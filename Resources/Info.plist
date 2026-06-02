@@ -28,8 +28,6 @@
     <true/>
     <key>NSAccessibilityUsageDescription</key>
     <string>Flash uses the Accessibility API to find clickable elements in the focused application so it can show jump-hints.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Flash sends Apple Events to Safari and Chrome to enumerate clickable elements on the current page.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

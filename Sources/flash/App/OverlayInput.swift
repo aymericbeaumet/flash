@@ -14,7 +14,6 @@ extension OverlayPanel {
             return
         }
         guard let chars = event.charactersIgnoringModifiers, !chars.isEmpty else { return }
-        let withShift = event.modifierFlags.contains(.shift)
-        coordinator.overlayDidCommit(prefix: chars, withShift: withShift)
+        coordinator.overlayDidCommit(prefix: chars)
     }
 }

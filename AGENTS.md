@@ -159,8 +159,7 @@ Keys:
 
 | Key                                            | Type           | Default              |
 | ---------------------------------------------- | -------------- | -------------------- |
-| `hints.keys`                                   | string         | `"<colemak>"`        |
-| `hints.shift_means_right_click`                | bool           | `true`               |
+| `hints.keys`                                   | string         | `"<qwerty>"`         |
 | `hints.min_length`                             | int            | `1`                  |
 | `overlay.font_size`                            | double         | `14`                 |
 | `overlay.hint_bg` / `hint_fg`                  | hex string     | `"#FFD400"` / `"#1B1B1B"` |
@@ -170,7 +169,7 @@ Keys:
 | `providers.deadline_ms_hot` / `deadline_ms_cold` | int          | `80` / `300`         |
 | `per_app."<bundle>".roles`                     | array<string>  | —                    |
 
-`hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a preset token `<colemak>` / `<qwerty>` / `<dvorak>`. Resolution lives in `Alphabet.resolve(_:)`.
+`hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a preset token `<qwerty>` (default) / `<colemak>` / `<dvorak>`. Resolution lives in `Alphabet.resolve(_:)`.
 
 ## Permissions
 
@@ -225,6 +224,27 @@ Karabiner-Elements binding lives in `~/.config/karabiner/karabiner.json` under `
 Tests in `Tests/FlashTests/` cover deterministic units (HintAssigner prefix-free, Alphabet resolution, ConfigLoader parsing). Anything that requires AppKit / AX / Vision is **manually verified**: run `./Scripts/bundle.sh`, grant permissions if needed, then exercise the app in real target apps.
 
 Do not claim UI-level changes "work" based on the type-checker alone. State explicitly when you couldn't verify visually.
+
+## Known limitations
+
+### Open menus dismiss when Flash activates
+
+When any non-menu window becomes the system's key window, AppKit's menu
+tracking session cancels and the menu closes. Flash's overlay panel becomes
+key in order to receive the user's hint keystrokes via `NSPanel.keyDown`,
+which trips this dismissal — so triggering Flash on top of an open
+`NSMenu` / `NSPopover` / popup-button menu collapses it.
+
+There are two ways around this and both are off the table:
+1. **Global event tap (`CGEventTap` / `addGlobalMonitorForEvents`)** would
+   let us read keystrokes without taking key window, so the menu would
+   stay open. Banned by hard rule (2): no global keyboard logic.
+2. **Render through a CGS / WindowServer-level window** below the menu
+   plane. This uses private SkyLight APIs that aren't part of the public
+   AppKit surface. Out of scope.
+
+Workaround for users: dismiss the menu, trigger Flash on the menu's parent
+button (which is hinted), commit, then read the menu.
 
 ## Common pitfalls
 

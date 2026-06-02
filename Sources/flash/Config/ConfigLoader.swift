@@ -71,8 +71,6 @@ enum ConfigLoader {
         switch path {
         case ["hints", "keys"]:
             config.hints.keys = parseString(value) ?? config.hints.keys
-        case ["hints", "shift_means_right_click"]:
-            config.hints.shiftMeansRightClick = parseBool(value) ?? config.hints.shiftMeansRightClick
         case ["hints", "min_length"]:
             config.hints.minLength = parseInt(value) ?? config.hints.minLength
 
@@ -91,6 +89,13 @@ enum ConfigLoader {
             config.providers.deadlineMsHot = parseInt(value) ?? config.providers.deadlineMsHot
         case ["providers", "deadline_ms_cold"]:
             config.providers.deadlineMsCold = parseInt(value) ?? config.providers.deadlineMsCold
+
+        case ["debug", "show_bounds"]:
+            config.debug.showBounds = parseBool(value) ?? config.debug.showBounds
+        case ["debug", "bounds_bg"]:
+            config.debug.boundsBG = parseString(value) ?? config.debug.boundsBG
+        case ["debug", "bounds_fg"]:
+            config.debug.boundsFG = parseString(value) ?? config.debug.boundsFG
 
         default:
             if path.count == 3, path[0] == "per_app", path[2] == "roles" {

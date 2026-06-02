@@ -2,8 +2,7 @@ import Foundation
 
 struct Config {
     struct Hints {
-        var keys: String = "<colemak>"
-        var shiftMeansRightClick: Bool = true
+        var keys: String = "<qwerty>"
         var minLength: Int = 1
     }
     struct Overlay {
@@ -17,17 +16,28 @@ struct Config {
         var deadlineMsHot: Int = 80
         var deadlineMsCold: Int = 300
     }
+    struct Debug {
+        /// When true, every detected target is outlined alongside its hint chip.
+        /// Useful for diagnosing missing or misplaced hints — you can see exactly
+        /// which AX rect Flash decided to use.
+        var showBounds: Bool = false
+        /// Fill for the debug outline rectangle. Default transparent.
+        var boundsBG: String = "#00000000"
+        /// Stroke for the debug outline rectangle. Mirrors the `hint_fg` slot:
+        /// it's the foreground colour of the bounds shape.
+        var boundsFG: String = "#FF3B9A"
+    }
 
     var hints = Hints()
     var overlay = Overlay()
     var providers = Providers()
+    var debug = Debug()
     var perAppRoles: [String: [String]] = [:]
     var warnings: [String] = []
 
     static let `default` = Config()
 
-    var resolvedAlphabet: [Character] {
-        let (chars, _) = Alphabet.resolve(hints.keys)
-        return chars
+    var resolvedAlphabet: Alphabet.Resolved {
+        Alphabet.resolve(hints.keys)
     }
 }

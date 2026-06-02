@@ -4,9 +4,8 @@ import XCTest
 final class ConfigLoaderTests: XCTestCase {
     func testDefaultsWhenEmpty() {
         let c = ConfigLoader.parse("")
-        XCTAssertEqual(c.hints.keys, "<colemak>")
+        XCTAssertEqual(c.hints.keys, "<qwerty>")
         XCTAssertEqual(c.hints.minLength, 1)
-        XCTAssertEqual(c.hints.shiftMeansRightClick, true)
         XCTAssertEqual(c.overlay.fontSize, 14)
         XCTAssertEqual(c.providers.deadlineMsHot, 80)
     }
@@ -14,20 +13,18 @@ final class ConfigLoaderTests: XCTestCase {
     func testParsesHintsSection() {
         let toml = """
         [hints]
-        keys = "<qwerty>"
-        shift_means_right_click = false
+        keys = "<colemak>"
         min_length = 2
         """
         let c = ConfigLoader.parse(toml)
-        XCTAssertEqual(c.hints.keys, "<qwerty>")
-        XCTAssertEqual(c.hints.shiftMeansRightClick, false)
+        XCTAssertEqual(c.hints.keys, "<colemak>")
         XCTAssertEqual(c.hints.minLength, 2)
     }
 
     func testParsesLiteralKeys() {
         let c = ConfigLoader.parse("[hints]\nkeys = \"asdfghjkl\"")
         XCTAssertEqual(c.hints.keys, "asdfghjkl")
-        XCTAssertEqual(String(c.resolvedAlphabet), "asdfghjkl")
+        XCTAssertEqual(String(c.resolvedAlphabet.chars), "asdfghjkl")
     }
 
     func testParsesArray() {

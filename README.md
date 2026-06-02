@@ -64,9 +64,8 @@ ctrl + alt + shift - f : open -g flash://activate?right=1
 ```toml
 [hints]
 # Either a preset token in <angle brackets> or a literal character string.
-# Default: "<colemak>"
-keys = "<colemak>"            # or "<qwerty>", "<dvorak>", or e.g. "asdfghjkl"
-shift_means_right_click = true
+# Default: "<qwerty>"
+keys = "<qwerty>"             # or "<colemak>", "<dvorak>", or e.g. "asdfghjkl"
 min_length = 1
 
 [overlay]

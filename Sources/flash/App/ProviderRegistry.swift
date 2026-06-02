@@ -2,38 +2,19 @@ import Foundation
 import FlashCore
 import FlashProviders
 
+/// One generic AccessibilityProvider handles every app. No per-app special
+/// cases — the rule set is universal: clickable controls, text inputs, list
+/// rows in virtualised containers. App-specific tuning belongs in config
+/// later, not in code.
 final class ProviderRegistry {
     private(set) var providers: [JumpProvider]
 
     init(config: Config) {
-        var list: [JumpProvider] = [
-            SafariProvider(),
-            ChromeProvider(),
-            FirefoxProvider(),
-            MessagesProvider(),
-            NotesProvider(),
-            RemindersProvider(),
-            PosticoProvider(),
-            WhatsAppProvider(),
-            LinearProvider(),
-            SlackProvider(),
-        ]
-
-        let perAppAX = AccessibilityProvider(
-            identifier: "accessibility",
-            priority: 10,
-            roles: AccessibilityProvider.defaultRoles,
-            maxDepth: 60,
-            maxTargets: 500,
-            supportedBundles: nil
-        )
-        list.append(perAppAX)
-
+        let generic = AccessibilityProvider()
         let disabled = Set(config.providers.disabled)
-        providers = list.filter { !disabled.contains($0.identifier) }
+        providers = [generic].filter { !disabled.contains($0.identifier) }
     }
 
-    /// Resolve providers that apply for the given context, ordered by descending priority.
     func chain(for context: AppContext) -> [JumpProvider] {
         providers
             .filter { $0.supports(context) }

@@ -2,48 +2,58 @@ import XCTest
 @testable import flash
 
 final class AlphabetTests: XCTestCase {
-    func testColemakDefault() {
-        let (chars, warn) = Alphabet.resolve(nil)
-        XCTAssertEqual(String(chars), "arstneiogfplmuywvbckxjqzdh")
-        XCTAssertNil(warn)
+    private let qwerty = "sadfjklewcmpghvtbynruo"
+    private let colemak = "arstneiogfplmuywvbckxjqzdh"
+
+    func testQwertyDefault() {
+        let r = Alphabet.resolve(nil)
+        XCTAssertEqual(String(r.chars), qwerty)
+        XCTAssertNil(r.warning)
     }
 
     func testColemakToken() {
-        let (chars, warn) = Alphabet.resolve("<colemak>")
-        XCTAssertEqual(String(chars).prefix(4), "arst")
-        XCTAssertNil(warn)
+        let r = Alphabet.resolve("<colemak>")
+        XCTAssertEqual(String(r.chars), colemak)
+        XCTAssertNil(r.warning)
     }
 
     func testQwertyToken() {
-        let (chars, _) = Alphabet.resolve("<qwerty>")
-        XCTAssertTrue(chars.starts(with: ["s","a","d","f"]))
+        let r = Alphabet.resolve("<qwerty>")
+        XCTAssertEqual(String(r.chars), qwerty)
     }
 
     func testDvorakToken() {
-        let (chars, _) = Alphabet.resolve("<dvorak>")
-        XCTAssertEqual(chars.first, "a")
+        let r = Alphabet.resolve("<dvorak>")
+        XCTAssertEqual(r.chars.first, "a")
     }
 
     func testUnknownPresetFallsBack() {
-        let (chars, warn) = Alphabet.resolve("<klingon>")
-        XCTAssertEqual(String(chars), "arstneiogfplmuywvbckxjqzdh")
-        XCTAssertNotNil(warn)
+        let r = Alphabet.resolve("<klingon>")
+        XCTAssertEqual(String(r.chars), qwerty)
+        XCTAssertNotNil(r.warning)
     }
 
     func testLiteralAlphabet() {
-        let (chars, warn) = Alphabet.resolve("asdfghjkl")
-        XCTAssertEqual(String(chars), "asdfghjkl")
-        XCTAssertNil(warn)
+        let r = Alphabet.resolve("asdfghjkl")
+        XCTAssertEqual(String(r.chars), "asdfghjkl")
+        XCTAssertNil(r.warning)
     }
 
     func testLiteralWithDuplicatesAndUppercase() {
-        let (chars, _) = Alphabet.resolve("ASDFFGH")
-        XCTAssertEqual(String(chars), "asdfgh")
+        let r = Alphabet.resolve("ASDFFGH")
+        XCTAssertEqual(String(r.chars), "asdfgh")
     }
 
     func testInvalidLiteralFallsBack() {
-        let (chars, warn) = Alphabet.resolve("12!")
-        XCTAssertEqual(String(chars), "arstneiogfplmuywvbckxjqzdh")
-        XCTAssertNotNil(warn)
+        let r = Alphabet.resolve("12!")
+        XCTAssertEqual(String(r.chars), qwerty)
+        XCTAssertNotNil(r.warning)
+    }
+
+    func testPresetsCarryLeftHandSet() {
+        XCTAssertTrue(Alphabet.resolve("<qwerty>").leftHand.contains("a"))
+        XCTAssertFalse(Alphabet.resolve("<qwerty>").leftHand.contains("j"))
+        XCTAssertTrue(Alphabet.resolve("<colemak>").leftHand.contains("r"))
+        XCTAssertFalse(Alphabet.resolve("<colemak>").leftHand.contains("n"))
     }
 }
