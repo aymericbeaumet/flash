@@ -10,16 +10,12 @@ struct Config {
         var fontSize: Double = 14
         var hintBG: String = "#FFD400"
         var hintFG: String = "#1B1B1B"
-        var dimBackground: Bool = true
         var exitKey: String = "escape"
     }
     struct Providers {
         var disabled: [String] = []
         var deadlineMsHot: Int = 80
         var deadlineMsCold: Int = 300
-        // OCR is opt-in: it forces a Screen Recording permission prompt on first use.
-        // Default empty; users who want hints in terminals / Electron apps add the bundle.
-        var visionEnabledBundles: [String] = []
     }
 
     var hints = Hints()

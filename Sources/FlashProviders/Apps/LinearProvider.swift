@@ -1,33 +1,19 @@
 import FlashCore
-import Foundation
 
-public final class LinearProvider: JumpProvider {
-    public let identifier = "linear"
-    public let priority = 30
-    private let ax: AccessibilityProvider
-    private let vision: VisionProvider
-
-    public init(visionEnabledBundles: [String]) {
-        self.ax = AccessibilityProvider(
-            identifier: "linear-ax",
+public final class LinearProvider: AccessibilityProvider {
+    public init() {
+        super.init(
+            identifier: "linear",
             priority: 30,
-            roles: ["AXButton", "AXLink", "AXTextField", "AXRow", "AXCell", "AXMenuItem", "AXTab"],
-            maxDepth: 80,
-            maxTargets: 400,
+            roles: [
+                "AXButton", "AXLink", "AXTextField", "AXSearchField",
+                "AXRow", "AXCell", "AXMenuItem", "AXMenuButton",
+                "AXImage", "AXTab", "AXList", "AXListItem", "AXGroup",
+                "AXCheckBox", "AXPopUpButton",
+            ],
+            maxDepth: 100,
+            maxTargets: 500,
             supportedBundles: ["com.linear", "com.linear.LinearDesktop"]
         )
-        self.vision = VisionProvider(enabledBundles: visionEnabledBundles)
-    }
-
-    public func supports(_ context: AppContext) -> Bool {
-        context.bundleIdentifier.hasPrefix("com.linear")
-    }
-
-    public func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget] {
-        let axResults = (try? ax.discover(in: context, deadline: deadline)) ?? []
-        if axResults.count >= 5 { return axResults }
-        guard vision.supports(context) else { return axResults }
-        let visionResults = (try? vision.discover(in: context, deadline: deadline)) ?? []
-        return axResults + visionResults
     }
 }

@@ -56,7 +56,6 @@ kill_all_flash
 # and the grant binds to the binary they actually have installed.
 echo "==> Resetting stale TCC entries for com.flash.app"
 tccutil reset Accessibility com.flash.app 2>/dev/null || true
-tccutil reset ScreenCapture com.flash.app 2>/dev/null || true
 tccutil reset AppleEvents com.flash.app 2>/dev/null || true
 
 echo "==> Installing to $INSTALL_PATH"

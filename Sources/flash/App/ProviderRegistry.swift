@@ -6,7 +6,6 @@ final class ProviderRegistry {
     private(set) var providers: [JumpProvider]
 
     init(config: Config) {
-        let visionBundles = config.providers.visionEnabledBundles
         var list: [JumpProvider] = [
             SafariProvider(),
             ChromeProvider(),
@@ -15,11 +14,10 @@ final class ProviderRegistry {
             NotesProvider(),
             RemindersProvider(),
             PosticoProvider(),
-            WhatsAppProvider(visionEnabledBundles: visionBundles),
-            LinearProvider(visionEnabledBundles: visionBundles),
-            AlacrittyProvider(visionEnabledBundles: visionBundles),
+            WhatsAppProvider(),
+            LinearProvider(),
+            SlackProvider(),
         ]
-        list.append(VisionProvider(enabledBundles: visionBundles))
 
         let perAppAX = AccessibilityProvider(
             identifier: "accessibility",

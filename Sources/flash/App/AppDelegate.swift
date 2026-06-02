@@ -44,11 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // MARK: Activation
 
     private func activate(rightClick: Bool) {
-        guard let context = monitor.currentContext() else {
-            overlay.overlayConfig = config.overlay
-            overlay.displayBanner("flash: no frontmost app")
-            return
-        }
+        guard let context = monitor.currentContext() else { return }
         sourceAppPID = context.processID
         let action: JumpAction = rightClick ? .rightClick : .leftClick
         pendingAction = action
@@ -60,10 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         }
 
         let targets = monitor.discover(now: context)
-        if targets.isEmpty {
-            overlay.displayBanner("flash: no targets in \(context.bundleIdentifier)")
-            return
-        }
+        if targets.isEmpty { return }
         let alphabet = config.resolvedAlphabet
         let hints = HintAssigner.assign(targets: targets, alphabet: alphabet, minLength: config.hints.minLength)
         currentHints = hints

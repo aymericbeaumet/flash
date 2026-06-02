@@ -82,8 +82,6 @@ enum ConfigLoader {
             config.overlay.hintBG = parseString(value) ?? config.overlay.hintBG
         case ["overlay", "hint_fg"]:
             config.overlay.hintFG = parseString(value) ?? config.overlay.hintFG
-        case ["overlay", "dim_background"]:
-            config.overlay.dimBackground = parseBool(value) ?? config.overlay.dimBackground
         case ["overlay", "exit_key"]:
             config.overlay.exitKey = parseString(value) ?? config.overlay.exitKey
 
@@ -93,8 +91,6 @@ enum ConfigLoader {
             config.providers.deadlineMsHot = parseInt(value) ?? config.providers.deadlineMsHot
         case ["providers", "deadline_ms_cold"]:
             config.providers.deadlineMsCold = parseInt(value) ?? config.providers.deadlineMsCold
-        case ["providers", "vision", "enabled_for_bundles"]:
-            config.providers.visionEnabledBundles = parseStringArray(value) ?? config.providers.visionEnabledBundles
 
         default:
             if path.count == 3, path[0] == "per_app", path[2] == "roles" {

@@ -4,7 +4,6 @@ import FlashCore
 
 final class OverlayPanel: NSPanel {
     private let contentLayer = CALayer()
-    private let dimLayer = CALayer()
     private var hintLayers: [CALayer] = []
     private var labelLayers: [CATextLayer] = []
     private var hintLayerPool: [CALayer] = []
@@ -37,10 +36,6 @@ final class OverlayPanel: NSPanel {
         view.wantsLayer = true
         view.layer = contentLayer
         contentLayer.frame = view.bounds
-        contentLayer.addSublayer(dimLayer)
-        dimLayer.frame = view.bounds
-        dimLayer.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
-        dimLayer.isHidden = true
         self.contentView = view
     }
 
@@ -62,9 +57,7 @@ final class OverlayPanel: NSPanel {
             self.setFrame(frame, display: false)
             self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
             contentLayer.frame = contentView?.bounds ?? .zero
-            dimLayer.frame = contentLayer.frame
         }
-        dimLayer.isHidden = !overlayConfig.dimBackground
 
         recycleAll()
 
@@ -143,9 +136,7 @@ final class OverlayPanel: NSPanel {
             self.setFrame(frame, display: false)
             self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
             contentLayer.frame = contentView?.bounds ?? .zero
-            dimLayer.frame = contentLayer.frame
         }
-        dimLayer.isHidden = true
         recycleAll()
 
         let fontSize = max(CGFloat(overlayConfig.fontSize), 16)

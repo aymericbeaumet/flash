@@ -32,11 +32,11 @@ final class ConfigLoaderTests: XCTestCase {
 
     func testParsesArray() {
         let toml = """
-        [providers.vision]
-        enabled_for_bundles = ["org.alacritty", "net.whatsapp.WhatsApp"]
+        [providers]
+        disabled = ["whatsapp", "slack"]
         """
         let c = ConfigLoader.parse(toml)
-        XCTAssertEqual(c.providers.visionEnabledBundles, ["org.alacritty", "net.whatsapp.WhatsApp"])
+        XCTAssertEqual(c.providers.disabled, ["whatsapp", "slack"])
     }
 
     func testParsesPerApp() {

@@ -16,6 +16,8 @@ Activation is exclusively via the `flash://` URL scheme — bound to a hotkey by
 4. **No second process / no IPC protocol.** Activation is always `NSAppleEventManager` receiving the URL scheme. Don't add Unix sockets, mach services, or a CLI client.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **TOML parser is hand-rolled** (small subset). Don't add `TOMLKit` / `Toml` / other deps unless we outgrow what we can hand-roll cleanly.
+7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, `CGWindowList*`, or anything that touches the screen recording permission. The user explicitly removed it; if a request requires capturing pixels, surface it instead of silently adding it back.
+8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(rightClick:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
 
 If a request would violate any of the above, surface it to the user instead of silently complying.
 
@@ -31,9 +33,8 @@ Sources/
     JumpProvider.swift               # The protocol; `supports/discover` API
   FlashProviders/                    # Built-in providers (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class — subclassed by per-app providers.
-    Vision/VisionProvider.swift                  # ScreenCaptureKit window grab + Vision OCR
     Browser/{BrowserScriptProvider,Safari,Chrome,Firefox}.swift
-    Apps/{Alacritty,Messages,Notes,Reminders,Postico,WhatsApp,Linear}.swift
+    Apps/{Messages,Notes,Reminders,Postico,WhatsApp,Linear,Slack}.swift
   flash/                             # The executable target
     main.swift                       # NSApplication boot
     App/
@@ -140,14 +141,12 @@ Steps:
 
 1. Create `Sources/FlashProviders/<Group>/YourProvider.swift`.
 2. Implement the protocol. Return `JumpTarget`s with **global NSScreen coordinates** (bottom-left origin of primary screen). Honour `deadline` inside any recursive walk.
-3. If you need a per-app `AccessibilityProvider` variant, subclass it and set roles / `supportedBundles` / depth caps in `init`.
+3. If you need a per-app `AccessibilityProvider` variant, subclass it and set roles / `supportedBundles` / depth caps in `init`. Electron apps (WhatsApp, Linear, Slack) need broader role lists (e.g. `AXGroup`, `AXList`, `AXListItem`, sometimes `AXStaticText`) and bigger depth/target caps because Chromium fans out wide.
 4. Register in `Sources/flash/App/ProviderRegistry.swift`'s built-in list. Pick a priority — higher wins on overlapping rects. Existing scale:
-   - 30: browser/script-bridge or Electron AX+Vision merge
-   - 25: Firefox (AX-tuned)
-   - 20: per-app AX subclasses (Messages, Notes, Reminders, Postico)
+   - 30: browser/script-bridge (Safari, Chrome) and Electron AX subclasses (WhatsApp, Linear, Slack)
+   - 25: Firefox (AX-tuned, walks `AXWebArea` for in-page hints)
+   - 20: per-app native AX subclasses (Messages, Notes, Reminders, Postico)
    - 10: generic `AccessibilityProvider` fallback
-   - 5: `VisionProvider` (OCR, gated by bundle list)
-   - 40: Alacritty (OCR-only; no AX)
 5. Add a smoke test in the per-app matrix and update README.
 
 A `JumpTarget.activate` closure overrides the default action. Use it when the underlying API has a cheaper / more reliable way to "click" than synthesizing a `CGEvent` (e.g. browsers can dispatch `.click()` in JS; AX can call `kAXPressAction`).
@@ -169,7 +168,6 @@ Keys:
 | `overlay.exit_key`                             | string         | `"escape"`           |
 | `providers.disabled`                           | array<string>  | `[]`                 |
 | `providers.deadline_ms_hot` / `deadline_ms_cold` | int          | `80` / `300`         |
-| `providers.vision.enabled_for_bundles`         | array<string>  | `["org.alacritty", "net.whatsapp.WhatsApp", "com.linear"]` |
 | `per_app."<bundle>".roles`                     | array<string>  | —                    |
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a preset token `<colemak>` / `<qwerty>` / `<dvorak>`. Resolution lives in `Alphabet.resolve(_:)`.
@@ -182,9 +180,9 @@ Required:
 
 Optional:
 
-- **Screen Recording** — required only when `VisionProvider` runs. **OFF by default**: `providers.vision.enabled_for_bundles = []`. The user opts in per-bundle in their config. `VisionProvider.supports(_:)` calls `CGPreflightScreenCaptureAccess()` and returns false if the grant is missing, so we never trigger the system prompt mid-jump — the user grants it via System Settings on their own time.
 - **Automation → Safari / Chrome** — required only for the browser DOM bridge. Prompted on first use of `do JavaScript`.
 - **Input Monitoring** — **NOT** required and **NOT** requested. If you find yourself wanting to request it, you're violating rule (2) above.
+- **Screen Recording** — **NOT** required and **NOT** requested. See rule (7) above. The plist no longer declares `NSScreenCaptureUsageDescription`.
 
 ### TCC and rebuilds
 
