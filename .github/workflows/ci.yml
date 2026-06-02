@@ -8,7 +8,7 @@ on:
 jobs:
   format:
     name: Format
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show swift-format version
@@ -23,7 +23,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show swift-format version
@@ -33,7 +33,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show Swift version
@@ -50,7 +50,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show Swift version

@@ -5,7 +5,6 @@ import FlashCore
 final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var config = Config.default
   private var registry: ProviderRegistry!
-  private var cache = TargetCache()
   private var monitor: AppMonitor!
   private var overlay: OverlayPanel!
   private var urlHandler: URLEventHandler!
@@ -37,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationDidFinishLaunching(_ notification: Notification) {
     config = ConfigLoader.load()
     registry = ProviderRegistry()
-    monitor = AppMonitor(registry: registry, cache: cache, config: config)
+    monitor = AppMonitor(registry: registry, config: config)
     monitor.start()
 
     overlay = OverlayPanel()
@@ -52,8 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     urlHandler = URLEventHandler { [weak self] cmd in
       guard let self else { return }
       switch cmd {
-      case .activate(let right): self.activate(rightClick: right)
-      case .cancel: self.cancelOverlay()
+      case .showHints(let right): self.activate(rightClick: right)
+      case .dismissHints: self.cancelOverlay()
       case .quit: NSApp.terminate(nil)
       }
     }
@@ -254,7 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       "If Flash IS already in the list (toggle ON):",
       "  The grant is bound to the previous binary's hash.",
       "  Toggle Flash OFF then ON to re-bind to the current build.",
-      "  (./Scripts/bundle.sh resets this for you next time.)",
+      "  (./Scripts/install.sh resets this for you next time.)",
       "",
       "System Settings has been opened.",
     ]
@@ -317,12 +316,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func commit(hint: AssignedHint) {
     let action = pendingAction
-    // Use the target's own owning pid when present (cross-app scope) and
-    // fall back to the activation-time focused pid otherwise. This is
-    // the bit that makes `hints.scope = active_monitor` / `everywhere`
-    // actually click in the right app — the click is dispatched to the
-    // app that owns the chosen control, not the app that happened to be
-    // frontmost when the user pressed ctrl+space.
+    // The target carries its owning pid (always the focused app at
+    // walk time). Fall back to the activation-time focused pid if the
+    // provider didn't set one.
     let pid = hint.target.pid ?? sourceAppPID
     // Compute the chip's centre BEFORE hiding the overlay so the dispatcher
     // can synthesize a click at the same on-screen point the user just saw.
@@ -368,9 +364,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self.config = cfg
       self.overlay.overlayConfig = cfg.overlay
       self.overlay.debugConfig = cfg.debug
-      // Publish to AppMonitor under its internal lock — this also
-      // clears the precompute cache, whose hint labels are stale if
-      // the alphabet changed.
+      // Publish to AppMonitor under its internal lock — every future
+      // activation snapshots the new config at the start of its walk.
       self.monitor.updateConfig(cfg)
     }
     source.setCancelHandler { close(fd) }

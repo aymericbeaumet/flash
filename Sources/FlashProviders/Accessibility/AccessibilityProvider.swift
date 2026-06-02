@@ -95,6 +95,17 @@ public final class AccessibilityProvider: JumpProvider {
   /// plain mutable property is safe here.
   public var dumpURL: URL?
 
+  /// Millisecond wall-clock timestamp identifying the activation that
+  /// produced this walk. Set by AppMonitor from the activation's
+  /// profiler before each call to `discover` so dump lines can be
+  /// correlated with the show_hints trigger they belong to.
+  public var triggerMs: UInt64?
+
+  /// Background queue used to flush AX dump buffers to disk so the
+  /// activation hot path never blocks on file I/O. Serial so concurrent
+  /// activations' dumps don't interleave on the same file.
+  private static let dumpWriteQueue = DispatchQueue(label: "flash.ax-dump.write", qos: .utility)
+
   public init() {}
 
   public func supports(_ context: AppContext) -> Bool { true }
@@ -113,6 +124,11 @@ public final class AccessibilityProvider: JumpProvider {
     return (cf as! AXValue)
   }
 
+  private func nonEmpty(_ arr: [AXUIElement]?) -> [AXUIElement]? {
+    guard let arr, !arr.isEmpty else { return nil }
+    return arr
+  }
+
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
   // Indices are hot-path constants — keep them in sync with `walk`.
   private static let batchAttrs: CFArray =
@@ -125,6 +141,7 @@ public final class AccessibilityProvider: JumpProvider {
       "AXVisibleChildren",  // 5 — virtualised containers
       "AXVisibleRows",  // 6 — NSTableView / NSOutlineView specifically
       kAXChildrenAttribute,  // 7 — fallback
+      "AXHidden",  // 8 — Firefox/WebKit a11y-hidden subtrees
     ] as CFArray
 
   public func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget] {
@@ -159,39 +176,77 @@ public final class AccessibilityProvider: JumpProvider {
     var out: [JumpTarget] = []
     var idCounter = 0
 
-    // Open the dump file (truncate) if requested. We hold the handle
-    // for the whole walk so per-element writes don't reopen on each
-    // line.
-    var dumpHandle: FileHandle?
-    if let url = dumpURL {
-      dumpHandle = openDumpFile(at: url, context: context)
+    // Buffer dump lines in memory during the walk and flush async at
+    // the end, so per-element file I/O never adds latency to
+    // activation.
+    var dumpBuffer: [String]? = dumpURL != nil ? [] : nil
+    if dumpBuffer != nil {
+      let trigger = triggerMs.map { "  trigger=\($0)" } ?? ""
+      dumpBuffer?.append(
+        "# flash AX dump  bundle=\(context.bundleIdentifier)  pid=\(context.processID)  time=\(Date())\(trigger)\n"
+      )
     }
-    defer { try? dumpHandle?.close() }
 
-    // Walk straight from the app element. The batched read inside `walk`
-    // pulls kAXChildrenAttribute as one of its fields, so we don't need
-    // a separate kAXChildrenAttribute IPC on the app first. The app's
-    // role (AXApplication) doesn't match `roles`, so it doesn't become
-    // a target itself — it just descends.
+    // Active-window only. One IPC up front to resolve
+    // kAXFocusedWindowAttribute and walk that subtree exclusively. This
+    // is the *correct* way to scope to a single window — relying on a
+    // geometric region filter alone leaves edge cases where AX-reported
+    // frames from sibling windows or the app's AXMenuBar happen to
+    // land inside the active window's bounds (full-screen apps, off-
+    // screen popovers, AX coordinate quirks) and bleed through as
+    // stray hints.
+    //
+    // If `kAXFocusedWindow` is missing (rare — happens momentarily
+    // during app launches, or for apps with no windows), there's
+    // nothing to hint, so return empty rather than walking the whole
+    // app and risk picking up menu-bar items.
+    var focusedRaw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focusedRaw)
+        == .success,
+      let focusedCF = focusedRaw,
+      CFGetTypeID(focusedCF) == AXUIElementGetTypeID()
+    else {
+      if let url = dumpURL, let lines = dumpBuffer {
+        flushDump(lines: lines, to: url)
+      }
+      return out
+    }
+    let focusedWindow = focusedCF as! AXUIElement
+
     walk(
-      app, depth: 0, screenH: screenH, visible: clip,
+      focusedWindow, depth: 0, screenH: screenH, visible: clip,
       pid: context.processID, descendIntoWebAreas: descendIntoWebAreas,
-      insideClickable: false, parentRole: nil, dump: dumpHandle,
+      insideClickable: false, insideWebArea: false,
+      parentRole: nil, dump: &dumpBuffer,
       out: &out, idCounter: &idCounter)
+
+    if let url = dumpURL, let lines = dumpBuffer {
+      flushDump(lines: lines, to: url)
+    }
     return out
   }
 
-  private func openDumpFile(at url: URL, context: AppContext) -> FileHandle? {
-    let fm = FileManager.default
-    try? fm.createDirectory(
-      at: url.deletingLastPathComponent(),
-      withIntermediateDirectories: true)
-    fm.createFile(atPath: url.path, contents: nil)
-    guard let handle = try? FileHandle(forWritingTo: url) else { return nil }
-    let header =
-      "# flash AX dump  bundle=\(context.bundleIdentifier)  pid=\(context.processID)  time=\(Date())\n"
-    if let data = header.data(using: .utf8) { handle.write(data) }
-    return handle
+  /// Off-thread flush of accumulated dump lines. `FileHandle.write` is
+  /// serialised through the shared `dumpWriteQueue`, so multiple back-
+  /// to-back activations don't interleave their dumps and the
+  /// activation that produced the data is already free.
+  private func flushDump(lines: [String], to url: URL) {
+    let joined = lines.joined()
+    Self.dumpWriteQueue.async {
+      let fm = FileManager.default
+      try? fm.createDirectory(
+        at: url.deletingLastPathComponent(),
+        withIntermediateDirectories: true)
+      // Truncate per activation — matches the documented semantics
+      // (file is rewritten on each show_hints).
+      fm.createFile(atPath: url.path, contents: nil)
+      guard let handle = try? FileHandle(forWritingTo: url) else { return }
+      defer { try? handle.close() }
+      if let data = joined.data(using: .utf8) {
+        try? handle.write(contentsOf: data)
+      }
+    }
   }
 
   private func walk(
@@ -202,8 +257,9 @@ public final class AccessibilityProvider: JumpProvider {
     pid: pid_t,
     descendIntoWebAreas: Bool,
     insideClickable: Bool,
+    insideWebArea: Bool,
     parentRole: String?,
-    dump: FileHandle?,
+    dump: inout [String]?,
     out: inout [JumpTarget],
     idCounter: inout Int
   ) {
@@ -217,7 +273,7 @@ public final class AccessibilityProvider: JumpProvider {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 8 else { return }
+    guard err == .success, let vals = valuesRef as? [Any], vals.count == 9 else { return }
 
     let role = vals[0] as? String
     let subrole = vals[1] as? String
@@ -227,6 +283,15 @@ public final class AccessibilityProvider: JumpProvider {
     let visibleChildren = vals[5] as? [AXUIElement]
     let visibleRows = vals[6] as? [AXUIElement]
     let allChildren = vals[7] as? [AXUIElement]
+    let hidden = (vals[8] as? Bool) ?? false
+
+    // AXHidden=true is the WAI-ARIA `aria-hidden`/`display:none`/
+    // `visibility:hidden` signal coming through WebKit/Firefox. The
+    // element still has valid pos/size (so our geometric filter would
+    // happily accept it) but it isn't on screen and isn't user-
+    // clickable. Skip the whole subtree — hidden ancestors imply
+    // hidden descendants.
+    if hidden { return }
 
     if !descendIntoWebAreas, role == "AXWebArea" {
       return
@@ -246,8 +311,28 @@ public final class AccessibilityProvider: JumpProvider {
     }
 
     var addedAsTarget = false
+    // Decide whether this element is a hint target. Two acceptance paths:
+    //   1. Role is in the curated `roles` set (covers all native AX
+    //      controls + the obvious web cases like AXButton/AXLink).
+    //   2. We're inside an AXWebArea descendant *and* the element
+    //      exposes an `AXPress`/`AXOpen`/`AXConfirm` action. Many JS
+    //      sites (GitHub being the canonical case) render interactive
+    //      controls as `AXGroup` or `AXGenericElement` with a JS
+    //      handler — they're real click targets, just don't carry the
+    //      semantically correct role. Guarding by AXWebArea keeps the
+    //      per-element action IPC out of the native-AX hot path.
+    let roleRecognised = role.map { Self.roles.contains($0) } ?? false
+    let acceptsViaWebAction =
+      !roleRecognised
+      && insideWebArea
+      && !insideClickable
+      && enabled
+      && role != "AXStaticText"
+      && role != "AXWebArea"
+      && Self.elementHasPressAction(element)
     if enabled,
-      let r = role, Self.roles.contains(r),
+      roleRecognised || acceptsViaWebAction,
+      let r = role,
       let posV = posValue, let sizeV = sizeValue,
       let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH)
     {
@@ -374,9 +459,9 @@ public final class AccessibilityProvider: JumpProvider {
     // the dump reflects what the walker actually saw + did). We log
     // every visited node, not just the ones that become targets — the
     // false-negatives are exactly the lines without a `hint=1` tag.
-    if let dump = dump {
-      writeDumpLine(
-        dump,
+    if dump != nil {
+      appendDumpLine(
+        into: &dump,
         depth: depth,
         role: role,
         subrole: subrole,
@@ -398,9 +483,18 @@ public final class AccessibilityProvider: JumpProvider {
     //   3. kAXChildrenAttribute (everything else, fallback)
     // For Notes' 292-row sidebar this drops the walk to the ~12 rows
     // actually rendered on screen.
-    let children = visibleChildren ?? visibleRows ?? allChildren ?? []
+    //
+    // Empty arrays are treated as "no signal", not "zero visible
+    // children". Messages' chat list is the canonical example: its
+    // table reports `AXVisibleChildren = []` when the container hasn't
+    // been queried recently, even though `AXChildren` contains every
+    // row. Without this fallback the whole chat list disappears from
+    // the walk.
+    let children =
+      nonEmpty(visibleChildren) ?? nonEmpty(visibleRows) ?? allChildren ?? []
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
+    let nowInsideWebArea = insideWebArea || role == "AXWebArea"
     for child in children {
       walk(
         child,
@@ -410,8 +504,9 @@ public final class AccessibilityProvider: JumpProvider {
         pid: pid,
         descendIntoWebAreas: descendIntoWebAreas,
         insideClickable: nowInsideClickable,
+        insideWebArea: nowInsideWebArea,
         parentRole: role,
-        dump: dump,
+        dump: &dump,
         out: &out,
         idCounter: &idCounter
       )
@@ -565,8 +660,8 @@ public final class AccessibilityProvider: JumpProvider {
     return s
   }
 
-  private func writeDumpLine(
-    _ handle: FileHandle,
+  private func appendDumpLine(
+    into buffer: inout [String]?,
     depth: Int,
     role: String?,
     subrole: String?,
@@ -579,6 +674,7 @@ public final class AccessibilityProvider: JumpProvider {
     label: String?,
     hinted: Bool
   ) {
+    guard buffer != nil else { return }
     let frame: CGRect?
     if let p = posValue, let s = sizeValue {
       frame = frameFromAX(pos: p, size: s, screenH: screenH)
@@ -590,11 +686,10 @@ public final class AccessibilityProvider: JumpProvider {
       frame.map { "(\(Int($0.minX)),\(Int($0.minY)),\(Int($0.width))x\(Int($0.height)))" } ?? "-"
     let acts = actions.isEmpty ? "-" : actions.joined(separator: ",")
     let lbl = label.map { "\"\($0.replacingOccurrences(of: "\"", with: "\\\""))\"" } ?? "-"
+    let triggerTag = triggerMs.map { "t=\($0) " } ?? ""
     let line = """
-      \(indent)d=\(depth) role=\(role ?? "?") subrole=\(subrole ?? "-") parent=\(parentRole ?? "-") frame=\(f) enabled=\(enabled) actions=\(acts) label=\(lbl)\(hinted ? " hint=1" : "")
+      \(indent)\(triggerTag)d=\(depth) role=\(role ?? "?") subrole=\(subrole ?? "-") parent=\(parentRole ?? "-") frame=\(f) enabled=\(enabled) actions=\(acts) label=\(lbl)\(hinted ? " hint=1" : "")
       """
-    if let data = (line + "\n").data(using: .utf8) {
-      handle.write(data)
-    }
+    buffer?.append(line + "\n")
   }
 }

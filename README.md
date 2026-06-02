@@ -7,8 +7,7 @@ System-wide vimium-style "find and jump" for macOS. Triggered by an external too
 ## Build
 
 ```bash
-./Scripts/bundle.sh
-mv build/Flash.app /Applications/
+./Scripts/install.sh
 ```
 
 Open it once so macOS knows where it lives:
@@ -22,17 +21,17 @@ Then in *System Settings → Privacy & Security*:
 - **Accessibility** — required. Toggle Flash on.
 - **Automation → Safari / Chrome** — only needed for the browser DOM hints.
 
-> **Heads up on rebuilds**: every `./Scripts/bundle.sh` replaces the binary in `/Applications/Flash.app`. macOS keys TCC grants (Accessibility) to the ad-hoc-signed binary's hash, so the script also runs `tccutil reset` for the bundle id — meaning you re-grant once per rebuild and the grant binds to the new binary.
+> **Heads up on rebuilds**: every `./Scripts/install.sh` replaces the binary in `/Applications/Flash.app`. macOS keys TCC grants (Accessibility) to the ad-hoc-signed binary's hash, so the script also runs `tccutil reset` for the bundle id — meaning you re-grant once per rebuild and the grant binds to the new binary.
 
 ## Triggers
 
 Flash registers the `flash://` URL scheme. Anything that can run a shell command can trigger it:
 
 ```bash
-open -g flash://activate           # show hints; on commit, left-click
-open -g flash://activate?right=1   # show hints; on commit, right-click
-open -g flash://cancel             # dismiss the overlay
-open -g flash://quit               # quit the app
+open -g flash://show_hints           # show hints; on commit, left-click
+open -g flash://show_hints?right=1   # show hints; on commit, right-click
+open -g flash://dismiss_hints        # dismiss the overlay
+open -g flash://quit                 # quit the app
 ```
 
 `-g` keeps focus on the target app — Flash will only briefly steal it to perform the click and then return.
@@ -42,21 +41,21 @@ open -g flash://quit               # quit the app
 ```json
 { "type": "basic",
   "from": { "key_code": "f", "modifiers": { "mandatory": ["left_control","left_option"] } },
-  "to":   [{ "shell_command": "open -g flash://activate" }] }
+  "to":   [{ "shell_command": "open -g flash://show_hints" }] }
 ```
 
 ### Hammerspoon
 
 ```lua
-hs.hotkey.bind({"ctrl", "alt"}, "f", function() hs.urlevent.openURL("flash://activate") end)
-hs.hotkey.bind({"ctrl", "alt", "shift"}, "f", function() hs.urlevent.openURL("flash://activate?right=1") end)
+hs.hotkey.bind({"ctrl", "alt"}, "f", function() hs.urlevent.openURL("flash://show_hints") end)
+hs.hotkey.bind({"ctrl", "alt", "shift"}, "f", function() hs.urlevent.openURL("flash://show_hints?right=1") end)
 ```
 
 ### skhd
 
 ```
-ctrl + alt - f : open -g flash://activate
-ctrl + alt + shift - f : open -g flash://activate?right=1
+ctrl + alt - f : open -g flash://show_hints
+ctrl + alt + shift - f : open -g flash://show_hints?right=1
 ```
 
 ## Configuration
@@ -68,19 +67,14 @@ ctrl + alt + shift - f : open -g flash://activate?right=1
 # Either a preset token in <angle brackets> or a literal character string.
 keys = "<qwerty>"             # or "<colemak>", "<dvorak>", or e.g. "asdfghjkl"
 min_length = 1
-# Which apps' controls get hinted on activation:
-#   "active_app"     — only the focused app (default, fastest)
-#   "active_monitor" — every visible app on the focused monitor
-#   "everywhere"     — every visible app on every monitor
-scope = "active_app"
 
 [overlay]
-font_size = 11               # vimium-style small bold label
+font_size = 12               # vimium-style small bold label
 hint_fg = "#302505"
 hint_bg_top = "#FFF785"      # gradient top stop
 hint_bg_bottom = "#FFC542"   # gradient bottom stop (set equal to top for flat fill)
 hint_border = "#E3BE23"
-exit_key = "escape"
+exit_key = "<escape>"      # special keys wrapped in <>; or a single literal char like "q"
 
 [debug]
 show_bounds = false
@@ -102,7 +96,7 @@ Flash is one resident, headless macOS app:
 - **No global keyboard hooks.** Activation always comes through the `flash://` URL scheme. Hint typing only happens inside the overlay window via standard `NSWindow` `keyDown`.
 - **Precomputes targets continuously.** Subscribes to `NSWorkspace` + per-app `AXObserver` notifications so the hint set is ready before you ask.
 - **Provider chain** per app: Safari/Chrome DOM bridge (Vimium-style `do JavaScript` discovery — exact DOM rects, priority 30) → generic `AccessibilityProvider` (priority 10, every native app and Firefox's in-page DOM via `AXWebArea` descendants). When the browser script bridge is unavailable (Automation denied, "Allow JavaScript from Apple Events" off), the AX walker fills in via dedup.
-- **Multi-app scope.** With `hints.scope ≠ active_app`, Flash walks every relevant app and tags each `JumpTarget` with the owning pid so the commit step activates the right process before clicking.
+- **Active-window only.** Flash always walks the focused application; background apps and other monitors are ignored.
 
 Public SPI lives in `FlashCore` (`JumpProvider`, `JumpTarget`, `AppContext`, `JumpAction`). Add a new provider by implementing the protocol and registering it in `Sources/flash/App/ProviderRegistry.swift`.
 

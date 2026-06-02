@@ -4,44 +4,20 @@ import FlashCore
 import FlashProviders
 import os
 
-/// Coordinates discovery + hint assignment for the focused app (and, when
-/// `hints.scope` extends beyond it, for the other visible apps on the active
-/// monitor or every monitor).
+/// Coordinates discovery + hint assignment for the focused app only.
 ///
-/// Two pipelines feed the same `TargetCache`:
-///
-/// 1. **Eager precompute** runs in the background on a serial AX queue
-///    whenever we get a signal that the front-app's UI changed — workspace
-///    activation, AX window-moved/resized, focused-element changed. The
-///    cache entry includes the *assigned hint labels*, not just the
-///    discovered targets, so the activation hot path can both skip the AX
-///    walk **and** the hint assignment when there's a hit.
-///
-/// 2. **On-demand discovery** is what `discoverAsync` does on the hot path.
-///    Cache hit → call back inline. Miss → dispatch to the AX queue, walk
-///    every context the current scope demands, assign labels, hop to main
-///    with the result.
-///
-/// All AX traversal runs on `axQueue`, a single serial queue. This is the
-/// invariant that fixed the earlier non-determinism: the AX server returns
-/// stable child orderings when only one walker is in flight at a time. Both
-/// pipelines coordinate through `precomputeGen` (so stale precompute work is
-/// skipped at queue head) and `precomputeSuspended` (so a queued precompute
-/// drops itself when activation has already taken priority).
+/// Every `discoverAsync` call dispatches a fresh AX walk on the serial
+/// `axQueue` and never reads from a precomputed cache. We deliberately do
+/// **not** speculatively warm a cache on workspace/AX notifications: those
+/// notifications miss enough state changes (in-page scrolling, JS-driven
+/// DOM updates, focus changes that don't fire AX events) that any cached
+/// result is liable to be wrong by the time the user asks for hints. We
+/// pay the walk cost on every activation in exchange for "what you see is
+/// what you click".
 final class AppMonitor {
   private let registry: ProviderRegistry
-  private let cache: TargetCache
 
   private let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
-  private let observerQueue = DispatchQueue(label: "flash.ax-observer", qos: .utility)
-  private var observers: [pid_t: AXObserver] = [:]
-  private var workspaceTokens: [NSObjectProtocol] = []
-
-  /// AX observers actively invalidate the cache when the source window
-  /// state changes, so the TTL is a backstop, not a freshness driver. Keep
-  /// it long enough that repeated activations on a stable window keep
-  /// hitting cache for free.
-  private let cacheTTL: TimeInterval = 60.0
 
   // MARK: Config (shared between main + axQueue)
   //
@@ -59,109 +35,20 @@ final class AppMonitor {
   }
 
   /// Called by the AppDelegate config file-watcher whenever ~/.config/flash/config.toml
-  /// changes. Atomically swaps the shared config and clears the precomputed
-  /// hint cache — its labels were generated against the previous alphabet
-  /// and would be stale.
+  /// changes. Atomically swaps the shared config.
   func updateConfig(_ cfg: Config) {
     os_unfair_lock_lock(&configLock)
     config = cfg
     os_unfair_lock_unlock(&configLock)
-    cache.clear()
   }
 
-  // MARK: Precompute coordination
-  //
-  // Two pieces of state both touched from main and axQueue. They share one
-  // lock because they're updated as a unit by the activation path
-  // (suspend + read gen) and because the lock is held only across a few
-  // word-sized reads/writes.
-
-  private var precomputeGen: UInt64 = 0
-  private var precomputeSuspended: Bool = false
-  private var precomputeLock = os_unfair_lock_s()
-  private var precomputeDebounce: DispatchWorkItem?
-
-  private func setPrecomputeSuspended(_ v: Bool) {
-    os_unfair_lock_lock(&precomputeLock)
-    precomputeSuspended = v
-    os_unfair_lock_unlock(&precomputeLock)
-  }
-
-  private func isPrecomputeSuspended() -> Bool {
-    os_unfair_lock_lock(&precomputeLock)
-    defer { os_unfair_lock_unlock(&precomputeLock) }
-    return precomputeSuspended
-  }
-
-  private func bumpPrecomputeGen() -> UInt64 {
-    os_unfair_lock_lock(&precomputeLock)
-    precomputeGen &+= 1
-    let v = precomputeGen
-    os_unfair_lock_unlock(&precomputeLock)
-    return v
-  }
-
-  private func currentPrecomputeGen() -> UInt64 {
-    os_unfair_lock_lock(&precomputeLock)
-    defer { os_unfair_lock_unlock(&precomputeLock) }
-    return precomputeGen
-  }
-
-  init(registry: ProviderRegistry, cache: TargetCache, config: Config) {
+  init(registry: ProviderRegistry, config: Config) {
     self.registry = registry
-    self.cache = cache
     self.config = config
   }
 
-  func start() {
-    let nc = NSWorkspace.shared.notificationCenter
-    let activate = nc.addObserver(
-      forName: NSWorkspace.didActivateApplicationNotification,
-      object: nil,
-      queue: .main
-    ) { [weak self] note in
-      guard let self,
-        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-      else { return }
-      self.installAXObserver(for: app)
-      self.schedulePrecompute(for: app)
-    }
-    let terminate = nc.addObserver(
-      forName: NSWorkspace.didTerminateApplicationNotification,
-      object: nil,
-      queue: .main
-    ) { [weak self] note in
-      guard let self,
-        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-      else { return }
-      let pid = app.processIdentifier
-      self.cache.invalidate(pid: pid)
-      if let observer = self.observers.removeValue(forKey: pid) {
-        // Detach the observer's run-loop source before letting it
-        // deallocate. Without this the source dangles on the main
-        // run loop with a freed callback target — a slow leak that
-        // accumulates over long sessions of app-launch/quit churn.
-        CFRunLoopRemoveSource(
-          CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
-      }
-    }
-    workspaceTokens.append(contentsOf: [activate, terminate])
-
-    if let front = NSWorkspace.shared.frontmostApplication {
-      installAXObserver(for: front)
-      schedulePrecompute(for: front)
-    }
-  }
-
-  func stop() {
-    let nc = NSWorkspace.shared.notificationCenter
-    for token in workspaceTokens { nc.removeObserver(token) }
-    workspaceTokens.removeAll()
-    for observer in observers.values {
-      CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
-    }
-    observers.removeAll()
-  }
+  func start() {}
+  func stop() {}
 
   func currentContext() -> AppContext? {
     guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
@@ -170,43 +57,23 @@ final class AppMonitor {
 
   // MARK: Discovery
 
-  /// Activation hot path. Cache hit → calls `completion` synchronously on
-  /// the current run loop. Cache miss → dispatches to the serial AX queue,
-  /// runs the walk + assignment, and hops back to main to invoke
-  /// `completion`. Pending precomputes on the AX queue see
-  /// `precomputeSuspended = true` and short-circuit, so the activation
-  /// walk doesn't queue behind redundant work.
+  /// Activation hot path. Always walks on the serial AX queue and hops
+  /// back to main with the result. No cache, no precompute — the walk is
+  /// the only source of truth.
   func discoverAsync(
     context: AppContext,
     profiler: FlashProfiler? = nil,
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
-    let alphaKey = cfg.alphabetKey
-    if let entry = cacheHit(for: context, alphabetKey: alphaKey) {
-      profiler?.mark("cache_hit_main", detail: "hints=\(entry.hints.count)")
-      completion(entry.hints)
-      return
-    }
-    profiler?.mark("cache_miss_main", detail: "pid=\(context.processID)")
-    setPrecomputeSuspended(true)
-    precomputeDebounce?.cancel()
-
     let enqueueNs = profiler?.intervalStart()
     axQueue.async { [weak self] in
       guard let self else { return }
       if let enqueueNs {
         self.finishQueueWait(profiler, since: enqueueNs)
       }
-      if let entry = self.cacheHit(for: context, alphabetKey: alphaKey) {
-        profiler?.mark("cache_hit_ax", detail: "hints=\(entry.hints.count)")
-        self.setPrecomputeSuspended(false)
-        DispatchQueue.main.async { completion(entry.hints) }
-        return
-      }
-      profiler?.mark("walk_start", detail: "scope=\(cfg.hints.scope.rawValue)")
+      profiler?.mark("walk_start")
       let hints = self.runAndAssign(context: context, cfg: cfg, profiler: profiler)
-      self.setPrecomputeSuspended(false)
       profiler?.mark("walk_done", detail: "hints=\(hints.count)")
       DispatchQueue.main.async { completion(hints) }
     }
@@ -216,24 +83,12 @@ final class AppMonitor {
     profiler?.finishInterval("ax_queue_wait", since: start)
   }
 
-  private func cacheHit(for context: AppContext, alphabetKey: String) -> TargetCache.Entry? {
-    guard
-      let entry = cache.read(
-        pid: context.processID,
-        currentFrame: context.frontWindowFrame,
-        alphabetKey: alphabetKey,
-        ttl: cacheTTL
-      ), entry.bundleID == context.bundleIdentifier
-    else { return nil }
-    return entry
-  }
-
   private func runAndAssign(context: AppContext, cfg: Config, profiler: FlashProfiler? = nil)
     -> [AssignedHint]
   {
     let walkStart = profiler?.intervalStart()
-    configureDebugSinks(for: cfg)
-    let targets = walkAllForScope(focused: context, scope: cfg.hints.scope, profiler: profiler)
+    configureDebugSinks(for: cfg, triggerMs: profiler?.triggerMs)
+    let targets = walkFocused(context: context, profiler: profiler)
     if let walkStart {
       profiler?.finishInterval("walk_all", since: walkStart, detail: "targets=\(targets.count)")
     }
@@ -249,125 +104,119 @@ final class AppMonitor {
       profiler?.finishInterval(
         "assign_hints", since: assignStart, detail: "targets=\(targets.count) hints=\(hints.count)")
     }
-    cache.write(
-      .init(
-        pid: context.processID,
-        bundleID: context.bundleIdentifier,
-        windowFrame: context.frontWindowFrame,
-        hints: hints,
-        alphabetKey: cfg.alphabetKey,
-        timestamp: Date()
-      ))
-    profiler?.mark("cache_write", detail: "hints=\(hints.count)")
     return hints
   }
 
-  // MARK: Multi-app discovery
+  // MARK: Discovery
   //
   // Two layers of filtering keep hints on only the pixels the user can
-  // actually see, regardless of scope:
+  // actually see:
   //
   //   1. `WindowSnapshot` does a painter's-algorithm pass over the
   //      CGWindowList z-order (front → back), subtracting each window's
-  //      bounds from those below it. The result is a per-pid set of
-  //      visible rectangles — the parts of each app's windows that
-  //      aren't covered by anything in front. With scope=`everywhere`
-  //      this is what stops Flash from drawing hints on a buried Safari
-  //      tab whose toolbar isn't actually visible behind the active
-  //      app's window. With scope=`active_app` it also handles
-  //      same-app occlusion (a modal sheet hiding its parent window's
-  //      buttons).
+  //      bounds from those below it. The result is the focused pid's
+  //      genuinely-visible region — the parts of its windows that
+  //      aren't covered by anything in front. This handles same-app
+  //      occlusion (a modal sheet hiding its parent window's buttons)
+  //      and the menu bar / Dock / status items covering the top/edge
+  //      strips.
   //
   //   2. Per-target visibility check: a target survives only if its
-  //      centre falls inside the owning pid's visible region. AX rects
+  //      centre falls inside the focused app's visible region. AX rects
   //      from scrolled-off rows, modal-covered fields, and DOM rects
   //      from minimised browser tabs all get dropped here.
   //
-  // The first pass is also the source of the `expandContexts` filter:
-  // an app with an empty visible region (fully occluded) is never
-  // walked at all, so the AX IPC budget is spent on apps the user can
-  // currently see.
-
-  /// Resolve the list of `AppContext`s to walk for a given scope and run
-  /// the provider chain against each, merging results with spatial dedup.
-  /// The focused app is always walked first so its targets win on overlap
-  /// with background apps.
-  private func walkAllForScope(
-    focused: AppContext,
-    scope: Config.Scope,
+  // After both filters, the candidates go through a smaller-frame-wins
+  // dedup: when a parent (e.g. a 400×300 card wrapper) and its smaller
+  // child (e.g. a 24×24 link) overlap by ≥70%, the smaller one
+  // survives. That's what makes the actual link/button get the hint
+  // instead of an un-clickable wrapper.
+  private func walkFocused(
+    context focused: AppContext,
     profiler: FlashProfiler? = nil
   ) -> [JumpTarget] {
     let primaryH = primaryScreenHeight()
     let snapshotStart = profiler?.intervalStart()
     let snapshot = WindowSnapshot.build(
       primaryH: primaryH,
-      onlyComputingVisibleRegionsFor: scope == .activeApp ? focused.processID : nil
+      onlyComputingVisibleRegionsFor: focused.processID
     )
     if let snapshotStart {
-      let visiblePidCount = snapshot.visibleRegions.count
       profiler?.finishInterval(
         "window_snapshot",
         since: snapshotStart,
-        detail: "windows=\(snapshot.entries.count) visible_pids=\(visiblePidCount)"
+        detail: "windows=\(snapshot.entries.count)"
       )
     }
-    let contexts = expandContexts(focused: focused, scope: scope, snapshot: snapshot)
-    profiler?.mark("contexts", detail: "count=\(contexts.count)")
-    var merged: [JumpTarget] = []
-    merged.reserveCapacity(256)
-    var dedup = SpatialDedup()
-    for ctx in contexts {
-      let region = snapshot.visibleRegions[ctx.processID] ?? []
-      if region.isEmpty { continue }
-      let providerContext = context(ctx, clippedTo: union(of: region))
-      let chain = registry.chain(for: ctx)
-      var browserDOMSucceeded = false
-      for provider in chain {
-        let providerStart = profiler?.intervalStart()
-        let prunedWeb = browserDOMSucceeded && provider is AccessibilityProvider
-        let results: [JumpTarget]
-        if prunedWeb, let ax = provider as? AccessibilityProvider {
-          results =
-            (try? ax.discover(
-              in: providerContext, deadline: .distantFuture, descendIntoWebAreas: false)) ?? []
-        } else {
-          results = (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
+    let region = snapshot.visibleRegions[focused.processID] ?? []
+    if region.isEmpty { return [] }
+    let providerContext = clip(focused, to: union(of: region))
+    let chain = registry.chain(for: focused)
+    var collected: [JumpTarget] = []
+    collected.reserveCapacity(256)
+    var browserDOMSucceeded = false
+    for provider in chain {
+      let providerStart = profiler?.intervalStart()
+      let prunedWeb = browserDOMSucceeded && provider is AccessibilityProvider
+      let results: [JumpTarget]
+      if prunedWeb, let ax = provider as? AccessibilityProvider {
+        results =
+          (try? ax.discover(
+            in: providerContext, deadline: .distantFuture, descendIntoWebAreas: false)) ?? []
+      } else {
+        results = (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
+      }
+      var kept = 0
+      var hidden = 0
+      for t in results {
+        let mid = CGPoint(x: t.frame.midX, y: t.frame.midY)
+        var visible = false
+        for r in region where r.contains(mid) {
+          visible = true
+          break
         }
-        var kept = 0
-        var hidden = 0
-        var duplicate = 0
-        for t in results {
-          let mid = CGPoint(x: t.frame.midX, y: t.frame.midY)
-          var visible = false
-          for r in region where r.contains(mid) {
-            visible = true
-            break
-          }
-          if !visible {
-            hidden += 1
-            continue
-          }
-          if dedup.contains(t.frame) {
-            duplicate += 1
-            continue
-          }
-          dedup.insert(t.frame)
-          merged.append(t)
-          kept += 1
+        if !visible {
+          hidden += 1
+          continue
         }
-        if provider is BrowserScriptProvider, kept > 0 {
-          browserDOMSucceeded = true
-        }
-        if let providerStart {
-          profiler?.finishInterval(
-            "provider.\(provider.identifier)",
-            since: providerStart,
-            detail:
-              "pid=\(ctx.processID) raw=\(results.count) kept=\(kept) hidden=\(hidden) duplicate=\(duplicate) web_pruned=\(prunedWeb)"
-          )
-        }
+        collected.append(t)
+        kept += 1
+      }
+      if provider is BrowserScriptProvider, kept > 0 {
+        browserDOMSucceeded = true
+      }
+      if let providerStart {
+        profiler?.finishInterval(
+          "provider.\(provider.identifier)",
+          since: providerStart,
+          detail:
+            "raw=\(results.count) kept=\(kept) hidden=\(hidden) web_pruned=\(prunedWeb)"
+        )
       }
     }
+
+    let dedupStart = profiler?.intervalStart()
+    var merged: [JumpTarget] = []
+    merged.reserveCapacity(collected.count)
+    collected.sort { ($0.frame.width * $0.frame.height) < ($1.frame.width * $1.frame.height) }
+    var dedup = SpatialDedup()
+    var duplicate = 0
+    for t in collected {
+      if dedup.contains(t.frame) {
+        duplicate += 1
+        continue
+      }
+      dedup.insert(t.frame)
+      merged.append(t)
+    }
+    if let dedupStart {
+      profiler?.finishInterval(
+        "dedup_targets",
+        since: dedupStart,
+        detail: "candidates=\(collected.count) kept=\(merged.count) duplicate=\(duplicate)"
+      )
+    }
+
     let sortStart = profiler?.intervalStart()
     merged.sort { lhs, rhs in
       let lhsTop = lhs.frame.maxY
@@ -385,7 +234,7 @@ final class AppMonitor {
     return merged
   }
 
-  private func context(_ context: AppContext, clippedTo frame: CGRect) -> AppContext {
+  private func clip(_ context: AppContext, to frame: CGRect) -> AppContext {
     AppContext(
       bundleIdentifier: context.bundleIdentifier,
       processID: context.processID,
@@ -401,75 +250,6 @@ final class AppMonitor {
     return out
   }
 
-  private func expandContexts(focused: AppContext, scope: Config.Scope, snapshot: WindowSnapshot)
-    -> [AppContext]
-  {
-    switch scope {
-    case .activeApp:
-      return [focused]
-    case .activeMonitor:
-      let active = activeMonitorFrame(for: focused.processID, snapshot: snapshot)
-      return contextsForVisibleApps(focused: focused, monitorFilter: active, snapshot: snapshot)
-    case .everywhere:
-      return contextsForVisibleApps(focused: focused, monitorFilter: nil, snapshot: snapshot)
-    }
-  }
-
-  /// Enumerate apps that have a non-empty visible region, in z-order
-  /// (front-most first). The focused app is always first. Background
-  /// apps without a Dock icon (`activationPolicy != .regular`) are
-  /// excluded — they're typically menu-bar utilities whose AX trees
-  /// aren't user-clickable surfaces.
-  private func contextsForVisibleApps(
-    focused: AppContext, monitorFilter: CGRect?, snapshot: WindowSnapshot
-  ) -> [AppContext] {
-    var orderedPids: [pid_t] = [focused.processID]
-    var seen: Set<pid_t> = [focused.processID]
-
-    for entry in snapshot.entries {
-      if entry.layer != 0 { continue }
-      if seen.contains(entry.pid) { continue }
-      guard let region = snapshot.visibleRegions[entry.pid], !region.isEmpty else { continue }
-      if let monitor = monitorFilter {
-        if !region.contains(where: { $0.intersects(monitor) }) { continue }
-      }
-      seen.insert(entry.pid)
-      orderedPids.append(entry.pid)
-    }
-
-    var contexts: [AppContext] = []
-    contexts.reserveCapacity(orderedPids.count)
-    for pid in orderedPids {
-      if pid == focused.processID {
-        contexts.append(focused)
-        continue
-      }
-      guard let app = NSRunningApplication(processIdentifier: pid),
-        app.activationPolicy == .regular,
-        let ctx = makeContext(for: app)
-      else { continue }
-      contexts.append(ctx)
-    }
-    return contexts
-  }
-
-  /// The "active monitor" is the screen containing the focused app's
-  /// frontmost layer-0 window. CGWindowList preserves z-order, so the
-  /// first entry with the focused pid in the snapshot is its top window.
-  /// Falls back to `NSScreen.main` (and then the first screen) when no
-  /// window is found — happens if the focused app is briefly minimised
-  /// while Flash activates.
-  private func activeMonitorFrame(for focusedPid: pid_t, snapshot: WindowSnapshot) -> CGRect {
-    for entry in snapshot.entries where entry.layer == 0 && entry.pid == focusedPid {
-      let center = CGPoint(x: entry.nsBounds.midX, y: entry.nsBounds.midY)
-      for screen in NSScreen.screens where screen.frame.contains(center) {
-        return screen.frame
-      }
-      break
-    }
-    return NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? .zero
-  }
-
   private func primaryScreenHeight() -> CGFloat {
     if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
       return primary.frame.height
@@ -479,16 +259,19 @@ final class AppMonitor {
 
   /// Toggle the file-backed debug sinks based on the current config.
   /// Called at the start of every walk so config hot-reloads take
-  /// effect on the very next activation.
+  /// effect on the very next activation. The trigger timestamp is
+  /// propagated so each dump line / log line can be correlated to the
+  /// activation that produced it.
   ///   - `dump_ax`   → AX walker writes per-element trace to
   ///                   ~/Library/Logs/Flash/ax-dump.log (rewritten per walk).
   ///   - `dump_logs` → FlashLog mirrors all stderr writes to
   ///                   ~/Library/Logs/Flash/flash.log (appended).
-  private func configureDebugSinks(for cfg: Config) {
+  private func configureDebugSinks(for cfg: Config, triggerMs: UInt64?) {
     FlashLog.setMirrorToFile(cfg.debug.dumpLogs)
 
     let ax = registry.providers.first { $0 is AccessibilityProvider } as? AccessibilityProvider
     if let ax {
+      ax.triggerMs = triggerMs
       if cfg.debug.dumpAx {
         let home = FileManager.default.homeDirectoryForCurrentUser
         ax.dumpURL =
@@ -498,95 +281,6 @@ final class AppMonitor {
         ax.dumpURL = nil
       }
     }
-  }
-
-  // MARK: Precompute
-
-  /// Workspace-activation precompute: we want this to start *immediately*
-  /// so that by the time the user's ctrl+space round-trips through Karabiner
-  /// + open(1) + Apple Events (~50-100 ms), the walk + label assignment is
-  /// finished and the activation reads everything from cache. AX-observer
-  /// callbacks call this with `debounceMs > 0` to coalesce window-resize
-  /// bursts.
-  private func schedulePrecompute(for app: NSRunningApplication, debounceMs: Int = 0) {
-    precomputeDebounce?.cancel()
-    let myGen = bumpPrecomputeGen()
-    let item = DispatchWorkItem { [weak self] in
-      guard let self else { return }
-      if self.currentPrecomputeGen() != myGen { return }
-      guard let ctx = self.makeContext(for: app) else { return }
-      let cfg = self.snapshotConfig()
-      self.axQueue.async { [weak self] in
-        guard let self else { return }
-        if self.isPrecomputeSuspended() { return }
-        if self.currentPrecomputeGen() != myGen { return }
-        let alphaKey = cfg.alphabetKey
-        if self.cacheHit(for: ctx, alphabetKey: alphaKey) != nil { return }
-        let profiler = FlashProfiler(kind: "precompute", debug: cfg.debug, slowLogsEnabled: false)
-        profiler.mark(
-          "precompute_start",
-          detail:
-            "pid=\(ctx.processID) bundle=\(ctx.bundleIdentifier) scope=\(cfg.hints.scope.rawValue)")
-        _ = self.runAndAssign(context: ctx, cfg: cfg, profiler: profiler)
-        profiler.finish(
-          outcome: "done", detail: "pid=\(ctx.processID) bundle=\(ctx.bundleIdentifier)")
-      }
-    }
-    precomputeDebounce = item
-    if debounceMs > 0 {
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(debounceMs), execute: item)
-    } else {
-      DispatchQueue.main.async(execute: item)
-    }
-  }
-
-  // MARK: AX observation
-
-  private func installAXObserver(for app: NSRunningApplication) {
-    let pid = app.processIdentifier
-    guard pid > 0 else { return }
-    if observers[pid] != nil { return }
-
-    var observerRef: AXObserver?
-    let callback: AXObserverCallback = { _, _, _, refcon in
-      guard let refcon else { return }
-      let monitor = Unmanaged<AppMonitor>.fromOpaque(refcon).takeUnretainedValue()
-      DispatchQueue.main.async {
-        monitor.invalidateAndReschedule()
-      }
-    }
-    guard AXObserverCreate(pid, callback, &observerRef) == .success,
-      let observer = observerRef
-    else { return }
-
-    CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
-    observers[pid] = observer
-
-    // The expensive part — AXObserverAddNotification round-trips to the
-    // target app's AX server, six times. Six IPCs on cold AX can add up
-    // to hundreds of ms. Move them off the main thread so they never
-    // delay the activation hot path.
-    let refcon = Unmanaged.passUnretained(self).toOpaque()
-    observerQueue.async {
-      let axApp = AXUIElementCreateApplication(pid)
-      let notifications: [String] = [
-        kAXFocusedWindowChangedNotification,
-        kAXMainWindowChangedNotification,
-        kAXWindowMovedNotification,
-        kAXWindowResizedNotification,
-        kAXFocusedUIElementChangedNotification,
-        kAXSelectedChildrenChangedNotification,
-      ]
-      for n in notifications {
-        AXObserverAddNotification(observer, axApp, n as CFString, refcon)
-      }
-    }
-  }
-
-  private func invalidateAndReschedule() {
-    guard let app = NSWorkspace.shared.frontmostApplication else { return }
-    cache.invalidate(pid: app.processIdentifier)
-    schedulePrecompute(for: app, debounceMs: 40)
   }
 
   // MARK: Context
@@ -697,7 +391,7 @@ struct WindowSnapshot {
   /// window). Empty for pids that are fully occluded.
   let visibleRegions: [pid_t: [CGRect]]
 
-  static func build(primaryH: CGFloat, onlyComputingVisibleRegionsFor focusedPid: pid_t? = nil)
+  static func build(primaryH: CGFloat, onlyComputingVisibleRegionsFor focusedPid: pid_t)
     -> WindowSnapshot
   {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -725,14 +419,23 @@ struct WindowSnapshot {
       entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns))
     }
 
+    // The "active window" is the front-most layer-0 window owned by the
+    // focused pid. CGWindowList returns windows in z-order, so the
+    // first hit is the right one. Every other window — including other
+    // windows of the same app on another monitor — is treated purely
+    // as an occluder, never as a hintable surface. This is what keeps
+    // hints scoped to the single active window.
+    var activeWindowIndex: Int? = nil
+    for (idx, e) in entries.enumerated() where e.layer == 0 && e.pid == focusedPid {
+      activeWindowIndex = idx
+      break
+    }
+
     var byPid: [pid_t: [CGRect]] = [:]
     var occluders: [CGRect] = []
     occluders.reserveCapacity(entries.count)
-    for e in entries {
-      // Layer-0 windows produce hintable surfaces; higher-layer
-      // windows only act as occluders.
-      let shouldComputeVisibleRegion = e.layer == 0 && (focusedPid == nil || focusedPid == e.pid)
-      if shouldComputeVisibleRegion {
+    for (idx, e) in entries.enumerated() {
+      if idx == activeWindowIndex {
         var fragments: [CGRect] = [e.nsBounds]
         for occluder in occluders {
           if fragments.isEmpty { break }

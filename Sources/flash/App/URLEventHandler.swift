@@ -1,8 +1,8 @@
 import AppKit
 
 enum URLCommand {
-  case activate(rightClick: Bool)
-  case cancel
+  case showHints(rightClick: Bool)
+  case dismissHints
   case quit
 }
 
@@ -27,14 +27,14 @@ final class URLEventHandler: NSObject {
       let components = URLComponents(string: raw)
     else { return }
     switch components.host?.lowercased() ?? components.path.lowercased() {
-    case "activate":
+    case "show_hints":
       let right =
         components.queryItems?.contains(where: {
           $0.name == "right" && ($0.value == "1" || $0.value == "true")
         }) ?? false
-      handler(.activate(rightClick: right))
-    case "cancel":
-      handler(.cancel)
+      handler(.showHints(rightClick: right))
+    case "dismiss_hints":
+      handler(.dismissHints)
     case "quit":
       handler(.quit)
     default:

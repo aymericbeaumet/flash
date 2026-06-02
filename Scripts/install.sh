@@ -165,13 +165,13 @@ fi
 echo
 echo "Installed: $INSTALL_PATH"
 echo "Triggers:"
-echo "  open -g flash://activate"
-echo "  open -g flash://activate?right=1"
-echo "  open -g flash://cancel"
+echo "  open -g flash://show_hints"
+echo "  open -g flash://show_hints?right=1"
+echo "  open -g flash://dismiss_hints"
 echo "  open -g flash://quit"
 echo
 echo "First build with the stable identity? Press ctrl+space; Flash will"
 echo "open System Settings → Privacy & Security → Accessibility for you."
-echo "Toggle Flash on once. From then on, every ./Scripts/bundle.sh re-uses"
+echo "Toggle Flash on once. From then on, every ./Scripts/install.sh re-uses"
 echo "the same signing cert, so TCC's stored designated requirement keeps"
 echo "matching and the grant persists across rebuilds — no more re-granting."

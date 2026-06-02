@@ -31,6 +31,11 @@ final class FlashProfiler {
   private var lastNs: UInt64
   private var marks: [Mark] = []
   private let lock = NSLock()
+  /// Millisecond-precision wall-clock timestamp at the moment this
+  /// profiler was created. Used as a stable correlation id across
+  /// stderr/file logs and the AX dump for the same activation —
+  /// every show_hints trigger gets a unique value.
+  let triggerMs: UInt64
 
   init(kind: String, debug: Config.Debug, slowLogsEnabled: Bool = true) {
     self.id = Self.nextID()
@@ -39,6 +44,7 @@ final class FlashProfiler {
     self.slowMs = slowLogsEnabled && debug.slowMs > 0 ? Double(debug.slowMs) : nil
     self.startNs = DispatchTime.now().uptimeNanoseconds
     self.lastNs = startNs
+    self.triggerMs = UInt64(Date().timeIntervalSince1970 * 1000)
   }
 
   var isRecording: Bool {
@@ -91,7 +97,7 @@ final class FlashProfiler {
     lock.unlock()
 
     var header =
-      "flash: profile kind=\(kind) id=\(id) total_ms=\(Self.format(total)) outcome=\(Self.clean(outcome))"
+      "flash: profile trigger=\(triggerMs) kind=\(kind) id=\(id) total_ms=\(Self.format(total)) outcome=\(Self.clean(outcome))"
     if let detail, !detail.isEmpty {
       header += " \(Self.clean(detail))"
     }
@@ -100,7 +106,7 @@ final class FlashProfiler {
 
     for mark in snapshot {
       var line =
-        "flash: profile kind=\(kind) id=\(id) elapsed_ms=\(Self.format(mark.elapsedMs)) step_ms=\(Self.format(mark.stepMs)) stage=\(Self.clean(mark.name))"
+        "flash: profile trigger=\(triggerMs) kind=\(kind) id=\(id) elapsed_ms=\(Self.format(mark.elapsedMs)) step_ms=\(Self.format(mark.stepMs)) stage=\(Self.clean(mark.name))"
       if let detail = mark.detail, !detail.isEmpty {
         line += " \(detail)"
       }

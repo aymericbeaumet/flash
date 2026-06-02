@@ -12,8 +12,8 @@
 #
 #   CLI flag  >  env var  >  config file  >  built-in default
 #
-# Flag form:   --<section>-<key>=<value>      e.g. --hints-scope=everywhere
-# Env  form:   FLASH_<SECTION>_<KEY>=<value>  e.g. FLASH_HINTS_SCOPE=everywhere
+# Flag form:   --<section>-<key>=<value>      e.g. --hints-min-length=2
+# Env  form:   FLASH_<SECTION>_<KEY>=<value>  e.g. FLASH_HINTS_MIN_LENGTH=2
 # Config path: --config=<path> / FLASH_CONFIG=<path>
 #
 # Source of truth for these defaults lives in `Sources/flash/Config/Config.swift`.
@@ -30,18 +30,12 @@ keys = "<qwerty>"
 # even when the target count would fit in 1.
 min_length = 1
 
-# Which apps' controls get hinted on activation:
-#   "active_app"     — only the focused app (fastest)
-#   "active_monitor" — every visible app with a window on the focused monitor
-#   "everywhere"     — every visible app on every monitor
-scope = "active_app"
-
 [overlay]
 # Hint chip styling. font_size is in points; colors accept #RRGGBB or #RRGGBBAA.
 # Defaults mirror Vimium's classic yellow hint marker — small bold label on a
 # vertical gradient with a darker amber border. Set hint_bg_top == hint_bg_bottom
 # for a flat fill.
-font_size = 11
+font_size = 12
 hint_fg = "#302505"
 hint_bg_top = "#FFF785"
 hint_bg_bottom = "#FFC542"
@@ -49,7 +43,11 @@ hint_border = "#E3BE23"
 
 # Key that dismisses the overlay without committing. The overlay panel
 # receives this via its own keyDown handler — there is no global hotkey.
-exit_key = "escape"
+# Special keys use Karabiner-style angle brackets:
+#   <escape> <return> <tab> <space> <backspace> <delete>
+#   <arrow_up> <arrow_down> <arrow_left> <arrow_right>
+# Or a literal single character: "q"
+exit_key = "<escape>"
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

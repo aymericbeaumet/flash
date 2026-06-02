@@ -6,11 +6,14 @@ import Foundation
 ///
 /// Profiler output and one-shot permission warnings both flow through
 /// here so the file mirror is complete — there is no other code path
-/// that writes to stderr directly.
+/// that writes to stderr directly. File writes are dispatched onto a
+/// dedicated background queue so a slow disk never blocks the
+/// activation hot path.
 enum FlashLog {
   private static let lock = NSLock()
   private static var mirrorEnabled: Bool = false
   private static var handle: FileHandle?
+  private static let writeQueue = DispatchQueue(label: "flash.log.write", qos: .utility)
 
   static func setMirrorToFile(_ enabled: Bool) {
     lock.lock()
@@ -20,18 +23,21 @@ enum FlashLog {
     if enabled {
       handle = openLogFile()
     } else {
-      try? handle?.close()
+      let stale = handle
       handle = nil
+      writeQueue.async { try? stale?.close() }
     }
   }
 
   static func write(_ message: String) {
     fputs(message, stderr)
     lock.lock()
-    defer { lock.unlock() }
-    guard mirrorEnabled, let handle else { return }
-    if let data = message.data(using: .utf8) {
-      try? handle.write(contentsOf: data)
+    let enabled = mirrorEnabled
+    let h = handle
+    lock.unlock()
+    guard enabled, let h, let data = message.data(using: .utf8) else { return }
+    writeQueue.async {
+      try? h.write(contentsOf: data)
     }
   }
 

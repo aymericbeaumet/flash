@@ -4,7 +4,7 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `open -g flash://activate`, overlays vimium-style hint labels on the focused app's clickable elements and clicks one when the user types its hint. No menu bar, no Dock icon, no global keyboard hooks, no CLI client, no autostart.
+A headless, resident macOS app that, when triggered by `open -g flash://show_hints`, overlays vimium-style hint labels on the focused app's clickable elements and clicks one when the user types its hint. No menu bar, no Dock icon, no global keyboard hooks, no CLI client, no autostart.
 
 Activation is exclusively via the `flash://` URL scheme — bound to a hotkey by the user's choice of external tool (Karabiner, skhd, Hammerspoon).
 
@@ -40,8 +40,7 @@ Sources/
     App/
       AppDelegate.swift              # Orchestrator + OverlayCoordinator
       URLEventHandler.swift          # Registers GetURL handler; the ONLY hot-path entry point
-      AppMonitor.swift               # NSWorkspace + per-pid AXObserver, debounced precompute, multi-app scope
-      TargetCache.swift              # Per-pid AssignedHint cache (os_unfair_lock)
+      AppMonitor.swift               # Focused-app AX walk dispatcher (serial AX queue, no cache, no precompute)
       OverlayPanel.swift             # Reusable transparent NSPanel, CALayer pool, animations disabled
       OverlayInput.swift             # NSPanel.keyDown — the ONLY keyboard code in the project
       HintAssigner.swift             # Vimium prefix-free label generator + memoised candidate cache
@@ -54,23 +53,23 @@ Sources/
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
-Scripts/bundle.sh                    # Release build → staging .app → /Applications/Flash.app, ad-hoc codesigned
+Scripts/install.sh                   # Release build → staging .app → /Applications/Flash.app, ad-hoc codesigned
 README.md                            # User-facing
 AGENTS.md                            # This file
 ```
 
 ## Activation flow (read this before editing the hot path)
 
-1. External tool runs `open -g flash://activate[?right=1]`.
+1. External tool runs `open -g flash://show_hints[?right=1]`.
 2. macOS Launch Services routes to the running instance via `kAEGetURL` Apple Event.
 3. `URLEventHandler` parses the URL host/query and invokes the AppDelegate handler.
 4. `AppDelegate.activate(rightClick:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
-5. `AppMonitor.discoverAsync` checks the per-pid cache (keyed by pid + window-frame + alphabet identity). Hit → callback runs inline on main. Miss → dispatch to the serial AX queue.
-6. On the AX queue, `walkAllForScope` expands the focused `AppContext` into one or more contexts per `hints.scope` (just the focused app, or every visible app on the active monitor / on any monitor). For each context, runs the provider chain in descending priority and dedupes overlapping rects via the spatial-hash bucket (`> 70%` of smaller rect).
-7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet — pre-uppercased as `AssignedHint.display`, memoised by `(alphabet, leftHand, length)`. The result lands in the cache so the next activation skips both the walk and the assignment.
+5. `AppMonitor.discoverAsync` dispatches a fresh walk on the serial AX queue. No cache, no precompute — every show_hints walks from scratch so the result reflects the *current* UI, not a (possibly stale) snapshot.
+6. On the AX queue, `walkFocused` runs the provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives).
+7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet — pre-uppercased as `AssignedHint.display`, memoised by `(alphabet, leftHand, length)`.
 8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
 9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
-10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` activates the target's owning pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
+10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` reactivates the focused pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
 11. `ActionDispatcher` prefers `AXUIElementPerformAction(_, kAXPressAction)` (or `kAXShowMenuAction` for right-click) for AX targets — no cursor movement, more reliable. For browser DOM targets it dispatches `.click()` / focus+select / synthetic `contextmenu` in-page via AppleScript `do JavaScript`. Falls back to synthesized `CGEvent` click that restores cursor position after.
 12. Overlay hides; process stays resident.
 
@@ -102,12 +101,12 @@ for s in NSScreen.screens { u = u.union(s.frame) }
 
 ## Determinism
 
-The activation hot path **must return the same result for the same UI state**. An earlier bug: pressing ctrl+space twice returned different hint sets because the cache held a deadline-truncated snapshot from a background precompute, and reads could land on either the cached snapshot or a fresh run.
+The activation hot path **must return the same result for the same UI state**. An earlier bug: pressing ctrl+space twice returned different hint sets because a precompute cache held a deadline-truncated snapshot, and reads could land on either the cached snapshot or a fresh run. That cache + precompute pipeline was deleted; today every show_hints walks fresh.
 
 Current contract:
 
-- **Walks are never truncated.** The per-walk deadline was removed; walks always run to `maxDepth` / `maxTargets`. A walk that times the user out is preferable to a non-deterministic hint set. Latency is bounded by precompute, not by mid-walk truncation.
-- **Cache entries are complete by construction.** They store `[AssignedHint]` plus an `alphabetKey` identity (`hints.keys|min_length|scope`). A config change that touches any of those bumps the key and invalidates entries automatically. The activation path reads-then-writes; the AX queue is serial so precompute can't race a read.
+- **Walks are never truncated.** The per-walk deadline was removed; walks always run to `maxDepth` / `maxTargets`. A walk that times the user out is preferable to a non-deterministic hint set.
+- **No cache, no precompute.** Every show_hints dispatches a fresh walk on the serial AX queue. The trade is freshness over latency: the user sees the *current* UI, not a snapshot from N seconds ago.
 - **Provider ordering is by priority desc.** Within a provider, traversal order is deterministic (AX child order for `AccessibilityProvider`, DOM order for `BrowserScriptProvider`).
 
 ## Animations
@@ -189,12 +188,11 @@ Keys:
 | ---------------------------------- | -------------- | -------------------- |
 | `hints.keys`                       | string         | `"<qwerty>"`         |
 | `hints.min_length`                 | int            | `1`                  |
-| `hints.scope`                      | string         | `"active_app"`       |
-| `overlay.font_size`                | double         | `11`                 |
+| `overlay.font_size`                | double         | `12`                 |
 | `overlay.hint_fg`                  | hex string     | `"#302505"`          |
 | `overlay.hint_bg_top` / `hint_bg_bottom` | hex string | `"#FFF785"` / `"#FFC542"` |
 | `overlay.hint_border`              | hex string     | `"#E3BE23"`          |
-| `overlay.exit_key`                 | string         | `"escape"`           |
+| `overlay.exit_key`                 | string         | `"<escape>"`         |
 | `debug.show_bounds`                | bool           | `false`              |
 | `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.profile`                    | bool           | `false`              |
@@ -217,9 +215,9 @@ Naming convention:
 
 | Surface       | Form                                  | Example                                     |
 | ------------- | ------------------------------------- | ------------------------------------------- |
-| TOML          | `[section]` + `key = value`           | `[hints]\nscope = "everywhere"`             |
-| CLI           | `--<section>-<key>=<value>`           | `--hints-scope=everywhere`                  |
-| Env var       | `FLASH_<SECTION>_<KEY>=<value>`       | `FLASH_HINTS_SCOPE=everywhere`              |
+| TOML          | `[section]` + `key = value`           | `[hints]\nmin_length = 2`                   |
+| CLI           | `--<section>-<key>=<value>`           | `--hints-min-length=2`                      |
+| Env var       | `FLASH_<SECTION>_<KEY>=<value>`       | `FLASH_HINTS_MIN_LENGTH=2`                  |
 | Config path   | `--config=<path>` / `FLASH_CONFIG=…`  | `--config=/tmp/flash.toml`                  |
 
 Precedence (high → low): **CLI flag > env var > TOML > built-in default.** Hot-reload re-applies env + CLI on top of the freshly-read TOML, so the overrides stay in effect across `config.toml` edits.
@@ -232,15 +230,9 @@ When you add a field, also add `applyOverrides` test coverage in `Tests/FlashTes
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a preset token `<qwerty>` (default) / `<colemak>` / `<dvorak>`. Resolution lives in `Alphabet.resolve(_:)`.
 
-`hints.scope` controls which apps get walked on activation:
+**Flash always walks the focused app only.** There is no `hints.scope` knob and no multi-app walk machinery — background apps and other monitors are ignored. `JumpTarget.pid` carries the focused app's pid so `commit` can re-activate it before dispatching the click. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps.
 
-| Value             | Behaviour                                                                 |
-| ----------------- | ------------------------------------------------------------------------- |
-| `"active_app"`    | Default. Walk only the focused app — cheapest, classic vimium semantics.  |
-| `"active_monitor"`| Walk every visible app with a window on the same monitor as the focused app. |
-| `"everywhere"`    | Walk every visible app on every monitor.                                  |
-
-`JumpTarget.pid` carries the owning app's pid; the activation path uses it at commit time so the click reaches whichever app owns the chosen control, not whichever app was frontmost when the user triggered Flash. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps. The latency budget is enforced by the AX-queue + precompute design instead (see "Activation flow" above).
+`overlay.exit_key` follows Karabiner's angle-bracket convention for special keys: `<escape>`, `<return>`, `<tab>`, `<space>`, `<backspace>`, `<delete>`, `<arrow_up/down/left/right>`. A bare value (e.g. `"q"`) matches that literal character.
 
 ## Permissions
 
@@ -256,27 +248,39 @@ Optional:
 
 ### TCC and rebuilds
 
-TCC grants for ad-hoc-signed apps are keyed by the binary's cdhash. Every `./Scripts/bundle.sh` produces a new cdhash and therefore invalidates the previous grant. The user will see "Accessibility / Screen Recording" prompts again after rebuilding. This is a known limitation of ad-hoc development signing. The bundling script `lsregister -f`s the new bundle to refresh URL-scheme routing, but there is no API to migrate TCC grants. Document the re-grant step in user-facing changes that touch the signing/install flow.
+TCC grants for ad-hoc-signed apps are keyed by the binary's cdhash. Every `./Scripts/install.sh` produces a new cdhash and therefore invalidates the previous grant. The user will see "Accessibility / Screen Recording" prompts again after rebuilding. This is a known limitation of ad-hoc development signing. The install script `lsregister -f`s the new bundle to refresh URL-scheme routing, but there is no API to migrate TCC grants. Document the re-grant step in user-facing changes that touch the signing/install flow.
 
 ## Build / install / verify
 
+**Every change requires reinstalling** to see it in action. Flash is a resident background process launched out of `/Applications/Flash.app`; there is no live-reload, dev server, or attached debugger flow. `swift build` produces a binary in `.build/` that the resident process is *not* using — only the copy under `/Applications/Flash.app/Contents/MacOS/flash` matters. So the developer loop is:
+
 ```bash
-# Build only (debug)
+# Make code change → run install (NOT just `swift build`)
+./Scripts/install.sh
+
+# Trigger and verify
+open -g flash://show_hints
+```
+
+`./Scripts/install.sh` is what builds release, codesigns, quits the running instance, replaces the bundle, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs.
+
+```bash
+# Build only (debug; type-check + unit tests, NOT for behaviour verification)
 swift build
 
 # Tests
 swift test
 
-# Build release, install to /Applications/Flash.app, relaunch
-./Scripts/bundle.sh
+# Build release, install to /Applications/Flash.app, relaunch — required after every change
+./Scripts/install.sh
 ```
 
-`bundle.sh`:
+`install.sh`:
 
 1. `swift build -c release`
 2. Assembles `build/Flash.app` from the binary + `Resources/Info.plist`
 3. Ad-hoc codesigns the staging bundle
-4. Quits any running Flash (`osascript`, `flash://quit`, `pkill` fallback)
+4. Quits any running Flash (`osascript`, `open -g flash://quit`, `pkill` fallback)
 5. Replaces `/Applications/Flash.app`
 6. Codesigns the installed copy
 7. `lsregister -f` to refresh URL-scheme routing
@@ -285,14 +289,14 @@ swift test
 After install, verify:
 
 - `pgrep -fl '/Applications/Flash.app/Contents/MacOS/flash'` shows one PID.
-- `open -g flash://cancel` triggers no visible side effect (overlay was already hidden).
+- `open -g flash://dismiss_hints` triggers no visible side effect (overlay was already hidden).
 - `open -g flash://quit` exits the process; relaunch with `open /Applications/Flash.app`.
 
-Karabiner-Elements binding lives in `~/.config/karabiner/karabiner.json` under `profiles[<active>].complex_modifications.rules`. Current binding: `control + spacebar → open -g flash://activate`.
+Karabiner-Elements binding lives in `~/.config/karabiner/karabiner.json` under `profiles[<active>].complex_modifications.rules`. Current binding: `control + spacebar → open -g flash://show_hints`.
 
 ## Testing UI behavior
 
-Tests in `Tests/FlashTests/` cover deterministic units (HintAssigner prefix-free, Alphabet resolution, ConfigLoader parsing). Anything that requires AppKit / AX / Vision is **manually verified**: run `./Scripts/bundle.sh`, grant permissions if needed, then exercise the app in real target apps.
+Tests in `Tests/FlashTests/` cover deterministic units (HintAssigner prefix-free, Alphabet resolution, ConfigLoader parsing). Anything that requires AppKit / AX / Vision is **manually verified**: run `./Scripts/install.sh`, grant permissions if needed, then exercise the app in real target apps.
 
 Do not claim UI-level changes "work" based on the type-checker alone. State explicitly when you couldn't verify visually.
 

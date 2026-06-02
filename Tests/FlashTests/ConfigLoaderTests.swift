@@ -7,8 +7,7 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse("")
     XCTAssertEqual(c.hints.keys, "<qwerty>")
     XCTAssertEqual(c.hints.minLength, 1)
-    XCTAssertEqual(c.hints.scope, .activeApp)
-    XCTAssertEqual(c.overlay.fontSize, 11)
+    XCTAssertEqual(c.overlay.fontSize, 12)
     XCTAssertEqual(c.overlay.hintFG, "#302505")
     XCTAssertEqual(c.overlay.hintBGTop, "#FFF785")
     XCTAssertEqual(c.overlay.hintBGBottom, "#FFC542")
@@ -32,21 +31,6 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse("[hints]\nkeys = \"asdfghjkl\"")
     XCTAssertEqual(c.hints.keys, "asdfghjkl")
     XCTAssertEqual(String(c.resolvedAlphabet.chars), "asdfghjkl")
-  }
-
-  func testParsesScopeActiveMonitor() {
-    let c = ConfigLoader.parse("[hints]\nscope = \"active_monitor\"")
-    XCTAssertEqual(c.hints.scope, .activeMonitor)
-  }
-
-  func testParsesScopeEverywhere() {
-    let c = ConfigLoader.parse("[hints]\nscope = \"everywhere\"")
-    XCTAssertEqual(c.hints.scope, .everywhere)
-  }
-
-  func testUnknownScopeFallsBackToDefault() {
-    let c = ConfigLoader.parse("[hints]\nscope = \"wat\"")
-    XCTAssertEqual(c.hints.scope, .activeApp)
   }
 
   func testParsesDebugProfiling() {
@@ -79,7 +63,6 @@ final class ConfigLoaderTests: XCTestCase {
       "flash",
       "--hints-keys=asdf",
       "--hints-min-length=3",
-      "--hints-scope=everywhere",
       "--overlay-font-size=20",
       "--overlay-hint-fg=#FFFFFF",
       "--overlay-hint-bg-top=#000000",
@@ -95,7 +78,6 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
     XCTAssertEqual(c.hints.keys, "asdf")
     XCTAssertEqual(c.hints.minLength, 3)
-    XCTAssertEqual(c.hints.scope, .everywhere)
     XCTAssertEqual(c.overlay.fontSize, 20)
     XCTAssertEqual(c.overlay.hintFG, "#FFFFFF")
     XCTAssertEqual(c.overlay.hintBGTop, "#000000")
@@ -114,7 +96,6 @@ final class ConfigLoaderTests: XCTestCase {
     let env = [
       "FLASH_HINTS_KEYS": "qwer",
       "FLASH_HINTS_MIN_LENGTH": "2",
-      "FLASH_HINTS_SCOPE": "active_monitor",
       "FLASH_OVERLAY_FONT_SIZE": "18",
       "FLASH_OVERLAY_HINT_FG": "#DDEEFF",
       "FLASH_OVERLAY_HINT_BG_TOP": "#AABBCC",
@@ -130,7 +111,6 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
     XCTAssertEqual(c.hints.keys, "qwer")
     XCTAssertEqual(c.hints.minLength, 2)
-    XCTAssertEqual(c.hints.scope, .activeMonitor)
     XCTAssertEqual(c.overlay.fontSize, 18)
     XCTAssertEqual(c.overlay.hintFG, "#DDEEFF")
     XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
@@ -147,27 +127,27 @@ final class ConfigLoaderTests: XCTestCase {
   func testCLIBeatsEnv() {
     // Both set; CLI must win.
     let base = Config()
-    let args = ["flash", "--hints-scope=everywhere"]
-    let env = ["FLASH_HINTS_SCOPE": "active_monitor"]
+    let args = ["flash", "--hints-min-length=3"]
+    let env = ["FLASH_HINTS_MIN_LENGTH": "5"]
     let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: env)
-    XCTAssertEqual(c.hints.scope, .everywhere)
+    XCTAssertEqual(c.hints.minLength, 3)
   }
 
   func testEnvBeatsTOML() {
-    // Simulate "TOML produced active_monitor; env says everywhere".
+    // Simulate "TOML produced 2; env says 5".
     var base = Config()
-    base.hints.scope = .activeMonitor
-    let env = ["FLASH_HINTS_SCOPE": "everywhere"]
+    base.hints.minLength = 2
+    let env = ["FLASH_HINTS_MIN_LENGTH": "5"]
     let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
-    XCTAssertEqual(c.hints.scope, .everywhere)
+    XCTAssertEqual(c.hints.minLength, 5)
   }
 
   func testInvalidCLIValueIsDropped() {
     var base = Config()
-    base.hints.scope = .activeApp
-    let args = ["flash", "--hints-scope=garbage"]
+    base.hints.minLength = 2
+    let args = ["flash", "--hints-min-length=garbage"]
     let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
-    XCTAssertEqual(c.hints.scope, .activeApp)
+    XCTAssertEqual(c.hints.minLength, 2)
   }
 
   func testUnknownCLIFlagIsIgnored() {

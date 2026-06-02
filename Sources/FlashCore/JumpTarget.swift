@@ -6,10 +6,9 @@ public struct JumpTarget: @unchecked Sendable {
   public let frame: CGRect
   public let role: String?
   public let accessibilityLabel: String?
-  /// pid of the app that owns this target. Required when the discovery
-  /// `scope` extends beyond the focused app — without it, `commit` doesn't
-  /// know which app to bring forward before dispatching the click. Nil is
-  /// fine for legacy single-app contexts.
+  /// pid of the app that owns this target. Always the focused app
+  /// (Flash only walks the active window) but kept on the target so the
+  /// commit path can re-activate by pid without re-querying NSWorkspace.
   public let pid: pid_t?
   public let activate: ((JumpAction) -> Bool)?
   public let providerID: String

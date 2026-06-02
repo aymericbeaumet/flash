@@ -123,10 +123,6 @@ enum ConfigLoader {
       config.hints.keys = parseString(value) ?? config.hints.keys
     case ["hints", "min_length"]:
       config.hints.minLength = parseInt(value) ?? config.hints.minLength
-    case ["hints", "scope"]:
-      if let raw = parseString(value), let scope = Config.Scope(rawValue: raw) {
-        config.hints.scope = scope
-      }
 
     case ["overlay", "font_size"]:
       config.overlay.fontSize = parseDouble(value) ?? config.overlay.fontSize
@@ -242,8 +238,6 @@ enum ConfigLoader {
       config.hints.keys = value
     case "hints-min-length":
       if let i = Int(value) { config.hints.minLength = i }
-    case "hints-scope":
-      if let s = Config.Scope(rawValue: value) { config.hints.scope = s }
 
     case "overlay-font-size":
       if let d = Double(value) { config.overlay.fontSize = d }

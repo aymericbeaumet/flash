@@ -1,24 +1,12 @@
 import Foundation
 
 struct Config {
-  enum Scope: String {
-    /// Hint only the focused app's controls. Default — fastest, matches
-    /// classic vimium semantics.
-    case activeApp = "active_app"
-    /// Hint every visible app with a window on the same monitor as the
-    /// focused app's main window.
-    case activeMonitor = "active_monitor"
-    /// Hint every visible app on every monitor.
-    case everywhere
-  }
-
   struct Hints {
     var keys: String = "<qwerty>"
     var minLength: Int = 1
-    var scope: Scope = .activeApp
   }
   struct Overlay {
-    var fontSize: Double = 11
+    var fontSize: Double = 12
     var hintFG: String = "#302505"
     /// Top stop of the chip's vertical gradient. Vimium's default light
     /// yellow. Set this equal to `hintBGBottom` for a flat fill.
@@ -27,7 +15,7 @@ struct Config {
     var hintBGBottom: String = "#FFC542"
     /// 1px border around the chip.
     var hintBorder: String = "#E3BE23"
-    var exitKey: String = "escape"
+    var exitKey: String = "<escape>"
   }
   struct Debug {
     /// When true, every detected target is outlined alongside its hint chip.
@@ -69,13 +57,5 @@ struct Config {
 
   var resolvedAlphabet: Alphabet.Resolved {
     Alphabet.resolve(hints.keys)
-  }
-
-  /// Stable identity of the hint-generation inputs. Used as the alphabet
-  /// component of the precompute cache key, so a config hot-reload that
-  /// changes the alphabet, min-length, or scope invalidates labels but
-  /// keeps the underlying target geometry valid through the next walk.
-  var alphabetKey: String {
-    "\(hints.keys)|\(hints.minLength)|\(hints.scope.rawValue)"
   }
 }
