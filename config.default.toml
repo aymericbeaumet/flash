@@ -1,0 +1,65 @@
+# Flash — default configuration.
+#
+# This file is the canonical reference for every configuration key Flash
+# accepts, with its built-in default value. Copy any keys you want to
+# override into ~/.config/flash/config.toml; unspecified keys fall back to
+# the values shown here.
+#
+# Edits to ~/.config/flash/config.toml hot-reload — no restart needed.
+#
+# Every key below can ALSO be overridden via a command-line flag or an
+# environment variable. Precedence (high → low):
+#
+#   CLI flag  >  env var  >  config file  >  built-in default
+#
+# Flag form:   --<section>-<key>=<value>      e.g. --hints-scope=everywhere
+# Env  form:   FLASH_<SECTION>_<KEY>=<value>  e.g. FLASH_HINTS_SCOPE=everywhere
+# Config path: --config=<path> / FLASH_CONFIG=<path>
+#
+# Source of truth for these defaults lives in `Sources/flash/Config/Config.swift`.
+# Keep this file in sync with that struct whenever you change a default.
+
+[hints]
+# Alphabet used to generate prefix-free hint labels.
+# Either a preset token (<qwerty>|<colemak>|<dvorak>) or a literal string of
+# ASCII letters (deduped, lowercase, e.g. "asdfghjkl").
+keys = "<qwerty>"
+
+# Floor on label length. Force longer labels (and thus alternating-hand
+# scoring) by raising this — e.g. min_length = 2 always uses 2-char labels
+# even when the target count would fit in 1.
+min_length = 1
+
+# Which apps' controls get hinted on activation:
+#   "active_app"     — only the focused app (fastest)
+#   "active_monitor" — every visible app with a window on the focused monitor
+#   "everywhere"     — every visible app on every monitor
+scope = "active_app"
+
+[overlay]
+# Hint chip styling. font_size is in points; colors accept #RRGGBB or #RRGGBBAA.
+font_size = 14
+hint_bg = "#FFD400"
+hint_fg = "#1B1B1B"
+
+# Key that dismisses the overlay without committing. The overlay panel
+# receives this via its own keyDown handler — there is no global hotkey.
+exit_key = "escape"
+
+[debug]
+# Set to true to draw the raw detected rect for every target alongside its
+# hint chip. Useful when diagnosing missing or misplaced hints.
+show_bounds = false
+
+# Fill + stroke for the debug outline rectangle. Default is transparent
+# fill with a pink stroke.
+bounds_bg = "#00000000"
+bounds_fg = "#FF3B9A"
+
+# Emit a profiling trace for every activation and background precompute.
+# Traces are written to stderr (~/Library/Logs/Flash/ in the installed app).
+profile = false
+
+# Log activation profiles whose end-to-end latency is at least this many
+# milliseconds, even when profile=false. Set to 0 to disable slow logs.
+slow_ms = 100

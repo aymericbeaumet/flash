@@ -25,6 +25,7 @@ If a request would violate any of the above, surface it to the user instead of s
 
 ```
 Package.swift                        # SwiftPM, macOS 14+, swift 5 mode
+config.default.toml                  # Canonical default config (MUST mirror Config.swift defaults)
 Sources/
   FlashCore/                         # Public SPI (provider protocol + value types)
     AppContext.swift                 # Front-app context: bundle, pid, window frame
@@ -32,23 +33,22 @@ Sources/
     JumpAction.swift                 # .leftClick | .rightClick
     JumpProvider.swift               # The protocol; `supports/discover` API
   FlashProviders/                    # Built-in providers (depend on FlashCore + AppKit)
-    Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class — subclassed by per-app providers.
-    Browser/{BrowserScriptProvider,Safari,Chrome,Firefox}.swift
-    Apps/{Messages,Notes,Reminders,Postico,WhatsApp,Linear,Slack}.swift
+    Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
+    Browser/BrowserScriptProvider.swift         # Vimium-style DOM bridge + Safari/Chrome subclasses
   flash/                             # The executable target
     main.swift                       # NSApplication boot
     App/
       AppDelegate.swift              # Orchestrator + OverlayCoordinator
       URLEventHandler.swift          # Registers GetURL handler; the ONLY hot-path entry point
-      AppMonitor.swift               # NSWorkspace + per-pid AXObserver, debounced precompute
-      TargetCache.swift              # Per-pid LRU (currently a dict; warm-up only, not read on activation)
+      AppMonitor.swift               # NSWorkspace + per-pid AXObserver, debounced precompute, multi-app scope
+      TargetCache.swift              # Per-pid AssignedHint cache (os_unfair_lock)
       OverlayPanel.swift             # Reusable transparent NSPanel, CALayer pool, animations disabled
       OverlayInput.swift             # NSPanel.keyDown — the ONLY keyboard code in the project
-      HintAssigner.swift             # Vimium prefix-free label generator
+      HintAssigner.swift             # Vimium prefix-free label generator + memoised candidate cache
       ActionDispatcher.swift         # AXPress preferred; CGEvent click fallback
       ProviderRegistry.swift         # Built-in provider list; chain resolution by priority
     Config/
-      Config.swift                   # Decoded model
+      Config.swift                   # Decoded model — defaults here MUST match config.default.toml
       ConfigLoader.swift             # Hand-rolled TOML subset parser + DispatchSource fs-watch hot-reload
       Alphabet.swift                 # <colemak>/<qwerty>/<dvorak>/literal resolution
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
@@ -64,14 +64,14 @@ AGENTS.md                            # This file
 1. External tool runs `open -g flash://activate[?right=1]`.
 2. macOS Launch Services routes to the running instance via `kAEGetURL` Apple Event.
 3. `URLEventHandler` parses the URL host/query and invokes the AppDelegate handler.
-4. `AppDelegate.activate(rightClick:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`.
-5. `AppMonitor.discover(now:)` runs `runChain` **fresh** every time (no cache read — see "Determinism" below).
-6. `runChain` walks providers in descending priority. For each: call `discover(in:deadline:)`, dedupe overlapping rects (`> 70%` of smaller rect).
-7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet.
-8. `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
+4. `AppDelegate.activate(rightClick:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
+5. `AppMonitor.discoverAsync` checks the per-pid cache (keyed by pid + window-frame + alphabet identity). Hit → callback runs inline on main. Miss → dispatch to the serial AX queue.
+6. On the AX queue, `walkAllForScope` expands the focused `AppContext` into one or more contexts per `hints.scope` (just the focused app, or every visible app on the active monitor / on any monitor). For each context, runs the provider chain in descending priority and dedupes overlapping rects via the spatial-hash bucket (`> 70%` of smaller rect).
+7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet — pre-uppercased as `AssignedHint.display`, memoised by `(alphabet, leftHand, length)`. The result lands in the cache so the next activation skips both the walk and the assignment.
+8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
 9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
-10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` runs `ActionDispatcher.perform`.
-11. `ActionDispatcher` prefers `AXUIElementPerformAction(_, kAXPressAction)` (or `kAXShowMenuAction` for right-click) — no cursor movement, more reliable. Falls back to synthesized `CGEvent` click that restores cursor position after.
+10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` activates the target's owning pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
+11. `ActionDispatcher` prefers `AXUIElementPerformAction(_, kAXPressAction)` (or `kAXShowMenuAction` for right-click) for AX targets — no cursor movement, more reliable. For browser DOM targets it dispatches `.click()` / focus+select / synthetic `contextmenu` in-page via AppleScript `do JavaScript`. Falls back to synthesized `CGEvent` click that restores cursor position after.
 12. Overlay hides; process stays resident.
 
 ## Coordinate systems (subtle, get this right)
@@ -102,13 +102,13 @@ for s in NSScreen.screens { u = u.union(s.frame) }
 
 ## Determinism
 
-`discover(now:)` is on the activation hot path and **must return the same result for the same UI state**. The previous bug: pressing ctrl+space twice returned different hint sets because the cache held a deadline-truncated snapshot from a background precompute, and reads could land on either the cached snapshot or a fresh run.
+The activation hot path **must return the same result for the same UI state**. An earlier bug: pressing ctrl+space twice returned different hint sets because the cache held a deadline-truncated snapshot from a background precompute, and reads could land on either the cached snapshot or a fresh run.
 
 Current contract:
 
-- **Cache is write-only on the activation path.** `discover(now:)` always runs `runChain` fresh. The cache + AXObserver-driven precompute exists only to warm AX state (the first AX query into an app pays a one-time cost). If you re-introduce a cache read, you must also guarantee cache entries are *complete* (not deadline-truncated), and you must not write the cache from precompute and read from activation in a way that creates a race.
-- **The deadline must be generous enough that walks complete on real apps.** `deadline_ms_cold = 300` (used on activation) is calibrated for current built-in providers; if you raise the role allow-list significantly, re-test that walks finish within budget.
-- **Provider ordering is by priority desc.** Within a provider, AX child traversal is in AX-determined order (deterministic).
+- **Walks are never truncated.** The per-walk deadline was removed; walks always run to `maxDepth` / `maxTargets`. A walk that times the user out is preferable to a non-deterministic hint set. Latency is bounded by precompute, not by mid-walk truncation.
+- **Cache entries are complete by construction.** They store `[AssignedHint]` plus an `alphabetKey` identity (`hints.keys|min_length|scope`). A config change that touches any of those bumps the key and invalidates entries automatically. The activation path reads-then-writes; the AX queue is serial so precompute can't race a read.
+- **Provider ordering is by priority desc.** Within a provider, traversal order is deterministic (AX child order for `AccessibilityProvider`, DOM order for `BrowserScriptProvider`).
 
 ## Animations
 
@@ -141,35 +141,102 @@ Steps:
 
 1. Create `Sources/FlashProviders/<Group>/YourProvider.swift`.
 2. Implement the protocol. Return `JumpTarget`s with **global NSScreen coordinates** (bottom-left origin of primary screen). Honour `deadline` inside any recursive walk.
-3. If you need a per-app `AccessibilityProvider` variant, subclass it and set roles / `supportedBundles` / depth caps in `init`. Electron apps (WhatsApp, Linear, Slack) need broader role lists (e.g. `AXGroup`, `AXList`, `AXListItem`, sometimes `AXStaticText`) and bigger depth/target caps because Chromium fans out wide.
+3. **Do not introduce per-app providers**. The project's working assumption is that generic rules are good enough. If a specific app misbehaves, fix the universal walker (roles/depth/etc.) — don't subclass per bundle id. The previous Messages/Notes/WhatsApp/Linear/Slack subclasses were collapsed for this reason; reintroduce them only if a generic-rule change for the same problem hurts other apps.
 4. Register in `Sources/flash/App/ProviderRegistry.swift`'s built-in list. Pick a priority — higher wins on overlapping rects. Existing scale:
-   - 30: browser/script-bridge (Safari, Chrome) and Electron AX subclasses (WhatsApp, Linear, Slack)
-   - 25: Firefox (AX-tuned, walks `AXWebArea` for in-page hints)
-   - 20: per-app native AX subclasses (Messages, Notes, Reminders, Postico)
-   - 10: generic `AccessibilityProvider` fallback
-5. Add a smoke test in the per-app matrix and update README.
+   - 30: `BrowserScriptProvider` (Safari, Chrome and Chromium variants — Vimium-style DOM discovery via `do JavaScript`)
+   - 10: generic `AccessibilityProvider` (universal AX walker; also handles Firefox's in-page DOM via `AXWebArea` descendants)
+5. Add a smoke test and update README.
 
 A `JumpTarget.activate` closure overrides the default action. Use it when the underlying API has a cheaper / more reliable way to "click" than synthesizing a `CGEvent` (e.g. browsers can dispatch `.click()` in JS; AX can call `kAXPressAction`).
+
+## Browser DOM bridge (Vimium sync rule)
+
+`Sources/FlashProviders/Browser/BrowserScriptProvider.swift` contains a JavaScript discovery routine that is a **direct port of Vimium's clickable-element detection**. The user's expectation is that "what Vimium hints" and "what Flash hints" stay observably identical inside Safari and Chromium-family browsers.
+
+Source files in the upstream repo (https://github.com/philc/vimium):
+
+| Upstream file                       | What we port                                               |
+| ----------------------------------- | ---------------------------------------------------------- |
+| `content_scripts/link_hints.js`     | `LocalHints.getLocalHintsForElement` — the clickability rules. `LocalHints.getLocalHints` — the collect → reverse → false-positive → overlap-via-elementFromPoint pipeline. `LocalHints.getElementFromPoint` — shadow-DOM-aware hit test. |
+| `lib/dom_utils.js`                  | `DomUtils.getVisibleClientRect`, `DomUtils.cropRectToVisible`, `DomUtils.isSelectable`. |
+
+The Swift file pins the upstream commit SHA it was last reconciled against, in a block comment above `discoveryJS`. Update procedure when changing the JS:
+
+1. Diff the upstream files against the SHA recorded in the comment block.
+2. Mirror any change inside `discoveryJS` line-by-line where possible. Section markers in the JS (`// ----- LocalHints.getElementFromPoint -----` etc.) name the upstream function each block corresponds to — keep them.
+3. Bump the SHA in the comment block to the new upstream commit.
+4. If a predicate changes category (e.g. a new tag becomes clickable, a role is added, a role drops), update the table below.
+5. If a new feature in Vimium has no Flash equivalent (e.g. their Frame./Scroll. body hints) **document the deviation in the "Pieces deliberately omitted" comment in `discoveryJS`** — do not silently drop it.
+
+Currently omitted from the port (be aware before extending):
+
+- Image-map `<area>` hint expansion (rare on the modern web).
+- `<body>`-as-frame and scrollable-container hints (Vimium uses these for frame focus + scroll commands; Flash has no equivalent semantic).
+- AngularJS `ng-click` attribute family (legacy framework; trivial to re-add).
+- Cross-frame walking (Vimium injects per-frame as a content script; Flash only reaches the top window via `do JavaScript`).
+
+Things that match Vimium today: shadow-DOM walk, `aria-disabled`, `onclick` attr/property, the role allowlist (`button, tab, link, checkbox, menuitem, menuitemcheckbox, menuitemradio, radio, textbox`), `contentEditable`, `jsaction` attribute (Google framework, used by Gmail/Drive/Calendar), native tags (`a, button, select, textarea, input, object, embed, label, img[cursor=zoom-*], details`), the `button`/`btn` class heuristic with false-positive marking, the `<span>` false-positive marker, `tabindex` second-class citizens, the `getClientRects()` + viewport-crop + `visibility:visible` filter, the DOM-order reversal + 6-back/3-up false-positive descendant filter, and the `elementFromPoint` overlap filter at centre + four corners.
 
 ## Configuration
 
 `~/.config/flash/config.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, `#` line comments, trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or inline tables. Add support only if you actually need it.
 
+**`config.default.toml` at the repo root is the canonical reference for every key Flash accepts, with its built-in default value.** When you change a default in `Sources/flash/Config/Config.swift`, change `config.default.toml` in the same commit. When you add a new key, add it to the loader (`ConfigLoader.swift`), the struct (`Config.swift`), the default file, the table in this section, and the README — also in the same commit. The default file is what users diff against to see what they could be overriding; it drifts the moment you forget to update it.
+
 Keys:
 
-| Key                                            | Type           | Default              |
-| ---------------------------------------------- | -------------- | -------------------- |
-| `hints.keys`                                   | string         | `"<qwerty>"`         |
-| `hints.min_length`                             | int            | `1`                  |
-| `overlay.font_size`                            | double         | `14`                 |
-| `overlay.hint_bg` / `hint_fg`                  | hex string     | `"#FFD400"` / `"#1B1B1B"` |
-| `overlay.dim_background`                       | bool           | `true`               |
-| `overlay.exit_key`                             | string         | `"escape"`           |
-| `providers.disabled`                           | array<string>  | `[]`                 |
-| `providers.deadline_ms_hot` / `deadline_ms_cold` | int          | `80` / `300`         |
-| `per_app."<bundle>".roles`                     | array<string>  | —                    |
+| Key                                | Type           | Default              |
+| ---------------------------------- | -------------- | -------------------- |
+| `hints.keys`                       | string         | `"<qwerty>"`         |
+| `hints.min_length`                 | int            | `1`                  |
+| `hints.scope`                      | string         | `"active_app"`       |
+| `overlay.font_size`                | double         | `14`                 |
+| `overlay.hint_bg` / `hint_fg`      | hex string     | `"#FFD400"` / `"#1B1B1B"` |
+| `overlay.exit_key`                 | string         | `"escape"`           |
+| `debug.show_bounds`                | bool           | `false`              |
+| `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
+| `debug.profile`                    | bool           | `false`              |
+| `debug.slow_ms`                    | int            | `100`                |
+
+There is intentionally **no** `per_app.*` table. The project's working assumption is to converge on universal rules before re-introducing per-bundle knobs — `Config.perAppRoles` and its TOML parser case were removed for this reason.
+
+### CLI flag + environment-variable overrides (hard rule)
+
+**Every key in `Config` MUST also be exposed via a command-line flag and an environment variable, in the same commit that introduces the field.** This is enforced by reading code review, not by macros — there is no `derive` magic. The four places that move together when you add a key:
+
+1. `Sources/flash/Config/Config.swift` — struct field with the default.
+2. `Sources/flash/Config/ConfigLoader.swift` — `apply(table:key:value:into:)` switch (TOML parser) **and** `applyOverride(key:value:into:)` switch (CLI/env parser).
+3. `config.default.toml` — the user-visible reference.
+4. The "Keys" table above + the README.
+
+Naming convention:
+
+| Surface       | Form                                  | Example                                     |
+| ------------- | ------------------------------------- | ------------------------------------------- |
+| TOML          | `[section]` + `key = value`           | `[hints]\nscope = "everywhere"`             |
+| CLI           | `--<section>-<key>=<value>`           | `--hints-scope=everywhere`                  |
+| Env var       | `FLASH_<SECTION>_<KEY>=<value>`       | `FLASH_HINTS_SCOPE=everywhere`              |
+| Config path   | `--config=<path>` / `FLASH_CONFIG=…`  | `--config=/tmp/flash.toml`                  |
+
+Precedence (high → low): **CLI flag > env var > TOML > built-in default.** Hot-reload re-applies env + CLI on top of the freshly-read TOML, so the overrides stay in effect across `config.toml` edits.
+
+Bool fields accept `true|1|yes|on` and `false|0|no|off` (case-insensitive) in CLI/env. TOML still requires `true`/`false` per the parser.
+
+Unknown flags and unrecognised `FLASH_*` env vars are silently ignored — this is deliberate so adding a new field to a downstream fork doesn't make upstream builds reject the command line. Malformed values (e.g. `--hints-min-length=hello`) are also silently dropped, matching the TOML loader's behaviour.
+
+When you add a field, also add `applyOverrides` test coverage in `Tests/FlashTests/ConfigLoaderTests.swift`.
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a preset token `<qwerty>` (default) / `<colemak>` / `<dvorak>`. Resolution lives in `Alphabet.resolve(_:)`.
+
+`hints.scope` controls which apps get walked on activation:
+
+| Value             | Behaviour                                                                 |
+| ----------------- | ------------------------------------------------------------------------- |
+| `"active_app"`    | Default. Walk only the focused app — cheapest, classic vimium semantics.  |
+| `"active_monitor"`| Walk every visible app with a window on the same monitor as the focused app. |
+| `"everywhere"`    | Walk every visible app on every monitor.                                  |
+
+`JumpTarget.pid` carries the owning app's pid; the activation path uses it at commit time so the click reaches whichever app owns the chosen control, not whichever app was frontmost when the user triggered Flash. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps. The latency budget is enforced by the AX-queue + precompute design instead (see "Activation flow" above).
 
 ## Permissions
 

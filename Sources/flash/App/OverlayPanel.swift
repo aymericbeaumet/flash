@@ -109,8 +109,8 @@ final class OverlayPanel: NSPanel {
         let borderCG = OverlayPanel.borderCGColor
         let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
         let labelLen = hints.first?.display.count ?? 1
-        let approxWidth = max(18, CGFloat(labelLen) * fontSize * 0.7 + 10)
-        let chipHeight = fontSize + 8
+        let approxWidth = Self.chipWidth(forLabelLength: labelLen, fontSize: fontSize)
+        let chipHeight = Self.chipHeight(forFontSize: fontSize)
         let labelFrame = CGRect(x: 0, y: (chipHeight - fontSize - 2) / 2, width: approxWidth, height: fontSize + 2)
 
         let debugEnabled = debugConfig.showBounds
@@ -164,11 +164,16 @@ final class OverlayPanel: NSPanel {
             label.font = font
             label.frame = labelFrame
 
-            chip.frame = CGRect(
-                x: targetFrame.minX - frame.minX,
-                y: targetFrame.maxY - frame.minY - chipHeight,
+            let chipGlobal = Self.chipFrame(
+                target: targetFrame,
                 width: approxWidth,
                 height: chipHeight
+            )
+            chip.frame = CGRect(
+                x: chipGlobal.minX - frame.minX,
+                y: chipGlobal.minY - frame.minY,
+                width: chipGlobal.width,
+                height: chipGlobal.height
             )
             chip.backgroundColor = bgCG
             chip.borderColor = borderCG
@@ -346,20 +351,55 @@ final class OverlayPanel: NSPanel {
         return makeLabelLayer()
     }
 
-    /// The chip's bounding rect in global NSScreen coordinates for a given hint
-    /// and font size. The renderer in `display(hints:)` and the dispatcher both
-    /// call this so the click point we synthesize is identical to where the
-    /// chip is drawn — never the AX rect's geometric centre, which can be
-    /// hundreds of pixels away for a long row.
-    static func chipFrame(for hint: AssignedHint, fontSize: CGFloat) -> CGRect {
-        let approxWidth = max(18, CGFloat(hint.display.count) * fontSize * 0.7 + 10)
-        let chipHeight = fontSize + 8
+    /// Chip's bounding rect in global NSScreen coordinates, for a target
+    /// rect + uniform chip size.
+    ///
+    /// All-or-nothing centring:
+    ///  - If the target is small in **both** dimensions (each less than
+    ///    150 % of the matching chip dimension — icons, single-glyph
+    ///    buttons, switches), centre the chip on the target's midpoint.
+    ///  - Otherwise (the target is bigger than 1.5× the chip on at
+    ///    least one axis — rows, buttons, panels, hero cards) anchor
+    ///    the chip to the target's top-left corner with no padding.
+    static func chipFrame(target: CGRect, width: CGFloat, height: CGFloat) -> CGRect {
+        let centerBoth = target.width < width * 1.5 && target.height < height * 1.5
+        if centerBoth {
+            return CGRect(
+                x: target.midX - width / 2,
+                y: target.midY - height / 2,
+                width: width,
+                height: height
+            )
+        }
+        // Top-left in NSScreen Y-up: minX horizontally, maxY - height
+        // vertically (top of chip flush with top of target).
         return CGRect(
-            x: hint.target.frame.minX,
-            y: hint.target.frame.maxY - chipHeight,
-            width: approxWidth,
-            height: chipHeight
+            x: target.minX,
+            y: target.maxY - height,
+            width: width,
+            height: height
         )
+    }
+
+    /// Convenience overload. Used by `commit` (`hint.target.frame` is the
+    /// only thing it knows) to derive the click point — the renderer
+    /// inside `display(hints:)` calls the `(target:width:height:)` form
+    /// directly so it can reuse the per-render uniform chip size.
+    static func chipFrame(for hint: AssignedHint, fontSize: CGFloat) -> CGRect {
+        let width = chipWidth(forLabelLength: hint.display.count, fontSize: fontSize)
+        let height = chipHeight(forFontSize: fontSize)
+        return chipFrame(target: hint.target.frame, width: width, height: height)
+    }
+
+    /// Centralised chip-dimension formulas so the renderer in
+    /// `display(hints:)` and the click-point computation in `commit`
+    /// never drift out of sync.
+    static func chipWidth(forLabelLength labelLen: Int, fontSize: CGFloat) -> CGFloat {
+        max(14, CGFloat(labelLen) * fontSize * 0.6 + 6)
+    }
+
+    static func chipHeight(forFontSize fontSize: CGFloat) -> CGFloat {
+        fontSize + 4
     }
 
     static func unionScreenFrame() -> NSRect {

@@ -64,9 +64,13 @@ ctrl + alt + shift - f : open -g flash://activate?right=1
 ```toml
 [hints]
 # Either a preset token in <angle brackets> or a literal character string.
-# Default: "<qwerty>"
 keys = "<qwerty>"             # or "<colemak>", "<dvorak>", or e.g. "asdfghjkl"
 min_length = 1
+# Which apps' controls get hinted on activation:
+#   "active_app"     — only the focused app (default, fastest)
+#   "active_monitor" — every visible app on the focused monitor
+#   "everywhere"     — every visible app on every monitor
+scope = "active_app"
 
 [overlay]
 font_size = 14
@@ -74,11 +78,15 @@ hint_bg = "#FFD400"
 hint_fg = "#1B1B1B"
 exit_key = "escape"
 
-[providers]
-disabled = []                 # disable by id, e.g. ["slack"]
-deadline_ms_hot = 80
-deadline_ms_cold = 300
+[debug]
+show_bounds = false
+bounds_bg = "#00000000"       # transparent fill
+bounds_fg = "#FF3B9A"         # pink stroke around each detected rect
+profile = false               # log every activation/precompute timing trace
+slow_ms = 100                 # log activations at/above this latency; 0 disables
 ```
+
+Debug logs are written to stderr. In the installed app, check `~/Library/Logs/Flash/`.
 
 ## Architecture
 
@@ -87,7 +95,8 @@ Flash is one resident, headless macOS app:
 - **No menu bar, no Dock icon, no preferences UI.** Only the transparent hint overlay.
 - **No global keyboard hooks.** Activation always comes through the `flash://` URL scheme. Hint typing only happens inside the overlay window via standard `NSWindow` `keyDown`.
 - **Precomputes targets continuously.** Subscribes to `NSWorkspace` + per-app `AXObserver` notifications so the hint set is ready before you ask.
-- **Provider chain** per front app: bundle-specific (Safari, Chrome, Firefox, Messages, Notes, Reminders, Postico, WhatsApp, Linear, Slack) → generic `AccessibilityProvider`. Firefox uses an AX walk that includes the in-page DOM (`AXWebArea` descendants) since Firefox doesn't expose `do JavaScript` like Safari/Chrome.
+- **Provider chain** per app: Safari/Chrome DOM bridge (Vimium-style `do JavaScript` discovery — exact DOM rects, priority 30) → generic `AccessibilityProvider` (priority 10, every native app and Firefox's in-page DOM via `AXWebArea` descendants). When the browser script bridge is unavailable (Automation denied, "Allow JavaScript from Apple Events" off), the AX walker fills in via dedup.
+- **Multi-app scope.** With `hints.scope ≠ active_app`, Flash walks every relevant app and tags each `JumpTarget` with the owning pid so the commit step activates the right process before clicking.
 
 Public SPI lives in `FlashCore` (`JumpProvider`, `JumpTarget`, `AppContext`, `JumpAction`). Add a new provider by implementing the protocol and registering it in `Sources/flash/App/ProviderRegistry.swift`.
 

@@ -2,9 +2,15 @@ import AppKit
 import ApplicationServices
 import FlashCore
 
-/// Single, universal AX walker. No per-app variants any more — every macOS app
-/// is treated by the same rules: clickable controls, text inputs, and rows in
+/// Single, universal AX walker. No per-app variants — every macOS app is
+/// treated by the same rules: clickable controls, text inputs, and rows in
 /// virtualised lists. Section-header rows are suppressed via `skipSubroles`.
+///
+/// The role/skip/depth/target sets are intentionally *not* exposed for
+/// per-app override. The project's working assumption is that generic rules
+/// are good enough; if a specific app misbehaves we tune the universal set,
+/// not the per-app fork. See AGENTS.md ("Project layout" + "Browser DOM
+/// bridge") for the rationale.
 ///
 /// Performance contract:
 ///   - Exactly one IPC per visited element (batched via
@@ -14,22 +20,13 @@ import FlashCore
 ///     is never walked. On Notes' 292-row sidebar this turns a ~300-element
 ///     walk into a ~30-element walk — only the visible rows are touched.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
-///     returned targets is deterministic). The chain-level deadline in
-///     AppMonitor is the only safety net.
-open class AccessibilityProvider: JumpProvider {
-    public let identifier: String
-    public let priority: Int
-    public let roles: Set<String>
-    public let leafRoles: Set<String>
-    public let skipSubroles: Set<String>
-    public let maxDepth: Int
-    public let maxTargets: Int
-    public let supportedBundles: Set<String>?
+///     returned targets is deterministic).
+public final class AccessibilityProvider: JumpProvider {
+    public let identifier: String = "accessibility"
+    public let priority: Int = 10
 
-    /// Every clickable / focusable role we recognise. Generic across apps —
-    /// don't add app-specific roles here. If an app has a custom non-standard
-    /// role you want to hint, expose it through config later.
-    public static let defaultRoles: Set<String> = [
+    /// Every clickable / focusable role we recognise. Generic across apps.
+    public static let roles: Set<String> = [
         // Click targets
         "AXButton", "AXLink",
         "AXMenuItem", "AXMenuButton",
@@ -52,7 +49,7 @@ open class AccessibilityProvider: JumpProvider {
     /// else — buttons, popups, menu items — we descend, which means a
     /// button that has an open menu underneath it gets its menu items
     /// hinted alongside the button itself.
-    public static let defaultLeafRoles: Set<String> = [
+    public static let leafRoles: Set<String> = [
         "AXRow", "AXCell",
     ]
 
@@ -60,7 +57,7 @@ open class AccessibilityProvider: JumpProvider {
     /// NSOutlineView/NSTableView. We *don't* add these as targets, but we
     /// keep descending — so the disclosure triangle inside the header gets
     /// hinted on its own.
-    public static let defaultSkipSubroles: Set<String> = [
+    public static let skipSubroles: Set<String> = [
         "AXOutlineSecondaryRow",
         "AXSecondaryOutlineRow",
         "AXSeparatorRow",
@@ -75,30 +72,12 @@ open class AccessibilityProvider: JumpProvider {
         "AXTextField", "AXSearchField", "AXTextArea",
     ]
 
-    public init(
-        identifier: String = "accessibility",
-        priority: Int = 10,
-        roles: Set<String> = AccessibilityProvider.defaultRoles,
-        leafRoles: Set<String> = AccessibilityProvider.defaultLeafRoles,
-        skipSubroles: Set<String> = AccessibilityProvider.defaultSkipSubroles,
-        maxDepth: Int = 80,
-        maxTargets: Int = 1500,
-        supportedBundles: Set<String>? = nil
-    ) {
-        self.identifier = identifier
-        self.priority = priority
-        self.roles = roles
-        self.leafRoles = leafRoles
-        self.skipSubroles = skipSubroles
-        self.maxDepth = maxDepth
-        self.maxTargets = maxTargets
-        self.supportedBundles = supportedBundles
-    }
+    public static let maxDepth: Int = 80
+    public static let maxTargets: Int = 1500
 
-    open func supports(_ context: AppContext) -> Bool {
-        if let s = supportedBundles { return s.contains(context.bundleIdentifier) }
-        return true
-    }
+    public init() {}
+
+    public func supports(_ context: AppContext) -> Bool { true }
 
     // Cached CFTypeID for AXValue. AXUIElementCopyMultipleAttributeValues
     // returns AXValueAttributeError (which is itself an AXValue with type
@@ -127,20 +106,33 @@ open class AccessibilityProvider: JumpProvider {
         kAXChildrenAttribute,      // 7 — fallback
     ] as CFArray
 
-    open func discover(in context: AppContext, deadline _: Date) throws -> [JumpTarget] {
+    public func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget] {
+        try discover(in: context, deadline: deadline, descendIntoWebAreas: true)
+    }
+
+    /// `descendIntoWebAreas` is false only when a higher-priority browser DOM
+    /// provider already returned page targets. In that case AX still
+    /// contributes browser chrome controls, but skipping AXWebArea descendants
+    /// avoids walking the entire web page twice.
+    public func discover(
+        in context: AppContext,
+        deadline _: Date,
+        descendIntoWebAreas: Bool
+    ) throws -> [JumpTarget] {
         let app = AXUIElementCreateApplication(context.processID)
         let screenH = primaryScreenHeight()
 
-        // The clip rect is the *actual on-screen union of the source app's
-        // visible windows*, taken from the WindowServer's perspective via
-        // CGWindowList. This is stricter than the screen frame:
+        // The clip rect is supplied by AppMonitor from its single
+        // WindowServer visibility snapshot. This is stricter than the screen
+        // frame:
         //   - AX can report frames for scrolled-off rows that happen to fall
         //     within the screen bounds (below the Notes window, on the
         //     wallpaper). Those rejected here.
-        //   - But popover/menu windows owned by the same process *are* in
-        //     CGWindowList, so they're included in the union. Hints on the
-        //     share popover items pass through.
-        let clip = visibleWindowsUnion(pid: context.processID)
+        //   - Popover/menu windows owned by the same process are included in
+        //     the snapshot's visible region. Hints on those items pass
+        //     through without doing a second CGWindowListCopyWindowInfo call
+        //     per provider.
+        let clip = context.frontWindowFrame
         guard !clip.isNull else { return [] }
 
         var out: [JumpTarget] = []
@@ -151,36 +143,10 @@ open class AccessibilityProvider: JumpProvider {
         // a separate kAXChildrenAttribute IPC on the app first. The app's
         // role (AXApplication) doesn't match `roles`, so it doesn't become
         // a target itself — it just descends.
-        walk(app, depth: 0, screenH: screenH,
-             visible: clip, out: &out, idCounter: &idCounter)
+        walk(app, depth: 0, screenH: screenH, visible: clip,
+             pid: context.processID, descendIntoWebAreas: descendIntoWebAreas,
+             out: &out, idCounter: &idCounter)
         return out
-    }
-
-    /// Union, in NSScreen coordinates, of every window the WindowServer is
-    /// currently rendering for `pid`. Off-screen / minimized windows aren't
-    /// in CGWindowList with `.optionOnScreenOnly`, so they're excluded.
-    private func visibleWindowsUnion(pid: pid_t) -> CGRect {
-        guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-            return .null
-        }
-        let screenH = primaryScreenHeight()
-        var union: CGRect = .null
-        for w in info {
-            guard let wpid = w[kCGWindowOwnerPID as String] as? Int32, pid_t(wpid) == pid else { continue }
-            guard let boundsDict = w[kCGWindowBounds as String] as? [String: Any],
-                  let cgBounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
-            else { continue }
-            // CGWindowList reports bounds in top-left origin; flip to NSScreen
-            // (bottom-left origin of primary screen).
-            let ns = CGRect(
-                x: cgBounds.minX,
-                y: screenH - cgBounds.minY - cgBounds.height,
-                width: cgBounds.width,
-                height: cgBounds.height
-            )
-            union = union.union(ns)
-        }
-        return union
     }
 
     private func walk(
@@ -188,11 +154,13 @@ open class AccessibilityProvider: JumpProvider {
         depth: Int,
         screenH: CGFloat,
         visible: CGRect,
+        pid: pid_t,
+        descendIntoWebAreas: Bool,
         out: inout [JumpTarget],
         idCounter: inout Int
     ) {
-        if depth > maxDepth { return }
-        if out.count >= maxTargets { return }
+        if depth > Self.maxDepth { return }
+        if out.count >= Self.maxTargets { return }
 
         var valuesRef: CFArray?
         let err = AXUIElementCopyMultipleAttributeValues(
@@ -212,15 +180,19 @@ open class AccessibilityProvider: JumpProvider {
         let visibleRows = vals[6] as? [AXUIElement]
         let allChildren = vals[7] as? [AXUIElement]
 
+        if !descendIntoWebAreas, role == "AXWebArea" {
+            return
+        }
+
         var addedAsTarget = false
         if enabled,
-           let r = role, roles.contains(r),
+           let r = role, Self.roles.contains(r),
            let posV = posValue, let sizeV = sizeValue,
            let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH) {
             // Skip subroles that mark non-target group containers (e.g. outline
             // section headers). We still descend, so their children can be
             // hinted individually.
-            let suppressed = subrole.map { skipSubroles.contains($0) } ?? false
+            let suppressed = subrole.map { Self.skipSubroles.contains($0) } ?? false
             if !suppressed {
                 let center = CGPoint(x: frame.midX, y: frame.midY)
                 if visible.contains(center) {
@@ -254,10 +226,11 @@ open class AccessibilityProvider: JumpProvider {
                             }
                         }
                         out.append(JumpTarget(
-                            id: "ax-\(idCounter)",
+                            id: "ax-\(pid)-\(idCounter)",
                             frame: frame,
                             role: r,
                             accessibilityLabel: nil,
+                            pid: pid,
                             activate: activate,
                             providerID: identifier
                         ))
@@ -269,7 +242,7 @@ open class AccessibilityProvider: JumpProvider {
 
         // Leaf-role pruning: stop descending once we've added a target whose
         // role we consider atomic.
-        if addedAsTarget, let r = role, leafRoles.contains(r) {
+        if addedAsTarget, let r = role, Self.leafRoles.contains(r) {
             return
         }
 
@@ -282,8 +255,17 @@ open class AccessibilityProvider: JumpProvider {
         // actually rendered on screen.
         let children = visibleChildren ?? visibleRows ?? allChildren ?? []
         for child in children {
-            walk(child, depth: depth + 1, screenH: screenH, visible: visible, out: &out, idCounter: &idCounter)
-            if out.count >= maxTargets { return }
+            walk(
+                child,
+                depth: depth + 1,
+                screenH: screenH,
+                visible: visible,
+                pid: pid,
+                descendIntoWebAreas: descendIntoWebAreas,
+                out: &out,
+                idCounter: &idCounter
+            )
+            if out.count >= Self.maxTargets { return }
         }
     }
 

@@ -2,17 +2,30 @@ import Foundation
 import FlashCore
 import FlashProviders
 
-/// One generic AccessibilityProvider handles every app. No per-app special
-/// cases — the rule set is universal: clickable controls, text inputs, list
-/// rows in virtualised containers. App-specific tuning belongs in config
-/// later, not in code.
+/// The provider chain for a given app:
+///   - Browser script bridge for Safari / Chrome (priority 30) — Vimium-style
+///     DOM discovery via AppleScript `do JavaScript`. Falls back silently to
+///     AX if Automation is denied.
+///   - Generic AX walker (priority 10) — universal, handles every native app
+///     and Firefox's in-page DOM via AXWebArea descendants.
+///
+/// Within a chain, higher priority runs first. On overlapping rects the
+/// higher-priority provider wins via spatial dedup in AppMonitor — so for
+/// Safari/Chrome the script bridge's precise DOM rects suppress AX-derived
+/// web-area targets.
+///
+/// There is no per-app configuration here on purpose. The project's working
+/// assumption is to converge on universal rules before reintroducing
+/// per-bundle knobs. See AGENTS.md → "Adding a new provider" for the policy.
 final class ProviderRegistry {
     private(set) var providers: [JumpProvider]
 
-    init(config: Config) {
-        let generic = AccessibilityProvider()
-        let disabled = Set(config.providers.disabled)
-        providers = [generic].filter { !disabled.contains($0.identifier) }
+    init() {
+        providers = [
+            SafariProvider(),
+            ChromeProvider(),
+            AccessibilityProvider(),
+        ]
     }
 
     func chain(for context: AppContext) -> [JumpProvider] {

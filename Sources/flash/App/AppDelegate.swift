@@ -36,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         config = ConfigLoader.load()
-        registry = ProviderRegistry(config: config)
+        registry = ProviderRegistry()
         monitor = AppMonitor(registry: registry, cache: cache, config: config)
         monitor.start()
 
@@ -110,33 +110,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // MARK: Activation
 
     private func activate(rightClick: Bool) {
+        let profiler = FlashProfiler(kind: "activation", debug: config.debug)
+        profiler.mark("url", detail: "right_click=\(rightClick)")
+
         // Drop concurrent / redundant triggers. A press during an in-flight
         // walk, or while hints are already on screen, is a no-op — never a
         // queued second activation. This is what makes rapid ctrl+space
         // presses behave: one walk, one overlay, no multi-fire backlog.
-        if activationInFlight || !currentHints.isEmpty { return }
+        if activationInFlight || !currentHints.isEmpty {
+            profiler.finish(
+                outcome: "dropped_busy",
+                detail: "activation_in_flight=\(activationInFlight) visible_hints=\(currentHints.count)"
+            )
+            return
+        }
 
-        guard let context = monitor.currentContext() else { return }
+        let contextStart = profiler.intervalStart()
+        guard let context = monitor.currentContext() else {
+            profiler.finish(outcome: "no_context")
+            return
+        }
+        profiler.finishInterval(
+            "current_context",
+            since: contextStart,
+            detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)"
+        )
         sourceAppPID = context.processID
         pendingAction = rightClick ? .rightClick : .leftClick
 
         overlay.overlayConfig = config.overlay
         overlay.debugConfig = config.debug
 
+        let permissionStart = profiler.intervalStart()
         if !isAccessibilityTrusted() {
+            profiler.finishInterval("accessibility_check", since: permissionStart, detail: "trusted=false")
             promptForAccessibility()
+            profiler.finish(outcome: "accessibility_denied", detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)")
             return
         }
+        profiler.finishInterval("accessibility_check", since: permissionStart, detail: "trusted=true")
 
         activationGen &+= 1
         let myGen = activationGen
         activationInFlight = true
-        monitor.discoverAsync(context: context) { [weak self] hints in
+        monitor.discoverAsync(context: context, profiler: profiler) { [weak self] hints in
             guard let self else { return }
             self.activationInFlight = false
             // The walk is done; gate is open for the next activation
             // regardless of whether *this* walk's result is still relevant.
-            guard self.activationGen == myGen else { return }
+            guard self.activationGen == myGen else {
+                profiler.finish(outcome: "stale_generation", detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)")
+                return
+            }
             if hints.isEmpty {
                 // Empty result is also the symptom of accessibility
                 // permission being revoked between activations: AX walks
@@ -146,12 +171,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
                 if !PermissionCheck.isAccessibilityTrusted {
                     self.cachedAccessibilityTrusted = false
                     self.promptForAccessibility()
+                    profiler.finish(outcome: "accessibility_revoked", detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)")
+                } else {
+                    profiler.finish(outcome: "no_targets", detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)")
                 }
                 return
             }
             self.currentHints = hints
             self.currentPrefix = ""
+            let displayStart = profiler.intervalStart()
             self.overlay.display(hints: hints)
+            profiler.finishInterval("overlay_display", since: displayStart, detail: "hints=\(hints.count)")
+            profiler.finish(outcome: "displayed", detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier) hints=\(hints.count)")
         }
     }
 
@@ -271,14 +302,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     private func commit(hint: AssignedHint) {
         let action = pendingAction
-        let pid = sourceAppPID
+        // Use the target's own owning pid when present (cross-app scope) and
+        // fall back to the activation-time focused pid otherwise. This is
+        // the bit that makes `hints.scope = active_monitor` / `everywhere`
+        // actually click in the right app — the click is dispatched to the
+        // app that owns the chosen control, not the app that happened to be
+        // frontmost when the user pressed ctrl+space.
+        let pid = hint.target.pid ?? sourceAppPID
         // Compute the chip's centre BEFORE hiding the overlay so the dispatcher
         // can synthesize a click at the same on-screen point the user just saw.
         let chip = OverlayPanel.chipFrame(for: hint, fontSize: CGFloat(config.overlay.fontSize))
         let clickPoint = CGPoint(x: chip.midX, y: chip.midY)
 
         overlay.hide()
-        // Restore focus to the source app before dispatching, so AXPress / the
+        // Restore focus to the target app before dispatching, so AXPress / the
         // synthesized click both reach the intended window.
         if let pid, let app = NSRunningApplication(processIdentifier: pid) {
             app.activate()
