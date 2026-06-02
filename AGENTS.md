@@ -199,6 +199,8 @@ Keys:
 | `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.profile`                    | bool           | `false`              |
 | `debug.slow_ms`                    | int            | `100`                |
+| `debug.dump_ax`                    | bool           | `false`              |
+| `debug.dump_logs`                  | bool           | `false`              |
 
 There is intentionally **no** `per_app.*` table. The project's working assumption is to converge on universal rules before re-introducing per-bundle knobs — `Config.perAppRoles` and its TOML parser case were removed for this reason.
 

@@ -30,194 +30,197 @@ import FlashCore
 /// against the upstream files and bump the commit SHA in the comment block.
 /// The sync policy is documented in `AGENTS.md` under "Browser DOM bridge".
 open class BrowserScriptProvider: JumpProvider {
-    public let identifier: String
-    public let priority: Int
-    public let supportedBundles: Set<String>
-    private var bridgeRetryAfter: Date?
+  public let identifier: String
+  public let priority: Int
+  public let supportedBundles: Set<String>
+  private var bridgeRetryAfter: Date?
 
-    public init(
-        identifier: String,
-        priority: Int,
-        supportedBundles: Set<String>
-    ) {
-        self.identifier = identifier
-        self.priority = priority
-        self.supportedBundles = supportedBundles
+  public init(
+    identifier: String,
+    priority: Int,
+    supportedBundles: Set<String>
+  ) {
+    self.identifier = identifier
+    self.priority = priority
+    self.supportedBundles = supportedBundles
+  }
+
+  open func supports(_ context: AppContext) -> Bool {
+    supportedBundles.contains(context.bundleIdentifier)
+  }
+
+  /// Build the AppleScript that runs `js` in the active tab. Subclasses
+  /// emit the bundle-specific verb (`do JavaScript in document 1` vs
+  /// `execute active tab of window 1 javascript`).
+  open func appleScript(running js: String) -> String {
+    fatalError("BrowserScriptProvider subclasses must override appleScript(running:)")
+  }
+
+  public func discover(in context: AppContext, deadline _: Date) throws -> [JumpTarget] {
+    // The discovery JS returns a JSON array of
+    // `[id, screenX_topLeft, screenY_topLeft, w, h, tag]` tuples — keys
+    // chosen for compactness to keep the AppleScript string short.
+    if let retryAfter = bridgeRetryAfter, Date() < retryAfter {
+      return []
+    }
+    guard let raw = runEscapedJS(Self.escapedDiscoveryJS) else {
+      // Bridge failures are usually permission/configuration problems:
+      // Automation denied, no document, or "Allow JavaScript from Apple
+      // Events" disabled. Back off briefly so the generic AX fallback
+      // does not pay the same AppleScript failure cost on every
+      // activation while still recovering quickly after the user fixes
+      // the browser setting.
+      bridgeRetryAfter = Date().addingTimeInterval(5)
+      return []
+    }
+    bridgeRetryAfter = nil
+    guard let data = raw.data(using: .utf8),
+      let arr = try? JSONSerialization.jsonObject(with: data) as? [[Any]]
+    else {
+      return []
     }
 
-    open func supports(_ context: AppContext) -> Bool {
-        supportedBundles.contains(context.bundleIdentifier)
+    let screenH = primaryScreenHeight()
+    var out: [JumpTarget] = []
+    out.reserveCapacity(arr.count)
+
+    for entry in arr {
+      guard entry.count >= 5,
+        let id = (entry[0] as? NSNumber)?.intValue,
+        let sx = (entry[1] as? NSNumber)?.doubleValue,
+        let sy = (entry[2] as? NSNumber)?.doubleValue,
+        let w = (entry[3] as? NSNumber)?.doubleValue,
+        let h = (entry[4] as? NSNumber)?.doubleValue
+      else { continue }
+      let tag = (entry.count > 5 ? entry[5] : nil) as? String
+      // sx/sy are top-left in JS screen coords (Y-down, origin
+      // top-left of primary). Flip to NSScreen (Y-up, origin
+      // bottom-left of primary).
+      let nsY = screenH - CGFloat(sy) - CGFloat(h)
+      let frame = CGRect(x: CGFloat(sx), y: nsY, width: CGFloat(w), height: CGFloat(h))
+      if frame.width < 2 || frame.height < 2 { continue }
+
+      let provider = self
+      let activate: ((JumpAction) -> Bool) = { action in
+        provider.commitClick(id: id, action: action, tag: tag)
+      }
+      out.append(
+        JumpTarget(
+          id: "dom-\(context.processID)-\(id)",
+          frame: frame,
+          role: tag,
+          accessibilityLabel: nil,
+          pid: context.processID,
+          activate: activate,
+          providerID: identifier
+        ))
     }
+    return out
+  }
 
-    /// Build the AppleScript that runs `js` in the active tab. Subclasses
-    /// emit the bundle-specific verb (`do JavaScript in document 1` vs
-    /// `execute active tab of window 1 javascript`).
-    open func appleScript(running js: String) -> String {
-        fatalError("BrowserScriptProvider subclasses must override appleScript(running:)")
+  private func commitClick(id: Int, action: JumpAction, tag: String?) -> Bool {
+    let isInput = (tag == "input" || tag == "textarea" || tag == "select")
+    let js: String
+    switch action {
+    case .leftClick:
+      // Focus inputs (so the user can immediately type), click
+      // everything else. `el.click()` is gated to trusted-only for a
+      // handful of actions (form submission via `submit()` etc) but
+      // dispatches a real click on anchors, buttons, and
+      // role=button. For inputs, focus + selection is what the user
+      // actually wants from a hint.
+      if isInput {
+        js = """
+          (function(){var e=document.querySelector('[data-flash-id="\(id)"]');if(!e)return false;e.focus();if(e.select)e.select();return true;})()
+          """
+      } else {
+        js = """
+          (function(){var e=document.querySelector('[data-flash-id="\(id)"]');if(!e)return false;e.click();return true;})()
+          """
+      }
+    case .rightClick:
+      // Synthetic contextmenu event. Native browser context menus
+      // aren't always triggered from dispatchEvent but custom in-page
+      // menus (Notion, Linear, GitHub) handle this fine.
+      js = """
+        (function(){var e=document.querySelector('[data-flash-id="\(id)"]');if(!e)return false;var r=e.getBoundingClientRect();var ev=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,view:window,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2});e.dispatchEvent(ev);return true;})()
+        """
     }
+    guard let raw = runJS(js) else { return false }
+    return raw.trimmingCharacters(in: .whitespaces).lowercased() == "true"
+  }
 
-    public func discover(in context: AppContext, deadline _: Date) throws -> [JumpTarget] {
-        // The discovery JS returns a JSON array of
-        // `[id, screenX_topLeft, screenY_topLeft, w, h, tag]` tuples — keys
-        // chosen for compactness to keep the AppleScript string short.
-        if let retryAfter = bridgeRetryAfter, Date() < retryAfter {
-            return []
-        }
-        guard let raw = runEscapedJS(Self.escapedDiscoveryJS) else {
-            // Bridge failures are usually permission/configuration problems:
-            // Automation denied, no document, or "Allow JavaScript from Apple
-            // Events" disabled. Back off briefly so the generic AX fallback
-            // does not pay the same AppleScript failure cost on every
-            // activation while still recovering quickly after the user fixes
-            // the browser setting.
-            bridgeRetryAfter = Date().addingTimeInterval(5)
-            return []
-        }
-        bridgeRetryAfter = nil
-        guard let data = raw.data(using: .utf8),
-              let arr = try? JSONSerialization.jsonObject(with: data) as? [[Any]] else {
-            return []
-        }
+  /// Run `js` via AppleScript. Returns the JS expression's string value, or
+  /// nil if the bridge failed (Automation denied, document missing,
+  /// JavaScript-from-AE not enabled).
+  private func runJS(_ js: String) -> String? {
+    runEscapedJS(Self.escapeForAppleScript(js))
+  }
 
-        let screenH = primaryScreenHeight()
-        var out: [JumpTarget] = []
-        out.reserveCapacity(arr.count)
+  private func runEscapedJS(_ escaped: String) -> String? {
+    let source = appleScript(running: escaped)
+    guard let script = NSAppleScript(source: source) else { return nil }
+    var error: NSDictionary?
+    let descriptor = script.executeAndReturnError(&error)
+    if error != nil { return nil }
+    return descriptor.stringValue
+  }
 
-        for entry in arr {
-            guard entry.count >= 5,
-                  let id = (entry[0] as? NSNumber)?.intValue,
-                  let sx = (entry[1] as? NSNumber)?.doubleValue,
-                  let sy = (entry[2] as? NSNumber)?.doubleValue,
-                  let w = (entry[3] as? NSNumber)?.doubleValue,
-                  let h = (entry[4] as? NSNumber)?.doubleValue else { continue }
-            let tag = (entry.count > 5 ? entry[5] : nil) as? String
-            // sx/sy are top-left in JS screen coords (Y-down, origin
-            // top-left of primary). Flip to NSScreen (Y-up, origin
-            // bottom-left of primary).
-            let nsY = screenH - CGFloat(sy) - CGFloat(h)
-            let frame = CGRect(x: CGFloat(sx), y: nsY, width: CGFloat(w), height: CGFloat(h))
-            if frame.width < 2 || frame.height < 2 { continue }
+  private static func escapeForAppleScript(_ js: String) -> String {
+    js
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
+  }
 
-            let provider = self
-            let activate: ((JumpAction) -> Bool) = { action in
-                provider.commitClick(id: id, action: action, tag: tag)
-            }
-            out.append(JumpTarget(
-                id: "dom-\(context.processID)-\(id)",
-                frame: frame,
-                role: tag,
-                accessibilityLabel: nil,
-                pid: context.processID,
-                activate: activate,
-                providerID: identifier
-            ))
-        }
-        return out
+  private func primaryScreenHeight() -> CGFloat {
+    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
+      return primary.frame.height
     }
+    return NSScreen.main?.frame.height ?? 1080
+  }
 
-    private func commitClick(id: Int, action: JumpAction, tag: String?) -> Bool {
-        let isInput = (tag == "input" || tag == "textarea" || tag == "select")
-        let js: String
-        switch action {
-        case .leftClick:
-            // Focus inputs (so the user can immediately type), click
-            // everything else. `el.click()` is gated to trusted-only for a
-            // handful of actions (form submission via `submit()` etc) but
-            // dispatches a real click on anchors, buttons, and
-            // role=button. For inputs, focus + selection is what the user
-            // actually wants from a hint.
-            if isInput {
-                js = """
-                (function(){var e=document.querySelector('[data-flash-id="\(id)"]');if(!e)return false;e.focus();if(e.select)e.select();return true;})()
-                """
-            } else {
-                js = """
-                (function(){var e=document.querySelector('[data-flash-id="\(id)"]');if(!e)return false;e.click();return true;})()
-                """
-            }
-        case .rightClick:
-            // Synthetic contextmenu event. Native browser context menus
-            // aren't always triggered from dispatchEvent but custom in-page
-            // menus (Notion, Linear, GitHub) handle this fine.
-            js = """
-            (function(){var e=document.querySelector('[data-flash-id="\(id)"]');if(!e)return false;var r=e.getBoundingClientRect();var ev=new MouseEvent('contextmenu',{bubbles:true,cancelable:true,view:window,button:2,clientX:r.left+r.width/2,clientY:r.top+r.height/2});e.dispatchEvent(ev);return true;})()
-            """
-        }
-        guard let raw = runJS(js) else { return false }
-        return raw.trimmingCharacters(in: .whitespaces).lowercased() == "true"
-    }
+  // MARK: Vimium-ported discovery JS
+  //
+  // Ported from philc/vimium @ 7f4deb3f91dda66fe2aef0d4a34fc96ebef96c22.
+  // Specifically these upstream files:
+  //
+  //   content_scripts/link_hints.js
+  //     - LocalHints.getLocalHintsForElement  (clickability rules)
+  //     - LocalHints.getLocalHints            (collect → reverse → false-pos → overlap)
+  //     - LocalHints.getElementFromPoint      (shadow-DOM aware hit test)
+  //
+  //   lib/dom_utils.js
+  //     - DomUtils.getVisibleClientRect       (rect iteration + crop + visibility)
+  //     - DomUtils.cropRectToVisible          (viewport clip)
+  //     - DomUtils.isSelectable               (input/textarea/contentEditable predicate)
+  //
+  // The port is intentionally line-by-line where possible so future
+  // diffs against Vimium upstream are easy to read. Pieces deliberately
+  // omitted (because they target Vimium-specific UX, not "click and
+  // jump"):
+  //   - Image-map (<area>) hint expansion. Rare on modern web; would need
+  //     getClientRectsForAreas + map-name lookup. Add if reports show it's
+  //     missed.
+  //   - <body>-as-frame and scrollable <div>/<ol>/<ul> hints — Vimium uses
+  //     these for frame focus + scroll commands; Flash has no equivalent
+  //     semantic.
+  //   - AngularJS ng-click attribute family — most modern pages don't use
+  //     classic Angular. Trivial to re-add if reports show misses on
+  //     legacy ng-scope pages.
+  //   - Cross-frame walking. Vimium injects per-frame as a content
+  //     script; we only get the top window via `do JavaScript`. Same-
+  //     origin iframes are reachable via `iframe.contentDocument` but we
+  //     don't recurse to keep the script size + latency budget tight.
+  //
+  // Shadow DOM is included.
+  //
+  // When updating: diff `link_hints.js` + `dom_utils.js` at the new
+  // upstream commit against this file, bump the commit SHA above, and
+  // update AGENTS.md → "Browser DOM bridge" if any predicate changes
+  // category.
+  private static let escapedDiscoveryJS = escapeForAppleScript(discoveryJS)
 
-    /// Run `js` via AppleScript. Returns the JS expression's string value, or
-    /// nil if the bridge failed (Automation denied, document missing,
-    /// JavaScript-from-AE not enabled).
-    private func runJS(_ js: String) -> String? {
-        runEscapedJS(Self.escapeForAppleScript(js))
-    }
-
-    private func runEscapedJS(_ escaped: String) -> String? {
-        let source = appleScript(running: escaped)
-        guard let script = NSAppleScript(source: source) else { return nil }
-        var error: NSDictionary?
-        let descriptor = script.executeAndReturnError(&error)
-        if error != nil { return nil }
-        return descriptor.stringValue
-    }
-
-    private static func escapeForAppleScript(_ js: String) -> String {
-        js
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-    }
-
-    private func primaryScreenHeight() -> CGFloat {
-        if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
-            return primary.frame.height
-        }
-        return NSScreen.main?.frame.height ?? 1080
-    }
-
-    // MARK: Vimium-ported discovery JS
-    //
-    // Ported from philc/vimium @ 7f4deb3f91dda66fe2aef0d4a34fc96ebef96c22.
-    // Specifically these upstream files:
-    //
-    //   content_scripts/link_hints.js
-    //     - LocalHints.getLocalHintsForElement  (clickability rules)
-    //     - LocalHints.getLocalHints            (collect → reverse → false-pos → overlap)
-    //     - LocalHints.getElementFromPoint      (shadow-DOM aware hit test)
-    //
-    //   lib/dom_utils.js
-    //     - DomUtils.getVisibleClientRect       (rect iteration + crop + visibility)
-    //     - DomUtils.cropRectToVisible          (viewport clip)
-    //     - DomUtils.isSelectable               (input/textarea/contentEditable predicate)
-    //
-    // The port is intentionally line-by-line where possible so future
-    // diffs against Vimium upstream are easy to read. Pieces deliberately
-    // omitted (because they target Vimium-specific UX, not "click and
-    // jump"):
-    //   - Image-map (<area>) hint expansion. Rare on modern web; would need
-    //     getClientRectsForAreas + map-name lookup. Add if reports show it's
-    //     missed.
-    //   - <body>-as-frame and scrollable <div>/<ol>/<ul> hints — Vimium uses
-    //     these for frame focus + scroll commands; Flash has no equivalent
-    //     semantic.
-    //   - AngularJS ng-click attribute family — most modern pages don't use
-    //     classic Angular. Trivial to re-add if reports show misses on
-    //     legacy ng-scope pages.
-    //   - Cross-frame walking. Vimium injects per-frame as a content
-    //     script; we only get the top window via `do JavaScript`. Same-
-    //     origin iframes are reachable via `iframe.contentDocument` but we
-    //     don't recurse to keep the script size + latency budget tight.
-    //
-    // Shadow DOM is included.
-    //
-    // When updating: diff `link_hints.js` + `dom_utils.js` at the new
-    // upstream commit against this file, bump the commit SHA above, and
-    // update AGENTS.md → "Browser DOM bridge" if any predicate changes
-    // category.
-    private static let escapedDiscoveryJS = escapeForAppleScript(discoveryJS)
-
-    static let discoveryJS: String = """
+  static let discoveryJS: String = """
     (function(){
       // ----- DomUtils.cropRectToVisible -----
       // Origin clipped to (0,0) but right/bottom are left unbounded; rect
@@ -516,68 +519,69 @@ open class BrowserScriptProvider: JumpProvider {
 }
 
 public final class SafariProvider: BrowserScriptProvider {
-    public init() {
-        super.init(
-            identifier: "safari-dom",
-            priority: 30,
-            supportedBundles: [
-                "com.apple.Safari",
-                "com.apple.SafariTechnologyPreview",
-            ]
-        )
-    }
+  public init() {
+    super.init(
+      identifier: "safari-dom",
+      priority: 30,
+      supportedBundles: [
+        "com.apple.Safari",
+        "com.apple.SafariTechnologyPreview",
+      ]
+    )
+  }
 
-    public override func appleScript(running js: String) -> String {
-        // `in document 1` is what targets the active document. If no
-        // window is open the AppleScript fails — `runJS` returns nil and we
-        // contribute no targets, which is the correct fallback (the AX
-        // walker still runs).
-        "tell application \"Safari\"\ndo JavaScript \"\(js)\" in document 1\nend tell"
-    }
+  public override func appleScript(running js: String) -> String {
+    // `in document 1` is what targets the active document. If no
+    // window is open the AppleScript fails — `runJS` returns nil and we
+    // contribute no targets, which is the correct fallback (the AX
+    // walker still runs).
+    "tell application \"Safari\"\ndo JavaScript \"\(js)\" in document 1\nend tell"
+  }
 }
 
 public final class ChromeProvider: BrowserScriptProvider {
-    public init() {
-        super.init(
-            identifier: "chrome-dom",
-            priority: 30,
-            // Every Chromium-derived browser ships with the same AppleScript
-            // dictionary verbs (`execute active tab of window 1 javascript`),
-            // so we treat them as the same target. Each app id keeps its
-            // own Automation grant.
-            supportedBundles: [
-                "com.google.Chrome",
-                "com.google.Chrome.canary",
-                "com.google.Chrome.dev",
-                "com.google.Chrome.beta",
-                "com.brave.Browser",
-                "com.microsoft.edgemac",
-                "company.thebrowser.Browser",      // Arc
-                "com.vivaldi.Vivaldi",
-            ]
-        )
-    }
+  public init() {
+    super.init(
+      identifier: "chrome-dom",
+      priority: 30,
+      // Every Chromium-derived browser ships with the same AppleScript
+      // dictionary verbs (`execute active tab of window 1 javascript`),
+      // so we treat them as the same target. Each app id keeps its
+      // own Automation grant.
+      supportedBundles: [
+        "com.google.Chrome",
+        "com.google.Chrome.canary",
+        "com.google.Chrome.dev",
+        "com.google.Chrome.beta",
+        "com.brave.Browser",
+        "com.microsoft.edgemac",
+        "company.thebrowser.Browser",  // Arc
+        "com.vivaldi.Vivaldi",
+      ]
+    )
+  }
 
-    public override func appleScript(running js: String) -> String {
-        // Chromium dictionary syntax. We resolve the running app's display
-        // name from the frontmost application — every Chromium variant
-        // ships its own localized name but the same verb.
-        let appName = chromeAppName()
-        return "tell application \"\(appName)\"\nexecute active tab of window 1 javascript \"\(js)\"\nend tell"
-    }
+  public override func appleScript(running js: String) -> String {
+    // Chromium dictionary syntax. We resolve the running app's display
+    // name from the frontmost application — every Chromium variant
+    // ships its own localized name but the same verb.
+    let appName = chromeAppName()
+    return
+      "tell application \"\(appName)\"\nexecute active tab of window 1 javascript \"\(js)\"\nend tell"
+  }
 
-    private func chromeAppName() -> String {
-        let bid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        switch bid {
-        case "com.google.Chrome":               return "Google Chrome"
-        case "com.google.Chrome.canary":        return "Google Chrome Canary"
-        case "com.google.Chrome.dev":           return "Google Chrome Dev"
-        case "com.google.Chrome.beta":          return "Google Chrome Beta"
-        case "com.brave.Browser":               return "Brave Browser"
-        case "com.microsoft.edgemac":           return "Microsoft Edge"
-        case "company.thebrowser.Browser":      return "Arc"
-        case "com.vivaldi.Vivaldi":             return "Vivaldi"
-        default:                                return "Google Chrome"
-        }
+  private func chromeAppName() -> String {
+    let bid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    switch bid {
+    case "com.google.Chrome": return "Google Chrome"
+    case "com.google.Chrome.canary": return "Google Chrome Canary"
+    case "com.google.Chrome.dev": return "Google Chrome Dev"
+    case "com.google.Chrome.beta": return "Google Chrome Beta"
+    case "com.brave.Browser": return "Brave Browser"
+    case "com.microsoft.edgemac": return "Microsoft Edge"
+    case "company.thebrowser.Browser": return "Arc"
+    case "com.vivaldi.Vivaldi": return "Vivaldi"
+    default: return "Google Chrome"
     }
+  }
 }

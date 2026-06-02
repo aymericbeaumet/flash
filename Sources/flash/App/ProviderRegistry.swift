@@ -1,6 +1,6 @@
-import Foundation
 import FlashCore
 import FlashProviders
+import Foundation
 
 /// The provider chain for a given app:
 ///   - Browser script bridge for Safari / Chrome (priority 30) — Vimium-style
@@ -18,19 +18,19 @@ import FlashProviders
 /// assumption is to converge on universal rules before reintroducing
 /// per-bundle knobs. See AGENTS.md → "Adding a new provider" for the policy.
 final class ProviderRegistry {
-    private(set) var providers: [JumpProvider]
+  private(set) var providers: [JumpProvider]
 
-    init() {
-        providers = [
-            SafariProvider(),
-            ChromeProvider(),
-            AccessibilityProvider(),
-        ]
-    }
+  init() {
+    providers = [
+      SafariProvider(),
+      ChromeProvider(),
+      AccessibilityProvider(),
+    ]
+  }
 
-    func chain(for context: AppContext) -> [JumpProvider] {
-        providers
-            .filter { $0.supports(context) }
-            .sorted { $0.priority > $1.priority }
-    }
+  func chain(for context: AppContext) -> [JumpProvider] {
+    providers
+      .filter { $0.supports(context) }
+      .sorted { $0.priority > $1.priority }
+  }
 }

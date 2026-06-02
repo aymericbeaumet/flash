@@ -6,25 +6,61 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Test (macOS)
+  format:
+    name: Format
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - name: Show swift-format version
+        run: swift format --version
+      - name: Check formatting
+        # Run the formatter in-place, then require a clean working tree.
+        # No `.swift-format` config in the repo — Apple's default rules
+        # are the source of truth.
+        run: |
+          swift format format --in-place --recursive Sources Tests Package.swift
+          git diff --exit-code
 
+  lint:
+    name: Lint
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show swift-format version
+        run: swift format --version
+      - name: Lint
+        run: swift format lint --strict --recursive Sources Tests Package.swift
+
+  build:
+    name: Build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
       - name: Show Swift version
         run: swift --version
-
       - name: Cache SwiftPM build
         uses: actions/cache@v4
         with:
           path: .build
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          key: ${{ runner.os }}-spm-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
           restore-keys: |
-            ${{ runner.os }}-spm-
-
+            ${{ runner.os }}-spm-build-
       - name: Build
         run: swift build
 
+  test:
+    name: Test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Swift version
+        run: swift --version
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-test-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-test-
       - name: Test
         run: swift test

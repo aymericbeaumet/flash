@@ -68,3 +68,18 @@ profile = false
 # Log activation profiles whose end-to-end latency is at least this many
 # milliseconds, even when profile=false. Set to 0 to disable slow logs.
 slow_ms = 100
+
+# When true, the AX walker writes one line per visited element
+# (role, subrole, frame, parent role, actions, label) to
+# `~/Library/Logs/Flash/ax-dump.log` on every activation. Used to
+# diagnose missing or spurious hints in apps that fall through to the AX
+# provider (Firefox web pages, Electron, etc.). The file is rewritten on
+# each activation. Verbose — keep off for normal use.
+dump_ax = false
+
+# When true, mirrors every stderr diagnostic line Flash writes (profile
+# traces, accessibility-permission warnings, etc.) to
+# `~/Library/Logs/Flash/flash.log`. Appended across activations. Useful
+# when running Flash via launchd where stderr isn't attached to a
+# terminal.
+dump_logs = false

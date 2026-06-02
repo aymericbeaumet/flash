@@ -88,6 +88,8 @@ bounds_bg = "#00000000"       # transparent fill
 bounds_fg = "#FF3B9A"         # pink stroke around each detected rect
 profile = false               # log every activation/precompute timing trace
 slow_ms = 100                 # log activations at/above this latency; 0 disables
+dump_ax = false               # dump AX tree to ~/Library/Logs/Flash/ax-dump.log per activation
+dump_logs = false             # mirror stderr diagnostics to ~/Library/Logs/Flash/flash.log
 ```
 
 Debug logs are written to stderr. In the installed app, check `~/Library/Logs/Flash/`.

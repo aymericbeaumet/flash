@@ -1,4 +1,4 @@
 public enum JumpAction: Sendable {
-    case leftClick
-    case rightClick
+  case leftClick
+  case rightClick
 }
