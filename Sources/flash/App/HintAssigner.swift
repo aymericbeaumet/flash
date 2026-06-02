@@ -1,9 +1,20 @@
 import Foundation
+import os
 import FlashCore
 
 struct AssignedHint {
     let target: JumpTarget
+    /// Canonical, lowercase label — what the alphabet produced.
     let label: String
+    /// Pre-uppercased copy used by every render and every per-keystroke
+    /// prefix match. Computed once at assign time, never per-frame.
+    let display: String
+
+    init(target: JumpTarget, label: String) {
+        self.target = target
+        self.label = label
+        self.display = label.uppercased()
+    }
 }
 
 enum HintAssigner {
@@ -19,7 +30,12 @@ enum HintAssigner {
             leftHand: leftHand,
             minLength: minLength
         )
-        return zip(targets, labels).map { AssignedHint(target: $0.0, label: $0.1) }
+        var out: [AssignedHint] = []
+        out.reserveCapacity(targets.count)
+        for (t, l) in zip(targets, labels) {
+            out.append(AssignedHint(target: t, label: l))
+        }
+        return out
     }
 
     /// Generate `count` prefix-free labels of uniform length, ordered so that
@@ -45,8 +61,10 @@ enum HintAssigner {
         }
         let k = alphabet.count
         var length = max(1, minLength)
-        while pow(Double(k), Double(length)) < Double(count) {
+        var bound = intPow(k, length)
+        while bound < count {
             length += 1
+            bound *= k
         }
 
         // Single-char labels: no alternation possible (one keypress each).
@@ -56,66 +74,144 @@ enum HintAssigner {
             return (0..<count).map { String(alphabet[$0]) }
         }
 
-        // Multi-char: enumerate all K^L candidates, score each, sort by
-        // score desc with a deterministic lex tiebreak, take the best
-        // `count`. K^L is small enough to brute-force for realistic alphabet
-        // sizes (~22 chars, L=2 → 484 candidates; L=3 → ~10k).
-        let total = Int(pow(Double(k), Double(length)))
-        // Per-character position-in-alphabet for the lex tiebreaker.
+        let sorted = sortedCandidates(alphabet: alphabet, leftHand: leftHand, length: length)
+        if sorted.count >= count {
+            return Array(sorted.prefix(count))
+        }
+        return sorted
+    }
+
+    /// Returns the full K^L candidate space sorted by ergonomic score
+    /// (descending), with a deterministic lexicographic tiebreak. Memoised by
+    /// (alphabet identity, length, leftHand identity) — for the typical
+    /// `<qwerty>` preset and L=2/3 this cache is populated once per session
+    /// and every subsequent activation skips the sort entirely.
+    static func sortedCandidates(
+        alphabet: [Character],
+        leftHand: Set<Character>,
+        length: Int
+    ) -> [String] {
+        let key = makeCacheKey(alphabet: alphabet, leftHand: leftHand, length: length)
+        os_unfair_lock_lock(&cacheLock)
+        if let cached = cache[key] {
+            os_unfair_lock_unlock(&cacheLock)
+            return cached
+        }
+        os_unfair_lock_unlock(&cacheLock)
+
+        let computed = computeSortedCandidates(alphabet: alphabet, leftHand: leftHand, length: length)
+
+        os_unfair_lock_lock(&cacheLock)
+        cache[key] = computed
+        os_unfair_lock_unlock(&cacheLock)
+        return computed
+    }
+
+    private static var cache: [String: [String]] = [:]
+    private static var cacheLock = os_unfair_lock_s()
+
+    private static func makeCacheKey(alphabet: [Character], leftHand: Set<Character>, length: Int) -> String {
+        var key = ""
+        key.reserveCapacity(alphabet.count + leftHand.count + 8)
+        key.append(contentsOf: alphabet)
+        key.append("|")
+        // Iterate the set in sorted order for a stable identity.
+        for c in leftHand.sorted() { key.append(c) }
+        key.append("|")
+        key.append(String(length))
+        return key
+    }
+
+    private static func computeSortedCandidates(
+        alphabet: [Character],
+        leftHand: Set<Character>,
+        length: Int
+    ) -> [String] {
+        let k = alphabet.count
+        let total = intPow(k, length)
+
+        // Direct character→rank lookup; rank only needs the alphabet
+        // positions, not the full 128-entry ASCII table.
         var rank = [Character: Int](minimumCapacity: k)
         for (i, ch) in alphabet.enumerated() { rank[ch] = i }
 
-        var candidates = Array<(label: String, score: Int, rankKey: [Int])>()
-        candidates.reserveCapacity(total)
-        for n in 0..<total {
-            let label = numberToLabel(n, alphabet: alphabet, length: length)
-            let score = scoreLabel(label, leftHand: leftHand)
-            let rankKey = label.map { rank[$0] ?? 0 }
-            candidates.append((label, score, rankKey))
+        // Left-hand membership precomputed per alphabet index — saves a
+        // Set hash lookup inside the inner score loop.
+        var leftByIndex = [Bool](repeating: false, count: k)
+        for (i, ch) in alphabet.enumerated() { leftByIndex[i] = leftHand.contains(ch) }
+
+        struct Candidate {
+            var indices: [Int]   // alphabet positions, length L
+            var score: Int
         }
+        var candidates = [Candidate]()
+        candidates.reserveCapacity(total)
+
+        var indices = [Int](repeating: 0, count: length)
+        for n in 0..<total {
+            var value = n
+            for pos in (0..<length).reversed() {
+                indices[pos] = value % k
+                value /= k
+            }
+            var score = 0
+            for i in 1..<length {
+                let a = indices[i - 1]
+                let b = indices[i]
+                if a == b {
+                    score -= 10
+                } else if leftByIndex[a] != leftByIndex[b] {
+                    score += 5
+                } else {
+                    score -= 1
+                }
+            }
+            candidates.append(Candidate(indices: indices, score: score))
+        }
+
         candidates.sort { a, b in
             if a.score != b.score { return a.score > b.score }
-            // Stable, total order tiebreak — compares position-in-alphabet
-            // tuple lexicographically.
-            for i in 0..<a.rankKey.count where a.rankKey[i] != b.rankKey[i] {
-                return a.rankKey[i] < b.rankKey[i]
+            for i in 0..<length where a.indices[i] != b.indices[i] {
+                return a.indices[i] < b.indices[i]
             }
             return false
         }
-        return Array(candidates.prefix(count).map(\.label))
+
+        var labels = [String]()
+        labels.reserveCapacity(total)
+        var buf: [Character] = Array(repeating: alphabet[0], count: length)
+        for c in candidates {
+            for i in 0..<length { buf[i] = alphabet[c.indices[i]] }
+            labels.append(String(buf))
+        }
+        return labels
     }
 
     /// Higher is better. Rewards adjacent-character pairs that alternate
     /// between left and right hand; penalises same-key repeats and same-hand
     /// pairs (different finger). Final score for an L-char label is the
-    /// sum of (L-1) pairwise scores.
-    private static func scoreLabel(_ label: String, leftHand: Set<Character>) -> Int {
+    /// sum of (L-1) pairwise scores. Kept for tests / external callers; the
+    /// fast path lives in `computeSortedCandidates`.
+    static func scoreLabel(_ label: String, leftHand: Set<Character>) -> Int {
         let chars = Array(label)
         if chars.count < 2 { return 0 }
         var score = 0
         for i in 1..<chars.count {
             if chars[i] == chars[i - 1] {
-                score -= 10                       // same finger, very bad
+                score -= 10
             } else {
                 let prevLeft = leftHand.contains(chars[i - 1])
                 let currLeft = leftHand.contains(chars[i])
-                if prevLeft != currLeft {
-                    score += 5                    // alternating hands — best
-                } else {
-                    score -= 1                    // same hand, different finger
-                }
+                if prevLeft != currLeft { score += 5 }
+                else { score -= 1 }
             }
         }
         return score
     }
 
-    private static func numberToLabel(_ n: Int, alphabet: [Character], length: Int) -> String {
-        var s = ""
-        var value = n
-        for _ in 0..<length {
-            s = String(alphabet[value % alphabet.count]) + s
-            value /= alphabet.count
-        }
-        return s
+    private static func intPow(_ base: Int, _ exp: Int) -> Int {
+        var r = 1
+        for _ in 0..<exp { r *= base }
+        return r
     }
 }

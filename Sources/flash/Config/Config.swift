@@ -40,4 +40,12 @@ struct Config {
     var resolvedAlphabet: Alphabet.Resolved {
         Alphabet.resolve(hints.keys)
     }
+
+    /// Stable identity of the hint-generation inputs. Used as the alphabet
+    /// component of the precompute cache key, so a config hot-reload that
+    /// changes the alphabet or min-length invalidates labels but keeps the
+    /// underlying target geometry valid through the next walk.
+    var alphabetKey: String {
+        "\(hints.keys)|\(hints.minLength)"
+    }
 }

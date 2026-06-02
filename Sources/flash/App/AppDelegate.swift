@@ -21,21 +21,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     /// events that arrive during this window are dropped, not queued. Same
     /// guard rejects re-entry if hints are already on screen.
     private var activationInFlight: Bool = false
+    /// Bumped on every `activate(rightClick:)` *and* every `cancelOverlay()`.
+    /// The discovery completion captures the value at activation time and
+    /// only renders if it still matches when the walk finishes. This is what
+    /// prevents a stale walk from rendering hints over the wrong app after
+    /// the user dismisses or switches focus mid-flight.
+    private var activationGen: UInt64 = 0
     /// AX trust is checked once per session — until we observe `true`, we
     /// re-query each time. Once granted, the value is sticky for the rest
     /// of the run. Saves one IPC per activation in the steady state.
+    /// Reset to `false` if an activation walk returns zero targets, which
+    /// is the symptom of permission revocation mid-session.
     private var cachedAccessibilityTrusted: Bool = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         config = ConfigLoader.load()
         registry = ProviderRegistry(config: config)
-        monitor = AppMonitor(registry: registry, cache: cache, configRef: { [weak self] in self?.config ?? .default })
+        monitor = AppMonitor(registry: registry, cache: cache, config: config)
         monitor.start()
 
         overlay = OverlayPanel()
         overlay.coordinator = self
         overlay.overlayConfig = config.overlay
         overlay.debugConfig = config.debug
+        // Pay the layer-allocation cost at launch instead of on the first
+        // activation. 256 covers the steady state for most apps; further
+        // growth uses the regular dequeue/alloc fallback.
+        overlay.warmPool(count: 256)
 
         urlHandler = URLEventHandler { [weak self] cmd in
             guard let self else { return }
@@ -116,20 +128,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             return
         }
 
+        activationGen &+= 1
+        let myGen = activationGen
         activationInFlight = true
-        monitor.discoverAsync(context: context) { [weak self] targets in
+        monitor.discoverAsync(context: context) { [weak self] hints in
             guard let self else { return }
             self.activationInFlight = false
-            // If we were dismissed (Esc) before the walk finished, skip render.
-            guard self.sourceAppPID == context.processID else { return }
-            if targets.isEmpty { return }
-            let resolved = self.config.resolvedAlphabet
-            let hints = HintAssigner.assign(
-                targets: targets,
-                alphabet: resolved.chars,
-                leftHand: resolved.leftHand,
-                minLength: self.config.hints.minLength
-            )
+            // The walk is done; gate is open for the next activation
+            // regardless of whether *this* walk's result is still relevant.
+            guard self.activationGen == myGen else { return }
+            if hints.isEmpty {
+                // Empty result is also the symptom of accessibility
+                // permission being revoked between activations: AX walks
+                // silently return [] when the process is no longer trusted.
+                // Cheap to re-check — and we want the permission banner to
+                // appear instead of the user staring at nothing.
+                if !PermissionCheck.isAccessibilityTrusted {
+                    self.cachedAccessibilityTrusted = false
+                    self.promptForAccessibility()
+                }
+                return
+            }
             self.currentHints = hints
             self.currentPrefix = ""
             self.overlay.display(hints: hints)
@@ -144,9 +163,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
 
     private func cancelOverlay() {
+        // The fast no-op exit: dismissal observers fire on every app switch,
+        // including when no overlay is up. Skip the layer-recycle churn when
+        // there's nothing to dismiss.
+        if currentHints.isEmpty && !activationInFlight { return }
         overlay.hide()
         currentHints = []
         currentPrefix = ""
+        sourceAppPID = nil
+        // Invalidate any in-flight discovery walk's right to render. We
+        // *don't* clear `activationInFlight` here — the walk is still
+        // running on the AX queue and clearing the flag would let a fresh
+        // activation arrive and race with the previous walk's completion.
+        // Once the walk does complete, it checks the generation and bails.
+        activationGen &+= 1
     }
 
     private var lastPermissionPromptAt: Date?
@@ -204,12 +234,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         }
         overlay.filter(prefix: currentPrefix, hints: currentHints)
 
+        // Single pass: count matches and remember the first one. Avoids
+        // building a [AssignedHint] array per keystroke (was a 1-N alloc
+        // every time the user typed a character). The hints carry a
+        // pre-uppercased `display` field, so we don't pay an `uppercased()`
+        // per chip per keystroke either.
         let upper = currentPrefix.uppercased()
-        let matches = currentHints.filter { $0.label.uppercased().hasPrefix(upper) }
-        if matches.count == 1 && matches[0].label.uppercased() == upper {
-            commit(hint: matches[0])
-        } else if matches.isEmpty {
+        var matchCount = 0
+        var firstMatch: AssignedHint?
+        for h in currentHints where h.display.hasPrefix(upper) {
+            matchCount += 1
+            if matchCount == 1 {
+                firstMatch = h
+            } else {
+                break
+            }
+        }
+        if matchCount == 0 {
             cancelOverlay()
+        } else if matchCount == 1, let m = firstMatch, m.display == upper {
+            commit(hint: m)
         }
     }
 
@@ -239,11 +283,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         if let pid, let app = NSRunningApplication(processIdentifier: pid) {
             app.activate()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
-            _ = ActionDispatcher.perform(action, on: hint.target, pid: pid, clickPoint: clickPoint)
-        }
+        // Hold the activation gate closed across the click dispatch. Without
+        // this, the 20-ms delay below opens a window where a fresh
+        // ctrl+space can land and start a second walk, and *this* commit's
+        // click would then fire during the new activation (clicking
+        // whatever the user was about to hint, not what they committed to).
+        activationInFlight = true
+        activationGen &+= 1
         currentHints = []
         currentPrefix = ""
+        sourceAppPID = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
+            _ = ActionDispatcher.perform(action, on: hint.target, pid: pid, clickPoint: clickPoint)
+            self?.activationInFlight = false
+        }
     }
 
     // MARK: Config hot reload
@@ -259,9 +312,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         )
         source.setEventHandler { [weak self] in
             guard let self else { return }
-            self.config = ConfigLoader.load()
-            self.overlay.overlayConfig = self.config.overlay
-            self.overlay.debugConfig = self.config.debug
+            let cfg = ConfigLoader.load()
+            self.config = cfg
+            self.overlay.overlayConfig = cfg.overlay
+            self.overlay.debugConfig = cfg.debug
+            // Publish to AppMonitor under its internal lock — this also
+            // clears the precompute cache, whose hint labels are stale if
+            // the alphabet changed.
+            self.monitor.updateConfig(cfg)
         }
         source.setCancelHandler { close(fd) }
         source.resume()
@@ -270,6 +328,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     private func logPermissionState() {
         let trusted = AXIsProcessTrusted()
+        // Seed the activation-path cache so the very first ctrl+space
+        // doesn't pay the AX IPC cost just to discover the user already
+        // granted permission at some prior session.
+        if trusted { cachedAccessibilityTrusted = true }
         if !trusted {
             fputs("flash: Accessibility permission not granted. Grant it in System Settings → Privacy & Security → Accessibility for /Applications/Flash.app.\n", stderr)
         }

@@ -21,6 +21,10 @@ final class OverlayPanel: NSPanel {
     var overlayConfig: Config.Overlay = .init()
     var debugConfig: Config.Debug = .init()
 
+    // Cached cgColor of the chip border. Static — doesn't depend on
+    // user config (border is structural, not themable).
+    private static let borderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
+
     init() {
         let frame = OverlayPanel.unionScreenFrame()
         super.init(
@@ -55,6 +59,18 @@ final class OverlayPanel: NSPanel {
         self.contentView = view
     }
 
+    /// Allocate `count` chip+label layers and stash them in the pools. Called
+    /// once at app launch to keep the first-activation layer allocation cost
+    /// off the hot path.
+    func warmPool(count: Int) {
+        hintLayerPool.reserveCapacity(count)
+        labelLayerPool.reserveCapacity(count)
+        for _ in 0..<count {
+            hintLayerPool.append(makeChipLayer())
+            labelLayerPool.append(makeLabelLayer())
+        }
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -82,6 +98,21 @@ final class OverlayPanel: NSPanel {
         let fontSize = CGFloat(overlayConfig.fontSize)
         let scale = NSScreen.main?.backingScaleFactor ?? 2
 
+        // Hoisted out of the per-chip loop: every value below is identical
+        // for every chip in this activation (HintAssigner guarantees uniform
+        // label length, the colors come from config not from the hint, and
+        // the font instance never changes mid-render). Previously every one
+        // of these was recomputed N times — at N=200 that's 200 NSFont
+        // allocations, 200 NSColor allocations, 200 CGColor accesses.
+        let bgCG = bg.cgColor
+        let fgCG = fg.cgColor
+        let borderCG = OverlayPanel.borderCGColor
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+        let labelLen = hints.first?.display.count ?? 1
+        let approxWidth = max(18, CGFloat(labelLen) * fontSize * 0.7 + 10)
+        let chipHeight = fontSize + 8
+        let labelFrame = CGRect(x: 0, y: (chipHeight - fontSize - 2) / 2, width: approxWidth, height: fontSize + 2)
+
         let debugEnabled = debugConfig.showBounds
         if debugEnabled {
             debugShapeLayer.strokeColor = (nsColor(fromHex: debugConfig.boundsFG) ?? NSColor.systemPink).cgColor
@@ -92,19 +123,32 @@ final class OverlayPanel: NSPanel {
             lastTargetLocalRects.reserveCapacity(hints.count)
         }
 
+        // Build sublayers off-tree, then batch-attach with a single
+        // assignment to `contentLayer.sublayers`. The previous approach
+        // (N `addSublayer` calls) was N tree mutations on the host layer,
+        // each of which triggers AppKit's needs-display bookkeeping.
+        var newSublayers: [CALayer] = []
+        newSublayers.reserveCapacity(hints.count + 1)
+        if debugEnabled {
+            newSublayers.append(debugShapeLayer)
+        }
+
+        hintLayers.reserveCapacity(hints.count)
+        labelLayers.reserveCapacity(hints.count)
+
         for hint in hints {
+            let targetFrame = hint.target.frame
             let local = CGRect(
-                x: hint.target.frame.minX - frame.minX,
-                y: hint.target.frame.minY - frame.minY,
-                width: hint.target.frame.width,
-                height: hint.target.frame.height
+                x: targetFrame.minX - frame.minX,
+                y: targetFrame.minY - frame.minY,
+                width: targetFrame.width,
+                height: targetFrame.height
             )
             if debugEnabled {
                 lastTargetLocalRects.append(local)
             }
 
             let chip = dequeueHintLayer()
-            chip.actions = OverlayPanel.noActions
             // The chip pool retains visual state across activations. If the
             // previous overlay was dismissed mid-filter (e.g. by typing the
             // first character of a hint), most chips were `isHidden = true`.
@@ -112,44 +156,33 @@ final class OverlayPanel: NSPanel {
             // of the pool and the user sees only the debug outlines.
             chip.isHidden = false
             let label = dequeueLabelLayer()
-            label.actions = OverlayPanel.noActions
             label.isHidden = false
-            label.string = hint.label.uppercased()
+            label.string = hint.display
             label.fontSize = fontSize
-            label.foregroundColor = fg.cgColor
-            label.alignmentMode = .center
+            label.foregroundColor = fgCG
             label.contentsScale = scale
-            label.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+            label.font = font
+            label.frame = labelFrame
 
-            // Global-screen chip frame (computed via the shared helper so the
-            // dispatcher can click at the same point) → translate to the
-            // overlay's local coordinate space by subtracting `frame.minX/Y`.
-            let chipGlobal = OverlayPanel.chipFrame(for: hint, fontSize: fontSize)
-            let approxWidth = chipGlobal.width
-            let chipHeight = chipGlobal.height
             chip.frame = CGRect(
-                x: chipGlobal.minX - frame.minX,
-                y: chipGlobal.minY - frame.minY,
-                width: chipGlobal.width,
-                height: chipGlobal.height
+                x: targetFrame.minX - frame.minX,
+                y: targetFrame.maxY - frame.minY - chipHeight,
+                width: approxWidth,
+                height: chipHeight
             )
-            chip.backgroundColor = bg.cgColor
-            chip.cornerRadius = 4
-            chip.borderWidth = 1
-            chip.borderColor = NSColor.black.withAlphaComponent(0.4).cgColor
+            chip.backgroundColor = bgCG
+            chip.borderColor = borderCG
 
-            label.frame = CGRect(x: 0, y: (chipHeight - fontSize - 2) / 2, width: approxWidth, height: fontSize + 2)
-            chip.addSublayer(label)
-
-            contentLayer.addSublayer(chip)
+            chip.sublayers = [label]
+            newSublayers.append(chip)
             hintLayers.append(chip)
             labelLayers.append(label)
         }
 
+        contentLayer.sublayers = newSublayers
         if debugEnabled {
             rebuildDebugPath(visibleIndices: nil)
             debugShapeLayer.isHidden = false
-            contentLayer.insertSublayer(debugShapeLayer, at: 0)
         } else {
             debugShapeLayer.isHidden = true
             debugShapeLayer.path = nil
@@ -205,7 +238,6 @@ final class OverlayPanel: NSPanel {
         let longestLine = lines.map(\.count).max() ?? text.count
 
         let label = dequeueLabelLayer()
-        label.actions = OverlayPanel.noActions
         label.string = text
         label.fontSize = fontSize
         label.foregroundColor = (nsColor(fromHex: overlayConfig.hintFG) ?? .black).cgColor
@@ -228,16 +260,14 @@ final class OverlayPanel: NSPanel {
         }
 
         let chip = dequeueHintLayer()
-        chip.actions = OverlayPanel.noActions
         chip.frame = CGRect(x: centerX - approxWidth / 2, y: centerY - chipHeight / 2, width: approxWidth, height: chipHeight)
         chip.backgroundColor = (nsColor(fromHex: overlayConfig.hintBG) ?? .systemYellow).cgColor
         chip.cornerRadius = 6
-        chip.borderWidth = 1
-        chip.borderColor = NSColor.black.withAlphaComponent(0.4).cgColor
+        chip.borderColor = OverlayPanel.borderCGColor
         let textHeight = lineHeight * CGFloat(lines.count)
         label.frame = CGRect(x: 8, y: (chipHeight - textHeight) / 2, width: approxWidth - 16, height: textHeight)
-        chip.addSublayer(label)
-        contentLayer.addSublayer(chip)
+        chip.sublayers = [label]
+        contentLayer.sublayers = [chip]
         hintLayers.append(chip)
         labelLayers.append(label)
 
@@ -258,7 +288,7 @@ final class OverlayPanel: NSPanel {
         for (idx, hint) in hints.enumerated() {
             guard idx < hintLayers.count else { break }
             let chip = hintLayers[idx]
-            let matches = hint.label.uppercased().hasPrefix(upper)
+            let matches = hint.display.hasPrefix(upper)
             chip.isHidden = !matches
             if matches { visible.insert(idx) }
         }
@@ -269,9 +299,15 @@ final class OverlayPanel: NSPanel {
     }
 
     private func recycleAll() {
+        // Batch detach: one assignment to `sublayers` instead of N
+        // removeFromSuperlayer calls. The debugShapeLayer is re-added by
+        // display(hints:) if debug is enabled, so detaching it here too is
+        // safe — it's not retained anywhere else.
+        contentLayer.sublayers = nil
         for chip in hintLayers {
-            chip.removeFromSuperlayer()
-            for sub in chip.sublayers ?? [] { sub.removeFromSuperlayer() }
+            // Each chip has exactly one sublayer (its label). Wipe so the
+            // chip is clean when next dequeued from the pool.
+            chip.sublayers = nil
             hintLayerPool.append(chip)
         }
         labelLayerPool.append(contentsOf: labelLayers)
@@ -282,14 +318,32 @@ final class OverlayPanel: NSPanel {
         lastTargetLocalRects.removeAll(keepingCapacity: true)
     }
 
+    private func makeChipLayer() -> CALayer {
+        let l = CALayer()
+        // Static styling that never changes after creation — set once at
+        // pool-fill time so the per-chip render loop only touches frame +
+        // colors.
+        l.cornerRadius = 4
+        l.borderWidth = 1
+        l.actions = OverlayPanel.noActions
+        return l
+    }
+
+    private func makeLabelLayer() -> CATextLayer {
+        let l = CATextLayer()
+        l.alignmentMode = .center
+        l.actions = OverlayPanel.noActions
+        return l
+    }
+
     private func dequeueHintLayer() -> CALayer {
         if let last = hintLayerPool.popLast() { return last }
-        return CALayer()
+        return makeChipLayer()
     }
 
     private func dequeueLabelLayer() -> CATextLayer {
         if let last = labelLayerPool.popLast() { return last }
-        return CATextLayer()
+        return makeLabelLayer()
     }
 
     /// The chip's bounding rect in global NSScreen coordinates for a given hint
@@ -298,7 +352,7 @@ final class OverlayPanel: NSPanel {
     /// chip is drawn — never the AX rect's geometric centre, which can be
     /// hundreds of pixels away for a long row.
     static func chipFrame(for hint: AssignedHint, fontSize: CGFloat) -> CGRect {
-        let approxWidth = max(18, CGFloat(hint.label.count) * fontSize * 0.7 + 10)
+        let approxWidth = max(18, CGFloat(hint.display.count) * fontSize * 0.7 + 10)
         let chipHeight = fontSize + 8
         return CGRect(
             x: hint.target.frame.minX,
