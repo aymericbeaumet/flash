@@ -18,9 +18,15 @@ struct Config {
         var scope: Scope = .activeApp
     }
     struct Overlay {
-        var fontSize: Double = 14
-        var hintBG: String = "#FFD400"
-        var hintFG: String = "#1B1B1B"
+        var fontSize: Double = 11
+        var hintFG: String = "#302505"
+        /// Top stop of the chip's vertical gradient. Vimium's default light
+        /// yellow. Set this equal to `hintBGBottom` for a flat fill.
+        var hintBGTop: String = "#FFF785"
+        /// Bottom stop of the chip's vertical gradient.
+        var hintBGBottom: String = "#FFC542"
+        /// 1px border around the chip.
+        var hintBorder: String = "#E3BE23"
         var exitKey: String = "escape"
     }
     struct Debug {

@@ -7,7 +7,11 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(c.hints.keys, "<qwerty>")
         XCTAssertEqual(c.hints.minLength, 1)
         XCTAssertEqual(c.hints.scope, .activeApp)
-        XCTAssertEqual(c.overlay.fontSize, 14)
+        XCTAssertEqual(c.overlay.fontSize, 11)
+        XCTAssertEqual(c.overlay.hintFG, "#302505")
+        XCTAssertEqual(c.overlay.hintBGTop, "#FFF785")
+        XCTAssertEqual(c.overlay.hintBGBottom, "#FFC542")
+        XCTAssertEqual(c.overlay.hintBorder, "#E3BE23")
         XCTAssertFalse(c.debug.profile)
         XCTAssertEqual(c.debug.slowMs, 100)
     }
@@ -76,8 +80,10 @@ final class ConfigLoaderTests: XCTestCase {
             "--hints-min-length=3",
             "--hints-scope=everywhere",
             "--overlay-font-size=20",
-            "--overlay-hint-bg=#000000",
             "--overlay-hint-fg=#FFFFFF",
+            "--overlay-hint-bg-top=#000000",
+            "--overlay-hint-bg-bottom=#111111",
+            "--overlay-hint-border=#222222",
             "--overlay-exit-key=q",
             "--debug-show-bounds=true",
             "--debug-bounds-bg=#11223344",
@@ -90,8 +96,10 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(c.hints.minLength, 3)
         XCTAssertEqual(c.hints.scope, .everywhere)
         XCTAssertEqual(c.overlay.fontSize, 20)
-        XCTAssertEqual(c.overlay.hintBG, "#000000")
         XCTAssertEqual(c.overlay.hintFG, "#FFFFFF")
+        XCTAssertEqual(c.overlay.hintBGTop, "#000000")
+        XCTAssertEqual(c.overlay.hintBGBottom, "#111111")
+        XCTAssertEqual(c.overlay.hintBorder, "#222222")
         XCTAssertEqual(c.overlay.exitKey, "q")
         XCTAssertTrue(c.debug.showBounds)
         XCTAssertEqual(c.debug.boundsBG, "#11223344")
@@ -107,8 +115,10 @@ final class ConfigLoaderTests: XCTestCase {
             "FLASH_HINTS_MIN_LENGTH": "2",
             "FLASH_HINTS_SCOPE": "active_monitor",
             "FLASH_OVERLAY_FONT_SIZE": "18",
-            "FLASH_OVERLAY_HINT_BG": "#AABBCC",
             "FLASH_OVERLAY_HINT_FG": "#DDEEFF",
+            "FLASH_OVERLAY_HINT_BG_TOP": "#AABBCC",
+            "FLASH_OVERLAY_HINT_BG_BOTTOM": "#998877",
+            "FLASH_OVERLAY_HINT_BORDER": "#665544",
             "FLASH_OVERLAY_EXIT_KEY": "x",
             "FLASH_DEBUG_SHOW_BOUNDS": "yes",
             "FLASH_DEBUG_BOUNDS_BG": "#11111111",
@@ -121,8 +131,10 @@ final class ConfigLoaderTests: XCTestCase {
         XCTAssertEqual(c.hints.minLength, 2)
         XCTAssertEqual(c.hints.scope, .activeMonitor)
         XCTAssertEqual(c.overlay.fontSize, 18)
-        XCTAssertEqual(c.overlay.hintBG, "#AABBCC")
         XCTAssertEqual(c.overlay.hintFG, "#DDEEFF")
+        XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
+        XCTAssertEqual(c.overlay.hintBGBottom, "#998877")
+        XCTAssertEqual(c.overlay.hintBorder, "#665544")
         XCTAssertEqual(c.overlay.exitKey, "x")
         XCTAssertTrue(c.debug.showBounds)
         XCTAssertEqual(c.debug.boundsBG, "#11111111")

@@ -190,8 +190,10 @@ Keys:
 | `hints.keys`                       | string         | `"<qwerty>"`         |
 | `hints.min_length`                 | int            | `1`                  |
 | `hints.scope`                      | string         | `"active_app"`       |
-| `overlay.font_size`                | double         | `14`                 |
-| `overlay.hint_bg` / `hint_fg`      | hex string     | `"#FFD400"` / `"#1B1B1B"` |
+| `overlay.font_size`                | double         | `11`                 |
+| `overlay.hint_fg`                  | hex string     | `"#302505"`          |
+| `overlay.hint_bg_top` / `hint_bg_bottom` | hex string | `"#FFF785"` / `"#FFC542"` |
+| `overlay.hint_border`              | hex string     | `"#E3BE23"`          |
 | `overlay.exit_key`                 | string         | `"escape"`           |
 | `debug.show_bounds`                | bool           | `false`              |
 | `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |

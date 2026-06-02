@@ -4,9 +4,9 @@ import FlashCore
 
 final class OverlayPanel: NSPanel {
     private let contentLayer = CALayer()
-    private var hintLayers: [CALayer] = []
+    private var hintLayers: [CAGradientLayer] = []
     private var labelLayers: [CATextLayer] = []
-    private var hintLayerPool: [CALayer] = []
+    private var hintLayerPool: [CAGradientLayer] = []
     private var labelLayerPool: [CATextLayer] = []
 
     /// One shape layer holds every debug border, drawn as a single CGPath. This
@@ -21,9 +21,8 @@ final class OverlayPanel: NSPanel {
     var overlayConfig: Config.Overlay = .init()
     var debugConfig: Config.Debug = .init()
 
-    // Cached cgColor of the chip border. Static — doesn't depend on
-    // user config (border is structural, not themable).
-    private static let borderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
+    // Fallback border colour when the configured `hint_border` is malformed.
+    private static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
 
     init() {
         let frame = OverlayPanel.unionScreenFrame()
@@ -93,8 +92,10 @@ final class OverlayPanel: NSPanel {
 
         recycleAll()
 
-        let bg = nsColor(fromHex: overlayConfig.hintBG) ?? .systemYellow
+        let bgTop = nsColor(fromHex: overlayConfig.hintBGTop) ?? .systemYellow
+        let bgBottom = nsColor(fromHex: overlayConfig.hintBGBottom) ?? bgTop
         let fg = nsColor(fromHex: overlayConfig.hintFG) ?? .black
+        let border = nsColor(fromHex: overlayConfig.hintBorder)
         let fontSize = CGFloat(overlayConfig.fontSize)
         let scale = NSScreen.main?.backingScaleFactor ?? 2
 
@@ -104,9 +105,9 @@ final class OverlayPanel: NSPanel {
         // the font instance never changes mid-render). Previously every one
         // of these was recomputed N times — at N=200 that's 200 NSFont
         // allocations, 200 NSColor allocations, 200 CGColor accesses.
-        let bgCG = bg.cgColor
+        let gradientColors: [CGColor] = [bgBottom.cgColor, bgTop.cgColor]
         let fgCG = fg.cgColor
-        let borderCG = OverlayPanel.borderCGColor
+        let borderCG = border?.cgColor ?? OverlayPanel.fallbackBorderCGColor
         let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
         let labelLen = hints.first?.display.count ?? 1
         let approxWidth = Self.chipWidth(forLabelLength: labelLen, fontSize: fontSize)
@@ -175,7 +176,7 @@ final class OverlayPanel: NSPanel {
                 width: chipGlobal.width,
                 height: chipGlobal.height
             )
-            chip.backgroundColor = bgCG
+            chip.colors = gradientColors
             chip.borderColor = borderCG
 
             chip.sublayers = [label]
@@ -266,9 +267,11 @@ final class OverlayPanel: NSPanel {
 
         let chip = dequeueHintLayer()
         chip.frame = CGRect(x: centerX - approxWidth / 2, y: centerY - chipHeight / 2, width: approxWidth, height: chipHeight)
-        chip.backgroundColor = (nsColor(fromHex: overlayConfig.hintBG) ?? .systemYellow).cgColor
+        let bannerTop = nsColor(fromHex: overlayConfig.hintBGTop) ?? .systemYellow
+        let bannerBottom = nsColor(fromHex: overlayConfig.hintBGBottom) ?? bannerTop
+        chip.colors = [bannerBottom.cgColor, bannerTop.cgColor]
         chip.cornerRadius = 6
-        chip.borderColor = OverlayPanel.borderCGColor
+        chip.borderColor = nsColor(fromHex: overlayConfig.hintBorder)?.cgColor ?? OverlayPanel.fallbackBorderCGColor
         let textHeight = lineHeight * CGFloat(lines.count)
         label.frame = CGRect(x: 8, y: (chipHeight - textHeight) / 2, width: approxWidth - 16, height: textHeight)
         chip.sublayers = [label]
@@ -323,12 +326,12 @@ final class OverlayPanel: NSPanel {
         lastTargetLocalRects.removeAll(keepingCapacity: true)
     }
 
-    private func makeChipLayer() -> CALayer {
-        let l = CALayer()
+    private func makeChipLayer() -> CAGradientLayer {
+        let l = CAGradientLayer()
         // Static styling that never changes after creation — set once at
         // pool-fill time so the per-chip render loop only touches frame +
         // colors.
-        l.cornerRadius = 4
+        l.cornerRadius = 3
         l.borderWidth = 1
         l.actions = OverlayPanel.noActions
         return l
@@ -341,7 +344,7 @@ final class OverlayPanel: NSPanel {
         return l
     }
 
-    private func dequeueHintLayer() -> CALayer {
+    private func dequeueHintLayer() -> CAGradientLayer {
         if let last = hintLayerPool.popLast() { return last }
         return makeChipLayer()
     }
@@ -354,31 +357,18 @@ final class OverlayPanel: NSPanel {
     /// Chip's bounding rect in global NSScreen coordinates, for a target
     /// rect + uniform chip size.
     ///
-    /// All-or-nothing centring:
-    ///  - If the target is small in **both** dimensions (each less than
-    ///    150 % of the matching chip dimension — icons, single-glyph
-    ///    buttons, switches), centre the chip on the target's midpoint.
-    ///  - Otherwise (the target is bigger than 1.5× the chip on at
-    ///    least one axis — rows, buttons, panels, hero cards) anchor
-    ///    the chip to the target's top-left corner with no padding.
+    /// Centring is gated on height first:
+    ///  - If the target's height is under 130 % of the chip height, the
+    ///    chip is centred vertically on the target's midpoint.
+    ///  - Horizontal centring additionally requires the target's width to
+    ///    be under 130 % of the chip width.
+    ///  - Otherwise the chip anchors to the target's top-left corner.
     static func chipFrame(target: CGRect, width: CGFloat, height: CGFloat) -> CGRect {
-        let centerBoth = target.width < width * 1.5 && target.height < height * 1.5
-        if centerBoth {
-            return CGRect(
-                x: target.midX - width / 2,
-                y: target.midY - height / 2,
-                width: width,
-                height: height
-            )
-        }
-        // Top-left in NSScreen Y-up: minX horizontally, maxY - height
-        // vertically (top of chip flush with top of target).
-        return CGRect(
-            x: target.minX,
-            y: target.maxY - height,
-            width: width,
-            height: height
-        )
+        let centerY = target.height < height * 1.3
+        let centerX = centerY && target.width < width * 1.3
+        let x = centerX ? target.midX - width / 2 : target.minX
+        let y = centerY ? target.midY - height / 2 : target.maxY - height
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     /// Convenience overload. Used by `commit` (`hint.target.frame` is the

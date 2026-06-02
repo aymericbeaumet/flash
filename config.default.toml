@@ -38,9 +38,14 @@ scope = "active_app"
 
 [overlay]
 # Hint chip styling. font_size is in points; colors accept #RRGGBB or #RRGGBBAA.
-font_size = 14
-hint_bg = "#FFD400"
-hint_fg = "#1B1B1B"
+# Defaults mirror Vimium's classic yellow hint marker — small bold label on a
+# vertical gradient with a darker amber border. Set hint_bg_top == hint_bg_bottom
+# for a flat fill.
+font_size = 11
+hint_fg = "#302505"
+hint_bg_top = "#FFF785"
+hint_bg_bottom = "#FFC542"
+hint_border = "#E3BE23"
 
 # Key that dismisses the overlay without committing. The overlay panel
 # receives this via its own keyDown handler — there is no global hotkey.

@@ -121,10 +121,14 @@ enum ConfigLoader {
 
         case ["overlay", "font_size"]:
             config.overlay.fontSize = parseDouble(value) ?? config.overlay.fontSize
-        case ["overlay", "hint_bg"]:
-            config.overlay.hintBG = parseString(value) ?? config.overlay.hintBG
         case ["overlay", "hint_fg"]:
             config.overlay.hintFG = parseString(value) ?? config.overlay.hintFG
+        case ["overlay", "hint_bg_top"]:
+            config.overlay.hintBGTop = parseString(value) ?? config.overlay.hintBGTop
+        case ["overlay", "hint_bg_bottom"]:
+            config.overlay.hintBGBottom = parseString(value) ?? config.overlay.hintBGBottom
+        case ["overlay", "hint_border"]:
+            config.overlay.hintBorder = parseString(value) ?? config.overlay.hintBorder
         case ["overlay", "exit_key"]:
             config.overlay.exitKey = parseString(value) ?? config.overlay.exitKey
 
@@ -226,10 +230,14 @@ enum ConfigLoader {
 
         case "overlay-font-size":
             if let d = Double(value) { config.overlay.fontSize = d }
-        case "overlay-hint-bg":
-            config.overlay.hintBG = value
         case "overlay-hint-fg":
             config.overlay.hintFG = value
+        case "overlay-hint-bg-top":
+            config.overlay.hintBGTop = value
+        case "overlay-hint-bg-bottom":
+            config.overlay.hintBGBottom = value
+        case "overlay-hint-border":
+            config.overlay.hintBorder = value
         case "overlay-exit-key":
             config.overlay.exitKey = value
 

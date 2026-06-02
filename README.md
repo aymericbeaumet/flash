@@ -1,5 +1,7 @@
 # Flash
 
+[![CI](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml/badge.svg)](https://github.com/aymericbeaumet/flash/actions/workflows/ci.yml)
+
 System-wide vimium-style "find and jump" for macOS. Triggered by an external tool (Karabiner / skhd / Hammerspoon / etc.), Flash overlays hint labels on clickable elements in the focused app and lets you click them by typing a 1–3 character hint.
 
 ## Build
@@ -73,9 +75,11 @@ min_length = 1
 scope = "active_app"
 
 [overlay]
-font_size = 14
-hint_bg = "#FFD400"
-hint_fg = "#1B1B1B"
+font_size = 11               # vimium-style small bold label
+hint_fg = "#302505"
+hint_bg_top = "#FFF785"      # gradient top stop
+hint_bg_bottom = "#FFC542"   # gradient bottom stop (set equal to top for flat fill)
+hint_border = "#E3BE23"
 exit_key = "escape"
 
 [debug]
