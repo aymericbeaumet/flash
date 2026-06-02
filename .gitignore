@@ -1,0 +1,19 @@
+## SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+## Build artifacts
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+
+## Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+## Local config / scratch
+karabiner.json.bak-*
+*.bak-flash

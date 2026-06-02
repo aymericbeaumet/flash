@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>flash</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.flash.app</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Flash</string>
+    <key>CFBundleDisplayName</key>
+    <string>Flash</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Flash uses the Accessibility API to find clickable elements in the focused application so it can show jump-hints.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Flash sends Apple Events to Safari and Chrome to enumerate clickable elements on the current page.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Flash captures the focused window to detect clickable text via OCR when accessibility data is unavailable (terminals, some Electron apps).</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Flash Activation</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>flash</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
