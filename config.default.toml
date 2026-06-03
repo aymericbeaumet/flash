@@ -41,13 +41,10 @@ hint_bg_top = "#FFF785"
 hint_bg_bottom = "#FFC542"
 hint_border = "#E3BE23"
 
-# Key that dismisses the overlay without committing. The overlay panel
-# receives this via its own keyDown handler — there is no global hotkey.
-# Special keys use Karabiner-style angle brackets:
-#   <escape> <return> <tab> <space> <backspace> <delete>
-#   <arrow_up> <arrow_down> <arrow_left> <arrow_right>
-# Or a literal single character: "q"
-exit_key = "<escape>"
+# Dismissal is not configurable: the overlay always disappears on
+# Escape, Space, any arrow key, or any scroll event. Re-invoking the
+# show_hints URL while hints are visible cancels them and starts a
+# fresh walk.
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

@@ -68,7 +68,6 @@ final class ConfigLoaderTests: XCTestCase {
       "--overlay-hint-bg-top=#000000",
       "--overlay-hint-bg-bottom=#111111",
       "--overlay-hint-border=#222222",
-      "--overlay-exit-key=q",
       "--debug-show-bounds=true",
       "--debug-bounds-bg=#11223344",
       "--debug-bounds-fg=#55667788",
@@ -83,7 +82,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#000000")
     XCTAssertEqual(c.overlay.hintBGBottom, "#111111")
     XCTAssertEqual(c.overlay.hintBorder, "#222222")
-    XCTAssertEqual(c.overlay.exitKey, "q")
     XCTAssertTrue(c.debug.showBounds)
     XCTAssertEqual(c.debug.boundsBG, "#11223344")
     XCTAssertEqual(c.debug.boundsFG, "#55667788")
@@ -101,7 +99,6 @@ final class ConfigLoaderTests: XCTestCase {
       "FLASH_OVERLAY_HINT_BG_TOP": "#AABBCC",
       "FLASH_OVERLAY_HINT_BG_BOTTOM": "#998877",
       "FLASH_OVERLAY_HINT_BORDER": "#665544",
-      "FLASH_OVERLAY_EXIT_KEY": "x",
       "FLASH_DEBUG_SHOW_BOUNDS": "yes",
       "FLASH_DEBUG_BOUNDS_BG": "#11111111",
       "FLASH_DEBUG_BOUNDS_FG": "#22222222",
@@ -116,7 +113,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
     XCTAssertEqual(c.overlay.hintBGBottom, "#998877")
     XCTAssertEqual(c.overlay.hintBorder, "#665544")
-    XCTAssertEqual(c.overlay.exitKey, "x")
     XCTAssertTrue(c.debug.showBounds)
     XCTAssertEqual(c.debug.boundsBG, "#11111111")
     XCTAssertEqual(c.debug.boundsFG, "#22222222")

@@ -15,7 +15,6 @@ struct Config {
     var hintBGBottom: String = "#FFC542"
     /// 1px border around the chip.
     var hintBorder: String = "#E3BE23"
-    var exitKey: String = "<escape>"
   }
   struct Debug {
     /// When true, every detected target is outlined alongside its hint chip.

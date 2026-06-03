@@ -113,16 +113,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     let profiler = FlashProfiler(kind: "activation", debug: config.debug)
     profiler.mark("url", detail: "right_click=\(rightClick)")
 
-    // Drop concurrent / redundant triggers. A press during an in-flight
-    // walk, or while hints are already on screen, is a no-op — never a
-    // queued second activation. This is what makes rapid ctrl+space
-    // presses behave: one walk, one overlay, no multi-fire backlog.
-    if activationInFlight || !currentHints.isEmpty {
-      profiler.finish(
-        outcome: "dropped_busy",
-        detail: "activation_in_flight=\(activationInFlight) visible_hints=\(currentHints.count)"
-      )
-      return
+    // Cancel any in-flight walk and clear any visible hints. The
+    // earlier "drop on busy" behaviour rejected the new trigger; the
+    // user-facing rule now is "the most recent show_hints wins" —
+    // pressing the hotkey again while hints are up restarts from
+    // scratch (cancel current, kick off a fresh walk on the now-
+    // focused window). cancelOverlay() bumps activationGen, so any
+    // in-flight discoverAsync completion will see a stale generation
+    // and bail before rendering.
+    let wasBusy = activationInFlight || !currentHints.isEmpty
+    if wasBusy {
+      cancelOverlay()
+      profiler.mark(
+        "restart",
+        detail: "in_flight=\(activationInFlight) visible_hints=\(currentHints.count)")
     }
 
     let contextStart = profiler.intervalStart()

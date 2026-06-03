@@ -134,8 +134,6 @@ enum ConfigLoader {
       config.overlay.hintBGBottom = parseString(value) ?? config.overlay.hintBGBottom
     case ["overlay", "hint_border"]:
       config.overlay.hintBorder = parseString(value) ?? config.overlay.hintBorder
-    case ["overlay", "exit_key"]:
-      config.overlay.exitKey = parseString(value) ?? config.overlay.exitKey
 
     case ["debug", "show_bounds"]:
       config.debug.showBounds = parseBool(value) ?? config.debug.showBounds
@@ -249,8 +247,6 @@ enum ConfigLoader {
       config.overlay.hintBGBottom = value
     case "overlay-hint-border":
       config.overlay.hintBorder = value
-    case "overlay-exit-key":
-      config.overlay.exitKey = value
 
     case "debug-show-bounds":
       if let b = boolFromString(value) { config.debug.showBounds = b }

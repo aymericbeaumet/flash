@@ -74,6 +74,19 @@ final class OverlayPanel: NSPanel {
   override var canBecomeMain: Bool { false }
   override var acceptsFirstResponder: Bool { true }
 
+  /// Active scroll event monitor — non-nil while the overlay is up.
+  /// We use NSEvent's *global* monitor for `.scrollWheel` because the
+  /// panel has `ignoresMouseEvents = true` so scroll events go to
+  /// whichever app is under the cursor, not to us. A global monitor
+  /// observes those events without intercepting them, which is what
+  /// we want: dismiss the overlay but let the user's scroll reach
+  /// the underlying app uninterrupted. The local monitor catches the
+  /// (rare) case where the overlay or another Flash window is
+  /// frontmost when a scroll arrives — without this the user could
+  /// scroll our own UI without dismissing.
+  private var scrollGlobalMonitor: Any?
+  private var scrollLocalMonitor: Any?
+
   func display(hints: [AssignedHint]) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -81,6 +94,7 @@ final class OverlayPanel: NSPanel {
       CATransaction.commit()
       orderFrontRegardless()
       makeKey()
+      installScrollMonitor()
     }
 
     let frame = OverlayPanel.unionScreenFrame()
@@ -258,8 +272,44 @@ final class OverlayPanel: NSPanel {
   ]
 
   func hide() {
+    removeScrollMonitor()
     orderOut(nil)
     recycleAll()
+  }
+
+  /// Install (idempotent) the global+local scroll observers. Calling
+  /// this twice is safe — the second call removes the previous
+  /// monitor before installing a fresh one.
+  private func installScrollMonitor() {
+    removeScrollMonitor()
+    let dismiss: () -> Void = { [weak self] in
+      // Hop to main to keep all coordinator interactions on the same
+      // thread as display(). NSEvent monitors fire on main already,
+      // but the local-monitor closure may return synchronously; the
+      // dispatch ensures we don't reentrantly tear down the monitor
+      // while it's executing.
+      DispatchQueue.main.async {
+        self?.coordinator?.overlayDidCancel()
+      }
+    }
+    scrollGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { _ in
+      dismiss()
+    }
+    scrollLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+      dismiss()
+      return event
+    }
+  }
+
+  private func removeScrollMonitor() {
+    if let m = scrollGlobalMonitor {
+      NSEvent.removeMonitor(m)
+      scrollGlobalMonitor = nil
+    }
+    if let m = scrollLocalMonitor {
+      NSEvent.removeMonitor(m)
+      scrollLocalMonitor = nil
+    }
   }
 
   /// Show a transient banner centered on the focused screen. Multi-line strings (with
