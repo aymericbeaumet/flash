@@ -35,7 +35,7 @@ Sources/
   FlashProviders/                    # Built-in providers (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
     Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
-    Browser/BrowserScriptProvider.swift         # Vimium-style DOM bridge + Safari/Chrome subclasses
+    Tmux/TmuxProvider.swift                     # Visible-pane word hints for terminals running a tmux client
   FlashE2EKit/                       # Shared Firefox E2E fixture + harness + assertions used by both the standalone runner and the xctest target.
   flash/                             # The executable target
     main.swift                       # NSApplication boot
@@ -66,13 +66,13 @@ AGENTS.md                            # This file
 2. macOS Launch Services routes to the running instance via `kAEGetURL` Apple Event.
 3. `URLEventHandler` parses the URL host/query and invokes the AppDelegate handler.
 4. `AppDelegate.activate(rightClick:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
-5. `AppMonitor.discoverAsync` first tries the AX-event-driven prepared model (see *Prepared model contract* below). On hit, native AX-backed `[AssignedHint]` values are delivered to main without an activation-time AX walk. Safari/Chrome still run the DOM bridge on activation and merge it with the prepared AX chrome model; tmux remains activation-only because its output is volatile.
+5. `AppMonitor.discoverAsync` first tries the AX-event-driven prepared model (see *Prepared model contract* below). On hit, native AX-backed `[AssignedHint]` values are delivered to main without an activation-time AX walk. Tmux remains activation-only because its output is volatile.
 6. On the AX queue, `AppMonitor` runs the selected provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives). Inside `AccessibilityProvider`, the focused window's direct children are fanned out across concurrent walkers, and action-name IPCs for tentative web-area / AXImage targets are resolved in a parallel post-pass.
 7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet — pre-uppercased as `AssignedHint.display`, memoised by `(alphabet, leftHand, length)`.
 8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
 9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
 10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` reactivates the focused pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
-11. `ActionDispatcher` runs the click through a three-step pipeline. (1) Call the provider-owned `target.activate` closure — AX targets try AXPress/AXOpen/AXConfirm (or focus-set for text inputs); browser DOM targets dispatch `.click()` / focus+select / synthetic `contextmenu` via `do JavaScript`. (2) On failure, AX-hit-test at the click point via `AXClick.clickAtPoint`, then try the press-style actions on that element + its ancestors. Cursor doesn't move and this often recovers inert-wrapper / handler-on-descendant cases (Firefox tab strip, React `role="tab"` widgets) plus acts as an AX-level fallback for browser DOM targets when the JS bridge has been denied. (3) Final fallback: synthesized `CGEvent` click — cursor warps to the point hidden, clicks, warps back, unhides. The dispatcher is the only place mouse synthesis lives; the providers themselves never synthesize.
+11. `ActionDispatcher` runs the click through a three-step pipeline. (1) Call the provider-owned `target.activate` closure — AX targets try AXPress/AXOpen/AXConfirm (or focus-set for text inputs). (2) On failure, AX-hit-test at the click point via `AXClick.clickAtPoint`, then try the press-style actions on that element + its ancestors. Cursor doesn't move and this often recovers inert-wrapper / handler-on-descendant cases (Firefox tab strip, React `role="tab"` widgets). (3) Final fallback: synthesized `CGEvent` click — cursor warps to the point hidden, clicks, warps back, unhides. The dispatcher is the only place mouse synthesis lives; the providers themselves never synthesize.
 12. Overlay hides; process stays resident.
 
 ## Coordinate systems (subtle, get this right)
@@ -112,7 +112,7 @@ The current prepared model is a different design. It preserves determinism by:
 - **Walks are never truncated.** No per-walk deadline; walks always run to `maxDepth` / `maxTargets`. A walk that times the user out is preferable to a non-deterministic hint set.
 - **No partial model.** A walk either completes and writes a full prepared model, or its result is discarded — never half-served.
 - **Model reads are atomic against AX events and config.** `dirtyTokens[pid]` is bumped on every observed AX event (and on focused-app change). `configRevision` is bumped on config reload. A walk captures both before starting; it only writes the model if both still match at completion and the pid is still frontmost. Reads only serve a hit if token, config revision, and freshness all match.
-- **Provider ordering is by priority desc.** Within a provider, traversal order is deterministic (AX child order for `AccessibilityProvider`, DOM order for `BrowserScriptProvider`). Concurrent walking fans out subtree workers but the dedup + sort passes after merging are deterministic, so the final hint order is independent of worker scheduling.
+- **Provider ordering is by priority desc.** Within a provider, traversal order is deterministic (AX child order for `AccessibilityProvider`, visible-grid order for `TmuxProvider`). Concurrent walking fans out subtree workers but the dedup + sort passes after merging are deterministic, so the final hint order is independent of worker scheduling.
 
 See *Prepared model contract* below for the exact invariants.
 
@@ -130,16 +130,15 @@ See *Prepared model contract* below for the exact invariants.
 
 1. `scheduleModelRefresh(for: pid)` — 80-ms debounced. Multiple bumps coalesce.
 2. On debounce fire, capture `startToken = dirtyTokens[pid]` and `configRevision` on main, dispatch a continuous-provider walk on `axQueue`.
-3. Walk runs to completion (never truncated). For Safari/Chrome, the continuous AX model deliberately skips `AXWebArea` descendants because the DOM bridge runs on activation.
+3. Walk runs to completion (never truncated).
 4. Result hops back to main. If token and config revision still match AND pid is still frontmost → write a `PreparedModel` with targets, assigned hints, token, config revision, and timestamp. Else discard.
 5. A maintenance refresh is scheduled before the freshness ceiling so a quiet focused app stays warm.
 
 **Activation lookup** (`lookupPreparedModel`):
 
 - Model hit iff `model.dirtyToken == dirtyTokens[pid]` AND `model.configRevision == configRevision` AND `now - model.computedAt < modelFreshnessMs`.
-- On miss for pure continuous providers, activation waits for a model build and stores it if still valid.
-- On miss for activation-only providers, activation runs the full provider chain. Safari/Chrome can still hit the prepared AX chrome model and merge activation-time DOM results into it.
-- Volatile providers (`readinessPolicy == .volatile`, e.g. `TmuxProvider`) skip prepared-model lookup and writes.
+- On miss, activation waits for a model build and stores it if still valid; if the build also returns nothing (e.g. focused-window changed mid-build) activation falls back to a synchronous full provider walk.
+- Volatile providers (`readinessPolicy == .volatile`, e.g. `TmuxProvider`) skip prepared-model lookup and writes entirely; activation runs the full provider chain on demand.
 
 If you add new AX events that mutate UI state, add them to `AppMonitor.observedNotifications` in the same commit — otherwise the model can silently serve stale hints when those events fire. The freshness ceiling is a safety belt for events we forgot to subscribe to; don't lean on it as a primary mechanism.
 
@@ -176,39 +175,13 @@ Steps:
 2. Implement the protocol. Return `JumpTarget`s with **global NSScreen coordinates** (bottom-left origin of primary screen). Honour `deadline` inside any recursive walk.
 3. **Do not introduce per-app providers**. The project's working assumption is that generic rules are good enough. If a specific app misbehaves, fix the universal walker (roles/depth/etc.) — don't subclass per bundle id. The previous Messages/Notes/WhatsApp/Linear/Slack subclasses were collapsed for this reason; reintroduce them only if a generic-rule change for the same problem hurts other apps.
 4. Register in `Sources/flash/App/ProviderRegistry.swift`'s built-in list. Pick a priority — higher wins on overlapping rects. Existing scale:
-   - 30: `BrowserScriptProvider` (Safari, Chrome and Chromium variants — Vimium-style DOM discovery via `do JavaScript`)
-   - 10: generic `AccessibilityProvider` (universal AX walker; also handles Firefox's in-page DOM via `AXWebArea` descendants)
+   - 20: `TmuxProvider` (terminals with a tmux client in the process subtree — pane content isn't AX-clickable, so we hint each visible word and copy on commit)
+   - 10: generic `AccessibilityProvider` (universal AX walker; also handles browser in-page DOM via `AXWebArea` descendants)
 5. Add a smoke test and update README.
 
-A `JumpTarget.activate` closure overrides the default action. Use it when the underlying API has a cheaper / more reliable way to "click" than synthesizing a `CGEvent` (e.g. browsers can dispatch `.click()` in JS; AX can call `kAXPressAction`).
+Flash deliberately uses **only two providers**: `AccessibilityProvider` as the universal default, and `TmuxProvider` for terminals whose visible content macOS Accessibility cannot see. There is no DOM bridge / `do JavaScript` provider — browser page content reaches us through `AXWebArea` descendants the same way every other web area does. If you find yourself reaching for AppleScript-based discovery, surface that to the user instead of adding it.
 
-## Browser DOM bridge (Vimium sync rule)
-
-`Sources/FlashProviders/Browser/BrowserScriptProvider.swift` contains a JavaScript discovery routine that is a **direct port of Vimium's clickable-element detection**. The user's expectation is that "what Vimium hints" and "what Flash hints" stay observably identical inside Safari and Chromium-family browsers.
-
-Source files in the upstream repo (https://github.com/philc/vimium):
-
-| Upstream file                       | What we port                                               |
-| ----------------------------------- | ---------------------------------------------------------- |
-| `content_scripts/link_hints.js`     | `LocalHints.getLocalHintsForElement` — the clickability rules. `LocalHints.getLocalHints` — the collect → reverse → false-positive → overlap-via-elementFromPoint pipeline. `LocalHints.getElementFromPoint` — shadow-DOM-aware hit test. |
-| `lib/dom_utils.js`                  | `DomUtils.getVisibleClientRect`, `DomUtils.cropRectToVisible`, `DomUtils.isSelectable`. |
-
-The Swift file pins the upstream commit SHA it was last reconciled against, in a block comment above `discoveryJS`. Update procedure when changing the JS:
-
-1. Diff the upstream files against the SHA recorded in the comment block.
-2. Mirror any change inside `discoveryJS` line-by-line where possible. Section markers in the JS (`// ----- LocalHints.getElementFromPoint -----` etc.) name the upstream function each block corresponds to — keep them.
-3. Bump the SHA in the comment block to the new upstream commit.
-4. If a predicate changes category (e.g. a new tag becomes clickable, a role is added, a role drops), update the table below.
-5. If a new feature in Vimium has no Flash equivalent (e.g. their Frame./Scroll. body hints) **document the deviation in the "Pieces deliberately omitted" comment in `discoveryJS`** — do not silently drop it.
-
-Currently omitted from the port (be aware before extending):
-
-- Image-map `<area>` hint expansion (rare on the modern web).
-- `<body>`-as-frame and scrollable-container hints (Vimium uses these for frame focus + scroll commands; Flash has no equivalent semantic).
-- AngularJS `ng-click` attribute family (legacy framework; trivial to re-add).
-- Cross-frame walking (Vimium injects per-frame as a content script; Flash only reaches the top window via `do JavaScript`).
-
-Things that match Vimium today: shadow-DOM walk, `aria-disabled`, `onclick` attr/property, the role allowlist (`button, tab, link, checkbox, menuitem, menuitemcheckbox, menuitemradio, radio, textbox`), `contentEditable`, `jsaction` attribute (Google framework, used by Gmail/Drive/Calendar), native tags (`a, button, select, textarea, input, object, embed, label, img[cursor=zoom-*], details`), the `button`/`btn` class heuristic with false-positive marking, the `<span>` false-positive marker, `tabindex` second-class citizens, the `getClientRects()` + viewport-crop + `visibility:visible` filter, the DOM-order reversal + 6-back/3-up false-positive descendant filter, and the `elementFromPoint` overlap filter at centre + four corners.
+A `JumpTarget.activate` closure overrides the default action. Use it when the underlying API has a cheaper / more reliable way to "click" than synthesizing a `CGEvent` (e.g. AX can call `kAXPressAction`).
 
 ## Configuration
 
@@ -279,9 +252,9 @@ Required:
 
 - **Accessibility** — required for AX walks and `AXUIElementPerformAction`. Granted in *System Settings → Privacy & Security → Accessibility*. The bundle identifier is `com.flash.app`; the path must be `/Applications/Flash.app`.
 
-Optional:
+Not required:
 
-- **Automation → Safari / Chrome** — required only for the browser DOM bridge. Prompted on first use of `do JavaScript`.
+- **Automation (`NSAppleEventsUsageDescription`)** — **NOT** required and **NOT** requested. Flash discovers browser page content through `AXWebArea` descendants in the AX tree, not via `do JavaScript`. If you find yourself wanting Automation, surface that need before adding it.
 - **Input Monitoring** — **NOT** required and **NOT** requested. If you find yourself wanting to request it, you're violating rule (2) above.
 - **Screen Recording** — **NOT** required and **NOT** requested. See rule (7) above. The plist no longer declares `NSScreenCaptureUsageDescription`.
 
@@ -346,7 +319,7 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
   Both forms launch Firefox to a structured fixture page (data: URL) containing every clickable role we promise to hint plus a deliberate set of "must not hint" elements, and walk it through `AccessibilityProvider.discover`. The fixture exercises three regression modes simultaneously, with assertions targeted at each:
   - **Undermatch** — per-role lower bounds for `AXLink` (5 anchors + 3 img-wrapped), `AXButton` (5 + 1 submit), `AXTextField` (text/email/password/number/tel/url), `AXSearchField`, `AXCheckBox`, `AXRadioButton`, `AXPopUpButton` (select), `AXTextArea` (textarea + contenteditable). A regression that narrows the role set or drops a specific input-type mapping triggers a specific failure with the role and expected floor in the message.
   - **Overmatch** — forbidden roles (`AXHeading`, `AXStaticText`, `AXGroup`, `AXGenericElement`, `AXScrollArea`, `AXSplitter`, `AXWebArea`, `AXSection`, `AXParagraph`, `AXDocument`, `AXOutline`, `AXList`, `AXListItem`) must produce zero hints. `AXImage` inside the page area must also be zero, since every fixture image is either wrapped in an `<a>` (decorative under `clickableContainerRoles`) or has no click handler (filtered by the pending-action verifier). A regression in the img-as-decorative folding or the action-name verifier shows up as a non-zero `AXImage` count.
-  - **Hidden-subtree exclusion** — disabled controls (5 buttons + 5 inputs), `aria-hidden` subtrees (5 buttons + 5 inputs), and `display:none` subtrees (5 buttons) are seeded into the fixture; they contribute 25 elements that *must not* be hinted. Upper-bound assertions on `AXButton` and `AXTextField` page-area counts catch any regression where the `enabled` filter, the `AXHidden` short-circuit, or DOM exclusion stops working.
+  - **Hidden-subtree exclusion** — disabled controls (5 buttons + 5 inputs) seeded into the fixture should not be hinted; the `enabled` check is the only AX-level gate for this. `aria-hidden` / `display:none` subtrees are no longer short-circuited at the walker (those rows are walked so the dump can show them), so the test counts reflect whatever Firefox itself surfaces for those elements through AX. Update fixture upper bounds accordingly when reconciling.
   - **Invariants** — page-area targets carry Firefox's pid, frames are non-degenerate, frames intersect the primary screen (catches AX↔NSScreen coordinate-flip regressions), and ids are unique (OverlayPanel's layer pool keys by id).
 
   Page-area filtering: the test BFS-walks Firefox's AX tree to find the `AXWebArea` frame, then filters hint targets to that rect so the count assertions reason about page content alone (chrome buttons live outside the web area). On failure, the test prints the full role histogram of the page area for diagnostic context.
@@ -390,8 +363,6 @@ button (which is hinted), commit, then read the menu.
 ## Common pitfalls
 
 - **AX `AXUIElementPerformAction` requires Accessibility permission.** Without it, the call returns `.notImplemented` or `.cannotComplete` silently; the user sees nothing happen. `--doctor`-equivalent diagnostics live in `Permissions/PermissionCheck.swift` (currently only AX check; extend if adding more required perms).
-- **Browser DOM bridge requires Automation permission per-target-app.** A first run prompts; if the user denies, future runs silently return no targets.
-- **`NSAppleScript.executeAndReturnError(_:)` returns a non-optional `NSAppleEventDescriptor`.** Don't `guard let` it. Inspect the error pointer instead.
 - **`AXObserver` callbacks run on the main run loop.** Don't do AX work inside them — schedule onto `refreshQueue`.
 - **`NSPanel(.nonactivatingPanel)` can become key without activating the app.** That is intentional: the overlay needs to receive keys, but stealing focus from the target app would break `AXPressAction` (the action must run *against* the original app, which is why we call `app.activate()` in `commit` before dispatching).
 - **`CGEventSource` `.combinedSessionState`** is the right choice for synthesizing input; it sees the current modifier state, so e.g. shift held during commit doesn't poison the click.

@@ -11,8 +11,6 @@ final class ProviderReadinessTests: XCTestCase {
 
   func testBuiltInProviderPolicies() {
     XCTAssertEqual(AccessibilityProvider().readinessPolicy, .continuous)
-    XCTAssertEqual(SafariProvider().readinessPolicy, .activationOnly)
-    XCTAssertEqual(ChromeProvider().readinessPolicy, .activationOnly)
     XCTAssertEqual(TmuxProvider().readinessPolicy, .volatile)
     XCTAssertTrue(TmuxProvider().resultsAreVolatile)
   }

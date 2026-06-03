@@ -9,16 +9,17 @@ import FlashCore
 /// The role/skip/depth/target sets are intentionally *not* exposed for
 /// per-app override. The project's working assumption is that generic rules
 /// are good enough; if a specific app misbehaves we tune the universal set,
-/// not the per-app fork. See AGENTS.md ("Project layout" + "Browser DOM
-/// bridge") for the rationale.
+/// not the per-app fork. See AGENTS.md ("Project layout") for the rationale.
 ///
 /// Performance contract:
 ///   - Exactly one batched IPC per visited element via
 ///     `AXUIElementCopyMultipleAttributeValues`.
-///   - Prefer kAXVisibleChildrenAttribute over kAXChildrenAttribute so
-///     scrolled-off content in NSOutlineView / NSTableView / NSCollectionView
-///     is never walked. On Notes' 292-row sidebar this turns a ~300-element
-///     walk into a ~30-element walk — only the visible rows are touched.
+///   - Walks the full `kAXChildrenAttribute` tree. We deliberately do not
+///     prefer `kAXVisibleChildrenAttribute` / `kAXVisibleRows`: virtualised-
+///     list optimisations hide scrolled-off rows from the dump, which made
+///     it impossible to tell whether a missing element was absent from the
+///     AX tree or just being filtered. Geometric and visibility filtering
+///     happens later in `AppMonitor.collectFocusedTargets`.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
 ///     returned targets is deterministic).
 ///   - No per-IPC timeout. macOS default (6 s) is in place. Any tighter
@@ -68,17 +69,6 @@ public final class AccessibilityProvider: JumpProvider {
     "AXTab",
   ]
 
-  /// Roles where we add a target and *do not* descend further. Restricted
-  /// to virtualised-list rows because those are the only elements where the
-  /// fanout below the target is both huge (per-row icons, labels, dates)
-  /// and uninteresting (no independent click targets). For everything
-  /// else — buttons, popups, menu items — we descend, which means a
-  /// button that has an open menu underneath it gets its menu items
-  /// hinted alongside the button itself.
-  public static let leafRoles: Set<String> = [
-    "AXRow", "AXCell",
-  ]
-
   /// AppKit's standard subroles for "section header" rows in
   /// NSOutlineView/NSTableView. We *don't* add these as targets, but we
   /// keep descending — so the disclosure triangle inside the header gets
@@ -98,8 +88,13 @@ public final class AccessibilityProvider: JumpProvider {
     "AXTextField", "AXSearchField", "AXTextArea",
   ]
 
-  public static let maxDepth: Int = 80
-  public static let maxTargets: Int = 1500
+  /// Runaway guards rather than real limits. Real AX trees rarely exceed
+  /// ~30 levels of depth or a few thousand elements, but the previous
+  /// caps (80 / 1500) hid genuine tree content from the dump on
+  /// virtualised lists with many rows. If a walk hits either cap there
+  /// is almost certainly a cycle in the AX tree.
+  public static let maxDepth: Int = 500
+  public static let maxTargets: Int = 100_000
   /// How many separate `concurrentPerform` fan-outs a single walk path
   /// is allowed. Each fan-out point pays a small dispatch-queue cost
   /// but unblocks N AX IPCs in parallel. Two levels covers the typical
@@ -151,11 +146,6 @@ public final class AccessibilityProvider: JumpProvider {
     return (cf as! AXValue)
   }
 
-  private func nonEmpty(_ arr: [AXUIElement]?) -> [AXUIElement]? {
-    guard let arr, !arr.isEmpty else { return nil }
-    return arr
-  }
-
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
   // Indices are hot-path constants — keep them in sync with `walk`.
   private static let batchAttrs: CFArray =
@@ -165,10 +155,7 @@ public final class AccessibilityProvider: JumpProvider {
       kAXPositionAttribute,  // 2
       kAXSizeAttribute,  // 3
       kAXEnabledAttribute,  // 4
-      "AXVisibleChildren",  // 5 — virtualised containers
-      "AXVisibleRows",  // 6 — NSTableView / NSOutlineView specifically
-      kAXChildrenAttribute,  // 7 — fallback
-      "AXHidden",  // 8 — Firefox/WebKit a11y-hidden subtrees
+      kAXChildrenAttribute,  // 5
     ] as CFArray
 
   /// Per-worker mutable state. `WalkState` is per-thread under concurrent
@@ -211,19 +198,7 @@ public final class AccessibilityProvider: JumpProvider {
     }
   }
 
-  public func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget] {
-    try discover(in: context, deadline: deadline, descendIntoWebAreas: true)
-  }
-
-  /// `descendIntoWebAreas` is false only when a higher-priority browser DOM
-  /// provider already returned page targets. In that case AX still
-  /// contributes browser chrome controls, but skipping AXWebArea descendants
-  /// avoids walking the entire web page twice.
-  public func discover(
-    in context: AppContext,
-    deadline _: Date,
-    descendIntoWebAreas: Bool
-  ) throws -> [JumpTarget] {
+  public func discover(in context: AppContext, deadline _: Date) throws -> [JumpTarget] {
     let app = AXUIElementCreateApplication(context.processID)
     // Wake the target app's a11y engine. Some apps (notably Firefox)
     // run a lazy/idle accessibility service that only exposes the
@@ -299,7 +274,6 @@ public final class AccessibilityProvider: JumpProvider {
       screenH: screenH,
       visible: clip,
       pid: context.processID,
-      descendIntoWebAreas: descendIntoWebAreas,
       insideClickable: false,
       insideWebArea: false,
       parentRole: nil,
@@ -354,7 +328,6 @@ public final class AccessibilityProvider: JumpProvider {
     screenH: CGFloat,
     visible: CGRect,
     pid: pid_t,
-    descendIntoWebAreas: Bool,
     insideClickable: Bool,
     insideWebArea: Bool,
     parentRole: String?,
@@ -372,29 +345,14 @@ public final class AccessibilityProvider: JumpProvider {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 9 else { return }
+    guard err == .success, let vals = valuesRef as? [Any], vals.count == 6 else { return }
 
     let role = vals[0] as? String
     let subrole = vals[1] as? String
     let posValue = Self.axValue(vals[2])
     let sizeValue = Self.axValue(vals[3])
     let enabled = (vals[4] as? Bool) ?? true
-    let visibleChildren = vals[5] as? [AXUIElement]
-    let visibleRows = vals[6] as? [AXUIElement]
-    let allChildren = vals[7] as? [AXUIElement]
-    let hidden = (vals[8] as? Bool) ?? false
-
-    // AXHidden=true is the WAI-ARIA `aria-hidden`/`display:none`/
-    // `visibility:hidden` signal coming through WebKit/Firefox. The
-    // element still has valid pos/size (so our geometric filter would
-    // happily accept it) but it isn't on screen and isn't user-
-    // clickable. Skip the whole subtree — hidden ancestors imply
-    // hidden descendants.
-    if hidden { return }
-
-    if !descendIntoWebAreas, role == "AXWebArea" {
-      return
-    }
+    let allChildren = vals[5] as? [AXUIElement]
 
     // When dumping, fetch the supported actions + label upfront so the
     // line includes enough signal to diagnose role mismatches. Skipped
@@ -519,29 +477,6 @@ public final class AccessibilityProvider: JumpProvider {
       }
     }
 
-    // Leaf-role pruning: stop descending once we've added a target whose
-    // role we consider atomic.
-    if addedAsTarget, let r = role, Self.leafRoles.contains(r) {
-      // Emit dump line before bailing.
-      if state.dumpBuffer != nil {
-        appendDumpLine(
-          into: &state.dumpBuffer,
-          depth: depth,
-          role: role,
-          subrole: subrole,
-          parentRole: parentRole,
-          posValue: posValue,
-          sizeValue: sizeValue,
-          screenH: screenH,
-          enabled: enabled,
-          actions: dumpActions ?? [],
-          label: dumpLabel,
-          hinted: addedAsTarget
-        )
-      }
-      return
-    }
-
     // Emit a dump line for this element (after the gating decision so
     // the dump reflects what the walker actually saw + did). We log
     // every visited node, not just the ones that become targets — the
@@ -563,72 +498,27 @@ public final class AccessibilityProvider: JumpProvider {
       )
     }
 
-    // Prefer the narrowest "visible" view of children that the element
-    // implements:
-    //   1. kAXVisibleChildrenAttribute (NSCollectionView, generic scroll)
-    //   2. kAXVisibleRowsAttribute (NSTableView / NSOutlineView)
-    //   3. kAXChildrenAttribute (everything else, fallback)
-    // For Notes' 292-row sidebar this drops the walk to the ~12 rows
-    // actually rendered on screen.
+    // Always walk `kAXChildrenAttribute`. We deliberately do NOT prefer
+    // `kAXVisibleChildren` / `kAXVisibleRows` even though that would skip
+    // scrolled-off rows in NSTableView / NSOutlineView / NSCollectionView:
+    // the dump exists to answer "is this element in the AX tree?", and
+    // hiding scrolled-off rows from the dump makes the question
+    // unanswerable.
     //
-    // Empty arrays are treated as "no signal", not "zero visible
-    // children". Messages' chat list is the canonical example: its
-    // table reports `AXVisibleChildren = []` when the container hasn't
-    // been queried recently, even though `AXChildren` contains every
-    // row. Without this fallback the whole chat list disappears from
-    // the walk.
-    //
-    // Children selection:
-    //
-    // **At depth 0 (focused window root)** the "visible children"
-    // optimization is actively harmful. Firefox's `AXWindow`
-    // exposes `AXVisibleChildren` as just the title-bar buttons
-    // (close/min/fullscreen) — the main content `AXGroup` is only
-    // reachable via `kAXChildrenAttribute`. Other apps may have
-    // similar quirks at the root. We unconditionally take the full
-    // children list at depth 0, falling through to a single-attribute
-    // query if the batched response dropped it.
-    //
-    // **Below the root** prefer the narrowest "visible" view of
-    // children that the element implements:
-    //   1. kAXVisibleChildrenAttribute (NSCollectionView, generic scroll)
-    //   2. kAXVisibleRowsAttribute (NSTableView / NSOutlineView)
-    //   3. kAXChildrenAttribute (everything else, fallback)
-    // For Notes' 292-row sidebar this drops the walk to the ~12 rows
-    // actually rendered on screen. Empty arrays are "no signal"
-    // not "zero children" — Messages' chat list reports
-    // `AXVisibleChildren = []` even when populated, so we fall
-    // through to `kAXChildrenAttribute` in that case.
-    //
-    // **Single-attribute children fallback**: when the batched IPC
-    // drops `kAXChildrenAttribute` entirely (Firefox's a11y does
-    // this for `AXTabPanel` under concurrent IPC contention —
-    // returns an error placeholder in vals[7] instead of the real
-    // child list), re-query that one attribute on its own.
-    var children: [AXUIElement]
-    if depth == 0 {
-      children = allChildren ?? []
-      if children.isEmpty {
-        var raw: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
-          == .success,
-          let arr = raw as? [AXUIElement]
-        {
-          children = arr
-        }
-      }
-    } else {
-      children =
-        nonEmpty(visibleChildren) ?? nonEmpty(visibleRows) ?? allChildren ?? []
-      if children.isEmpty {
-        var raw: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
-          == .success,
-          let fallback = raw as? [AXUIElement],
-          !fallback.isEmpty
-        {
-          children = fallback
-        }
+    // **Single-attribute children fallback**: the batched IPC can
+    // occasionally drop `kAXChildrenAttribute` (returns an error
+    // placeholder in vals[5] instead of the real child list — Firefox's
+    // a11y does this for `AXTabPanel` under concurrent IPC contention).
+    // Re-query that one attribute on its own when the batch came back
+    // empty.
+    var children: [AXUIElement] = allChildren ?? []
+    if children.isEmpty {
+      var raw: CFTypeRef?
+      if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
+        == .success,
+        let arr = raw as? [AXUIElement]
+      {
+        children = arr
       }
     }
     let nowInsideClickable =
@@ -654,7 +544,6 @@ public final class AccessibilityProvider: JumpProvider {
       let captureScreenH = screenH
       let captureVisible = visible
       let capturePid = pid
-      let captureDescend = descendIntoWebAreas
       let captureInsideClickable = nowInsideClickable
       let captureInsideWebArea = nowInsideWebArea
       let captureParentRole = role
@@ -675,7 +564,6 @@ public final class AccessibilityProvider: JumpProvider {
           screenH: captureScreenH,
           visible: captureVisible,
           pid: capturePid,
-          descendIntoWebAreas: captureDescend,
           insideClickable: captureInsideClickable,
           insideWebArea: captureInsideWebArea,
           parentRole: captureParentRole,
@@ -702,7 +590,6 @@ public final class AccessibilityProvider: JumpProvider {
         screenH: screenH,
         visible: visible,
         pid: pid,
-        descendIntoWebAreas: descendIntoWebAreas,
         insideClickable: nowInsideClickable,
         insideWebArea: nowInsideWebArea,
         parentRole: role,

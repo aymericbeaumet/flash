@@ -5,17 +5,14 @@ import FlashE2EKit
 import FlashProviders
 import XCTest
 
-/// Live AX integration tests against Firefox. Firefox is the trickiest
-/// host Flash supports because:
-///   - it has no AppleScript `do JavaScript` bridge, so the
-///     BrowserScriptProvider never applies — the AccessibilityProvider
-///     IS the implementation.
-///   - its accessibility engine is lazy: until something signals
+/// Live AX integration tests against Firefox. Browsers are the trickiest
+/// hosts Flash supports because:
+///   - their accessibility engine is lazy: until something signals
 ///     "screen reader on", `AXWebArea` exposes only the chrome buttons.
 ///     `AccessibilityProvider` sets `AXEnhancedUserInterface` and
 ///     `AXManualAccessibility` to wake it; any regression there
 ///     silently empties the hint list.
-///   - it batches AX IPC differently than Safari/Chrome, which is why
+///   - Firefox batches AX IPC differently from Safari/Chrome, which is why
 ///     the walker has a per-element-attributes single-call fallback.
 ///
 /// The fixture HTML + every assertion lives in `FlashE2EKit` so this

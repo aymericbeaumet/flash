@@ -475,11 +475,8 @@ final class AppMonitor {
 
   // MARK: Discovery
 
-  /// Activation hot path. Tries the prepared AX model first. When the
-  /// provider chain is pure-continuous, a hit completes immediately.
-  /// Activation-only providers (Safari/Chrome DOM bridge) run on demand
-  /// and merge with the prepared continuous model. Volatile providers
-  /// (tmux) bypass the model entirely.
+  /// Activation hot path. Tries the prepared AX model first. Volatile
+  /// providers (tmux) bypass the model entirely.
   func discoverAsync(
     context: AppContext,
     profiler: FlashProfiler? = nil,
@@ -495,7 +492,6 @@ final class AppMonitor {
       return
     }
 
-    let activationProviders = activationOnlyProviders(for: context)
     if let model = lookupPreparedModel(for: pid) {
       let ageMs =
         Double(DispatchTime.now().uptimeNanoseconds - model.computedAt.uptimeNanoseconds)
@@ -505,35 +501,22 @@ final class AppMonitor {
         detail:
           "hints=\(model.hints.count) age_ms=\(String(format: "%.1f", ageMs)) token=\(model.dirtyToken)"
       )
-      if activationProviders.isEmpty {
-        completion(model.hints)
-      } else {
-        runActivationProviders(
-          context: context,
-          baseModel: model,
-          activationProviders: activationProviders,
-          profiler: profiler,
-          completion: completion)
-      }
+      completion(model.hints)
       return
     }
 
     profiler?.mark("model_miss", detail: "pid=\(pid)")
-    if activationProviders.isEmpty {
-      runModelRefresh(
-        pid: pid,
-        reason: "activation",
-        profiler: profiler
-      ) { [weak self] model in
-        guard let self else { return }
-        if let model {
-          completion(model.hints)
-        } else {
-          self.runActivationDiscovery(context: context, profiler: profiler, completion: completion)
-        }
+    runModelRefresh(
+      pid: pid,
+      reason: "activation",
+      profiler: profiler
+    ) { [weak self] model in
+      guard let self else { return }
+      if let model {
+        completion(model.hints)
+      } else {
+        self.runActivationDiscovery(context: context, profiler: profiler, completion: completion)
       }
-    } else {
-      runActivationDiscovery(context: context, profiler: profiler, completion: completion)
     }
   }
 
@@ -552,18 +535,8 @@ final class AppMonitor {
     registry.chain(for: context).filter { $0.readinessPolicy == .continuous }
   }
 
-  private func activationOnlyProviders(for context: AppContext) -> [JumpProvider] {
-    registry.chain(for: context).filter { $0.readinessPolicy == .activationOnly }
-  }
-
   private func finishQueueWait(_ profiler: FlashProfiler?, since start: UInt64) {
     profiler?.finishInterval("ax_queue_wait", since: start)
-  }
-
-  private enum AXWebAreaPolicy {
-    case auto
-    case include
-    case exclude
   }
 
   private struct DiscoveryResult {
@@ -579,15 +552,10 @@ final class AppMonitor {
     configRevision: UInt64,
     profiler: FlashProfiler?
   ) -> PreparedModel {
-    let browserActivationApplies = activationOnlyProviders(for: context).contains {
-      $0 is BrowserScriptProvider
-    }
-    let axPolicy: AXWebAreaPolicy = browserActivationApplies ? .exclude : .include
     let result = runAndAssign(
       context: context,
       cfg: cfg,
       providers: providers,
-      axWebAreaPolicy: axPolicy,
       profiler: profiler)
     return PreparedModel(
       pid: context.processID,
@@ -618,7 +586,6 @@ final class AppMonitor {
         context: context,
         cfg: cfg,
         providers: providers,
-        axWebAreaPolicy: .auto,
         profiler: profiler)
       profiler?.mark("walk_done", detail: "hints=\(result.hints.count)")
       DispatchQueue.main.async {
@@ -627,56 +594,10 @@ final class AppMonitor {
     }
   }
 
-  private func runActivationProviders(
-    context: AppContext,
-    baseModel: PreparedModel,
-    activationProviders: [JumpProvider],
-    profiler: FlashProfiler?,
-    completion: @escaping ([AssignedHint]) -> Void
-  ) {
-    let cfg = snapshotConfig()
-    let enqueueNs = profiler?.intervalStart()
-    axQueue.async { [weak self] in
-      guard let self else { return }
-      if let enqueueNs {
-        self.finishQueueWait(profiler, since: enqueueNs)
-      }
-      self.configureProviders(for: cfg, triggerMs: profiler?.triggerMs)
-      profiler?.mark(
-        "activation_providers_start",
-        detail: "providers=\(activationProviders.map(\.identifier).joined(separator: ","))")
-      let extraTargets = self.collectFocusedTargets(
-        context: context,
-        providers: activationProviders,
-        axWebAreaPolicy: .auto,
-        profiler: profiler)
-      let browserBridgeFailed =
-        extraTargets.isEmpty && activationProviders.contains { $0 is BrowserScriptProvider }
-      let targets: [JumpTarget]
-      if browserBridgeFailed {
-        profiler?.mark("browser_bridge_fallback")
-        targets = self.collectFocusedTargets(
-          context: context,
-          providers: self.continuousProviders(for: context),
-          axWebAreaPolicy: .include,
-          profiler: profiler)
-      } else {
-        targets = baseModel.targets + extraTargets
-      }
-      let finalized = self.finalizeTargets(targets, profiler: profiler)
-      let hints = self.assignTargets(finalized, cfg: cfg, profiler: profiler)
-      profiler?.mark("activation_providers_done", detail: "hints=\(hints.count)")
-      DispatchQueue.main.async {
-        completion(hints)
-      }
-    }
-  }
-
   private func runAndAssign(
     context: AppContext,
     cfg: Config,
     providers: [JumpProvider],
-    axWebAreaPolicy: AXWebAreaPolicy,
     profiler: FlashProfiler? = nil
   ) -> DiscoveryResult {
     let walkStart = profiler?.intervalStart()
@@ -684,7 +605,6 @@ final class AppMonitor {
     let collected = collectFocusedTargets(
       context: context,
       providers: providers,
-      axWebAreaPolicy: axWebAreaPolicy,
       profiler: profiler)
     let targets = finalizeTargets(collected, profiler: profiler)
     if let walkStart {
@@ -741,7 +661,6 @@ final class AppMonitor {
   private func collectFocusedTargets(
     context focused: AppContext,
     providers: [JumpProvider],
-    axWebAreaPolicy: AXWebAreaPolicy,
     profiler: FlashProfiler? = nil
   ) -> [JumpTarget] {
     let primaryH = primaryScreenHeight()
@@ -763,8 +682,6 @@ final class AppMonitor {
     var collected: [JumpTarget] = []
     collected.reserveCapacity(256)
 
-    // Helper: filter a provider's results by the visible region; counts
-    // kept vs hidden so the profiler line stays informative.
     func filterVisible(_ targets: [JumpTarget]) -> (kept: [JumpTarget], hidden: Int) {
       var out: [JumpTarget] = []
       out.reserveCapacity(targets.count)
@@ -781,100 +698,10 @@ final class AppMonitor {
       return (out, hidden)
     }
 
-    // Browser DOM bridge + AX walker, when both apply, run in parallel.
-    // The browser provider shells out to AppleScript (osascript fork +
-    // an Apple Event round-trip to the browser); the AX walker pipes
-    // batched AX IPCs into the same browser's main thread. Both
-    // ultimately serialise at the browser's main thread, but Flash's
-    // side (osascript fork+exec, AX setup, IPC dispatch) parallelises,
-    // pulling the wall time down to roughly `max(browser, ax-pruned)`
-    // instead of `browser + ax-pruned`.
-    //
-    // AX runs with `descendIntoWebAreas: false` speculatively — the
-    // common case is that the browser bridge succeeds and the pruned
-    // AX walk is what we want. If the bridge returns nothing
-    // (Automation denied, browser without an open document, JS-from-
-    // Apple-Events disabled), re-run AX with the web area enabled so
-    // the user still gets DOM hints via the AX path; this fallback is
-    // serial but only fires on the bridge-failure case.
-    let browser = providers.first(where: { $0 is BrowserScriptProvider })
-    let ax = providers.first(where: { $0 is AccessibilityProvider }) as? AccessibilityProvider
-    let runParallel = axWebAreaPolicy == .auto && browser != nil && ax != nil
-    var skip: Set<ObjectIdentifier> = []
-    if runParallel, let browser, let ax {
-      skip.insert(ObjectIdentifier(browser))
-      skip.insert(ObjectIdentifier(ax))
-      let browserStart = profiler?.intervalStart()
-      let axStart = profiler?.intervalStart()
-      var browserResults: [JumpTarget] = []
-      var axResults: [JumpTarget] = []
-      let group = DispatchGroup()
-      let q = DispatchQueue.global(qos: .userInitiated)
-      group.enter()
-      q.async {
-        browserResults =
-          (try? browser.discover(in: providerContext, deadline: .distantFuture)) ?? []
-        group.leave()
-      }
-      group.enter()
-      q.async {
-        axResults =
-          (try? ax.discover(
-            in: providerContext, deadline: .distantFuture, descendIntoWebAreas: false)) ?? []
-        group.leave()
-      }
-      group.wait()
-      let bridgeFailed = browserResults.isEmpty
-      if bridgeFailed {
-        // Re-walk including the web area so we don't silently lose all
-        // page targets when the bridge is unavailable.
-        axResults =
-          (try? ax.discover(
-            in: providerContext, deadline: .distantFuture, descendIntoWebAreas: true)) ?? []
-      }
-      let bFiltered = filterVisible(browserResults)
-      let aFiltered = filterVisible(axResults)
-      collected.append(contentsOf: bFiltered.kept)
-      collected.append(contentsOf: aFiltered.kept)
-      if let browserStart {
-        profiler?.finishInterval(
-          "provider.\(browser.identifier)",
-          since: browserStart,
-          detail:
-            "raw=\(browserResults.count) kept=\(bFiltered.kept.count) hidden=\(bFiltered.hidden)"
-        )
-      }
-      if let axStart {
-        profiler?.finishInterval(
-          "provider.\(ax.identifier)",
-          since: axStart,
-          detail:
-            "raw=\(axResults.count) kept=\(aFiltered.kept.count) hidden=\(aFiltered.hidden) web_pruned=\(!bridgeFailed) bridge_fallback=\(bridgeFailed)"
-        )
-      }
-    }
-
-    func discover(_ provider: JumpProvider) -> [JumpTarget] {
-      if let ax = provider as? AccessibilityProvider {
-        let descend: Bool
-        switch axWebAreaPolicy {
-        case .auto, .include:
-          descend = true
-        case .exclude:
-          descend = false
-        }
-        return
-          (try? ax.discover(
-            in: providerContext,
-            deadline: .distantFuture,
-            descendIntoWebAreas: descend)) ?? []
-      }
-      return (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
-    }
-
-    for provider in providers where !skip.contains(ObjectIdentifier(provider)) {
+    for provider in providers {
       let providerStart = profiler?.intervalStart()
-      let results = discover(provider)
+      let results =
+        (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
       let f = filterVisible(results)
       collected.append(contentsOf: f.kept)
       if let providerStart {

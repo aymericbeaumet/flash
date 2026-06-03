@@ -8,14 +8,11 @@ enum ActionDispatcher {
   ///
   ///   1. `target.activate(action)` — provider-owned best-known path.
   ///      AccessibilityProvider tries focus-set (text inputs) +
-  ///      AXPress/AXOpen/AXConfirm. BrowserScriptProvider dispatches a
-  ///      JS `.click()` / focus+select / synthetic `contextmenu`.
+  ///      AXPress/AXOpen/AXConfirm.
   ///   2. AX hit-test at the click point (`AXClick.clickAtPoint`).
   ///      Recovers inert-wrapper cases — the hint element advertised no
   ///      AX action but the AX node actually under the click point (or
-  ///      one of its ancestors) does. Also acts as an AX-level fallback
-  ///      for browser DOM targets when the JS bridge has been denied.
-  ///      Cursor never moves.
+  ///      one of its ancestors) does. Cursor never moves.
   ///   3. Synthesized `CGEvent` mouse click (`synthesizeClick`). Last
   ///      resort: the cursor briefly visits the click site and warps
   ///      back, hidden so the user never sees the motion.

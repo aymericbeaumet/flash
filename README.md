@@ -19,7 +19,6 @@ open /Applications/Flash.app
 Then in *System Settings → Privacy & Security*:
 
 - **Accessibility** — required. Toggle Flash on.
-- **Automation → Safari / Chrome** — only needed for the browser DOM hints.
 
 > **Heads up on rebuilds**: every `./Scripts/install.sh` replaces the binary in `/Applications/Flash.app`. macOS keys TCC grants (Accessibility) to the ad-hoc-signed binary's hash, so the script also runs `tccutil reset` for the bundle id — meaning you re-grant once per rebuild and the grant binds to the new binary.
 
@@ -99,7 +98,7 @@ Flash is one resident, headless macOS app:
 - **No global keyboard hooks.** Activation always comes through the `flash://` URL scheme. Hint typing only happens inside the overlay window via standard `NSWindow` `keyDown`.
 - **AX-event-driven prepared model.** Subscribes to `NSWorkspace` focus + per-app `AXObserver` notifications. On any observed change, an 80-ms-debounced AX model rebuild runs in the background, then a maintenance refresh keeps the focused app warm while it remains quiet. On `show_hints`, native AX-backed hints are delivered immediately when the prepared model token, config revision, and freshness window still match.
 - **Concurrent AX walking.** When a prepared model is unavailable, `AccessibilityProvider` fans out the focused window's direct children across `DispatchQueue.concurrentPerform` workers so multiple AX IPCs are in flight against the target app's main thread at once. No per-IPC AX timeout is set.
-- **Provider chain** per app: Safari/Chrome DOM bridge (Vimium-style `do JavaScript` discovery — exact DOM rects, priority 30) → generic `AccessibilityProvider` (priority 10, every native app and Firefox's in-page DOM via `AXWebArea` descendants). When the browser script bridge is unavailable (Automation denied, "Allow JavaScript from Apple Events" off), the AX walker fills in via dedup.
+- **Provider chain** per app: `TmuxProvider` (priority 20, terminals with a tmux client in the process subtree — pane content isn't AX-clickable) → generic `AccessibilityProvider` (priority 10, every native app and browser in-page DOM via `AXWebArea` descendants).
 - **Active-window only.** Flash always walks the focused application; background apps and other monitors are ignored.
 
 Public SPI lives in `FlashCore` (`JumpProvider`, `JumpTarget`, `AppContext`, `JumpAction`). Add a new provider by implementing the protocol and registering it in `Sources/flash/App/ProviderRegistry.swift`.
