@@ -97,7 +97,27 @@ final class OverlayPanel: NSPanel {
     let fg = nsColor(fromHex: overlayConfig.hintFG) ?? .black
     let border = nsColor(fromHex: overlayConfig.hintBorder)
     let fontSize = CGFloat(overlayConfig.fontSize)
-    let scale = NSScreen.main?.backingScaleFactor ?? 2
+    // Resolve per-screen backing scale per chip below — but precompute
+    // a sorted list of (screen, frameInPanelLocal) pairs once so the
+    // per-chip lookup is a tight linear scan over (usually) one or two
+    // screens. Hint chips render fuzzy when contentsScale doesn't match
+    // the host screen's backingScaleFactor, so on a mixed-DPI dual-
+    // monitor setup the chip layer's scale must follow the screen the
+    // chip lands on, not `NSScreen.main`.
+    let screensInPanel: [(scale: CGFloat, panelRect: CGRect)] = {
+      let panelOrigin = frame.origin
+      return NSScreen.screens.map { s in
+        let r = CGRect(
+          x: s.frame.minX - panelOrigin.x,
+          y: s.frame.minY - panelOrigin.y,
+          width: s.frame.width,
+          height: s.frame.height
+        )
+        return (s.backingScaleFactor, r)
+      }
+    }()
+    let fallbackScale =
+      NSScreen.main?.backingScaleFactor ?? screensInPanel.first?.scale ?? 2
 
     // Hoisted out of the per-chip loop: every value below is identical
     // for every chip in this activation (HintAssigner guarantees uniform
@@ -168,10 +188,9 @@ final class OverlayPanel: NSPanel {
       label.isHidden = false
       label.string = Self.attributedLabel(
         display: hint.display, boldPrefixLen: 0,
-        regularFont: regularFont, boldFont: boldFont, fgCG: fgCG)
+        regularFont: regularFont, boldFont: boldFont, fgNS: fg)
       label.fontSize = fontSize
       label.foregroundColor = fgCG
-      label.contentsScale = scale
       label.frame = labelFrame
 
       let chipGlobal = Self.chipFrame(
@@ -179,14 +198,31 @@ final class OverlayPanel: NSPanel {
         width: approxWidth,
         height: chipHeight
       )
-      chip.frame = CGRect(
+      let chipLocal = CGRect(
         x: chipGlobal.minX - frame.minX,
         y: chipGlobal.minY - frame.minY,
         width: chipGlobal.width,
         height: chipGlobal.height
       )
+      // Pick the screen this chip is rendered on so the chip and its
+      // label use the correct backing scale. Without this the gradient
+      // chip + 1px border + text were rasterised at NSScreen.main's
+      // scale even when the host window was on a different-DPI
+      // display, which looked muddy/blurry.
+      let chipMid = CGPoint(x: chipLocal.midX, y: chipLocal.midY)
+      var chipScale = fallbackScale
+      for sp in screensInPanel where sp.panelRect.contains(chipMid) {
+        chipScale = sp.scale
+        break
+      }
+      // Snap to device-pixel grid so the 1pt border lands on integer
+      // device-pixels (otherwise it gets anti-aliased into two half-
+      // intensity rows and reads as pixelated).
+      chip.frame = Self.snap(chipLocal, scale: chipScale)
+      chip.contentsScale = chipScale
       chip.colors = gradientColors
       chip.borderColor = borderCG
+      label.contentsScale = chipScale
 
       chip.sublayers = [label]
       newSublayers.append(chip)
@@ -305,23 +341,25 @@ final class OverlayPanel: NSPanel {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     let upper = prefix.uppercased()
+    let prefixLen = upper.count
     let fontSize = CGFloat(overlayConfig.fontSize)
     let regularFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     let boldFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
-    let fgCG = (nsColor(fromHex: overlayConfig.hintFG) ?? .black).cgColor
+    let fgNS = nsColor(fromHex: overlayConfig.hintFG) ?? .black
     var visible = Set<Int>()
     for (idx, hint) in hints.enumerated() {
       guard idx < hintLayers.count, idx < labelLayers.count else { break }
       let chip = hintLayers[idx]
       let matches = hint.display.hasPrefix(upper)
       chip.isHidden = !matches
+      // Only rebuild the visible chips' labels — hidden chips don't
+      // contribute to what the user sees and there's nothing wasted in
+      // leaving their previous-prefix label state in place.
       if matches {
         visible.insert(idx)
-        // Re-render with the typed prefix in bold so the user sees
-        // their progress through a multi-key hint.
         labelLayers[idx].string = Self.attributedLabel(
-          display: hint.display, boldPrefixLen: upper.count,
-          regularFont: regularFont, boldFont: boldFont, fgCG: fgCG)
+          display: hint.display, boldPrefixLen: prefixLen,
+          regularFont: regularFont, boldFont: boldFont, fgNS: fgNS)
       }
     }
     if debugConfig.showBounds {
@@ -330,31 +368,41 @@ final class OverlayPanel: NSPanel {
     CATransaction.commit()
   }
 
+  /// Centered paragraph style — immutable, allocated once.
+  /// CATextLayer ignores `alignmentMode` when its string is an
+  /// NSAttributedString, so alignment rides along as a
+  /// `.paragraphStyle` attribute. Shared across every chip label;
+  /// NSParagraphStyle is documented thread-safe for read-only use.
+  private static let centeredParagraphStyle: NSParagraphStyle = {
+    let p = NSMutableParagraphStyle()
+    p.alignment = .center
+    return p.copy() as! NSParagraphStyle
+  }()
+
   /// Build the chip label's attributed string. The first
   /// `boldPrefixLen` characters of `display` render in `boldFont`, the
   /// rest in `regularFont`. Both fonts must be monospaced and the same
   /// point size or the glyph advances won't line up with the chip
   /// width computed in `display(hints:)`.
   ///
-  /// CATextLayer ignores `alignmentMode` when its string is an
-  /// NSAttributedString — alignment has to ride along inside the
-  /// string as an `.paragraphStyle` attribute.
+  /// Takes NSColor directly (not CGColor) so the caller can hoist the
+  /// color alloc out of the per-chip loop — `NSColor(cgColor:)` is
+  /// hundreds of nanoseconds per call and the per-keystroke filter
+  /// rebuild calls this N times.
   private static func attributedLabel(
     display: String,
     boldPrefixLen: Int,
     regularFont: NSFont,
     boldFont: NSFont,
-    fgCG: CGColor
+    fgNS: NSColor
   ) -> NSAttributedString {
-    let para = NSMutableParagraphStyle()
-    para.alignment = .center
     let attr = NSMutableAttributedString(string: display)
     let full = NSRange(location: 0, length: (display as NSString).length)
     attr.addAttributes(
       [
         .font: regularFont,
-        .foregroundColor: NSColor(cgColor: fgCG) ?? .black,
-        .paragraphStyle: para,
+        .foregroundColor: fgNS,
+        .paragraphStyle: centeredParagraphStyle,
       ],
       range: full
     )
@@ -363,6 +411,21 @@ final class OverlayPanel: NSPanel {
       attr.addAttribute(.font, value: boldFont, range: NSRange(location: 0, length: boldLen))
     }
     return attr
+  }
+
+  /// Round `rect` to the device-pixel grid for `scale`. A 1pt border
+  /// drawn on a half-pixel x/y looks like two adjacent half-intensity
+  /// pixel rows, which the eye reads as fuzzy. Snapping the frame's
+  /// origin and size to multiples of `1/scale` puts the border on a
+  /// single device-pixel row and renders crisp.
+  static func snap(_ rect: CGRect, scale: CGFloat) -> CGRect {
+    guard scale > 0 else { return rect }
+    let s = scale
+    let x = (rect.origin.x * s).rounded() / s
+    let y = (rect.origin.y * s).rounded() / s
+    let w = (rect.size.width * s).rounded() / s
+    let h = (rect.size.height * s).rounded() / s
+    return CGRect(x: x, y: y, width: w, height: h)
   }
 
   private func recycleAll() {
