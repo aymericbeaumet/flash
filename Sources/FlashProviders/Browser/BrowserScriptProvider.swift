@@ -32,6 +32,7 @@ import FlashCore
 open class BrowserScriptProvider: JumpProvider {
   public let identifier: String
   public let priority: Int
+  public let readinessPolicy: JumpProviderReadinessPolicy = .activationOnly
   public let supportedBundles: Set<String>
   private var bridgeRetryAfter: Date?
 

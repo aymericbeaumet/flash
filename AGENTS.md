@@ -40,7 +40,7 @@ Sources/
     App/
       AppDelegate.swift              # Orchestrator + OverlayCoordinator
       URLEventHandler.swift          # Registers GetURL handler; the ONLY hot-path entry point
-      AppMonitor.swift               # Focused-app AX walk dispatcher (serial AX queue, no cache, no precompute)
+      AppMonitor.swift               # Focused-app prepared model + AX walk dispatcher (serial AX queue)
       OverlayPanel.swift             # Reusable transparent NSPanel, CALayer pool, animations disabled
       OverlayInput.swift             # NSPanel.keyDown — the ONLY keyboard code in the project
       HintAssigner.swift             # Vimium prefix-free label generator + memoised candidate cache
@@ -51,7 +51,7 @@ Sources/
       ConfigLoader.swift             # Hand-rolled TOML subset parser + DispatchSource fs-watch hot-reload
       Alphabet.swift                 # <colemak>/<qwerty>/<dvorak>/literal resolution
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
-Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner
+Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, plus live integration suites (TmuxIntegrationTests against an isolated tmux server; FirefoxIntegrationTests, opt-in via FLASH_FIREFOX_E2E=1)
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
 Scripts/install.sh                   # Release build → staging .app → /Applications/Flash.app, ad-hoc codesigned
 README.md                            # User-facing
@@ -64,8 +64,8 @@ AGENTS.md                            # This file
 2. macOS Launch Services routes to the running instance via `kAEGetURL` Apple Event.
 3. `URLEventHandler` parses the URL host/query and invokes the AppDelegate handler.
 4. `AppDelegate.activate(rightClick:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
-5. `AppMonitor.discoverAsync` first tries the AX-event-driven pre-walk cache (see *Cache contract* below). On hit, the cached `[AssignedHint]` is delivered to main without an IPC. On miss, a fresh walk is dispatched on the serial AX queue; on completion the result is also written into the cache for the next activation within the TTL window.
-6. On the AX queue, `walkFocused` runs the provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives). Inside `AccessibilityProvider`, the focused window's direct children are fanned out across concurrent walkers (`performance.concurrent_walk`), per-IPC duration is bounded (`performance.ax_timeout_ms`), and action-name IPCs for tentative web-area / AXImage targets are resolved in a parallel post-pass.
+5. `AppMonitor.discoverAsync` first tries the AX-event-driven prepared model (see *Prepared model contract* below). On hit, native AX-backed `[AssignedHint]` values are delivered to main without an activation-time AX walk. Safari/Chrome still run the DOM bridge on activation and merge it with the prepared AX chrome model; tmux remains activation-only because its output is volatile.
+6. On the AX queue, `AppMonitor` runs the selected provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives). Inside `AccessibilityProvider`, the focused window's direct children are fanned out across concurrent walkers, and action-name IPCs for tentative web-area / AXImage targets are resolved in a parallel post-pass.
 7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet — pre-uppercased as `AssignedHint.display`, memoised by `(alphabet, leftHand, length)`.
 8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
 9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
@@ -105,39 +105,41 @@ The activation hot path **must return the same result for the same UI state**.
 
 An earlier cache attempt got this wrong by serving deadline-truncated snapshots, and by falling back to a fresh walk on cache miss — so two presses in the same UI state could land on either a partial snapshot or a complete fresh walk, producing different hint sets. That broken cache was deleted.
 
-The current cache is a different design. It preserves determinism by:
+The current prepared model is a different design. It preserves determinism by:
 
-- **Walks are never truncated.** No per-walk deadline; walks always run to `maxDepth` / `maxTargets`. A walk that times the user out is preferable to a non-deterministic hint set. (The per-IPC timeout `performance.ax_timeout_ms` only bounds individual element stalls within a walk; it does not truncate the walk overall.)
-- **No partial cache.** A walk either completes and writes a full result to the cache, or its result is discarded — never half-served.
-- **Cache reads are atomic against AX events.** `dirtyTokens[pid]` is bumped on every observed AX event (and on focused-app change). A walk captures `startToken` before starting; it only writes to the cache if `dirtyTokens[pid] == startToken` at completion (no events fired during the walk). Reads only serve a hit if `entry.dirtyTokenAtStart == dirtyTokens[pid]` AND age < `cacheTtlMs`.
-- **Provider ordering is by priority desc.** Within a provider, traversal order is deterministic (AX child order for `AccessibilityProvider`, DOM order for `BrowserScriptProvider`). Concurrent walking (`performance.concurrent_walk`) fans out subtree workers but the dedup + sort passes after merging are deterministic, so the final hint order is independent of worker scheduling.
+- **Walks are never truncated.** No per-walk deadline; walks always run to `maxDepth` / `maxTargets`. A walk that times the user out is preferable to a non-deterministic hint set.
+- **No partial model.** A walk either completes and writes a full prepared model, or its result is discarded — never half-served.
+- **Model reads are atomic against AX events and config.** `dirtyTokens[pid]` is bumped on every observed AX event (and on focused-app change). `configRevision` is bumped on config reload. A walk captures both before starting; it only writes the model if both still match at completion and the pid is still frontmost. Reads only serve a hit if token, config revision, and freshness all match.
+- **Provider ordering is by priority desc.** Within a provider, traversal order is deterministic (AX child order for `AccessibilityProvider`, DOM order for `BrowserScriptProvider`). Concurrent walking fans out subtree workers but the dedup + sort passes after merging are deterministic, so the final hint order is independent of worker scheduling.
 
-See *Cache contract* below for the exact invariants.
+See *Prepared model contract* below for the exact invariants.
 
-### Cache contract
+### Prepared model contract
 
-`AppMonitor` maintains a per-pid `cache: [pid_t: CachedWalk]` and a `dirtyTokens: [pid_t: UInt64]` counter touched only from the main thread. An `AXObserver` is installed on the focused application; the workspace `didActivateApplicationNotification` swaps observers as focus changes.
+`AppMonitor` maintains a `PreparedModelStore`, a per-pid `dirtyTokens: [pid_t: UInt64]`, and a `configRevision` counter touched only from the main thread. An `AXObserver` is installed on the focused application; the workspace `didActivateApplicationNotification` swaps observers as focus changes.
 
 **Token bump triggers** (each bumps `dirtyTokens[pid]`):
 
 - Workspace focus change → bump new pid.
+- Config reload, active Space change, and screen-parameter change → bump the focused pid.
 - Any of these AX notifications on the focused pid: `kAXFocusedUIElementChanged`, `kAXFocusedWindowChanged`, `kAXMainWindowChanged`, `kAXLayoutChanged`, `kAXSelectedChildrenChanged`, `kAXSelectedRowsChanged`, `kAXValueChanged`, `kAXWindowResized`, `kAXWindowMoved`, `kAXTitleChanged`, `kAXCreated`, `kAXUIElementDestroyed`, `kAXRowExpanded`, `kAXRowCollapsed`.
 
 **Walk life-cycle:**
 
-1. `schedulePrewalk(for: pid)` — 80-ms debounced. Multiple bumps coalesce.
-2. On debounce fire, capture `startToken = dirtyTokens[pid]` on main, dispatch walk on `axQueue`.
-3. Walk runs to completion (never truncated).
-4. Result hops back to main. If `dirtyTokens[pid] == startToken` AND pid is still frontmost → write to cache with `dirtyTokenAtStart = startToken`. Else discard.
+1. `scheduleModelRefresh(for: pid)` — 80-ms debounced. Multiple bumps coalesce.
+2. On debounce fire, capture `startToken = dirtyTokens[pid]` and `configRevision` on main, dispatch a continuous-provider walk on `axQueue`.
+3. Walk runs to completion (never truncated). For Safari/Chrome, the continuous AX model deliberately skips `AXWebArea` descendants because the DOM bridge runs on activation.
+4. Result hops back to main. If token and config revision still match AND pid is still frontmost → write a `PreparedModel` with targets, assigned hints, token, config revision, and timestamp. Else discard.
+5. A maintenance refresh is scheduled before the freshness ceiling so a quiet focused app stays warm.
 
-**Activation lookup** (`lookupCache`):
+**Activation lookup** (`lookupPreparedModel`):
 
-- Cache hit iff `entry.dirtyTokenAtStart == dirtyTokens[pid]` AND `now - entry.computedAt < cacheTtlMs`.
-- On miss, fresh walk runs and ALSO updates the cache on completion (same invariants).
+- Model hit iff `model.dirtyToken == dirtyTokens[pid]` AND `model.configRevision == configRevision` AND `now - model.computedAt < modelFreshnessMs`.
+- On miss for pure continuous providers, activation waits for a model build and stores it if still valid.
+- On miss for activation-only providers, activation runs the full provider chain. Safari/Chrome can still hit the prepared AX chrome model and merge activation-time DOM results into it.
+- Volatile providers (`readinessPolicy == .volatile`, e.g. `TmuxProvider`) skip prepared-model lookup and writes.
 
-If you add new AX events that mutate UI state, add them to `AppMonitor.observedNotifications` in the same commit — otherwise the cache will silently serve stale hints when those events fire. The TTL ceiling is a safety belt for events we forgot to subscribe to; don't lean on it as a primary mechanism.
-
-The whole cache layer is gated by `performance.cache_enabled` (default `true`). Setting it to `false` reverts to the legacy fresh-walk-on-every-activation behaviour; observers are torn down.
+If you add new AX events that mutate UI state, add them to `AppMonitor.observedNotifications` in the same commit — otherwise the model can silently serve stale hints when those events fire. The freshness ceiling is a safety belt for events we forgot to subscribe to; don't lean on it as a primary mechanism.
 
 ## Animations
 
@@ -230,10 +232,10 @@ Keys:
 | `debug.dump_ax`                    | bool           | `false`              |
 | `debug.dump_logs`                  | bool           | `false`              |
 
-Performance behaviours are **not configurable.** The pre-walk cache,
+Performance behaviours are **not configurable.** The prepared AX model,
 the concurrent subtree walk, and the parallel deferred action-name
 IPC pass are always on. Per-IPC AX messaging timeout is never set
-(see *Cache contract* below).
+(see *Prepared model contract* below).
 
 There is intentionally **no** `per_app.*` table. The project's working assumption is to converge on universal rules before re-introducing per-bundle knobs — `Config.perAppRoles` and its TOML parser case were removed for this reason.
 
@@ -265,7 +267,7 @@ When you add a field, also add `applyOverrides` test coverage in `Tests/FlashTes
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a preset token `<qwerty>` (default) / `<colemak>` / `<dvorak>`. Resolution lives in `Alphabet.resolve(_:)`.
 
-**Flash always walks the focused app only.** There is no `hints.scope` knob and no multi-app walk machinery — background apps and other monitors are ignored. `JumpTarget.pid` carries the focused app's pid so `commit` can re-activate it before dispatching the click. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps. (The `performance.ax_timeout_ms` knob caps *per-IPC* duration, not whole-walk duration, so it can't truncate the result set.)
+**Flash always walks the focused app only.** There is no `hints.scope` knob and no multi-app walk machinery — background apps and other monitors are ignored. `JumpTarget.pid` carries the focused app's pid so `commit` can re-activate it before dispatching the click. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps.
 
 `overlay.exit_key` follows Karabiner's angle-bracket convention for special keys: `<escape>`, `<return>`, `<tab>`, `<space>`, `<backspace>`, `<delete>`, `<arrow_up/down/left/right>`. A bare value (e.g. `"q"`) matches that literal character.
 
@@ -331,7 +333,34 @@ Karabiner-Elements binding lives in `~/.config/karabiner/karabiner.json` under `
 
 ## Testing UI behavior
 
-Tests in `Tests/FlashTests/` cover deterministic units (HintAssigner prefix-free, Alphabet resolution, ConfigLoader parsing). Anything that requires AppKit / AX / Vision is **manually verified**: run `./Scripts/install.sh`, grant permissions if needed, then exercise the app in real target apps.
+Tests in `Tests/FlashTests/` are stratified by what they exercise:
+
+- **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `TmuxProviderTests`). Deterministic, run in milliseconds, no external state. `TmuxProviderTests` covers the tokenization rules (`extractWords`), the cell-geometry math (`resolveGeometry`), the status-bar parser (`parseStatusInfo`), the TOML alacritty-config reader, and `parseTwoInts`. Run on every `swift test`.
+- **Live tmux integration** (`TmuxIntegrationTests`). Boots an isolated tmux server under a per-test socket (`tmux -L flash-it-<uuid> -f /dev/null`) and asserts the binary's CLI contract Flash depends on: the `#{pane_*}` / `#{client_*}` / `#{status}` / `#{status-position}` format strings; that `capture-pane -p` returns the rendered grid; that horizontal + vertical splits yield the expected `pane_left` / `pane_top`. Catches breakage from tmux upgrades silently changing format-string semantics — the only realistic regression source for `TmuxProvider`. Skipped when no `tmux` binary is found on the probe paths. Runs in ~10 s.
+- **Live Firefox AX integration**. The Firefox E2E exists in two forms; both run the same fixture + assertions:
+  - **Recommended**: the standalone `flash-firefox-e2e` SPM executable (`Sources/flash-firefox-e2e/main.swift`). Built via `Scripts/build-firefox-e2e.sh`, which signs the binary with the same stable `Flash Dev` identity as the main Flash app. Grant the resulting `build/flash-firefox-e2e` Accessibility once and the TCC grant persists across rebuilds (the cert, not the cdhash, is in the designated requirement). Prints a colourised pass/fail report and exits non-zero on any failed assertion.
+  - **Also available**: `FirefoxIntegrationTests` (opt-in via `FLASH_FIREFOX_E2E=1`). Same logic, runs under `swift test`. Skips with a pointer to the standalone runner when the test runner lacks Accessibility, because granting the SwiftPM xctest helper is fragile in practice.
+
+  Both forms launch Firefox to a structured fixture page (data: URL) containing every clickable role we promise to hint plus a deliberate set of "must not hint" elements, and walk it through `AccessibilityProvider.discover`. The fixture exercises three regression modes simultaneously, with assertions targeted at each:
+  - **Undermatch** — per-role lower bounds for `AXLink` (5 anchors + 3 img-wrapped), `AXButton` (5 + 1 submit), `AXTextField` (text/email/password/number/tel/url), `AXSearchField`, `AXCheckBox`, `AXRadioButton`, `AXPopUpButton` (select), `AXTextArea` (textarea + contenteditable). A regression that narrows the role set or drops a specific input-type mapping triggers a specific failure with the role and expected floor in the message.
+  - **Overmatch** — forbidden roles (`AXHeading`, `AXStaticText`, `AXGroup`, `AXGenericElement`, `AXScrollArea`, `AXSplitter`, `AXWebArea`, `AXSection`, `AXParagraph`, `AXDocument`, `AXOutline`, `AXList`, `AXListItem`) must produce zero hints. `AXImage` inside the page area must also be zero, since every fixture image is either wrapped in an `<a>` (decorative under `clickableContainerRoles`) or has no click handler (filtered by the pending-action verifier). A regression in the img-as-decorative folding or the action-name verifier shows up as a non-zero `AXImage` count.
+  - **Hidden-subtree exclusion** — disabled controls (5 buttons + 5 inputs), `aria-hidden` subtrees (5 buttons + 5 inputs), and `display:none` subtrees (5 buttons) are seeded into the fixture; they contribute 25 elements that *must not* be hinted. Upper-bound assertions on `AXButton` and `AXTextField` page-area counts catch any regression where the `enabled` filter, the `AXHidden` short-circuit, or DOM exclusion stops working.
+  - **Invariants** — page-area targets carry Firefox's pid, frames are non-degenerate, frames intersect the primary screen (catches AX↔NSScreen coordinate-flip regressions), and ids are unique (OverlayPanel's layer pool keys by id).
+
+  Page-area filtering: the test BFS-walks Firefox's AX tree to find the `AXWebArea` frame, then filters hint targets to that rect so the count assertions reason about page content alone (chrome buttons live outside the web area). On failure, the test prints the full role histogram of the page area for diagnostic context.
+
+  Both forms skip when Firefox isn't installed at `/Applications/Firefox.app` OR when the runner lacks Accessibility permission.
+
+Run order:
+
+```bash
+swift test                                           # unit + live tmux
+./Scripts/install.sh                                 # one-time: creates the Flash Dev signing identity
+./Scripts/build-firefox-e2e.sh                       # builds + signs the standalone E2E runner
+./build/flash-firefox-e2e                            # runs the Firefox E2E (after granting it AX once)
+```
+
+Anything that requires the full overlay / commit pipeline (chip rendering, key handling, AXPress against a live focused app) is still **manually verified**: run `./Scripts/install.sh`, grant permissions if needed, then exercise the app in real target apps.
 
 Do not claim UI-level changes "work" based on the type-checker alone. State explicitly when you couldn't verify visually.
 

@@ -51,9 +51,9 @@ import Foundation
 ///
 /// **Volatility**: `resultsAreVolatile = true`. Tmux content changes
 /// (terminal output, async tmux activity) don't propagate through
-/// AX, so AppMonitor's cache would serve stale hints. Marking the
-/// provider volatile makes activation skip the cache lookup + write
-/// + pre-walk for any context this provider applies to.
+/// AX, so AppMonitor's prepared model would serve stale hints. Marking
+/// the provider volatile makes activation skip prepared-model lookup
+/// and writes for any context this provider applies to.
 public final class TmuxProvider: JumpProvider {
   public let identifier: String = "tmux"
   /// Priority 20 — above the generic AX walker (10), below browser
@@ -62,6 +62,7 @@ public final class TmuxProvider: JumpProvider {
   /// spatial-dedup pass keeps the small per-word rects and drops the
   /// larger AX text-area rect.
   public let priority: Int = 20
+  public let readinessPolicy: JumpProviderReadinessPolicy = .volatile
   public var resultsAreVolatile: Bool { true }
 
   /// Known terminal app bundles. Only these get the tmux probe — any
@@ -81,7 +82,7 @@ public final class TmuxProvider: JumpProvider {
   /// Resolve the tmux binary once at provider construction. Flash
   /// launches under launchd, so it doesn't inherit the user's PATH;
   /// hardcoded probe through the standard Homebrew + macOS locations.
-  private static let tmuxPath: String? = {
+  static let tmuxPath: String? = {
     for p in [
       "/opt/homebrew/bin/tmux",
       "/usr/local/bin/tmux",
@@ -191,17 +192,7 @@ public final class TmuxProvider: JumpProvider {
     // Add the top-positioned status rows to lift pane content into
     // the right screen position. `#{status}` is the integer status
     // lines value (0–5; tmux normalises "on" to 1 in this variable).
-    let statusParts =
-      statusInfo
-      .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
-      .filter { !$0.isEmpty }
-    let statusLines: Int = {
-      guard let first = statusParts.first.map(String.init) else { return 0 }
-      if let n = Int(first) { return n }
-      return first == "on" ? 1 : 0
-    }()
-    let statusAtTop = statusParts.count >= 2 && statusParts[1] == "top"
-    let topOffset = statusAtTop ? statusLines : 0
+    let (_, _, topOffset) = parseStatusInfo(statusInfo)
 
     // The tmux status bar is deliberately not hinted. Status content
     // (session name, hostname, clock) is rarely the thing the user
@@ -271,7 +262,7 @@ public final class TmuxProvider: JumpProvider {
   /// the hint count without losing useful tokens. Punctuation always
   /// terminates a run — paths like `/foo/bar/baz` produce three
   /// separate words, which matches what was asked for.
-  private func extractWords(
+  func extractWords(
     line: String, maxCols: Int, emit: (_ col: Int, _ text: String) -> Void
   ) {
     var col = 0
@@ -305,12 +296,12 @@ public final class TmuxProvider: JumpProvider {
 
   // MARK: Tmux client + pane discovery
 
-  private struct TmuxClient {
+  struct TmuxClient {
     let tty: String
     let session: String
   }
 
-  private struct Pane {
+  struct Pane {
     let id: String
     let left: Int
     let top: Int
@@ -318,7 +309,27 @@ public final class TmuxProvider: JumpProvider {
     let rows: Int
   }
 
-  private func parseTwoInts(_ s: String) -> (Int, Int)? {
+  /// Parse `#{status} #{status-position}` output. Returns the number
+  /// of status lines tmux is rendering (0 when off), whether they
+  /// render at the top of the client, and the `topOffset` rows that
+  /// `pane_top` needs to be shifted by when computing screen position.
+  /// `#{status}` is an int 0–5 in modern tmux but legacy versions
+  /// returned `"on"`/`"off"`; both are handled.
+  func parseStatusInfo(_ s: String) -> (lines: Int, atTop: Bool, topOffset: Int) {
+    let parts =
+      s
+      .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
+      .filter { !$0.isEmpty }
+    let lines: Int = {
+      guard let first = parts.first.map(String.init) else { return 0 }
+      if let n = Int(first) { return n }
+      return first == "on" ? 1 : 0
+    }()
+    let atTop = parts.count >= 2 && parts[1] == "top"
+    return (lines, atTop, atTop ? lines : 0)
+  }
+
+  func parseTwoInts(_ s: String) -> (Int, Int)? {
     let parts = s.trimmingCharacters(in: .whitespacesAndNewlines)
       .split(whereSeparator: { $0 == " " || $0 == "\t" })
       .filter { !$0.isEmpty }
@@ -407,7 +418,7 @@ public final class TmuxProvider: JumpProvider {
   /// terminals without padding and acceptably close for those with
   /// small padding. Adding readers per-terminal is the natural
   /// extension when the fallback proves wrong on a specific app.
-  private func resolveGeometry(
+  func resolveGeometry(
     bundleID: String,
     windowFrame: CGRect,
     clientCols: Int,
@@ -426,7 +437,7 @@ public final class TmuxProvider: JumpProvider {
     return (windowFrame.width / CGFloat(clientCols), windowFrame.height / CGFloat(clientRows), 0, 0)
   }
 
-  private struct AlacrittyFont {
+  struct AlacrittyFont {
     let family: String
     let size: Double
   }
@@ -437,7 +448,7 @@ public final class TmuxProvider: JumpProvider {
   /// Done at every walk rather than cached: walks happen only on
   /// activation (cheap), the file is small, and reading every time
   /// makes config edits take effect without a Flash restart.
-  private func alacrittyFont() -> AlacrittyFont? {
+  func alacrittyFont() -> AlacrittyFont? {
     let candidates = [
       (NSString(string: "~/.config/alacritty/alacritty.toml")
         as NSString).expandingTildeInPath,
@@ -461,7 +472,7 @@ public final class TmuxProvider: JumpProvider {
   /// Minimal TOML lookup — finds `key` inside `[section]`. Doesn't
   /// handle inline tables, nested sections beyond two levels, or
   /// trailing comments — enough for the alacritty.toml shape we read.
-  private func readTOMLRaw(in text: String, section: String, key: String) -> String? {
+  func readTOMLRaw(in text: String, section: String, key: String) -> String? {
     var inSection = false
     for rawLine in text.split(separator: "\n") {
       let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -483,7 +494,7 @@ public final class TmuxProvider: JumpProvider {
     return nil
   }
 
-  private func readTOMLString(in text: String, section: String, key: String) -> String? {
+  func readTOMLString(in text: String, section: String, key: String) -> String? {
     guard var v = readTOMLRaw(in: text, section: section, key: key) else { return nil }
     if v.hasPrefix("\""), v.hasSuffix("\""), v.count >= 2 {
       v = String(v.dropFirst().dropLast())
@@ -491,7 +502,7 @@ public final class TmuxProvider: JumpProvider {
     return v.isEmpty ? nil : v
   }
 
-  private func readTOMLNumber(in text: String, section: String, key: String) -> Double? {
+  func readTOMLNumber(in text: String, section: String, key: String) -> Double? {
     guard let v = readTOMLRaw(in: text, section: section, key: key) else { return nil }
     return Double(v)
   }
@@ -505,7 +516,7 @@ public final class TmuxProvider: JumpProvider {
   /// overshoots by ~3pt for typical monospace fonts; using it would
   /// push our content height past the window and clamp padding to
   /// zero. Falls back to Menlo if the named family can't load.
-  private func cellMetrics(family: String, size: Double) -> (width: CGFloat, height: CGFloat)? {
+  func cellMetrics(family: String, size: Double) -> (width: CGFloat, height: CGFloat)? {
     let font =
       NSFont(name: family, size: CGFloat(size))
       ?? NSFont(name: "Menlo", size: CGFloat(size))
@@ -518,7 +529,7 @@ public final class TmuxProvider: JumpProvider {
 
   // MARK: Shell helper
 
-  private func runShell(_ exec: String, _ args: [String]) -> String? {
+  func runShell(_ exec: String, _ args: [String]) -> String? {
     let task = Process()
     task.executableURL = URL(fileURLWithPath: exec)
     task.arguments = args

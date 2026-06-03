@@ -86,7 +86,7 @@ dump_ax = false               # dump AX tree to ~/Library/Logs/Flash/ax-dump.log
 dump_logs = false             # mirror stderr diagnostics to ~/Library/Logs/Flash/flash.log
 ```
 
-Performance behaviours (pre-walk cache, concurrent subtree walk,
+Performance behaviours (prepared AX model, concurrent subtree walk,
 parallel deferred action-name IPC) are always on and not user-configurable.
 
 Debug logs are written to stderr. In the installed app, check `~/Library/Logs/Flash/`.
@@ -97,8 +97,8 @@ Flash is one resident, headless macOS app:
 
 - **No menu bar, no Dock icon, no preferences UI.** Only the transparent hint overlay.
 - **No global keyboard hooks.** Activation always comes through the `flash://` URL scheme. Hint typing only happens inside the overlay window via standard `NSWindow` `keyDown`.
-- **AX-event-driven pre-walk cache.** Subscribes to `NSWorkspace` focus + per-app `AXObserver` notifications. On any observed change, an 80-ms-debounced walk runs in the background; on `show_hints` the cached hints are delivered immediately if no event has fired since the walk completed (and the entry is younger than `cache_ttl_ms`). Cache invariants are token-based — see `AGENTS.md → Cache contract` — so two presses in the same UI state always serve the same hints. The cache layer is opt-out via `performance.cache_enabled`.
-- **Concurrent AX walking.** When the cache misses, `AccessibilityProvider` fans out the focused window's direct children across `DispatchQueue.concurrentPerform` workers so multiple AX IPCs are in flight against the target app's main thread at once. Per-IPC duration is bounded by `performance.ax_timeout_ms`.
+- **AX-event-driven prepared model.** Subscribes to `NSWorkspace` focus + per-app `AXObserver` notifications. On any observed change, an 80-ms-debounced AX model rebuild runs in the background, then a maintenance refresh keeps the focused app warm while it remains quiet. On `show_hints`, native AX-backed hints are delivered immediately when the prepared model token, config revision, and freshness window still match.
+- **Concurrent AX walking.** When a prepared model is unavailable, `AccessibilityProvider` fans out the focused window's direct children across `DispatchQueue.concurrentPerform` workers so multiple AX IPCs are in flight against the target app's main thread at once. No per-IPC AX timeout is set.
 - **Provider chain** per app: Safari/Chrome DOM bridge (Vimium-style `do JavaScript` discovery — exact DOM rects, priority 30) → generic `AccessibilityProvider` (priority 10, every native app and Firefox's in-page DOM via `AXWebArea` descendants). When the browser script bridge is unavailable (Automation denied, "Allow JavaScript from Apple Events" off), the AX walker fills in via dedup.
 - **Active-window only.** Flash always walks the focused application; background apps and other monitors are ignored.
 

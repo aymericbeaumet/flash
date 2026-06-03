@@ -35,6 +35,7 @@ import FlashCore
 public final class AccessibilityProvider: JumpProvider {
   public let identifier: String = "accessibility"
   public let priority: Int = 10
+  public let readinessPolicy: JumpProviderReadinessPolicy = .continuous
 
   /// Every clickable / focusable role we recognise. Generic across apps.
   public static let roles: Set<String> = [

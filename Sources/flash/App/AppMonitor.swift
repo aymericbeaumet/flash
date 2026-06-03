@@ -8,32 +8,31 @@ import os
 ///
 /// Two latency regimes coexist:
 ///
-/// **Cold (no cache hit):** every `discoverAsync` dispatches a fresh AX
-/// walk on the serial `axQueue` and hops the result back to main. The
-/// walk is parallelised inside `AccessibilityProvider` at the focused
-/// window's direct-child boundary.
+/// **Cold (no prepared model):** `discoverAsync` dispatches the same
+/// complete walk the background model builder uses and hops the result
+/// back to main. The walk is parallelised inside `AccessibilityProvider`
+/// at the focused window's direct-child boundary.
 ///
-/// **Warm (cache hit):** an AX-event-driven pre-walk has already
-/// completed for the focused pid and its result is still valid (no
-/// observed event fired since the walk started AND age < `cacheTtlMs`).
-/// Activation skips the walk entirely and serves the cached hints — the
-/// overlay appears within ~overlay-display latency (~10 ms).
+/// **Warm (prepared model hit):** an AX-event-driven model build has
+/// already completed for the focused pid and its result is still valid
+/// (no observed event fired since the walk started, config revision
+/// still matches, and age < `modelFreshnessMs`). Activation skips the
+/// AX walk entirely and serves the prepared hints.
 ///
 /// **Invalidation contract (the previous cache attempt got this wrong):**
 ///   - Every observed AX event (focus/layout/scroll/value/window) on the
 ///     focused app bumps `dirtyTokens[pid]`.
-///   - Workspace focus change bumps the new pid's token (any cached
+///   - Workspace focus change bumps the new pid's token (any prepared
 ///     entry from before the switch is now stale).
 ///   - A walk captures `startToken = dirtyTokens[pid]` before starting.
-///   - On completion, the cache entry is written ONLY if
+///   - On completion, the prepared model is written ONLY if
 ///     `dirtyTokens[pid] == startToken` (no events during the walk) AND
 ///     the pid is still frontmost.
-///   - Cache reads serve a hit ONLY if `entry.dirtyTokenAtStart ==
-///     dirtyTokens[pid]` AND `age < ttl`.
+///   - Model reads serve a hit ONLY if token, config revision, and
+///     freshness all match.
 ///
 /// The result is deterministic: two activations in the same UI state
-/// always serve the same hint set. No partial cache, no fallback racing
-/// with a fresh walk.
+/// always serve the same hint set. No partial model, no stale model.
 final class AppMonitor {
   private let registry: ProviderRegistry
 
@@ -47,6 +46,7 @@ final class AppMonitor {
 
   private var config: Config
   private var configLock = os_unfair_lock_s()
+  private var configRevision: UInt64 = 0
 
   private func snapshotConfig() -> Config {
     os_unfair_lock_lock(&configLock)
@@ -56,47 +56,56 @@ final class AppMonitor {
 
   /// Called by the AppDelegate config file-watcher whenever
   /// ~/.config/flash/config.toml changes. Atomically swaps the shared
-  /// config. (Performance behaviours aren't configurable, so this is
-  /// a pure store — no observer-set reconfiguration needed.)
+  /// config, then invalidates the prepared model on main so labels and
+  /// provider debug settings refresh together.
   func updateConfig(_ cfg: Config) {
     os_unfair_lock_lock(&configLock)
     config = cfg
     os_unfair_lock_unlock(&configLock)
+
+    let bump = { [weak self] in
+      guard let self else { return }
+      self.configRevision &+= 1
+      guard let app = NSWorkspace.shared.frontmostApplication else { return }
+      let pid = app.processIdentifier
+      guard pid > 0 else { return }
+      self.invalidatePreparedModel(for: pid)
+      self.scheduleModelRefresh(for: pid, reason: "config")
+    }
+    if Thread.isMainThread {
+      bump()
+    } else {
+      DispatchQueue.main.async { bump() }
+    }
   }
 
-  /// Hard ceiling on how long a cached walk is served before falling
+  /// Hard ceiling on how long a prepared model is served before falling
   /// back to a fresh walk. Belt-and-suspenders against AX events the
   /// observer set missed (some apps don't fire `kAXLayoutChanged` on
   /// every UI transition).
-  private static let cacheTtlMs: Int = 1500
+  private static let modelFreshnessMs: Int = 1500
+  private static let modelDebounceMs: Int = 80
+  private static let modelMaintenanceLeadMs: Int = 250
 
   init(registry: ProviderRegistry, config: Config) {
     self.registry = registry
     self.config = config
   }
 
-  // MARK: Cache state
+  // MARK: Prepared model state
   //
   // Every field below is touched only from the main thread. Walk results
   // arrive on `axQueue` and are hopped back to main before they update
   // any of these.
 
-  private struct CachedWalk {
-    let pid: pid_t
-    let bundleID: String
-    let hints: [AssignedHint]
-    let computedAt: DispatchTime
-    /// Snapshot of `dirtyTokens[pid]` at the start of the walk. If the
-    /// counter has advanced by the time of read, an event fired between
-    /// walk-start and now and the entry is stale.
-    let dirtyTokenAtStart: UInt64
-  }
-
-  private var cache: [pid_t: CachedWalk] = [:]
+  private var preparedModels = PreparedModelStore()
   private var dirtyTokens: [pid_t: UInt64] = [:]
   private var observers: [pid_t: ObserverEntry] = [:]
-  private var prewalkDebounce: [pid_t: DispatchWorkItem] = [:]
+  private var modelDebounce: [pid_t: DispatchWorkItem] = [:]
+  private var maintenanceRefresh: [pid_t: DispatchWorkItem] = [:]
+  private var pendingModelCompletions: [pid_t: [(PreparedModel?) -> Void]] = [:]
   private var workspaceObservers: [NSObjectProtocol] = []
+  private var localObservers: [NSObjectProtocol] = []
 
   private struct ObserverEntry {
     let observer: AXObserver
@@ -132,8 +141,8 @@ final class AppMonitor {
   }
 
   /// AX notifications we subscribe to per focused app. Any one of these
-  /// invalidates the cache (bumps `dirtyTokens[pid]`) and schedules a
-  /// debounced pre-walk. The set is intentionally generous — false
+  /// invalidates the prepared model (bumps `dirtyTokens[pid]`) and schedules a
+  /// debounced rebuild. The set is intentionally generous — false
   /// positives only cost an 80-ms-debounced background walk, while
   /// false negatives serve stale hints.
   private static let observedNotifications: [String] = [
@@ -164,10 +173,16 @@ final class AppMonitor {
 
   func stop() {
     teardownAllObservers()
+    preparedModels.removeAll()
+    cancelAllRefreshWork()
     for token in workspaceObservers {
       NSWorkspace.shared.notificationCenter.removeObserver(token)
     }
     workspaceObservers.removeAll()
+    for token in localObservers {
+      NotificationCenter.default.removeObserver(token)
+    }
+    localObservers.removeAll()
   }
 
   private func installWorkspaceObservers() {
@@ -194,41 +209,65 @@ final class AppMonitor {
         self.onAppTerminated(pid: app.processIdentifier)
       }
     }
-    workspaceObservers = [activate, terminate]
+    let activeSpace = nc.addObserver(
+      forName: NSWorkspace.activeSpaceDidChangeNotification,
+      object: nil, queue: .main
+    ) { [weak self] _ in
+      self?.onFocusedEnvironmentChanged(reason: "space")
+    }
+    workspaceObservers = [activate, terminate, activeSpace]
+
+    let screen = NotificationCenter.default.addObserver(
+      forName: NSApplication.didChangeScreenParametersNotification,
+      object: nil, queue: .main
+    ) { [weak self] _ in
+      self?.onFocusedEnvironmentChanged(reason: "screen")
+    }
+    localObservers = [screen]
   }
 
   private func onFocusedAppChanged(to app: NSRunningApplication) {
     let pid = app.processIdentifier
     guard pid > 0 else { return }
-    // Bump this pid's dirty token — any cached entry from before the
+    // Bump this pid's dirty token — any prepared model from before the
     // focus came back is now suspect (the app may have repainted, the
     // window may have moved). Discarding via token bump is cheaper than
     // re-resolving the bundle frame here.
     dirtyTokens[pid, default: 0] &+= 1
+    invalidatePreparedModel(for: pid)
     if observers[pid] == nil {
       installObserver(for: pid)
     }
-    schedulePrewalk(for: pid)
+    scheduleModelRefresh(for: pid, reason: "focus")
   }
 
   private func onAppTerminated(pid: pid_t) {
     teardownObserver(for: pid)
-    cache.removeValue(forKey: pid)
+    preparedModels.remove(pid: pid)
     dirtyTokens.removeValue(forKey: pid)
-    prewalkDebounce[pid]?.cancel()
-    prewalkDebounce.removeValue(forKey: pid)
+    cancelRefreshWork(for: pid)
   }
 
   func onAXEvent(pid: pid_t) {
     dirtyTokens[pid, default: 0] &+= 1
-    schedulePrewalk(for: pid)
+    invalidatePreparedModel(for: pid)
+    scheduleModelRefresh(for: pid, reason: "ax")
+  }
+
+  private func onFocusedEnvironmentChanged(reason: String) {
+    guard let app = NSWorkspace.shared.frontmostApplication else { return }
+    let pid = app.processIdentifier
+    guard pid > 0 else { return }
+    dirtyTokens[pid, default: 0] &+= 1
+    invalidatePreparedModel(for: pid)
+    scheduleModelRefresh(for: pid, reason: reason)
   }
 
   // MARK: AX observer install / teardown
 
   private func installObserver(for pid: pid_t) {
     // Without Accessibility permission, AXObserverAddNotification
-    // silently fails — no callbacks ever fire and the cache silently
+    // silently fails — no callbacks ever fire and the model silently
     // serves stale hints because dirty tokens never bump. Skip install
     // entirely; we'll retry on the next focus change, by which time
     // the user has likely granted permission.
@@ -272,81 +311,161 @@ final class AppMonitor {
     }
   }
 
-  // MARK: Pre-walk scheduling
+  // MARK: Prepared model scheduling
 
-  /// Debounced pre-walk kick. Multiple events arriving within 80 ms
+  private func invalidatePreparedModel(for pid: pid_t) {
+    preparedModels.discardModel(pid: pid)
+    maintenanceRefresh[pid]?.cancel()
+    maintenanceRefresh.removeValue(forKey: pid)
+  }
+
+  private func cancelRefreshWork(for pid: pid_t) {
+    modelDebounce[pid]?.cancel()
+    modelDebounce.removeValue(forKey: pid)
+    maintenanceRefresh[pid]?.cancel()
+    maintenanceRefresh.removeValue(forKey: pid)
+    pendingModelCompletions.removeValue(forKey: pid)
+  }
+
+  private func cancelAllRefreshWork() {
+    for work in modelDebounce.values { work.cancel() }
+    modelDebounce.removeAll()
+    for work in maintenanceRefresh.values { work.cancel() }
+    maintenanceRefresh.removeAll()
+    pendingModelCompletions.removeAll()
+  }
+
+  /// Debounced model refresh. Multiple events arriving within 80 ms
   /// coalesce into a single background walk. The deadline pushes back
   /// on every fresh event, so a steady stream (e.g. scrolling) stays
   /// quiet until it settles.
-  private func schedulePrewalk(for pid: pid_t) {
-    prewalkDebounce[pid]?.cancel()
+  private func scheduleModelRefresh(for pid: pid_t, reason: String) {
+    modelDebounce[pid]?.cancel()
     let work = DispatchWorkItem { [weak self] in
-      self?.runPrewalk(pid: pid)
+      self?.runModelRefresh(pid: pid, reason: reason, profiler: nil, completion: nil)
     }
-    prewalkDebounce[pid] = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(80), execute: work)
+    modelDebounce[pid] = work
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(Self.modelDebounceMs),
+      execute: work)
   }
 
-  private func runPrewalk(pid: pid_t) {
-    let cfg = snapshotConfig()
-    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
+  private func scheduleMaintenanceRefresh(for model: PreparedModel) {
+    maintenanceRefresh[model.pid]?.cancel()
+    let delayMs = max(0, Self.modelFreshnessMs - Self.modelMaintenanceLeadMs)
+    let token = model.dirtyToken
+    let revision = model.configRevision
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      let currentToken = self.dirtyTokens[model.pid] ?? 0
+      guard currentToken == token, self.configRevision == revision else { return }
+      guard NSWorkspace.shared.frontmostApplication?.processIdentifier == model.pid else { return }
+      self.runModelRefresh(pid: model.pid, reason: "maintenance", profiler: nil, completion: nil)
+    }
+    maintenanceRefresh[model.pid] = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: work)
+  }
+
+  private func runModelRefresh(
+    pid: pid_t,
+    reason: String,
+    profiler: FlashProfiler?,
+    completion: ((PreparedModel?) -> Void)?
+  ) {
+    modelDebounce[pid]?.cancel()
+    modelDebounce.removeValue(forKey: pid)
+
+    guard PermissionCheck.isAccessibilityTrusted else {
+      completion?(nil)
       return
     }
-    // Only pre-walk the front app. Background-app walks would compete
-    // with the user's active app for AX IPC bandwidth on the target
-    // process and produce hints that'd never be served (the cache
-    // serves only for the current focused pid).
-    if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid { return }
+    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
+      completion?(nil)
+      return
+    }
+    // Only prepare the front app. Background-app walks would compete
+    // with the user's active app for AX IPC bandwidth and produce hints
+    // that'd never be served.
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+      completion?(nil)
+      return
+    }
     let startToken = dirtyTokens[pid] ?? 0
-    guard let context = makeContext(for: app) else { return }
-    // Skip pre-walk + cache write for any focused context where a
-    // volatile provider applies (e.g. TmuxProvider): its results
-    // depend on state we can't track via AX events, so caching would
-    // serve stale hints.
-    if anyVolatileProviderApplies(to: context) { return }
+    let revision = configRevision
+    let cfg = snapshotConfig()
+    guard let context = makeContext(for: app) else {
+      completion?(nil)
+      return
+    }
+    if anyVolatileProviderApplies(to: context) {
+      completion?(nil)
+      return
+    }
+    let providers = continuousProviders(for: context)
+    guard !providers.isEmpty else {
+      completion?(nil)
+      return
+    }
+    guard preparedModels.beginRebuild(pid: pid) else {
+      if let completion {
+        pendingModelCompletions[pid, default: []].append(completion)
+      }
+      return
+    }
 
+    let enqueueNs = profiler?.intervalStart()
     axQueue.async { [weak self] in
       guard let self else { return }
-      let hints = self.runAndAssign(context: context, cfg: cfg, profiler: nil)
+      if let enqueueNs {
+        self.finishQueueWait(profiler, since: enqueueNs)
+      }
+      profiler?.mark(
+        "model_build_start", detail: "token=\(startToken) reason=\(reason)")
+      let built = self.buildPreparedModel(
+        context: context,
+        providers: providers,
+        cfg: cfg,
+        dirtyToken: startToken,
+        configRevision: revision,
+        profiler: profiler)
+      profiler?.mark("model_build_done", detail: "hints=\(built.hints.count)")
       DispatchQueue.main.async {
-        // Cache iff no observed event fired between walk-start and now
-        // AND the pid is still the focused one. Otherwise discard —
-        // the next event will kick a fresh walk.
-        guard (self.dirtyTokens[pid] ?? 0) == startToken else { return }
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
-        // Don't cache empty results. An empty walk is indistinguishable
-        // from "walk failed mid-way" (an AX IPC timed out, a permission
-        // race, etc.); caching it turns a transient failure into
-        // `cache_ttl_ms` of broken hints. Apps that truly have no
-        // targets (e.g., a terminal) just walk fresh each time — the
-        // walk is cheap when there's nothing to traverse.
-        if hints.isEmpty { return }
-        self.cache[pid] = CachedWalk(
-          pid: pid,
-          bundleID: context.bundleIdentifier,
-          hints: hints,
-          computedAt: DispatchTime.now(),
-          dirtyTokenAtStart: startToken
-        )
-        if cfg.debug.profile {
-          FlashLog.write(
-            "flash: prewalk pid=\(pid) bundle=\(context.bundleIdentifier) hints=\(hints.count) token=\(startToken)\n"
-          )
+        let shouldRunQueued = self.preparedModels.finishRebuild(pid: pid)
+        let waiters = self.pendingModelCompletions.removeValue(forKey: pid) ?? []
+        defer {
+          if shouldRunQueued {
+            self.scheduleModelRefresh(for: pid, reason: "queued")
+          }
+        }
+
+        let tokenStillMatches = (self.dirtyTokens[pid] ?? 0) == startToken
+        let revisionStillMatches = self.configRevision == revision
+        let stillFocused = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+        if tokenStillMatches, revisionStillMatches, stillFocused {
+          self.preparedModels.store(built)
+          self.scheduleMaintenanceRefresh(for: built)
+          if cfg.debug.profile {
+            FlashLog.write(
+              "flash: model_ready pid=\(pid) bundle=\(context.bundleIdentifier) hints=\(built.hints.count) token=\(startToken) reason=\(reason)\n"
+            )
+          }
+        }
+        let validModel = tokenStillMatches && revisionStillMatches && stillFocused ? built : nil
+        completion?(validModel)
+        for waiter in waiters {
+          waiter(validModel)
         }
       }
     }
   }
 
-  // MARK: Cache lookup
-
-  private func lookupCache(for pid: pid_t) -> CachedWalk? {
-    guard let entry = cache[pid] else { return nil }
-    guard (dirtyTokens[pid] ?? 0) == entry.dirtyTokenAtStart else { return nil }
-    let ageNs =
-      DispatchTime.now().uptimeNanoseconds - entry.computedAt.uptimeNanoseconds
-    let ageMs = Double(ageNs) / 1_000_000
-    if ageMs > Double(Self.cacheTtlMs) { return nil }
-    return entry
+  private func lookupPreparedModel(for pid: pid_t) -> PreparedModel? {
+    preparedModels.lookup(
+      pid: pid,
+      dirtyToken: dirtyTokens[pid] ?? 0,
+      configRevision: configRevision,
+      now: DispatchTime.now(),
+      freshnessMs: Self.modelFreshnessMs)
   }
 
   func currentContext() -> AppContext? {
@@ -356,98 +475,229 @@ final class AppMonitor {
 
   // MARK: Discovery
 
-  /// Activation hot path. Tries the cache first; on miss, dispatches a
-  /// fresh walk on the serial AX queue and hops back to main with the
-  /// result. The fresh walk's result is also written to the cache on
-  /// success so subsequent activations within the TTL window can serve
-  /// directly.
-  ///
-  /// Volatile-provider contexts (e.g. `TmuxProvider` for terminals
-  /// hosting a tmux client) skip cache lookup AND cache write — the
-  /// provider's underlying state isn't AX-event-trackable, so caching
-  /// would silently serve stale hints.
+  /// Activation hot path. Tries the prepared AX model first. When the
+  /// provider chain is pure-continuous, a hit completes immediately.
+  /// Activation-only providers (Safari/Chrome DOM bridge) run on demand
+  /// and merge with the prepared continuous model. Volatile providers
+  /// (tmux) bypass the model entirely.
   func discoverAsync(
     context: AppContext,
     profiler: FlashProfiler? = nil,
     completion: @escaping ([AssignedHint]) -> Void
   ) {
-    let cfg = snapshotConfig()
-    let volatile = anyVolatileProviderApplies(to: context)
+    let pid = context.processID
+    if observers[pid] == nil {
+      installObserver(for: pid)
+    }
 
-    if !volatile, let cached = lookupCache(for: context.processID) {
-      let ageMs =
-        Double(
-          DispatchTime.now().uptimeNanoseconds - cached.computedAt.uptimeNanoseconds
-        ) / 1_000_000
-      profiler?.mark(
-        "cache_hit",
-        detail:
-          "hints=\(cached.hints.count) age_ms=\(String(format: "%.1f", ageMs)) token=\(cached.dirtyTokenAtStart)"
-      )
-      completion(cached.hints)
+    if anyVolatileProviderApplies(to: context) {
+      runActivationDiscovery(context: context, profiler: profiler, completion: completion)
       return
     }
 
-    let enqueueNs = profiler?.intervalStart()
-    let startToken = dirtyTokens[context.processID] ?? 0
-    axQueue.async { [weak self] in
-      guard let self else { return }
-      if let enqueueNs {
-        self.finishQueueWait(profiler, since: enqueueNs)
-      }
+    let activationProviders = activationOnlyProviders(for: context)
+    if let model = lookupPreparedModel(for: pid) {
+      let ageMs =
+        Double(DispatchTime.now().uptimeNanoseconds - model.computedAt.uptimeNanoseconds)
+        / 1_000_000
       profiler?.mark(
-        "walk_start", detail: "token=\(startToken) volatile=\(volatile)")
-      let hints = self.runAndAssign(context: context, cfg: cfg, profiler: profiler)
-      profiler?.mark("walk_done", detail: "hints=\(hints.count)")
-      DispatchQueue.main.async {
-        // Update cache only when no volatile provider applies AND no
-        // events fired during the walk AND the pid is still focused
-        // AND the result is non-empty (see `runPrewalk` for the
-        // empty-result rationale). Volatile contexts skip caching
-        // entirely so terminal/tmux state changes never serve stale
-        // hints.
-        if !volatile,
-          !hints.isEmpty,
-          (self.dirtyTokens[context.processID] ?? 0) == startToken,
-          NSWorkspace.shared.frontmostApplication?.processIdentifier == context.processID
-        {
-          self.cache[context.processID] = CachedWalk(
-            pid: context.processID,
-            bundleID: context.bundleIdentifier,
-            hints: hints,
-            computedAt: DispatchTime.now(),
-            dirtyTokenAtStart: startToken
-          )
-        }
-        completion(hints)
+        "model_hit",
+        detail:
+          "hints=\(model.hints.count) age_ms=\(String(format: "%.1f", ageMs)) token=\(model.dirtyToken)"
+      )
+      if activationProviders.isEmpty {
+        completion(model.hints)
+      } else {
+        runActivationProviders(
+          context: context,
+          baseModel: model,
+          activationProviders: activationProviders,
+          profiler: profiler,
+          completion: completion)
       }
+      return
+    }
+
+    profiler?.mark("model_miss", detail: "pid=\(pid)")
+    if activationProviders.isEmpty {
+      runModelRefresh(
+        pid: pid,
+        reason: "activation",
+        profiler: profiler
+      ) { [weak self] model in
+        guard let self else { return }
+        if let model {
+          completion(model.hints)
+        } else {
+          self.runActivationDiscovery(context: context, profiler: profiler, completion: completion)
+        }
+      }
+    } else {
+      runActivationDiscovery(context: context, profiler: profiler, completion: completion)
     }
   }
 
   /// True iff any registered provider both (a) declares its results
   /// volatile and (b) supports the given context. Called on the
-  /// activation hot path AND the pre-walk path; keep volatile
+  /// activation hot path AND the model-builder path; keep volatile
   /// providers' `supports` cheap.
   private func anyVolatileProviderApplies(to context: AppContext) -> Bool {
-    for p in registry.providers where p.resultsAreVolatile {
+    for p in registry.providers where p.readinessPolicy == .volatile || p.resultsAreVolatile {
       if p.supports(context) { return true }
     }
     return false
+  }
+
+  private func continuousProviders(for context: AppContext) -> [JumpProvider] {
+    registry.chain(for: context).filter { $0.readinessPolicy == .continuous }
+  }
+
+  private func activationOnlyProviders(for context: AppContext) -> [JumpProvider] {
+    registry.chain(for: context).filter { $0.readinessPolicy == .activationOnly }
   }
 
   private func finishQueueWait(_ profiler: FlashProfiler?, since start: UInt64) {
     profiler?.finishInterval("ax_queue_wait", since: start)
   }
 
-  private func runAndAssign(context: AppContext, cfg: Config, profiler: FlashProfiler? = nil)
-    -> [AssignedHint]
-  {
+  private enum AXWebAreaPolicy {
+    case auto
+    case include
+    case exclude
+  }
+
+  private struct DiscoveryResult {
+    let targets: [JumpTarget]
+    let hints: [AssignedHint]
+  }
+
+  private func buildPreparedModel(
+    context: AppContext,
+    providers: [JumpProvider],
+    cfg: Config,
+    dirtyToken: UInt64,
+    configRevision: UInt64,
+    profiler: FlashProfiler?
+  ) -> PreparedModel {
+    let browserActivationApplies = activationOnlyProviders(for: context).contains {
+      $0 is BrowserScriptProvider
+    }
+    let axPolicy: AXWebAreaPolicy = browserActivationApplies ? .exclude : .include
+    let result = runAndAssign(
+      context: context,
+      cfg: cfg,
+      providers: providers,
+      axWebAreaPolicy: axPolicy,
+      profiler: profiler)
+    return PreparedModel(
+      pid: context.processID,
+      bundleID: context.bundleIdentifier,
+      targets: result.targets,
+      hints: result.hints,
+      computedAt: DispatchTime.now(),
+      dirtyToken: dirtyToken,
+      configRevision: configRevision)
+  }
+
+  private func runActivationDiscovery(
+    context: AppContext,
+    profiler: FlashProfiler?,
+    completion: @escaping ([AssignedHint]) -> Void
+  ) {
+    let cfg = snapshotConfig()
+    let providers = registry.chain(for: context)
+    let enqueueNs = profiler?.intervalStart()
+    axQueue.async { [weak self] in
+      guard let self else { return }
+      if let enqueueNs {
+        self.finishQueueWait(profiler, since: enqueueNs)
+      }
+      profiler?.mark("walk_start", detail: "providers=\(providers.map(\.identifier).joined(separator: ","))")
+      let result = self.runAndAssign(
+        context: context,
+        cfg: cfg,
+        providers: providers,
+        axWebAreaPolicy: .auto,
+        profiler: profiler)
+      profiler?.mark("walk_done", detail: "hints=\(result.hints.count)")
+      DispatchQueue.main.async {
+        completion(result.hints)
+      }
+    }
+  }
+
+  private func runActivationProviders(
+    context: AppContext,
+    baseModel: PreparedModel,
+    activationProviders: [JumpProvider],
+    profiler: FlashProfiler?,
+    completion: @escaping ([AssignedHint]) -> Void
+  ) {
+    let cfg = snapshotConfig()
+    let enqueueNs = profiler?.intervalStart()
+    axQueue.async { [weak self] in
+      guard let self else { return }
+      if let enqueueNs {
+        self.finishQueueWait(profiler, since: enqueueNs)
+      }
+      self.configureProviders(for: cfg, triggerMs: profiler?.triggerMs)
+      profiler?.mark(
+        "activation_providers_start",
+        detail: "providers=\(activationProviders.map(\.identifier).joined(separator: ","))")
+      let extraTargets = self.collectFocusedTargets(
+        context: context,
+        providers: activationProviders,
+        axWebAreaPolicy: .auto,
+        profiler: profiler)
+      let browserBridgeFailed =
+        extraTargets.isEmpty && activationProviders.contains { $0 is BrowserScriptProvider }
+      let targets: [JumpTarget]
+      if browserBridgeFailed {
+        profiler?.mark("browser_bridge_fallback")
+        targets = self.collectFocusedTargets(
+          context: context,
+          providers: self.continuousProviders(for: context),
+          axWebAreaPolicy: .include,
+          profiler: profiler)
+      } else {
+        targets = baseModel.targets + extraTargets
+      }
+      let finalized = self.finalizeTargets(targets, profiler: profiler)
+      let hints = self.assignTargets(finalized, cfg: cfg, profiler: profiler)
+      profiler?.mark("activation_providers_done", detail: "hints=\(hints.count)")
+      DispatchQueue.main.async {
+        completion(hints)
+      }
+    }
+  }
+
+  private func runAndAssign(
+    context: AppContext,
+    cfg: Config,
+    providers: [JumpProvider],
+    axWebAreaPolicy: AXWebAreaPolicy,
+    profiler: FlashProfiler? = nil
+  ) -> DiscoveryResult {
     let walkStart = profiler?.intervalStart()
     configureProviders(for: cfg, triggerMs: profiler?.triggerMs)
-    let targets = walkFocused(context: context, profiler: profiler)
+    let collected = collectFocusedTargets(
+      context: context,
+      providers: providers,
+      axWebAreaPolicy: axWebAreaPolicy,
+      profiler: profiler)
+    let targets = finalizeTargets(collected, profiler: profiler)
     if let walkStart {
       profiler?.finishInterval("walk_all", since: walkStart, detail: "targets=\(targets.count)")
     }
+    let hints = assignTargets(targets, cfg: cfg, profiler: profiler)
+    return DiscoveryResult(targets: targets, hints: hints)
+  }
+
+  private func assignTargets(
+    _ targets: [JumpTarget],
+    cfg: Config,
+    profiler: FlashProfiler?
+  ) -> [AssignedHint] {
     let resolved = Alphabet.resolve(cfg.hints.keys)
     let assignStart = profiler?.intervalStart()
     let hints = HintAssigner.assign(
@@ -487,8 +737,10 @@ final class AppMonitor {
   // child (e.g. a 24×24 link) overlap by ≥70%, the smaller one
   // survives. That's what makes the actual link/button get the hint
   // instead of an un-clickable wrapper.
-  private func walkFocused(
+  private func collectFocusedTargets(
     context focused: AppContext,
+    providers: [JumpProvider],
+    axWebAreaPolicy: AXWebAreaPolicy,
     profiler: FlashProfiler? = nil
   ) -> [JumpTarget] {
     let primaryH = primaryScreenHeight()
@@ -507,7 +759,6 @@ final class AppMonitor {
     let region = snapshot.visibleRegions[focused.processID] ?? []
     if region.isEmpty { return [] }
     let providerContext = clip(focused, to: union(of: region))
-    let chain = registry.chain(for: focused)
     var collected: [JumpTarget] = []
     collected.reserveCapacity(256)
 
@@ -545,9 +796,9 @@ final class AppMonitor {
     // Apple-Events disabled), re-run AX with the web area enabled so
     // the user still gets DOM hints via the AX path; this fallback is
     // serial but only fires on the bridge-failure case.
-    let browser = chain.first(where: { $0 is BrowserScriptProvider })
-    let ax = chain.first(where: { $0 is AccessibilityProvider }) as? AccessibilityProvider
-    let runParallel = browser != nil && ax != nil
+    let browser = providers.first(where: { $0 is BrowserScriptProvider })
+    let ax = providers.first(where: { $0 is AccessibilityProvider }) as? AccessibilityProvider
+    let runParallel = axWebAreaPolicy == .auto && browser != nil && ax != nil
     var skip: Set<ObjectIdentifier> = []
     if runParallel, let browser, let ax {
       skip.insert(ObjectIdentifier(browser))
@@ -602,9 +853,27 @@ final class AppMonitor {
       }
     }
 
-    for provider in chain where !skip.contains(ObjectIdentifier(provider)) {
+    func discover(_ provider: JumpProvider) -> [JumpTarget] {
+      if let ax = provider as? AccessibilityProvider {
+        let descend: Bool
+        switch axWebAreaPolicy {
+        case .auto, .include:
+          descend = true
+        case .exclude:
+          descend = false
+        }
+        return
+          (try? ax.discover(
+            in: providerContext,
+            deadline: .distantFuture,
+            descendIntoWebAreas: descend)) ?? []
+      }
+      return (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
+    }
+
+    for provider in providers where !skip.contains(ObjectIdentifier(provider)) {
       let providerStart = profiler?.intervalStart()
-      let results = (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
+      let results = discover(provider)
       let f = filterVisible(results)
       collected.append(contentsOf: f.kept)
       if let providerStart {
@@ -616,6 +885,14 @@ final class AppMonitor {
       }
     }
 
+    return collected
+  }
+
+  private func finalizeTargets(
+    _ collected: [JumpTarget],
+    profiler: FlashProfiler? = nil
+  ) -> [JumpTarget] {
+    var collected = collected
     let dedupStart = profiler?.intervalStart()
     var merged: [JumpTarget] = []
     merged.reserveCapacity(collected.count)

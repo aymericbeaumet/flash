@@ -79,8 +79,8 @@ dump_ax = false
 # terminal.
 dump_logs = false
 
-# Performance behaviours (AX-event-driven pre-walk cache, concurrent
+# Performance behaviours (AX-event-driven prepared model, concurrent
 # subtree walk, parallel deferred action-name IPC) are always on and
-# not configurable. See AGENTS.md → "Cache contract" for the
+# not configurable. See AGENTS.md → "Prepared model contract" for the
 # determinism invariants. No per-IPC AX timeout is ever set — caps
 # tight enough to be useful tripped Firefox's lazy AXWebArea build.

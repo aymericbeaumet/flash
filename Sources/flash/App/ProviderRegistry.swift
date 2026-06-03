@@ -10,7 +10,7 @@ import Foundation
 ///     app is a known terminal bundle AND a tmux client lives in the
 ///     terminal's process subtree. Hints each alphanumeric word in the
 ///     visible pane; clipboard-copies on commit. Marks results
-///     volatile so AppMonitor skips the AX-event-driven cache for
+///     volatile so AppMonitor skips prepared-model lookup for
 ///     this context (tmux content changes aren't observable via AX).
 ///   - Generic AX walker (priority 10) — universal, handles every native app
 ///     and Firefox's in-page DOM via AXWebArea descendants.

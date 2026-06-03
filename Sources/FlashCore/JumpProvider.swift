@@ -1,13 +1,25 @@
 import Foundation
 
+public enum JumpProviderReadinessPolicy: Sendable {
+  /// Safe to keep prepared from AX/workspace invalidation while the app
+  /// is focused.
+  case continuous
+  /// Run only when the user activates Flash.
+  case activationOnly
+  /// Results depend on external state Flash cannot observe reliably.
+  case volatile
+}
+
 public protocol JumpProvider: AnyObject {
   var identifier: String { get }
   var priority: Int { get }
+  /// How AppMonitor is allowed to prepare this provider's results.
+  var readinessPolicy: JumpProviderReadinessPolicy { get }
   /// When true, this provider's results depend on state that isn't
   /// observable via `AXObserver` notifications, so caching them would
-  /// silently serve stale hints. Activation skips the cache (lookup
-  /// and write) and the AX-event-driven pre-walk for any focused-app
-  /// context where a volatile provider applies. Default: false.
+  /// silently serve stale hints. Activation skips prepared-model lookup
+  /// and writes for any focused-app context where a volatile provider
+  /// applies. Default: false.
   ///
   /// Set this on providers that read external state — e.g.,
   /// `TmuxProvider` shells out to `tmux capture-pane`, whose content
@@ -19,5 +31,6 @@ public protocol JumpProvider: AnyObject {
 }
 
 extension JumpProvider {
-  public var resultsAreVolatile: Bool { false }
+  public var readinessPolicy: JumpProviderReadinessPolicy { .activationOnly }
+  public var resultsAreVolatile: Bool { readinessPolicy == .volatile }
 }
