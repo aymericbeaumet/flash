@@ -99,6 +99,15 @@ public final class AccessibilityProvider: JumpProvider {
 
   public static let maxDepth: Int = 80
   public static let maxTargets: Int = 1500
+  /// How many separate `concurrentPerform` fan-outs a single walk path
+  /// is allowed. Each fan-out point pays a small dispatch-queue cost
+  /// but unblocks N AX IPCs in parallel. Two levels covers the typical
+  /// "menu bar + content window + ... + big content group" shape: the
+  /// first fan-out splits across the window's direct children; each
+  /// of those workers can then fan out one more time inside its
+  /// subtree (e.g. inside an AXWebArea or a large AXGroup). Beyond
+  /// two levels the dispatch overhead dominates the IPC win.
+  public static let maxFanoutLevels: Int = 2
 
   /// When set, the next walk writes one line per visited element to this
   /// file. Owned and toggled by AppMonitor based on `debug.dump_ax`. The
@@ -294,6 +303,7 @@ public final class AccessibilityProvider: JumpProvider {
       insideWebArea: false,
       parentRole: nil,
       idPrefix: "r",
+      fanoutBudget: Self.maxFanoutLevels,
       state: &state
     )
 
@@ -348,6 +358,7 @@ public final class AccessibilityProvider: JumpProvider {
     insideWebArea: Bool,
     parentRole: String?,
     idPrefix: String,
+    fanoutBudget: Int,
     state: inout WalkState
   ) {
     if depth > Self.maxDepth { return }
@@ -666,17 +677,22 @@ public final class AccessibilityProvider: JumpProvider {
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
     let nowInsideWebArea = insideWebArea || role == "AXWebArea"
 
-    // Concurrent fan-out only fires once per activation, at the focused
-    // window's direct children. Deeper recursion stays serial — the
-    // bottleneck is the target app's main thread, so over-parallelising
-    // doesn't help and over-allocates worker threads. Single-child
-    // case falls through to the serial loop below.
-    if depth == 0, children.count > 1 {
+    // Concurrent fan-out fires at the first multi-child node on each
+    // walk path, up to `maxFanoutLevels` times per path. The original
+    // version fanned out only at depth 0 (the focused window's direct
+    // children), which left big subtrees serial — Firefox's content
+    // AXGroup, AWS Console's web area. Allowing one more fan-out level
+    // inside each depth-0 worker pipelines the IPC against the target
+    // app's main thread for those big subtrees too.
+    //
+    // The bottleneck is still the target app's main thread, so each
+    // fan-out level pays for itself only if the children would each
+    // generate a meaningful IPC stream. Two levels covers the typical
+    // case; deeper than that the dispatch overhead dominates. Single-
+    // child case falls through to the serial loop below.
+    if fanoutBudget > 0, children.count > 1 {
       let collector = WalkCollector()
       let dumpEnabled = state.dumpBuffer != nil
-      // Capture-by-value-friendly copies of the descent params so the
-      // worker closure doesn't need to reach back into `self`'s mutable
-      // state.
       let captureScreenH = screenH
       let captureVisible = visible
       let capturePid = pid
@@ -684,13 +700,20 @@ public final class AccessibilityProvider: JumpProvider {
       let captureInsideClickable = nowInsideClickable
       let captureInsideWebArea = nowInsideWebArea
       let captureParentRole = role
+      let captureDepth = depth
+      let captureIdPrefix = idPrefix
+      let captureNewBudget = fanoutBudget - 1
       let childrenSnapshot = children
       DispatchQueue.concurrentPerform(iterations: childrenSnapshot.count) { i in
         var workerState = WalkState()
         workerState.dumpBuffer = dumpEnabled ? [] : nil
+        // Encode the fan-out level into the id prefix so ids stay
+        // unique across nested fan-out points. Outer fan-out emits
+        // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
+        let childPrefix = captureIdPrefix == "r" ? "w\(i)" : "\(captureIdPrefix)w\(i)"
         self.walk(
           childrenSnapshot[i],
-          depth: 1,
+          depth: captureDepth + 1,
           screenH: captureScreenH,
           visible: captureVisible,
           pid: capturePid,
@@ -698,7 +721,8 @@ public final class AccessibilityProvider: JumpProvider {
           insideClickable: captureInsideClickable,
           insideWebArea: captureInsideWebArea,
           parentRole: captureParentRole,
-          idPrefix: "w\(i)",
+          idPrefix: childPrefix,
+          fanoutBudget: captureNewBudget,
           state: &workerState
         )
         collector.absorb(workerState)
@@ -725,6 +749,7 @@ public final class AccessibilityProvider: JumpProvider {
         insideWebArea: nowInsideWebArea,
         parentRole: role,
         idPrefix: idPrefix,
+        fanoutBudget: fanoutBudget,
         state: &state
       )
       if state.confirmedTargets.count >= Self.maxTargets { return }

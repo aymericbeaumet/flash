@@ -510,43 +510,108 @@ final class AppMonitor {
     let chain = registry.chain(for: focused)
     var collected: [JumpTarget] = []
     collected.reserveCapacity(256)
-    var browserDOMSucceeded = false
-    for provider in chain {
-      let providerStart = profiler?.intervalStart()
-      let prunedWeb = browserDOMSucceeded && provider is AccessibilityProvider
-      let results: [JumpTarget]
-      if prunedWeb, let ax = provider as? AccessibilityProvider {
-        results =
-          (try? ax.discover(
-            in: providerContext, deadline: .distantFuture, descendIntoWebAreas: false)) ?? []
-      } else {
-        results = (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
-      }
-      var kept = 0
+
+    // Helper: filter a provider's results by the visible region; counts
+    // kept vs hidden so the profiler line stays informative.
+    func filterVisible(_ targets: [JumpTarget]) -> (kept: [JumpTarget], hidden: Int) {
+      var out: [JumpTarget] = []
+      out.reserveCapacity(targets.count)
       var hidden = 0
-      for t in results {
+      for t in targets {
         let mid = CGPoint(x: t.frame.midX, y: t.frame.midY)
         var visible = false
         for r in region where r.contains(mid) {
           visible = true
           break
         }
-        if !visible {
-          hidden += 1
-          continue
-        }
-        collected.append(t)
-        kept += 1
+        if visible { out.append(t) } else { hidden += 1 }
       }
-      if provider is BrowserScriptProvider, kept > 0 {
-        browserDOMSucceeded = true
+      return (out, hidden)
+    }
+
+    // Browser DOM bridge + AX walker, when both apply, run in parallel.
+    // The browser provider shells out to AppleScript (osascript fork +
+    // an Apple Event round-trip to the browser); the AX walker pipes
+    // batched AX IPCs into the same browser's main thread. Both
+    // ultimately serialise at the browser's main thread, but Flash's
+    // side (osascript fork+exec, AX setup, IPC dispatch) parallelises,
+    // pulling the wall time down to roughly `max(browser, ax-pruned)`
+    // instead of `browser + ax-pruned`.
+    //
+    // AX runs with `descendIntoWebAreas: false` speculatively — the
+    // common case is that the browser bridge succeeds and the pruned
+    // AX walk is what we want. If the bridge returns nothing
+    // (Automation denied, browser without an open document, JS-from-
+    // Apple-Events disabled), re-run AX with the web area enabled so
+    // the user still gets DOM hints via the AX path; this fallback is
+    // serial but only fires on the bridge-failure case.
+    let browser = chain.first(where: { $0 is BrowserScriptProvider })
+    let ax = chain.first(where: { $0 is AccessibilityProvider }) as? AccessibilityProvider
+    let runParallel = browser != nil && ax != nil
+    var skip: Set<ObjectIdentifier> = []
+    if runParallel, let browser, let ax {
+      skip.insert(ObjectIdentifier(browser))
+      skip.insert(ObjectIdentifier(ax))
+      let browserStart = profiler?.intervalStart()
+      let axStart = profiler?.intervalStart()
+      var browserResults: [JumpTarget] = []
+      var axResults: [JumpTarget] = []
+      let group = DispatchGroup()
+      let q = DispatchQueue.global(qos: .userInitiated)
+      group.enter()
+      q.async {
+        browserResults =
+          (try? browser.discover(in: providerContext, deadline: .distantFuture)) ?? []
+        group.leave()
       }
+      group.enter()
+      q.async {
+        axResults =
+          (try? ax.discover(
+            in: providerContext, deadline: .distantFuture, descendIntoWebAreas: false)) ?? []
+        group.leave()
+      }
+      group.wait()
+      let bridgeFailed = browserResults.isEmpty
+      if bridgeFailed {
+        // Re-walk including the web area so we don't silently lose all
+        // page targets when the bridge is unavailable.
+        axResults =
+          (try? ax.discover(
+            in: providerContext, deadline: .distantFuture, descendIntoWebAreas: true)) ?? []
+      }
+      let bFiltered = filterVisible(browserResults)
+      let aFiltered = filterVisible(axResults)
+      collected.append(contentsOf: bFiltered.kept)
+      collected.append(contentsOf: aFiltered.kept)
+      if let browserStart {
+        profiler?.finishInterval(
+          "provider.\(browser.identifier)",
+          since: browserStart,
+          detail:
+            "raw=\(browserResults.count) kept=\(bFiltered.kept.count) hidden=\(bFiltered.hidden)"
+        )
+      }
+      if let axStart {
+        profiler?.finishInterval(
+          "provider.\(ax.identifier)",
+          since: axStart,
+          detail:
+            "raw=\(axResults.count) kept=\(aFiltered.kept.count) hidden=\(aFiltered.hidden) web_pruned=\(!bridgeFailed) bridge_fallback=\(bridgeFailed)"
+        )
+      }
+    }
+
+    for provider in chain where !skip.contains(ObjectIdentifier(provider)) {
+      let providerStart = profiler?.intervalStart()
+      let results = (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
+      let f = filterVisible(results)
+      collected.append(contentsOf: f.kept)
       if let providerStart {
         profiler?.finishInterval(
           "provider.\(provider.identifier)",
           since: providerStart,
-          detail:
-            "raw=\(results.count) kept=\(kept) hidden=\(hidden) web_pruned=\(prunedWeb)"
+          detail: "raw=\(results.count) kept=\(f.kept.count) hidden=\(f.hidden)"
         )
       }
     }

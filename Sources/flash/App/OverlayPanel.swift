@@ -521,25 +521,43 @@ final class OverlayPanel: NSPanel {
     return u
   }
 
+  /// Hex → NSColor with a tiny memo. `display(hints:)` parses 4 hex
+  /// strings per render and `filter(...)` parses one more per
+  /// keystroke; the values come from `overlayConfig` so they're
+  /// constant across activations until the user edits config.toml.
+  /// Sentinel `NSColor.clear` represents "parse failure" so we can
+  /// distinguish nil-cached from absent-from-cache.
+  private var colorCache: [String: NSColor] = [:]
+  private static let parseFailureSentinel = NSColor.clear
+
   private func nsColor(fromHex hex: String) -> NSColor? {
+    if let cached = colorCache[hex] {
+      return cached === OverlayPanel.parseFailureSentinel ? nil : cached
+    }
     var s = hex.trimmingCharacters(in: .whitespaces)
     if s.hasPrefix("#") { s.removeFirst() }
-    guard let v = UInt64(s, radix: 16) else { return nil }
+    guard let v = UInt64(s, radix: 16) else {
+      colorCache[hex] = OverlayPanel.parseFailureSentinel
+      return nil
+    }
+    let result: NSColor?
     switch s.count {
     case 6:
       let r = CGFloat((v >> 16) & 0xff) / 255
       let g = CGFloat((v >> 8) & 0xff) / 255
       let b = CGFloat(v & 0xff) / 255
-      return NSColor(red: r, green: g, blue: b, alpha: 1)
+      result = NSColor(red: r, green: g, blue: b, alpha: 1)
     case 8:
       let r = CGFloat((v >> 24) & 0xff) / 255
       let g = CGFloat((v >> 16) & 0xff) / 255
       let b = CGFloat((v >> 8) & 0xff) / 255
       let a = CGFloat(v & 0xff) / 255
-      return NSColor(red: r, green: g, blue: b, alpha: a)
+      result = NSColor(red: r, green: g, blue: b, alpha: a)
     default:
-      return nil
+      result = nil
     }
+    colorCache[hex] = result ?? OverlayPanel.parseFailureSentinel
+    return result
   }
 }
 

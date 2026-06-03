@@ -203,137 +203,64 @@ public final class TmuxProvider: JumpProvider {
     let statusAtTop = statusParts.count >= 2 && statusParts[1] == "top"
     let topOffset = statusAtTop ? statusLines : 0
 
-    // (Diagnostic file write removed — see git history for the
-    // alignment-debug version if you need to instrument again.)
+    // The tmux status bar is deliberately not hinted. Status content
+    // (session name, hostname, clock) is rarely the thing the user
+    // wants to act on, and hinting it clutters the overlay. We still
+    // resolve status lines + position above because pane content
+    // coordinates depend on `topOffset`.
 
-    var targets: [JumpTarget] = []
-    targets.reserveCapacity(512)
-    var idCounter = 0
     let pid = context.processID
 
-    // Status bar(s): query the rendered text per line via tmux's
-    // `#{T:status-format[i]}` format expander. The status bar isn't
-    // a pane so `capture-pane` doesn't reach it. The result keeps
-    // `#[…]` directives as literal text, so we parse them to honor
-    // `align=left/center/right` and place each segment at its known
-    // base column (left at 0, right at `clientCols - len`, center
-    // at `(clientCols - len) / 2`). Lines sit at the top of the
-    // client grid when status-position=top, or the bottom otherwise.
-    for i in 0..<statusLines {
-      let formatArg = "#{T:status-format[\(i)]}"
-      guard
-        let raw = runShell(
-          tmux, ["display-message", "-c", client.tty, "-p", formatArg])
-      else { continue }
-      let cleanedFormat =
-        Self.stripAnsi(raw).trimmingCharacters(in: .newlines)
-      var aligned = Self.parseStatusAlign(cleanedFormat)
-
-      // Some users build a custom `status-format[i]` that doesn't
-      // reference `#{status-left}` / `#{status-right}`, so the
-      // dynamic content those options expand to never makes it into
-      // the master template's output. Query them separately and
-      // merge — but only when the raw (unexpanded) format doesn't
-      // already reference them, so users whose template DOES
-      // reference them don't get double-rendered content.
-      let rawTemplate =
-        runShell(tmux, ["show-options", "-gv", "status-format[\(i)]"]) ?? ""
-      if !rawTemplate.contains("status-left") {
-        if let leftRaw = runShell(
-          tmux,
-          ["display-message", "-c", client.tty, "-p", "#{T:status-left}"])
-        {
-          let cleanLeft = Self.stripAnsi(leftRaw).trimmingCharacters(in: .newlines)
-          if !cleanLeft.isEmpty {
-            // status-left in tmux's natural rendering is appended
-            // at the LEFT of the line before any format-supplied
-            // content, so it goes at the head of the left bucket.
-            aligned.left = cleanLeft + aligned.left
+    // Capture every pane's content in parallel. Each `tmux capture-pane`
+    // is a separate fork+exec on Flash's side; tmux's server serialises
+    // the requests but the fork+exec parallelises across panes, so a
+    // 4-pane workspace gets ~3 fork+exec costs reclaimed (~9–15 ms).
+    // Each worker writes only into its own `paneTargets[i]` slot, so
+    // no locking is needed for the accumulation; the id-disambiguator
+    // is the pane index so ids stay unique across the merge.
+    var paneTargets: [[JumpTarget]] = Array(repeating: [], count: panes.count)
+    paneTargets.withUnsafeMutableBufferPointer { buf in
+      DispatchQueue.concurrentPerform(iterations: panes.count) { i in
+        let pane = panes[i]
+        guard let raw = self.runShell(tmux, ["capture-pane", "-t", pane.id, "-p"]) else {
+          return
+        }
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
+        var local: [JumpTarget] = []
+        local.reserveCapacity(64)
+        var idCounter = 0
+        for (rowIdx, line) in lines.enumerated() {
+          if rowIdx >= pane.rows { break }
+          self.extractWords(line: String(line), maxCols: pane.cols) { col, text in
+            let screenCol = pane.left + col
+            let screenRow = topOffset + pane.top + rowIdx
+            let x = windowFrame.minX + padX + CGFloat(screenCol) * cellW
+            // NSScreen Y grows up, so a cell's bottom-Y is
+            // window-top minus the top padding minus (screenRow+1) cells.
+            let y =
+              windowFrame.minY + windowFrame.height - padY
+              - CGFloat(screenRow + 1) * cellH
+            let frame = CGRect(
+              x: x, y: y, width: CGFloat(text.count) * cellW, height: cellH)
+            idCounter += 1
+            local.append(
+              JumpTarget(
+                id: "tmux-\(pid)-p\(i)-\(idCounter)",
+                frame: frame,
+                role: "tmux-word",
+                accessibilityLabel: text,
+                pid: pid,
+                providerID: identifier
+              ))
           }
         }
-      }
-      if !rawTemplate.contains("status-right") {
-        if let rightRaw = runShell(
-          tmux,
-          ["display-message", "-c", client.tty, "-p", "#{T:status-right}"])
-        {
-          let cleanRight = Self.stripAnsi(rightRaw).trimmingCharacters(in: .newlines)
-          if !cleanRight.isEmpty {
-            // status-right sits at the END of the right-aligned
-            // region in tmux's rendering, after any format-supplied
-            // right-aligned content.
-            aligned.right = aligned.right + cleanRight
-          }
-        }
-      }
-      let statusScreenRow: Int
-      if statusAtTop {
-        statusScreenRow = i
-      } else {
-        statusScreenRow = clientRows - statusLines + i
-      }
-      let leftBase = 0
-      let rightBase = max(0, clientCols - aligned.right.count)
-      let centerBase = max(0, (clientCols - aligned.center.count) / 2)
-      for (text, baseCol) in [
-        (aligned.left, leftBase),
-        (aligned.center, centerBase),
-        (aligned.right, rightBase),
-      ] where !text.isEmpty {
-        extractWords(line: text, maxCols: clientCols - baseCol) { col, word in
-          let actualCol = baseCol + col
-          let x = windowFrame.minX + padX + CGFloat(actualCol) * cellW
-          let y =
-            windowFrame.minY + windowFrame.height - padY
-            - CGFloat(statusScreenRow + 1) * cellH
-          let frame = CGRect(
-            x: x, y: y, width: CGFloat(word.count) * cellW, height: cellH)
-          idCounter += 1
-          targets.append(
-            JumpTarget(
-              id: "tmux-\(pid)-status\(i)-\(idCounter)",
-              frame: frame,
-              role: "tmux-status-word",
-              accessibilityLabel: word,
-              pid: pid,
-              providerID: identifier
-            ))
-        }
+        buf[i] = local
       }
     }
 
-    for pane in panes {
-      guard
-        let raw = runShell(tmux, ["capture-pane", "-t", pane.id, "-p"])
-      else { continue }
-      let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
-      for (rowIdx, line) in lines.enumerated() {
-        if rowIdx >= pane.rows { break }
-        extractWords(line: String(line), maxCols: pane.cols) { col, text in
-          let screenCol = pane.left + col
-          let screenRow = topOffset + pane.top + rowIdx
-          let x = windowFrame.minX + padX + CGFloat(screenCol) * cellW
-          // NSScreen Y grows up, so a cell's bottom-Y is
-          // window-top minus the top padding minus (screenRow+1) cells.
-          let y =
-            windowFrame.minY + windowFrame.height - padY
-            - CGFloat(screenRow + 1) * cellH
-          let frame = CGRect(
-            x: x, y: y, width: CGFloat(text.count) * cellW, height: cellH)
-          idCounter += 1
-          targets.append(
-            JumpTarget(
-              id: "tmux-\(pid)-\(idCounter)",
-              frame: frame,
-              role: "tmux-word",
-              accessibilityLabel: text,
-              pid: pid,
-              providerID: identifier
-            ))
-        }
-      }
-    }
-
+    var targets: [JumpTarget] = []
+    targets.reserveCapacity(paneTargets.reduce(0) { $0 + $1.count })
+    for arr in paneTargets { targets.append(contentsOf: arr) }
     return targets
   }
 
@@ -410,69 +337,57 @@ public final class TmuxProvider: JumpProvider {
   /// every attached client across every terminal window. Without the
   /// match, focusing alacritty while another terminal hosts a tmux
   /// session would have us capture from the WRONG pane.
-  private func clientHostedBy(pid: pid_t) -> TmuxClient? {
+  ///
+  /// Algorithm: ask tmux for each attached client's `client_pid` (the
+  /// process that ran `tmux attach`), then walk its parent chain via
+  /// `proc_pidinfo` until we either hit `focusedPid` (match) or pid 1
+  /// (no match). This replaces a prior `/bin/ps` shell-out that
+  /// enumerated the whole process table; the new approach is one
+  /// syscall per ancestor hop and avoids paying a fork+exec on every
+  /// tmux walk (~3 ms saved).
+  private func clientHostedBy(pid focusedPid: pid_t) -> TmuxClient? {
     guard let tmux = Self.tmuxPath else { return nil }
-    guard let raw = runShell(tmux, ["list-clients", "-F", "#{client_tty}\t#{session_name}"])
+    guard
+      let raw = runShell(
+        tmux, ["list-clients", "-F", "#{client_tty}\t#{session_name}\t#{client_pid}"])
     else { return nil }
-    let clients = raw.split(separator: "\n").compactMap { line -> TmuxClient? in
-      let parts = line.split(separator: "\t", maxSplits: 1)
-      guard parts.count == 2 else { return nil }
-      return TmuxClient(tty: String(parts[0]), session: String(parts[1]))
+    for line in raw.split(separator: "\n") {
+      let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+      guard parts.count == 3 else { continue }
+      let tty = parts[0]
+      let session = parts[1]
+      guard let clientPid = pid_t(parts[2]) else { continue }
+      if Self.isAncestor(focusedPid, of: clientPid) {
+        return TmuxClient(tty: tty, session: session)
+      }
     }
-    if clients.isEmpty { return nil }
-    let subtreeTtys = Set(ttysInSubtree(of: pid))
-    return clients.first(where: { subtreeTtys.contains($0.tty) })
+    return nil
   }
 
-  // MARK: Process subtree walk
-  //
-  // One `ps axo pid=,ppid=,tty=` call gives us the entire process
-  // table in a single shell-out. We build pid→children + pid→tty in
-  // memory and BFS from the focused pid to collect every tty owned
-  // by a descendant. The match against `tmux list-clients` then
-  // identifies the right client.
+  /// True if `ancestor` appears in the parent chain of `descendant`
+  /// (or equals it). Walks up via `proc_pidinfo(_, PROC_PIDTBSDINFO,
+  /// _)`; bounded to 64 hops as a pathological-safety cap (real
+  /// chains rarely exceed a dozen).
+  private static func isAncestor(_ ancestor: pid_t, of descendant: pid_t) -> Bool {
+    var cur = descendant
+    var hops = 0
+    while cur > 1, hops < 64 {
+      if cur == ancestor { return true }
+      guard let p = parentPID(of: cur), p != cur else { return false }
+      cur = p
+      hops += 1
+    }
+    return false
+  }
 
-  private func ttysInSubtree(of root: pid_t) -> [String] {
-    guard let raw = runShell("/bin/ps", ["axo", "pid=,ppid=,tty="]) else {
-      return []
+  private static func parentPID(of pid: pid_t) -> pid_t? {
+    var info = proc_bsdinfo()
+    let size = MemoryLayout<proc_bsdinfo>.size
+    let got = withUnsafeMutablePointer(to: &info) { ptr -> Int32 in
+      proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, ptr, Int32(size))
     }
-    struct Info {
-      let ppid: pid_t
-      let tty: String
-    }
-    var byPid: [pid_t: Info] = [:]
-    var children: [pid_t: [pid_t]] = [:]
-    for line in raw.split(separator: "\n") {
-      let parts =
-        line
-        .split(whereSeparator: { $0 == " " || $0 == "\t" })
-        .filter { !$0.isEmpty }
-      guard parts.count >= 3,
-        let pid = pid_t(parts[0]),
-        let ppid = pid_t(parts[1])
-      else { continue }
-      let tty = String(parts[2])
-      byPid[pid] = Info(ppid: ppid, tty: tty)
-      children[ppid, default: []].append(pid)
-    }
-
-    var ttys: [String] = []
-    var queue: [pid_t] = [root]
-    var visited = Set<pid_t>()
-    while let p = queue.first {
-      queue.removeFirst()
-      if !visited.insert(p).inserted { continue }
-      if visited.count > 1024 { break }  // pathological-safety cap
-      if let info = byPid[p], info.tty != "?", info.tty != "??" {
-        // `ps` prints tty without the `/dev/` prefix; tmux's
-        // `client_tty` is the fully-qualified path. Normalise.
-        ttys.append("/dev/" + info.tty)
-      }
-      for child in children[p] ?? [] {
-        queue.append(child)
-      }
-    }
-    return ttys
+    guard got == Int32(size) else { return nil }
+    return pid_t(info.pbi_ppid)
   }
 
   // MARK: Geometry resolution
@@ -621,87 +536,6 @@ public final class TmuxProvider: JumpProvider {
     guard task.terminationStatus == 0 else { return nil }
     let data = outPipe.fileHandleForReading.readDataToEndOfFile()
     return String(data: data, encoding: .utf8)
-  }
-
-  /// Split a tmux status-format string into its left / center /
-  /// right text buckets by interpreting `#[align=…]` directives.
-  /// All `#[…]` segments are removed from the output (they aren't
-  /// rendered cells); the remaining visible characters land in
-  /// whichever bucket matches the most recent `align=` directive.
-  /// Default alignment is left (tmux's default before any directive).
-  ///
-  /// We don't try to parse styling (`fg=…`, `bg=…`, `bold`) — those
-  /// don't affect column positioning, so consuming the directive
-  /// and discarding its non-align attributes is enough.
-  private static func parseStatusAlign(_ format: String)
-    -> (left: String, center: String, right: String)
-  {
-    enum Align { case left, center, right }
-    var align: Align = .left
-    var left = ""
-    var center = ""
-    var right = ""
-    var i = format.startIndex
-    while i < format.endIndex {
-      // Detect `#[…]` directive.
-      if format[i] == "#",
-        format.index(after: i) < format.endIndex,
-        format[format.index(after: i)] == "["
-      {
-        let dirStart = format.index(i, offsetBy: 2)
-        if let dirEnd = format[dirStart...].firstIndex(of: "]") {
-          let directive = String(format[dirStart..<dirEnd])
-          if directive.contains("align=left") {
-            align = .left
-          } else if directive.contains("align=right") {
-            align = .right
-          } else if directive.contains("align=center")
-            || directive.contains("align=centre")
-          {
-            align = .center
-          }
-          i = format.index(after: dirEnd)
-          continue
-        }
-      }
-      let ch = format[i]
-      switch align {
-      case .left: left.append(ch)
-      case .center: center.append(ch)
-      case .right: right.append(ch)
-      }
-      i = format.index(after: i)
-    }
-    return (left, center, right)
-  }
-
-  /// Strip CSI escape sequences (ESC `[` … letter) from a string.
-  /// Tmux's `#{T:status-format}` evaluation can emit style escapes
-  /// (e.g. `\x1b[1;34m`) when the status format contains `#[fg=…]`
-  /// directives; they're invisible cells in the rendered terminal
-  /// but they confuse our column-based tokenizer. Strip them so
-  /// `col` increments line up with the visible character grid.
-  private static func stripAnsi(_ s: String) -> String {
-    var out = ""
-    out.reserveCapacity(s.count)
-    var iter = s.makeIterator()
-    while let ch = iter.next() {
-      if ch == "\u{1b}" {
-        // Consume the rest of the CSI until a final byte (letter).
-        // Tmux only emits CSI-m (SGR) sequences here; for safety
-        // also accept any other terminator in the 0x40–0x7e range.
-        while let c = iter.next() {
-          if let scalar = c.unicodeScalars.first,
-            (0x40...0x7e).contains(Int(scalar.value))
-          {
-            break
-          }
-        }
-      } else {
-        out.append(ch)
-      }
-    }
-    return out
   }
 
 }
