@@ -64,8 +64,8 @@ AGENTS.md                            # This file
 2. macOS Launch Services routes to the running instance via `kAEGetURL` Apple Event.
 3. `URLEventHandler` parses the URL host/query and invokes the AppDelegate handler.
 4. `AppDelegate.activate(rightClick:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
-5. `AppMonitor.discoverAsync` dispatches a fresh walk on the serial AX queue. No cache, no precompute — every show_hints walks from scratch so the result reflects the *current* UI, not a (possibly stale) snapshot.
-6. On the AX queue, `walkFocused` runs the provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives).
+5. `AppMonitor.discoverAsync` first tries the AX-event-driven pre-walk cache (see *Cache contract* below). On hit, the cached `[AssignedHint]` is delivered to main without an IPC. On miss, a fresh walk is dispatched on the serial AX queue; on completion the result is also written into the cache for the next activation within the TTL window.
+6. On the AX queue, `walkFocused` runs the provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives). Inside `AccessibilityProvider`, the focused window's direct children are fanned out across concurrent walkers (`performance.concurrent_walk`), per-IPC duration is bounded (`performance.ax_timeout_ms`), and action-name IPCs for tentative web-area / AXImage targets are resolved in a parallel post-pass.
 7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet — pre-uppercased as `AssignedHint.display`, memoised by `(alphabet, leftHand, length)`.
 8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
 9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
@@ -101,13 +101,43 @@ for s in NSScreen.screens { u = u.union(s.frame) }
 
 ## Determinism
 
-The activation hot path **must return the same result for the same UI state**. An earlier bug: pressing ctrl+space twice returned different hint sets because a precompute cache held a deadline-truncated snapshot, and reads could land on either the cached snapshot or a fresh run. That cache + precompute pipeline was deleted; today every show_hints walks fresh.
+The activation hot path **must return the same result for the same UI state**.
 
-Current contract:
+An earlier cache attempt got this wrong by serving deadline-truncated snapshots, and by falling back to a fresh walk on cache miss — so two presses in the same UI state could land on either a partial snapshot or a complete fresh walk, producing different hint sets. That broken cache was deleted.
 
-- **Walks are never truncated.** The per-walk deadline was removed; walks always run to `maxDepth` / `maxTargets`. A walk that times the user out is preferable to a non-deterministic hint set.
-- **No cache, no precompute.** Every show_hints dispatches a fresh walk on the serial AX queue. The trade is freshness over latency: the user sees the *current* UI, not a snapshot from N seconds ago.
-- **Provider ordering is by priority desc.** Within a provider, traversal order is deterministic (AX child order for `AccessibilityProvider`, DOM order for `BrowserScriptProvider`).
+The current cache is a different design. It preserves determinism by:
+
+- **Walks are never truncated.** No per-walk deadline; walks always run to `maxDepth` / `maxTargets`. A walk that times the user out is preferable to a non-deterministic hint set. (The per-IPC timeout `performance.ax_timeout_ms` only bounds individual element stalls within a walk; it does not truncate the walk overall.)
+- **No partial cache.** A walk either completes and writes a full result to the cache, or its result is discarded — never half-served.
+- **Cache reads are atomic against AX events.** `dirtyTokens[pid]` is bumped on every observed AX event (and on focused-app change). A walk captures `startToken` before starting; it only writes to the cache if `dirtyTokens[pid] == startToken` at completion (no events fired during the walk). Reads only serve a hit if `entry.dirtyTokenAtStart == dirtyTokens[pid]` AND age < `cacheTtlMs`.
+- **Provider ordering is by priority desc.** Within a provider, traversal order is deterministic (AX child order for `AccessibilityProvider`, DOM order for `BrowserScriptProvider`). Concurrent walking (`performance.concurrent_walk`) fans out subtree workers but the dedup + sort passes after merging are deterministic, so the final hint order is independent of worker scheduling.
+
+See *Cache contract* below for the exact invariants.
+
+### Cache contract
+
+`AppMonitor` maintains a per-pid `cache: [pid_t: CachedWalk]` and a `dirtyTokens: [pid_t: UInt64]` counter touched only from the main thread. An `AXObserver` is installed on the focused application; the workspace `didActivateApplicationNotification` swaps observers as focus changes.
+
+**Token bump triggers** (each bumps `dirtyTokens[pid]`):
+
+- Workspace focus change → bump new pid.
+- Any of these AX notifications on the focused pid: `kAXFocusedUIElementChanged`, `kAXFocusedWindowChanged`, `kAXMainWindowChanged`, `kAXLayoutChanged`, `kAXSelectedChildrenChanged`, `kAXSelectedRowsChanged`, `kAXValueChanged`, `kAXWindowResized`, `kAXWindowMoved`, `kAXTitleChanged`, `kAXCreated`, `kAXUIElementDestroyed`, `kAXRowExpanded`, `kAXRowCollapsed`.
+
+**Walk life-cycle:**
+
+1. `schedulePrewalk(for: pid)` — 80-ms debounced. Multiple bumps coalesce.
+2. On debounce fire, capture `startToken = dirtyTokens[pid]` on main, dispatch walk on `axQueue`.
+3. Walk runs to completion (never truncated).
+4. Result hops back to main. If `dirtyTokens[pid] == startToken` AND pid is still frontmost → write to cache with `dirtyTokenAtStart = startToken`. Else discard.
+
+**Activation lookup** (`lookupCache`):
+
+- Cache hit iff `entry.dirtyTokenAtStart == dirtyTokens[pid]` AND `now - entry.computedAt < cacheTtlMs`.
+- On miss, fresh walk runs and ALSO updates the cache on completion (same invariants).
+
+If you add new AX events that mutate UI state, add them to `AppMonitor.observedNotifications` in the same commit — otherwise the cache will silently serve stale hints when those events fire. The TTL ceiling is a safety belt for events we forgot to subscribe to; don't lean on it as a primary mechanism.
+
+The whole cache layer is gated by `performance.cache_enabled` (default `true`). Setting it to `false` reverts to the legacy fresh-walk-on-every-activation behaviour; observers are torn down.
 
 ## Animations
 
@@ -200,6 +230,11 @@ Keys:
 | `debug.dump_ax`                    | bool           | `false`              |
 | `debug.dump_logs`                  | bool           | `false`              |
 
+Performance behaviours are **not configurable.** The pre-walk cache,
+the concurrent subtree walk, and the parallel deferred action-name
+IPC pass are always on. Per-IPC AX messaging timeout is never set
+(see *Cache contract* below).
+
 There is intentionally **no** `per_app.*` table. The project's working assumption is to converge on universal rules before re-introducing per-bundle knobs — `Config.perAppRoles` and its TOML parser case were removed for this reason.
 
 ### CLI flag + environment-variable overrides (hard rule)
@@ -230,7 +265,7 @@ When you add a field, also add `applyOverrides` test coverage in `Tests/FlashTes
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a preset token `<qwerty>` (default) / `<colemak>` / `<dvorak>`. Resolution lives in `Alphabet.resolve(_:)`.
 
-**Flash always walks the focused app only.** There is no `hints.scope` knob and no multi-app walk machinery — background apps and other monitors are ignored. `JumpTarget.pid` carries the focused app's pid so `commit` can re-activate it before dispatching the click. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps.
+**Flash always walks the focused app only.** There is no `hints.scope` knob and no multi-app walk machinery — background apps and other monitors are ignored. `JumpTarget.pid` carries the focused app's pid so `commit` can re-activate it before dispatching the click. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps. (The `performance.ax_timeout_ms` knob caps *per-IPC* duration, not whole-walk duration, so it can't truncate the result set.)
 
 `overlay.exit_key` follows Karabiner's angle-bracket convention for special keys: `<escape>`, `<return>`, `<tab>`, `<space>`, `<backspace>`, `<delete>`, `<arrow_up/down/left/right>`. A bare value (e.g. `"q"`) matches that literal character.
 

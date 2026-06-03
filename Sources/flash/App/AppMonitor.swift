@@ -4,16 +4,36 @@ import FlashCore
 import FlashProviders
 import os
 
-/// Coordinates discovery + hint assignment for the focused app only.
+/// Coordinates discovery + hint assignment for the focused app.
 ///
-/// Every `discoverAsync` call dispatches a fresh AX walk on the serial
-/// `axQueue` and never reads from a precomputed cache. We deliberately do
-/// **not** speculatively warm a cache on workspace/AX notifications: those
-/// notifications miss enough state changes (in-page scrolling, JS-driven
-/// DOM updates, focus changes that don't fire AX events) that any cached
-/// result is liable to be wrong by the time the user asks for hints. We
-/// pay the walk cost on every activation in exchange for "what you see is
-/// what you click".
+/// Two latency regimes coexist:
+///
+/// **Cold (no cache hit):** every `discoverAsync` dispatches a fresh AX
+/// walk on the serial `axQueue` and hops the result back to main. The
+/// walk is parallelised inside `AccessibilityProvider` at the focused
+/// window's direct-child boundary.
+///
+/// **Warm (cache hit):** an AX-event-driven pre-walk has already
+/// completed for the focused pid and its result is still valid (no
+/// observed event fired since the walk started AND age < `cacheTtlMs`).
+/// Activation skips the walk entirely and serves the cached hints — the
+/// overlay appears within ~overlay-display latency (~10 ms).
+///
+/// **Invalidation contract (the previous cache attempt got this wrong):**
+///   - Every observed AX event (focus/layout/scroll/value/window) on the
+///     focused app bumps `dirtyTokens[pid]`.
+///   - Workspace focus change bumps the new pid's token (any cached
+///     entry from before the switch is now stale).
+///   - A walk captures `startToken = dirtyTokens[pid]` before starting.
+///   - On completion, the cache entry is written ONLY if
+///     `dirtyTokens[pid] == startToken` (no events during the walk) AND
+///     the pid is still frontmost.
+///   - Cache reads serve a hit ONLY if `entry.dirtyTokenAtStart ==
+///     dirtyTokens[pid]` AND `age < ttl`.
+///
+/// The result is deterministic: two activations in the same UI state
+/// always serve the same hint set. No partial cache, no fallback racing
+/// with a fresh walk.
 final class AppMonitor {
   private let registry: ProviderRegistry
 
@@ -34,21 +54,295 @@ final class AppMonitor {
     return config
   }
 
-  /// Called by the AppDelegate config file-watcher whenever ~/.config/flash/config.toml
-  /// changes. Atomically swaps the shared config.
+  /// Called by the AppDelegate config file-watcher whenever
+  /// ~/.config/flash/config.toml changes. Atomically swaps the shared
+  /// config. (Performance behaviours aren't configurable, so this is
+  /// a pure store — no observer-set reconfiguration needed.)
   func updateConfig(_ cfg: Config) {
     os_unfair_lock_lock(&configLock)
     config = cfg
     os_unfair_lock_unlock(&configLock)
   }
 
+  /// Hard ceiling on how long a cached walk is served before falling
+  /// back to a fresh walk. Belt-and-suspenders against AX events the
+  /// observer set missed (some apps don't fire `kAXLayoutChanged` on
+  /// every UI transition).
+  private static let cacheTtlMs: Int = 1500
+
   init(registry: ProviderRegistry, config: Config) {
     self.registry = registry
     self.config = config
   }
 
-  func start() {}
-  func stop() {}
+  // MARK: Cache state
+  //
+  // Every field below is touched only from the main thread. Walk results
+  // arrive on `axQueue` and are hopped back to main before they update
+  // any of these.
+
+  private struct CachedWalk {
+    let pid: pid_t
+    let bundleID: String
+    let hints: [AssignedHint]
+    let computedAt: DispatchTime
+    /// Snapshot of `dirtyTokens[pid]` at the start of the walk. If the
+    /// counter has advanced by the time of read, an event fired between
+    /// walk-start and now and the entry is stale.
+    let dirtyTokenAtStart: UInt64
+  }
+
+  private var cache: [pid_t: CachedWalk] = [:]
+  private var dirtyTokens: [pid_t: UInt64] = [:]
+  private var observers: [pid_t: ObserverEntry] = [:]
+  private var prewalkDebounce: [pid_t: DispatchWorkItem] = [:]
+  private var workspaceObservers: [NSObjectProtocol] = []
+
+  private struct ObserverEntry {
+    let observer: AXObserver
+    let appElement: AXUIElement
+    let context: ObserverContext
+  }
+
+  /// The `refcon` blob passed to the C AXObserver callback. Held alive
+  /// by `observers[pid]` so it stays valid for the observer's lifetime.
+  private final class ObserverContext {
+    weak var monitor: AppMonitor?
+    let pid: pid_t
+    init(monitor: AppMonitor, pid: pid_t) {
+      self.monitor = monitor
+      self.pid = pid
+    }
+  }
+
+  private static let observerCallback: AXObserverCallback = { _, _, _, refcon in
+    guard let refcon else { return }
+    let ctx = Unmanaged<ObserverContext>.fromOpaque(refcon).takeUnretainedValue()
+    guard let monitor = ctx.monitor else { return }
+    let pid = ctx.pid
+    // AXObserver callbacks already run on the run loop that holds the
+    // source — we add it to the main run loop below, so we're already
+    // on main here. Hop anyway to make the invariant explicit and
+    // bullet-proof against future relocation of the source.
+    if Thread.isMainThread {
+      monitor.onAXEvent(pid: pid)
+    } else {
+      DispatchQueue.main.async { monitor.onAXEvent(pid: pid) }
+    }
+  }
+
+  /// AX notifications we subscribe to per focused app. Any one of these
+  /// invalidates the cache (bumps `dirtyTokens[pid]`) and schedules a
+  /// debounced pre-walk. The set is intentionally generous — false
+  /// positives only cost an 80-ms-debounced background walk, while
+  /// false negatives serve stale hints.
+  private static let observedNotifications: [String] = [
+    kAXFocusedUIElementChangedNotification,
+    kAXFocusedWindowChangedNotification,
+    kAXMainWindowChangedNotification,
+    kAXLayoutChangedNotification,
+    kAXSelectedChildrenChangedNotification,
+    kAXSelectedRowsChangedNotification,
+    kAXValueChangedNotification,
+    kAXWindowResizedNotification,
+    kAXWindowMovedNotification,
+    kAXTitleChangedNotification,
+    kAXCreatedNotification,
+    kAXUIElementDestroyedNotification,
+    kAXRowExpandedNotification,
+    kAXRowCollapsedNotification,
+  ]
+
+  // MARK: Lifecycle
+
+  func start() {
+    installWorkspaceObservers()
+    if let app = NSWorkspace.shared.frontmostApplication {
+      onFocusedAppChanged(to: app)
+    }
+  }
+
+  func stop() {
+    teardownAllObservers()
+    for token in workspaceObservers {
+      NSWorkspace.shared.notificationCenter.removeObserver(token)
+    }
+    workspaceObservers.removeAll()
+  }
+
+  private func installWorkspaceObservers() {
+    let nc = NSWorkspace.shared.notificationCenter
+    let activate = nc.addObserver(
+      forName: NSWorkspace.didActivateApplicationNotification,
+      object: nil, queue: .main
+    ) { [weak self] note in
+      guard let self else { return }
+      guard
+        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+      else { return }
+      // Skip Flash itself — its overlay panel becoming key fires a
+      // workspace activation we don't want to chase.
+      if app.bundleIdentifier == Bundle.main.bundleIdentifier { return }
+      self.onFocusedAppChanged(to: app)
+    }
+    let terminate = nc.addObserver(
+      forName: NSWorkspace.didTerminateApplicationNotification,
+      object: nil, queue: .main
+    ) { [weak self] note in
+      guard let self else { return }
+      if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        self.onAppTerminated(pid: app.processIdentifier)
+      }
+    }
+    workspaceObservers = [activate, terminate]
+  }
+
+  private func onFocusedAppChanged(to app: NSRunningApplication) {
+    let pid = app.processIdentifier
+    guard pid > 0 else { return }
+    // Bump this pid's dirty token — any cached entry from before the
+    // focus came back is now suspect (the app may have repainted, the
+    // window may have moved). Discarding via token bump is cheaper than
+    // re-resolving the bundle frame here.
+    dirtyTokens[pid, default: 0] &+= 1
+    if observers[pid] == nil {
+      installObserver(for: pid)
+    }
+    schedulePrewalk(for: pid)
+  }
+
+  private func onAppTerminated(pid: pid_t) {
+    teardownObserver(for: pid)
+    cache.removeValue(forKey: pid)
+    dirtyTokens.removeValue(forKey: pid)
+    prewalkDebounce[pid]?.cancel()
+    prewalkDebounce.removeValue(forKey: pid)
+  }
+
+  func onAXEvent(pid: pid_t) {
+    dirtyTokens[pid, default: 0] &+= 1
+    schedulePrewalk(for: pid)
+  }
+
+  // MARK: AX observer install / teardown
+
+  private func installObserver(for pid: pid_t) {
+    // Without Accessibility permission, AXObserverAddNotification
+    // silently fails — no callbacks ever fire and the cache silently
+    // serves stale hints because dirty tokens never bump. Skip install
+    // entirely; we'll retry on the next focus change, by which time
+    // the user has likely granted permission.
+    if !PermissionCheck.isAccessibilityTrusted { return }
+    var observer: AXObserver?
+    let err = AXObserverCreate(pid, Self.observerCallback, &observer)
+    guard err == .success, let observer else { return }
+
+    let appEl = AXUIElementCreateApplication(pid)
+    let ctx = ObserverContext(monitor: self, pid: pid)
+    let refcon = Unmanaged.passUnretained(ctx).toOpaque()
+
+    for n in Self.observedNotifications {
+      _ = AXObserverAddNotification(observer, appEl, n as CFString, refcon)
+    }
+
+    CFRunLoopAddSource(
+      CFRunLoopGetMain(),
+      AXObserverGetRunLoopSource(observer),
+      .commonModes
+    )
+
+    observers[pid] = ObserverEntry(observer: observer, appElement: appEl, context: ctx)
+  }
+
+  private func teardownObserver(for pid: pid_t) {
+    guard let entry = observers.removeValue(forKey: pid) else { return }
+    CFRunLoopRemoveSource(
+      CFRunLoopGetMain(),
+      AXObserverGetRunLoopSource(entry.observer),
+      .commonModes
+    )
+    for n in Self.observedNotifications {
+      _ = AXObserverRemoveNotification(entry.observer, entry.appElement, n as CFString)
+    }
+  }
+
+  private func teardownAllObservers() {
+    for pid in Array(observers.keys) {
+      teardownObserver(for: pid)
+    }
+  }
+
+  // MARK: Pre-walk scheduling
+
+  /// Debounced pre-walk kick. Multiple events arriving within 80 ms
+  /// coalesce into a single background walk. The deadline pushes back
+  /// on every fresh event, so a steady stream (e.g. scrolling) stays
+  /// quiet until it settles.
+  private func schedulePrewalk(for pid: pid_t) {
+    prewalkDebounce[pid]?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      self?.runPrewalk(pid: pid)
+    }
+    prewalkDebounce[pid] = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(80), execute: work)
+  }
+
+  private func runPrewalk(pid: pid_t) {
+    let cfg = snapshotConfig()
+    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
+      return
+    }
+    // Only pre-walk the front app. Background-app walks would compete
+    // with the user's active app for AX IPC bandwidth on the target
+    // process and produce hints that'd never be served (the cache
+    // serves only for the current focused pid).
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid { return }
+    let startToken = dirtyTokens[pid] ?? 0
+    guard let context = makeContext(for: app) else { return }
+
+    axQueue.async { [weak self] in
+      guard let self else { return }
+      let hints = self.runAndAssign(context: context, cfg: cfg, profiler: nil)
+      DispatchQueue.main.async {
+        // Cache iff no observed event fired between walk-start and now
+        // AND the pid is still the focused one. Otherwise discard —
+        // the next event will kick a fresh walk.
+        guard (self.dirtyTokens[pid] ?? 0) == startToken else { return }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+        // Don't cache empty results. An empty walk is indistinguishable
+        // from "walk failed mid-way" (an AX IPC timed out, a permission
+        // race, etc.); caching it turns a transient failure into
+        // `cache_ttl_ms` of broken hints. Apps that truly have no
+        // targets (e.g., a terminal) just walk fresh each time — the
+        // walk is cheap when there's nothing to traverse.
+        if hints.isEmpty { return }
+        self.cache[pid] = CachedWalk(
+          pid: pid,
+          bundleID: context.bundleIdentifier,
+          hints: hints,
+          computedAt: DispatchTime.now(),
+          dirtyTokenAtStart: startToken
+        )
+        if cfg.debug.profile {
+          FlashLog.write(
+            "flash: prewalk pid=\(pid) bundle=\(context.bundleIdentifier) hints=\(hints.count) token=\(startToken)\n"
+          )
+        }
+      }
+    }
+  }
+
+  // MARK: Cache lookup
+
+  private func lookupCache(for pid: pid_t) -> CachedWalk? {
+    guard let entry = cache[pid] else { return nil }
+    guard (dirtyTokens[pid] ?? 0) == entry.dirtyTokenAtStart else { return nil }
+    let ageNs =
+      DispatchTime.now().uptimeNanoseconds - entry.computedAt.uptimeNanoseconds
+    let ageMs = Double(ageNs) / 1_000_000
+    if ageMs > Double(Self.cacheTtlMs) { return nil }
+    return entry
+  }
 
   func currentContext() -> AppContext? {
     guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
@@ -57,25 +351,62 @@ final class AppMonitor {
 
   // MARK: Discovery
 
-  /// Activation hot path. Always walks on the serial AX queue and hops
-  /// back to main with the result. No cache, no precompute — the walk is
-  /// the only source of truth.
+  /// Activation hot path. Tries the cache first; on miss, dispatches a
+  /// fresh walk on the serial AX queue and hops back to main with the
+  /// result. The fresh walk's result is also written to the cache on
+  /// success so subsequent activations within the TTL window can serve
+  /// directly.
   func discoverAsync(
     context: AppContext,
     profiler: FlashProfiler? = nil,
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
+
+    if let cached = lookupCache(for: context.processID) {
+      let ageMs =
+        Double(
+          DispatchTime.now().uptimeNanoseconds - cached.computedAt.uptimeNanoseconds
+        ) / 1_000_000
+      profiler?.mark(
+        "cache_hit",
+        detail:
+          "hints=\(cached.hints.count) age_ms=\(String(format: "%.1f", ageMs)) token=\(cached.dirtyTokenAtStart)"
+      )
+      completion(cached.hints)
+      return
+    }
+
     let enqueueNs = profiler?.intervalStart()
+    let startToken = dirtyTokens[context.processID] ?? 0
     axQueue.async { [weak self] in
       guard let self else { return }
       if let enqueueNs {
         self.finishQueueWait(profiler, since: enqueueNs)
       }
-      profiler?.mark("walk_start")
+      profiler?.mark("walk_start", detail: "token=\(startToken)")
       let hints = self.runAndAssign(context: context, cfg: cfg, profiler: profiler)
       profiler?.mark("walk_done", detail: "hints=\(hints.count)")
-      DispatchQueue.main.async { completion(hints) }
+      DispatchQueue.main.async {
+        // Update cache with this fresh walk's result if no events fired
+        // during the walk and the pid is still focused, and the result
+        // is non-empty (see `runPrewalk` for the empty-result
+        // rationale). This makes the common pattern of "show_hints →
+        // dismiss → show_hints again" hit cache on the second press.
+        if !hints.isEmpty,
+          (self.dirtyTokens[context.processID] ?? 0) == startToken,
+          NSWorkspace.shared.frontmostApplication?.processIdentifier == context.processID
+        {
+          self.cache[context.processID] = CachedWalk(
+            pid: context.processID,
+            bundleID: context.bundleIdentifier,
+            hints: hints,
+            computedAt: DispatchTime.now(),
+            dirtyTokenAtStart: startToken
+          )
+        }
+        completion(hints)
+      }
     }
   }
 
@@ -87,7 +418,7 @@ final class AppMonitor {
     -> [AssignedHint]
   {
     let walkStart = profiler?.intervalStart()
-    configureDebugSinks(for: cfg, triggerMs: profiler?.triggerMs)
+    configureProviders(for: cfg, triggerMs: profiler?.triggerMs)
     let targets = walkFocused(context: context, profiler: profiler)
     if let walkStart {
       profiler?.finishInterval("walk_all", since: walkStart, detail: "targets=\(targets.count)")
@@ -257,16 +588,16 @@ final class AppMonitor {
     return NSScreen.main?.frame.height ?? 1080
   }
 
-  /// Toggle the file-backed debug sinks based on the current config.
-  /// Called at the start of every walk so config hot-reloads take
-  /// effect on the very next activation. The trigger timestamp is
+  /// Push the current `Config` into the provider instances each walk
+  /// reads from. Called at the start of every walk so config hot-reloads
+  /// take effect on the very next activation. The trigger timestamp is
   /// propagated so each dump line / log line can be correlated to the
   /// activation that produced it.
   ///   - `dump_ax`   → AX walker writes per-element trace to
   ///                   ~/Library/Logs/Flash/ax-dump.log (rewritten per walk).
   ///   - `dump_logs` → FlashLog mirrors all stderr writes to
   ///                   ~/Library/Logs/Flash/flash.log (appended).
-  private func configureDebugSinks(for cfg: Config, triggerMs: UInt64?) {
+  private func configureProviders(for cfg: Config, triggerMs: UInt64?) {
     FlashLog.setMirrorToFile(cfg.debug.dumpLogs)
 
     let ax = registry.providers.first { $0 is AccessibilityProvider } as? AccessibilityProvider

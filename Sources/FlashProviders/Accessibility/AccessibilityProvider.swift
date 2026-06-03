@@ -13,14 +13,25 @@ import FlashCore
 /// bridge") for the rationale.
 ///
 /// Performance contract:
-///   - Exactly one IPC per visited element (batched via
-///     AXUIElementCopyMultipleAttributeValues).
+///   - Exactly one batched IPC per visited element via
+///     `AXUIElementCopyMultipleAttributeValues`.
 ///   - Prefer kAXVisibleChildrenAttribute over kAXChildrenAttribute so
 ///     scrolled-off content in NSOutlineView / NSTableView / NSCollectionView
 ///     is never walked. On Notes' 292-row sidebar this turns a ~300-element
 ///     walk into a ~30-element walk — only the visible rows are touched.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
 ///     returned targets is deterministic).
+///   - No per-IPC timeout. macOS default (6 s) is in place. Any tighter
+///     cap silently dropped Firefox's `AXWebArea` subtree (lazy build).
+///   - Top-level subtrees always fan out across concurrent workers via
+///     `DispatchQueue.concurrentPerform`, pipelining many AX IPCs
+///     against the target app's main thread. The single-attribute
+///     children fallback recovers Firefox's batched-IPC drops.
+///   - Action-name IPCs needed to confirm tentative targets (web-area
+///     roleless-with-AXPress, standalone AXImage) are buffered as
+///     `pendingTargets` during the walk and resolved in parallel after
+///     it completes, so the IPC pipeline isn't serialised on inline
+///     follow-up reads.
 public final class AccessibilityProvider: JumpProvider {
   public let identifier: String = "accessibility"
   public let priority: Int = 10
@@ -93,6 +104,12 @@ public final class AccessibilityProvider: JumpProvider {
   /// file. Owned and toggled by AppMonitor based on `debug.dump_ax`. The
   /// AX provider runs serially on a single queue (see AppMonitor), so a
   /// plain mutable property is safe here.
+  ///
+  /// Caveat under `concurrentWalk = true`: per-worker buffers are
+  /// concatenated in worker-order at end of walk, so the file is no
+  /// longer in strict tree-traversal order. Set
+  /// `performance.concurrent_walk = false` if you need the legacy
+  /// ordering for diff'ing two activations.
   public var dumpURL: URL?
 
   /// Millisecond wall-clock timestamp identifying the activation that
@@ -144,6 +161,46 @@ public final class AccessibilityProvider: JumpProvider {
       "AXHidden",  // 8 — Firefox/WebKit a11y-hidden subtrees
     ] as CFArray
 
+  /// Per-worker mutable state. `WalkState` is per-thread under concurrent
+  /// walks; serial walks pass one through the whole recursion.
+  private struct WalkState {
+    var confirmedTargets: [JumpTarget] = []
+    /// Targets whose acceptance is contingent on an action-name IPC.
+    /// Collected during the walk; resolved in parallel after the
+    /// walk completes (see `resolvePendingActionChecks`).
+    var pendingTargets: [PendingTarget] = []
+    var idCounter: Int = 0
+    var dumpBuffer: [String]? = nil
+  }
+
+  /// Tentative target awaiting an action-name IPC. The candidate is fully
+  /// formed — if the action check passes, it's appended to
+  /// `confirmedTargets` as-is; otherwise dropped.
+  private struct PendingTarget {
+    let candidate: JumpTarget
+    let element: AXUIElement
+  }
+
+  /// Lock-protected collector for merging per-worker `WalkState`s back
+  /// onto the activation's combined result. Allocated once per
+  /// concurrent fan-out.
+  private final class WalkCollector {
+    let lock = NSLock()
+    var confirmedTargets: [JumpTarget] = []
+    var pendingTargets: [PendingTarget] = []
+    var dump: [String] = []
+
+    func absorb(_ state: WalkState) {
+      lock.lock()
+      confirmedTargets.append(contentsOf: state.confirmedTargets)
+      pendingTargets.append(contentsOf: state.pendingTargets)
+      if let d = state.dumpBuffer {
+        dump.append(contentsOf: d)
+      }
+      lock.unlock()
+    }
+  }
+
   public func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget] {
     try discover(in: context, deadline: deadline, descendIntoWebAreas: true)
   }
@@ -173,16 +230,11 @@ public final class AccessibilityProvider: JumpProvider {
     let clip = context.frontWindowFrame
     guard !clip.isNull else { return [] }
 
-    var out: [JumpTarget] = []
-    var idCounter = 0
-
-    // Buffer dump lines in memory during the walk and flush async at
-    // the end, so per-element file I/O never adds latency to
-    // activation.
-    var dumpBuffer: [String]? = dumpURL != nil ? [] : nil
-    if dumpBuffer != nil {
+    let dumpEnabled = dumpURL != nil
+    var combinedDump: [String] = []
+    if dumpEnabled {
       let trigger = triggerMs.map { "  trigger=\($0)" } ?? ""
-      dumpBuffer?.append(
+      combinedDump.append(
         "# flash AX dump  bundle=\(context.bundleIdentifier)  pid=\(context.processID)  time=\(Date())\(trigger)\n"
       )
     }
@@ -207,24 +259,47 @@ public final class AccessibilityProvider: JumpProvider {
       let focusedCF = focusedRaw,
       CFGetTypeID(focusedCF) == AXUIElementGetTypeID()
     else {
-      if let url = dumpURL, let lines = dumpBuffer {
-        flushDump(lines: lines, to: url)
-      }
-      return out
+      if let url = dumpURL { flushDump(lines: combinedDump, to: url) }
+      return []
     }
     let focusedWindow = focusedCF as! AXUIElement
 
+    var state = WalkState()
+    state.dumpBuffer = dumpEnabled ? [] : nil
+    // The root walk uses the "r" prefix; concurrent fan-out workers use
+    // "w<i>" (see depth-0 fan-out below). This keeps target IDs unique
+    // across the focused window's own target (if it's hinted) and the
+    // per-worker subtree results.
     walk(
-      focusedWindow, depth: 0, screenH: screenH, visible: clip,
-      pid: context.processID, descendIntoWebAreas: descendIntoWebAreas,
-      insideClickable: false, insideWebArea: false,
-      parentRole: nil, dump: &dumpBuffer,
-      out: &out, idCounter: &idCounter)
+      focusedWindow,
+      depth: 0,
+      screenH: screenH,
+      visible: clip,
+      pid: context.processID,
+      descendIntoWebAreas: descendIntoWebAreas,
+      insideClickable: false,
+      insideWebArea: false,
+      parentRole: nil,
+      idPrefix: "r",
+      state: &state
+    )
 
-    if let url = dumpURL, let lines = dumpBuffer {
-      flushDump(lines: lines, to: url)
+    // Parallel resolution of pending action-name checks. These are
+    // tentative targets the walker buffered instead of paying an inline
+    // IPC per element (the inline pattern doubled the IPC count on
+    // web-heavy apps because every AXGroup-in-webarea and every
+    // standalone AXImage triggered an extra `AXUIElementCopyActionNames`
+    // round-trip). Resolving in parallel lets the target app's main
+    // thread service multiple action-name reads concurrently.
+    let survivors = resolvePendingActionChecks(state.pendingTargets)
+    state.confirmedTargets.append(contentsOf: survivors)
+    if let d = state.dumpBuffer {
+      combinedDump.append(contentsOf: d)
     }
-    return out
+    if dumpEnabled, let url = dumpURL {
+      flushDump(lines: combinedDump, to: url)
+    }
+    return state.confirmedTargets
   }
 
   /// Off-thread flush of accumulated dump lines. `FileHandle.write` is
@@ -259,12 +334,11 @@ public final class AccessibilityProvider: JumpProvider {
     insideClickable: Bool,
     insideWebArea: Bool,
     parentRole: String?,
-    dump: inout [String]?,
-    out: inout [JumpTarget],
-    idCounter: inout Int
+    idPrefix: String,
+    state: inout WalkState
   ) {
     if depth > Self.maxDepth { return }
-    if out.count >= Self.maxTargets { return }
+    if state.confirmedTargets.count >= Self.maxTargets { return }
 
     var valuesRef: CFArray?
     let err = AXUIElementCopyMultipleAttributeValues(
@@ -302,7 +376,7 @@ public final class AccessibilityProvider: JumpProvider {
     // in the normal hot path — those IPCs are not free.
     var dumpActions: [String]? = nil
     var dumpLabel: String? = nil
-    if dump != nil {
+    if state.dumpBuffer != nil {
       dumpActions = actionNames(element)
       dumpLabel =
         stringAttr(element, kAXTitleAttribute as CFString)
@@ -311,27 +385,31 @@ public final class AccessibilityProvider: JumpProvider {
     }
 
     var addedAsTarget = false
-    // Decide whether this element is a hint target. Two acceptance paths:
+    // Decide whether this element is a hint target. Three acceptance paths:
     //   1. Role is in the curated `roles` set (covers all native AX
-    //      controls + the obvious web cases like AXButton/AXLink).
-    //   2. We're inside an AXWebArea descendant *and* the element
-    //      exposes an `AXPress`/`AXOpen`/`AXConfirm` action. Many JS
-    //      sites (GitHub being the canonical case) render interactive
-    //      controls as `AXGroup` or `AXGenericElement` with a JS
-    //      handler — they're real click targets, just don't carry the
-    //      semantically correct role. Guarding by AXWebArea keeps the
-    //      per-element action IPC out of the native-AX hot path.
+    //      controls + the obvious web cases like AXButton/AXLink). No
+    //      extra IPC.
+    //   2. We're inside an AXWebArea descendant *and* the element has
+    //      no recognised role — could be a `<div onclick>` widget
+    //      masquerading as AXGroup. Buffered as a pending target; the
+    //      action-name check runs in parallel after the walk.
+    //   3. Standalone AXImage (no clickable ancestor). Same deferred
+    //      treatment — most decorative images expose no actions.
+    //
+    // Buffering (2) and (3) instead of doing the action-name IPC
+    // inline halves the IPC count on web-heavy apps like AWS Console
+    // where virtually every AXGroup in the page tree advertises an
+    // `AXPress` action.
     let roleRecognised = role.map { Self.roles.contains($0) } ?? false
-    let acceptsViaWebAction =
+    let acceptsViaWebActionCandidate =
       !roleRecognised
       && insideWebArea
       && !insideClickable
       && enabled
       && role != "AXStaticText"
       && role != "AXWebArea"
-      && Self.elementHasPressAction(element)
     if enabled,
-      roleRecognised || acceptsViaWebAction,
+      roleRecognised || acceptsViaWebActionCandidate,
       let r = role,
       let posV = posValue, let sizeV = sizeValue,
       let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH)
@@ -347,14 +425,16 @@ public final class AccessibilityProvider: JumpProvider {
       //      `<a><img/>text</a>` double-hint case in Firefox.
       //   2. If we're standalone (no clickable ancestor), an AXImage
       //      is only a real click target when it exposes a press
-      //      action. Pure decorative `<img>` exposes no actions.
+      //      action. Buffered as a pending target — the action-name
+      //      check runs in parallel after the walk.
       //   See AccessibilityProvider.clickableContainerRoles.
       var imageDecorative = false
+      var imageRequiresActionCheck = false
       if r == "AXImage" {
         if insideClickable {
           imageDecorative = true
-        } else if !imageHasPressAction(element) {
-          imageDecorative = true
+        } else {
+          imageRequiresActionCheck = true
         }
       }
       if !suppressed, !imageDecorative {
@@ -362,7 +442,7 @@ public final class AccessibilityProvider: JumpProvider {
         if visible.contains(center) {
           let clipped = frame.intersection(visible)
           if !clipped.isNull, clipped.width >= 4, clipped.height >= 4 {
-            idCounter += 1
+            state.idCounter += 1
             let captured = element
             let capturedRole = r
             // CGEvent uses Y-down screen coords (origin top-left of
@@ -433,17 +513,25 @@ public final class AccessibilityProvider: JumpProvider {
                 return Self.synthesizeMouseClick(at: cgClickPoint, button: .right)
               }
             }
-            out.append(
-              JumpTarget(
-                id: "ax-\(pid)-\(idCounter)",
-                frame: frame,
-                role: r,
-                accessibilityLabel: nil,
-                pid: pid,
-                activate: activate,
-                providerID: identifier
-              ))
-            addedAsTarget = true
+            let candidate = JumpTarget(
+              id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
+              frame: frame,
+              role: r,
+              accessibilityLabel: nil,
+              pid: pid,
+              activate: activate,
+              providerID: identifier
+            )
+            if acceptsViaWebActionCandidate || imageRequiresActionCheck {
+              // Defer the action-name IPC: bookkeep the candidate now,
+              // resolve in parallel after the walk.
+              state.pendingTargets.append(
+                PendingTarget(candidate: candidate, element: element))
+              addedAsTarget = true
+            } else {
+              state.confirmedTargets.append(candidate)
+              addedAsTarget = true
+            }
           }
         }
       }
@@ -452,6 +540,23 @@ public final class AccessibilityProvider: JumpProvider {
     // Leaf-role pruning: stop descending once we've added a target whose
     // role we consider atomic.
     if addedAsTarget, let r = role, Self.leafRoles.contains(r) {
+      // Emit dump line before bailing.
+      if state.dumpBuffer != nil {
+        appendDumpLine(
+          into: &state.dumpBuffer,
+          depth: depth,
+          role: role,
+          subrole: subrole,
+          parentRole: parentRole,
+          posValue: posValue,
+          sizeValue: sizeValue,
+          screenH: screenH,
+          enabled: enabled,
+          actions: dumpActions ?? [],
+          label: dumpLabel,
+          hinted: addedAsTarget
+        )
+      }
       return
     }
 
@@ -459,9 +564,9 @@ public final class AccessibilityProvider: JumpProvider {
     // the dump reflects what the walker actually saw + did). We log
     // every visited node, not just the ones that become targets — the
     // false-negatives are exactly the lines without a `hint=1` tag.
-    if dump != nil {
+    if state.dumpBuffer != nil {
       appendDumpLine(
-        into: &dump,
+        into: &state.dumpBuffer,
         depth: depth,
         role: role,
         subrole: subrole,
@@ -490,11 +595,79 @@ public final class AccessibilityProvider: JumpProvider {
     // been queried recently, even though `AXChildren` contains every
     // row. Without this fallback the whole chat list disappears from
     // the walk.
-    let children =
+    //
+    // Single-attribute children fallback: when the batched IPC drops
+    // `kAXChildrenAttribute` (Firefox's a11y does this for `AXTabPanel`
+    // under concurrent IPC contention — returns an error placeholder
+    // in vals[7] instead of the real child list, and the entire
+    // in-page DOM disappears from the walk), re-query that one
+    // attribute on its own. The single-attribute IPC succeeds when the
+    // batched one didn't — likely because Firefox has had time to
+    // materialise the subtree by the time we issue the second call.
+    // Cost is bounded: at most one extra IPC per element that returned
+    // no children, and only ever fires on truly contested subtrees.
+    var children =
       nonEmpty(visibleChildren) ?? nonEmpty(visibleRows) ?? allChildren ?? []
+    if children.isEmpty {
+      var raw: CFTypeRef?
+      if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw) == .success,
+        let fallback = raw as? [AXUIElement],
+        !fallback.isEmpty
+      {
+        children = fallback
+      }
+    }
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
     let nowInsideWebArea = insideWebArea || role == "AXWebArea"
+
+    // Concurrent fan-out only fires once per activation, at the focused
+    // window's direct children. Deeper recursion stays serial — the
+    // bottleneck is the target app's main thread, so over-parallelising
+    // doesn't help and over-allocates worker threads. Single-child
+    // case falls through to the serial loop below.
+    if depth == 0, children.count > 1 {
+      let collector = WalkCollector()
+      let dumpEnabled = state.dumpBuffer != nil
+      // Capture-by-value-friendly copies of the descent params so the
+      // worker closure doesn't need to reach back into `self`'s mutable
+      // state.
+      let captureScreenH = screenH
+      let captureVisible = visible
+      let capturePid = pid
+      let captureDescend = descendIntoWebAreas
+      let captureInsideClickable = nowInsideClickable
+      let captureInsideWebArea = nowInsideWebArea
+      let captureParentRole = role
+      let childrenSnapshot = children
+      DispatchQueue.concurrentPerform(iterations: childrenSnapshot.count) { i in
+        var workerState = WalkState()
+        workerState.dumpBuffer = dumpEnabled ? [] : nil
+        self.walk(
+          childrenSnapshot[i],
+          depth: 1,
+          screenH: captureScreenH,
+          visible: captureVisible,
+          pid: capturePid,
+          descendIntoWebAreas: captureDescend,
+          insideClickable: captureInsideClickable,
+          insideWebArea: captureInsideWebArea,
+          parentRole: captureParentRole,
+          idPrefix: "w\(i)",
+          state: &workerState
+        )
+        collector.absorb(workerState)
+      }
+      collector.lock.lock()
+      state.confirmedTargets.append(contentsOf: collector.confirmedTargets)
+      state.pendingTargets.append(contentsOf: collector.pendingTargets)
+      if state.dumpBuffer != nil {
+        state.dumpBuffer?.append(contentsOf: collector.dump)
+      }
+      collector.lock.unlock()
+      return
+    }
+
     for child in children {
       walk(
         child,
@@ -506,12 +679,41 @@ public final class AccessibilityProvider: JumpProvider {
         insideClickable: nowInsideClickable,
         insideWebArea: nowInsideWebArea,
         parentRole: role,
-        dump: &dump,
-        out: &out,
-        idCounter: &idCounter
+        idPrefix: idPrefix,
+        state: &state
       )
-      if out.count >= Self.maxTargets { return }
+      if state.confirmedTargets.count >= Self.maxTargets { return }
     }
+  }
+
+  /// Parallel resolution of action-name IPCs for tentative targets that
+  /// the walker bookkept during the recursive descent. Each
+  /// `AXUIElementCopyActionNames` is independent so they can run
+  /// concurrently, bounded by the target app's main-thread service rate
+  /// (and `DispatchQueue.concurrentPerform`'s thread pool sizing).
+  ///
+  /// The walk previously paid this IPC inline per element — for AWS
+  /// Console (every page-tree AXGroup exposes `AXPress`) that doubled
+  /// the IPC count. Deferring and parallelising trims ~30–40 % off the
+  /// web-heavy-app walk wall time.
+  private func resolvePendingActionChecks(_ pending: [PendingTarget]) -> [JumpTarget] {
+    if pending.isEmpty { return [] }
+    // Per-iteration write into a UInt8 buffer is byte-aligned and the
+    // indices are disjoint, so this is safe without locking.
+    // (Concurrent reads of `pending` are also safe — it's a value
+    // type, never mutated during the parallel pass.)
+    var keep = [UInt8](repeating: 0, count: pending.count)
+    keep.withUnsafeMutableBufferPointer { buf in
+      DispatchQueue.concurrentPerform(iterations: pending.count) { i in
+        buf[i] = Self.elementHasPressAction(pending[i].element) ? 1 : 0
+      }
+    }
+    var out: [JumpTarget] = []
+    out.reserveCapacity(pending.count)
+    for (i, k) in keep.enumerated() where k == 1 {
+      out.append(pending[i].candidate)
+    }
+    return out
   }
 
   private func primaryScreenHeight() -> CGFloat {
@@ -637,18 +839,6 @@ public final class AccessibilityProvider: JumpProvider {
     let err = AXUIElementCopyActionNames(element, &names)
     guard err == .success, let arr = names as? [String] else { return [] }
     return arr
-  }
-
-  /// Standalone `AXImage` gate. We treat an image as a real click target
-  /// only when it exposes a press-style action — pure decorative
-  /// `<img>` exposes none. Called only when `role == "AXImage"` and
-  /// there is no clickable ancestor, so the one extra IPC per check is
-  /// bounded by the per-page image count.
-  private func imageHasPressAction(_ element: AXUIElement) -> Bool {
-    let actions = Set(actionNames(element))
-    return actions.contains(kAXPressAction)
-      || actions.contains("AXOpen")
-      || actions.contains("AXConfirm")
   }
 
   private func stringAttr(_ element: AXUIElement, _ attribute: CFString) -> String? {
