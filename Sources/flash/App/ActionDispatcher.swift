@@ -1,29 +1,43 @@
 import AppKit
 import CoreGraphics
 import FlashCore
+import FlashProviders
 
 enum ActionDispatcher {
-  /// `clickPoint`, when supplied, is the screen-coord point we should click
-  /// if (and only if) we fall back to a synthesized mouse event. The
-  /// expected value is the target's geometric centre — the same point
-  /// AX uses for its internal AXPress→click fallback. For small AX
-  /// targets that's also the centre of the rendered chip (chipFrame
-  /// centres the chip on the target there); for wide targets the chip
-  /// anchors to top-left but the click still goes to the target middle.
+  /// Click pipeline, tried in order until one succeeds:
+  ///
+  ///   1. `target.activate(action)` — provider-owned best-known path.
+  ///      AccessibilityProvider tries focus-set (text inputs) +
+  ///      AXPress/AXOpen/AXConfirm. BrowserScriptProvider dispatches a
+  ///      JS `.click()` / focus+select / synthetic `contextmenu`.
+  ///   2. AX hit-test at the click point (`AXClick.clickAtPoint`).
+  ///      Recovers inert-wrapper cases — the hint element advertised no
+  ///      AX action but the AX node actually under the click point (or
+  ///      one of its ancestors) does. Also acts as an AX-level fallback
+  ///      for browser DOM targets when the JS bridge has been denied.
+  ///      Cursor never moves.
+  ///   3. Synthesized `CGEvent` mouse click (`synthesizeClick`). Last
+  ///      resort: the cursor briefly visits the click site and warps
+  ///      back, hidden so the user never sees the motion.
+  ///
+  /// `clickPoint`, when supplied, is the screen-coord point we should
+  /// click in steps 2 + 3. The expected value is the target's geometric
+  /// centre — the same point AX uses internally for its press-to-click
+  /// fallback. For small AX targets that's also the centre of the
+  /// rendered chip; for wide targets the chip anchors to top-left but
+  /// the click still goes to the target middle.
   static func perform(
     _ action: JumpAction, on target: JumpTarget, pid _: pid_t? = nil, clickPoint: CGPoint? = nil
   ) -> Bool {
-    // AXPress (and its AXOpen / AXConfirm friends, tried inside the
-    // provider's `activate` closure) is the only no-cursor-movement
-    // option. It works for the majority of native AX targets — the
-    // cursor stays exactly where the user left it.
     if let activate = target.activate, activate(action) {
       return true
     }
-    // No AX action accepted. Fall back to a real mouse event. The cursor
-    // *will* move; we warp it to the chip's exact centre so the visible
-    // motion matches where the user expected to click.
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
+    if let pid = target.pid,
+      AXClick.clickAtPoint(pid: pid, nsScreenPoint: point, action: action)
+    {
+      return true
+    }
     return synthesizeClick(at: point, action: action)
   }
 

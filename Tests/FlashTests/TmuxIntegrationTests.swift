@@ -161,7 +161,7 @@ final class TmuxIntegrationTests: XCTestCase {
     // racing against startup messages.
     _ = run("send-keys", "-t", "s", "exec cat", "Enter")
     // Wait for the exec to take effect before piping content.
-    waitForPaneContent("$") // shell prompt or post-exec marker
+    waitForPaneContent("$")  // shell prompt or post-exec marker
     _ = run("send-keys", "-t", "s", "ALPHA BRAVO charlie 123", "Enter")
     waitForPaneContent("BRAVO")
     let raw = try XCTUnwrap(run("capture-pane", "-t", "s", "-p"))
@@ -218,7 +218,7 @@ final class TmuxIntegrationTests: XCTestCase {
       clientCols: 80, clientRows: 24)
     let cellW = geom.cellW
     let cellH = geom.cellH
-    let topOffset = 0 // status off
+    let topOffset = 0  // status off
     let paneTop = 0
     let row = payloadIdx
     let screenRow = topOffset + paneTop + row
@@ -287,7 +287,7 @@ final class TmuxIntegrationTests: XCTestCase {
       if let raw = run("capture-pane", "-t", "s", "-p"), raw.contains(marker) {
         return
       }
-      usleep(50_000) // 50ms
+      usleep(50_000)  // 50ms
     }
   }
 

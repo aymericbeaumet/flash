@@ -362,50 +362,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   // MARK: Config hot reload
 
   /// `DispatchSource` watches a specific file descriptor → a specific
-  /// inode. Editors that save via write-temp-then-rename (vim's
-  /// `writebackup`, most editor "atomic writes", `Edit` tool here, …)
-  /// replace the inode under our fd, so:
-  ///   1. The original source fires once with `.delete` or `.rename`.
-  ///   2. The fd now points at a deleted-but-still-open inode.
-  ///   3. Subsequent edits never fire because we're watching a tombstone.
+  /// inode. Two complications make this non-trivial:
   ///
-  /// Re-arm by cancelling the source on any delete/rename event and
-  /// reopening against the new path on a short delay (giving the
-  /// editor's rename a moment to complete). The `write`/`extend`
-  /// branch reloads in place — that's the common case for editors
-  /// that write the file directly.
+  ///  1. Editors that save via write-temp-then-rename (vim's
+  ///     `writebackup`, most editor "atomic writes", the `Edit` tool
+  ///     in this harness, …) replace the inode under our fd: the
+  ///     source fires once with `.delete`/`.rename`, then the fd
+  ///     points at a deleted-but-still-open tombstone and subsequent
+  ///     edits never fire. We re-arm by cancelling and reopening the
+  ///     path after a short delay.
+  ///
+  ///  2. The config file may not exist when Flash launches — first-
+  ///     run users start without `~/.config/flash/config.toml`, and
+  ///     some workflows delete the file when switching configs. In
+  ///     that case `open(path, O_EVTONLY)` returns -1 and a naive
+  ///     watcher silently no-ops, so the user's later "I'll just
+  ///     create the file now" doesn't get picked up until the next
+  ///     Flash restart. We fall back to watching the nearest existing
+  ///     ancestor directory and re-evaluate the whole chain on any
+  ///     event in it — which means creating an intermediate directory
+  ///     or finally writing the file both kick the watcher one step
+  ///     down the cascade toward a real file watcher.
+  ///
+  /// The `write`/`extend` branch reloads in place — that's the
+  /// common case for editors that write the file directly without
+  /// rename-shuffling.
   private func watchConfigFile() {
-    let path = ConfigLoader.defaultPath.path
-    let fd = open(path, O_EVTONLY)
-    guard fd >= 0 else { return }
-    let source = DispatchSource.makeFileSystemObjectSource(
-      fileDescriptor: fd,
-      eventMask: [.write, .delete, .rename, .extend],
-      queue: .main
-    )
-    source.setEventHandler { [weak self, weak source] in
-      guard let self, let source else { return }
-      let events = source.data
-      let cfg = ConfigLoader.load()
-      self.config = cfg
-      self.overlay.overlayConfig = cfg.overlay
-      self.overlay.debugConfig = cfg.debug
-      // Publish to AppMonitor under its internal lock — every future
-      // activation snapshots the new config at the start of its walk.
-      self.monitor.updateConfig(cfg)
-
-      // Detect atomic-replace edits and re-watch the new inode.
-      if events.contains(.delete) || events.contains(.rename) {
-        source.cancel()
-        self.configSource = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-          self?.watchConfigFile()
+    let url = ConfigLoader.defaultPath
+    let fileFD = open(url.path, O_EVTONLY)
+    if fileFD >= 0 {
+      // Reload once on (re-)attachment so the running config matches
+      // the just-restored file — covers the "delete → quickly recreate"
+      // sequence where the in-process config is still the pre-delete
+      // version.
+      reloadConfig()
+      configSource = makeWatcher(
+        fd: fileFD,
+        eventMask: [.write, .delete, .rename, .extend]
+      ) { [weak self] events in
+        guard let self else { return }
+        self.reloadConfig()
+        if events.contains(.delete) || events.contains(.rename) {
+          self.configSource?.cancel()
+          self.configSource = nil
+          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+            self?.watchConfigFile()
+          }
         }
       }
+      return
+    }
+    // File missing — watch the nearest existing ancestor directory and
+    // re-evaluate when anything inside it changes.
+    watchAncestorDirectory(of: url)
+  }
+
+  /// Walk up `fileURL` to the first directory that exists, watch it
+  /// for any change, and on any event cancel + retry `watchConfigFile`.
+  /// Each event tries to upgrade the watcher one step toward the
+  /// actual file: dir created → start watching the new (deeper) dir,
+  /// file created → start watching the file.
+  private func watchAncestorDirectory(of fileURL: URL) {
+    var dir = fileURL.deletingLastPathComponent()
+    while true {
+      let fd = open(dir.path, O_EVTONLY)
+      if fd >= 0 {
+        configSource = makeWatcher(
+          fd: fd,
+          eventMask: [.write, .delete, .rename, .extend]
+        ) { [weak self] _ in
+          guard let self else { return }
+          self.configSource?.cancel()
+          self.configSource = nil
+          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+            self?.watchConfigFile()
+          }
+        }
+        return
+      }
+      let parent = dir.deletingLastPathComponent()
+      if parent.path == dir.path { return }  // hit "/"
+      dir = parent
+    }
+  }
+
+  private func makeWatcher(
+    fd: Int32,
+    eventMask: DispatchSource.FileSystemEvent,
+    onEvent: @escaping (DispatchSource.FileSystemEvent) -> Void
+  ) -> DispatchSourceFileSystemObject {
+    let source = DispatchSource.makeFileSystemObjectSource(
+      fileDescriptor: fd, eventMask: eventMask, queue: .main)
+    source.setEventHandler { [weak source] in
+      guard let source else { return }
+      onEvent(source.data)
     }
     source.setCancelHandler { close(fd) }
     source.resume()
-    configSource = source
+    return source
+  }
+
+  /// Re-read the config from disk, layer env + CLI overrides on top,
+  /// then publish to overlay + monitor under their internal locks. Every
+  /// future activation snapshots the new config at the start of its walk.
+  private func reloadConfig() {
+    let cfg = ConfigLoader.load()
+    config = cfg
+    overlay.overlayConfig = cfg.overlay
+    overlay.debugConfig = cfg.debug
+    monitor.updateConfig(cfg)
   }
 
   private func logPermissionState() {

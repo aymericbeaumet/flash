@@ -612,7 +612,8 @@ final class AppMonitor {
       if let enqueueNs {
         self.finishQueueWait(profiler, since: enqueueNs)
       }
-      profiler?.mark("walk_start", detail: "providers=\(providers.map(\.identifier).joined(separator: ","))")
+      profiler?.mark(
+        "walk_start", detail: "providers=\(providers.map(\.identifier).joined(separator: ","))")
       let result = self.runAndAssign(
         context: context,
         cfg: cfg,

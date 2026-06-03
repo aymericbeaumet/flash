@@ -9,6 +9,7 @@ let package = Package(
     .executable(name: "flash-firefox-e2e", targets: ["flash-firefox-e2e"]),
     .library(name: "FlashCore", targets: ["FlashCore"]),
     .library(name: "FlashProviders", targets: ["FlashProviders"]),
+    .library(name: "FlashE2EKit", targets: ["FlashE2EKit"]),
   ],
   targets: [
     .executableTarget(
@@ -18,7 +19,7 @@ let package = Package(
     ),
     .executableTarget(
       name: "flash-firefox-e2e",
-      dependencies: ["FlashCore", "FlashProviders"],
+      dependencies: ["FlashCore", "FlashProviders", "FlashE2EKit"],
       path: "Sources/flash-firefox-e2e"
     ),
     .target(
@@ -30,9 +31,14 @@ let package = Package(
       dependencies: ["FlashCore"],
       path: "Sources/FlashProviders"
     ),
+    .target(
+      name: "FlashE2EKit",
+      dependencies: ["FlashCore", "FlashProviders"],
+      path: "Sources/FlashE2EKit"
+    ),
     .testTarget(
       name: "FlashTests",
-      dependencies: ["flash", "FlashCore", "FlashProviders"],
+      dependencies: ["flash", "FlashCore", "FlashProviders", "FlashE2EKit"],
       path: "Tests/FlashTests"
     ),
   ],

@@ -34,7 +34,9 @@ Sources/
     JumpProvider.swift               # The protocol; `supports/discover` API
   FlashProviders/                    # Built-in providers (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
+    Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
     Browser/BrowserScriptProvider.swift         # Vimium-style DOM bridge + Safari/Chrome subclasses
+  FlashE2EKit/                       # Shared Firefox E2E fixture + harness + assertions used by both the standalone runner and the xctest target.
   flash/                             # The executable target
     main.swift                       # NSApplication boot
     App/
@@ -70,7 +72,7 @@ AGENTS.md                            # This file
 8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
 9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
 10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` reactivates the focused pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
-11. `ActionDispatcher` prefers `AXUIElementPerformAction(_, kAXPressAction)` (or `kAXShowMenuAction` for right-click) for AX targets — no cursor movement, more reliable. For browser DOM targets it dispatches `.click()` / focus+select / synthetic `contextmenu` in-page via AppleScript `do JavaScript`. Falls back to synthesized `CGEvent` click that restores cursor position after.
+11. `ActionDispatcher` runs the click through a three-step pipeline. (1) Call the provider-owned `target.activate` closure — AX targets try AXPress/AXOpen/AXConfirm (or focus-set for text inputs); browser DOM targets dispatch `.click()` / focus+select / synthetic `contextmenu` via `do JavaScript`. (2) On failure, AX-hit-test at the click point via `AXClick.clickAtPoint`, then try the press-style actions on that element + its ancestors. Cursor doesn't move and this often recovers inert-wrapper / handler-on-descendant cases (Firefox tab strip, React `role="tab"` widgets) plus acts as an AX-level fallback for browser DOM targets when the JS bridge has been denied. (3) Final fallback: synthesized `CGEvent` click — cursor warps to the point hidden, clicks, warps back, unhides. The dispatcher is the only place mouse synthesis lives; the providers themselves never synthesize.
 12. Overlay hides; process stays resident.
 
 ## Coordinate systems (subtle, get this right)

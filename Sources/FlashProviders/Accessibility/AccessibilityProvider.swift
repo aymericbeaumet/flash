@@ -470,72 +470,29 @@ public final class AccessibilityProvider: JumpProvider {
             state.idCounter += 1
             let captured = element
             let capturedRole = r
-            // CGEvent uses Y-down screen coords (origin top-left of
-            // primary). Our `frame` is in NSScreen coords (Y-up,
-            // origin bottom-left), so flip back.
-            let cgClickPoint = CGPoint(x: frame.midX, y: screenH - frame.midY)
+            // The provider's activate closure only attempts AX-level
+            // actions on the captured element. When all of those fail
+            // it returns false; `ActionDispatcher` then takes over and
+            // tries an AX hit-test at the click point (covers
+            // inert-wrapper / handler-lives-on-a-descendant cases) and
+            // finally a synthesized mouse click. Splitting the
+            // responsibility this way means each fallback step exists
+            // in exactly one place.
             let activate: ((JumpAction) -> Bool) = { action in
               switch action {
               case .leftClick:
                 // Text inputs don't respond to AXPress — pressing a
-                // search field is meaningless. The correct AX-level
-                // action is to set kAXFocusedAttribute = true, which
-                // moves keyboard focus to the field. The user can
-                // then start typing immediately.
-                if Self.textInputRoles.contains(capturedRole) {
-                  let setErr = AXUIElementSetAttributeValue(
-                    captured,
-                    kAXFocusedAttribute as CFString,
-                    kCFBooleanTrue
-                  )
-                  if setErr == .success { return true }
-                }
-                if AXUIElementPerformAction(captured, kAXPressAction as CFString) == .success {
-                  return true
-                }
-                if AXUIElementPerformAction(captured, "AXOpen" as CFString) == .success {
-                  return true
-                }
-                if AXUIElementPerformAction(captured, "AXConfirm" as CFString) == .success {
-                  return true
-                }
-                // Fallback: AX action didn't take. Try to
-                // locate a descendant that *does* expose a
-                // press action and click on its centre — the
-                // detected node may be an inert
-                // `<div role="tab">` whose actual handler
-                // lives a level or two below. If no clickable
-                // descendant exists, synthesize a click at
-                // the detected element's own centre as the
-                // ultimate fallback.
-                if let (childEl, childCG) = Self.firstActionableDescendant(
-                  captured, screenH: screenH)
+                // search field is meaningless. Setting
+                // kAXFocusedAttribute = true moves keyboard focus to
+                // the field; the user can start typing immediately.
+                if Self.textInputRoles.contains(capturedRole),
+                  AXClick.setFocus(captured)
                 {
-                  if AXUIElementPerformAction(childEl, kAXPressAction as CFString) == .success {
-                    return true
-                  }
-                  if AXUIElementPerformAction(childEl, "AXOpen" as CFString) == .success {
-                    return true
-                  }
-                  if AXUIElementPerformAction(childEl, "AXConfirm" as CFString) == .success {
-                    return true
-                  }
-                  return Self.synthesizeMouseClick(at: childCG, button: .left)
+                  return true
                 }
-                return Self.synthesizeMouseClick(at: cgClickPoint, button: .left)
+                return AXClick.tryActions(captured, action: .leftClick)
               case .rightClick:
-                if AXUIElementPerformAction(captured, kAXShowMenuAction as CFString) == .success {
-                  return true
-                }
-                if let (childEl, childCG) = Self.firstActionableDescendant(
-                  captured, screenH: screenH)
-                {
-                  if AXUIElementPerformAction(childEl, kAXShowMenuAction as CFString) == .success {
-                    return true
-                  }
-                  return Self.synthesizeMouseClick(at: childCG, button: .right)
-                }
-                return Self.synthesizeMouseClick(at: cgClickPoint, button: .right)
+                return AXClick.tryActions(captured, action: .rightClick)
               }
             }
             let candidate = JumpTarget(
@@ -776,7 +733,7 @@ public final class AccessibilityProvider: JumpProvider {
     var keep = [UInt8](repeating: 0, count: pending.count)
     keep.withUnsafeMutableBufferPointer { buf in
       DispatchQueue.concurrentPerform(iterations: pending.count) { i in
-        buf[i] = Self.elementHasPressAction(pending[i].element) ? 1 : 0
+        buf[i] = AXClick.hasPressAction(pending[i].element) ? 1 : 0
       }
     }
     var out: [JumpTarget] = []
@@ -803,106 +760,6 @@ public final class AccessibilityProvider: JumpProvider {
     if sz.width <= 0 || sz.height <= 0 { return nil }
     let flippedY = screenH - origin.y - sz.height
     return CGRect(x: origin.x, y: flippedY, width: sz.width, height: sz.height)
-  }
-
-  /// Breadth-first search for a descendant of `root` that exposes any of
-  /// the press-style AX actions, returning the descendant plus the CGEvent
-  /// click point (Y-down screen coords) at its centre. Used at click time
-  /// when the detected hint element is an inert wrapper whose actual
-  /// handler lives one or two levels deeper — a common pattern on
-  /// Firefox tab strips and React `role="tab"`/`role="button"` widgets.
-  ///
-  /// Bounded by `maxDepth` and `maxNodes` so a single click never blows
-  /// up the AX IPC budget on a pathological subtree. The traversal is
-  /// only invoked when the root's own AX actions have all failed, so the
-  /// extra cost is paid at most once per Flash activation.
-  static func firstActionableDescendant(
-    _ root: AXUIElement,
-    screenH: CGFloat,
-    maxDepth: Int = 6,
-    maxNodes: Int = 200
-  ) -> (AXUIElement, CGPoint)? {
-    var queue: [(AXUIElement, Int)] = [(root, 0)]
-    var visited = 0
-    while !queue.isEmpty {
-      let (el, depth) = queue.removeFirst()
-      visited += 1
-      if visited > maxNodes { return nil }
-      if depth > 0,
-        elementHasPressAction(el),
-        let frame = frameForElement(el, screenH: screenH)
-      {
-        let cg = CGPoint(x: frame.midX, y: screenH - frame.midY)
-        return (el, cg)
-      }
-      if depth >= maxDepth { continue }
-      var raw: CFTypeRef?
-      if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw) == .success,
-        let children = raw as? [AXUIElement]
-      {
-        for child in children { queue.append((child, depth + 1)) }
-      }
-    }
-    return nil
-  }
-
-  private static func elementHasPressAction(_ element: AXUIElement) -> Bool {
-    var names: CFArray?
-    guard AXUIElementCopyActionNames(element, &names) == .success,
-      let arr = names as? [String]
-    else { return false }
-    return arr.contains(kAXPressAction)
-      || arr.contains("AXOpen")
-      || arr.contains("AXConfirm")
-  }
-
-  private static func frameForElement(_ element: AXUIElement, screenH: CGFloat) -> CGRect? {
-    var posRaw: CFTypeRef?
-    var sizeRaw: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRaw) == .success,
-      AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRaw) == .success,
-      let posCF = posRaw, let sizeCF = sizeRaw,
-      CFGetTypeID(posCF) == AXValueGetTypeID(),
-      CFGetTypeID(sizeCF) == AXValueGetTypeID()
-    else { return nil }
-    let posVal = posCF as! AXValue
-    let sizeVal = sizeCF as! AXValue
-    guard AXValueGetType(posVal) == .cgPoint, AXValueGetType(sizeVal) == .cgSize else { return nil }
-    var origin = CGPoint.zero
-    var sz = CGSize.zero
-    AXValueGetValue(posVal, .cgPoint, &origin)
-    AXValueGetValue(sizeVal, .cgSize, &sz)
-    if sz.width <= 0 || sz.height <= 0 { return nil }
-    let flippedY = screenH - origin.y - sz.height
-    return CGRect(x: origin.x, y: flippedY, width: sz.width, height: sz.height)
-  }
-
-  /// Post a real `leftMouseDown`+`leftMouseUp` (or right-button equivalent)
-  /// pair via CGEvent at the given screen point. Used as the fallback when
-  /// no AX action takes — i.e. the element exposes `AXLink`/`AXButton`/
-  /// `AXTab` but has no `AXPress`/`AXOpen`/`AXConfirm` handler, which is
-  /// common for `<div onclick>` widgets and the Firefox tab strip.
-  ///
-  /// The events post to `.cghidEventTap` so they're delivered to whichever
-  /// app owns the window under the point — that's the same path an actual
-  /// user click takes. Requires the Accessibility (assistive) permission
-  /// Flash already needs to read AX trees; no extra grant.
-  static func synthesizeMouseClick(at point: CGPoint, button: CGMouseButton) -> Bool {
-    let source = CGEventSource(stateID: .hidSystemState)
-    let downType: CGEventType = (button == .right) ? .rightMouseDown : .leftMouseDown
-    let upType: CGEventType = (button == .right) ? .rightMouseUp : .leftMouseUp
-    guard
-      let down = CGEvent(
-        mouseEventSource: source, mouseType: downType,
-        mouseCursorPosition: point, mouseButton: button),
-      let up = CGEvent(
-        mouseEventSource: source, mouseType: upType,
-        mouseCursorPosition: point, mouseButton: button)
-    else { return false }
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
-    return true
   }
 
   private func actionNames(_ element: AXUIElement) -> [String] {

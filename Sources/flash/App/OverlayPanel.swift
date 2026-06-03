@@ -142,13 +142,12 @@ final class OverlayPanel: NSPanel {
     let gradientColors: [CGColor] = [bgBottom.cgColor, bgTop.cgColor]
     let fgCG = fg.cgColor
     let borderCG = border?.cgColor ?? OverlayPanel.fallbackBorderCGColor
-    // Two weights: the un-typed portion of each label renders in
-    // .regular; once the user has typed a prefix, those leading
-    // characters re-render in .bold via `attributedLabel(...)`. Both
-    // are monospaced so glyph advance — and therefore chip width —
-    // doesn't change with weight.
-    let regularFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-    let boldFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    // Single weight, bold monospaced — labels always render in bold so
+    // small chips stay readable. Once the user has typed a prefix,
+    // those leading characters re-render at 30% alpha via
+    // `attributedLabel(...)`; the weight stays bold so glyph advance
+    // and therefore chip width don't change across keystrokes.
+    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let labelLen = hints.first?.display.count ?? 1
     let approxWidth = Self.chipWidth(forLabelLength: labelLen, fontSize: fontSize)
     let chipHeight = Self.chipHeight(forFontSize: fontSize)
@@ -200,10 +199,18 @@ final class OverlayPanel: NSPanel {
       chip.isHidden = false
       let label = dequeueLabelLayer()
       label.isHidden = false
-      label.string = Self.attributedLabel(
-        display: hint.display, boldPrefixLen: 0,
-        regularFont: regularFont, boldFont: boldFont, fgNS: fg)
+      // CATextLayer's own `font` + `fontSize` properties are the
+      // authoritative source for weight + size; the per-attribute
+      // `.font` in the attributed string is treated as a hint and is
+      // unreliable for the system monospaced face (SF Mono). Setting
+      // both keeps every codepath that touches the layer in
+      // lockstep, including when chips are reused from the pool with
+      // a stale regular-weight font from a previous render.
+      label.font = labelFont
       label.fontSize = fontSize
+      label.string = Self.attributedLabel(
+        display: hint.display, typedPrefixLen: 0,
+        font: labelFont, fgNS: fg)
       label.foregroundColor = fgCG
       label.frame = labelFrame
 
@@ -393,8 +400,7 @@ final class OverlayPanel: NSPanel {
     let upper = prefix.uppercased()
     let prefixLen = upper.count
     let fontSize = CGFloat(overlayConfig.fontSize)
-    let regularFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-    let boldFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let fgNS = nsColor(fromHex: overlayConfig.hintFG) ?? .black
     var visible = Set<Int>()
     for (idx, hint) in hints.enumerated() {
@@ -407,9 +413,14 @@ final class OverlayPanel: NSPanel {
       // leaving their previous-prefix label state in place.
       if matches {
         visible.insert(idx)
-        labelLayers[idx].string = Self.attributedLabel(
-          display: hint.display, boldPrefixLen: prefixLen,
-          regularFont: regularFont, boldFont: boldFont, fgNS: fgNS)
+        let l = labelLayers[idx]
+        // Keep CATextLayer's own font in lockstep with the attributed
+        // string's weight — see the note in `display(hints:)`. Cheap;
+        // CATextLayer compares font references and noops on equal.
+        l.font = labelFont
+        l.string = Self.attributedLabel(
+          display: hint.display, typedPrefixLen: prefixLen,
+          font: labelFont, fgNS: fgNS)
       }
     }
     if debugConfig.showBounds {
@@ -429,11 +440,12 @@ final class OverlayPanel: NSPanel {
     return p.copy() as! NSParagraphStyle
   }()
 
-  /// Build the chip label's attributed string. The first
-  /// `boldPrefixLen` characters of `display` render in `boldFont`, the
-  /// rest in `regularFont`. Both fonts must be monospaced and the same
-  /// point size or the glyph advances won't line up with the chip
-  /// width computed in `display(hints:)`.
+  /// Build the chip label's attributed string. The whole label renders
+  /// in `font` (bold monospaced); the first `typedPrefixLen` characters
+  /// re-render at 30 % alpha (i.e. 70 % transparent) so the un-typed
+  /// remainder visually dominates the chip. Weight never changes —
+  /// glyph advances must not vary with prefix length, since the chip
+  /// width was already computed in `display(hints:)`.
   ///
   /// Takes NSColor directly (not CGColor) so the caller can hoist the
   /// color alloc out of the per-chip loop — `NSColor(cgColor:)` is
@@ -441,24 +453,27 @@ final class OverlayPanel: NSPanel {
   /// rebuild calls this N times.
   private static func attributedLabel(
     display: String,
-    boldPrefixLen: Int,
-    regularFont: NSFont,
-    boldFont: NSFont,
+    typedPrefixLen: Int,
+    font: NSFont,
     fgNS: NSColor
   ) -> NSAttributedString {
     let attr = NSMutableAttributedString(string: display)
     let full = NSRange(location: 0, length: (display as NSString).length)
     attr.addAttributes(
       [
-        .font: regularFont,
+        .font: font,
         .foregroundColor: fgNS,
         .paragraphStyle: centeredParagraphStyle,
       ],
       range: full
     )
-    let boldLen = min(max(boldPrefixLen, 0), full.length)
-    if boldLen > 0 {
-      attr.addAttribute(.font, value: boldFont, range: NSRange(location: 0, length: boldLen))
+    let typedLen = min(max(typedPrefixLen, 0), full.length)
+    if typedLen > 0 {
+      attr.addAttribute(
+        .foregroundColor,
+        value: fgNS.withAlphaComponent(0.3),
+        range: NSRange(location: 0, length: typedLen)
+      )
     }
     return attr
   }
