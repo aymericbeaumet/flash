@@ -4,10 +4,12 @@ import FlashCore
 
 enum ActionDispatcher {
   /// `clickPoint`, when supplied, is the screen-coord point we should click
-  /// if (and only if) we fall back to a synthesized mouse event. It is
-  /// expected to be the centre of the rendered hint chip — never the AX
-  /// element's geometric centre — so visually the click lands where the
-  /// user saw the hint.
+  /// if (and only if) we fall back to a synthesized mouse event. The
+  /// expected value is the target's geometric centre — the same point
+  /// AX uses for its internal AXPress→click fallback. For small AX
+  /// targets that's also the centre of the rendered chip (chipFrame
+  /// centres the chip on the target there); for wide targets the chip
+  /// anchors to top-left but the click still goes to the target middle.
   static func perform(
     _ action: JumpAction, on target: JumpTarget, pid _: pid_t? = nil, clickPoint: CGPoint? = nil
   ) -> Bool {

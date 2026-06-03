@@ -324,10 +324,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // walk time). Fall back to the activation-time focused pid if the
     // provider didn't set one.
     let pid = hint.target.pid ?? sourceAppPID
-    // Compute the chip's centre BEFORE hiding the overlay so the dispatcher
-    // can synthesize a click at the same on-screen point the user just saw.
-    let chip = OverlayPanel.chipFrame(for: hint, fontSize: CGFloat(config.overlay.fontSize))
-    let clickPoint = CGPoint(x: chip.midX, y: chip.midY)
+    // Click the middle of the underlying target. For small targets
+    // (most AX buttons / links / inputs) `chipFrame` already centres
+    // the chip on the target, so target-centre and chip-centre
+    // coincide. For wide targets (long tmux words, big AX buttons,
+    // table rows) the chip anchors to the target's top-left for
+    // visibility — but the *click* should still land in the middle of
+    // the underlying element. Clicking near the left edge of a word
+    // ("f" of "filename") instead of its middle felt wrong, and AX's
+    // own AXPress fallback already uses the target's geometric centre
+    // for the same reason, so this keeps the two paths consistent.
+    let targetFrame = hint.target.frame
+    let clickPoint = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
 
     overlay.hide()
     // Restore focus to the target app before dispatching, so AXPress / the
