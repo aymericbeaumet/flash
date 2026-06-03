@@ -38,7 +38,10 @@ public final class AccessibilityProvider: JumpProvider {
   public let priority: Int = 10
   public let readinessPolicy: JumpProviderReadinessPolicy = .continuous
 
-  /// Every clickable / focusable role we recognise. Generic across apps.
+  /// Roles we recognise in native (non-web) AX trees. Broader than the
+  /// web allowlist because native apps surface things the web doesn't —
+  /// virtualised list rows, disclosure triangles, icon-only AXImage
+  /// buttons.
   public static let roles: Set<String> = [
     // Click targets
     "AXButton", "AXLink",
@@ -55,6 +58,24 @@ public final class AccessibilityProvider: JumpProvider {
     // ancestor-role + AXPress to avoid double-hinting decorative
     // images inside links/buttons.
     "AXImage",
+  ]
+
+  /// Roles we accept inside an `AXWebArea`. Vimium-style allowlist:
+  /// only true semantic controls. Notably excludes:
+  ///   - `AXImage` — web AXImages are nearly always decorative; Vimium
+  ///     only hints `<img cursor:zoom-*>` and we can't see CSS via AX.
+  ///   - `AXRow` / `AXCell` — web tables aren't click targets the way
+  ///     virtualised native lists are.
+  ///   - Any AXPress-on-AXGroup fallback. AX surfaces `AXPress` on
+  ///     countless structural wrappers; accepting them displaces the
+  ///     real link/button via the smaller-frame-wins dedup.
+  public static let webClickableRoles: Set<String> = [
+    "AXLink", "AXButton",
+    "AXCheckBox", "AXRadioButton",
+    "AXTextField", "AXSearchField", "AXTextArea",
+    "AXPopUpButton",
+    "AXTab",
+    "AXMenuItem",
   ]
 
   /// Roles whose descendant AXImage is considered decorative (already
@@ -368,113 +389,40 @@ public final class AccessibilityProvider: JumpProvider {
     }
 
     var addedAsTarget = false
-    // Decide whether this element is a hint target. Three acceptance paths:
-    //   1. Role is in the curated `roles` set (covers all native AX
-    //      controls + the obvious web cases like AXButton/AXLink). No
-    //      extra IPC.
-    //   2. We're inside an AXWebArea descendant *and* the element has
-    //      no recognised role — could be a `<div onclick>` widget
-    //      masquerading as AXGroup. Buffered as a pending target; the
-    //      action-name check runs in parallel after the walk.
-    //   3. Standalone AXImage (no clickable ancestor). Same deferred
-    //      treatment — most decorative images expose no actions.
-    //
-    // Buffering (2) and (3) instead of doing the action-name IPC
-    // inline halves the IPC count on web-heavy apps like AWS Console
-    // where virtually every AXGroup in the page tree advertises an
-    // `AXPress` action.
-    let roleRecognised = role.map { Self.roles.contains($0) } ?? false
-    let acceptsViaWebActionCandidate =
-      !roleRecognised
-      && insideWebArea
-      && !insideClickable
-      && enabled
-      && role != "AXStaticText"
-      && role != "AXWebArea"
-    if enabled,
-      roleRecognised || acceptsViaWebActionCandidate,
-      let r = role,
-      let posV = posValue, let sizeV = sizeValue,
+    // Firehose mode: every element with a valid frame becomes a hint
+    // target. No role allowlist, no enabled check, no visibility filter,
+    // no AXImage refinement, no insideClickable gate. This is intentionally
+    // overwhelming — used to diagnose which elements AX exposes at all.
+    if let posV = posValue, let sizeV = sizeValue,
       let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH)
     {
-      // Skip subroles that mark non-target group containers (e.g. outline
-      // section headers). We still descend, so their children can be
-      // hinted individually.
-      let suppressed = subrole.map { Self.skipSubroles.contains($0) } ?? false
-      // AXImage refinement:
-      //   1. If we're inside a clickable container ancestor (AXLink,
-      //      AXButton, ...) treat the image as decorative — the
-      //      ancestor already owns the hint. Kills the
-      //      `<a><img/>text</a>` double-hint case in Firefox.
-      //   2. If we're standalone (no clickable ancestor), an AXImage
-      //      is only a real click target when it exposes a press
-      //      action. Buffered as a pending target — the action-name
-      //      check runs in parallel after the walk.
-      //   See AccessibilityProvider.clickableContainerRoles.
-      var imageDecorative = false
-      var imageRequiresActionCheck = false
-      if r == "AXImage" {
-        if insideClickable {
-          imageDecorative = true
-        } else {
-          imageRequiresActionCheck = true
-        }
-      }
-      if !suppressed, !imageDecorative {
-        let center = CGPoint(x: frame.midX, y: frame.midY)
-        if visible.contains(center) {
-          let clipped = frame.intersection(visible)
-          if !clipped.isNull, clipped.width >= 4, clipped.height >= 4 {
-            state.idCounter += 1
-            let captured = element
-            let capturedRole = r
-            // The provider's activate closure only attempts AX-level
-            // actions on the captured element. When all of those fail
-            // it returns false; `ActionDispatcher` then takes over and
-            // tries an AX hit-test at the click point (covers
-            // inert-wrapper / handler-lives-on-a-descendant cases) and
-            // finally a synthesized mouse click. Splitting the
-            // responsibility this way means each fallback step exists
-            // in exactly one place.
-            let activate: ((JumpAction) -> Bool) = { action in
-              switch action {
-              case .leftClick:
-                // Text inputs don't respond to AXPress — pressing a
-                // search field is meaningless. Setting
-                // kAXFocusedAttribute = true moves keyboard focus to
-                // the field; the user can start typing immediately.
-                if Self.textInputRoles.contains(capturedRole),
-                  AXClick.setFocus(captured)
-                {
-                  return true
-                }
-                return AXClick.tryActions(captured, action: .leftClick)
-              case .rightClick:
-                return AXClick.tryActions(captured, action: .rightClick)
-              }
-            }
-            let candidate = JumpTarget(
-              id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
-              frame: frame,
-              role: r,
-              accessibilityLabel: nil,
-              pid: pid,
-              activate: activate,
-              providerID: identifier
-            )
-            if acceptsViaWebActionCandidate || imageRequiresActionCheck {
-              // Defer the action-name IPC: bookkeep the candidate now,
-              // resolve in parallel after the walk.
-              state.pendingTargets.append(
-                PendingTarget(candidate: candidate, element: element))
-              addedAsTarget = true
-            } else {
-              state.confirmedTargets.append(candidate)
-              addedAsTarget = true
-            }
+      state.idCounter += 1
+      let captured = element
+      let capturedRole = role ?? "AXUnknown"
+      let activate: ((JumpAction) -> Bool) = { action in
+        switch action {
+        case .leftClick:
+          if Self.textInputRoles.contains(capturedRole),
+            AXClick.setFocus(captured)
+          {
+            return true
           }
+          return AXClick.tryActions(captured, action: .leftClick)
+        case .rightClick:
+          return AXClick.tryActions(captured, action: .rightClick)
         }
       }
+      let candidate = JumpTarget(
+        id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
+        frame: frame,
+        role: capturedRole,
+        accessibilityLabel: nil,
+        pid: pid,
+        activate: activate,
+        providerID: identifier
+      )
+      state.confirmedTargets.append(candidate)
+      addedAsTarget = true
     }
 
     // Emit a dump line for this element (after the gating decision so

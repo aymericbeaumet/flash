@@ -636,83 +636,31 @@ final class AppMonitor {
 
   // MARK: Discovery
   //
-  // Two layers of filtering keep hints on only the pixels the user can
-  // actually see:
-  //
-  //   1. `WindowSnapshot` does a painter's-algorithm pass over the
-  //      CGWindowList z-order (front → back), subtracting each window's
-  //      bounds from those below it. The result is the focused pid's
-  //      genuinely-visible region — the parts of its windows that
-  //      aren't covered by anything in front. This handles same-app
-  //      occlusion (a modal sheet hiding its parent window's buttons)
-  //      and the menu bar / Dock / status items covering the top/edge
-  //      strips.
-  //
-  //   2. Per-target visibility check: a target survives only if its
-  //      centre falls inside the focused app's visible region. AX rects
-  //      from scrolled-off rows, modal-covered fields, and DOM rects
-  //      from minimised browser tabs all get dropped here.
-  //
-  // After both filters, the candidates go through a smaller-frame-wins
-  // dedup: when a parent (e.g. a 400×300 card wrapper) and its smaller
-  // child (e.g. a 24×24 link) overlap by ≥70%, the smaller one
-  // survives. That's what makes the actual link/button get the hint
-  // instead of an un-clickable wrapper.
+  // Firehose mode: no visibility filter, no dedup. Every JumpTarget that
+  // a provider returns is forwarded. Off-screen elements (scrolled-off
+  // rows, occluded controls) are still emitted as hints — they just
+  // won't be visually reachable. Intended for diagnosing what AX exposes,
+  // not for daily use.
   private func collectFocusedTargets(
     context focused: AppContext,
     providers: [JumpProvider],
     profiler: FlashProfiler? = nil
   ) -> [JumpTarget] {
-    let primaryH = primaryScreenHeight()
-    let snapshotStart = profiler?.intervalStart()
-    let snapshot = WindowSnapshot.build(
-      primaryH: primaryH,
-      onlyComputingVisibleRegionsFor: focused.processID
-    )
-    if let snapshotStart {
-      profiler?.finishInterval(
-        "window_snapshot",
-        since: snapshotStart,
-        detail: "windows=\(snapshot.entries.count)"
-      )
-    }
-    let region = snapshot.visibleRegions[focused.processID] ?? []
-    if region.isEmpty { return [] }
-    let providerContext = clip(focused, to: union(of: region))
     var collected: [JumpTarget] = []
     collected.reserveCapacity(256)
-
-    func filterVisible(_ targets: [JumpTarget]) -> (kept: [JumpTarget], hidden: Int) {
-      var out: [JumpTarget] = []
-      out.reserveCapacity(targets.count)
-      var hidden = 0
-      for t in targets {
-        let mid = CGPoint(x: t.frame.midX, y: t.frame.midY)
-        var visible = false
-        for r in region where r.contains(mid) {
-          visible = true
-          break
-        }
-        if visible { out.append(t) } else { hidden += 1 }
-      }
-      return (out, hidden)
-    }
-
     for provider in providers {
       let providerStart = profiler?.intervalStart()
       let results =
-        (try? provider.discover(in: providerContext, deadline: .distantFuture)) ?? []
-      let f = filterVisible(results)
-      collected.append(contentsOf: f.kept)
+        (try? provider.discover(in: focused, deadline: .distantFuture)) ?? []
+      collected.append(contentsOf: results)
       if let providerStart {
         profiler?.finishInterval(
           "provider.\(provider.identifier)",
           since: providerStart,
-          detail: "raw=\(results.count) kept=\(f.kept.count) hidden=\(f.hidden)"
+          detail: "raw=\(results.count)"
         )
       }
     }
-
     return collected
   }
 
@@ -720,29 +668,9 @@ final class AppMonitor {
     _ collected: [JumpTarget],
     profiler: FlashProfiler? = nil
   ) -> [JumpTarget] {
-    var collected = collected
-    let dedupStart = profiler?.intervalStart()
-    var merged: [JumpTarget] = []
-    merged.reserveCapacity(collected.count)
-    collected.sort { ($0.frame.width * $0.frame.height) < ($1.frame.width * $1.frame.height) }
-    var dedup = SpatialDedup()
-    var duplicate = 0
-    for t in collected {
-      if dedup.contains(t.frame) {
-        duplicate += 1
-        continue
-      }
-      dedup.insert(t.frame)
-      merged.append(t)
-    }
-    if let dedupStart {
-      profiler?.finishInterval(
-        "dedup_targets",
-        since: dedupStart,
-        detail: "candidates=\(collected.count) kept=\(merged.count) duplicate=\(duplicate)"
-      )
-    }
-
+    // Firehose mode: no dedup. Keep deterministic sort so hint labels are
+    // stable across activations.
+    var merged = collected
     let sortStart = profiler?.intervalStart()
     merged.sort { lhs, rhs in
       let lhsTop = lhs.frame.maxY
