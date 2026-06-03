@@ -299,6 +299,11 @@ final class AppMonitor {
     if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid { return }
     let startToken = dirtyTokens[pid] ?? 0
     guard let context = makeContext(for: app) else { return }
+    // Skip pre-walk + cache write for any focused context where a
+    // volatile provider applies (e.g. TmuxProvider): its results
+    // depend on state we can't track via AX events, so caching would
+    // serve stale hints.
+    if anyVolatileProviderApplies(to: context) { return }
 
     axQueue.async { [weak self] in
       guard let self else { return }
@@ -356,14 +361,20 @@ final class AppMonitor {
   /// result. The fresh walk's result is also written to the cache on
   /// success so subsequent activations within the TTL window can serve
   /// directly.
+  ///
+  /// Volatile-provider contexts (e.g. `TmuxProvider` for terminals
+  /// hosting a tmux client) skip cache lookup AND cache write — the
+  /// provider's underlying state isn't AX-event-trackable, so caching
+  /// would silently serve stale hints.
   func discoverAsync(
     context: AppContext,
     profiler: FlashProfiler? = nil,
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
+    let volatile = anyVolatileProviderApplies(to: context)
 
-    if let cached = lookupCache(for: context.processID) {
+    if !volatile, let cached = lookupCache(for: context.processID) {
       let ageMs =
         Double(
           DispatchTime.now().uptimeNanoseconds - cached.computedAt.uptimeNanoseconds
@@ -384,16 +395,19 @@ final class AppMonitor {
       if let enqueueNs {
         self.finishQueueWait(profiler, since: enqueueNs)
       }
-      profiler?.mark("walk_start", detail: "token=\(startToken)")
+      profiler?.mark(
+        "walk_start", detail: "token=\(startToken) volatile=\(volatile)")
       let hints = self.runAndAssign(context: context, cfg: cfg, profiler: profiler)
       profiler?.mark("walk_done", detail: "hints=\(hints.count)")
       DispatchQueue.main.async {
-        // Update cache with this fresh walk's result if no events fired
-        // during the walk and the pid is still focused, and the result
-        // is non-empty (see `runPrewalk` for the empty-result
-        // rationale). This makes the common pattern of "show_hints →
-        // dismiss → show_hints again" hit cache on the second press.
-        if !hints.isEmpty,
+        // Update cache only when no volatile provider applies AND no
+        // events fired during the walk AND the pid is still focused
+        // AND the result is non-empty (see `runPrewalk` for the
+        // empty-result rationale). Volatile contexts skip caching
+        // entirely so terminal/tmux state changes never serve stale
+        // hints.
+        if !volatile,
+          !hints.isEmpty,
           (self.dirtyTokens[context.processID] ?? 0) == startToken,
           NSWorkspace.shared.frontmostApplication?.processIdentifier == context.processID
         {
@@ -408,6 +422,17 @@ final class AppMonitor {
         completion(hints)
       }
     }
+  }
+
+  /// True iff any registered provider both (a) declares its results
+  /// volatile and (b) supports the given context. Called on the
+  /// activation hot path AND the pre-walk path; keep volatile
+  /// providers' `supports` cheap.
+  private func anyVolatileProviderApplies(to context: AppContext) -> Bool {
+    for p in registry.providers where p.resultsAreVolatile {
+      if p.supports(context) { return true }
+    }
+    return false
   }
 
   private func finishQueueWait(_ profiler: FlashProfiler?, since start: UInt64) {

@@ -349,6 +349,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   // MARK: Config hot reload
 
+  /// `DispatchSource` watches a specific file descriptor → a specific
+  /// inode. Editors that save via write-temp-then-rename (vim's
+  /// `writebackup`, most editor "atomic writes", `Edit` tool here, …)
+  /// replace the inode under our fd, so:
+  ///   1. The original source fires once with `.delete` or `.rename`.
+  ///   2. The fd now points at a deleted-but-still-open inode.
+  ///   3. Subsequent edits never fire because we're watching a tombstone.
+  ///
+  /// Re-arm by cancelling the source on any delete/rename event and
+  /// reopening against the new path on a short delay (giving the
+  /// editor's rename a moment to complete). The `write`/`extend`
+  /// branch reloads in place — that's the common case for editors
+  /// that write the file directly.
   private func watchConfigFile() {
     let path = ConfigLoader.defaultPath.path
     let fd = open(path, O_EVTONLY)
@@ -358,8 +371,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       eventMask: [.write, .delete, .rename, .extend],
       queue: .main
     )
-    source.setEventHandler { [weak self] in
-      guard let self else { return }
+    source.setEventHandler { [weak self, weak source] in
+      guard let self, let source else { return }
+      let events = source.data
       let cfg = ConfigLoader.load()
       self.config = cfg
       self.overlay.overlayConfig = cfg.overlay
@@ -367,6 +381,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // Publish to AppMonitor under its internal lock — every future
       // activation snapshots the new config at the start of its walk.
       self.monitor.updateConfig(cfg)
+
+      // Detect atomic-replace edits and re-watch the new inode.
+      if events.contains(.delete) || events.contains(.rename) {
+        source.cancel()
+        self.configSource = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+          self?.watchConfigFile()
+        }
+      }
     }
     source.setCancelHandler { close(fd) }
     source.resume()

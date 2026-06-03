@@ -108,7 +108,13 @@ final class OverlayPanel: NSPanel {
     let gradientColors: [CGColor] = [bgBottom.cgColor, bgTop.cgColor]
     let fgCG = fg.cgColor
     let borderCG = border?.cgColor ?? OverlayPanel.fallbackBorderCGColor
-    let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    // Two weights: the un-typed portion of each label renders in
+    // .regular; once the user has typed a prefix, those leading
+    // characters re-render in .bold via `attributedLabel(...)`. Both
+    // are monospaced so glyph advance — and therefore chip width —
+    // doesn't change with weight.
+    let regularFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+    let boldFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let labelLen = hints.first?.display.count ?? 1
     let approxWidth = Self.chipWidth(forLabelLength: labelLen, fontSize: fontSize)
     let chipHeight = Self.chipHeight(forFontSize: fontSize)
@@ -160,11 +166,12 @@ final class OverlayPanel: NSPanel {
       chip.isHidden = false
       let label = dequeueLabelLayer()
       label.isHidden = false
-      label.string = hint.display
+      label.string = Self.attributedLabel(
+        display: hint.display, boldPrefixLen: 0,
+        regularFont: regularFont, boldFont: boldFont, fgCG: fgCG)
       label.fontSize = fontSize
       label.foregroundColor = fgCG
       label.contentsScale = scale
-      label.font = font
       label.frame = labelFrame
 
       let chipGlobal = Self.chipFrame(
@@ -298,18 +305,64 @@ final class OverlayPanel: NSPanel {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     let upper = prefix.uppercased()
+    let fontSize = CGFloat(overlayConfig.fontSize)
+    let regularFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+    let boldFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let fgCG = (nsColor(fromHex: overlayConfig.hintFG) ?? .black).cgColor
     var visible = Set<Int>()
     for (idx, hint) in hints.enumerated() {
-      guard idx < hintLayers.count else { break }
+      guard idx < hintLayers.count, idx < labelLayers.count else { break }
       let chip = hintLayers[idx]
       let matches = hint.display.hasPrefix(upper)
       chip.isHidden = !matches
-      if matches { visible.insert(idx) }
+      if matches {
+        visible.insert(idx)
+        // Re-render with the typed prefix in bold so the user sees
+        // their progress through a multi-key hint.
+        labelLayers[idx].string = Self.attributedLabel(
+          display: hint.display, boldPrefixLen: upper.count,
+          regularFont: regularFont, boldFont: boldFont, fgCG: fgCG)
+      }
     }
     if debugConfig.showBounds {
       rebuildDebugPath(visibleIndices: visible)
     }
     CATransaction.commit()
+  }
+
+  /// Build the chip label's attributed string. The first
+  /// `boldPrefixLen` characters of `display` render in `boldFont`, the
+  /// rest in `regularFont`. Both fonts must be monospaced and the same
+  /// point size or the glyph advances won't line up with the chip
+  /// width computed in `display(hints:)`.
+  ///
+  /// CATextLayer ignores `alignmentMode` when its string is an
+  /// NSAttributedString — alignment has to ride along inside the
+  /// string as an `.paragraphStyle` attribute.
+  private static func attributedLabel(
+    display: String,
+    boldPrefixLen: Int,
+    regularFont: NSFont,
+    boldFont: NSFont,
+    fgCG: CGColor
+  ) -> NSAttributedString {
+    let para = NSMutableParagraphStyle()
+    para.alignment = .center
+    let attr = NSMutableAttributedString(string: display)
+    let full = NSRange(location: 0, length: (display as NSString).length)
+    attr.addAttributes(
+      [
+        .font: regularFont,
+        .foregroundColor: NSColor(cgColor: fgCG) ?? .black,
+        .paragraphStyle: para,
+      ],
+      range: full
+    )
+    let boldLen = min(max(boldPrefixLen, 0), full.length)
+    if boldLen > 0 {
+      attr.addAttribute(.font, value: boldFont, range: NSRange(location: 0, length: boldLen))
+    }
+    return attr
   }
 
   private func recycleAll() {

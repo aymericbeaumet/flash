@@ -215,6 +215,19 @@ public final class AccessibilityProvider: JumpProvider {
     descendIntoWebAreas: Bool
   ) throws -> [JumpTarget] {
     let app = AXUIElementCreateApplication(context.processID)
+    // Wake the target app's a11y engine. Some apps (notably Firefox)
+    // run a lazy/idle accessibility service that only exposes the
+    // window-decoration buttons until an assistive technology
+    // explicitly signals it's reading the tree. The undocumented but
+    // widely-used `AXEnhancedUserInterface` and `AXManualAccessibility`
+    // attributes are the standard signals — VoiceOver sets the same
+    // ones. Best-effort: errors are ignored because most apps don't
+    // recognise these attributes and that's fine.
+    let trueRef = kCFBooleanTrue as CFTypeRef
+    _ = AXUIElementSetAttributeValue(
+      app, "AXEnhancedUserInterface" as CFString, trueRef)
+    _ = AXUIElementSetAttributeValue(
+      app, "AXManualAccessibility" as CFString, trueRef)
     let screenH = primaryScreenHeight()
 
     // The clip rect is supplied by AppMonitor from its single
@@ -596,25 +609,57 @@ public final class AccessibilityProvider: JumpProvider {
     // row. Without this fallback the whole chat list disappears from
     // the walk.
     //
-    // Single-attribute children fallback: when the batched IPC drops
-    // `kAXChildrenAttribute` (Firefox's a11y does this for `AXTabPanel`
-    // under concurrent IPC contention — returns an error placeholder
-    // in vals[7] instead of the real child list, and the entire
-    // in-page DOM disappears from the walk), re-query that one
-    // attribute on its own. The single-attribute IPC succeeds when the
-    // batched one didn't — likely because Firefox has had time to
-    // materialise the subtree by the time we issue the second call.
-    // Cost is bounded: at most one extra IPC per element that returned
-    // no children, and only ever fires on truly contested subtrees.
-    var children =
-      nonEmpty(visibleChildren) ?? nonEmpty(visibleRows) ?? allChildren ?? []
-    if children.isEmpty {
-      var raw: CFTypeRef?
-      if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw) == .success,
-        let fallback = raw as? [AXUIElement],
-        !fallback.isEmpty
-      {
-        children = fallback
+    // Children selection:
+    //
+    // **At depth 0 (focused window root)** the "visible children"
+    // optimization is actively harmful. Firefox's `AXWindow`
+    // exposes `AXVisibleChildren` as just the title-bar buttons
+    // (close/min/fullscreen) — the main content `AXGroup` is only
+    // reachable via `kAXChildrenAttribute`. Other apps may have
+    // similar quirks at the root. We unconditionally take the full
+    // children list at depth 0, falling through to a single-attribute
+    // query if the batched response dropped it.
+    //
+    // **Below the root** prefer the narrowest "visible" view of
+    // children that the element implements:
+    //   1. kAXVisibleChildrenAttribute (NSCollectionView, generic scroll)
+    //   2. kAXVisibleRowsAttribute (NSTableView / NSOutlineView)
+    //   3. kAXChildrenAttribute (everything else, fallback)
+    // For Notes' 292-row sidebar this drops the walk to the ~12 rows
+    // actually rendered on screen. Empty arrays are "no signal"
+    // not "zero children" — Messages' chat list reports
+    // `AXVisibleChildren = []` even when populated, so we fall
+    // through to `kAXChildrenAttribute` in that case.
+    //
+    // **Single-attribute children fallback**: when the batched IPC
+    // drops `kAXChildrenAttribute` entirely (Firefox's a11y does
+    // this for `AXTabPanel` under concurrent IPC contention —
+    // returns an error placeholder in vals[7] instead of the real
+    // child list), re-query that one attribute on its own.
+    var children: [AXUIElement]
+    if depth == 0 {
+      children = allChildren ?? []
+      if children.isEmpty {
+        var raw: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
+          == .success,
+          let arr = raw as? [AXUIElement]
+        {
+          children = arr
+        }
+      }
+    } else {
+      children =
+        nonEmpty(visibleChildren) ?? nonEmpty(visibleRows) ?? allChildren ?? []
+      if children.isEmpty {
+        var raw: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
+          == .success,
+          let fallback = raw as? [AXUIElement],
+          !fallback.isEmpty
+        {
+          children = fallback
+        }
       }
     }
     let nowInsideClickable =
