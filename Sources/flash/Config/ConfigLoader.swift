@@ -169,7 +169,9 @@ enum ConfigLoader {
       } else {
         config.warnings.append(
           "shortcut \"\(key)\" has an unrecognised value (\(value)) — "
-            + "use a URL, a path, a flash:// command, or [\"argv\", ...]")
+            + "strings must be a flash:// URL; for anything else use "
+            + "the array form, e.g. [\"open\", \"https://...\"] "
+            + "or [\"open\", \"-a\", \"AppName\"]")
       }
       return
     }

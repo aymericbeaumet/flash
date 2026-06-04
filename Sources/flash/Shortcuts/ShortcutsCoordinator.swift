@@ -61,8 +61,6 @@ final class ShortcutsCoordinator {
     switch action {
     case .flashCommand(let cmd):
       flashDispatch?(cmd)
-    case .openable(let url):
-      NSWorkspace.shared.open(url)
     case .shell(let argv):
       runShell(argv)
     }

@@ -103,12 +103,18 @@ dump_logs = false
 #       flash://open_app?name=<App Name or bundle ID>
 #       flash://quit
 #
-#   - any other URL or absolute path — passed to NSWorkspace.open.
-#
 #   - an array of strings — exec'd as argv via /usr/bin/env (or the
-#     absolute path if argv[0] is rooted). Use this for shell-style
-#     commands; if you need pipes/redirects, do them via
-#     ["sh", "-c", "..."].
+#     absolute path if argv[0] is rooted). The user-visible escape
+#     hatch for anything that isn't a flash:// command:
+#       ["open", "https://github.com"]
+#       ["open", "-a", "Foo"]
+#       ["sh", "-c", "tmux new -A -s main"]
+#
+# These are the only two forms. Bare strings that aren't flash://
+# URLs are rejected — that's deliberate. The string form is the
+# fast path; the array form makes the cost (process spawn + Launch
+# Services) visible at the config line so users reach for flash://
+# whenever it applies.
 #
 # Examples (none enabled by default):
 #
@@ -116,6 +122,6 @@ dump_logs = false
 #   "ctrl+space"   = "flash://show_hints"
 #   "cmd+ctrl+a"   = "flash://open_app?name=Alacritty"
 #   "cmd+ctrl+s"   = "flash://open_app?name=com.tinyspeck.slackmacgap"
-#   "cmd+ctrl+g"   = "https://github.com"
+#   "cmd+ctrl+g"   = ["open", "https://github.com"]
 #   "cmd+ctrl+t"   = ["sh", "-c", "tmux new -A -s main"]
 [shortcuts]

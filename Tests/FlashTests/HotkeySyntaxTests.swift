@@ -91,19 +91,19 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(name, "Postico 2")
   }
 
-  func testParseHttpURL() {
-    let action = parseShortcutAction(rawString: "https://example.com")
-    guard case .openable(let url) = action else {
-      return XCTFail("expected .openable")
-    }
-    XCTAssertEqual(url.absoluteString, "https://example.com")
+  func testNonFlashStringIsRejected() {
+    // Strings must be `flash://...` URLs. Anything else is rejected
+    // so the user reaches for the array form (which makes the cost
+    // visible) instead of accidentally using the slow path.
+    XCTAssertNil(parseShortcutAction(rawString: "https://example.com"))
+    XCTAssertNil(parseShortcutAction(rawString: "/Applications/Safari.app"))
+    XCTAssertNil(parseShortcutAction(rawString: "Safari"))
+    XCTAssertNil(parseShortcutAction(rawString: "open -a Foo"))
   }
 
-  func testParseAbsolutePath() {
-    let action = parseShortcutAction(rawString: "/Applications/Safari.app")
-    guard case .openable = action else {
-      return XCTFail("expected .openable for absolute path")
-    }
+  func testInvalidFlashURLRejected() {
+    XCTAssertNil(parseShortcutAction(rawString: "flash://unknown_command"))
+    XCTAssertNil(parseShortcutAction(rawString: "flash://open_app"))  // no name
   }
 
   func testParseShellArgv() {
@@ -114,10 +114,14 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(argv, ["sh", "-c", "echo hi"])
   }
 
-  func testBareAppNameReturnsNil() {
-    // "Safari" without a scheme isn't a URL; the user is expected
-    // to use `flash://open_app?name=Safari` for the cached fast path.
-    XCTAssertNil(parseShortcutAction(rawString: "Safari"))
+  func testParseOpenWithURLAsArgv() {
+    // The escape hatch for non-flash URLs: pass them to `open`.
+    let action = parseShortcutAction(
+      rawArray: ["open", "https://example.com"])
+    guard case .shell(let argv) = action else {
+      return XCTFail("expected .shell")
+    }
+    XCTAssertEqual(argv, ["open", "https://example.com"])
   }
 
   func testEmptyShellArrayReturnsNil() {
