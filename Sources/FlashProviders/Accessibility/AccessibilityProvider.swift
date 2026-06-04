@@ -395,7 +395,24 @@ public final class AccessibilityProvider: JumpProvider {
     // Disabled elements never hint — they're visible but inert, and
     // the user would just click into a no-op.
     let allowlist = insideWebArea ? Self.webClickableRoles : Self.roles
-    let roleAllowed = role.map { allowlist.contains($0) } ?? false
+    var roleAllowed = role.map { allowlist.contains($0) } ?? false
+    // Vimium-parity heuristic for AXLink-only: drop anchors smaller
+    // than 13x13. These are virtually always wrappers around a
+    // decorative CSS sprite or a hidden hit-region — HN-style upvote
+    // arrows, "..." pagination dots, etc. Firefox AX often propagates
+    // the child element's `title` attribute to the link, so an
+    // accessible-name check doesn't discriminate. Vimium skips them
+    // because the visible content (computed style) renders as
+    // invisible or non-pointer; we can't see CSS but the size is a
+    // reliable proxy (real icon links are 16x16+, real text links
+    // are taller than 13px).
+    if roleAllowed, insideWebArea, role == "AXLink",
+      let posV = posValue, let sizeV = sizeValue,
+      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      frame.width < 13, frame.height < 13
+    {
+      roleAllowed = false
+    }
     if let posV = posValue, let sizeV = sizeValue,
       let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       roleAllowed, enabled
