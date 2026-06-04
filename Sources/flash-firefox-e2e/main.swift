@@ -20,7 +20,7 @@ import Foundation
 // keep working as long as the binary at that path is the one re-signed
 // in place.
 //
-// Use Scripts/build-firefox-e2e.sh to build + sign + print the path
+// Use Scripts/test-firefox-e2e.sh to build + sign + print the path
 // you need to grant.
 
 // MARK: - Output helpers
@@ -68,7 +68,7 @@ private func ensureAccessibilityOrExit() {
 
     Notes:
       - Granting your terminal does NOT propagate to this binary.
-      - Scripts/build-firefox-e2e.sh signs the binary with the stable
+      - Scripts/test-firefox-e2e.sh signs the binary with the stable
         "Flash Dev" identity, so TCC's stored designated requirement
         (the cert, not the cdhash) keeps matching across rebuilds.
         You only need to grant once.

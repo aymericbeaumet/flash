@@ -55,7 +55,7 @@ Sources/
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, plus live integration suites (TmuxIntegrationTests against an isolated tmux server; FirefoxIntegrationTests, opt-in via FLASH_FIREFOX_E2E=1)
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
-Scripts/install.sh                   # Release build → staging .app → /Applications/Flash.app, ad-hoc codesigned
+Scripts/install-release.sh                   # Release build → staging .app → /Applications/Flash.app, ad-hoc codesigned
 README.md                            # User-facing
 AGENTS.md                            # This file
 ```
@@ -260,7 +260,7 @@ Not required:
 
 ### TCC and rebuilds
 
-TCC grants for ad-hoc-signed apps are keyed by the binary's cdhash. Every `./Scripts/install.sh` produces a new cdhash and therefore invalidates the previous grant. The user will see "Accessibility / Screen Recording" prompts again after rebuilding. This is a known limitation of ad-hoc development signing. The install script `lsregister -f`s the new bundle to refresh URL-scheme routing, but there is no API to migrate TCC grants. Document the re-grant step in user-facing changes that touch the signing/install flow.
+TCC grants for ad-hoc-signed apps are keyed by the binary's cdhash. Every `./Scripts/install-release.sh` produces a new cdhash and therefore invalidates the previous grant. The user will see "Accessibility / Screen Recording" prompts again after rebuilding. This is a known limitation of ad-hoc development signing. The install script `lsregister -f`s the new bundle to refresh URL-scheme routing, but there is no API to migrate TCC grants. Document the re-grant step in user-facing changes that touch the signing/install flow.
 
 ## Build / install / verify
 
@@ -268,13 +268,13 @@ TCC grants for ad-hoc-signed apps are keyed by the binary's cdhash. Every `./Scr
 
 ```bash
 # Make code change → run install (NOT just `swift build`)
-./Scripts/install.sh
+./Scripts/install-release.sh
 
 # Trigger and verify
 open -g flash://show_hints
 ```
 
-`./Scripts/install.sh` is what builds release, codesigns, quits the running instance, replaces the bundle, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs.
+`./Scripts/install-release.sh` is what builds release, codesigns, quits the running instance, replaces the bundle, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs.
 
 ```bash
 # Build only (debug; type-check + unit tests, NOT for behaviour verification)
@@ -284,10 +284,10 @@ swift build
 swift test
 
 # Build release, install to /Applications/Flash.app, relaunch — required after every change
-./Scripts/install.sh
+./Scripts/install-release.sh
 ```
 
-`install.sh`:
+`install-release.sh`:
 
 1. `swift build -c release`
 2. Assembles `build/Flash.app` from the binary + `Resources/Info.plist`
@@ -313,7 +313,7 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `TmuxProviderTests`). Deterministic, run in milliseconds, no external state. `TmuxProviderTests` covers the tokenization rules (`extractWords`), the cell-geometry math (`resolveGeometry`), the status-bar parser (`parseStatusInfo`), the TOML alacritty-config reader, and `parseTwoInts`. Run on every `swift test`.
 - **Live tmux integration** (`TmuxIntegrationTests`). Boots an isolated tmux server under a per-test socket (`tmux -L flash-it-<uuid> -f /dev/null`) and asserts the binary's CLI contract Flash depends on: the `#{pane_*}` / `#{client_*}` / `#{status}` / `#{status-position}` format strings; that `capture-pane -p` returns the rendered grid; that horizontal + vertical splits yield the expected `pane_left` / `pane_top`. Catches breakage from tmux upgrades silently changing format-string semantics — the only realistic regression source for `TmuxProvider`. Skipped when no `tmux` binary is found on the probe paths. Runs in ~10 s.
 - **Live Firefox AX integration**. The Firefox E2E exists in two forms; both run the same fixture + assertions:
-  - **Recommended**: the standalone `flash-firefox-e2e` SPM executable (`Sources/flash-firefox-e2e/main.swift`). Built via `Scripts/build-firefox-e2e.sh`, which signs the binary with the same stable `Flash Dev` identity as the main Flash app. Grant the resulting `build/flash-firefox-e2e` Accessibility once and the TCC grant persists across rebuilds (the cert, not the cdhash, is in the designated requirement). Prints a colourised pass/fail report and exits non-zero on any failed assertion.
+  - **Recommended**: the standalone `flash-firefox-e2e` SPM executable (`Sources/flash-firefox-e2e/main.swift`). Built via `Scripts/test-firefox-e2e.sh`, which signs the binary with the same stable `Flash Dev` identity as the main Flash app. Grant the resulting `build/flash-firefox-e2e` Accessibility once and the TCC grant persists across rebuilds (the cert, not the cdhash, is in the designated requirement). Prints a colourised pass/fail report and exits non-zero on any failed assertion.
   - **Also available**: `FirefoxIntegrationTests` (opt-in via `FLASH_FIREFOX_E2E=1`). Same logic, runs under `swift test`. Skips with a pointer to the standalone runner when the test runner lacks Accessibility, because granting the SwiftPM xctest helper is fragile in practice.
 
   Both forms launch Firefox to a structured fixture page (data: URL) containing every clickable role we promise to hint plus a deliberate set of "must not hint" elements, and walk it through `AccessibilityProvider.discover`. The fixture exercises three regression modes simultaneously, with assertions targeted at each:
@@ -330,12 +330,12 @@ Run order:
 
 ```bash
 swift test                                           # unit + live tmux
-./Scripts/install.sh                                 # one-time: creates the Flash Dev signing identity
-./Scripts/build-firefox-e2e.sh                       # builds + signs the standalone E2E runner
+./Scripts/install-release.sh                                 # one-time: creates the Flash Dev signing identity
+./Scripts/test-firefox-e2e.sh                       # builds + signs the standalone E2E runner
 ./build/flash-firefox-e2e                            # runs the Firefox E2E (after granting it AX once)
 ```
 
-Anything that requires the full overlay / commit pipeline (chip rendering, key handling, AXPress against a live focused app) is still **manually verified**: run `./Scripts/install.sh`, grant permissions if needed, then exercise the app in real target apps.
+Anything that requires the full overlay / commit pipeline (chip rendering, key handling, AXPress against a live focused app) is still **manually verified**: run `./Scripts/install-release.sh`, grant permissions if needed, then exercise the app in real target apps.
 
 Do not claim UI-level changes "work" based on the type-checker alone. State explicitly when you couldn't verify visually.
 

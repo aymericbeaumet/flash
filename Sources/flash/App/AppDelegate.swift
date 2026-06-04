@@ -257,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       "If Flash IS already in the list (toggle ON):",
       "  The grant is bound to the previous binary's hash.",
       "  Toggle Flash OFF then ON to re-bind to the current build.",
-      "  (./Scripts/install.sh resets this for you next time.)",
+      "  (./Scripts/install-release.sh resets this for you next time.)",
       "",
       "System Settings has been opened.",
     ]

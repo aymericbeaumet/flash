@@ -70,8 +70,8 @@ final class FirefoxIntegrationTests: XCTestCase {
         It signs with the stable "Flash Dev" identity, so the TCC grant
         persists across rebuilds:
 
-          ./Scripts/install.sh              # one-time, sets up the signing identity
-          ./Scripts/build-firefox-e2e.sh    # builds + signs flash-firefox-e2e
+          ./Scripts/install-release.sh              # one-time, sets up the signing identity
+          ./Scripts/test-firefox-e2e.sh    # builds + signs flash-firefox-e2e
           # then grant accessibility to:
           #   <project>/build/flash-firefox-e2e
           ./build/flash-firefox-e2e

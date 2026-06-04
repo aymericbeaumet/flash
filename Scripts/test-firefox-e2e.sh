@@ -10,14 +10,14 @@ set -euo pipefail
 #
 # This script builds the `flash-firefox-e2e` SPM product and signs it
 # with the same stable self-signed "Flash Dev" identity that
-# Scripts/install.sh creates for the main Flash bundle. Because TCC
+# Scripts/install-release.sh creates for the main Flash bundle. Because TCC
 # stores a designated requirement (the cert), not a cdhash, the
 # Accessibility grant persists across rebuilds as long as the
 # signing identity stays the same.
 #
 # Usage:
-#   ./Scripts/build-firefox-e2e.sh         # build + sign + print grant instructions
-#   ./Scripts/build-firefox-e2e.sh --run   # also run the binary at the end
+#   ./Scripts/test-firefox-e2e.sh         # build + sign + print grant instructions
+#   ./Scripts/test-firefox-e2e.sh --run   # also run the binary at the end
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
@@ -43,7 +43,7 @@ done
 if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>/dev/null |
   grep -q "\"$SIGN_IDENTITY\""; then
   echo "ERROR: signing identity \"$SIGN_IDENTITY\" not found in $KEYCHAIN_PATH."
-  echo "Run Scripts/install.sh once first — it creates the stable dev"
+  echo "Run Scripts/install-release.sh once first — it creates the stable dev"
   echo "code-signing identity used by both flash.app and this E2E binary."
   exit 1
 fi
@@ -60,7 +60,7 @@ fi
 mkdir -p "$OUTPUT_DIR"
 cp "$BIN_PATH" "$OUTPUT_BIN"
 
-# Match install.sh's signing flags exactly: same identity, no hardened
+# Match install-release.sh's signing flags exactly: same identity, no hardened
 # runtime, same identifier shape. TCC's stored designated requirement
 # combines the cert chain *and* the signing flags — if those drift, the
 # already-granted entry silently stops matching new builds. Keeping the

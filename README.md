@@ -7,7 +7,7 @@ System-wide vimium-style "find and jump" for macOS. Triggered by an external too
 ## Build
 
 ```bash
-./Scripts/install.sh
+./Scripts/install-release.sh
 ```
 
 Open it once so macOS knows where it lives:
@@ -20,7 +20,7 @@ Then in *System Settings → Privacy & Security*:
 
 - **Accessibility** — required. Toggle Flash on.
 
-> **Heads up on rebuilds**: every `./Scripts/install.sh` replaces the binary in `/Applications/Flash.app`. macOS keys TCC grants (Accessibility) to the ad-hoc-signed binary's hash, so the script also runs `tccutil reset` for the bundle id — meaning you re-grant once per rebuild and the grant binds to the new binary.
+> **Heads up on rebuilds**: every `./Scripts/install-release.sh` replaces the binary in `/Applications/Flash.app`. macOS keys TCC grants (Accessibility) to the ad-hoc-signed binary's hash, so the script also runs `tccutil reset` for the bundle id — meaning you re-grant once per rebuild and the grant binds to the new binary.
 
 ## Triggers
 
