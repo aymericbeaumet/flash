@@ -106,6 +106,7 @@ public enum VimiumOracle {
     firefox: NSRunningApplication,
     context: AppContext,
     provider: AccessibilityProvider,
+    marionette: MarionetteClient?,
     readyTimeout: TimeInterval = 30,
     anchorsTimeout: TimeInterval = 10
   ) throws -> OracleSnapshot {
@@ -164,19 +165,22 @@ public enum VimiumOracle {
       Thread.sleep(forTimeInterval: 0.3)
     }
 
-    // 4. Briefly bring Firefox foreground for the entire scroll-loop
-    //    capture. The scroll loop posts 'f' / Escape repeatedly; each
-    //    needs to land in Firefox's event queue. Restore previous
-    //    frontmost app on exit so the user's editor/terminal comes
-    //    back to focus.
-    //
-    //    Isolation guarantees:
-    //    - CGEventSource(.privateState) ignores live HID modifier state
-    //    - explicit flags = [] zeroes any latent source modifiers
-    let prevFrontmost = NSWorkspace.shared.frontmostApplication
-    firefox.activate()
+    // 4. Keystrokes are delivered via Marionette (TCP into Firefox's
+    //    event dispatch) so Firefox doesn't have to be the OS-
+    //    frontmost app. This unlocks parallel fixture runs and stops
+    //    Firefox from stealing focus from the user's editor.
+    //    Fall back to the CGEvent path only when no Marionette client
+    //    was provided (legacy / debugging).
+    let useMarionette = marionette != nil
+    let prevFrontmost: NSRunningApplication?
+    if useMarionette {
+      prevFrontmost = nil
+    } else {
+      prevFrontmost = NSWorkspace.shared.frontmostApplication
+      firefox.activate()
+      Thread.sleep(forTimeInterval: 0.15)
+    }
     defer { prevFrontmost?.activate() }
-    Thread.sleep(forTimeInterval: 0.15)
 
     // 5. Scroll-through loop. Per iteration: post 'f' until Vimium
     //    activates + companion captures + signals ANCHORS_READY, walk
@@ -202,7 +206,11 @@ public enum VimiumOracle {
       let anchorsDeadline = Date().addingTimeInterval(anchorsTimeout)
       var gotAnchors = false
       while Date() < anchorsDeadline {
-        postKey(kVK_ANSI_F, to: pid)
+        if let m = marionette {
+          _ = try? m.tapKey("f")
+        } else {
+          postKey(kVK_ANSI_F, to: pid)
+        }
         let waitChunk = Date().addingTimeInterval(0.9)
         while Date() < waitChunk, Date() < anchorsDeadline {
           let t = readFocusedWindowTitle(pid: pid) ?? ""
@@ -308,9 +316,16 @@ public enum VimiumOracle {
       //     second arrives with Vimium back in default mode, so the
       //     companion's window keydown listener actually sees it and
       //     runs reset() + scroll.
-      postKey(kVK_Escape, to: pid)
-      Thread.sleep(forTimeInterval: 0.05)
-      postKey(kVK_Escape, to: pid)
+      let escape = "\u{e00C}"  // WebDriver key value for Escape
+      if let m = marionette {
+        _ = try? m.tapKey(escape)
+        Thread.sleep(forTimeInterval: 0.05)
+        _ = try? m.tapKey(escape)
+      } else {
+        postKey(kVK_Escape, to: pid)
+        Thread.sleep(forTimeInterval: 0.05)
+        postKey(kVK_Escape, to: pid)
+      }
       let readyDeadline = Date().addingTimeInterval(5)
       var sawReady = false
       while Date() < readyDeadline {

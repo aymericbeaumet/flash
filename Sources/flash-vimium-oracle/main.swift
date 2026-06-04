@@ -165,6 +165,18 @@ private func ensureOracleReadyOrExit() {
 
 // MARK: - Per-fixture run
 
+// Per-process Marionette port allocator. Each fixture run claims a
+// fresh port so parallel instances don't collide on the wire.
+private var marionettePortCounter: UInt16 = 2828
+private let marionettePortLock = NSLock()
+private func nextMarionettePort() -> UInt16 {
+  marionettePortLock.lock()
+  defer { marionettePortLock.unlock() }
+  let port = marionettePortCounter
+  marionettePortCounter = marionettePortCounter &+ 1
+  return port
+}
+
 private func runFixture(
   _ fixture: OracleFixture,
   provider: AccessibilityProvider,
@@ -185,25 +197,55 @@ private func runFixture(
   }
   defer { server.stop() }
 
+  // Launch Firefox with --marionette enabled. Firefox picks a free
+  // port (per the `marionette.port = 0` pref in user.js) and writes
+  // it to `<profile>/MarionetteActivePort`. We read it back and
+  // connect — this gives us a TCP keystroke channel that bypasses
+  // OS focus, so Firefox can stay in the background while we run.
+  let profilePath = OracleProfile.profileDirectory.path
+  // Wipe any stale MarionetteActivePort from a prior run so we don't
+  // race-read the previous port.
+  let portFile = (profilePath as NSString)
+    .appendingPathComponent("MarionetteActivePort")
+  try? FileManager.default.removeItem(atPath: portFile)
+
   let firefox: NSRunningApplication
   do {
     firefox = try FirefoxHarness.launchWithProfile(
       appPath: OracleProfile.appPath,
-      profilePath: OracleProfile.profileDirectory.path,
+      profilePath: profilePath,
       url: server.url,
       extraArgs: [],
-      offscreen: false)
+      offscreen: false,
+      marionettePort: 0)  // sentinel — actual port read post-launch
   } catch {
     recorder.fail("launch failed: \(error)")
     return nil
   }
   defer { firefox.terminate() }
 
+  let marionette: MarionetteClient?
+  if let actualPort = FirefoxHarness.readMarionettePort(profilePath: profilePath) {
+    do {
+      let client = try MarionetteClient(port: actualPort)
+      try client.newSession()
+      marionette = client
+    } catch {
+      recorder.fail("marionette connect failed: \(error)")
+      marionette = nil
+    }
+  } else {
+    recorder.fail("MarionetteActivePort never appeared in profile")
+    marionette = nil
+  }
+  defer { marionette?.close() }
+
   let context = FirefoxHarness.makeContext(for: firefox)
   let snapshot: OracleSnapshot
   do {
     snapshot = try VimiumOracle.capture(
-      firefox: firefox, context: context, provider: provider)
+      firefox: firefox, context: context, provider: provider,
+      marionette: marionette)
   } catch {
     recorder.fail("capture failed: \(error)")
     return nil

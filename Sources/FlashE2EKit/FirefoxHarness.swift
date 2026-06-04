@@ -84,6 +84,7 @@ public enum FirefoxHarness {
     url: URL,
     extraArgs: [String] = [],
     offscreen: Bool = false,
+    marionettePort: UInt16? = nil,
     timeout: TimeInterval = 20
   ) throws -> NSRunningApplication {
     guard FileManager.default.fileExists(atPath: appPath) else {
@@ -130,10 +131,18 @@ public enum FirefoxHarness {
     _ = binPath  // retained above for the not-installed precheck
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    var firefoxArgs: [String] =
+      ["-profile", profilePath, "-no-remote", "-new-instance"]
+    if marionettePort != nil {
+      // Firefox ignores -marionette-port and reads `marionette.port`
+      // pref instead (set to 0 in user.js so Firefox picks a free
+      // port). The caller is expected to read the actual port from
+      // `<profile>/MarionetteActivePort` after launch.
+      firefoxArgs.append("--marionette")
+    }
     process.arguments =
-      ["-g", "-a", appPath, "--args",
-       "-profile", profilePath, "-no-remote", "-new-instance"]
-      + extraArgs + [url.absoluteString]
+      ["-g", "-a", appPath, "--args"] + firefoxArgs + extraArgs
+      + [url.absoluteString]
     // Capture stderr to a known path so failure modes (extension load
     // errors, content-script crashes, profile init issues) are
     // diagnosable post-mortem. stdout still goes to /dev/null — it's
@@ -226,6 +235,28 @@ public enum FirefoxHarness {
     for w in windows {
       AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, posValue)
     }
+  }
+
+  /// Read the actual Marionette port Firefox bound to. Firefox writes
+  /// the port into `<profile>/MarionetteActivePort` once the marionette
+  /// server is listening. Polls up to `timeout` seconds.
+  public static func readMarionettePort(
+    profilePath: String, timeout: TimeInterval = 15
+  ) -> UInt16? {
+    let path = (profilePath as NSString)
+      .appendingPathComponent("MarionetteActivePort")
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+        let str = String(data: data, encoding: .utf8)?
+          .trimmingCharacters(in: .whitespacesAndNewlines),
+        let port = UInt16(str)
+      {
+        return port
+      }
+      Thread.sleep(forTimeInterval: 0.2)
+    }
+    return nil
   }
 
   /// Find Firefox processes holding `profilePath`, terminate them, and

@@ -164,6 +164,14 @@ user_pref("devtools.onboarding.telemetry.logged", true);
 user_pref("toolkit.startup.max_resumed_crashes", -1);
 user_pref("browser.sessionstore.max_resumed_crashes", -1);
 
+// Marionette automation server. Lets the oracle synthesize 'f'
+// keystrokes via TCP regardless of which app is OS-frontmost — no
+// focus theft, and parallel fixture instances each listen on their
+// own port (set via -marionette-port at launch). The bind port is
+// chosen per-run by FirefoxHarness.launchWithProfile.
+user_pref("marionette.enabled", true);
+user_pref("marionette.port", 0);
+
 // Pin window geometry so fiducial calibration is stable run-to-run.
 user_pref("browser.window.width", 1280);
 user_pref("browser.window.height", 900);
