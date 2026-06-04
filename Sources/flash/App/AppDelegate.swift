@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var urlHandler: URLEventHandler!
   private var configSources: [DispatchSourceFileSystemObject] = []
   private let shortcuts = ShortcutsCoordinator()
+  private var lastConfigErrorAlertMessage: String?
+  private var configErrorAlertVisible = false
 
   private var currentHints: [AssignedHint] = []
   private var currentPrefix: String = ""
@@ -56,8 +58,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       switch cmd {
       case .showHints(let right): self.activate(rightClick: right)
-      case .showAlert(let message): self.alertPanel.show(message)
-      case .dismissAlert: self.alertPanel.dismiss()
+      case .showAlert(let message):
+        self.configErrorAlertVisible = false
+        self.lastConfigErrorAlertMessage = nil
+        self.alertPanel.show(message)
+      case .dismissAlert:
+        self.configErrorAlertVisible = false
+        self.lastConfigErrorAlertMessage = nil
+        self.alertPanel.dismiss()
       case .showUsage: Self.writeUsageToStdout()
       case .dismissHints: self.cancelOverlay()
       case .quit: NSApp.terminate(nil)
@@ -481,11 +489,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // needing to touch `FlashLog` from two places.
     FlashLog.setLevel(cfg.debug.logLevel)
     FlashLog.setMirrorToFile(cfg.debug.dumpLogs)
-    for warning in cfg.warnings {
-      FlashLog.warn("[config] \(warning)")
+    for diagnostic in cfg.loadingDiagnostics {
+      FlashLog.warn("[config] \(diagnostic.logMessage)")
     }
     FlashLog.debug("[config] resolved_config=\(cfg.resolvedConfigJSON)")
     FlashLog.debug("[config] resolved_hints_keys=\(cfg.resolvedHintsKeysJSON)")
+    showConfigErrorAlertIfNeeded(for: cfg)
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
     overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
@@ -494,6 +503,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // rebuilds from scratch each call, so add/remove/edit all
     // converge atomically.
     shortcuts.apply(shortcuts: cfg.shortcuts)
+  }
+
+  private func showConfigErrorAlertIfNeeded(for cfg: Config) {
+    guard let message = cfg.loadingErrorAlertMessage else {
+      lastConfigErrorAlertMessage = nil
+      if configErrorAlertVisible {
+        configErrorAlertVisible = false
+        alertPanel.dismiss()
+      }
+      return
+    }
+    guard message != lastConfigErrorAlertMessage else { return }
+    lastConfigErrorAlertMessage = message
+    configErrorAlertVisible = true
+    alertPanel.show(message, duration: 8, style: .error)
   }
 
   private func logPermissionState() {

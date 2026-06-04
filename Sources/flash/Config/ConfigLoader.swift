@@ -97,20 +97,42 @@ enum ConfigLoader {
     var config = Config()
     var currentTable: [String] = []
 
-    for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+    for (lineOffset, rawLinePart) in text.split(
+      separator: "\n", omittingEmptySubsequences: false
+    ).enumerated() {
+      let lineNumber = lineOffset + 1
+      let rawLine = String(rawLinePart)
       var line = rawLine.trimmingCharacters(in: .whitespaces)
       if line.isEmpty || line.hasPrefix("#") { continue }
       if let hashIdx = unquotedCommentIndex(in: line) {
         line = String(line[..<hashIdx]).trimmingCharacters(in: .whitespaces)
       }
-      if line.hasPrefix("[") && line.hasSuffix("]") {
+      if line.hasPrefix("[") {
+        guard line.hasSuffix("]") else {
+          config.addDiagnostic(
+            "malformed table header",
+            location: ConfigLocation(
+              line: lineNumber,
+              column: firstNonWhitespaceColumn(in: rawLine)))
+          continue
+        }
         let inner = String(line.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
         currentTable = splitTablePath(inner)
         continue
       }
-      guard let eqIdx = line.firstIndex(of: "=") else { continue }
+      guard let eqIdx = line.firstIndex(of: "=") else {
+        config.addDiagnostic(
+          "expected key = value",
+          location: ConfigLocation(
+            line: lineNumber,
+            column: firstNonWhitespaceColumn(in: rawLine)))
+        continue
+      }
       var key = String(line[..<eqIdx]).trimmingCharacters(in: .whitespaces)
       let val = String(line[line.index(after: eqIdx)...]).trimmingCharacters(in: .whitespaces)
+      let location = ConfigLocation(
+        line: lineNumber,
+        column: valueColumn(in: rawLine) ?? firstNonWhitespaceColumn(in: rawLine))
       // Allow quoted keys (TOML spec) so `"cmd+ctrl - a" = "Alacritty"`
       // works in [shortcuts] — the hotkey LHS contains `+` and
       // spaces, neither of which is a valid bare TOML key.
@@ -121,6 +143,7 @@ enum ConfigLoader {
         table: currentTable,
         key: key,
         value: val,
+        location: location,
         sourceURL: sourceURL,
         environment: environment,
         into: &config)
@@ -138,6 +161,25 @@ enum ConfigLoader {
       i = line.index(after: i)
     }
     return nil
+  }
+
+  private static func firstNonWhitespaceColumn(in rawLine: String) -> Int {
+    guard let idx = rawLine.firstIndex(where: { !$0.isWhitespace }) else { return 1 }
+    return columnNumber(in: rawLine, at: idx)
+  }
+
+  private static func valueColumn(in rawLine: String) -> Int? {
+    guard var idx = rawLine.firstIndex(of: "=") else { return nil }
+    idx = rawLine.index(after: idx)
+    while idx < rawLine.endIndex, rawLine[idx].isWhitespace {
+      idx = rawLine.index(after: idx)
+    }
+    guard idx < rawLine.endIndex else { return columnNumber(in: rawLine, at: rawLine.endIndex) }
+    return columnNumber(in: rawLine, at: idx)
+  }
+
+  private static func columnNumber(in rawLine: String, at idx: String.Index) -> Int {
+    rawLine.distance(from: rawLine.startIndex, to: idx) + 1
   }
 
   private static func splitTablePath(_ raw: String) -> [String] {
@@ -164,6 +206,7 @@ enum ConfigLoader {
     table: [String],
     key: String,
     value: String,
+    location: ConfigLocation,
     sourceURL: URL?,
     environment: [String: String],
     into config: inout Config
@@ -189,51 +232,136 @@ enum ConfigLoader {
       if let action {
         config.shortcuts.append(Shortcut(hotkey: key, action: action))
       } else {
-        config.warnings.append(
+        config.addDiagnostic(
           "shortcut \"\(key)\" has an unrecognised value (\(value)) — "
             + "strings must be a flash:// URL; for anything else use "
             + "the array form, e.g. [\"open\", \"https://...\"] "
-            + "or [\"open\", \"-a\", \"AppName\"]")
+            + "or [\"open\", \"-a\", \"AppName\"]",
+          location: location)
       }
       return
     }
     let path = table + [key]
     switch path {
     case ["hints", "keys"]:
-      config.hints.keys = parseString(value) ?? config.hints.keys
+      if let parsed = parseString(value) {
+        config.hints.keys = parsed
+        config.recordLocation(path: "hints.keys", location: location)
+      } else {
+        config.addDiagnostic("hints.keys must be a quoted string", location: location)
+      }
     case ["hints", "min_length"]:
-      config.hints.minLength = parseInt(value) ?? config.hints.minLength
+      if let parsed = parseInt(value) {
+        config.hints.minLength = parsed
+        config.recordLocation(path: "hints.min_length", location: location)
+      } else {
+        config.addDiagnostic("hints.min_length must be an integer", location: location)
+      }
     case ["hints", "magic_modifiers"]:
-      config.hints.magicModifiers = parseStringArray(value) ?? config.hints.magicModifiers
+      if let parsed = parseStringArray(value) {
+        config.hints.magicModifiers = parsed
+        config.recordLocation(path: "hints.magic_modifiers", location: location)
+      } else {
+        config.addDiagnostic(
+          "hints.magic_modifiers must be an array of strings",
+          location: location)
+      }
 
     case ["overlay", "font_size"]:
-      config.overlay.fontSize = parseDouble(value) ?? config.overlay.fontSize
+      if let parsed = parseDouble(value) {
+        config.overlay.fontSize = parsed
+        config.recordLocation(path: "overlay.font_size", location: location)
+      } else {
+        config.addDiagnostic("overlay.font_size must be a number", location: location)
+      }
     case ["overlay", "hint_fg"]:
-      config.overlay.hintFG = parseString(value) ?? config.overlay.hintFG
+      if let parsed = parseString(value) {
+        config.overlay.hintFG = parsed
+        config.recordLocation(path: "overlay.hint_fg", location: location)
+      } else {
+        config.addDiagnostic("overlay.hint_fg must be a quoted string", location: location)
+      }
     case ["overlay", "hint_bg_top"]:
-      config.overlay.hintBGTop = parseString(value) ?? config.overlay.hintBGTop
+      if let parsed = parseString(value) {
+        config.overlay.hintBGTop = parsed
+        config.recordLocation(path: "overlay.hint_bg_top", location: location)
+      } else {
+        config.addDiagnostic("overlay.hint_bg_top must be a quoted string", location: location)
+      }
     case ["overlay", "hint_bg_bottom"]:
-      config.overlay.hintBGBottom = parseString(value) ?? config.overlay.hintBGBottom
+      if let parsed = parseString(value) {
+        config.overlay.hintBGBottom = parsed
+        config.recordLocation(path: "overlay.hint_bg_bottom", location: location)
+      } else {
+        config.addDiagnostic(
+          "overlay.hint_bg_bottom must be a quoted string",
+          location: location)
+      }
     case ["overlay", "hint_border"]:
-      config.overlay.hintBorder = parseString(value) ?? config.overlay.hintBorder
+      if let parsed = parseString(value) {
+        config.overlay.hintBorder = parsed
+        config.recordLocation(path: "overlay.hint_border", location: location)
+      } else {
+        config.addDiagnostic("overlay.hint_border must be a quoted string", location: location)
+      }
 
     case ["debug", "show_bounds"]:
-      config.debug.showBounds = parseBool(value) ?? config.debug.showBounds
+      if let parsed = parseBool(value) {
+        config.debug.showBounds = parsed
+        config.recordLocation(path: "debug.show_bounds", location: location)
+      } else {
+        config.addDiagnostic("debug.show_bounds must be true or false", location: location)
+      }
     case ["debug", "bounds_bg"]:
-      config.debug.boundsBG = parseString(value) ?? config.debug.boundsBG
+      if let parsed = parseString(value) {
+        config.debug.boundsBG = parsed
+        config.recordLocation(path: "debug.bounds_bg", location: location)
+      } else {
+        config.addDiagnostic("debug.bounds_bg must be a quoted string", location: location)
+      }
     case ["debug", "bounds_fg"]:
-      config.debug.boundsFG = parseString(value) ?? config.debug.boundsFG
+      if let parsed = parseString(value) {
+        config.debug.boundsFG = parsed
+        config.recordLocation(path: "debug.bounds_fg", location: location)
+      } else {
+        config.addDiagnostic("debug.bounds_fg must be a quoted string", location: location)
+      }
     case ["debug", "profile"]:
-      config.debug.profile = parseBool(value) ?? config.debug.profile
+      if let parsed = parseBool(value) {
+        config.debug.profile = parsed
+        config.recordLocation(path: "debug.profile", location: location)
+      } else {
+        config.addDiagnostic("debug.profile must be true or false", location: location)
+      }
     case ["debug", "slow_ms"]:
-      config.debug.slowMs = parseInt(value) ?? config.debug.slowMs
+      if let parsed = parseInt(value) {
+        config.debug.slowMs = parsed
+        config.recordLocation(path: "debug.slow_ms", location: location)
+      } else {
+        config.addDiagnostic("debug.slow_ms must be an integer", location: location)
+      }
     case ["debug", "dump_ax"]:
-      config.debug.dumpAx = parseBool(value) ?? config.debug.dumpAx
+      if let parsed = parseBool(value) {
+        config.debug.dumpAx = parsed
+        config.recordLocation(path: "debug.dump_ax", location: location)
+      } else {
+        config.addDiagnostic("debug.dump_ax must be true or false", location: location)
+      }
     case ["debug", "dump_logs"]:
-      config.debug.dumpLogs = parseBool(value) ?? config.debug.dumpLogs
+      if let parsed = parseBool(value) {
+        config.debug.dumpLogs = parsed
+        config.recordLocation(path: "debug.dump_logs", location: location)
+      } else {
+        config.addDiagnostic("debug.dump_logs must be true or false", location: location)
+      }
     case ["debug", "log_level"]:
       if let raw = parseString(value), let lvl = FlashLog.Level.parse(raw) {
         config.debug.logLevel = lvl
+        config.recordLocation(path: "debug.log_level", location: location)
+      } else {
+        config.addDiagnostic(
+          "debug.log_level must be one of: debug, info, warn, error",
+          location: location)
       }
 
     default:
@@ -488,45 +616,77 @@ enum ConfigLoader {
     switch key {
     case "hints-keys":
       config.hints.keys = value
+      config.clearLocation(path: "hints.keys")
     case "hints-min-length":
-      if let i = Int(value) { config.hints.minLength = i }
+      if let i = Int(value) {
+        config.hints.minLength = i
+        config.clearLocation(path: "hints.min_length")
+      }
     case "hints-magic-modifiers":
       if let values = parseOverrideStringArray(value) {
         config.hints.magicModifiers = values
+        config.clearLocation(path: "hints.magic_modifiers")
         if !values.contains(where: { $0.lowercased() == "shift" }) {
-          config.warnings.removeAll {
+          config.removeDiagnostics {
             $0.hasPrefix(Config.ambiguousShiftMagicModifierWarningPrefix)
           }
         }
       }
 
     case "overlay-font-size":
-      if let d = Double(value) { config.overlay.fontSize = d }
+      if let d = Double(value) {
+        config.overlay.fontSize = d
+        config.clearLocation(path: "overlay.font_size")
+      }
     case "overlay-hint-fg":
       config.overlay.hintFG = value
+      config.clearLocation(path: "overlay.hint_fg")
     case "overlay-hint-bg-top":
       config.overlay.hintBGTop = value
+      config.clearLocation(path: "overlay.hint_bg_top")
     case "overlay-hint-bg-bottom":
       config.overlay.hintBGBottom = value
+      config.clearLocation(path: "overlay.hint_bg_bottom")
     case "overlay-hint-border":
       config.overlay.hintBorder = value
+      config.clearLocation(path: "overlay.hint_border")
 
     case "debug-show-bounds":
-      if let b = boolFromString(value) { config.debug.showBounds = b }
+      if let b = boolFromString(value) {
+        config.debug.showBounds = b
+        config.clearLocation(path: "debug.show_bounds")
+      }
     case "debug-bounds-bg":
       config.debug.boundsBG = value
+      config.clearLocation(path: "debug.bounds_bg")
     case "debug-bounds-fg":
       config.debug.boundsFG = value
+      config.clearLocation(path: "debug.bounds_fg")
     case "debug-profile":
-      if let b = boolFromString(value) { config.debug.profile = b }
+      if let b = boolFromString(value) {
+        config.debug.profile = b
+        config.clearLocation(path: "debug.profile")
+      }
     case "debug-slow-ms":
-      if let i = Int(value) { config.debug.slowMs = i }
+      if let i = Int(value) {
+        config.debug.slowMs = i
+        config.clearLocation(path: "debug.slow_ms")
+      }
     case "debug-dump-ax":
-      if let b = boolFromString(value) { config.debug.dumpAx = b }
+      if let b = boolFromString(value) {
+        config.debug.dumpAx = b
+        config.clearLocation(path: "debug.dump_ax")
+      }
     case "debug-dump-logs":
-      if let b = boolFromString(value) { config.debug.dumpLogs = b }
+      if let b = boolFromString(value) {
+        config.debug.dumpLogs = b
+        config.clearLocation(path: "debug.dump_logs")
+      }
     case "debug-log-level":
-      if let lvl = FlashLog.Level.parse(value) { config.debug.logLevel = lvl }
+      if let lvl = FlashLog.Level.parse(value) {
+        config.debug.logLevel = lvl
+        config.clearLocation(path: "debug.log_level")
+      }
 
     // `--config=` is consumed by `resolvePath`; ignore here so it
     // doesn't show up as an unknown key.

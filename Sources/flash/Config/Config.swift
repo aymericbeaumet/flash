@@ -1,5 +1,22 @@
 import Foundation
 
+struct ConfigLocation: Equatable {
+  let line: Int
+  let column: Int
+}
+
+struct ConfigDiagnostic: Equatable {
+  let message: String
+  let location: ConfigLocation?
+
+  var logMessage: String {
+    guard let location else { return message }
+    return "line \(location.line), col \(location.column): \(message)"
+  }
+
+  var alertLine: String { logMessage }
+}
+
 struct Config {
   struct Hints {
     var keys: String = Alphabet.defaultKeys
@@ -72,6 +89,8 @@ struct Config {
   /// Carbon hotkey fire dispatches the already-resolved action.
   var shortcuts: [Shortcut] = []
   var warnings: [String] = []
+  var diagnostics: [ConfigDiagnostic] = []
+  var valueLocations: [String: ConfigLocation] = [:]
   /// Prepared from `hints.keys` by `ConfigLoader` after TOML/env/CLI
   /// precedence has settled. Activation should use this stored value
   /// instead of re-parsing layout selectors.
@@ -80,6 +99,24 @@ struct Config {
   static let `default` = Config()
   static let ambiguousShiftMagicModifierWarningPrefix = "hints.magic_modifiers includes \"shift\""
 
+  mutating func recordLocation(path: String, location: ConfigLocation?) {
+    valueLocations[path] = location
+  }
+
+  mutating func clearLocation(path: String) {
+    valueLocations.removeValue(forKey: path)
+  }
+
+  mutating func addDiagnostic(_ message: String, location: ConfigLocation? = nil) {
+    diagnostics.append(ConfigDiagnostic(message: message, location: location))
+    warnings.append(message)
+  }
+
+  mutating func removeDiagnostics(where predicate: (String) -> Bool) {
+    diagnostics.removeAll { predicate($0.message) }
+    warnings.removeAll(where: predicate)
+  }
+
   mutating func prepareDerivedValues() {
     resolvedAlphabet = Alphabet.resolve(hints.keys)
     removeAmbiguousShiftMagicModifier()
@@ -87,17 +124,18 @@ struct Config {
 
   private mutating func removeAmbiguousShiftMagicModifier() {
     guard resolvedAlphabet.chars.contains(where: { !$0.isLetter }) else {
-      warnings.removeAll { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
+      removeDiagnostics { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
       return
     }
     let original = hints.magicModifiers
     hints.magicModifiers.removeAll { $0.lowercased() == "shift" }
     guard original.count != hints.magicModifiers.count else { return }
-    warnings.removeAll { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
-    warnings.append(
+    removeDiagnostics { $0.hasPrefix(Self.ambiguousShiftMagicModifierWarningPrefix) }
+    addDiagnostic(
       "hints.magic_modifiers includes \"shift\", but resolved hints.keys "
         + "contains non-letter characters (\(String(resolvedAlphabet.chars))); "
-        + "removed \"shift\" because shifted-character input is ambiguous"
+        + "removed \"shift\" because shifted-character input is ambiguous",
+      location: valueLocations["hints.keys"] ?? valueLocations["hints.magic_modifiers"]
     )
   }
 
@@ -149,6 +187,30 @@ struct Config {
       "raw": hints.keys,
       "warning": resolvedAlphabet.warning ?? NSNull(),
     ])
+  }
+
+  var loadingDiagnostics: [ConfigDiagnostic] {
+    var diagnostics = self.diagnostics
+    if let warning = resolvedAlphabet.warning {
+      diagnostics.append(
+        ConfigDiagnostic(
+          message: warning,
+          location: valueLocations["hints.keys"]))
+    }
+    return diagnostics
+  }
+
+  var loadingErrorAlertMessage: String? {
+    let diagnostics = loadingDiagnostics
+    guard !diagnostics.isEmpty else { return nil }
+    let visibleDiagnostics = diagnostics.prefix(3).map { "- \($0.alertLine)" }
+    var lines = ["[Flash]", diagnostics.count == 1 ? "Config error" : "Config errors"]
+    lines.append(contentsOf: visibleDiagnostics)
+    let remaining = diagnostics.count - visibleDiagnostics.count
+    if remaining > 0 {
+      lines.append("- \(remaining) more config issue\(remaining == 1 ? "" : "s")")
+    }
+    return lines.joined(separator: "\n")
   }
 
   private func compactJSON(_ object: Any) -> String {

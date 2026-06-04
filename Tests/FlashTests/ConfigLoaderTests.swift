@@ -452,6 +452,42 @@ final class ConfigLoaderTests: XCTestCase {
       ])
   }
 
+  func testLoadingErrorAlertIncludesResolvedAlphabetWarning() {
+    let c = ConfigLoader.parse("[hints]\nkeys = \"<colemak_toprow|colemak_homerow>\"")
+    let message = c.loadingErrorAlertMessage
+    XCTAssertNotNil(message)
+    XCTAssertEqual(message?.components(separatedBy: "\n").first, "[Flash]")
+    XCTAssertTrue(message?.contains("\nConfig error\n") == true)
+    XCTAssertTrue(message?.contains("line 2, col 8") == true)
+    XCTAssertTrue(message?.contains("Unknown hints.keys preset") == true)
+    XCTAssertTrue(message?.contains("colemak_toprow|colemak_homerow") == true)
+  }
+
+  func testLoadingErrorAlertIncludesShortcutWarnings() {
+    let c = ConfigLoader.parse(
+      """
+      [shortcuts]
+      "cmd+ctrl+b" = "show_hints"
+      """)
+    let message = c.loadingErrorAlertMessage
+    XCTAssertNotNil(message)
+    XCTAssertEqual(message?.components(separatedBy: "\n").first, "[Flash]")
+    XCTAssertTrue(message?.contains("line 2, col 16") == true)
+    XCTAssertTrue(message?.contains("cmd+ctrl+b") == true)
+  }
+
+  func testLoadingErrorAlertIsNilForValidConfig() {
+    let c = ConfigLoader.parse("[hints]\nkeys = \"<colemak_homerow+colemak_toprow>\"")
+    XCTAssertNil(c.loadingErrorAlertMessage)
+  }
+
+  func testMalformedKnownConfigValueReportsLineAndColumn() {
+    let c = ConfigLoader.parse("[debug]\nslow_ms = \"fast\"")
+    XCTAssertEqual(c.warnings.count, 1)
+    XCTAssertEqual(c.loadingDiagnostics.first?.location, ConfigLocation(line: 2, column: 11))
+    XCTAssertTrue(c.loadingErrorAlertMessage?.contains("debug.slow_ms must be an integer") == true)
+  }
+
   private static func parseJSONObject(_ json: String) throws -> [String: Any]? {
     let data = Data(json.utf8)
     return try JSONSerialization.jsonObject(with: data) as? [String: Any]

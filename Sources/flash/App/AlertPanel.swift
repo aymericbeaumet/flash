@@ -7,6 +7,21 @@ import QuartzCore
 /// 27pt system font, radius 27, 2s display, 0.15s fade out. Only one
 /// alert is visible at a time; a new alert immediately replaces the old one.
 final class AlertPanel: NSPanel {
+  struct Style {
+    let fillColor: NSColor
+    let strokeColor: NSColor
+    let textColor: NSColor
+
+    static let standard = Style(
+      fillColor: NSColor.black.withAlphaComponent(0.75),
+      strokeColor: .white,
+      textColor: .white)
+    static let error = Style(
+      fillColor: NSColor.systemRed.withAlphaComponent(0.92),
+      strokeColor: NSColor.white.withAlphaComponent(0.95),
+      textColor: .white)
+  }
+
   private let boxView = NSView(frame: .zero)
   private let label = NSTextField(labelWithString: "")
   private var hideTimer: Timer?
@@ -15,9 +30,6 @@ final class AlertPanel: NSPanel {
   private static let textSize: CGFloat = 27
   private static let radius: CGFloat = 27
   private static let strokeWidth: CGFloat = 2
-  private static let fillColor = NSColor.black.withAlphaComponent(0.75)
-  private static let strokeColor = NSColor.white
-  private static let textColor = NSColor.white
   private static let displayDuration: TimeInterval = 2.0
   private static let fadeOutDuration: TimeInterval = 0.15
   private static let textGutter: CGFloat = 10
@@ -46,8 +58,8 @@ final class AlertPanel: NSPanel {
     contentView = content
 
     boxView.wantsLayer = true
-    boxView.layer?.backgroundColor = Self.fillColor.cgColor
-    boxView.layer?.borderColor = Self.strokeColor.cgColor
+    boxView.layer?.backgroundColor = Style.standard.fillColor.cgColor
+    boxView.layer?.borderColor = Style.standard.strokeColor.cgColor
     boxView.layer?.borderWidth = Self.strokeWidth
     boxView.layer?.cornerRadius = Self.radius
     boxView.layer?.masksToBounds = true
@@ -55,7 +67,7 @@ final class AlertPanel: NSPanel {
     boxView.addSubview(label)
 
     label.font = NSFont.systemFont(ofSize: Self.textSize)
-    label.textColor = Self.textColor
+    label.textColor = Style.standard.textColor
     label.alignment = .center
     label.backgroundColor = .clear
     label.lineBreakMode = .byWordWrapping
@@ -67,7 +79,8 @@ final class AlertPanel: NSPanel {
   override var canBecomeKey: Bool { false }
   override var canBecomeMain: Bool { false }
 
-  func show(_ message: String, duration: TimeInterval = 2.0) {
+  func show(_ message: String, duration: TimeInterval? = nil, style: Style = .standard) {
+    let duration = duration ?? Self.displayDuration
     token &+= 1
     let myToken = token
     hideTimer?.invalidate()
@@ -92,7 +105,10 @@ final class AlertPanel: NSPanel {
     setFrame(panelFrame, display: false)
     contentView?.frame = boxFrame
     boxView.frame = boxFrame
+    boxView.layer?.backgroundColor = style.fillColor.cgColor
+    boxView.layer?.borderColor = style.strokeColor.cgColor
     label.stringValue = message
+    label.textColor = style.textColor
     label.frame = CGRect(
       x: padding + Self.strokeWidth / 2,
       y: (boxSize.height - textSize.height) / 2,
