@@ -19,6 +19,18 @@ public enum OracleFixture: String, CaseIterable {
   case ahrefsBlog
   case yCombinatorAbout
 
+  /// Fixtures the default `flash-vimium-oracle` sweep iterates. .reddit
+  /// is intentionally excluded — old.reddit's saved JS intercepts 'f'
+  /// before Vimium's listener fires, so the oracle's hint trigger
+  /// never activates and the run hangs. Run explicitly via
+  /// `--fixture reddit` to reproduce.
+  public static var allCases: [OracleFixture] {
+    [
+      .baselineSynthetic, .example, .hackerNews, .wikipedia, .mdn,
+      .githubExplore, .stackoverflow, .ahrefsBlog, .yCombinatorAbout,
+    ]
+  }
+
   public var displayName: String {
     switch self {
     case .baselineSynthetic: return "baseline-synthetic"
