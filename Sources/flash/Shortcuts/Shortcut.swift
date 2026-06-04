@@ -33,13 +33,16 @@ enum ShortcutAction {
   case shell([String])
 }
 
-/// Resolve a single string value into a `ShortcutAction`. Only
-/// `flash://...` URLs are accepted as strings — for anything else
-/// the user must use the array form (`["open", ...]`).
+/// Resolve a single string value into a `ShortcutAction`. The
+/// string must be a `flash://...` URL; the scheme is mandatory so
+/// every config line either *visibly* takes the fast path
+/// (`"flash://…"`) or *visibly* takes the slow argv path
+/// (`["open", …]`). Parsing is delegated to
+/// `URLEventHandler.parseFlashURL` — the same parser the live
+/// AppleEvent handler uses — so adding a new command happens in
+/// exactly one place.
 func parseShortcutAction(rawString s: String) -> ShortcutAction? {
-  let trimmed = s.trimmingCharacters(in: .whitespaces)
-  guard trimmed.lowercased().hasPrefix("flash://") else { return nil }
-  guard let cmd = URLEventHandler.parseFlashURL(trimmed) else { return nil }
+  guard let cmd = URLEventHandler.parseFlashURL(s) else { return nil }
   return .flashCommand(cmd)
 }
 

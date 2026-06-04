@@ -106,6 +106,61 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseShortcutAction(rawString: "flash://open_app"))  // no name
   }
 
+  func testParseFlashMoveWindowPositionOnly() {
+    let action = parseShortcutAction(
+      rawString: "flash://move_window?position=lefthalf")
+    guard case .flashCommand(.moveWindow(let params)) = action else {
+      return XCTFail("expected .moveWindow")
+    }
+    XCTAssertEqual(params.position, .leftHalf)
+    XCTAssertEqual(params.screen, 0)
+  }
+
+  func testParseFlashMoveWindowScreenOnly() {
+    // `screen=+1` with no `position` is the multi-monitor "move
+    // this window to the next display" form. Position must remain
+    // nil so WindowMover does a proportional remap instead of
+    // snapping to a fixed slot.
+    let next = parseShortcutAction(
+      rawString: "flash://move_window?screen=+1")
+    guard case .flashCommand(.moveWindow(let nextP)) = next else {
+      return XCTFail("expected .moveWindow for screen=+1")
+    }
+    XCTAssertNil(nextP.position)
+    XCTAssertEqual(nextP.screen, 1)
+
+    let prev = parseShortcutAction(
+      rawString: "flash://move_window?screen=-1")
+    guard case .flashCommand(.moveWindow(let prevP)) = prev else {
+      return XCTFail("expected .moveWindow for screen=-1")
+    }
+    XCTAssertNil(prevP.position)
+    XCTAssertEqual(prevP.screen, -1)
+  }
+
+  func testParseFlashMoveWindowPositionAndScreen() {
+    let action = parseShortcutAction(
+      rawString: "flash://move_window?position=maximized&screen=+1")
+    guard case .flashCommand(.moveWindow(let params)) = action else {
+      return XCTFail("expected .moveWindow")
+    }
+    XCTAssertEqual(params.position, .maximized)
+    XCTAssertEqual(params.screen, 1)
+  }
+
+  func testParseFlashMoveWindowRejectsInvalidOrEmpty() {
+    // Empty form is rejected — a binding with no query is always a
+    // user error, not a "silent no-op" hotkey.
+    XCTAssertNil(parseShortcutAction(rawString: "flash://move_window"))
+    // A typo'd position must not silently degrade to "just move
+    // screen" — reject so the user sees the parse error in logs.
+    XCTAssertNil(
+      parseShortcutAction(rawString: "flash://move_window?position=somewhere"))
+    // Non-numeric `screen=` is also a parse failure.
+    XCTAssertNil(
+      parseShortcutAction(rawString: "flash://move_window?screen=next"))
+  }
+
   func testParseShellArgv() {
     let action = parseShortcutAction(rawArray: ["sh", "-c", "echo hi"])
     guard case .shell(let argv) = action else {

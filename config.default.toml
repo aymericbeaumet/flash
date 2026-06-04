@@ -82,6 +82,15 @@ dump_ax = false
 # terminal.
 dump_logs = false
 
+# Minimum log level emitted to stderr (and to flash.log when
+# dump_logs = true). Anything below this level is dropped before the
+# message is even formatted, so leaving this at "info" has zero cost
+# for noisy DEBUG traces. Accepted values: "debug" | "info" |
+# "warn" | "error". Set to "debug" while investigating an issue
+# (profiler step-by-step breakdown shows up at this level); leave at
+# "info" for normal use.
+log_level = "info"
+
 # Performance behaviours (AX-event-driven prepared model, concurrent
 # subtree walk, parallel deferred action-name IPC) are always on and
 # not configurable. See AGENTS.md → "Prepared model contract" for the
@@ -97,10 +106,27 @@ dump_logs = false
 # Values are one of:
 #
 #   - a `flash://...` URL — dispatched in-process, sub-millisecond
-#     (no shell, no Launch Services). Recognised commands:
+#     (no shell, no Launch Services). The `flash://` scheme is
+#     mandatory; bare `"show_hints"` is rejected so each config
+#     line *visibly* declares which path it uses. Recognised
+#     commands:
 #       flash://show_hints[?right=1]
 #       flash://dismiss_hints
 #       flash://open_app?name=<App Name or bundle ID>
+#       flash://move_window[?position=<P>][&screen=<N>]
+#         Both query keys are optional and orthogonal:
+#           position: named slot on the target screen. P ∈
+#             topleft, topright, bottomleft, bottomright,
+#             lefthalf, righthalf, tophalf, bottomhalf,
+#             maximized, centered
+#           screen: relative monitor offset. 0 = current screen
+#             (default), `+N` / `-N` cycle forward/backward through
+#             `NSScreen.screens` with modulo wrap.
+#         If only `position` is given, the window snaps to that slot
+#         on the current screen. If only `screen` is given, the
+#         window is proportionally remapped onto the new screen
+#         (keeps its relative shape — a left-half stays a
+#         left-half across monitors of different resolution).
 #       flash://quit
 #
 #   - an array of strings — exec'd as argv via /usr/bin/env (or the
@@ -122,6 +148,8 @@ dump_logs = false
 #   "ctrl+space"   = "flash://show_hints"
 #   "cmd+ctrl+a"   = "flash://open_app?name=Alacritty"
 #   "cmd+ctrl+s"   = "flash://open_app?name=com.tinyspeck.slackmacgap"
+#   "alt+h"        = "flash://move_window?position=lefthalf"
+#   "alt+n"        = "flash://move_window?position=maximized&screen=+1"
 #   "cmd+ctrl+g"   = ["open", "https://github.com"]
 #   "cmd+ctrl+t"   = ["sh", "-c", "tmux new -A -s main"]
 [shortcuts]

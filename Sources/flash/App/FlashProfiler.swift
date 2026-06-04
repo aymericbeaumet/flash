@@ -97,21 +97,27 @@ final class FlashProfiler {
     lock.unlock()
 
     var header =
-      "flash: profile trigger=\(triggerMs) kind=\(kind) id=\(id) total_ms=\(Self.format(total)) outcome=\(Self.clean(outcome))"
+      "[profile] trigger=\(triggerMs) kind=\(kind) id=\(id) "
+      + "total_ms=\(Self.format(total)) outcome=\(Self.clean(outcome))"
     if let detail, !detail.isEmpty {
       header += " \(Self.clean(detail))"
     }
-    header += "\n"
-    FlashLog.write(header)
+    // Profiler runs are explicit opt-in via debug.profile (or
+    // debug.slow_ms tripping) — the user is asking for the trace,
+    // so emit at INFO so it shows up under the default level too.
+    // Per-mark breakdown is verbose enough to push to DEBUG.
+    FlashLog.info(header)
 
     for mark in snapshot {
       var line =
-        "flash: profile trigger=\(triggerMs) kind=\(kind) id=\(id) elapsed_ms=\(Self.format(mark.elapsedMs)) step_ms=\(Self.format(mark.stepMs)) stage=\(Self.clean(mark.name))"
+        "[profile] trigger=\(triggerMs) kind=\(kind) id=\(id) "
+        + "elapsed_ms=\(Self.format(mark.elapsedMs)) "
+        + "step_ms=\(Self.format(mark.stepMs)) "
+        + "stage=\(Self.clean(mark.name))"
       if let detail = mark.detail, !detail.isEmpty {
         line += " \(detail)"
       }
-      line += "\n"
-      FlashLog.write(line)
+      FlashLog.debug(line)
     }
   }
 

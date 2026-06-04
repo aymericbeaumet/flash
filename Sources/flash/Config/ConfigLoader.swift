@@ -207,6 +207,10 @@ enum ConfigLoader {
       config.debug.dumpAx = parseBool(value) ?? config.debug.dumpAx
     case ["debug", "dump_logs"]:
       config.debug.dumpLogs = parseBool(value) ?? config.debug.dumpLogs
+    case ["debug", "log_level"]:
+      if let raw = parseString(value), let lvl = FlashLog.Level.parse(raw) {
+        config.debug.logLevel = lvl
+      }
 
     default:
       break
@@ -357,6 +361,8 @@ enum ConfigLoader {
       if let b = boolFromString(value) { config.debug.dumpAx = b }
     case "debug-dump-logs":
       if let b = boolFromString(value) { config.debug.dumpLogs = b }
+    case "debug-log-level":
+      if let lvl = FlashLog.Level.parse(value) { config.debug.logLevel = lvl }
 
     // `--config=` is consumed by `resolvePath`; ignore here so it
     // doesn't show up as an unknown key.

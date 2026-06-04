@@ -517,8 +517,9 @@ final class AppMonitor {
           self.preparedModels.store(built)
           self.scheduleMaintenanceRefresh(for: built)
           if cfg.debug.profile {
-            FlashLog.write(
-              "flash: model_ready pid=\(pid) bundle=\(context.bundleIdentifier) hints=\(built.hints.count) token=\(startToken) reason=\(reason)\n"
+            FlashLog.info(
+              "[ax] model_ready pid=\(pid) bundle=\(context.bundleIdentifier) "
+                + "hints=\(built.hints.count) token=\(startToken) reason=\(reason)"
             )
           }
         }
@@ -794,6 +795,7 @@ final class AppMonitor {
   ///                   ~/Library/Logs/Flash/flash.log (appended).
   private func configureProviders(for cfg: Config, triggerMs: UInt64?) {
     FlashLog.setMirrorToFile(cfg.debug.dumpLogs)
+    FlashLog.setLevel(cfg.debug.logLevel)
 
     let ax = registry.providers.first { $0 is AccessibilityProvider } as? AccessibilityProvider
     if let ax {

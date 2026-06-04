@@ -55,7 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       case .showHints(let right): self.activate(rightClick: right)
       case .dismissHints: self.cancelOverlay()
       case .quit: NSApp.terminate(nil)
-      case .openApp(let name): self.shortcuts.cache.activate(target: name)
+      case .openApp(let name): AppLauncher.activate(target: name)
+      case .moveWindow(let params): WindowMover.move(params)
       }
     }
     urlHandler = URLEventHandler(handler: dispatch)
@@ -458,6 +459,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private func reloadConfig() {
     let cfg = ConfigLoader.load()
     config = cfg
+    // Apply log settings immediately — they need to be live for
+    // any warning the rest of `reloadConfig` might emit (e.g.
+    // unparsable hotkeys logged by `shortcuts.apply`).
+    // `configureProviders` re-applies these on every activation
+    // walk so a hot-reload of the config also propagates without
+    // needing to touch `FlashLog` from two places.
+    FlashLog.setLevel(cfg.debug.logLevel)
+    FlashLog.setMirrorToFile(cfg.debug.dumpLogs)
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
     monitor.updateConfig(cfg)
@@ -474,8 +483,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // granted permission at some prior session.
     if trusted { cachedAccessibilityTrusted = true }
     if !trusted {
-      FlashLog.write(
-        "flash: Accessibility permission not granted. Grant it in System Settings → Privacy & Security → Accessibility for /Applications/Flash.app.\n"
+      FlashLog.warn(
+        "[ax] accessibility permission not granted. "
+          + "Grant it in System Settings → Privacy & Security → Accessibility "
+          + "for /Applications/Flash.app."
       )
     }
   }

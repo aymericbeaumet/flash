@@ -45,6 +45,11 @@ struct Config {
     /// running Flash via launchd (no terminal) but you still want to
     /// see profile traces and one-off warnings.
     var dumpLogs: Bool = false
+    /// Minimum severity emitted by `FlashLog`. Messages below this
+    /// level are dropped before any string interpolation runs.
+    /// Defaults to `info` — set to `debug` while investigating an
+    /// issue, or `warn` / `error` to mute the steady-state traces.
+    var logLevel: FlashLog.Level = .info
   }
 
   var hints = Hints()

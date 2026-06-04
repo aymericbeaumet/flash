@@ -135,12 +135,13 @@ final class OverlayPanel: NSPanel {
     let fallbackScale =
       NSScreen.main?.backingScaleFactor ?? screensInPanel.first?.scale ?? 2
 
-    // Hoisted out of the per-chip loop: every value below is identical
-    // for every chip in this activation (HintAssigner guarantees uniform
-    // label length, the colors come from config not from the hint, and
-    // the font instance never changes mid-render). Previously every one
-    // of these was recomputed N times — at N=200 that's 200 NSFont
-    // allocations, 200 NSColor allocations, 200 CGColor accesses.
+    // Hoisted out of the per-chip loop: colors, font, and chip height
+    // are identical for every chip in this activation. Chip *width*
+    // is per-hint — `HintAssigner` now packs singles + 2-char labels
+    // in the same activation (so the user can commit a 1-key hint
+    // whenever the target count allows), and using a single uniform
+    // width sized to the first hint clipped/squished every label
+    // with a different length.
     let gradientColors: [CGColor] = [bgBottom.cgColor, bgTop.cgColor]
     let fgCG = fg.cgColor
     let borderCG = border?.cgColor ?? OverlayPanel.fallbackBorderCGColor
@@ -150,11 +151,14 @@ final class OverlayPanel: NSPanel {
     // `attributedLabel(...)`; the weight stays bold so glyph advance
     // and therefore chip width don't change across keystrokes.
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
-    let labelLen = hints.first?.display.count ?? 1
-    let approxWidth = Self.chipWidth(forLabelLength: labelLen, fontSize: fontSize)
     let chipHeight = Self.chipHeight(forFontSize: fontSize)
-    let labelFrame = CGRect(
-      x: 0, y: (chipHeight - fontSize - 2) / 2, width: approxWidth, height: fontSize + 2)
+    let labelYOffset = (chipHeight - fontSize - 2) / 2
+    let labelHeight = fontSize + 2
+    // The full label space in HintAssigner caps out at a handful of
+    // distinct lengths (usually 1 and 2). Cache `chipWidth` by length
+    // so we pay the arithmetic once per distinct length, not per chip.
+    var widthByLen: [Int: CGFloat] = [:]
+    widthByLen.reserveCapacity(2)
 
     let debugEnabled = debugConfig.showBounds
     if debugEnabled {
@@ -214,11 +218,21 @@ final class OverlayPanel: NSPanel {
         display: hint.display, typedPrefixLen: 0,
         font: labelFont, fgNS: fg)
       label.foregroundColor = fgCG
-      label.frame = labelFrame
+
+      let labelLen = hint.display.count
+      let chipW: CGFloat
+      if let cached = widthByLen[labelLen] {
+        chipW = cached
+      } else {
+        chipW = Self.chipWidth(forLabelLength: labelLen, fontSize: fontSize)
+        widthByLen[labelLen] = chipW
+      }
+      label.frame = CGRect(
+        x: 0, y: labelYOffset, width: chipW, height: labelHeight)
 
       let chipGlobal = Self.chipFrame(
         target: targetFrame,
-        width: approxWidth,
+        width: chipW,
         height: chipHeight
       )
       let chipLocal = CGRect(

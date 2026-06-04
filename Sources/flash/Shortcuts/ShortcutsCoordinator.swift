@@ -18,18 +18,15 @@ import Foundation
 ///     thread so a slow spawn never blocks the next hotkey.
 final class ShortcutsCoordinator {
 
-  let cache = AppActivationCache()
   private let hotkeys = HotKeyManager()
   private var flashDispatch: ((URLCommand) -> Void)?
 
   func start(dispatch: @escaping (URLCommand) -> Void) {
     flashDispatch = dispatch
-    cache.start()
   }
 
   func stop() {
     hotkeys.unregisterAll()
-    cache.stop()
     flashDispatch = nil
   }
 
@@ -37,7 +34,7 @@ final class ShortcutsCoordinator {
     hotkeys.unregisterAll()
     for shortcut in shortcuts {
       guard let parsed = HotkeySyntax.parse(hotkey: shortcut.hotkey) else {
-        FlashLog.write(
+        FlashLog.warn(
           "[shortcuts] could not parse hotkey \"\(shortcut.hotkey)\"")
         continue
       }
@@ -48,7 +45,7 @@ final class ShortcutsCoordinator {
         self?.fire(action)
       }
       if !ok {
-        FlashLog.write(
+        FlashLog.warn(
           "[shortcuts] could not register \"\(shortcut.hotkey)\" — "
             + "another app may already own this hotkey")
       }
@@ -86,7 +83,7 @@ final class ShortcutsCoordinator {
       do {
         try task.run()
       } catch {
-        FlashLog.write(
+        FlashLog.error(
           "[shortcuts] shell exec failed for \(argv): \(error)")
       }
     }
