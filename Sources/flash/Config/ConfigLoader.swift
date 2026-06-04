@@ -150,12 +150,26 @@ enum ConfigLoader {
   private static func apply(table: [String], key: String, value: String, into config: inout Config)
   {
     // [shortcuts] is a free-form map: every key in the section is a
-    // hotkey string, every value is the target app. Handle out-of-
-    // band of the per-key path-match switch below.
-    if table == ["shortcuts"] {
-      let app = parseString(value) ?? value
-      if !key.isEmpty, !app.isEmpty {
-        config.shortcuts[key] = app
+    // hotkey string. The value is either a single string (URL or
+    // path — passed to `open`, or short-circuited internally for
+    // `flash://`) or an array of strings (exec'd as argv). Both
+    // forms are resolved to a typed `ShortcutAction` AOT here so
+    // the hot path never re-parses a string on a Carbon callback.
+    if table == ["shortcuts"], !key.isEmpty {
+      let action: ShortcutAction?
+      if let arr = parseStringArray(value) {
+        action = parseShortcutAction(rawArray: arr)
+      } else if let s = parseString(value) {
+        action = parseShortcutAction(rawString: s)
+      } else {
+        action = nil
+      }
+      if let action {
+        config.shortcuts.append(Shortcut(hotkey: key, action: action))
+      } else {
+        config.warnings.append(
+          "shortcut \"\(key)\" has an unrecognised value (\(value)) — "
+            + "use a URL, a path, a flash:// command, or [\"argv\", ...]")
       }
       return
     }
@@ -210,6 +224,43 @@ enum ConfigLoader {
   }
   private static func parseInt(_ v: String) -> Int? { Int(v) }
   private static func parseDouble(_ v: String) -> Double? { Double(v) }
+
+  /// Parse a TOML inline array of strings: `["a", "b", "c"]`.
+  /// Returns nil when the input doesn't look like an array. Handles
+  /// quoted strings with `\"` and `\\` escapes; rejects malformed
+  /// input (unterminated quote, stray garbage) by returning nil.
+  static func parseStringArray(_ v: String) -> [String]? {
+    let trimmed = v.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasPrefix("["), trimmed.hasSuffix("]") else { return nil }
+    let inner = trimmed.dropFirst().dropLast()
+    var out: [String] = []
+    var i = inner.startIndex
+    while i < inner.endIndex {
+      // Skip whitespace + element separators.
+      while i < inner.endIndex,
+        inner[i].isWhitespace || inner[i] == ","
+      {
+        i = inner.index(after: i)
+      }
+      if i >= inner.endIndex { break }
+      guard inner[i] == "\"" else { return nil }
+      i = inner.index(after: i)
+      var current = ""
+      while i < inner.endIndex, inner[i] != "\"" {
+        if inner[i] == "\\", inner.index(after: i) < inner.endIndex {
+          i = inner.index(after: i)
+          current.append(inner[i])
+        } else {
+          current.append(inner[i])
+        }
+        i = inner.index(after: i)
+      }
+      guard i < inner.endIndex else { return nil }  // unterminated
+      out.append(current)
+      i = inner.index(after: i)
+    }
+    return out
+  }
 
   // MARK: CLI + env overrides
   //

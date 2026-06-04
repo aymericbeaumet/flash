@@ -51,11 +51,18 @@ struct Config {
   var overlay = Overlay()
   var debug = Debug()
   /// `[shortcuts]` section. Each entry maps a hotkey string
-  /// (skhd-style LHS, e.g. `"cmd+ctrl - a"`) to an app name or
-  /// bundle identifier (`"Alacritty"`, `"com.apple.Safari"`).
-  /// `ShortcutsCoordinator` registers these via Carbon at launch
-  /// and re-registers them on every config reload.
-  var shortcuts: [String: String] = [:]
+  /// (e.g. `"cmd+ctrl+a"`) to one of:
+  ///
+  ///   - a single string, which is either a `flash://...` URL
+  ///     (fast path — dispatched internally), any other URL or
+  ///     file path (passed to `NSWorkspace.open`), or
+  ///   - an array of strings, which is exec'd as `argv` (the
+  ///     first element is the executable, the rest are args).
+  ///
+  /// `ShortcutsCoordinator` resolves each value into a typed
+  /// `ShortcutAction` AOT at config-load. The hot path on a
+  /// Carbon hotkey fire dispatches the already-resolved action.
+  var shortcuts: [Shortcut] = []
   var warnings: [String] = []
 
   static let `default` = Config()

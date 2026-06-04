@@ -49,19 +49,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // growth uses the regular dequeue/alloc fallback.
     overlay.warmPool(count: 256)
 
-    urlHandler = URLEventHandler { [weak self] cmd in
+    let dispatch: (URLCommand) -> Void = { [weak self] cmd in
       guard let self else { return }
       switch cmd {
       case .showHints(let right): self.activate(rightClick: right)
       case .dismissHints: self.cancelOverlay()
       case .quit: NSApp.terminate(nil)
+      case .openApp(let name): self.shortcuts.cache.activate(target: name)
       }
     }
+    urlHandler = URLEventHandler(handler: dispatch)
+    shortcuts.start(dispatch: dispatch)
 
     watchConfigFile()
     logPermissionState()
     installDismissObservers()
-    shortcuts.start()
   }
 
   private func installDismissObservers() {

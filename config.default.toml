@@ -88,21 +88,34 @@ dump_logs = false
 # determinism invariants. No per-IPC AX timeout is ever set — caps
 # tight enough to be useful tripped Firefox's lazy AXWebArea build.
 
-# App-switching hotkeys. The key is the hotkey string — modifiers and
-# the key joined by `+`, the last token is the key. Supported modifiers
-# (case-insensitive): cmd, shift, ctrl, alt (aka opt/option). Supported
-# keys: a-z, 0-9, ANSI punctuation single chars, named keys (return,
-# tab, space, escape, delete, arrows, home/end, pageup/down), or 0xNN
-# raw virtual-key.
+# Hotkey -> URL bindings. The key is the hotkey:
+#   modifiers and the key joined by `+`, last token is the key.
+#   Modifiers (case-insensitive): cmd, shift, ctrl, alt/opt/option.
+#   Keys: a-z, 0-9, ANSI punctuation single chars, named keys (return,
+#   tab, space, escape, delete, arrows, home/end, pageup/down), 0xNN.
 #
-# Values are app names or bundle IDs. Both resolve via NSWorkspace.
-# Carbon RegisterEventHotKey catches the keypress system-level, the
-# cached NSRunningApplication is activated directly — sub-10ms.
+# Values are one of:
+#
+#   - a `flash://...` URL — dispatched in-process, sub-millisecond
+#     (no shell, no Launch Services). Recognised commands:
+#       flash://show_hints[?right=1]
+#       flash://dismiss_hints
+#       flash://open_app?name=<App Name or bundle ID>
+#       flash://quit
+#
+#   - any other URL or absolute path — passed to NSWorkspace.open.
+#
+#   - an array of strings — exec'd as argv via /usr/bin/env (or the
+#     absolute path if argv[0] is rooted). Use this for shell-style
+#     commands; if you need pipes/redirects, do them via
+#     ["sh", "-c", "..."].
 #
 # Examples (none enabled by default):
 #
 #   [shortcuts]
-#   "cmd+ctrl+a" = "Alacritty"
-#   "cmd+shift+r" = "Reminders"
-#   "cmd+ctrl+s" = "com.tinyspeck.slackmacgap"
+#   "ctrl+space"   = "flash://show_hints"
+#   "cmd+ctrl+a"   = "flash://open_app?name=Alacritty"
+#   "cmd+ctrl+s"   = "flash://open_app?name=com.tinyspeck.slackmacgap"
+#   "cmd+ctrl+g"   = "https://github.com"
+#   "cmd+ctrl+t"   = ["sh", "-c", "tmux new -A -s main"]
 [shortcuts]

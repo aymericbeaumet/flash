@@ -6,24 +6,19 @@ import XCTest
 final class HotkeySyntaxTests: XCTestCase {
 
   func testSingleModifier() {
-    let r = HotkeySyntax.parse(hotkey: "cmd+h", target: "Safari")
+    let r = HotkeySyntax.parse(hotkey: "cmd+h")
     XCTAssertEqual(r?.modifiers, UInt32(cmdKey))
     XCTAssertEqual(r?.virtualKey, 0x04)  // h
-    if case .launchApp(let t) = r?.action {
-      XCTAssertEqual(t, "Safari")
-    } else {
-      XCTFail("expected launchApp")
-    }
   }
 
   func testMultipleModifiersJoinedByPlus() {
-    let r = HotkeySyntax.parse(hotkey: "cmd+ctrl+a", target: "Alacritty")
+    let r = HotkeySyntax.parse(hotkey: "cmd+ctrl+a")
     XCTAssertEqual(r?.modifiers, UInt32(cmdKey | controlKey))
     XCTAssertEqual(r?.virtualKey, 0x00)  // a
   }
 
   func testAllFourModifiers() {
-    let r = HotkeySyntax.parse(hotkey: "cmd+shift+ctrl+alt+1", target: "Finder")
+    let r = HotkeySyntax.parse(hotkey: "cmd+shift+ctrl+alt+1")
     let expected = UInt32(cmdKey | shiftKey | controlKey | optionKey)
     XCTAssertEqual(r?.modifiers, expected)
     XCTAssertEqual(r?.virtualKey, 0x12)  // 1
@@ -31,38 +26,101 @@ final class HotkeySyntaxTests: XCTestCase {
 
   func testNamedKeys() {
     XCTAssertEqual(
-      HotkeySyntax.parse(hotkey: "cmd+return", target: "X")?.virtualKey,
+      HotkeySyntax.parse(hotkey: "cmd+return")?.virtualKey,
       UInt32(kVK_Return))
     XCTAssertEqual(
-      HotkeySyntax.parse(hotkey: "ctrl+alt+left", target: "X")?.virtualKey,
+      HotkeySyntax.parse(hotkey: "ctrl+alt+left")?.virtualKey,
       UInt32(kVK_LeftArrow))
     XCTAssertEqual(
-      HotkeySyntax.parse(hotkey: "cmd+escape", target: "X")?.virtualKey,
-      UInt32(kVK_Escape))
+      HotkeySyntax.parse(hotkey: "ctrl+space")?.virtualKey,
+      UInt32(kVK_Space))
   }
 
   func testCaseInsensitive() {
-    let upper = HotkeySyntax.parse(hotkey: "CMD+CTRL+A", target: "X")
-    let lower = HotkeySyntax.parse(hotkey: "cmd+ctrl+a", target: "X")
+    let upper = HotkeySyntax.parse(hotkey: "CMD+CTRL+A")
+    let lower = HotkeySyntax.parse(hotkey: "cmd+ctrl+a")
     XCTAssertEqual(upper?.modifiers, lower?.modifiers)
     XCTAssertEqual(upper?.virtualKey, lower?.virtualKey)
   }
 
   func testAliasesMapToSameFlag() {
-    let a = HotkeySyntax.parse(hotkey: "command+option+control+a", target: "X")
-    let b = HotkeySyntax.parse(hotkey: "cmd+opt+ctrl+a", target: "X")
-    let c = HotkeySyntax.parse(hotkey: "cmd+alt+ctrl+a", target: "X")
+    let a = HotkeySyntax.parse(hotkey: "command+option+control+a")
+    let b = HotkeySyntax.parse(hotkey: "cmd+opt+ctrl+a")
+    let c = HotkeySyntax.parse(hotkey: "cmd+alt+ctrl+a")
     XCTAssertEqual(a?.modifiers, b?.modifiers)
     XCTAssertEqual(b?.modifiers, c?.modifiers)
   }
 
   func testRawHexKeyCode() {
-    let r = HotkeySyntax.parse(hotkey: "cmd+0x32", target: "X")
+    let r = HotkeySyntax.parse(hotkey: "cmd+0x32")
     XCTAssertEqual(r?.virtualKey, 0x32)
   }
 
   func testInvalidKeyReturnsNil() {
-    XCTAssertNil(HotkeySyntax.parse(hotkey: "cmd+nothing", target: "X"))
-    XCTAssertNil(HotkeySyntax.parse(hotkey: "", target: "X"))
+    XCTAssertNil(HotkeySyntax.parse(hotkey: "cmd+nothing"))
+    XCTAssertNil(HotkeySyntax.parse(hotkey: ""))
+  }
+
+  // MARK: - Action parsing
+
+  func testParseFlashShowHints() {
+    let action = parseShortcutAction(rawString: "flash://show_hints")
+    guard case .flashCommand(let cmd) = action else {
+      return XCTFail("expected .flashCommand")
+    }
+    if case .showHints(let right) = cmd { XCTAssertFalse(right) } else {
+      XCTFail("expected .showHints, got \(cmd)")
+    }
+  }
+
+  func testParseFlashOpenApp() {
+    let action = parseShortcutAction(rawString: "flash://open_app?name=Alacritty")
+    guard case .flashCommand(let cmd) = action else {
+      return XCTFail("expected .flashCommand")
+    }
+    if case .openApp(let name) = cmd { XCTAssertEqual(name, "Alacritty") } else {
+      XCTFail("expected .openApp")
+    }
+  }
+
+  func testParseFlashOpenAppWithSpaces() {
+    let action = parseShortcutAction(rawString: "flash://open_app?name=Postico%202")
+    guard case .flashCommand(.openApp(let name)) = action else {
+      return XCTFail("expected .openApp")
+    }
+    XCTAssertEqual(name, "Postico 2")
+  }
+
+  func testParseHttpURL() {
+    let action = parseShortcutAction(rawString: "https://example.com")
+    guard case .openable(let url) = action else {
+      return XCTFail("expected .openable")
+    }
+    XCTAssertEqual(url.absoluteString, "https://example.com")
+  }
+
+  func testParseAbsolutePath() {
+    let action = parseShortcutAction(rawString: "/Applications/Safari.app")
+    guard case .openable = action else {
+      return XCTFail("expected .openable for absolute path")
+    }
+  }
+
+  func testParseShellArgv() {
+    let action = parseShortcutAction(rawArray: ["sh", "-c", "echo hi"])
+    guard case .shell(let argv) = action else {
+      return XCTFail("expected .shell")
+    }
+    XCTAssertEqual(argv, ["sh", "-c", "echo hi"])
+  }
+
+  func testBareAppNameReturnsNil() {
+    // "Safari" without a scheme isn't a URL; the user is expected
+    // to use `flash://open_app?name=Safari` for the cached fast path.
+    XCTAssertNil(parseShortcutAction(rawString: "Safari"))
+  }
+
+  func testEmptyShellArrayReturnsNil() {
+    XCTAssertNil(parseShortcutAction(rawArray: []))
   }
 }

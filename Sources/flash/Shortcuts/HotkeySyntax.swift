@@ -16,22 +16,23 @@ import Foundation
 /// the named keys (return, tab, space, escape, delete, arrows,
 /// home/end, pageup/down). `0xNN` accepts a raw virtual-key for
 /// keys without a name.
+struct ParsedHotkey {
+  let modifiers: UInt32  // Carbon modifier flags
+  let virtualKey: UInt32  // Carbon virtual key code
+}
+
 enum HotkeySyntax {
 
-  /// Parse `hotkey` and pair it with `target`. `target` passes
-  /// through into the rule untouched and is interpreted later by
-  /// `AppActivationCache.activate(target:)` as an app name or
-  /// bundle ID.
-  static func parse(hotkey: String, target: String) -> ShortcutRule? {
+  /// Parse the LHS of a shortcut binding. Returns nil for empty
+  /// input or unrecognised keys.
+  static func parse(hotkey: String) -> ParsedHotkey? {
     let trimmed = hotkey.trimmingCharacters(in: .whitespaces)
     let tokens = trimmed.split(separator: "+", omittingEmptySubsequences: true)
       .map { $0.trimmingCharacters(in: .whitespaces) }
     guard tokens.count >= 1 else { return nil }
     guard let key = parseKey(tokens.last!) else { return nil }
     let mods = parseModifiers(tokens.dropLast())
-    return ShortcutRule(
-      modifiers: mods, virtualKey: key,
-      action: .launchApp(target: target), source: hotkey)
+    return ParsedHotkey(modifiers: mods, virtualKey: key)
   }
 
   static func parseModifiers<S: Sequence>(_ tokens: S) -> UInt32
@@ -104,19 +105,3 @@ enum HotkeySyntax {
   ]
 }
 
-/// One Carbon hotkey binding to one app target.
-struct ShortcutRule {
-  let modifiers: UInt32  // Carbon modifier flags
-  let virtualKey: UInt32  // Carbon virtual key code
-  let action: ShortcutAction
-  /// Original hotkey string from the config — kept for diagnostic
-  /// logging on registration failure.
-  let source: String
-}
-
-enum ShortcutAction {
-  /// `target` is either a bundle ID (`com.apple.Safari`) or a
-  /// localized app name (`Safari`).
-  /// `AppActivationCache.activate(target:)` tries both lookup paths.
-  case launchApp(target: String)
-}
