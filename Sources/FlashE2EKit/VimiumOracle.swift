@@ -1,0 +1,374 @@
+import AppKit
+import ApplicationServices
+import CoreGraphics
+import FlashCore
+import FlashProviders
+import Foundation
+
+/// One element Vimium-FF emitted a hint marker for, after CSS->screen
+/// coordinate transformation.
+public struct VimiumAnchor {
+  public let tag: String
+  public let role: String
+  public let label: String
+  public let marker: String
+  public let cssRect: CGRect
+  public let screenRect: CGRect
+
+  public init(
+    tag: String, role: String, label: String, marker: String,
+    cssRect: CGRect, screenRect: CGRect
+  ) {
+    self.tag = tag
+    self.role = role
+    self.label = label
+    self.marker = marker
+    self.cssRect = cssRect
+    self.screenRect = screenRect
+  }
+}
+
+public struct OracleSnapshot {
+  public let flashTargets: [JumpTarget]
+  public let vimiumAnchors: [VimiumAnchor]
+  public let transform: OracleTransform
+  public let fiducialResidual: Double
+
+  public init(
+    flashTargets: [JumpTarget], vimiumAnchors: [VimiumAnchor],
+    transform: OracleTransform, fiducialResidual: Double
+  ) {
+    self.flashTargets = flashTargets
+    self.vimiumAnchors = vimiumAnchors
+    self.transform = transform
+    self.fiducialResidual = fiducialResidual
+  }
+}
+
+/// Drives the full per-fixture capture sequence: wait for companion
+/// ready, snapshot Flash hints, post 'f' to wake Vimium, poll for
+/// anchors payload, decode + solve fiducial transform, dismiss Vimium.
+public enum VimiumOracle {
+  public enum CaptureError: Error, CustomStringConvertible {
+    case readyTimedOut
+    case anchorsTimedOut
+    case decodeFailed(String)
+    case missingFiducials([String])
+    case transformFailed(Error)
+
+    public var description: String {
+      switch self {
+      case .readyTimedOut:
+        return """
+          Companion never signalled FLASH_ORACLE_READY. Check:
+            - Firefox Developer Edition (not Release) — release Firefox refuses unsigned extensions
+            - companion XPI installed at OracleProfile.companionXPIPath
+            - Vimium-FF didn't crash the tab during load
+          """
+      case .anchorsTimedOut:
+        return """
+          Companion never signalled FLASH_ORACLE_ANCHORS after the 'f' keystroke. Check:
+            - Vimium-FF actually loaded into the profile
+            - the page (not the URL bar) had focus when 'f' was posted
+            - markers actually rendered (smoke-test by pressing 'f' manually)
+          """
+      case .decodeFailed(let why):
+        return "Failed to decode anchors payload: \(why)"
+      case .missingFiducials(let ids):
+        return "Fiducials not found in Firefox AX tree: \(ids.joined(separator: ", "))"
+      case .transformFailed(let e):
+        return "Could not solve coordinate transform: \(e)"
+      }
+    }
+  }
+
+  private static let readyPrefix = "FLASH_ORACLE_READY"
+  private static let anchorsPrefix = "FLASH_ORACLE_ANCHORS:"
+  private static let fiducialIDs = [
+    "__flash_oracle_fiducial_a__",
+    "__flash_oracle_fiducial_b__",
+  ]
+  // Apple HID virtual key codes.
+  private static let kVK_ANSI_F: CGKeyCode = 0x03
+  private static let kVK_Escape: CGKeyCode = 0x35
+
+  public static func capture(
+    firefox: NSRunningApplication,
+    context: AppContext,
+    provider: AccessibilityProvider,
+    readyTimeout: TimeInterval = 15,
+    anchorsTimeout: TimeInterval = 10
+  ) throws -> OracleSnapshot {
+    let pid = firefox.processIdentifier
+
+    // 1. Wait for companion to signal READY (page idle + companion mounted).
+    guard
+      waitForTitle(
+        pid: pid, contains: readyPrefix,
+        deadline: Date().addingTimeInterval(readyTimeout))
+    else {
+      throw CaptureError.readyTimedOut
+    }
+
+    // 2. Snapshot Flash AX hints *before* Vimium adds marker DOM. Failing
+    //    this ordering would walk Vimium's own markers into the AX set.
+    firefox.activate(options: [])
+    Thread.sleep(forTimeInterval: 0.25)
+    let flashTargets =
+      (try? provider.discover(in: context, deadline: Date().addingTimeInterval(3))) ?? []
+
+    // 3. Trigger Vimium hint mode.
+    postKey(kVK_ANSI_F, to: pid)
+
+    // 4. Wait for anchors payload.
+    guard
+      let raw = waitForTitlePayload(
+        pid: pid, prefix: anchorsPrefix,
+        deadline: Date().addingTimeInterval(anchorsTimeout))
+    else {
+      postKey(kVK_Escape, to: pid)
+      throw CaptureError.anchorsTimedOut
+    }
+
+    // 5. Decode.
+    let decoded: ExtensionPayload
+    do {
+      decoded = try JSONDecoder().decode(ExtensionPayload.self, from: Data(raw.utf8))
+    } catch {
+      postKey(kVK_Escape, to: pid)
+      throw CaptureError.decodeFailed(String(describing: error))
+    }
+
+    // 6. Measure fiducials via AX.
+    let measured = findFiducials(pid: pid, ids: fiducialIDs)
+    let missing = fiducialIDs.filter { measured[$0] == nil }
+    if !missing.isEmpty {
+      postKey(kVK_Escape, to: pid)
+      throw CaptureError.missingFiducials(missing)
+    }
+
+    // 7. Solve transform from fiducial pairs.
+    //    Companion gives CSS top-left of each fiducial; AX (post-flip)
+    //    gives NSScreen rect — the matching screen point for the CSS
+    //    top-left is (rect.minX, rect.maxY).
+    var pairs: [(css: CGPoint, screen: CGPoint)] = []
+    for fid in decoded.fiducials {
+      guard let screenRect = measured[fid.id] else { continue }
+      pairs.append(
+        (
+          css: CGPoint(x: fid.x, y: fid.y),
+          screen: CGPoint(x: screenRect.minX, y: screenRect.maxY)
+        ))
+    }
+    let transform: OracleTransform
+    do {
+      transform = try OracleTransform.solve(pairs: pairs)
+    } catch {
+      postKey(kVK_Escape, to: pid)
+      throw CaptureError.transformFailed(error)
+    }
+    let residual = transform.maxResidual(pairs: pairs)
+
+    // 8. Project Vimium anchor rects from CSS to NSScreen.
+    let anchors: [VimiumAnchor] = decoded.anchors.map { a in
+      let cssR = CGRect(
+        x: a.rect[0], y: a.rect[1], width: a.rect[2], height: a.rect[3])
+      let screenR = transform.screenRect(fromCSS: cssR)
+      return VimiumAnchor(
+        tag: a.tag, role: a.role, label: a.label, marker: a.marker,
+        cssRect: cssR, screenRect: screenR)
+    }
+
+    // 9. Dismiss Vimium hint mode + reset companion for the next capture.
+    postKey(kVK_Escape, to: pid)
+
+    return OracleSnapshot(
+      flashTargets: flashTargets, vimiumAnchors: anchors,
+      transform: transform, fiducialResidual: residual)
+  }
+
+  // MARK: - Wire types (mirror Resources/oracle-extension/content.js)
+
+  private struct ExtensionPayload: Decodable {
+    let anchors: [RawAnchor]
+    let fiducials: [Fiducial]
+    let viewport: Viewport
+  }
+  private struct RawAnchor: Decodable {
+    let tag: String
+    let role: String
+    let rect: [Double]
+    let label: String
+    let marker: String
+  }
+  private struct Fiducial: Decodable {
+    let id: String
+    let x: Double
+    let y: Double
+    let w: Double
+    let h: Double
+  }
+  private struct Viewport: Decodable {
+    let scrollX: Double
+    let scrollY: Double
+    let innerWidth: Double
+    let innerHeight: Double
+    let dpr: Double
+  }
+
+  // MARK: - AX helpers
+
+  private static func waitForTitle(
+    pid: pid_t, contains needle: String, deadline: Date
+  ) -> Bool {
+    while Date() < deadline {
+      if let t = readFocusedWindowTitle(pid: pid), t.contains(needle) {
+        return true
+      }
+      Thread.sleep(forTimeInterval: 0.1)
+    }
+    return false
+  }
+
+  /// Wait for the focused window AX title to start with `prefix`, then
+  /// return the embedded JSON object. Firefox appends " — Mozilla
+  /// Firefox Developer Edition" to the document title; the balanced
+  /// brace walker truncates the suffix.
+  private static func waitForTitlePayload(
+    pid: pid_t, prefix: String, deadline: Date
+  ) -> String? {
+    while Date() < deadline {
+      if let t = readFocusedWindowTitle(pid: pid),
+        let range = t.range(of: prefix)
+      {
+        if let json = extractJSONPrefix(String(t[range.upperBound...])) {
+          return json
+        }
+      }
+      Thread.sleep(forTimeInterval: 0.1)
+    }
+    return nil
+  }
+
+  /// Extract a balanced JSON object starting at the first `{` in `s`.
+  /// Tracks string state + escape sequences so `{` / `}` inside string
+  /// literals don't confuse the depth counter.
+  private static func extractJSONPrefix(_ s: String) -> String? {
+    guard let start = s.firstIndex(of: "{") else { return nil }
+    var depth = 0
+    var inStr = false
+    var escape = false
+    var i = start
+    while i < s.endIndex {
+      let ch = s[i]
+      if escape {
+        escape = false
+        i = s.index(after: i)
+        continue
+      }
+      if inStr {
+        if ch == "\\" {
+          escape = true
+        } else if ch == "\"" {
+          inStr = false
+        }
+      } else {
+        if ch == "\"" {
+          inStr = true
+        } else if ch == "{" {
+          depth += 1
+        } else if ch == "}" {
+          depth -= 1
+          if depth == 0 {
+            return String(s[start...i])
+          }
+        }
+      }
+      i = s.index(after: i)
+    }
+    return nil
+  }
+
+  private static func readFocusedWindowTitle(pid: pid_t) -> String? {
+    let app = AXUIElementCreateApplication(pid)
+    var winRaw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &winRaw)
+        == .success,
+      let winCF = winRaw, CFGetTypeID(winCF) == AXUIElementGetTypeID()
+    else { return nil }
+    let win = winCF as! AXUIElement
+    var titleRaw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(win, kAXTitleAttribute as CFString, &titleRaw) == .success
+    else { return nil }
+    return titleRaw as? String
+  }
+
+  private static func findFiducials(pid: pid_t, ids: [String]) -> [String: CGRect] {
+    let app = AXUIElementCreateApplication(pid)
+    let screenH = primaryScreenHeight()
+    var found: [String: CGRect] = [:]
+    let target = Set(ids)
+    var queue: [AXUIElement] = [app]
+    var visited = 0
+    let maxNodes = 8000
+    while !queue.isEmpty, visited < maxNodes, found.count < ids.count {
+      let node = queue.removeFirst()
+      visited += 1
+      var descRaw: CFTypeRef?
+      _ = AXUIElementCopyAttributeValue(
+        node, kAXDescriptionAttribute as CFString, &descRaw)
+      if let desc = descRaw as? String, target.contains(desc), found[desc] == nil {
+        if let rect = rectOf(node, screenH: screenH) {
+          found[desc] = rect
+        }
+      }
+      var childrenRaw: CFTypeRef?
+      if AXUIElementCopyAttributeValue(
+        node, kAXChildrenAttribute as CFString, &childrenRaw) == .success,
+        let children = childrenRaw as? [AXUIElement]
+      {
+        queue.append(contentsOf: children)
+      }
+    }
+    return found
+  }
+
+  private static func rectOf(_ element: AXUIElement, screenH: CGFloat) -> CGRect? {
+    var posRaw: CFTypeRef?
+    var sizeRaw: CFTypeRef?
+    _ = AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRaw)
+    _ = AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRaw)
+    guard let posCF = posRaw, let sizeCF = sizeRaw,
+      CFGetTypeID(posCF) == AXValueGetTypeID(),
+      CFGetTypeID(sizeCF) == AXValueGetTypeID()
+    else { return nil }
+    let posV = posCF as! AXValue
+    let sizeV = sizeCF as! AXValue
+    var pos = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue(posV, .cgPoint, &pos),
+      AXValueGetValue(sizeV, .cgSize, &size),
+      size.width > 0, size.height > 0
+    else { return nil }
+    let nsY = screenH - pos.y - size.height
+    return CGRect(x: pos.x, y: nsY, width: size.width, height: size.height)
+  }
+
+  private static func primaryScreenHeight() -> CGFloat {
+    NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
+      ?? NSScreen.main?.frame.height ?? 1080
+  }
+
+  private static func postKey(_ keyCode: CGKeyCode, to pid: pid_t) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    if let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
+      down.postToPid(pid)
+    }
+    Thread.sleep(forTimeInterval: 0.02)
+    if let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
+      up.postToPid(pid)
+    }
+  }
+}

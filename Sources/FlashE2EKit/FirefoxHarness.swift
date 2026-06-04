@@ -64,6 +64,78 @@ public enum FirefoxHarness {
     return app
   }
 
+  /// Launch a Firefox-family browser with a dedicated profile and a URL.
+  /// Uses `Process` (not NSWorkspace) because `NSWorkspace.open` does
+  /// not reliably forward `-profile` to the underlying binary, and the
+  /// oracle requires a known-good profile with Vimium-FF + the
+  /// companion extension pre-installed.
+  ///
+  /// `-no-remote -new-instance` are essential: without them, a running
+  /// Firefox would steal the URL into its own profile and we'd never
+  /// get our oracle profile to load.
+  ///
+  /// Returns the `NSRunningApplication` for the new process. Because
+  /// `firefox` on disk is a shim that re-execs `firefox-bin`, we can't
+  /// trust the `Process.processIdentifier`; instead we snapshot existing
+  /// Firefox PIDs by bundle ID and poll for the new one.
+  public static func launchWithProfile(
+    appPath: String,
+    profilePath: String,
+    url: URL,
+    extraArgs: [String] = [],
+    timeout: TimeInterval = 20
+  ) throws -> NSRunningApplication {
+    guard FileManager.default.fileExists(atPath: appPath) else {
+      throw LaunchError.notInstalled(appPath)
+    }
+    let binPath = "\(appPath)/Contents/MacOS/firefox"
+    guard FileManager.default.fileExists(atPath: binPath) else {
+      throw LaunchError.notInstalled(binPath)
+    }
+    guard let bundleID = bundleIdentifier(forAppPath: appPath) else {
+      throw LaunchError.openFailed(
+        NSError(
+          domain: "FirefoxHarness", code: 1,
+          userInfo: [NSLocalizedDescriptionKey: "could not read Info.plist at \(appPath)"]))
+    }
+
+    let preExisting = Set(
+      NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        .map { $0.processIdentifier })
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: binPath)
+    process.arguments =
+      ["-profile", profilePath, "-no-remote", "-new-instance"]
+      + extraArgs + [url.absoluteString]
+    // Detach stdout/stderr — we don't want Firefox's chatter on our pipes.
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { throw LaunchError.openFailed(error) }
+
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      let current = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+      if let app = current.first(where: { !preExisting.contains($0.processIdentifier) }) {
+        if waitForAXWindow(app, timeout: max(1, deadline.timeIntervalSinceNow)) {
+          return app
+        }
+        throw LaunchError.noAXWindow
+      }
+      Thread.sleep(forTimeInterval: 0.25)
+    }
+    throw LaunchError.openTimedOut
+  }
+
+  private static func bundleIdentifier(forAppPath path: String) -> String? {
+    let plistPath = "\(path)/Contents/Info.plist"
+    guard let data = FileManager.default.contents(atPath: plistPath),
+      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
+        as? [String: Any]
+    else { return nil }
+    return plist["CFBundleIdentifier"] as? String
+  }
+
   /// Wait until Firefox's AX root reports at least one window, or
   /// `timeout` expires.
   public static func waitForAXWindow(_ app: NSRunningApplication, timeout: TimeInterval) -> Bool {
