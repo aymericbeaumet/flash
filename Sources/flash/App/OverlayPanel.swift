@@ -86,6 +86,8 @@ final class OverlayPanel: NSPanel {
   /// scroll our own UI without dismissing.
   private var scrollGlobalMonitor: Any?
   private var scrollLocalMonitor: Any?
+  private var clickGlobalMonitor: Any?
+  private var clickLocalMonitor: Any?
 
   func display(hints: [AssignedHint]) {
     CATransaction.begin()
@@ -94,7 +96,7 @@ final class OverlayPanel: NSPanel {
       CATransaction.commit()
       orderFrontRegardless()
       makeKey()
-      installScrollMonitor()
+      installInputMonitors()
     }
 
     let frame = OverlayPanel.unionScreenFrame()
@@ -279,16 +281,23 @@ final class OverlayPanel: NSPanel {
   ]
 
   func hide() {
-    removeScrollMonitor()
+    removeInputMonitors()
     orderOut(nil)
     recycleAll()
   }
 
-  /// Install (idempotent) the global+local scroll observers. Calling
-  /// this twice is safe — the second call removes the previous
-  /// monitor before installing a fresh one.
-  private func installScrollMonitor() {
-    removeScrollMonitor()
+  /// Install (idempotent) the dismissal event monitors. Calling this
+  /// twice is safe — the second call removes the previous monitors
+  /// before installing fresh ones.
+  ///
+  /// Dismissal triggers: scroll wheel, any mouse-button press. Mouse
+  /// move is intentionally NOT a dismissal trigger because the
+  /// pointer can drift past the overlay while the user is reaching
+  /// for a key. Non-matching keystrokes are dismissed by
+  /// `AppDelegate.overlayDidCommit` when no hint label matches the
+  /// running prefix.
+  private func installInputMonitors() {
+    removeInputMonitors()
     let dismiss: () -> Void = { [weak self] in
       // Hop to main to keep all coordinator interactions on the same
       // thread as display(). NSEvent monitors fire on main already,
@@ -306,17 +315,32 @@ final class OverlayPanel: NSPanel {
       dismiss()
       return event
     }
+    // Mouse-button presses (single, double, or right click) dismiss
+    // immediately. The user has clearly chosen a different action
+    // than typing a hint; keep the overlay out of the way. The
+    // local monitor catches clicks on the overlay/Flash itself —
+    // without it the overlay would persist if the user clicked one
+    // of its chips.
+    let clickMask: NSEvent.EventTypeMask = [
+      .leftMouseDown, .rightMouseDown, .otherMouseDown,
+    ]
+    clickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) { _ in
+      dismiss()
+    }
+    clickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) { event in
+      dismiss()
+      return event
+    }
   }
 
-  private func removeScrollMonitor() {
-    if let m = scrollGlobalMonitor {
-      NSEvent.removeMonitor(m)
-      scrollGlobalMonitor = nil
+  private func removeInputMonitors() {
+    for m in [scrollGlobalMonitor, scrollLocalMonitor, clickGlobalMonitor, clickLocalMonitor] {
+      if let m { NSEvent.removeMonitor(m) }
     }
-    if let m = scrollLocalMonitor {
-      NSEvent.removeMonitor(m)
-      scrollLocalMonitor = nil
-    }
+    scrollGlobalMonitor = nil
+    scrollLocalMonitor = nil
+    clickGlobalMonitor = nil
+    clickLocalMonitor = nil
   }
 
   /// Show a transient banner centered on the focused screen. Multi-line strings (with

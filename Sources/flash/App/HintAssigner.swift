@@ -38,17 +38,27 @@ enum HintAssigner {
     return out
   }
 
-  /// Generate `count` prefix-free labels of uniform length, ordered so that
-  /// labels typed by *alternating* hands come before labels typed entirely
-  /// on one hand. The same-finger case (e.g. "AA") is penalised hardest.
+  /// Generate `count` prefix-free labels, packing the cheapest (shortest)
+  /// labels first so the user can commit a hint with a single keypress
+  /// whenever the target count allows.
   ///
-  /// Every label still shares the same length L (smallest L with
-  /// `alphabet.count ** L >= count`, floored at `minLength`), so the
-  /// commit path knows exactly how many characters to expect.
+  /// Layout policy:
+  ///   - If `count ≤ alphabet.count` (and `minLength == 1`): all labels
+  ///     are single chars in the alphabet's declared order. The user
+  ///     types one key per target.
+  ///   - Otherwise: pack as many single-char labels as possible while
+  ///     keeping the rest 2-char and prefix-free. Concretely we pick
+  ///     X singles + (count − X) two-char labels where the two-char
+  ///     labels never start with any of the X reserved single chars
+  ///     (otherwise typing the single char would be ambiguous).
+  ///     X is the largest value satisfying X + (K−X)*K ≥ count.
+  ///   - If the user pinned `minLength ≥ 2`, every label uses uniform
+  ///     length L (smallest L with K^L ≥ count and L ≥ minLength) —
+  ///     the original Vimium-style uniform-length behaviour.
   ///
-  /// Determinism: when two candidate labels tie on score, we use the
-  /// lexicographic order on (chars in alphabet position) as the tiebreaker.
-  /// Two runs on identical input produce identical output.
+  /// Within a length class, labels are sorted by an ergonomic score
+  /// that rewards hand-alternation and penalises same-finger repeats,
+  /// then by lexicographic position as a deterministic tiebreaker.
   static func generateLabels(
     count: Int,
     alphabet: [Character],
@@ -60,20 +70,48 @@ enum HintAssigner {
       return (0..<count).map { _ in String(alphabet.first ?? "a") }
     }
     let k = alphabet.count
-    var length = max(1, minLength)
+    let minLen = max(1, minLength)
+
+    // Mixed-length path: singles first, then 2-char labels whose first
+    // char isn't a reserved single. Only available when the user hasn't
+    // forced longer labels via `minLength`.
+    if minLen == 1 {
+      if count <= k {
+        return (0..<count).map { String(alphabet[$0]) }
+      }
+      // Max X such that the remaining count fits in 2-char labels with
+      // a prefix-free constraint:
+      //   X + (K − X) * K ≥ count
+      //   X(K − 1) ≤ K² − count
+      let cap = (k * k - count) / max(1, k - 1)
+      let singlesCount = max(0, min(k - 1, cap))
+      if singlesCount > 0 {
+        let singles = (0..<singlesCount).map { String(alphabet[$0]) }
+        let reservedPrefixes = Set(alphabet[0..<singlesCount])
+        let multi = sortedCandidates(alphabet: alphabet, leftHand: leftHand, length: 2)
+          .lazy.filter {
+            guard let first = $0.first else { return false }
+            return !reservedPrefixes.contains(first)
+          }
+        return singles + Array(multi.prefix(count - singlesCount))
+      }
+      // No room for singles (extremely large count). Fall through to
+      // the uniform-length path below.
+    }
+
+    // Uniform-length path: every label shares L = smallest length that
+    // fits, floored at `minLength`. Used when the caller pins a min
+    // length, or when count is so large that there's no room for any
+    // single-char labels.
+    var length = minLen
     var bound = intPow(k, length)
     while bound < count {
       length += 1
       bound *= k
     }
-
-    // Single-char labels: no alternation possible (one keypress each).
-    // Just consume the alphabet in its declared order — that order is
-    // already optimised for ergonomics by the preset (home row first).
     if length == 1 {
       return (0..<count).map { String(alphabet[$0]) }
     }
-
     let sorted = sortedCandidates(alphabet: alphabet, leftHand: leftHand, length: length)
     if sorted.count >= count {
       return Array(sorted.prefix(count))

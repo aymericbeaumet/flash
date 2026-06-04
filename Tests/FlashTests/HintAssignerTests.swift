@@ -26,21 +26,61 @@ final class HintAssignerTests: XCTestCase {
     XCTAssertTrue(labels.allSatisfy { $0.count == 2 })
   }
 
-  func testUniformLength() {
-    // 8-char alphabet, count = 9 → 1 char isn't enough, all should be 2-char.
-    let nine = HintAssigner.generateLabels(count: 9, alphabet: alphabet)
-    XCTAssertTrue(
-      nine.allSatisfy { $0.count == 2 }, "9 items in 8-char alphabet → all 2-char labels")
-
+  func testSinglesFirstWhenItFits() {
     // count = 8 → exactly fits in 1-char labels.
     let eight = HintAssigner.generateLabels(count: 8, alphabet: alphabet)
     XCTAssertTrue(
       eight.allSatisfy { $0.count == 1 }, "8 items in 8-char alphabet → all 1-char labels")
+  }
 
-    // count = 65 → 1 and 2 chars aren't enough (8^2 = 64), need 3.
-    let many = HintAssigner.generateLabels(count: 65, alphabet: alphabet)
+  func testSinglesPackedFirstWhenCountExceedsAlphabet() {
+    // 9 items in 8-char alphabet: should use as many single-char labels
+    // as possible (with at least one alphabet char reserved as multi
+    // prefix), then 2-char labels for the rest. The singles come FIRST
+    // in the output so the earliest targets get the cheapest labels.
+    let nine = HintAssigner.generateLabels(count: 9, alphabet: alphabet)
+    XCTAssertEqual(nine.count, 9)
+    XCTAssertEqual(Set(nine).count, 9, "labels are unique")
+    let singles = nine.filter { $0.count == 1 }
+    let doubles = nine.filter { $0.count == 2 }
+    XCTAssertGreaterThan(singles.count, 0, "should use at least one single-char label")
+    XCTAssertEqual(singles.count + doubles.count, 9, "every label is 1- or 2-char")
+    // Singles must precede doubles in the output.
+    let firstDouble = nine.firstIndex { $0.count == 2 } ?? nine.count
+    let lastSingle = nine.lastIndex { $0.count == 1 } ?? -1
+    XCTAssertLessThan(lastSingle, firstDouble, "singles come before doubles in output")
+  }
+
+  func testPrefixFreeOnMixedLengths() {
+    // 200 items in 8-char alphabet — mixed-length output. Verify no
+    // single label is a prefix of any double, and no double is a
+    // prefix of another (which uniformity would otherwise guarantee).
+    let labels = HintAssigner.generateLabels(count: 200, alphabet: alphabet)
+    XCTAssertEqual(labels.count, 200)
+    for (i, a) in labels.enumerated() {
+      for (j, b) in labels.enumerated() where i != j {
+        XCTAssertFalse(
+          a.hasPrefix(b), "label \(a) at \(i) starts with label \(b) at \(j)")
+      }
+    }
+  }
+
+  func testMinLengthForcesUniform() {
+    // When minLength >= 2, the user is explicitly pinning longer
+    // labels — singles are off the table and every label has the
+    // same length.
+    let labels = HintAssigner.generateLabels(count: 9, alphabet: alphabet, minLength: 2)
+    XCTAssertTrue(labels.allSatisfy { $0.count == 2 })
+  }
+
+  func testLargeCountFallsBackToUniform() {
+    // 65 items in 8-char alphabet: 8 singles + (8-8)*8 = 8 doesn't
+    // fit, so no singles work. Output is all 3-char labels.
+    let labels = HintAssigner.generateLabels(count: 65, alphabet: alphabet)
     XCTAssertTrue(
-      many.allSatisfy { $0.count == 3 }, "65 items in 8-char alphabet → all 3-char labels")
+      labels.allSatisfy { $0.count == 3 },
+      "65 items in 8-char alphabet exceeds the 1+2-char capacity, "
+        + "falls back to uniform 3-char labels")
   }
 
   func testHandAlternationPrefersAlternatingPairs() {
@@ -70,9 +110,10 @@ final class HintAssignerTests: XCTestCase {
     let labels = HintAssigner.generateLabels(count: count, alphabet: alphabet)
     XCTAssertEqual(labels.count, count, "expected \(count) labels")
     XCTAssertEqual(Set(labels).count, count, "labels should be unique")
-    // Uniform length is a stronger invariant than prefix-free; verify both.
-    let first = labels.first?.count ?? 0
-    XCTAssertTrue(labels.allSatisfy { $0.count == first }, "all labels should share one length")
+    // Prefix-free is the load-bearing invariant: if "a" is a label, no
+    // other label can start with "a" (typing "a" would otherwise be
+    // ambiguous). Mixed-length labels (the singles-first packing) are
+    // allowed as long as the prefix-free property holds.
     for (i, a) in labels.enumerated() {
       for (j, b) in labels.enumerated() where i != j {
         XCTAssertFalse(a.hasPrefix(b), "label \(a) at \(i) starts with label \(b) at \(j)")
