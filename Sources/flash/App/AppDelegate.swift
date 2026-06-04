@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var overlay: OverlayPanel!
   private var urlHandler: URLEventHandler!
   private var configSource: DispatchSourceFileSystemObject?
+  private let shortcuts = ShortcutsCoordinator()
 
   private var currentHints: [AssignedHint] = []
   private var currentPrefix: String = ""
@@ -60,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     watchConfigFile()
     logPermissionState()
     installDismissObservers()
+    shortcuts.start()
   }
 
   private func installDismissObservers() {
