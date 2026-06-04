@@ -33,15 +33,24 @@ public struct OracleSnapshot {
   public let vimiumAnchors: [VimiumAnchor]
   public let transform: OracleTransform
   public let fiducialResidual: Double
+  /// Screen-space bounds of the page viewport, derived from the
+  /// companion-reported `viewport.innerWidth/innerHeight` projected
+  /// through `transform`. The runner uses this to filter Flash AX
+  /// targets to the page area — more reliable than `findWebAreaFrame`
+  /// when the Firefox window is off-screen (the AX search can match
+  /// stale or chrome-side AXWebAreas instead of the real one).
+  public let pageScreenRect: CGRect
 
   public init(
     flashTargets: [JumpTarget], vimiumAnchors: [VimiumAnchor],
-    transform: OracleTransform, fiducialResidual: Double
+    transform: OracleTransform, fiducialResidual: Double,
+    pageScreenRect: CGRect
   ) {
     self.flashTargets = flashTargets
     self.vimiumAnchors = vimiumAnchors
     self.transform = transform
     self.fiducialResidual = fiducialResidual
+    self.pageScreenRect = pageScreenRect
   }
 }
 
@@ -129,41 +138,51 @@ public enum VimiumOracle {
     let flashTargets =
       (try? provider.discover(in: context, deadline: Date().addingTimeInterval(3))) ?? []
 
-    // 3. Briefly bring Firefox foreground so the 'f' keystroke routes
-    //    to its focused widget. postToPid is unreliable when the app
-    //    isn't frontmost — the OS holds the event but the app's event
-    //    loop doesn't dispatch to the focused window. Restore the
-    //    user's previous frontmost app immediately after — when the
-    //    Firefox window is off-screen, all the user sees is a brief
-    //    menu-bar flicker.
+    // 3+4. Briefly bring Firefox foreground, post 'f', wait for the
+    //      companion to flip the title to ANCHORS_READY. Re-post 'f'
+    //      every second until the title changes or we hit the
+    //      timeout — Vimium's keymap registration is racy and 'f'
+    //      sometimes lands before it's listening; URL bar can also
+    //      grab focus and swallow the first attempt.
+    //
+    //      Isolation guarantees:
+    //      - CGEventSource(.privateState): does not inherit live HID
+    //        modifier state (no Cmd+f / Shift+f if user is holding
+    //        modifiers when we post)
+    //      - explicit flags = [] zeroes any latent source modifiers
+    //      - Firefox foreground window kept short (activate + post
+    //        loop + restore-prev-frontmost) to minimize the slot
+    //        where user keystrokes could leak into the page
     let prevFrontmost = NSWorkspace.shared.frontmostApplication
     firefox.activate()
-    Thread.sleep(forTimeInterval: 0.4)
-    postKey(kVK_ANSI_F, to: pid)
-    Thread.sleep(forTimeInterval: 0.2)
-    postKey(kVK_ANSI_F, to: pid)
     defer { prevFrontmost?.activate() }
+    Thread.sleep(forTimeInterval: 0.15)
 
-    // 4. Wait for the companion to signal ANCHORS_READY. The title is
-    //    a fixed marker; the actual payload lives in an aria-label on
-    //    an off-screen div the companion mounts (kAXDescription on
-    //    that element gives us the full JSON without the ~300-char
-    //    truncation macOS imposes on window titles).
+    let anchorsDeadline = Date().addingTimeInterval(anchorsTimeout)
     var lastAnchorTitle = ""
-    if !waitForTitle(
-      pid: pid, contains: anchorsReadyTitle,
-      deadline: Date().addingTimeInterval(anchorsTimeout),
-      onPoll: { title in
-        if title != lastAnchorTitle {
-          lastAnchorTitle = title
+    var gotAnchors = false
+    while Date() < anchorsDeadline {
+      postKey(kVK_ANSI_F, to: pid)
+      let waitChunk = Date().addingTimeInterval(0.9)
+      while Date() < waitChunk, Date() < anchorsDeadline {
+        let t = readFocusedWindowTitle(pid: pid) ?? ""
+        if t != lastAnchorTitle {
+          lastAnchorTitle = t
           FileHandle.standardError.write(
-            Data("[oracle] post-'f' AX title: \(title)\n".utf8))
+            Data("[oracle] post-'f' AX title: \(t)\n".utf8))
         }
-      })
-    {
-      postKey(kVK_Escape, to: pid)
+        if t.contains(anchorsReadyTitle) {
+          gotAnchors = true
+          break
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+      }
+      if gotAnchors { break }
+    }
+    if !gotAnchors {
       throw CaptureError.anchorsTimedOut
     }
+    let resolvedFlashTargets = flashTargets
 
     // 5+6. One AX tree walk: collect the payload div (by description
     //      prefix) AND the fiducials. Cheaper than two passes, and
@@ -171,7 +190,7 @@ public enum VimiumOracle {
     //      before flipping the title to ANCHORS_READY.
     let walked = walkForOracleMarkers(pid: pid, fiducialIDs: fiducialIDs)
     guard let payloadDesc = walked.payload else {
-      postKey(kVK_Escape, to: pid)
+      // no dismiss needed: Firefox is terminated after each fixture run
       throw CaptureError.decodeFailed(
         "payload div not found in AX tree (companion crashed?)")
     }
@@ -181,13 +200,13 @@ public enum VimiumOracle {
       decoded = try JSONDecoder().decode(
         ExtensionPayload.self, from: Data(rawJSON.utf8))
     } catch {
-      postKey(kVK_Escape, to: pid)
+      // no dismiss needed: Firefox is terminated after each fixture run
       throw CaptureError.decodeFailed(String(describing: error))
     }
     let measured = walked.fiducials
     let missing = fiducialIDs.filter { measured[$0] == nil }
     if !missing.isEmpty {
-      postKey(kVK_Escape, to: pid)
+      // no dismiss needed: Firefox is terminated after each fixture run
       throw CaptureError.missingFiducials(missing)
     }
 
@@ -208,7 +227,7 @@ public enum VimiumOracle {
     do {
       transform = try OracleTransform.solve(pairs: pairs)
     } catch {
-      postKey(kVK_Escape, to: pid)
+      // no dismiss needed: Firefox is terminated after each fixture run
       throw CaptureError.transformFailed(error)
     }
     let residual = transform.maxResidual(pairs: pairs)
@@ -223,12 +242,22 @@ public enum VimiumOracle {
         cssRect: cssR, screenRect: screenR)
     }
 
-    // 9. Dismiss Vimium hint mode + reset companion for the next capture.
-    postKey(kVK_Escape, to: pid)
+    // 9. Project the page viewport rect (CSS) into screen space —
+    //    Flash targets filtered by this rect end up corresponding to
+    //    page DOM, ignoring Firefox chrome.
+    let pageCSSRect = CGRect(
+      x: 0, y: 0,
+      width: decoded.viewport.innerWidth,
+      height: decoded.viewport.innerHeight)
+    let pageScreenRect = transform.screenRect(fromCSS: pageCSSRect)
+
+    // 10. Dismiss Vimium hint mode + reset companion for the next capture.
+    // no dismiss needed: Firefox is terminated after each fixture run
 
     return OracleSnapshot(
-      flashTargets: flashTargets, vimiumAnchors: anchors,
-      transform: transform, fiducialResidual: residual)
+      flashTargets: resolvedFlashTargets, vimiumAnchors: anchors,
+      transform: transform, fiducialResidual: residual,
+      pageScreenRect: pageScreenRect)
   }
 
   // MARK: - Wire types (mirror Resources/oracle-extension/content.js)
@@ -419,13 +448,26 @@ public enum VimiumOracle {
       ?? NSScreen.main?.frame.height ?? 1080
   }
 
+  /// Synthesize a key down/up via CGEvent, modifier-isolated.
+  ///
+  /// `.privateState` does NOT inherit the live HID modifier flags —
+  /// without this, if the user is physically holding Cmd/Shift/Opt/Ctrl
+  /// when we post 'f', the OS would route Cmd+f (Find) instead of bare
+  /// 'f'. `flags = []` is belt-and-suspenders for any latent state
+  /// on the source itself.
   private static func postKey(_ keyCode: CGKeyCode, to pid: pid_t) {
-    let source = CGEventSource(stateID: .hidSystemState)
-    if let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
+    let source = CGEventSource(stateID: .privateState)
+    if let down = CGEvent(
+      keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
+    {
+      down.flags = []
       down.postToPid(pid)
     }
     Thread.sleep(forTimeInterval: 0.02)
-    if let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
+    if let up = CGEvent(
+      keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+    {
+      up.flags = []
       up.postToPid(pid)
     }
   }

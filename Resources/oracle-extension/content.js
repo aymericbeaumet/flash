@@ -97,32 +97,49 @@
   }
 
   function resolveAnchor(marker) {
-    // Markers are positioned at the target's top-left. Hide all markers
-    // temporarily and probe just inside the marker's footprint to hit
-    // the underlying element.
+    // Vimium positions markers at the top-left of their target,
+    // slightly offset upward — elementFromPoint at the marker's
+    // center often lands *above* the target in empty space (which
+    // hit-tests to body). Probe multiple positions around the marker
+    // and walk up from each hit until we find something interactive.
+    // If none of the probes find an interactive element, skip the
+    // marker — better to under-report than to fabricate a body hint.
     const r = marker.getBoundingClientRect();
-    const px = r.left + Math.max(1, r.width / 2);
-    const py = r.top + Math.max(1, r.height / 2);
-    const hit = document.elementFromPoint(px, py);
-    if (!hit) return null;
-    // Walk up until we find something interactive-looking; skip text
-    // nodes and obvious wrappers.
-    let cur = hit;
-    let walked = 0;
-    while (cur && walked < 8) {
-      const tag = cur.tagName ? cur.tagName.toLowerCase() : "";
+    const probes = [
+      [r.left + r.width / 2, r.bottom + 2],          // just below marker (target body)
+      [r.right + 2, r.top + r.height / 2],           // just right of marker
+      [r.right + 2, r.bottom + 2],                   // bottom-right corner past marker
+      [r.left + r.width / 2, r.top + r.height / 2],  // marker center (fallback)
+    ];
+    function isInteractive(el) {
+      if (!el || !el.tagName) return false;
+      const tag = el.tagName.toLowerCase();
       if (
         tag === "a" || tag === "button" || tag === "input" ||
-        tag === "select" || tag === "textarea" || tag === "summary" ||
-        cur.hasAttribute("tabindex") || cur.hasAttribute("role") ||
-        cur.hasAttribute("onclick") || cur.isContentEditable
+        tag === "select" || tag === "textarea" || tag === "summary"
       ) {
-        return cur;
+        return true;
       }
-      cur = cur.parentElement;
-      walked++;
+      // tabindex/role/onclick/contenteditable on non-body/html. Body
+      // itself never counts — Vimium doesn't hint body, and walking
+      // up to body means the probe didn't land on a real target.
+      if (tag === "body" || tag === "html") return false;
+      return (
+        el.hasAttribute("tabindex") || el.hasAttribute("role") ||
+        el.hasAttribute("onclick") || el.isContentEditable
+      );
     }
-    return hit;
+    for (const [px, py] of probes) {
+      const hit = document.elementFromPoint(px, py);
+      let cur = hit;
+      let walked = 0;
+      while (cur && walked < 8) {
+        if (isInteractive(cur)) return cur;
+        cur = cur.parentElement;
+        walked++;
+      }
+    }
+    return null;
   }
 
   function serializeAnchors(markers) {
@@ -219,21 +236,6 @@
 
   function start() {
     injectFiducials();
-    // Drag focus off the URL bar and onto the page. body.focus() is
-    // unreliable from content scripts; explicitly focusing the first
-    // real interactive element gets the page key context the OS
-    // recognizes as "the page is what should receive keystrokes".
-    // {preventScroll: true} avoids visual disruption if the element
-    // is below the fold.
-    const firstFocusable = document.querySelector(
-      'a[href], button, input:not([disabled]), select:not([disabled]),' +
-      ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
-    if (firstFocusable) {
-      firstFocusable.focus({ preventScroll: true });
-    } else if (document.body) {
-      document.body.setAttribute("tabindex", "-1");
-      document.body.focus();
-    }
     document.title = TITLE_READY;
 
     const observer = new MutationObserver((mutations) => {

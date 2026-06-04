@@ -54,13 +54,11 @@ final class CLIRecorder: FirefoxE2ERecorder {
 struct Args {
   var fixtures: [OracleFixture]
   var updateAllowList: Bool
-  var visible: Bool
 }
 
 private func parseArgs() -> Args {
   var fixtures: [OracleFixture] = OracleFixture.allCases
   var updateAllowList = false
-  var visible = false
   var iter = CommandLine.arguments.dropFirst().makeIterator()
   while let arg = iter.next() {
     switch arg {
@@ -81,12 +79,10 @@ private func parseArgs() -> Args {
       fixtures = [f]
     case "--update-allow-list":
       updateAllowList = true
-    case "--visible":
-      visible = true
     case "--help", "-h":
       log(
         """
-        flash-vimium-oracle [--fixture <name>] [--update-allow-list] [--visible]
+        flash-vimium-oracle [--fixture <name>] [--update-allow-list]
 
         Compare Flash's AX-derived hint set against what Vimium-FF would
         hint on each fixture page. Strict ISO: any divergence not in the
@@ -96,12 +92,11 @@ private func parseArgs() -> Args {
           --update-allow-list   Print suggested allow-list JSON entries to
                                 stderr and exit 0 even when divergences exist
                                 (use to seed a new fixture's sidecar).
-          --visible             Run Firefox on-screen (default: off-screen
-                                window). True --headless was tested and
-                                broken — Firefox doesn't expose an AX
-                                tree without a real window. Off-screen
-                                is the closest functional equivalent:
-                                AX-walkable, invisible to the user.
+
+        Firefox is always launched in background (open -g) and maximized,
+        so Dock-clicking it surfaces the live fixture page for inspection.
+        True --headless was tested and broken — Firefox doesn't expose an
+        AX tree without a real window.
         """)
       exit(0)
     default:
@@ -109,7 +104,7 @@ private func parseArgs() -> Args {
       exit(2)
     }
   }
-  return Args(fixtures: fixtures, updateAllowList: updateAllowList, visible: visible)
+  return Args(fixtures: fixtures, updateAllowList: updateAllowList)
 }
 
 // MARK: - Preflight
@@ -174,8 +169,7 @@ private func runFixture(
   _ fixture: OracleFixture,
   provider: AccessibilityProvider,
   recorder: CLIRecorder,
-  updateAllowList: Bool,
-  visible: Bool
+  updateAllowList: Bool
 ) -> OracleDiff.Result? {
   log("\n\(Colour.bold)Running fixture: \(fixture.displayName)\(Colour.reset)")
 
@@ -198,7 +192,7 @@ private func runFixture(
       profilePath: OracleProfile.profileDirectory.path,
       url: server.url,
       extraArgs: [],
-      offscreen: !visible)
+      offscreen: false)
   } catch {
     recorder.fail("launch failed: \(error)")
     return nil
@@ -227,22 +221,17 @@ private func runFixture(
       + "flash=\(snapshot.flashTargets.count) AX targets")
 
   // Vimium only ever hints page DOM, never Firefox chrome. Filter
-  // Flash's hits to the AXWebArea bounds before diffing — otherwise
-  // every toolbar button, tab strip, address bar, etc. would appear
-  // as a flashOnly noise entry. Same pattern as
-  // FirefoxAssertions.run() (line 47).
-  let webArea = FirefoxHarness.findWebAreaFrame(pid: firefox.processIdentifier)
-  let pageFlash: [JumpTarget]
-  if let web = webArea {
-    pageFlash = snapshot.flashTargets.filter { web.intersects($0.frame) }
-    recorder.pass(
-      "AXWebArea frame \(web) — \(pageFlash.count)/\(snapshot.flashTargets.count) "
-        + "flash targets fall inside page area")
-  } else {
-    pageFlash = snapshot.flashTargets
-    recorder.fail(
-      "could not locate AXWebArea; diff includes Firefox chrome hits")
+  // Flash's hits to the projected viewport rect (derived from the
+  // companion's reported page size + the fiducial transform). This
+  // is more reliable than walking the AX tree for AXWebArea — when
+  // Firefox is off-screen, the AX search has been observed to match
+  // unrelated stale elements at the screen origin.
+  let pageFlash = snapshot.flashTargets.filter {
+    snapshot.pageScreenRect.intersects($0.frame)
   }
+  recorder.pass(
+    "page rect \(snapshot.pageScreenRect) — \(pageFlash.count)/"
+      + "\(snapshot.flashTargets.count) flash targets in page area")
 
   let allowList = fixture.loadAllowList()
   let result = OracleDiff.classify(
@@ -276,7 +265,7 @@ for fixture in args.fixtures {
   guard
     let result = runFixture(
       fixture, provider: provider, recorder: recorder,
-      updateAllowList: args.updateAllowList, visible: args.visible)
+      updateAllowList: args.updateAllowList)
   else {
     anyHardFailure = true
     continue

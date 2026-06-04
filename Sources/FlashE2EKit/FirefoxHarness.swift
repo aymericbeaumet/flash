@@ -151,8 +151,20 @@ public enum FirefoxHarness {
       let current = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
       if let app = current.first(where: { !preExisting.contains($0.processIdentifier) }) {
         if waitForAXWindow(app, timeout: max(1, deadline.timeIntervalSinceNow)) {
+          // Firefox finishes positioning its window asynchronously
+          // after the AX window first reports as present. A too-early
+          // AXPosition/Size write gets reverted by Firefox's own
+          // placement. Sleep briefly, set, sleep, set again so the
+          // change sticks.
+          Thread.sleep(forTimeInterval: 0.4)
           if offscreen {
             moveWindowsOffscreen(pid: app.processIdentifier)
+            Thread.sleep(forTimeInterval: 0.3)
+            moveWindowsOffscreen(pid: app.processIdentifier)
+          } else {
+            maximizeWindows(pid: app.processIdentifier)
+            Thread.sleep(forTimeInterval: 0.3)
+            maximizeWindows(pid: app.processIdentifier)
           }
           // Return focus to whoever owned it before — Firefox grabs
           // the foreground during startup regardless of `open -g`.
@@ -164,6 +176,33 @@ public enum FirefoxHarness {
       Thread.sleep(forTimeInterval: 0.25)
     }
     throw LaunchError.openTimedOut
+  }
+
+  /// Size every Firefox top-level window to cover the primary
+  /// screen. Firefox is launched in the background (`open -g`) so
+  /// the window stays behind the user's foreground app — but if
+  /// they click Firefox in the Dock they see the fixture page
+  /// rendered at full size, which is useful for inspecting what
+  /// the oracle saw.
+  private static func maximizeWindows(pid: pid_t) {
+    let app = AXUIElementCreateApplication(pid)
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw)
+        == .success,
+      let windows = raw as? [AXUIElement]
+    else { return }
+    let screen = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+    let menuBarH: CGFloat = 25
+    var pos = CGPoint(x: 0, y: menuBarH)
+    var size = CGSize(width: screen.width, height: screen.height - menuBarH)
+    guard let posValue = AXValueCreate(.cgPoint, &pos),
+      let sizeValue = AXValueCreate(.cgSize, &size)
+    else { return }
+    for w in windows {
+      AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, posValue)
+      AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, sizeValue)
+    }
   }
 
   /// Reposition every Firefox top-level window to an off-screen

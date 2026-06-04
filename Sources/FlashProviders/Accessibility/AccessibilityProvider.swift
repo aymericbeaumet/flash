@@ -389,12 +389,16 @@ public final class AccessibilityProvider: JumpProvider {
     }
 
     var addedAsTarget = false
-    // Firehose mode: every element with a valid frame becomes a hint
-    // target. No role allowlist, no enabled check, no visibility filter,
-    // no AXImage refinement, no insideClickable gate. This is intentionally
-    // overwhelming — used to diagnose which elements AX exposes at all.
+    // Role allowlist: web pages use the narrower Vimium-equivalent set
+    // (true semantic controls only); native apps use the broader set
+    // (rows, cells, disclosure triangles, icon-only AXImage buttons).
+    // Disabled elements never hint — they're visible but inert, and
+    // the user would just click into a no-op.
+    let allowlist = insideWebArea ? Self.webClickableRoles : Self.roles
+    let roleAllowed = role.map { allowlist.contains($0) } ?? false
     if let posV = posValue, let sizeV = sizeValue,
-      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      roleAllowed, enabled
     {
       state.idCounter += 1
       let captured = element
