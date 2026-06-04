@@ -50,6 +50,12 @@ struct Config {
   var hints = Hints()
   var overlay = Overlay()
   var debug = Debug()
+  /// `[shortcuts]` section. Each entry maps a hotkey string
+  /// (skhd-style LHS, e.g. `"cmd+ctrl - a"`) to an app name or
+  /// bundle identifier (`"Alacritty"`, `"com.apple.Safari"`).
+  /// `ShortcutsCoordinator` registers these via Carbon at launch
+  /// and re-registers them on every config reload.
+  var shortcuts: [String: String] = [:]
   var warnings: [String] = []
 
   static let `default` = Config()

@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var monitor: AppMonitor!
   private var overlay: OverlayPanel!
   private var urlHandler: URLEventHandler!
-  private var configSource: DispatchSourceFileSystemObject?
+  private var configSources: [DispatchSourceFileSystemObject] = []
   private let shortcuts = ShortcutsCoordinator()
 
   private var currentHints: [AssignedHint] = []
@@ -386,66 +386,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   ///     or finally writing the file both kick the watcher one step
   ///     down the cascade toward a real file watcher.
   ///
-  /// The `write`/`extend` branch reloads in place — that's the
-  /// common case for editors that write the file directly without
-  /// rename-shuffling.
+  /// Watch every candidate config path. Reload on any event:
+  ///   - file edit at the currently-loaded path → re-read it
+  ///   - a higher-precedence path springs into existence → switch to it
+  ///   - the currently-loaded file is deleted → fall through to the
+  ///     next candidate
+  ///
+  /// Missing files have their parent directory watched instead, so
+  /// creation triggers a re-watch + reload.
   private func watchConfigFile() {
-    let url = ConfigLoader.defaultPath
-    let fileFD = open(url.path, O_EVTONLY)
-    if fileFD >= 0 {
-      // Reload once on (re-)attachment so the running config matches
-      // the just-restored file — covers the "delete → quickly recreate"
-      // sequence where the in-process config is still the pre-delete
-      // version.
-      reloadConfig()
-      configSource = makeWatcher(
-        fd: fileFD,
-        eventMask: [.write, .delete, .rename, .extend]
-      ) { [weak self] events in
-        guard let self else { return }
-        self.reloadConfig()
-        if events.contains(.delete) || events.contains(.rename) {
-          self.configSource?.cancel()
-          self.configSource = nil
-          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-            self?.watchConfigFile()
-          }
-        }
+    teardownConfigWatchers()
+    let candidates = ConfigLoader.candidatePaths(
+      arguments: CommandLine.arguments,
+      environment: ProcessInfo.processInfo.environment)
+    var watchedDirs = Set<String>()
+    for url in candidates {
+      attachWatcher(forPath: url.path)
+      let dir = url.deletingLastPathComponent().path
+      if watchedDirs.insert(dir).inserted {
+        attachWatcher(forPath: dir)
       }
-      return
     }
-    // File missing — watch the nearest existing ancestor directory and
-    // re-evaluate when anything inside it changes.
-    watchAncestorDirectory(of: url)
+    reloadConfig()
   }
 
-  /// Walk up `fileURL` to the first directory that exists, watch it
-  /// for any change, and on any event cancel + retry `watchConfigFile`.
-  /// Each event tries to upgrade the watcher one step toward the
-  /// actual file: dir created → start watching the new (deeper) dir,
-  /// file created → start watching the file.
-  private func watchAncestorDirectory(of fileURL: URL) {
-    var dir = fileURL.deletingLastPathComponent()
-    while true {
-      let fd = open(dir.path, O_EVTONLY)
-      if fd >= 0 {
-        configSource = makeWatcher(
-          fd: fd,
-          eventMask: [.write, .delete, .rename, .extend]
-        ) { [weak self] _ in
-          guard let self else { return }
-          self.configSource?.cancel()
-          self.configSource = nil
-          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-            self?.watchConfigFile()
-          }
-        }
-        return
+  private func teardownConfigWatchers() {
+    for s in configSources { s.cancel() }
+    configSources.removeAll()
+  }
+
+  /// Attach a `kqueue`-backed watcher to `path` if it exists. On any
+  /// event, debounce + re-run `watchConfigFile` (which re-evaluates
+  /// existence and reloads the active config). Silently skipped when
+  /// the path doesn't exist — the parent-dir watcher already covers
+  /// "file gets created later".
+  private func attachWatcher(forPath path: String) {
+    let fd = open(path, O_EVTONLY)
+    guard fd >= 0 else { return }
+    let mask: DispatchSource.FileSystemEvent =
+      [.write, .delete, .rename, .extend]
+    let source = makeWatcher(fd: fd, eventMask: mask) { [weak self] _ in
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) {
+        [weak self] in
+        self?.watchConfigFile()
       }
-      let parent = dir.deletingLastPathComponent()
-      if parent.path == dir.path { return }  // hit "/"
-      dir = parent
     }
+    configSources.append(source)
   }
 
   private func makeWatcher(
@@ -473,6 +459,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
     monitor.updateConfig(cfg)
+    // Push the new shortcut set in too — the Carbon hotkey registry
+    // rebuilds from scratch each call, so add/remove/edit all
+    // converge atomically.
+    shortcuts.apply(shortcuts: cfg.shortcuts)
   }
 
   private func logPermissionState() {

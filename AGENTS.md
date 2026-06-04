@@ -312,27 +312,14 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `TmuxProviderTests`). Deterministic, run in milliseconds, no external state. `TmuxProviderTests` covers the tokenization rules (`extractWords`), the cell-geometry math (`resolveGeometry`), the status-bar parser (`parseStatusInfo`), the TOML alacritty-config reader, and `parseTwoInts`. Run on every `swift test`.
 - **Live tmux integration** (`TmuxIntegrationTests`). Boots an isolated tmux server under a per-test socket (`tmux -L flash-it-<uuid> -f /dev/null`) and asserts the binary's CLI contract Flash depends on: the `#{pane_*}` / `#{client_*}` / `#{status}` / `#{status-position}` format strings; that `capture-pane -p` returns the rendered grid; that horizontal + vertical splits yield the expected `pane_left` / `pane_top`. Catches breakage from tmux upgrades silently changing format-string semantics — the only realistic regression source for `TmuxProvider`. Skipped when no `tmux` binary is found on the probe paths. Runs in ~10 s.
-- **Live Firefox AX integration**. The Firefox E2E exists in two forms; both run the same fixture + assertions:
-  - **Recommended**: the standalone `flash-firefox-e2e` SPM executable (`Sources/flash-firefox-e2e/main.swift`). Built via `Scripts/test-firefox-e2e.sh`, which signs the binary with the same stable `Flash Dev` identity as the main Flash app. Grant the resulting `build/flash-firefox-e2e` Accessibility once and the TCC grant persists across rebuilds (the cert, not the cdhash, is in the designated requirement). Prints a colourised pass/fail report and exits non-zero on any failed assertion.
-  - **Also available**: `FirefoxIntegrationTests` (opt-in via `FLASH_FIREFOX_E2E=1`). Same logic, runs under `swift test`. Skips with a pointer to the standalone runner when the test runner lacks Accessibility, because granting the SwiftPM xctest helper is fragile in practice.
-
-  Both forms launch Firefox to a structured fixture page (data: URL) containing every clickable role we promise to hint plus a deliberate set of "must not hint" elements, and walk it through `AccessibilityProvider.discover`. The fixture exercises three regression modes simultaneously, with assertions targeted at each:
-  - **Undermatch** — per-role lower bounds for `AXLink` (5 anchors + 3 img-wrapped), `AXButton` (5 + 1 submit), `AXTextField` (text/email/password/number/tel/url), `AXSearchField`, `AXCheckBox`, `AXRadioButton`, `AXPopUpButton` (select), `AXTextArea` (textarea + contenteditable). A regression that narrows the role set or drops a specific input-type mapping triggers a specific failure with the role and expected floor in the message.
-  - **Overmatch** — forbidden roles (`AXHeading`, `AXStaticText`, `AXGroup`, `AXGenericElement`, `AXScrollArea`, `AXSplitter`, `AXWebArea`, `AXSection`, `AXParagraph`, `AXDocument`, `AXOutline`, `AXList`, `AXListItem`) must produce zero hints. `AXImage` inside the page area must also be zero, since every fixture image is either wrapped in an `<a>` (decorative under `clickableContainerRoles`) or has no click handler (filtered by the pending-action verifier). A regression in the img-as-decorative folding or the action-name verifier shows up as a non-zero `AXImage` count.
-  - **Hidden-subtree exclusion** — disabled controls (5 buttons + 5 inputs) seeded into the fixture should not be hinted; the `enabled` check is the only AX-level gate for this. `aria-hidden` / `display:none` subtrees are no longer short-circuited at the walker (those rows are walked so the dump can show them), so the test counts reflect whatever Firefox itself surfaces for those elements through AX. Update fixture upper bounds accordingly when reconciling.
-  - **Invariants** — page-area targets carry Firefox's pid, frames are non-degenerate, frames intersect the primary screen (catches AX↔NSScreen coordinate-flip regressions), and ids are unique (OverlayPanel's layer pool keys by id).
-
-  Page-area filtering: the test BFS-walks Firefox's AX tree to find the `AXWebArea` frame, then filters hint targets to that rect so the count assertions reason about page content alone (chrome buttons live outside the web area). On failure, the test prints the full role histogram of the page area for diagnostic context.
-
-  Both forms skip when Firefox isn't installed at `/Applications/Firefox.app` OR when the runner lacks Accessibility permission.
+- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a dedicated Firefox Developer Edition profile with Vimium-FF + a companion WebExtension, then drives Marionette to navigate a fixture corpus (synthetic page + snapshot HTML of HN / Wikipedia / MDN / GitHub Explore / Stack Overflow / Ahrefs / YC About) tab by tab. Per fixture: Flash walks Firefox's AX tree, Vimium's hint set is exfiltrated via an aria-labeled off-screen div, and the two are diffed under strict-ISO. Catches both undermatch (Flash misses a hint Vimium provides) and overmatch (Flash hints something Vimium skips). Run order: build + sign once (`./Scripts/install-release.sh` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh` — the script self-provisions everything else.
 
 Run order:
 
 ```bash
 swift test                                           # unit + live tmux
-./Scripts/install-release.sh                                 # one-time: creates the Flash Dev signing identity
-./Scripts/test-firefox-e2e.sh                       # builds + signs the standalone E2E runner
-./build/flash-firefox-e2e                            # runs the Firefox E2E (after granting it AX once)
+./Scripts/install-release.sh                         # one-time: creates the Flash Dev signing identity
+./Scripts/test-integration-browser.sh                # builds + signs + runs the browser corpus
 ```
 
 Anything that requires the full overlay / commit pipeline (chip rendering, key handling, AXPress against a live focused app) is still **manually verified**: run `./Scripts/install-release.sh`, grant permissions if needed, then exercise the app in real target apps.

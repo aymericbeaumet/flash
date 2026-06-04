@@ -3,7 +3,7 @@ import Foundation
 /// Static path helpers for the Firefox profile that hosts the Vimium
 /// parity oracle.
 ///
-/// The profile itself is provisioned by `Scripts/test-vimium-parity.sh`
+/// The profile itself is provisioned by `Scripts/test-integration-browser.sh`
 /// (downloads pinned Vimium-FF .xpi, zips + drops companion extension,
 /// writes user.js, builds + signs the runner, then runs it). This
 /// type only resolves paths and verifies the result is usable.
@@ -61,12 +61,12 @@ public enum OracleProfile {
       case .profileMissing(let url):
         return """
           Oracle profile not found at \(url.path).
-          Run ./Scripts/test-vimium-parity.sh to provision it.
+          Run ./Scripts/test-integration-browser.sh to provision it.
           """
       case .companionMissing(let url):
         return """
           Companion extension not installed at \(url.path).
-          Run ./Scripts/test-vimium-parity.sh to provision it.
+          Run ./Scripts/test-integration-browser.sh to provision it.
           """
       }
     }

@@ -1,31 +1,57 @@
 import Foundation
 
 enum ConfigLoader {
-  /// Default lookup chain for the TOML file path:
+  /// Lookup chain for the TOML file path. First existing wins.
   ///   1. `--config=<path>` on the command line
   ///   2. `FLASH_CONFIG` environment variable
-  ///   3. `$XDG_CONFIG_HOME/flash/config.toml`
-  ///   4. `~/.config/flash/config.toml`
+  ///   3. `$XDG_CONFIG_HOME/flash/flash.toml`
+  ///   4. `~/.config/flash/flash.toml`
+  ///   5. `~/.flash.toml`
   static var defaultPath: URL {
     resolvePath(
       arguments: CommandLine.arguments,
       environment: ProcessInfo.processInfo.environment)
   }
 
-  static func resolvePath(arguments: [String], environment: [String: String]) -> URL {
+  /// Every candidate path in lookup order. Used by the config-file
+  /// watcher: a watcher per path catches both edits to the active
+  /// config AND creation of a higher-precedence one (e.g. user adds
+  /// `$XDG_CONFIG_HOME/flash/flash.toml` while running with
+  /// `~/.flash.toml`).
+  static func candidatePaths(arguments: [String], environment: [String: String]) -> [URL]
+  {
     for arg in arguments.dropFirst() {
       if arg.hasPrefix("--config=") {
         let p = String(arg.dropFirst("--config=".count))
-        if !p.isEmpty { return URL(fileURLWithPath: (p as NSString).expandingTildeInPath) }
+        if !p.isEmpty {
+          return [URL(fileURLWithPath: (p as NSString).expandingTildeInPath)]
+        }
       }
     }
     if let p = environment["FLASH_CONFIG"], !p.isEmpty {
-      return URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
+      return [URL(fileURLWithPath: (p as NSString).expandingTildeInPath)]
     }
+    var out: [URL] = []
     let home = FileManager.default.homeDirectoryForCurrentUser
-    let xdg = environment["XDG_CONFIG_HOME"]
-    let base = xdg.flatMap { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".config")
-    return base.appendingPathComponent("flash/config.toml")
+    if let xdg = environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+      out.append(
+        URL(fileURLWithPath: (xdg as NSString).expandingTildeInPath)
+          .appendingPathComponent("flash/flash.toml"))
+    }
+    out.append(home.appendingPathComponent(".config/flash/flash.toml"))
+    out.append(home.appendingPathComponent(".flash.toml"))
+    return out
+  }
+
+  static func resolvePath(arguments: [String], environment: [String: String]) -> URL {
+    let candidates = candidatePaths(arguments: arguments, environment: environment)
+    let fm = FileManager.default
+    if let existing = candidates.first(where: { fm.fileExists(atPath: $0.path) }) {
+      return existing
+    }
+    // Fall back to the canonical xdg-style path when nothing exists
+    // yet. `parseFile` handles missing files gracefully.
+    return candidates.first ?? URL(fileURLWithPath: NSHomeDirectory() + "/.flash.toml")
   }
 
   /// Production entry point. Resolves the config path, reads the TOML
@@ -77,8 +103,14 @@ enum ConfigLoader {
         continue
       }
       guard let eqIdx = line.firstIndex(of: "=") else { continue }
-      let key = String(line[..<eqIdx]).trimmingCharacters(in: .whitespaces)
+      var key = String(line[..<eqIdx]).trimmingCharacters(in: .whitespaces)
       let val = String(line[line.index(after: eqIdx)...]).trimmingCharacters(in: .whitespaces)
+      // Allow quoted keys (TOML spec) so `"cmd+ctrl - a" = "Alacritty"`
+      // works in [shortcuts] — the hotkey LHS contains `+` and
+      // spaces, neither of which is a valid bare TOML key.
+      if key.hasPrefix("\""), key.hasSuffix("\""), key.count >= 2 {
+        key = String(key.dropFirst().dropLast())
+      }
       apply(table: currentTable, key: key, value: val, into: &config)
     }
     return config
@@ -117,6 +149,16 @@ enum ConfigLoader {
 
   private static func apply(table: [String], key: String, value: String, into config: inout Config)
   {
+    // [shortcuts] is a free-form map: every key in the section is a
+    // hotkey string, every value is the target app. Handle out-of-
+    // band of the per-key path-match switch below.
+    if table == ["shortcuts"] {
+      let app = parseString(value) ?? value
+      if !key.isEmpty, !app.isEmpty {
+        config.shortcuts[key] = app
+      }
+      return
+    }
     let path = table + [key]
     switch path {
     case ["hints", "keys"]:

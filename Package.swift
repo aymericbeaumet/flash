@@ -6,7 +6,6 @@ let package = Package(
   platforms: [.macOS(.v14)],
   products: [
     .executable(name: "flash", targets: ["flash"]),
-    .executable(name: "flash-firefox-e2e", targets: ["flash-firefox-e2e"]),
     .executable(name: "flash-vimium-oracle", targets: ["flash-vimium-oracle"]),
     .library(name: "FlashCore", targets: ["FlashCore"]),
     .library(name: "FlashProviders", targets: ["FlashProviders"]),
@@ -17,11 +16,6 @@ let package = Package(
       name: "flash",
       dependencies: ["FlashCore", "FlashProviders"],
       path: "Sources/flash"
-    ),
-    .executableTarget(
-      name: "flash-firefox-e2e",
-      dependencies: ["FlashCore", "FlashProviders", "FlashE2EKit"],
-      path: "Sources/flash-firefox-e2e"
     ),
     .executableTarget(
       name: "flash-vimium-oracle",

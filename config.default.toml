@@ -2,10 +2,13 @@
 #
 # This file is the canonical reference for every configuration key Flash
 # accepts, with its built-in default value. Copy any keys you want to
-# override into ~/.config/flash/config.toml; unspecified keys fall back to
-# the values shown here.
+# override into one of these paths (first existing wins):
 #
-# Edits to ~/.config/flash/config.toml hot-reload — no restart needed.
+#   $XDG_CONFIG_HOME/flash/flash.toml
+#   ~/.config/flash/flash.toml
+#   ~/.flash.toml
+#
+# All three are watched for live reload — no restart needed.
 #
 # Every key below can ALSO be overridden via a command-line flag or an
 # environment variable. Precedence (high → low):
@@ -84,3 +87,22 @@ dump_logs = false
 # not configurable. See AGENTS.md → "Prepared model contract" for the
 # determinism invariants. No per-IPC AX timeout is ever set — caps
 # tight enough to be useful tripped Firefox's lazy AXWebArea build.
+
+# App-switching hotkeys. The key is the hotkey string — modifiers and
+# the key joined by `+`, the last token is the key. Supported modifiers
+# (case-insensitive): cmd, shift, ctrl, alt (aka opt/option). Supported
+# keys: a-z, 0-9, ANSI punctuation single chars, named keys (return,
+# tab, space, escape, delete, arrows, home/end, pageup/down), or 0xNN
+# raw virtual-key.
+#
+# Values are app names or bundle IDs. Both resolve via NSWorkspace.
+# Carbon RegisterEventHotKey catches the keypress system-level, the
+# cached NSRunningApplication is activated directly — sub-10ms.
+#
+# Examples (none enabled by default):
+#
+#   [shortcuts]
+#   "cmd+ctrl+a" = "Alacritty"
+#   "cmd+shift+r" = "Reminders"
+#   "cmd+ctrl+s" = "com.tinyspeck.slackmacgap"
+[shortcuts]

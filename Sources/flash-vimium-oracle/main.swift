@@ -19,7 +19,7 @@ import Foundation
 //     element on either side is a failure unless covered by an
 //     allow-list JSON sidecar
 //
-// See Scripts/test-vimium-parity.sh for the all-in-one provision/build/run
+// See Scripts/test-integration-browser.sh for the all-in-one provision/build/run
 // driver — it preserves the TCC Accessibility grant across rebuilds.
 
 private enum Colour {

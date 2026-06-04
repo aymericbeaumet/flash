@@ -196,10 +196,24 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(url.path, "/tmp/from-env.toml")
   }
 
-  func testResolvePathFallsBackToXDGHome() {
+  func testCandidatePathsHonourXDGHome() {
+    // First candidate when XDG_CONFIG_HOME is set is XDG-rooted.
     let args = ["flash"]
     let env = ["XDG_CONFIG_HOME": "/tmp/xdg"]
-    let url = ConfigLoader.resolvePath(arguments: args, environment: env)
-    XCTAssertEqual(url.path, "/tmp/xdg/flash/config.toml")
+    let paths = ConfigLoader.candidatePaths(arguments: args, environment: env)
+    XCTAssertEqual(paths.first?.path, "/tmp/xdg/flash/flash.toml")
+  }
+
+  func testCandidatePathsFallbackChain() {
+    // No XDG → only the home-rooted paths, in priority order.
+    let args = ["flash"]
+    let env: [String: String] = [:]
+    let paths = ConfigLoader.candidatePaths(arguments: args, environment: env)
+      .map { $0.path }
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    XCTAssertEqual(paths, [
+      "\(home)/.config/flash/flash.toml",
+      "\(home)/.flash.toml",
+    ])
   }
 }
