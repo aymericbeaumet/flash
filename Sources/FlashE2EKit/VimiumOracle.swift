@@ -138,7 +138,33 @@ public enum VimiumOracle {
     let flashTargets =
       (try? provider.discover(in: context, deadline: Date().addingTimeInterval(3))) ?? []
 
-    // 3+4. Briefly bring Firefox foreground, post 'f', wait for the
+    // 3. Wait for Firefox's AX tree to stabilize before snapshotting.
+    //    Firefox builds the page's accessibility subtree lazily and
+    //    asynchronously after content loads — on big pages
+    //    (wikipedia, github, reddit) the tree isn't ready when the
+    //    companion fires READY. Poll discover() and take the
+    //    snapshot once the target count stops growing for two
+    //    consecutive polls (or we hit the timeout).
+    let stableDeadline = Date().addingTimeInterval(6)
+    var resolvedFlashTargets = flashTargets
+    var stableRuns = 0
+    var lastCount = -1
+    while Date() < stableDeadline {
+      let now =
+        (try? provider.discover(in: context, deadline: Date().addingTimeInterval(2))) ?? []
+      if now.count == lastCount, now.count > 5 {
+        stableRuns += 1
+        resolvedFlashTargets = now
+        if stableRuns >= 2 { break }
+      } else {
+        lastCount = now.count
+        stableRuns = 0
+        resolvedFlashTargets = now
+      }
+      Thread.sleep(forTimeInterval: 0.3)
+    }
+
+    // 4+5. Briefly bring Firefox foreground, post 'f', wait for the
     //      companion to flip the title to ANCHORS_READY. Re-post 'f'
     //      every second until the title changes or we hit the
     //      timeout — Vimium's keymap registration is racy and 'f'
@@ -182,7 +208,6 @@ public enum VimiumOracle {
     if !gotAnchors {
       throw CaptureError.anchorsTimedOut
     }
-    let resolvedFlashTargets = flashTargets
 
     // 5+6. One AX tree walk: collect the payload div (by description
     //      prefix) AND the fiducials. Cheaper than two passes, and

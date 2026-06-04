@@ -596,7 +596,11 @@ public final class AccessibilityProvider: JumpProvider {
     var sz = CGSize.zero
     AXValueGetValue(pos, .cgPoint, &origin)
     AXValueGetValue(size, .cgSize, &sz)
-    if sz.width <= 0 || sz.height <= 0 { return nil }
+    // Minimum visual area gate. 1x1 anchors are a common tracking-
+    // pixel idiom that Vimium correctly skips (Utils.areClientRectsTooSmall);
+    // 3x3 is the conservative threshold that drops them without
+    // touching real icon-only buttons (16x16+).
+    if sz.width < 3 || sz.height < 3 { return nil }
     let flippedY = screenH - origin.y - sz.height
     return CGRect(x: origin.x, y: flippedY, width: sz.width, height: sz.height)
   }

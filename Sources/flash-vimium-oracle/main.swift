@@ -220,14 +220,14 @@ private func runFixture(
     "vimium=\(snapshot.vimiumAnchors.count) anchors, "
       + "flash=\(snapshot.flashTargets.count) AX targets")
 
-  // Vimium only ever hints page DOM, never Firefox chrome. Filter
-  // Flash's hits to the projected viewport rect (derived from the
-  // companion's reported page size + the fiducial transform). This
-  // is more reliable than walking the AX tree for AXWebArea — when
-  // Firefox is off-screen, the AX search has been observed to match
-  // unrelated stale elements at the screen origin.
+  // Vimium only ever hints page DOM, never Firefox chrome. Keep
+  // Flash hits whose CENTER lies inside the projected viewport —
+  // `intersects` was too lax and let in elements partially scrolled
+  // off the top of the viewport (rects with negative y but height
+  // crossing y=0) that Vimium correctly skips.
+  let pageRect = snapshot.pageScreenRect
   let pageFlash = snapshot.flashTargets.filter {
-    snapshot.pageScreenRect.intersects($0.frame)
+    pageRect.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
   }
   recorder.pass(
     "page rect \(snapshot.pageScreenRect) — \(pageFlash.count)/"
