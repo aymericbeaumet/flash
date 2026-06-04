@@ -20,6 +20,7 @@ final class OverlayPanel: NSPanel {
 
   var overlayConfig: Config.Overlay = .init()
   var debugConfig: Config.Debug = .init()
+  var magicModifiers: ClickModifiers = .defaultMagic
 
   // Fallback border colour when the configured `hint_border` is malformed.
   private static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
@@ -666,6 +667,6 @@ final class OverlayPanel: NSPanel {
 
 protocol OverlayCoordinator: AnyObject {
   func overlayDidCancel()
-  func overlayDidCommit(prefix: String)
+  func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)
   func overlayDidUpdatePrefix(_ prefix: String)
 }

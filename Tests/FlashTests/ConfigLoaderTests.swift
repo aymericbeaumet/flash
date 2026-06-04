@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 @testable import flash
@@ -5,8 +6,10 @@ import XCTest
 final class ConfigLoaderTests: XCTestCase {
   func testDefaultsWhenEmpty() {
     let c = ConfigLoader.parse("")
-    XCTAssertEqual(c.hints.keys, "<qwerty>")
+    XCTAssertEqual(c.hints.keys, "<qwerty_homerow+qwerty_toprow>")
+    XCTAssertEqual(c.resolvedAlphabet.layoutName, "qwerty")
     XCTAssertEqual(c.hints.minLength, 1)
+    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "ctrl", "alt", "shift"])
     XCTAssertEqual(c.overlay.fontSize, 12)
     XCTAssertEqual(c.overlay.hintFG, "#302505")
     XCTAssertEqual(c.overlay.hintBGTop, "#FFF785")
@@ -19,18 +22,141 @@ final class ConfigLoaderTests: XCTestCase {
   func testParsesHintsSection() {
     let toml = """
       [hints]
-      keys = "<colemak>"
+      keys = "<colemak_homerow+colemak_toprow>"
       min_length = 2
+      magic_modifiers = ["cmd", "alt"]
       """
     let c = ConfigLoader.parse(toml)
-    XCTAssertEqual(c.hints.keys, "<colemak>")
+    XCTAssertEqual(c.hints.keys, "<colemak_homerow+colemak_toprow>")
+    XCTAssertEqual(c.resolvedAlphabet.layoutName, "colemak")
     XCTAssertEqual(c.hints.minLength, 2)
+    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "alt"])
+  }
+
+  func testParsesEmptyMagicModifiersArray() {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      magic_modifiers = []
+      """)
+    XCTAssertEqual(c.hints.magicModifiers, [])
+  }
+
+  func testShiftMagicModifierIsRemovedWhenResolvedKeysContainNonLetters() {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      keys = "as;d"
+      """)
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "as;d")
+    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "ctrl", "alt"])
+    XCTAssertEqual(c.warnings.count, 1)
+    XCTAssertTrue(c.warnings[0].contains("removed \"shift\""))
+    XCTAssertTrue(c.warnings[0].contains("as;d"))
+  }
+
+  func testShiftMagicModifierWarningIsNotDuplicatedByOverrides() {
+    let base = ConfigLoader.parse(
+      """
+      [hints]
+      keys = "as;d"
+      """)
+    let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: [:])
+    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "ctrl", "alt"])
+    XCTAssertEqual(c.warnings.filter { $0.contains("removed \"shift\"") }.count, 1)
+  }
+
+  func testResolvedConfigJSONIncludesDefaultsAndOverrides() throws {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      magic_modifiers = ["shift"]
+      [debug]
+      log_level = "debug"
+      """)
+    let json = c.resolvedConfigJSON
+    XCTAssertFalse(json.contains("\n"))
+    let root = try XCTUnwrap(Self.parseJSONObject(json))
+    let hints = try XCTUnwrap(root["hints"] as? [String: Any])
+    let overlay = try XCTUnwrap(root["overlay"] as? [String: Any])
+    let debug = try XCTUnwrap(root["debug"] as? [String: Any])
+    XCTAssertEqual(hints["keys"] as? String, "<qwerty_homerow+qwerty_toprow>")
+    XCTAssertEqual(hints["min_length"] as? Int, 1)
+    XCTAssertEqual(hints["magic_modifiers"] as? [String], ["shift"])
+    XCTAssertEqual(overlay["font_size"] as? Double, 12)
+    XCTAssertEqual(debug["log_level"] as? String, "debug")
+  }
+
+  func testResolvedHintsKeysJSONIncludesDefaultAndResolvedAlphabet() throws {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      keys = "<colemak_homerow>"
+      """)
+    let json = c.resolvedHintsKeysJSON
+    XCTAssertFalse(json.contains("\n"))
+    let root = try XCTUnwrap(Self.parseJSONObject(json))
+    XCTAssertEqual(root["default"] as? String, "<qwerty_homerow+qwerty_toprow>")
+    XCTAssertEqual(root["raw"] as? String, "<colemak_homerow>")
+    XCTAssertEqual(root["layout"] as? String, "colemak")
+    XCTAssertEqual(root["chars"] as? String, "arstnediho")
+    XCTAssertEqual(root["left_hand"] as? String, "abcdfgpqrstvwxz")
+  }
+
+  func testParsesInvalidLayoutKeysIntoPreparedFallback() {
+    let c = ConfigLoader.parse("[hints]\nkeys = \"<colemak_homerow+qwerty_toprow>\"")
+    XCTAssertEqual(c.hints.keys, "<colemak_homerow+qwerty_toprow>")
+    XCTAssertEqual(c.resolvedAlphabet.layoutName, "qwerty")
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "sdfjklagheruiwtyoqp")
+    XCTAssertNotNil(c.resolvedAlphabet.warning)
+  }
+
+  func testParsesValidLayoutCombinationIntoPreparedAlphabet() {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      keys = "<dvorak_homerow_lefthand+dvorak_toprow_righthand>"
+      """)
+    XCTAssertEqual(c.resolvedAlphabet.layoutName, "dvorak")
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "aoeuifcrlg")
+    XCTAssertNil(c.resolvedAlphabet.warning)
   }
 
   func testParsesLiteralKeys() {
     let c = ConfigLoader.parse("[hints]\nkeys = \"asdfghjkl\"")
     XCTAssertEqual(c.hints.keys, "asdfghjkl")
     XCTAssertEqual(String(c.resolvedAlphabet.chars), "asdfghjkl")
+    XCTAssertNil(c.resolvedAlphabet.layoutName)
+    XCTAssertEqual(c.resolvedAlphabet.keyScores["a"], 9)
+    XCTAssertEqual(c.resolvedAlphabet.keyScores["l"], 1)
+  }
+
+  func testLayoutIsInferredFromPresetKeys() {
+    let c = ConfigLoader.parse("[hints]\nkeys = \"<colemak_homerow>\"")
+    XCTAssertEqual(c.resolvedAlphabet.layoutName, "colemak")
+  }
+
+  func testResolvedAlphabetIsPreparedAndOnlyRefreshedExplicitly() {
+    var c = ConfigLoader.parse("[hints]\nkeys = \"zsaq\"")
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "zsaq")
+    c.hints.keys = "<colemak_homerow>"
+    XCTAssertEqual(
+      String(c.resolvedAlphabet.chars),
+      "zsaq",
+      "direct mutation should not recompute hot-path derived data")
+    c.prepareDerivedValues()
+    XCTAssertEqual(c.resolvedAlphabet.layoutName, "colemak")
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "arstnediho")
+  }
+
+  func testLayoutKeyIsNotAVisibleConfigProperty() {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      keys = "<colemak_homerow>"
+      layout = "<qwerty>"
+      """)
+    XCTAssertEqual(c.resolvedAlphabet.layoutName, "colemak")
   }
 
   func testParsesDebugProfiling() {
@@ -63,6 +189,7 @@ final class ConfigLoaderTests: XCTestCase {
       "flash",
       "--hints-keys=asdf",
       "--hints-min-length=3",
+      "--hints-magic-modifiers=cmd,alt",
       "--overlay-font-size=20",
       "--overlay-hint-fg=#FFFFFF",
       "--overlay-hint-bg-top=#000000",
@@ -79,7 +206,9 @@ final class ConfigLoaderTests: XCTestCase {
     ]
     let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
     XCTAssertEqual(c.hints.keys, "asdf")
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "asdf")
     XCTAssertEqual(c.hints.minLength, 3)
+    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "alt"])
     XCTAssertEqual(c.overlay.fontSize, 20)
     XCTAssertEqual(c.overlay.hintFG, "#FFFFFF")
     XCTAssertEqual(c.overlay.hintBGTop, "#000000")
@@ -100,6 +229,7 @@ final class ConfigLoaderTests: XCTestCase {
     let env = [
       "FLASH_HINTS_KEYS": "qwer",
       "FLASH_HINTS_MIN_LENGTH": "2",
+      "FLASH_HINTS_MAGIC_MODIFIERS": "ctrl,alt",
       "FLASH_OVERLAY_FONT_SIZE": "18",
       "FLASH_OVERLAY_HINT_FG": "#DDEEFF",
       "FLASH_OVERLAY_HINT_BG_TOP": "#AABBCC",
@@ -116,7 +246,9 @@ final class ConfigLoaderTests: XCTestCase {
     ]
     let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
     XCTAssertEqual(c.hints.keys, "qwer")
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "qwer")
     XCTAssertEqual(c.hints.minLength, 2)
+    XCTAssertEqual(c.hints.magicModifiers, ["ctrl", "alt"])
     XCTAssertEqual(c.overlay.fontSize, 18)
     XCTAssertEqual(c.overlay.hintFG, "#DDEEFF")
     XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
@@ -218,6 +350,18 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.hints.minLength, 3)
   }
 
+  func testCLIKeysBeatEnvAndRefreshPreparedAlphabet() {
+    let base = ConfigLoader.parse("[hints]\nkeys = \"<qwerty_homerow>\"")
+    let env = ["FLASH_HINTS_KEYS": "<colemak_homerow>"]
+    let args = ["flash", "--hints-keys=zsaq"]
+    let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: env)
+    XCTAssertEqual(c.hints.keys, "zsaq")
+    XCTAssertNil(c.resolvedAlphabet.layoutName)
+    XCTAssertEqual(String(c.resolvedAlphabet.chars), "zsaq")
+    XCTAssertEqual(c.resolvedAlphabet.keyScores["z"], 4)
+    XCTAssertEqual(c.resolvedAlphabet.keyScores["q"], 1)
+  }
+
   func testEnvBeatsTOML() {
     // Simulate "TOML produced 2; env says 5".
     var base = Config()
@@ -306,5 +450,10 @@ final class ConfigLoaderTests: XCTestCase {
         "\(home)/.config/flash/flash.toml",
         "\(home)/.flash.toml",
       ])
+  }
+
+  private static func parseJSONObject(_ json: String) throws -> [String: Any]? {
+    let data = Data(json.utf8)
+    return try JSONSerialization.jsonObject(with: data) as? [String: Any]
   }
 }

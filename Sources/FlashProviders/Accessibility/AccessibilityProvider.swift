@@ -131,11 +131,9 @@ public final class AccessibilityProvider: JumpProvider {
   /// AX provider runs serially on a single queue (see AppMonitor), so a
   /// plain mutable property is safe here.
   ///
-  /// Caveat under `concurrentWalk = true`: per-worker buffers are
-  /// concatenated in worker-order at end of walk, so the file is no
-  /// longer in strict tree-traversal order. Set
-  /// `performance.concurrent_walk = false` if you need the legacy
-  /// ordering for diff'ing two activations.
+  /// Caveat: per-worker buffers are concatenated in worker order at
+  /// end of walk, so the file is no longer in strict tree-traversal
+  /// order; use target ids and frames when diffing two activations.
   public var dumpURL: URL?
 
   /// Millisecond wall-clock timestamp identifying the activation that
@@ -167,6 +165,12 @@ public final class AccessibilityProvider: JumpProvider {
     return (cf as! AXValue)
   }
 
+  private static func stringValue(_ v: Any) -> String? {
+    guard let value = v as? String else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
   // Indices are hot-path constants — keep them in sync with `walk`.
   private static let batchAttrs: CFArray =
@@ -177,6 +181,9 @@ public final class AccessibilityProvider: JumpProvider {
       kAXSizeAttribute,  // 3
       kAXEnabledAttribute,  // 4
       kAXChildrenAttribute,  // 5
+      kAXTitleAttribute,  // 6
+      kAXDescriptionAttribute,  // 7
+      kAXValueAttribute,  // 8
     ] as CFArray
 
   /// Per-worker mutable state. `WalkState` is per-thread under concurrent
@@ -366,7 +373,7 @@ public final class AccessibilityProvider: JumpProvider {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 6 else { return }
+    guard err == .success, let vals = valuesRef as? [Any], vals.count == 9 else { return }
 
     let role = vals[0] as? String
     let subrole = vals[1] as? String
@@ -374,6 +381,8 @@ public final class AccessibilityProvider: JumpProvider {
     let sizeValue = Self.axValue(vals[3])
     let enabled = (vals[4] as? Bool) ?? true
     let allChildren = vals[5] as? [AXUIElement]
+    let label =
+      Self.stringValue(vals[6]) ?? Self.stringValue(vals[7]) ?? Self.stringValue(vals[8])
 
     // When dumping, fetch the supported actions + label upfront so the
     // line includes enough signal to diagnose role mismatches. Skipped
@@ -382,10 +391,7 @@ public final class AccessibilityProvider: JumpProvider {
     var dumpLabel: String? = nil
     if state.dumpBuffer != nil {
       dumpActions = actionNames(element)
-      dumpLabel =
-        stringAttr(element, kAXTitleAttribute as CFString)
-        ?? stringAttr(element, kAXDescriptionAttribute as CFString)
-        ?? stringAttr(element, kAXValueAttribute as CFString)
+      dumpLabel = label
     }
 
     var addedAsTarget = false
@@ -396,6 +402,9 @@ public final class AccessibilityProvider: JumpProvider {
     // the user would just click into a no-op.
     let allowlist = insideWebArea ? Self.webClickableRoles : Self.roles
     var roleAllowed = role.map { allowlist.contains($0) } ?? false
+    if roleAllowed, role == "AXImage", insideClickable {
+      roleAllowed = false
+    }
     // Vimium-parity heuristic for AXLink-only: drop anchors smaller
     // than 13x13. These are virtually always wrappers around a
     // decorative CSS sprite or a hidden hit-region — HN-style upvote
@@ -438,12 +447,16 @@ public final class AccessibilityProvider: JumpProvider {
         id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
         frame: frame,
         role: capturedRole,
-        accessibilityLabel: nil,
+        accessibilityLabel: label,
         pid: pid,
         activate: activate,
         providerID: identifier
       )
-      state.confirmedTargets.append(candidate)
+      if role == "AXImage" {
+        state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
+      } else {
+        state.confirmedTargets.append(candidate)
+      }
       addedAsTarget = true
     }
 
@@ -628,15 +641,6 @@ public final class AccessibilityProvider: JumpProvider {
     let err = AXUIElementCopyActionNames(element, &names)
     guard err == .success, let arr = names as? [String] else { return [] }
     return arr
-  }
-
-  private func stringAttr(_ element: AXUIElement, _ attribute: CFString) -> String? {
-    var raw: CFTypeRef?
-    let err = AXUIElementCopyAttributeValue(element, attribute, &raw)
-    guard err == .success else { return nil }
-    let s = raw as? String
-    guard let s, !s.isEmpty else { return nil }
-    return s
   }
 
   private func appendDumpLine(

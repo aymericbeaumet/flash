@@ -42,8 +42,16 @@ KEYCHAIN_PATH="$HOME/Library/Keychains/login.keychain-db"
 BUNDLE_ID="com.flash.vimium-oracle"
 
 PROFILE_DIR="$HOME/Library/Application Support/Flash/firefox-browser-test-profile"
+WORKER_PROFILE_ROOT="$HOME/Library/Application Support/Flash/firefox-browser-test-workers"
 EXT_DIR="$PROFILE_DIR/extensions"
 FIXTURES_DIR="$PROJECT_DIR/Tests/BrowserSnapshots"
+
+cleanup_test_apps() {
+  /usr/bin/pkill -f "$INSTALL_APP/Contents/MacOS/$BIN_NAME" 2>/dev/null || true
+  /usr/bin/pkill -f "$WORKER_PROFILE_ROOT" 2>/dev/null || true
+}
+trap cleanup_test_apps EXIT
+trap 'cleanup_test_apps; exit 130' INT TERM
 
 if [[ -n "${FLASH_BROWSER_FIREFOX_APP:-}" ]]; then
   FIREFOX_APP="$FLASH_BROWSER_FIREFOX_APP"

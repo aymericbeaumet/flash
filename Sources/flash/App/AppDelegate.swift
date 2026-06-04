@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.coordinator = self
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
+    overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
     // Pay the layer-allocation cost at launch instead of on the first
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
@@ -57,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       case .showHints(let right): self.activate(rightClick: right)
       case .showAlert(let message): self.alertPanel.show(message)
       case .dismissAlert: self.alertPanel.dismiss()
-      case .showUsage: self.alertPanel.show(URLEventHandler.usageText, duration: 8)
+      case .showUsage: Self.writeUsageToStdout()
       case .dismissHints: self.cancelOverlay()
       case .quit: NSApp.terminate(nil)
       case .openApp(let name): AppLauncher.activate(target: name)
@@ -70,6 +71,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     watchConfigFile()
     logPermissionState()
     installDismissObservers()
+  }
+
+  private static func writeUsageToStdout() {
+    let text = URLEventHandler.usageText + "\n"
+    if let data = text.data(using: .utf8) {
+      FileHandle.standardOutput.write(data)
+    }
   }
 
   private func installDismissObservers() {
@@ -280,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     cancelOverlay()
   }
 
-  func overlayDidCommit(prefix: String) {
+  func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {
     if prefix == "__BACKSPACE__" {
       if !currentPrefix.isEmpty {
         currentPrefix.removeLast()
@@ -312,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     if matchCount == 0 {
       cancelOverlay()
     } else if matchCount == 1, let m = firstMatch, m.display == upper {
-      commit(hint: m)
+      commit(hint: m, clickModifiers: clickModifiers)
     }
   }
 
@@ -328,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
-  private func commit(hint: AssignedHint) {
+  private func commit(hint: AssignedHint, clickModifiers: ClickModifiers) {
     let action = pendingAction
     // The target carries its owning pid (always the focused app at
     // walk time). Fall back to the activation-time focused pid if the
@@ -364,7 +372,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     currentPrefix = ""
     sourceAppPID = nil
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
-      _ = ActionDispatcher.perform(action, on: hint.target, pid: pid, clickPoint: clickPoint)
+      _ = ActionDispatcher.perform(
+        action, on: hint.target, pid: pid, clickPoint: clickPoint, modifiers: clickModifiers)
       self?.activationInFlight = false
     }
   }
@@ -475,8 +484,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     for warning in cfg.warnings {
       FlashLog.warn("[config] \(warning)")
     }
+    FlashLog.debug("[config] resolved_config=\(cfg.resolvedConfigJSON)")
+    FlashLog.debug("[config] resolved_hints_keys=\(cfg.resolvedHintsKeysJSON)")
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
+    overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
     monitor.updateConfig(cfg)
     // Push the new shortcut set in too — the Carbon hotkey registry
     // rebuilds from scratch each call, so add/remove/edit all

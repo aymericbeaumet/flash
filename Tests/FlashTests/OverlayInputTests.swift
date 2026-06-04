@@ -10,43 +10,111 @@ final class OverlayInputTests: XCTestCase {
         keyCode: 45,
         modifierFlags: [],
         charactersIgnoringModifiers: "n"),
-      .commit("n"))
+      .commit("n", []))
   }
 
-  func testShiftLetterStillCommitsHintCharacter() {
+  func testShiftLetterCommitsWithShiftClickModifierByDefault() {
     XCTAssertEqual(
       OverlayInputInterpreter.action(
         keyCode: 45,
         modifierFlags: [.shift],
         charactersIgnoringModifiers: "n"),
-      .commit("n"))
+      .commit("n", [.shift]))
   }
 
-  func testCommandLetterCancelsInsteadOfEatingPlainHint() {
+  func testCommandLetterCommitsWithCommandClickModifier() {
     XCTAssertEqual(
       OverlayInputInterpreter.action(
         keyCode: 45,
         modifierFlags: [.command],
         charactersIgnoringModifiers: "n"),
-      .cancel)
+      .commit("n", [.command]))
   }
 
-  func testControlLetterCancelsInsteadOfEatingPlainHint() {
+  func testControlLetterCommitsWithControlClickModifier() {
     XCTAssertEqual(
       OverlayInputInterpreter.action(
         keyCode: 45,
         modifierFlags: [.control],
         charactersIgnoringModifiers: "n"),
-      .cancel)
+      .commit("n", [.control]))
   }
 
-  func testOptionLetterCancelsInsteadOfEatingPlainHint() {
+  func testOptionLetterCommitsWithOptionClickModifier() {
     XCTAssertEqual(
       OverlayInputInterpreter.action(
         keyCode: 45,
         modifierFlags: [.option],
         charactersIgnoringModifiers: "n"),
+      .commit("n", [.option]))
+  }
+
+  func testShiftIsCarriedWithOtherMagicModifiersByDefault() {
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 45,
+        modifierFlags: [.command, .shift],
+        charactersIgnoringModifiers: "n"),
+      .commit("n", [.command, .shift]))
+  }
+
+  func testShiftCanBeRemovedFromMagicModifiers() {
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 45,
+        modifierFlags: [.shift],
+        charactersIgnoringModifiers: "n",
+        magicModifiers: [.command, .control, .option]),
+      .commit("n", []))
+  }
+
+  func testCommandControlOptionLetterCommitsWithAllClickModifiers() {
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 45,
+        modifierFlags: [.command, .control, .option],
+        charactersIgnoringModifiers: "n"),
+      .commit("n", [.command, .control, .option]))
+  }
+
+  func testUnlistedModifierCancelsWhenMagicModifiersAreRestricted() {
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 45,
+        modifierFlags: [.option],
+        charactersIgnoringModifiers: "n",
+        magicModifiers: [.command]),
       .cancel)
+  }
+
+  func testEmptyMagicModifiersCancelsModifiedHintKey() {
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 45,
+        modifierFlags: [.command],
+        charactersIgnoringModifiers: "n",
+        magicModifiers: []),
+      .cancel)
+  }
+
+  func testEmptyMagicModifiersStillAllowsPlainHintKey() {
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 45,
+        modifierFlags: [],
+        charactersIgnoringModifiers: "n",
+        magicModifiers: []),
+      .commit("n", []))
+  }
+
+  func testEmptyMagicModifiersIgnoresShiftAsPlainHintKey() {
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 45,
+        modifierFlags: [.shift],
+        charactersIgnoringModifiers: "n",
+        magicModifiers: []),
+      .commit("n", []))
   }
 
   func testModifiedBackspaceCancelsInsteadOfEditingPrefix() {

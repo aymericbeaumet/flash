@@ -38,6 +38,7 @@ Sources/
     Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
     Tmux/TmuxProvider.swift                     # Visible-pane word hints for terminals running a tmux client
   FlashBrowserTestSupport/           # Browser integration fixture catalog, Firefox harness, Marionette client, and Vimium diff helpers.
+  FlashIntegrationTestSupport/       # Shared GUI integration helpers: AX launch/wait/context, matching, timing, recorder.
   flash/                             # The executable target
     main.swift                       # NSApplication boot
     App/
@@ -52,12 +53,16 @@ Sources/
     Config/
       Config.swift                   # Decoded model — defaults here MUST match config.default.toml
       ConfigLoader.swift             # Hand-rolled TOML subset parser + DispatchSource fs-watch hot-reload
-      Alphabet.swift                 # <colemak>/<qwerty>/<dvorak>/literal resolution
+      Alphabet.swift                 # layout selector / literal hints.keys resolution
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
-Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, TargetFinalizer, WindowSnapshot, browser fixture catalog, plus live TmuxIntegrationTests.
+Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, TargetFinalizer, WindowSnapshot, browser fixture catalog, shared integration support, plus live TmuxIntegrationTests.
 Tests/BrowserSnapshots/              # Browser integration manifest + 100 offline HTML snapshots used by Scripts/test-integration-browser.sh.
+Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
 Scripts/install-release.sh                   # Release build → staging .app → /Applications/Flash.app, stable dev-signed, login autolaunch
+Scripts/test-integration-native.sh           # Build/sign/run native AppKit integration fixture + oracle
+Scripts/test-integration-electron.sh         # Install pinned Electron fixture deps, build/sign/run Electron oracle
+Scripts/check-guardrails.sh                  # CI hard-rule scanner for banned production APIs / stale config references
 README.md                            # User-facing
 AGENTS.md                            # This file
 ```
@@ -195,8 +200,9 @@ Keys:
 
 | Key                                | Type           | Default              |
 | ---------------------------------- | -------------- | -------------------- |
-| `hints.keys`                       | string         | `"<qwerty>"`         |
+| `hints.keys`                       | string         | `"<qwerty_homerow+qwerty_toprow>"` |
 | `hints.min_length`                 | int            | `1`                  |
+| `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
 | `overlay.font_size`                | double         | `12`                 |
 | `overlay.hint_fg`                  | hex string     | `"#302505"`          |
 | `overlay.hint_bg_top` / `hint_bg_bottom` | hex string | `"#FFF785"` / `"#FFC542"` |
@@ -209,6 +215,12 @@ Keys:
 | `debug.dump_logs`                  | bool           | `false`              |
 | `debug.log_level`                  | string         | `"info"`             |
 | `[shortcuts]` entries              | string/array   | none                 |
+
+`hints.magic_modifiers` supports `"cmd"`, `"ctrl"`, `"alt"`, and `"shift"`.
+If the resolved `hints.keys` contains non-letter characters, Flash logs a warning
+and removes `"shift"` because shifted-character input is ambiguous at the
+hint-input layer: Flash cannot distinguish `shift+1` from `!`. `[]` disables
+modified clicks.
 
 Performance behaviours are **not configurable.** The prepared AX model,
 the concurrent subtree walk, and the parallel deferred action-name
@@ -243,7 +255,7 @@ Unknown flags and unrecognised `FLASH_*` env vars are silently ignored — this 
 
 When you add a field, also add `applyOverrides` test coverage in `Tests/FlashTests/ConfigLoaderTests.swift`.
 
-`hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a preset token `<qwerty>` (default) / `<colemak>` / `<dvorak>`. Resolution lives in `Alphabet.resolve(_:)`.
+`hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a layout selector token. Selector syntax is `<$layout[_$row][_$hand]+...>` where layout is `qwerty` / `colemak` / `dvorak`, row is `homerow` / `toprow` / `bottomrow`, and hand is `lefthand` / `righthand`. Examples: `<colemak>`, `<colemak_homerow+colemak_toprow>`, `<colemak_homerow_lefthand+colemak_toprow_righthand>`, `<colemak_lefthand>`. Selectors cannot mix layouts. Layout selectors are scored by the inferred layout's key scores; literal strings are scored by their written order. There is no `hints.layout` key. Resolution lives in `Alphabet.resolve(_:)`.
 
 **Flash always walks the focused app only.** There is no `hints.scope` knob and no multi-app walk machinery — background apps and other monitors are ignored. `JumpTarget.pid` carries the focused app's pid so `commit` can re-activate it before dispatching the click. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps.
 
@@ -326,7 +338,9 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `TmuxProviderTests`). Deterministic, run in milliseconds, no external state. `TmuxProviderTests` covers the tokenization rules (`extractWords`), the cell-geometry math (`resolveGeometry`), the status-bar parser (`parseStatusInfo`), the TOML alacritty-config reader, and `parseTwoInts`. Run on every `swift test`.
 - **Live tmux integration** (`TmuxIntegrationTests`). Boots an isolated tmux server under a per-test socket (`tmux -L flash-it-<uuid> -f /dev/null`) and asserts the binary's CLI contract Flash depends on: the `#{pane_*}` / `#{client_*}` / `#{status}` / `#{status-position}` format strings; that `capture-pane -p` returns the rendered grid; that horizontal + vertical splits yield the expected `pane_left` / `pane_top`. Catches breakage from tmux upgrades silently changing format-string semantics — the only realistic regression source for `TmuxProvider`. Skipped when no `tmux` binary is found on the probe paths. Runs in ~10 s.
-- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with pinned Vimium-FF, builds/codesigns the `flash-vimium-oracle` runner, then runs the 100-file offline corpus from `Tests/BrowserSnapshots` through a parallel worker pool. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures Vimium marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch (Flash misses a hint Vimium provides) and overmatch (Flash hints something Vimium skips). Run order: build + sign once (`./Scripts/install-release.sh` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`.
+- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with pinned Vimium-FF, builds/codesigns the `flash-vimium-oracle` runner, then runs the 100-file offline corpus from `Tests/BrowserSnapshots` through a parallel worker pool. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures Vimium marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch (Flash misses a hint Vimium provides) and overmatch (Flash hints something Vimium skips). Run order: build + sign once (`./Scripts/install-release.sh` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
+- **Native AppKit integration** (`Scripts/test-integration-native.sh`). Builds/codesigns `flash-native-fixture` and `flash-native-oracle`, launches a deterministic AppKit window, compares generic AX targets against expected controls, verifies AXPress mutates a fixture state file, and records the open-NSMenu limitation under the no-key-capture production rule. It covers buttons, image-backed buttons, duplicate labels, checkboxes, radio buttons, popups, search/text areas, tabs, rows, and negative controls such as disabled/hidden/decorative/slider elements. It does not add production global key capture or private APIs, and the script kills its test apps on exit/interruption.
+- **Electron integration** (`Scripts/test-integration-electron.sh`). Runs `npm ci` for the pinned Electron fixture, builds/codesigns `flash-electron-oracle`, launches Electron with a deterministic DOM fixture, reads expected target JSON emitted by the fixture, compares it against Flash's generic AX provider output, and verifies AX activation mutates fixture state. The script kills its oracle app and fixture Electron process on exit/interruption.
 
 Run order:
 
@@ -334,6 +348,8 @@ Run order:
 swift test                                           # unit + live tmux
 ./Scripts/install-release.sh                         # one-time: creates the Flash Dev signing identity
 ./Scripts/test-integration-browser.sh                # builds + signs + runs the browser corpus
+./Scripts/test-integration-native.sh                 # builds + signs + runs native AppKit fixture
+./Scripts/test-integration-electron.sh               # installs pinned Electron fixture and runs oracle
 ```
 
 Anything that requires the full overlay / commit pipeline (chip rendering, key handling, AXPress against a live focused app) is still **manually verified**: run `./Scripts/install-release.sh`, grant permissions if needed, then exercise the app in real target apps.
@@ -371,3 +387,6 @@ button (which is hinted), commit, then read the menu.
 ## When in doubt
 
 Add a one-line `print` (it goes to stderr → log file in production via the launched bundle) before guessing. Real AX traces win arguments fast.
+  flash-native-fixture/              # AppKit fixture app for native integration tests.
+  flash-native-oracle/               # Signed CLI oracle that drives the native fixture through AX.
+  flash-electron-oracle/             # Signed CLI oracle for the pinned Electron fixture.

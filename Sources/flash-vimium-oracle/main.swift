@@ -243,6 +243,13 @@ final class OracleSession {
     try? marionette.quit()
     marionette.close()
     firefox.terminate()
+    let deadline = Date().addingTimeInterval(2)
+    while !firefox.isTerminated, Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.1)
+    }
+    if !firefox.isTerminated {
+      firefox.forceTerminate()
+    }
   }
 
   enum SessionError: Error, CustomStringConvertible {

@@ -102,6 +102,68 @@ final class HintAssignerTests: XCTestCase {
     }
   }
 
+  func testSingleLabelsUsePreparedAlphabetOrder() {
+    let labels = HintAssigner.generateLabels(
+      count: 4,
+      alphabet: Array("qasz"),
+      keyScores: [
+        "s": 100,
+        "a": 90,
+        "q": 50,
+        "z": 10,
+      ])
+    XCTAssertEqual(
+      labels,
+      ["q", "a", "s", "z"],
+      "single-label assignment should consume the config-prepared alphabet without re-sorting")
+  }
+
+  func testPairsPreferHighScoredHomeRowKeys() {
+    let resolved = Alphabet.resolve("<qwerty_homerow+qwerty_toprow>")
+    let labels = HintAssigner.generateLabels(
+      count: 6,
+      alphabet: resolved.chars,
+      leftHand: resolved.leftHand,
+      keyScores: resolved.keyScores,
+      minLength: 2)
+    let homeRow: Set<Character> = Set("sdfjkl")
+    XCTAssertTrue(
+      labels.allSatisfy { Set($0).isSubset(of: homeRow) },
+      "expected early pairs to stay on the strongest home-row keys, got \(labels)")
+    XCTAssertEqual(labels.first, "sj")
+  }
+
+  func testPairsUseInferredLayoutScoresForLayoutTokens() {
+    let qwerty = Alphabet.resolve("<qwerty_homerow>")
+    let colemak = Alphabet.resolve("<colemak_homerow>")
+    let qwertyLabels = HintAssigner.generateLabels(
+      count: 4,
+      alphabet: qwerty.chars,
+      leftHand: qwerty.leftHand,
+      keyScores: qwerty.keyScores,
+      minLength: 2)
+    let colemakLabels = HintAssigner.generateLabels(
+      count: 4,
+      alphabet: colemak.chars,
+      leftHand: colemak.leftHand,
+      keyScores: colemak.keyScores,
+      minLength: 2)
+    XCTAssertNotEqual(qwertyLabels, colemakLabels)
+    XCTAssertTrue(colemakLabels[0].contains("a"))
+  }
+
+  func testLiteralPairsUseLiteralOrderScores() {
+    let resolved = Alphabet.resolve("zsaq")
+    let labels = HintAssigner.generateLabels(
+      count: 3,
+      alphabet: resolved.chars,
+      leftHand: resolved.leftHand,
+      keyScores: resolved.keyScores,
+      minLength: 2)
+    XCTAssertTrue(labels[0].contains("z"))
+    XCTAssertFalse(labels[0].contains("q"))
+  }
+
   func testEmpty() {
     XCTAssertTrue(HintAssigner.generateLabels(count: 0, alphabet: alphabet).isEmpty)
   }

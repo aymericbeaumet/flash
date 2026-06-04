@@ -82,7 +82,9 @@ enum ConfigLoader {
     guard let data = try? Data(contentsOf: url),
       let text = String(data: data, encoding: .utf8)
     else {
-      return .default
+      var config = Config.default
+      config.prepareDerivedValues()
+      return config
     }
     return parse(text, sourceURL: url.resolvingSymlinksInPath(), environment: environment)
   }
@@ -123,6 +125,7 @@ enum ConfigLoader {
         environment: environment,
         into: &config)
     }
+    config.prepareDerivedValues()
     return config
   }
 
@@ -164,8 +167,7 @@ enum ConfigLoader {
     sourceURL: URL?,
     environment: [String: String],
     into config: inout Config
-  )
-  {
+  ) {
     // [shortcuts] is a free-form map: every key in the section is a
     // hotkey string. The value is either a single `flash://...` URL
     // string or an array of strings (exec'd as argv). Both forms are
@@ -201,6 +203,8 @@ enum ConfigLoader {
       config.hints.keys = parseString(value) ?? config.hints.keys
     case ["hints", "min_length"]:
       config.hints.minLength = parseInt(value) ?? config.hints.minLength
+    case ["hints", "magic_modifiers"]:
+      config.hints.magicModifiers = parseStringArray(value) ?? config.hints.magicModifiers
 
     case ["overlay", "font_size"]:
       config.overlay.fontSize = parseDouble(value) ?? config.overlay.fontSize
@@ -421,11 +425,11 @@ enum ConfigLoader {
   // MARK: CLI + env overrides
   //
   // Every key in `Config` is exposed via:
-  //   - a TOML key (`section.key`, e.g. `hints.scope`)
+  //   - a TOML key (`section.key`, e.g. `hints.min_length`)
   //   - an environment variable (`FLASH_<SECTION>_<KEY>`, e.g.
-  //     `FLASH_HINTS_SCOPE`)
+  //     `FLASH_HINTS_MIN_LENGTH`)
   //   - a command-line flag (`--<section>-<key>=<value>`, e.g.
-  //     `--hints-scope=everywhere`)
+  //     `--hints-min-length=2`)
   //
   // Precedence is CLI > env > TOML > built-in default. The hot-reload
   // path re-applies env + CLI on every reload, so the overrides stay in
@@ -441,9 +445,9 @@ enum ConfigLoader {
   static let envPrefix = "FLASH_"
 
   /// Layer env + CLI overrides on top of `config`. The override knobs
-  /// are keyed in dash form (`hints-scope`, `overlay-font-size`, …);
-  /// `applyEnv` translates `FLASH_HINTS_SCOPE` → `hints-scope` before
-  /// calling `applyOverride`.
+  /// are keyed in dash form (`hints-min-length`, `overlay-font-size`, …);
+  /// `applyEnv` translates `FLASH_HINTS_MIN_LENGTH` →
+  /// `hints-min-length` before calling `applyOverride`.
   static func applyOverrides(
     to config: Config,
     arguments: [String],
@@ -452,6 +456,7 @@ enum ConfigLoader {
     var result = config
     applyEnv(env: environment, into: &result)
     applyCLI(args: arguments, into: &result)
+    result.prepareDerivedValues()
     return result
   }
 
@@ -485,6 +490,15 @@ enum ConfigLoader {
       config.hints.keys = value
     case "hints-min-length":
       if let i = Int(value) { config.hints.minLength = i }
+    case "hints-magic-modifiers":
+      if let values = parseOverrideStringArray(value) {
+        config.hints.magicModifiers = values
+        if !values.contains(where: { $0.lowercased() == "shift" }) {
+          config.warnings.removeAll {
+            $0.hasPrefix(Config.ambiguousShiftMagicModifierWarningPrefix)
+          }
+        }
+      }
 
     case "overlay-font-size":
       if let d = Double(value) { config.overlay.fontSize = d }
@@ -530,5 +544,15 @@ enum ConfigLoader {
     case "false", "0", "no", "off": return false
     default: return nil
     }
+  }
+
+  private static func parseOverrideStringArray(_ v: String) -> [String]? {
+    let trimmed = v.trimmingCharacters(in: .whitespaces)
+    if trimmed.isEmpty { return [] }
+    if let values = parseStringArray(trimmed) {
+      return values
+    }
+    return trimmed.split(separator: ",", omittingEmptySubsequences: false)
+      .map { $0.trimmingCharacters(in: .whitespaces) }
   }
 }

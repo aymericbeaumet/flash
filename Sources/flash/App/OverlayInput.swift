@@ -3,7 +3,7 @@ import AppKit
 enum OverlayKeyAction: Equatable {
   case cancel
   case backspace
-  case commit(String)
+  case commit(String, ClickModifiers)
   case ignore
 }
 
@@ -11,7 +11,8 @@ enum OverlayInputInterpreter {
   static func action(
     keyCode: UInt16,
     modifierFlags: NSEvent.ModifierFlags,
-    charactersIgnoringModifiers: String?
+    charactersIgnoringModifiers: String?,
+    magicModifiers: ClickModifiers = .defaultMagic
   ) -> OverlayKeyAction {
     switch keyCode {
     case 49,  // space
@@ -22,22 +23,27 @@ enum OverlayInputInterpreter {
       break
     }
 
-    let commandModifiers =
+    let independentModifiers =
       modifierFlags
       .intersection(.deviceIndependentFlagsMask)
-      .intersection([.command, .control, .option])
-    if !commandModifiers.isEmpty {
+    let strictModifiers = independentModifiers.intersection([.command, .control, .option])
+    let requestedStrictModifiers = ClickModifiers(eventFlags: strictModifiers)
+    if !magicModifiers.isSuperset(of: requestedStrictModifiers) {
       return .cancel
     }
 
     if keyCode == 51 {
+      if !strictModifiers.isEmpty {
+        return .cancel
+      }
       return .backspace
     }
 
     guard let chars = charactersIgnoringModifiers, !chars.isEmpty else {
       return .ignore
     }
-    return .commit(chars)
+    let clickModifiers = ClickModifiers(eventFlags: independentModifiers, allowed: magicModifiers)
+    return .commit(chars, clickModifiers)
   }
 }
 
@@ -46,7 +52,22 @@ enum OverlayInputInterpreter {
 /// separately by the explicit `[shortcuts]` Carbon registry.
 extension OverlayPanel {
   override func keyDown(with event: NSEvent) {
-    guard let coordinator = coordinator else { return }
+    _ = handleOverlayKeyEvent(event)
+  }
+
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    guard
+      modifiers.contains(.command) || modifiers.contains(.option) || modifiers.contains(.control)
+    else {
+      return super.performKeyEquivalent(with: event)
+    }
+    return handleOverlayKeyEvent(event, swallowIgnored: modifiers.contains(.command))
+  }
+
+  @discardableResult
+  private func handleOverlayKeyEvent(_ event: NSEvent, swallowIgnored: Bool = false) -> Bool {
+    guard let coordinator = coordinator else { return false }
     // Hardcoded dismissal keys. Not configurable on purpose: arrows /
     // space / escape are common "abort what I was about to do" signals
     // in every macOS app, and matching that intuition keeps the
@@ -55,16 +76,20 @@ extension OverlayPanel {
     switch OverlayInputInterpreter.action(
       keyCode: event.keyCode,
       modifierFlags: event.modifierFlags,
-      charactersIgnoringModifiers: event.charactersIgnoringModifiers)
+      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      magicModifiers: magicModifiers)
     {
     case .cancel:
       coordinator.overlayDidCancel()
+      return true
     case .backspace:
       coordinator.overlayDidUpdatePrefix("__BACKSPACE__")
-    case .commit(let chars):
-      coordinator.overlayDidCommit(prefix: chars)
+      return true
+    case .commit(let chars, let clickModifiers):
+      coordinator.overlayDidCommit(prefix: chars, clickModifiers: clickModifiers)
+      return true
     case .ignore:
-      break
+      return swallowIgnored
     }
   }
 }

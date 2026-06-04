@@ -22,12 +22,14 @@ enum HintAssigner {
     targets: [JumpTarget],
     alphabet: [Character],
     leftHand: Set<Character> = [],
+    keyScores: [Character: Int] = [:],
     minLength: Int = 1
   ) -> [AssignedHint] {
     let labels = generateLabels(
       count: targets.count,
       alphabet: alphabet,
       leftHand: leftHand,
+      keyScores: keyScores,
       minLength: minLength
     )
     var out: [AssignedHint] = []
@@ -44,8 +46,8 @@ enum HintAssigner {
   ///
   /// Layout policy:
   ///   - If `count ≤ alphabet.count` (and `minLength == 1`): all labels
-  ///     are single chars in the alphabet's declared order. The user
-  ///     types one key per target.
+  ///     are single chars in layout-score order. The user types one key
+  ///     per target, and the strongest keys are assigned first.
   ///   - Otherwise: pack as many single-char labels as possible while
   ///     keeping the rest 2-char and prefix-free. Concretely we pick
   ///     X singles + (count − X) two-char labels where the two-char
@@ -57,12 +59,13 @@ enum HintAssigner {
   ///     the original Vimium-style uniform-length behaviour.
   ///
   /// Within a length class, labels are sorted by an ergonomic score
-  /// that rewards hand-alternation and penalises same-finger repeats,
-  /// then by lexicographic position as a deterministic tiebreaker.
+  /// that rewards high-value layout keys and hand alternation, penalises
+  /// same-key repeats, then falls back to deterministic key order.
   static func generateLabels(
     count: Int,
     alphabet: [Character],
     leftHand: Set<Character> = [],
+    keyScores: [Character: Int] = [:],
     minLength: Int = 1
   ) -> [String] {
     guard count > 0 else { return [] }
@@ -88,11 +91,16 @@ enum HintAssigner {
       if singlesCount > 0 {
         let singles = (0..<singlesCount).map { String(alphabet[$0]) }
         let reservedPrefixes = Set(alphabet[0..<singlesCount])
-        let multi = sortedCandidates(alphabet: alphabet, leftHand: leftHand, length: 2)
-          .lazy.filter {
-            guard let first = $0.first else { return false }
-            return !reservedPrefixes.contains(first)
-          }
+        let multi = sortedCandidates(
+          alphabet: alphabet,
+          leftHand: leftHand,
+          keyScores: keyScores,
+          length: 2
+        )
+        .lazy.filter {
+          guard let first = $0.first else { return false }
+          return !reservedPrefixes.contains(first)
+        }
         return singles + Array(multi.prefix(count - singlesCount))
       }
       // No room for singles (extremely large count). Fall through to
@@ -112,7 +120,12 @@ enum HintAssigner {
     if length == 1 {
       return (0..<count).map { String(alphabet[$0]) }
     }
-    let sorted = sortedCandidates(alphabet: alphabet, leftHand: leftHand, length: length)
+    let sorted = sortedCandidates(
+      alphabet: alphabet,
+      leftHand: leftHand,
+      keyScores: keyScores,
+      length: length
+    )
     if sorted.count >= count {
       return Array(sorted.prefix(count))
     }
@@ -120,16 +133,22 @@ enum HintAssigner {
   }
 
   /// Returns the full K^L candidate space sorted by ergonomic score
-  /// (descending), with a deterministic lexicographic tiebreak. Memoised by
-  /// (alphabet identity, length, leftHand identity) — for the typical
-  /// `<qwerty>` preset and L=2/3 this cache is populated once per session
-  /// and every subsequent activation skips the sort entirely.
+  /// (descending), with a deterministic key-order tiebreak. Memoised by
+  /// (alphabet identity, length, leftHand identity, key scores) — for the
+  /// typical `<qwerty>` preset and L=2/3 this cache is populated once per
+  /// session and every subsequent activation skips the sort entirely.
   static func sortedCandidates(
     alphabet: [Character],
     leftHand: Set<Character>,
+    keyScores: [Character: Int] = [:],
     length: Int
   ) -> [String] {
-    let key = makeCacheKey(alphabet: alphabet, leftHand: leftHand, length: length)
+    let key = makeCacheKey(
+      alphabet: alphabet,
+      leftHand: leftHand,
+      keyScores: keyScores,
+      length: length
+    )
     os_unfair_lock_lock(&cacheLock)
     if let cached = cache[key] {
       os_unfair_lock_unlock(&cacheLock)
@@ -137,7 +156,12 @@ enum HintAssigner {
     }
     os_unfair_lock_unlock(&cacheLock)
 
-    let computed = computeSortedCandidates(alphabet: alphabet, leftHand: leftHand, length: length)
+    let computed = computeSortedCandidates(
+      alphabet: alphabet,
+      leftHand: leftHand,
+      keyScores: keyScores,
+      length: length
+    )
 
     os_unfair_lock_lock(&cacheLock)
     cache[key] = computed
@@ -148,12 +172,20 @@ enum HintAssigner {
   private static var cache: [String: [String]] = [:]
   private static var cacheLock = os_unfair_lock_s()
 
-  private static func makeCacheKey(alphabet: [Character], leftHand: Set<Character>, length: Int)
-    -> String
-  {
+  private static func makeCacheKey(
+    alphabet: [Character],
+    leftHand: Set<Character>,
+    keyScores: [Character: Int],
+    length: Int
+  ) -> String {
     var key = ""
-    key.reserveCapacity(alphabet.count + leftHand.count + 8)
-    key.append(contentsOf: alphabet)
+    key.reserveCapacity(alphabet.count * 5 + leftHand.count + 8)
+    for c in alphabet {
+      key.append(c)
+      key.append(":")
+      key.append(String(keyScores[c] ?? 0))
+      key.append(",")
+    }
     key.append("|")
     // Iterate the set in sorted order for a stable identity.
     for c in leftHand.sorted() { key.append(c) }
@@ -165,20 +197,18 @@ enum HintAssigner {
   private static func computeSortedCandidates(
     alphabet: [Character],
     leftHand: Set<Character>,
+    keyScores: [Character: Int],
     length: Int
   ) -> [String] {
     let k = alphabet.count
     let total = intPow(k, length)
 
-    // Direct character→rank lookup; rank only needs the alphabet
-    // positions, not the full 128-entry ASCII table.
-    var rank = [Character: Int](minimumCapacity: k)
-    for (i, ch) in alphabet.enumerated() { rank[ch] = i }
-
     // Left-hand membership precomputed per alphabet index — saves a
     // Set hash lookup inside the inner score loop.
     var leftByIndex = [Bool](repeating: false, count: k)
     for (i, ch) in alphabet.enumerated() { leftByIndex[i] = leftHand.contains(ch) }
+    var keyScoreByIndex = [Int](repeating: 0, count: k)
+    for (i, ch) in alphabet.enumerated() { keyScoreByIndex[i] = keyScores[ch] ?? 0 }
 
     struct Candidate {
       var indices: [Int]  // alphabet positions, length L
@@ -195,15 +225,18 @@ enum HintAssigner {
         value /= k
       }
       var score = 0
+      for i in 0..<length {
+        score += keyScoreByIndex[indices[i]] * 10
+      }
       for i in 1..<length {
         let a = indices[i - 1]
         let b = indices[i]
         if a == b {
-          score -= 10
+          score -= 5_000
         } else if leftByIndex[a] != leftByIndex[b] {
-          score += 5
+          score += 40
         } else {
-          score -= 1
+          score -= 15
         }
       }
       candidates.append(Candidate(indices: indices, score: score))
@@ -227,22 +260,33 @@ enum HintAssigner {
     return labels
   }
 
-  /// Higher is better. Rewards adjacent-character pairs that alternate
-  /// between left and right hand; penalises same-key repeats and same-hand
-  /// pairs (different finger). Final score for an L-char label is the
-  /// sum of (L-1) pairwise scores. Kept for tests / external callers; the
-  /// fast path lives in `computeSortedCandidates`.
+  /// Higher is better. Rewards high-value layout keys and adjacent-character
+  /// pairs that alternate between left and right hand; penalises same-key
+  /// repeats and same-hand pairs. Kept for tests / external callers; the fast
+  /// path lives in `computeSortedCandidates`.
   static func scoreLabel(_ label: String, leftHand: Set<Character>) -> Int {
+    scoreLabel(label, leftHand: leftHand, keyScores: [:])
+  }
+
+  static func scoreLabel(
+    _ label: String,
+    leftHand: Set<Character>,
+    keyScores: [Character: Int]
+  ) -> Int {
     let chars = Array(label)
-    if chars.count < 2 { return 0 }
+    guard !chars.isEmpty else { return 0 }
     var score = 0
+    for ch in chars {
+      score += (keyScores[ch] ?? 0) * 10
+    }
+    if chars.count < 2 { return score }
     for i in 1..<chars.count {
       if chars[i] == chars[i - 1] {
-        score -= 10
+        score -= 5_000
       } else {
         let prevLeft = leftHand.contains(chars[i - 1])
         let currLeft = leftHand.contains(chars[i])
-        if prevLeft != currLeft { score += 5 } else { score -= 1 }
+        if prevLeft != currLeft { score += 40 } else { score -= 15 }
       }
     }
     return score

@@ -1,5 +1,6 @@
 import CoreGraphics
 import FlashCore
+import FlashIntegrationTestSupport
 import Foundation
 
 public struct DiffEntry {
@@ -98,7 +99,7 @@ public enum OracleDiff {
   public static func report(
     _ result: Result,
     fixtureName: String,
-    recorder: FirefoxE2ERecorder
+    recorder: FlashIntegrationRecorder
   ) {
     recorder.pass(
       "\(fixtureName): \(result.matchedCount) matched, "

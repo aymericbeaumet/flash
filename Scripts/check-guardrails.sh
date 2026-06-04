@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_DIR"
+
+fail=0
+
+check_absent() {
+  local label="$1"
+  local pattern="$2"
+  shift 2
+  local output
+  if output="$(rg -n "$pattern" "$@" 2>/dev/null)"; then
+    echo "GUARDRAIL FAILED: $label" >&2
+    echo "$output" >&2
+    fail=1
+  fi
+}
+
+PROD_SWIFT=(
+  Sources/flash
+  Sources/FlashCore
+  Sources/FlashProviders
+)
+
+check_absent \
+  "no keyboard event taps or private event capture" \
+  "CGEventTap|CGEventCreateTap|\\.tapCreate\\(" \
+  "${PROD_SWIFT[@]}"
+
+check_absent \
+  "no global keyboard monitors" \
+  "addGlobalMonitorForEvents\\(matching:.*(keyDown|keyUp|flagsChanged)" \
+  Sources/flash
+
+check_absent \
+  "no screen capture, OCR, or pixel capture" \
+  "ScreenCaptureKit|VisionProvider|VNRecognize|NSScreenCaptureUsageDescription|CGWindowListCreateImage|CGDisplayStream" \
+  Sources Resources
+
+check_absent \
+  "no production menu bar, Dock, status, or alert UI" \
+  "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|setActivationPolicy\\(\\.regular" \
+  Sources/flash Resources/Info.plist
+
+check_absent \
+  "flash://help prints stdout instead of using the alert toast" \
+  "case \\.showUsage:.*alertPanel\\.show" \
+  Sources/flash
+
+check_absent \
+  "no activation-time hints.keys parsing" \
+  "Alphabet\\.resolve" \
+  Sources/flash/App Sources/FlashCore Sources/FlashProviders
+
+check_absent \
+  "no stale removed config or provider references" \
+  "performance\\.concurrent_walk|BrowserScriptProvider|cache_ttl|hints\\.scope|hints\\.layout|hints-layout|FLASH_HINTS_LAYOUT" \
+  Sources README.md
+
+if [[ $fail -ne 0 ]]; then
+  exit 1
+fi
+
+echo "guardrails ok"

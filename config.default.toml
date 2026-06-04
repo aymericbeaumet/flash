@@ -24,14 +24,31 @@
 
 [hints]
 # Alphabet used to generate prefix-free hint labels.
-# Either a preset token (<qwerty>|<colemak>|<dvorak>) or a literal string of
-# ASCII letters (deduped, lowercase, e.g. "asdfghjkl").
-keys = "<qwerty>"
+# Either a layout selector token or a literal string of ASCII letters.
+# Layout selector syntax: <$layout[_$row][_$hand]+...>
+#   layouts: qwerty, colemak, dvorak
+#   rows: homerow, toprow, bottomrow
+#   hands: lefthand, righthand
+# Examples:
+#   <colemak>
+#   <colemak_homerow+colemak_toprow>
+#   <colemak_homerow_lefthand+colemak_toprow_righthand>
+#   <colemak_lefthand>
+# Layout selectors cannot mix layouts. Literal strings are deduped and
+# scored in the order written, e.g. "asdfghjkl".
+keys = "<qwerty_homerow+qwerty_toprow>"
 
 # Floor on label length. Force longer labels (and thus alternating-hand
 # scoring) by raising this — e.g. min_length = 2 always uses 2-char labels
 # even when the target count would fit in 1.
 min_length = 1
+
+# Modifiers that can be held on the final hint key and forwarded to the click.
+# Supported names: "cmd", "ctrl", "alt", "shift". If the resolved hints.keys
+# contain any non-letter characters, Flash logs a warning and removes "shift"
+# because shifted-character input is ambiguous: it cannot distinguish "shift+1"
+# from typing "!". Use [] to disable modified clicks.
+magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
 [overlay]
 # Hint chip styling. font_size is in points; colors accept #RRGGBB or #RRGGBBAA.
@@ -87,8 +104,9 @@ dump_logs = false
 # message is even formatted, so leaving this at "info" has zero cost
 # for noisy DEBUG traces. Accepted values: "debug" | "info" |
 # "warn" | "error". Set to "debug" while investigating an issue
-# (profiler step-by-step breakdown shows up at this level); leave at
-# "info" for normal use.
+# (profiler step-by-step breakdown plus one-line JSON for the effective
+# config and resolved hints.keys show up at this level); leave at "info"
+# for normal use.
 log_level = "info"
 
 # Performance behaviours (AX-event-driven prepared model, concurrent

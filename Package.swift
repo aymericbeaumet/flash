@@ -7,8 +7,12 @@ let package = Package(
   products: [
     .executable(name: "flash", targets: ["flash"]),
     .executable(name: "flash-vimium-oracle", targets: ["flash-vimium-oracle"]),
+    .executable(name: "flash-native-fixture", targets: ["flash-native-fixture"]),
+    .executable(name: "flash-native-oracle", targets: ["flash-native-oracle"]),
+    .executable(name: "flash-electron-oracle", targets: ["flash-electron-oracle"]),
     .library(name: "FlashCore", targets: ["FlashCore"]),
     .library(name: "FlashProviders", targets: ["FlashProviders"]),
+    .library(name: "FlashIntegrationTestSupport", targets: ["FlashIntegrationTestSupport"]),
     .library(name: "FlashBrowserTestSupport", targets: ["FlashBrowserTestSupport"]),
   ],
   targets: [
@@ -19,8 +23,25 @@ let package = Package(
     ),
     .executableTarget(
       name: "flash-vimium-oracle",
-      dependencies: ["FlashCore", "FlashProviders", "FlashBrowserTestSupport"],
+      dependencies: [
+        "FlashCore", "FlashProviders", "FlashIntegrationTestSupport",
+        "FlashBrowserTestSupport",
+      ],
       path: "Sources/flash-vimium-oracle"
+    ),
+    .executableTarget(
+      name: "flash-native-fixture",
+      path: "Sources/flash-native-fixture"
+    ),
+    .executableTarget(
+      name: "flash-native-oracle",
+      dependencies: ["FlashCore", "FlashProviders", "FlashIntegrationTestSupport"],
+      path: "Sources/flash-native-oracle"
+    ),
+    .executableTarget(
+      name: "flash-electron-oracle",
+      dependencies: ["FlashCore", "FlashProviders", "FlashIntegrationTestSupport"],
+      path: "Sources/flash-electron-oracle"
     ),
     .target(
       name: "FlashCore",
@@ -32,13 +53,21 @@ let package = Package(
       path: "Sources/FlashProviders"
     ),
     .target(
-      name: "FlashBrowserTestSupport",
+      name: "FlashIntegrationTestSupport",
       dependencies: ["FlashCore", "FlashProviders"],
+      path: "Sources/FlashIntegrationTestSupport"
+    ),
+    .target(
+      name: "FlashBrowserTestSupport",
+      dependencies: ["FlashCore", "FlashProviders", "FlashIntegrationTestSupport"],
       path: "Sources/FlashBrowserTestSupport"
     ),
     .testTarget(
       name: "FlashTests",
-      dependencies: ["flash", "FlashCore", "FlashProviders", "FlashBrowserTestSupport"],
+      dependencies: [
+        "flash", "FlashCore", "FlashProviders", "FlashIntegrationTestSupport",
+        "FlashBrowserTestSupport",
+      ],
       path: "Tests/FlashTests"
     ),
   ],

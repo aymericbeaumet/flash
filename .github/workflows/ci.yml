@@ -31,6 +31,14 @@ jobs:
       - name: Lint
         run: swift format lint --strict --recursive Sources Tests Package.swift
 
+  guardrails:
+    name: Guardrails
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check hard-rule guardrails
+        run: ./Scripts/check-guardrails.sh
+
   build:
     name: Build
     runs-on: macos-15

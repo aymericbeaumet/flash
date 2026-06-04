@@ -716,12 +716,13 @@ final class AppMonitor {
     cfg: Config,
     profiler: FlashProfiler?
   ) -> [AssignedHint] {
-    let resolved = Alphabet.resolve(cfg.hints.keys)
+    let resolved = cfg.resolvedAlphabet
     let assignStart = profiler?.intervalStart()
     let hints = HintAssigner.assign(
       targets: targets,
       alphabet: resolved.chars,
       leftHand: resolved.leftHand,
+      keyScores: resolved.keyScores,
       minLength: cfg.hints.minLength
     )
     if let assignStart {

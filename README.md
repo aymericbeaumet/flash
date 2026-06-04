@@ -32,7 +32,7 @@ open -g flash://show_hints?right=1   # show hints; on commit, right-click
 open -g 'flash://show_alert?message=Done' # show a temporary centered alert
 open -g flash://dismiss_alert        # dismiss the alert
 open -g flash://dismiss_hints        # dismiss the overlay
-open -g flash://help                 # show URL command usage
+open -g flash://help                 # print URL command usage to stdout
 open -g flash://quit                 # quit the app
 ```
 
@@ -74,8 +74,9 @@ ctrl + alt + shift - f : open -g flash://show_hints?right=1
 ```toml
 [hints]
 # Either a preset token in <angle brackets> or a literal character string.
-keys = "<qwerty>"             # or "<colemak>", "<dvorak>", or e.g. "asdfghjkl"
+keys = "<qwerty_homerow+qwerty_toprow>"
 min_length = 1
+magic_modifiers = ["cmd", "ctrl", "alt", "shift"] # [] disables modified clicks
 
 [overlay]
 font_size = 12               # vimium-style small bold label
@@ -92,7 +93,7 @@ profile = false               # log every activation/precompute timing trace
 slow_ms = 100                 # log activations at/above this latency; 0 disables
 dump_ax = false               # dump AX tree to ~/Library/Logs/Flash/ax-dump.log per activation
 dump_logs = false             # mirror stderr diagnostics to ~/Library/Logs/Flash/flash.log
-log_level = "info"            # debug | info | warn | error
+log_level = "info"            # debug logs resolved config and hints.keys JSON
 
 [shortcuts]
 # Examples:
@@ -103,6 +104,18 @@ log_level = "info"            # debug | info | warn | error
 # "alt+shift+d" = ["sh", "../../scripts/toggle_darkmode.sh"]
 # "alt+shift+w" = ["sh", "$HOME/.dotfiles/scripts/toggle_wifi.sh"]
 ```
+
+`hints.keys` can be a literal key order like `"asdfghjkl"` or a layout selector
+like `<colemak_homerow+colemak_toprow>`. Layout selectors use
+`<$layout[_$row][_$hand]+...>` with `qwerty`, `colemak`, or `dvorak`; rows are
+`homerow`, `toprow`, `bottomrow`; hands are `lefthand`, `righthand`. Selectors
+cannot mix layouts. Literal strings are scored in the order written.
+
+`hints.magic_modifiers` accepts `"cmd"`, `"ctrl"`, `"alt"`, and `"shift"`.
+When the resolved `hints.keys` contains any non-letter characters, Flash logs a
+warning and removes `"shift"` because shifted-character input is ambiguous: it
+cannot distinguish `shift+1` from typing `!`. Set `magic_modifiers = []` to
+disable modified clicks.
 
 Performance behaviours (prepared AX model, concurrent subtree walk,
 parallel deferred action-name IPC) are always on and not user-configurable.
@@ -142,6 +155,22 @@ The browser runner provisions a Firefox profile template with pinned
 Vimium-FF, copies that template per worker, drives Firefox through
 Marionette, and compares Vimium's marker DOM with Flash's AX-derived
 targets. The fixture corpus is offline under `Tests/BrowserSnapshots`.
+
+Native AppKit and Electron coverage use separate signed oracles:
+
+```bash
+./Scripts/test-integration-native.sh
+./Scripts/test-integration-electron.sh
+```
+
+The native runner launches a deterministic AppKit fixture, compares
+generic AX targets against expected controls, verifies AXPress updates
+fixture state, and records the current open-NSMenu limitation under the
+no-key-capture production rule. The Electron runner installs the pinned
+fixture dependency from `Tests/ElectronFixture`, launches Electron, reads
+the fixture's expected DOM target JSON, and compares it with Flash's AX
+output. The native, browser, and Electron scripts clean up the test apps
+they launch on normal exit and interruption.
 
 ## License
 

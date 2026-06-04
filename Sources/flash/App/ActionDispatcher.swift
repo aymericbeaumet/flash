@@ -24,12 +24,19 @@ enum ActionDispatcher {
   /// rendered chip; for wide targets the chip anchors to top-left but
   /// the click still goes to the target middle.
   static func perform(
-    _ action: JumpAction, on target: JumpTarget, pid _: pid_t? = nil, clickPoint: CGPoint? = nil
+    _ action: JumpAction,
+    on target: JumpTarget,
+    pid _: pid_t? = nil,
+    clickPoint: CGPoint? = nil,
+    modifiers: ClickModifiers = []
   ) -> Bool {
+    let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
+    if !modifiers.isEmpty {
+      return synthesizeClick(at: point, action: action, modifiers: modifiers)
+    }
     if let activate = target.activate, activate(action) {
       return true
     }
-    let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
     if let pid = target.pid,
       AXClick.clickAtPoint(pid: pid, nsScreenPoint: point, action: action)
     {
@@ -48,7 +55,9 @@ enum ActionDispatcher {
   /// still even though under the hood it has briefly visited the click
   /// site to deliver the event.
   @discardableResult
-  static func synthesizeClick(at screenPoint: CGPoint, action: JumpAction) -> Bool {
+  static func synthesizeClick(
+    at screenPoint: CGPoint, action: JumpAction, modifiers: ClickModifiers = []
+  ) -> Bool {
     let screenH =
       NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
       ?? NSScreen.main?.frame.height ?? 1080
@@ -69,6 +78,8 @@ enum ActionDispatcher {
         mouseEventSource: source, mouseType: upType, mouseCursorPosition: cgPoint,
         mouseButton: button)
     else { return false }
+    down.flags = modifiers.cgEventFlags
+    up.flags = modifiers.cgEventFlags
 
     // Hide the system cursor *before* the warp so the visible jump never
     // happens on screen. CGDisplayHideCursor/ShowCursor pair must be
