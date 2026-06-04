@@ -80,6 +80,16 @@ public final class MarionetteClient {
     try send(name: "WebDriver:NewSession", params: ["capabilities": [String: Any]()])
   }
 
+  /// Navigate the current top-level browsing context to `url`. Blocks
+  /// until the load completes (or page load timeout).
+  @discardableResult
+  public func navigate(url: URL, timeout: TimeInterval = 30) throws -> [String: Any]
+  {
+    try send(
+      name: "WebDriver:Navigate",
+      params: ["url": url.absoluteString], timeout: timeout)
+  }
+
   /// Press + release a single key. `key` is a W3C Webdriver key value
   /// — single character for printable keys, or one of the named keys
   /// from the spec (`\u{e00C}` for Escape, etc.). Uses transient ID

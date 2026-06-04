@@ -93,10 +93,10 @@ private func parseArgs() -> Args {
                                 stderr and exit 0 even when divergences exist
                                 (use to seed a new fixture's sidecar).
 
-        Firefox is always launched in background (open -g) and maximized,
-        so Dock-clicking it surfaces the live fixture page for inspection.
-        True --headless was tested and broken — Firefox doesn't expose an
-        AX tree without a real window.
+        Firefox launches once at the start of the run (in background via
+        `open -g`) and stays open. Each fixture re-uses the same window —
+        the runner navigates between URLs via Marionette, so neither focus
+        nor a new Firefox process is needed per fixture.
         """)
       exit(0)
     default:
@@ -163,31 +163,80 @@ private func ensureOracleReadyOrExit() {
   }
 }
 
-// MARK: - Per-fixture run
+// MARK: - Session + per-fixture run
 
-// Per-process Marionette port allocator. Each fixture run claims a
-// fresh port so parallel instances don't collide on the wire.
-private var marionettePortCounter: UInt16 = 2828
-private let marionettePortLock = NSLock()
-private func nextMarionettePort() -> UInt16 {
-  marionettePortLock.lock()
-  defer { marionettePortLock.unlock() }
-  let port = marionettePortCounter
-  marionettePortCounter = marionettePortCounter &+ 1
-  return port
+/// Long-lived Firefox session. One Firefox process for the whole
+/// corpus run; each fixture navigates the same window via Marionette
+/// rather than spawning its own browser. Big win: ~5s of launch cost
+/// paid once instead of per fixture, no per-fixture process churn,
+/// and the user sees at most one Firefox icon in the dock.
+final class OracleSession {
+  let firefox: NSRunningApplication
+  let marionette: MarionetteClient
+  let context: AppContext
+
+  init(firefox: NSRunningApplication, marionette: MarionetteClient, context: AppContext) {
+    self.firefox = firefox
+    self.marionette = marionette
+    self.context = context
+  }
+
+  static func start() throws -> OracleSession {
+    let profilePath = OracleProfile.profileDirectory.path
+    // Wipe stale MarionetteActivePort from any prior run so we don't
+    // race-read the previous port.
+    let portFile = (profilePath as NSString)
+      .appendingPathComponent("MarionetteActivePort")
+    try? FileManager.default.removeItem(atPath: portFile)
+    let firefox = try FirefoxHarness.launchWithProfile(
+      appPath: OracleProfile.appPath,
+      profilePath: profilePath,
+      url: URL(string: "about:blank")!,
+      extraArgs: [],
+      offscreen: false,
+      marionettePort: 0)
+    guard let port = FirefoxHarness.readMarionettePort(profilePath: profilePath)
+    else {
+      firefox.terminate()
+      throw SessionError.marionettePortMissing
+    }
+    let marionette = try MarionetteClient(port: port)
+    try marionette.newSession()
+    let context = FirefoxHarness.makeContext(for: firefox)
+    return OracleSession(
+      firefox: firefox, marionette: marionette, context: context)
+  }
+
+  func stop() {
+    try? marionette.quit()
+    marionette.close()
+    firefox.terminate()
+  }
+
+  enum SessionError: Error, CustomStringConvertible {
+    case marionettePortMissing
+    var description: String {
+      switch self {
+      case .marionettePortMissing:
+        return "Firefox didn't write MarionetteActivePort to the profile"
+      }
+    }
+  }
 }
 
 private func runFixture(
   _ fixture: OracleFixture,
+  session: OracleSession,
   provider: AccessibilityProvider,
   recorder: CLIRecorder,
   updateAllowList: Bool
 ) -> OracleDiff.Result? {
   log("\n\(Colour.bold)Running fixture: \(fixture.displayName)\(Colour.reset)")
 
-  // Spin up a localhost server with the fixture HTML. Required because
-  // Firefox MV2 content scripts don't run on data: URLs — without a
-  // real origin, the companion never mounts.
+  // Spin up a per-fixture localhost server with this fixture's HTML.
+  // Firefox MV2 content scripts don't run on data: URLs, so we need a
+  // real origin — fresh port per fixture so we don't reuse a stale
+  // connection from the previous load.
   let server: FixtureServer
   do {
     server = try FixtureServer(html: fixture.html())
@@ -197,55 +246,21 @@ private func runFixture(
   }
   defer { server.stop() }
 
-  // Launch Firefox with --marionette enabled. Firefox picks a free
-  // port (per the `marionette.port = 0` pref in user.js) and writes
-  // it to `<profile>/MarionetteActivePort`. We read it back and
-  // connect — this gives us a TCP keystroke channel that bypasses
-  // OS focus, so Firefox can stay in the background while we run.
-  let profilePath = OracleProfile.profileDirectory.path
-  // Wipe any stale MarionetteActivePort from a prior run so we don't
-  // race-read the previous port.
-  let portFile = (profilePath as NSString)
-    .appendingPathComponent("MarionetteActivePort")
-  try? FileManager.default.removeItem(atPath: portFile)
-
-  let firefox: NSRunningApplication
+  // Navigate the existing Firefox window to this fixture's URL via
+  // Marionette. Reuses the same browser process across the corpus —
+  // no Firefox spawn cost, no profile dance, no focus theft.
   do {
-    firefox = try FirefoxHarness.launchWithProfile(
-      appPath: OracleProfile.appPath,
-      profilePath: profilePath,
-      url: server.url,
-      extraArgs: [],
-      offscreen: false,
-      marionettePort: 0)  // sentinel — actual port read post-launch
+    try session.marionette.navigate(url: server.url)
   } catch {
-    recorder.fail("launch failed: \(error)")
+    recorder.fail("navigate failed: \(error)")
     return nil
   }
-  defer { firefox.terminate() }
 
-  let marionette: MarionetteClient?
-  if let actualPort = FirefoxHarness.readMarionettePort(profilePath: profilePath) {
-    do {
-      let client = try MarionetteClient(port: actualPort)
-      try client.newSession()
-      marionette = client
-    } catch {
-      recorder.fail("marionette connect failed: \(error)")
-      marionette = nil
-    }
-  } else {
-    recorder.fail("MarionetteActivePort never appeared in profile")
-    marionette = nil
-  }
-  defer { marionette?.close() }
-
-  let context = FirefoxHarness.makeContext(for: firefox)
   let snapshot: OracleSnapshot
   do {
     snapshot = try VimiumOracle.capture(
-      firefox: firefox, context: context, provider: provider,
-      marionette: marionette)
+      firefox: session.firefox, context: session.context, provider: provider,
+      marionette: session.marionette)
   } catch {
     recorder.fail("capture failed: \(error)")
     return nil
@@ -302,11 +317,21 @@ log("Fixtures: \(args.fixtures.map { $0.displayName }.joined(separator: ", "))")
 let provider = AccessibilityProvider()
 let recorder = CLIRecorder()
 
+// One Firefox launch for the whole corpus run.
+let session: OracleSession
+do {
+  session = try OracleSession.start()
+} catch {
+  logErr("\(Colour.red)Failed to start Firefox session: \(error)\(Colour.reset)")
+  exit(2)
+}
+defer { session.stop() }
+
 var anyHardFailure = false
 for fixture in args.fixtures {
   guard
     let result = runFixture(
-      fixture, provider: provider, recorder: recorder,
+      fixture, session: session, provider: provider, recorder: recorder,
       updateAllowList: args.updateAllowList)
   else {
     anyHardFailure = true
