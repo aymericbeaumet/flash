@@ -10,6 +10,8 @@ STAGING_PATH="$PROJECT_DIR/build/$APP_NAME.app"
 INSTALL_PATH="/Applications/$APP_NAME.app"
 SIGN_IDENTITY="Flash Dev"
 KEYCHAIN_PATH="$HOME/Library/Keychains/login.keychain-db"
+LOGIN_AGENT_LABEL="com.flash.app.autolaunch"
+LOGIN_AGENT_PATH="$HOME/Library/LaunchAgents/$LOGIN_AGENT_LABEL.plist"
 
 kill_all_flash() {
     open -g flash://quit >/dev/null 2>&1 || true
@@ -104,6 +106,32 @@ ensure_signing_identity() {
     tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
 }
 
+install_login_agent() {
+    mkdir -p "$(dirname "$LOGIN_AGENT_PATH")"
+    cat > "$LOGIN_AGENT_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LOGIN_AGENT_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/open</string>
+        <string>-g</string>
+        <string>$INSTALL_PATH</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+EOF
+    chmod 644 "$LOGIN_AGENT_PATH"
+    launchctl bootout "gui/$(id -u)" "$LOGIN_AGENT_PATH" >/dev/null 2>&1 || true
+    launchctl bootstrap "gui/$(id -u)" "$LOGIN_AGENT_PATH" >/dev/null 2>&1 || true
+    launchctl enable "gui/$(id -u)/$LOGIN_AGENT_LABEL" >/dev/null 2>&1 || true
+}
+
 echo "==> Building flash (release)"
 swift build -c release
 
@@ -148,6 +176,9 @@ codesign --force --deep \
 echo "==> Killing again post-install (defensive)"
 kill_all_flash
 
+echo "==> Installing login autolaunch"
+install_login_agent
+
 echo "==> Starting fresh resident process"
 open "$INSTALL_PATH"
 sleep 0.6
@@ -158,6 +189,7 @@ echo "==> Verification"
 echo "  Installed PIDs: ${NEW_PIDS:-none}"
 echo "  All Flash PIDs: ${ALL_PIDS:-none}"
 echo "  Signed with:    $SIGN_IDENTITY"
+echo "  Login agent:    $LOGIN_AGENT_PATH"
 if [[ -z "${NEW_PIDS:-}" ]]; then
     echo "  WARNING: the installed copy is not running. Check Console.app for launch errors."
 fi

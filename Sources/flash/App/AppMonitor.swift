@@ -617,6 +617,11 @@ final class AppMonitor {
     let hints: [AssignedHint]
   }
 
+  private struct DiscoveryFrame {
+    let providerContext: AppContext
+    let visibleRegions: [CGRect]
+  }
+
   private func buildPreparedModel(
     context: AppContext,
     providers: [JumpProvider],
@@ -675,11 +680,30 @@ final class AppMonitor {
   ) -> DiscoveryResult {
     let walkStart = profiler?.intervalStart()
     configureProviders(for: cfg, triggerMs: profiler?.triggerMs)
+    let frame = resolveDiscoveryFrame(for: context, profiler: profiler)
+    guard !frame.visibleRegions.isEmpty else {
+      if let walkStart {
+        profiler?.finishInterval("walk_all", since: walkStart, detail: "targets=0")
+      }
+      return DiscoveryResult(targets: [], hints: [])
+    }
     let collected = collectFocusedTargets(
-      context: context,
+      context: frame.providerContext,
       providers: providers,
       profiler: profiler)
-    let targets = finalizeTargets(collected, profiler: profiler)
+    let finalizeStart = profiler?.intervalStart()
+    let finalized = TargetFinalizer.finalizeWithStats(
+      collected,
+      visibleRegions: frame.visibleRegions)
+    let targets = finalized.targets
+    if let finalizeStart {
+      profiler?.finishInterval(
+        "finalize_targets",
+        since: finalizeStart,
+        detail:
+          "raw=\(finalized.rawCount) visible=\(finalized.visibleCount) "
+          + "deduped=\(finalized.dedupedCount)")
+    }
     if let walkStart {
       profiler?.finishInterval("walk_all", since: walkStart, detail: "targets=\(targets.count)")
     }
@@ -707,25 +731,58 @@ final class AppMonitor {
     return hints
   }
 
-  // MARK: Discovery
-  //
-  // Firehose mode: no visibility filter, no dedup. Every JumpTarget that
-  // a provider returns is forwarded. Off-screen elements (scrolled-off
-  // rows, occluded controls) are still emitted as hints — they just
-  // won't be visually reachable. Intended for diagnosing what AX exposes,
-  // not for daily use.
+  private func resolveDiscoveryFrame(
+    for context: AppContext,
+    profiler: FlashProfiler? = nil
+  ) -> DiscoveryFrame {
+    let snapshotStart = profiler?.intervalStart()
+    let snapshot = WindowSnapshot.build(
+      primaryH: primaryScreenHeight(),
+      onlyComputingVisibleRegionsFor: context.processID)
+    let visible: [CGRect]
+    if let regions = snapshot.visibleRegions[context.processID] {
+      visible = regions
+    } else if snapshot.entries.isEmpty {
+      // CGWindowList can fail transiently. Fall back to the activation-time
+      // screen union so the user still gets hints instead of a silent empty
+      // overlay; normal runs use the precise active-window visible regions.
+      visible = [context.frontWindowFrame]
+    } else {
+      visible = []
+    }
+    let providerFrame = snapshot.activeWindowFrame ?? union(of: visible)
+    if let snapshotStart {
+      profiler?.finishInterval(
+        "window_snapshot",
+        since: snapshotStart,
+        detail:
+          "windows=\(snapshot.entries.count) visible_regions=\(visible.count)"
+      )
+    }
+    return DiscoveryFrame(
+      providerContext: clip(context, to: providerFrame),
+      visibleRegions: visible)
+  }
+
   private func collectFocusedTargets(
     context focused: AppContext,
     providers: [JumpProvider],
     profiler: FlashProfiler? = nil
-  ) -> [JumpTarget] {
-    var collected: [JumpTarget] = []
+  ) -> [TargetCandidate] {
+    var collected: [TargetCandidate] = []
     collected.reserveCapacity(256)
-    for provider in providers {
+    for (providerOrder, provider) in providers.enumerated() {
       let providerStart = profiler?.intervalStart()
       let results =
         (try? provider.discover(in: focused, deadline: .distantFuture)) ?? []
-      collected.append(contentsOf: results)
+      collected.append(
+        contentsOf: results.enumerated().map { ordinal, target in
+          TargetCandidate(
+            target: target,
+            priority: provider.priority,
+            providerOrder: providerOrder,
+            ordinal: ordinal)
+        })
       if let providerStart {
         profiler?.finishInterval(
           "provider.\(provider.identifier)",
@@ -735,30 +792,6 @@ final class AppMonitor {
       }
     }
     return collected
-  }
-
-  private func finalizeTargets(
-    _ collected: [JumpTarget],
-    profiler: FlashProfiler? = nil
-  ) -> [JumpTarget] {
-    // Firehose mode: no dedup. Keep deterministic sort so hint labels are
-    // stable across activations.
-    var merged = collected
-    let sortStart = profiler?.intervalStart()
-    merged.sort { lhs, rhs in
-      let lhsTop = lhs.frame.maxY
-      let rhsTop = rhs.frame.maxY
-      if abs(lhsTop - rhsTop) > 8 { return lhsTop > rhsTop }
-      if lhs.frame.minX != rhs.frame.minX { return lhs.frame.minX < rhs.frame.minX }
-      if lhs.frame.minY != rhs.frame.minY { return lhs.frame.minY > rhs.frame.minY }
-      if lhs.frame.width != rhs.frame.width { return lhs.frame.width < rhs.frame.width }
-      if lhs.frame.height != rhs.frame.height { return lhs.frame.height < rhs.frame.height }
-      return lhs.id < rhs.id
-    }
-    if let sortStart {
-      profiler?.finishInterval("sort_targets", since: sortStart, detail: "targets=\(merged.count)")
-    }
-    return merged
   }
 
   private func clip(_ context: AppContext, to frame: CGRect) -> AppContext {
@@ -838,55 +871,6 @@ final class AppMonitor {
   }
 }
 
-/// Spatial-hash dedup keyed on a 256-pixel grid. For N=1500 targets the old
-/// `seen.contains(where:)` was O(N²) — 1.1M `CGRect.intersection` calls in
-/// the worst case. Bucketing collapses it to ~O(N) since the average number
-/// of rectangles overlapping any single bucket is small.
-private struct SpatialDedup {
-  private static let cellSize: CGFloat = 256
-  private var buckets: [Int64: [CGRect]] = [:]
-
-  private static func key(_ x: Int, _ y: Int) -> Int64 {
-    (Int64(x) << 32) | (Int64(y) & 0xffff_ffff)
-  }
-
-  private func bucketRange(_ rect: CGRect) -> (xMin: Int, xMax: Int, yMin: Int, yMax: Int) {
-    let xMin = Int((rect.minX / Self.cellSize).rounded(.down))
-    let xMax = Int((rect.maxX / Self.cellSize).rounded(.down))
-    let yMin = Int((rect.minY / Self.cellSize).rounded(.down))
-    let yMax = Int((rect.maxY / Self.cellSize).rounded(.down))
-    return (xMin, xMax, yMin, yMax)
-  }
-
-  func contains(_ rect: CGRect) -> Bool {
-    let r = bucketRange(rect)
-    for x in r.xMin...r.xMax {
-      for y in r.yMin...r.yMax {
-        guard let bucket = buckets[Self.key(x, y)] else { continue }
-        for other in bucket where overlapsSubstantially(other, rect) { return true }
-      }
-    }
-    return false
-  }
-
-  mutating func insert(_ rect: CGRect) {
-    let r = bucketRange(rect)
-    for x in r.xMin...r.xMax {
-      for y in r.yMin...r.yMax {
-        buckets[Self.key(x, y), default: []].append(rect)
-      }
-    }
-  }
-
-  private func overlapsSubstantially(_ a: CGRect, _ b: CGRect) -> Bool {
-    let inter = a.intersection(b)
-    if inter.isNull { return false }
-    let interArea = inter.width * inter.height
-    let smaller = min(a.width * a.height, b.width * b.height)
-    return smaller > 0 && interArea / smaller > 0.7
-  }
-}
-
 /// Z-order snapshot of every on-screen window, with each window's
 /// genuinely-visible portion already computed. Built from a single
 /// `CGWindowListCopyWindowInfo` call.
@@ -919,12 +903,18 @@ struct WindowSnapshot {
   /// window). Empty for pids that are fully occluded.
   let visibleRegions: [pid_t: [CGRect]]
 
+  /// Front-most layer-0 window for the focused pid, before occlusion
+  /// subtraction. Providers that need full-window geometry (tmux cell
+  /// math) use this frame; AppMonitor filters returned targets against
+  /// `visibleRegions` afterward.
+  let activeWindowFrame: CGRect?
+
   static func build(primaryH: CGFloat, onlyComputingVisibleRegionsFor focusedPid: pid_t)
     -> WindowSnapshot
   {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
-      return WindowSnapshot(entries: [], visibleRegions: [:])
+      return WindowSnapshot(entries: [], visibleRegions: [:], activeWindowFrame: nil)
     }
 
     var entries: [Entry] = []
@@ -989,7 +979,11 @@ struct WindowSnapshot {
       occluders.append(e.nsBounds)
     }
 
-    return WindowSnapshot(entries: entries, visibleRegions: byPid)
+    let activeWindowFrame = activeWindowIndex.map { entries[$0].nsBounds }
+    return WindowSnapshot(
+      entries: entries,
+      visibleRegions: byPid,
+      activeWindowFrame: activeWindowFrame)
   }
 
   /// Rectangle subtraction in NSScreen-coord (Y-up) space. Returns up to

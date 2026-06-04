@@ -73,6 +73,9 @@ final class ConfigLoaderTests: XCTestCase {
       "--debug-bounds-fg=#55667788",
       "--debug-profile=true",
       "--debug-slow-ms=250",
+      "--debug-dump-ax=true",
+      "--debug-dump-logs=true",
+      "--debug-log-level=debug",
     ]
     let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
     XCTAssertEqual(c.hints.keys, "asdf")
@@ -87,6 +90,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.debug.boundsFG, "#55667788")
     XCTAssertTrue(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 250)
+    XCTAssertTrue(c.debug.dumpAx)
+    XCTAssertTrue(c.debug.dumpLogs)
+    XCTAssertEqual(c.debug.logLevel, .debug)
   }
 
   func testEnvOverridesEveryField() {
@@ -104,6 +110,9 @@ final class ConfigLoaderTests: XCTestCase {
       "FLASH_DEBUG_BOUNDS_FG": "#22222222",
       "FLASH_DEBUG_PROFILE": "on",
       "FLASH_DEBUG_SLOW_MS": "175",
+      "FLASH_DEBUG_DUMP_AX": "true",
+      "FLASH_DEBUG_DUMP_LOGS": "true",
+      "FLASH_DEBUG_LOG_LEVEL": "warn",
     ]
     let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
     XCTAssertEqual(c.hints.keys, "qwer")
@@ -118,6 +127,20 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.debug.boundsFG, "#22222222")
     XCTAssertTrue(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 175)
+    XCTAssertTrue(c.debug.dumpAx)
+    XCTAssertTrue(c.debug.dumpLogs)
+    XCTAssertEqual(c.debug.logLevel, .warn)
+  }
+
+  func testInvalidShortcutValueProducesWarning() {
+    let toml = """
+      [shortcuts]
+      "cmd+ctrl+b" = "https://example.com"
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertTrue(c.shortcuts.isEmpty)
+    XCTAssertEqual(c.warnings.count, 1)
+    XCTAssertTrue(c.warnings[0].contains("cmd+ctrl+b"))
   }
 
   func testCLIBeatsEnv() {

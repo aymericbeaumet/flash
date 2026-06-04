@@ -31,6 +31,7 @@ public struct VimiumAnchor {
 public struct OracleSnapshot {
   public let flashTargets: [JumpTarget]
   public let vimiumAnchors: [VimiumAnchor]
+  public let hintWidthSamples: [HintWidthSample]
   public let transform: OracleTransform
   public let fiducialResidual: Double
   /// Screen-space bounds of the page viewport, derived from the
@@ -43,14 +44,41 @@ public struct OracleSnapshot {
 
   public init(
     flashTargets: [JumpTarget], vimiumAnchors: [VimiumAnchor],
+    hintWidthSamples: [HintWidthSample],
     transform: OracleTransform, fiducialResidual: Double,
     pageScreenRect: CGRect
   ) {
     self.flashTargets = flashTargets
     self.vimiumAnchors = vimiumAnchors
+    self.hintWidthSamples = hintWidthSamples
     self.transform = transform
     self.fiducialResidual = fiducialResidual
     self.pageScreenRect = pageScreenRect
+  }
+}
+
+public struct HintWidthSample {
+  public let scrollIndex: Int
+  public let vimiumTargetCount: Int
+  public let vimiumMaxLabelLength: Int
+  public let flashRawTargetCount: Int
+  public let flashTargetCount: Int
+  public let flashMaxLabelLength: Int
+
+  public init(
+    scrollIndex: Int,
+    vimiumTargetCount: Int,
+    vimiumMaxLabelLength: Int,
+    flashRawTargetCount: Int,
+    flashTargetCount: Int,
+    flashMaxLabelLength: Int
+  ) {
+    self.scrollIndex = scrollIndex
+    self.vimiumTargetCount = vimiumTargetCount
+    self.vimiumMaxLabelLength = vimiumMaxLabelLength
+    self.flashRawTargetCount = flashRawTargetCount
+    self.flashTargetCount = flashTargetCount
+    self.flashMaxLabelLength = flashMaxLabelLength
   }
 }
 
@@ -196,6 +224,7 @@ public enum VimiumOracle {
     //    naturally handles the per-cycle pairing.
     var allFlashTargets: [JumpTarget] = resolvedFlashTargets
     var allVimiumAnchors: [VimiumAnchor] = []
+    var hintWidthSamples: [HintWidthSample] = []
     var lastTransform: OracleTransform?
     var lastResidual: Double = 0
     var lastPageRect: CGRect = .zero
@@ -293,12 +322,33 @@ public enum VimiumOracle {
       // 5e. Walk Flash AX again at this scroll position + accumulate.
       //     (First iteration's flashTargets came from the pre-loop
       //     snapshot; subsequent iterations add their post-scroll set.)
+      let flashTargetsForScroll: [JumpTarget]
       if scrollIdx > 0 {
-        let here =
+        flashTargetsForScroll =
           (try? provider.discover(
             in: context, deadline: Date().addingTimeInterval(2))) ?? []
-        allFlashTargets.append(contentsOf: here)
+        allFlashTargets.append(contentsOf: flashTargetsForScroll)
+      } else {
+        flashTargetsForScroll = resolvedFlashTargets
       }
+      let flashCandidates = flashTargetsForScroll.enumerated().map { ordinal, target in
+        TargetCandidate(
+          target: target,
+          priority: provider.priority,
+          providerOrder: 0,
+          ordinal: ordinal)
+      }
+      let flashFinalized = TargetFinalizer.finalizeWithStats(
+        flashCandidates,
+        visibleRegions: [lastPageRect])
+      hintWidthSamples.append(
+        HintWidthSample(
+          scrollIndex: scrollIdx,
+          vimiumTargetCount: anchors.count,
+          vimiumMaxLabelLength: anchors.map { $0.marker.count }.max() ?? 0,
+          flashRawTargetCount: flashFinalized.rawCount,
+          flashTargetCount: flashFinalized.dedupedCount,
+          flashMaxLabelLength: maxFlashHintLength(targetCount: flashFinalized.dedupedCount)))
 
       // 5f. End-of-loop conditions. One line per scroll so a run is
       //     diagnosable from the log without dumping every poll.
@@ -349,8 +399,21 @@ public enum VimiumOracle {
     }
     return OracleSnapshot(
       flashTargets: allFlashTargets, vimiumAnchors: allVimiumAnchors,
+      hintWidthSamples: hintWidthSamples,
       transform: transform, fiducialResidual: lastResidual,
       pageScreenRect: lastPageRect)
+  }
+
+  private static func maxFlashHintLength(targetCount: Int) -> Int {
+    guard targetCount > 0 else { return 0 }
+    let alphabetSize = 26
+    var length = 1
+    var capacity = alphabetSize
+    while capacity < targetCount {
+      length += 1
+      capacity *= alphabetSize
+    }
+    return length
   }
 
   // MARK: - Wire types (mirror Resources/oracle-extension/content.js)

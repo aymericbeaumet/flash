@@ -150,11 +150,10 @@ enum ConfigLoader {
   private static func apply(table: [String], key: String, value: String, into config: inout Config)
   {
     // [shortcuts] is a free-form map: every key in the section is a
-    // hotkey string. The value is either a single string (URL or
-    // path — passed to `open`, or short-circuited internally for
-    // `flash://`) or an array of strings (exec'd as argv). Both
-    // forms are resolved to a typed `ShortcutAction` AOT here so
-    // the hot path never re-parses a string on a Carbon callback.
+    // hotkey string. The value is either a single `flash://...` URL
+    // string or an array of strings (exec'd as argv). Both forms are
+    // resolved to a typed `ShortcutAction` AOT here so the hot path
+    // never re-parses a string on a Carbon callback.
     if table == ["shortcuts"], !key.isEmpty {
       let action: ShortcutAction?
       if let arr = parseStringArray(value) {

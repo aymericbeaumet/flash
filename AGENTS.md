@@ -4,19 +4,19 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `open -g flash://show_hints`, overlays vimium-style hint labels on the focused app's clickable elements and clicks one when the user types its hint. No menu bar, no Dock icon, no global keyboard hooks, no CLI client, no autostart.
+A headless, resident macOS app that, when triggered by `open -g flash://show_hints` or by a configured native shortcut, overlays vimium-style hint labels on the focused app's clickable elements and clicks one when the user types its hint. No menu bar, no Dock icon, no CLI client.
 
-Activation is exclusively via the `flash://` URL scheme — bound to a hotkey by the user's choice of external tool (Karabiner, skhd, Hammerspoon).
+Activation can come through the `flash://` URL scheme or through Flash's `[shortcuts]` Carbon hotkey registry. Shortcut string values must still be `flash://...` commands and are dispatched in-process through the same `URLCommand` parser as URL-scheme AppleEvents.
 
 ## Hard rules (do not violate)
 
 1. **No UI surface** beyond the transparent hint overlay. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
-2. **No global keyboard logic.** No `RegisterEventHotKey`, no `CGEventTap`, no `NSEvent.addGlobalMonitorForEvents`. The only keyboard handling allowed is `NSPanel.keyDown` on the overlay panel itself, which receives keys only while the overlay is the key window.
-3. **No autostart.** No launchd agents, no login items, no writes to `~/Library/LaunchAgents`.
-4. **No second process / no IPC protocol.** Activation is always `NSAppleEventManager` receiving the URL scheme. Don't add Unix sockets, mach services, or a CLI client.
+2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit `[shortcuts]` entries. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
+3. **Autolaunch is installer-owned.** `Scripts/install-release.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
+4. **No second process / no IPC protocol.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native shortcuts dispatch `URLCommand` in-process. Don't add Unix sockets, mach services, or a CLI client.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **TOML parser is hand-rolled** (small subset). Don't add `TOMLKit` / `Toml` / other deps unless we outgrow what we can hand-roll cleanly.
-7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, `CGWindowList*`, or anything that touches the screen recording permission. The user explicitly removed it; if a request requires capturing pixels, surface it instead of silently adding it back.
+7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
 8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(rightClick:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
 
 If a request would violate any of the above, surface it to the user instead of silently complying.
@@ -32,6 +32,7 @@ Sources/
     JumpTarget.swift                 # A clickable thing with a screen rect + optional activate closure
     JumpAction.swift                 # .leftClick | .rightClick
     JumpProvider.swift               # The protocol; `supports/discover` API
+    TargetFinalizer.swift            # Shared visible-region filter + smaller-frame-wins dedup before label assignment
   FlashProviders/                    # Built-in providers (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
     Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
@@ -41,7 +42,7 @@ Sources/
     main.swift                       # NSApplication boot
     App/
       AppDelegate.swift              # Orchestrator + OverlayCoordinator
-      URLEventHandler.swift          # Registers GetURL handler; the ONLY hot-path entry point
+      URLEventHandler.swift          # Registers GetURL handler; shared parser for URL and shortcut commands
       AppMonitor.swift               # Focused-app prepared model + AX walk dispatcher (serial AX queue)
       OverlayPanel.swift             # Reusable transparent NSPanel, CALayer pool, animations disabled
       OverlayInput.swift             # NSPanel.keyDown — the ONLY keyboard code in the project
@@ -55,16 +56,16 @@ Sources/
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, plus live integration suites (TmuxIntegrationTests against an isolated tmux server; FirefoxIntegrationTests, opt-in via FLASH_FIREFOX_E2E=1)
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
-Scripts/install-release.sh                   # Release build → staging .app → /Applications/Flash.app, ad-hoc codesigned
+Scripts/install-release.sh                   # Release build → staging .app → /Applications/Flash.app, stable dev-signed, login autolaunch
 README.md                            # User-facing
 AGENTS.md                            # This file
 ```
 
 ## Activation flow (read this before editing the hot path)
 
-1. External tool runs `open -g flash://show_hints[?right=1]`.
-2. macOS Launch Services routes to the running instance via `kAEGetURL` Apple Event.
-3. `URLEventHandler` parses the URL host/query and invokes the AppDelegate handler.
+1. External tool runs `open -g flash://show_hints[?right=1]`, or a configured `[shortcuts]` Carbon hotkey fires the equivalent parsed `URLCommand`.
+2. URL-scheme activation routes via Launch Services to the running instance as a `kAEGetURL` Apple Event; native shortcuts dispatch in-process.
+3. `URLEventHandler` parses URL host/query for AppleEvents and provides the shared parser used by shortcut config loading.
 4. `AppDelegate.activate(rightClick:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
 5. `AppMonitor.discoverAsync` first tries the AX-event-driven prepared model (see *Prepared model contract* below). On hit, native AX-backed `[AssignedHint]` values are delivered to main without an activation-time AX walk. Tmux remains activation-only because its output is volatile.
 6. On the AX queue, `AppMonitor` runs the selected provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives). Inside `AccessibilityProvider`, the focused window's direct children are fanned out across concurrent walkers, and action-name IPCs for tentative web-area / AXImage targets are resolved in a parallel post-pass.
@@ -199,13 +200,14 @@ Keys:
 | `overlay.hint_fg`                  | hex string     | `"#302505"`          |
 | `overlay.hint_bg_top` / `hint_bg_bottom` | hex string | `"#FFF785"` / `"#FFC542"` |
 | `overlay.hint_border`              | hex string     | `"#E3BE23"`          |
-| `overlay.exit_key`                 | string         | `"<escape>"`         |
 | `debug.show_bounds`                | bool           | `false`              |
 | `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.profile`                    | bool           | `false`              |
 | `debug.slow_ms`                    | int            | `100`                |
 | `debug.dump_ax`                    | bool           | `false`              |
 | `debug.dump_logs`                  | bool           | `false`              |
+| `debug.log_level`                  | string         | `"info"`             |
+| `[shortcuts]` entries              | string/array   | none                 |
 
 Performance behaviours are **not configurable.** The prepared AX model,
 the concurrent subtree walk, and the parallel deferred action-name
@@ -244,7 +246,9 @@ When you add a field, also add `applyOverrides` test coverage in `Tests/FlashTes
 
 **Flash always walks the focused app only.** There is no `hints.scope` knob and no multi-app walk machinery — background apps and other monitors are ignored. `JumpTarget.pid` carries the focused app's pid so `commit` can re-activate it before dispatching the click. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps.
 
-`overlay.exit_key` follows Karabiner's angle-bracket convention for special keys: `<escape>`, `<return>`, `<tab>`, `<space>`, `<backspace>`, `<delete>`, `<arrow_up/down/left/right>`. A bare value (e.g. `"q"`) matches that literal character.
+Overlay dismissal keys are hardcoded: Escape, Space, arrow keys, and scroll/click dismissal monitors. There is no `overlay.exit_key` config key.
+
+`[shortcuts]` maps hotkey strings such as `"ctrl+space"` to either a `flash://...` URL string or an argv array. The string form is the fast in-process path and must use the `flash://` scheme; non-Flash URLs and shell commands belong in the array form.
 
 ## Permissions
 
@@ -252,15 +256,18 @@ Required:
 
 - **Accessibility** — required for AX walks and `AXUIElementPerformAction`. Granted in *System Settings → Privacy & Security → Accessibility*. The bundle identifier is `com.flash.app`; the path must be `/Applications/Flash.app`.
 
+Declared / conditional:
+
+- **Automation (`NSAppleEventsUsageDescription`)** — declared for `flash://open_app` shortcuts that ask Launch Services to launch/reopen/focus another app. Flash still discovers browser page content through `AXWebArea` descendants in the AX tree, not via `do JavaScript`.
+
 Not required:
 
-- **Automation (`NSAppleEventsUsageDescription`)** — **NOT** required and **NOT** requested. Flash discovers browser page content through `AXWebArea` descendants in the AX tree, not via `do JavaScript`. If you find yourself wanting Automation, surface that need before adding it.
 - **Input Monitoring** — **NOT** required and **NOT** requested. If you find yourself wanting to request it, you're violating rule (2) above.
 - **Screen Recording** — **NOT** required and **NOT** requested. See rule (7) above. The plist no longer declares `NSScreenCaptureUsageDescription`.
 
 ### TCC and rebuilds
 
-TCC grants for ad-hoc-signed apps are keyed by the binary's cdhash. Every `./Scripts/install-release.sh` produces a new cdhash and therefore invalidates the previous grant. The user will see "Accessibility / Screen Recording" prompts again after rebuilding. This is a known limitation of ad-hoc development signing. The install script `lsregister -f`s the new bundle to refresh URL-scheme routing, but there is no API to migrate TCC grants. Document the re-grant step in user-facing changes that touch the signing/install flow.
+`./Scripts/install-release.sh` signs with the stable self-signed "Flash Dev" identity and installs a user LaunchAgent at `~/Library/LaunchAgents/com.flash.app.autolaunch.plist` so Flash starts at login. The first run with that identity resets Accessibility once so the next grant binds to the stable certificate; subsequent rebuilds should preserve the grant.
 
 ## Build / install / verify
 
@@ -339,7 +346,7 @@ which trips this dismissal — so triggering Flash on top of an open
 There are two ways around this and both are off the table:
 1. **Global event tap (`CGEventTap` / `addGlobalMonitorForEvents`)** would
    let us read keystrokes without taking key window, so the menu would
-   stay open. Banned by hard rule (2): no global keyboard logic.
+   stay open. Banned by hard rule (2): no arbitrary global key capture.
 2. **Render through a CGS / WindowServer-level window** below the menu
    plane. This uses private SkyLight APIs that aren't part of the public
    AppKit surface. Out of scope.

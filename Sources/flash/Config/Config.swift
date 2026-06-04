@@ -58,9 +58,8 @@ struct Config {
   /// `[shortcuts]` section. Each entry maps a hotkey string
   /// (e.g. `"cmd+ctrl+a"`) to one of:
   ///
-  ///   - a single string, which is either a `flash://...` URL
-  ///     (fast path — dispatched internally), any other URL or
-  ///     file path (passed to `NSWorkspace.open`), or
+  ///   - a single `flash://...` URL string (fast path — dispatched
+  ///     internally through the same URLCommand parser as AppleEvents), or
   ///   - an array of strings, which is exec'd as `argv` (the
   ///     first element is the executable, the rest are args).
   ///

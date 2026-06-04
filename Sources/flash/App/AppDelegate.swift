@@ -467,6 +467,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // needing to touch `FlashLog` from two places.
     FlashLog.setLevel(cfg.debug.logLevel)
     FlashLog.setMirrorToFile(cfg.debug.dumpLogs)
+    for warning in cfg.warnings {
+      FlashLog.warn("[config] \(warning)")
+    }
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
     monitor.updateConfig(cfg)

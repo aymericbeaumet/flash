@@ -48,6 +48,7 @@ public enum FirefoxFixture {
     public static let ariaHiddenButtons = 5  // <button> inside aria-hidden subtree
     public static let ariaHiddenInputs = 5  // <input> inside aria-hidden subtree
     public static let displayNoneButtons = 5  // <button> inside display:none subtree
+    public static let offscreenButtons = 700  // visible only after scrolling
 
     // Per-role aggregates derived from the section counts. Kept here so
     // the assertion bodies don't sprout their own ad-hoc arithmetic.
@@ -101,6 +102,18 @@ public enum FirefoxFixture {
         h2 { margin: 0 0 8px; font-size: 14px; color: #666; }
         button, input, select, textarea { margin: 4px; }
         img { width: 32px; height: 32px; background: #ddd; display: inline-block; }
+        .offscreen-flood { margin-top: 1400px; }
+        .offscreen-flood-grid {
+          display: grid;
+          grid-template-columns: repeat(4, max-content);
+          gap: 8px;
+          align-items: start;
+        }
+        .offscreen-flood-grid button {
+          margin: 0;
+          min-width: 64px;
+          padding: 2px 4px;
+        }
       </style>
       </head><body>
       <section id="links"><h2>links</h2>
@@ -207,7 +220,14 @@ public enum FirefoxFixture {
     for i in 1...Counts.displayNoneButtons {
       html += "<button>display-none-btn-\(i)</button> "
     }
-    html += "</section></body></html>"
+    html += """
+      </section><section id="offscreen-flood" class="offscreen-flood">
+      <h2>offscreen clickable flood</h2><div class="offscreen-flood-grid">
+      """
+    for i in 1...Counts.offscreenButtons {
+      html += "<button>far-btn-\(i)</button>"
+    }
+    html += "</div></section></body></html>"
     return html
   }()
 }

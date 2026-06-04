@@ -415,6 +415,7 @@ public final class AccessibilityProvider: JumpProvider {
     }
     if let posV = posValue, let sizeV = sizeValue,
       let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      visible.contains(CGPoint(x: frame.midX, y: frame.midY)),
       roleAllowed, enabled
     {
       state.idCounter += 1

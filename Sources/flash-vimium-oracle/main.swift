@@ -295,6 +295,7 @@ private func runFixture(
   recorder.pass(
     "page rect \(snapshot.pageScreenRect) — \(pageFlash.count)/"
       + "\(snapshot.flashTargets.count) flash targets in page area")
+  assertHintWidths(fixture: fixture, snapshot: snapshot, recorder: recorder)
 
   let allowList = fixture.loadAllowList()
   let result = OracleDiff.classify(
@@ -309,6 +310,26 @@ private func runFixture(
     logErr("--- end ---\n")
   }
   return result
+}
+
+private func assertHintWidths(
+  fixture: OracleFixture,
+  snapshot: OracleSnapshot,
+  recorder: CLIRecorder
+) {
+  guard fixture == .baselineSynthetic else { return }
+  for sample in snapshot.hintWidthSamples {
+    let line =
+      "hint width scroll #\(sample.scrollIndex): "
+      + "vimium targets=\(sample.vimiumTargetCount) max=\(sample.vimiumMaxLabelLength), "
+      + "flash raw=\(sample.flashRawTargetCount) "
+      + "visible=\(sample.flashTargetCount) max=\(sample.flashMaxLabelLength)"
+    if sample.flashMaxLabelLength > sample.vimiumMaxLabelLength {
+      recorder.fail(line)
+    } else {
+      recorder.pass(line)
+    }
+  }
 }
 
 // MARK: - Main
