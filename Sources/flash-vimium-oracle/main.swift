@@ -229,7 +229,8 @@ private func runFixture(
   session: OracleSession,
   provider: AccessibilityProvider,
   recorder: CLIRecorder,
-  updateAllowList: Bool
+  updateAllowList: Bool,
+  isFirst: Bool
 ) -> OracleDiff.Result? {
   log("\n\(Colour.bold)Running fixture: \(fixture.displayName)\(Colour.reset)")
 
@@ -246,13 +247,18 @@ private func runFixture(
   }
   defer { server.stop() }
 
-  // Navigate the existing Firefox window to this fixture's URL via
-  // Marionette. Reuses the same browser process across the corpus —
-  // no Firefox spawn cost, no profile dance, no focus theft.
+  // Pick a target tab. The first fixture re-uses Firefox's initial
+  // tab; every subsequent fixture opens a fresh tab. All tabs stay
+  // open across the run so the user can inspect any fixture's live
+  // page state in Firefox after the oracle finishes.
   do {
+    if !isFirst {
+      let handle = try session.marionette.newWindow(type: "tab")
+      try session.marionette.switchToWindow(handle: handle)
+    }
     try session.marionette.navigate(url: server.url)
   } catch {
-    recorder.fail("navigate failed: \(error)")
+    recorder.fail("tab navigate failed: \(error)")
     return nil
   }
 
@@ -328,11 +334,11 @@ do {
 defer { session.stop() }
 
 var anyHardFailure = false
-for fixture in args.fixtures {
+for (idx, fixture) in args.fixtures.enumerated() {
   guard
     let result = runFixture(
       fixture, session: session, provider: provider, recorder: recorder,
-      updateAllowList: args.updateAllowList)
+      updateAllowList: args.updateAllowList, isFirst: idx == 0)
   else {
     anyHardFailure = true
     continue

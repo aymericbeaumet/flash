@@ -90,6 +90,32 @@ public final class MarionetteClient {
       params: ["url": url.absoluteString], timeout: timeout)
   }
 
+  /// Open a new browsing context. `type` is `"tab"` (default) or
+  /// `"window"`. Returns the new context's handle as a string.
+  /// Marionette wraps the WebDriver result in `value`, so we
+  /// unwrap one level before reading `handle`.
+  public func newWindow(type: String = "tab") throws -> String {
+    let r = try send(
+      name: "WebDriver:NewWindow",
+      params: ["type": type, "focus": false])
+    return (r["handle"] as? String) ?? ""
+  }
+
+  /// Switch the current target to `handle`. Subsequent commands run
+  /// against that tab/window. Modern Marionette expects the param
+  /// key as `handle`; older versions used `name`.
+  public func switchToWindow(handle: String) throws {
+    _ = try send(
+      name: "WebDriver:SwitchToWindow", params: ["handle": handle])
+  }
+
+  /// Current window handle.
+  public func currentWindowHandle() throws -> String {
+    let r = try send(
+      name: "WebDriver:GetWindowHandle", params: [String: Any]())
+    return (r["value"] as? String) ?? ""
+  }
+
   /// Press + release a single key. `key` is a W3C Webdriver key value
   /// — single character for printable keys, or one of the named keys
   /// from the spec (`\u{e00C}` for Escape, etc.). Uses transient ID
