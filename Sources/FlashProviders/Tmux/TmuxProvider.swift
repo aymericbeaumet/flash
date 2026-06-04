@@ -115,7 +115,7 @@ public final class TmuxProvider: JumpProvider {
     return Self.tmuxPath != nil
   }
 
-  public func discover(in context: AppContext, deadline _: Date) throws -> [JumpTarget] {
+  public func discover(in context: AppContext) throws -> [JumpTarget] {
     guard let tmux = Self.tmuxPath else { return [] }
     guard let client = clientHostedBy(pid: context.processID) else { return [] }
 

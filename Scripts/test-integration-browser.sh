@@ -4,25 +4,18 @@ set -euo pipefail
 # One-shot driver for the flash-vimium-oracle runner.
 #
 # What this does, in order, each step idempotent:
-#   1. Verify signing identity + Firefox Developer Edition are present
-#   2. Provision the oracle Firefox profile (companion XPI + Vimium-FF
-#      XPI + user.js) — overwrites the companion every time so local
-#      edits to Resources/oracle-extension/ are always picked up
+#   1. Verify signing identity + Firefox are present
+#   2. Provision a browser-test Firefox profile template with pinned Vimium-FF
+#      and Marionette enabled
 #   3. Build + codesign flash-vimium-oracle
 #   4. Run it, forwarding any extra args
 #
-# Why Firefox Developer Edition (not Release):
-#   The companion extension is unsigned (signing it would require an
-#   AMO submission for every code change — too much friction for a
-#   test harness). Only Dev Edition and Nightly honour
-#   xpinstall.signatures.required=false; release Firefox silently
-#   ignores it.
-#
 # Usage:
-#   ./Scripts/test-integration-browser.sh                      # full setup + run all fixtures
-#   ./Scripts/test-integration-browser.sh --fixture baseline-synthetic
+#   ./Scripts/test-integration-browser.sh
+#   ./Scripts/test-integration-browser.sh --fixture baseline-synthetic-001
+#   ./Scripts/test-integration-browser.sh --jobs 4
 #   ./Scripts/test-integration-browser.sh --update-allow-list
-#   ./Scripts/test-integration-browser.sh --setup-only         # provision + build, don't run
+#   ./Scripts/test-integration-browser.sh --setup-only
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
@@ -48,19 +41,22 @@ SIGN_IDENTITY="Flash Dev"
 KEYCHAIN_PATH="$HOME/Library/Keychains/login.keychain-db"
 BUNDLE_ID="com.flash.vimium-oracle"
 
-PROFILE_DIR="$HOME/Library/Application Support/Flash/firefox-oracle-profile"
+PROFILE_DIR="$HOME/Library/Application Support/Flash/firefox-browser-test-profile"
 EXT_DIR="$PROFILE_DIR/extensions"
-COMPANION_SRC="$PROJECT_DIR/Resources/oracle-extension"
-COMPANION_ID="flash-oracle@flash.local"
-COMPANION_XPI="$EXT_DIR/$COMPANION_ID.xpi"
-FIREFOX_APP="/Applications/Firefox Developer Edition.app"
+FIXTURES_DIR="$PROJECT_DIR/Tests/BrowserSnapshots"
 
-# Bump VIMIUM_SHA256 after the first successful download to lock the
-# pin; the script will refuse to install anything else once set.
-VIMIUM_XPI_URL="https://addons.mozilla.org/firefox/downloads/latest/vimium-ff/addon-554828-latest.xpi"
+if [[ -n "${FLASH_BROWSER_FIREFOX_APP:-}" ]]; then
+  FIREFOX_APP="$FLASH_BROWSER_FIREFOX_APP"
+elif [[ -d "/Applications/Firefox.app" ]]; then
+  FIREFOX_APP="/Applications/Firefox.app"
+else
+  FIREFOX_APP="/Applications/Firefox Developer Edition.app"
+fi
+
+VIMIUM_XPI_URL="https://addons.mozilla.org/firefox/downloads/file/4717567/vimium_ff-2.4.2.xpi"
 VIMIUM_EXT_ID="{d7742d87-e61d-4b78-b8a1-b469842139fa}"
 VIMIUM_XPI="$EXT_DIR/$VIMIUM_EXT_ID.xpi"
-VIMIUM_SHA256=""
+VIMIUM_SHA256="131e2a67580e7ae9125ab19781159e61409fac47b441fc2782aab76396ead196"
 
 # -- 1. preflight ---------------------------------------------------------
 echo "==> Preflight"
@@ -77,72 +73,59 @@ fi
 
 if [[ ! -d "$FIREFOX_APP" ]]; then
   cat <<EOF >&2
-ERROR: Firefox Developer Edition not found at $FIREFOX_APP.
+ERROR: Firefox not found at $FIREFOX_APP.
 
-The companion extension is unsigned. Only Dev Edition or Nightly
-honour xpinstall.signatures.required=false; release Firefox silently
-ignores it.
-
-Install from:
-  https://www.mozilla.org/en-US/firefox/developer/
+Install Firefox, or set FLASH_BROWSER_FIREFOX_APP to a Firefox-family
+.app path.
 EOF
   exit 1
 fi
 
-if [[ ! -d "$COMPANION_SRC" ]]; then
-  echo "ERROR: companion extension source not found at $COMPANION_SRC" >&2
+if [[ ! -f "$FIXTURES_DIR/manifest.json" ]]; then
+  echo "ERROR: browser fixture manifest not found at $FIXTURES_DIR/manifest.json" >&2
   exit 1
 fi
 
 # -- 2. profile provisioning ---------------------------------------------
-echo "==> Provisioning profile at $PROFILE_DIR"
+echo "==> Provisioning browser profile template at $PROFILE_DIR"
 mkdir -p "$EXT_DIR"
 
-# Always re-zip the companion so edits to content.js / manifest.json
-# take effect on the next launch. The XPI basename must match the
-# manifest's gecko.id or Firefox refuses to load it.
-rm -f "$COMPANION_XPI"
-(cd "$COMPANION_SRC" && zip -qr "$COMPANION_XPI" .)
-
 if [[ ! -f "$VIMIUM_XPI" ]]; then
-  echo "==> Downloading Vimium-FF (first run)"
+  echo "==> Downloading Vimium-FF 2.4.2"
   TMP_VIMIUM="$(mktemp -t vimium-ff.XXXXXX.xpi)"
   trap 'rm -f "$TMP_VIMIUM"' EXIT
   curl -fsSL -o "$TMP_VIMIUM" "$VIMIUM_XPI_URL"
-  if [[ -n "$VIMIUM_SHA256" ]]; then
-    ACTUAL="$(shasum -a 256 "$TMP_VIMIUM" | awk '{print $1}')"
-    if [[ "$ACTUAL" != "$VIMIUM_SHA256" ]]; then
-      cat <<EOF >&2
+  ACTUAL="$(shasum -a 256 "$TMP_VIMIUM" | awk '{print $1}')"
+  if [[ "$ACTUAL" != "$VIMIUM_SHA256" ]]; then
+    cat <<EOF >&2
 ERROR: Vimium-FF SHA256 mismatch.
   pinned:  $VIMIUM_SHA256
   got:     $ACTUAL
-Verify the new release manually, then bump VIMIUM_SHA256 in $(basename "$0").
 EOF
-      exit 1
-    fi
-  else
-    echo "  (no SHA256 pin set; lock it by adding to $(basename "$0"):"
-    echo "     VIMIUM_SHA256=\"$(shasum -a 256 "$TMP_VIMIUM" | awk '{print $1}')\")"
+    exit 1
   fi
   mv "$TMP_VIMIUM" "$VIMIUM_XPI"
   trap - EXIT
+else
+  ACTUAL="$(shasum -a 256 "$VIMIUM_XPI" | awk '{print $1}')"
+  if [[ "$ACTUAL" != "$VIMIUM_SHA256" ]]; then
+    echo "ERROR: existing Vimium-FF XPI checksum mismatch at $VIMIUM_XPI" >&2
+    exit 1
+  fi
 fi
 
 cat >"$PROFILE_DIR/user.js" <<'EOF'
 // Generated by Scripts/test-integration-browser.sh.
 
-// Allow the unsigned companion extension (honoured on Dev Edition / Nightly only).
-user_pref("xpinstall.signatures.required", false);
+// Load profile-installed extensions and keep them stable.
 user_pref("extensions.autoDisableScopes", 0);
 user_pref("extensions.enabledScopes", 15);
-
-// Pin Vimium-FF to the installed version; auto-update would defeat any SHA256 pin.
 user_pref("app.update.auto", false);
 user_pref("app.update.enabled", false);
 user_pref("extensions.update.enabled", false);
 user_pref("extensions.update.autoUpdateDefault", false);
 
-// Suppress everything that would race the fixture page load.
+// Suppress everything that would race fixture page load.
 user_pref("browser.startup.homepage_override.mstone", "ignore");
 user_pref("browser.aboutwelcome.enabled", false);
 user_pref("browser.shell.checkDefaultBrowser", false);
@@ -155,20 +138,11 @@ user_pref("datareporting.policy.dataSubmissionEnabled", false);
 user_pref("browser.safebrowsing.malware.enabled", false);
 user_pref("browser.safebrowsing.phishing.enabled", false);
 user_pref("devtools.onboarding.telemetry.logged", true);
-
-// Suppress the safe-mode / "Troubleshoot Mode?" dialog that Firefox
-// shows after a forceful exit. SIGKILL of a dirty Firefox is the
-// fallback path in FirefoxHarness.reapStaleProfileHolders, which
-// would otherwise trip this prompt on the next launch and block the
-// fixture from loading.
 user_pref("toolkit.startup.max_resumed_crashes", -1);
 user_pref("browser.sessionstore.max_resumed_crashes", -1);
 
-// Marionette automation server. Lets the oracle synthesize 'f'
-// keystrokes via TCP regardless of which app is OS-frontmost — no
-// focus theft, and parallel fixture instances each listen on their
-// own port (set via -marionette-port at launch). The bind port is
-// chosen per-run by FirefoxHarness.launchWithProfile.
+// Marionette automation server. Each worker profile binds a free port and
+// the runner reads it from MarionetteActivePort after launch.
 user_pref("marionette.enabled", true);
 user_pref("marionette.port", 0);
 
@@ -187,11 +161,6 @@ if [[ ! -f "$BIN_PATH" ]]; then
   exit 1
 fi
 
-# Assemble a real .app bundle. TCC on Sequoia/Tahoe is significantly
-# more reliable about granting Accessibility to .app bundles than to
-# standalone Mach-O binaries — the bundle's Info.plist gives Launch
-# Services a stable identity to bind the grant to. Modelled on
-# Scripts/install-release.sh's staging of Flash.app.
 echo "==> Assembling $APP_NAME.app"
 rm -rf "$STAGING_APP"
 mkdir -p "$STAGING_APP/Contents/MacOS"
@@ -228,17 +197,11 @@ cat >"$STAGING_APP/Contents/Info.plist" <<EOF
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAccessibilityUsageDescription</key>
-    <string>The Flash Vimium Oracle needs Accessibility to walk Firefox's AX tree and post keystrokes that trigger Vimium hint mode.</string>
+    <string>The Flash browser test runner needs Accessibility to walk Firefox's AX tree while comparing Flash hints with Vimium.</string>
 </dict>
 </plist>
 EOF
 
-# Match Scripts/install-release.sh's flags exactly — no hardened runtime, no
-# entitlements. Flash.app works with this minimal signature; adding
-# --options runtime here causes TCC on Sequoia/Tahoe to silently refuse
-# Accessibility grants (hardened runtime requires explicit entitlements
-# for the capabilities it locks down). --deep signs the inner binary
-# + the bundle so the Info.plist's bundle ID becomes authoritative.
 echo "==> Codesigning $APP_NAME.app with $SIGN_IDENTITY"
 codesign --force --deep \
   --sign "$SIGN_IDENTITY" \
@@ -246,26 +209,16 @@ codesign --force --deep \
   "$STAGING_APP" >/dev/null
 codesign --verify --strict "$STAGING_APP"
 
-# Install to /Applications so TCC + Launch Services see the bundle in
-# the canonical location. Flash.app does the same — running from a
-# project-local path under ~/workspace was observed to silently refuse
-# Accessibility grants on macOS Sequoia/Tahoe even with a
-# perfectly-signed bundle. Mirrors Scripts/install-release.sh.
 echo "==> Installing to $INSTALL_APP"
 rm -rf "$INSTALL_APP"
 cp -R "$STAGING_APP" "$INSTALL_APP"
 
-# Re-sign in place — cp -R preserves the signature, but a defensive
-# re-sign avoids any ambiguity about what TCC binds against.
 codesign --force --deep \
   --sign "$SIGN_IDENTITY" \
   --identifier "$BUNDLE_ID" \
   "$INSTALL_APP" >/dev/null
 codesign --verify --strict "$INSTALL_APP"
 
-# Force Launch Services to refresh routing for the bundle. Without
-# this, `tccutil reset Accessibility com.flash.vimium-oracle` fails
-# with "No such bundle identifier" because LS hasn't indexed it yet.
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
   -f "$INSTALL_APP" >/dev/null 2>&1 || true
 
@@ -279,15 +232,13 @@ fi
 echo
 echo "==> Running $APP_NAME ${RUN_ARGS[*]:-}"
 set +e
-"$INSTALL_BIN" "${RUN_ARGS[@]}"
+"$INSTALL_BIN" \
+  --fixtures-dir "$FIXTURES_DIR" \
+  --browser-app "$FIREFOX_APP" \
+  "${RUN_ARGS[@]}"
 RC=$?
 set -e
 
-# The runner exits 2 when Accessibility is missing (most common
-# first-run blocker). Open System Settings at the right pane and stage
-# the installed .app path on the clipboard — System Settings →
-# Accessibility resolves it to the bundle, which is what TCC keys
-# the grant against. Skipped when stdout isn't a tty.
 if [[ $RC -eq 2 ]] && [[ -t 1 ]]; then
   if command -v pbcopy >/dev/null 2>&1; then
     printf '%s' "$INSTALL_APP" | pbcopy 2>/dev/null &&

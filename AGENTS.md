@@ -37,7 +37,7 @@ Sources/
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
     Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
     Tmux/TmuxProvider.swift                     # Visible-pane word hints for terminals running a tmux client
-  FlashE2EKit/                       # Shared Firefox E2E fixture + harness + assertions used by both the standalone runner and the xctest target.
+  FlashBrowserTestSupport/           # Browser integration fixture catalog, Firefox harness, Marionette client, and Vimium diff helpers.
   flash/                             # The executable target
     main.swift                       # NSApplication boot
     App/
@@ -54,7 +54,8 @@ Sources/
       ConfigLoader.swift             # Hand-rolled TOML subset parser + DispatchSource fs-watch hot-reload
       Alphabet.swift                 # <colemak>/<qwerty>/<dvorak>/literal resolution
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
-Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, plus live integration suites (TmuxIntegrationTests against an isolated tmux server; FirefoxIntegrationTests, opt-in via FLASH_FIREFOX_E2E=1)
+Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, TargetFinalizer, WindowSnapshot, browser fixture catalog, plus live TmuxIntegrationTests.
+Tests/BrowserSnapshots/              # Browser integration manifest + 100 offline HTML snapshots used by Scripts/test-integration-browser.sh.
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
 Scripts/install-release.sh                   # Release build → staging .app → /Applications/Flash.app, stable dev-signed, login autolaunch
 README.md                            # User-facing
@@ -166,14 +167,14 @@ public protocol JumpProvider: AnyObject {
     var identifier: String { get }
     var priority: Int { get }
     func supports(_ context: AppContext) -> Bool
-    func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget]
+    func discover(in context: AppContext) throws -> [JumpTarget]
 }
 ```
 
 Steps:
 
 1. Create `Sources/FlashProviders/<Group>/YourProvider.swift`.
-2. Implement the protocol. Return `JumpTarget`s with **global NSScreen coordinates** (bottom-left origin of primary screen). Honour `deadline` inside any recursive walk.
+2. Implement the protocol. Return a complete deterministic `[JumpTarget]` set with **global NSScreen coordinates** (bottom-left origin of primary screen). Do not deadline-truncate provider output.
 3. **Do not introduce per-app providers**. The project's working assumption is that generic rules are good enough. If a specific app misbehaves, fix the universal walker (roles/depth/etc.) — don't subclass per bundle id. The previous Messages/Notes/WhatsApp/Linear/Slack subclasses were collapsed for this reason; reintroduce them only if a generic-rule change for the same problem hurts other apps.
 4. Register in `Sources/flash/App/ProviderRegistry.swift`'s built-in list. Pick a priority — higher wins on overlapping rects. Existing scale:
    - 20: `TmuxProvider` (terminals with a tmux client in the process subtree — pane content isn't AX-clickable, so we hint each visible word and copy on commit)
@@ -319,7 +320,7 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `TmuxProviderTests`). Deterministic, run in milliseconds, no external state. `TmuxProviderTests` covers the tokenization rules (`extractWords`), the cell-geometry math (`resolveGeometry`), the status-bar parser (`parseStatusInfo`), the TOML alacritty-config reader, and `parseTwoInts`. Run on every `swift test`.
 - **Live tmux integration** (`TmuxIntegrationTests`). Boots an isolated tmux server under a per-test socket (`tmux -L flash-it-<uuid> -f /dev/null`) and asserts the binary's CLI contract Flash depends on: the `#{pane_*}` / `#{client_*}` / `#{status}` / `#{status-position}` format strings; that `capture-pane -p` returns the rendered grid; that horizontal + vertical splits yield the expected `pane_left` / `pane_top`. Catches breakage from tmux upgrades silently changing format-string semantics — the only realistic regression source for `TmuxProvider`. Skipped when no `tmux` binary is found on the probe paths. Runs in ~10 s.
-- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a dedicated Firefox Developer Edition profile with Vimium-FF + a companion WebExtension, then drives Marionette to navigate a fixture corpus (synthetic page + snapshot HTML of HN / Wikipedia / MDN / GitHub Explore / Stack Overflow / Ahrefs / YC About) tab by tab. Per fixture: Flash walks Firefox's AX tree, Vimium's hint set is exfiltrated via an aria-labeled off-screen div, and the two are diffed under strict-ISO. Catches both undermatch (Flash misses a hint Vimium provides) and overmatch (Flash hints something Vimium skips). Run order: build + sign once (`./Scripts/install-release.sh` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh` — the script self-provisions everything else.
+- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with pinned Vimium-FF, builds/codesigns the `flash-vimium-oracle` runner, then runs the 100-file offline corpus from `Tests/BrowserSnapshots` through a parallel worker pool. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures Vimium marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch (Flash misses a hint Vimium provides) and overmatch (Flash hints something Vimium skips). Run order: build + sign once (`./Scripts/install-release.sh` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`.
 
 Run order:
 

@@ -219,7 +219,7 @@ public final class AccessibilityProvider: JumpProvider {
     }
   }
 
-  public func discover(in context: AppContext, deadline _: Date) throws -> [JumpTarget] {
+  public func discover(in context: AppContext) throws -> [JumpTarget] {
     let app = AXUIElementCreateApplication(context.processID)
     // Wake the target app's a11y engine. Some apps (notably Firefox)
     // run a lazy/idle accessibility service that only exposes the

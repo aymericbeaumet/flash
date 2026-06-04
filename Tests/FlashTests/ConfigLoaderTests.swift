@@ -234,9 +234,11 @@ final class ConfigLoaderTests: XCTestCase {
     let paths = ConfigLoader.candidatePaths(arguments: args, environment: env)
       .map { $0.path }
     let home = FileManager.default.homeDirectoryForCurrentUser.path
-    XCTAssertEqual(paths, [
-      "\(home)/.config/flash/flash.toml",
-      "\(home)/.flash.toml",
-    ])
+    XCTAssertEqual(
+      paths,
+      [
+        "\(home)/.config/flash/flash.toml",
+        "\(home)/.flash.toml",
+      ])
   }
 }

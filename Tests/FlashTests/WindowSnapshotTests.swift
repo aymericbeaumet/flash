@@ -1,0 +1,73 @@
+import CoreGraphics
+import XCTest
+
+@testable import flash
+
+final class WindowSnapshotTests: XCTestCase {
+  func testFocusedWindowVisibleRegionSubtractsHigherZWindows() {
+    let focused = WindowSnapshot.Entry(
+      pid: 42,
+      layer: 0,
+      nsBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    let occluder = WindowSnapshot.Entry(
+      pid: 7,
+      layer: 0,
+      nsBounds: CGRect(x: 25, y: 25, width: 50, height: 50))
+
+    let snapshot = WindowSnapshot.build(entries: [occluder, focused], focusedPid: 42)
+
+    XCTAssertEqual(snapshot.activeWindowFrame, focused.nsBounds)
+    let visible = snapshot.visibleRegions[42] ?? []
+    XCTAssertEqual(visible.count, 4)
+    let visibleArea = visible.reduce(CGFloat(0)) { $0 + $1.width * $1.height }
+    XCTAssertEqual(visibleArea, 7_500)
+    XCTAssertFalse(visible.contains { $0.contains(CGPoint(x: 50, y: 50)) })
+  }
+
+  func testOnlyFrontMostFocusedWindowIsHintable() {
+    let front = WindowSnapshot.Entry(
+      pid: 42,
+      layer: 0,
+      nsBounds: CGRect(x: 0, y: 0, width: 80, height: 80))
+    let backSamePid = WindowSnapshot.Entry(
+      pid: 42,
+      layer: 0,
+      nsBounds: CGRect(x: 100, y: 100, width: 80, height: 80))
+
+    let snapshot = WindowSnapshot.build(entries: [front, backSamePid], focusedPid: 42)
+
+    XCTAssertEqual(snapshot.activeWindowFrame, front.nsBounds)
+    XCTAssertEqual(snapshot.visibleRegions[42], [front.nsBounds])
+  }
+
+  func testCGWindowInfoEntriesConvertToNSScreenCoordinates() {
+    let info: [[String: Any]] = [
+      [
+        kCGWindowOwnerPID as String: Int32(42),
+        kCGWindowLayer as String: 0,
+        kCGWindowBounds as String: [
+          "X": 10,
+          "Y": 20,
+          "Width": 200,
+          "Height": 100,
+        ],
+      ],
+      [
+        kCGWindowOwnerPID as String: Int32(99),
+        kCGWindowLayer as String: 0,
+        kCGWindowBounds as String: [
+          "X": 0,
+          "Y": 0,
+          "Width": 0,
+          "Height": 100,
+        ],
+      ],
+    ]
+
+    let entries = WindowSnapshot.entries(from: info, primaryH: 900)
+
+    XCTAssertEqual(entries.count, 1)
+    XCTAssertEqual(entries[0].pid, 42)
+    XCTAssertEqual(entries[0].nsBounds, CGRect(x: 10, y: 780, width: 200, height: 100))
+  }
+}

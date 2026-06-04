@@ -119,6 +119,20 @@ swift build
 swift test
 ```
 
+Browser parity coverage lives behind the signed integration runner:
+
+```bash
+./Scripts/test-integration-browser.sh --setup-only
+./Scripts/test-integration-browser.sh              # 100 local snapshots, parallel by default
+./Scripts/test-integration-browser.sh --jobs 4
+./Scripts/test-integration-browser.sh --fixture baseline-synthetic-001
+```
+
+The browser runner provisions a Firefox profile template with pinned
+Vimium-FF, copies that template per worker, drives Firefox through
+Marionette, and compares Vimium's marker DOM with Flash's AX-derived
+targets. The fixture corpus is offline under `Tests/BrowserSnapshots`.
+
 ## License
 
 MIT (see `LICENSE` if added).

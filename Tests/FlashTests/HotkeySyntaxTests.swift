@@ -68,7 +68,9 @@ final class HotkeySyntaxTests: XCTestCase {
     guard case .flashCommand(let cmd) = action else {
       return XCTFail("expected .flashCommand")
     }
-    if case .showHints(let right) = cmd { XCTAssertFalse(right) } else {
+    if case .showHints(let right) = cmd {
+      XCTAssertFalse(right)
+    } else {
       XCTFail("expected .showHints, got \(cmd)")
     }
   }
@@ -78,7 +80,9 @@ final class HotkeySyntaxTests: XCTestCase {
     guard case .flashCommand(let cmd) = action else {
       return XCTFail("expected .flashCommand")
     }
-    if case .openApp(let name) = cmd { XCTAssertEqual(name, "Alacritty") } else {
+    if case .openApp(let name) = cmd {
+      XCTAssertEqual(name, "Alacritty")
+    } else {
       XCTFail("expected .openApp")
     }
   }

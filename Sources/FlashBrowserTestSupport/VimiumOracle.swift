@@ -1,0 +1,531 @@
+import AppKit
+import ApplicationServices
+import CoreGraphics
+import FlashCore
+import FlashProviders
+import Foundation
+
+/// One element Vimium-FF emitted a hint marker for, after CSS->screen
+/// coordinate transformation.
+public struct VimiumAnchor {
+  public let tag: String
+  public let role: String
+  public let label: String
+  public let marker: String
+  public let cssRect: CGRect
+  public let screenRect: CGRect
+
+  public init(
+    tag: String, role: String, label: String, marker: String,
+    cssRect: CGRect, screenRect: CGRect
+  ) {
+    self.tag = tag
+    self.role = role
+    self.label = label
+    self.marker = marker
+    self.cssRect = cssRect
+    self.screenRect = screenRect
+  }
+}
+
+public struct OracleSnapshot {
+  public let flashTargets: [JumpTarget]
+  public let vimiumAnchors: [VimiumAnchor]
+  public let hintWidthSamples: [HintWidthSample]
+  public let transform: OracleTransform
+  public let fiducialResidual: Double
+  /// Screen-space bounds of the page viewport, derived from the
+  /// Marionette-reported `viewport.innerWidth/innerHeight` projected
+  /// through `transform`.
+  public let pageScreenRect: CGRect
+
+  public init(
+    flashTargets: [JumpTarget], vimiumAnchors: [VimiumAnchor],
+    hintWidthSamples: [HintWidthSample],
+    transform: OracleTransform, fiducialResidual: Double,
+    pageScreenRect: CGRect
+  ) {
+    self.flashTargets = flashTargets
+    self.vimiumAnchors = vimiumAnchors
+    self.hintWidthSamples = hintWidthSamples
+    self.transform = transform
+    self.fiducialResidual = fiducialResidual
+    self.pageScreenRect = pageScreenRect
+  }
+}
+
+public struct HintWidthSample {
+  public let scrollIndex: Int
+  public let vimiumTargetCount: Int
+  public let vimiumMaxLabelLength: Int
+  public let flashRawTargetCount: Int
+  public let flashTargetCount: Int
+  public let flashMaxLabelLength: Int
+
+  public init(
+    scrollIndex: Int,
+    vimiumTargetCount: Int,
+    vimiumMaxLabelLength: Int,
+    flashRawTargetCount: Int,
+    flashTargetCount: Int,
+    flashMaxLabelLength: Int
+  ) {
+    self.scrollIndex = scrollIndex
+    self.vimiumTargetCount = vimiumTargetCount
+    self.vimiumMaxLabelLength = vimiumMaxLabelLength
+    self.flashRawTargetCount = flashRawTargetCount
+    self.flashTargetCount = flashTargetCount
+    self.flashMaxLabelLength = flashMaxLabelLength
+  }
+}
+
+/// Drives the per-fixture capture sequence. Vimium-FF remains the oracle,
+/// but Marionette now owns the whole harness side: page setup, DOM marker
+/// capture, keyboard input, and dismissal. No unsigned companion extension
+/// is installed in Firefox.
+public enum VimiumOracle {
+  public enum CaptureError: Error, CustomStringConvertible {
+    case setupFailed(String)
+    case anchorsTimedOut
+    case decodeFailed(String)
+    case missingFiducials([String])
+    case transformFailed(Error)
+
+    public var description: String {
+      switch self {
+      case .setupFailed(let why):
+        return "Browser fixture setup failed: \(why)"
+      case .anchorsTimedOut:
+        return """
+          Vimium markers never appeared after the 'f' keystroke. Check:
+            - Vimium-FF loaded into the test profile
+            - the page context, not browser chrome, receives WebDriver key actions
+            - the fixture did not intercept bare 'f'
+          """
+      case .decodeFailed(let why):
+        return "Failed to decode Marionette capture payload: \(why)"
+      case .missingFiducials(let ids):
+        return "Fiducials not found in Firefox AX tree: \(ids.joined(separator: ", "))"
+      case .transformFailed(let e):
+        return "Could not solve coordinate transform: \(e)"
+      }
+    }
+  }
+
+  private static let fiducialIDs = [
+    "__flash_oracle_fiducial_a__",
+    "__flash_oracle_fiducial_b__",
+  ]
+  private static let webdriverEscape = "\u{e00C}"
+
+  public static func capture(
+    firefox: NSRunningApplication,
+    context: AppContext,
+    provider: AccessibilityProvider,
+    marionette: MarionetteClient,
+    anchorsTimeout: TimeInterval = 10
+  ) throws -> OracleSnapshot {
+    let pid = firefox.processIdentifier
+
+    guard let setupValue = try marionette.executeScript(setupScript, args: [0])
+    else {
+      throw CaptureError.setupFailed("setup script returned nil")
+    }
+    _ = setupValue
+
+    let flashTargets = waitForStableFlashTargets(
+      provider: provider,
+      context: context,
+      timeout: 6)
+
+    let anchorsDeadline = Date().addingTimeInterval(anchorsTimeout)
+    var decoded: ExtensionPayload?
+    while Date() < anchorsDeadline {
+      _ = try? marionette.tapKey("f")
+      let waitChunk = Date().addingTimeInterval(0.9)
+      while Date() < waitChunk, Date() < anchorsDeadline {
+        if let value = try? marionette.executeScript(captureScript),
+          let payload = try? decodePayload(value),
+          !payload.anchors.isEmpty
+        {
+          decoded = payload
+          break
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+      }
+      if decoded != nil { break }
+    }
+    guard let decoded else { throw CaptureError.anchorsTimedOut }
+
+    let walkedFiducials = walkForFiducials(pid: pid, fiducialIDs: fiducialIDs)
+    let missing = fiducialIDs.filter { walkedFiducials[$0] == nil }
+    if !missing.isEmpty { throw CaptureError.missingFiducials(missing) }
+
+    var pairs: [(css: CGPoint, screen: CGPoint)] = []
+    for fid in decoded.fiducials {
+      guard let screenRect = walkedFiducials[fid.id] else { continue }
+      pairs.append(
+        (
+          css: CGPoint(x: fid.x, y: fid.y),
+          screen: CGPoint(x: screenRect.minX, y: screenRect.maxY)
+        ))
+    }
+    let transform: OracleTransform
+    do {
+      transform = try OracleTransform.solve(pairs: pairs)
+    } catch {
+      throw CaptureError.transformFailed(error)
+    }
+    let residual = transform.maxResidual(pairs: pairs)
+    let pageRect = transform.screenRect(
+      fromCSS: CGRect(
+        x: 0, y: 0,
+        width: decoded.viewport.innerWidth,
+        height: decoded.viewport.innerHeight))
+
+    let anchors: [VimiumAnchor] = decoded.anchors.map { a in
+      let cssR = CGRect(
+        x: a.rect[0], y: a.rect[1], width: a.rect[2], height: a.rect[3])
+      return VimiumAnchor(
+        tag: a.tag, role: a.role, label: a.label, marker: a.marker,
+        cssRect: cssR, screenRect: transform.screenRect(fromCSS: cssR))
+    }
+
+    let flashCandidates = flashTargets.enumerated().map { ordinal, target in
+      TargetCandidate(
+        target: target,
+        priority: provider.priority,
+        providerOrder: 0,
+        ordinal: ordinal)
+    }
+    let flashFinalized = TargetFinalizer.finalizeWithStats(
+      flashCandidates,
+      visibleRegions: [pageRect])
+    let samples = [
+      HintWidthSample(
+        scrollIndex: 0,
+        vimiumTargetCount: anchors.count,
+        vimiumMaxLabelLength: anchors.map { $0.marker.count }.max() ?? 0,
+        flashRawTargetCount: flashFinalized.rawCount,
+        flashTargetCount: flashFinalized.dedupedCount,
+        flashMaxLabelLength: maxFlashHintLength(targetCount: flashFinalized.dedupedCount))
+    ]
+
+    _ = try? marionette.tapKey(webdriverEscape)
+
+    return OracleSnapshot(
+      flashTargets: flashTargets,
+      vimiumAnchors: anchors,
+      hintWidthSamples: samples,
+      transform: transform,
+      fiducialResidual: residual,
+      pageScreenRect: pageRect)
+  }
+
+  private static func waitForStableFlashTargets(
+    provider: AccessibilityProvider,
+    context: AppContext,
+    timeout: TimeInterval
+  ) -> [JumpTarget] {
+    let stableDeadline = Date().addingTimeInterval(timeout)
+    var resolved: [JumpTarget] = []
+    var stableRuns = 0
+    var lastCount = -1
+    while Date() < stableDeadline {
+      let now = (try? provider.discover(in: context)) ?? []
+      if now.count == lastCount, now.count > 0 {
+        stableRuns += 1
+        resolved = now
+        if stableRuns >= 2 { break }
+      } else {
+        lastCount = now.count
+        stableRuns = 0
+        resolved = now
+      }
+      Thread.sleep(forTimeInterval: 0.25)
+    }
+    return resolved
+  }
+
+  private static func maxFlashHintLength(targetCount: Int) -> Int {
+    guard targetCount > 0 else { return 0 }
+    let alphabetSize = 26
+    var length = 1
+    var capacity = alphabetSize
+    while capacity < targetCount {
+      length += 1
+      capacity *= alphabetSize
+    }
+    return length
+  }
+
+  private static func decodePayload(_ value: Any) throws -> ExtensionPayload {
+    guard JSONSerialization.isValidJSONObject(value) else {
+      throw CaptureError.decodeFailed("non-JSON value \(value)")
+    }
+    let data = try JSONSerialization.data(withJSONObject: value, options: [])
+    return try JSONDecoder().decode(ExtensionPayload.self, from: data)
+  }
+
+  // MARK: - Wire types
+
+  private struct ExtensionPayload: Decodable {
+    let anchors: [RawAnchor]
+    let fiducials: [Fiducial]
+    let viewport: Viewport
+  }
+  private struct RawAnchor: Decodable {
+    let tag: String
+    let role: String
+    let rect: [Double]
+    let label: String
+    let marker: String
+  }
+  private struct Fiducial: Decodable {
+    let id: String
+    let x: Double
+    let y: Double
+    let w: Double
+    let h: Double
+  }
+  private struct Viewport: Decodable {
+    let scrollX: Double
+    let scrollY: Double
+    let innerWidth: Double
+    let innerHeight: Double
+    let dpr: Double
+    let scrollHeight: Double?
+    let atBottom: Bool?
+  }
+
+  // MARK: - AX helpers
+
+  private static func walkForFiducials(
+    pid: pid_t, fiducialIDs: [String]
+  ) -> [String: CGRect] {
+    let app = AXUIElementCreateApplication(pid)
+    let screenH = primaryScreenHeight()
+    var fiducials: [String: CGRect] = [:]
+    let fiducialSet = Set(fiducialIDs)
+    var queue: [AXUIElement] = [app]
+    var visited = 0
+    let maxNodes = 10000
+    while !queue.isEmpty, visited < maxNodes {
+      let node = queue.removeFirst()
+      visited += 1
+      var descRaw: CFTypeRef?
+      _ = AXUIElementCopyAttributeValue(
+        node, kAXDescriptionAttribute as CFString, &descRaw)
+      if let desc = descRaw as? String,
+        fiducialSet.contains(desc),
+        fiducials[desc] == nil,
+        let rect = rectOf(node, screenH: screenH)
+      {
+        fiducials[desc] = rect
+        if fiducials.count == fiducialIDs.count { break }
+      }
+      var childrenRaw: CFTypeRef?
+      if AXUIElementCopyAttributeValue(
+        node, kAXChildrenAttribute as CFString, &childrenRaw) == .success,
+        let children = childrenRaw as? [AXUIElement]
+      {
+        queue.append(contentsOf: children)
+      }
+    }
+    return fiducials
+  }
+
+  private static func rectOf(_ element: AXUIElement, screenH: CGFloat) -> CGRect? {
+    var posRaw: CFTypeRef?
+    var sizeRaw: CFTypeRef?
+    _ = AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRaw)
+    _ = AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRaw)
+    guard let posCF = posRaw, let sizeCF = sizeRaw,
+      CFGetTypeID(posCF) == AXValueGetTypeID(),
+      CFGetTypeID(sizeCF) == AXValueGetTypeID()
+    else { return nil }
+    let posV = posCF as! AXValue
+    let sizeV = sizeCF as! AXValue
+    var pos = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue(posV, .cgPoint, &pos),
+      AXValueGetValue(sizeV, .cgSize, &size),
+      size.width > 0, size.height > 0
+    else { return nil }
+    let nsY = screenH - pos.y - size.height
+    return CGRect(x: pos.x, y: nsY, width: size.width, height: size.height)
+  }
+
+  private static func primaryScreenHeight() -> CGFloat {
+    NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
+      ?? NSScreen.main?.frame.height ?? 1080
+  }
+
+  // MARK: - Marionette scripts
+
+  private static let setupScript = """
+    const scrollY = Number(arguments[0] || 0);
+    const fiducials = [
+      ["__flash_oracle_fiducial_a__", 40, 40],
+      ["__flash_oracle_fiducial_b__", 800, 600],
+    ];
+    for (const [id, left, top] of fiducials) {
+      let d = document.getElementById(id);
+      if (!d) {
+        d = document.createElement("div");
+        d.id = id;
+        d.setAttribute("role", "img");
+        d.setAttribute("aria-label", id);
+        d.style.cssText =
+          "position:fixed;left:" + left + "px;top:" + top + "px;" +
+          "width:8px;height:8px;background:#ff00aa;z-index:2147483646;" +
+          "pointer-events:none;";
+        document.documentElement.appendChild(d);
+      }
+    }
+    window.scrollTo(0, scrollY);
+    window.focus();
+    if (document.body) {
+      document.body.setAttribute("tabindex", document.body.getAttribute("tabindex") || "-1");
+      document.body.focus({ preventScroll: true });
+    }
+    return { ready: true, title: document.title, scrollY: window.scrollY };
+    """
+
+  private static let captureScript = """
+    const MARKER_REGEX = /vimium.*[Hh]int.*[Mm]arker|vimium-hint-marker/;
+    const FIDUCIAL_IDS = ["__flash_oracle_fiducial_a__", "__flash_oracle_fiducial_b__"];
+
+    function implicitRole(el) {
+      const tag = el.tagName.toLowerCase();
+      switch (tag) {
+        case "a": return el.hasAttribute("href") ? "link" : "";
+        case "button": return "button";
+        case "input": {
+          const t = (el.getAttribute("type") || "text").toLowerCase();
+          if (t === "submit" || t === "button" || t === "reset") return "button";
+          if (t === "checkbox") return "checkbox";
+          if (t === "radio") return "radio";
+          if (t === "search") return "searchbox";
+          return "textbox";
+        }
+        case "select": return "combobox";
+        case "textarea": return "textbox";
+        case "summary": return "button";
+        default: return "";
+      }
+    }
+
+    function readFiducials() {
+      return FIDUCIAL_IDS.map((id) => {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { id, x: r.left, y: r.top, w: r.width, h: r.height };
+      }).filter(Boolean);
+    }
+
+    function findMarkers() {
+      const out = [];
+      for (const el of document.querySelectorAll("*")) {
+        const cls = el.className;
+        if (typeof cls !== "string" || cls.length === 0) continue;
+        if (!MARKER_REGEX.test(cls)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 4 || r.height < 4) continue;
+        out.push(el);
+      }
+      return out;
+    }
+
+    function resolveAnchor(marker) {
+      const r = marker.getBoundingClientRect();
+      const probes = [
+        [r.left + r.width / 2, r.bottom + 2],
+        [r.right + 2, r.top + r.height / 2],
+        [r.right + 2, r.bottom + 2],
+        [r.left + r.width / 2, r.top + r.height / 2],
+      ];
+      function isInteractive(el) {
+        if (!el || !el.tagName) return false;
+        const tag = el.tagName.toLowerCase();
+        if (
+          tag === "a" || tag === "button" || tag === "input" ||
+          tag === "select" || tag === "textarea" || tag === "summary"
+        ) {
+          return true;
+        }
+        if (tag === "body" || tag === "html") return false;
+        return (
+          el.hasAttribute("tabindex") || el.hasAttribute("role") ||
+          el.hasAttribute("onclick") || el.isContentEditable
+        );
+      }
+      for (const [px, py] of probes) {
+        const hit = document.elementFromPoint(px, py);
+        let cur = hit;
+        let walked = 0;
+        while (cur && walked < 8) {
+          if (isInteractive(cur)) return cur;
+          cur = cur.parentElement;
+          walked++;
+        }
+      }
+      return null;
+    }
+
+    function serializeAnchors(markers) {
+      const hiddenStyles = markers.map((m) => m.style.visibility);
+      markers.forEach((m) => (m.style.visibility = "hidden"));
+      try {
+        const seen = new Set();
+        const anchors = [];
+        for (const marker of markers) {
+          const target = resolveAnchor(marker);
+          if (!target || seen.has(target)) continue;
+          seen.add(target);
+          const r = target.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) continue;
+          const label =
+            target.getAttribute("aria-label") ||
+            target.getAttribute("title") ||
+            (target.textContent || "").trim().slice(0, 40);
+          anchors.push({
+            tag: target.tagName.toLowerCase(),
+            role: target.getAttribute("role") || implicitRole(target),
+            rect: [
+              Math.round(r.left * 100) / 100,
+              Math.round(r.top * 100) / 100,
+              Math.round(r.width * 100) / 100,
+              Math.round(r.height * 100) / 100
+            ],
+            label,
+            marker: (marker.textContent || "").trim()
+          });
+        }
+        return anchors;
+      } finally {
+        markers.forEach((m, i) => (m.style.visibility = hiddenStyles[i] || ""));
+      }
+    }
+
+    const docH = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    const markers = findMarkers();
+    return {
+      anchors: serializeAnchors(markers),
+      fiducials: readFiducials(),
+      viewport: {
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        dpr: window.devicePixelRatio,
+        scrollHeight: docH,
+        atBottom: window.scrollY + window.innerHeight >= docH - 10
+      }
+    };
+    """
+}

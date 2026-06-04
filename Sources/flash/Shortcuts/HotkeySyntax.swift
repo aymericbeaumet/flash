@@ -104,4 +104,3 @@ enum HotkeySyntax {
     "m": 0x2E, ".": 0x2F, "`": 0x32,
   ]
 }
-

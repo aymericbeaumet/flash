@@ -27,7 +27,10 @@ public protocol JumpProvider: AnyObject {
   /// host terminal doesn't expose to AX at all.
   var resultsAreVolatile: Bool { get }
   func supports(_ context: AppContext) -> Bool
-  func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget]
+  /// Return a complete deterministic target set for the current UI state.
+  /// Providers must not deadline-truncate results; a slow complete walk is
+  /// preferable to serving a partial, activation-dependent hint set.
+  func discover(in context: AppContext) throws -> [JumpTarget]
 }
 
 extension JumpProvider {

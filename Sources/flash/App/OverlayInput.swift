@@ -22,7 +22,8 @@ enum OverlayInputInterpreter {
       break
     }
 
-    let commandModifiers = modifierFlags
+    let commandModifiers =
+      modifierFlags
       .intersection(.deviceIndependentFlagsMask)
       .intersection([.command, .control, .option])
     if !commandModifiers.isEmpty {

@@ -774,7 +774,7 @@ final class AppMonitor {
     for (providerOrder, provider) in providers.enumerated() {
       let providerStart = profiler?.intervalStart()
       let results =
-        (try? provider.discover(in: focused, deadline: .distantFuture)) ?? []
+        (try? provider.discover(in: focused)) ?? []
       collected.append(
         contentsOf: results.enumerated().map { ordinal, target in
           TargetCandidate(
@@ -916,7 +916,12 @@ struct WindowSnapshot {
     guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
       return WindowSnapshot(entries: [], visibleRegions: [:], activeWindowFrame: nil)
     }
+    return build(
+      entries: entries(from: info, primaryH: primaryH),
+      focusedPid: focusedPid)
+  }
 
+  static func entries(from info: [[String: Any]], primaryH: CGFloat) -> [Entry] {
     var entries: [Entry] = []
     entries.reserveCapacity(info.count)
     for w in info {
@@ -936,7 +941,10 @@ struct WindowSnapshot {
       )
       entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns))
     }
+    return entries
+  }
 
+  static func build(entries: [Entry], focusedPid: pid_t) -> WindowSnapshot {
     // The "active window" is the front-most layer-0 window owned by the
     // focused pid. CGWindowList returns windows in z-order, so the
     // first hit is the right one. Every other window — including other

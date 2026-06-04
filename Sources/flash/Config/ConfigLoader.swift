@@ -18,8 +18,7 @@ enum ConfigLoader {
   /// config AND creation of a higher-precedence one (e.g. user adds
   /// `$XDG_CONFIG_HOME/flash/flash.toml` while running with
   /// `~/.flash.toml`).
-  static func candidatePaths(arguments: [String], environment: [String: String]) -> [URL]
-  {
+  static func candidatePaths(arguments: [String], environment: [String: String]) -> [URL] {
     for arg in arguments.dropFirst() {
       if arg.hasPrefix("--config=") {
         let p = String(arg.dropFirst("--config=".count))

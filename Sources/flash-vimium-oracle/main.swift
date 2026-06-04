@@ -1,26 +1,11 @@
 import AppKit
 import ApplicationServices
+import FlashBrowserTestSupport
 import FlashCore
-import FlashE2EKit
 import FlashProviders
 import Foundation
 
-// MARK: - Why this exists
-//
-// Iterating on `AccessibilityProvider`'s hint-filtering logic without
-// an oracle is risky — it's easy to drop a class of legitimate hints
-// (regression) or let through decorative noise (over-match). This
-// runner pins both ends down:
-//   - Vimium-FF (real, signed) is the source of truth for "what should
-//     be hinted" on a given page
-//   - Flash's AX walker runs in parallel against the same Firefox
-//     window
-//   - A per-fixture diff is reported against strict ISO: any unmatched
-//     element on either side is a failure unless covered by an
-//     allow-list JSON sidecar
-//
-// See Scripts/test-integration-browser.sh for the all-in-one provision/build/run
-// driver — it preserves the TCC Accessibility grant across rebuilds.
+// MARK: - Output
 
 private enum Colour {
   static let red = "\u{1B}[31m"
@@ -30,21 +15,39 @@ private enum Colour {
   static let reset = "\u{1B}[0m"
 }
 
+private let outputLock = NSLock()
+
 private func log(_ s: String) {
+  outputLock.lock()
   print(s)
   fflush(stdout)
+  outputLock.unlock()
 }
+
 private func logErr(_ s: String) {
+  outputLock.lock()
   if let data = (s + "\n").data(using: .utf8) {
     FileHandle.standardError.write(data)
   }
+  outputLock.unlock()
 }
 
 final class CLIRecorder: FirefoxE2ERecorder {
-  private(set) var failures: [String] = []
+  private let lock = NSLock()
+  private var storedFailures: [String] = []
+
+  var failures: [String] {
+    lock.lock()
+    defer { lock.unlock() }
+    return storedFailures
+  }
+
   func pass(_ msg: String) { log("\(Colour.green)✓\(Colour.reset) \(msg)") }
+
   func fail(_ msg: String) {
-    failures.append(msg)
+    lock.lock()
+    storedFailures.append(msg)
+    lock.unlock()
     log("\(Colour.red)✗\(Colour.reset) \(msg)")
   }
 }
@@ -52,13 +55,35 @@ final class CLIRecorder: FirefoxE2ERecorder {
 // MARK: - Args
 
 struct Args {
-  var fixtures: [OracleFixture]
+  var fixturesDirectory: URL
+  var fixtureNames: [String]
   var updateAllowList: Bool
+  var jobs: Int
+  var browserAppPath: String
+}
+
+private func defaultFixturesDirectory() -> URL {
+  URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    .appendingPathComponent("Tests/BrowserSnapshots", isDirectory: true)
+}
+
+private func defaultJobs() -> Int {
+  let cores = ProcessInfo.processInfo.activeProcessorCount
+  return min(8, max(2, cores / 2))
+}
+
+private func parseJobs(_ raw: String) -> Int? {
+  if raw == "auto" { return defaultJobs() }
+  guard let value = Int(raw), value > 0 else { return nil }
+  return value
 }
 
 private func parseArgs() -> Args {
-  var fixtures: [OracleFixture] = OracleFixture.allCases
+  var fixturesDirectory = defaultFixturesDirectory()
+  var fixtureNames: [String] = []
   var updateAllowList = false
+  var jobs = defaultJobs()
+  var browserAppPath = BrowserTestProfile.defaultAppPath()
   var iter = CommandLine.arguments.dropFirst().makeIterator()
   while let arg = iter.next() {
     switch arg {
@@ -67,36 +92,44 @@ private func parseArgs() -> Args {
         logErr("--fixture requires a value")
         exit(2)
       }
-      guard
-        let f = OracleFixture.allCases.first(where: {
-          $0.rawValue == name || $0.displayName == name
-        })
-      else {
-        let known = OracleFixture.allCases.map { $0.displayName }.joined(separator: ", ")
-        logErr("Unknown fixture: \(name). Known: \(known)")
+      fixtureNames.append(name)
+    case "--fixtures-dir":
+      guard let path = iter.next() else {
+        logErr("--fixtures-dir requires a value")
         exit(2)
       }
-      fixtures = [f]
+      fixturesDirectory = URL(fileURLWithPath: path)
+    case "--jobs":
+      guard let raw = iter.next(), let parsed = parseJobs(raw) else {
+        logErr("--jobs requires a positive integer or 'auto'")
+        exit(2)
+      }
+      jobs = parsed
+    case "--browser-app":
+      guard let path = iter.next() else {
+        logErr("--browser-app requires a value")
+        exit(2)
+      }
+      browserAppPath = path
     case "--update-allow-list":
       updateAllowList = true
     case "--help", "-h":
       log(
         """
-        flash-vimium-oracle [--fixture <name>] [--update-allow-list]
+        flash-vimium-oracle [--fixture <name>] [--fixtures-dir <path>] [--jobs <n|auto>]
 
-        Compare Flash's AX-derived hint set against what Vimium-FF would
-        hint on each fixture page. Strict ISO: any divergence not in the
-        fixture's allow-list JSON sidecar fails the runner.
+        Compare Flash's AX-derived hint set against what Vimium-FF hints
+        on each browser fixture. Strict ISO: any divergence not covered
+        by a fixture allow-list JSON sidecar fails the runner.
 
-          --fixture <name>      Run a single fixture (default: all).
-          --update-allow-list   Print suggested allow-list JSON entries to
-                                stderr and exit 0 even when divergences exist
-                                (use to seed a new fixture's sidecar).
-
-        Firefox launches once at the start of the run (in background via
-        `open -g`) and stays open. Each fixture re-uses the same window —
-        the runner navigates between URLs via Marionette, so neither focus
-        nor a new Firefox process is needed per fixture.
+          --fixture <name>      Run one fixture. May be repeated.
+          --fixtures-dir <path> Directory containing manifest.json,
+                                snapshots/, and allowlists/.
+          --jobs <n|auto>      Parallel Firefox workers. Default: auto.
+          --browser-app <path> Firefox-family .app path. Default: Firefox.app,
+                                then Firefox Developer Edition.app.
+          --update-allow-list  Print suggested allow-list JSON entries to
+                                stderr and exit 0 even when divergences exist.
         """)
       exit(0)
     default:
@@ -104,21 +137,18 @@ private func parseArgs() -> Args {
       exit(2)
     }
   }
-  return Args(fixtures: fixtures, updateAllowList: updateAllowList)
+  return Args(
+    fixturesDirectory: fixturesDirectory,
+    fixtureNames: fixtureNames,
+    updateAllowList: updateAllowList,
+    jobs: jobs,
+    browserAppPath: browserAppPath)
 }
 
 // MARK: - Preflight
 
 private func ensureAccessibilityOrExit() {
   if AXIsProcessTrusted() { return }
-  // Not trusted yet. Re-check via the prompting variant — macOS will
-  // pop its canonical "Allow X to control your computer using
-  // Accessibility features?" dialog with a button that takes the user
-  // straight to the right entry in System Settings. The call returns
-  // immediately; it doesn't block on the user. On a fresh install this
-  // is the most reliable path through the TCC dance: the system itself
-  // adds the entry (it doesn't rely on the user finding the bundle in
-  // the file picker).
   let opts: NSDictionary = [
     kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
   ]
@@ -144,17 +174,14 @@ private func ensureAccessibilityOrExit() {
 
     Open System Settings → Privacy & Security → Accessibility → + →
     ⌘⇧G → paste the path above → Open → toggle the new entry on.
-
-    The bundle is codesigned with the stable "Flash Dev" identity so
-    the grant persists across rebuilds.
     """)
   exit(2)
 }
 
-private func ensureOracleReadyOrExit() {
+private func ensureBrowserProfileReadyOrExit(appPath: String) {
   do {
-    try OracleProfile.verifyReady()
-  } catch let e as OracleProfile.SetupError {
+    try BrowserTestProfile.verifyReady(appPath: appPath)
+  } catch let e as BrowserTestProfile.SetupError {
     logErr("\(Colour.red)\(e)\(Colour.reset)")
     exit(2)
   } catch {
@@ -163,33 +190,34 @@ private func ensureOracleReadyOrExit() {
   }
 }
 
-// MARK: - Session + per-fixture run
+// MARK: - Session + worker state
 
-/// Long-lived Firefox session. One Firefox process for the whole
-/// corpus run; each fixture navigates the same window via Marionette
-/// rather than spawning its own browser. Big win: ~5s of launch cost
-/// paid once instead of per fixture, no per-fixture process churn,
-/// and the user sees at most one Firefox icon in the dock.
 final class OracleSession {
+  let workerID: Int
   let firefox: NSRunningApplication
   let marionette: MarionetteClient
   let context: AppContext
+  let profilePath: String
 
-  init(firefox: NSRunningApplication, marionette: MarionetteClient, context: AppContext) {
+  init(
+    workerID: Int,
+    firefox: NSRunningApplication,
+    marionette: MarionetteClient,
+    context: AppContext,
+    profilePath: String
+  ) {
+    self.workerID = workerID
     self.firefox = firefox
     self.marionette = marionette
     self.context = context
+    self.profilePath = profilePath
   }
 
-  static func start() throws -> OracleSession {
-    let profilePath = OracleProfile.profileDirectory.path
-    // Wipe stale MarionetteActivePort from any prior run so we don't
-    // race-read the previous port.
-    let portFile = (profilePath as NSString)
-      .appendingPathComponent("MarionetteActivePort")
-    try? FileManager.default.removeItem(atPath: portFile)
+  static func start(workerID: Int, appPath: String) throws -> OracleSession {
+    let profile = try BrowserTestProfile.prepareWorkerProfile(workerID: workerID)
+    let profilePath = profile.path
     let firefox = try FirefoxHarness.launchWithProfile(
-      appPath: OracleProfile.appPath,
+      appPath: appPath,
       profilePath: profilePath,
       url: URL(string: "about:blank")!,
       extraArgs: [],
@@ -204,7 +232,11 @@ final class OracleSession {
     try marionette.newSession()
     let context = FirefoxHarness.makeContext(for: firefox)
     return OracleSession(
-      firefox: firefox, marionette: marionette, context: context)
+      workerID: workerID,
+      firefox: firefox,
+      marionette: marionette,
+      context: context,
+      profilePath: profilePath)
   }
 
   func stop() {
@@ -224,82 +256,160 @@ final class OracleSession {
   }
 }
 
+private final class FixtureQueue {
+  private let lock = NSLock()
+  private let fixtures: [(Int, BrowserFixture)]
+  private var nextIndex = 0
+
+  init(fixtures: [BrowserFixture]) {
+    self.fixtures = fixtures.enumerated().map { ($0.offset, $0.element) }
+  }
+
+  func next() -> (Int, BrowserFixture)? {
+    lock.lock()
+    defer { lock.unlock() }
+    guard nextIndex < fixtures.count else { return nil }
+    let item = fixtures[nextIndex]
+    nextIndex += 1
+    return item
+  }
+}
+
+private struct FixtureSummary {
+  let index: Int
+  let name: String
+  let workerID: Int
+  let duration: TimeInterval
+  let hardFailures: Int
+}
+
+private final class SummaryStore {
+  private let lock = NSLock()
+  private var summaries: [FixtureSummary] = []
+  private var sessionFailures: [String] = []
+
+  func append(_ summary: FixtureSummary) {
+    lock.lock()
+    summaries.append(summary)
+    lock.unlock()
+  }
+
+  func failSession(_ message: String) {
+    lock.lock()
+    sessionFailures.append(message)
+    lock.unlock()
+  }
+
+  var all: [FixtureSummary] {
+    lock.lock()
+    defer { lock.unlock() }
+    return summaries
+  }
+
+  var failures: [String] {
+    lock.lock()
+    defer { lock.unlock() }
+    return sessionFailures
+  }
+}
+
+// MARK: - Per-fixture run
+
 private func runFixture(
-  _ fixture: OracleFixture,
+  index: Int,
+  fixture: BrowserFixture,
+  fixturesDirectory: URL,
   session: OracleSession,
   provider: AccessibilityProvider,
   recorder: CLIRecorder,
-  updateAllowList: Bool,
-  isFirst: Bool
-) -> OracleDiff.Result? {
-  log("\n\(Colour.bold)Running fixture: \(fixture.displayName)\(Colour.reset)")
+  updateAllowList: Bool
+) -> FixtureSummary {
+  let start = Date()
+  log(
+    "\n\(Colour.bold)[w\(session.workerID)] Running fixture \(index + 1): "
+      + "\(fixture.displayName)\(Colour.reset)")
 
-  // Spin up a per-fixture localhost server with this fixture's HTML.
-  // Firefox MV2 content scripts don't run on data: URLs, so we need a
-  // real origin — fresh port per fixture so we don't reuse a stale
-  // connection from the previous load.
+  let html: String
+  do {
+    html = try fixture.html(fixturesDirectory: fixturesDirectory)
+  } catch {
+    recorder.fail("[w\(session.workerID)] \(fixture.displayName): fixture read failed: \(error)")
+    return FixtureSummary(
+      index: index,
+      name: fixture.displayName,
+      workerID: session.workerID,
+      duration: Date().timeIntervalSince(start),
+      hardFailures: 1)
+  }
+
   let server: FixtureServer
   do {
-    server = try FixtureServer(html: fixture.html())
+    server = try FixtureServer(html: html)
   } catch {
-    recorder.fail("fixture server failed: \(error)")
-    return nil
+    recorder.fail("[w\(session.workerID)] \(fixture.displayName): fixture server failed: \(error)")
+    return FixtureSummary(
+      index: index,
+      name: fixture.displayName,
+      workerID: session.workerID,
+      duration: Date().timeIntervalSince(start),
+      hardFailures: 1)
   }
   defer { server.stop() }
 
-  // Pick a target tab. The first fixture re-uses Firefox's initial
-  // tab; every subsequent fixture opens a fresh tab. All tabs stay
-  // open across the run so the user can inspect any fixture's live
-  // page state in Firefox after the oracle finishes.
   do {
-    if !isFirst {
-      let handle = try session.marionette.newWindow(type: "tab")
-      try session.marionette.switchToWindow(handle: handle)
-    }
     try session.marionette.navigate(url: server.url)
   } catch {
-    recorder.fail("tab navigate failed: \(error)")
-    return nil
+    recorder.fail("[w\(session.workerID)] \(fixture.displayName): navigate failed: \(error)")
+    return FixtureSummary(
+      index: index,
+      name: fixture.displayName,
+      workerID: session.workerID,
+      duration: Date().timeIntervalSince(start),
+      hardFailures: 1)
   }
 
   let snapshot: OracleSnapshot
   do {
     snapshot = try VimiumOracle.capture(
-      firefox: session.firefox, context: session.context, provider: provider,
+      firefox: session.firefox,
+      context: session.context,
+      provider: provider,
       marionette: session.marionette)
   } catch {
-    recorder.fail("capture failed: \(error)")
-    return nil
+    recorder.fail("[w\(session.workerID)] \(fixture.displayName): capture failed: \(error)")
+    return FixtureSummary(
+      index: index,
+      name: fixture.displayName,
+      workerID: session.workerID,
+      duration: Date().timeIntervalSince(start),
+      hardFailures: 1)
   }
 
   let residual = String(format: "%.2f", snapshot.fiducialResidual)
-  recorder.pass("fiducial residual: \(residual)pt (threshold 2pt)")
+  recorder.pass("[w\(session.workerID)] \(fixture.displayName): fiducial residual \(residual)pt")
   if snapshot.fiducialResidual > 2 {
     recorder.fail(
-      "fiducial residual \(residual)pt > 2pt — coordinate transform is "
-        + "unreliable; divergences below are likely spurious")
+      "[w\(session.workerID)] \(fixture.displayName): fiducial residual "
+        + "\(residual)pt > 2pt")
   }
   recorder.pass(
-    "vimium=\(snapshot.vimiumAnchors.count) anchors, "
-      + "flash=\(snapshot.flashTargets.count) AX targets")
+    "[w\(session.workerID)] \(fixture.displayName): vimium="
+      + "\(snapshot.vimiumAnchors.count) anchors, flash="
+      + "\(snapshot.flashTargets.count) AX targets")
 
-  // Vimium only ever hints page DOM, never Firefox chrome. Keep
-  // Flash hits whose CENTER lies inside the projected viewport —
-  // `intersects` was too lax and let in elements partially scrolled
-  // off the top of the viewport (rects with negative y but height
-  // crossing y=0) that Vimium correctly skips.
   let pageRect = snapshot.pageScreenRect
   let pageFlash = snapshot.flashTargets.filter {
     pageRect.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
   }
   recorder.pass(
-    "page rect \(snapshot.pageScreenRect) — \(pageFlash.count)/"
-      + "\(snapshot.flashTargets.count) flash targets in page area")
+    "[w\(session.workerID)] \(fixture.displayName): page targets "
+      + "\(pageFlash.count)/\(snapshot.flashTargets.count)")
   assertHintWidths(fixture: fixture, snapshot: snapshot, recorder: recorder)
 
-  let allowList = fixture.loadAllowList()
+  let allowList = fixture.loadAllowList(fixturesDirectory: fixturesDirectory)
   let result = OracleDiff.classify(
-    vimium: snapshot.vimiumAnchors, flash: pageFlash,
+    vimium: snapshot.vimiumAnchors,
+    flash: pageFlash,
     allowList: allowList)
   OracleDiff.report(result, fixtureName: fixture.displayName, recorder: recorder)
 
@@ -309,18 +419,23 @@ private func runFixture(
     logErr(json)
     logErr("--- end ---\n")
   }
-  return result
+  return FixtureSummary(
+    index: index,
+    name: fixture.displayName,
+    workerID: session.workerID,
+    duration: Date().timeIntervalSince(start),
+    hardFailures: result.hardFailures.count)
 }
 
 private func assertHintWidths(
-  fixture: OracleFixture,
+  fixture: BrowserFixture,
   snapshot: OracleSnapshot,
   recorder: CLIRecorder
 ) {
-  guard fixture == .baselineSynthetic else { return }
+  guard fixture.name.hasPrefix("baseline-synthetic") else { return }
   for sample in snapshot.hintWidthSamples {
     let line =
-      "hint width scroll #\(sample.scrollIndex): "
+      "\(fixture.displayName): hint width viewport #\(sample.scrollIndex): "
       + "vimium targets=\(sample.vimiumTargetCount) max=\(sample.vimiumMaxLabelLength), "
       + "flash raw=\(sample.flashRawTargetCount) "
       + "visible=\(sample.flashTargetCount) max=\(sample.flashMaxLabelLength)"
@@ -336,50 +451,98 @@ private func assertHintWidths(
 
 let args = parseArgs()
 ensureAccessibilityOrExit()
-ensureOracleReadyOrExit()
+ensureBrowserProfileReadyOrExit(appPath: args.browserAppPath)
 
-log("\(Colour.bold)Flash Vimium Oracle\(Colour.reset)")
-log("Fixtures: \(args.fixtures.map { $0.displayName }.joined(separator: ", "))")
-
-let provider = AccessibilityProvider()
-let recorder = CLIRecorder()
-
-// One Firefox launch for the whole corpus run.
-let session: OracleSession
+let catalog: BrowserFixtureCatalog
 do {
-  session = try OracleSession.start()
+  catalog = try BrowserFixtureCatalog.load(from: args.fixturesDirectory)
 } catch {
-  logErr("\(Colour.red)Failed to start Firefox session: \(error)\(Colour.reset)")
+  logErr("\(Colour.red)Could not load browser fixture catalog: \(error)\(Colour.reset)")
   exit(2)
 }
-defer { session.stop() }
 
-var anyHardFailure = false
-for (idx, fixture) in args.fixtures.enumerated() {
-  guard
-    let result = runFixture(
-      fixture, session: session, provider: provider, recorder: recorder,
-      updateAllowList: args.updateAllowList, isFirst: idx == 0)
-  else {
-    anyHardFailure = true
-    continue
-  }
-  if !result.hardFailures.isEmpty {
-    anyHardFailure = true
+let fixtures: [BrowserFixture]
+do {
+  fixtures = try catalog.select(named: args.fixtureNames)
+} catch {
+  logErr("\(Colour.red)\(error)\(Colour.reset)")
+  exit(2)
+}
+
+let jobs = min(max(1, args.jobs), max(1, fixtures.count))
+log("\(Colour.bold)Flash Vimium Oracle\(Colour.reset)")
+log("Fixtures: \(fixtures.count)")
+log("Workers: \(jobs)")
+log("Fixtures dir: \(args.fixturesDirectory.path)")
+log("Firefox app: \(args.browserAppPath)")
+
+private var sessions: [OracleSession] = []
+private let summaries = SummaryStore()
+private let recorder = CLIRecorder()
+private let runStart = Date()
+
+for workerID in 0..<jobs {
+  do {
+    let session = try OracleSession.start(workerID: workerID, appPath: args.browserAppPath)
+    sessions.append(session)
+  } catch {
+    let msg = "[w\(workerID)] failed to start Firefox session: \(error)"
+    summaries.failSession(msg)
+    logErr("\(Colour.red)\(msg)\(Colour.reset)")
   }
 }
 
+if sessions.isEmpty {
+  logErr("\(Colour.red)No Firefox worker sessions could be started\(Colour.reset)")
+  exit(2)
+}
+
+private let queue = FixtureQueue(fixtures: fixtures)
+DispatchQueue.concurrentPerform(iterations: sessions.count) { workerIndex in
+  let session = sessions[workerIndex]
+  defer { session.stop() }
+
+  let provider = AccessibilityProvider()
+  while let (index, fixture) = queue.next() {
+    let summary = runFixture(
+      index: index,
+      fixture: fixture,
+      fixturesDirectory: args.fixturesDirectory,
+      session: session,
+      provider: provider,
+      recorder: recorder,
+      updateAllowList: args.updateAllowList)
+    summaries.append(summary)
+  }
+}
+
+private let elapsed = Date().timeIntervalSince(runStart)
+private let ordered = summaries.all.sorted { $0.index < $1.index }
+private let hardFailures =
+  ordered.reduce(0) { $0 + $1.hardFailures } + summaries.failures.count
+
 log("")
-if args.updateAllowList && anyHardFailure {
+log("\(Colour.bold)Summary\(Colour.reset)")
+for summary in ordered {
+  let status = summary.hardFailures == 0 ? "PASS" : "FAIL"
+  let seconds = String(format: "%.2f", summary.duration)
+  log(
+    "\(status) [w\(summary.workerID)] \(summary.name) "
+      + "\(seconds)s failures=\(summary.hardFailures)")
+}
+let elapsedString = String(format: "%.2f", elapsed)
+log("Total: \(fixtures.count) fixture(s), \(jobs) worker(s), \(elapsedString)s")
+
+if args.updateAllowList && hardFailures > 0 {
   log(
     "\(Colour.yellow)\(Colour.bold)REVIEW\(Colour.reset) — divergences "
       + "printed above; commit allow-list sidecars after review")
   exit(0)
 }
-if anyHardFailure {
+if hardFailures > 0 {
   log(
     "\(Colour.red)\(Colour.bold)FAIL\(Colour.reset) — "
-      + "\(recorder.failures.count) assertion(s) failed")
+      + "\(recorder.failures.count + summaries.failures.count) assertion(s) failed")
   exit(1)
 }
 log("\(Colour.green)\(Colour.bold)PASS\(Colour.reset) — strict ISO held on all fixtures")

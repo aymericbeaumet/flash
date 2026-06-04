@@ -22,7 +22,7 @@ private final class StubProvider: JumpProvider {
 
   func supports(_ context: AppContext) -> Bool { false }
 
-  func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget] {
+  func discover(in context: AppContext) throws -> [JumpTarget] {
     []
   }
 }

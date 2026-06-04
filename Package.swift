@@ -9,7 +9,7 @@ let package = Package(
     .executable(name: "flash-vimium-oracle", targets: ["flash-vimium-oracle"]),
     .library(name: "FlashCore", targets: ["FlashCore"]),
     .library(name: "FlashProviders", targets: ["FlashProviders"]),
-    .library(name: "FlashE2EKit", targets: ["FlashE2EKit"]),
+    .library(name: "FlashBrowserTestSupport", targets: ["FlashBrowserTestSupport"]),
   ],
   targets: [
     .executableTarget(
@@ -19,7 +19,7 @@ let package = Package(
     ),
     .executableTarget(
       name: "flash-vimium-oracle",
-      dependencies: ["FlashCore", "FlashProviders", "FlashE2EKit"],
+      dependencies: ["FlashCore", "FlashProviders", "FlashBrowserTestSupport"],
       path: "Sources/flash-vimium-oracle"
     ),
     .target(
@@ -32,14 +32,13 @@ let package = Package(
       path: "Sources/FlashProviders"
     ),
     .target(
-      name: "FlashE2EKit",
+      name: "FlashBrowserTestSupport",
       dependencies: ["FlashCore", "FlashProviders"],
-      path: "Sources/FlashE2EKit",
-      resources: [.copy("Snapshots")]
+      path: "Sources/FlashBrowserTestSupport"
     ),
     .testTarget(
       name: "FlashTests",
-      dependencies: ["flash", "FlashCore", "FlashProviders", "FlashE2EKit"],
+      dependencies: ["flash", "FlashCore", "FlashProviders", "FlashBrowserTestSupport"],
       path: "Tests/FlashTests"
     ),
   ],
