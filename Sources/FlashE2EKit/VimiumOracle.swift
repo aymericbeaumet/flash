@@ -82,8 +82,9 @@ public enum VimiumOracle {
     }
   }
 
-  private static let readyPrefix = "FLASH_ORACLE_READY"
-  private static let anchorsPrefix = "FLASH_ORACLE_ANCHORS:"
+  private static let readyTitle = "FLASH_ORACLE_READY"
+  private static let anchorsReadyTitle = "FLASH_ORACLE_ANCHORS_READY"
+  private static let payloadLabelPrefix = "FLASH_ORACLE_PAYLOAD|"
   private static let fiducialIDs = [
     "__flash_oracle_fiducial_a__",
     "__flash_oracle_fiducial_b__",
@@ -96,51 +97,94 @@ public enum VimiumOracle {
     firefox: NSRunningApplication,
     context: AppContext,
     provider: AccessibilityProvider,
-    readyTimeout: TimeInterval = 15,
+    readyTimeout: TimeInterval = 30,
     anchorsTimeout: TimeInterval = 10
   ) throws -> OracleSnapshot {
     let pid = firefox.processIdentifier
 
     // 1. Wait for companion to signal READY (page idle + companion mounted).
-    guard
-      waitForTitle(
-        pid: pid, contains: readyPrefix,
-        deadline: Date().addingTimeInterval(readyTimeout))
-    else {
+    //    Log every distinct title we see so a timeout is diagnosable —
+    //    "AX title was X" tells us instantly whether Firefox loaded the
+    //    fixture, whether the companion fired, whether Firefox is
+    //    showing a different window (about:welcome, etc.).
+    var lastSeenTitle = ""
+    if !waitForTitle(
+      pid: pid, contains: readyTitle,
+      deadline: Date().addingTimeInterval(readyTimeout),
+      onPoll: { title in
+        if title != lastSeenTitle {
+          lastSeenTitle = title
+          FileHandle.standardError.write(
+            Data("[oracle] AX window title: \(title)\n".utf8))
+        }
+      })
+    {
       throw CaptureError.readyTimedOut
     }
 
-    // 2. Snapshot Flash AX hints *before* Vimium adds marker DOM. Failing
-    //    this ordering would walk Vimium's own markers into the AX set.
-    firefox.activate(options: [])
-    Thread.sleep(forTimeInterval: 0.25)
+    // 2. Snapshot Flash AX hints *before* Vimium adds marker DOM —
+    //    walking Vimium's own marker DOM into the AX set would be a
+    //    nonsense input for the diff. AX walks work regardless of
+    //    focus, so do this while we're still backgrounded.
     let flashTargets =
       (try? provider.discover(in: context, deadline: Date().addingTimeInterval(3))) ?? []
 
-    // 3. Trigger Vimium hint mode.
+    // 3. Briefly bring Firefox foreground so the 'f' keystroke routes
+    //    to its focused widget. postToPid is unreliable when the app
+    //    isn't frontmost — the OS holds the event but the app's event
+    //    loop doesn't dispatch to the focused window. Restore the
+    //    user's previous frontmost app immediately after — when the
+    //    Firefox window is off-screen, all the user sees is a brief
+    //    menu-bar flicker.
+    let prevFrontmost = NSWorkspace.shared.frontmostApplication
+    firefox.activate()
+    Thread.sleep(forTimeInterval: 0.4)
     postKey(kVK_ANSI_F, to: pid)
+    Thread.sleep(forTimeInterval: 0.2)
+    postKey(kVK_ANSI_F, to: pid)
+    defer { prevFrontmost?.activate() }
 
-    // 4. Wait for anchors payload.
-    guard
-      let raw = waitForTitlePayload(
-        pid: pid, prefix: anchorsPrefix,
-        deadline: Date().addingTimeInterval(anchorsTimeout))
-    else {
+    // 4. Wait for the companion to signal ANCHORS_READY. The title is
+    //    a fixed marker; the actual payload lives in an aria-label on
+    //    an off-screen div the companion mounts (kAXDescription on
+    //    that element gives us the full JSON without the ~300-char
+    //    truncation macOS imposes on window titles).
+    var lastAnchorTitle = ""
+    if !waitForTitle(
+      pid: pid, contains: anchorsReadyTitle,
+      deadline: Date().addingTimeInterval(anchorsTimeout),
+      onPoll: { title in
+        if title != lastAnchorTitle {
+          lastAnchorTitle = title
+          FileHandle.standardError.write(
+            Data("[oracle] post-'f' AX title: \(title)\n".utf8))
+        }
+      })
+    {
       postKey(kVK_Escape, to: pid)
       throw CaptureError.anchorsTimedOut
     }
 
-    // 5. Decode.
+    // 5+6. One AX tree walk: collect the payload div (by description
+    //      prefix) AND the fiducials. Cheaper than two passes, and
+    //      ordering doesn't matter because the companion mounts both
+    //      before flipping the title to ANCHORS_READY.
+    let walked = walkForOracleMarkers(pid: pid, fiducialIDs: fiducialIDs)
+    guard let payloadDesc = walked.payload else {
+      postKey(kVK_Escape, to: pid)
+      throw CaptureError.decodeFailed(
+        "payload div not found in AX tree (companion crashed?)")
+    }
+    let rawJSON = String(payloadDesc.dropFirst(payloadLabelPrefix.count))
     let decoded: ExtensionPayload
     do {
-      decoded = try JSONDecoder().decode(ExtensionPayload.self, from: Data(raw.utf8))
+      decoded = try JSONDecoder().decode(
+        ExtensionPayload.self, from: Data(rawJSON.utf8))
     } catch {
       postKey(kVK_Escape, to: pid)
       throw CaptureError.decodeFailed(String(describing: error))
     }
-
-    // 6. Measure fiducials via AX.
-    let measured = findFiducials(pid: pid, ids: fiducialIDs)
+    let measured = walked.fiducials
     let missing = fiducialIDs.filter { measured[$0] == nil }
     if !missing.isEmpty {
       postKey(kVK_Escape, to: pid)
@@ -219,12 +263,13 @@ public enum VimiumOracle {
   // MARK: - AX helpers
 
   private static func waitForTitle(
-    pid: pid_t, contains needle: String, deadline: Date
+    pid: pid_t, contains needle: String, deadline: Date,
+    onPoll: ((String) -> Void)? = nil
   ) -> Bool {
     while Date() < deadline {
-      if let t = readFocusedWindowTitle(pid: pid), t.contains(needle) {
-        return true
-      }
+      let t = readFocusedWindowTitle(pid: pid) ?? ""
+      onPoll?(t)
+      if t.contains(needle) { return true }
       Thread.sleep(forTimeInterval: 0.1)
     }
     return false
@@ -235,12 +280,13 @@ public enum VimiumOracle {
   /// Firefox Developer Edition" to the document title; the balanced
   /// brace walker truncates the suffix.
   private static func waitForTitlePayload(
-    pid: pid_t, prefix: String, deadline: Date
+    pid: pid_t, prefix: String, deadline: Date,
+    onPoll: ((String) -> Void)? = nil
   ) -> String? {
     while Date() < deadline {
-      if let t = readFocusedWindowTitle(pid: pid),
-        let range = t.range(of: prefix)
-      {
+      let t = readFocusedWindowTitle(pid: pid) ?? ""
+      onPoll?(t)
+      if let range = t.range(of: prefix) {
         if let json = extractJSONPrefix(String(t[range.upperBound...])) {
           return json
         }
@@ -305,24 +351,36 @@ public enum VimiumOracle {
     return titleRaw as? String
   }
 
-  private static func findFiducials(pid: pid_t, ids: [String]) -> [String: CGRect] {
+  /// Single-pass AX tree walk that collects:
+  ///   - the payload div's aria-label (description starts with PAYLOAD_LABEL_PREFIX)
+  ///   - each fiducial's screen rect (description matches one of fiducialIDs)
+  /// Bails as soon as both are satisfied to keep latency low.
+  private static func walkForOracleMarkers(
+    pid: pid_t, fiducialIDs: [String]
+  ) -> (payload: String?, fiducials: [String: CGRect]) {
     let app = AXUIElementCreateApplication(pid)
     let screenH = primaryScreenHeight()
-    var found: [String: CGRect] = [:]
-    let target = Set(ids)
+    var payload: String?
+    var fiducials: [String: CGRect] = [:]
+    let fiducialSet = Set(fiducialIDs)
     var queue: [AXUIElement] = [app]
     var visited = 0
-    let maxNodes = 8000
-    while !queue.isEmpty, visited < maxNodes, found.count < ids.count {
+    let maxNodes = 10000
+    while !queue.isEmpty, visited < maxNodes {
       let node = queue.removeFirst()
       visited += 1
       var descRaw: CFTypeRef?
       _ = AXUIElementCopyAttributeValue(
         node, kAXDescriptionAttribute as CFString, &descRaw)
-      if let desc = descRaw as? String, target.contains(desc), found[desc] == nil {
-        if let rect = rectOf(node, screenH: screenH) {
-          found[desc] = rect
+      if let desc = descRaw as? String {
+        if payload == nil, desc.hasPrefix(payloadLabelPrefix) {
+          payload = desc
+        } else if fiducialSet.contains(desc), fiducials[desc] == nil {
+          if let rect = rectOf(node, screenH: screenH) {
+            fiducials[desc] = rect
+          }
         }
+        if payload != nil, fiducials.count == fiducialIDs.count { break }
       }
       var childrenRaw: CFTypeRef?
       if AXUIElementCopyAttributeValue(
@@ -332,7 +390,7 @@ public enum VimiumOracle {
         queue.append(contentsOf: children)
       }
     }
-    return found
+    return (payload, fiducials)
   }
 
   private static func rectOf(_ element: AXUIElement, screenH: CGFloat) -> CGRect? {

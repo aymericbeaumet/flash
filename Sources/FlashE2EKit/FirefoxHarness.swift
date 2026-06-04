@@ -83,6 +83,7 @@ public enum FirefoxHarness {
     profilePath: String,
     url: URL,
     extraArgs: [String] = [],
+    offscreen: Bool = false,
     timeout: TimeInterval = 20
   ) throws -> NSRunningApplication {
     guard FileManager.default.fileExists(atPath: appPath) else {
@@ -99,18 +100,50 @@ public enum FirefoxHarness {
           userInfo: [NSLocalizedDescriptionKey: "could not read Info.plist at \(appPath)"]))
     }
 
+    // Reclaim our profile: a previous test run may have left a Firefox
+    // process holding the .parentlock, which would manifest as a
+    // "Close Firefox" dialog instead of the fixture page. Kill any
+    // process whose command-line argv includes this profile path, then
+    // remove residual lock files.
+    reapStaleProfileHolders(profilePath: profilePath)
+
+    // Snapshot whoever currently owns the foreground so we can put
+    // them back once Firefox launches. `open -g` tells Launch Services
+    // not to activate the target app — but Firefox internally calls
+    // `[NSApp activateIgnoringOtherApps:YES]` during startup and there
+    // is no flag to suppress that. Re-activating the previous app
+    // immediately after Firefox's AX window appears is the most
+    // reliable way to keep the user's terminal/editor in front.
+    let previousFrontmost = NSWorkspace.shared.frontmostApplication
+
     let preExisting = Set(
       NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
         .map { $0.processIdentifier })
 
+    // Launch via `open -g -a` rather than the firefox-bin binary
+    // directly. `-g` tells Launch Services not to bring the app
+    // forward on launch — Firefox stays in the background while we
+    // capture, so the user's foreground app (terminal, editor) keeps
+    // focus. `postToPid` delivers the 'f' keystroke into Firefox's
+    // event queue regardless of frontmost status, so Vimium still
+    // activates on the page even though Firefox is unfocused.
+    _ = binPath  // retained above for the not-installed precheck
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: binPath)
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     process.arguments =
-      ["-profile", profilePath, "-no-remote", "-new-instance"]
+      ["-g", "-a", appPath, "--args",
+       "-profile", profilePath, "-no-remote", "-new-instance"]
       + extraArgs + [url.absoluteString]
-    // Detach stdout/stderr — we don't want Firefox's chatter on our pipes.
+    // Capture stderr to a known path so failure modes (extension load
+    // errors, content-script crashes, profile init issues) are
+    // diagnosable post-mortem. stdout still goes to /dev/null — it's
+    // pure noise from Firefox's startup.
+    let stderrPath = "/tmp/firefox-oracle.stderr.log"
+    FileManager.default.createFile(atPath: stderrPath, contents: nil)
+    if let stderrHandle = FileHandle(forWritingAtPath: stderrPath) {
+      process.standardError = stderrHandle
+    }
     process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
     do { try process.run() } catch { throw LaunchError.openFailed(error) }
 
     let deadline = Date().addingTimeInterval(timeout)
@@ -118,6 +151,12 @@ public enum FirefoxHarness {
       let current = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
       if let app = current.first(where: { !preExisting.contains($0.processIdentifier) }) {
         if waitForAXWindow(app, timeout: max(1, deadline.timeIntervalSinceNow)) {
+          if offscreen {
+            moveWindowsOffscreen(pid: app.processIdentifier)
+          }
+          // Return focus to whoever owned it before — Firefox grabs
+          // the foreground during startup regardless of `open -g`.
+          previousFrontmost?.activate()
           return app
         }
         throw LaunchError.noAXWindow
@@ -125,6 +164,81 @@ public enum FirefoxHarness {
       Thread.sleep(forTimeInterval: 0.25)
     }
     throw LaunchError.openTimedOut
+  }
+
+  /// Reposition every Firefox top-level window to an off-screen
+  /// coordinate. AXPosition writes are honored by Firefox even though
+  /// the window stays renderable, and the AX tree (which is what
+  /// Flash's provider walks) is unaffected by position.
+  private static func moveWindowsOffscreen(pid: pid_t) {
+    let app = AXUIElementCreateApplication(pid)
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw)
+        == .success,
+      let windows = raw as? [AXUIElement]
+    else { return }
+    // (-9999, -9999) is comfortably outside any reasonable monitor
+    // arrangement. macOS clamps absurd values; this is large enough
+    // to be invisible but small enough that the AX subsystem doesn't
+    // refuse it.
+    var off = CGPoint(x: -9999, y: -9999)
+    guard let posValue = AXValueCreate(.cgPoint, &off) else { return }
+    for w in windows {
+      AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, posValue)
+    }
+  }
+
+  /// Find Firefox processes holding `profilePath`, terminate them, and
+  /// remove residual lock files. Safe to call when no such processes
+  /// exist (no-op). Matches by argv substring so it only touches
+  /// processes that were actually launched against this profile —
+  /// the user's daily Firefox running against their default profile
+  /// stays untouched.
+  private static func reapStaleProfileHolders(profilePath: String) {
+    let pgrep = Process()
+    pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    pgrep.arguments = ["-f", profilePath]
+    let pipe = Pipe()
+    pgrep.standardOutput = pipe
+    pgrep.standardError = FileHandle.nullDevice
+    do { try pgrep.run() } catch { return }
+    pgrep.waitUntilExit()
+    let raw = String(
+      decoding: pipe.fileHandleForReading.readDataToEndOfFile(),
+      as: UTF8.self)
+    let pids = raw.split(whereSeparator: { $0.isWhitespace })
+      .compactMap { pid_t($0) }
+      .filter { $0 != getpid() }
+    if !pids.isEmpty {
+      for p in pids { kill(p, SIGTERM) }
+      Thread.sleep(forTimeInterval: 0.5)
+      for p in pids { kill(p, SIGKILL) }
+      Thread.sleep(forTimeInterval: 0.2)
+    }
+    // Even if no processes matched, a crashed previous run can leave
+    // the lock behind. Always wipe.
+    for name in [".parentlock", "lock", "parent.lock"] {
+      try? FileManager.default.removeItem(
+        atPath: (profilePath as NSString).appendingPathComponent(name))
+    }
+    // Also remove the crash-detection breadcrumbs so the next launch
+    // doesn't show the "Troubleshoot Mode?" dialog. The max-resumed-
+    // crashes pref handles repeat crashes, but a single dirty exit
+    // can still trip the prompt before the pref takes effect.
+    //
+    // xulstore.json stores window geometry + maximized/fullscreen
+    // state across launches; wiping it forces each run to start with
+    // the default (small, windowed, non-fullscreen) layout regardless
+    // of what state the previous session left behind.
+    for name in [
+      "sessionstore-backups", "sessionCheckpoints.json",
+      "sessionstore.jsonlz4", "previous.jsonlz4", "recovery.jsonlz4",
+      "recovery.baklz4", "xulstore.json",
+    ] {
+      try? FileManager.default.removeItem(
+        atPath: (profilePath as NSString).appendingPathComponent(name))
+    }
   }
 
   private static func bundleIdentifier(forAppPath path: String) -> String? {

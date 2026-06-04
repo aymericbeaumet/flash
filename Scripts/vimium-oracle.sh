@@ -38,8 +38,12 @@ done
 
 # -- shared constants -----------------------------------------------------
 BIN_NAME="flash-vimium-oracle"
+APP_NAME="Flash Vimium Oracle"
 OUTPUT_DIR="$PROJECT_DIR/build"
-OUTPUT_BIN="$OUTPUT_DIR/$BIN_NAME"
+STAGING_APP="$OUTPUT_DIR/$APP_NAME.app"
+STAGING_BIN="$STAGING_APP/Contents/MacOS/$BIN_NAME"
+INSTALL_APP="/Applications/$APP_NAME.app"
+INSTALL_BIN="$INSTALL_APP/Contents/MacOS/$BIN_NAME"
 SIGN_IDENTITY="Flash Dev"
 KEYCHAIN_PATH="$HOME/Library/Keychains/login.keychain-db"
 BUNDLE_ID="com.flash.vimium-oracle"
@@ -152,12 +156,20 @@ user_pref("browser.safebrowsing.malware.enabled", false);
 user_pref("browser.safebrowsing.phishing.enabled", false);
 user_pref("devtools.onboarding.telemetry.logged", true);
 
+// Suppress the safe-mode / "Troubleshoot Mode?" dialog that Firefox
+// shows after a forceful exit. SIGKILL of a dirty Firefox is the
+// fallback path in FirefoxHarness.reapStaleProfileHolders, which
+// would otherwise trip this prompt on the next launch and block the
+// fixture from loading.
+user_pref("toolkit.startup.max_resumed_crashes", -1);
+user_pref("browser.sessionstore.max_resumed_crashes", -1);
+
 // Pin window geometry so fiducial calibration is stable run-to-run.
 user_pref("browser.window.width", 1280);
 user_pref("browser.window.height", 900);
 EOF
 
-# -- 3. build + codesign --------------------------------------------------
+# -- 3. build + bundle + codesign ----------------------------------------
 echo "==> Building $BIN_NAME (release)"
 swift build -c release --product "$BIN_NAME"
 
@@ -167,25 +179,113 @@ if [[ ! -f "$BIN_PATH" ]]; then
   exit 1
 fi
 
-mkdir -p "$OUTPUT_DIR"
-cp "$BIN_PATH" "$OUTPUT_BIN"
+# Assemble a real .app bundle. TCC on Sequoia/Tahoe is significantly
+# more reliable about granting Accessibility to .app bundles than to
+# standalone Mach-O binaries — the bundle's Info.plist gives Launch
+# Services a stable identity to bind the grant to. Modelled on
+# Scripts/install.sh's staging of Flash.app.
+echo "==> Assembling $APP_NAME.app"
+rm -rf "$STAGING_APP"
+mkdir -p "$STAGING_APP/Contents/MacOS"
+mkdir -p "$STAGING_APP/Contents/Resources"
+cp "$BIN_PATH" "$STAGING_BIN"
+echo "APPL????" >"$STAGING_APP/Contents/PkgInfo"
+cat >"$STAGING_APP/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>$BIN_NAME</string>
+    <key>CFBundleIdentifier</key>
+    <string>$BUNDLE_ID</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$APP_NAME</string>
+    <key>CFBundleDisplayName</key>
+    <string>$APP_NAME</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>The Flash Vimium Oracle needs Accessibility to walk Firefox's AX tree and post keystrokes that trigger Vimium hint mode.</string>
+</dict>
+</plist>
+EOF
 
-# Same identity + identifier shape as build-firefox-e2e.sh so a single
-# TCC Accessibility grant covers both binaries.
-echo "==> Codesigning with $SIGN_IDENTITY"
-codesign --force \
+# Match Scripts/install.sh's flags exactly — no hardened runtime, no
+# entitlements. Flash.app works with this minimal signature; adding
+# --options runtime here causes TCC on Sequoia/Tahoe to silently refuse
+# Accessibility grants (hardened runtime requires explicit entitlements
+# for the capabilities it locks down). --deep signs the inner binary
+# + the bundle so the Info.plist's bundle ID becomes authoritative.
+echo "==> Codesigning $APP_NAME.app with $SIGN_IDENTITY"
+codesign --force --deep \
   --sign "$SIGN_IDENTITY" \
   --identifier "$BUNDLE_ID" \
-  "$OUTPUT_BIN" >/dev/null
-codesign --verify --strict "$OUTPUT_BIN"
+  "$STAGING_APP" >/dev/null
+codesign --verify --strict "$STAGING_APP"
+
+# Install to /Applications so TCC + Launch Services see the bundle in
+# the canonical location. Flash.app does the same — running from a
+# project-local path under ~/workspace was observed to silently refuse
+# Accessibility grants on macOS Sequoia/Tahoe even with a
+# perfectly-signed bundle. Mirrors Scripts/install.sh.
+echo "==> Installing to $INSTALL_APP"
+rm -rf "$INSTALL_APP"
+cp -R "$STAGING_APP" "$INSTALL_APP"
+
+# Re-sign in place — cp -R preserves the signature, but a defensive
+# re-sign avoids any ambiguity about what TCC binds against.
+codesign --force --deep \
+  --sign "$SIGN_IDENTITY" \
+  --identifier "$BUNDLE_ID" \
+  "$INSTALL_APP" >/dev/null
+codesign --verify --strict "$INSTALL_APP"
+
+# Force Launch Services to refresh routing for the bundle. Without
+# this, `tccutil reset Accessibility com.flash.vimium-oracle` fails
+# with "No such bundle identifier" because LS hasn't indexed it yet.
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+  -f "$INSTALL_APP" >/dev/null 2>&1 || true
 
 # -- 4. run --------------------------------------------------------------
 if [[ $SETUP_ONLY -eq 1 ]]; then
   echo
-  echo "==> Setup complete. Binary at: $OUTPUT_BIN"
+  echo "==> Setup complete. Installed: $INSTALL_APP"
   exit 0
 fi
 
 echo
-echo "==> Running $BIN_NAME ${RUN_ARGS[*]:-}"
-exec "$OUTPUT_BIN" "${RUN_ARGS[@]}"
+echo "==> Running $APP_NAME ${RUN_ARGS[*]:-}"
+set +e
+"$INSTALL_BIN" "${RUN_ARGS[@]}"
+RC=$?
+set -e
+
+# The runner exits 2 when Accessibility is missing (most common
+# first-run blocker). Open System Settings at the right pane and stage
+# the installed .app path on the clipboard — System Settings →
+# Accessibility resolves it to the bundle, which is what TCC keys
+# the grant against. Skipped when stdout isn't a tty.
+if [[ $RC -eq 2 ]] && [[ -t 1 ]]; then
+  if command -v pbcopy >/dev/null 2>&1; then
+    printf '%s' "$INSTALL_APP" | pbcopy 2>/dev/null &&
+      echo "  → app bundle path copied to clipboard"
+  fi
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" \
+    >/dev/null 2>&1 || true
+fi
+exit $RC

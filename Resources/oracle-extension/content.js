@@ -1,23 +1,33 @@
 // Flash Oracle companion content script.
 //
-// Wire protocol (one direction, content -> Flash via document.title):
-//   FLASH_ORACLE_READY                           — companion loaded, page idle
-//   FLASH_ORACLE_ANCHORS:{json}                  — Vimium markers captured
+// Wire protocol — Flash reads back via the AX tree:
+//   document.title = FLASH_ORACLE_READY            — companion loaded, page idle
+//   document.title = FLASH_ORACLE_ANCHORS_READY    — anchors captured + payload div mounted
+//   <div role="img" aria-label="FLASH_ORACLE_PAYLOAD|{json}"
+//        style="position:fixed;left:-9999px;...">  — full JSON
 //
-// Flash drives the handshake: it waits for READY, posts 'f' (Vimium hint
-// trigger) to Firefox, then waits for ANCHORS. Escape dismisses Vimium
-// hint mode and resets the companion for the next capture.
+// Why a payload div instead of just document.title: macOS truncates
+// AX window titles at ~300 chars, mangling any anchor list with more
+// than ~5 entries. aria-label has no such cap — AX exposes it verbatim
+// as kAXDescription, and Flash walks the AX tree to find the div by
+// its known description prefix.
+//
+// Flash drives the handshake: waits for READY, posts 'f' (Vimium hint
+// trigger), waits for ANCHORS_READY, then walks AX to read the payload.
+// Escape dismisses Vimium hint mode and resets the companion.
 //
 // The companion intentionally never touches the page's interactive DOM
-// beyond two absolutely-positioned fiducial markers used to calibrate
-// the CSS->screen affine transform on every run.
+// beyond two absolutely-positioned fiducial markers + one off-screen
+// payload div, all mounted after the page's own content is idle.
 
 (function () {
   "use strict";
   if (window.top !== window) return; // top frame only
 
-  const PREFIX_READY = "FLASH_ORACLE_READY";
-  const PREFIX_ANCHORS = "FLASH_ORACLE_ANCHORS:";
+  const TITLE_READY = "FLASH_ORACLE_READY";
+  const TITLE_ANCHORS_READY = "FLASH_ORACLE_ANCHORS_READY";
+  const PAYLOAD_DIV_ID = "__flash_oracle_payload__";
+  const PAYLOAD_LABEL_PREFIX = "FLASH_ORACLE_PAYLOAD|";
   const MARKER_REGEX = /vimium.*[Hh]int.*[Mm]arker|vimium-hint-marker/;
   const FIDUCIAL_IDS = ["__flash_oracle_fiducial_a__", "__flash_oracle_fiducial_b__"];
 
@@ -152,7 +162,18 @@
 
   function emit(payloadObj) {
     const json = JSON.stringify(payloadObj);
-    document.title = PREFIX_ANCHORS + json;
+    let div = document.getElementById(PAYLOAD_DIV_ID);
+    if (!div) {
+      div = document.createElement("div");
+      div.id = PAYLOAD_DIV_ID;
+      div.setAttribute("role", "img");
+      div.style.cssText =
+        "position:fixed;left:-9999px;top:-9999px;" +
+        "width:1px;height:1px;overflow:hidden;pointer-events:none;";
+      document.documentElement.appendChild(div);
+    }
+    div.setAttribute("aria-label", PAYLOAD_LABEL_PREFIX + json);
+    document.title = TITLE_ANCHORS_READY;
   }
 
   function scheduleCapture() {
@@ -191,12 +212,29 @@
       clearTimeout(captureScheduled);
       captureScheduled = null;
     }
-    document.title = PREFIX_READY;
+    const div = document.getElementById(PAYLOAD_DIV_ID);
+    if (div) div.removeAttribute("aria-label");
+    document.title = TITLE_READY;
   }
 
   function start() {
     injectFiducials();
-    document.title = PREFIX_READY;
+    // Drag focus off the URL bar and onto the page. body.focus() is
+    // unreliable from content scripts; explicitly focusing the first
+    // real interactive element gets the page key context the OS
+    // recognizes as "the page is what should receive keystrokes".
+    // {preventScroll: true} avoids visual disruption if the element
+    // is below the fold.
+    const firstFocusable = document.querySelector(
+      'a[href], button, input:not([disabled]), select:not([disabled]),' +
+      ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    if (firstFocusable) {
+      firstFocusable.focus({ preventScroll: true });
+    } else if (document.body) {
+      document.body.setAttribute("tabindex", "-1");
+      document.body.focus();
+    }
+    document.title = TITLE_READY;
 
     const observer = new MutationObserver((mutations) => {
       for (const m of mutations) {
@@ -219,7 +257,7 @@
 
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") reset();
-    }, true);
+    }, false);
   }
 
   if (document.readyState === "loading") {

@@ -16,11 +16,13 @@ public enum OracleFixture: String, CaseIterable {
     }
   }
 
-  /// URL the runner navigates Firefox to. data: URLs for synthetic
-  /// fixtures, file: URLs for real-site snapshots.
-  public func htmlURL() -> URL {
+  /// Raw HTML for this fixture. The runner serves it from a
+  /// short-lived localhost HTTP server (`FixtureServer`) so the
+  /// companion content script actually mounts — data: URLs don't run
+  /// content scripts in Firefox MV2.
+  public func html() -> String {
     switch self {
-    case .baselineSynthetic: return FirefoxFixture.dataURL()
+    case .baselineSynthetic: return FirefoxFixture.html
     }
   }
 
