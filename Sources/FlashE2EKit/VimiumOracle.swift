@@ -164,125 +164,178 @@ public enum VimiumOracle {
       Thread.sleep(forTimeInterval: 0.3)
     }
 
-    // 4+5. Briefly bring Firefox foreground, post 'f', wait for the
-    //      companion to flip the title to ANCHORS_READY. Re-post 'f'
-    //      every second until the title changes or we hit the
-    //      timeout — Vimium's keymap registration is racy and 'f'
-    //      sometimes lands before it's listening; URL bar can also
-    //      grab focus and swallow the first attempt.
+    // 4. Briefly bring Firefox foreground for the entire scroll-loop
+    //    capture. The scroll loop posts 'f' / Escape repeatedly; each
+    //    needs to land in Firefox's event queue. Restore previous
+    //    frontmost app on exit so the user's editor/terminal comes
+    //    back to focus.
     //
-    //      Isolation guarantees:
-    //      - CGEventSource(.privateState): does not inherit live HID
-    //        modifier state (no Cmd+f / Shift+f if user is holding
-    //        modifiers when we post)
-    //      - explicit flags = [] zeroes any latent source modifiers
-    //      - Firefox foreground window kept short (activate + post
-    //        loop + restore-prev-frontmost) to minimize the slot
-    //        where user keystrokes could leak into the page
+    //    Isolation guarantees:
+    //    - CGEventSource(.privateState) ignores live HID modifier state
+    //    - explicit flags = [] zeroes any latent source modifiers
     let prevFrontmost = NSWorkspace.shared.frontmostApplication
     firefox.activate()
     defer { prevFrontmost?.activate() }
     Thread.sleep(forTimeInterval: 0.15)
 
-    let anchorsDeadline = Date().addingTimeInterval(anchorsTimeout)
-    var lastAnchorTitle = ""
-    var gotAnchors = false
-    while Date() < anchorsDeadline {
-      postKey(kVK_ANSI_F, to: pid)
-      let waitChunk = Date().addingTimeInterval(0.9)
-      while Date() < waitChunk, Date() < anchorsDeadline {
-        let t = readFocusedWindowTitle(pid: pid) ?? ""
-        if t != lastAnchorTitle {
-          lastAnchorTitle = t
-          FileHandle.standardError.write(
-            Data("[oracle] post-'f' AX title: \(t)\n".utf8))
+    // 5. Scroll-through loop. Per iteration: post 'f' until Vimium
+    //    activates + companion captures + signals ANCHORS_READY, walk
+    //    AX for payload + fiducials + per-scroll Flash hints, decode,
+    //    project, accumulate. If companion reports atBottom, break.
+    //    Otherwise post Escape (Vimium dismisses; companion auto-
+    //    scrolls via its keydown listener, then sets title back to
+    //    READY), wait for READY, continue.
+    //
+    //    Each scroll cycle is an independent mini-capture: same
+    //    element visible across two scrolls yields two entries in
+    //    accumulators. The diff matcher pairs by rect proximity and
+    //    naturally handles the per-cycle pairing.
+    var allFlashTargets: [JumpTarget] = resolvedFlashTargets
+    var allVimiumAnchors: [VimiumAnchor] = []
+    var lastTransform: OracleTransform?
+    var lastResidual: Double = 0
+    var lastPageRect: CGRect = .zero
+
+    let maxScrolls = 50
+    for scrollIdx in 0..<maxScrolls {
+      // 5a. Post 'f' until ANCHORS_READY.
+      let anchorsDeadline = Date().addingTimeInterval(anchorsTimeout)
+      var gotAnchors = false
+      while Date() < anchorsDeadline {
+        postKey(kVK_ANSI_F, to: pid)
+        let waitChunk = Date().addingTimeInterval(0.9)
+        while Date() < waitChunk, Date() < anchorsDeadline {
+          let t = readFocusedWindowTitle(pid: pid) ?? ""
+          if t.contains(anchorsReadyTitle) {
+            gotAnchors = true
+            break
+          }
+          Thread.sleep(forTimeInterval: 0.1)
         }
-        if t.contains(anchorsReadyTitle) {
-          gotAnchors = true
+        if gotAnchors { break }
+      }
+      if !gotAnchors {
+        if scrollIdx == 0 { throw CaptureError.anchorsTimedOut }
+        break  // partial result OK after at least one cycle
+      }
+
+      // 5b. Walk AX for payload + fiducials.
+      let walked = walkForOracleMarkers(pid: pid, fiducialIDs: fiducialIDs)
+      guard let payloadDesc = walked.payload else {
+        if scrollIdx == 0 {
+          throw CaptureError.decodeFailed("payload div not found")
+        }
+        break
+      }
+      let rawJSON = String(payloadDesc.dropFirst(payloadLabelPrefix.count))
+      let decoded: ExtensionPayload
+      do {
+        decoded = try JSONDecoder().decode(
+          ExtensionPayload.self, from: Data(rawJSON.utf8))
+      } catch {
+        if scrollIdx == 0 {
+          throw CaptureError.decodeFailed(String(describing: error))
+        }
+        break
+      }
+
+      let missing = fiducialIDs.filter { walked.fiducials[$0] == nil }
+      if !missing.isEmpty {
+        if scrollIdx == 0 { throw CaptureError.missingFiducials(missing) }
+        break
+      }
+
+      // 5c. Solve transform (fiducials are position:fixed, so the
+      //     transform is constant across scrolls — we re-solve every
+      //     cycle anyway as a sanity check against drift).
+      var pairs: [(css: CGPoint, screen: CGPoint)] = []
+      for fid in decoded.fiducials {
+        guard let screenRect = walked.fiducials[fid.id] else { continue }
+        pairs.append(
+          (
+            css: CGPoint(x: fid.x, y: fid.y),
+            screen: CGPoint(x: screenRect.minX, y: screenRect.maxY)
+          ))
+      }
+      let transform: OracleTransform
+      do {
+        transform = try OracleTransform.solve(pairs: pairs)
+      } catch {
+        if scrollIdx == 0 { throw CaptureError.transformFailed(error) }
+        break
+      }
+      lastTransform = transform
+      lastResidual = transform.maxResidual(pairs: pairs)
+      lastPageRect = transform.screenRect(
+        fromCSS: CGRect(
+          x: 0, y: 0,
+          width: decoded.viewport.innerWidth,
+          height: decoded.viewport.innerHeight))
+
+      // 5d. Project Vimium anchors + accumulate.
+      let anchors: [VimiumAnchor] = decoded.anchors.map { a in
+        let cssR = CGRect(
+          x: a.rect[0], y: a.rect[1], width: a.rect[2], height: a.rect[3])
+        return VimiumAnchor(
+          tag: a.tag, role: a.role, label: a.label, marker: a.marker,
+          cssRect: cssR, screenRect: transform.screenRect(fromCSS: cssR))
+      }
+      allVimiumAnchors.append(contentsOf: anchors)
+
+      // 5e. Walk Flash AX again at this scroll position + accumulate.
+      //     (First iteration's flashTargets came from the pre-loop
+      //     snapshot; subsequent iterations add their post-scroll set.)
+      if scrollIdx > 0 {
+        let here =
+          (try? provider.discover(
+            in: context, deadline: Date().addingTimeInterval(2))) ?? []
+        allFlashTargets.append(contentsOf: here)
+      }
+
+      // 5f. End-of-loop conditions. One line per scroll so a run is
+      //     diagnosable from the log without dumping every poll.
+      let msg =
+        "[oracle] scroll #\(scrollIdx) y=\(Int(decoded.viewport.scrollY)) "
+        + "anchors=\(anchors.count)"
+        + (decoded.viewport.atBottom == true ? " (bottom)" : "") + "\n"
+      FileHandle.standardError.write(Data(msg.utf8))
+      if decoded.viewport.atBottom == true { break }
+
+      // 5g. Dismiss Vimium + trigger companion auto-scroll, then
+      //     wait for READY (companion has scrolled + reset the title).
+      //     Send Escape TWICE: the first one is swallowed by Vimium's
+      //     hint-mode handler (it's how Vimium exits hint mode). The
+      //     second arrives with Vimium back in default mode, so the
+      //     companion's window keydown listener actually sees it and
+      //     runs reset() + scroll.
+      postKey(kVK_Escape, to: pid)
+      Thread.sleep(forTimeInterval: 0.05)
+      postKey(kVK_Escape, to: pid)
+      let readyDeadline = Date().addingTimeInterval(5)
+      var sawReady = false
+      while Date() < readyDeadline {
+        let t = readFocusedWindowTitle(pid: pid) ?? ""
+        if t.contains(readyTitle), !t.contains(anchorsReadyTitle) {
+          sawReady = true
           break
         }
         Thread.sleep(forTimeInterval: 0.1)
       }
-      if gotAnchors { break }
-    }
-    if !gotAnchors {
-      throw CaptureError.anchorsTimedOut
-    }
-
-    // 5+6. One AX tree walk: collect the payload div (by description
-    //      prefix) AND the fiducials. Cheaper than two passes, and
-    //      ordering doesn't matter because the companion mounts both
-    //      before flipping the title to ANCHORS_READY.
-    let walked = walkForOracleMarkers(pid: pid, fiducialIDs: fiducialIDs)
-    guard let payloadDesc = walked.payload else {
-      // no dismiss needed: Firefox is terminated after each fixture run
-      throw CaptureError.decodeFailed(
-        "payload div not found in AX tree (companion crashed?)")
-    }
-    let rawJSON = String(payloadDesc.dropFirst(payloadLabelPrefix.count))
-    let decoded: ExtensionPayload
-    do {
-      decoded = try JSONDecoder().decode(
-        ExtensionPayload.self, from: Data(rawJSON.utf8))
-    } catch {
-      // no dismiss needed: Firefox is terminated after each fixture run
-      throw CaptureError.decodeFailed(String(describing: error))
-    }
-    let measured = walked.fiducials
-    let missing = fiducialIDs.filter { measured[$0] == nil }
-    if !missing.isEmpty {
-      // no dismiss needed: Firefox is terminated after each fixture run
-      throw CaptureError.missingFiducials(missing)
+      if !sawReady { break }
+      // Wait for Firefox to rebuild the post-scroll AX subtree. The
+      // shorter waits we tried saw a 30-50% drop in match rate
+      // because Flash's per-scroll discover ran while the new
+      // viewport content was still mid-build.
+      Thread.sleep(forTimeInterval: 0.9)
     }
 
-    // 7. Solve transform from fiducial pairs.
-    //    Companion gives CSS top-left of each fiducial; AX (post-flip)
-    //    gives NSScreen rect — the matching screen point for the CSS
-    //    top-left is (rect.minX, rect.maxY).
-    var pairs: [(css: CGPoint, screen: CGPoint)] = []
-    for fid in decoded.fiducials {
-      guard let screenRect = measured[fid.id] else { continue }
-      pairs.append(
-        (
-          css: CGPoint(x: fid.x, y: fid.y),
-          screen: CGPoint(x: screenRect.minX, y: screenRect.maxY)
-        ))
+    guard let transform = lastTransform else {
+      throw CaptureError.anchorsTimedOut  // never got past iteration 0
     }
-    let transform: OracleTransform
-    do {
-      transform = try OracleTransform.solve(pairs: pairs)
-    } catch {
-      // no dismiss needed: Firefox is terminated after each fixture run
-      throw CaptureError.transformFailed(error)
-    }
-    let residual = transform.maxResidual(pairs: pairs)
-
-    // 8. Project Vimium anchor rects from CSS to NSScreen.
-    let anchors: [VimiumAnchor] = decoded.anchors.map { a in
-      let cssR = CGRect(
-        x: a.rect[0], y: a.rect[1], width: a.rect[2], height: a.rect[3])
-      let screenR = transform.screenRect(fromCSS: cssR)
-      return VimiumAnchor(
-        tag: a.tag, role: a.role, label: a.label, marker: a.marker,
-        cssRect: cssR, screenRect: screenR)
-    }
-
-    // 9. Project the page viewport rect (CSS) into screen space —
-    //    Flash targets filtered by this rect end up corresponding to
-    //    page DOM, ignoring Firefox chrome.
-    let pageCSSRect = CGRect(
-      x: 0, y: 0,
-      width: decoded.viewport.innerWidth,
-      height: decoded.viewport.innerHeight)
-    let pageScreenRect = transform.screenRect(fromCSS: pageCSSRect)
-
-    // 10. Dismiss Vimium hint mode + reset companion for the next capture.
-    // no dismiss needed: Firefox is terminated after each fixture run
-
     return OracleSnapshot(
-      flashTargets: resolvedFlashTargets, vimiumAnchors: anchors,
-      transform: transform, fiducialResidual: residual,
-      pageScreenRect: pageScreenRect)
+      flashTargets: allFlashTargets, vimiumAnchors: allVimiumAnchors,
+      transform: transform, fiducialResidual: lastResidual,
+      pageScreenRect: lastPageRect)
   }
 
   // MARK: - Wire types (mirror Resources/oracle-extension/content.js)
@@ -312,6 +365,8 @@ public enum VimiumOracle {
     let innerWidth: Double
     let innerHeight: Double
     let dpr: Double
+    let scrollHeight: Double?
+    let atBottom: Bool?
   }
 
   // MARK: - AX helpers

@@ -206,6 +206,12 @@
         if (markers.length === 0) return;
         const anchors = serializeAnchors(markers);
         const fiducials = readFiducials();
+        const docH = Math.max(
+          document.documentElement.scrollHeight,
+          document.body ? document.body.scrollHeight : 0
+        );
+        const atBottom =
+          window.scrollY + window.innerHeight >= docH - 10;
         emit({
           anchors,
           fiducials,
@@ -214,7 +220,9 @@
             scrollY: window.scrollY,
             innerWidth: window.innerWidth,
             innerHeight: window.innerHeight,
-            dpr: window.devicePixelRatio
+            dpr: window.devicePixelRatio,
+            scrollHeight: docH,
+            atBottom,
           }
         });
       } finally {
@@ -231,6 +239,22 @@
     }
     const div = document.getElementById(PAYLOAD_DIV_ID);
     if (div) div.removeAttribute("aria-label");
+    // Auto-scroll for the next capture cycle. Flash drives the
+    // multi-scroll loop by posting Escape between captures; the
+    // companion handles the actual scroll so Flash doesn't need a
+    // JS bridge. Scroll by ~90% of viewport for slight overlap —
+    // catches elements split across the scroll boundary.
+    const docH = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    const remaining = docH - (window.scrollY + window.innerHeight);
+    if (remaining > 10) {
+      window.scrollBy({
+        top: Math.floor(window.innerHeight * 0.9),
+        behavior: "instant",
+      });
+    }
     document.title = TITLE_READY;
   }
 
