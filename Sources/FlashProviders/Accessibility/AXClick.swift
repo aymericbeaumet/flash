@@ -19,7 +19,7 @@ public enum AXClick {
   /// Press-style action names tried in order for a left-click.
   /// `AXOpen` covers Finder items; `AXConfirm` covers default-button
   /// confirmations that don't expose `AXPress`.
-  private static let leftClickActions: [String] = [
+  private static let pressActions: [String] = [
     kAXPressAction, "AXOpen", "AXConfirm",
   ]
 
@@ -30,7 +30,7 @@ public enum AXClick {
   public static func tryActions(_ element: AXUIElement, action: JumpAction) -> Bool {
     switch action {
     case .leftClick:
-      for name in leftClickActions {
+      for name in pressActions {
         if AXUIElementPerformAction(element, name as CFString) == .success {
           return true
         }
@@ -63,7 +63,7 @@ public enum AXClick {
     guard AXUIElementCopyActionNames(element, &names) == .success,
       let arr = names as? [String]
     else { return false }
-    for name in leftClickActions where arr.contains(name) {
+    for name in pressActions where arr.contains(name) {
       return true
     }
     return false

@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+    tags:
+      - "*.*.*"
   pull_request:
 
 jobs:
@@ -72,3 +74,121 @@ jobs:
             ${{ runner.os }}-spm-test-
       - name: Test
         run: swift test
+
+  homebrew:
+    name: Homebrew
+    runs-on: macos-15
+    needs: [format, lint, guardrails, build, test]
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure deployment
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "branch" && "$GITHUB_REF_NAME" == "main" ]]; then
+            short_sha="${GITHUB_SHA::8}"
+            build_date="$(date -u +%Y%m%d)"
+            version="nightly-${build_date}-${short_sha}"
+            release_tag="nightly"
+            cask_token="flash@nightly"
+            asset_name="Flash-${version}.zip"
+            marketing_version=""
+          elif [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            version="$GITHUB_REF_NAME"
+            release_tag="$GITHUB_REF_NAME"
+            cask_token="flash@$GITHUB_REF_NAME"
+            asset_name="Flash-${version}.zip"
+            marketing_version="$GITHUB_REF_NAME"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "cask_token=$cask_token" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
+          echo "marketing_version=$marketing_version" >> "$GITHUB_OUTPUT"
+
+      - name: Package Flash.app
+        id: package
+        if: steps.meta.outputs.deploy == 'true'
+        run: |
+          zip_path="$RUNNER_TEMP/${{ steps.meta.outputs.asset_name }}"
+          if [[ -n "${{ steps.meta.outputs.marketing_version }}" ]]; then
+            export FLASH_MARKETING_VERSION="${{ steps.meta.outputs.marketing_version }}"
+          fi
+          export FLASH_BUNDLE_VERSION="${{ github.run_number }}"
+          bash Scripts/package-release.sh "$zip_path"
+          echo "zip_path=$zip_path" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cat "$zip_path.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release asset
+        if: steps.meta.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="${{ steps.meta.outputs.release_tag }}"
+          title="Flash ${{ steps.meta.outputs.version }}"
+          notes="Automated build from ${GITHUB_SHA}."
+          if ! gh release view "$release_tag" >/dev/null 2>&1; then
+            args=(release create "$release_tag" --target "$GITHUB_SHA" --title "$title" --notes "$notes")
+            if [[ "$release_tag" == "nightly" ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
+          fi
+          gh release upload \
+            "$release_tag" \
+            "${{ steps.package.outputs.zip_path }}#${{ steps.meta.outputs.asset_name }}" \
+            --clobber
+
+      - name: Check Homebrew tap token
+        if: steps.meta.outputs.deploy == 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "HOMEBREW_TAP_TOKEN secret is required to push aymericbeaumet/homebrew-tap"
+            exit 1
+          fi
+
+      - name: Checkout Homebrew tap
+        if: steps.meta.outputs.deploy == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: aymericbeaumet/homebrew-tap
+          path: homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update Homebrew cask
+        if: steps.meta.outputs.deploy == 'true'
+        run: |
+          url="https://github.com/aymericbeaumet/flash/releases/download/${{ steps.meta.outputs.release_tag }}/${{ steps.meta.outputs.asset_name }}"
+          bash Scripts/update-homebrew-cask.sh \
+            --tap-dir homebrew-tap \
+            --token "${{ steps.meta.outputs.cask_token }}" \
+            --version "${{ steps.meta.outputs.version }}" \
+            --url "$url" \
+            --sha256 "${{ steps.package.outputs.sha256 }}"
+          ruby -c "homebrew-tap/Casks/${{ steps.meta.outputs.cask_token }}.rb"
+
+      - name: Push Homebrew tap update
+        if: steps.meta.outputs.deploy == 'true'
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "Casks/${{ steps.meta.outputs.cask_token }}.rb"
+          if git diff --cached --quiet; then
+            echo "No Homebrew tap changes"
+            exit 0
+          fi
+          git commit -m "Update flash ${{ steps.meta.outputs.version }}"
+          git push

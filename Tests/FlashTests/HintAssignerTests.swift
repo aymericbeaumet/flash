@@ -102,6 +102,35 @@ final class HintAssignerTests: XCTestCase {
     }
   }
 
+  func testHandAlternationDominatesLayoutScoresForPairs() {
+    let alpha = Array("asjk")
+    let leftHand: Set<Character> = ["a", "s"]
+    let keyScores: [Character: Int] = [
+      "a": 100,
+      "s": 99,
+      "j": 20,
+      "k": 10,
+    ]
+
+    XCTAssertGreaterThan(
+      HintAssigner.scoreLabel("aj", leftHand: leftHand, keyScores: keyScores),
+      HintAssigner.scoreLabel("as", leftHand: leftHand, keyScores: keyScores),
+      "an alternating pair should outrank a higher-scored same-hand pair")
+
+    let labels = HintAssigner.generateLabels(
+      count: 4,
+      alphabet: alpha,
+      leftHand: leftHand,
+      keyScores: keyScores,
+      minLength: 2)
+    XCTAssertTrue(
+      labels.allSatisfy {
+        let chars = Array($0)
+        return leftHand.contains(chars[0]) != leftHand.contains(chars[1])
+      },
+      "expected the first full hand-balanced bucket before same-hand pairs, got \(labels)")
+  }
+
   func testSingleLabelsUsePreparedAlphabetOrder() {
     let labels = HintAssigner.generateLabels(
       count: 4,

@@ -59,8 +59,9 @@ enum HintAssigner {
   ///     the original Vimium-style uniform-length behaviour.
   ///
   /// Within a length class, labels are sorted by an ergonomic score
-  /// that rewards high-value layout keys and hand alternation, penalises
-  /// same-key repeats, then falls back to deterministic key order.
+  /// that favours left/right hand alternation first, rewards high-value
+  /// layout keys inside the same hand pattern, penalises same-key repeats,
+  /// then falls back to deterministic key order.
   static func generateLabels(
     count: Int,
     alphabet: [Character],
@@ -172,6 +173,13 @@ enum HintAssigner {
   private static var cache: [String: [String]] = [:]
   private static var cacheLock = os_unfair_lock_s()
 
+  private enum Score {
+    static let keyWeight = 10
+    static let handAlternation = 10_000
+    static let sameHand = -10_000
+    static let sameKey = -50_000
+  }
+
   private static func makeCacheKey(
     alphabet: [Character],
     leftHand: Set<Character>,
@@ -226,17 +234,17 @@ enum HintAssigner {
       }
       var score = 0
       for i in 0..<length {
-        score += keyScoreByIndex[indices[i]] * 10
+        score += keyScoreByIndex[indices[i]] * Score.keyWeight
       }
       for i in 1..<length {
         let a = indices[i - 1]
         let b = indices[i]
         if a == b {
-          score -= 5_000
+          score += Score.sameKey
         } else if leftByIndex[a] != leftByIndex[b] {
-          score += 40
+          score += Score.handAlternation
         } else {
-          score -= 15
+          score += Score.sameHand
         }
       }
       candidates.append(Candidate(indices: indices, score: score))
@@ -260,10 +268,10 @@ enum HintAssigner {
     return labels
   }
 
-  /// Higher is better. Rewards high-value layout keys and adjacent-character
-  /// pairs that alternate between left and right hand; penalises same-key
-  /// repeats and same-hand pairs. Kept for tests / external callers; the fast
-  /// path lives in `computeSortedCandidates`.
+  /// Higher is better. Favours adjacent-character pairs that alternate between
+  /// left and right hand, then rewards high-value layout keys; penalises
+  /// same-key repeats and same-hand pairs. Kept for tests / external callers;
+  /// the fast path lives in `computeSortedCandidates`.
   static func scoreLabel(_ label: String, leftHand: Set<Character>) -> Int {
     scoreLabel(label, leftHand: leftHand, keyScores: [:])
   }
@@ -277,16 +285,16 @@ enum HintAssigner {
     guard !chars.isEmpty else { return 0 }
     var score = 0
     for ch in chars {
-      score += (keyScores[ch] ?? 0) * 10
+      score += (keyScores[ch] ?? 0) * Score.keyWeight
     }
     if chars.count < 2 { return score }
     for i in 1..<chars.count {
       if chars[i] == chars[i - 1] {
-        score -= 5_000
+        score += Score.sameKey
       } else {
         let prevLeft = leftHand.contains(chars[i - 1])
         let currLeft = leftHand.contains(chars[i])
-        if prevLeft != currLeft { score += 40 } else { score -= 15 }
+        score += prevLeft != currLeft ? Score.handAlternation : Score.sameHand
       }
     }
     return score
