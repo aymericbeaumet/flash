@@ -143,6 +143,72 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.warnings[0].contains("cmd+ctrl+b"))
   }
 
+  func testShortcutRelativePathArgumentsResolveAgainstConfigFile() {
+    let toml = """
+      [shortcuts]
+      "alt+shift+c" = ["sh", "../../scripts/toggle_caffeinate.sh"]
+      "alt+shift+d" = ["sh", "~/.dotfiles/scripts/toggle_darkmode.sh"]
+      "alt+shift+m" = ["sh", "$HOME/.dotfiles/scripts/toggle_mute.sh"]
+      "alt+shift+w" = ["sh", "${HOME}/.dotfiles/scripts/toggle_wifi.sh"]
+      "alt+shift+x" = ["sh", "-c", "echo /tmp/example", "https://example.com/a/b"]
+      "alt+shift+y" = ["scripts/toggle_wifi.sh", "--flag=$HOME/path", "$NOPE/path"]
+      """
+    let sourceURL = URL(fileURLWithPath: "/Users/test/.dotfiles/.config/flash/config.toml")
+    let c = ConfigLoader.parse(
+      toml,
+      sourceURL: sourceURL,
+      environment: ["HOME": "/Users/envhome"])
+
+    XCTAssertEqual(c.shortcuts.count, 6)
+
+    guard case .shell(let caffeineArgv) = c.shortcuts[0].action else {
+      return XCTFail("expected shell action")
+    }
+    XCTAssertEqual(
+      caffeineArgv,
+      ["sh", "/Users/test/.dotfiles/scripts/toggle_caffeinate.sh"])
+
+    guard case .shell(let darkModeArgv) = c.shortcuts[1].action else {
+      return XCTFail("expected shell action")
+    }
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    XCTAssertEqual(
+      darkModeArgv,
+      ["sh", "\(home)/.dotfiles/scripts/toggle_darkmode.sh"])
+
+    guard case .shell(let muteArgv) = c.shortcuts[2].action else {
+      return XCTFail("expected shell action")
+    }
+    XCTAssertEqual(
+      muteArgv,
+      ["sh", "/Users/envhome/.dotfiles/scripts/toggle_mute.sh"])
+
+    guard case .shell(let wifiEnvArgv) = c.shortcuts[3].action else {
+      return XCTFail("expected shell action")
+    }
+    XCTAssertEqual(
+      wifiEnvArgv,
+      ["sh", "/Users/envhome/.dotfiles/scripts/toggle_wifi.sh"])
+
+    guard case .shell(let shellSnippetArgv) = c.shortcuts[4].action else {
+      return XCTFail("expected shell action")
+    }
+    XCTAssertEqual(
+      shellSnippetArgv,
+      ["sh", "-c", "echo /tmp/example", "https://example.com/a/b"])
+
+    guard case .shell(let relativeArgv) = c.shortcuts[5].action else {
+      return XCTFail("expected shell action")
+    }
+    XCTAssertEqual(
+      relativeArgv,
+      [
+        "/Users/test/.dotfiles/.config/flash/scripts/toggle_wifi.sh",
+        "--flag=$HOME/path",
+        "$NOPE/path",
+      ])
+  }
+
   func testCLIBeatsEnv() {
     // Both set; CLI must win.
     let base = Config()

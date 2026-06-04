@@ -29,13 +29,21 @@ Flash registers the `flash://` URL scheme. Anything that can run a shell command
 ```bash
 open -g flash://show_hints           # show hints; on commit, left-click
 open -g flash://show_hints?right=1   # show hints; on commit, right-click
+open -g 'flash://show_alert?message=Done' # show a temporary centered alert
+open -g flash://dismiss_alert        # dismiss the alert
 open -g flash://dismiss_hints        # dismiss the overlay
+open -g flash://help                 # show URL command usage
 open -g flash://quit                 # quit the app
 ```
 
 `-g` keeps focus on the target app — Flash will only briefly steal it to perform the click and then return.
 
-Flash can also register native hotkeys from `[shortcuts]` in `config.toml`. Use `flash://...` string values for fast in-process commands, or an argv array for commands that need a process spawn.
+Flash can also register native hotkeys from `[shortcuts]` in `config.toml`. Use
+`flash://...` string values for fast in-process commands, or an argv array for
+commands that need a process spawn. In argv arrays loaded from a config file,
+standalone path arguments expand `~`, `$VAR`, and `${VAR}`; relative paths such
+as `../../scripts/toggle_wifi.sh` resolve relative to the config file's real
+directory after symlinks.
 
 ### Karabiner-Elements
 
@@ -92,6 +100,8 @@ log_level = "info"            # debug | info | warn | error
 # "cmd+ctrl+a" = "flash://open_app?name=Alacritty"
 # "alt+h" = "flash://move_window?position=lefthalf"
 # "cmd+ctrl+g" = ["open", "https://github.com"]
+# "alt+shift+d" = ["sh", "../../scripts/toggle_darkmode.sh"]
+# "alt+shift+w" = ["sh", "$HOME/.dotfiles/scripts/toggle_wifi.sh"]
 ```
 
 Performance behaviours (prepared AX model, concurrent subtree walk,

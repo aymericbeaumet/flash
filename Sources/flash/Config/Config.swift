@@ -61,7 +61,10 @@ struct Config {
   ///   - a single `flash://...` URL string (fast path — dispatched
   ///     internally through the same URLCommand parser as AppleEvents), or
   ///   - an array of strings, which is exec'd as `argv` (the
-  ///     first element is the executable, the rest are args).
+  ///     first element is the executable, the rest are args). Standalone
+  ///     path arguments from a config file expand `~`, `$VAR`, and
+  ///     `${VAR}`; relative paths resolve against that file's real
+  ///     directory before exec.
   ///
   /// `ShortcutsCoordinator` resolves each value into a typed
   /// `ShortcutAction` AOT at config-load. The hot path on a

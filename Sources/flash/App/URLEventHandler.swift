@@ -2,6 +2,9 @@ import AppKit
 
 enum URLCommand {
   case showHints(rightClick: Bool)
+  case showAlert(message: String)
+  case dismissAlert
+  case showUsage
   case dismissHints
   case quit
   case openApp(name: String)
@@ -100,6 +103,12 @@ final class URLEventHandler: NSObject {
   /// `URLCommand`, so the compiler points out any missed wiring.
   private static let commands: [String: (FlashURLQuery) -> URLCommand?] = [
     "show_hints": { q in .showHints(rightClick: q.bool("right")) },
+    "show_alert": { q in
+      guard let message = q.value("message"), !message.isEmpty else { return nil }
+      return .showAlert(message: message)
+    },
+    "dismiss_alert": { _ in .dismissAlert },
+    "help": { _ in .showUsage },
     "dismiss_hints": { _ in .dismissHints },
     "quit": { _ in .quit },
     "open_app": { q in
@@ -134,6 +143,17 @@ final class URLEventHandler: NSObject {
       return .moveWindow(MoveWindowParams(position: position, screen: screen))
     },
   ]
+
+  static let usageText = """
+    flash://show_hints[?right=1]
+    flash://show_alert?message=<text>
+    flash://dismiss_alert
+    flash://dismiss_hints
+    flash://open_app?name=<app>
+    flash://move_window?position=<slot>&screen=<n>
+    flash://quit
+    flash://help
+    """
 }
 
 /// Thin wrapper over `[URLQueryItem]` providing the lookups every

@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var registry: ProviderRegistry!
   private var monitor: AppMonitor!
   private var overlay: OverlayPanel!
+  private var alertPanel: AlertPanel!
   private var urlHandler: URLEventHandler!
   private var configSources: [DispatchSourceFileSystemObject] = []
   private let shortcuts = ShortcutsCoordinator()
@@ -48,11 +49,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
     overlay.warmPool(count: 256)
+    alertPanel = AlertPanel()
 
     let dispatch: (URLCommand) -> Void = { [weak self] cmd in
       guard let self else { return }
       switch cmd {
       case .showHints(let right): self.activate(rightClick: right)
+      case .showAlert(let message): self.alertPanel.show(message)
+      case .dismissAlert: self.alertPanel.dismiss()
+      case .showUsage: self.alertPanel.show(URLEventHandler.usageText, duration: 8)
       case .dismissHints: self.cancelOverlay()
       case .quit: NSApp.terminate(nil)
       case .openApp(let name): AppLauncher.activate(target: name)

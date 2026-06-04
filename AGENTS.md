@@ -4,13 +4,13 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `open -g flash://show_hints` or by a configured native shortcut, overlays vimium-style hint labels on the focused app's clickable elements and clicks one when the user types its hint. No menu bar, no Dock icon, no CLI client.
+A headless, resident macOS app that, when triggered by `open -g flash://show_hints` or by a configured native shortcut, overlays vimium-style hint labels on the focused app's clickable elements and clicks one when the user types its hint. It also supports `flash://show_alert?message=...` / `flash://dismiss_alert` for a temporary centered toast. No menu bar, no Dock icon, no CLI client.
 
 Activation can come through the `flash://` URL scheme or through Flash's `[shortcuts]` Carbon hotkey registry. Shortcut string values must still be `flash://...` commands and are dispatched in-process through the same `URLCommand` parser as URL-scheme AppleEvents.
 
 ## Hard rules (do not violate)
 
-1. **No UI surface** beyond the transparent hint overlay. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
+1. **No UI surface** beyond the transparent hint overlay and explicit `flash://show_alert` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
 2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit `[shortcuts]` entries. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
 3. **Autolaunch is installer-owned.** `Scripts/install-release.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
 4. **No second process / no IPC protocol.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native shortcuts dispatch `URLCommand` in-process. Don't add Unix sockets, mach services, or a CLI client.
@@ -249,7 +249,13 @@ When you add a field, also add `applyOverrides` test coverage in `Tests/FlashTes
 
 Overlay dismissal keys are hardcoded: Escape, Space, arrow keys, and scroll/click dismissal monitors. There is no `overlay.exit_key` config key.
 
-`[shortcuts]` maps hotkey strings such as `"ctrl+space"` to either a `flash://...` URL string or an argv array. The string form is the fast in-process path and must use the `flash://` scheme; non-Flash URLs and shell commands belong in the array form.
+`[shortcuts]` maps hotkey strings such as `"ctrl+space"` to either a `flash://...`
+URL string or an argv array. The string form is the fast in-process path and must
+use the `flash://` scheme; non-Flash URLs and shell commands belong in the array
+form. In argv arrays loaded from TOML, standalone path arguments expand `~`,
+`$VAR`, and `${VAR}`; relative path arguments containing `/` resolve relative to
+the loaded config file's real directory after symlinks. URLs, flag-style
+arguments, and shell snippets with whitespace are left as written.
 
 ## Permissions
 

@@ -95,6 +95,28 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(name, "Postico 2")
   }
 
+  func testParseFlashShowAlert() {
+    let action = parseShortcutAction(rawString: "flash://show_alert?message=Wi-Fi%20OFF")
+    guard case .flashCommand(.showAlert(let message)) = action else {
+      return XCTFail("expected .showAlert")
+    }
+    XCTAssertEqual(message, "Wi-Fi OFF")
+  }
+
+  func testParseFlashDismissAlert() {
+    let action = parseShortcutAction(rawString: "flash://dismiss_alert")
+    guard case .flashCommand(.dismissAlert) = action else {
+      return XCTFail("expected .dismissAlert")
+    }
+  }
+
+  func testParseFlashHelp() {
+    let help = parseShortcutAction(rawString: "flash://help")
+    guard case .flashCommand(.showUsage) = help else {
+      return XCTFail("expected .showUsage for help")
+    }
+  }
+
   func testNonFlashStringIsRejected() {
     // Strings must be `flash://...` URLs. Anything else is rejected
     // so the user reaches for the array form (which makes the cost
@@ -108,6 +130,8 @@ final class HotkeySyntaxTests: XCTestCase {
   func testInvalidFlashURLRejected() {
     XCTAssertNil(parseShortcutAction(rawString: "flash://unknown_command"))
     XCTAssertNil(parseShortcutAction(rawString: "flash://open_app"))  // no name
+    XCTAssertNil(parseShortcutAction(rawString: "flash://show_alert"))  // no message
+    XCTAssertNil(parseShortcutAction(rawString: "flash://usage"))
   }
 
   func testParseFlashMoveWindowPositionOnly() {

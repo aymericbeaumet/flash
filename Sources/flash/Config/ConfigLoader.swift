@@ -61,7 +61,7 @@ enum ConfigLoader {
     let args = CommandLine.arguments
     let env = ProcessInfo.processInfo.environment
     let url = resolvePath(arguments: args, environment: env)
-    let parsed = parseFile(at: url)
+    let parsed = parseFile(at: url, environment: env)
     return applyOverrides(to: parsed, arguments: args, environment: env)
   }
 
@@ -69,24 +69,29 @@ enum ConfigLoader {
   /// process's environment + arguments still applied as overrides. Used
   /// by hot-reload (it already knows the resolved path).
   static func load(from url: URL) -> Config {
-    let parsed = parseFile(at: url)
+    let env = ProcessInfo.processInfo.environment
+    let parsed = parseFile(at: url, environment: env)
     return applyOverrides(
       to: parsed,
       arguments: CommandLine.arguments,
-      environment: ProcessInfo.processInfo.environment
+      environment: env
     )
   }
 
-  private static func parseFile(at url: URL) -> Config {
+  private static func parseFile(at url: URL, environment: [String: String]) -> Config {
     guard let data = try? Data(contentsOf: url),
       let text = String(data: data, encoding: .utf8)
     else {
       return .default
     }
-    return parse(text)
+    return parse(text, sourceURL: url.resolvingSymlinksInPath(), environment: environment)
   }
 
-  static func parse(_ text: String) -> Config {
+  static func parse(
+    _ text: String,
+    sourceURL: URL? = nil,
+    environment: [String: String] = [:]
+  ) -> Config {
     var config = Config()
     var currentTable: [String] = []
 
@@ -110,7 +115,13 @@ enum ConfigLoader {
       if key.hasPrefix("\""), key.hasSuffix("\""), key.count >= 2 {
         key = String(key.dropFirst().dropLast())
       }
-      apply(table: currentTable, key: key, value: val, into: &config)
+      apply(
+        table: currentTable,
+        key: key,
+        value: val,
+        sourceURL: sourceURL,
+        environment: environment,
+        into: &config)
     }
     return config
   }
@@ -146,7 +157,14 @@ enum ConfigLoader {
     return parts.map { $0.trimmingCharacters(in: .whitespaces) }
   }
 
-  private static func apply(table: [String], key: String, value: String, into config: inout Config)
+  private static func apply(
+    table: [String],
+    key: String,
+    value: String,
+    sourceURL: URL?,
+    environment: [String: String],
+    into config: inout Config
+  )
   {
     // [shortcuts] is a free-form map: every key in the section is a
     // hotkey string. The value is either a single `flash://...` URL
@@ -156,7 +174,11 @@ enum ConfigLoader {
     if table == ["shortcuts"], !key.isEmpty {
       let action: ShortcutAction?
       if let arr = parseStringArray(value) {
-        action = parseShortcutAction(rawArray: arr)
+        action = parseShortcutAction(
+          rawArray: resolveShortcutArgv(
+            arr,
+            sourceURL: sourceURL,
+            environment: environment))
       } else if let s = parseString(value) {
         action = parseShortcutAction(rawString: s)
       } else {
@@ -264,6 +286,136 @@ enum ConfigLoader {
       i = inner.index(after: i)
     }
     return out
+  }
+
+  private static func resolveShortcutArgv(
+    _ argv: [String],
+    sourceURL: URL?,
+    environment: [String: String]
+  ) -> [String] {
+    let base = sourceURL?.deletingLastPathComponent()
+    return argv.map {
+      resolveShortcutArgument($0, relativeTo: base, environment: environment)
+    }
+  }
+
+  private static func resolveShortcutArgument(
+    _ value: String,
+    relativeTo base: URL?,
+    environment: [String: String]
+  ) -> String {
+    guard shouldResolveShortcutPath(value) else { return value }
+    let expanded = expandEnvironmentVariables(
+      expandTilde(value),
+      environment: environment)
+    if expanded.hasPrefix("/") {
+      return URL(fileURLWithPath: expanded).standardizedFileURL.path
+    }
+    guard let base, isStandaloneRelativePath(expanded) else { return expanded }
+    return URL(fileURLWithPath: expanded, relativeTo: base).standardizedFileURL.path
+  }
+
+  private static func shouldResolveShortcutPath(_ value: String) -> Bool {
+    guard !value.isEmpty else { return false }
+    guard !value.hasPrefix("-") else { return false }
+    guard !value.contains(where: { $0.isWhitespace }) else { return false }
+    guard URLComponents(string: value)?.scheme == nil else { return false }
+    return value.hasPrefix("/")
+      || value.hasPrefix("~")
+      || value.hasPrefix("$")
+      || value.contains("/")
+  }
+
+  private static func isStandaloneRelativePath(_ value: String) -> Bool {
+    guard value.contains("/") else { return false }
+    guard !value.hasPrefix("/") else { return false }
+    guard !value.hasPrefix("~") else { return false }
+    guard !value.hasPrefix("$") else { return false }
+    guard URLComponents(string: value)?.scheme == nil else { return false }
+    return true
+  }
+
+  private static func expandTilde(_ value: String) -> String {
+    guard value.hasPrefix("~") else { return value }
+    return (value as NSString).expandingTildeInPath
+  }
+
+  private static func expandEnvironmentVariables(
+    _ value: String,
+    environment: [String: String]
+  ) -> String {
+    var out = ""
+    var i = value.startIndex
+    while i < value.endIndex {
+      guard value[i] == "$" else {
+        out.append(value[i])
+        i = value.index(after: i)
+        continue
+      }
+
+      let dollar = i
+      i = value.index(after: i)
+      if i < value.endIndex, value[i] == "{" {
+        i = value.index(after: i)
+        let nameStart = i
+        while i < value.endIndex, value[i] != "}" {
+          i = value.index(after: i)
+        }
+        guard i < value.endIndex else {
+          out += String(value[dollar...])
+          return out
+        }
+        let rawName = String(value[nameStart..<i])
+        i = value.index(after: i)
+        if isEnvironmentName(rawName), let replacement = environmentValue(rawName, environment) {
+          out += replacement
+        } else {
+          out += String(value[dollar..<i])
+        }
+        continue
+      }
+
+      guard i < value.endIndex, isEnvironmentNameStart(value[i]) else {
+        out.append("$")
+        continue
+      }
+      let nameStart = i
+      i = value.index(after: i)
+      while i < value.endIndex, isEnvironmentNamePart(value[i]) {
+        i = value.index(after: i)
+      }
+      let rawName = String(value[nameStart..<i])
+      if let replacement = environmentValue(rawName, environment) {
+        out += replacement
+      } else {
+        out += String(value[dollar..<i])
+      }
+    }
+    return out
+  }
+
+  private static func environmentValue(
+    _ name: String,
+    _ environment: [String: String]
+  ) -> String? {
+    if let value = environment[name] { return value }
+    if name == "HOME" {
+      return FileManager.default.homeDirectoryForCurrentUser.path
+    }
+    return nil
+  }
+
+  private static func isEnvironmentName(_ value: String) -> Bool {
+    guard let first = value.first, isEnvironmentNameStart(first) else { return false }
+    return value.dropFirst().allSatisfy(isEnvironmentNamePart)
+  }
+
+  private static func isEnvironmentNameStart(_ ch: Character) -> Bool {
+    ch == "_" || ch.isLetter
+  }
+
+  private static func isEnvironmentNamePart(_ ch: Character) -> Bool {
+    ch == "_" || ch.isLetter || ch.isNumber
   }
 
   // MARK: CLI + env overrides
