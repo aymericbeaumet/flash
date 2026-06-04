@@ -40,7 +40,8 @@ let package = Package(
     .target(
       name: "FlashE2EKit",
       dependencies: ["FlashCore", "FlashProviders"],
-      path: "Sources/FlashE2EKit"
+      path: "Sources/FlashE2EKit",
+      resources: [.copy("Snapshots")]
     ),
     .testTarget(
       name: "FlashTests",
