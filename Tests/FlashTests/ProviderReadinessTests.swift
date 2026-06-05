@@ -14,6 +14,12 @@ final class ProviderReadinessTests: XCTestCase {
     XCTAssertEqual(TmuxProvider().readinessPolicy, .volatile)
     XCTAssertTrue(TmuxProvider().resultsAreVolatile)
   }
+
+  func testAccessibilityProviderTreatsComboboxAsEditableTarget() {
+    XCTAssertTrue(AccessibilityProvider.roles.contains("AXComboBox"))
+    XCTAssertTrue(AccessibilityProvider.webClickableRoles.contains("AXComboBox"))
+  }
+
 }
 
 private final class StubProvider: JumpProvider {

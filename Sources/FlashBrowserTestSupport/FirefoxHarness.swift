@@ -109,12 +109,8 @@ public enum FirefoxHarness {
     reapStaleProfileHolders(profilePath: profilePath)
 
     // Snapshot whoever currently owns the foreground so we can put
-    // them back once Firefox launches. `open -g` tells Launch Services
-    // not to activate the target app — but Firefox internally calls
-    // `[NSApp activateIgnoringOtherApps:YES]` during startup and there
-    // is no flag to suppress that. Re-activating the previous app
-    // immediately after Firefox's AX window appears is the most
-    // reliable way to keep the user's terminal/editor in front.
+    // them back once Firefox launches. Firefox internally activates
+    // itself during startup, even when launched through its binary.
     let previousFrontmost = NSWorkspace.shared.frontmostApplication
 
     let preExisting = Set(
@@ -172,8 +168,6 @@ public enum FirefoxHarness {
             Thread.sleep(forTimeInterval: 0.3)
             maximizeWindows(pid: app.processIdentifier)
           }
-          // Return focus to whoever owned it before — Firefox grabs
-          // the foreground during startup regardless of `open -g`.
           previousFrontmost?.activate()
           return app
         }
@@ -345,7 +339,24 @@ public enum FirefoxHarness {
   /// page area (excluding Firefox chrome buttons).
   public static func findWebAreaFrame(pid: pid_t) -> CGRect? {
     let app = AXUIElementCreateApplication(pid)
-    var queue: [AXUIElement] = [app]
+    var queue: [AXUIElement] = []
+    var focusedRaw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focusedRaw)
+      == .success,
+      let focused = focusedRaw,
+      CFGetTypeID(focused) == AXUIElementGetTypeID()
+    {
+      let element = (focused as! AXUIElement)
+      if role(of: element) == "AXWindow" { queue.append(element) }
+    }
+    var windowsRaw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRaw)
+      == .success,
+      let windows = windowsRaw as? [AXUIElement]
+    {
+      queue.append(contentsOf: windows.filter { role(of: $0) == "AXWindow" })
+    }
+    if queue.isEmpty { queue.append(app) }
     var visited = 0
     let maxNodes = 2000
     let screenH = primaryScreenHeight()
@@ -387,6 +398,14 @@ public enum FirefoxHarness {
       }
     }
     return nil
+  }
+
+  private static func role(of element: AXUIElement) -> String? {
+    var roleRaw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRaw)
+      == .success
+    else { return nil }
+    return roleRaw as? String
   }
 
   /// Build the `AppContext` Flash would pass to `AccessibilityProvider`

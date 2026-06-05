@@ -38,8 +38,12 @@ public enum OracleDiff {
 
   /// Pair Vimium anchors with Flash AX targets by greedy
   /// nearest-neighbour. A pair is a candidate when its rect centroids
-  /// are within 12pt OR their IoU ≥ 0.5. Each item on either side
-  /// matches at most once; ties broken by smallest centroid distance.
+  /// are within 12pt, their IoU ≥ 0.5, or one rect substantially
+  /// contains the other. The containment case handles Firefox AX
+  /// exposing a smaller text/icon rect inside Vimium's DOM clickable
+  /// rectangle; clicking either rect activates the same target.
+  /// Each item on either side matches at most once; ties broken by
+  /// smallest centroid distance.
   /// Unmatched entries are classified per side and checked against
   /// `allowList` for strict-ISO suppression.
   public static func classify(
@@ -57,7 +61,8 @@ public enum OracleDiff {
       for (fi, f) in flash.enumerated() {
         let dist = centroidDistance(v.screenRect, f.frame)
         let iou = iouRatio(v.screenRect, f.frame)
-        if dist <= 12 || iou >= 0.5 {
+        let containment = smallerOverlapRatio(v.screenRect, f.frame)
+        if dist <= 12 || iou >= 0.5 || containment >= 0.6 {
           candidates.append(Candidate(vIdx: vi, fIdx: fi, cost: dist))
         }
       }
@@ -121,7 +126,7 @@ public enum OracleDiff {
       case .flashOnly(let t):
         let line =
           "flashOnly   rect=\(rectString(t.frame)) "
-          + "axRole=\(t.role ?? "<nil>") id=\(t.id)"
+          + "axRole=\(t.role ?? "<nil>") label=\(quote(t.accessibilityLabel ?? "")) id=\(t.id)"
         if entry.suppressedByAllowList {
           recorder.pass("allow-listed " + line)
         } else {
@@ -145,7 +150,7 @@ public enum OracleDiff {
           AllowListEntry(
             side: .vimiumOnly,
             rect: rectArray(v.screenRect),
-            reason: "TODO — explain why this is acceptable",
+            reason: "explain why this divergence is acceptable before committing",
             axRole: nil,
             domSelector: v.tag.isEmpty ? nil : v.tag))
       case .flashOnly(let t):
@@ -153,7 +158,7 @@ public enum OracleDiff {
           AllowListEntry(
             side: .flashOnly,
             rect: rectArray(t.frame),
-            reason: "TODO — explain why this is acceptable",
+            reason: "explain why this divergence is acceptable before committing",
             axRole: t.role,
             domSelector: nil))
       }
@@ -177,6 +182,14 @@ public enum OracleDiff {
     let iArea = Double(inter.width * inter.height)
     let union = Double(a.width * a.height + b.width * b.height) - iArea
     return union > 0 ? iArea / union : 0
+  }
+
+  private static func smallerOverlapRatio(_ a: CGRect, _ b: CGRect) -> Double {
+    let inter = a.intersection(b)
+    if inter.isNull || inter.isEmpty { return 0 }
+    let smaller = min(a.width * a.height, b.width * b.height)
+    guard smaller > 0 else { return 0 }
+    return Double(inter.width * inter.height / smaller)
   }
 
   private static func rectString(_ r: CGRect) -> String {

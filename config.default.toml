@@ -5,7 +5,6 @@
 #
 #   $XDG_CONFIG_HOME/flash/flash.toml
 #   ~/.config/flash/flash.toml
-#   ~/.flash.toml
 #
 # The active file is watched for live reload.
 
@@ -24,6 +23,12 @@ min_length = 1
 # Modifiers that can be held on the final hint key and forwarded to the click.
 # Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
+
+[open]
+# App candidates hidden from :open and flash://app_open?name=...
+# Entries match display name, bundle identifier, bundle path, .app filename,
+# or app filename without .app, case-insensitively.
+ignored_apps = []
 
 [mode]
 # Labels shown in the mode overlay. The overlay width is based on the
@@ -61,10 +66,12 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 "G" = "flash://scroll_bottom"
 "gt" = "flash://tab_next"
 "gT" = "flash://tab_previous"
+"gN" = "flash://tab_select"
 "ctrl-o" = "flash://app_back"
 "ctrl-i" = "flash://app_forward"
 "gf" = "flash://frame_next"
 "gF" = "flash://frame_main"
+"i" = "flash://mode_insert"
 "f" = "flash://mouse_click"
 "rf" = "flash://mouse_click?right=1"
 "df" = "flash://mouse_click?double=1"
@@ -72,9 +79,9 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 "u" = "flash://app_undo"
 "ctrl-r" = "flash://app_redo"
 "x" = "flash://window_close"
+"t" = "flash://tab_new_insert"
 "/" = "flash://app_find"
 "o" = "flash://app_open_finder?all=1"
-"cmd+space" = "flash://app_open_finder?all=1"
 "O" = "flash://app_open_finder?all=1"
 "r" = "flash://app_reload"
 "?" = "flash://help_show"
@@ -93,19 +100,14 @@ show_bounds = false
 bounds_bg = "#00000000"
 bounds_fg = "#FF3B9A"
 
-# Emit profiling traces to stderr. In the installed app, stderr is available
-# under ~/Library/Logs/Flash/.
+# Emit profiling traces as JSON log lines.
 profile = false
 
 # Log activation profiles whose latency is at least this many milliseconds.
 # Set to 0 to disable slow logs.
 slow_ms = 100
 
-# Dump the AX tree to ~/Library/Logs/Flash/ax-dump.log on each activation.
-dump_ax = false
-
-# Mirror stderr diagnostics to ~/Library/Logs/Flash/flash.log.
-dump_logs = false
-
-# Accepted values: "trace", "debug", "info", "warn", "error".
+# Accepted values: "trace", "debug", "info", "warn", "error", "fatal".
+# Logs are newline-delimited JSON written to stderr and
+# ~/Library/Logs/Flash/flash.log. Set "trace" to include AX tree dumps.
 log_level = "info"

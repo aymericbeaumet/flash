@@ -31,6 +31,7 @@ struct NormalModeTransition: Equatable {
 
 enum NormalModeInterpreter {
   private static let maxRepeatCount = 999
+  static let sequenceTimeoutMs = 1_000
 
   private struct PendingState {
     var count: Int?
@@ -85,6 +86,7 @@ enum NormalModeInterpreter {
     }
 
     let keys = mappingKeys(
+      keyCode: keyCode,
       hasControl: hasControl,
       hasShift: independent.contains(.shift),
       ignoredChar: ignoredChar,
@@ -120,6 +122,16 @@ enum NormalModeInterpreter {
       let mapping = mappings.first(where: { $0.key == state.prefix })
     else { return nil }
     return (mapping.action.command, state.repeatCount)
+  }
+
+  static func pendingSequenceTimedOut(
+    pending: String,
+    lastInputAt: Date?,
+    now: Date = Date(),
+    timeoutMs: Int = sequenceTimeoutMs
+  ) -> Bool {
+    guard !pending.isEmpty, let lastInputAt else { return false }
+    return now.timeIntervalSince(lastInputAt) * 1_000 > Double(timeoutMs)
   }
 
   private static func pendingState(_ pending: String) -> PendingState {
@@ -166,6 +178,7 @@ enum NormalModeInterpreter {
   }
 
   private static func mappingKeys(
+    keyCode: UInt16,
     hasControl: Bool,
     hasShift: Bool,
     ignoredChar: Character?,
@@ -184,6 +197,16 @@ enum NormalModeInterpreter {
     }
     if keys.isEmpty, let ignoredChar {
       keys.append(String(ignoredChar))
+    }
+    switch Int(keyCode) {
+    case kVK_Tab:
+      if !keys.contains("tab") { keys.append("tab") }
+    case kVK_ForwardDelete:
+      for alias in ["delete_forward", "forward_delete"] where !keys.contains(alias) {
+        keys.append(alias)
+      }
+    default:
+      break
     }
     return keys
   }
@@ -474,7 +497,7 @@ enum NormalModeDispatcher {
 
     let indexedChars = rawCandidate.enumerated().compactMap { offset, ch -> (Int, Character)? in
       guard let scalar = String(ch).lowercased().unicodeScalars.first,
-        CharacterSet.alphanumerics.contains(scalar)
+        isSearchableScalar(scalar)
       else { return nil }
       return (offset, Character(String(scalar)))
     }
@@ -498,7 +521,7 @@ enum NormalModeDispatcher {
     var out = ""
     var previousWasSpace = false
     for scalar in value.lowercased().unicodeScalars {
-      if CharacterSet.alphanumerics.contains(scalar) {
+      if isSearchableScalar(scalar) {
         out.unicodeScalars.append(scalar)
         previousWasSpace = false
       } else if !previousWasSpace {
@@ -601,7 +624,7 @@ enum NormalModeDispatcher {
         score += 8
       } else {
         let previous = candidate[candidateIndex - 1]
-        if previous == " " || previous == "-" || previous == "_" || previous == "." {
+        if previous == " " || previous == "-" || previous == "_" || previous == "." || previous == "#" {
           score += 6
         }
       }
@@ -613,6 +636,10 @@ enum NormalModeDispatcher {
     }
     guard queryIndex == query.count else { return nil }
     return 140 + score - max(0, candidate.count - query.count) / 4
+  }
+
+  private static func isSearchableScalar(_ scalar: UnicodeScalar) -> Bool {
+    CharacterSet.alphanumerics.contains(scalar) || scalar.value == 35
   }
 
   private static func searchSegments(candidate: String) -> [String] {

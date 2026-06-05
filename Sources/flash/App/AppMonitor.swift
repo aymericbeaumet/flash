@@ -34,10 +34,11 @@ import os
 /// The result is deterministic: two activations in the same UI state
 /// always serve the same hint set. No partial model, no stale model.
 final class AppMonitor {
-  private let registry: ProviderRegistry
+  private let registry: SourceRegistry
 
   private let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
   var focusedElementDidChange: ((pid_t) -> Void)?
+  var focusedWindowGeometryDidChange: ((pid_t, String) -> Void)?
 
   // MARK: Config (shared between main + axQueue)
   //
@@ -88,7 +89,7 @@ final class AppMonitor {
   private static let modelDebounceMs: Int = 80
   private static let modelMaintenanceLeadMs: Int = 250
 
-  init(registry: ProviderRegistry, config: Config) {
+  init(registry: SourceRegistry, config: Config) {
     self.registry = registry
     self.config = config
   }
@@ -125,19 +126,22 @@ final class AppMonitor {
     }
   }
 
-  private static let observerCallback: AXObserverCallback = { _, _, _, refcon in
+  private static let observerCallback: AXObserverCallback = { _, _, notification, refcon in
     guard let refcon else { return }
     let ctx = Unmanaged<ObserverContext>.fromOpaque(refcon).takeUnretainedValue()
     guard let monitor = ctx.monitor else { return }
     let pid = ctx.pid
+    let notificationName = notification as String
     // AXObserver callbacks already run on the run loop that holds the
     // source — we add it to the main run loop below, so we're already
     // on main here. Hop anyway to make the invariant explicit and
     // bullet-proof against future relocation of the source.
     if Thread.isMainThread {
-      monitor.onAXEvent(pid: pid)
+      monitor.onAXEvent(pid: pid, notification: notificationName)
     } else {
-      DispatchQueue.main.async { monitor.onAXEvent(pid: pid) }
+      DispatchQueue.main.async {
+        monitor.onAXEvent(pid: pid, notification: notificationName)
+      }
     }
   }
 
@@ -162,6 +166,13 @@ final class AppMonitor {
     kAXRowExpandedNotification,
     kAXRowCollapsedNotification,
   ]
+
+  static func windowGeometryNotificationRequiresBorderSuspension(_ notification: String) -> Bool {
+    notification == kAXWindowMovedNotification
+      || notification == kAXWindowResizedNotification
+      || notification == kAXFocusedWindowChangedNotification
+      || notification == kAXMainWindowChangedNotification
+  }
 
   // MARK: Lifecycle
 
@@ -321,10 +332,13 @@ final class AppMonitor {
     cancelRefreshWork(for: pid)
   }
 
-  func onAXEvent(pid: pid_t) {
+  func onAXEvent(pid: pid_t, notification: String) {
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid)
-    scheduleModelRefresh(for: pid, reason: "ax")
+    scheduleModelRefresh(for: pid, reason: "ax:\(notification)")
+    if Self.windowGeometryNotificationRequiresBorderSuspension(notification) {
+      focusedWindowGeometryDidChange?(pid, notification)
+    }
     focusedElementDidChange?(pid)
   }
 
@@ -495,11 +509,11 @@ final class AppMonitor {
       completion?(nil)
       return
     }
-    if anyVolatileProviderApplies(to: context) {
+    if registry.anyVolatileSourceApplies(to: context) {
       completion?(nil)
       return
     }
-    let providers = continuousProviders(for: context)
+    let providers = registry.continuousSources(for: context)
     guard !providers.isEmpty else {
       completion?(nil)
       return
@@ -604,7 +618,7 @@ final class AppMonitor {
       installObserver(for: pid)
     }
 
-    if anyVolatileProviderApplies(to: context) {
+    if registry.anyVolatileSourceApplies(to: context) {
       runActivationDiscovery(
         context: context,
         profiler: profiler,
@@ -655,21 +669,6 @@ final class AppMonitor {
     }
   }
 
-  /// True iff any registered provider both (a) declares its results
-  /// volatile and (b) supports the given context. Called on the
-  /// activation hot path AND the model-builder path; keep volatile
-  /// providers' `supports` cheap.
-  private func anyVolatileProviderApplies(to context: AppContext) -> Bool {
-    for p in registry.providers where p.readinessPolicy == .volatile || p.resultsAreVolatile {
-      if p.supports(context) { return true }
-    }
-    return false
-  }
-
-  private func continuousProviders(for context: AppContext) -> [JumpProvider] {
-    registry.chain(for: context).filter { $0.readinessPolicy == .continuous }
-  }
-
   private func finishQueueWait(_ profiler: FlashProfiler?, since start: UInt64) {
     profiler?.finishInterval("ax_queue_wait", since: start)
   }
@@ -686,7 +685,7 @@ final class AppMonitor {
 
   private func buildPreparedModel(
     context: AppContext,
-    providers: [JumpProvider],
+    providers: [FlashSource],
     cfg: Config,
     dirtyToken: UInt64,
     configRevision: UInt64,
@@ -739,12 +738,12 @@ final class AppMonitor {
   private func runAndAssign(
     context: AppContext,
     cfg: Config,
-    providers: [JumpProvider],
+    providers: [FlashSource],
     targetFilter: ((JumpTarget) -> Bool)? = nil,
     profiler: FlashProfiler? = nil
   ) -> DiscoveryResult {
     let walkStart = profiler?.intervalStart()
-    configureProviders(for: cfg, triggerMs: profiler?.triggerMs)
+    configureRuntime(for: cfg)
     let frame = resolveDiscoveryFrame(for: context, profiler: profiler)
     guard !frame.visibleRegions.isEmpty else {
       if let walkStart {
@@ -833,7 +832,7 @@ final class AppMonitor {
 
   private func collectFocusedTargets(
     context focused: AppContext,
-    providers: [JumpProvider],
+    providers: [FlashSource],
     profiler: FlashProfiler? = nil
   ) -> [TargetCandidate] {
     var collected: [TargetCandidate] = []
@@ -884,31 +883,9 @@ final class AppMonitor {
     return NSScreen.main?.frame.height ?? 1080
   }
 
-  /// Push the current `Config` into the provider instances each walk
-  /// reads from. Called at the start of every walk so config hot-reloads
-  /// take effect on the very next activation. The trigger timestamp is
-  /// propagated so each dump line / log line can be correlated to the
-  /// activation that produced it.
-  ///   - `dump_ax`   → AX walker writes per-element trace to
-  ///                   ~/Library/Logs/Flash/ax-dump.log (rewritten per walk).
-  ///   - `dump_logs` → FlashLog mirrors all stderr writes to
-  ///                   ~/Library/Logs/Flash/flash.log (appended).
-  private func configureProviders(for cfg: Config, triggerMs: UInt64?) {
-    FlashLog.setMirrorToFile(cfg.debug.dumpLogs)
+  /// Push runtime config that should take effect on the next activation.
+  private func configureRuntime(for cfg: Config) {
     FlashLog.setLevel(cfg.debug.logLevel)
-
-    let ax = registry.providers.first { $0 is AccessibilityProvider } as? AccessibilityProvider
-    if let ax {
-      ax.triggerMs = triggerMs
-      if cfg.debug.dumpAx {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        ax.dumpURL =
-          home
-          .appendingPathComponent("Library/Logs/Flash/ax-dump.log")
-      } else {
-        ax.dumpURL = nil
-      }
-    }
   }
 
   // MARK: Context

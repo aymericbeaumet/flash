@@ -1,5 +1,6 @@
 import XCTest
 
+@testable import FlashCore
 @testable import FlashProviders
 
 final class TmuxProviderTests: XCTestCase {
@@ -23,6 +24,41 @@ final class TmuxProviderTests: XCTestCase {
     }
     XCTAssertEqual(out.map { $0.1 }, ["foo", "bar", "baz"])
     XCTAssertEqual(out.map { $0.0 }, [1, 5, 9])
+  }
+
+  // MARK: - tab targets
+
+  func testTmuxWindowIndicesTrimEmptyLines() {
+    let provider = TmuxProvider()
+    XCTAssertEqual(provider.tmuxWindowIndices(from: "\n1\n  3 \n\n8\n"), ["1", "3", "8"])
+  }
+
+  func testTmuxOrdinalTabUsesWindowListOrderNotNumericIndex() {
+    let provider = TmuxProvider()
+    let indices = ["1", "4", "9"]
+    XCTAssertEqual(
+      provider.tmuxTargetForOrdinalTab(2, session: "work", windowIndices: indices),
+      "work:4")
+    XCTAssertNil(provider.tmuxTargetForOrdinalTab(4, session: "work", windowIndices: indices))
+  }
+
+  func testTmuxAdjacentTabWrapsOverWindowListOrder() {
+    let provider = TmuxProvider()
+    let indices = ["1", "4", "9"]
+    XCTAssertEqual(
+      provider.tmuxTargetForAdjacentTab(
+        .next,
+        session: "work",
+        currentIndex: "9",
+        windowIndices: indices),
+      "work:1")
+    XCTAssertEqual(
+      provider.tmuxTargetForAdjacentTab(
+        .previous,
+        session: "work",
+        currentIndex: "1",
+        windowIndices: indices),
+      "work:9")
   }
 
   func testExtractWordsAlphanumericMix() {

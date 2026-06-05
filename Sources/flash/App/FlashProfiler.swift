@@ -2,9 +2,8 @@ import Foundation
 
 /// Lightweight activation/precompute profiler.
 ///
-/// The app is headless, so diagnostics go through `FlashLog` — that always
-/// writes to stderr, and additionally mirrors to
-/// `~/Library/Logs/Flash/flash.log` when `debug.dump_logs` is set.
+/// The app is headless, so diagnostics go through `FlashLog` as JSON lines
+/// written to stderr and `~/Library/Logs/Flash/flash.log`.
 final class FlashProfiler {
   private struct Mark {
     let name: String
@@ -33,8 +32,7 @@ final class FlashProfiler {
   private let lock = NSLock()
   /// Millisecond-precision wall-clock timestamp at the moment this
   /// profiler was created. Used as a stable correlation id across
-  /// stderr/file logs and the AX dump for the same activation —
-  /// every mouse_click trigger gets a unique value.
+  /// JSON log lines for the same activation.
   let triggerMs: UInt64
 
   init(kind: String, debug: Config.Debug, slowLogsEnabled: Bool = true) {

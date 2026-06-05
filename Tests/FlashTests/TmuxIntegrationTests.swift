@@ -264,6 +264,28 @@ final class TmuxIntegrationTests: XCTestCase {
     }
   }
 
+  func testWindowLifecycleCommandsSupportTabActions() throws {
+    try newSession(cols: 80, rows: 24)
+    let created = try XCTUnwrap(
+      run(
+        "new-window", "-P", "-F", "#{window_index}",
+        "-t", "s",
+        "-c", "/"
+      )?.trimmingCharacters(in: .whitespacesAndNewlines))
+    XCTAssertFalse(created.isEmpty)
+
+    let afterCreate = try XCTUnwrap(run("list-windows", "-t", "s", "-F", "#{window_index}"))
+      .split(separator: "\n")
+      .map(String.init)
+    XCTAssertTrue(afterCreate.contains(created))
+
+    XCTAssertNotNil(run("kill-window", "-t", "s:\(created)"))
+    let afterKill = try XCTUnwrap(run("list-windows", "-t", "s", "-F", "#{window_index}"))
+      .split(separator: "\n")
+      .map(String.init)
+    XCTAssertFalse(afterKill.contains(created))
+  }
+
   // MARK: - Helpers
 
   private func newSession(cols: Int, rows: Int) throws {

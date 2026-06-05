@@ -34,12 +34,10 @@ private func buildURLString(from args: [String]) -> String? {
   if rest.isEmpty {
     return "flash://\(command)"
   }
-  if (command == "app_open" || command == "open_app"), rest.count == 1, !rest[0].contains("=") {
+  if command == "app_open", rest.count == 1, !rest[0].contains("=") {
     return "flash://\(command)?name=\(percentEncode(rest[0]))"
   }
-  if (command == "alert_show" || command == "show_alert"),
-    !rest.contains(where: { $0.contains("=") })
-  {
+  if command == "alert_show", !rest.contains(where: { $0.contains("=") }) {
     return "flash://\(command)?message=\(percentEncode(rest.joined(separator: " ")))"
   }
   let query = rest.map { part -> String in

@@ -58,6 +58,19 @@ final class TargetFinalizerTests: XCTestCase {
     XCTAssertEqual(finalized.map(\.id), ["high"])
   }
 
+  func testDedupCollapsesSubstantiallyOverlappingShiftedTargets() {
+    let visible = CGRect(x: 0, y: 0, width: 300, height: 300)
+    let first = candidate(
+      id: "first",
+      frame: CGRect(x: 8, y: 210, width: 100, height: 22))
+    let shifted = candidate(
+      id: "shifted",
+      frame: CGRect(x: 28, y: 206, width: 100, height: 22))
+
+    let finalized = TargetFinalizer.finalize([first, shifted], visibleRegions: [visible])
+    XCTAssertEqual(finalized.count, 1)
+  }
+
   private func candidate(
     id: String,
     frame: CGRect,

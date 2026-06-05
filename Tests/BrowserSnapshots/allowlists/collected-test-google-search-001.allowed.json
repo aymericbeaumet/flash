@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "side": "vimiumOnly",
+      "rect": [1668, 928.5, 40, 40],
+      "reason": "Vimium marks a browser-account DOM target that Firefox AX does not expose as a page target in this snapshot.",
+      "domSelector": "a"
+    },
+    {
+      "side": "vimiumOnly",
+      "rect": [230, 743.23, 456.75, 40.5],
+      "reason": "Vimium marks a Google result card rectangle that Firefox AX exposes through a different matched descendant.",
+      "domSelector": "a"
+    },
+    {
+      "side": "vimiumOnly",
+      "rect": [230, 610.23, 517.25, 36.37],
+      "reason": "Vimium marks a Google result card rectangle that Firefox AX exposes through a different matched descendant.",
+      "domSelector": "a"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [11, 898.5, 110, 44],
+      "reason": "Firefox AX exposes a visible accessibility skip link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    }
+  ]
+}

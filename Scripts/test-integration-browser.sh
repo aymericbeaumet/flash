@@ -154,6 +154,11 @@ user_pref("browser.sessionstore.max_resumed_crashes", -1);
 user_pref("marionette.enabled", true);
 user_pref("marionette.port", 0);
 
+// Keep Firefox's page accessibility tree available to the AX oracle.
+// Firefox uses -1 to force-enable accessibility, 0 for platform default,
+// and 1 to force-disable it.
+user_pref("accessibility.force_disabled", -1);
+
 // Pin window geometry so fiducial calibration is stable run-to-run.
 user_pref("browser.window.width", 1280);
 user_pref("browser.window.height", 900);

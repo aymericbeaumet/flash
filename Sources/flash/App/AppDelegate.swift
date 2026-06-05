@@ -2,9 +2,12 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
+import FlashProviders
 
 enum InsertModeTransitionReason: Equatable {
   case explicitCommand
+  case normalModeInput
+  case pointerClick
   case hintCommit
   case advancedModeDisabled
 
@@ -12,12 +15,23 @@ enum InsertModeTransitionReason: Equatable {
     switch self {
     case .explicitCommand:
       return "explicit_command"
+    case .normalModeInput:
+      return "normal_mode_input"
+    case .pointerClick:
+      return "pointer_click"
     case .hintCommit:
       return "hint_commit"
     case .advancedModeDisabled:
       return "advanced_mode_disabled"
     }
   }
+}
+
+struct ModeOverlaySnapshot: Equatable {
+  var text: String
+  var visible: Bool
+  var captureInput: Bool
+  var inputMode: OverlayInputMode
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
@@ -27,53 +41,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case moveMouse
   }
 
-  private static let editableHintTargetRoles: Set<String> = [
-    "AXTextField",
-    "AXTextArea",
-    "AXComboBox",
-    "AXSearchField",
-  ]
+  private struct MovementEntry {
+    enum Kind {
+      case app
+      case candidate
+    }
 
-  private enum AppFinderScope {
-    case running
-    case all
-  }
-
-  private enum AppFinderCandidateKind {
-    case app
-    case tmuxWindow
-    case browserTab
-    case slackChannel
-  }
-
-  private struct AppFinderCandidate {
-    var kind: AppFinderCandidateKind
-    var sourceName: String
+    var kind: Kind
+    var key: String
     var pid: pid_t?
-    var name: String
-    var subtitle: String
-    var bundleIdentifier: String
-    var url: URL?
-    var tmuxClientTTY: String?
-    var tmuxTarget: String?
-    var targetElement: AXUIElement?
-    var displayTitle: String = ""
-    var normalizedSearchText: String = ""
+    var candidate: Candidate?
+
+    static func app(pid: pid_t) -> MovementEntry {
+      MovementEntry(kind: .app, key: "app:\(pid)", pid: pid, candidate: nil)
+    }
+
+    static func candidate(_ candidate: Candidate) -> MovementEntry {
+      let target =
+        candidate.tmuxTarget
+        ?? candidate.url?.absoluteString
+        ?? candidate.sourcePayload
+        ?? candidate.title
+      return MovementEntry(
+        kind: .candidate,
+        key: "candidate:\(candidate.sourceID):\(candidate.pid ?? 0):\(target)",
+        pid: candidate.pid,
+        candidate: candidate)
+    }
   }
 
-  private struct AppFinderMatch {
-    var candidate: AppFinderCandidate
-    var score: Int
-    var highlightedRanges: [Range<Int>]
-  }
-
-  private struct AppFinderSource {
-    var name: String
-    var candidates: (AppDelegate, AppFinderScope) -> [AppFinderCandidate]
+  private struct MovementIdentity: Equatable {
+    var key: String
   }
 
   private var config = Config.default
-  private var registry: ProviderRegistry!
+  private var registry: SourceRegistry!
   private var monitor: AppMonitor!
   private var overlay: OverlayPanel!
   private var alertPanel: AlertPanel!
@@ -90,29 +92,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var flashMode: FlashMode = .insert
   private var modeBadgeEnabled = false
   private var normalModeTargetPID: pid_t?
-  private var appFinderCandidates: [AppFinderCandidate] = []
-  private var appFinderMatches: [AppFinderMatch] = []
-  private var appFinderSelectedIndex = 0
-  private var appFinderScope: AppFinderScope = .all
-  private let appFinderCacheQueue = DispatchQueue(label: "flash.app_finder.cache", qos: .utility)
-  private var appFinderAllAppsCache: [AppFinderCandidate] = []
-  private var appFinderAllAppsCacheReady = false
-  private var appFinderAllAppsRefreshInFlight = false
-  private var appFinderDynamicCache: [AppFinderCandidate] = []
-  private var appFinderDynamicCacheTimestamp: TimeInterval = 0
-  private var appFinderDynamicRefreshInFlight = false
-  private let appFinderDynamicCacheTTL: TimeInterval = 1.0
+  private var candidateFinderCandidates: [Candidate] = []
+  private var candidateFinderMatches: [CandidateMatch] = []
+  private var candidateFinderSelectedIndex = 0
+  private var candidateFinderCurrentQuery = ""
+  private var candidateFinderScope: CandidateScope = .all
+  private let candidateFinderCacheQueue = DispatchQueue(label: "flash.candidate_finder.cache", qos: .utility)
+  private var candidateFinderRunningAppsCache: [Candidate] = []
+  private var candidateFinderRunningAppsCacheReady = false
+  private var candidateFinderRunningAppsRefreshInFlight = false
+  private var candidateFinderAllAppsCache: [Candidate] = []
+  private var candidateFinderAllAppsCacheReady = false
+  private var candidateFinderAllAppsRefreshInFlight = false
+  private var candidateFinderLiveRefreshTimer: DispatchSourceTimer?
   private var editableFocusSuppressedPID: pid_t?
   private var selectedInitialMode = false
   private var sourceAppPID: pid_t?
-  private var appHistoryCurrentPID: pid_t?
-  private var appHistoryBackStack: [pid_t] = []
-  private var appHistoryForwardStack: [pid_t] = []
-  private var appHistoryNavigationTargetPID: pid_t?
+  private var movementCurrent: MovementEntry?
+  private var movementBackStack: [MovementEntry] = []
+  private var movementForwardStack: [MovementEntry] = []
+  private var movementNavigationTargetKey: String?
   private var workspaceTokens: [NSObjectProtocol] = []
   private var resignKeyToken: NSObjectProtocol?
   private var normalModeRecaptureToken: UInt64 = 0
+  private var normalModeCaptureVerificationToken: UInt64 = 0
   private var normalModePendingCommandToken: UInt64 = 0
+  private var windowGeometryChangeToken: UInt64 = 0
+  private var windowGeometryChangeInProgress = false
+  private var activeWindowBorderTrackingTimer: DispatchSourceTimer?
+  private var activeWindowBorderTrackedFrame: CGRect?
   /// Set while an activation walk is in flight on the AX queue. New URL
   /// events that arrive during this window are dropped, not queued. Same
   /// guard rejects re-entry if hints are already on screen.
@@ -129,36 +137,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Reset to `false` if an activation walk returns zero targets, which
   /// is the symptom of permission revocation mid-session.
   private var cachedAccessibilityTrusted: Bool = false
-
-  private var applicationAppFinderSource: AppFinderSource {
-    AppFinderSource(name: "app") { app, scope in
-      switch scope {
-      case .running:
-        return app.runningAppFinderCandidates(sourceName: "app")
-      case .all:
-        return app.allAppFinderCandidates(sourceName: "app")
-      }
-    }
-  }
-
-  private var dynamicAppFinderSources: [AppFinderSource] {
-    [
-      AppFinderSource(name: "tmux") { app, _ in
-        app.tmuxWindowCandidates(sourceName: "tmux")
-      },
-      AppFinderSource(name: "browser-tabs") { app, _ in
-        app.browserTabCandidates()
-      },
-      AppFinderSource(name: "slack") { app, _ in
-        app.slackChannelCandidates(sourceName: "slack")
-      },
-    ]
-  }
+  private var activationInFlightGeneration: UInt64?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     config = ConfigLoader.load()
-    registry = ProviderRegistry()
+    registry = SourceRegistry(openConfig: config.open)
     monitor = AppMonitor(registry: registry, config: config)
+    monitor.focusedWindowGeometryDidChange = { [weak self] pid, notification in
+      self?.focusedWindowGeometryDidChange(pid: pid, notification: notification)
+    }
     monitor.start()
 
     overlay = OverlayPanel()
@@ -184,13 +171,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     if let app = NSWorkspace.shared.frontmostApplication,
       app.bundleIdentifier != Bundle.main.bundleIdentifier
     {
-      appHistoryCurrentPID = app.processIdentifier
+      movementCurrent = .app(pid: app.processIdentifier)
     }
     watchConfigFile()
     selectInitialModeIfNeeded()
     logPermissionState()
     installDismissObservers()
-    prewarmAppFinderCaches(reason: "launch")
+    prewarmCandidateFinderCaches(reason: "launch")
+    startCandidateFinderLiveRefresh()
   }
 
   private func handleURLCommand(_ cmd: URLCommand) {
@@ -208,9 +196,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterInsertMode()
     case .commandMode:
       enterCommandLineMode()
-    case .scroll, .reload, .undo, .redo, .close, .find, .appFinder, .copyURL,
-      .nextFrame, .mainFrame, .nextTab, .previousTab, .appBack, .appForward, .quitApp, .save,
-      .saveAndQuit, .print, .openDocument, .newWindow, .newTab, .copy, .cut, .paste, .copyAll:
+    case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .copyURL,
+      .nextFrame, .mainFrame, .tabNext, .tabPrev, .tabSelect, .appBack, .appForward, .quitApp,
+      .save, .saveAndQuit, .print, .openDocument, .newWindow, .tabNew, .tabNewInsert, .copy, .cut,
+      .paste, .copyAll:
       performMappedCommand(cmd)
     case .showAlert(let message):
       configErrorAlertVisible = false
@@ -227,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .quit:
       NSApp.terminate(nil)
     case .openApp(let name):
-      AppLauncher.activate(target: name)
+      openSourceItem(matching: name)
     case .moveWindow(let params):
       WindowMover.move(params)
     }
@@ -256,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         return
       }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        self.registry.refreshRunningApplications()
         self.recordAppActivation(app.processIdentifier)
         if self.flashMode == .normal {
           self.normalModeTargetPID = app.processIdentifier
@@ -272,20 +262,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       forName: NSWorkspace.activeSpaceDidChangeNotification,
       object: nil,
       queue: .main
-    ) { [weak self] _ in self?.cancelOverlay() }
+    ) { [weak self] _ in
+      guard let self else { return }
+      self.cancelOverlay()
+      if self.flashMode == .normal {
+        self.scheduleNormalModeRecapture()
+      }
+    }
     let appLaunched = nc.addObserver(
       forName: NSWorkspace.didLaunchApplicationNotification,
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      self?.invalidateAppFinderCaches(reason: "app_launch", refreshApps: false)
+      guard let self else { return }
+      self.registry.refreshRunningApplications()
+      self.invalidateCandidateFinderCaches(reason: "app_launch", refreshApps: false)
+      if self.flashMode == .normal {
+        self.scheduleNormalModeRecapture()
+      }
     }
     let appTerminated = nc.addObserver(
       forName: NSWorkspace.didTerminateApplicationNotification,
       object: nil,
       queue: .main
     ) { [weak self] _ in
-      self?.invalidateAppFinderCaches(reason: "app_terminate", refreshApps: false)
+      self?.registry.refreshRunningApplications()
+      self?.invalidateCandidateFinderCaches(reason: "app_terminate", refreshApps: false)
     }
     workspaceTokens = [appSwitch, activeSpace, appLaunched, appTerminated]
 
@@ -306,6 +308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    candidateFinderLiveRefreshTimer?.cancel()
+    candidateFinderLiveRefreshTimer = nil
+  }
 
   // MARK: Activation
 
@@ -384,6 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     activationGen &+= 1
     let myGen = activationGen
     activationInFlight = true
+    activationInFlightGeneration = myGen
     overlay.inputMode = .hints
     FlashLog.trace(
       "[activation] dispatch_discover gen=\(myGen) pid=\(context.processID) "
@@ -394,7 +402,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       targetFilter: targetFilter
     ) { [weak self] hints in
       guard let self else { return }
-      self.activationInFlight = false
+      if self.activationInFlightGeneration == myGen {
+        self.activationInFlight = false
+        self.activationInFlightGeneration = nil
+      }
       FlashLog.trace(
         "[activation] discover_complete gen=\(myGen) current_gen=\(self.activationGen) "
           + "hints=\(hints.count) mode=\(self.flashMode)")
@@ -471,6 +482,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     if currentHints.isEmpty && !activationInFlight {
       overlay.hide()
       applyModeOverlay()
+      refreshCurrentModeSideEffects(reason: "cancel_idle")
       return
     }
     overlay.hide()
@@ -478,13 +490,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     currentPrefix = ""
     sourceAppPID = nil
     pendingHintCommitBehavior = .click
-    // Invalidate any in-flight discovery walk's right to render. We
-    // *don't* clear `activationInFlight` here — the walk is still
-    // running on the AX queue and clearing the flag would let a fresh
-    // activation arrive and race with the previous walk's completion.
-    // Once the walk does complete, it checks the generation and bails.
-    activationGen &+= 1
+    invalidateActivation(reason: "cancel_overlay")
     applyModeOverlay()
+    refreshCurrentModeSideEffects(reason: "cancel_overlay")
   }
 
   private var lastPermissionPromptAt: Date?
@@ -531,15 +539,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     FlashLog.trace(
       "[mode] enter_normal from=\(flashMode) hints=\(currentHints.count) "
         + "in_flight=\(activationInFlight)")
-    flashMode = .normal
-    overlay.normalModePending = ""
-    overlay.commandLineText = ""
-    overlay.commandLineCursorIndex = 0
-    overlay.appFinderQuery = ""
-    appFinderCandidates = []
-    appFinderMatches = []
-    appFinderSelectedIndex = 0
+    transitionMode(to: .normal, reason: "explicit_normal")
+  }
+
+  private func enterInsertMode(
+    reason: InsertModeTransitionReason = .explicitCommand,
+    force: Bool = false
+  ) {
+    if flashMode == .normal, modeBadgeEnabled, !force,
+      !Self.normalModeMayEnterInsert(reason: reason)
+    {
+      FlashLog.debug(
+        "[mode] enter_insert_denied reason=\(reason.logValue) "
+          + "rule=normal_requires_hint_focus")
+      normalModePendingCommandToken &+= 1
+      resetModeInputState()
+      if overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder || overlay.inputMode == .help {
+        overlay.hide()
+      }
+      applyModeOverlay()
+      scheduleNormalModeRecapture()
+      return
+    }
+    FlashLog.debug("[mode] insert reason=\(reason.logValue)")
+    FlashLog.trace(
+      "[mode] enter_insert reason=\(reason.logValue) from=\(flashMode) hints=\(currentHints.count) "
+        + "in_flight=\(activationInFlight)")
+    transitionMode(to: .insert, reason: reason.logValue)
+  }
+
+  private func transitionMode(to nextMode: FlashMode, reason: String) {
+    let previousMode = flashMode
+    if previousMode != nextMode {
+      modeWillLeave(previousMode, to: nextMode, reason: reason)
+      flashMode = nextMode
+    }
+    clearTransientHintState(reason: "enter_\(nextMode)_\(reason)")
+    modeDidEnter(nextMode, from: previousMode, reason: reason)
+  }
+
+  private func invalidateActivation(reason: String) {
+    if activationInFlight || activationInFlightGeneration != nil {
+      FlashLog.trace(
+        "[activation] invalidate reason=\(reason) gen=\(activationGen) "
+          + "in_flight_gen=\(String(describing: activationInFlightGeneration))")
+    }
+    activationGen &+= 1
+    activationInFlight = false
+    activationInFlightGeneration = nil
+  }
+
+  private func clearTransientHintState(reason: String) {
+    let hadHints = !currentHints.isEmpty
+    let hadActivation = activationInFlight || activationInFlightGeneration != nil
+    if hadHints || hadActivation {
+      FlashLog.trace(
+        "[mode] clear_hints reason=\(reason) hints=\(currentHints.count) "
+          + "in_flight=\(activationInFlight)")
+    }
+    if hadHints {
+      overlay.hide()
+    }
+    currentHints = []
     currentPrefix = ""
+    sourceAppPID = nil
+    pendingHintCommitBehavior = .click
+    if hadActivation {
+      invalidateActivation(reason: reason)
+    }
+  }
+
+  private func modeWillLeave(_ mode: FlashMode, to nextMode: FlashMode, reason: String) {
+    FlashLog.trace("[mode] leave mode=\(mode) next=\(nextMode) reason=\(reason)")
+    switch mode {
+    case .insert:
+      windowGeometryChangeInProgress = false
+      windowGeometryChangeToken &+= 1
+      stopActiveWindowBorderTracking(reason: "leave_insert_\(reason)")
+      overlay.setActiveWindowBorder(around: nil)
+    case .normal:
+      normalModeRecaptureToken &+= 1
+    }
+  }
+
+  private func modeDidEnter(_ mode: FlashMode, from previousMode: FlashMode, reason: String) {
+    FlashLog.trace("[mode] did_enter mode=\(mode) from=\(previousMode) reason=\(reason)")
+    switch mode {
+    case .normal:
+      modeDidEnterNormal(reason: reason)
+    case .insert:
+      modeDidEnterInsert(reason: reason)
+    }
+  }
+
+  private func modeDidEnterNormal(reason: String) {
+    resetModeInputState()
     if let context = currentNonFlashContext() ?? normalModeContext() {
       normalModeTargetPID = context.processID
       suppressEditableFocus(for: context.processID)
@@ -551,78 +645,227 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     scheduleNormalModeRecapture()
   }
 
-  private func enterInsertMode(
-    reason: InsertModeTransitionReason = .explicitCommand,
-    force: Bool = false,
-    showFocusIndicator: Bool = true
-  ) {
-    if flashMode == .normal, modeBadgeEnabled, !force,
-      !Self.normalModeMayEnterInsert(reason: reason)
-    {
-      FlashLog.debug(
-        "[mode] enter_insert_denied reason=\(reason.logValue) "
-          + "rule=normal_requires_hint_focus")
-      normalModePendingCommandToken &+= 1
-      overlay.normalModePending = ""
-      overlay.commandLineText = ""
-      overlay.commandLineCursorIndex = 0
-      overlay.appFinderQuery = ""
-      appFinderCandidates = []
-      appFinderMatches = []
-      appFinderSelectedIndex = 0
-      currentPrefix = ""
-      if overlay.inputMode == .commandLine || overlay.inputMode == .appFinder || overlay.inputMode == .help {
-        overlay.hide()
-      }
-      applyModeOverlay()
-      scheduleNormalModeRecapture()
-      return
+  private func modeDidEnterInsert(reason: String) {
+    normalModeRecaptureToken &+= 1
+    normalModePendingCommandToken &+= 1
+    resetModeInputState()
+    normalModeTargetPID = nil
+    editableFocusSuppressedPID = nil
+    if currentHints.isEmpty {
+      overlay.hide()
     }
-    FlashLog.debug("[mode] insert reason=\(reason.logValue)")
-    FlashLog.trace(
-      "[mode] enter_insert reason=\(reason.logValue) from=\(flashMode) hints=\(currentHints.count) "
-        + "in_flight=\(activationInFlight)")
-    let focusFrame =
-      (currentNonFlashContext() ?? normalModeContext())
-      .flatMap { NormalModeDispatcher.focusedElementFrame(pid: $0.processID) }
-    flashMode = .insert
+    applyModeOverlay()
+    updateInsertModeActiveWindowBorder(reason: "enter_\(reason)")
+  }
+
+  private func refreshCurrentModeSideEffects(reason: String) {
+    switch flashMode {
+    case .insert:
+      updateInsertModeActiveWindowBorder(reason: reason)
+    case .normal:
+      break
+    }
+  }
+
+  private func focusedWindowGeometryDidChange(pid: pid_t, notification: String) {
+    guard let context = currentNonFlashContext(), context.processID == pid else { return }
+    beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
+  }
+
+  private func modeWillBeginWindowGeometryChange(reason: String) {
+    windowGeometryChangeInProgress = true
+    FlashLog.trace("[mode] window_geometry_begin mode=\(flashMode) reason=\(reason)")
+    switch flashMode {
+    case .insert:
+      overlay.setActiveWindowBorder(around: nil)
+    case .normal:
+      break
+    }
+  }
+
+  private func modeDidEndWindowGeometryChange(reason: String) {
+    windowGeometryChangeInProgress = false
+    FlashLog.trace("[mode] window_geometry_end mode=\(flashMode) reason=\(reason)")
+    switch flashMode {
+    case .insert:
+      updateInsertModeActiveWindowBorder(reason: "window_geometry_end_\(reason)")
+    case .normal:
+      break
+    }
+  }
+
+  private func resetModeInputState() {
     overlay.normalModePending = ""
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
-    overlay.appFinderQuery = ""
-    appFinderCandidates = []
-    appFinderMatches = []
-    appFinderSelectedIndex = 0
+    overlay.candidateFinderQuery = ""
+    candidateFinderCandidates = []
+    candidateFinderMatches = []
+    candidateFinderSelectedIndex = 0
+    candidateFinderCurrentQuery = ""
     currentPrefix = ""
-    normalModeTargetPID = nil
-    editableFocusSuppressedPID = nil
-    applyModeOverlay()
-    if currentHints.isEmpty {
-      overlay.hide()
-      applyModeOverlay()
+  }
+
+  private func updateInsertModeActiveWindowBorder(reason: String) {
+    let context = currentNonFlashContext()
+    guard
+      Self.activeWindowBorderShouldBeVisible(
+        mode: flashMode,
+        modeBadgeEnabled: modeBadgeEnabled,
+        hasHints: !currentHints.isEmpty,
+        windowGeometryChangeInProgress: windowGeometryChangeInProgress)
+    else {
+      overlay.setActiveWindowBorder(around: nil)
+      if !windowGeometryChangeInProgress {
+        stopActiveWindowBorderTracking(reason: "hidden_\(reason)")
+      }
+      return
     }
-    if showFocusIndicator, let focusFrame {
-      overlay.displayFocusIndicator(around: focusFrame)
+    FlashLog.trace("[mode] insert_border_update reason=\(reason)")
+    overlay.setActiveWindowBorder(around: context?.frontWindowFrame)
+    startActiveWindowBorderTracking(frame: context?.frontWindowFrame, reason: reason)
+  }
+
+  private func startActiveWindowBorderTracking(frame: CGRect?, reason: String) {
+    activeWindowBorderTrackedFrame = frame
+    guard activeWindowBorderTrackingTimer == nil else { return }
+
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(
+      deadline: .now() + .milliseconds(Self.activeWindowBorderTrackingIntervalMs),
+      repeating: .milliseconds(Self.activeWindowBorderTrackingIntervalMs),
+      leeway: .milliseconds(Self.activeWindowBorderTrackingLeewayMs))
+    timer.setEventHandler { [weak self] in
+      self?.pollActiveWindowBorderFrame()
+    }
+    activeWindowBorderTrackingTimer = timer
+    FlashLog.trace("[mode] insert_border_tracking_start reason=\(reason)")
+    timer.resume()
+  }
+
+  private func stopActiveWindowBorderTracking(reason: String) {
+    guard let timer = activeWindowBorderTrackingTimer else {
+      activeWindowBorderTrackedFrame = nil
+      return
+    }
+    timer.cancel()
+    activeWindowBorderTrackingTimer = nil
+    activeWindowBorderTrackedFrame = nil
+    FlashLog.trace("[mode] insert_border_tracking_stop reason=\(reason)")
+  }
+
+  private func pollActiveWindowBorderFrame() {
+    guard
+      Self.activeWindowBorderTrackingShouldRun(
+        mode: flashMode,
+        modeBadgeEnabled: modeBadgeEnabled,
+        hasHints: !currentHints.isEmpty)
+    else {
+      stopActiveWindowBorderTracking(reason: "state")
+      return
+    }
+
+    let frame = currentNonFlashContext()?.frontWindowFrame
+    guard
+      !Self.activeWindowBorderFramesApproximatelyEqual(
+        activeWindowBorderTrackedFrame,
+        frame,
+        tolerance: Self.activeWindowBorderFrameTolerance)
+    else { return }
+
+    beginTrackedWindowGeometryChange(reason: "frame_poll", frame: frame)
+  }
+
+  private func beginTrackedWindowGeometryChange(reason: String, frame: CGRect?) {
+    activeWindowBorderTrackedFrame = frame
+    windowGeometryChangeToken &+= 1
+    let token = windowGeometryChangeToken
+    modeWillBeginWindowGeometryChange(reason: reason)
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.windowGeometryQuietMs)) {
+      [weak self] in
+      guard let self, self.windowGeometryChangeToken == token else { return }
+      self.modeDidEndWindowGeometryChange(reason: reason)
+    }
+  }
+
+  static func activeWindowBorderShouldBeVisible(
+    mode: FlashMode,
+    modeBadgeEnabled: Bool,
+    hasHints: Bool,
+    windowGeometryChangeInProgress: Bool
+  ) -> Bool {
+    modeBadgeEnabled && mode == .insert && !hasHints && !windowGeometryChangeInProgress
+  }
+
+  static func activeWindowBorderTrackingShouldRun(
+    mode: FlashMode,
+    modeBadgeEnabled: Bool,
+    hasHints: Bool
+  ) -> Bool {
+    modeBadgeEnabled && mode == .insert && !hasHints
+  }
+
+  static func activeWindowBorderFramesApproximatelyEqual(
+    _ lhs: CGRect?,
+    _ rhs: CGRect?,
+    tolerance: CGFloat
+  ) -> Bool {
+    switch (lhs, rhs) {
+    case (.none, .none):
+      return true
+    case let (.some(lhs), .some(rhs)):
+      return abs(lhs.minX - rhs.minX) <= tolerance
+        && abs(lhs.minY - rhs.minY) <= tolerance
+        && abs(lhs.width - rhs.width) <= tolerance
+        && abs(lhs.height - rhs.height) <= tolerance
+    default:
+      return false
     }
   }
 
   static func normalModeMayEnterInsert(reason: InsertModeTransitionReason) -> Bool {
-    reason == .hintCommit
+    reason == .hintCommit || reason == .normalModeInput || reason == .pointerClick
+  }
+
+  static func modeOverlaySnapshot(
+    mode: FlashMode,
+    labels: Config.Mode.Labels,
+    visible: Bool,
+    hasHints: Bool,
+    activationInFlight: Bool,
+    captureOverride: Bool?
+  ) -> ModeOverlaySnapshot {
+    let canCapture = mode == .normal && !hasHints && !activationInFlight
+    let wantsCapture = captureOverride ?? canCapture
+    let capture = canCapture && wantsCapture
+    return ModeOverlaySnapshot(
+      text: mode == .normal ? labels.normal : labels.insert,
+      visible: visible,
+      captureInput: capture,
+      inputMode: capture ? .normal : .hints)
   }
 
   private func applyModeOverlay(captureOverride: Bool? = nil) {
-    let capture =
-      captureOverride
-      ?? (flashMode == .normal && currentHints.isEmpty && !activationInFlight)
-    FlashLog.trace(
-      "[mode] overlay mode=\(flashMode) capture=\(capture) override=\(String(describing: captureOverride)) "
-        + "visible=\(modeBadgeEnabled) hints=\(currentHints.count) in_flight=\(activationInFlight)")
-    overlay.inputMode = capture ? .normal : .hints
-    overlay.setModeBadge(
-      text: flashMode == .normal ? config.mode.labels.normal : config.mode.labels.insert,
+    let snapshot = Self.modeOverlaySnapshot(
+      mode: flashMode,
+      labels: config.mode.labels,
       visible: modeBadgeEnabled,
-      captureInput: capture,
+      hasHints: !currentHints.isEmpty,
+      activationInFlight: activationInFlight,
+      captureOverride: captureOverride)
+    FlashLog.trace(
+      "[mode] overlay mode=\(flashMode) capture=\(snapshot.captureInput) "
+        + "override=\(String(describing: captureOverride)) "
+        + "visible=\(modeBadgeEnabled) hints=\(currentHints.count) in_flight=\(activationInFlight)")
+    overlay.inputMode = snapshot.inputMode
+    overlay.setModeBadge(
+      text: snapshot.text,
+      visible: snapshot.visible,
+      captureInput: snapshot.captureInput,
       mode: flashMode)
+    if snapshot.captureInput {
+      verifyNormalModeCapture(reason: "apply_mode_overlay")
+    }
   }
 
   private func suppressEditableFocus(for pid: pid_t) {
@@ -633,8 +876,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private func scheduleNormalModeRecapture() {
     normalModeRecaptureToken &+= 1
     let token = normalModeRecaptureToken
-    FlashLog.trace("[mode] schedule_recapture token=\(token) delays=0,30,100,250,500,900,1400")
-    for delayMs in [0, 30, 100, 250, 500, 900, 1_400] {
+    FlashLog.trace(
+      "[mode] schedule_recapture token=\(token) delays="
+        + Self.normalModeRecaptureDelaysMs.map(String.init).joined(separator: ","))
+    for delayMs in Self.normalModeRecaptureDelaysMs {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
         guard let self else { return }
         guard self.normalModeRecaptureToken == token else {
@@ -654,12 +899,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
-  private func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
-    normalModeRecaptureToken &+= 1
-    FlashLog.trace(
-      "[mode] pointer_recapture_suppressed target=\(Self.pointerFocusLossTarget()) "
-        + "reason=preserve_menu_or_popup")
+  private func verifyNormalModeCapture(reason: String) {
+    normalModeCaptureVerificationToken &+= 1
+    let token = normalModeCaptureVerificationToken
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
+      guard let self, self.normalModeCaptureVerificationToken == token else { return }
+      guard self.shouldCaptureNormalModeInput else { return }
+      guard !self.overlay.keyboardCaptureIsActive else { return }
+      FlashLog.debug(
+        "[mode] capture_inactive reason=\(reason) key=\(self.overlay.isKeyWindow) "
+          + "first_responder=\(String(describing: self.overlay.firstResponder))")
+      self.scheduleNormalModeRecapture()
+    }
   }
+
+  private func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
+    FlashLog.trace(
+      "[mode] pointer_recapture_force target=\(Self.pointerFocusLossTarget()) "
+        + "reason=normal_mode_focus_contract")
+    scheduleNormalModeRecapture()
+  }
+
+  static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]
+  static let windowGeometryQuietMs = 160
+  static let activeWindowBorderTrackingIntervalMs = 50
+  static let activeWindowBorderTrackingLeewayMs = 10
+  static let activeWindowBorderFrameTolerance: CGFloat = 1
 
   private static func pointerFocusLossTarget() -> String {
     pointIsInMenuBar(NSEvent.mouseLocation) ? "menu_bar" : "window_or_popup"
@@ -682,7 +947,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var shouldCaptureNormalModeInput: Bool {
     guard flashMode == .normal, currentHints.isEmpty, !activationInFlight else { return false }
     switch overlay.inputMode {
-    case .commandLine, .help, .appFinder:
+    case .commandLine, .help, .candidateFinder:
       return false
     case .hints, .normal:
       return true
@@ -699,7 +964,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       "[mappings] action=\(command.diagnosticDescription) repeat=\(repeatCount)")
     switch command {
     case .insertMode:
-      enterInsertMode()
+      enterInsertMode(reason: .normalModeInput)
     case .normalMode:
       enterNormalMode()
     case .commandMode:
@@ -709,21 +974,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .reload:
       sendNormalModeKey(CGKeyCode(kVK_ANSI_R), flags: .maskCommand, repeatCount: repeatCount)
     case .undo:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_Z), flags: .maskCommand, repeatCount: repeatCount)
+      sendNormalModeKey(
+        CGKeyCode(kVK_ANSI_Z),
+        flags: .maskCommand,
+        repeatCount: repeatCount,
+        suppressInTerminalFor: command)
     case .redo:
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_Z),
         flags: [.maskCommand, .maskShift],
-        repeatCount: repeatCount)
+        repeatCount: repeatCount,
+        suppressInTerminalFor: command)
     case .close:
       sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: repeatCount)
+    case .tabClose:
+      tabCloseInNormalMode(repeatCount: repeatCount)
     case .find:
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_F),
         flags: .maskCommand,
         repeatCount: repeatCount)
-    case .appFinder(let all):
-      enterCommandLineMode(initialText: "open ", appFinderScope: all ? .all : .running)
+    case .candidateFinder(let all):
+      enterCommandLineMode(initialText: "open ", candidateFinderScope: all ? .all : .running)
     case .mouseClick(let action):
       guard let context = normalModeContext() else {
         FlashLog.debug("[mappings] no target app for mouse_click")
@@ -750,16 +1022,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .mainFrame:
       FlashLog.debug("[mappings] frame_main has no AX frame target in the focused app")
       applyModeOverlay()
-    case .nextTab:
-      sendNormalModeKey(
-        CGKeyCode(kVK_ANSI_RightBracket),
-        flags: [.maskCommand, .maskShift],
-        repeatCount: repeatCount)
-    case .previousTab:
-      sendNormalModeKey(
-        CGKeyCode(kVK_ANSI_LeftBracket),
-        flags: [.maskCommand, .maskShift],
-        repeatCount: repeatCount)
+    case .tabNext:
+      tabNextInNormalMode(repeatCount: repeatCount)
+    case .tabPrev:
+      tabPrevInNormalMode(repeatCount: repeatCount)
+    case .tabSelect(let explicitIndex):
+      tabSelectInNormalMode(index: explicitIndex ?? repeatCount)
     case .appBack:
       navigateAppHistory(direction: .back)
     case .appForward:
@@ -779,8 +1047,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       sendNormalModeKey(CGKeyCode(kVK_ANSI_O), flags: .maskCommand, repeatCount: repeatCount)
     case .newWindow:
       sendNormalModeKey(CGKeyCode(kVK_ANSI_N), flags: .maskCommand, repeatCount: repeatCount)
-    case .newTab:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: repeatCount)
+    case .tabNew:
+      tabNewInNormalMode(repeatCount: repeatCount)
+    case .tabNewInsert:
+      tabNewAndEnterInsertMode()
     case .copy:
       sendNormalModeKey(CGKeyCode(kVK_ANSI_C), flags: .maskCommand, repeatCount: repeatCount)
     case .cut:
@@ -807,622 +1077,233 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func enterCommandLineMode(
     initialText: String = "",
-    appFinderScope: AppFinderScope? = nil
+    candidateFinderScope: CandidateScope? = nil
   ) {
-    guard flashMode == .normal else { return }
+    guard
+      Self.commandLineEntryIsAllowed(
+        mode: flashMode,
+        hasHints: !currentHints.isEmpty,
+        activationInFlight: activationInFlight)
+    else { return }
+    normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
-    if let appFinderScope {
-      self.appFinderScope = appFinderScope
-      appFinderCandidates = appFinderCandidates(for: appFinderScope)
-      appFinderSelectedIndex = 0
+    clearTransientHintState(reason: "enter_command")
+    resetCommandLineState()
+    if let candidateFinderScope {
+      self.candidateFinderScope = candidateFinderScope
+      candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
+      candidateFinderSelectedIndex = 0
     } else {
-      self.appFinderScope = .all
-      clearAppFinderState()
+      self.candidateFinderScope = .all
+      clearCandidateFinderState()
     }
-    refreshCommandLine(text: initialText, cursorIndex: initialText.count)
+    overlay.setActiveWindowBorder(around: nil)
+    let command = Self.commandLineBuffer(from: initialText)
+    refreshCommandLine(text: command, cursorIndex: command.count)
+  }
+
+  static func commandLineEntryIsAllowed(
+    mode: FlashMode,
+    hasHints: Bool,
+    activationInFlight: Bool
+  ) -> Bool {
+    switch mode {
+    case .normal, .insert:
+      return true
+    }
   }
 
   private func showHelp() {
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
-    clearAppFinderState()
-    currentHints = []
-    currentPrefix = ""
-    sourceAppPID = nil
-    pendingHintCommitBehavior = .click
-    activationGen &+= 1
+    clearTransientHintState(reason: "enter_help")
+    clearCandidateFinderState()
     overlay.hide()
+    overlay.setActiveWindowBorder(around: nil)
     overlay.displayHelp(NormalModeDispatcher.helpText(config: config, showModes: modeBadgeEnabled))
   }
 
-  private func enterAppFinderMode(scope: AppFinderScope) {
+  private func enterCandidateFinderMode(scope: CandidateScope) {
     guard flashMode == .normal else { return }
     overlay.normalModePending = ""
-    overlay.appFinderQuery = ""
+    clearTransientHintState(reason: "enter_candidate_finder")
+    overlay.candidateFinderQuery = ""
     overlay.commandLineCursorIndex = 0
-    appFinderScope = scope
-    appFinderCandidates = appFinderCandidates(for: scope)
-    appFinderSelectedIndex = 0
-    refreshAppFinder(query: "")
+    candidateFinderScope = scope
+    candidateFinderCandidates = candidateFinderCandidates(for: scope)
+    candidateFinderSelectedIndex = 0
+    overlay.setActiveWindowBorder(around: nil)
+    refreshCandidateFinder(query: "")
   }
 
-  private func prewarmAppFinderCaches(reason: String) {
-    refreshAllAppFinderCandidatesAsync(reason: reason)
-    refreshDynamicAppFinderCandidatesAsync(reason: reason)
+  private func prewarmCandidateFinderCaches(reason: String) {
+    refreshCandidatesAsync(scope: .running, reason: reason)
+    refreshCandidatesAsync(scope: .all, reason: reason)
   }
 
-  private func invalidateAppFinderCaches(reason: String, refreshApps: Bool) {
-    FlashLog.trace("[app_finder] invalidate_cache reason=\(reason) refresh_apps=\(refreshApps)")
-    appFinderDynamicCacheTimestamp = 0
-    refreshDynamicAppFinderCandidatesAsync(reason: reason)
+  private func invalidateCandidateFinderCaches(reason: String, refreshApps: Bool) {
+    FlashLog.trace("[candidate_finder] refresh_cache reason=\(reason) refresh_apps=\(refreshApps)")
     if refreshApps {
-      appFinderAllAppsCacheReady = false
-      refreshAllAppFinderCandidatesAsync(reason: reason)
+      registry.refreshRunningApplications()
     }
+    prewarmCandidateFinderCaches(reason: reason)
   }
 
-  private func refreshVisibleAppFinderResultsFromCache() {
+  private func startCandidateFinderLiveRefresh() {
+    candidateFinderLiveRefreshTimer?.cancel()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(
+      deadline: .now() + .seconds(2),
+      repeating: .seconds(2),
+      leeway: .milliseconds(500))
+    timer.setEventHandler { [weak self] in
+      self?.prewarmCandidateFinderCaches(reason: "live")
+    }
+    timer.resume()
+    candidateFinderLiveRefreshTimer = timer
+  }
+
+  private func refreshVisibleCandidateFinderResultsFromCache() {
     guard overlay != nil else { return }
     switch overlay.inputMode {
     case .commandLine:
       guard NormalModeDispatcher.commandLineOpenAppQuery(overlay.commandLineText) != nil else {
         return
       }
-      appFinderCandidates = appFinderCandidates(for: appFinderScope)
+      candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
       refreshCommandLine(text: overlay.commandLineText, cursorIndex: overlay.commandLineCursorIndex)
-    case .appFinder:
-      appFinderCandidates = appFinderCandidates(for: appFinderScope)
-      refreshAppFinder(query: overlay.appFinderQuery)
+    case .candidateFinder:
+      candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
+      refreshCandidateFinder(query: overlay.candidateFinderQuery)
     case .hints, .normal, .help:
       return
     }
   }
 
-  private func refreshAllAppFinderCandidatesAsync(reason: String) {
-    guard !appFinderAllAppsRefreshInFlight else { return }
-    appFinderAllAppsRefreshInFlight = true
-    let roots = applicationSearchRoots()
-    FlashLog.trace("[app_finder] refresh_all_apps_start reason=\(reason)")
-    appFinderCacheQueue.async { [weak self] in
-      let candidates = Self.scanApplicationBundleCandidates(roots: roots)
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.appFinderAllAppsCache = self.prepareAppFinderCandidates(candidates)
-        self.appFinderAllAppsCacheReady = true
-        self.appFinderAllAppsRefreshInFlight = false
-        FlashLog.trace(
-          "[app_finder] refresh_all_apps_done count=\(self.appFinderAllAppsCache.count) "
-            + "reason=\(reason)")
-        self.refreshVisibleAppFinderResultsFromCache()
-      }
+  private func refreshCandidatesAsync(scope: CandidateScope, reason: String) {
+    switch scope {
+    case .running:
+      guard !candidateFinderRunningAppsRefreshInFlight else { return }
+      candidateFinderRunningAppsRefreshInFlight = true
+    case .all:
+      guard !candidateFinderAllAppsRefreshInFlight else { return }
+      candidateFinderAllAppsRefreshInFlight = true
     }
-  }
 
-  private func cachedDynamicAppFinderCandidates() -> [AppFinderCandidate] {
-    let now = Date().timeIntervalSinceReferenceDate
-    if now - appFinderDynamicCacheTimestamp > appFinderDynamicCacheTTL {
-      refreshDynamicAppFinderCandidatesAsync(reason: "ttl")
-    }
-    return appFinderDynamicCache
-  }
-
-  private func refreshDynamicAppFinderCandidatesAsync(reason: String) {
-    guard !appFinderDynamicRefreshInFlight else { return }
-    appFinderDynamicRefreshInFlight = true
-    FlashLog.trace("[app_finder] refresh_dynamic_start reason=\(reason)")
-    appFinderCacheQueue.async { [weak self] in
+    FlashLog.trace("[candidate_finder] refresh_start scope=\(scope) reason=\(reason)")
+    candidateFinderCacheQueue.async { [weak self] in
       guard let self else { return }
-      let candidates = self.prepareAppFinderCandidates(
-        self.dynamicAppFinderSources.flatMap { source in
-          let sourceCandidates = source.candidates(self, self.appFinderScope)
-          FlashLog.trace("[app_finder] source=\(source.name) count=\(sourceCandidates.count)")
-          return sourceCandidates
-        })
+      let candidates = self.registry.candidates(scope: scope)
       DispatchQueue.main.async {
-        self.appFinderDynamicCache = candidates
-        self.appFinderDynamicCacheTimestamp = Date().timeIntervalSinceReferenceDate
-        self.appFinderDynamicRefreshInFlight = false
+        switch scope {
+        case .running:
+          self.candidateFinderRunningAppsCache = candidates
+          self.candidateFinderRunningAppsCacheReady = true
+          self.candidateFinderRunningAppsRefreshInFlight = false
+        case .all:
+          self.candidateFinderAllAppsCache = candidates
+          self.candidateFinderAllAppsCacheReady = true
+          self.candidateFinderAllAppsRefreshInFlight = false
+        }
         FlashLog.trace(
-          "[app_finder] refresh_dynamic_done count=\(candidates.count) reason=\(reason)")
-        self.refreshVisibleAppFinderResultsFromCache()
+          "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) reason=\(reason)")
+        self.refreshVisibleCandidateFinderResultsFromCache()
       }
     }
   }
 
-  private func appFinderCandidates(for scope: AppFinderScope) -> [AppFinderCandidate] {
-    var candidates = applicationAppFinderSource.candidates(self, scope)
-    candidates.append(contentsOf: cachedDynamicAppFinderCandidates())
-    return prepareAppFinderCandidates(candidates)
-  }
-
-  private func runningAppFinderCandidates(sourceName: String) -> [AppFinderCandidate] {
-    let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
-    return NSWorkspace.shared.runningApplications.compactMap { app in
-      guard app.activationPolicy == .regular, !app.isTerminated else { return nil }
-      guard app.bundleIdentifier != flashBundleIdentifier else { return nil }
-      let name = app.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-      guard !name.isEmpty else { return nil }
-      return AppFinderCandidate(
-        kind: .app,
-        sourceName: sourceName,
-        pid: app.processIdentifier,
-        name: name,
-        subtitle: "app",
-        bundleIdentifier: app.bundleIdentifier ?? "",
-        url: app.bundleURL,
-        tmuxClientTTY: nil,
-        tmuxTarget: nil,
-        targetElement: nil)
-    }
-    .sorted { lhs, rhs in
-      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-    }
-  }
-
-  private func allAppFinderCandidates(sourceName: String) -> [AppFinderCandidate] {
-    var byIdentifier: [String: AppFinderCandidate] = [:]
-    var byPath: [String: AppFinderCandidate] = [:]
-
-    for candidate in runningAppFinderCandidates(sourceName: sourceName) {
-      if !candidate.bundleIdentifier.isEmpty {
-        byIdentifier[candidate.bundleIdentifier] = candidate
-      } else if let path = candidate.url?.path {
-        byPath[path] = candidate
+  private func candidateFinderCandidates(for scope: CandidateScope) -> [Candidate] {
+    switch scope {
+    case .running:
+      if !candidateFinderRunningAppsCacheReady {
+        refreshCandidatesAsync(scope: .running, reason: "cache_miss")
       }
-    }
-
-    if appFinderAllAppsCacheReady {
-      for candidate in appFinderAllAppsCache {
-        if !candidate.bundleIdentifier.isEmpty {
-          if byIdentifier[candidate.bundleIdentifier]?.pid == nil {
-            byIdentifier[candidate.bundleIdentifier] = candidate
-          }
-        } else if let path = candidate.url?.path {
-          byPath[path] = candidate
-        }
+      return candidateFinderRunningAppsCache
+    case .all:
+      if !candidateFinderAllAppsCacheReady {
+        refreshCandidatesAsync(scope: .all, reason: "cache_miss")
       }
-    } else {
-      refreshAllAppFinderCandidatesAsync(reason: "cache_miss")
-    }
-
-    let combined = Array(byIdentifier.values) + Array(byPath.values)
-    return combined.sorted { lhs, rhs in
-      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+      return candidateFinderAllAppsCacheReady ? candidateFinderAllAppsCache : candidateFinderRunningAppsCache
     }
   }
 
-  private func applicationSearchRoots() -> [URL] {
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    return [
-      URL(fileURLWithPath: "/Applications"),
-      URL(fileURLWithPath: "/System/Applications"),
-      URL(fileURLWithPath: "/System/Applications/Utilities"),
-      home.appendingPathComponent("Applications"),
-    ]
-  }
-
-  private static func scanApplicationBundleCandidates(roots: [URL]) -> [AppFinderCandidate] {
-    var byIdentifier: [String: AppFinderCandidate] = [:]
-    var byPath: [String: AppFinderCandidate] = [:]
-    for root in roots {
-      guard
-        let enumerator = FileManager.default.enumerator(
-          at: root,
-          includingPropertiesForKeys: [.isDirectoryKey],
-          options: [.skipsHiddenFiles, .skipsPackageDescendants])
-      else { continue }
-
-      for case let url as URL in enumerator {
-        guard url.pathExtension.lowercased() == "app" else { continue }
-        let candidate = appBundleCandidate(fromBundleURL: url)
-        if !candidate.bundleIdentifier.isEmpty {
-          byIdentifier[candidate.bundleIdentifier] = candidate
-        } else {
-          byPath[url.path] = candidate
-        }
-      }
-    }
-    return (Array(byIdentifier.values) + Array(byPath.values)).sorted { lhs, rhs in
-      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-    }
-  }
-
-  private static func appBundleCandidate(fromBundleURL url: URL) -> AppFinderCandidate {
-    let bundle = Bundle(url: url)
-    let info = bundle?.localizedInfoDictionary ?? bundle?.infoDictionary ?? [:]
-    let rawName =
-      (info["CFBundleDisplayName"] as? String)
-      ?? (info["CFBundleName"] as? String)
-      ?? url.deletingPathExtension().lastPathComponent
-    let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-    return AppFinderCandidate(
-      kind: .app,
-      sourceName: "app",
-      pid: nil,
-      name: name.isEmpty ? url.deletingPathExtension().lastPathComponent : name,
-      subtitle: "app",
-      bundleIdentifier: bundle?.bundleIdentifier ?? "",
-      url: url,
-      tmuxClientTTY: nil,
-      tmuxTarget: nil,
-      targetElement: nil)
-  }
-
-  private func appCandidate(fromBundleURL url: URL) -> AppFinderCandidate {
-    var candidate = Self.appBundleCandidate(fromBundleURL: url)
-    let bundleIdentifier = candidate.bundleIdentifier
-    let running = NSWorkspace.shared.runningApplications.first {
-      if !bundleIdentifier.isEmpty, $0.bundleIdentifier == bundleIdentifier {
-        return true
-      }
-      return $0.bundleURL == url
-    }
-    candidate.pid = running?.processIdentifier
-    return prepareAppFinderCandidate(candidate)
-  }
-
-  private func prepareAppFinderCandidates(_ candidates: [AppFinderCandidate]) -> [AppFinderCandidate] {
-    candidates.map(prepareAppFinderCandidate)
-  }
-
-  private func prepareAppFinderCandidate(_ candidate: AppFinderCandidate) -> AppFinderCandidate {
-    var prepared = candidate
-    prepared.displayTitle = appFinderDisplayTitle(candidate)
-    prepared.normalizedSearchText = NormalModeDispatcher.normalizedSearchText(
-      "\(candidate.sourceName) \(candidate.name) \(candidate.subtitle) \(candidate.bundleIdentifier)")
-    return prepared
-  }
-
-  private static let tmuxPath: String? = {
-    for path in [
-      "/opt/homebrew/bin/tmux",
-      "/usr/local/bin/tmux",
-      "/opt/local/bin/tmux",
-      "/usr/bin/tmux",
-    ] where FileManager.default.isExecutableFile(atPath: path) {
-      return path
-    }
-    return nil
-  }()
-
-  struct TmuxFinderClient: Equatable {
-    var tty: String
-    var session: String
-    var clientPID: pid_t
-    var terminalPID: pid_t?
-  }
-
-  struct TmuxFinderWindowSpec: Equatable {
-    var session: String
-    var index: String
-    var name: String
-    var tty: String?
-    var terminalPID: pid_t?
-
-    var title: String {
-      name.isEmpty ? "\(session):\(index)" : "\(session):\(index) \(name)"
-    }
-
-    var subtitle: String {
-      name.isEmpty ? "tmux \(session)" : "tmux \(session) \(name)"
-    }
-
-    var target: String {
-      "\(session):\(index)"
-    }
-  }
-
-  private func tmuxWindowCandidates(sourceName: String) -> [AppFinderCandidate] {
-    guard let tmux = Self.tmuxPath else { return [] }
-    let clients = tmuxFinderClients(tmux: tmux)
-    guard
-      let raw = runShell(
-        tmux,
-        [
-          "list-windows", "-a", "-F",
-          "#{session_name}\t#{window_index}\t#{window_name}",
-        ])
-    else { return [] }
-
-    return Self.tmuxFinderWindowSpecs(windowListRaw: raw, clients: clients).map { spec in
-      return AppFinderCandidate(
-        kind: .tmuxWindow,
-        sourceName: sourceName,
-        pid: spec.terminalPID,
-        name: spec.title,
-        subtitle: spec.subtitle,
-        bundleIdentifier: "",
-        url: nil,
-        tmuxClientTTY: spec.tty,
-        tmuxTarget: spec.target,
-        targetElement: nil)
-    }
-  }
-
-  private func tmuxFinderClients(tmux: String) -> [TmuxFinderClient] {
-    guard
-      let raw = runShell(
-        tmux, ["list-clients", "-F", "#{client_tty}\t#{session_name}\t#{client_pid}"])
-    else { return [] }
-    return Self.tmuxFinderClients(raw: raw) { clientPID in
-      terminalApplicationPID(hosting: clientPID)
-    }
-  }
-
-  static func tmuxFinderClients(
-    raw: String,
-    terminalPIDForClient: (pid_t) -> pid_t?
-  ) -> [TmuxFinderClient] {
-    return raw.split(separator: "\n").compactMap { line in
-      let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
-      guard parts.count == 3, let clientPID = pid_t(parts[2]) else { return nil }
-      return TmuxFinderClient(
-        tty: parts[0],
-        session: parts[1],
-        clientPID: clientPID,
-        terminalPID: terminalPIDForClient(clientPID))
-    }
-  }
-
-  static func tmuxFinderWindowSpecs(
-    windowListRaw raw: String,
-    clients: [TmuxFinderClient]
-  ) -> [TmuxFinderWindowSpec] {
-    let fallbackClient = clients.first { $0.terminalPID != nil } ?? clients.first
-    let clientBySession = Dictionary(
-      clients.map { ($0.session, $0) },
-      uniquingKeysWith: { first, second in
-        first.terminalPID != nil ? first : second
-      })
-    return raw.split(separator: "\n").compactMap { line in
-      let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
-      guard parts.count == 3 else { return nil }
-      let session = parts[0]
-      let client = clientBySession[session] ?? fallbackClient
-      return TmuxFinderWindowSpec(
-        session: session,
-        index: parts[1],
-        name: parts[2].trimmingCharacters(in: .whitespacesAndNewlines),
-        tty: client?.tty,
-        terminalPID: client?.terminalPID)
-    }
-  }
-
-  private func terminalApplicationPID(hosting descendant: pid_t) -> pid_t? {
-    NSWorkspace.shared.runningApplications.first { app in
-      app.activationPolicy == .regular
-        && Self.isAncestor(app.processIdentifier, of: descendant)
-    }?.processIdentifier
-  }
-
-  private static let browserBundleIdentifiers: Set<String> = [
-    "com.apple.Safari",
-    "com.apple.SafariTechnologyPreview",
-    "com.google.Chrome",
-    "com.google.Chrome.canary",
-    "org.chromium.Chromium",
-    "com.brave.Browser",
-    "com.microsoft.edgemac",
-    "com.microsoft.edgemac.Canary",
-    "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition",
-  ]
-
-  private func browserTabCandidates() -> [AppFinderCandidate] {
-    var out: [AppFinderCandidate] = []
-    var seen = Set<String>()
-    for app in NSWorkspace.shared.runningApplications {
-      guard app.activationPolicy == .regular, let bundleID = app.bundleIdentifier,
-        Self.browserBundleIdentifiers.contains(bundleID)
-      else { continue }
-      let appName = app.localizedName ?? "Browser"
-      let sourceName = Self.browserSourceName(bundleID: bundleID, appName: appName)
-      let axApp = AXUIElementCreateApplication(app.processIdentifier)
-      let windows = axElementArrayAttribute(axApp, kAXWindowsAttribute as String)
-      for window in windows {
-        let windowTitle = axStringAttribute(window, kAXTitleAttribute as String) ?? appName
-        for tab in browserTabElements(in: window) {
-          let title =
-            axStringAttribute(tab, kAXTitleAttribute as String)
-            ?? axStringAttribute(tab, kAXDescriptionAttribute as String)
-            ?? axStringAttribute(tab, kAXValueAttribute as String)
-            ?? windowTitle
-          let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-          guard !trimmed.isEmpty else { continue }
-          let key = "\(app.processIdentifier)|\(windowTitle)|\(trimmed)"
-          guard seen.insert(key).inserted else { continue }
-          out.append(
-            AppFinderCandidate(
-              kind: .browserTab,
-              sourceName: sourceName,
-              pid: app.processIdentifier,
-              name: trimmed,
-              subtitle: "\(appName) tab \(windowTitle)",
-              bundleIdentifier: bundleID,
-              url: nil,
-              tmuxClientTTY: nil,
-              tmuxTarget: nil,
-              targetElement: tab))
-        }
-      }
-    }
-    return out
-  }
-
-  private static func browserSourceName(bundleID: String, appName: String) -> String {
-    switch bundleID {
-    case "org.mozilla.firefox":
-      return "firefox"
-    case "org.mozilla.firefoxdeveloperedition":
-      return "firefox-dev"
-    case "com.google.Chrome", "com.google.Chrome.canary":
-      return "chrome"
-    case "com.brave.Browser":
-      return "brave"
-    case "com.microsoft.edgemac", "com.microsoft.edgemac.Canary":
-      return "edge"
-    case "com.apple.Safari", "com.apple.SafariTechnologyPreview":
-      return "safari"
-    default:
-      return appName.lowercased().replacingOccurrences(of: " ", with: "-")
-    }
-  }
-
-  private static let slackBundleIdentifiers: Set<String> = [
-    "com.tinyspeck.slackmacgap",
-    "com.tinyspeck.slackmacgap.direct",
-  ]
-
-  private func slackChannelCandidates(sourceName: String) -> [AppFinderCandidate] {
-    var out: [AppFinderCandidate] = []
-    var seen = Set<String>()
-    for app in NSWorkspace.shared.runningApplications {
-      guard app.activationPolicy == .regular, let bundleID = app.bundleIdentifier,
-        Self.slackBundleIdentifiers.contains(bundleID)
-      else { continue }
-      let axApp = AXUIElementCreateApplication(app.processIdentifier)
-      let windows = axElementArrayAttribute(axApp, kAXWindowsAttribute as String)
-      for window in windows {
-        for element in slackChannelElements(in: window) {
-          guard let channel = slackChannelName(for: element) else { continue }
-          let key = "\(app.processIdentifier)|\(channel)"
-          guard seen.insert(key).inserted else { continue }
-          out.append(
-            AppFinderCandidate(
-              kind: .slackChannel,
-              sourceName: sourceName,
-              pid: app.processIdentifier,
-              name: channel,
-              subtitle: "Slack channel",
-              bundleIdentifier: bundleID,
-              url: nil,
-              tmuxClientTTY: nil,
-              tmuxTarget: nil,
-              targetElement: element))
-        }
-      }
-    }
-    return out
-  }
-
-  private func slackChannelElements(in root: AXUIElement) -> [AXUIElement] {
-    var out: [AXUIElement] = []
-    var queue = [root]
-    var index = 0
-    while index < queue.count, index < 3_000 {
-      let element = queue[index]
-      index += 1
-      if slackChannelName(for: element) != nil {
-        out.append(element)
-      }
-      queue.append(contentsOf: axElementArrayAttribute(element, kAXChildrenAttribute as String))
-    }
-    return out
-  }
-
-  private func slackChannelName(for element: AXUIElement) -> String? {
-    let raw =
-      axStringAttribute(element, kAXTitleAttribute as String)
-      ?? axStringAttribute(element, kAXDescriptionAttribute as String)
-      ?? axStringAttribute(element, kAXValueAttribute as String)
-    guard let raw else { return nil }
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard trimmed.hasPrefix("#"), trimmed.count > 1 else { return nil }
-    return trimmed.split(separator: " ", maxSplits: 1).first.map(String.init)
-  }
-
-  private func browserTabElements(in root: AXUIElement) -> [AXUIElement] {
-    var out: [AXUIElement] = []
-    var queue = [root]
-    var index = 0
-    while index < queue.count, index < 2_000 {
-      let element = queue[index]
-      index += 1
-      let role = axStringAttribute(element, kAXRoleAttribute as String)
-      if role == "AXTab" || role == "AXRadioButton" {
-        out.append(element)
-      }
-      queue.append(contentsOf: axElementArrayAttribute(element, kAXChildrenAttribute as String))
-    }
-    return out
-  }
-
-  private func refreshAppFinder(query: String) {
-    updateAppFinderMatches(query: query)
-    overlay.displayAppFinder(query: query, items: appFinderDisplayItems())
+  private func refreshCandidateFinder(query: String) {
+    updateCandidateMatches(query: query)
+    overlay.displayCandidateFinder(query: query, items: candidateFinderDisplayItems())
   }
 
   private func refreshCommandLine(text: String, cursorIndex: Int? = nil) {
-    overlay.commandLineText = text
-    overlay.commandLineCursorIndex = cursorIndex ?? text.count
-    guard let query = NormalModeDispatcher.commandLineOpenAppQuery(text) else {
-      clearAppFinderState()
-      overlay.displayCommandLine(text, cursorIndex: overlay.commandLineCursorIndex)
+    let command = Self.commandLineBuffer(from: text)
+    overlay.commandLineText = command
+    overlay.commandLineCursorIndex = cursorIndex ?? command.count
+    guard let query = NormalModeDispatcher.commandLineOpenAppQuery(command) else {
+      clearCandidateFinderState()
+      overlay.displayCommandLine(command, cursorIndex: overlay.commandLineCursorIndex)
       return
     }
-    if appFinderCandidates.isEmpty {
-      appFinderCandidates = appFinderCandidates(for: appFinderScope)
-      appFinderSelectedIndex = 0
+    if candidateFinderCandidates.isEmpty {
+      candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
+      candidateFinderSelectedIndex = 0
     }
-    updateAppFinderMatches(query: query)
+    updateCandidateMatches(query: query)
     overlay.displayCommandLine(
-      text,
-      suggestions: appFinderDisplayItems(windowSize: 5),
+      command,
+      suggestions: candidateFinderDisplayItems(windowSize: 5),
       cursorIndex: overlay.commandLineCursorIndex)
   }
 
-  private func updateAppFinderMatches(query: String) {
+  static func commandLineBuffer(from raw: String) -> String {
+    raw.hasPrefix(":") ? raw : ":\(raw)"
+  }
+
+  private func updateCandidateMatches(query: String) {
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(trimmed)
-    let scored: [AppFinderMatch] = appFinderCandidates.compactMap { candidate in
-      let title = candidate.displayTitle.isEmpty ? appFinderDisplayTitle(candidate) : candidate.displayTitle
-      if normalizedQuery.isEmpty {
-        return AppFinderMatch(candidate: candidate, score: 0, highlightedRanges: [])
+    candidateFinderCurrentQuery = trimmed
+    let scored: [CandidateMatch] = candidateFinderCandidates.compactMap { candidate in
+      if trimmed.isEmpty {
+        return CandidateMatch(candidate: candidate, score: 0)
       }
-      guard
-        let score = NormalModeDispatcher.fuzzyScore(
-          normalizedQuery: normalizedQuery,
-          normalizedCandidate: candidate.normalizedSearchText)
-      else { return nil }
-      return AppFinderMatch(
-        candidate: candidate,
-        score: score,
-        highlightedRanges: NormalModeDispatcher.fuzzyHighlightRanges(
-          query: trimmed,
-          candidate: title))
+      guard let score = CandidateFinder.score(query: trimmed, candidate: candidate) else { return nil }
+      return CandidateMatch(candidate: candidate, score: score)
     }
-    appFinderMatches = scored.sorted { lhs, rhs in
+    candidateFinderMatches = scored.sorted { lhs, rhs in
       if lhs.score != rhs.score { return lhs.score > rhs.score }
-      return lhs.candidate.name.localizedCaseInsensitiveCompare(rhs.candidate.name)
+      return lhs.candidate.title.localizedCaseInsensitiveCompare(rhs.candidate.title)
         == .orderedAscending
     }
-    if appFinderMatches.isEmpty {
-      appFinderSelectedIndex = 0
+    if candidateFinderMatches.isEmpty {
+      candidateFinderSelectedIndex = 0
     } else {
-      appFinderSelectedIndex = min(max(appFinderSelectedIndex, 0), appFinderMatches.count - 1)
+      candidateFinderSelectedIndex = min(max(candidateFinderSelectedIndex, 0), candidateFinderMatches.count - 1)
     }
   }
 
-  private func appFinderDisplayItems(windowSize: Int = 6) -> [AppFinderDisplayItem] {
-    guard !appFinderMatches.isEmpty else { return [] }
-    let maxStart = max(0, appFinderMatches.count - windowSize)
-    let start = min(max(0, appFinderSelectedIndex - windowSize / 2), maxStart)
-    let end = min(appFinderMatches.count, start + windowSize)
-    return appFinderMatches[start..<end].enumerated().map { offset, match in
-      AppFinderDisplayItem(
-        title: match.candidate.displayTitle.isEmpty
-          ? appFinderDisplayTitle(match.candidate) : match.candidate.displayTitle,
-        highlightedRanges: match.highlightedRanges,
-        isSelected: start + offset == appFinderSelectedIndex)
+  private func candidateFinderDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
+    guard !candidateFinderMatches.isEmpty else { return [] }
+    let maxStart = max(0, candidateFinderMatches.count - windowSize)
+    let start = min(max(0, candidateFinderSelectedIndex - windowSize / 2), maxStart)
+    let end = min(candidateFinderMatches.count, start + windowSize)
+    return candidateFinderMatches[start..<end].enumerated().map { offset, match in
+      let title =
+        match.candidate.displayTitle.isEmpty
+        ? candidateFinderDisplayTitle(match.candidate) : match.candidate.displayTitle
+      return CandidateDisplayItem(
+        title: title,
+        highlightedRanges: candidateFinderCurrentQuery.isEmpty
+          ? []
+          : NormalModeDispatcher.fuzzyHighlightRanges(
+            query: candidateFinderCurrentQuery,
+            candidate: title),
+        isSelected: start + offset == candidateFinderSelectedIndex)
     }
   }
 
-  private func appFinderDisplayTitle(_ candidate: AppFinderCandidate) -> String {
-    Self.appFinderDisplayTitle(sourceName: candidate.sourceName, name: candidate.name)
+  private func candidateFinderDisplayTitle(_ candidate: Candidate) -> String {
+    CandidateFinder.displayTitle(candidate)
   }
 
-  static func appFinderDisplayTitle(sourceName: String, name: String) -> String {
-    "[\(sourceName)] \(name)"
+  static func candidateFinderDisplayTitle(source: String, title: String) -> String {
+    CandidateFinder.displayTitle(source: source, title: title)
   }
 
   private func submitCommandLine(_ raw: String) {
@@ -1431,9 +1312,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return
     }
     overlay.hide()
+    resetCommandLineState()
+    applyModeOverlay(captureOverride: false)
+    refreshCurrentModeSideEffects(reason: "command_submit")
     guard let command = NormalModeDispatcher.commandLineCommand(raw) else {
-      FlashLog.debug("[normal_mode] unknown command :\(raw)")
+      FlashLog.debug("[normal_mode] unknown command \(raw)")
       applyModeOverlay()
+      refreshCurrentModeSideEffects(reason: "command_unknown")
       return
     }
     performCommandLineCommand(command)
@@ -1454,7 +1339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .newWindow:
       performMappedCommand(.newWindow)
     case .newTab:
-      performMappedCommand(.newTab)
+      performMappedCommand(.tabNew)
     case .close:
       performMappedCommand(.close)
     case .find:
@@ -1475,22 +1360,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private func submitSelectedCommandLineApp() {
-    guard !appFinderMatches.isEmpty else {
+    guard !candidateFinderMatches.isEmpty else {
       overlay.hide()
-      clearAppFinderState()
+      resetCommandLineState()
       applyModeOverlay()
+      refreshCurrentModeSideEffects(reason: "command_open_empty")
       return
     }
-    let candidate = appFinderMatches[min(appFinderSelectedIndex, appFinderMatches.count - 1)]
+    let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
       .candidate
-    openAppFinderCandidate(candidate)
+    openSourceItem(candidate)
   }
 
-  private func clearAppFinderState() {
-    overlay.appFinderQuery = ""
-    appFinderCandidates = []
-    appFinderMatches = []
-    appFinderSelectedIndex = 0
+  private func resetCommandLineState() {
+    overlay.commandLineText = ""
+    overlay.commandLineCursorIndex = 0
+    overlay.candidateFinderQuery = ""
+    candidateFinderScope = .all
+    clearCandidateFinderState()
+  }
+
+  private func clearCandidateFinderState() {
+    overlay.candidateFinderQuery = ""
+    candidateFinderCandidates = []
+    candidateFinderMatches = []
+    candidateFinderSelectedIndex = 0
+    candidateFinderCurrentQuery = ""
   }
 
   private func quitNormalModeTargetApp(force: Bool = false) {
@@ -1542,10 +1437,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private func sendNormalModeKey(
     _ key: CGKeyCode,
     flags: CGEventFlags = [],
-    repeatCount: Int = 1
+    repeatCount: Int = 1,
+    suppressInTerminalFor command: URLCommand? = nil
   ) {
     guard let context = normalModeContext() else {
       FlashLog.debug("[normal_mode] no target app for key \(key)")
+      applyModeOverlay()
+      return
+    }
+    if let command,
+      Self.normalModeCommandKeyShortcutIsUnsafeInTerminal(
+        command,
+        bundleIdentifier: context.bundleIdentifier)
+    {
+      FlashLog.debug(
+        "[normal_mode] suppress terminal shortcut command=\(command.diagnosticDescription) "
+          + "bundle=\(context.bundleIdentifier)")
       applyModeOverlay()
       return
     }
@@ -1577,12 +1484,180 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
+  private func tabSelectInNormalMode(index: Int) {
+    let index = normalizedRepeatCount(index)
+    guard let context = normalModeContext() else {
+      FlashLog.debug("[normal_mode] no target app for tab_select index=\(index)")
+      applyModeOverlay()
+      return
+    }
+    registry.tabSelect(at: index, in: context) { [weak self] result in
+      guard let self else { return }
+      if result.didPerform {
+        if let pid = result.targetPID {
+          self.normalModeTargetPID = pid
+        }
+        self.scheduleNormalModeRecapture()
+        return
+      }
+      guard let key = Self.tabIndexKeyCode(index) else {
+        FlashLog.debug("[normal_mode] tab_select unsupported index=\(index)")
+        self.applyModeOverlay()
+        return
+      }
+      self.sendNormalModeKey(key, flags: .maskCommand)
+    }
+  }
+
+  private func tabNextInNormalMode(repeatCount: Int) {
+    performTabSourceAction(
+      name: "tab_next",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.tabNext(in: context, completion: completion)
+      },
+      fallback: { [weak self] count in
+        self?.sendNormalModeKey(
+          CGKeyCode(kVK_ANSI_RightBracket),
+          flags: [.maskCommand, .maskShift],
+          repeatCount: count)
+      })
+  }
+
+  private func tabPrevInNormalMode(repeatCount: Int) {
+    performTabSourceAction(
+      name: "tab_previous",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.tabPrev(in: context, completion: completion)
+      },
+      fallback: { [weak self] count in
+        self?.sendNormalModeKey(
+          CGKeyCode(kVK_ANSI_LeftBracket),
+          flags: [.maskCommand, .maskShift],
+          repeatCount: count)
+      })
+  }
+
+  private func tabNewInNormalMode(repeatCount: Int) {
+    performTabSourceAction(
+      name: "tab_new",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.tabNew(in: context, completion: completion)
+      },
+      fallback: { [weak self] count in
+        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count)
+      })
+  }
+
+  private func tabCloseInNormalMode(repeatCount: Int) {
+    performTabSourceAction(
+      name: "tab_close",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.tabClose(in: context, completion: completion)
+      },
+      fallback: { [weak self] count in
+        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
+      })
+  }
+
+  private func performTabSourceAction(
+    name: String,
+    repeatCount: Int,
+    action: @escaping (
+      SourceRegistry,
+      AppContext,
+      @escaping (SourceActionResult) -> Void
+    ) -> Void,
+    fallback: @escaping (Int) -> Void
+  ) {
+    guard let context = normalModeContext() else {
+      FlashLog.debug("[normal_mode] no target app for \(name)")
+      applyModeOverlay()
+      return
+    }
+    let count = normalizedRepeatCount(repeatCount)
+
+    func attempt(_ remaining: Int) {
+      guard remaining > 0 else {
+        scheduleNormalModeRecapture()
+        return
+      }
+      action(registry, context) { [weak self] result in
+        guard let self else { return }
+        if result.didPerform {
+          if let pid = result.targetPID {
+            self.normalModeTargetPID = pid
+          }
+          attempt(remaining - 1)
+          return
+        }
+        fallback(remaining)
+      }
+    }
+
+    attempt(count)
+  }
+
+  private func tabNewAndEnterInsertMode() {
+    guard let context = normalModeContext() else {
+      FlashLog.debug("[normal_mode] no target app for tab_new_insert")
+      applyModeOverlay()
+      return
+    }
+    registry.tabNew(in: context) { [weak self] result in
+      guard let self else { return }
+      if !result.didPerform {
+        NormalModeDispatcher.sendKey(
+          virtualKey: CGKeyCode(kVK_ANSI_T),
+          flags: .maskCommand,
+          to: context.processID)
+      }
+      let targetPID = result.targetPID ?? context.processID
+      self.normalModeTargetPID = targetPID
+      self.suppressEditableFocus(for: targetPID)
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(60)) { [weak self] in
+        self?.enterInsertMode(reason: .normalModeInput)
+      }
+    }
+  }
+
+  private static func tabIndexKeyCode(_ index: Int) -> CGKeyCode? {
+    switch index {
+    case 1: return CGKeyCode(kVK_ANSI_1)
+    case 2: return CGKeyCode(kVK_ANSI_2)
+    case 3: return CGKeyCode(kVK_ANSI_3)
+    case 4: return CGKeyCode(kVK_ANSI_4)
+    case 5: return CGKeyCode(kVK_ANSI_5)
+    case 6: return CGKeyCode(kVK_ANSI_6)
+    case 7: return CGKeyCode(kVK_ANSI_7)
+    case 8: return CGKeyCode(kVK_ANSI_8)
+    case 9: return CGKeyCode(kVK_ANSI_9)
+    default: return nil
+    }
+  }
+
+  static func normalModeCommandKeyShortcutIsUnsafeInTerminal(
+    _ command: URLCommand,
+    bundleIdentifier: String
+  ) -> Bool {
+    guard TmuxProvider.terminalBundles.contains(bundleIdentifier) else { return false }
+    switch command {
+    case .undo, .redo:
+      return true
+    default:
+      return false
+    }
+  }
+
   private func copyFocusedDocumentURL() {
     guard let context = normalModeContext() else {
       FlashLog.debug("[normal_mode] no target app for copyDocumentURL")
       return
     }
-    guard let url = NormalModeDispatcher.documentURL(pid: context.processID) else {
+    guard let url = registry.documentURL(in: context) else {
       FlashLog.debug(
         "[normal_mode] no AX document URL exposed by \(context.bundleIdentifier)")
       return
@@ -1609,87 +1684,203 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private func recordAppActivation(_ pid: pid_t) {
-    guard pid > 0 else { return }
-    if appHistoryNavigationTargetPID == pid {
-      appHistoryNavigationTargetPID = nil
-      appHistoryCurrentPID = pid
-      pruneAppHistoryStacks()
-      FlashLog.trace("[app_history] activation target=\(pid) source=navigation")
+    recordMovement(.app(pid: pid), source: "app_activation")
+  }
+
+  private func recordMovement(_ entry: MovementEntry, source: String) {
+    guard let identity = movementIdentity(entry) else { return }
+    if movementNavigationTargetKey == identity.key {
+      movementNavigationTargetKey = nil
+      movementCurrent = entry
+      pruneMovementStacks()
+      FlashLog.trace("[movement] activation target=\(identity.key) raw=\(entry.key) source=navigation")
       return
     }
-    guard appHistoryCurrentPID != pid else { return }
-    if let current = appHistoryCurrentPID, NSRunningApplication(processIdentifier: current) != nil {
-      appendAppHistoryPID(current, to: &appHistoryBackStack)
+    if let current = movementCurrent,
+      let currentIdentity = movementIdentity(current),
+      currentIdentity.key == identity.key
+    {
+      movementCurrent = entry
+      movementNavigationTargetKey = nil
+      pruneMovementStacks()
+      FlashLog.trace("[movement] coalesced source=\(source) current=\(identity.key) raw=\(entry.key)")
+      return
     }
-    appHistoryCurrentPID = pid
-    appHistoryForwardStack.removeAll(keepingCapacity: true)
-    pruneAppHistoryStacks()
+    if let current = movementCurrent,
+      movementEntriesShareActivation(current, entry)
+    {
+      movementNavigationTargetKey = nil
+      pruneMovementStacks()
+      FlashLog.trace("[movement] coalesced_activation source=\(source) current=\(identity.key) raw=\(entry.key)")
+      return
+    }
+    if let current = movementCurrent {
+      appendMovementEntry(current, to: &movementBackStack)
+    }
+    movementCurrent = entry
+    movementForwardStack.removeAll(keepingCapacity: true)
+    pruneMovementStacks()
     FlashLog.trace(
-      "[app_history] activation current=\(pid) back=\(appHistoryBackStack.count) "
-        + "forward=\(appHistoryForwardStack.count)")
+      "[movement] record source=\(source) current=\(identity.key) raw=\(entry.key) back=\(movementBackStack.count) "
+        + "forward=\(movementForwardStack.count)")
   }
 
   private func navigateAppHistory(direction: AppHistoryDirection) {
-    let current = currentNonFlashContext()?.processID ?? appHistoryCurrentPID
-    if let current {
-      appHistoryCurrentPID = current
-    }
+    let current = currentMovementEntry()
+    if let current { movementCurrent = current }
 
+    var sourceStack: [MovementEntry]
+    var destinationStack: [MovementEntry]
+    let label: String
     switch direction {
     case .back:
-      navigateAppHistory(
-        source: &appHistoryBackStack,
-        destination: &appHistoryForwardStack,
-        current: current,
-        label: "back")
+      sourceStack = movementBackStack
+      destinationStack = movementForwardStack
+      label = "back"
     case .forward:
-      navigateAppHistory(
-        source: &appHistoryForwardStack,
-        destination: &appHistoryBackStack,
-        current: current,
-        label: "forward")
+      sourceStack = movementForwardStack
+      destinationStack = movementBackStack
+      label = "forward"
     }
-  }
 
-  private func navigateAppHistory(
-    source: inout [pid_t],
-    destination: inout [pid_t],
-    current: pid_t?,
-    label: String
-  ) {
-    while let target = source.popLast() {
-      guard let app = NSRunningApplication(processIdentifier: target), !app.isTerminated else {
+    while let target = sourceStack.popLast() {
+      guard movementEntryIsRestorable(target) else {
         continue
       }
-      if let current, current != target {
-        appendAppHistoryPID(current, to: &destination)
+      let targetIdentity = movementIdentity(target)
+      if let current,
+        let currentIdentity = movementIdentity(current),
+        currentIdentity.key != targetIdentity?.key
+      {
+        appendMovementEntry(current, to: &destinationStack)
       }
-      appHistoryCurrentPID = target
-      appHistoryNavigationTargetPID = target
-      normalModeTargetPID = target
-      suppressEditableFocus(for: target)
-      FlashLog.debug("[app_history] navigate \(label) target=\(target)")
-      app.activate(options: [.activateAllWindows])
-      applyModeOverlay(captureOverride: true)
-      scheduleNormalModeRecapture()
+      movementCurrent = target
+      movementNavigationTargetKey = targetIdentity?.key
+      storeMovementStacks(source: sourceStack, destination: destinationStack, direction: direction)
+      FlashLog.debug("[movement] navigate \(label) target=\(targetIdentity?.key ?? target.key)")
+      restoreMovement(target)
       return
     }
-    FlashLog.debug("[app_history] no \(label) target")
+
+    storeMovementStacks(source: sourceStack, destination: destinationStack, direction: direction)
+    pruneMovementStacks()
+    FlashLog.debug("[movement] no \(label) target")
     applyModeOverlay()
   }
 
-  private func appendAppHistoryPID(_ pid: pid_t, to stack: inout [pid_t]) {
-    guard pid > 0 else { return }
-    stack.removeAll { $0 == pid || NSRunningApplication(processIdentifier: $0) == nil }
-    stack.append(pid)
+  private func currentMovementEntry() -> MovementEntry? {
+    if let current = movementCurrent,
+      let context = currentNonFlashContext(),
+      current.pid == context.processID
+    {
+      return current
+    }
+    if let context = currentNonFlashContext() {
+      return .app(pid: context.processID)
+    }
+    if let current = movementCurrent {
+      return current
+    }
+    if let pid = normalModeTargetPID {
+      return .app(pid: pid)
+    }
+    return nil
+  }
+
+  private func restoreMovement(_ entry: MovementEntry) {
+    switch entry.kind {
+    case .app:
+      guard let pid = entry.pid, let item = registry.candidate(forProcessID: pid) else {
+        applyModeOverlay()
+        return
+      }
+      openSourceItem(item, recordMovement: false)
+    case .candidate:
+      guard let candidate = entry.candidate else {
+        applyModeOverlay()
+        return
+      }
+      openSourceItem(candidate, recordMovement: false)
+    }
+  }
+
+  private func appendMovementEntry(_ entry: MovementEntry, to stack: inout [MovementEntry]) {
+    guard let identity = movementIdentity(entry) else { return }
+    stack.removeAll { existing in
+      guard let existingIdentity = movementIdentity(existing) else { return true }
+      return existingIdentity.key == identity.key
+    }
+    stack.append(entry)
     if stack.count > 20 {
       stack.removeFirst(stack.count - 20)
     }
   }
 
-  private func pruneAppHistoryStacks() {
-    appHistoryBackStack.removeAll { NSRunningApplication(processIdentifier: $0) == nil }
-    appHistoryForwardStack.removeAll { NSRunningApplication(processIdentifier: $0) == nil }
+  private func movementEntriesShareActivation(
+    _ current: MovementEntry,
+    _ next: MovementEntry
+  ) -> Bool {
+    current.kind == .candidate
+      && next.kind == .app
+      && current.pid != nil
+      && current.pid == next.pid
+  }
+
+  private func movementIdentity(_ entry: MovementEntry) -> MovementIdentity? {
+    switch entry.kind {
+    case .app:
+      guard let pid = entry.pid, pid > 0,
+        let candidate = registry.candidate(forProcessID: pid)
+      else { return nil }
+      return Self.appMovementIdentity(candidate)
+    case .candidate:
+      guard let candidate = entry.candidate else { return nil }
+      if candidate.kind == .app {
+        return Self.appMovementIdentity(candidate)
+      }
+      if let pid = candidate.pid, NSRunningApplication(processIdentifier: pid) == nil {
+        return nil
+      }
+      guard registry.source(identifier: candidate.sourceID) != nil else { return nil }
+      return MovementIdentity(key: entry.key)
+    }
+  }
+
+  private static func appMovementIdentity(_ candidate: Candidate) -> MovementIdentity? {
+    if !candidate.bundleIdentifier.isEmpty {
+      return MovementIdentity(key: "app.bundle:\(candidate.bundleIdentifier)")
+    }
+    if let path = candidate.url?.standardizedFileURL.path, !path.isEmpty {
+      return MovementIdentity(key: "app.path:\(path)")
+    }
+    if let pid = candidate.pid, pid > 0 {
+      return MovementIdentity(key: "app.pid:\(pid)")
+    }
+    return nil
+  }
+
+  private func movementEntryIsRestorable(_ entry: MovementEntry) -> Bool {
+    movementIdentity(entry) != nil
+  }
+
+  private func storeMovementStacks(
+    source: [MovementEntry],
+    destination: [MovementEntry],
+    direction: AppHistoryDirection
+  ) {
+    switch direction {
+    case .back:
+      movementBackStack = source
+      movementForwardStack = destination
+    case .forward:
+      movementForwardStack = source
+      movementBackStack = destination
+    }
+  }
+
+  private func pruneMovementStacks() {
+    movementBackStack.removeAll { !movementEntryIsRestorable($0) }
+    movementForwardStack.removeAll { !movementEntryIsRestorable($0) }
   }
 
   private func currentNonFlashContext() -> AppContext? {
@@ -1705,8 +1896,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   func overlayDidCancelByPointer() {
     cancelOverlay()
-    if flashMode == .normal {
-      scheduleNormalModeRecaptureAfterPointerFocusLoss()
+    if flashMode != .insert {
+      enterInsertMode(reason: .pointerClick)
     }
   }
 
@@ -1798,6 +1989,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
+      refreshCurrentModeSideEffects(reason: "copy_url_commit")
       return
     }
     if pendingHintCommitBehavior == .moveMouse {
@@ -1811,6 +2003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
+      refreshCurrentModeSideEffects(reason: "move_mouse_commit")
       return
     }
 
@@ -1823,6 +2016,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // walk time). Fall back to the activation-time focused pid if the
     // provider didn't set one.
     let pid = hint.target.pid ?? sourceAppPID
+    if let pid {
+      recordMovement(.app(pid: pid), source: "hint_commit")
+    }
     // Click the middle of the underlying target. For small targets
     // (most AX buttons / links / inputs) `chipFrame` already centres
     // the chip on the target, so target-centre and chip-centre
@@ -1838,8 +2034,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     if shouldRestoreNormalMode {
       applyModeOverlay(captureOverride: false)
-    } else if shouldEnterInsertAfterCommit {
-      enterInsertMode(reason: .hintCommit, showFocusIndicator: false)
     }
     overlay.hide()
     // Restore focus to the target app before dispatching, so AXPress / the
@@ -1859,7 +2053,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     sourceAppPID = nil
     pendingHintCommitBehavior = .click
     if shouldEnterInsertAfterCommit {
-      applyModeOverlay()
+      enterInsertMode(reason: .hintCommit)
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
       _ = ActionDispatcher.perform(
@@ -1873,9 +2067,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   static func hintCommitShouldEnterInsertMode(_ target: JumpTarget) -> Bool {
-    if target.providerID == "tmux" { return true }
-    guard let role = target.role else { return false }
-    return editableHintTargetRoles.contains(role)
+    true
   }
 
   private func usesTmuxProvider(_ context: AppContext?) -> Bool {
@@ -1892,14 +2084,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.normalModePending = ""
     overlay.hide()
     applyModeOverlay()
+    refreshCurrentModeSideEffects(reason: "help_cancel")
   }
 
   func overlayDidCancelCommandLine() {
-    overlay.commandLineText = ""
-    overlay.commandLineCursorIndex = 0
-    clearAppFinderState()
+    resetCommandLineState()
     overlay.hide()
     applyModeOverlay()
+    refreshCurrentModeSideEffects(reason: "command_cancel")
   }
 
   func overlayDidUpdateCommandLine(
@@ -1907,8 +2099,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     cursorIndex: Int,
     resetSelection: Bool
   ) {
+    guard command.hasPrefix(":") else {
+      FlashLog.trace("[input] command_line cancel reason=prompt_erased")
+      overlayDidCancelCommandLine()
+      return
+    }
     if resetSelection {
-      appFinderSelectedIndex = 0
+      candidateFinderSelectedIndex = 0
     }
     refreshCommandLine(text: command, cursorIndex: cursorIndex)
   }
@@ -1917,15 +2114,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     guard NormalModeDispatcher.commandLineOpenAppQuery(overlay.commandLineText) != nil else {
       return false
     }
-    guard !appFinderMatches.isEmpty else {
+    guard !candidateFinderMatches.isEmpty else {
       refreshCommandLine(
         text: overlay.commandLineText,
         cursorIndex: overlay.commandLineCursorIndex)
       return true
     }
-    appFinderSelectedIndex = min(
-      max(appFinderSelectedIndex + delta, 0),
-      appFinderMatches.count - 1)
+    candidateFinderSelectedIndex = min(
+      max(candidateFinderSelectedIndex + delta, 0),
+      candidateFinderMatches.count - 1)
     refreshCommandLine(
       text: overlay.commandLineText,
       cursorIndex: overlay.commandLineCursorIndex)
@@ -1936,175 +2133,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     submitCommandLine(command)
   }
 
-  func overlayDidCancelAppFinder() {
-    clearAppFinderState()
+  func overlayDidCancelCandidateFinder() {
+    clearCandidateFinderState()
     overlay.hide()
     applyModeOverlay()
+    refreshCurrentModeSideEffects(reason: "candidate_finder_cancel")
   }
 
-  func overlayDidUpdateAppFinderQuery(_ query: String) {
-    appFinderSelectedIndex = 0
-    refreshAppFinder(query: query)
+  func overlayDidUpdateCandidateFinderQuery(_ query: String) {
+    candidateFinderSelectedIndex = 0
+    refreshCandidateFinder(query: query)
   }
 
-  func overlayDidMoveAppFinderSelection(_ delta: Int) {
-    guard !appFinderMatches.isEmpty else {
-      refreshAppFinder(query: overlay.appFinderQuery)
+  func overlayDidMoveCandidateFinderSelection(_ delta: Int) {
+    guard !candidateFinderMatches.isEmpty else {
+      refreshCandidateFinder(query: overlay.candidateFinderQuery)
       return
     }
-    appFinderSelectedIndex = min(
-      max(appFinderSelectedIndex + delta, 0),
-      appFinderMatches.count - 1)
-    refreshAppFinder(query: overlay.appFinderQuery)
+    candidateFinderSelectedIndex = min(
+      max(candidateFinderSelectedIndex + delta, 0),
+      candidateFinderMatches.count - 1)
+    refreshCandidateFinder(query: overlay.candidateFinderQuery)
   }
 
-  func overlayDidSubmitAppFinder() {
-    guard !appFinderMatches.isEmpty else {
-      overlayDidCancelAppFinder()
+  func overlayDidSubmitCandidateFinder() {
+    guard !candidateFinderMatches.isEmpty else {
+      overlayDidCancelCandidateFinder()
       return
     }
-    let candidate = appFinderMatches[min(appFinderSelectedIndex, appFinderMatches.count - 1)]
+    let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
       .candidate
-    openAppFinderCandidate(candidate)
+    openSourceItem(candidate)
   }
 
-  private func openAppFinderCandidate(_ candidate: AppFinderCandidate) {
+  private func openSourceItem(matching target: String) {
+    guard let item = registry.candidate(matching: target) else {
+      FlashLog.warn("[app_open] no source item found for \"\(target)\"")
+      return
+    }
+    openSourceItem(item)
+  }
+
+  private func openSourceItem(_ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true) {
+    if shouldRecordMovement {
+      recordMovement(.candidate(candidate), source: "source_open")
+    }
     overlay.hide()
-    clearAppFinderState()
-
-    switch candidate.kind {
-    case .app:
-      openAppCandidate(candidate)
-    case .tmuxWindow:
-      openTmuxWindowCandidate(candidate)
-    case .browserTab, .slackChannel:
-      openAXElementCandidate(candidate)
-    }
-  }
-
-  private func openAppCandidate(_ candidate: AppFinderCandidate) {
-    if let pid = candidate.pid {
-      normalModeTargetPID = pid
-      suppressEditableFocus(for: pid)
-      applyModeOverlay(captureOverride: true)
-      if let app = NSRunningApplication(processIdentifier: pid) {
-        app.activate(options: [.activateAllWindows])
-      }
-      scheduleNormalModeRecapture()
-    } else if let url = candidate.url {
-      applyModeOverlay(captureOverride: true)
-      let configuration = NSWorkspace.OpenConfiguration()
-      configuration.activates = true
-      NSWorkspace.shared.openApplication(at: url, configuration: configuration) { [weak self] app, error in
-        DispatchQueue.main.async {
-          guard let self else { return }
-          if let app {
-            self.normalModeTargetPID = app.processIdentifier
-            self.suppressEditableFocus(for: app.processIdentifier)
-          } else if let error {
-            FlashLog.warn("[app_finder] could not open \(url.path): \(error.localizedDescription)")
-          }
-          self.scheduleNormalModeRecapture()
-        }
-      }
-    }
-  }
-
-  private func openTmuxWindowCandidate(_ candidate: AppFinderCandidate) {
-    if let pid = candidate.pid {
-      normalModeTargetPID = pid
-      suppressEditableFocus(for: pid)
-      if let app = NSRunningApplication(processIdentifier: pid) {
-        app.activate(options: [.activateAllWindows])
-      }
-    }
-    if let tmux = Self.tmuxPath, let target = candidate.tmuxTarget {
-      var args = ["switch-client"]
-      if let tty = candidate.tmuxClientTTY {
-        args.append(contentsOf: ["-c", tty])
-      }
-      args.append(contentsOf: ["-t", target])
-      appFinderCacheQueue.async { [weak self] in
-        _ = self?.runShell(tmux, args)
-      }
-    }
+    resetCommandLineState()
     applyModeOverlay(captureOverride: true)
-    scheduleNormalModeRecapture()
-  }
+    refreshCurrentModeSideEffects(reason: "source_open")
 
-  private func openAXElementCandidate(_ candidate: AppFinderCandidate) {
-    if let pid = candidate.pid {
-      normalModeTargetPID = pid
-      suppressEditableFocus(for: pid)
-      if let app = NSRunningApplication(processIdentifier: pid) {
-        app.activate(options: [.activateAllWindows])
+    registry.resolveCandidate(candidate) { [weak self] result in
+      guard let self else { return }
+      if let pid = result.targetPID {
+        self.normalModeTargetPID = pid
+        self.suppressEditableFocus(for: pid)
+      } else if !result.didResolve {
+        FlashLog.debug(
+          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) title=\(candidate.title)")
       }
+      self.refreshCurrentModeSideEffects(reason: "source_resolved")
+      self.scheduleNormalModeRecapture()
     }
-    if let element = candidate.targetElement {
-      if AXUIElementPerformAction(element, kAXPressAction as CFString) != .success {
-        _ = AXUIElementSetAttributeValue(element, kAXSelectedAttribute as CFString, kCFBooleanTrue)
-      }
-    }
-    applyModeOverlay(captureOverride: true)
-    scheduleNormalModeRecapture()
-  }
-
-  private func runShell(_ executable: String, _ arguments: [String]) -> String? {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = arguments
-    let stdout = Pipe()
-    process.standardOutput = stdout
-    process.standardError = Pipe()
-    do {
-      try process.run()
-      process.waitUntilExit()
-    } catch {
-      return nil
-    }
-    guard process.terminationStatus == 0 else { return nil }
-    let data = stdout.fileHandleForReading.readDataToEndOfFile()
-    return String(data: data, encoding: .utf8)
-  }
-
-  private func axStringAttribute(_ element: AXUIElement, _ name: String) -> String? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw
-    else { return nil }
-    return value as? String
-  }
-
-  private func axElementArrayAttribute(_ element: AXUIElement, _ name: String) -> [AXUIElement] {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let values = raw as? [AXUIElement]
-    else { return [] }
-    return values
-  }
-
-  private static func isAncestor(_ ancestor: pid_t, of descendant: pid_t) -> Bool {
-    var current = descendant
-    var hops = 0
-    while current > 1, hops < 64 {
-      if current == ancestor { return true }
-      guard let parent = parentPID(of: current), parent != current else {
-        return false
-      }
-      current = parent
-      hops += 1
-    }
-    return false
-  }
-
-  private static func parentPID(of pid: pid_t) -> pid_t? {
-    var info = proc_bsdinfo()
-    let size = MemoryLayout<proc_bsdinfo>.size
-    let result = withUnsafeMutablePointer(to: &info) { ptr -> Int32 in
-      proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, ptr, Int32(size))
-    }
-    guard result == Int32(size) else { return nil }
-    return pid_t(info.pbi_ppid)
   }
 
   // MARK: Config hot reload
@@ -2205,11 +2295,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // Apply log settings immediately — they need to be live for
     // any warning the rest of `reloadConfig` might emit (e.g.
     // unparsable native mappings logged by `mappings.apply`).
-    // `configureProviders` re-applies these on every activation
-    // walk so a hot-reload of the config also propagates without
-    // needing to touch `FlashLog` from two places.
+    // `configureProviders` re-applies this on every activation walk
+    // so a hot-reload of the config also propagates without needing
+    // to touch `FlashLog` from two places.
     FlashLog.setLevel(cfg.debug.logLevel)
-    FlashLog.setMirrorToFile(cfg.debug.dumpLogs)
     for diagnostic in cfg.loadingDiagnostics {
       FlashLog.warn("[config] \(diagnostic.logMessage)")
     }
@@ -2221,13 +2310,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
     overlay.normalModeMappings = cfg.mode.mappings(for: .normal)
+    registry.updateOpenConfig(cfg.open)
+    invalidateCandidateFinderCaches(reason: "config_reload", refreshApps: true)
     monitor.updateConfig(cfg)
     modeBadgeEnabled = hasNormalModeBinding(cfg)
     if !modeBadgeEnabled, flashMode == .normal {
       enterInsertMode(
         reason: .advancedModeDisabled,
-        force: true,
-        showFocusIndicator: false)
+        force: true)
     }
     applyModeOverlay()
     // Push native mappings too — the Carbon hotkey registry rebuilds

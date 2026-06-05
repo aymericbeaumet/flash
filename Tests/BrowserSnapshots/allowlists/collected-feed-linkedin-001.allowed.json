@@ -1,0 +1,88 @@
+{
+  "entries": [
+    {
+      "side": "flashOnly",
+      "rect": [108.5, 910, 139.5, 22],
+      "reason": "Firefox AX exposes a visible LinkedIn skip control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [248, 910, 104.5, 22],
+      "reason": "Firefox AX exposes a visible LinkedIn skip control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [352.5, 910, 157, 22],
+      "reason": "Firefox AX exposes a visible LinkedIn skip control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [509.5, 910, 91.5, 22],
+      "reason": "Firefox AX exposes a visible LinkedIn skip control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [28, 873, 36, 33],
+      "reason": "Firefox AX exposes a visible LinkedIn jump-menu control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [48, 744.5, 72.5, 33],
+      "reason": "Firefox AX exposes a visible LinkedIn navigation control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [48, 716.5, 122, 16],
+      "reason": "Firefox AX exposes a visible LinkedIn navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [48, 687, 52.5, 16],
+      "reason": "Firefox AX exposes a visible LinkedIn navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [68, 683, 52.5, 16],
+      "reason": "Firefox AX exposes a duplicate visible LinkedIn navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [48, 657.5, 101.5, 16],
+      "reason": "Firefox AX exposes a visible LinkedIn navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [48, 628, 114.5, 16],
+      "reason": "Firefox AX exposes a visible LinkedIn navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [48, 558.5, 92, 68],
+      "reason": "Firefox AX exposes a visible LinkedIn account control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [48, 491.5, 131.5, 33],
+      "reason": "Firefox AX exposes a visible LinkedIn business control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [8, 458, 143.5, 16],
+      "reason": "Firefox AX exposes a visible LinkedIn premium link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    }
+  ]
+}

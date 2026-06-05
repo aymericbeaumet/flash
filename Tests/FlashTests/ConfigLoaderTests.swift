@@ -23,7 +23,7 @@ final class ConfigLoaderTests: XCTestCase {
       .scroll(.down))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "O" })?.action.command,
-      .appFinder(all: true))
+      .candidateFinder(all: true))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "rf" })?.action.command,
       .mouseClick(action: .rightClick))
@@ -33,10 +33,14 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "yy" }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "o" })?.action.command,
-      .appFinder(all: true))
+      .candidateFinder(all: true))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "cmd+space" })?.action.command,
-      .appFinder(all: true))
+      c.mode.normal.first(where: { $0.key == "gN" })?.action.command,
+      .tabSelect(index: nil))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "t" })?.action.command,
+      .tabNewInsert)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-o" })?.action.command,
       .appBack)
@@ -48,6 +52,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.labels.command, "COMMAND")
     XCTAssertTrue(c.mode.all.isEmpty)
     XCTAssertTrue(c.mode.insert.isEmpty)
+    XCTAssertTrue(c.open.ignoredApps.isEmpty)
   }
 
   func testParsesModeLabelsInlineTable() {
@@ -89,6 +94,69 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.resolvedAlphabet.layoutName, "colemak")
     XCTAssertEqual(c.hints.minLength, 2)
     XCTAssertEqual(c.hints.magicModifiers, ["cmd", "alt"])
+  }
+
+  func testParsesOpenIgnoredApps() {
+    let c = ConfigLoader.parse(
+      """
+      [open]
+      ignored_apps = ["Flash", "com.flash.app", "/Applications/Flash.app"]
+      """)
+
+    XCTAssertEqual(
+      c.open.ignoredApps,
+      ["Flash", "com.flash.app", "/Applications/Flash.app"])
+  }
+
+  func testParsesMultilineOpenIgnoredApps() {
+    let c = ConfigLoader.parse(
+      """
+      [open]
+      ignored_apps = [
+        "com.flash.app",
+        "com.flash.native-fixture",
+        "com.flash.native-oracle",
+        "com.flash.vimium-oracle",
+      ]
+      """)
+
+    XCTAssertEqual(
+      c.open.ignoredApps,
+      [
+        "com.flash.app",
+        "com.flash.native-fixture",
+        "com.flash.native-oracle",
+        "com.flash.vimium-oracle",
+      ])
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testParsesMultilineStringArrayComments() {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      magic_modifiers = [
+        "cmd",
+        "alt", # keep option-click support
+      ]
+      """)
+
+    XCTAssertEqual(c.hints.magicModifiers, ["cmd", "alt"])
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testInvalidOpenIgnoredAppsReportDiagnostic() {
+    let c = ConfigLoader.parse(
+      """
+      [open]
+      ignored_apps = "Flash"
+      """)
+
+    XCTAssertTrue(c.open.ignoredApps.isEmpty)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message == "open.ignored_apps must be an array of strings"
+      })
   }
 
   func testParsesEmptyMagicModifiersArray() {
@@ -139,12 +207,14 @@ final class ConfigLoaderTests: XCTestCase {
     let overlay = try XCTUnwrap(root["overlay"] as? [String: Any])
     let debug = try XCTUnwrap(root["debug"] as? [String: Any])
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
+    let open = try XCTUnwrap(root["open"] as? [String: Any])
     XCTAssertEqual(hints["keys"] as? String, "<qwerty_homerow+qwerty_toprow>")
     XCTAssertEqual(hints["min_length"] as? Int, 1)
     XCTAssertEqual(hints["magic_modifiers"] as? [String], ["shift"])
     XCTAssertEqual(overlay["font_size"] as? Double, 12)
     XCTAssertEqual(debug["log_level"] as? String, "debug")
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
+    XCTAssertEqual(open["ignored_apps"] as? [String], [])
   }
 
   func testResolvedHintsKeysJSONIncludesDefaultAndResolvedAlphabet() throws {
@@ -250,6 +320,7 @@ final class ConfigLoaderTests: XCTestCase {
       "--hints-keys=asdf",
       "--hints-min-length=3",
       "--hints-magic-modifiers=cmd,alt",
+      "--open-ignored-apps=Flash,com.flash.app",
       "--overlay-font-size=20",
       "--overlay-hint-fg=#FFFFFF",
       "--overlay-hint-bg-top=#000000",
@@ -260,8 +331,6 @@ final class ConfigLoaderTests: XCTestCase {
       "--debug-bounds-fg=#55667788",
       "--debug-profile=true",
       "--debug-slow-ms=250",
-      "--debug-dump-ax=true",
-      "--debug-dump-logs=true",
       "--debug-log-level=debug",
     ]
     let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
@@ -269,6 +338,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(String(c.resolvedAlphabet.chars), "asdf")
     XCTAssertEqual(c.hints.minLength, 3)
     XCTAssertEqual(c.hints.magicModifiers, ["cmd", "alt"])
+    XCTAssertEqual(c.open.ignoredApps, ["Flash", "com.flash.app"])
     XCTAssertEqual(c.overlay.fontSize, 20)
     XCTAssertEqual(c.overlay.hintFG, "#FFFFFF")
     XCTAssertEqual(c.overlay.hintBGTop, "#000000")
@@ -279,8 +349,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.debug.boundsFG, "#55667788")
     XCTAssertTrue(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 250)
-    XCTAssertTrue(c.debug.dumpAx)
-    XCTAssertTrue(c.debug.dumpLogs)
     XCTAssertEqual(c.debug.logLevel, .debug)
   }
 
@@ -290,6 +358,7 @@ final class ConfigLoaderTests: XCTestCase {
       "FLASH_HINTS_KEYS": "qwer",
       "FLASH_HINTS_MIN_LENGTH": "2",
       "FLASH_HINTS_MAGIC_MODIFIERS": "ctrl,alt",
+      "FLASH_OPEN_IGNORED_APPS": "[\"Flash\", \"com.flash.app\"]",
       "FLASH_OVERLAY_FONT_SIZE": "18",
       "FLASH_OVERLAY_HINT_FG": "#DDEEFF",
       "FLASH_OVERLAY_HINT_BG_TOP": "#AABBCC",
@@ -300,15 +369,14 @@ final class ConfigLoaderTests: XCTestCase {
       "FLASH_DEBUG_BOUNDS_FG": "#22222222",
       "FLASH_DEBUG_PROFILE": "on",
       "FLASH_DEBUG_SLOW_MS": "175",
-      "FLASH_DEBUG_DUMP_AX": "true",
-      "FLASH_DEBUG_DUMP_LOGS": "true",
-      "FLASH_DEBUG_LOG_LEVEL": "warn",
+      "FLASH_DEBUG_LOG_LEVEL": "fatal",
     ]
     let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
     XCTAssertEqual(c.hints.keys, "qwer")
     XCTAssertEqual(String(c.resolvedAlphabet.chars), "qwer")
     XCTAssertEqual(c.hints.minLength, 2)
     XCTAssertEqual(c.hints.magicModifiers, ["ctrl", "alt"])
+    XCTAssertEqual(c.open.ignoredApps, ["Flash", "com.flash.app"])
     XCTAssertEqual(c.overlay.fontSize, 18)
     XCTAssertEqual(c.overlay.hintFG, "#DDEEFF")
     XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
@@ -319,9 +387,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.debug.boundsFG, "#22222222")
     XCTAssertTrue(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 175)
-    XCTAssertTrue(c.debug.dumpAx)
-    XCTAssertTrue(c.debug.dumpLogs)
-    XCTAssertEqual(c.debug.logLevel, .warn)
+    XCTAssertEqual(c.debug.logLevel, .fatal)
   }
 
   func testInvalidMappingValueProducesWarning() {
@@ -380,7 +446,7 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == "i" }))
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "i" })?.action.command, .insertMode)
     XCTAssertEqual(c.mode.normal.filter { $0.key == "j" }.count, 1)
   }
 
@@ -480,8 +546,8 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(paths.first?.path, "/tmp/xdg/flash/flash.toml")
   }
 
-  func testCandidatePathsFallbackChain() {
-    // No XDG → only the home-rooted paths, in priority order.
+  func testCandidatePathsDefaultToCanonicalConfigOnly() {
+    // No XDG -> only the home-rooted canonical path.
     let args = ["flash"]
     let env: [String: String] = [:]
     let paths = ConfigLoader.candidatePaths(arguments: args, environment: env)
@@ -491,7 +557,6 @@ final class ConfigLoaderTests: XCTestCase {
       paths,
       [
         "\(home)/.config/flash/flash.toml",
-        "\(home)/.flash.toml",
       ])
   }
 

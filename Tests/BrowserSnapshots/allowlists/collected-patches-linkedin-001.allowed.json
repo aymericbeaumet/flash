@@ -1,0 +1,34 @@
+{
+  "entries": [
+    {
+      "side": "flashOnly",
+      "rect": [28, 873, 36, 33],
+      "reason": "Firefox AX exposes a visible LinkedIn jump-menu control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [68, 683, 52.5, 16],
+      "reason": "Firefox AX exposes a visible navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [28, 403.5, 36, 33],
+      "reason": "Firefox AX exposes a visible LinkedIn navigation control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [28, 313, 35.5, 16],
+      "reason": "Firefox AX exposes a visible LinkedIn reset link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [28, 17.5, 37.5, 22],
+      "reason": "Firefox AX exposes a visible hint control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    }
+  ]
+}

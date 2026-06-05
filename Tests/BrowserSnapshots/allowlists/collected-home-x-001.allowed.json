@@ -1,0 +1,88 @@
+{
+  "entries": [
+    {
+      "side": "vimiumOnly",
+      "rect": [1, 366.5, 348, 62],
+      "reason": "Vimium marks an X trend DOM target that Firefox AX does not expose as a page link in this snapshot.",
+      "domSelector": "div"
+    },
+    {
+      "side": "vimiumOnly",
+      "rect": [1, 304.5, 348, 62],
+      "reason": "Vimium marks an X trend DOM target that Firefox AX does not expose as a page link in this snapshot.",
+      "domSelector": "div"
+    },
+    {
+      "side": "vimiumOnly",
+      "rect": [1, 242.5, 348, 62],
+      "reason": "Vimium marks an X trend DOM target that Firefox AX does not expose as a page link in this snapshot.",
+      "domSelector": "div"
+    },
+    {
+      "side": "vimiumOnly",
+      "rect": [1, 180.5, 348, 62],
+      "reason": "Vimium marks an X trend DOM target that Firefox AX does not expose as a page link in this snapshot.",
+      "domSelector": "div"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [0, 964.5, 36, 36],
+      "reason": "Firefox AX exposes a visible X skip control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 884, 259, 58.5],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 826, 259, 58],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 767.5, 259, 58.5],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 709.5, 259, 58],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 651, 259, 58.5],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 593, 259, 58],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 534.5, 259, 58.5],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 476.5, 259, 58],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [239.5, 418, 259, 58.5],
+      "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    }
+  ]
+}

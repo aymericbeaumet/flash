@@ -1,0 +1,76 @@
+{
+  "entries": [
+    {
+      "side": "flashOnly",
+      "rect": [8, 973.5, 133, 19],
+      "reason": "Firefox AX exposes a visible accessibility skip link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1491.5, 963, 67, 19],
+      "reason": "Firefox AX exposes a visible Reddit chrome link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [8, 954, 140, 19.5],
+      "reason": "Firefox AX exposes a visible Reddit navigation control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [152, 954, 147, 19.5],
+      "reason": "Firefox AX exposes a visible Reddit navigation control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1366.5, 871, 284, 46.5],
+      "reason": "Firefox AX exposes a visible sidebar community link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1366.5, 824.5, 284, 46.5],
+      "reason": "Firefox AX exposes a visible sidebar community link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [610.5, 776.5, 700, 72],
+      "reason": "Firefox AX exposes a large Reddit post link that Vimium resolves through already matched descendants.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1366.5, 778, 284, 46.5],
+      "reason": "Firefox AX exposes a visible sidebar community link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1366.5, 731.5, 284, 46.5],
+      "reason": "Firefox AX exposes a visible sidebar community link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1366.5, 685.5, 284, 46],
+      "reason": "Firefox AX exposes a visible sidebar community link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1366.5, 666, 60, 19.5],
+      "reason": "Firefox AX exposes a visible sidebar expansion control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [610.5, 13, 700, 106],
+      "reason": "Firefox AX exposes a large Reddit post link that Vimium resolves through already matched descendants.",
+      "axRole": "AXLink"
+    }
+  ]
+}

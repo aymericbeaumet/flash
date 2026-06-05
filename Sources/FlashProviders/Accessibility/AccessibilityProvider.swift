@@ -4,7 +4,7 @@ import FlashCore
 
 /// Single, universal AX walker. No per-app variants — every macOS app is
 /// treated by the same rules: clickable controls, text inputs, and rows in
-/// virtualised lists. Section-header rows are suppressed via `skipSubroles`.
+/// virtualised lists.
 ///
 /// The role/skip/depth/target sets are intentionally *not* exposed for
 /// per-app override. The project's working assumption is that generic rules
@@ -35,8 +35,10 @@ import FlashCore
 ///     follow-up reads.
 public final class AccessibilityProvider: JumpProvider {
   public let identifier: String = "accessibility"
+  public let displayName: String = "accessibility"
   public let priority: Int = 10
   public let readinessPolicy: JumpProviderReadinessPolicy = .continuous
+  public let capabilities: FlashSourceCapabilities = [.jumpTargets, .documentURL, .tabSelection]
 
   /// Roles we recognise in native (non-web) AX trees. Broader than the
   /// web allowlist because native apps surface things the web doesn't —
@@ -51,7 +53,7 @@ public final class AccessibilityProvider: JumpProvider {
     "AXTab",
     "AXDisclosureTriangle",
     // Text inputs
-    "AXTextField", "AXSearchField", "AXTextArea",
+    "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
     // Virtualised list rows (each row is one click target)
     "AXRow", "AXCell",
     // Icon-only buttons sometimes report as AXImage. Gated below by
@@ -72,7 +74,7 @@ public final class AccessibilityProvider: JumpProvider {
   public static let webClickableRoles: Set<String> = [
     "AXLink", "AXButton",
     "AXCheckBox", "AXRadioButton",
-    "AXTextField", "AXSearchField", "AXTextArea",
+    "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
     "AXPopUpButton",
     "AXTab",
     "AXMenuItem",
@@ -90,23 +92,12 @@ public final class AccessibilityProvider: JumpProvider {
     "AXTab",
   ]
 
-  /// AppKit's standard subroles for "section header" rows in
-  /// NSOutlineView/NSTableView. We *don't* add these as targets, but we
-  /// keep descending — so the disclosure triangle inside the header gets
-  /// hinted on its own.
-  public static let skipSubroles: Set<String> = [
-    "AXOutlineSecondaryRow",
-    "AXSecondaryOutlineRow",
-    "AXSeparatorRow",
-    "AXGroupRow",
-  ]
-
   /// Roles for which "click" really means "focus the input". AXPress on a
   /// search field is a no-op and a synthesized mouse click on top of an
   /// already-keyed app may land in the wrong subview; setting
   /// `kAXFocusedAttribute = true` is the unambiguous AX-level way.
   static let textInputRoles: Set<String> = [
-    "AXTextField", "AXSearchField", "AXTextArea",
+    "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
   ]
 
   /// Runaway guards rather than real limits. Real AX trees rarely exceed
@@ -126,30 +117,173 @@ public final class AccessibilityProvider: JumpProvider {
   /// two levels the dispatch overhead dominates the IPC win.
   public static let maxFanoutLevels: Int = 2
 
-  /// When set, the next walk writes one line per visited element to this
-  /// file. Owned and toggled by AppMonitor based on `debug.dump_ax`. The
-  /// AX provider runs serially on a single queue (see AppMonitor), so a
-  /// plain mutable property is safe here.
-  ///
-  /// Caveat: per-worker buffers are concatenated in worker order at
-  /// end of walk, so the file is no longer in strict tree-traversal
-  /// order; use target ids and frames when diffing two activations.
-  public var dumpURL: URL?
-
-  /// Millisecond wall-clock timestamp identifying the activation that
-  /// produced this walk. Set by AppMonitor from the activation's
-  /// profiler before each call to `discover` so dump lines can be
-  /// correlated with the mouse_click trigger they belong to.
-  public var triggerMs: UInt64?
-
-  /// Background queue used to flush AX dump buffers to disk so the
-  /// activation hot path never blocks on file I/O. Serial so concurrent
-  /// activations' dumps don't interleave on the same file.
-  private static let dumpWriteQueue = DispatchQueue(label: "flash.ax-dump.write", qos: .utility)
-
   public init() {}
 
   public func supports(_ context: AppContext) -> Bool { true }
+
+  public func tabSelect(
+    at index: Int,
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    guard index > 0 else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    let app = AXUIElementCreateApplication(context.processID)
+    guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String) else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    let tabs = Self.tabElements(in: focusedWindow)
+    guard index <= tabs.count else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
+      runningApp.activate(options: [.activateAllWindows])
+    }
+    let tab = tabs[index - 1]
+    let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
+    let selected =
+      pressed
+      || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+        == .success
+    DispatchQueue.main.async {
+      completion(selected ? .performed(pid: context.processID) : .unhandled)
+    }
+  }
+
+  public func documentURL(in context: AppContext) -> String? {
+    let app = AXUIElementCreateApplication(context.processID)
+    var focusedRaw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focusedRaw)
+      == .success,
+      let element = focusedRaw,
+      CFGetTypeID(element) == AXUIElementGetTypeID()
+    {
+      let focusedElement = element as! AXUIElement
+      if let url = Self.documentURLNear(focusedElement) {
+        return url
+      }
+    }
+
+    var windowRaw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &windowRaw)
+        == .success,
+      let window = windowRaw,
+      CFGetTypeID(window) == AXUIElementGetTypeID()
+    else { return nil }
+    let focusedWindow = window as! AXUIElement
+    if let url = Self.urlAttribute(focusedWindow, kAXDocumentAttribute as String)
+      ?? Self.urlAttribute(focusedWindow, kAXURLAttribute as String)
+    {
+      return url
+    }
+    return Self.firstDocumentURL(in: focusedWindow, maxNodes: 2_000)
+  }
+
+  private static let documentRoles: Set<String> = ["AXWebArea", "AXDocument"]
+
+  private static func documentURLNear(_ element: AXUIElement) -> String? {
+    var current = element
+    for _ in 0..<10 {
+      if role(of: current).map({ documentRoles.contains($0) }) == true {
+        if let url = urlAttribute(current, kAXURLAttribute as String)
+          ?? urlAttribute(current, kAXDocumentAttribute as String)
+        {
+          return url
+        }
+      }
+      guard let parent = elementAttribute(current, kAXParentAttribute as String) else {
+        return nil
+      }
+      current = parent
+    }
+    return nil
+  }
+
+  private static func firstDocumentURL(in root: AXUIElement, maxNodes: Int) -> String? {
+    var queue = [root]
+    var index = 0
+    while index < queue.count, index < maxNodes {
+      let element = queue[index]
+      index += 1
+      if role(of: element).map({ documentRoles.contains($0) }) == true {
+        if let url = urlAttribute(element, kAXURLAttribute as String)
+          ?? urlAttribute(element, kAXDocumentAttribute as String)
+        {
+          return url
+        }
+      }
+      queue.append(contentsOf: children(of: element))
+    }
+    return nil
+  }
+
+  private static func role(of element: AXUIElement) -> String? {
+    stringAttribute(element, kAXRoleAttribute as String)
+  }
+
+  private static func children(of element: AXUIElement) -> [AXUIElement] {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
+      == .success,
+      let children = raw as? [AXUIElement]
+    else { return [] }
+    return children
+  }
+
+  private static func tabElements(in root: AXUIElement) -> [AXUIElement] {
+    var out: [AXUIElement] = []
+    var seen = Set<UInt>()
+    var queue = [root]
+    var index = 0
+    while index < queue.count, index < 3_000 {
+      let element = queue[index]
+      index += 1
+      let role = role(of: element)
+      let subrole = stringAttribute(element, kAXSubroleAttribute as String)
+      if role == "AXTab" || subrole == "AXTabButton" {
+        if seen.insert(CFHash(element)).inserted {
+          out.append(element)
+        }
+      }
+      queue.append(contentsOf: children(of: element))
+    }
+    return out
+  }
+
+  private static func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
+      let value = raw,
+      CFGetTypeID(value) == AXUIElementGetTypeID()
+    else { return nil }
+    return (value as! AXUIElement)
+  }
+
+  private static func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
+      let value = raw
+    else { return nil }
+    return value as? String
+  }
+
+  private static func urlAttribute(_ element: AXUIElement, _ name: String) -> String? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
+      let value = raw
+    else { return nil }
+    if let url = value as? URL { return url.absoluteString }
+    if CFGetTypeID(value) == CFURLGetTypeID() {
+      return (value as! URL).absoluteString
+    }
+    return value as? String
+  }
 
   // Cached CFTypeID for AXValue. AXUIElementCopyMultipleAttributeValues
   // returns AXValueAttributeError (which is itself an AXValue with type
@@ -187,15 +321,15 @@ public final class AccessibilityProvider: JumpProvider {
   private static let batchAttrs: CFArray =
     [
       kAXRoleAttribute,  // 0
-      kAXSubroleAttribute,  // 1
-      kAXPositionAttribute,  // 2
-      kAXSizeAttribute,  // 3
-      kAXEnabledAttribute,  // 4
-      kAXChildrenAttribute,  // 5
-      kAXTitleAttribute,  // 6
-      kAXDescriptionAttribute,  // 7
-      kAXValueAttribute,  // 8
-      kAXURLAttribute,  // 9
+      kAXPositionAttribute,  // 1
+      kAXSizeAttribute,  // 2
+      kAXEnabledAttribute,  // 3
+      kAXChildrenAttribute,  // 4
+      kAXTitleAttribute,  // 5
+      kAXDescriptionAttribute,  // 6
+      kAXValueAttribute,  // 7
+      kAXURLAttribute,  // 8
+      kAXHiddenAttribute,  // 9
     ] as CFArray
 
   /// Per-worker mutable state. `WalkState` is per-thread under concurrent
@@ -207,7 +341,6 @@ public final class AccessibilityProvider: JumpProvider {
     /// walk completes (see `resolvePendingActionChecks`).
     var pendingTargets: [PendingTarget] = []
     var idCounter: Int = 0
-    var dumpBuffer: [String]? = nil
   }
 
   /// Tentative target awaiting an action-name IPC. The candidate is fully
@@ -225,15 +358,11 @@ public final class AccessibilityProvider: JumpProvider {
     let lock = NSLock()
     var confirmedTargets: [JumpTarget] = []
     var pendingTargets: [PendingTarget] = []
-    var dump: [String] = []
 
     func absorb(_ state: WalkState) {
       lock.lock()
       confirmedTargets.append(contentsOf: state.confirmedTargets)
       pendingTargets.append(contentsOf: state.pendingTargets)
-      if let d = state.dumpBuffer {
-        dump.append(contentsOf: d)
-      }
       lock.unlock()
     }
   }
@@ -268,15 +397,6 @@ public final class AccessibilityProvider: JumpProvider {
     let clip = context.frontWindowFrame
     guard !clip.isNull else { return [] }
 
-    let dumpEnabled = dumpURL != nil
-    var combinedDump: [String] = []
-    if dumpEnabled {
-      let trigger = triggerMs.map { "  trigger=\($0)" } ?? ""
-      combinedDump.append(
-        "# flash AX dump  bundle=\(context.bundleIdentifier)  pid=\(context.processID)  time=\(Date())\(trigger)\n"
-      )
-    }
-
     // Active-window only. One IPC up front to resolve
     // kAXFocusedWindowAttribute and walk that subtree exclusively. This
     // is the *correct* way to scope to a single window — relying on a
@@ -287,23 +407,13 @@ public final class AccessibilityProvider: JumpProvider {
     // stray hints.
     //
     // If `kAXFocusedWindow` is missing (rare — happens momentarily
-    // during app launches, or for apps with no windows), there's
-    // nothing to hint, so return empty rather than walking the whole
-    // app and risk picking up menu-bar items.
-    var focusedRaw: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focusedRaw)
-        == .success,
-      let focusedCF = focusedRaw,
-      CFGetTypeID(focusedCF) == AXUIElementGetTypeID()
-    else {
-      if let url = dumpURL { flushDump(lines: combinedDump, to: url) }
-      return []
-    }
-    let focusedWindow = focusedCF as! AXUIElement
+    // during app launches and in some automated Firefox sessions), fall
+    // back to the first reported app window. This keeps the walk scoped
+    // to one foreground-app window without broadening to app/menu-bar
+    // children.
+    guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
 
     var state = WalkState()
-    state.dumpBuffer = dumpEnabled ? [] : nil
     // The root walk uses the "r" prefix; concurrent fan-out workers use
     // "w<i>" (see depth-0 fan-out below). This keeps target IDs unique
     // across the focused window's own target (if it's hinted) and the
@@ -331,35 +441,25 @@ public final class AccessibilityProvider: JumpProvider {
     // thread service multiple action-name reads concurrently.
     let survivors = resolvePendingActionChecks(state.pendingTargets)
     state.confirmedTargets.append(contentsOf: survivors)
-    if let d = state.dumpBuffer {
-      combinedDump.append(contentsOf: d)
-    }
-    if dumpEnabled, let url = dumpURL {
-      flushDump(lines: combinedDump, to: url)
-    }
     return state.confirmedTargets
   }
 
-  /// Off-thread flush of accumulated dump lines. `FileHandle.write` is
-  /// serialised through the shared `dumpWriteQueue`, so multiple back-
-  /// to-back activations don't interleave their dumps and the
-  /// activation that produced the data is already free.
-  private func flushDump(lines: [String], to url: URL) {
-    let joined = lines.joined()
-    Self.dumpWriteQueue.async {
-      let fm = FileManager.default
-      try? fm.createDirectory(
-        at: url.deletingLastPathComponent(),
-        withIntermediateDirectories: true)
-      // Truncate per activation — matches the documented semantics
-      // (file is rewritten on each mouse_click).
-      fm.createFile(atPath: url.path, contents: nil)
-      guard let handle = try? FileHandle(forWritingTo: url) else { return }
-      defer { try? handle.close() }
-      if let data = joined.data(using: .utf8) {
-        try? handle.write(contentsOf: data)
+  private static func focusedOrFirstWindow(in app: AXUIElement) -> AXUIElement? {
+    for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+      if let window = elementAttribute(app, attribute as String),
+        role(of: window) == "AXWindow"
+      {
+        return window
       }
     }
+    var windowsRaw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRaw)
+      == .success,
+      let windows = windowsRaw as? [AXUIElement]
+    {
+      return windows.first { role(of: $0) == "AXWindow" }
+    }
+    return nil
   }
 
   private func walk(
@@ -388,26 +488,15 @@ public final class AccessibilityProvider: JumpProvider {
     guard err == .success, let vals = valuesRef as? [Any], vals.count == 10 else { return }
 
     let role = vals[0] as? String
-    let subrole = vals[1] as? String
-    let posValue = Self.axValue(vals[2])
-    let sizeValue = Self.axValue(vals[3])
-    let enabled = (vals[4] as? Bool) ?? true
-    let allChildren = vals[5] as? [AXUIElement]
+    let posValue = Self.axValue(vals[1])
+    let sizeValue = Self.axValue(vals[2])
+    let enabled = (vals[3] as? Bool) ?? true
+    let allChildren = vals[4] as? [AXUIElement]
     let label =
-      Self.stringValue(vals[6]) ?? Self.stringValue(vals[7]) ?? Self.stringValue(vals[8])
-    let url = Self.urlValue(vals[9])
+      Self.stringValue(vals[5]) ?? Self.stringValue(vals[6]) ?? Self.stringValue(vals[7])
+    let url = Self.urlValue(vals[8])
+    let hidden = (vals[9] as? Bool) ?? false
 
-    // When dumping, fetch the supported actions + label upfront so the
-    // line includes enough signal to diagnose role mismatches. Skipped
-    // in the normal hot path — those IPCs are not free.
-    var dumpActions: [String]? = nil
-    var dumpLabel: String? = nil
-    if state.dumpBuffer != nil {
-      dumpActions = actionNames(element)
-      dumpLabel = label
-    }
-
-    var addedAsTarget = false
     // Role allowlist: web pages use the narrower Vimium-equivalent set
     // (true semantic controls only); native apps use the broader set
     // (rows, cells, disclosure triangles, icon-only AXImage buttons).
@@ -438,7 +527,7 @@ public final class AccessibilityProvider: JumpProvider {
     if let posV = posValue, let sizeV = sizeValue,
       let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       visible.contains(CGPoint(x: frame.midX, y: frame.midY)),
-      roleAllowed, enabled
+      roleAllowed, enabled, !hidden
     {
       state.idCounter += 1
       let captured = element
@@ -473,36 +562,14 @@ public final class AccessibilityProvider: JumpProvider {
       } else {
         state.confirmedTargets.append(candidate)
       }
-      addedAsTarget = true
-    }
-
-    // Emit a dump line for this element (after the gating decision so
-    // the dump reflects what the walker actually saw + did). We log
-    // every visited node, not just the ones that become targets — the
-    // false-negatives are exactly the lines without a `hint=1` tag.
-    if state.dumpBuffer != nil {
-      appendDumpLine(
-        into: &state.dumpBuffer,
-        depth: depth,
-        role: role,
-        subrole: subrole,
-        parentRole: parentRole,
-        posValue: posValue,
-        sizeValue: sizeValue,
-        screenH: screenH,
-        enabled: enabled,
-        actions: dumpActions ?? [],
-        label: dumpLabel,
-        hinted: addedAsTarget
-      )
     }
 
     // Always walk `kAXChildrenAttribute`. We deliberately do NOT prefer
     // `kAXVisibleChildren` / `kAXVisibleRows` even though that would skip
     // scrolled-off rows in NSTableView / NSOutlineView / NSCollectionView:
-    // the dump exists to answer "is this element in the AX tree?", and
-    // hiding scrolled-off rows from the dump makes the question
-    // unanswerable.
+    // visible filtering is geometric and happens after discovery, so
+    // traversal must still see elements that AX marks non-visible but
+    // positions inside the focused window.
     //
     // **Single-attribute children fallback**: the batched IPC can
     // occasionally drop `kAXChildrenAttribute` (returns an error
@@ -539,7 +606,6 @@ public final class AccessibilityProvider: JumpProvider {
     // child case falls through to the serial loop below.
     if fanoutBudget > 0, children.count > 1 {
       let collector = WalkCollector()
-      let dumpEnabled = state.dumpBuffer != nil
       let captureScreenH = screenH
       let captureVisible = visible
       let capturePid = pid
@@ -552,7 +618,6 @@ public final class AccessibilityProvider: JumpProvider {
       let childrenSnapshot = children
       DispatchQueue.concurrentPerform(iterations: childrenSnapshot.count) { i in
         var workerState = WalkState()
-        workerState.dumpBuffer = dumpEnabled ? [] : nil
         // Encode the fan-out level into the id prefix so ids stay
         // unique across nested fan-out points. Outer fan-out emits
         // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
@@ -575,9 +640,6 @@ public final class AccessibilityProvider: JumpProvider {
       collector.lock.lock()
       state.confirmedTargets.append(contentsOf: collector.confirmedTargets)
       state.pendingTargets.append(contentsOf: collector.pendingTargets)
-      if state.dumpBuffer != nil {
-        state.dumpBuffer?.append(contentsOf: collector.dump)
-      }
       collector.lock.unlock()
       return
     }
@@ -650,45 +712,5 @@ public final class AccessibilityProvider: JumpProvider {
     if sz.width < 3 || sz.height < 3 { return nil }
     let flippedY = screenH - origin.y - sz.height
     return CGRect(x: origin.x, y: flippedY, width: sz.width, height: sz.height)
-  }
-
-  private func actionNames(_ element: AXUIElement) -> [String] {
-    var names: CFArray?
-    let err = AXUIElementCopyActionNames(element, &names)
-    guard err == .success, let arr = names as? [String] else { return [] }
-    return arr
-  }
-
-  private func appendDumpLine(
-    into buffer: inout [String]?,
-    depth: Int,
-    role: String?,
-    subrole: String?,
-    parentRole: String?,
-    posValue: AXValue?,
-    sizeValue: AXValue?,
-    screenH: CGFloat,
-    enabled: Bool,
-    actions: [String],
-    label: String?,
-    hinted: Bool
-  ) {
-    guard buffer != nil else { return }
-    let frame: CGRect?
-    if let p = posValue, let s = sizeValue {
-      frame = frameFromAX(pos: p, size: s, screenH: screenH)
-    } else {
-      frame = nil
-    }
-    let indent = String(repeating: "  ", count: min(depth, 40))
-    let f =
-      frame.map { "(\(Int($0.minX)),\(Int($0.minY)),\(Int($0.width))x\(Int($0.height)))" } ?? "-"
-    let acts = actions.isEmpty ? "-" : actions.joined(separator: ",")
-    let lbl = label.map { "\"\($0.replacingOccurrences(of: "\"", with: "\\\""))\"" } ?? "-"
-    let triggerTag = triggerMs.map { "t=\($0) " } ?? ""
-    let line = """
-      \(indent)\(triggerTag)d=\(depth) role=\(role ?? "?") subrole=\(subrole ?? "-") parent=\(parentRole ?? "-") frame=\(f) enabled=\(enabled) actions=\(acts) label=\(lbl)\(hinted ? " hint=1" : "")
-      """
-    buffer?.append(line + "\n")
   }
 }

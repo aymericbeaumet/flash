@@ -599,6 +599,90 @@
       "file": "commerce-listing-100.html",
       "category": "commerce-listing",
       "kind": "realistic"
+    },
+    {
+      "name": "collected-test-google-search-001",
+      "file": "collected-test-google-search-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-reddit-the-heart-of-the-internet-001",
+      "file": "collected-reddit-the-heart-of-the-internet-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-feed-linkedin-001",
+      "file": "collected-feed-linkedin-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-patches-linkedin-001",
+      "file": "collected-patches-linkedin-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-instagram-google-search-001",
+      "file": "collected-instagram-google-search-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-instagram-001",
+      "file": "collected-instagram-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-home-x-001",
+      "file": "collected-home-x-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-facebook-001",
+      "file": "collected-facebook-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-20-facebook-001",
+      "file": "collected-20-facebook-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-20-facebook-002",
+      "file": "collected-20-facebook-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-20-facebook-003",
+      "file": "collected-20-facebook-003.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-u-s-military-turned-gps-into-a-global-numbers-st-001",
+      "file": "collected-u-s-military-turned-gps-into-a-global-numbers-st-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-the-go-programming-language-001",
+      "file": "collected-the-go-programming-language-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-rust-programming-language-001",
+      "file": "collected-rust-programming-language-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
     }
   ]
 }

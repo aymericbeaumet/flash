@@ -52,24 +52,15 @@ struct Config {
     /// Log activation profiles whose end-to-end latency is at least this
     /// many milliseconds. Set to 0 to disable slow-activation logs.
     var slowMs: Int = 100
-    /// When true, the AX walker writes one line per visited element
-    /// (role, subrole, frame, parent role, actions, label) to
-    /// `~/Library/Logs/Flash/ax-dump.log` on every activation. Used to
-    /// diagnose missing or spurious hints in apps that fall through to
-    /// the AX provider (Firefox web pages, Electron, etc.). Off by
-    /// default — the dump is verbose and rotates per activation.
-    var dumpAx: Bool = false
-    /// When true, every diagnostic line that goes to stderr is also
-    /// appended to `~/Library/Logs/Flash/flash.log`. Useful when
-    /// running Flash via launchd (no terminal) but you still want to
-    /// see profile traces and one-off warnings.
-    var dumpLogs: Bool = false
     /// Minimum severity emitted by `FlashLog`. Messages below this
     /// level are dropped before any string interpolation runs.
     /// Defaults to `info` — set to `trace` while investigating a
     /// stuck-mode/input issue, `debug` for broader diagnostics, or
-    /// `warn` / `error` to mute the steady-state traces.
+    /// `warn` / `error` / `fatal` to mute the steady-state traces.
     var logLevel: FlashLog.Level = .info
+  }
+  struct Open {
+    var ignoredApps: [String] = []
   }
   struct Mode {
     struct Labels: Equatable {
@@ -98,12 +89,14 @@ struct Config {
       ModeMapping(key: "ctrl-u", action: .flashCommand(.scroll(.halfPageUp))),
       ModeMapping(key: "gg", action: .flashCommand(.scroll(.top))),
       ModeMapping(key: "G", action: .flashCommand(.scroll(.bottom))),
-      ModeMapping(key: "gt", action: .flashCommand(.nextTab)),
-      ModeMapping(key: "gT", action: .flashCommand(.previousTab)),
+      ModeMapping(key: "gt", action: .flashCommand(.tabNext)),
+      ModeMapping(key: "gT", action: .flashCommand(.tabPrev)),
+      ModeMapping(key: "gN", action: .flashCommand(.tabSelect(index: nil))),
       ModeMapping(key: "ctrl-o", action: .flashCommand(.appBack)),
       ModeMapping(key: "ctrl-i", action: .flashCommand(.appForward)),
       ModeMapping(key: "gf", action: .flashCommand(.nextFrame)),
       ModeMapping(key: "gF", action: .flashCommand(.mainFrame)),
+      ModeMapping(key: "i", action: .flashCommand(.insertMode)),
       ModeMapping(key: "f", action: .flashCommand(.mouseClick(action: .leftClick))),
       ModeMapping(key: "rf", action: .flashCommand(.mouseClick(action: .rightClick))),
       ModeMapping(key: "df", action: .flashCommand(.mouseClick(action: .doubleClick))),
@@ -111,10 +104,10 @@ struct Config {
       ModeMapping(key: "u", action: .flashCommand(.undo)),
       ModeMapping(key: "ctrl-r", action: .flashCommand(.redo)),
       ModeMapping(key: "x", action: .flashCommand(.close)),
+      ModeMapping(key: "t", action: .flashCommand(.tabNewInsert)),
       ModeMapping(key: "/", action: .flashCommand(.find)),
-      ModeMapping(key: "o", action: .flashCommand(.appFinder(all: true))),
-      ModeMapping(key: "cmd+space", action: .flashCommand(.appFinder(all: true))),
-      ModeMapping(key: "O", action: .flashCommand(.appFinder(all: true))),
+      ModeMapping(key: "o", action: .flashCommand(.candidateFinder(all: true))),
+      ModeMapping(key: "O", action: .flashCommand(.candidateFinder(all: true))),
       ModeMapping(key: "r", action: .flashCommand(.reload)),
       ModeMapping(key: "?", action: .flashCommand(.showUsage)),
       ModeMapping(key: ":", action: .flashCommand(.commandMode)),
@@ -144,6 +137,7 @@ struct Config {
 
   var hints = Hints()
   var overlay = Overlay()
+  var open = Open()
   var mode = Mode()
   var debug = Debug()
   var warnings: [String] = []
@@ -202,8 +196,6 @@ struct Config {
       "debug": [
         "bounds_bg": debug.boundsBG,
         "bounds_fg": debug.boundsFG,
-        "dump_ax": debug.dumpAx,
-        "dump_logs": debug.dumpLogs,
         "log_level": debug.logLevel.name,
         "profile": debug.profile,
         "show_bounds": debug.showBounds,
@@ -223,6 +215,9 @@ struct Config {
           "normal": mode.labels.normal,
         ],
         "normal": mode.normal.map(Self.mappingJSONValue),
+      ],
+      "open": [
+        "ignored_apps": open.ignoredApps
       ],
       "overlay": [
         "font_size": overlay.fontSize,
@@ -293,18 +288,6 @@ struct Config {
   }
 }
 
-extension FlashLog.Level {
-  var name: String {
-    switch self {
-    case .trace: return "trace"
-    case .debug: return "debug"
-    case .info: return "info"
-    case .warn: return "warn"
-    case .error: return "error"
-    }
-  }
-}
-
 extension URLCommand {
   var diagnosticDescription: String {
     switch self {
@@ -344,9 +327,11 @@ extension URLCommand {
       return "flash://app_redo"
     case .close:
       return "flash://window_close"
+    case .tabClose:
+      return "flash://tab_close"
     case .find:
       return "flash://app_find"
-    case .appFinder(let all):
+    case .candidateFinder(let all):
       return all ? "flash://app_open_finder?all=1" : "flash://app_open_finder"
     case .copyURL:
       return "flash://url_copy"
@@ -354,10 +339,15 @@ extension URLCommand {
       return "flash://frame_next"
     case .mainFrame:
       return "flash://frame_main"
-    case .nextTab:
+    case .tabNext:
       return "flash://tab_next"
-    case .previousTab:
+    case .tabPrev:
       return "flash://tab_previous"
+    case .tabSelect(let index):
+      if let index {
+        return "flash://tab_select?index=\(index)"
+      }
+      return "flash://tab_select"
     case .appBack:
       return "flash://app_back"
     case .appForward:
@@ -374,8 +364,10 @@ extension URLCommand {
       return "flash://document_open"
     case .newWindow:
       return "flash://window_new"
-    case .newTab:
+    case .tabNew:
       return "flash://tab_new"
+    case .tabNewInsert:
+      return "flash://tab_new_insert"
     case .copy:
       return "flash://clipboard_copy"
     case .cut:

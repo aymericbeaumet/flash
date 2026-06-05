@@ -6,7 +6,6 @@ enum ConfigLoader {
   ///   2. `FLASH_CONFIG` environment variable
   ///   3. `$XDG_CONFIG_HOME/flash/flash.toml`
   ///   4. `~/.config/flash/flash.toml`
-  ///   5. `~/.flash.toml`
   static var defaultPath: URL {
     resolvePath(
       arguments: CommandLine.arguments,
@@ -17,7 +16,7 @@ enum ConfigLoader {
   /// watcher: a watcher per path catches both edits to the active
   /// config AND creation of a higher-precedence one (e.g. user adds
   /// `$XDG_CONFIG_HOME/flash/flash.toml` while running with
-  /// `~/.flash.toml`).
+  /// `~/.config/flash/flash.toml`).
   static func candidatePaths(arguments: [String], environment: [String: String]) -> [URL] {
     for arg in arguments.dropFirst() {
       if arg.hasPrefix("--config=") {
@@ -38,7 +37,6 @@ enum ConfigLoader {
           .appendingPathComponent("flash/flash.toml"))
     }
     out.append(home.appendingPathComponent(".config/flash/flash.toml"))
-    out.append(home.appendingPathComponent(".flash.toml"))
     return out
   }
 
@@ -50,7 +48,9 @@ enum ConfigLoader {
     }
     // Fall back to the canonical xdg-style path when nothing exists
     // yet. `parseFile` handles missing files gracefully.
-    return candidates.first ?? URL(fileURLWithPath: NSHomeDirectory() + "/.flash.toml")
+    return candidates.first
+      ?? FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".config/flash/flash.toml")
   }
 
   /// Production entry point. Resolves the config path, reads the TOML
@@ -65,9 +65,9 @@ enum ConfigLoader {
     return applyOverrides(to: parsed, arguments: args, environment: env)
   }
 
-  /// Back-compat entry — load from a specific path, with the current
-  /// process's environment + arguments still applied as overrides. Used
-  /// by hot-reload (it already knows the resolved path).
+  /// Load from a specific path, with the current process's environment
+  /// + arguments still applied as overrides. Used by hot-reload (it
+  /// already knows the resolved path).
   static func load(from url: URL) -> Config {
     let env = ProcessInfo.processInfo.environment
     let parsed = parseFile(at: url, environment: env)
@@ -97,11 +97,9 @@ enum ConfigLoader {
     var config = Config()
     var currentTable: [String] = []
 
-    for (lineOffset, rawLinePart) in text.split(
-      separator: "\n", omittingEmptySubsequences: false
-    ).enumerated() {
-      let lineNumber = lineOffset + 1
-      let rawLine = String(rawLinePart)
+    for logicalLine in logicalLines(from: text) {
+      let lineNumber = logicalLine.lineNumber
+      let rawLine = logicalLine.rawLine
       var line = rawLine.trimmingCharacters(in: .whitespaces)
       if line.isEmpty || line.hasPrefix("#") { continue }
       if let hashIdx = unquotedCommentIndex(in: line) {
@@ -152,12 +150,114 @@ enum ConfigLoader {
     return config
   }
 
+  private struct LogicalLine {
+    var lineNumber: Int
+    var rawLine: String
+  }
+
+  private static func logicalLines(from text: String) -> [LogicalLine] {
+    var lines: [LogicalLine] = []
+    var collectedLineNumber = 0
+    var collectedRaw = ""
+    var arrayDepth = 0
+
+    func appendCollectedIfComplete() {
+      guard arrayDepth <= 0 else { return }
+      lines.append(LogicalLine(lineNumber: collectedLineNumber, rawLine: collectedRaw))
+      collectedLineNumber = 0
+      collectedRaw = ""
+      arrayDepth = 0
+    }
+
+    for (lineOffset, rawLinePart) in text.split(
+      separator: "\n", omittingEmptySubsequences: false
+    ).enumerated() {
+      let lineNumber = lineOffset + 1
+      let rawLine = String(rawLinePart)
+      let lineWithoutComment = stripUnquotedComment(rawLine)
+
+      if collectedLineNumber != 0 {
+        collectedRaw += "\n" + lineWithoutComment
+        arrayDepth += bracketDelta(in: lineWithoutComment)
+        appendCollectedIfComplete()
+        continue
+      }
+
+      guard startsMultilineArray(rawLine: lineWithoutComment) else {
+        lines.append(LogicalLine(lineNumber: lineNumber, rawLine: rawLine))
+        continue
+      }
+
+      collectedLineNumber = lineNumber
+      collectedRaw = lineWithoutComment
+      arrayDepth = bracketDelta(in: lineWithoutComment)
+      appendCollectedIfComplete()
+    }
+
+    if collectedLineNumber != 0 {
+      lines.append(LogicalLine(lineNumber: collectedLineNumber, rawLine: collectedRaw))
+    }
+    return lines
+  }
+
+  private static func startsMultilineArray(rawLine: String) -> Bool {
+    var line = rawLine.trimmingCharacters(in: .whitespaces)
+    guard !line.isEmpty, !line.hasPrefix("#"), let eqIdx = line.firstIndex(of: "=") else {
+      return false
+    }
+    line = String(line[line.index(after: eqIdx)...]).trimmingCharacters(in: .whitespaces)
+    guard line.hasPrefix("[") else { return false }
+    return bracketDelta(in: line) > 0
+  }
+
+  private static func stripUnquotedComment(_ line: String) -> String {
+    guard let hashIdx = unquotedCommentIndex(in: line) else { return line }
+    return String(line[..<hashIdx])
+  }
+
+  private static func bracketDelta(in line: String) -> Int {
+    var delta = 0
+    var inString = false
+    var escaped = false
+
+    for c in line {
+      if escaped {
+        escaped = false
+        continue
+      }
+      if inString, c == "\\" {
+        escaped = true
+        continue
+      }
+      if c == "\"" {
+        inString.toggle()
+        continue
+      }
+      guard !inString else { continue }
+      if c == "[" {
+        delta += 1
+      } else if c == "]" {
+        delta -= 1
+      }
+    }
+    return delta
+  }
+
   private static func unquotedCommentIndex(in line: String) -> String.Index? {
     var inString = false
+    var escaped = false
     var i = line.startIndex
     while i < line.endIndex {
       let c = line[i]
-      if c == "\"" { inString.toggle() } else if c == "#" && !inString { return i }
+      if escaped {
+        escaped = false
+      } else if inString && c == "\\" {
+        escaped = true
+      } else if c == "\"" {
+        inString.toggle()
+      } else if c == "#" && !inString {
+        return i
+      }
       i = line.index(after: i)
     }
     return nil
@@ -247,6 +347,16 @@ enum ConfigLoader {
       } else {
         config.addDiagnostic(
           "hints.magic_modifiers must be an array of strings",
+          location: location)
+      }
+
+    case ["open", "ignored_apps"]:
+      if let parsed = parseStringArray(value) {
+        config.open.ignoredApps = parsed
+        config.recordLocation(path: "open.ignored_apps", location: location)
+      } else {
+        config.addDiagnostic(
+          "open.ignored_apps must be an array of strings",
           location: location)
       }
 
@@ -343,27 +453,13 @@ enum ConfigLoader {
       } else {
         config.addDiagnostic("debug.slow_ms must be an integer", location: location)
       }
-    case ["debug", "dump_ax"]:
-      if let parsed = parseBool(value) {
-        config.debug.dumpAx = parsed
-        config.recordLocation(path: "debug.dump_ax", location: location)
-      } else {
-        config.addDiagnostic("debug.dump_ax must be true or false", location: location)
-      }
-    case ["debug", "dump_logs"]:
-      if let parsed = parseBool(value) {
-        config.debug.dumpLogs = parsed
-        config.recordLocation(path: "debug.dump_logs", location: location)
-      } else {
-        config.addDiagnostic("debug.dump_logs must be true or false", location: location)
-      }
     case ["debug", "log_level"]:
       if let raw = parseString(value), let lvl = FlashLog.Level.parse(raw) {
         config.debug.logLevel = lvl
         config.recordLocation(path: "debug.log_level", location: location)
       } else {
         config.addDiagnostic(
-          "debug.log_level must be one of: trace, debug, info, warn, error",
+          "debug.log_level must be one of: trace, debug, info, warn, error, fatal",
           location: location)
       }
 
@@ -585,6 +681,12 @@ enum ConfigLoader {
         }
       }
 
+    case "open-ignored-apps":
+      if let values = parseOverrideStringArray(value) {
+        config.open.ignoredApps = values
+        config.clearLocation(path: "open.ignored_apps")
+      }
+
     case "overlay-font-size":
       if let d = Double(value) {
         config.overlay.fontSize = d
@@ -623,16 +725,6 @@ enum ConfigLoader {
       if let i = Int(value) {
         config.debug.slowMs = i
         config.clearLocation(path: "debug.slow_ms")
-      }
-    case "debug-dump-ax":
-      if let b = boolFromString(value) {
-        config.debug.dumpAx = b
-        config.clearLocation(path: "debug.dump_ax")
-      }
-    case "debug-dump-logs":
-      if let b = boolFromString(value) {
-        config.debug.dumpLogs = b
-        config.clearLocation(path: "debug.dump_logs")
       }
     case "debug-log-level":
       if let lvl = FlashLog.Level.parse(value) {

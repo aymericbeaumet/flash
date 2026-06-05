@@ -7,8 +7,8 @@ final class BrowserFixtureCatalogTests: XCTestCase {
       .appendingPathComponent("Tests/BrowserSnapshots", isDirectory: true)
     let catalog = try BrowserFixtureCatalog.load(from: fixturesDir)
 
-    XCTAssertEqual(catalog.fixtures.count, 100)
-    XCTAssertEqual(Set(catalog.fixtures.map(\.name)).count, 100)
+    XCTAssertGreaterThanOrEqual(catalog.fixtures.count, 100)
+    XCTAssertEqual(Set(catalog.fixtures.map(\.name)).count, catalog.fixtures.count)
 
     let byCategory = Dictionary(grouping: catalog.fixtures, by: \.category)
     XCTAssertGreaterThanOrEqual(byCategory.count, 7)

@@ -56,6 +56,7 @@ import Foundation
 /// and writes for any context this provider applies to.
 public final class TmuxProvider: JumpProvider {
   public let identifier: String = "tmux"
+  public let displayName: String = "tmux"
   /// Priority 20 — above the generic AX walker (10), below browser
   /// DOM (30). When the AX walker also returns hints for the same
   /// terminal (Terminal.app's `AXTextArea` is the typical case), the
@@ -63,11 +64,15 @@ public final class TmuxProvider: JumpProvider {
   /// larger AX text-area rect.
   public let priority: Int = 20
   public let readinessPolicy: JumpProviderReadinessPolicy = .volatile
+  public let activationPolicy: FlashSourceActivationPolicy = .terminalBundles
+  public let capabilities: FlashSourceCapabilities = [
+    .jumpTargets, .candidates, .tabSelection, .tabCreation, .tabNavigation, .tabClosing,
+  ]
   public var resultsAreVolatile: Bool { true }
 
   /// Known terminal app bundles. Only these get the tmux probe — any
   /// other app skips supports() at line 1 and falls through to AX.
-  private static let terminalBundles: Set<String> = [
+  public static let terminalBundles: Set<String> = [
     "org.alacritty",
     "io.alacritty",
     "com.apple.Terminal",
@@ -104,7 +109,7 @@ public final class TmuxProvider: JumpProvider {
     // from two hot paths:
     //   1. AppMonitor.anyVolatileProviderApplies, on the MAIN thread,
     //      before each activation can dispatch to the AX queue.
-    //   2. ProviderRegistry.chain, on the AX queue.
+    //   2. SourceRegistry.chain, on the AX queue.
     // A blocking subprocess on the main path adds 3–10 ms of latency to
     // every alacritty/Terminal activation regardless of whether the user
     // actually has tmux running. `discover` runs the real
@@ -113,6 +118,141 @@ public final class TmuxProvider: JumpProvider {
     // hints unaffected.
     guard Self.terminalBundles.contains(context.bundleIdentifier) else { return false }
     return Self.tmuxPath != nil
+  }
+
+  public func candidates(
+    in environment: FlashSourceEnvironment,
+    scope: CandidateScope
+  ) -> [Candidate] {
+    guard let tmux = Self.tmuxPath else { return [] }
+    let clients = tmuxFinderClients(tmux: tmux, environment: environment)
+    guard
+      let raw = runShell(
+        tmux,
+        [
+          "list-windows", "-a", "-F",
+          "#{session_name}\t#{window_index}\t#{window_name}",
+        ])
+    else { return [] }
+
+    return Self.tmuxFinderWindowSpecs(windowListRaw: raw, clients: clients).map { spec in
+      Candidate(
+        kind: .tmuxWindow,
+        sourceID: identifier,
+        source: displayName,
+        pid: spec.terminalPID,
+        title: spec.title,
+        subtitle: spec.subtitle,
+        bundleIdentifier: "",
+        url: nil,
+        tmuxClientTTY: spec.tty,
+        tmuxTarget: spec.target,
+        targetElement: nil)
+    }
+  }
+
+  public func resolveCandidate(
+    _ item: Candidate,
+    in environment: FlashSourceEnvironment,
+    completion: @escaping (CandidateResolution) -> Void
+  ) {
+    if let pid = item.pid,
+      let app = NSRunningApplication(processIdentifier: pid)
+    {
+      app.activate(options: [.activateAllWindows])
+    }
+    if let tmux = Self.tmuxPath, let target = item.tmuxTarget {
+      var args = ["switch-client"]
+      if let tty = item.tmuxClientTTY {
+        args.append(contentsOf: ["-c", tty])
+      }
+      args.append(contentsOf: ["-t", target])
+      DispatchQueue.global(qos: .utility).async { [weak self] in
+        _ = self?.runShell(tmux, args)
+      }
+    }
+    DispatchQueue.main.async {
+      completion(.resolved(pid: item.pid))
+    }
+  }
+
+  public func tabSelect(
+    at index: Int,
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    guard index > 0 else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    performTmuxTabAction(in: context, completion: completion) { tmux, client in
+      guard let target = self.tmuxTargetForOrdinalTab(index, tmux: tmux, client: client) else {
+        return false
+      }
+      return self.switchTmuxClient(tmux: tmux, client: client, target: target)
+    }
+  }
+
+  public func tabNext(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performTmuxTabAction(in: context, completion: completion) { tmux, client in
+      guard
+        let target = self.tmuxTargetForAdjacentTab(.next, tmux: tmux, client: client)
+      else { return false }
+      return self.switchTmuxClient(tmux: tmux, client: client, target: target)
+    }
+  }
+
+  public func tabPrev(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performTmuxTabAction(in: context, completion: completion) { tmux, client in
+      guard
+        let target = self.tmuxTargetForAdjacentTab(.previous, tmux: tmux, client: client)
+      else { return false }
+      return self.switchTmuxClient(tmux: tmux, client: client, target: target)
+    }
+  }
+
+  public func tabNew(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performTmuxTabAction(in: context, completion: completion) { tmux, client in
+      let currentPath = self.trimmedTmuxOutput(
+        self.runShell(tmux, ["display-message", "-c", client.tty, "-p", "#{pane_current_path}"]))
+      var args = ["new-window", "-P", "-F", "#{window_index}", "-t", client.session]
+      if let currentPath, !currentPath.isEmpty {
+        args.append(contentsOf: ["-c", currentPath])
+      }
+      guard let createdIndex = self.trimmedTmuxOutput(self.runShell(tmux, args)),
+        !createdIndex.isEmpty
+      else { return false }
+      return self.switchTmuxClient(
+        tmux: tmux,
+        client: client,
+        target: "\(client.session):\(createdIndex)")
+    }
+  }
+
+  public func tabClose(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performTmuxTabAction(in: context, completion: completion) { tmux, client in
+      guard let target = self.currentTmuxWindowTarget(tmux: tmux, client: client) else {
+        return false
+      }
+      return self.runShell(tmux, ["kill-window", "-t", target]) != nil
+    }
   }
 
   public func discover(in context: AppContext) throws -> [JumpTarget] {
@@ -255,6 +395,114 @@ public final class TmuxProvider: JumpProvider {
     return targets
   }
 
+  // MARK: Tmux tab actions
+
+  private func performTmuxTabAction(
+    in context: AppContext,
+    completion: @escaping (SourceActionResult) -> Void,
+    operation: @escaping (_ tmux: String, _ client: TmuxClient) -> Bool
+  ) {
+    guard let tmux = Self.tmuxPath else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    DispatchQueue.global(qos: .utility).async { [weak self] in
+      guard let self, let client = self.clientHostedBy(pid: context.processID) else {
+        DispatchQueue.main.async { completion(.unhandled) }
+        return
+      }
+      let didPerform = operation(tmux, client)
+      DispatchQueue.main.async {
+        completion(didPerform ? .performed(pid: context.processID) : .unhandled)
+      }
+    }
+  }
+
+  private func switchTmuxClient(tmux: String, client: TmuxClient, target: String) -> Bool {
+    runShell(tmux, ["switch-client", "-c", client.tty, "-t", target]) != nil
+  }
+
+  private func tmuxTargetForOrdinalTab(
+    _ ordinal: Int,
+    tmux: String,
+    client: TmuxClient
+  ) -> String? {
+    guard
+      let raw = runShell(tmux, ["list-windows", "-t", client.session, "-F", "#{window_index}"])
+    else { return nil }
+    return tmuxTargetForOrdinalTab(
+      ordinal,
+      session: client.session,
+      windowIndices: tmuxWindowIndices(from: raw))
+  }
+
+  func tmuxTargetForOrdinalTab(
+    _ ordinal: Int,
+    session: String,
+    windowIndices: [String]
+  ) -> String? {
+    guard ordinal > 0, ordinal <= windowIndices.count else { return nil }
+    return "\(session):\(windowIndices[ordinal - 1])"
+  }
+
+  private func tmuxTargetForAdjacentTab(
+    _ direction: SourceTabDirection,
+    tmux: String,
+    client: TmuxClient
+  ) -> String? {
+    guard
+      let currentIndex = trimmedTmuxOutput(
+        runShell(tmux, ["display-message", "-c", client.tty, "-p", "#{window_index}"])),
+      let raw = runShell(tmux, ["list-windows", "-t", client.session, "-F", "#{window_index}"])
+    else { return nil }
+    return tmuxTargetForAdjacentTab(
+      direction,
+      session: client.session,
+      currentIndex: currentIndex,
+      windowIndices: tmuxWindowIndices(from: raw))
+  }
+
+  func tmuxTargetForAdjacentTab(
+    _ direction: SourceTabDirection,
+    session: String,
+    currentIndex: String,
+    windowIndices: [String]
+  ) -> String? {
+    guard !windowIndices.isEmpty,
+      let currentOffset = windowIndices.firstIndex(of: currentIndex)
+    else { return nil }
+    let targetOffset: Int
+    switch direction {
+    case .next:
+      targetOffset = (currentOffset + 1) % windowIndices.count
+    case .previous:
+      targetOffset = (currentOffset - 1 + windowIndices.count) % windowIndices.count
+    }
+    return "\(session):\(windowIndices[targetOffset])"
+  }
+
+  private func currentTmuxWindowTarget(tmux: String, client: TmuxClient) -> String? {
+    guard
+      let currentIndex = trimmedTmuxOutput(
+        runShell(tmux, ["display-message", "-c", client.tty, "-p", "#{window_index}"])),
+      !currentIndex.isEmpty
+    else { return nil }
+    return "\(client.session):\(currentIndex)"
+  }
+
+  func tmuxWindowIndices(from raw: String) -> [String] {
+    raw.split(separator: "\n").compactMap { line in
+      let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
+    }
+  }
+
+  private func trimmedTmuxOutput(_ raw: String?) -> String? {
+    guard let raw else { return nil }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
   // MARK: Tokenization
 
   /// Iterate `[A-Za-z0-9]+` runs of length ≥2. 1-char tokens are
@@ -299,6 +547,54 @@ public final class TmuxProvider: JumpProvider {
   struct TmuxClient {
     let tty: String
     let session: String
+  }
+
+  public struct TmuxFinderClient: Equatable {
+    public var tty: String
+    public var session: String
+    public var clientPID: pid_t
+    public var terminalPID: pid_t?
+
+    public init(tty: String, session: String, clientPID: pid_t, terminalPID: pid_t?) {
+      self.tty = tty
+      self.session = session
+      self.clientPID = clientPID
+      self.terminalPID = terminalPID
+    }
+  }
+
+  public struct TmuxFinderWindowSpec: Equatable {
+    public var session: String
+    public var index: String
+    public var name: String
+    public var tty: String?
+    public var terminalPID: pid_t?
+
+    public init(
+      session: String,
+      index: String,
+      name: String,
+      tty: String?,
+      terminalPID: pid_t?
+    ) {
+      self.session = session
+      self.index = index
+      self.name = name
+      self.tty = tty
+      self.terminalPID = terminalPID
+    }
+
+    public var title: String {
+      name.isEmpty ? "\(session):\(index)" : "\(session):\(index) \(name)"
+    }
+
+    public var subtitle: String {
+      name.isEmpty ? "tmux \(session)" : "tmux \(session) \(name)"
+    }
+
+    public var target: String {
+      "\(session):\(index)"
+    }
   }
 
   struct Pane {
@@ -373,6 +669,61 @@ public final class TmuxProvider: JumpProvider {
       }
     }
     return nil
+  }
+
+  private func tmuxFinderClients(
+    tmux: String,
+    environment: FlashSourceEnvironment
+  ) -> [TmuxFinderClient] {
+    guard
+      let raw = runShell(
+        tmux, ["list-clients", "-F", "#{client_tty}\t#{session_name}\t#{client_pid}"])
+    else { return [] }
+    return Self.tmuxFinderClients(raw: raw) { clientPID in
+      environment.runningApplications.first { app in
+        app.activationPolicy == .regular
+          && Self.isAncestor(app.processIdentifier, of: clientPID)
+      }?.processIdentifier
+    }
+  }
+
+  public static func tmuxFinderClients(
+    raw: String,
+    terminalPIDForClient: (pid_t) -> pid_t?
+  ) -> [TmuxFinderClient] {
+    raw.split(separator: "\n").compactMap { line in
+      let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+      guard parts.count == 3, let clientPID = pid_t(parts[2]) else { return nil }
+      return TmuxFinderClient(
+        tty: parts[0],
+        session: parts[1],
+        clientPID: clientPID,
+        terminalPID: terminalPIDForClient(clientPID))
+    }
+  }
+
+  public static func tmuxFinderWindowSpecs(
+    windowListRaw raw: String,
+    clients: [TmuxFinderClient]
+  ) -> [TmuxFinderWindowSpec] {
+    let fallbackClient = clients.first { $0.terminalPID != nil } ?? clients.first
+    let clientBySession = Dictionary(
+      clients.map { ($0.session, $0) },
+      uniquingKeysWith: { first, second in
+        first.terminalPID != nil ? first : second
+      })
+    return raw.split(separator: "\n").compactMap { line in
+      let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+      guard parts.count == 3 else { return nil }
+      let session = parts[0]
+      let client = clientBySession[session] ?? fallbackClient
+      return TmuxFinderWindowSpec(
+        session: session,
+        index: parts[1],
+        name: parts[2].trimmingCharacters(in: .whitespacesAndNewlines),
+        tty: client?.tty,
+        terminalPID: client?.terminalPID)
+    }
   }
 
   /// True if `ancestor` appears in the parent chain of `descendant`

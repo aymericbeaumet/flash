@@ -1,16 +1,11 @@
 import Foundation
 
-/// Single sink for the app's stderr diagnostics. Every line is
-/// formatted as `"[LEVEL] subsystem message\n"` so log scraping is
-/// uniform across stderr and the file mirror.
+/// Single sink for the app's diagnostics. Every emitted line is one
+/// compact JSON object, written to stderr and appended to
+/// `~/Library/Logs/Flash/flash.log`.
 ///
-/// Always writes to stderr (subject to the configured `minLevel`);
-/// also appends to `~/Library/Logs/Flash/flash.log` when
-/// `mirrorEnabled` is true. Toggled by `debug.dump_logs` via
-/// `AppMonitor.configureLogging`.
-///
-/// File writes are dispatched onto a dedicated background queue so
-/// a slow disk never blocks the activation hot path.
+/// File writes are dispatched onto a dedicated background queue so a
+/// slow disk never blocks the activation hot path.
 enum FlashLog {
   /// Severity ordering. The configured `minLevel` is the floor —
   /// messages below it are dropped before any string interpolation
@@ -21,18 +16,18 @@ enum FlashLog {
     case info = 2
     case warn = 3
     case error = 4
+    case fatal = 5
 
     static func < (a: Level, b: Level) -> Bool { a.rawValue < b.rawValue }
 
-    /// Six-character padded tag so columns line up across levels
-    /// when scanning the file or stderr.
-    var tag: String {
+    var name: String {
       switch self {
-      case .trace: return "[TRACE]"
-      case .debug: return "[DEBUG]"
-      case .info: return "[INFO] "
-      case .warn: return "[WARN] "
-      case .error: return "[ERROR]"
+      case .trace: return "trace"
+      case .debug: return "debug"
+      case .info: return "info"
+      case .warn: return "warn"
+      case .error: return "error"
+      case .fatal: return "fatal"
       }
     }
 
@@ -46,13 +41,13 @@ enum FlashLog {
       case "info": return .info
       case "warn", "warning": return .warn
       case "error": return .error
+      case "fatal": return .fatal
       default: return nil
       }
     }
   }
 
   private static let lock = NSLock()
-  private static var mirrorEnabled: Bool = false
   private static var minLevel: Level = .info
   private static var handle: FileHandle?
   private static let writeQueue =
@@ -62,20 +57,6 @@ enum FlashLog {
     lock.lock()
     minLevel = level
     lock.unlock()
-  }
-
-  static func setMirrorToFile(_ enabled: Bool) {
-    lock.lock()
-    defer { lock.unlock() }
-    if enabled == mirrorEnabled { return }
-    mirrorEnabled = enabled
-    if enabled {
-      handle = openLogFile()
-    } else {
-      let stale = handle
-      handle = nil
-      writeQueue.async { try? stale?.close() }
-    }
   }
 
   static func debug(_ message: @autoclosure () -> String) {
@@ -93,26 +74,44 @@ enum FlashLog {
   static func error(_ message: @autoclosure () -> String) {
     emit(.error, message)
   }
+  static func fatal(_ message: @autoclosure () -> String) {
+    emit(.fatal, message)
+  }
 
   private static func emit(
     _ level: Level, _ message: () -> String
   ) {
     lock.lock()
     let pass = level >= minLevel
-    let mirror = mirrorEnabled
+    if pass, handle == nil {
+      handle = openLogFile()
+    }
     let h = handle
     lock.unlock()
     guard pass else { return }
-    var line = "\(level.tag) \(message())"
-    // Callers used to terminate their own strings inconsistently
-    // (some `\n`, some bare). Normalise here so every line in
-    // stderr and the file mirror ends with exactly one newline.
-    if !line.hasSuffix("\n") { line.append("\n") }
+    let line = jsonLine(level: level, message: message())
     fputs(line, stderr)
-    guard mirror, let h, let data = line.data(using: .utf8) else { return }
+    guard let h, let data = line.data(using: .utf8) else { return }
     writeQueue.async {
       try? h.write(contentsOf: data)
     }
+  }
+
+  private static func jsonLine(level: Level, message: String) -> String {
+    let object: [String: Any] = [
+      "level": level.name,
+      "message": message,
+      "pid": Int(ProcessInfo.processInfo.processIdentifier),
+      "time_unix_ms": Int64((Date().timeIntervalSince1970 * 1000).rounded()),
+    ]
+    guard
+      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+      var line = String(data: data, encoding: .utf8)
+    else {
+      return "{\"level\":\"\(level.name)\",\"message\":\"log serialization failed\"}\n"
+    }
+    line.append("\n")
+    return line
   }
 
   private static func openLogFile() -> FileHandle? {

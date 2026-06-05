@@ -8,14 +8,18 @@ enum OverlayModeBadgeStyle {
   case command
 }
 
-struct AppFinderDisplayItem: Equatable {
+struct CandidateDisplayItem: Equatable {
   var title: String
   var highlightedRanges: [Range<Int>] = []
   var isSelected: Bool
 }
 
+final class CommandLineTextField: NSTextField {
+  override var acceptsFirstResponder: Bool { true }
+}
+
 final class OverlayPanel: NSPanel {
-  private static let appFinderMaxRows = 6
+  private static let candidateFinderMaxRows = 6
 
   private let contentLayer = CALayer()
   private var hintLayers: [CAGradientLayer] = []
@@ -24,24 +28,25 @@ final class OverlayPanel: NSPanel {
   private var labelLayerPool: [CATextLayer] = []
   private let modeBadgeLayer = CAGradientLayer()
   private let modeBadgeLabel = CATextLayer()
-  private let commandPromptLayer = CALayer()
+  private let commandPromptLayer = CAGradientLayer()
   private let commandPromptLabel = CATextLayer()
-  private let commandInputField = CommandInputField()
-  private let appFinderResultsLayer = CALayer()
-  private let appFinderResultsLabel = CATextLayer()
-  private let focusIndicatorLayer = CAShapeLayer()
+  private let commandCaretLayer = CALayer()
+  private let commandTextField = CommandLineTextField(frame: .zero)
+  private let candidateFinderResultsLayer = CAGradientLayer()
+  private let candidateFinderResultsLabel = CATextLayer()
+  private let activeWindowBorderLayer = CAShapeLayer()
   private var modeBadgeVisible = false
   private var modeBadgeText = "INSERT"
   private var modeBadgeStyle: OverlayModeBadgeStyle = .insert
   private var modeBadgeCapturesInput = false
   private var commandPromptVisible = false
   private var commandPromptPrefix = ":"
-  private var appFinderResultsVisible = false
-  private var appFinderResultsMeasurementText = ""
-  private var appFinderResultsAttributedText: NSAttributedString?
-  private var focusIndicatorToken: UInt64 = 0
+  private var candidateFinderResultsVisible = false
+  private var candidateFinderResultsMeasurementText = ""
+  private var candidateFinderResultsAttributedText: NSAttributedString?
+  private var activeWindowBorderToken: UInt64 = 0
   private var transientContentVisible = false
-  private var isUpdatingCommandInputField = false
+  private var suppressCommandTextFieldChange = false
 
   /// One shape layer holds every debug border, drawn as a single CGPath. This
   /// is one GPU draw call regardless of how many targets are visible —
@@ -57,7 +62,14 @@ final class OverlayPanel: NSPanel {
   var modeLabels: Config.Mode.Labels = .init()
   var magicModifiers: ClickModifiers = .defaultMagic
   var inputMode: OverlayInputMode = .hints
-  var normalModePending: String = ""
+  var normalModePending: String = "" {
+    didSet {
+      if normalModePending.isEmpty {
+        normalModePendingUpdatedAt = nil
+      }
+    }
+  }
+  var normalModePendingUpdatedAt: Date?
   var normalModeMappings: [ModeMapping] = Config.Mode.defaultNormalMappings
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
@@ -65,7 +77,7 @@ final class OverlayPanel: NSPanel {
   var commandLineCursorIndex: Int = 0 {
     didSet { commandLineCursorIndex = min(max(commandLineCursorIndex, 0), commandLineText.count) }
   }
-  var appFinderQuery: String = ""
+  var candidateFinderQuery: String = ""
 
   // Fallback border colour when the configured `hint_border` is malformed.
   private static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
@@ -112,34 +124,29 @@ final class OverlayPanel: NSPanel {
     modeBadgeLayer.sublayers = [modeBadgeLabel]
     commandPromptLayer.cornerRadius = 4
     commandPromptLayer.borderWidth = 1
+    commandPromptLayer.masksToBounds = true
     commandPromptLayer.actions = OverlayPanel.noActions
     commandPromptLabel.alignmentMode = .left
     commandPromptLabel.actions = OverlayPanel.noActions
-    commandPromptLayer.sublayers = [commandPromptLabel]
-    commandInputField.isHidden = true
-    commandInputField.focusRingType = .none
-    commandInputField.isBordered = false
-    commandInputField.isBezeled = false
-    commandInputField.drawsBackground = false
-    commandInputField.isEditable = true
-    commandInputField.isSelectable = true
-    commandInputField.usesSingleLineMode = true
-    commandInputField.cell?.wraps = false
-    commandInputField.cell?.isScrollable = true
-    commandInputField.commandDelegate = self
-    appFinderResultsLayer.cornerRadius = 4
-    appFinderResultsLayer.borderWidth = 1
-    appFinderResultsLayer.actions = OverlayPanel.noActions
-    appFinderResultsLabel.alignmentMode = .left
-    appFinderResultsLabel.actions = OverlayPanel.noActions
-    appFinderResultsLayer.sublayers = [appFinderResultsLabel]
-    focusIndicatorLayer.fillColor = NSColor.clear.cgColor
-    focusIndicatorLayer.strokeColor = NSColor.systemTeal.cgColor
-    focusIndicatorLayer.lineWidth = 2
-    focusIndicatorLayer.actions = OverlayPanel.noActions
+    commandCaretLayer.actions = OverlayPanel.noActions
+    commandCaretLayer.backgroundColor = Self.nordSnowStorm2.cgColor
+    commandCaretLayer.isHidden = true
+    commandPromptLayer.sublayers = [commandPromptLabel, commandCaretLayer]
+    candidateFinderResultsLayer.cornerRadius = 4
+    candidateFinderResultsLayer.borderWidth = 1
+    candidateFinderResultsLayer.masksToBounds = true
+    candidateFinderResultsLayer.actions = OverlayPanel.noActions
+    candidateFinderResultsLabel.alignmentMode = .left
+    candidateFinderResultsLabel.actions = OverlayPanel.noActions
+    candidateFinderResultsLayer.sublayers = [candidateFinderResultsLabel]
+    activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
+    activeWindowBorderLayer.strokeColor = Self.nordFrost2.cgColor
+    activeWindowBorderLayer.lineWidth = 2
+    activeWindowBorderLayer.actions = OverlayPanel.noActions
 
     self.contentView = view
-    view.addSubview(commandInputField)
+    configureCommandTextField()
+    view.addSubview(commandTextField)
   }
 
   /// Allocate `count` chip+label layers and stash them in the pools. Called
@@ -158,6 +165,14 @@ final class OverlayPanel: NSPanel {
   override var canBecomeMain: Bool { false }
   override var acceptsFirstResponder: Bool { true }
 
+  var keyboardCaptureIsActive: Bool {
+    if inputMode == .commandLine {
+      return isVisible && isKeyWindow
+        && (firstResponder === commandTextField || commandTextField.currentEditor() != nil)
+    }
+    return isVisible && isKeyWindow && firstResponder === self
+  }
+
   /// Active scroll event monitor — non-nil while the overlay is up.
   /// We use NSEvent's *global* monitor for `.scrollWheel` because the
   /// panel has `ignoresMouseEvents = true` so scroll events go to
@@ -172,6 +187,8 @@ final class OverlayPanel: NSPanel {
   private var scrollLocalMonitor: Any?
   private var clickGlobalMonitor: Any?
   private var clickLocalMonitor: Any?
+  private var pointerIntentGlobalMonitor: Any?
+  private var pointerIntentLocalMonitor: Any?
 
   func display(hints: [AssignedHint]) {
     FlashLog.trace("[overlay] display hints=\(hints.count) input=\(inputMode)")
@@ -378,6 +395,7 @@ final class OverlayPanel: NSPanel {
     "transform": NSNull(), "contents": NSNull(), "hidden": NSNull(),
     "opacity": NSNull(), "backgroundColor": NSNull(), "cornerRadius": NSNull(),
     "borderWidth": NSNull(), "borderColor": NSNull(), "foregroundColor": NSNull(),
+    "masksToBounds": NSNull(),
     "onOrderIn": NSNull(), "onOrderOut": NSNull(), "sublayers": NSNull(),
     "path": NSNull(), "strokeColor": NSNull(), "fillColor": NSNull(), "lineWidth": NSNull(),
     "colors": NSNull(),
@@ -391,11 +409,12 @@ final class OverlayPanel: NSPanel {
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"
-    commandInputField.isHidden = true
-    clearAppFinderResults()
+    commandCaretLayer.isHidden = true
+    hideCommandTextField()
+    clearCandidateFinderResults()
     commandLineText = ""
     commandLineCursorIndex = 0
-    appFinderQuery = ""
+    candidateFinderQuery = ""
     recycleAll()
     renderModeBadgeOnlyOrHide()
   }
@@ -405,10 +424,12 @@ final class OverlayPanel: NSPanel {
     orderFrontRegardless()
     makeKey()
     if inputMode == .commandLine {
-      makeFirstResponder(commandInputField)
-    } else {
-      makeFirstResponder(self)
+      commandTextField.isHidden = false
+      makeFirstResponder(commandTextField)
+      syncCommandTextFieldSelection()
+      return
     }
+    makeFirstResponder(self)
   }
 
   func setModeBadge(text: String, visible: Bool, captureInput: Bool, mode: FlashMode) {
@@ -427,7 +448,10 @@ final class OverlayPanel: NSPanel {
   ) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    defer { CATransaction.commit() }
+    defer {
+      CATransaction.commit()
+      updatePointerIntentMonitors()
+    }
 
     modeBadgeText = text
     modeBadgeStyle = style
@@ -435,8 +459,9 @@ final class OverlayPanel: NSPanel {
     modeBadgeCapturesInput = captureInput
     if style != .command {
       commandPromptVisible = false
-      commandInputField.isHidden = true
-      clearAppFinderResults()
+      commandCaretLayer.isHidden = true
+      hideCommandTextField()
+      clearCandidateFinderResults()
     }
 
     if transientContentVisible {
@@ -445,7 +470,7 @@ final class OverlayPanel: NSPanel {
         let frame = ensurePanelFrame()
         configureModeBadge(panelFrame: frame)
         configureCommandPrompt(panelFrame: frame)
-        configureAppFinderResults(panelFrame: frame)
+        configureCandidateFinderResults(panelFrame: frame)
         if !sublayers.contains(where: { $0 === modeBadgeLayer }) {
           sublayers.append(modeBadgeLayer)
         }
@@ -456,17 +481,17 @@ final class OverlayPanel: NSPanel {
         } else if !commandPromptVisible {
           sublayers.removeAll { $0 === commandPromptLayer }
         }
-        if appFinderResultsVisible,
-          !sublayers.contains(where: { $0 === appFinderResultsLayer })
+        if candidateFinderResultsVisible,
+          !sublayers.contains(where: { $0 === candidateFinderResultsLayer })
         {
-          sublayers.append(appFinderResultsLayer)
-        } else if !appFinderResultsVisible {
-          sublayers.removeAll { $0 === appFinderResultsLayer }
+          sublayers.append(candidateFinderResultsLayer)
+        } else if !candidateFinderResultsVisible {
+          sublayers.removeAll { $0 === candidateFinderResultsLayer }
         }
       } else {
         sublayers.removeAll { $0 === modeBadgeLayer }
         sublayers.removeAll { $0 === commandPromptLayer }
-        sublayers.removeAll { $0 === appFinderResultsLayer }
+        sublayers.removeAll { $0 === candidateFinderResultsLayer }
       }
       contentLayer.sublayers = sublayers
       if captureInput {
@@ -530,6 +555,53 @@ final class OverlayPanel: NSPanel {
     }
   }
 
+  private func installPointerIntentMonitors() {
+    removePointerIntentMonitors()
+    let pointerIntent: () -> Void = { [weak self] in
+      DispatchQueue.main.async {
+        self?.coordinator?.overlayDidCancelByPointer()
+      }
+    }
+    let clickMask: NSEvent.EventTypeMask = [
+      .leftMouseDown, .rightMouseDown, .otherMouseDown,
+    ]
+    pointerIntentGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) { _ in
+      pointerIntent()
+    }
+    pointerIntentLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) { event in
+      pointerIntent()
+      return event
+    }
+  }
+
+  private func removePointerIntentMonitors() {
+    for m in [pointerIntentGlobalMonitor, pointerIntentLocalMonitor] {
+      if let m { NSEvent.removeMonitor(m) }
+    }
+    pointerIntentGlobalMonitor = nil
+    pointerIntentLocalMonitor = nil
+  }
+
+  private func updatePointerIntentMonitors() {
+    if Self.pointerIntentMonitorShouldRun(
+      inputMode: inputMode,
+      modeBadgeVisible: modeBadgeVisible,
+      modeBadgeCapturesInput: modeBadgeCapturesInput)
+    {
+      installPointerIntentMonitors()
+    } else {
+      removePointerIntentMonitors()
+    }
+  }
+
+  static func pointerIntentMonitorShouldRun(
+    inputMode: OverlayInputMode,
+    modeBadgeVisible: Bool,
+    modeBadgeCapturesInput: Bool
+  ) -> Bool {
+    inputMode == .normal && modeBadgeVisible && modeBadgeCapturesInput
+  }
+
   private func removeInputMonitors() {
     for m in [scrollGlobalMonitor, scrollLocalMonitor, clickGlobalMonitor, clickLocalMonitor] {
       if let m { NSEvent.removeMonitor(m) }
@@ -538,6 +610,7 @@ final class OverlayPanel: NSPanel {
     scrollLocalMonitor = nil
     clickGlobalMonitor = nil
     clickLocalMonitor = nil
+    removePointerIntentMonitors()
   }
 
   /// Show a transient banner centered on the focused screen. Multi-line strings (with
@@ -685,28 +758,26 @@ final class OverlayPanel: NSPanel {
 
   func displayCommandLine(
     _ text: String,
-    suggestions: [AppFinderDisplayItem]? = nil,
+    suggestions: [CandidateDisplayItem]? = nil,
     cursorIndex: Int? = nil
   ) {
     FlashLog.trace(
       "[overlay] display_command_line text=\(text) cursor=\(cursorIndex ?? text.count) "
         + "suggestions=\(suggestions?.count ?? 0)")
     inputMode = .commandLine
-    commandLineText = text
-    commandLineCursorIndex = cursorIndex ?? text.count
-    updateCommandInputField(text: commandLineText, cursorIndex: commandLineCursorIndex)
+    setCommandTextFieldText(text, cursorIndex: cursorIndex ?? text.count)
     commandPromptVisible = true
-    commandPromptPrefix = ":"
+    commandPromptPrefix = ""
     if let suggestions {
-      setAppFinderResults(items: suggestions, emptyText: "no matching app")
+      setCandidateFinderResults(items: suggestions, emptyText: "no matching app")
     } else {
-      clearAppFinderResults()
+      clearCandidateFinderResults()
     }
     updateModeBadge(text: modeLabels.command, visible: true, captureInput: true, style: .command)
   }
 
-  func displayAppFinder(query: String, items: [AppFinderDisplayItem]) {
-    FlashLog.trace("[overlay] display_app_finder query=\(query) items=\(items.count)")
+  func displayCandidateFinder(query: String, items: [CandidateDisplayItem]) {
+    FlashLog.trace("[overlay] display_candidate_finder query=\(query) items=\(items.count)")
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer {
@@ -714,62 +785,66 @@ final class OverlayPanel: NSPanel {
       captureKeyboardInput()
     }
 
-    appFinderQuery = query
-    commandInputField.isHidden = true
-    inputMode = .appFinder
+    candidateFinderQuery = query
+    inputMode = .candidateFinder
+    hideCommandTextField()
     commandLineText = query
     commandLineCursorIndex = query.count
     commandPromptPrefix = "Applications> "
     commandPromptVisible = true
-    setAppFinderResults(items: items, emptyText: "no matching app")
+    setCandidateFinderResults(items: items, emptyText: "no matching app")
     updateModeBadge(text: modeLabels.command, visible: true, captureInput: true, style: .command)
   }
 
-  func displayFocusIndicator(around targetFrame: CGRect, durationMs: Int = 1_200) {
-    guard !targetFrame.isNull, targetFrame.width > 0, targetFrame.height > 0 else { return }
-    focusIndicatorToken &+= 1
-    let token = focusIndicatorToken
+  func setActiveWindowBorder(around targetFrame: CGRect?) {
+    activeWindowBorderToken &+= 1
 
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    defer {
-      CATransaction.commit()
-      orderFrontRegardless()
+    defer { CATransaction.commit() }
+
+    guard let targetFrame, !targetFrame.isNull, targetFrame.width > 0, targetFrame.height > 0 else {
+      activeWindowBorderLayer.path = nil
+      var sublayers = contentLayer.sublayers ?? []
+      sublayers.removeAll { $0 === activeWindowBorderLayer }
+      contentLayer.sublayers = sublayers
+      return
     }
 
     let panelFrame = ensurePanelFrame()
-    let local = CGRect(
-      x: targetFrame.minX - panelFrame.minX - 4,
-      y: targetFrame.minY - panelFrame.minY - 4,
-      width: targetFrame.width + 8,
-      height: targetFrame.height + 8)
+    let lineWidth: CGFloat = 2
+    let local = Self.activeWindowBorderLocalRect(
+      targetFrame: targetFrame,
+      panelFrame: panelFrame,
+      lineWidth: lineWidth)
     let scale = NSScreen.main?.backingScaleFactor ?? NSScreen.screens.first?.backingScaleFactor ?? 2
     let snapped = Self.snap(local, scale: scale)
     let path = CGMutablePath()
-    path.addRoundedRect(in: snapped, cornerWidth: 5, cornerHeight: 5)
-    focusIndicatorLayer.frame = contentLayer.bounds
-    focusIndicatorLayer.path = path
-    focusIndicatorLayer.strokeColor = NSColor.systemTeal.cgColor
-    focusIndicatorLayer.fillColor = NSColor.clear.cgColor
-    focusIndicatorLayer.lineWidth = 2
+    path.addRoundedRect(in: snapped, cornerWidth: 4, cornerHeight: 4)
+    activeWindowBorderLayer.frame = contentLayer.bounds
+    activeWindowBorderLayer.path = path
+    activeWindowBorderLayer.strokeColor = Self.nordFrost2.cgColor
+    activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
+    activeWindowBorderLayer.lineWidth = lineWidth
 
     var sublayers = contentLayer.sublayers ?? []
-    if !sublayers.contains(where: { $0 === focusIndicatorLayer }) {
-      sublayers.append(focusIndicatorLayer)
+    if !sublayers.contains(where: { $0 === activeWindowBorderLayer }) {
+      sublayers.append(activeWindowBorderLayer)
     }
     contentLayer.sublayers = sublayers
+  }
 
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(durationMs)) { [weak self] in
-      guard let self, self.focusIndicatorToken == token else { return }
-      CATransaction.begin()
-      CATransaction.setDisableActions(true)
-      self.focusIndicatorLayer.path = nil
-      var sublayers = self.contentLayer.sublayers ?? []
-      sublayers.removeAll { $0 === self.focusIndicatorLayer }
-      self.contentLayer.sublayers = sublayers
-      CATransaction.commit()
-      self.renderModeBadgeOnlyOrHide()
-    }
+  static func activeWindowBorderLocalRect(
+    targetFrame: CGRect,
+    panelFrame: CGRect,
+    lineWidth: CGFloat
+  ) -> CGRect {
+    let inset = lineWidth / 2
+    return CGRect(
+      x: targetFrame.minX - panelFrame.minX + inset,
+      y: targetFrame.minY - panelFrame.minY + inset,
+      width: targetFrame.width - inset * 2,
+      height: targetFrame.height - inset * 2)
   }
 
   private struct ModeBadgePalette {
@@ -798,16 +873,16 @@ final class OverlayPanel: NSPanel {
     if modeBadgeVisible {
       configureModeBadge(panelFrame: frame)
       configureCommandPrompt(panelFrame: frame)
-      configureAppFinderResults(panelFrame: frame)
+      configureCandidateFinderResults(panelFrame: frame)
       var sublayers: [CALayer] = [modeBadgeLayer]
       if commandPromptVisible {
         sublayers.append(commandPromptLayer)
       }
-      if appFinderResultsVisible {
-        sublayers.append(appFinderResultsLayer)
+      if candidateFinderResultsVisible {
+        sublayers.append(candidateFinderResultsLayer)
       }
-      if focusIndicatorLayer.path != nil {
-        sublayers.append(focusIndicatorLayer)
+      if activeWindowBorderLayer.path != nil {
+        sublayers.append(activeWindowBorderLayer)
       }
       contentLayer.sublayers = sublayers
       if modeBadgeCapturesInput {
@@ -835,9 +910,9 @@ final class OverlayPanel: NSPanel {
       configureCommandPrompt(panelFrame: panelFrame)
       sublayers.append(commandPromptLayer)
     }
-    if appFinderResultsVisible {
-      configureAppFinderResults(panelFrame: panelFrame)
-      sublayers.append(appFinderResultsLayer)
+    if candidateFinderResultsVisible {
+      configureCandidateFinderResults(panelFrame: panelFrame)
+      sublayers.append(candidateFinderResultsLayer)
     }
   }
 
@@ -867,7 +942,7 @@ final class OverlayPanel: NSPanel {
     ]
     modeBadgeLayer.borderColor = palette.border.cgColor
 
-    modeBadgeLabel.frame = CGRect(x: 0, y: 3, width: width, height: fontSize + 2)
+    modeBadgeLabel.frame = CGRect(x: 0, y: 4, width: width, height: fontSize + 2)
     modeBadgeLabel.font = labelFont
     modeBadgeLabel.fontSize = fontSize
     modeBadgeLabel.foregroundColor = palette.foreground.cgColor
@@ -881,7 +956,7 @@ final class OverlayPanel: NSPanel {
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let prompt: String
     if inputMode == .commandLine {
-      prompt = commandPromptPrefix
+      prompt = commandLineText
     } else {
       let cursor = min(max(commandLineCursorIndex, 0), commandLineText.count)
       let cursorStringIndex = commandLineText.index(commandLineText.startIndex, offsetBy: cursor)
@@ -898,82 +973,159 @@ final class OverlayPanel: NSPanel {
     let localX = modeBadgeLayer.frame.maxX + gap
     let localY = modeBadgeLayer.frame.minY
     let maxWidth = max(120, visible.maxX - panelFrame.minX - localX - 10)
-    let measuredCount =
-      inputMode == .commandLine
-      ? max(commandPromptPrefix.count + commandLineText.count, commandPromptPrefix.count + 14)
-      : prompt.count
+    let measuredCount = max(prompt.count, 14)
     let width = min(max(96, CGFloat(measuredCount) * fontSize * 0.62 + 18), maxWidth)
     commandPromptLayer.frame = Self.snap(
       CGRect(x: localX, y: localY, width: width, height: height),
       scale: scale)
     commandPromptLayer.contentsScale = scale
-    commandPromptLayer.backgroundColor =
-      NSColor(calibratedRed: 0.02, green: 0.02, blue: 0.025, alpha: 1).cgColor
-    commandPromptLayer.borderColor =
-      NSColor(calibratedRed: 0.23, green: 0.24, blue: 0.27, alpha: 1).cgColor
+    let palette = commandPalette()
+    commandPromptLayer.colors = [
+      palette.bottom.cgColor,
+      palette.top.cgColor,
+    ]
+    commandPromptLayer.borderColor = palette.border.cgColor
 
-    let promptWidth = min(
-      width - 8,
-      max(10, CGFloat(commandPromptPrefix.count) * fontSize * 0.62 + 6))
+    let horizontalPadding: CGFloat = 4
+    let availableTextWidth = max(10, width - horizontalPadding * 2)
+    let textWidth = ceil((prompt as NSString).size(withAttributes: [.font: labelFont]).width)
+    let labelWidth = max(availableTextWidth, textWidth + 2)
+    let cursor = min(max(commandLineCursorIndex, 0), commandLineText.count)
+    let scrollOffset: CGFloat
+    if inputMode == .commandLine {
+      let cursorStringIndex = commandLineText.index(commandLineText.startIndex, offsetBy: cursor)
+      let beforeCursor = String(commandLineText[..<cursorStringIndex])
+      let cursorX = ceil(
+        (beforeCursor as NSString).size(withAttributes: [.font: labelFont]).width)
+      let maxScroll = max(0, textWidth - availableTextWidth)
+      scrollOffset = min(max(0, cursorX - availableTextWidth + 8), maxScroll)
+      commandCaretLayer.isHidden = true
+      configureCommandTextField(
+        promptFrame: commandPromptLayer.frame,
+        font: labelFont,
+        fontSize: fontSize)
+    } else {
+      scrollOffset = 0
+      commandCaretLayer.isHidden = true
+      hideCommandTextField()
+    }
     commandPromptLabel.frame = CGRect(
-      x: 4,
-      y: 3,
-      width: inputMode == .commandLine ? promptWidth : width - 8,
+      x: horizontalPadding - scrollOffset,
+      y: 4,
+      width: labelWidth,
       height: fontSize + 2)
     commandPromptLabel.font = labelFont
     commandPromptLabel.fontSize = fontSize
-    commandPromptLabel.foregroundColor =
-      NSColor(calibratedRed: 0.94, green: 0.95, blue: 0.97, alpha: 1).cgColor
+    commandPromptLabel.foregroundColor = Self.nordSnowStorm2.cgColor
     commandPromptLabel.contentsScale = scale
     commandPromptLabel.alignmentMode = .left
     commandPromptLabel.string = prompt
-
     if inputMode == .commandLine {
-      commandInputField.isHidden = false
-      commandInputField.font = labelFont
-      commandInputField.textColor =
-        NSColor(calibratedRed: 0.94, green: 0.95, blue: 0.97, alpha: 1)
-      commandInputField.frame = CGRect(
-        x: commandPromptLayer.frame.minX + promptWidth,
-        y: commandPromptLayer.frame.minY + 1,
-        width: max(20, commandPromptLayer.frame.width - promptWidth - 6),
-        height: commandPromptLayer.frame.height - 2)
-    } else {
-      commandInputField.isHidden = true
+      commandPromptLabel.string = ""
     }
   }
 
-  private func updateCommandInputField(text: String, cursorIndex: Int) {
-    isUpdatingCommandInputField = true
-    commandInputField.stringValue = text
-    if let editor = commandInputField.currentEditor() {
-      editor.string = text
-      editor.selectedRange = NSRange(
-        location: min(max(cursorIndex, 0), text.count),
-        length: 0)
+  private func configureCommandTextField() {
+    commandTextField.delegate = self
+    commandTextField.isHidden = true
+    commandTextField.isBordered = false
+    commandTextField.drawsBackground = false
+    commandTextField.focusRingType = .none
+    commandTextField.isEditable = true
+    commandTextField.isSelectable = true
+    commandTextField.maximumNumberOfLines = 1
+    commandTextField.lineBreakMode = .byClipping
+    commandTextField.cell?.usesSingleLineMode = true
+    commandTextField.cell?.wraps = false
+    commandTextField.cell?.isScrollable = true
+    commandTextField.textColor = Self.nordSnowStorm2
+    commandTextField.backgroundColor = .clear
+  }
+
+  private func configureCommandTextField(
+    promptFrame: CGRect,
+    font: NSFont,
+    fontSize: CGFloat
+  ) {
+    commandTextField.font = font
+    commandTextField.textColor = Self.nordSnowStorm2
+    commandTextField.frame = CGRect(
+      x: promptFrame.minX + 4,
+      y: promptFrame.minY + max(0, (promptFrame.height - fontSize - 4) / 2),
+      width: max(10, promptFrame.width - 8),
+      height: fontSize + 5)
+    commandTextField.isHidden = false
+  }
+
+  private func hideCommandTextField() {
+    commandTextField.isHidden = true
+    if firstResponder === commandTextField || commandTextField.currentEditor() != nil {
+      makeFirstResponder(self)
     }
-    isUpdatingCommandInputField = false
   }
 
-  private func clearAppFinderResults() {
-    appFinderResultsVisible = false
-    appFinderResultsMeasurementText = ""
-    appFinderResultsAttributedText = nil
+  private func setCommandTextFieldText(_ text: String, cursorIndex: Int) {
+    suppressCommandTextFieldChange = true
+    commandLineText = text
+    commandLineCursorIndex = cursorIndex
+    if commandTextField.stringValue != text {
+      commandTextField.stringValue = text
+    }
+    syncCommandTextFieldSelection()
+    suppressCommandTextFieldChange = false
   }
 
-  private func setAppFinderResults(items: [AppFinderDisplayItem], emptyText: String) {
-    let shownItems = Array(items.prefix(Self.appFinderMaxRows))
+  private func syncCommandTextFieldSelection() {
+    guard let editor = commandTextField.currentEditor() as? NSTextView else { return }
+    editor.insertionPointColor = Self.nordSnowStorm2
+    editor.selectedRange = NSRange(
+      location: utf16Offset(forCharacterOffset: commandLineCursorIndex, in: commandLineText),
+      length: 0)
+  }
+
+  private func commandTextFieldCursorIndex() -> Int {
+    guard let editor = commandTextField.currentEditor() as? NSTextView else {
+      return commandTextField.stringValue.count
+    }
+    return characterOffset(forUTF16Offset: editor.selectedRange.location, in: commandTextField.stringValue)
+  }
+
+  private func utf16Offset(forCharacterOffset offset: Int, in text: String) -> Int {
+    let clamped = min(max(offset, 0), text.count)
+    let index = text.index(text.startIndex, offsetBy: clamped)
+    return index.samePosition(in: text.utf16)?.utf16Offset(in: text) ?? text.utf16.count
+  }
+
+  private func characterOffset(forUTF16Offset offset: Int, in text: String) -> Int {
+    let clamped = min(max(offset, 0), text.utf16.count)
+    guard let utf16Index = text.utf16.index(
+      text.utf16.startIndex,
+      offsetBy: clamped,
+      limitedBy: text.utf16.endIndex),
+      let index = String.Index(utf16Index, within: text)
+    else { return text.count }
+    return text.distance(from: text.startIndex, to: index)
+  }
+
+  private func clearCandidateFinderResults() {
+    candidateFinderResultsVisible = false
+    candidateFinderResultsMeasurementText = ""
+    candidateFinderResultsAttributedText = nil
+  }
+
+  private func setCandidateFinderResults(items: [CandidateDisplayItem], emptyText: String) {
+    let shownItems = Array(items.prefix(Self.candidateFinderMaxRows))
     if shownItems.isEmpty {
-      appFinderResultsMeasurementText = emptyText
-      appFinderResultsAttributedText = NSAttributedString(
+      candidateFinderResultsMeasurementText = emptyText
+      candidateFinderResultsAttributedText = NSAttributedString(
         string: emptyText,
         attributes: [
           .font: NSFont.monospacedSystemFont(
             ofSize: max(CGFloat(overlayConfig.fontSize), 11),
             weight: .medium),
-          .foregroundColor: NSColor(calibratedRed: 0.62, green: 0.65, blue: 0.70, alpha: 1),
+          .foregroundColor: Self.nordSnowStorm0,
         ])
-      appFinderResultsVisible = true
+      candidateFinderResultsVisible = true
       return
     }
 
@@ -984,10 +1136,10 @@ final class OverlayPanel: NSPanel {
     let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let selectedFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let highlightFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
-    let baseColor = NSColor(calibratedRed: 0.91, green: 0.93, blue: 0.96, alpha: 1)
-    let selectedColor = NSColor.white
-    let highlightColor = NSColor(calibratedRed: 1.00, green: 0.87, blue: 0.25, alpha: 1)
-    let markerColor = NSColor(calibratedRed: 0.46, green: 0.73, blue: 1.00, alpha: 1)
+    let baseColor = Self.nordSnowStorm1
+    let selectedColor = Self.nordSnowStorm2
+    let highlightColor = Self.nordAuroraYellow
+    let markerColor = Self.nordAuroraPurple
     let attributed = NSMutableAttributedString()
     var plainLines: [String] = []
 
@@ -1031,23 +1183,23 @@ final class OverlayPanel: NSPanel {
       attributed.append(lineAttributed)
     }
 
-    appFinderResultsMeasurementText = plainLines.joined(separator: "\n")
-    appFinderResultsAttributedText = attributed
-    appFinderResultsVisible = true
+    candidateFinderResultsMeasurementText = plainLines.joined(separator: "\n")
+    candidateFinderResultsAttributedText = attributed
+    candidateFinderResultsVisible = true
   }
 
-  private func configureAppFinderResults(panelFrame: CGRect) {
-    guard appFinderResultsVisible else { return }
+  private func configureCandidateFinderResults(panelFrame: CGRect) {
+    guard candidateFinderResultsVisible else { return }
     let fontSize = max(CGFloat(overlayConfig.fontSize), 11)
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let screen = NSScreen.main ?? NSScreen.screens.first
     let visible = screen?.visibleFrame ?? panelFrame
     let scale = screen?.backingScaleFactor ?? 2
-    let lines = appFinderResultsMeasurementText.split(
+    let lines = candidateFinderResultsMeasurementText.split(
       separator: "\n",
       omittingEmptySubsequences: false)
     let lineCount = max(lines.count, 1)
-    let longest = lines.map(\.count).max() ?? appFinderResultsMeasurementText.count
+    let longest = lines.map(\.count).max() ?? candidateFinderResultsMeasurementText.count
     let lineHeight = fontSize + 5
     let x = commandPromptLayer.frame.minX
     let maxWidth = max(180, visible.maxX - panelFrame.minX - x - 10)
@@ -1055,24 +1207,25 @@ final class OverlayPanel: NSPanel {
     let height = lineHeight * CGFloat(lineCount) + 10
     let y = commandPromptLayer.frame.maxY + 6
 
-    appFinderResultsLayer.frame = Self.snap(
+    candidateFinderResultsLayer.frame = Self.snap(
       CGRect(x: x, y: y, width: width, height: height),
       scale: scale)
-    appFinderResultsLayer.contentsScale = scale
-    appFinderResultsLayer.backgroundColor =
-      NSColor(calibratedRed: 0.02, green: 0.02, blue: 0.025, alpha: 1).cgColor
-    appFinderResultsLayer.borderColor =
-      NSColor(calibratedRed: 0.23, green: 0.24, blue: 0.27, alpha: 1).cgColor
+    candidateFinderResultsLayer.contentsScale = scale
+    let palette = commandPalette()
+    candidateFinderResultsLayer.colors = [
+      palette.bottom.cgColor,
+      palette.top.cgColor,
+    ]
+    candidateFinderResultsLayer.borderColor = palette.border.cgColor
 
-    appFinderResultsLabel.frame = CGRect(x: 7, y: 5, width: width - 14, height: height - 10)
-    appFinderResultsLabel.font = labelFont
-    appFinderResultsLabel.fontSize = fontSize
-    appFinderResultsLabel.foregroundColor =
-      NSColor(calibratedRed: 0.91, green: 0.93, blue: 0.96, alpha: 1).cgColor
-    appFinderResultsLabel.contentsScale = scale
-    appFinderResultsLabel.alignmentMode = .left
-    appFinderResultsLabel.string =
-      appFinderResultsAttributedText ?? NSAttributedString(string: appFinderResultsMeasurementText)
+    candidateFinderResultsLabel.frame = CGRect(x: 7, y: 5, width: width - 14, height: height - 10)
+    candidateFinderResultsLabel.font = labelFont
+    candidateFinderResultsLabel.fontSize = fontSize
+    candidateFinderResultsLabel.foregroundColor = Self.nordSnowStorm1.cgColor
+    candidateFinderResultsLabel.contentsScale = scale
+    candidateFinderResultsLabel.alignmentMode = .left
+    candidateFinderResultsLabel.string =
+      candidateFinderResultsAttributedText ?? NSAttributedString(string: candidateFinderResultsMeasurementText)
   }
 
   private func modeBadgePalette() -> ModeBadgePalette {
@@ -1098,10 +1251,22 @@ final class OverlayPanel: NSPanel {
     }
   }
 
+  private func commandPalette() -> ModeBadgePalette {
+    ModeBadgePalette(
+      top: Self.nordPolarNight1,
+      bottom: Self.nordPolarNight0,
+      foreground: Self.nordAuroraPurple,
+      border: Self.nordAuroraPurple)
+  }
+
   private static let nordPolarNight0 = NSColor(calibratedRed: 0.18, green: 0.20, blue: 0.25, alpha: 1)
   private static let nordPolarNight1 = NSColor(calibratedRed: 0.23, green: 0.26, blue: 0.32, alpha: 1)
+  private static let nordSnowStorm0 = NSColor(calibratedRed: 0.85, green: 0.87, blue: 0.91, alpha: 1)
+  private static let nordSnowStorm1 = NSColor(calibratedRed: 0.90, green: 0.91, blue: 0.94, alpha: 1)
+  private static let nordSnowStorm2 = NSColor(calibratedRed: 0.93, green: 0.94, blue: 0.96, alpha: 1)
   private static let nordFrost2 = NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.82, alpha: 1)
   private static let nordAuroraGreen = NSColor(calibratedRed: 0.64, green: 0.75, blue: 0.55, alpha: 1)
+  private static let nordAuroraYellow = NSColor(calibratedRed: 0.92, green: 0.80, blue: 0.55, alpha: 1)
   private static let nordAuroraPurple = NSColor(calibratedRed: 0.71, green: 0.56, blue: 0.68, alpha: 1)
 
   static func modeBadgeWidth(
@@ -1229,9 +1394,9 @@ final class OverlayPanel: NSPanel {
     labelLayers.removeAll(keepingCapacity: true)
     debugShapeLayer.path = nil
     debugShapeLayer.isHidden = true
-    focusIndicatorLayer.path = nil
-    commandInputField.isHidden = true
-    clearAppFinderResults()
+    activeWindowBorderLayer.path = nil
+    commandCaretLayer.isHidden = true
+    clearCandidateFinderResults()
     lastTargetLocalRects.removeAll(keepingCapacity: true)
   }
 
@@ -1348,86 +1513,58 @@ final class OverlayPanel: NSPanel {
   }
 }
 
-extension OverlayPanel: CommandInputFieldDelegate {
-  func commandInputFieldDidChange(_ field: CommandInputField) {
-    guard !isUpdatingCommandInputField else { return }
-    commandLineText = field.stringValue
-    commandLineCursorIndex = field.cursorIndex
+extension OverlayPanel: NSTextFieldDelegate {
+  func controlTextDidBeginEditing(_ obj: Notification) {
+    (commandTextField.currentEditor() as? NSTextView)?.insertionPointColor = Self.nordSnowStorm2
+  }
+
+  func controlTextDidChange(_ obj: Notification) {
+    guard !suppressCommandTextFieldChange else { return }
+    commandLineText = commandTextField.stringValue
+    commandLineCursorIndex = commandTextFieldCursorIndex()
+    FlashLog.trace(
+      "[input] command_line edit text=\(commandLineText) cursor=\(commandLineCursorIndex)")
     coordinator?.overlayDidUpdateCommandLine(
       commandLineText,
       cursorIndex: commandLineCursorIndex,
       resetSelection: true)
   }
 
-  func commandInputFieldDidCancel(_ field: CommandInputField) {
-    commandLineText = ""
-    commandLineCursorIndex = 0
-    coordinator?.overlayDidCancelCommandLine()
-  }
-
-  func commandInputFieldDidSubmit(_ field: CommandInputField) {
-    let command = field.stringValue
-    commandLineText = ""
-    commandLineCursorIndex = 0
-    coordinator?.overlayDidSubmitCommandLine(command)
-  }
-
-  func commandInputFieldDidRequestSelectionMove(_ field: CommandInputField, delta: Int) -> Bool {
-    coordinator?.overlayDidMoveCommandLineSelection(delta) ?? false
-  }
-}
-
-protocol CommandInputFieldDelegate: AnyObject {
-  func commandInputFieldDidChange(_ field: CommandInputField)
-  func commandInputFieldDidCancel(_ field: CommandInputField)
-  func commandInputFieldDidSubmit(_ field: CommandInputField)
-  func commandInputFieldDidRequestSelectionMove(_ field: CommandInputField, delta: Int) -> Bool
-}
-
-final class CommandInputField: NSTextField {
-  weak var commandDelegate: CommandInputFieldDelegate?
-
-  var cursorIndex: Int {
-    currentEditor()?.selectedRange.location ?? stringValue.count
-  }
-
-  override func textDidChange(_ notification: Notification) {
-    super.textDidChange(notification)
-    commandDelegate?.commandInputFieldDidChange(self)
-  }
-
-  override func keyDown(with event: NSEvent) {
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let ignoredChar =
-      NormalModeInterpreter.firstCharacter(event.charactersIgnoringModifiers)?
-      .lowercased().first
-
-    if event.keyCode == 53 || (modifiers.contains(.control) && ignoredChar == "c") {
-      commandDelegate?.commandInputFieldDidCancel(self)
-      return
-    }
-
-    switch event.keyCode {
-    case 36, 76:
-      commandDelegate?.commandInputFieldDidSubmit(self)
-      return
-    case 48:
-      let delta = modifiers.contains(.shift) ? -1 : 1
-      _ = commandDelegate?.commandInputFieldDidRequestSelectionMove(self, delta: delta)
-      return
-    case 125:
-      if commandDelegate?.commandInputFieldDidRequestSelectionMove(self, delta: -1) == true {
-        return
-      }
-    case 126:
-      if commandDelegate?.commandInputFieldDidRequestSelectionMove(self, delta: 1) == true {
-        return
-      }
+  func control(
+    _ control: NSControl,
+    textView: NSTextView,
+    doCommandBy commandSelector: Selector
+  ) -> Bool {
+    guard control === commandTextField else { return false }
+    switch commandSelector {
+    case #selector(NSResponder.insertNewline(_:)):
+      let command = commandTextField.stringValue
+      commandLineText = ""
+      commandLineCursorIndex = 0
+      FlashLog.trace("[input] command_line submit command=\(command)")
+      coordinator?.overlayDidSubmitCommandLine(command)
+      return true
+    case #selector(NSResponder.cancelOperation(_:)):
+      commandLineText = ""
+      commandLineCursorIndex = 0
+      FlashLog.trace("[input] command_line cancel reason=cancel_operation")
+      coordinator?.overlayDidCancelCommandLine()
+      return true
+    case #selector(NSResponder.insertTab(_:)):
+      _ = coordinator?.overlayDidMoveCommandLineSelection(1)
+      return true
+    case #selector(NSResponder.insertBacktab(_:)):
+      _ = coordinator?.overlayDidMoveCommandLineSelection(-1)
+      return true
+    case #selector(NSResponder.moveUp(_:)):
+      _ = coordinator?.overlayDidMoveCommandLineSelection(1)
+      return true
+    case #selector(NSResponder.moveDown(_:)):
+      _ = coordinator?.overlayDidMoveCommandLineSelection(-1)
+      return true
     default:
-      break
+      return false
     }
-
-    super.keyDown(with: event)
   }
 }
 
@@ -1443,8 +1580,8 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool
   func overlayDidSubmitCommandLine(_ command: String)
-  func overlayDidCancelAppFinder()
-  func overlayDidUpdateAppFinderQuery(_ query: String)
-  func overlayDidMoveAppFinderSelection(_ delta: Int)
-  func overlayDidSubmitAppFinder()
+  func overlayDidCancelCandidateFinder()
+  func overlayDidUpdateCandidateFinderQuery(_ query: String)
+  func overlayDidMoveCandidateFinderSelection(_ delta: Int)
+  func overlayDidSubmitCandidateFinder()
 }

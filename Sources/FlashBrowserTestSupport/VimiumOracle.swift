@@ -29,6 +29,8 @@ public struct VimiumAnchor {
 }
 
 public struct OracleSnapshot {
+  /// The finalized Flash targets after visibility filtering and spatial
+  /// deduplication, matching the resident app's hint pipeline.
   public let flashTargets: [JumpTarget]
   public let vimiumAnchors: [VimiumAnchor]
   public let hintWidthSamples: [HintWidthSample]
@@ -157,26 +159,47 @@ public enum VimiumOracle {
     }
     guard let decoded else { throw CaptureError.anchorsTimedOut }
 
-    let walkedFiducials = walkForFiducials(pid: pid, fiducialIDs: fiducialIDs)
-    let missing = fiducialIDs.filter { walkedFiducials[$0] == nil }
-    if !missing.isEmpty { throw CaptureError.missingFiducials(missing) }
-
     var pairs: [(css: CGPoint, screen: CGPoint)] = []
-    for fid in decoded.fiducials {
-      guard let screenRect = walkedFiducials[fid.id] else { continue }
-      pairs.append(
-        (
-          css: CGPoint(x: fid.x, y: fid.y),
-          screen: CGPoint(x: screenRect.minX, y: screenRect.maxY)
-        ))
+    let walkedFiducials = waitForFiducials(pid: pid, fiducialIDs: fiducialIDs, timeout: 4)
+    let missing = fiducialIDs.filter { walkedFiducials[$0] == nil }
+    if missing.isEmpty {
+      for fid in decoded.fiducials {
+        guard let screenRect = walkedFiducials[fid.id] else { continue }
+        pairs.append(
+          (
+            css: CGPoint(x: fid.x, y: fid.y),
+            screen: CGPoint(x: screenRect.minX, y: screenRect.maxY)
+          ))
+      }
     }
     let transform: OracleTransform
+    let residual: Double
     do {
-      transform = try OracleTransform.solve(pairs: pairs)
+      if pairs.count >= 2 {
+        transform = try OracleTransform.solve(pairs: pairs)
+        residual = transform.maxResidual(pairs: pairs)
+      } else if let webAreaFrame = FirefoxHarness.findWebAreaFrame(pid: pid) {
+        transform = try OracleTransform.viewport(
+          webAreaFrame: webAreaFrame,
+          innerWidth: decoded.viewport.innerWidth,
+          innerHeight: decoded.viewport.innerHeight)
+        residual = 0
+      } else if let screenX = decoded.viewport.mozInnerScreenX,
+        let screenY = decoded.viewport.mozInnerScreenY
+      {
+        transform = try OracleTransform.firefoxViewport(
+          topLeftX: screenX,
+          topLeftY: screenY,
+          screenHeight: Double(primaryScreenHeight()),
+          innerWidth: decoded.viewport.innerWidth,
+          innerHeight: decoded.viewport.innerHeight)
+        residual = 0
+      } else {
+        throw CaptureError.missingFiducials(missing)
+      }
     } catch {
       throw CaptureError.transformFailed(error)
     }
-    let residual = transform.maxResidual(pairs: pairs)
     let pageRect = transform.screenRect(
       fromCSS: CGRect(
         x: 0, y: 0,
@@ -201,6 +224,7 @@ public enum VimiumOracle {
     let flashFinalized = TargetFinalizer.finalizeWithStats(
       flashCandidates,
       visibleRegions: [pageRect])
+    let finalizedTargets = flashFinalized.targets
     let samples = [
       HintWidthSample(
         scrollIndex: 0,
@@ -214,7 +238,7 @@ public enum VimiumOracle {
     _ = try? marionette.tapKey(webdriverEscape)
 
     return OracleSnapshot(
-      flashTargets: flashTargets,
+      flashTargets: finalizedTargets,
       vimiumAnchors: anchors,
       hintWidthSamples: samples,
       transform: transform,
@@ -296,32 +320,46 @@ public enum VimiumOracle {
     let dpr: Double
     let scrollHeight: Double?
     let atBottom: Bool?
+    let mozInnerScreenX: Double?
+    let mozInnerScreenY: Double?
   }
 
   // MARK: - AX helpers
+
+  private static func waitForFiducials(
+    pid: pid_t, fiducialIDs: [String], timeout: TimeInterval
+  ) -> [String: CGRect] {
+    let deadline = Date().addingTimeInterval(timeout)
+    var best: [String: CGRect] = [:]
+    while Date() < deadline {
+      let found = walkForFiducials(pid: pid, fiducialIDs: fiducialIDs)
+      if found.count > best.count { best = found }
+      if found.count == fiducialIDs.count { return found }
+      Thread.sleep(forTimeInterval: 0.1)
+    }
+    return best
+  }
 
   private static func walkForFiducials(
     pid: pid_t, fiducialIDs: [String]
   ) -> [String: CGRect] {
     let app = AXUIElementCreateApplication(pid)
+    wakeAccessibility(app)
     let screenH = primaryScreenHeight()
     var fiducials: [String: CGRect] = [:]
     let fiducialSet = Set(fiducialIDs)
-    var queue: [AXUIElement] = [app]
+    var queue = fiducialRoots(app)
     var visited = 0
     let maxNodes = 10000
     while !queue.isEmpty, visited < maxNodes {
       let node = queue.removeFirst()
       visited += 1
-      var descRaw: CFTypeRef?
-      _ = AXUIElementCopyAttributeValue(
-        node, kAXDescriptionAttribute as CFString, &descRaw)
-      if let desc = descRaw as? String,
-        fiducialSet.contains(desc),
-        fiducials[desc] == nil,
+      if let label = fiducialLabel(node),
+        fiducialSet.contains(label),
+        fiducials[label] == nil,
         let rect = rectOf(node, screenH: screenH)
       {
-        fiducials[desc] = rect
+        fiducials[label] = rect
         if fiducials.count == fiducialIDs.count { break }
       }
       var childrenRaw: CFTypeRef?
@@ -333,6 +371,54 @@ public enum VimiumOracle {
       }
     }
     return fiducials
+  }
+
+  private static func wakeAccessibility(_ app: AXUIElement) {
+    let trueRef = kCFBooleanTrue as CFTypeRef
+    _ = AXUIElementSetAttributeValue(
+      app, "AXEnhancedUserInterface" as CFString, trueRef)
+    _ = AXUIElementSetAttributeValue(
+      app, "AXManualAccessibility" as CFString, trueRef)
+  }
+
+  private static func fiducialRoots(_ app: AXUIElement) -> [AXUIElement] {
+    var roots: [AXUIElement] = []
+    var focusedRaw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focusedRaw)
+      == .success,
+      let focused = focusedRaw,
+      CFGetTypeID(focused) == AXUIElementGetTypeID()
+    {
+      roots.append(focused as! AXUIElement)
+    }
+    var windowsRaw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRaw)
+      == .success,
+      let windows = windowsRaw as? [AXUIElement]
+    {
+      roots.append(contentsOf: windows)
+    }
+    if roots.isEmpty { roots.append(app) }
+    return roots
+  }
+
+  private static func fiducialLabel(_ element: AXUIElement) -> String? {
+    for attribute in [
+      kAXTitleAttribute,
+      kAXDescriptionAttribute,
+      kAXValueAttribute,
+      kAXHelpAttribute,
+      kAXIdentifierAttribute,
+    ] {
+      var raw: CFTypeRef?
+      if AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+        let value = raw as? String,
+        !value.isEmpty
+      {
+        return value
+      }
+    }
+    return nil
   }
 
   private static func rectOf(_ element: AXUIElement, screenH: CGFloat) -> CGRect? {
@@ -446,8 +532,31 @@ public enum VimiumOracle {
         [r.right + 2, r.bottom + 2],
         [r.left + r.width / 2, r.top + r.height / 2],
       ];
+      const interactiveRoles = new Set([
+        "button",
+        "checkbox",
+        "combobox",
+        "link",
+        "menuitem",
+        "menuitemcheckbox",
+        "menuitemradio",
+        "option",
+        "radio",
+        "searchbox",
+        "slider",
+        "switch",
+        "tab",
+        "textbox"
+      ]);
       function isInteractive(el) {
         if (!el || !el.tagName) return false;
+        if (
+          el.closest("[aria-hidden='true'], [hidden], [inert]") ||
+          el.getAttribute("aria-disabled") === "true" ||
+          el.disabled
+        ) {
+          return false;
+        }
         const tag = el.tagName.toLowerCase();
         if (
           tag === "a" || tag === "button" || tag === "input" ||
@@ -456,8 +565,10 @@ public enum VimiumOracle {
           return true;
         }
         if (tag === "body" || tag === "html") return false;
+        const role = (el.getAttribute("role") || "").toLowerCase();
+        if (role && !interactiveRoles.has(role)) return false;
         return (
-          el.hasAttribute("tabindex") || el.hasAttribute("role") ||
+          el.hasAttribute("tabindex") || interactiveRoles.has(role) ||
           el.hasAttribute("onclick") || el.isContentEditable
         );
       }
@@ -480,12 +591,25 @@ public enum VimiumOracle {
       try {
         const seen = new Set();
         const anchors = [];
+        const viewport = {
+          left: 0,
+          top: 0,
+          right: window.innerWidth,
+          bottom: window.innerHeight
+        };
+        function hasVisibleCenter(r) {
+          const cx = r.left + r.width / 2;
+          const cy = r.top + r.height / 2;
+          return cx >= viewport.left && cx <= viewport.right &&
+            cy >= viewport.top && cy <= viewport.bottom;
+        }
         for (const marker of markers) {
           const target = resolveAnchor(marker);
           if (!target || seen.has(target)) continue;
           seen.add(target);
           const r = target.getBoundingClientRect();
           if (r.width <= 0 || r.height <= 0) continue;
+          if (!hasVisibleCenter(r)) continue;
           const label =
             target.getAttribute("aria-label") ||
             target.getAttribute("title") ||
@@ -524,7 +648,9 @@ public enum VimiumOracle {
         innerHeight: window.innerHeight,
         dpr: window.devicePixelRatio,
         scrollHeight: docH,
-        atBottom: window.scrollY + window.innerHeight >= docH - 10
+        atBottom: window.scrollY + window.innerHeight >= docH - 10,
+        mozInnerScreenX: Number.isFinite(window.mozInnerScreenX) ? window.mozInnerScreenX : null,
+        mozInnerScreenY: Number.isFinite(window.mozInnerScreenY) ? window.mozInnerScreenY : null
       }
     };
     """

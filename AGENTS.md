@@ -27,16 +27,16 @@ If a request would violate any of the above, surface it to the user instead of s
 Package.swift                        # SwiftPM, macOS 14+, swift 5 mode
 config.default.toml                  # Canonical user-facing config reference
 Sources/
-  FlashCore/                         # Public SPI (provider protocol + value types)
+  FlashCore/                         # Public SPI (source protocol + value types)
     AppContext.swift                 # Front-app context: bundle, pid, window frame
     JumpTarget.swift                 # A clickable thing with a screen rect + optional activate closure
     JumpAction.swift                 # .leftClick | .rightClick | .doubleClick
-    JumpProvider.swift               # The protocol; `supports/discover` API
+    JumpProvider.swift               # FlashSource protocol; jump targets, :open items, activation policy
     TargetFinalizer.swift            # Shared visible-region filter + smaller-frame-wins dedup before label assignment
-  FlashProviders/                    # Built-in providers (depend on FlashCore + AppKit)
+  FlashProviders/                    # Built-in jump-target sources (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
     Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
-    Tmux/TmuxProvider.swift                     # Visible-pane word hints for terminals running a tmux client
+    Tmux/TmuxProvider.swift                     # Visible-pane word hints + :open tmux windows for terminals running a tmux client
   FlashBrowserTestSupport/           # Browser integration fixture catalog, Firefox harness, Marionette client, and reference-marker diff helpers.
   FlashIntegrationTestSupport/       # Shared GUI integration helpers: AX launch/wait/context, matching, timing, recorder.
   flash/                             # Resident app executable target
@@ -49,7 +49,11 @@ Sources/
       OverlayInput.swift             # NSPanel.keyDown — the ONLY keyboard code in the project
       HintAssigner.swift             # Prefix-free label generator + memoised candidate cache
       ActionDispatcher.swift         # AXPress preferred; CGEvent click fallback
-      ProviderRegistry.swift         # Built-in provider list; chain resolution by priority
+      SourceRegistry.swift           # Built-in source descriptors; activation-gated source loading + priority chain
+      CandidateFinder.swift                # Shared :open candidate preparation and app merge helpers
+      ApplicationSource.swift        # Running/installed app source and flash://app_open resolver
+      BrowserTabSources.swift        # :open browser tabs, enabled only while supported browsers run
+      SlackSource.swift              # :open Slack channels, enabled only while Slack runs
     Config/
       Config.swift                   # Decoded model — defaults here MUST match config.default.toml
       ConfigLoader.swift             # Hand-rolled TOML subset parser + DispatchSource fs-watch hot-reload
@@ -164,38 +168,51 @@ CALayer mutates implicitly animate by default — including `frame`, `bounds`, `
 
 If you add a new visible property (gradient, shadow path, …), add its key to `OverlayPanel.noActions` too.
 
-## Adding a new provider
+## Adding a new source
 
-A provider conforms to `JumpProvider` in `FlashCore`:
+A source conforms to `FlashSource` in `FlashCore` (`JumpProvider` is a compatibility alias). A source can contribute jump targets, `:open` items, document URL resolution, app activation, or any combination through `capabilities`:
 
 ```swift
-public protocol JumpProvider: AnyObject {
+public protocol FlashSource: AnyObject {
     var identifier: String { get }
+    var displayName: String { get }
     var priority: Int { get }
+    var capabilities: FlashSourceCapabilities { get }
+    var activationPolicy: FlashSourceActivationPolicy { get }
+    var readinessPolicy: FlashSourceReadinessPolicy { get }
     func supports(_ context: AppContext) -> Bool
     func discover(in context: AppContext) throws -> [JumpTarget]
+    func candidates(in environment: FlashSourceEnvironment, scope: CandidateScope) -> [Candidate]
+    func resolveCandidate(_ item: Candidate, in environment: FlashSourceEnvironment, completion: @escaping (CandidateResolution) -> Void)
+    func tabSelect(at index: Int, in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
+    func tabNext(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
+    func tabPrev(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
+    func tabNew(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
+    func tabClose(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
 }
 ```
 
+Most source methods are optional in practice through default protocol-extension implementations that return no candidates, no document URL, or `.unhandled`. Implement only the capabilities the source actually owns.
+
 Steps:
 
-1. Create `Sources/FlashProviders/<Group>/YourProvider.swift`.
-2. Implement the protocol. Return a complete deterministic `[JumpTarget]` set with **global NSScreen coordinates** (bottom-left origin of primary screen). Do not deadline-truncate provider output.
-3. **Do not introduce per-app providers**. The project's working assumption is that generic rules are good enough. If a specific app misbehaves, fix the universal walker (roles/depth/etc.) — don't subclass per bundle id. The previous Messages/Notes/WhatsApp/Linear/Slack subclasses were collapsed for this reason; reintroduce them only if a generic-rule change for the same problem hurts other apps.
-4. Register in `Sources/flash/App/ProviderRegistry.swift`'s built-in list. Pick a priority — higher wins on overlapping rects. Existing scale:
-   - 20: `TmuxProvider` (terminals with a tmux client in the process subtree — pane content isn't AX-clickable, so we hint each visible word and copy on commit)
+1. Create the source in `Sources/FlashProviders/<Group>/` when it is reusable jump-target logic, or under `Sources/flash/App/` when it is app-owned `:open` / command-resolution glue.
+2. Implement the protocol. For jump targets, return a complete deterministic `[JumpTarget]` set with **global NSScreen coordinates** (bottom-left origin of primary screen). Do not deadline-truncate output.
+3. Pick an activation policy. Use `.always` only for cheap universal sources, `.bundleIDs(...)` for app-scoped sources like Slack/browser tabs, and `.terminalBundles` for terminal-backed sources. `SourceRegistry` instantiates non-`.always` sources only while a matching app is running.
+4. Register a `SourceDescriptor` in `Sources/flash/App/SourceRegistry.swift`. Pick a priority for overlapping jump targets — higher wins. Existing jump-target scale:
+   - 20: `TmuxProvider` (terminals with a tmux client in the process subtree)
    - 10: generic `AccessibilityProvider` (universal AX walker; also handles browser in-page DOM via `AXWebArea` descendants)
-5. Add a smoke test and update README.
+5. Add focused tests. At minimum cover source activation gating in `SourceRegistryTests` or the source's parsing/resolution helpers, then update README when user-facing behavior changes.
 
-Flash deliberately uses **only two providers**: `AccessibilityProvider` as the universal default, and `TmuxProvider` for terminals whose visible content macOS Accessibility cannot see. There is no DOM bridge / `do JavaScript` provider — browser page content reaches us through `AXWebArea` descendants the same way every other web area does. If you find yourself reaching for AppleScript-based discovery, surface that to the user instead of adding it.
+Flash deliberately uses **only two jump-target sources**: `AccessibilityProvider` as the universal default, and `TmuxProvider` for terminals whose visible content macOS Accessibility cannot see. App-specific sources may contribute `:open` items or custom resolution when that data does not belong in the AX walker. There is no DOM bridge / `do JavaScript` provider — browser page content reaches us through `AXWebArea` descendants the same way every other web area does. If you find yourself reaching for AppleScript-based discovery, surface that to the user instead of adding it.
 
 A `JumpTarget.activate` closure overrides the default action. Use it when the underlying API has a cheaper / more reliable way to "click" than synthesizing a `CGEvent` (e.g. AX can call `kAXPressAction`).
 
 ## Configuration
 
-`~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. The fallback lookup still accepts `~/.flash.toml` for convenience. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, the constrained inline string table used by `mode.labels`, `#` line comments, and trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or arbitrary inline tables. Add support only if you actually need it.
+`~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, the constrained inline string table used by `mode.labels`, `#` line comments, and trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or arbitrary inline tables. Add support only if you actually need it.
 
-The user-facing top-level sections are exactly `[hints]`, `[mode]`, `[mode.all]`, `[mode.normal]`, `[mode.insert]`, and `[debug]`, in that order in `config.default.toml`.
+The user-facing top-level sections are exactly `[hints]`, `[open]`, `[mode]`, `[mode.all]`, `[mode.normal]`, `[mode.insert]`, and `[debug]`, in that order in `config.default.toml`.
 
 **`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
@@ -206,6 +223,7 @@ Keys:
 | `hints.keys`                       | string         | `"<qwerty_homerow+qwerty_toprow>"` |
 | `hints.min_length`                 | int            | `1`                  |
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
+| `open.ignored_apps`                | string array   | `[]`                 |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
 | `[mode.all]` entries               | `flash://` mapping | none             |
 | `[mode.normal]` entries            | `flash://` mapping | built-in normal map |
@@ -214,8 +232,6 @@ Keys:
 | `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.profile`                    | bool           | `false`              |
 | `debug.slow_ms`                    | int            | `100`                |
-| `debug.dump_ax`                    | bool           | `false`              |
-| `debug.dump_logs`                  | bool           | `false`              |
 | `debug.log_level`                  | string         | `"info"`             |
 
 `hints.magic_modifiers` supports `"cmd"`, `"ctrl"`, `"alt"`, and `"shift"`.
@@ -223,6 +239,16 @@ If the resolved `hints.keys` contains non-letter characters, Flash logs a warnin
 and removes `"shift"` because shifted-character input is ambiguous at the
 hint-input layer: Flash cannot distinguish `shift+1` from `!`. `[]` disables
 modified clicks.
+
+`open.ignored_apps` excludes app results from `:open` and
+`flash://app_open?name=...`. Entries match an app's display name, bundle
+identifier, full bundle path, `.app` filename, or filename without `.app`,
+case-insensitively.
+
+Logs are newline-delimited JSON written to stderr and
+`~/Library/Logs/Flash/flash.log`. `debug.log_level = "trace"` includes AX tree
+dumps. Accepted levels are `trace`, `debug`, `info`, `warn`, `error`, and
+`fatal`.
 
 Performance behaviours are **not configurable.** The prepared AX model,
 the concurrent subtree walk, and the parallel deferred action-name
@@ -249,25 +275,26 @@ When any `[mode.all]` mapping resolves to `flash://mode_normal`, Flash enters ad
 - always displays the mode cell using configured `mode.labels`, including in the help view;
 - extends `flash://help_show` with ACTION / NORMAL / INSERT columns.
 
-`flash://normal_mode` is accepted as a compatibility alias for the same command. `[mode.normal]` and `[mode.insert]` mappings to either spelling do not enable advanced mode by themselves. When no `[mode.all]` advanced-mode mapping is configured, the mode cell is hidden and help stays simple while still listing the normal map.
+`flash://mode_normal` is the only accepted normal-mode action. `[mode.normal]` and `[mode.insert]` mappings to it do not enable advanced mode by themselves. When no `[mode.all]` advanced-mode mapping is configured, the mode cell is hidden and help stays simple while still listing the normal map.
 
 ### URL Actions
 
 Every action Flash takes must have a corresponding `flash://` action parsed by `URLEventHandler`. Keep `URLCommand`, parser wiring, `URLCommand.diagnosticDescription`, mapping help, README, default config examples, and tests in sync.
 
-Normal-mode action URLs currently include: `flash://mouse_click[?right=1|double=1]`, `flash://mouse_move`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://url_copy`, `flash://frame_next`, `flash://frame_main`, `flash://tab_next`, `flash://tab_previous`, `flash://app_back`, `flash://app_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, and `flash://clipboard_copy_all`.
+Normal-mode action URLs currently include: `flash://mouse_click[?right=1|double=1]`, `flash://mouse_move`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://url_copy`, `flash://frame_next`, `flash://frame_main`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select[?index=<n>]`, `flash://tab_close`, `flash://app_back`, `flash://app_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, and `flash://clipboard_copy_all`.
 
-`:open <query>` results render above the command line, ordered bottom-to-top with the best match closest to the prompt. Candidate snapshots are cached ahead of use: app bundles are warmed after launch, while source providers for tmux windows, browser tabs, Slack channels, and future contexts feed a short-lived dynamic cache so typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail`, `[slack] #general`.
+`:open <query>` results render above the command line, ordered bottom-to-top with the best match closest to the prompt. Candidate snapshots are cached ahead of use through `SourceRegistry`: app bundles are warmed and cached by `ApplicationSource`, while tmux windows, browser tabs, Slack channels, and future contexts are queried only from currently active sources. Typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`.
 
 App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, and `flash://flash_quit`.
 
 ### Normal-Mode Audit Rule
 
-Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The current valid insert transition is:
+Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The current valid insert transitions are:
 
 - A committed `f`, `rf`, or `df` hint whose target is editable input or tmux/terminal content.
+- A normal-mode `i` keypress handled by the overlay's normal-mode interpreter.
 
-Do not reintroduce passive focused-element observers that switch to insert mode merely because macOS reports an editable focus. Do not recapture the overlay after pointer/menu/status-bar focus loss in a way that closes native menus or popovers. `flash://mode_insert`, `flash://app_find`, app-driven focus requests, window activation, and status/menu interactions must leave Flash in normal mode while advanced normal mode is active.
+Do not reintroduce passive focused-element observers that switch to insert mode merely because macOS reports an editable focus. While advanced normal mode is active, Flash must aggressively recapture the overlay after app activation, app launch, Space changes, and panel key-focus loss; this intentionally prioritizes keeping normal-mode keyboard capture over preserving native menus or popovers. `flash://mode_insert`, `flash://app_find`, app-driven focus requests, window activation, and status/menu interactions must leave Flash in normal mode while advanced normal mode is active.
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a layout selector token. Selector syntax is `<$layout[_$row][_$hand]+...>` where layout is `qwerty` / `colemak` / `dvorak`, row is `homerow` / `toprow` / `bottomrow`, and hand is `lefthand` / `righthand`. Examples: `<colemak>`, `<colemak_homerow+colemak_toprow>`, `<colemak_homerow_lefthand+colemak_toprow_righthand>`, `<colemak_lefthand>`. Selectors cannot mix layouts. Layout selectors are scored by the inferred layout's key scores; literal strings are scored by their written order. There is no `hints.layout` key. Resolution lives in `Alphabet.resolve(_:)`.
 

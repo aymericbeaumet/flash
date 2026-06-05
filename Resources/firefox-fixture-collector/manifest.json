@@ -1,0 +1,25 @@
+{
+  "manifest_version": 2,
+  "name": "Flash Fixture Collector",
+  "version": "0.1.0",
+  "description": "Capture the current page as a sanitized Flash browser fixture.",
+  "applications": {
+    "gecko": {
+      "id": "flash-fixture-collector@aymericbeaumet.com",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "activeTab",
+    "nativeMessaging",
+    "tabs"
+  ],
+  "browser_action": {
+    "default_title": "Capture Flash fixture"
+  },
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  }
+}

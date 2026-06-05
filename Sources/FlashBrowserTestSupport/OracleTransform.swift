@@ -1,9 +1,11 @@
 import CoreGraphics
 import Foundation
 
-/// Affine transform from page-CSS coordinates to NSScreen coordinates,
-/// solved at runtime from a small set of fiducial pairs Marionette
-/// injects + measures.
+/// Affine transform from page-CSS coordinates to NSScreen coordinates.
+/// The preferred runtime calibration uses a small set of fiducial pairs
+/// Marionette injects + measures. When Firefox does not expose those
+/// synthetic nodes through AX, the browser oracle falls back to the
+/// AXWebArea viewport frame.
 ///
 /// The transform is decomposable into translate + per-axis scale (no
 /// rotation/skew — browsers don't rotate viewport coords). With 2+
@@ -81,6 +83,36 @@ public struct OracleTransform {
     let tx = Double(anchor.screen.x) - sx * Double(anchor.css.x)
     let ty = Double(anchor.screen.y) - sy * Double(anchor.css.y)
     return OracleTransform(scaleX: sx, scaleY: sy, translateX: tx, translateY: ty)
+  }
+
+  public static func viewport(webAreaFrame: CGRect, innerWidth: Double, innerHeight: Double)
+    throws -> OracleTransform
+  {
+    guard innerWidth > 0, innerHeight > 0 else {
+      throw SolveError.degenerate("empty browser viewport")
+    }
+    return OracleTransform(
+      scaleX: Double(webAreaFrame.width) / innerWidth,
+      scaleY: -Double(webAreaFrame.height) / innerHeight,
+      translateX: Double(webAreaFrame.minX),
+      translateY: Double(webAreaFrame.maxY))
+  }
+
+  public static func firefoxViewport(
+    topLeftX: Double,
+    topLeftY: Double,
+    screenHeight: Double,
+    innerWidth: Double,
+    innerHeight: Double
+  ) throws -> OracleTransform {
+    guard innerWidth > 0, innerHeight > 0 else {
+      throw SolveError.degenerate("empty browser viewport")
+    }
+    return OracleTransform(
+      scaleX: 1,
+      scaleY: -1,
+      translateX: topLeftX,
+      translateY: screenHeight - topLeftY)
   }
 
   public func screenPoint(fromCSS p: CGPoint) -> CGPoint {

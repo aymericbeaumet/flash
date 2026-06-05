@@ -12,13 +12,15 @@ enum URLCommand: Hashable {
   case undo
   case redo
   case close
+  case tabClose
   case find
-  case appFinder(all: Bool)
+  case candidateFinder(all: Bool)
   case copyURL
   case nextFrame
   case mainFrame
-  case nextTab
-  case previousTab
+  case tabNext
+  case tabPrev
+  case tabSelect(index: Int?)
   case appBack
   case appForward
   case quitApp(force: Bool)
@@ -27,7 +29,8 @@ enum URLCommand: Hashable {
   case print
   case openDocument
   case newWindow
-  case newTab
+  case tabNew
+  case tabNewInsert
   case copy
   case cut
   case paste
@@ -133,98 +136,58 @@ final class URLEventHandler: NSObject {
   /// `URLCommand`, so the compiler points out any missed wiring.
   private static let commands: [String: (FlashURLQuery) -> URLCommand?] = [
     "mouse_click": mouseClickCommand,
-    "show_hints": mouseClickCommand,
     "mouse_move": { _ in .mouseMove },
-    "move_mouse": { _ in .mouseMove },
     "mode_normal": { _ in .normalMode },
-    "normal_mode": { _ in .normalMode },
     "mode_insert": { _ in .insertMode },
-    "insert_mode": { _ in .insertMode },
     "mode_command": { _ in .commandMode },
-    "command_mode": { _ in .commandMode },
     "scroll_left": { _ in .scroll(.left) },
     "scroll_right": { _ in .scroll(.right) },
     "scroll_up": { _ in .scroll(.up) },
     "scroll_down": { _ in .scroll(.down) },
     "scroll_half_page_up": { _ in .scroll(.halfPageUp) },
     "scroll_half_page_down": { _ in .scroll(.halfPageDown) },
-    "half_page_up": { _ in .scroll(.halfPageUp) },
-    "half_page_down": { _ in .scroll(.halfPageDown) },
     "scroll_top": { _ in .scroll(.top) },
     "scroll_bottom": { _ in .scroll(.bottom) },
     "app_reload": { _ in .reload },
-    "reload": { _ in .reload },
     "app_undo": { _ in .undo },
-    "undo": { _ in .undo },
     "app_redo": { _ in .redo },
-    "redo": { _ in .redo },
     "window_close": { _ in .close },
-    "close": { _ in .close },
+    "tab_close": { _ in .tabClose },
     "app_find": { _ in .find },
-    "find": { _ in .find },
-    "app_open_finder": { q in .appFinder(all: q.bool("all")) },
-    "open_app_finder": { q in .appFinder(all: q.bool("all")) },
+    "app_open_finder": { q in .candidateFinder(all: q.bool("all")) },
     "url_copy": { _ in .copyURL },
-    "copy_url": { _ in .copyURL },
     "frame_next": { _ in .nextFrame },
-    "next_frame": { _ in .nextFrame },
     "frame_main": { _ in .mainFrame },
-    "main_frame": { _ in .mainFrame },
-    "tab_next": { _ in .nextTab },
-    "next_tab": { _ in .nextTab },
-    "tab_previous": { _ in .previousTab },
-    "previous_tab": { _ in .previousTab },
+    "tab_next": { _ in .tabNext },
+    "tab_previous": { _ in .tabPrev },
+    "tab_select": { q in .tabSelect(index: q.int("index")) },
     "app_back": { _ in .appBack },
     "app_forward": { _ in .appForward },
     "app_quit": { q in .quitApp(force: q.bool("force")) },
-    "quit_app": { q in .quitApp(force: q.bool("force")) },
-    "force_quit_app": { _ in .quitApp(force: true) },
     "app_save": { _ in .save },
-    "save": { _ in .save },
     "app_save_and_quit": { q in .saveAndQuit(force: q.bool("force")) },
-    "save_and_quit": { q in .saveAndQuit(force: q.bool("force")) },
     "app_print": { _ in .print },
-    "print": { _ in .print },
     "document_open": { _ in .openDocument },
-    "open": { _ in .openDocument },
     "window_new": { _ in .newWindow },
-    "new_window": { _ in .newWindow },
-    "tab_new": { _ in .newTab },
-    "new_tab": { _ in .newTab },
+    "tab_new": { _ in .tabNew },
+    "tab_new_insert": { _ in .tabNewInsert },
     "clipboard_copy": { _ in .copy },
-    "copy": { _ in .copy },
     "clipboard_cut": { _ in .cut },
-    "cut": { _ in .cut },
     "clipboard_paste": { _ in .paste },
-    "paste": { _ in .paste },
     "clipboard_copy_all": { _ in .copyAll },
-    "copy_all": { _ in .copyAll },
     "alert_show": { q in
       guard let message = q.value("message"), !message.isEmpty else { return nil }
       return .showAlert(message: message)
     },
-    "show_alert": { q in
-      guard let message = q.value("message"), !message.isEmpty else { return nil }
-      return .showAlert(message: message)
-    },
     "alert_dismiss": { _ in .dismissAlert },
-    "dismiss_alert": { _ in .dismissAlert },
     "help_show": { _ in .showUsage },
-    "help": { _ in .showUsage },
     "hints_dismiss": { _ in .dismissHints },
-    "dismiss_hints": { _ in .dismissHints },
     "flash_quit": { _ in .quit },
-    "quit": { _ in .quit },
     "app_open": { q in
       guard let name = q.value("name"), !name.isEmpty else { return nil }
       return .openApp(name: name)
     },
-    "open_app": { q in
-      guard let name = q.value("name"), !name.isEmpty else { return nil }
-      return .openApp(name: name)
-    },
     "window_move": windowMoveCommand,
-    "move_window": windowMoveCommand,
   ]
 
   static let usageText = """
@@ -245,6 +208,7 @@ final class URLEventHandler: NSObject {
     flash://app_undo
     flash://app_redo
     flash://window_close
+    flash://tab_close
     flash://app_find
     flash://app_open_finder[?all=1]
     flash://url_copy
@@ -252,6 +216,7 @@ final class URLEventHandler: NSObject {
     flash://frame_main
     flash://tab_next
     flash://tab_previous
+    flash://tab_select[?index=<n>]
     flash://app_back
     flash://app_forward
     flash://app_quit[?force=1]
@@ -261,6 +226,7 @@ final class URLEventHandler: NSObject {
     flash://document_open
     flash://window_new
     flash://tab_new
+    flash://tab_new_insert
     flash://clipboard_copy
     flash://clipboard_cut
     flash://clipboard_paste
@@ -321,5 +287,9 @@ private struct FlashURLQuery {
   func bool(_ name: String) -> Bool {
     let v = value(name)
     return v == "1" || v == "true"
+  }
+  func int(_ name: String) -> Int? {
+    guard let raw = value(name), let value = Int(raw), value > 0 else { return nil }
+    return value
   }
 }

@@ -134,6 +134,6 @@ private struct SpatialDedup {
     if inter.isNull { return false }
     let interArea = inter.width * inter.height
     let smaller = min(a.width * a.height, b.width * b.height)
-    return smaller > 0 && interArea / smaller > 0.7
+    return smaller > 0 && interArea / smaller > 0.6
   }
 }
