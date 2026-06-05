@@ -1,7 +1,37 @@
 import AppKit
+import FlashCore
 
-enum URLCommand {
-  case showHints(rightClick: Bool)
+enum URLCommand: Hashable {
+  case mouseClick(action: JumpAction)
+  case mouseMove
+  case normalMode
+  case insertMode
+  case commandMode
+  case scroll(NormalModeDispatcher.ScrollKind)
+  case reload
+  case undo
+  case redo
+  case close
+  case find
+  case appFinder(all: Bool)
+  case copyURL
+  case nextFrame
+  case mainFrame
+  case nextTab
+  case previousTab
+  case appBack
+  case appForward
+  case quitApp(force: Bool)
+  case save
+  case saveAndQuit(force: Bool)
+  case print
+  case openDocument
+  case newWindow
+  case newTab
+  case copy
+  case cut
+  case paste
+  case copyAll
   case showAlert(message: String)
   case dismissAlert
   case showUsage
@@ -11,13 +41,13 @@ enum URLCommand {
   case moveWindow(MoveWindowParams)
 }
 
-/// Named positions for `flash://move_window?position=…`. Each value
+/// Named positions for `flash://window_move?position=…`. Each value
 /// maps the focused window to a fixed slot of the target screen's
 /// `visibleFrame` (menu bar + Dock excluded). The names mirror the
 /// shape users expect from Rectangle / Magnet / Hammerspoon
 /// snippets — halves, quarters, a maximized fill, and a centered
 /// "70 × 80 of the screen" common breakpoint.
-enum WindowPosition: String {
+enum WindowPosition: String, Hashable {
   case topLeft = "topleft"
   case topRight = "topright"
   case bottomLeft = "bottomleft"
@@ -30,7 +60,7 @@ enum WindowPosition: String {
   case centered = "centered"
 }
 
-/// Parameters for `flash://move_window?position=&screen=`. Both
+/// Parameters for `flash://window_move?position=&screen=`. Both
 /// query keys are optional and orthogonal:
 ///
 /// - `position` (optional): named slot of the target screen's
@@ -41,10 +71,10 @@ enum WindowPosition: String {
 ///   stays on the window's current screen. `+N` / `-N` cycle forward
 ///   / backward through `NSScreen.screens` with modulo wrap.
 ///
-/// The URL parser rejects the empty form (`flash://move_window`) so
-/// a binding that forgot both keys fails at config load instead of
+/// The URL parser rejects the empty form (`flash://window_move`) so
+/// a mapping that forgot both keys fails at config load instead of
 /// firing a silent no-op on every press.
-struct MoveWindowParams: Equatable {
+struct MoveWindowParams: Hashable {
   let position: WindowPosition?
   let screen: Int
 }
@@ -74,12 +104,12 @@ final class URLEventHandler: NSObject {
 
   /// Parse a flash command into a `URLCommand`. Used both by the
   /// live AppleEvent handler (`flash://` URLs from `open` /
-  /// `osascript` / Launch Services) AND by `ShortcutsCoordinator`
+  /// `osascript` / Launch Services) AND by `MappingsCoordinator`
   /// at config-load time so the hot path already has a resolved
   /// `URLCommand` and never re-parses a string on a Carbon callback.
   ///
   /// The `flash://` scheme is mandatory. Bare command names like
-  /// `"show_hints"` are rejected — the URL shape is what tells the
+  /// `"mouse_click"` are rejected — the URL shape is what tells the
   /// reader "this is a flash command, dispatched in-process" and
   /// keeps the string form visually distinct from the argv form
   /// (`["open", ...]`). Any other scheme also returns nil so things
@@ -102,58 +132,181 @@ final class URLEventHandler: NSObject {
   /// The dispatcher in `AppDelegate` switches exhaustively over
   /// `URLCommand`, so the compiler points out any missed wiring.
   private static let commands: [String: (FlashURLQuery) -> URLCommand?] = [
-    "show_hints": { q in .showHints(rightClick: q.bool("right")) },
+    "mouse_click": mouseClickCommand,
+    "show_hints": mouseClickCommand,
+    "mouse_move": { _ in .mouseMove },
+    "move_mouse": { _ in .mouseMove },
+    "mode_normal": { _ in .normalMode },
+    "normal_mode": { _ in .normalMode },
+    "mode_insert": { _ in .insertMode },
+    "insert_mode": { _ in .insertMode },
+    "mode_command": { _ in .commandMode },
+    "command_mode": { _ in .commandMode },
+    "scroll_left": { _ in .scroll(.left) },
+    "scroll_right": { _ in .scroll(.right) },
+    "scroll_up": { _ in .scroll(.up) },
+    "scroll_down": { _ in .scroll(.down) },
+    "scroll_half_page_up": { _ in .scroll(.halfPageUp) },
+    "scroll_half_page_down": { _ in .scroll(.halfPageDown) },
+    "half_page_up": { _ in .scroll(.halfPageUp) },
+    "half_page_down": { _ in .scroll(.halfPageDown) },
+    "scroll_top": { _ in .scroll(.top) },
+    "scroll_bottom": { _ in .scroll(.bottom) },
+    "app_reload": { _ in .reload },
+    "reload": { _ in .reload },
+    "app_undo": { _ in .undo },
+    "undo": { _ in .undo },
+    "app_redo": { _ in .redo },
+    "redo": { _ in .redo },
+    "window_close": { _ in .close },
+    "close": { _ in .close },
+    "app_find": { _ in .find },
+    "find": { _ in .find },
+    "app_open_finder": { q in .appFinder(all: q.bool("all")) },
+    "open_app_finder": { q in .appFinder(all: q.bool("all")) },
+    "url_copy": { _ in .copyURL },
+    "copy_url": { _ in .copyURL },
+    "frame_next": { _ in .nextFrame },
+    "next_frame": { _ in .nextFrame },
+    "frame_main": { _ in .mainFrame },
+    "main_frame": { _ in .mainFrame },
+    "tab_next": { _ in .nextTab },
+    "next_tab": { _ in .nextTab },
+    "tab_previous": { _ in .previousTab },
+    "previous_tab": { _ in .previousTab },
+    "app_back": { _ in .appBack },
+    "app_forward": { _ in .appForward },
+    "app_quit": { q in .quitApp(force: q.bool("force")) },
+    "quit_app": { q in .quitApp(force: q.bool("force")) },
+    "force_quit_app": { _ in .quitApp(force: true) },
+    "app_save": { _ in .save },
+    "save": { _ in .save },
+    "app_save_and_quit": { q in .saveAndQuit(force: q.bool("force")) },
+    "save_and_quit": { q in .saveAndQuit(force: q.bool("force")) },
+    "app_print": { _ in .print },
+    "print": { _ in .print },
+    "document_open": { _ in .openDocument },
+    "open": { _ in .openDocument },
+    "window_new": { _ in .newWindow },
+    "new_window": { _ in .newWindow },
+    "tab_new": { _ in .newTab },
+    "new_tab": { _ in .newTab },
+    "clipboard_copy": { _ in .copy },
+    "copy": { _ in .copy },
+    "clipboard_cut": { _ in .cut },
+    "cut": { _ in .cut },
+    "clipboard_paste": { _ in .paste },
+    "paste": { _ in .paste },
+    "clipboard_copy_all": { _ in .copyAll },
+    "copy_all": { _ in .copyAll },
+    "alert_show": { q in
+      guard let message = q.value("message"), !message.isEmpty else { return nil }
+      return .showAlert(message: message)
+    },
     "show_alert": { q in
       guard let message = q.value("message"), !message.isEmpty else { return nil }
       return .showAlert(message: message)
     },
+    "alert_dismiss": { _ in .dismissAlert },
     "dismiss_alert": { _ in .dismissAlert },
+    "help_show": { _ in .showUsage },
     "help": { _ in .showUsage },
+    "hints_dismiss": { _ in .dismissHints },
     "dismiss_hints": { _ in .dismissHints },
+    "flash_quit": { _ in .quit },
     "quit": { _ in .quit },
+    "app_open": { q in
+      guard let name = q.value("name"), !name.isEmpty else { return nil }
+      return .openApp(name: name)
+    },
     "open_app": { q in
       guard let name = q.value("name"), !name.isEmpty else { return nil }
       return .openApp(name: name)
     },
-    "move_window": { q in
-      let rawPosition = q.value("position")
-      let rawScreen = q.value("screen")
-      // Empty form `flash://move_window` is a no-op binding — flag
-      // it at config load so the user can't mis-write a hotkey.
-      if rawPosition == nil && rawScreen == nil { return nil }
-      // A *typo'd* position (e.g. `position=foo`) is rejected too;
-      // we don't want to silently degrade to "just move screen".
-      var position: WindowPosition? = nil
-      if let raw = rawPosition {
-        guard let p = WindowPosition(rawValue: raw.lowercased()) else {
-          return nil
-        }
-        position = p
-      }
-      // Swift's Int(_:) already accepts a leading "+" or "-", so
-      // `screen=+1` and `screen=-1` round-trip without a custom
-      // sign parser. A non-numeric `screen=` value is rejected.
-      let screen: Int
-      if let raw = rawScreen {
-        guard let n = Int(raw) else { return nil }
-        screen = n
-      } else {
-        screen = 0
-      }
-      return .moveWindow(MoveWindowParams(position: position, screen: screen))
-    },
+    "window_move": windowMoveCommand,
+    "move_window": windowMoveCommand,
   ]
 
   static let usageText = """
-    flash://show_hints[?right=1]
-    flash://show_alert?message=<text>
-    flash://dismiss_alert
-    flash://dismiss_hints
-    flash://open_app?name=<app>
-    flash://move_window?position=<slot>&screen=<n>
-    flash://quit
-    flash://help
+    flash://mouse_click[?right=1|double=1]
+    flash://mouse_move
+    flash://mode_normal
+    flash://mode_insert
+    flash://mode_command
+    flash://scroll_left
+    flash://scroll_right
+    flash://scroll_up
+    flash://scroll_down
+    flash://scroll_half_page_up
+    flash://scroll_half_page_down
+    flash://scroll_top
+    flash://scroll_bottom
+    flash://app_reload
+    flash://app_undo
+    flash://app_redo
+    flash://window_close
+    flash://app_find
+    flash://app_open_finder[?all=1]
+    flash://url_copy
+    flash://frame_next
+    flash://frame_main
+    flash://tab_next
+    flash://tab_previous
+    flash://app_back
+    flash://app_forward
+    flash://app_quit[?force=1]
+    flash://app_save
+    flash://app_save_and_quit[?force=1]
+    flash://app_print
+    flash://document_open
+    flash://window_new
+    flash://tab_new
+    flash://clipboard_copy
+    flash://clipboard_cut
+    flash://clipboard_paste
+    flash://clipboard_copy_all
+    flash://alert_show?message=<text>
+    flash://alert_dismiss
+    flash://hints_dismiss
+    flash://app_open?name=<app>
+    flash://window_move?position=<slot>&screen=<n>
+    flash://flash_quit
+    flash://help_show
     """
+}
+
+private func mouseClickCommand(_ q: FlashURLQuery) -> URLCommand? {
+  if q.bool("right") { return .mouseClick(action: .rightClick) }
+  if q.bool("double") { return .mouseClick(action: .doubleClick) }
+  return .mouseClick(action: .leftClick)
+}
+
+private func windowMoveCommand(_ q: FlashURLQuery) -> URLCommand? {
+  let rawPosition = q.value("position")
+  let rawScreen = q.value("screen")
+  // Empty form `flash://window_move` is a no-op mapping — flag
+  // it at config load so the user can't mis-write a hotkey.
+  if rawPosition == nil && rawScreen == nil { return nil }
+  // A *typo'd* position (e.g. `position=foo`) is rejected too;
+  // we don't want to silently degrade to "just move screen".
+  var position: WindowPosition? = nil
+  if let raw = rawPosition {
+    guard let p = WindowPosition(rawValue: raw.lowercased()) else {
+      return nil
+    }
+    position = p
+  }
+  // Swift's Int(_:) already accepts a leading "+" or "-", so
+  // `screen=+1` and `screen=-1` round-trip without a custom
+  // sign parser. A non-numeric `screen=` value is rejected.
+  let screen: Int
+  if let raw = rawScreen {
+    guard let n = Int(raw) else { return nil }
+    screen = n
+  } else {
+    screen = 0
+  }
+  return .moveWindow(MoveWindowParams(position: position, screen: screen))
 }
 
 /// Thin wrapper over `[URLQueryItem]` providing the lookups every

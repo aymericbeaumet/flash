@@ -1,4 +1,5 @@
 import Foundation
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -17,6 +18,63 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBorder, "#E3BE23")
     XCTAssertFalse(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 100)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "j" })?.action.command,
+      .scroll(.down))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "O" })?.action.command,
+      .appFinder(all: true))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "rf" })?.action.command,
+      .mouseClick(action: .rightClick))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "df" })?.action.command,
+      .mouseClick(action: .doubleClick))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "yy" }))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "o" })?.action.command,
+      .appFinder(all: true))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "cmd+space" })?.action.command,
+      .appFinder(all: true))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "ctrl-o" })?.action.command,
+      .appBack)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
+      .appForward)
+    XCTAssertEqual(c.mode.labels.normal, "NORMAL")
+    XCTAssertEqual(c.mode.labels.insert, "INSERT")
+    XCTAssertEqual(c.mode.labels.command, "COMMAND")
+    XCTAssertTrue(c.mode.all.isEmpty)
+    XCTAssertTrue(c.mode.insert.isEmpty)
+  }
+
+  func testParsesModeLabelsInlineTable() {
+    let c = ConfigLoader.parse(
+      """
+      [mode]
+      labels = { normal = "N", insert = "I", command = "C" }
+      """)
+
+    XCTAssertEqual(c.mode.labels.normal, "N")
+    XCTAssertEqual(c.mode.labels.insert, "I")
+    XCTAssertEqual(c.mode.labels.command, "C")
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testInvalidModeLabelsReportDiagnostic() {
+    let c = ConfigLoader.parse(
+      """
+      [mode]
+      labels = { normal = "N", insert = "I" }
+      """)
+
+    XCTAssertEqual(c.mode.labels.normal, "NORMAL")
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("mode.labels must be")
+      })
   }
 
   func testParsesHintsSection() {
@@ -80,11 +138,13 @@ final class ConfigLoaderTests: XCTestCase {
     let hints = try XCTUnwrap(root["hints"] as? [String: Any])
     let overlay = try XCTUnwrap(root["overlay"] as? [String: Any])
     let debug = try XCTUnwrap(root["debug"] as? [String: Any])
+    let mode = try XCTUnwrap(root["mode"] as? [String: Any])
     XCTAssertEqual(hints["keys"] as? String, "<qwerty_homerow+qwerty_toprow>")
     XCTAssertEqual(hints["min_length"] as? Int, 1)
     XCTAssertEqual(hints["magic_modifiers"] as? [String], ["shift"])
     XCTAssertEqual(overlay["font_size"] as? Double, 12)
     XCTAssertEqual(debug["log_level"] as? String, "debug")
+    XCTAssertNotNil(mode["normal"] as? [[String: Any]])
   }
 
   func testResolvedHintsKeysJSONIncludesDefaultAndResolvedAlphabet() throws {
@@ -264,81 +324,64 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.debug.logLevel, .warn)
   }
 
-  func testInvalidShortcutValueProducesWarning() {
+  func testInvalidMappingValueProducesWarning() {
     let toml = """
-      [shortcuts]
+      [mode.all]
       "cmd+ctrl+b" = "https://example.com"
       """
     let c = ConfigLoader.parse(toml)
-    XCTAssertTrue(c.shortcuts.isEmpty)
     XCTAssertEqual(c.warnings.count, 1)
     XCTAssertTrue(c.warnings[0].contains("cmd+ctrl+b"))
+    XCTAssertTrue(c.warnings[0].contains("mapping"))
   }
 
-  func testShortcutRelativePathArgumentsResolveAgainstConfigFile() {
+  func testParsesModeMappings() {
     let toml = """
-      [shortcuts]
-      "alt+shift+c" = ["sh", "../../scripts/toggle_caffeinate.sh"]
-      "alt+shift+d" = ["sh", "~/.dotfiles/scripts/toggle_darkmode.sh"]
-      "alt+shift+m" = ["sh", "$HOME/.dotfiles/scripts/toggle_mute.sh"]
-      "alt+shift+w" = ["sh", "${HOME}/.dotfiles/scripts/toggle_wifi.sh"]
-      "alt+shift+x" = ["sh", "-c", "echo /tmp/example", "https://example.com/a/b"]
-      "alt+shift+y" = ["scripts/toggle_wifi.sh", "--flag=$HOME/path", "$NOPE/path"]
+      [mode.insert]
+      "ctrl+alt+n" = "flash://mode_normal"
+      [mode.normal]
+      "j" = "flash://scroll_up"
       """
-    let sourceURL = URL(fileURLWithPath: "/Users/test/.dotfiles/.config/flash/config.toml")
-    let c = ConfigLoader.parse(
-      toml,
-      sourceURL: sourceURL,
-      environment: ["HOME": "/Users/envhome"])
+    let c = ConfigLoader.parse(toml)
+    XCTAssertEqual(c.mode.insert.count, 1)
+    XCTAssertEqual(c.mode.insert[0].action.command, .normalMode)
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
+    XCTAssertTrue(c.mode.containsNormalModeMapping)
+    XCTAssertFalse(c.mode.containsAdvancedModeMapping)
+  }
 
-    XCTAssertEqual(c.shortcuts.count, 6)
+  func testAdvancedModeMappingIsDetectedOnlyFromAllScope() {
+    let inAll = ConfigLoader.parse(
+      """
+      [mode.all]
+      "cmd+ctrl+n" = "flash://mode_normal"
+      """)
+    XCTAssertTrue(inAll.mode.containsAdvancedModeMapping)
 
-    guard case .shell(let caffeineArgv) = c.shortcuts[0].action else {
-      return XCTFail("expected shell action")
-    }
-    XCTAssertEqual(
-      caffeineArgv,
-      ["sh", "/Users/test/.dotfiles/scripts/toggle_caffeinate.sh"])
+    let inInsert = ConfigLoader.parse(
+      """
+      [mode.insert]
+      "cmd+ctrl+n" = "flash://mode_normal"
+      """)
+    XCTAssertFalse(inInsert.mode.containsAdvancedModeMapping)
 
-    guard case .shell(let darkModeArgv) = c.shortcuts[1].action else {
-      return XCTFail("expected shell action")
-    }
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    XCTAssertEqual(
-      darkModeArgv,
-      ["sh", "\(home)/.dotfiles/scripts/toggle_darkmode.sh"])
+    let inNormalOnly = ConfigLoader.parse(
+      """
+      [mode.normal]
+      "cmd+ctrl+n" = "flash://mode_normal"
+      """)
+    XCTAssertFalse(inNormalOnly.mode.containsAdvancedModeMapping)
+  }
 
-    guard case .shell(let muteArgv) = c.shortcuts[2].action else {
-      return XCTFail("expected shell action")
-    }
-    XCTAssertEqual(
-      muteArgv,
-      ["sh", "/Users/envhome/.dotfiles/scripts/toggle_mute.sh"])
-
-    guard case .shell(let wifiEnvArgv) = c.shortcuts[3].action else {
-      return XCTFail("expected shell action")
-    }
-    XCTAssertEqual(
-      wifiEnvArgv,
-      ["sh", "/Users/envhome/.dotfiles/scripts/toggle_wifi.sh"])
-
-    guard case .shell(let shellSnippetArgv) = c.shortcuts[4].action else {
-      return XCTFail("expected shell action")
-    }
-    XCTAssertEqual(
-      shellSnippetArgv,
-      ["sh", "-c", "echo /tmp/example", "https://example.com/a/b"])
-
-    guard case .shell(let relativeArgv) = c.shortcuts[5].action else {
-      return XCTFail("expected shell action")
-    }
-    XCTAssertEqual(
-      relativeArgv,
-      [
-        "/Users/test/.dotfiles/.config/flash/scripts/toggle_wifi.sh",
-        "--flag=$HOME/path",
-        "$NOPE/path",
-      ])
+  func testModeTableExtendsDefaultMappingsAndOverridesSameKey() {
+    let toml = """
+      [mode.normal]
+      "j" = "flash://scroll_up"
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "i" }))
+    XCTAssertEqual(c.mode.normal.filter { $0.key == "j" }.count, 1)
   }
 
   func testCLIBeatsEnv() {
@@ -463,11 +506,11 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(message?.contains("colemak_toprow|colemak_homerow") == true)
   }
 
-  func testLoadingErrorAlertIncludesShortcutWarnings() {
+  func testLoadingErrorAlertIncludesMappingWarnings() {
     let c = ConfigLoader.parse(
       """
-      [shortcuts]
-      "cmd+ctrl+b" = "show_hints"
+      [mode.all]
+      "cmd+ctrl+b" = "mouse_click"
       """)
     let message = c.loadingErrorAlertMessage
     XCTAssertNotNil(message)

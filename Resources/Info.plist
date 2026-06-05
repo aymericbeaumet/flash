@@ -29,7 +29,7 @@
     <key>NSAccessibilityUsageDescription</key>
     <string>Flash uses the Accessibility API to find clickable elements in the focused application so it can show jump-hints.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Flash sends Apple Events to focus or launch the apps you bind to flash://open_app shortcuts, and to make sure their main window appears.</string>
+    <string>Flash sends Apple Events to focus or launch the apps you bind to flash://app_open shortcuts, and to make sure their main window appears.</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

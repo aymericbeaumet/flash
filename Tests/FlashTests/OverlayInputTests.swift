@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import XCTest
 
 @testable import flash
@@ -143,4 +144,103 @@ final class OverlayInputTests: XCTestCase {
         charactersIgnoringModifiers: nil),
       .cancel)
   }
+
+  func testCommandLineEditsAtCursor() {
+    let panel = OverlayPanel()
+    let coordinator = RecordingOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .commandLine
+    panel.commandLineText = "open fx"
+    panel.commandLineCursorIndex = 5
+
+    panel.keyDown(with: keyEvent(keyCode: kVK_ANSI_I, characters: "i"))
+
+    XCTAssertEqual(panel.commandLineText, "open ifx")
+    XCTAssertEqual(panel.commandLineCursorIndex, 6)
+    XCTAssertEqual(coordinator.commandUpdates.last?.command, "open ifx")
+    XCTAssertEqual(coordinator.commandUpdates.last?.cursorIndex, 6)
+    XCTAssertEqual(coordinator.commandUpdates.last?.resetSelection, true)
+  }
+
+  func testCommandLineCursorMotionAndForwardDelete() {
+    let panel = OverlayPanel()
+    let coordinator = RecordingOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .commandLine
+    panel.commandLineText = "open firefox"
+    panel.commandLineCursorIndex = panel.commandLineText.count
+
+    panel.keyDown(with: keyEvent(keyCode: kVK_LeftArrow, characters: "", ignoring: ""))
+    XCTAssertEqual(panel.commandLineCursorIndex, "open firefo".count)
+    XCTAssertEqual(coordinator.commandUpdates.last?.resetSelection, false)
+
+    panel.keyDown(with: keyEvent(keyCode: kVK_ForwardDelete, characters: "\u{7f}"))
+    XCTAssertEqual(panel.commandLineText, "open firefo")
+    XCTAssertEqual(panel.commandLineCursorIndex, "open firefo".count)
+    XCTAssertEqual(coordinator.commandUpdates.last?.resetSelection, true)
+  }
+
+  func testOverlayNoActionsCoverModeTransitionProperties() {
+    for key in ["frame", "hidden", "backgroundColor", "sublayers", "colors"] {
+      XCTAssertNotNil(OverlayPanel.noActions[key], "missing \(key)")
+    }
+  }
+
+  func testModeBadgeWidthUsesLongestConfiguredLabel() {
+    let compact = OverlayPanel.modeBadgeWidth(
+      labels: Config.Mode.Labels(normal: "N", insert: "I", command: "C"),
+      currentText: "N",
+      fontSize: 12)
+    let full = OverlayPanel.modeBadgeWidth(
+      labels: Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND"),
+      currentText: "NORMAL",
+      fontSize: 12)
+
+    XCTAssertLessThan(compact, full)
+  }
+
+  private func keyEvent(
+    keyCode: Int,
+    characters: String,
+    ignoring: String? = nil,
+    modifiers: NSEvent.ModifierFlags = []
+  ) -> NSEvent {
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: modifiers,
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: characters,
+      charactersIgnoringModifiers: ignoring ?? characters,
+      isARepeat: false,
+      keyCode: UInt16(keyCode))!
+  }
+}
+
+private final class RecordingOverlayCoordinator: OverlayCoordinator {
+  var commandUpdates: [(command: String, cursorIndex: Int, resetSelection: Bool)] = []
+
+  func overlayDidCancel() {}
+  func overlayDidCancelByPointer() {}
+  func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {}
+  func overlayDidUpdatePrefix(_ prefix: String) {}
+  func overlayDidHandleNormalMode(_ command: URLCommand?, repeatCount: Int) {}
+  func overlayDidHandleMapping(_ event: NSEvent) -> Bool { false }
+  func overlayDidCancelHelp() {}
+  func overlayDidCancelCommandLine() {}
+  func overlayDidUpdateCommandLine(
+    _ command: String,
+    cursorIndex: Int,
+    resetSelection: Bool
+  ) {
+    commandUpdates.append((command, cursorIndex, resetSelection))
+  }
+  func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool { false }
+  func overlayDidSubmitCommandLine(_ command: String) {}
+  func overlayDidCancelAppFinder() {}
+  func overlayDidUpdateAppFinderQuery(_ query: String) {}
+  func overlayDidMoveAppFinderSelection(_ delta: Int) {}
+  func overlayDidSubmitAppFinder() {}
 }

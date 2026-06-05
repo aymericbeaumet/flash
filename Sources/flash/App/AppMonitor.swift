@@ -37,11 +37,12 @@ final class AppMonitor {
   private let registry: ProviderRegistry
 
   private let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
+  var focusedElementDidChange: ((pid_t) -> Void)?
 
   // MARK: Config (shared between main + axQueue)
   //
   // Cheap lock — held only for the duration of a struct copy. AppDelegate
-  // writes via `updateConfig` when the user edits config.toml; axQueue
+  // writes via `updateConfig` when the user edits flash.toml; axQueue
   // reads via `snapshotConfig` at the start of each walk.
 
   private var config: Config
@@ -55,7 +56,7 @@ final class AppMonitor {
   }
 
   /// Called by the AppDelegate config file-watcher whenever
-  /// ~/.config/flash/config.toml changes. Atomically swaps the shared
+  /// ~/.config/flash/flash.toml changes. Atomically swaps the shared
   /// config, then invalidates the prepared model on main so labels and
   /// provider debug settings refresh together.
   func updateConfig(_ cfg: Config) {
@@ -324,6 +325,31 @@ final class AppMonitor {
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid)
     scheduleModelRefresh(for: pid, reason: "ax")
+    focusedElementDidChange?(pid)
+  }
+
+  func invalidateAfterUserAction(pid: pid_t, reason: String) {
+    let bump = { [weak self] in
+      guard let self, pid > 0 else { return }
+      self.dirtyTokens[pid, default: 0] &+= 1
+      self.invalidatePreparedModel(for: pid)
+      self.scheduleModelRefresh(for: pid, reason: reason)
+      FlashLog.debug("[ax] model_invalidated pid=\(pid) reason=\(reason)")
+    }
+    if Thread.isMainThread {
+      bump()
+    } else {
+      DispatchQueue.main.async { bump() }
+    }
+  }
+
+  func focusedElementIsEditable(pid: pid_t, completion: @escaping (Bool) -> Void) {
+    axQueue.async {
+      let editable = NormalModeDispatcher.isEditableFocusedElement(pid: pid)
+      DispatchQueue.main.async {
+        completion(editable)
+      }
+    }
   }
 
   private func onFocusedEnvironmentChanged(reason: String) {
@@ -546,6 +572,23 @@ final class AppMonitor {
     return makeContext(for: app)
   }
 
+  func frontmostContext(excludingBundleIdentifier ignoredBundleIdentifier: String) -> AppContext? {
+    if let context = currentContext(),
+      context.bundleIdentifier != ignoredBundleIdentifier
+    {
+      return clip(context, to: topWindowFrame(for: context.processID) ?? context.frontWindowFrame)
+    }
+    return topVisibleWindowContext(excludingBundleIdentifier: ignoredBundleIdentifier)
+  }
+
+  func context(for pid: pid_t) -> AppContext? {
+    guard pid > 0,
+      let app = NSRunningApplication(processIdentifier: pid)
+    else { return nil }
+    guard let context = makeContext(for: app) else { return nil }
+    return clip(context, to: topWindowFrame(for: pid) ?? context.frontWindowFrame)
+  }
+
   // MARK: Discovery
 
   /// Activation hot path. Tries the prepared AX model first. Volatile
@@ -553,6 +596,7 @@ final class AppMonitor {
   func discoverAsync(
     context: AppContext,
     profiler: FlashProfiler? = nil,
+    targetFilter: ((JumpTarget) -> Bool)? = nil,
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let pid = context.processID
@@ -561,7 +605,11 @@ final class AppMonitor {
     }
 
     if anyVolatileProviderApplies(to: context) {
-      runActivationDiscovery(context: context, profiler: profiler, completion: completion)
+      runActivationDiscovery(
+        context: context,
+        profiler: profiler,
+        targetFilter: targetFilter,
+        completion: completion)
       return
     }
 
@@ -574,7 +622,12 @@ final class AppMonitor {
         detail:
           "hints=\(model.hints.count) age_ms=\(String(format: "%.1f", ageMs)) token=\(model.dirtyToken)"
       )
-      completion(model.hints)
+      if let targetFilter {
+        let cfg = snapshotConfig()
+        completion(assignTargets(model.targets.filter(targetFilter), cfg: cfg, profiler: profiler))
+      } else {
+        completion(model.hints)
+      }
       return
     }
 
@@ -586,9 +639,18 @@ final class AppMonitor {
     ) { [weak self] model in
       guard let self else { return }
       if let model {
-        completion(model.hints)
+        if let targetFilter {
+          let cfg = self.snapshotConfig()
+          completion(self.assignTargets(model.targets.filter(targetFilter), cfg: cfg, profiler: profiler))
+        } else {
+          completion(model.hints)
+        }
       } else {
-        self.runActivationDiscovery(context: context, profiler: profiler, completion: completion)
+        self.runActivationDiscovery(
+          context: context,
+          profiler: profiler,
+          targetFilter: targetFilter,
+          completion: completion)
       }
     }
   }
@@ -648,6 +710,7 @@ final class AppMonitor {
   private func runActivationDiscovery(
     context: AppContext,
     profiler: FlashProfiler?,
+    targetFilter: ((JumpTarget) -> Bool)? = nil,
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
@@ -664,6 +727,7 @@ final class AppMonitor {
         context: context,
         cfg: cfg,
         providers: providers,
+        targetFilter: targetFilter,
         profiler: profiler)
       profiler?.mark("walk_done", detail: "hints=\(result.hints.count)")
       DispatchQueue.main.async {
@@ -676,6 +740,7 @@ final class AppMonitor {
     context: AppContext,
     cfg: Config,
     providers: [JumpProvider],
+    targetFilter: ((JumpTarget) -> Bool)? = nil,
     profiler: FlashProfiler? = nil
   ) -> DiscoveryResult {
     let walkStart = profiler?.intervalStart()
@@ -695,7 +760,7 @@ final class AppMonitor {
     let finalized = TargetFinalizer.finalizeWithStats(
       collected,
       visibleRegions: frame.visibleRegions)
-    let targets = finalized.targets
+    let targets = targetFilter.map { finalized.targets.filter($0) } ?? finalized.targets
     if let finalizeStart {
       profiler?.finishInterval(
         "finalize_targets",
@@ -739,7 +804,8 @@ final class AppMonitor {
     let snapshotStart = profiler?.intervalStart()
     let snapshot = WindowSnapshot.build(
       primaryH: primaryScreenHeight(),
-      onlyComputingVisibleRegionsFor: context.processID)
+      onlyComputingVisibleRegionsFor: context.processID,
+      ignoringPids: [getpid()])
     let visible: [CGRect]
     if let regions = snapshot.visibleRegions[context.processID] {
       visible = regions
@@ -847,7 +913,10 @@ final class AppMonitor {
 
   // MARK: Context
 
-  private func makeContext(for app: NSRunningApplication) -> AppContext? {
+  private func makeContext(
+    for app: NSRunningApplication,
+    frontWindowFrame: CGRect? = nil
+  ) -> AppContext? {
     let pid = app.processIdentifier
     guard pid > 0 else { return nil }
 
@@ -862,13 +931,41 @@ final class AppMonitor {
     // snapshot and passes a clipped context to providers, so the
     // centre-in-visible check works without needing a precomputed AX
     // window frame from main.
+    let windowFrame = frontWindowFrame ?? screenFrame
     return AppContext(
       bundleIdentifier: app.bundleIdentifier ?? "",
       processID: pid,
       runningApp: app,
-      frontWindowFrame: screenFrame,
+      frontWindowFrame: windowFrame,
       allScreensFrame: screenFrame
     )
+  }
+
+  private func topWindowFrame(for pid: pid_t) -> CGRect? {
+    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    else { return nil }
+    return WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
+      .first { $0.layer == 0 && $0.pid == pid && $0.pid != getpid() }?
+      .nsBounds
+  }
+
+  private func topVisibleWindowContext(
+    excludingBundleIdentifier ignoredBundleIdentifier: String
+  ) -> AppContext? {
+    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    else { return nil }
+
+    for entry in WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()) {
+      guard entry.layer == 0, entry.pid > 0, entry.pid != getpid(),
+        let app = NSRunningApplication(processIdentifier: entry.pid),
+        !app.isTerminated,
+        app.bundleIdentifier != ignoredBundleIdentifier
+      else { continue }
+      return makeContext(for: app, frontWindowFrame: entry.nsBounds)
+    }
+    return nil
   }
 }
 
@@ -910,15 +1007,21 @@ struct WindowSnapshot {
   /// `visibleRegions` afterward.
   let activeWindowFrame: CGRect?
 
-  static func build(primaryH: CGFloat, onlyComputingVisibleRegionsFor focusedPid: pid_t)
+  static func build(
+    primaryH: CGFloat,
+    onlyComputingVisibleRegionsFor focusedPid: pid_t,
+    ignoringPids: Set<pid_t> = []
+  )
     -> WindowSnapshot
   {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
       return WindowSnapshot(entries: [], visibleRegions: [:], activeWindowFrame: nil)
     }
+    let entries = entries(from: info, primaryH: primaryH)
+      .filter { !ignoringPids.contains($0.pid) }
     return build(
-      entries: entries(from: info, primaryH: primaryH),
+      entries: entries,
       focusedPid: focusedPid)
   }
 

@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Implements `flash://move_window?position=&screen=` against the
+/// Implements `flash://window_move?position=&screen=` against the
 /// focused application's focused window via Accessibility.
 ///
 /// Coordinate spaces:
@@ -21,7 +21,7 @@ enum WindowMover {
     let status = AXUIElementCopyAttributeValue(
       axApp, kAXFocusedWindowAttribute as CFString, &windowRef)
     guard status == .success, let cfWin = windowRef else {
-      FlashLog.warn("[move_window] no focused window for pid \(frontApp.processIdentifier)")
+      FlashLog.warn("[window_move] no focused window for pid \(frontApp.processIdentifier)")
       return
     }
     let window = cfWin as! AXUIElement

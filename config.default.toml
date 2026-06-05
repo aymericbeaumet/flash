@@ -1,26 +1,13 @@
-# Flash — default configuration.
+# Flash default configuration.
 #
-# This file is the canonical reference for every configuration key Flash
-# accepts, with its built-in default value. Copy any keys you want to
-# override into one of these paths (first existing wins):
+# This file is the canonical reference for the user-facing configuration
+# sections Flash accepts. Copy the keys you want to edit into:
 #
 #   $XDG_CONFIG_HOME/flash/flash.toml
 #   ~/.config/flash/flash.toml
 #   ~/.flash.toml
 #
-# All three are watched for live reload — no restart needed.
-#
-# Every key below can ALSO be overridden via a command-line flag or an
-# environment variable. Precedence (high → low):
-#
-#   CLI flag  >  env var  >  config file  >  built-in default
-#
-# Flag form:   --<section>-<key>=<value>      e.g. --hints-min-length=2
-# Env  form:   FLASH_<SECTION>_<KEY>=<value>  e.g. FLASH_HINTS_MIN_LENGTH=2
-# Config path: --config=<path> / FLASH_CONFIG=<path>
-#
-# Source of truth for these defaults lives in `Sources/flash/Config/Config.swift`.
-# Keep this file in sync with that struct whenever you change a default.
+# The active file is watched for live reload.
 
 [hints]
 # Alphabet used to generate prefix-free hint labels.
@@ -29,153 +16,96 @@
 #   layouts: qwerty, colemak, dvorak
 #   rows: homerow, toprow, bottomrow
 #   hands: lefthand, righthand
-# Examples:
-#   <colemak>
-#   <colemak_homerow+colemak_toprow>
-#   <colemak_homerow_lefthand+colemak_toprow_righthand>
-#   <colemak_lefthand>
-# Layout selectors cannot mix layouts. Literal strings are deduped and
-# scored in the order written, e.g. "asdfghjkl".
 keys = "<qwerty_homerow+qwerty_toprow>"
 
-# Floor on label length. Force longer labels (and thus alternating-hand
-# scoring) by raising this — e.g. min_length = 2 always uses 2-char labels
-# even when the target count would fit in 1.
+# Floor on label length. Force longer labels by raising this.
 min_length = 1
 
 # Modifiers that can be held on the final hint key and forwarded to the click.
-# Supported names: "cmd", "ctrl", "alt", "shift". If the resolved hints.keys
-# contain any non-letter characters, Flash logs a warning and removes "shift"
-# because shifted-character input is ambiguous: it cannot distinguish "shift+1"
-# from typing "!". Use [] to disable modified clicks.
+# Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
-[overlay]
-# Hint chip styling. font_size is in points; colors accept #RRGGBB or #RRGGBBAA.
-# Defaults mirror Vimium's classic yellow hint marker — small bold label on a
-# vertical gradient with a darker amber border. Set hint_bg_top == hint_bg_bottom
-# for a flat fill.
-font_size = 12
-hint_fg = "#302505"
-hint_bg_top = "#FFF785"
-hint_bg_bottom = "#FFC542"
-hint_border = "#E3BE23"
+[mode]
+# Labels shown in the mode overlay. The overlay width is based on the
+# longest configured label, so compact labels such as N/I/C shrink it.
+labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 
-# Dismissal is not configurable: the overlay always disappears on
-# Escape, Space, any arrow key, or any scroll event. Re-invoking the
-# show_hints URL while hints are visible cancels them and starts a
-# fresh walk.
+[mode.all]
+# Mappings available in insert and normal modes.
+# Values must be flash:// actions; shell commands and non-Flash URLs are not
+# supported here.
+#
+# Native modified-key mappings are registered with Carbon only when the key
+# contains "+". Non-modified keys are read only by the overlay while Flash is
+# capturing normal-mode input.
+#
+# Examples:
+# "ctrl+space" = "flash://mouse_click"
+# "ctrl+alt+n" = "flash://mode_normal" # enables advanced mode
+# "cmd+ctrl+a" = "flash://app_open?name=Alacritty"
+# "alt+h" = "flash://window_move?position=lefthalf"
+# "alt+n" = "flash://window_move?screen=+1"
+
+[mode.normal]
+# Entries here extend the built-in normal-mode map. Reusing a key overrides
+# that one default mapping; unrelated defaults stay available.
+"h" = "flash://scroll_left"
+"j" = "flash://scroll_down"
+"k" = "flash://scroll_up"
+"l" = "flash://scroll_right"
+"ctrl-e" = "flash://scroll_down"
+"ctrl-y" = "flash://scroll_up"
+"ctrl-d" = "flash://scroll_half_page_down"
+"ctrl-u" = "flash://scroll_half_page_up"
+"gg" = "flash://scroll_top"
+"G" = "flash://scroll_bottom"
+"gt" = "flash://tab_next"
+"gT" = "flash://tab_previous"
+"ctrl-o" = "flash://app_back"
+"ctrl-i" = "flash://app_forward"
+"gf" = "flash://frame_next"
+"gF" = "flash://frame_main"
+"f" = "flash://mouse_click"
+"rf" = "flash://mouse_click?right=1"
+"df" = "flash://mouse_click?double=1"
+"mf" = "flash://mouse_move"
+"u" = "flash://app_undo"
+"ctrl-r" = "flash://app_redo"
+"x" = "flash://window_close"
+"/" = "flash://app_find"
+"o" = "flash://app_open_finder?all=1"
+"cmd+space" = "flash://app_open_finder?all=1"
+"O" = "flash://app_open_finder?all=1"
+"r" = "flash://app_reload"
+"?" = "flash://help_show"
+":" = "flash://mode_command"
+
+[mode.insert]
+# Mappings here apply only after insert mode is already active.
+# Advanced mode is enabled only by binding flash://mode_normal in [mode.all].
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its
 # hint chip. Useful when diagnosing missing or misplaced hints.
 show_bounds = false
 
-# Fill + stroke for the debug outline rectangle. Default is transparent
-# fill with a pink stroke.
+# Fill + stroke for the debug outline rectangle.
 bounds_bg = "#00000000"
 bounds_fg = "#FF3B9A"
 
-# Emit a profiling trace for every activation and background precompute.
-# Traces are written to stderr (~/Library/Logs/Flash/ in the installed app).
+# Emit profiling traces to stderr. In the installed app, stderr is available
+# under ~/Library/Logs/Flash/.
 profile = false
 
-# Log activation profiles whose end-to-end latency is at least this many
-# milliseconds, even when profile=false. Set to 0 to disable slow logs.
+# Log activation profiles whose latency is at least this many milliseconds.
+# Set to 0 to disable slow logs.
 slow_ms = 100
 
-# When true, the AX walker writes one line per visited element
-# (role, subrole, frame, parent role, actions, label) to
-# `~/Library/Logs/Flash/ax-dump.log` on every activation. Used to
-# diagnose missing or spurious hints in apps that fall through to the AX
-# provider (Firefox web pages, Electron, etc.). The file is rewritten on
-# each activation. Verbose — keep off for normal use.
+# Dump the AX tree to ~/Library/Logs/Flash/ax-dump.log on each activation.
 dump_ax = false
 
-# When true, mirrors every stderr diagnostic line Flash writes (profile
-# traces, accessibility-permission warnings, etc.) to
-# `~/Library/Logs/Flash/flash.log`. Appended across activations. Useful
-# when running Flash via launchd where stderr isn't attached to a
-# terminal.
+# Mirror stderr diagnostics to ~/Library/Logs/Flash/flash.log.
 dump_logs = false
 
-# Minimum log level emitted to stderr (and to flash.log when
-# dump_logs = true). Anything below this level is dropped before the
-# message is even formatted, so leaving this at "info" has zero cost
-# for noisy DEBUG traces. Accepted values: "debug" | "info" |
-# "warn" | "error". Set to "debug" while investigating an issue
-# (profiler step-by-step breakdown plus one-line JSON for the effective
-# config and resolved hints.keys show up at this level); leave at "info"
-# for normal use.
+# Accepted values: "trace", "debug", "info", "warn", "error".
 log_level = "info"
-
-# Performance behaviours (AX-event-driven prepared model, concurrent
-# subtree walk, parallel deferred action-name IPC) are always on and
-# not configurable. See AGENTS.md → "Prepared model contract" for the
-# determinism invariants. No per-IPC AX timeout is ever set — caps
-# tight enough to be useful tripped Firefox's lazy AXWebArea build.
-
-# Hotkey -> URL bindings. The key is the hotkey:
-#   modifiers and the key joined by `+`, last token is the key.
-#   Modifiers (case-insensitive): cmd, shift, ctrl, alt/opt/option.
-#   Keys: a-z, 0-9, ANSI punctuation single chars, named keys (return,
-#   tab, space, escape, delete, arrows, home/end, pageup/down), 0xNN.
-#
-# Values are one of:
-#
-#   - a `flash://...` URL — dispatched in-process, sub-millisecond
-#     (no shell, no Launch Services). The `flash://` scheme is
-#     mandatory; bare `"show_hints"` is rejected so each config
-#     line *visibly* declares which path it uses. Recognised
-#     commands:
-#       flash://show_hints[?right=1]
-#       flash://show_alert?message=<percent-encoded message>
-#       flash://dismiss_alert
-#       flash://dismiss_hints
-#       flash://open_app?name=<App Name or bundle ID>
-#       flash://move_window[?position=<P>][&screen=<N>]
-#         Both query keys are optional and orthogonal:
-#           position: named slot on the target screen. P ∈
-#             topleft, topright, bottomleft, bottomright,
-#             lefthalf, righthalf, tophalf, bottomhalf,
-#             maximized, centered
-#           screen: relative monitor offset. 0 = current screen
-#             (default), `+N` / `-N` cycle forward/backward through
-#             `NSScreen.screens` with modulo wrap.
-#         If only `position` is given, the window snaps to that slot
-#         on the current screen. If only `screen` is given, the
-#         window is proportionally remapped onto the new screen
-#         (keeps its relative shape — a left-half stays a
-#         left-half across monitors of different resolution).
-#       flash://quit
-#       flash://help
-#
-#   - an array of strings — exec'd as argv via /usr/bin/env (or the
-#     absolute path if argv[0] is rooted). Standalone path arguments
-#     expand `~`, `$VAR`, and `${VAR}`; relative path arguments
-#     containing `/` resolve relative to the loaded config file's real
-#     directory after symlinks. The user-visible escape hatch for
-#     anything that isn't a flash:// command:
-#       ["open", "https://github.com"]
-#       ["open", "-a", "Foo"]
-#       ["sh", "../../scripts/toggle_darkmode.sh"]
-#       ["sh", "$HOME/.dotfiles/scripts/toggle_wifi.sh"]
-#       ["sh", "-c", "tmux new -A -s main"]
-#
-# These are the only two forms. Bare strings that aren't flash://
-# URLs are rejected — that's deliberate. The string form is the
-# fast path; the array form makes the cost (process spawn + Launch
-# Services) visible at the config line so users reach for flash://
-# whenever it applies.
-#
-# Examples (none enabled by default):
-#
-#   [shortcuts]
-#   "ctrl+space"   = "flash://show_hints"
-#   "cmd+ctrl+a"   = "flash://open_app?name=Alacritty"
-#   "cmd+ctrl+s"   = "flash://open_app?name=com.tinyspeck.slackmacgap"
-#   "alt+h"        = "flash://move_window?position=lefthalf"
-#   "alt+n"        = "flash://move_window?position=maximized&screen=+1"
-#   "cmd+ctrl+g"   = ["open", "https://github.com"]
-#   "cmd+ctrl+t"   = ["sh", "-c", "tmux new -A -s main"]
-[shortcuts]

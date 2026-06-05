@@ -133,9 +133,9 @@ enum ConfigLoader {
       let location = ConfigLocation(
         line: lineNumber,
         column: valueColumn(in: rawLine) ?? firstNonWhitespaceColumn(in: rawLine))
-      // Allow quoted keys (TOML spec) so `"cmd+ctrl - a" = "Alacritty"`
-      // works in [shortcuts] — the hotkey LHS contains `+` and
-      // spaces, neither of which is a valid bare TOML key.
+      // Allow quoted keys (TOML spec) so `"cmd+ctrl+a" =
+      // "flash://mouse_click"` works in [mode.*] tables — modified
+      // mapping keys contain `+`, which is not a valid bare TOML key.
       if key.hasPrefix("\""), key.hasSuffix("\""), key.count >= 2 {
         key = String(key.dropFirst().dropLast())
       }
@@ -211,32 +211,15 @@ enum ConfigLoader {
     environment: [String: String],
     into config: inout Config
   ) {
-    // [shortcuts] is a free-form map: every key in the section is a
-    // hotkey string. The value is either a single `flash://...` URL
-    // string or an array of strings (exec'd as argv). Both forms are
-    // resolved to a typed `ShortcutAction` AOT here so the hot path
-    // never re-parses a string on a Carbon callback.
-    if table == ["shortcuts"], !key.isEmpty {
-      let action: ShortcutAction?
-      if let arr = parseStringArray(value) {
-        action = parseShortcutAction(
-          rawArray: resolveShortcutArgv(
-            arr,
-            sourceURL: sourceURL,
-            environment: environment))
-      } else if let s = parseString(value) {
-        action = parseShortcutAction(rawString: s)
-      } else {
-        action = nil
-      }
+    if table.count == 2, table[0] == "mode", let scope = ModeScope(rawValue: table[1]),
+      !key.isEmpty
+    {
+      let action = parseString(value).flatMap { parseMappingAction(rawString: $0) }
       if let action {
-        config.shortcuts.append(Shortcut(hotkey: key, action: action))
+        setModeMapping(scope: scope, key: key, action: action, into: &config)
       } else {
         config.addDiagnostic(
-          "shortcut \"\(key)\" has an unrecognised value (\(value)) — "
-            + "strings must be a flash:// URL; for anything else use "
-            + "the array form, e.g. [\"open\", \"https://...\"] "
-            + "or [\"open\", \"-a\", \"AppName\"]",
+          "mapping \"\(key)\" must be a quoted flash:// action",
           location: location)
       }
       return
@@ -264,6 +247,26 @@ enum ConfigLoader {
       } else {
         config.addDiagnostic(
           "hints.magic_modifiers must be an array of strings",
+          location: location)
+      }
+
+    case ["mode", "labels"]:
+      if let parsed = parseInlineStringTable(value),
+        let normal = parsed["normal"],
+        let insert = parsed["insert"],
+        let command = parsed["command"],
+        !normal.isEmpty,
+        !insert.isEmpty,
+        !command.isEmpty
+      {
+        config.mode.labels = Config.Mode.Labels(
+          normal: normal,
+          insert: insert,
+          command: command)
+        config.recordLocation(path: "mode.labels", location: location)
+      } else {
+        config.addDiagnostic(
+          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\" }",
           location: location)
       }
 
@@ -360,12 +363,32 @@ enum ConfigLoader {
         config.recordLocation(path: "debug.log_level", location: location)
       } else {
         config.addDiagnostic(
-          "debug.log_level must be one of: debug, info, warn, error",
+          "debug.log_level must be one of: trace, debug, info, warn, error",
           location: location)
       }
 
     default:
       break
+    }
+  }
+
+  private static func setModeMapping(
+    scope: ModeScope,
+    key: String,
+    action: MappingAction,
+    into config: inout Config
+  ) {
+    let mapping = ModeMapping(key: key, action: action)
+    switch scope {
+    case .all:
+      config.mode.all.removeAll { $0.key == key }
+      config.mode.all.append(mapping)
+    case .normal:
+      config.mode.normal.removeAll { $0.key == key }
+      config.mode.normal.append(mapping)
+    case .insert:
+      config.mode.insert.removeAll { $0.key == key }
+      config.mode.insert.append(mapping)
     }
   }
 
@@ -382,6 +405,65 @@ enum ConfigLoader {
   }
   private static func parseInt(_ v: String) -> Int? { Int(v) }
   private static func parseDouble(_ v: String) -> Double? { Double(v) }
+
+  /// Parse a TOML inline table with string values:
+  /// `{ normal = "N", insert = "I", command = "C" }`.
+  /// This intentionally stays smaller than full TOML: bare keys and
+  /// quoted string values only.
+  static func parseInlineStringTable(_ v: String) -> [String: String]? {
+    let trimmed = v.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}") else { return nil }
+    let inner = trimmed.dropFirst().dropLast()
+    var result: [String: String] = [:]
+    var i = inner.startIndex
+
+    func skipWhitespace() {
+      while i < inner.endIndex, inner[i].isWhitespace {
+        i = inner.index(after: i)
+      }
+    }
+
+    while true {
+      skipWhitespace()
+      if i >= inner.endIndex { break }
+
+      let keyStart = i
+      while i < inner.endIndex,
+        inner[i].isLetter || inner[i].isNumber || inner[i] == "_" || inner[i] == "-"
+      {
+        i = inner.index(after: i)
+      }
+      guard keyStart < i else { return nil }
+      let key = String(inner[keyStart..<i])
+
+      skipWhitespace()
+      guard i < inner.endIndex, inner[i] == "=" else { return nil }
+      i = inner.index(after: i)
+      skipWhitespace()
+
+      guard i < inner.endIndex, inner[i] == "\"" else { return nil }
+      i = inner.index(after: i)
+      var value = ""
+      while i < inner.endIndex, inner[i] != "\"" {
+        if inner[i] == "\\", inner.index(after: i) < inner.endIndex {
+          i = inner.index(after: i)
+          value.append(inner[i])
+        } else {
+          value.append(inner[i])
+        }
+        i = inner.index(after: i)
+      }
+      guard i < inner.endIndex else { return nil }
+      i = inner.index(after: i)
+      result[key] = value
+
+      skipWhitespace()
+      if i >= inner.endIndex { break }
+      guard inner[i] == "," else { return nil }
+      i = inner.index(after: i)
+    }
+    return result
+  }
 
   /// Parse a TOML inline array of strings: `["a", "b", "c"]`.
   /// Returns nil when the input doesn't look like an array. Handles
@@ -420,139 +502,9 @@ enum ConfigLoader {
     return out
   }
 
-  private static func resolveShortcutArgv(
-    _ argv: [String],
-    sourceURL: URL?,
-    environment: [String: String]
-  ) -> [String] {
-    let base = sourceURL?.deletingLastPathComponent()
-    return argv.map {
-      resolveShortcutArgument($0, relativeTo: base, environment: environment)
-    }
-  }
-
-  private static func resolveShortcutArgument(
-    _ value: String,
-    relativeTo base: URL?,
-    environment: [String: String]
-  ) -> String {
-    guard shouldResolveShortcutPath(value) else { return value }
-    let expanded = expandEnvironmentVariables(
-      expandTilde(value),
-      environment: environment)
-    if expanded.hasPrefix("/") {
-      return URL(fileURLWithPath: expanded).standardizedFileURL.path
-    }
-    guard let base, isStandaloneRelativePath(expanded) else { return expanded }
-    return URL(fileURLWithPath: expanded, relativeTo: base).standardizedFileURL.path
-  }
-
-  private static func shouldResolveShortcutPath(_ value: String) -> Bool {
-    guard !value.isEmpty else { return false }
-    guard !value.hasPrefix("-") else { return false }
-    guard !value.contains(where: { $0.isWhitespace }) else { return false }
-    guard URLComponents(string: value)?.scheme == nil else { return false }
-    return value.hasPrefix("/")
-      || value.hasPrefix("~")
-      || value.hasPrefix("$")
-      || value.contains("/")
-  }
-
-  private static func isStandaloneRelativePath(_ value: String) -> Bool {
-    guard value.contains("/") else { return false }
-    guard !value.hasPrefix("/") else { return false }
-    guard !value.hasPrefix("~") else { return false }
-    guard !value.hasPrefix("$") else { return false }
-    guard URLComponents(string: value)?.scheme == nil else { return false }
-    return true
-  }
-
-  private static func expandTilde(_ value: String) -> String {
-    guard value.hasPrefix("~") else { return value }
-    return (value as NSString).expandingTildeInPath
-  }
-
-  private static func expandEnvironmentVariables(
-    _ value: String,
-    environment: [String: String]
-  ) -> String {
-    var out = ""
-    var i = value.startIndex
-    while i < value.endIndex {
-      guard value[i] == "$" else {
-        out.append(value[i])
-        i = value.index(after: i)
-        continue
-      }
-
-      let dollar = i
-      i = value.index(after: i)
-      if i < value.endIndex, value[i] == "{" {
-        i = value.index(after: i)
-        let nameStart = i
-        while i < value.endIndex, value[i] != "}" {
-          i = value.index(after: i)
-        }
-        guard i < value.endIndex else {
-          out += String(value[dollar...])
-          return out
-        }
-        let rawName = String(value[nameStart..<i])
-        i = value.index(after: i)
-        if isEnvironmentName(rawName), let replacement = environmentValue(rawName, environment) {
-          out += replacement
-        } else {
-          out += String(value[dollar..<i])
-        }
-        continue
-      }
-
-      guard i < value.endIndex, isEnvironmentNameStart(value[i]) else {
-        out.append("$")
-        continue
-      }
-      let nameStart = i
-      i = value.index(after: i)
-      while i < value.endIndex, isEnvironmentNamePart(value[i]) {
-        i = value.index(after: i)
-      }
-      let rawName = String(value[nameStart..<i])
-      if let replacement = environmentValue(rawName, environment) {
-        out += replacement
-      } else {
-        out += String(value[dollar..<i])
-      }
-    }
-    return out
-  }
-
-  private static func environmentValue(
-    _ name: String,
-    _ environment: [String: String]
-  ) -> String? {
-    if let value = environment[name] { return value }
-    if name == "HOME" {
-      return FileManager.default.homeDirectoryForCurrentUser.path
-    }
-    return nil
-  }
-
-  private static func isEnvironmentName(_ value: String) -> Bool {
-    guard let first = value.first, isEnvironmentNameStart(first) else { return false }
-    return value.dropFirst().allSatisfy(isEnvironmentNamePart)
-  }
-
-  private static func isEnvironmentNameStart(_ ch: Character) -> Bool {
-    ch == "_" || ch.isLetter
-  }
-
-  private static func isEnvironmentNamePart(_ ch: Character) -> Bool {
-    ch == "_" || ch.isLetter || ch.isNumber
-  }
-
   // MARK: CLI + env overrides
   //
-  // Every key in `Config` is exposed via:
+  // Scalar config keys are exposed via:
   //   - a TOML key (`section.key`, e.g. `hints.min_length`)
   //   - an environment variable (`FLASH_<SECTION>_<KEY>`, e.g.
   //     `FLASH_HINTS_MIN_LENGTH`)
@@ -561,11 +513,11 @@ enum ConfigLoader {
   //
   // Precedence is CLI > env > TOML > built-in default. The hot-reload
   // path re-applies env + CLI on every reload, so the overrides stay in
-  // effect across `config.toml` edits.
+  // effect across `flash.toml` edits.
   //
-  // **When you add a new field to `Config`, you MUST also add it to the
-  // override switch below and to the `--help` table.** This is a hard
-  // rule documented in AGENTS.md.
+  // Mode mapping tables are TOML-only because their keys are arbitrary
+  // keystroke strings. When you add a new scalar field, add it to the
+  // override switch below and cover it in ConfigLoaderTests.
 
   /// Override flag prefix recognised by the CLI parser.
   static let cliPrefix = "--"

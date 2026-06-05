@@ -71,12 +71,14 @@ cask "$TOKEN" do
   url "$URL",
       verified: "github.com/aymericbeaumet/flash/"
   name "Flash"
-  desc "Headless Vimium-style hint overlay for macOS"
+  desc "Headless hint overlay for macOS"
   homepage "https://github.com/aymericbeaumet/flash"
 
   depends_on macos: ">= :sonoma"
 
   app "Flash.app"
+  binary "#{appdir}/Flash.app/Contents/MacOS/flashctl", target: "flash"
+  binary "#{appdir}/Flash.app/Contents/MacOS/flashctl", target: "flashctl"
 
   postflight do
     launch_agent = File.expand_path("~/Library/LaunchAgents/com.flash.app.autolaunch.plist")

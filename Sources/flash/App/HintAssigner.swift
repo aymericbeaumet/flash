@@ -56,7 +56,7 @@ enum HintAssigner {
   ///     X is the largest value satisfying X + (K−X)*K ≥ count.
   ///   - If the user pinned `minLength ≥ 2`, every label uses uniform
   ///     length L (smallest L with K^L ≥ count and L ≥ minLength) —
-  ///     the original Vimium-style uniform-length behaviour.
+  ///     the original uniform-length behaviour.
   ///
   /// Within a length class, labels are sorted by an ergonomic score
   /// that favours left/right hand alternation first, rewards high-value

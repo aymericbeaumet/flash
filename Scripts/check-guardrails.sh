@@ -45,7 +45,7 @@ check_absent \
   Sources/flash Resources/Info.plist
 
 check_absent \
-  "flash://help prints stdout instead of using the alert toast" \
+  "flash://help_show is routed to the alert toast instead of the help overlay" \
   "case \\.showUsage:.*alertPanel\\.show" \
   Sources/flash
 

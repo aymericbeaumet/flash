@@ -6,6 +6,7 @@ let package = Package(
   platforms: [.macOS(.v14)],
   products: [
     .executable(name: "flash", targets: ["flash"]),
+    .executable(name: "flashctl", targets: ["flashctl"]),
     .executable(name: "flash-vimium-oracle", targets: ["flash-vimium-oracle"]),
     .executable(name: "flash-native-fixture", targets: ["flash-native-fixture"]),
     .executable(name: "flash-native-oracle", targets: ["flash-native-oracle"]),
@@ -20,6 +21,10 @@ let package = Package(
       name: "flash",
       dependencies: ["FlashCore", "FlashProviders"],
       path: "Sources/flash"
+    ),
+    .executableTarget(
+      name: "flashctl",
+      path: "Sources/flashctl"
     ),
     .executableTarget(
       name: "flash-vimium-oracle",

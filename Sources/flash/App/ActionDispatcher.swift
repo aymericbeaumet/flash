@@ -66,20 +66,29 @@ enum ActionDispatcher {
     let source = CGEventSource(stateID: .combinedSessionState)
     let originalCursor = CGEvent(source: source)?.location ?? cgPoint
 
-    let button: CGMouseButton = action == .leftClick ? .left : .right
-    let downType: CGEventType = action == .leftClick ? .leftMouseDown : .rightMouseDown
-    let upType: CGEventType = action == .leftClick ? .leftMouseUp : .rightMouseUp
+    let button: CGMouseButton = action == .rightClick ? .right : .left
+    let downType: CGEventType = action == .rightClick ? .rightMouseDown : .leftMouseDown
+    let upType: CGEventType = action == .rightClick ? .rightMouseUp : .leftMouseUp
 
-    guard
-      let down = CGEvent(
-        mouseEventSource: source, mouseType: downType, mouseCursorPosition: cgPoint,
-        mouseButton: button),
-      let up = CGEvent(
-        mouseEventSource: source, mouseType: upType, mouseCursorPosition: cgPoint,
-        mouseButton: button)
-    else { return false }
-    down.flags = modifiers.cgEventFlags
-    up.flags = modifiers.cgEventFlags
+    let clickCount = action == .doubleClick ? 2 : 1
+    var events: [CGEvent] = []
+    events.reserveCapacity(clickCount * 2)
+    for clickIndex in 1...clickCount {
+      guard
+        let down = CGEvent(
+          mouseEventSource: source, mouseType: downType, mouseCursorPosition: cgPoint,
+          mouseButton: button),
+        let up = CGEvent(
+          mouseEventSource: source, mouseType: upType, mouseCursorPosition: cgPoint,
+          mouseButton: button)
+      else { return false }
+      down.flags = modifiers.cgEventFlags
+      up.flags = modifiers.cgEventFlags
+      down.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+      up.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+      events.append(down)
+      events.append(up)
+    }
 
     // Hide the system cursor *before* the warp so the visible jump never
     // happens on screen. CGDisplayHideCursor/ShowCursor pair must be
@@ -89,9 +98,22 @@ enum ActionDispatcher {
 
     CGWarpMouseCursorPosition(cgPoint)
     CGAssociateMouseAndMouseCursorPosition(1)
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    for event in events {
+      event.post(tap: .cghidEventTap)
+    }
     CGWarpMouseCursorPosition(originalCursor)
+    CGAssociateMouseAndMouseCursorPosition(1)
+    return true
+  }
+
+  /// Move the visible pointer to `screenPoint` without clicking.
+  @discardableResult
+  static func moveCursor(to screenPoint: CGPoint) -> Bool {
+    let screenH =
+      NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
+      ?? NSScreen.main?.frame.height ?? 1080
+    let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
+    CGWarpMouseCursorPosition(cgPoint)
     CGAssociateMouseAndMouseCursorPosition(1)
     return true
   }

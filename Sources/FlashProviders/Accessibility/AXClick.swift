@@ -39,6 +39,8 @@ public enum AXClick {
       if AXUIElementPerformAction(element, kAXShowMenuAction as CFString) == .success {
         return true
       }
+    case .doubleClick:
+      return false
     }
     return false
   }

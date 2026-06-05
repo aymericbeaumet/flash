@@ -23,7 +23,7 @@ struct ParsedHotkey {
 
 enum HotkeySyntax {
 
-  /// Parse the LHS of a shortcut binding. Returns nil for empty
+  /// Parse the LHS of a native modified-key mapping. Returns nil for empty
   /// input or unrecognised keys.
   static func parse(hotkey: String) -> ParsedHotkey? {
     let trimmed = hotkey.trimmingCharacters(in: .whitespaces)
@@ -75,6 +75,8 @@ enum HotkeySyntax {
     case "end": return UInt32(kVK_End)
     case "pageup", "page_up": return UInt32(kVK_PageUp)
     case "pagedown", "page_down": return UInt32(kVK_PageDown)
+    case "leftbrace": return UInt32(kVK_ANSI_LeftBracket)
+    case "rightbrace": return UInt32(kVK_ANSI_RightBracket)
     default: break
     }
     if s.count == 1, let ch = s.first {
@@ -86,21 +88,26 @@ enum HotkeySyntax {
     return nil
   }
 
-  /// ANSI virtual key codes (see `<Carbon/HIToolbox/Events.h>`).
-  /// Listed in declaration order rather than alphabetical so the
-  /// table reads as a layout reference.
+  /// ANSI virtual key codes (see `<Carbon/HIToolbox/Events.h>`). Shifted
+  /// punctuation maps to the same physical key as its unshifted form so
+  /// `"cmd+shift+}"` and `"cmd+shift+]"` register identically.
+  /// Listed in declaration order rather than alphabetical so the table
+  /// reads as a layout reference.
   private static let charToVirtualKey: [Character: UInt32] = [
     "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03,
     "h": 0x04, "g": 0x05, "z": 0x06, "x": 0x07,
     "c": 0x08, "v": 0x09, "b": 0x0B, "q": 0x0C,
     "w": 0x0D, "e": 0x0E, "r": 0x0F, "y": 0x10,
-    "t": 0x11, "1": 0x12, "2": 0x13, "3": 0x14,
-    "4": 0x15, "6": 0x16, "5": 0x17, "=": 0x18,
-    "9": 0x19, "7": 0x1A, "-": 0x1B, "8": 0x1C,
-    "0": 0x1D, "]": 0x1E, "o": 0x1F, "u": 0x20,
+    "t": 0x11, "1": 0x12, "!": 0x12, "2": 0x13, "@": 0x13, "3": 0x14,
+    "#": 0x14, "4": 0x15, "$": 0x15, "6": 0x16, "^": 0x16,
+    "5": 0x17, "%": 0x17, "=": 0x18, "+": 0x18,
+    "9": 0x19, "(": 0x19, "7": 0x1A, "&": 0x1A, "-": 0x1B,
+    "_": 0x1B, "8": 0x1C, "*": 0x1C, "0": 0x1D, ")": 0x1D,
+    "]": 0x1E, "}": 0x1E, "o": 0x1F, "u": 0x20,
     "[": 0x21, "i": 0x22, "p": 0x23, "l": 0x25,
-    "j": 0x26, "'": 0x27, "k": 0x28, ";": 0x29,
-    "\\": 0x2A, ",": 0x2B, "/": 0x2C, "n": 0x2D,
-    "m": 0x2E, ".": 0x2F, "`": 0x32,
+    "{": 0x21, "j": 0x26, "'": 0x27, "\"": 0x27, "k": 0x28,
+    ";": 0x29, ":": 0x29, "\\": 0x2A, "|": 0x2A,
+    ",": 0x2B, "<": 0x2B, "/": 0x2C, "?": 0x2C, "n": 0x2D,
+    "m": 0x2E, ".": 0x2F, ">": 0x2F, "`": 0x32, "~": 0x32,
   ]
 }

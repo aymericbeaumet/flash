@@ -139,7 +139,7 @@ public final class AccessibilityProvider: JumpProvider {
   /// Millisecond wall-clock timestamp identifying the activation that
   /// produced this walk. Set by AppMonitor from the activation's
   /// profiler before each call to `discover` so dump lines can be
-  /// correlated with the show_hints trigger they belong to.
+  /// correlated with the mouse_click trigger they belong to.
   public var triggerMs: UInt64?
 
   /// Background queue used to flush AX dump buffers to disk so the
@@ -171,6 +171,17 @@ public final class AccessibilityProvider: JumpProvider {
     return trimmed.isEmpty ? nil : trimmed
   }
 
+  private static func urlValue(_ v: Any) -> String? {
+    if let url = v as? URL {
+      return url.absoluteString
+    }
+    let cf = v as CFTypeRef
+    if CFGetTypeID(cf) == CFURLGetTypeID() {
+      return (cf as! URL).absoluteString
+    }
+    return stringValue(v)
+  }
+
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
   // Indices are hot-path constants — keep them in sync with `walk`.
   private static let batchAttrs: CFArray =
@@ -184,6 +195,7 @@ public final class AccessibilityProvider: JumpProvider {
       kAXTitleAttribute,  // 6
       kAXDescriptionAttribute,  // 7
       kAXValueAttribute,  // 8
+      kAXURLAttribute,  // 9
     ] as CFArray
 
   /// Per-worker mutable state. `WalkState` is per-thread under concurrent
@@ -340,7 +352,7 @@ public final class AccessibilityProvider: JumpProvider {
         at: url.deletingLastPathComponent(),
         withIntermediateDirectories: true)
       // Truncate per activation — matches the documented semantics
-      // (file is rewritten on each show_hints).
+      // (file is rewritten on each mouse_click).
       fm.createFile(atPath: url.path, contents: nil)
       guard let handle = try? FileHandle(forWritingTo: url) else { return }
       defer { try? handle.close() }
@@ -373,7 +385,7 @@ public final class AccessibilityProvider: JumpProvider {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 9 else { return }
+    guard err == .success, let vals = valuesRef as? [Any], vals.count == 10 else { return }
 
     let role = vals[0] as? String
     let subrole = vals[1] as? String
@@ -383,6 +395,7 @@ public final class AccessibilityProvider: JumpProvider {
     let allChildren = vals[5] as? [AXUIElement]
     let label =
       Self.stringValue(vals[6]) ?? Self.stringValue(vals[7]) ?? Self.stringValue(vals[8])
+    let url = Self.urlValue(vals[9])
 
     // When dumping, fetch the supported actions + label upfront so the
     // line includes enough signal to diagnose role mismatches. Skipped
@@ -441,6 +454,8 @@ public final class AccessibilityProvider: JumpProvider {
           return AXClick.tryActions(captured, action: .leftClick)
         case .rightClick:
           return AXClick.tryActions(captured, action: .rightClick)
+        case .doubleClick:
+          return false
         }
       }
       let candidate = JumpTarget(
@@ -448,6 +463,7 @@ public final class AccessibilityProvider: JumpProvider {
         frame: frame,
         role: capturedRole,
         accessibilityLabel: label,
+        url: url,
         pid: pid,
         activate: activate,
         providerID: identifier

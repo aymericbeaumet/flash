@@ -12,9 +12,12 @@ SIGN_IDENTITY="Flash Dev"
 KEYCHAIN_PATH="$HOME/Library/Keychains/login.keychain-db"
 LOGIN_AGENT_LABEL="com.flash.app.autolaunch"
 LOGIN_AGENT_PATH="$HOME/Library/LaunchAgents/$LOGIN_AGENT_LABEL.plist"
+CLI_LINK_DIR="$HOME/.local/bin"
+CLI_LINK_PATH="$CLI_LINK_DIR/flash"
+CLICTL_LINK_PATH="$CLI_LINK_DIR/flashctl"
 
 kill_all_flash() {
-    open -g flash://quit >/dev/null 2>&1 || true
+    open -g flash://flash_quit >/dev/null 2>&1 || true
     osascript -e 'tell application "Flash" to quit' >/dev/null 2>&1 || true
     pkill -f "/Applications/$APP_NAME.app/Contents/MacOS/flash" 2>/dev/null || true
     pkill -f "$STAGING_PATH/Contents/MacOS/flash" 2>/dev/null || true
@@ -134,6 +137,7 @@ EOF
 
 echo "==> Building flash (release)"
 swift build -c release
+swift build -c release --product flashctl
 
 BIN_PATH="$(swift build -c release --show-bin-path)"
 
@@ -142,6 +146,7 @@ rm -rf "$STAGING_PATH"
 mkdir -p "$STAGING_PATH/Contents/MacOS"
 mkdir -p "$STAGING_PATH/Contents/Resources"
 cp "$BIN_PATH/flash" "$STAGING_PATH/Contents/MacOS/flash"
+cp "$BIN_PATH/flashctl" "$STAGING_PATH/Contents/MacOS/flashctl"
 cp "$PROJECT_DIR/Resources/Info.plist" "$STAGING_PATH/Contents/Info.plist"
 echo "APPL????" > "$STAGING_PATH/Contents/PkgInfo"
 
@@ -179,6 +184,11 @@ kill_all_flash
 echo "==> Installing login autolaunch"
 install_login_agent
 
+echo "==> Installing CLI symlinks"
+mkdir -p "$CLI_LINK_DIR"
+ln -sf "$INSTALL_PATH/Contents/MacOS/flashctl" "$CLI_LINK_PATH"
+ln -sf "$INSTALL_PATH/Contents/MacOS/flashctl" "$CLICTL_LINK_PATH"
+
 echo "==> Starting fresh resident process"
 open "$INSTALL_PATH"
 sleep 0.6
@@ -190,6 +200,8 @@ echo "  Installed PIDs: ${NEW_PIDS:-none}"
 echo "  All Flash PIDs: ${ALL_PIDS:-none}"
 echo "  Signed with:    $SIGN_IDENTITY"
 echo "  Login agent:    $LOGIN_AGENT_PATH"
+echo "  CLI:            $CLI_LINK_PATH"
+echo "  CLI:            $CLICTL_LINK_PATH"
 if [[ -z "${NEW_PIDS:-}" ]]; then
     echo "  WARNING: the installed copy is not running. Check Console.app for launch errors."
 fi
@@ -197,10 +209,12 @@ fi
 echo
 echo "Installed: $INSTALL_PATH"
 echo "Triggers:"
-echo "  open -g flash://show_hints"
-echo "  open -g flash://show_hints?right=1"
-echo "  open -g flash://dismiss_hints"
-echo "  open -g flash://quit"
+echo "  open -g flash://mouse_click"
+echo "  open -g flash://mouse_click?right=1"
+echo "  open -g flash://hints_dismiss"
+echo "  open -g flash://flash_quit"
+echo "  flash mouse_click"
+echo "  flash help_show"
 echo
 echo "First build with the stable identity? Press ctrl+space; Flash will"
 echo "open System Settings → Privacy & Security → Accessibility for you."

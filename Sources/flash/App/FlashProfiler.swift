@@ -34,7 +34,7 @@ final class FlashProfiler {
   /// Millisecond-precision wall-clock timestamp at the moment this
   /// profiler was created. Used as a stable correlation id across
   /// stderr/file logs and the AX dump for the same activation —
-  /// every show_hints trigger gets a unique value.
+  /// every mouse_click trigger gets a unique value.
   let triggerMs: UInt64
 
   init(kind: String, debug: Config.Debug, slowLogsEnabled: Bool = true) {

@@ -16,10 +16,11 @@ enum FlashLog {
   /// messages below it are dropped before any string interpolation
   /// runs (autoclosure args stay un-evaluated).
   enum Level: Int, Comparable {
-    case debug = 0
-    case info = 1
-    case warn = 2
-    case error = 3
+    case trace = 0
+    case debug = 1
+    case info = 2
+    case warn = 3
+    case error = 4
 
     static func < (a: Level, b: Level) -> Bool { a.rawValue < b.rawValue }
 
@@ -27,6 +28,7 @@ enum FlashLog {
     /// when scanning the file or stderr.
     var tag: String {
       switch self {
+      case .trace: return "[TRACE]"
       case .debug: return "[DEBUG]"
       case .info: return "[INFO] "
       case .warn: return "[WARN] "
@@ -39,6 +41,7 @@ enum FlashLog {
     /// turn up in other tools' configs.
     static func parse(_ s: String) -> Level? {
       switch s.lowercased() {
+      case "trace": return .trace
       case "debug": return .debug
       case "info": return .info
       case "warn", "warning": return .warn
@@ -77,6 +80,9 @@ enum FlashLog {
 
   static func debug(_ message: @autoclosure () -> String) {
     emit(.debug, message)
+  }
+  static func trace(_ message: @autoclosure () -> String) {
+    emit(.trace, message)
   }
   static func info(_ message: @autoclosure () -> String) {
     emit(.info, message)

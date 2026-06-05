@@ -24,7 +24,7 @@ enum AppLauncher {
 
   static func activate(target: String) {
     guard let url = resolveURL(for: target) else {
-      FlashLog.warn("[open_app] no app found for \"\(target)\"")
+      FlashLog.warn("[app_open] no app found for \"\(target)\"")
       return
     }
     let conf = NSWorkspace.OpenConfiguration()

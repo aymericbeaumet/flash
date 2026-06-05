@@ -1,4 +1,5 @@
 import Foundation
+import FlashCore
 
 struct ConfigLocation: Equatable {
   let line: Int
@@ -26,8 +27,8 @@ struct Config {
   struct Overlay {
     var fontSize: Double = 12
     var hintFG: String = "#302505"
-    /// Top stop of the chip's vertical gradient. Vimium's default light
-    /// yellow. Set this equal to `hintBGBottom` for a flat fill.
+    /// Top stop of the chip's vertical gradient. Set this equal to
+    /// `hintBGBottom` for a flat fill.
     var hintBGTop: String = "#FFF785"
     /// Bottom stop of the chip's vertical gradient.
     var hintBGBottom: String = "#FFC542"
@@ -65,29 +66,86 @@ struct Config {
     var dumpLogs: Bool = false
     /// Minimum severity emitted by `FlashLog`. Messages below this
     /// level are dropped before any string interpolation runs.
-    /// Defaults to `info` — set to `debug` while investigating an
-    /// issue, or `warn` / `error` to mute the steady-state traces.
+    /// Defaults to `info` — set to `trace` while investigating a
+    /// stuck-mode/input issue, `debug` for broader diagnostics, or
+    /// `warn` / `error` to mute the steady-state traces.
     var logLevel: FlashLog.Level = .info
+  }
+  struct Mode {
+    struct Labels: Equatable {
+      var normal: String = "NORMAL"
+      var insert: String = "INSERT"
+      var command: String = "COMMAND"
+
+      var longestCount: Int {
+        max(normal.count, insert.count, command.count)
+      }
+    }
+
+    var all: [ModeMapping] = []
+    var normal: [ModeMapping] = Self.defaultNormalMappings
+    var insert: [ModeMapping] = []
+    var labels = Labels()
+
+    static let defaultNormalMappings: [ModeMapping] = [
+      ModeMapping(key: "h", action: .flashCommand(.scroll(.left))),
+      ModeMapping(key: "j", action: .flashCommand(.scroll(.down))),
+      ModeMapping(key: "k", action: .flashCommand(.scroll(.up))),
+      ModeMapping(key: "l", action: .flashCommand(.scroll(.right))),
+      ModeMapping(key: "ctrl-e", action: .flashCommand(.scroll(.down))),
+      ModeMapping(key: "ctrl-y", action: .flashCommand(.scroll(.up))),
+      ModeMapping(key: "ctrl-d", action: .flashCommand(.scroll(.halfPageDown))),
+      ModeMapping(key: "ctrl-u", action: .flashCommand(.scroll(.halfPageUp))),
+      ModeMapping(key: "gg", action: .flashCommand(.scroll(.top))),
+      ModeMapping(key: "G", action: .flashCommand(.scroll(.bottom))),
+      ModeMapping(key: "gt", action: .flashCommand(.nextTab)),
+      ModeMapping(key: "gT", action: .flashCommand(.previousTab)),
+      ModeMapping(key: "ctrl-o", action: .flashCommand(.appBack)),
+      ModeMapping(key: "ctrl-i", action: .flashCommand(.appForward)),
+      ModeMapping(key: "gf", action: .flashCommand(.nextFrame)),
+      ModeMapping(key: "gF", action: .flashCommand(.mainFrame)),
+      ModeMapping(key: "f", action: .flashCommand(.mouseClick(action: .leftClick))),
+      ModeMapping(key: "rf", action: .flashCommand(.mouseClick(action: .rightClick))),
+      ModeMapping(key: "df", action: .flashCommand(.mouseClick(action: .doubleClick))),
+      ModeMapping(key: "mf", action: .flashCommand(.mouseMove)),
+      ModeMapping(key: "u", action: .flashCommand(.undo)),
+      ModeMapping(key: "ctrl-r", action: .flashCommand(.redo)),
+      ModeMapping(key: "x", action: .flashCommand(.close)),
+      ModeMapping(key: "/", action: .flashCommand(.find)),
+      ModeMapping(key: "o", action: .flashCommand(.appFinder(all: true))),
+      ModeMapping(key: "cmd+space", action: .flashCommand(.appFinder(all: true))),
+      ModeMapping(key: "O", action: .flashCommand(.appFinder(all: true))),
+      ModeMapping(key: "r", action: .flashCommand(.reload)),
+      ModeMapping(key: "?", action: .flashCommand(.showUsage)),
+      ModeMapping(key: ":", action: .flashCommand(.commandMode)),
+    ]
+
+    func mappings(for mode: FlashMode) -> [ModeMapping] {
+      switch mode {
+      case .normal:
+        return all + normal
+      case .insert:
+        return all + insert
+      }
+    }
+
+    var containsNormalModeMapping: Bool {
+      (all + normal + insert).contains { mapping in
+        mapping.action.command == .normalMode
+      }
+    }
+
+    var containsAdvancedModeMapping: Bool {
+      all.contains { mapping in
+        mapping.action.command == .normalMode
+      }
+    }
   }
 
   var hints = Hints()
   var overlay = Overlay()
+  var mode = Mode()
   var debug = Debug()
-  /// `[shortcuts]` section. Each entry maps a hotkey string
-  /// (e.g. `"cmd+ctrl+a"`) to one of:
-  ///
-  ///   - a single `flash://...` URL string (fast path — dispatched
-  ///     internally through the same URLCommand parser as AppleEvents), or
-  ///   - an array of strings, which is exec'd as `argv` (the
-  ///     first element is the executable, the rest are args). Standalone
-  ///     path arguments from a config file expand `~`, `$VAR`, and
-  ///     `${VAR}`; relative paths resolve against that file's real
-  ///     directory before exec.
-  ///
-  /// `ShortcutsCoordinator` resolves each value into a typed
-  /// `ShortcutAction` AOT at config-load. The hot path on a
-  /// Carbon hotkey fire dispatches the already-resolved action.
-  var shortcuts: [Shortcut] = []
   var warnings: [String] = []
   var diagnostics: [ConfigDiagnostic] = []
   var valueLocations: [String: ConfigLocation] = [:]
@@ -156,6 +214,16 @@ struct Config {
         "magic_modifiers": hints.magicModifiers,
         "min_length": hints.minLength,
       ],
+      "mode": [
+        "all": mode.all.map(Self.mappingJSONValue),
+        "insert": mode.insert.map(Self.mappingJSONValue),
+        "labels": [
+          "command": mode.labels.command,
+          "insert": mode.labels.insert,
+          "normal": mode.labels.normal,
+        ],
+        "normal": mode.normal.map(Self.mappingJSONValue),
+      ],
       "overlay": [
         "font_size": overlay.fontSize,
         "hint_bg_bottom": overlay.hintBGBottom,
@@ -163,14 +231,15 @@ struct Config {
         "hint_border": overlay.hintBorder,
         "hint_fg": overlay.hintFG,
       ],
-      "shortcuts": shortcuts.map { shortcut in
-        [
-          "action": shortcut.action.diagnosticJSONValue,
-          "hotkey": shortcut.hotkey,
-        ] as [String: Any]
-      },
       "warnings": warnings,
     ])
+  }
+
+  private static func mappingJSONValue(_ mapping: ModeMapping) -> [String: Any] {
+    [
+      "action": mapping.action.diagnosticDescription,
+      "key": mapping.key,
+    ]
   }
 
   var resolvedHintsKeysJSON: String {
@@ -227,6 +296,7 @@ struct Config {
 extension FlashLog.Level {
   var name: String {
     switch self {
+    case .trace: return "trace"
     case .debug: return "debug"
     case .info: return "info"
     case .warn: return "warn"
@@ -235,41 +305,104 @@ extension FlashLog.Level {
   }
 }
 
-extension ShortcutAction {
-  var diagnosticJSONValue: Any {
-    switch self {
-    case .flashCommand(let command):
-      return command.diagnosticDescription
-    case .shell(let argv):
-      return argv
-    }
-  }
-}
-
 extension URLCommand {
   var diagnosticDescription: String {
     switch self {
-    case .showHints(let rightClick):
-      return rightClick ? "flash://show_hints?right=1" : "flash://show_hints"
+    case .mouseClick(let action):
+      switch action {
+      case .leftClick:
+        return "flash://mouse_click"
+      case .rightClick:
+        return "flash://mouse_click?right=1"
+      case .doubleClick:
+        return "flash://mouse_click?double=1"
+      }
+    case .mouseMove:
+      return "flash://mouse_move"
+    case .normalMode:
+      return "flash://mode_normal"
+    case .insertMode:
+      return "flash://mode_insert"
+    case .commandMode:
+      return "flash://mode_command"
+    case .scroll(let kind):
+      switch kind {
+      case .left: return "flash://scroll_left"
+      case .right: return "flash://scroll_right"
+      case .up: return "flash://scroll_up"
+      case .down: return "flash://scroll_down"
+      case .halfPageUp: return "flash://scroll_half_page_up"
+      case .halfPageDown: return "flash://scroll_half_page_down"
+      case .top: return "flash://scroll_top"
+      case .bottom: return "flash://scroll_bottom"
+      }
+    case .reload:
+      return "flash://app_reload"
+    case .undo:
+      return "flash://app_undo"
+    case .redo:
+      return "flash://app_redo"
+    case .close:
+      return "flash://window_close"
+    case .find:
+      return "flash://app_find"
+    case .appFinder(let all):
+      return all ? "flash://app_open_finder?all=1" : "flash://app_open_finder"
+    case .copyURL:
+      return "flash://url_copy"
+    case .nextFrame:
+      return "flash://frame_next"
+    case .mainFrame:
+      return "flash://frame_main"
+    case .nextTab:
+      return "flash://tab_next"
+    case .previousTab:
+      return "flash://tab_previous"
+    case .appBack:
+      return "flash://app_back"
+    case .appForward:
+      return "flash://app_forward"
+    case .quitApp(let force):
+      return force ? "flash://app_quit?force=1" : "flash://app_quit"
+    case .save:
+      return "flash://app_save"
+    case .saveAndQuit(let force):
+      return force ? "flash://app_save_and_quit?force=1" : "flash://app_save_and_quit"
+    case .print:
+      return "flash://app_print"
+    case .openDocument:
+      return "flash://document_open"
+    case .newWindow:
+      return "flash://window_new"
+    case .newTab:
+      return "flash://tab_new"
+    case .copy:
+      return "flash://clipboard_copy"
+    case .cut:
+      return "flash://clipboard_cut"
+    case .paste:
+      return "flash://clipboard_paste"
+    case .copyAll:
+      return "flash://clipboard_copy_all"
     case .showAlert(let message):
-      return "flash://show_alert?message=\(message)"
+      return "flash://alert_show?message=\(message)"
     case .dismissAlert:
-      return "flash://dismiss_alert"
+      return "flash://alert_dismiss"
     case .showUsage:
-      return "flash://help"
+      return "flash://help_show"
     case .dismissHints:
-      return "flash://dismiss_hints"
+      return "flash://hints_dismiss"
     case .quit:
-      return "flash://quit"
+      return "flash://flash_quit"
     case .openApp(let name):
-      return "flash://open_app?name=\(name)"
+      return "flash://app_open?name=\(name)"
     case .moveWindow(let params):
       var parts: [String] = []
       if let position = params.position {
         parts.append("position=\(position.rawValue)")
       }
       parts.append("screen=\(params.screen)")
-      return "flash://move_window?\(parts.joined(separator: "&"))"
+      return "flash://window_move?\(parts.joined(separator: "&"))"
     }
   }
 }

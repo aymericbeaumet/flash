@@ -9,7 +9,7 @@ import Foundation
 /// after the OS has already routed them.
 ///
 /// The event handler runs on the main run loop (where Carbon's
-/// dispatcher target lives); each binding's `onFire` closure runs
+/// dispatcher target lives); each registration's `onFire` closure runs
 /// synchronously inline, so the hot path from keypress to callback
 /// is sub-millisecond.
 final class HotKeyManager {
@@ -17,13 +17,13 @@ final class HotKeyManager {
   /// One registered hotkey. Holds the Carbon `EventHotKeyRef` so
   /// `UnregisterEventHotKey` can be paired with the original
   /// `RegisterEventHotKey` call, plus the user-supplied callback.
-  private struct Binding {
+  private struct Registration {
     let id: UInt32
     let ref: EventHotKeyRef
     let onFire: () -> Void
   }
 
-  private var bindings: [UInt32: Binding] = [:]
+  private var registrations: [UInt32: Registration] = [:]
   private var nextID: UInt32 = 1
   private var eventHandlerRef: EventHandlerRef?
   /// 'flHS' (Flash HotKey System) — distinguishes our registrations
@@ -40,13 +40,13 @@ final class HotKeyManager {
     if let h = eventHandlerRef { RemoveEventHandler(h) }
   }
 
-  /// Register a hotkey. Returns true when Carbon accepted the binding.
+  /// Register a hotkey. Returns `noErr` when Carbon accepted the registration.
   /// macOS will refuse if another process already owns the same
   /// (modifiers, virtualKey) combo — in that case we log + skip.
   @discardableResult
   func register(
     modifiers: UInt32, virtualKey: UInt32, onFire: @escaping () -> Void
-  ) -> Bool {
+  ) -> OSStatus {
     let id = nextID
     nextID += 1
     let hotKeyID = EventHotKeyID(signature: signature, id: id)
@@ -54,22 +54,24 @@ final class HotKeyManager {
     let status = RegisterEventHotKey(
       virtualKey, modifiers, hotKeyID,
       GetEventDispatcherTarget(), 0, &ref)
-    guard status == noErr, let ref else { return false }
-    bindings[id] = Binding(id: id, ref: ref, onFire: onFire)
-    return true
+    guard status == noErr, let ref else {
+      return status == noErr ? OSStatus(paramErr) : status
+    }
+    registrations[id] = Registration(id: id, ref: ref, onFire: onFire)
+    return noErr
   }
 
   /// Drop every previously-registered hotkey. Used before reloading
-  /// the skhdrc so a removed line stops responding immediately.
+  /// mode mappings so a removed line stops responding immediately.
   func unregisterAll() {
-    for (_, b) in bindings {
+    for (_, b) in registrations {
       UnregisterEventHotKey(b.ref)
     }
-    bindings.removeAll()
+    registrations.removeAll()
   }
 
   fileprivate func fire(id: UInt32) {
-    bindings[id]?.onFire()
+    registrations[id]?.onFire()
   }
 
   private func installEventHandler() {

@@ -6,6 +6,10 @@ public struct JumpTarget: @unchecked Sendable {
   public let frame: CGRect
   public let role: String?
   public let accessibilityLabel: String?
+  /// URL associated with this target when AX exposes one. Primarily
+  /// useful for link-like targets; nil for controls without URL
+  /// metadata.
+  public let url: String?
   /// pid of the app that owns this target. Always the focused app
   /// (Flash only walks the active window) but kept on the target so the
   /// commit path can re-activate by pid without re-querying NSWorkspace.
@@ -18,6 +22,7 @@ public struct JumpTarget: @unchecked Sendable {
     frame: CGRect,
     role: String? = nil,
     accessibilityLabel: String? = nil,
+    url: String? = nil,
     pid: pid_t? = nil,
     activate: ((JumpAction) -> Bool)? = nil,
     providerID: String
@@ -26,6 +31,7 @@ public struct JumpTarget: @unchecked Sendable {
     self.frame = frame
     self.role = role
     self.accessibilityLabel = accessibilityLabel
+    self.url = url
     self.pid = pid
     self.activate = activate
     self.providerID = providerID

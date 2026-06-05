@@ -4,20 +4,20 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `open -g flash://show_hints` or by a configured native shortcut, overlays vimium-style hint labels on the focused app's clickable elements and clicks one when the user types its hint. It also supports `flash://show_alert?message=...` / `flash://dismiss_alert` for a temporary centered toast. No menu bar, no Dock icon, no CLI client.
+A headless, resident macOS app that, when triggered by `open -g flash://mouse_click`, the `flash` CLI, or a configured native mapping, overlays hint labels on the focused app's clickable elements and clicks one when the user types its hint. It also supports normal/insert/command modes, `flash://alert_show?message=...` / `flash://alert_dismiss` for a temporary centered toast, and `flash://help_show` for the mapping view. No menu bar, no Dock icon, no preferences window.
 
-Activation can come through the `flash://` URL scheme or through Flash's `[shortcuts]` Carbon hotkey registry. Shortcut string values must still be `flash://...` commands and are dispatched in-process through the same `URLCommand` parser as URL-scheme AppleEvents.
+Activation can come through the `flash://` URL scheme, through the one-shot `flash` / `flashctl` CLI, or through Flash's `[mode.all]` / `[mode.normal]` / `[mode.insert]` Carbon registry for modified-key mappings. Mapping values must be `flash://...` commands and are dispatched through the same `URLCommand` parser as URL-scheme AppleEvents.
 
 ## Hard rules (do not violate)
 
-1. **No UI surface** beyond the transparent hint overlay and explicit `flash://show_alert` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
-2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit `[shortcuts]` entries. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
+1. **No UI surface** beyond the transparent hint overlay, the mode cell / command-line cell, the help and open-app overlays, and explicit `flash://alert_show` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
+2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit modified-key entries in `[mode.all]`, `[mode.normal]`, or `[mode.insert]`. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint, normal-mode, command-line, help, and open-app typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
 3. **Autolaunch is installer-owned.** `Scripts/install-release.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
-4. **No second process / no IPC protocol.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native shortcuts dispatch `URLCommand` in-process. Don't add Unix sockets, mach services, or a CLI client.
+4. **No second resident process / no custom IPC protocol.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native mappings dispatch `URLCommand` in-process. The `flash` / `flashctl` CLI is allowed only as a fast one-shot launcher that opens `flash://...` through Launch Services. Don't add Unix sockets, mach services, background helpers, or any always-running client.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **TOML parser is hand-rolled** (small subset). Don't add `TOMLKit` / `Toml` / other deps unless we outgrow what we can hand-roll cleanly.
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
-8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(rightClick:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
+8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(action:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
 
 If a request would violate any of the above, surface it to the user instead of silently complying.
 
@@ -25,29 +25,29 @@ If a request would violate any of the above, surface it to the user instead of s
 
 ```
 Package.swift                        # SwiftPM, macOS 14+, swift 5 mode
-config.default.toml                  # Canonical default config (MUST mirror Config.swift defaults)
+config.default.toml                  # Canonical user-facing config reference
 Sources/
   FlashCore/                         # Public SPI (provider protocol + value types)
     AppContext.swift                 # Front-app context: bundle, pid, window frame
     JumpTarget.swift                 # A clickable thing with a screen rect + optional activate closure
-    JumpAction.swift                 # .leftClick | .rightClick
+    JumpAction.swift                 # .leftClick | .rightClick | .doubleClick
     JumpProvider.swift               # The protocol; `supports/discover` API
     TargetFinalizer.swift            # Shared visible-region filter + smaller-frame-wins dedup before label assignment
   FlashProviders/                    # Built-in providers (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
     Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
     Tmux/TmuxProvider.swift                     # Visible-pane word hints for terminals running a tmux client
-  FlashBrowserTestSupport/           # Browser integration fixture catalog, Firefox harness, Marionette client, and Vimium diff helpers.
+  FlashBrowserTestSupport/           # Browser integration fixture catalog, Firefox harness, Marionette client, and reference-marker diff helpers.
   FlashIntegrationTestSupport/       # Shared GUI integration helpers: AX launch/wait/context, matching, timing, recorder.
-  flash/                             # The executable target
+  flash/                             # Resident app executable target
     main.swift                       # NSApplication boot
     App/
       AppDelegate.swift              # Orchestrator + OverlayCoordinator
-      URLEventHandler.swift          # Registers GetURL handler; shared parser for URL and shortcut commands
+      URLEventHandler.swift          # Registers GetURL handler; shared parser for URL and mapping commands
       AppMonitor.swift               # Focused-app prepared model + AX walk dispatcher (serial AX queue)
       OverlayPanel.swift             # Reusable transparent NSPanel, CALayer pool, animations disabled
       OverlayInput.swift             # NSPanel.keyDown — the ONLY keyboard code in the project
-      HintAssigner.swift             # Vimium prefix-free label generator + memoised candidate cache
+      HintAssigner.swift             # Prefix-free label generator + memoised candidate cache
       ActionDispatcher.swift         # AXPress preferred; CGEvent click fallback
       ProviderRegistry.swift         # Built-in provider list; chain resolution by priority
     Config/
@@ -55,6 +55,7 @@ Sources/
       ConfigLoader.swift             # Hand-rolled TOML subset parser + DispatchSource fs-watch hot-reload
       Alphabet.swift                 # layout selector / literal hints.keys resolution
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
+  flashctl/                          # One-shot CLI that dispatches flash:// URLs to the resident app
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, TargetFinalizer, WindowSnapshot, browser fixture catalog, shared integration support, plus live TmuxIntegrationTests.
 Tests/BrowserSnapshots/              # Browser integration manifest + 100 offline HTML snapshots used by Scripts/test-integration-browser.sh.
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
@@ -69,17 +70,17 @@ AGENTS.md                            # This file
 
 ## Activation flow (read this before editing the hot path)
 
-1. External tool runs `open -g flash://show_hints[?right=1]`, or a configured `[shortcuts]` Carbon hotkey fires the equivalent parsed `URLCommand`.
-2. URL-scheme activation routes via Launch Services to the running instance as a `kAEGetURL` Apple Event; native shortcuts dispatch in-process.
-3. `URLEventHandler` parses URL host/query for AppleEvents and provides the shared parser used by shortcut config loading.
-4. `AppDelegate.activate(rightClick:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
+1. External tool runs `open -g flash://mouse_click[?right=1|double=1]`, the `flash` CLI opens the equivalent `flash://...` URL, or a configured `[mode.*]` Carbon mapping fires a parsed `URLCommand`.
+2. URL-scheme activation routes via Launch Services to the running instance as a `kAEGetURL` Apple Event; native mappings dispatch in-process.
+3. `URLEventHandler` parses URL host/query for AppleEvents and provides the shared parser used by mapping config loading.
+4. `AppDelegate.activate(action:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
 5. `AppMonitor.discoverAsync` first tries the AX-event-driven prepared model (see *Prepared model contract* below). On hit, native AX-backed `[AssignedHint]` values are delivered to main without an activation-time AX walk. Tmux remains activation-only because its output is volatile.
 6. On the AX queue, `AppMonitor` runs the selected provider chain in descending priority against the focused app only, filters candidates by the focused pid's WindowServer-derived visible region (occluded pixels excluded), then dedupes overlapping rects via spatial-hash with a **smaller-frame-wins** policy (`> 70%` overlap → smaller rect survives). Inside `AccessibilityProvider`, the focused window's direct children are fanned out across concurrent walkers, and action-name IPCs for tentative web-area / AXImage targets are resolved in a parallel post-pass.
 7. `HintAssigner.assign` produces prefix-free labels using the configured alphabet — pre-uppercased as `AssignedHint.display`, memoised by `(alphabet, leftHand, length)`.
 8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
 9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
 10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` reactivates the focused pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
-11. `ActionDispatcher` runs the click through a three-step pipeline. (1) Call the provider-owned `target.activate` closure — AX targets try AXPress/AXOpen/AXConfirm (or focus-set for text inputs). (2) On failure, AX-hit-test at the click point via `AXClick.clickAtPoint`, then try the press-style actions on that element + its ancestors. Cursor doesn't move and this often recovers inert-wrapper / handler-on-descendant cases (Firefox tab strip, React `role="tab"` widgets). (3) Final fallback: synthesized `CGEvent` click — cursor warps to the point hidden, clicks, warps back, unhides. The dispatcher is the only place mouse synthesis lives; the providers themselves never synthesize.
+11. `ActionDispatcher` runs the click through a three-step pipeline. (1) Call the provider-owned `target.activate` closure — AX targets try AXPress/AXOpen/AXConfirm (or focus-set for text inputs), and right click tries AXShowMenu. (2) On failure, AX-hit-test at the click point via `AXClick.clickAtPoint`, then try the press-style actions on that element + its ancestors. Cursor doesn't move and this often recovers inert-wrapper / handler-on-descendant cases (Firefox tab strip, React `role="tab"` widgets). (3) Final fallback: synthesized `CGEvent` click, including double-click — cursor warps to the point hidden, clicks, warps back, unhides. The dispatcher is the only place mouse synthesis lives; the providers themselves never synthesize.
 12. Overlay hides; process stays resident.
 
 ## Coordinate systems (subtle, get this right)
@@ -192,9 +193,11 @@ A `JumpTarget.activate` closure overrides the default action. Use it when the un
 
 ## Configuration
 
-`~/.config/flash/config.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, `#` line comments, trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or inline tables. Add support only if you actually need it.
+`~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. The fallback lookup still accepts `~/.flash.toml` for convenience. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, the constrained inline string table used by `mode.labels`, `#` line comments, and trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or arbitrary inline tables. Add support only if you actually need it.
 
-**`config.default.toml` at the repo root is the canonical reference for every key Flash accepts, with its built-in default value.** When you change a default in `Sources/flash/Config/Config.swift`, change `config.default.toml` in the same commit. When you add a new key, add it to the loader (`ConfigLoader.swift`), the struct (`Config.swift`), the default file, the table in this section, and the README — also in the same commit. The default file is what users diff against to see what they could be overriding; it drifts the moment you forget to update it.
+The user-facing top-level sections are exactly `[hints]`, `[mode]`, `[mode.all]`, `[mode.normal]`, `[mode.insert]`, and `[debug]`, in that order in `config.default.toml`.
+
+**`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
 Keys:
 
@@ -203,10 +206,10 @@ Keys:
 | `hints.keys`                       | string         | `"<qwerty_homerow+qwerty_toprow>"` |
 | `hints.min_length`                 | int            | `1`                  |
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
-| `overlay.font_size`                | double         | `12`                 |
-| `overlay.hint_fg`                  | hex string     | `"#302505"`          |
-| `overlay.hint_bg_top` / `hint_bg_bottom` | hex string | `"#FFF785"` / `"#FFC542"` |
-| `overlay.hint_border`              | hex string     | `"#E3BE23"`          |
+| `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
+| `[mode.all]` entries               | `flash://` mapping | none             |
+| `[mode.normal]` entries            | `flash://` mapping | built-in normal map |
+| `[mode.insert]` entries            | `flash://` mapping | none             |
 | `debug.show_bounds`                | bool           | `false`              |
 | `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.profile`                    | bool           | `false`              |
@@ -214,7 +217,6 @@ Keys:
 | `debug.dump_ax`                    | bool           | `false`              |
 | `debug.dump_logs`                  | bool           | `false`              |
 | `debug.log_level`                  | string         | `"info"`             |
-| `[shortcuts]` entries              | string/array   | none                 |
 
 `hints.magic_modifiers` supports `"cmd"`, `"ctrl"`, `"alt"`, and `"shift"`.
 If the resolved `hints.keys` contains non-letter characters, Flash logs a warning
@@ -229,45 +231,47 @@ IPC pass are always on. Per-IPC AX messaging timeout is never set
 
 There is intentionally **no** `per_app.*` table. The project's working assumption is to converge on universal rules before re-introducing per-bundle knobs — `Config.perAppRoles` and its TOML parser case were removed for this reason.
 
-### CLI flag + environment-variable overrides (hard rule)
+### Mode Mappings
 
-**Every key in `Config` MUST also be exposed via a command-line flag and an environment variable, in the same commit that introduces the field.** This is enforced by reading code review, not by macros — there is no `derive` magic. The four places that move together when you add a key:
+`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the mode-cell text. The mode-cell width is derived from the longest configured label. `[mode.all]`, `[mode.normal]`, and `[mode.insert]` map `"key" = "flash://action"`.
 
-1. `Sources/flash/Config/Config.swift` — struct field with the default.
-2. `Sources/flash/Config/ConfigLoader.swift` — `apply(table:key:value:into:)` switch (TOML parser) **and** `applyOverride(key:value:into:)` switch (CLI/env parser).
-3. `config.default.toml` — the user-visible reference.
-4. The "Keys" table above + the README.
+- `[mode.all]` applies in insert and normal modes.
+- `[mode.normal]` applies only while the overlay is capturing normal-mode input.
+- `[mode.insert]` applies only in insert mode.
 
-Naming convention:
+Values must be `flash://...` actions. Shell arrays, non-Flash URLs, and bare action names are deliberately unsupported in mapping tables. The one-shot CLI is the escape hatch for external automation.
 
-| Surface       | Form                                  | Example                                     |
-| ------------- | ------------------------------------- | ------------------------------------------- |
-| TOML          | `[section]` + `key = value`           | `[hints]\nmin_length = 2`                   |
-| CLI           | `--<section>-<key>=<value>`           | `--hints-min-length=2`                      |
-| Env var       | `FLASH_<SECTION>_<KEY>=<value>`       | `FLASH_HINTS_MIN_LENGTH=2`                  |
-| Config path   | `--config=<path>` / `FLASH_CONFIG=…`  | `--config=/tmp/flash.toml`                  |
+Native modified-key mappings are registered through Carbon when the key contains `"+"`; unmodified normal-mode mappings are read only while the overlay panel owns keyboard input. `[mode.normal]` entries extend the built-in normal map and override only matching keys, so unrelated defaults stay available unless that exact key is remapped.
 
-Precedence (high → low): **CLI flag > env var > TOML > built-in default.** Hot-reload re-applies env + CLI on top of the freshly-read TOML, so the overrides stay in effect across `config.toml` edits.
+When any `[mode.all]` mapping resolves to `flash://mode_normal`, Flash enters advanced mode:
 
-Bool fields accept `true|1|yes|on` and `false|0|no|off` (case-insensitive) in CLI/env. TOML still requires `true`/`false` per the parser.
+- starts in normal mode by default;
+- always displays the mode cell using configured `mode.labels`, including in the help view;
+- extends `flash://help_show` with ACTION / NORMAL / INSERT columns.
 
-Unknown flags and unrecognised `FLASH_*` env vars are silently ignored — this is deliberate so adding a new field to a downstream fork doesn't make upstream builds reject the command line. Malformed values (e.g. `--hints-min-length=hello`) are also silently dropped, matching the TOML loader's behaviour.
+`flash://normal_mode` is accepted as a compatibility alias for the same command. `[mode.normal]` and `[mode.insert]` mappings to either spelling do not enable advanced mode by themselves. When no `[mode.all]` advanced-mode mapping is configured, the mode cell is hidden and help stays simple while still listing the normal map.
 
-When you add a field, also add `applyOverrides` test coverage in `Tests/FlashTests/ConfigLoaderTests.swift`.
+### URL Actions
+
+Every action Flash takes must have a corresponding `flash://` action parsed by `URLEventHandler`. Keep `URLCommand`, parser wiring, `URLCommand.diagnosticDescription`, mapping help, README, default config examples, and tests in sync.
+
+Normal-mode action URLs currently include: `flash://mouse_click[?right=1|double=1]`, `flash://mouse_move`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://url_copy`, `flash://frame_next`, `flash://frame_main`, `flash://tab_next`, `flash://tab_previous`, `flash://app_back`, `flash://app_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, and `flash://clipboard_copy_all`.
+
+`:open <query>` results render above the command line, ordered bottom-to-top with the best match closest to the prompt. Candidate snapshots are cached ahead of use: app bundles are warmed after launch, while source providers for tmux windows, browser tabs, Slack channels, and future contexts feed a short-lived dynamic cache so typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail`, `[slack] #general`.
+
+App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, and `flash://flash_quit`.
+
+### Normal-Mode Audit Rule
+
+Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The current valid insert transition is:
+
+- A committed `f`, `rf`, or `df` hint whose target is editable input or tmux/terminal content.
+
+Do not reintroduce passive focused-element observers that switch to insert mode merely because macOS reports an editable focus. Do not recapture the overlay after pointer/menu/status-bar focus loss in a way that closes native menus or popovers. `flash://mode_insert`, `flash://app_find`, app-driven focus requests, window activation, and status/menu interactions must leave Flash in normal mode while advanced normal mode is active.
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a layout selector token. Selector syntax is `<$layout[_$row][_$hand]+...>` where layout is `qwerty` / `colemak` / `dvorak`, row is `homerow` / `toprow` / `bottomrow`, and hand is `lefthand` / `righthand`. Examples: `<colemak>`, `<colemak_homerow+colemak_toprow>`, `<colemak_homerow_lefthand+colemak_toprow_righthand>`, `<colemak_lefthand>`. Selectors cannot mix layouts. Layout selectors are scored by the inferred layout's key scores; literal strings are scored by their written order. There is no `hints.layout` key. Resolution lives in `Alphabet.resolve(_:)`.
 
 **Flash always walks the focused app only.** There is no `hints.scope` knob and no multi-app walk machinery — background apps and other monitors are ignored. `JumpTarget.pid` carries the focused app's pid so `commit` can re-activate it before dispatching the click. There is **no per-walk deadline** — walks always run to their `maxDepth`/`maxTargets` caps.
-
-Overlay dismissal keys are hardcoded: Escape, Space, arrow keys, and scroll/click dismissal monitors. There is no `overlay.exit_key` config key.
-
-`[shortcuts]` maps hotkey strings such as `"ctrl+space"` to either a `flash://...`
-URL string or an argv array. The string form is the fast in-process path and must
-use the `flash://` scheme; non-Flash URLs and shell commands belong in the array
-form. In argv arrays loaded from TOML, standalone path arguments expand `~`,
-`$VAR`, and `${VAR}`; relative path arguments containing `/` resolve relative to
-the loaded config file's real directory after symlinks. URLs, flag-style
-arguments, and shell snippets with whitespace are left as written.
 
 ## Permissions
 
@@ -277,7 +281,7 @@ Required:
 
 Declared / conditional:
 
-- **Automation (`NSAppleEventsUsageDescription`)** — declared for `flash://open_app` shortcuts that ask Launch Services to launch/reopen/focus another app. Flash still discovers browser page content through `AXWebArea` descendants in the AX tree, not via `do JavaScript`.
+- **Automation (`NSAppleEventsUsageDescription`)** — declared for `flash://app_open` mappings that ask Launch Services to launch/reopen/focus another app. Flash still discovers browser page content through `AXWebArea` descendants in the AX tree, not via `do JavaScript`.
 
 Not required:
 
@@ -297,7 +301,7 @@ Not required:
 ./Scripts/install-release.sh
 
 # Trigger and verify
-open -g flash://show_hints
+open -g flash://mouse_click
 ```
 
 `./Scripts/install-release.sh` is what builds release, codesigns, quits the running instance, replaces the bundle, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs.
@@ -315,22 +319,24 @@ swift test
 
 `install-release.sh`:
 
-1. `swift build -c release`
-2. Assembles `build/Flash.app` from the binary + `Resources/Info.plist`
-3. Ad-hoc codesigns the staging bundle
-4. Quits any running Flash (`osascript`, `open -g flash://quit`, `pkill` fallback)
+1. `swift build -c release` and `swift build -c release --product flashctl`
+2. Assembles `build/Flash.app` from the resident binary, `flashctl`, and `Resources/Info.plist`
+3. Codesigns the staging bundle
+4. Quits any running Flash (`osascript`, `open -g flash://flash_quit`, `pkill` fallback)
 5. Replaces `/Applications/Flash.app`
 6. Codesigns the installed copy
 7. `lsregister -f` to refresh URL-scheme routing
-8. `open` the installed app so it's resident again
+8. Symlinks `~/.local/bin/flash` and `~/.local/bin/flashctl` to the bundled CLI
+9. `open` the installed app so it's resident again
 
 After install, verify:
 
 - `pgrep -fl '/Applications/Flash.app/Contents/MacOS/flash'` shows one PID.
-- `open -g flash://dismiss_hints` triggers no visible side effect (overlay was already hidden).
-- `open -g flash://quit` exits the process; relaunch with `open /Applications/Flash.app`.
+- `open -g flash://hints_dismiss` triggers no visible side effect (overlay was already hidden).
+- `~/.local/bin/flash help_show` opens the in-app mapping view through `flash://help_show`.
+- `open -g flash://flash_quit` exits the process; relaunch with `open /Applications/Flash.app`.
 
-Karabiner-Elements binding lives in `~/.config/karabiner/karabiner.json` under `profiles[<active>].complex_modifications.rules`. Current binding: `control + spacebar → open -g flash://show_hints`.
+Karabiner-Elements mappings live in `~/.config/karabiner/karabiner.json` under `profiles[<active>].complex_modifications.rules`.
 
 ## Testing UI behavior
 
@@ -338,7 +344,7 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `TmuxProviderTests`). Deterministic, run in milliseconds, no external state. `TmuxProviderTests` covers the tokenization rules (`extractWords`), the cell-geometry math (`resolveGeometry`), the status-bar parser (`parseStatusInfo`), the TOML alacritty-config reader, and `parseTwoInts`. Run on every `swift test`.
 - **Live tmux integration** (`TmuxIntegrationTests`). Boots an isolated tmux server under a per-test socket (`tmux -L flash-it-<uuid> -f /dev/null`) and asserts the binary's CLI contract Flash depends on: the `#{pane_*}` / `#{client_*}` / `#{status}` / `#{status-position}` format strings; that `capture-pane -p` returns the rendered grid; that horizontal + vertical splits yield the expected `pane_left` / `pane_top`. Catches breakage from tmux upgrades silently changing format-string semantics — the only realistic regression source for `TmuxProvider`. Skipped when no `tmux` binary is found on the probe paths. Runs in ~10 s.
-- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with pinned Vimium-FF, builds/codesigns the `flash-vimium-oracle` runner, then runs the 100-file offline corpus from `Tests/BrowserSnapshots` through a parallel worker pool. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures Vimium marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch (Flash misses a hint Vimium provides) and overmatch (Flash hints something Vimium skips). Run order: build + sign once (`./Scripts/install-release.sh` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
+- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with a pinned reference extension, builds/codesigns the browser oracle runner, then runs the 100-file offline corpus from `Tests/BrowserSnapshots` through a parallel worker pool. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures reference marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch and overmatch against the browser reference. Run order: build + sign once (`./Scripts/install-release.sh` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
 - **Native AppKit integration** (`Scripts/test-integration-native.sh`). Builds/codesigns `flash-native-fixture` and `flash-native-oracle`, launches a deterministic AppKit window, compares generic AX targets against expected controls, verifies AXPress mutates a fixture state file, and records the open-NSMenu limitation under the no-key-capture production rule. It covers buttons, image-backed buttons, duplicate labels, checkboxes, radio buttons, popups, search/text areas, tabs, rows, and negative controls such as disabled/hidden/decorative/slider elements. It does not add production global key capture or private APIs, and the script kills its test apps on exit/interruption.
 - **Electron integration** (`Scripts/test-integration-electron.sh`). Runs `npm ci` for the pinned Electron fixture, builds/codesigns `flash-electron-oracle`, launches Electron with a deterministic DOM fixture, reads expected target JSON emitted by the fixture, compares it against Flash's generic AX provider output, and verifies AX activation mutates fixture state. The script kills its oracle app and fixture Electron process on exit/interruption.
 
