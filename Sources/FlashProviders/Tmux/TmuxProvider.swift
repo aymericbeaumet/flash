@@ -380,6 +380,7 @@ public final class TmuxProvider: JumpProvider {
                 frame: frame,
                 role: "tmux-word",
                 accessibilityLabel: text,
+                acceptsTextInput: true,
                 pid: pid,
                 providerID: identifier
               ))

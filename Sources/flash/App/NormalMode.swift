@@ -312,6 +312,7 @@ enum NormalModeDispatcher {
   private static var commandLineHelpLines: [String] {
     var lines = commandLineSpecs.map { $0.helpLine }
     lines.append(":open <query>")
+    lines.append(":flashlight <query>")
     return lines
   }
 
@@ -359,6 +360,21 @@ enum NormalModeDispatcher {
   }
 
   static func commandLineOpenAppQuery(_ raw: String) -> String? {
+    commandLineQuery(raw, name: "open", acceptsBareCommand: false)
+  }
+
+  static func commandLineCandidateQuery(_ raw: String) -> String? {
+    if let query = commandLineOpenAppQuery(raw) {
+      return query
+    }
+    return commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true)
+  }
+
+  private static func commandLineQuery(
+    _ raw: String,
+    name: String,
+    acceptsBareCommand: Bool
+  ) -> String? {
     var body = raw.trimmingCharacters(in: .newlines)
     body.removeLeadingWhitespace()
     if body.hasPrefix(":") {
@@ -366,9 +382,12 @@ enum NormalModeDispatcher {
       body.removeLeadingWhitespace()
     }
 
-    guard body.count > 4 else { return nil }
-    let nameEnd = body.index(body.startIndex, offsetBy: 4)
-    guard body[..<nameEnd].lowercased() == "open" else { return nil }
+    if acceptsBareCommand, body.lowercased() == name {
+      return ""
+    }
+    guard body.count > name.count else { return nil }
+    let nameEnd = body.index(body.startIndex, offsetBy: name.count)
+    guard body[..<nameEnd].lowercased() == name else { return nil }
     guard body[nameEnd].isWhitespace else { return nil }
     let restStart = body.index(after: nameEnd)
     let query = String(body[restStart...]).trimmingCharacters(in: .whitespacesAndNewlines)

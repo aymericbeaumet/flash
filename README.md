@@ -39,7 +39,7 @@ flash window_move position=lefthalf
 flash help_show
 ```
 
-Common actions include `flash://mouse_click`, `flash://mouse_click?right=1`, `flash://mouse_click?double=1`, `flash://mouse_move`, `flash://scroll_down`, `flash://scroll_half_page_up`, `flash://scroll_half_page_down`, `flash://scroll_top`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder`, `flash://app_open_finder?all=1`, `flash://url_copy`, `flash://app_save`, `flash://app_save_and_quit`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://app_open?name=<app>`, `flash://window_move?position=<slot>&screen=<n>`, `flash://hints_dismiss`, `flash://alert_dismiss`, `flash://alert_show?message=<text>`, and `flash://show_alert?message=<text>`.
+Common actions include `flash://mouse_click`, `flash://mouse_click?right=1`, `flash://mouse_click?double=1`, `flash://mouse_move`, `flash://scroll_down`, `flash://scroll_half_page_up`, `flash://scroll_half_page_down`, `flash://scroll_top`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder`, `flash://flashlight`, `flash://url_copy`, `flash://app_save`, `flash://app_save_and_quit`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://app_open?name=<app>`, `flash://window_move?position=<slot>&screen=<n>`, `flash://hints_dismiss`, `flash://alert_dismiss`, `flash://alert_show?message=<text>`, and `flash://show_alert?message=<text>`.
 
 ## Configuration
 
@@ -62,7 +62,7 @@ labels = { normal = "N", insert = "I", command = "C" }
 # "ctrl+alt+n" = "flash://mode_normal"
 
 [mode.normal]
-leader = "space"
+leader = "\\"
 
 [mode.normal.mappings]
 "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
@@ -88,8 +88,7 @@ leader = "space"
 "x" = "flash://window_close"
 "t" = "flash://tab_new_insert"
 "/" = "flash://app_find"
-"o" = "flash://app_open_finder?all=1"
-"O" = "flash://app_open_finder?all=1"
+"<leader>space" = "flash://flashlight"
 "?" = "flash://help_show"
 ":" = "flash://mode_command"
 
@@ -100,13 +99,13 @@ leader = "space"
 log_level = "info"
 ```
 
-`[mode] labels` controls the mode-cell text; its width follows the longest configured label. `[mode.all.mappings]` applies in insert and normal modes. `[mode.normal]` holds normal-mode options such as `leader = "space"`. `[mode.normal.mappings]` extends the built-in normal-mode map and overrides only matching keys. `[mode.insert.mappings]` applies only in insert mode. Values can be `flash://...` actions or explicit command arrays such as `["sh", "~/bin/toggle-colors"]`; bare shell strings and non-Flash URLs are rejected. Relative argv paths containing `/` resolve from the config file location.
+`[mode] labels` controls the mode-cell text; its width follows the longest configured label. `[mode.all.mappings]` applies in insert and normal modes. `[mode.normal]` holds normal-mode options such as `leader = "\\"`. `[mode.normal.mappings]` extends the built-in normal-mode map and overrides only matching keys. `[mode.insert.mappings]` applies only in insert mode. Values can be `flash://...` actions or explicit command arrays such as `["sh", "~/bin/toggle-colors"]`; bare shell strings and non-Flash URLs are rejected. Relative argv paths containing `/` resolve from the config file location.
 
 When a `[mode.all.mappings]` mapping points to `flash://mode_normal`, Flash shows the persistent mode cell and starts in normal mode. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings do not enable advanced mode. Without an advanced-mode mapping, the mode cell is hidden and Flash behaves as a direct action launcher unless `flash://mode_normal` is invoked manually.
 
-Normal mode supports counts such as `10u` and `2gT`, `H` / `L` for target page history, `ctrl-o` / `ctrl-i` for Flash movement history, command-line mode with `:`, and `?` for the mapping view. Command-line forms include `:q[uit]`, `:q[uit]!`, `:w[rite]`, `:p[rint]`, `:e[dit]`, `:open`, `:open <query>`, `:new`, `:tabnew`, `:bd[elete]`, `:cl[ose]`, `:find`, `:u[ndo]`, `:red[o]`, `:y[ank]`, `:d[elete]`, `:pu[t]`, and `:%y[ank]`. `:open <query>` shows typo-tolerant results above the command line across source-labelled results such as `[app] Firefox`, `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, and `[slack] #general`; use arrows or tab / shift-tab to select and return to open. `[open] ignored_apps = ["Flash", "com.flash.app"]` hides matching app candidates from `:open` and `flash://app_open?name=...`.
+Normal mode supports counts such as `10u` and `2gT`, `H` / `L` for target page history, `ctrl-o` / `ctrl-i` for Flash movement history, command-line mode with `:`, and `?` for the mapping view. Command-line forms include `:q[uit]`, `:q[uit]!`, `:w[rite]`, `:p[rint]`, `:e[dit]`, `:open`, `:open <query>`, `:flashlight`, `:flashlight <query>`, `:new`, `:tabnew`, `:bd[elete]`, `:cl[ose]`, `:find`, `:u[ndo]`, `:red[o]`, `:y[ank]`, `:d[elete]`, `:pu[t]`, and `:%y[ank]`. `:open <query>` and `:flashlight <query>` show typo-tolerant results above the command line across source-labelled results such as `[app] Firefox`, `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, and `[slack] #general`; use arrows or tab / shift-tab to select and return to open. `[open] ignored_apps = ["Flash", "com.flash.app"]` hides matching app candidates from `:open`, `:flashlight`, and `flash://app_open?name=...`.
 
-Flash stays in normal mode until the user presses `i`, or a committed `f` / `rf` / `df` hint targets editable input or tmux/terminal content. External `flash://mode_insert`, passive focus changes, app focus requests, menu-bar clicks, status-bar popups, and `flash://app_find` do not switch to insert mode while advanced normal mode is active.
+Flash stays in normal mode until the user presses `i`, or a committed left-click `f` hint targets a text-entry surface such as an editable input or tmux/terminal content. External `flash://mode_insert`, passive focus changes, app focus requests, menu-bar clicks, status-bar popups, and `flash://app_find` do not switch to insert mode while advanced normal mode is active.
 
 ## External Tools
 

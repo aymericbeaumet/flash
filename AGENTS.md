@@ -226,7 +226,7 @@ Keys:
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
 | `[mode.all.mappings]` entries      | `flash://` or argv-array mapping | none             |
-| `mode.normal.leader`               | string         | unset               |
+| `mode.normal.leader`               | string         | `"\\"`             |
 | `[mode.normal.mappings]` entries   | `flash://` or argv-array mapping | built-in normal map |
 | `[mode.insert.mappings]` entries   | `flash://` or argv-array mapping | none             |
 | `debug.show_bounds`                | bool           | `false`              |
@@ -260,7 +260,7 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
 
 ### Mode Mappings
 
-`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the mode-cell text. The mode-cell width is derived from the longest configured label. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = "flash://action"` or `"key" = ["executable", "arg"]`. `[mode.normal] leader = "space"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`.
+`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the mode-cell text. The mode-cell width is derived from the longest configured label. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = "flash://action"` or `"key" = ["executable", "arg"]`. `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`.
 
 - `[mode.all.mappings]` applies in insert and normal modes.
 - `[mode.normal.mappings]` applies only while the overlay is capturing normal-mode input.
@@ -282,9 +282,9 @@ When any `[mode.all.mappings]` mapping resolves to `flash://mode_normal`, Flash 
 
 Every action Flash takes must have a corresponding `flash://` action parsed by `URLEventHandler`. Keep `URLCommand`, parser wiring, `URLCommand.diagnosticDescription`, mapping help, README, default config examples, and tests in sync.
 
-Normal-mode action URLs currently include: `flash://mouse_click[?right=1|double=1]`, `flash://mouse_move`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://url_copy`, `flash://frame_next`, `flash://frame_main`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select[?index=<n>]`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, and `flash://clipboard_copy_all`.
+Normal-mode action URLs currently include: `flash://mouse_click[?right=1|double=1]`, `flash://mouse_move`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://flashlight`, `flash://url_copy`, `flash://frame_next`, `flash://frame_main`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select[?index=<n>]`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, and `flash://clipboard_copy_all`.
 
-`:open <query>` results render above the command line, ordered bottom-to-top with the best match closest to the prompt. Candidate snapshots are cached ahead of use through `SourceRegistry`: app bundles are warmed and cached by `ApplicationSource`, while tmux windows, browser tabs, Slack channels, and future contexts are queried only from currently active sources. Typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`.
+`:open <query>` and `:flashlight <query>` results render above the command line, ordered bottom-to-top with the best match closest to the prompt. Candidate snapshots are cached ahead of use through `SourceRegistry`: app bundles are warmed and cached by `ApplicationSource`, while tmux windows, browser tabs, Slack channels, and future contexts are queried only from currently active sources. Typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`.
 
 App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://show_alert?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, and `flash://flash_quit`.
 
@@ -292,7 +292,7 @@ App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`
 
 Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The current valid insert transitions are:
 
-- A committed `f`, `rf`, or `df` hint whose target is editable input or tmux/terminal content.
+- A committed left-click `f` hint whose target accepts text input, such as an editable input or tmux/terminal content.
 - A normal-mode `i` keypress handled by the overlay's normal-mode interpreter.
 
 Do not reintroduce passive focused-element observers that switch to insert mode merely because macOS reports an editable focus. While advanced normal mode is active, Flash must aggressively recapture the overlay after app activation, app launch, Space changes, and panel key-focus loss; this intentionally prioritizes keeping normal-mode keyboard capture over preserving native menus or popovers. `flash://mode_insert`, `flash://app_find`, app-driven focus requests, window activation, and status/menu interactions must leave Flash in normal mode while advanced normal mode is active.

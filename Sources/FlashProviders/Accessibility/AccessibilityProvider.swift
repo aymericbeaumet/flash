@@ -273,6 +273,14 @@ public final class AccessibilityProvider: JumpProvider {
     return value as? String
   }
 
+  private static func boolAttribute(_ element: AXUIElement, _ name: String) -> Bool? {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
+      let value = raw
+    else { return nil }
+    return value as? Bool
+  }
+
   private static func urlAttribute(_ element: AXUIElement, _ name: String) -> String? {
     var raw: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
@@ -553,6 +561,7 @@ public final class AccessibilityProvider: JumpProvider {
         role: capturedRole,
         accessibilityLabel: label,
         url: url,
+        acceptsTextInput: Self.acceptsTextInput(captured, role: capturedRole),
         pid: pid,
         activate: activate,
         providerID: identifier
@@ -661,6 +670,30 @@ public final class AccessibilityProvider: JumpProvider {
       )
       if state.confirmedTargets.count >= Self.maxTargets { return }
     }
+  }
+
+  private static func acceptsTextInput(_ element: AXUIElement, role initialRole: String) -> Bool {
+    var current = element
+    var role = initialRole
+    for _ in 0..<8 {
+      if textInputRoles.contains(role) {
+        return true
+      }
+      if boolAttribute(current, "AXIsEditable") == true {
+        return true
+      }
+      if elementAttribute(current, "AXEditableAncestor") != nil
+        || elementAttribute(current, "AXHighestEditableAncestor") != nil
+      {
+        return true
+      }
+      guard let parent = elementAttribute(current, kAXParentAttribute as String) else {
+        return false
+      }
+      current = parent
+      role = Self.role(of: current) ?? ""
+    }
+    return false
   }
 
   /// Parallel resolution of action-name IPCs for tentative targets that

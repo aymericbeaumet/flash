@@ -14,6 +14,11 @@ struct CandidateDisplayItem: Equatable {
   var isSelected: Bool
 }
 
+enum OverlayPointerIntent: Equatable {
+  case click
+  case scroll
+}
+
 final class CommandLineTextField: NSTextField {
   override var acceptsFirstResponder: Bool { true }
 }
@@ -220,6 +225,8 @@ final class OverlayPanel: NSPanel {
   private var clickLocalMonitor: Any?
   private var pointerIntentGlobalMonitor: Any?
   private var pointerIntentLocalMonitor: Any?
+  private var helpClickGlobalMonitor: Any?
+  private var helpClickLocalMonitor: Any?
 
   func display(hints: [AssignedHint]) {
     FlashLog.trace("[overlay] display hints=\(hints.count) input=\(inputMode)")
@@ -553,16 +560,16 @@ final class OverlayPanel: NSPanel {
   /// running prefix.
   private func installInputMonitors() {
     removeInputMonitors()
-    let pointerDismiss: () -> Void = { [weak self] in
+    let pointerDismiss: (OverlayPointerIntent) -> Void = { [weak self] intent in
       DispatchQueue.main.async {
-        self?.coordinator?.overlayDidCancelByPointer()
+        self?.coordinator?.overlayDidCancelByPointer(intent)
       }
     }
     scrollGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { _ in
-      pointerDismiss()
+      pointerDismiss(.scroll)
     }
     scrollLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-      pointerDismiss()
+      pointerDismiss(.scroll)
       return event
     }
     // Mouse-button presses (single, double, or right click) dismiss
@@ -575,30 +582,30 @@ final class OverlayPanel: NSPanel {
       .leftMouseDown, .rightMouseDown, .otherMouseDown,
     ]
     clickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) { _ in
-      pointerDismiss()
+      pointerDismiss(.click)
     }
     clickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) { event in
-      pointerDismiss()
+      pointerDismiss(.click)
       return event
     }
   }
 
   private func installPointerIntentMonitors() {
     removePointerIntentMonitors()
-    let pointerIntent: () -> Void = { [weak self] in
+    let pointerIntent: (OverlayPointerIntent) -> Void = { [weak self] intent in
       DispatchQueue.main.async {
-        self?.coordinator?.overlayDidCancelByPointer()
+        self?.coordinator?.overlayDidCancelByPointer(intent)
       }
     }
     let clickMask: NSEvent.EventTypeMask = [
       .leftMouseDown, .rightMouseDown, .otherMouseDown,
     ]
     let pointerMask = clickMask.union(.scrollWheel)
-    pointerIntentGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: pointerMask) { _ in
-      pointerIntent()
+    pointerIntentGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: pointerMask) { event in
+      pointerIntent(event.type == .scrollWheel ? .scroll : .click)
     }
     pointerIntentLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: pointerMask) { event in
-      pointerIntent()
+      pointerIntent(event.type == .scrollWheel ? .scroll : .click)
       return event
     }
   }
@@ -640,6 +647,40 @@ final class OverlayPanel: NSPanel {
     clickGlobalMonitor = nil
     clickLocalMonitor = nil
     removePointerIntentMonitors()
+  }
+
+  private func installHelpDismissMonitors() {
+    removeHelpDismissMonitors()
+    let clickMask: NSEvent.EventTypeMask = [
+      .leftMouseDown, .rightMouseDown, .otherMouseDown,
+    ]
+    helpClickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) {
+      [weak self] _ in
+      DispatchQueue.main.async {
+        guard let self, self.inputMode == .help else { return }
+        self.coordinator?.overlayDidCancelHelp()
+      }
+    }
+    helpClickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) {
+      [weak self] event in
+      guard let self, self.inputMode == .help else { return event }
+      guard event.window === self else { return event }
+      if self.helpScrollView.frame.contains(event.locationInWindow) {
+        return event
+      }
+      DispatchQueue.main.async {
+        self.coordinator?.overlayDidCancelHelp()
+      }
+      return nil
+    }
+  }
+
+  private func removeHelpDismissMonitors() {
+    for m in [helpClickGlobalMonitor, helpClickLocalMonitor] {
+      if let m { NSEvent.removeMonitor(m) }
+    }
+    helpClickGlobalMonitor = nil
+    helpClickLocalMonitor = nil
   }
 
   /// Show a transient banner centered on the focused screen. Multi-line strings (with
@@ -780,6 +821,7 @@ final class OverlayPanel: NSPanel {
       lineCount: lines.count)
     helpScrollView.isHidden = false
     ignoresMouseEvents = false
+    installHelpDismissMonitors()
     transientContentVisible = true
   }
 
@@ -1149,6 +1191,7 @@ final class OverlayPanel: NSPanel {
   }
 
   private func hideHelpTextView() {
+    removeHelpDismissMonitors()
     helpScrollView.isHidden = true
     helpTextView.string = ""
     helpTextView.overlayCoordinator = nil
@@ -1690,7 +1733,7 @@ extension OverlayPanel: NSTextFieldDelegate {
 
 protocol OverlayCoordinator: AnyObject {
   func overlayDidCancel()
-  func overlayDidCancelByPointer()
+  func overlayDidCancelByPointer(_ intent: OverlayPointerIntent)
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingAction?, repeatCount: Int)

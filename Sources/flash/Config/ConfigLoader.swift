@@ -521,6 +521,12 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     for mapping in mappings {
+      if mapping.key.contains("<leader>"), mapping.scope != .normal {
+        config.addDiagnostic(
+          "mapping \"\(mapping.key)\" uses <leader> outside [mode.normal.mappings]",
+          location: mapping.location)
+        continue
+      }
       guard let key = resolvedMappingKey(mapping.key, scope: mapping.scope, config: config) else {
         config.addDiagnostic(
           "mapping \"\(mapping.key)\" uses <leader> but mode.normal.leader is not set",
@@ -606,7 +612,36 @@ enum ConfigLoader {
 
   private static func parseString(_ v: String) -> String? {
     guard v.hasPrefix("\""), v.hasSuffix("\""), v.count >= 2 else { return nil }
-    return String(v.dropFirst().dropLast())
+    var out = ""
+    var escaping = false
+    for ch in v.dropFirst().dropLast() {
+      if escaping {
+        switch ch {
+        case "\\":
+          out.append("\\")
+        case "\"":
+          out.append("\"")
+        case "n":
+          out.append("\n")
+        case "r":
+          out.append("\r")
+        case "t":
+          out.append("\t")
+        default:
+          out.append("\\")
+          out.append(ch)
+        }
+        escaping = false
+      } else if ch == "\\" {
+        escaping = true
+      } else {
+        out.append(ch)
+      }
+    }
+    if escaping {
+      out.append("\\")
+    }
+    return out
   }
   private static func parseBool(_ v: String) -> Bool? {
     switch v {

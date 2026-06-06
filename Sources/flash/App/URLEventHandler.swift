@@ -15,6 +15,7 @@ enum URLCommand: Hashable {
   case tabClose
   case find
   case candidateFinder(all: Bool)
+  case flashlight
   case copyURL
   case nextFrame
   case mainFrame
@@ -157,6 +158,7 @@ final class URLEventHandler: NSObject {
     "tab_close": { _ in .tabClose },
     "app_find": { _ in .find },
     "app_open_finder": { q in .candidateFinder(all: q.bool("all")) },
+    "flashlight": { _ in .flashlight },
     "url_copy": { _ in .copyURL },
     "frame_next": { _ in .nextFrame },
     "frame_main": { _ in .mainFrame },
@@ -221,6 +223,7 @@ final class URLEventHandler: NSObject {
     flash://tab_close
     flash://app_find
     flash://app_open_finder[?all=1]
+    flash://flashlight
     flash://url_copy
     flash://frame_next
     flash://frame_main

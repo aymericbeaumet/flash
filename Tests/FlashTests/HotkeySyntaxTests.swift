@@ -207,6 +207,7 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(
       parseMappingAction(rawString: "flash://app_open_finder?all=1")?.command,
       .candidateFinder(all: true))
+    XCTAssertEqual(parseMappingAction(rawString: "flash://flashlight")?.command, .flashlight)
     XCTAssertEqual(parseMappingAction(rawString: "flash://tab_next")?.command, .tabNext)
     XCTAssertEqual(parseMappingAction(rawString: "flash://tab_previous")?.command, .tabPrev)
     XCTAssertEqual(parseMappingAction(rawString: "flash://tab_select")?.command, .tabSelect(index: nil))

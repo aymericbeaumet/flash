@@ -21,9 +21,10 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "j" })?.action.command,
       .scroll(.down))
+    XCTAssertEqual(c.mode.normalLeader, "\\")
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "O" })?.action.command,
-      .candidateFinder(all: true))
+      c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
+      .flashlight)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "rf" })?.action.command,
       .mouseClick(action: .rightClick))
@@ -31,9 +32,8 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == "df" })?.action.command,
       .mouseClick(action: .doubleClick))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "yy" }))
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "o" })?.action.command,
-      .candidateFinder(all: true))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "o" }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "O" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "gN" })?.action.command,
@@ -511,13 +511,28 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normalLeader, "space")
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "spacec" })?.action.command, .reload)
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "spacespace" })?.action.command, .flashlight)
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "\\space" && $0.action.command == .flashlight }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
     XCTAssertTrue(c.warnings.isEmpty)
   }
 
-  func testLeaderMappingsRequireNormalLeader() {
-    let toml = """
+  func testNormalLeaderParsesEscapedBackslash() {
+    let toml = #"""
       [mode.normal.mappings]
+      "<leader>space" = "flash://flashlight"
+      [mode.normal]
+      leader = "\\"
+      """#
+    let c = ConfigLoader.parse(toml)
+    XCTAssertEqual(c.mode.normalLeader, "\\")
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "\\space" })?.action.command, .flashlight)
+    XCTAssertTrue(c.warnings.isEmpty)
+  }
+
+  func testLeaderMappingsRequireNormalScope() {
+    let toml = """
+      [mode.all.mappings]
       "<leader>c" = "flash://app_reload"
       """
     let c = ConfigLoader.parse(toml)

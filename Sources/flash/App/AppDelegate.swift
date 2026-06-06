@@ -117,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var normalModeRecaptureToken: UInt64 = 0
   private var normalModeCaptureVerificationToken: UInt64 = 0
   private var normalModePendingCommandToken: UInt64 = 0
+  private var normalModeScrollSuppressionUntil: Date?
   private var windowGeometryChangeToken: UInt64 = 0
   private var windowGeometryChangeInProgress = false
   private var activeWindowBorderTrackingTimer: DispatchSourceTimer?
@@ -198,7 +199,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterInsertMode()
     case .commandMode:
       enterCommandLineMode()
-    case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .copyURL,
+    case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .flashlight,
+      .copyURL,
       .nextFrame, .mainFrame, .tabNext, .tabPrev, .tabSelect, .historyBack, .historyForward,
       .movementBack, .movementForward, .quitApp, .save, .saveAndQuit, .print, .openDocument,
       .newWindow, .tabNew, .tabNewInsert, .copy, .cut, .paste, .copyAll:
@@ -641,6 +643,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func modeDidEnterNormal(reason: String) {
     resetModeInputState()
+    if reason == "explicit_normal" {
+      normalModeScrollSuppressionUntil = Date().addingTimeInterval(
+        TimeInterval(Self.explicitNormalScrollSuppressionMs) / 1_000)
+    } else {
+      normalModeScrollSuppressionUntil = nil
+    }
     if let context = currentNonFlashContext() ?? normalModeContext() {
       normalModeTargetPID = context.processID
       suppressEditableFocus(for: context.processID)
@@ -653,6 +661,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private func modeDidEnterInsert(reason: String) {
+    normalModeScrollSuppressionUntil = nil
     normalModeRecaptureToken &+= 1
     normalModePendingCommandToken &+= 1
     resetModeInputState()
@@ -852,6 +861,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     reason == .hintCommit || reason == .normalModeInput || reason == .pointerClick
   }
 
+  static let explicitNormalScrollSuppressionMs = 700
+
+  static func pointerScrollShouldBeSuppressed(
+    mode: FlashMode,
+    hasHints: Bool,
+    suppressionUntil: Date?,
+    now: Date = Date()
+  ) -> Bool {
+    guard mode == .normal, !hasHints, let suppressionUntil else { return false }
+    return now < suppressionUntil
+  }
+
   static func modeOverlaySnapshot(
     mode: FlashMode,
     labels: Config.Mode.Labels,
@@ -1021,6 +1042,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         repeatCount: repeatCount)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "open ", candidateFinderScope: all ? .all : .running)
+    case .flashlight:
+      enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: .all)
     case .mouseClick(let action):
       guard let context = normalModeContext() else {
         FlashLog.debug("[mappings] no target app for mouse_click")
@@ -1214,7 +1237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     guard overlay != nil else { return }
     switch overlay.inputMode {
     case .commandLine:
-      guard NormalModeDispatcher.commandLineOpenAppQuery(overlay.commandLineText) != nil else {
+      guard NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil else {
         return
       }
       candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
@@ -1283,7 +1306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     let command = Self.commandLineBuffer(from: text)
     overlay.commandLineText = command
     overlay.commandLineCursorIndex = cursorIndex ?? command.count
-    guard let query = NormalModeDispatcher.commandLineOpenAppQuery(command) else {
+    guard let query = NormalModeDispatcher.commandLineCandidateQuery(command) else {
       clearCandidateFinderState()
       overlay.displayCommandLine(command, cursorIndex: overlay.commandLineCursorIndex)
       return
@@ -1350,7 +1373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private func submitCommandLine(_ raw: String) {
-    if NormalModeDispatcher.commandLineOpenAppQuery(raw) != nil {
+    if NormalModeDispatcher.commandLineCandidateQuery(raw) != nil {
       submitSelectedCommandLineApp()
       return
     }
@@ -1948,7 +1971,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     cancelOverlay()
   }
 
-  func overlayDidCancelByPointer() {
+  func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {
+    if intent == .scroll,
+      Self.pointerScrollShouldBeSuppressed(
+        mode: flashMode,
+        hasHints: !currentHints.isEmpty,
+        suppressionUntil: normalModeScrollSuppressionUntil)
+    {
+      FlashLog.trace("[mode] suppress_pointer_scroll reason=explicit_normal_momentum")
+      applyModeOverlay()
+      scheduleNormalModeRecapture()
+      return
+    }
+    normalModeScrollSuppressionUntil = nil
     cancelOverlay()
     if flashMode != .insert {
       enterInsertMode(reason: .pointerClick)
@@ -2064,7 +2099,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     let action = pendingAction
     let shouldEnterInsertAfterCommit =
       flashMode == .normal
-      && Self.hintCommitShouldEnterInsertMode(hint.target)
+      && Self.hintCommitShouldEnterInsertMode(hint.target, action: action)
     let shouldRestoreNormalMode = flashMode == .normal && !shouldEnterInsertAfterCommit
     // The target carries its owning pid (always the focused app at
     // walk time). Fall back to the activation-time focused pid if the
@@ -2120,8 +2155,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
-  static func hintCommitShouldEnterInsertMode(_ target: JumpTarget) -> Bool {
-    true
+  static func hintCommitShouldEnterInsertMode(
+    _ target: JumpTarget,
+    action: JumpAction = .leftClick
+  ) -> Bool {
+    action == .leftClick && target.acceptsTextInput
   }
 
   private func usesTmuxProvider(_ context: AppContext?) -> Bool {
@@ -2162,7 +2200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool {
-    guard NormalModeDispatcher.commandLineOpenAppQuery(overlay.commandLineText) != nil else {
+    guard NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil else {
       return false
     }
     guard !candidateFinderMatches.isEmpty else {

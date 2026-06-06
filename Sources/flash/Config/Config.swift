@@ -76,8 +76,10 @@ struct Config {
     var all: [ModeMapping] = []
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
-    var normalLeader: String?
+    var normalLeader: String? = Self.defaultNormalLeader
     var labels = Labels()
+
+    static let defaultNormalLeader = "\\"
 
     static let defaultNormalMappings: [ModeMapping] = [
       ModeMapping(key: "h", action: .flashCommand(.scroll(.left))),
@@ -109,8 +111,7 @@ struct Config {
       ModeMapping(key: "x", action: .flashCommand(.close)),
       ModeMapping(key: "t", action: .flashCommand(.tabNewInsert)),
       ModeMapping(key: "/", action: .flashCommand(.find)),
-      ModeMapping(key: "o", action: .flashCommand(.candidateFinder(all: true))),
-      ModeMapping(key: "O", action: .flashCommand(.candidateFinder(all: true))),
+      ModeMapping(key: "\(Self.defaultNormalLeader)space", action: .flashCommand(.flashlight)),
       ModeMapping(key: "r", action: .flashCommand(.reload)),
       ModeMapping(key: "?", action: .flashCommand(.showUsage)),
       ModeMapping(key: ":", action: .flashCommand(.commandMode)),
@@ -122,6 +123,21 @@ struct Config {
         return all + normal
       case .insert:
         return all + insert
+      }
+    }
+
+    mutating func refreshLeaderDerivedDefaults() {
+      let defaultKey = "\(Self.defaultNormalLeader)space"
+      let resolvedKey = "\(normalLeader ?? Self.defaultNormalLeader)space"
+      guard resolvedKey != defaultKey else { return }
+      guard
+        let defaultIndex = normal.firstIndex(where: {
+          $0.key == defaultKey && $0.action == .flashCommand(.flashlight)
+        })
+      else { return }
+      normal.remove(at: defaultIndex)
+      if !normal.contains(where: { $0.key == resolvedKey }) {
+        normal.append(ModeMapping(key: resolvedKey, action: .flashCommand(.flashlight)))
       }
     }
 
@@ -173,6 +189,7 @@ struct Config {
   }
 
   mutating func prepareDerivedValues() {
+    mode.refreshLeaderDerivedDefaults()
     resolvedAlphabet = Alphabet.resolve(hints.keys)
     removeAmbiguousShiftMagicModifier()
   }
@@ -338,6 +355,8 @@ extension URLCommand {
       return "flash://app_find"
     case .candidateFinder(let all):
       return all ? "flash://app_open_finder?all=1" : "flash://app_open_finder"
+    case .flashlight:
+      return "flash://flashlight"
     case .copyURL:
       return "flash://url_copy"
     case .nextFrame:

@@ -55,9 +55,8 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 # "alt+shift+c" = ["sh", "~/bin/toggle-colors"]
 
 [mode.normal]
-# Optional normal-mode sequence prefix. Use it in normal mappings as <leader>.
-# Example:
-# leader = "space"
+# Normal-mode sequence prefix. Use it in normal mappings as <leader>.
+leader = "\\"
 
 [mode.normal.mappings]
 # Entries here extend the built-in normal-mode map. Reusing a key overrides
@@ -93,8 +92,7 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 "x" = "flash://window_close"
 "t" = "flash://tab_new_insert"
 "/" = "flash://app_find"
-"o" = "flash://app_open_finder?all=1"
-"O" = "flash://app_open_finder?all=1"
+"<leader>space" = "flash://flashlight"
 "r" = "flash://app_reload"
 "?" = "flash://help_show"
 ":" = "flash://mode_command"

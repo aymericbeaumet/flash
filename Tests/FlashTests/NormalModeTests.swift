@@ -158,13 +158,14 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "d", chars: "f"), .mouseClick(action: .doubleClick))
   }
 
-  func testHintCommitAlwaysEntersInsertBecauseClickIsUserIntent() {
+  func testHintCommitEntersInsertOnlyForTextInputLeftClickTargets() {
     XCTAssertTrue(
       AppDelegate.hintCommitShouldEnterInsertMode(
         JumpTarget(
           id: "tmux",
           frame: CGRect(x: 0, y: 0, width: 10, height: 10),
           role: nil,
+          acceptsTextInput: true,
           providerID: "tmux")))
     XCTAssertTrue(
       AppDelegate.hintCommitShouldEnterInsertMode(
@@ -172,14 +173,24 @@ final class NormalModeTests: XCTestCase {
           id: "input",
           frame: CGRect(x: 0, y: 0, width: 10, height: 10),
           role: "AXTextField",
+          acceptsTextInput: true,
           providerID: "accessibility")))
-    XCTAssertTrue(
+    XCTAssertFalse(
       AppDelegate.hintCommitShouldEnterInsertMode(
         JumpTarget(
           id: "button",
           frame: CGRect(x: 0, y: 0, width: 10, height: 10),
           role: "AXButton",
           providerID: "accessibility")))
+    XCTAssertFalse(
+      AppDelegate.hintCommitShouldEnterInsertMode(
+        JumpTarget(
+          id: "input-right-click",
+          frame: CGRect(x: 0, y: 0, width: 10, height: 10),
+          role: "AXTextField",
+          acceptsTextInput: true,
+          providerID: "accessibility"),
+        action: .rightClick))
   }
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
@@ -199,8 +210,12 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(chars: ":"), .commandMode)
     XCTAssertEqual(command(chars: "x"), .close)
     XCTAssertEqual(command(chars: "/"), .find)
-    XCTAssertEqual(command(chars: "o"), .candidateFinder(all: true))
-    XCTAssertEqual(command(chars: "O", ignoring: "o", flags: [.shift]), .candidateFinder(all: true))
+    XCTAssertEqual(transition(chars: "\\").pending, "\\")
+    XCTAssertEqual(
+      transition(pending: "\\", keyCode: kVK_Space, chars: " ").command,
+      .flashlight)
+    XCTAssertNil(command(chars: "o"))
+    XCTAssertNil(command(chars: "O", ignoring: "o", flags: [.shift]))
     let modified = transition(chars: "r", flags: [.command])
     XCTAssertNil(modified.command)
     XCTAssertFalse(modified.passThrough)
@@ -213,6 +228,35 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .pointerClick))
     XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .explicitCommand))
     XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .advancedModeDisabled))
+  }
+
+  func testExplicitNormalScrollSuppressionOnlyAppliesToIdleNormalModeBeforeDeadline() {
+    let now = Date()
+    let until = now.addingTimeInterval(0.5)
+    XCTAssertTrue(
+      AppDelegate.pointerScrollShouldBeSuppressed(
+        mode: .normal,
+        hasHints: false,
+        suppressionUntil: until,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.pointerScrollShouldBeSuppressed(
+        mode: .normal,
+        hasHints: true,
+        suppressionUntil: until,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.pointerScrollShouldBeSuppressed(
+        mode: .insert,
+        hasHints: false,
+        suppressionUntil: until,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.pointerScrollShouldBeSuppressed(
+        mode: .normal,
+        hasHints: false,
+        suppressionUntil: until,
+        now: until.addingTimeInterval(0.001)))
   }
 
   func testCommandLineEntryIsAllowedFromInsertAndNormalModeEvenWithTransientHints() {
@@ -456,6 +500,14 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineOpenAppQuery("edit firefox"))
   }
 
+  func testCommandLineCandidateQueryAcceptsFlashlight() {
+    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":open firefox"), "firefox")
+    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight"), "")
+    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight gmail.com"), "gmail.com")
+    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery("  FLASHLIGHT   Slack  "), "Slack")
+    XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":flashlightgmail"))
+  }
+
   func testFuzzyScoreMatchesOrderedCharacters() {
     XCTAssertNotNil(NormalModeDispatcher.fuzzyScore(query: "ff", candidate: "Firefox"))
     XCTAssertNotNil(NormalModeDispatcher.fuzzyScore(query: "alc", candidate: "Alacritty"))
@@ -660,12 +712,12 @@ final class NormalModeTests: XCTestCase {
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "H", "L", "f", "rf", "df", "mf", "u", "ctrl-r", "x", "/", "o", "O", "r", "t", "MAPPINGS",
+      "gg", "G", "H", "L", "f", "rf", "df", "mf", "u", "ctrl-r", "x", "/", "\\space", "r", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "gt", "gT", "gN", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
-      ":open <query>", "flash://mouse_click",
-      "flash://app_open_finder?all=1", "flash://mouse_click?right=1",
+      ":open <query>", ":flashlight <query>", "flash://mouse_click",
+      "flash://flashlight", "flash://mouse_click?right=1",
       "flash://mouse_click?double=1", "flash://history_back", "flash://history_forward",
       "flash://movement_back", "flash://movement_forward",
       "flash://tab_select", "flash://tab_new_insert", "?"]
