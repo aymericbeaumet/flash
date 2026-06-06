@@ -7,13 +7,13 @@ struct CandidateMatch {
 }
 
 enum CandidateFinder {
-  static func displayTitle(source: String, title: String) -> String {
-    "[\(source)] \(title)"
+  static func displayTitle(source: String, name: String) -> String {
+    "[\(source)] \(name)"
   }
 
   static func displayTitle(_ candidate: Candidate) -> String {
     guard candidate.kind == .browserTab else {
-      return displayTitle(source: candidate.source, title: candidate.title)
+      return displayTitle(source: candidate.source, name: candidate.name)
     }
     return browserTabDisplayTitle(candidate)
   }
@@ -49,7 +49,7 @@ enum CandidateFinder {
     var best: Int?
     if let titleScore = fieldScore(
       query: normalizedQuery,
-      field: candidate.title,
+      field: candidate.name,
       base: 10_000,
       normalize: normalize,
       fuzzyScore: fuzzyScore)
@@ -58,12 +58,21 @@ enum CandidateFinder {
     }
     if let sourceTitleScore = fieldScore(
       query: normalizedQuery,
-      field: "\(candidate.source) \(candidate.title)",
+      field: "\(candidate.source) \(candidate.name)",
       base: 8_000,
       normalize: normalize,
       fuzzyScore: fuzzyScore)
     {
       best = max(best ?? sourceTitleScore, sourceTitleScore)
+    }
+    if let urlScore = fieldScore(
+      query: normalizedQuery,
+      field: urlSearchText(candidate),
+      base: 9_000,
+      normalize: normalize,
+      fuzzyScore: fuzzyScore)
+    {
+      best = max(best ?? urlScore, urlScore)
     }
     if let displayScore = fieldScore(
       query: normalizedQuery,
@@ -80,8 +89,36 @@ enum CandidateFinder {
     return best
   }
 
+  static func isAlive(_ candidate: Candidate) -> Bool {
+    candidate.pid != nil
+  }
+
+  static func sortedMatches(_ matches: [CandidateMatch]) -> [CandidateMatch] {
+    matches.sorted { lhs, rhs in
+      let lhsAlive = isAlive(lhs.candidate)
+      let rhsAlive = isAlive(rhs.candidate)
+      if lhsAlive != rhsAlive { return lhsAlive }
+      if lhs.score != rhs.score { return lhs.score > rhs.score }
+
+      let titleOrder = lhs.candidate.name.localizedCaseInsensitiveCompare(rhs.candidate.name)
+      if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
+
+      let sourceOrder = lhs.candidate.source.localizedCaseInsensitiveCompare(rhs.candidate.source)
+      if sourceOrder != .orderedSame { return sourceOrder == .orderedAscending }
+
+      let lhsDisplay = lhs.candidate.displayTitle.isEmpty
+        ? displayTitle(lhs.candidate) : lhs.candidate.displayTitle
+      let rhsDisplay = rhs.candidate.displayTitle.isEmpty
+        ? displayTitle(rhs.candidate) : rhs.candidate.displayTitle
+      let displayOrder = lhsDisplay.localizedCaseInsensitiveCompare(rhsDisplay)
+      if displayOrder != .orderedSame { return displayOrder == .orderedAscending }
+
+      return lhs.candidate.sourceID < rhs.candidate.sourceID
+    }
+  }
+
   private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {
-    let candidateTitle = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let candidateTitle = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
     let url = browserTabURLString(candidate) ?? ""
     let title: String
     if candidateTitle.isEmpty || candidateTitle == url {
@@ -91,7 +128,7 @@ enum CandidateFinder {
     } else {
       title = "\(candidateTitle) (\(url))"
     }
-    return displayTitle(source: candidate.source, title: title)
+    return displayTitle(source: candidate.source, name: title)
   }
 
   private static func browserTabURLString(_ candidate: Candidate) -> String? {
@@ -104,8 +141,15 @@ enum CandidateFinder {
   }
 
   private static func searchText(_ candidate: Candidate) -> String {
-    let url = browserTabURLString(candidate) ?? ""
-    return "\(candidate.source) \(candidate.title) \(url) \(candidate.subtitle) \(candidate.bundleIdentifier)"
+    "\(candidate.source) \(candidate.name) \(urlSearchText(candidate))"
+  }
+
+  private static func urlSearchText(_ candidate: Candidate) -> String {
+    if let url = browserTabURLString(candidate), !url.isEmpty {
+      return url
+    }
+    guard let url = candidate.url else { return "" }
+    return url.isFileURL ? url.path : url.absoluteString
   }
 
   private static func fieldScore(
@@ -157,7 +201,7 @@ enum CandidateFinder {
     }
 
     return (Array(byIdentifier.values) + Array(byPath.values)).sorted { lhs, rhs in
-      lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
     }
   }
 }

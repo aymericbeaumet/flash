@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         candidate.tmuxTarget
         ?? candidate.url?.absoluteString
         ?? candidate.sourcePayload
-        ?? candidate.title
+        ?? candidate.name
       return MovementEntry(
         kind: .candidate,
         key: "candidate:\(candidate.sourceID):\(candidate.pid ?? 0):\(target)",
@@ -1266,11 +1266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let score = CandidateFinder.score(query: trimmed, candidate: candidate) else { return nil }
       return CandidateMatch(candidate: candidate, score: score)
     }
-    candidateFinderMatches = scored.sorted { lhs, rhs in
-      if lhs.score != rhs.score { return lhs.score > rhs.score }
-      return lhs.candidate.title.localizedCaseInsensitiveCompare(rhs.candidate.title)
-        == .orderedAscending
-    }
+    candidateFinderMatches = CandidateFinder.sortedMatches(scored)
     if candidateFinderMatches.isEmpty {
       candidateFinderSelectedIndex = 0
     } else {
@@ -1303,7 +1299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   static func candidateFinderDisplayTitle(source: String, title: String) -> String {
-    CandidateFinder.displayTitle(source: source, title: title)
+    CandidateFinder.displayTitle(source: source, name: title)
   }
 
   private func submitCommandLine(_ raw: String) {
@@ -2190,7 +2186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.suppressEditableFocus(for: pid)
       } else if !result.didResolve {
         FlashLog.debug(
-          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) title=\(candidate.title)")
+          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) name=\(candidate.name)")
       }
       self.refreshCurrentModeSideEffects(reason: "source_resolved")
       self.scheduleNormalModeRecapture()

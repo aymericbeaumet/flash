@@ -141,7 +141,7 @@ public final class TmuxProvider: JumpProvider {
         sourceID: identifier,
         source: displayName,
         pid: spec.terminalPID,
-        title: spec.title,
+        name: spec.title,
         subtitle: spec.subtitle,
         bundleIdentifier: "",
         url: nil,

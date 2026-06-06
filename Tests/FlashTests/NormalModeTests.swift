@@ -465,7 +465,7 @@ final class NormalModeTests: XCTestCase {
         sourceID: "slack",
         source: "slack",
         pid: 123,
-        title: "#schedule",
+        name: "#schedule",
         subtitle: "Slack channel",
         bundleIdentifier: "com.tinyspeck.slackmacgap",
         url: nil,
@@ -473,7 +473,7 @@ final class NormalModeTests: XCTestCase {
         tmuxTarget: nil,
         targetElement: nil))
 
-    XCTAssertEqual(candidate.normalizedSearchText, "slack #schedule slack channel com tinyspeck slackmacgap")
+    XCTAssertEqual(candidate.normalizedSearchText, "slack #schedule")
     XCTAssertNotNil(
       NormalModeDispatcher.fuzzyScore(
         normalizedQuery: NormalModeDispatcher.normalizedSearchText("#schedule"),
@@ -575,7 +575,7 @@ final class NormalModeTests: XCTestCase {
         path: "/Applications/Postico 2.app"))
 
     XCTAssertEqual(prepared.displayTitle, "[app] Postico 2")
-    XCTAssertEqual(prepared.normalizedSearchText, "app postico 2 app com eggerapps postico")
+    XCTAssertEqual(prepared.normalizedSearchText, "app postico 2 applications postico 2 app")
   }
 
   func testCandidateFinderPreparedBrowserTabIncludesBrowserTitleAndURL() {
@@ -585,7 +585,7 @@ final class NormalModeTests: XCTestCase {
         sourceID: "firefox-tabs",
         source: "firefox",
         pid: 123,
-        title: BrowserTabSources.browserTabName(
+        name: BrowserTabSources.browserTabName(
           title: "Gmail",
           url: "https://mail.google.com/mail/u/0/#inbox"),
         subtitle: "browser tab",
@@ -597,7 +597,7 @@ final class NormalModeTests: XCTestCase {
 
     XCTAssertEqual(prepared.displayTitle, "[firefox] Gmail (https://mail.google.com/mail/u/0/#inbox)")
     XCTAssertEqual(prepared.source, "firefox")
-    XCTAssertEqual(prepared.title, "Gmail")
+    XCTAssertEqual(prepared.name, "Gmail")
     XCTAssertEqual(prepared.url?.absoluteString, "https://mail.google.com/mail/u/0/#inbox")
     XCTAssertNotNil(
       NormalModeDispatcher.fuzzyScore(
@@ -612,7 +612,7 @@ final class NormalModeTests: XCTestCase {
         sourceID: "tmux",
         source: "tmux",
         pid: 123,
-        title: "beside:1 beside-agentic",
+        name: "beside:1 beside-agentic",
         subtitle: "tmux window",
         bundleIdentifier: "",
         url: nil,
@@ -800,7 +800,7 @@ final class NormalModeTests: XCTestCase {
       sourceID: "app",
       source: "app",
       pid: pid,
-      title: name,
+      name: name,
       subtitle: "app",
       bundleIdentifier: bundleIdentifier,
       url: URL(fileURLWithPath: path),

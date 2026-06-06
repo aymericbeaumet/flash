@@ -130,7 +130,7 @@ final class ApplicationSource: FlashSource {
       return item
     }
     .sorted { lhs, rhs in
-      lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
     }
   }
 
@@ -142,7 +142,7 @@ final class ApplicationSource: FlashSource {
       sourceID: identifier,
       source: displayName,
       pid: app.processIdentifier,
-      title: name,
+      name: name,
       subtitle: "app",
       bundleIdentifier: app.bundleIdentifier ?? "",
       url: app.bundleURL,
@@ -211,7 +211,7 @@ final class ApplicationSource: FlashSource {
       }
     }
     return (Array(byIdentifier.values) + Array(byPath.values)).sorted { lhs, rhs in
-      lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
     }
   }
 
@@ -253,7 +253,7 @@ final class ApplicationSource: FlashSource {
       sourceID: "app",
       source: "app",
       pid: nil,
-      title: name.isEmpty ? url.deletingPathExtension().lastPathComponent : name,
+      name: name.isEmpty ? url.deletingPathExtension().lastPathComponent : name,
       subtitle: "app",
       bundleIdentifier: bundle?.bundleIdentifier ?? "",
       url: url,
@@ -272,7 +272,7 @@ struct IgnoredAppMatcher: Equatable {
 
   func contains(_ candidate: Candidate) -> Bool {
     contains(
-      title: candidate.title,
+      title: candidate.name,
       bundleIdentifier: candidate.bundleIdentifier,
       url: candidate.url)
   }

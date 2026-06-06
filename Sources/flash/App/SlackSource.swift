@@ -45,7 +45,7 @@ final class SlackSource: FlashSource {
               sourceID: identifier,
               source: displayName,
               pid: app.processIdentifier,
-              title: channel,
+              name: channel,
               subtitle: "Slack channel",
               bundleIdentifier: bundleID,
               url: nil,

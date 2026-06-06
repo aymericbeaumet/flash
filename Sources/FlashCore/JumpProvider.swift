@@ -60,7 +60,7 @@ public struct Candidate: @unchecked Sendable {
   public var sourceID: String
   public var source: String
   public var pid: pid_t?
-  public var title: String
+  public var name: String
   public var subtitle: String
   public var bundleIdentifier: String
   public var url: URL?
@@ -76,7 +76,7 @@ public struct Candidate: @unchecked Sendable {
     sourceID: String,
     source: String,
     pid: pid_t?,
-    title: String,
+    name: String,
     subtitle: String,
     bundleIdentifier: String,
     url: URL?,
@@ -91,7 +91,7 @@ public struct Candidate: @unchecked Sendable {
     self.sourceID = sourceID
     self.source = source
     self.pid = pid
-    self.title = title
+    self.name = name
     self.subtitle = subtitle
     self.bundleIdentifier = bundleIdentifier
     self.url = url
