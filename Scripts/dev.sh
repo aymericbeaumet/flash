@@ -135,11 +135,11 @@ EOF
     launchctl enable "gui/$(id -u)/$LOGIN_AGENT_LABEL" >/dev/null 2>&1 || true
 }
 
-echo "==> Building flash (release)"
-swift build -c release
-swift build -c release --product flashctl
+echo "==> Building flash (debug)"
+swift build -c debug --product flash
+swift build -c debug --product flashctl
 
-BIN_PATH="$(swift build -c release --show-bin-path)"
+BIN_PATH="$(swift build -c debug --show-bin-path)"
 
 echo "==> Assembling staging $APP_NAME.app"
 rm -rf "$STAGING_PATH"
@@ -148,6 +148,9 @@ mkdir -p "$STAGING_PATH/Contents/Resources"
 cp "$BIN_PATH/flash" "$STAGING_PATH/Contents/MacOS/flash"
 cp "$BIN_PATH/flashctl" "$STAGING_PATH/Contents/MacOS/flashctl"
 cp "$PROJECT_DIR/Resources/Info.plist" "$STAGING_PATH/Contents/Info.plist"
+if [[ -d "$PROJECT_DIR/Plugins" ]]; then
+    ln -sfn "$PROJECT_DIR/Plugins" "$STAGING_PATH/Contents/Resources/Plugins"
+fi
 echo "APPL????" > "$STAGING_PATH/Contents/PkgInfo"
 
 ensure_signing_identity
@@ -209,15 +212,15 @@ fi
 echo
 echo "Installed: $INSTALL_PATH"
 echo "Triggers:"
-echo "  open -g flash://mouse_click"
-echo "  open -g flash://mouse_click?right=1"
+echo "  open -g flash://mouse_target"
+echo "  open -g flash://mouse_target?right=1"
 echo "  open -g flash://hints_dismiss"
 echo "  open -g flash://flash_quit"
-echo "  flash mouse_click"
+echo "  flash mouse_target"
 echo "  flash help_show"
 echo
 echo "First build with the stable identity? Press ctrl+space; Flash will"
 echo "open System Settings → Privacy & Security → Accessibility for you."
-echo "Toggle Flash on once. From then on, every ./Scripts/install-release.sh re-uses"
+echo "Toggle Flash on once. From then on, every ./Scripts/dev.sh re-uses"
 echo "the same signing cert, so TCC's stored designated requirement keeps"
 echo "matching and the grant persists across rebuilds — no more re-granting."

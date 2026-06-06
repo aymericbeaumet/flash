@@ -1,6 +1,45 @@
 import Foundation
 import FlashCore
 
+struct PluginReference: Equatable {
+  enum Kind: Equatable {
+    case github(owner: String, repository: String)
+    case file(path: String)
+  }
+
+  var raw: String
+  var kind: Kind
+
+  static func parse(_ raw: String, sourceURL: URL? = nil) -> PluginReference? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.hasPrefix("github:") {
+      let slug = String(trimmed.dropFirst("github:".count))
+      let parts = slug.split(separator: "/", maxSplits: 1).map(String.init)
+      guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+      return PluginReference(raw: trimmed, kind: .github(owner: parts[0], repository: parts[1]))
+    }
+    if trimmed.hasPrefix("file:") {
+      let rawPath = String(trimmed.dropFirst("file:".count))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !rawPath.isEmpty else { return nil }
+      let expanded = (rawPath as NSString).expandingTildeInPath
+      let resolved: String
+      if expanded.hasPrefix("/") {
+        resolved = expanded
+      } else if let sourceURL {
+        resolved = sourceURL.deletingLastPathComponent()
+          .appendingPathComponent(expanded)
+          .standardizedFileURL
+          .path
+      } else {
+        resolved = expanded
+      }
+      return PluginReference(raw: trimmed, kind: .file(path: resolved))
+    }
+    return nil
+  }
+}
+
 struct ConfigLocation: Equatable {
   let line: Int
   let column: Int
@@ -58,9 +97,18 @@ struct Config {
     /// stuck-mode/input issue, `debug` for broader diagnostics, or
     /// `warn` / `error` / `fatal` to mute the steady-state traces.
     var logLevel: FlashLog.Level = .info
+    /// Optional loopback HTTP server for live logs + state inspection.
+    /// Accepted hostnames are validated by DebugServer before binding.
+    var httpHost: String?
   }
   struct Open {
     var ignoredApps: [String] = []
+  }
+  struct Plugins {
+    /// Third-party plugins explicitly requested by the user. Official
+    /// bundled plugins are always enabled in v1 and are discovered from
+    /// the app bundle, not this list.
+    var thirdParty: [PluginReference] = []
   }
   struct Mode {
     struct Labels: Equatable {
@@ -96,24 +144,37 @@ struct Config {
       ModeMapping(key: "L", action: .flashCommand(.historyForward)),
       ModeMapping(key: "gt", action: .flashCommand(.tabNext)),
       ModeMapping(key: "gT", action: .flashCommand(.tabPrev)),
-      ModeMapping(key: "gN", action: .flashCommand(.tabSelect(index: nil))),
+      ModeMapping(key: "g1", action: .flashCommand(.tabSelect(index: 1))),
+      ModeMapping(key: "g2", action: .flashCommand(.tabSelect(index: 2))),
+      ModeMapping(key: "g3", action: .flashCommand(.tabSelect(index: 3))),
+      ModeMapping(key: "g4", action: .flashCommand(.tabSelect(index: 4))),
+      ModeMapping(key: "g5", action: .flashCommand(.tabSelect(index: 5))),
+      ModeMapping(key: "g6", action: .flashCommand(.tabSelect(index: 6))),
+      ModeMapping(key: "g7", action: .flashCommand(.tabSelect(index: 7))),
+      ModeMapping(key: "g8", action: .flashCommand(.tabSelect(index: 8))),
+      ModeMapping(key: "g9", action: .flashCommand(.tabSelect(index: 9))),
       ModeMapping(key: "ctrl-o", action: .flashCommand(.movementBack)),
       ModeMapping(key: "ctrl-i", action: .flashCommand(.movementForward)),
       ModeMapping(key: "gf", action: .flashCommand(.nextFrame)),
       ModeMapping(key: "gF", action: .flashCommand(.mainFrame)),
       ModeMapping(key: "i", action: .flashCommand(.insertMode)),
-      ModeMapping(key: "f", action: .flashCommand(.mouseClick(action: .leftClick))),
-      ModeMapping(key: "rf", action: .flashCommand(.mouseClick(action: .rightClick))),
-      ModeMapping(key: "df", action: .flashCommand(.mouseClick(action: .doubleClick))),
-      ModeMapping(key: "mf", action: .flashCommand(.mouseMove)),
+      ModeMapping(key: "f", action: .flashCommand(.mouseTarget(.click(.leftClick)))),
+      ModeMapping(key: "rf", action: .flashCommand(.mouseTarget(.click(.rightClick)))),
+      ModeMapping(key: "df", action: .flashCommand(.mouseTarget(.click(.doubleClick)))),
+      ModeMapping(key: "mf", action: .flashCommand(.mouseTarget(.move))),
+      ModeMapping(key: "s", action: .flashCommand(.mouseSnipe(.click(.leftClick)))),
+      ModeMapping(key: "rs", action: .flashCommand(.mouseSnipe(.click(.rightClick)))),
+      ModeMapping(key: "ds", action: .flashCommand(.mouseSnipe(.click(.doubleClick)))),
+      ModeMapping(key: "ms", action: .flashCommand(.mouseSnipe(.move))),
       ModeMapping(key: "u", action: .flashCommand(.undo)),
       ModeMapping(key: "ctrl-r", action: .flashCommand(.redo)),
       ModeMapping(key: "x", action: .flashCommand(.close)),
+      ModeMapping(key: "n", action: .flashCommand(.newWindow)),
       ModeMapping(key: "t", action: .flashCommand(.tabNewInsert)),
       ModeMapping(key: "/", action: .flashCommand(.find)),
       ModeMapping(key: "\(Self.defaultNormalLeader)space", action: .flashCommand(.flashlight)),
       ModeMapping(key: "r", action: .flashCommand(.reload)),
-      ModeMapping(key: "?", action: .flashCommand(.showUsage)),
+      ModeMapping(key: "?", action: .flashCommand(.showUsage(topic: nil))),
       ModeMapping(key: ":", action: .flashCommand(.commandMode)),
     ]
 
@@ -157,6 +218,7 @@ struct Config {
   var hints = Hints()
   var overlay = Overlay()
   var open = Open()
+  var plugins = Plugins()
   var mode = Mode()
   var debug = Debug()
   var warnings: [String] = []
@@ -227,6 +289,7 @@ struct Config {
       "debug": [
         "bounds_bg": debug.boundsBG,
         "bounds_fg": debug.boundsFG,
+        "http_host": debug.httpHost ?? NSNull(),
         "log_level": debug.logLevel.name,
         "profile": debug.profile,
         "show_bounds": debug.showBounds,
@@ -247,6 +310,9 @@ struct Config {
         "hint_bg_top": overlay.hintBGTop,
         "hint_border": overlay.hintBorder,
         "hint_fg": overlay.hintFG,
+      ],
+      "plugins": [
+        "third_party": plugins.thirdParty.map(\.raw)
       ],
       "warnings": warnings,
     ])
@@ -313,17 +379,10 @@ struct Config {
 extension URLCommand {
   var diagnosticDescription: String {
     switch self {
-    case .mouseClick(let action):
-      switch action {
-      case .leftClick:
-        return "flash://mouse_click"
-      case .rightClick:
-        return "flash://mouse_click?right=1"
-      case .doubleClick:
-        return "flash://mouse_click?double=1"
-      }
-    case .mouseMove:
-      return "flash://mouse_move"
+    case .mouseTarget(let command):
+      return "flash://mouse_target\(command.querySuffix)"
+    case .mouseSnipe(let command):
+      return "flash://mouse_snipe\(command.querySuffix)"
     case .normalMode:
       return "flash://mode_normal"
     case .insertMode:
@@ -408,14 +467,25 @@ extension URLCommand {
       return "flash://alert_show?message=\(message)"
     case .dismissAlert:
       return "flash://alert_dismiss"
-    case .showUsage:
+    case .showUsage(let topic):
+      if let topic, !topic.isEmpty {
+        return "flash://help_show?topic=\(topic)"
+      }
       return "flash://help_show"
+    case .showPlugins:
+      return "flash://plugins"
     case .dismissHints:
       return "flash://hints_dismiss"
     case .quit:
       return "flash://flash_quit"
     case .openApp(let name):
       return "flash://app_open?name=\(name)"
+    case .pluginAction(let command, let name, let args):
+      var parts = ["command=\(command)", "name=\(name)"]
+      if !args.isEmpty {
+        parts.append("args=\(args.joined(separator: " "))")
+      }
+      return "flash://plugin_action?\(parts.joined(separator: "&"))"
     case .moveWindow(let params):
       var parts: [String] = []
       if let position = params.position {
@@ -425,4 +495,53 @@ extension URLCommand {
       return "flash://window_move?\(parts.joined(separator: "&"))"
     }
   }
+}
+
+extension MouseCommand {
+  var querySuffix: String {
+    switch self {
+    case .move:
+      return "?move=1"
+    case .click(let action):
+      switch action {
+      case .leftClick:
+        return ""
+      case .rightClick:
+        return "?right=1"
+      case .doubleClick:
+        return "?double=1"
+      }
+    }
+  }
+}
+
+extension Config {
+  static let helpTopic = HelpTopic(
+    name: "config",
+    title: "Configuration",
+    summary: "flash.toml sections, defaults, and live reload.",
+    body: """
+      # Configuration
+
+      Flash reads `$XDG_CONFIG_HOME/flash/flash.toml`, then
+      `~/.config/flash/flash.toml` when XDG is unset. The active file is
+      watched and reloaded live.
+
+      User-facing sections are:
+
+      - `[hints]`
+      - `[open]`
+      - `[plugins]`
+      - `[mode]`
+      - `[mode.all.mappings]`
+      - `[mode.normal]`
+      - `[mode.normal.mappings]`
+      - `[mode.insert.mappings]`
+      - `[debug]`
+
+      Mapping values must be `flash://...` URLs or explicit argv arrays.
+      Relative argv paths containing `/` resolve from the config file.
+
+      `config.default.toml` is the canonical reference for all accepted keys.
+      """)
 }

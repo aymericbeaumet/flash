@@ -2,8 +2,8 @@ import AppKit
 import FlashCore
 
 enum URLCommand: Hashable {
-  case mouseClick(action: JumpAction)
-  case mouseMove
+  case mouseTarget(MouseCommand)
+  case mouseSnipe(MouseCommand)
   case normalMode
   case insertMode
   case commandMode
@@ -40,11 +40,30 @@ enum URLCommand: Hashable {
   case copyAll
   case showAlert(message: String)
   case dismissAlert
-  case showUsage
+  case showUsage(topic: String?)
+  case showPlugins
   case dismissHints
   case quit
   case openApp(name: String)
+  case pluginAction(command: String, name: String, args: [String])
   case moveWindow(MoveWindowParams)
+}
+
+enum MouseCommand: Hashable {
+  case click(JumpAction)
+  case move
+
+  var action: JumpAction {
+    switch self {
+    case .click(let action): return action
+    case .move: return .leftClick
+    }
+  }
+
+  var isMove: Bool {
+    if case .move = self { return true }
+    return false
+  }
 }
 
 /// Named positions for `flash://window_move?position=…`. Each value
@@ -115,7 +134,7 @@ final class URLEventHandler: NSObject {
   /// `URLCommand` and never re-parses a string on a Carbon callback.
   ///
   /// The `flash://` scheme is mandatory. Bare command names like
-  /// `"mouse_click"` are rejected — the URL shape is what tells the
+  /// `"mouse_target"` are rejected — the URL shape is what tells the
   /// reader "this is a flash command, dispatched in-process" and
   /// keeps the string form visually distinct from the argv form
   /// (`["open", ...]`). Any other scheme also returns nil so things
@@ -138,8 +157,9 @@ final class URLEventHandler: NSObject {
   /// The dispatcher in `AppDelegate` switches exhaustively over
   /// `URLCommand`, so the compiler points out any missed wiring.
   private static let commands: [String: (FlashURLQuery) -> URLCommand?] = [
-    "mouse_click": mouseClickCommand,
-    "mouse_move": { _ in .mouseMove },
+    "mouse_target": { q in mouseCommand(q).map(URLCommand.mouseTarget) },
+    "mouse_snipe": { q in mouseCommand(q).map(URLCommand.mouseSnipe) },
+    "mouse_click": { q in mouseCommand(q).map(URLCommand.mouseTarget) },
     "mode_normal": { _ in .normalMode },
     "mode_insert": { _ in .insertMode },
     "mode_command": { _ in .commandMode },
@@ -192,19 +212,29 @@ final class URLEventHandler: NSObject {
       return .showAlert(message: message)
     },
     "alert_dismiss": { _ in .dismissAlert },
-    "help_show": { _ in .showUsage },
+    "help_show": { q in .showUsage(topic: q.value("topic")) },
+    "plugins": { _ in .showPlugins },
     "hints_dismiss": { _ in .dismissHints },
     "flash_quit": { _ in .quit },
     "app_open": { q in
       guard let name = q.value("name"), !name.isEmpty else { return nil }
       return .openApp(name: name)
     },
+    "plugin_action": { q in
+      guard let command = q.value("command"), !command.isEmpty,
+        let name = q.value("name"), !name.isEmpty
+      else { return nil }
+      let args = q.value("args")?
+        .split(separator: " ", omittingEmptySubsequences: true)
+        .map(String.init) ?? []
+      return .pluginAction(command: command, name: name, args: args)
+    },
     "window_move": windowMoveCommand,
   ]
 
   static let usageText = """
-    flash://mouse_click[?right=1|double=1]
-    flash://mouse_move
+    flash://mouse_target[?right=1|double=1|move=1]
+    flash://mouse_snipe[?right=1|double=1|move=1]
     flash://mode_normal
     flash://mode_insert
     flash://mode_command
@@ -253,14 +283,41 @@ final class URLEventHandler: NSObject {
     flash://app_open?name=<app>
     flash://window_move?position=<slot>&screen=<n>
     flash://flash_quit
-    flash://help_show
+    flash://help_show[?topic=<topic>]
+    flash://plugins
+    flash://plugin_action?command=<command>&name=<action>
     """
 }
 
-private func mouseClickCommand(_ q: FlashURLQuery) -> URLCommand? {
-  if q.bool("right") { return .mouseClick(action: .rightClick) }
-  if q.bool("double") { return .mouseClick(action: .doubleClick) }
-  return .mouseClick(action: .leftClick)
+extension URLEventHandler {
+  static let helpTopic = HelpTopic(
+    name: "urls",
+    title: "Flash URLs",
+    summary: "URL actions accepted by Flash and flashctl.",
+    body: """
+      # Flash URLs
+
+      Every resident action is addressed through a `flash://` URL. The same
+      parser is used by Launch Services, the `flash` / `flashctl` CLI, and
+      configured in-process mappings.
+
+      `mouse_target` selects an app-discovered target. `mouse_snipe` selects a
+      precise screen position by repeatedly narrowing a deterministic grid.
+
+      ```text
+      \(URLEventHandler.usageText)
+      ```
+      """)
+}
+
+private func mouseCommand(_ q: FlashURLQuery) -> MouseCommand? {
+  if q.bool("move") { return .move }
+  let right = q.bool("right")
+  let double = q.bool("double")
+  if right && double { return nil }
+  if right { return .click(.rightClick) }
+  if double { return .click(.doubleClick) }
+  return .click(.leftClick)
 }
 
 private func windowMoveCommand(_ q: FlashURLQuery) -> URLCommand? {

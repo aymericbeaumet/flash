@@ -7,8 +7,9 @@ Usage:
   flashctl <action> [query...]
 
 Examples:
-  flash mouse_click
-  flash mouse_click double=1
+  flash mouse_target
+  flash mouse_target double=1
+  flash mouse_snipe move=1
   flash mode_normal
   flash app_open name=Firefox
   flash window_move position=lefthalf

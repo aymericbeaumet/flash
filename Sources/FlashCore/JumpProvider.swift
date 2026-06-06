@@ -48,11 +48,12 @@ public enum CandidateScope: Sendable {
   case all
 }
 
-public enum CandidateKind: Sendable {
+public enum CandidateKind: Sendable, Equatable {
   case app
   case tmuxWindow
   case browserTab
   case slackChannel
+  case plugin(String)
 }
 
 public struct Candidate: @unchecked Sendable {

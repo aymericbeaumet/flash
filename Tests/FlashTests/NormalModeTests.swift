@@ -89,7 +89,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "g", chars: "F", ignoring: "f", flags: [.shift]), .mainFrame)
     XCTAssertEqual(command(pending: "g", chars: "t"), .tabNext)
     XCTAssertEqual(command(pending: "g", chars: "T", ignoring: "t", flags: [.shift]), .tabPrev)
-    XCTAssertEqual(command(pending: "g", chars: "N", ignoring: "n", flags: [.shift]), .tabSelect(index: nil))
+    XCTAssertEqual(command(pending: "g", chars: "4"), .tabSelect(index: 4))
+    XCTAssertEqual(command(chars: "n"), .newWindow)
     XCTAssertEqual(command(chars: "t"), .tabNewInsert)
   }
 
@@ -109,9 +110,9 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(nextTab.command, .tabNext)
     XCTAssertEqual(nextTab.repeatCount, 2)
 
-    let selectTab = transition(pending: "3g", chars: "N", ignoring: "n", flags: [.shift])
-    XCTAssertEqual(selectTab.command, .tabSelect(index: nil))
-    XCTAssertEqual(selectTab.repeatCount, 3)
+    let selectTab = transition(pending: "g", chars: "3")
+    XCTAssertEqual(selectTab.command, .tabSelect(index: 3))
+    XCTAssertEqual(selectTab.repeatCount, 1)
 
     let leadingZero = transition(chars: "0")
     XCTAssertNil(leadingZero.command)
@@ -139,12 +140,14 @@ final class NormalModeTests: XCTestCase {
 
   func testMoveMouseSequence() {
     XCTAssertEqual(transition(chars: "m").pending, "m")
-    XCTAssertEqual(command(pending: "m", chars: "f"), .mouseMove)
+    XCTAssertEqual(command(pending: "m", chars: "f"), .mouseTarget(.move))
+    XCTAssertEqual(command(pending: "m", chars: "s"), .mouseSnipe(.move))
     XCTAssertNil(command(pending: "m", chars: "x"))
   }
 
   func testFIsHintModeAndShiftFIsUnmapped() {
-    XCTAssertEqual(command(chars: "f"), .mouseClick(action: .leftClick))
+    XCTAssertEqual(command(chars: "f"), .mouseTarget(.click(.leftClick)))
+    XCTAssertEqual(command(chars: "s"), .mouseSnipe(.click(.leftClick)))
     XCTAssertNil(command(chars: "F", ignoring: "f", flags: [.shift]))
   }
 
@@ -153,9 +156,11 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       NormalModeInterpreter.pendingCommand(pending: "r")?.command,
       .reload)
-    XCTAssertEqual(command(pending: "r", chars: "f"), .mouseClick(action: .rightClick))
+    XCTAssertEqual(command(pending: "r", chars: "f"), .mouseTarget(.click(.rightClick)))
+    XCTAssertEqual(command(pending: "r", chars: "s"), .mouseSnipe(.click(.rightClick)))
     XCTAssertEqual(transition(chars: "d").pending, "d")
-    XCTAssertEqual(command(pending: "d", chars: "f"), .mouseClick(action: .doubleClick))
+    XCTAssertEqual(command(pending: "d", chars: "f"), .mouseTarget(.click(.doubleClick)))
+    XCTAssertEqual(command(pending: "d", chars: "s"), .mouseSnipe(.click(.doubleClick)))
   }
 
   func testHintCommitEntersInsertOnlyForTextInputLeftClickTargets() {
@@ -195,8 +200,8 @@ final class NormalModeTests: XCTestCase {
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
     XCTAssertEqual(command(chars: "i"), .insertMode)
-    XCTAssertEqual(command(chars: "?"), .showUsage)
-    XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage)
+    XCTAssertEqual(command(chars: "?"), .showUsage(topic: nil))
+    XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage(topic: nil))
     XCTAssertNil(
       NormalModeInterpreter.interpret(
         pending: "",
@@ -482,10 +487,62 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("put"), .paste)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("%y"), .copyAll)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":%yan"), .copyAll)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":plugins"), .plugins)
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("qa"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("q!!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("p!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("qu!it"))
+  }
+
+  func testCommandLineHelpTopicParser() throws {
+    XCTAssertEqual(try XCTUnwrap(NormalModeDispatcher.commandLineHelpTopic(":help")), nil)
+    XCTAssertEqual(try XCTUnwrap(NormalModeDispatcher.commandLineHelpTopic(":h")), nil)
+    XCTAssertEqual(
+      try XCTUnwrap(NormalModeDispatcher.commandLineHelpTopic(":help plugins")),
+      "plugins")
+    XCTAssertEqual(
+      try XCTUnwrap(NormalModeDispatcher.commandLineHelpTopic("  HELP   normal-mode  ")),
+      "normal-mode")
+    XCTAssertTrue(NormalModeDispatcher.commandLineHelpTopic(":hello") == nil)
+  }
+
+  func testHelpDocsRenderIndexAndTopic() {
+    let index = HelpDocs.render(topic: nil, config: .default, showModes: true)
+    XCTAssertTrue(index.contains("`plugins`"))
+    XCTAssertTrue(index.contains("`normal-mode`"))
+
+    let plugins = HelpDocs.render(topic: "plugins", config: .default, showModes: true)
+    XCTAssertTrue(plugins.contains("# Plugins"))
+    XCTAssertTrue(plugins.contains("manifest.json"))
+
+    let unknown = HelpDocs.render(topic: "missing", config: .default, showModes: true)
+    XCTAssertTrue(unknown.contains("Unknown Help Topic"))
+  }
+
+  func testSnipeGridUsesDeterministicSingleKeyCells() {
+    let region = SnipeGrid.Region(frame: CGRect(x: 0, y: 0, width: 400, height: 200))
+    let hints = SnipeGrid.hints(
+      in: region,
+      depth: 0,
+      alphabet: Array("abcdefghijklmnop"))
+
+    XCTAssertEqual(hints.count, 16)
+    XCTAssertEqual(hints.first?.label, "a")
+    XCTAssertEqual(hints.last?.label, "p")
+    XCTAssertEqual(hints[0].target.frame, CGRect(x: 0, y: 100, width: 50, height: 100))
+    XCTAssertEqual(hints[7].target.frame, CGRect(x: 350, y: 100, width: 50, height: 100))
+    XCTAssertEqual(hints[15].target.frame, CGRect(x: 350, y: 0, width: 50, height: 100))
+  }
+
+  func testPluginCommandLineInvocationParser() throws {
+    let invocation = try XCTUnwrap(
+      NormalModeDispatcher.pluginCommandLineInvocation(":spotify pause quiet now"))
+    XCTAssertEqual(invocation.command, "spotify")
+    XCTAssertEqual(invocation.name, "pause")
+    XCTAssertEqual(invocation.args, ["quiet", "now"])
+
+    XCTAssertNil(NormalModeDispatcher.pluginCommandLineInvocation(":spotify"))
+    XCTAssertNil(NormalModeDispatcher.pluginCommandLineInvocation(":"))
   }
 
   func testCommandLineOpenAppQuery() {
@@ -712,15 +769,15 @@ final class NormalModeTests: XCTestCase {
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "H", "L", "f", "rf", "df", "mf", "u", "ctrl-r", "x", "/", "\\space", "r", "t", "MAPPINGS",
-      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "gt", "gT", "gN", "N{mapping}",
+      "gg", "G", "H", "L", "f", "rf", "df", "mf", "s", "rs", "ds", "ms", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "t", "MAPPINGS",
+      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "gt", "gT", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
-      ":open <query>", ":flashlight <query>", "flash://mouse_click",
-      "flash://flashlight", "flash://mouse_click?right=1",
-      "flash://mouse_click?double=1", "flash://history_back", "flash://history_forward",
+      ":open <query>", ":flashlight <query>", "flash://mouse_target",
+      "flash://flashlight", "flash://mouse_target?right=1",
+      "flash://mouse_target?double=1", "flash://mouse_snipe", "flash://history_back", "flash://history_forward",
       "flash://movement_back", "flash://movement_forward",
-      "flash://tab_select", "flash://tab_new_insert", "?"]
+      "flash://tab_select?index=1", "flash://tab_new_insert", "?"]
     {
       XCTAssertTrue(
         help.contains(mapping),
@@ -737,7 +794,7 @@ final class NormalModeTests: XCTestCase {
     let help = NormalModeDispatcher.helpText(config: config, showModes: true)
     XCTAssertTrue(help.contains("zz"))
     XCTAssertTrue(help.contains("flash://app_reload"))
-    XCTAssertFalse(help.contains("flash://mouse_click"))
+    XCTAssertFalse(help.contains("flash://mouse_target"))
     XCTAssertFalse(help.contains(":q[uit]"))
   }
 
@@ -755,7 +812,7 @@ final class NormalModeTests: XCTestCase {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: false)
     XCTAssertTrue(help.contains("ACTION"))
     XCTAssertTrue(help.contains("MAPPING"))
-    XCTAssertTrue(help.contains("flash://mouse_click"))
+    XCTAssertTrue(help.contains("flash://mouse_target"))
     XCTAssertTrue(help.contains("f"))
     XCTAssertFalse(help.contains("NORMAL"))
     XCTAssertFalse(help.contains("INSERT"))

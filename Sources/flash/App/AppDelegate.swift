@@ -39,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case click
     case copyURL
     case moveMouse
+    case snipeClick
+    case snipeMove
   }
 
   private struct MovementEntry {
@@ -75,8 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private var config = Config.default
+  private let pluginManager = PluginManager()
   private var registry: SourceRegistry!
   private var monitor: AppMonitor!
+  private var debugServer: DebugServer?
   private var overlay: OverlayPanel!
   private var alertPanel: AlertPanel!
   private var urlHandler: URLEventHandler!
@@ -108,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var editableFocusSuppressedPID: pid_t?
   private var selectedInitialMode = false
   private var sourceAppPID: pid_t?
+  private var snipeRegion: SnipeGrid.Region?
+  private var snipeDepth = 0
   private var movementCurrent: MovementEntry?
   private var movementBackStack: [MovementEntry] = []
   private var movementForwardStack: [MovementEntry] = []
@@ -142,12 +148,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     config = ConfigLoader.load()
-    registry = SourceRegistry(openConfig: config.open)
+    let manager = pluginManager
+    registry = SourceRegistry(
+      openConfig: config.open,
+      pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
+    monitor.focusedElementDidChange = { [weak self] pid in
+      self?.pluginManager.emit(
+        PluginEvent(
+          name: "ax.changed",
+          payload: ["pid": Int(pid)],
+          bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+          configPath: nil,
+          focused: true))
+    }
     monitor.focusedWindowGeometryDidChange = { [weak self] pid, notification in
       self?.focusedWindowGeometryDidChange(pid: pid, notification: notification)
     }
     monitor.start()
+    pluginManager.onStateChanged = { [weak self] in
+      self?.pluginStateDidChange()
+    }
+    pluginManager.start(config: config)
+    configureDebugServer(for: config)
 
     overlay = OverlayPanel()
     overlay.coordinator = self
@@ -182,6 +205,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     installDismissObservers()
     prewarmCandidateFinderCaches(reason: "launch")
     startCandidateFinderLiveRefresh()
+    pluginManager.emit(
+      PluginEvent(name: "flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
   }
 
   private func handleURLCommand(_ cmd: URLCommand) {
@@ -189,10 +214,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       "[url] command=\(cmd.diagnosticDescription) mode=\(flashMode) hints=\(currentHints.count) "
         + "in_flight=\(activationInFlight) overlay=\(String(describing: overlay?.inputMode))")
     switch cmd {
-    case .mouseClick(let action):
-      activate(action: action)
-    case .mouseMove:
-      activate(action: .leftClick, commitBehavior: .moveMouse, contextOverride: normalModeContext())
+    case .mouseTarget(let command):
+      activateMouseTarget(command, contextOverride: nil)
+    case .mouseSnipe(let command):
+      activateMouseSnipe(command, contextOverride: nil)
     case .normalMode:
       enterNormalMode()
     case .insertMode:
@@ -213,14 +238,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       configErrorAlertVisible = false
       lastConfigErrorAlertMessage = nil
       alertPanel.dismiss()
-    case .showUsage:
-      showHelp()
+    case .showUsage(let topic):
+      showHelp(topic: topic)
+    case .showPlugins:
+      showPlugins()
     case .dismissHints:
       cancelOverlay()
     case .quit:
       NSApp.terminate(nil)
     case .openApp(let name):
       openSourceItem(matching: name)
+    case .pluginAction(let command, let name, let args):
+      _ = pluginManager.invoke(
+        command: command,
+        name: name,
+        args: args,
+        raw: cmd.diagnosticDescription)
     case .moveWindow(let params):
       WindowMover.move(params)
     }
@@ -250,6 +283,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.registry.refreshRunningApplications()
+        self.pluginManager.emit(
+          PluginEvent(
+            name: "focus.changed",
+            payload: [
+              "bundle_id": app.bundleIdentifier ?? "",
+              "localized_name": app.localizedName ?? "",
+              "pid": Int(app.processIdentifier),
+            ],
+            bundleID: app.bundleIdentifier,
+            configPath: nil,
+            focused: true))
         self.recordAppActivation(app.processIdentifier)
         if self.flashMode == .normal {
           self.normalModeTargetPID = app.processIdentifier
@@ -269,6 +313,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     ) { [weak self] _ in
       guard let self else { return }
       self.cancelOverlay()
+      self.pluginManager.emit(
+        PluginEvent(name: "space.changed", payload: [:], bundleID: nil, configPath: nil, focused: nil))
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
       }
@@ -277,9 +323,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       forName: NSWorkspace.didLaunchApplicationNotification,
       object: nil,
       queue: .main
-    ) { [weak self] _ in
+    ) { [weak self] note in
       guard let self else { return }
       self.registry.refreshRunningApplications()
+      if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        self.pluginManager.emit(
+          PluginEvent(
+            name: "apps.launched",
+            payload: [
+              "bundle_id": app.bundleIdentifier ?? "",
+              "localized_name": app.localizedName ?? "",
+              "pid": Int(app.processIdentifier),
+            ],
+            bundleID: app.bundleIdentifier,
+            configPath: nil,
+            focused: false))
+      }
       self.invalidateCandidateFinderCaches(reason: "app_launch", refreshApps: false)
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
@@ -289,9 +348,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       forName: NSWorkspace.didTerminateApplicationNotification,
       object: nil,
       queue: .main
-    ) { [weak self] _ in
-      self?.registry.refreshRunningApplications()
-      self?.invalidateCandidateFinderCaches(reason: "app_terminate", refreshApps: false)
+    ) { [weak self] note in
+      guard let self else { return }
+      self.registry.refreshRunningApplications()
+      if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        self.pluginManager.emit(
+          PluginEvent(
+            name: "apps.terminated",
+            payload: [
+              "bundle_id": app.bundleIdentifier ?? "",
+              "localized_name": app.localizedName ?? "",
+              "pid": Int(app.processIdentifier),
+            ],
+            bundleID: app.bundleIdentifier,
+            configPath: nil,
+            focused: false))
+      }
+      self.invalidateCandidateFinderCaches(reason: "app_terminate", refreshApps: false)
     }
     workspaceTokens = [appSwitch, activeSpace, appLaunched, appTerminated]
 
@@ -316,9 +389,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationWillTerminate(_ notification: Notification) {
     candidateFinderLiveRefreshTimer?.cancel()
     candidateFinderLiveRefreshTimer = nil
+    pluginManager.stop()
+    debugServer?.stop()
+    debugServer = nil
   }
 
   // MARK: Activation
+
+  private func activateMouseTarget(_ command: MouseCommand, contextOverride: AppContext?) {
+    let behavior: HintCommitBehavior = command.isMove ? .moveMouse : .click
+    activate(action: command.action, commitBehavior: behavior, contextOverride: contextOverride)
+  }
+
+  private func activateMouseSnipe(_ command: MouseCommand, contextOverride: AppContext?) {
+    let context = contextOverride ?? currentNonFlashContext() ?? normalModeContext()
+    let region = SnipeGrid.initialRegion(
+      context: context,
+      screens: NSScreen.screens,
+      fallback: OverlayPanel.unionScreenFrame())
+    snipeRegion = region
+    snipeDepth = 0
+    sourceAppPID = context?.processID
+    pendingAction = command.action
+    pendingHintCommitBehavior = command.isMove ? .snipeMove : .snipeClick
+    currentPrefix = ""
+    overlay.overlayConfig = config.overlay
+    overlay.debugConfig = config.debug
+    displaySnipeRegion(region, depth: 0)
+  }
+
+  private func displaySnipeRegion(_ region: SnipeGrid.Region, depth: Int) {
+    let hints = SnipeGrid.hints(
+      in: region,
+      depth: depth,
+      alphabet: config.resolvedAlphabet.chars)
+    guard !hints.isEmpty else {
+      applyModeOverlay()
+      return
+    }
+    activationGen &+= 1
+    activationInFlight = false
+    activationInFlightGeneration = nil
+    currentHints = hints
+    currentPrefix = ""
+    overlay.inputMode = .hints
+    overlay.display(hints: hints)
+  }
 
   private func activate(
     action: JumpAction,
@@ -334,7 +450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     // Cancel any in-flight walk and clear any visible hints. The
     // earlier "drop on busy" behaviour rejected the new trigger; the
-    // user-facing rule now is "the most recent mouse_click wins" —
+    // user-facing rule now is "the most recent mouse target wins" —
     // pressing the hotkey again while hints are up restarts from
     // scratch (cancel current, kick off a fresh walk on the now-
     // focused window). cancelOverlay() bumps activationGen, so any
@@ -497,6 +613,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     currentHints = []
     currentPrefix = ""
     sourceAppPID = nil
+    snipeRegion = nil
+    snipeDepth = 0
     pendingHintCommitBehavior = .click
     invalidateActivation(reason: "cancel_overlay")
     applyModeOverlay()
@@ -534,7 +652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       "If Flash IS already in the list (toggle ON):",
       "  The grant is bound to the previous binary's hash.",
       "  Toggle Flash OFF then ON to re-bind to the current build.",
-      "  (./Scripts/install-release.sh resets this for you next time.)",
+      "  (./Scripts/dev.sh resets this for you next time.)",
       "",
       "System Settings has been opened.",
     ]
@@ -578,6 +696,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func transitionMode(to nextMode: FlashMode, reason: String) {
     let previousMode = flashMode
+    closeModalStateForModeExit(reason: "enter_\(nextMode)_\(reason)")
     if previousMode != nextMode {
       modeWillLeave(previousMode, to: nextMode, reason: reason)
       flashMode = nextMode
@@ -685,6 +804,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func focusedWindowGeometryDidChange(pid: pid_t, notification: String) {
     guard let context = currentNonFlashContext(), context.processID == pid else { return }
+    pluginManager.emit(
+      PluginEvent(
+        name: "ax.changed",
+        payload: ["notification": notification, "pid": Int(pid)],
+        bundleID: context.bundleIdentifier,
+        configPath: nil,
+        focused: true))
     beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
   }
 
@@ -1044,23 +1170,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterCommandLineMode(initialText: "open ", candidateFinderScope: all ? .all : .running)
     case .flashlight:
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: .all)
-    case .mouseClick(let action):
-      guard let context = normalModeContext() else {
-        FlashLog.debug("[mappings] no target app for mouse_click")
-        applyModeOverlay()
-        return
-      }
-      activate(action: action, contextOverride: context)
-    case .mouseMove:
-      guard let context = normalModeContext() else {
-        FlashLog.debug("[mappings] no target app for mouse_move")
-        applyModeOverlay()
-        return
-      }
-      activate(
-        action: .leftClick,
-        commitBehavior: .moveMouse,
-        contextOverride: context)
+    case .mouseTarget(let command):
+      activateMouseTarget(command, contextOverride: normalModeContext())
+    case .mouseSnipe(let command):
+      activateMouseSnipe(command, contextOverride: normalModeContext())
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()
@@ -1116,9 +1229,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           (CGKeyCode(kVK_ANSI_C), .maskCommand),
         ])
       }
-    case .showUsage:
-      showHelp()
-    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .moveWindow:
+    case .showUsage(let topic):
+      showHelp(topic: topic)
+    case .showPlugins:
+      showPlugins()
+    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginAction, .moveWindow:
       handleURLCommand(command)
     }
   }
@@ -1153,6 +1268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     else { return }
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
+    closeModalStateForModeExit(reason: "enter_command")
     clearTransientHintState(reason: "enter_command")
     resetCommandLineState()
     if let candidateFinderScope {
@@ -1183,14 +1299,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     .normal
   }
 
-  private func showHelp() {
+  private func showHelp(topic: String? = nil) {
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
     clearTransientHintState(reason: "enter_help")
     clearCandidateFinderState()
     overlay.hide()
     overlay.setActiveWindowBorder(around: nil)
-    overlay.displayHelp(NormalModeDispatcher.helpText(config: config, showModes: modeBadgeEnabled))
+    overlay.displayHelp(HelpDocs.render(topic: topic, config: config, showModes: modeBadgeEnabled))
+  }
+
+  private func showPlugins() {
+    normalModePendingCommandToken &+= 1
+    overlay.normalModePending = ""
+    clearTransientHintState(reason: "enter_plugins")
+    clearCandidateFinderState()
+    overlay.hide()
+    overlay.setActiveWindowBorder(around: nil)
+    overlay.displayHelp(pluginManager.statusText())
   }
 
   private func enterCandidateFinderMode(scope: CandidateScope) {
@@ -1377,13 +1503,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       submitSelectedCommandLineApp()
       return
     }
-    guard let command = NormalModeDispatcher.commandLineCommand(raw) else {
-      FlashLog.debug("[normal_mode] unknown command \(raw)")
-      finishCommandLineInteraction(reason: "command_unknown")
+    if let helpTopic = NormalModeDispatcher.commandLineHelpTopic(raw) {
+      finishCommandLineInteraction(reason: "help_submit")
+      showHelp(topic: helpTopic)
       return
     }
-    finishCommandLineInteraction(reason: "command_submit")
-    performCommandLineCommand(command)
+    if let command = NormalModeDispatcher.commandLineCommand(raw) {
+      finishCommandLineInteraction(reason: "command_submit")
+      performCommandLineCommand(command)
+      return
+    }
+    if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
+      pluginManager.invoke(
+        command: plugin.command,
+        name: plugin.name,
+        args: plugin.args,
+        raw: plugin.raw)
+    {
+      finishCommandLineInteraction(reason: "plugin_command_submit")
+      return
+    }
+    FlashLog.debug("[normal_mode] unknown command \(raw)")
+    finishCommandLineInteraction(reason: "command_unknown")
   }
 
   private func performCommandLineCommand(_ command: NormalModeDispatcher.CommandLineCommand) {
@@ -1418,6 +1559,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMappedCommand(.paste)
     case .copyAll:
       performMappedCommand(.copyAll)
+    case .plugins:
+      showPlugins()
+    case .help(let topic):
+      showHelp(topic: topic)
     }
   }
 
@@ -1972,7 +2117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {
-    if intent == .scroll,
+    if case .scroll = intent,
       Self.pointerScrollShouldBeSuppressed(
         mode: flashMode,
         hasHints: !currentHints.isEmpty,
@@ -1983,10 +2128,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       scheduleNormalModeRecapture()
       return
     }
+    let replayClick: OverlayPointerClick?
+    if case .click(let click) = intent,
+      flashMode == .normal,
+      currentHints.isEmpty,
+      !Self.pointIsInMenuBar(click.location)
+    {
+      replayClick = click
+    } else {
+      replayClick = nil
+    }
     normalModeScrollSuppressionUntil = nil
     cancelOverlay()
     if flashMode != .insert {
       enterInsertMode(reason: .pointerClick)
+    }
+    if let replayClick {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
+        _ = ActionDispatcher.synthesizeClick(
+          at: replayClick.location,
+          action: replayClick.action,
+          modifiers: replayClick.modifiers)
+      }
     }
   }
 
@@ -2067,6 +2230,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private func commit(hint: AssignedHint, clickModifiers: ClickModifiers) {
+    if pendingHintCommitBehavior == .snipeClick || pendingHintCommitBehavior == .snipeMove {
+      commitSnipeCell(hint: hint, clickModifiers: clickModifiers)
+      return
+    }
     if pendingHintCommitBehavior == .copyURL {
       if let url = hint.target.url {
         NormalModeDispatcher.copy(url)
@@ -2075,6 +2242,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       currentHints = []
       currentPrefix = ""
       sourceAppPID = nil
+      snipeRegion = nil
+      snipeDepth = 0
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
@@ -2089,6 +2258,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       currentHints = []
       currentPrefix = ""
       sourceAppPID = nil
+      snipeRegion = nil
+      snipeDepth = 0
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
@@ -2140,6 +2311,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     currentHints = []
     currentPrefix = ""
     sourceAppPID = nil
+    snipeRegion = nil
+    snipeDepth = 0
     pendingHintCommitBehavior = .click
     if shouldEnterInsertAfterCommit {
       enterInsertMode(reason: .hintCommit)
@@ -2153,6 +2326,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.scheduleNormalModeRecapture()
       }
     }
+  }
+
+  private func commitSnipeCell(hint: AssignedHint, clickModifiers: ClickModifiers) {
+    let nextRegion = SnipeGrid.Region(frame: hint.target.frame)
+    let nextDepth = snipeDepth + 1
+    if !SnipeGrid.shouldCommit(region: nextRegion, depth: nextDepth) {
+      snipeRegion = nextRegion
+      snipeDepth = nextDepth
+      currentPrefix = ""
+      displaySnipeRegion(nextRegion, depth: nextDepth)
+      return
+    }
+
+    let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
+    let shouldMove = pendingHintCommitBehavior == .snipeMove
+    overlay.hide()
+    currentHints = []
+    currentPrefix = ""
+    snipeRegion = nil
+    snipeDepth = 0
+    activationGen &+= 1
+    sourceAppPID = nil
+    pendingHintCommitBehavior = .click
+    if shouldMove {
+      _ = ActionDispatcher.moveCursor(to: point)
+    } else {
+      _ = ActionDispatcher.synthesizeClick(
+        at: point,
+        action: pendingAction,
+        modifiers: clickModifiers)
+    }
+    applyModeOverlay()
+    refreshCurrentModeSideEffects(reason: shouldMove ? "snipe_move_commit" : "snipe_click_commit")
   }
 
   static func hintCommitShouldEnterInsertMode(
@@ -2400,6 +2606,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
     overlay.normalModeMappings = cfg.mode.mappings(for: .normal)
     registry.updateOpenConfig(cfg.open)
+    pluginManager.updateConfig(cfg)
+    pluginManager.emit(
+      PluginEvent(
+        name: "config.changed",
+        payload: ["resolved": cfg.resolvedConfigJSON],
+        bundleID: nil,
+        configPath: "*",
+        focused: nil))
+    configureDebugServer(for: cfg)
     invalidateCandidateFinderCaches(reason: "config_reload", refreshApps: true)
     monitor.updateConfig(cfg)
     modeBadgeEnabled = hasNormalModeBinding(cfg)
@@ -2412,6 +2627,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // Push native mappings too — the Carbon hotkey registry rebuilds
     // from scratch each call, so add/remove/edit all converge atomically.
     mappings.apply(mode: cfg.mode)
+  }
+
+  private func pluginStateDidChange() {
+    invalidateCandidateFinderCaches(reason: "plugin_state", refreshApps: false)
+    debugServer?.broadcastState()
+  }
+
+  private func configureDebugServer(for cfg: Config) {
+    guard let httpHost = cfg.debug.httpHost, !httpHost.isEmpty else {
+      debugServer?.stop()
+      debugServer = nil
+      return
+    }
+    if debugServer?.hostPort == httpHost {
+      debugServer?.broadcastState()
+      return
+    }
+    debugServer?.stop()
+    let server = DebugServer(
+      hostPort: httpHost,
+      stateProvider: { [weak self] in self?.debugStateJSON() ?? [:] })
+    debugServer = server
+    server.start()
+  }
+
+  private func debugStateJSON() -> [String: Any] {
+    let configJSON: Any
+    if let data = config.resolvedConfigJSON.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data)
+    {
+      configJSON = object
+    } else {
+      configJSON = config.resolvedConfigJSON
+    }
+    let app = NSWorkspace.shared.frontmostApplication
+    let focusedPID: Any = app.map { Int($0.processIdentifier) } ?? NSNull()
+    return [
+      "config": configJSON,
+      "focused_app": [
+        "bundle_id": app?.bundleIdentifier ?? NSNull(),
+        "localized_name": app?.localizedName ?? NSNull(),
+        "pid": focusedPID,
+      ],
+      "mode": "\(flashMode)",
+      "overlay": String(describing: overlay?.inputMode),
+      "plugins": pluginManager.stateJSON(),
+    ]
   }
 
   private func selectInitialModeIfNeeded() {

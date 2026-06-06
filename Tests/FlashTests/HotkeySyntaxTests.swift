@@ -85,23 +85,33 @@ final class HotkeySyntaxTests: XCTestCase {
 
   // MARK: - Action parsing
 
-  func testParseFlashMouseClick() {
-    let action = parseMappingAction(rawString: "flash://mouse_click")
+  func testParseFlashMouseTarget() {
+    let action = parseMappingAction(rawString: "flash://mouse_target")
     guard case .flashCommand(let cmd) = action else {
       return XCTFail("expected .flashCommand")
     }
-    if case .mouseClick(let hintAction) = cmd {
+    if case .mouseTarget(.click(let hintAction)) = cmd {
       XCTAssertEqual(hintAction, .leftClick)
     } else {
-      XCTFail("expected .mouseClick, got \(cmd)")
+      XCTFail("expected .mouseTarget, got \(cmd)")
     }
 
     XCTAssertEqual(
-      parseMappingAction(rawString: "flash://mouse_click?right=1")?.command,
-      .mouseClick(action: .rightClick))
+      parseMappingAction(rawString: "flash://mouse_target?right=1")?.command,
+      .mouseTarget(.click(.rightClick)))
     XCTAssertEqual(
-      parseMappingAction(rawString: "flash://mouse_click?double=1")?.command,
-      .mouseClick(action: .doubleClick))
+      parseMappingAction(rawString: "flash://mouse_target?double=1")?.command,
+      .mouseTarget(.click(.doubleClick)))
+    XCTAssertEqual(
+      parseMappingAction(rawString: "flash://mouse_target?move=1")?.command,
+      .mouseTarget(.move))
+    XCTAssertEqual(
+      parseMappingAction(rawString: "flash://mouse_snipe?move=1")?.command,
+      .mouseSnipe(.move))
+    XCTAssertEqual(
+      parseMappingAction(rawString: "flash://mouse_click")?.command,
+      .mouseTarget(.click(.leftClick)))
+    XCTAssertNil(parseMappingAction(rawString: "flash://mouse_move"))
   }
 
   func testParseFlashNormalMode() {
@@ -156,9 +166,24 @@ final class HotkeySyntaxTests: XCTestCase {
 
   func testParseFlashHelp() {
     let help = parseMappingAction(rawString: "flash://help_show")
-    guard case .flashCommand(.showUsage) = help else {
+    guard case .flashCommand(.showUsage(topic: nil)) = help else {
       return XCTFail("expected .showUsage for help_show")
     }
+    XCTAssertEqual(
+      parseMappingAction(rawString: "flash://help_show?topic=plugins")?.command,
+      .showUsage(topic: "plugins"))
+  }
+
+  func testParseFlashPlugins() {
+    XCTAssertEqual(parseMappingAction(rawString: "flash://plugins")?.command, .showPlugins)
+    let action = parseMappingAction(
+      rawString: "flash://plugin_action?command=spotify&name=pause&args=quiet")
+    guard case .flashCommand(.pluginAction(let command, let name, let args)) = action else {
+      return XCTFail("expected .pluginAction")
+    }
+    XCTAssertEqual(command, "spotify")
+    XCTAssertEqual(name, "pause")
+    XCTAssertEqual(args, ["quiet"])
   }
 
   func testNonFlashStringIsRejected() {
@@ -199,7 +224,6 @@ final class HotkeySyntaxTests: XCTestCase {
   func testParseFlashModeActions() {
     XCTAssertEqual(parseMappingAction(rawString: "flash://mode_insert")?.command, .insertMode)
     XCTAssertEqual(parseMappingAction(rawString: "flash://mode_command")?.command, .commandMode)
-    XCTAssertEqual(parseMappingAction(rawString: "flash://mouse_move")?.command, .mouseMove)
     XCTAssertEqual(parseMappingAction(rawString: "flash://url_copy")?.command, .copyURL)
     XCTAssertEqual(
       parseMappingAction(rawString: "flash://app_open_finder")?.command,
@@ -238,6 +262,7 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingAction(rawString: "flash://app_open"))  // no name
     XCTAssertNil(parseMappingAction(rawString: "flash://alert_show"))  // no message
     XCTAssertNil(parseMappingAction(rawString: "flash://show_alert"))  // no message
+    XCTAssertNil(parseMappingAction(rawString: "flash://plugin_action?command=spotify"))
     XCTAssertNil(parseMappingAction(rawString: "flash://usage"))
   }
 

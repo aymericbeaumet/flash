@@ -13,6 +13,7 @@ final class SourceRegistry {
   private let descriptors: [SourceDescriptor]
   private let terminalBundleIDs: Set<String>
   private let runningApplicationsProvider: () -> [NSRunningApplication]
+  private let pluginSourcesProvider: () -> [FlashSource]
   private let lock = NSLock()
   private var activeSourcesByID: [String: FlashSource] = [:]
   private var runningApplications: [NSRunningApplication] = []
@@ -23,7 +24,8 @@ final class SourceRegistry {
     openConfig: Config.Open = .init(),
     terminalBundleIDs: Set<String> = TmuxProvider.terminalBundles,
     runningApplications: [NSRunningApplication]? = nil,
-    runningApplicationsProvider: (() -> [NSRunningApplication])? = nil
+    runningApplicationsProvider: (() -> [NSRunningApplication])? = nil,
+    pluginSourcesProvider: (() -> [FlashSource])? = nil
   ) {
     let initialRunningApplications =
       runningApplications ?? runningApplicationsProvider?() ?? NSWorkspace.shared.runningApplications
@@ -34,6 +36,7 @@ final class SourceRegistry {
     } else {
       self.runningApplicationsProvider = { NSWorkspace.shared.runningApplications }
     }
+    self.pluginSourcesProvider = pluginSourcesProvider ?? { [] }
     self.terminalBundleIDs = terminalBundleIDs
     self.openConfig = openConfig
     self.descriptors =
@@ -86,8 +89,9 @@ final class SourceRegistry {
 
   var sources: [FlashSource] {
     lock.lock()
-    defer { lock.unlock() }
-    return activeSourcesByID.values.sorted { lhs, rhs in
+    let builtIn = Array(activeSourcesByID.values)
+    lock.unlock()
+    return (builtIn + pluginSourcesProvider()).sorted { lhs, rhs in
       if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
       return lhs.identifier < rhs.identifier
     }

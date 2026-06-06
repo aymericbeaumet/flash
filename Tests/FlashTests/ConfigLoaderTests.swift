@@ -27,17 +27,30 @@ final class ConfigLoaderTests: XCTestCase {
       .flashlight)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "rf" })?.action.command,
-      .mouseClick(action: .rightClick))
+      .mouseTarget(.click(.rightClick)))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "df" })?.action.command,
-      .mouseClick(action: .doubleClick))
+      .mouseTarget(.click(.doubleClick)))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "mf" })?.action.command,
+      .mouseTarget(.move))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "s" })?.action.command,
+      .mouseSnipe(.click(.leftClick)))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "ms" })?.action.command,
+      .mouseSnipe(.move))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "yy" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "o" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "O" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "gN" })?.action.command,
-      .tabSelect(index: nil))
+      c.mode.normal.first(where: { $0.key == "g4" })?.action.command,
+      .tabSelect(index: 4))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "gN" }))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "n" })?.action.command,
+      .newWindow)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "t" })?.action.command,
       .tabNewInsert)
@@ -59,6 +72,8 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.mode.all.isEmpty)
     XCTAssertTrue(c.mode.insert.isEmpty)
     XCTAssertTrue(c.open.ignoredApps.isEmpty)
+    XCTAssertTrue(c.plugins.thirdParty.isEmpty)
+    XCTAssertNil(c.debug.httpHost)
   }
 
   func testParsesModeLabelsInlineTable() {
@@ -135,6 +150,61 @@ final class ConfigLoaderTests: XCTestCase {
         "com.flash.vimium-oracle",
       ])
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testParsesPluginReferences() throws {
+    let source = URL(fileURLWithPath: "/Users/test/.config/flash/flash.toml")
+    let c = ConfigLoader.parse(
+      """
+      [plugins]
+      third_party = ["github:user/project", "file:../plugins/spotify"]
+      """,
+      sourceURL: source)
+
+    XCTAssertEqual(c.plugins.thirdParty.count, 2)
+    XCTAssertEqual(c.plugins.thirdParty[0].raw, "github:user/project")
+    if case .github(let owner, let repository) = c.plugins.thirdParty[0].kind {
+      XCTAssertEqual(owner, "user")
+      XCTAssertEqual(repository, "project")
+    } else {
+      XCTFail("expected github plugin reference")
+    }
+    if case .file(let path) = c.plugins.thirdParty[1].kind {
+      XCTAssertEqual(path, "/Users/test/.config/plugins/spotify")
+    } else {
+      XCTFail("expected file plugin reference")
+    }
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testInvalidPluginReferenceReportsDiagnostic() {
+    let c = ConfigLoader.parse(
+      """
+      [plugins]
+      third_party = ["github:user", "https://example.com/plugin"]
+      """)
+
+    XCTAssertTrue(c.plugins.thirdParty.isEmpty)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("plugins.third_party entries must be")
+      })
+  }
+
+  func testParsesDebugHTTPHostBareAndQuoted() {
+    let bare = ConfigLoader.parse(
+      """
+      [debug]
+      http_host = localhost:4242
+      """)
+    XCTAssertEqual(bare.debug.httpHost, "localhost:4242")
+
+    let quoted = ConfigLoader.parse(
+      """
+      [debug]
+      http_host = "127.0.0.1:4343"
+      """)
+    XCTAssertEqual(quoted.debug.httpHost, "127.0.0.1:4343")
   }
 
   func testParsesMultilineStringArrayComments() {
@@ -216,17 +286,20 @@ final class ConfigLoaderTests: XCTestCase {
     let debug = try XCTUnwrap(root["debug"] as? [String: Any])
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
     let open = try XCTUnwrap(root["open"] as? [String: Any])
+    let plugins = try XCTUnwrap(root["plugins"] as? [String: Any])
     let allMappings = try XCTUnwrap(mode["all"] as? [[String: Any]])
     XCTAssertEqual(hints["keys"] as? String, "<qwerty_homerow+qwerty_toprow>")
     XCTAssertEqual(hints["min_length"] as? Int, 1)
     XCTAssertEqual(hints["magic_modifiers"] as? [String], ["shift"])
     XCTAssertEqual(overlay["font_size"] as? Double, 12)
     XCTAssertEqual(debug["log_level"] as? String, "debug")
+    XCTAssertTrue(debug.keys.contains("http_host"))
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
     XCTAssertEqual(
       allMappings.first?["action"] as? [String],
       ["sh", "~/.dotfiles/scripts/toggle-colors"])
     XCTAssertEqual(open["ignored_apps"] as? [String], [])
+    XCTAssertEqual(plugins["third_party"] as? [String], [])
   }
 
   func testResolvedHintsKeysJSONIncludesDefaultAndResolvedAlphabet() throws {
@@ -675,7 +748,7 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [mode.all.mappings]
-      "cmd+ctrl+b" = "mouse_click"
+      "cmd+ctrl+b" = "mouse_target"
       """)
     let message = c.loadingErrorAlertMessage
     XCTAssertNotNil(message)

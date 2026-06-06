@@ -47,9 +47,35 @@ enum FlashLog {
     }
   }
 
+  struct Record {
+    var level: Level
+    var source: String
+    var message: String
+    var fields: [String: String]
+    var pid: Int
+    var timeUnixMs: Int64
+
+    var jsonObject: [String: Any] {
+      var object: [String: Any] = [
+        "level": level.name,
+        "message": message,
+        "pid": pid,
+        "source": source,
+        "time_unix_ms": timeUnixMs,
+      ]
+      if !fields.isEmpty {
+        object["fields"] = fields
+      }
+      return object
+    }
+  }
+
+  typealias Sink = (Record) -> Void
+
   private static let lock = NSLock()
   private static var minLevel: Level = .info
   private static var handle: FileHandle?
+  private static var sinks: [UUID: Sink] = [:]
   private static let writeQueue =
     DispatchQueue(label: "flash.log.write", qos: .utility)
 
@@ -59,27 +85,76 @@ enum FlashLog {
     lock.unlock()
   }
 
-  static func debug(_ message: @autoclosure () -> String) {
-    emit(.debug, message)
+  static func addSink(_ sink: @escaping Sink) -> UUID {
+    let id = UUID()
+    lock.lock()
+    sinks[id] = sink
+    lock.unlock()
+    return id
   }
-  static func trace(_ message: @autoclosure () -> String) {
-    emit(.trace, message)
+
+  static func removeSink(_ id: UUID) {
+    lock.lock()
+    sinks.removeValue(forKey: id)
+    lock.unlock()
   }
-  static func info(_ message: @autoclosure () -> String) {
-    emit(.info, message)
+
+  static func coreSource(fileID: String, function: String) -> String {
+    let file = fileID.split(separator: "/").last.map(String.init) ?? fileID
+    return "core:\(file).\(function)"
   }
-  static func warn(_ message: @autoclosure () -> String) {
-    emit(.warn, message)
+
+  static func debug(
+    _ message: @autoclosure () -> String,
+    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+  ) {
+    emit(.debug, source: source, fields: [:], message)
   }
-  static func error(_ message: @autoclosure () -> String) {
-    emit(.error, message)
+  static func trace(
+    _ message: @autoclosure () -> String,
+    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+  ) {
+    emit(.trace, source: source, fields: [:], message)
   }
-  static func fatal(_ message: @autoclosure () -> String) {
-    emit(.fatal, message)
+  static func info(
+    _ message: @autoclosure () -> String,
+    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+  ) {
+    emit(.info, source: source, fields: [:], message)
+  }
+  static func warn(
+    _ message: @autoclosure () -> String,
+    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+  ) {
+    emit(.warn, source: source, fields: [:], message)
+  }
+  static func error(
+    _ message: @autoclosure () -> String,
+    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+  ) {
+    emit(.error, source: source, fields: [:], message)
+  }
+  static func fatal(
+    _ message: @autoclosure () -> String,
+    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
+  ) {
+    emit(.fatal, source: source, fields: [:], message)
+  }
+
+  static func plugin(
+    _ level: Level,
+    pluginID: String,
+    message: @autoclosure () -> String,
+    fields: [String: String] = [:]
+  ) {
+    emit(level, source: "plugin:\(pluginID)", fields: fields, message)
   }
 
   private static func emit(
-    _ level: Level, _ message: () -> String
+    _ level: Level,
+    source: String,
+    fields: [String: String],
+    _ message: () -> String
   ) {
     lock.lock()
     let pass = level >= minLevel
@@ -87,9 +162,21 @@ enum FlashLog {
       handle = openLogFile()
     }
     let h = handle
+    let sinkSnapshot = Array(sinks.values)
     lock.unlock()
+    guard pass || !sinkSnapshot.isEmpty else { return }
+    let record = Record(
+      level: level,
+      source: source,
+      message: message(),
+      fields: fields,
+      pid: Int(ProcessInfo.processInfo.processIdentifier),
+      timeUnixMs: Int64((Date().timeIntervalSince1970 * 1000).rounded()))
+    let line = jsonLine(record)
+    for sink in sinkSnapshot {
+      sink(record)
+    }
     guard pass else { return }
-    let line = jsonLine(level: level, message: message())
     fputs(line, stderr)
     guard let h, let data = line.data(using: .utf8) else { return }
     writeQueue.async {
@@ -97,18 +184,13 @@ enum FlashLog {
     }
   }
 
-  private static func jsonLine(level: Level, message: String) -> String {
-    let object: [String: Any] = [
-      "level": level.name,
-      "message": message,
-      "pid": Int(ProcessInfo.processInfo.processIdentifier),
-      "time_unix_ms": Int64((Date().timeIntervalSince1970 * 1000).rounded()),
-    ]
+  static func jsonLine(_ record: Record) -> String {
+    let object = record.jsonObject
     guard
       let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
       var line = String(data: data, encoding: .utf8)
     else {
-      return "{\"level\":\"\(level.name)\",\"message\":\"log serialization failed\"}\n"
+      return "{\"level\":\"error\",\"message\":\"log serialization failed\",\"source\":\"core:FlashLog\"}\n"
     }
     line.append("\n")
     return line

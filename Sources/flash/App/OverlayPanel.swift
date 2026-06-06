@@ -15,8 +15,14 @@ struct CandidateDisplayItem: Equatable {
 }
 
 enum OverlayPointerIntent: Equatable {
-  case click
+  case click(OverlayPointerClick)
   case scroll
+}
+
+struct OverlayPointerClick: Equatable {
+  var action: JumpAction
+  var location: CGPoint
+  var modifiers: ClickModifiers
 }
 
 final class CommandLineTextField: NSTextField {
@@ -582,10 +588,10 @@ final class OverlayPanel: NSPanel {
       .leftMouseDown, .rightMouseDown, .otherMouseDown,
     ]
     clickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) { _ in
-      pointerDismiss(.click)
+      pointerDismiss(.click(Self.pointerClick()))
     }
     clickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) { event in
-      pointerDismiss(.click)
+      pointerDismiss(.click(Self.pointerClick(event)))
       return event
     }
   }
@@ -602,12 +608,30 @@ final class OverlayPanel: NSPanel {
     ]
     let pointerMask = clickMask.union(.scrollWheel)
     pointerIntentGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: pointerMask) { event in
-      pointerIntent(event.type == .scrollWheel ? .scroll : .click)
+      pointerIntent(event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event)))
     }
     pointerIntentLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: pointerMask) { event in
-      pointerIntent(event.type == .scrollWheel ? .scroll : .click)
+      pointerIntent(event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event)))
       return event
     }
+  }
+
+  private static func pointerClick(_ event: NSEvent? = nil) -> OverlayPointerClick {
+    let action: JumpAction
+    if event?.type == .rightMouseDown {
+      action = .rightClick
+    } else if (event?.clickCount ?? 1) >= 2 {
+      action = .doubleClick
+    } else {
+      action = .leftClick
+    }
+    let modifiers = ClickModifiers(
+      eventFlags: event?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? [],
+      allowed: .all)
+    return OverlayPointerClick(
+      action: action,
+      location: NSEvent.mouseLocation,
+      modifiers: modifiers)
   }
 
   private func removePointerIntentMonitors() {

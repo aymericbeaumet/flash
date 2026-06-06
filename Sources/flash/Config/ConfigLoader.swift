@@ -133,7 +133,7 @@ enum ConfigLoader {
         line: lineNumber,
         column: valueColumn(in: rawLine) ?? firstNonWhitespaceColumn(in: rawLine))
       // Allow quoted keys (TOML spec) so `"cmd+ctrl+a" =
-      // "flash://mouse_click"` works in [mode.*] tables — modified
+      // "flash://mouse_target"` works in [mode.*] tables — modified
       // mapping keys contain `+`, which is not a valid bare TOML key.
       if key.hasPrefix("\""), key.hasSuffix("\""), key.count >= 2 {
         key = String(key.dropFirst().dropLast())
@@ -373,6 +373,31 @@ enum ConfigLoader {
           location: location)
       }
 
+    case ["plugins", "third_party"]:
+      if let parsed = parseStringArray(value) {
+        var refs: [PluginReference] = []
+        var invalid: [String] = []
+        for raw in parsed {
+          if let ref = PluginReference.parse(raw, sourceURL: sourceURL) {
+            refs.append(ref)
+          } else {
+            invalid.append(raw)
+          }
+        }
+        if invalid.isEmpty {
+          config.plugins.thirdParty = refs
+          config.recordLocation(path: "plugins.third_party", location: location)
+        } else {
+          config.addDiagnostic(
+            "plugins.third_party entries must be github:user/project or file:<path>: \(invalid.joined(separator: ", "))",
+            location: location)
+        }
+      } else {
+        config.addDiagnostic(
+          "plugins.third_party must be an array of strings",
+          location: location)
+      }
+
     case ["mode", "labels"]:
       if let parsed = parseInlineStringTable(value),
         let normal = parsed["normal"],
@@ -483,6 +508,15 @@ enum ConfigLoader {
       } else {
         config.addDiagnostic(
           "debug.log_level must be one of: trace, debug, info, warn, error, fatal",
+          location: location)
+      }
+    case ["debug", "http_host"]:
+      if let raw = parseHTTPHost(value), !raw.isEmpty {
+        config.debug.httpHost = raw
+        config.recordLocation(path: "debug.http_host", location: location)
+      } else {
+        config.addDiagnostic(
+          "debug.http_host must be a quoted string or bare host:port",
           location: location)
       }
 
@@ -652,6 +686,19 @@ enum ConfigLoader {
   }
   private static func parseInt(_ v: String) -> Int? { Int(v) }
   private static func parseDouble(_ v: String) -> Double? { Double(v) }
+
+  private static func parseHTTPHost(_ v: String) -> String? {
+    if let quoted = parseString(v) { return quoted }
+    let trimmed = v.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+      trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+      trimmed.contains(":"),
+      !trimmed.contains("\""),
+      !trimmed.contains("["),
+      !trimmed.contains("]")
+    else { return nil }
+    return trimmed
+  }
 
   /// Parse a TOML inline table with string values:
   /// `{ normal = "N", insert = "I", command = "C" }`.

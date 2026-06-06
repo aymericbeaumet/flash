@@ -30,6 +30,14 @@ magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 # or app filename without .app, case-insensitively.
 ignored_apps = []
 
+[plugins]
+# Official bundled plugins are always enabled in this version.
+# Third-party plugins are loaded only when listed here.
+# Supported references:
+#   github:user/project
+#   file:<path>
+third_party = []
+
 [mode]
 # Labels shown in the mode overlay. The overlay width is based on the
 # longest configured label, so compact labels such as N/I/C shrink it.
@@ -47,7 +55,7 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 # capturing normal-mode input.
 #
 # Examples:
-# "ctrl+space" = "flash://mouse_click"
+# "ctrl+space" = "flash://mouse_target"
 # "ctrl+alt+n" = "flash://mode_normal" # enables advanced mode
 # "cmd+ctrl+a" = "flash://app_open?name=Alacritty"
 # "alt+h" = "flash://window_move?position=lefthalf"
@@ -77,19 +85,32 @@ leader = "\\"
 "L" = "flash://history_forward"
 "gt" = "flash://tab_next"
 "gT" = "flash://tab_previous"
-"gN" = "flash://tab_select"
+"g1" = "flash://tab_select?index=1"
+"g2" = "flash://tab_select?index=2"
+"g3" = "flash://tab_select?index=3"
+"g4" = "flash://tab_select?index=4"
+"g5" = "flash://tab_select?index=5"
+"g6" = "flash://tab_select?index=6"
+"g7" = "flash://tab_select?index=7"
+"g8" = "flash://tab_select?index=8"
+"g9" = "flash://tab_select?index=9"
 "ctrl-o" = "flash://movement_back"
 "ctrl-i" = "flash://movement_forward"
 "gf" = "flash://frame_next"
 "gF" = "flash://frame_main"
 "i" = "flash://mode_insert"
-"f" = "flash://mouse_click"
-"rf" = "flash://mouse_click?right=1"
-"df" = "flash://mouse_click?double=1"
-"mf" = "flash://mouse_move"
+"f" = "flash://mouse_target"
+"rf" = "flash://mouse_target?right=1"
+"df" = "flash://mouse_target?double=1"
+"mf" = "flash://mouse_target?move=1"
+"s" = "flash://mouse_snipe"
+"rs" = "flash://mouse_snipe?right=1"
+"ds" = "flash://mouse_snipe?double=1"
+"ms" = "flash://mouse_snipe?move=1"
 "u" = "flash://app_undo"
 "ctrl-r" = "flash://app_redo"
 "x" = "flash://window_close"
+"n" = "flash://window_new"
 "t" = "flash://tab_new_insert"
 "/" = "flash://app_find"
 "<leader>space" = "flash://flashlight"
@@ -121,3 +142,7 @@ slow_ms = 100
 # Logs are newline-delimited JSON written to stderr and
 # ~/Library/Logs/Flash/flash.log. Set "trace" to include AX tree dumps.
 log_level = "info"
+
+# Optional loopback-only dense debug page with live logs and Flash/plugin state.
+# Example:
+# http_host = localhost:4242

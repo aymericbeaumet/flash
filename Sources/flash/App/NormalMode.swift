@@ -241,6 +241,57 @@ enum NormalModeDispatcher {
     case bottom
   }
 
+  static func helpTopic(config: Config, showModes: Bool) -> HelpTopic {
+    HelpTopic(
+      name: "normal-mode",
+      title: "Normal Mode",
+      summary: "Normal-mode mappings, counts, command line, and mouse targeting.",
+      body: """
+        # Normal Mode
+
+        Normal mode captures keyboard input through the Flash overlay panel. It
+        does not install arbitrary global key capture; only configured modified
+        mappings use Carbon hotkeys.
+
+        ## Core Motion
+
+        - `h` / `j` / `k` / `l` scroll left, down, up, and right.
+        - `ctrl-d` / `ctrl-u` scroll by half a page.
+        - `gg` scrolls to the top.
+        - `G` scrolls to the bottom.
+        - Counts prefix actions: `10u`, `2gT`, and similar forms repeat the action.
+
+        ## Tabs And Windows
+
+        - `gt` / `gT` moves to the next or previous tab.
+        - `g1` ... `g9` select a numbered tab when the focused source supports it.
+        - In browsers this maps to tab selection.
+        - `n` opens a new window with Cmd-N.
+        - `t` opens a new tab and then enters insert mode.
+
+        ## Mouse Targets
+
+        - `f` targets clickable elements discovered from the focused app.
+        - `rf` right-clicks a discovered target.
+        - `df` double-clicks a discovered target.
+        - `mf` moves the cursor to a discovered target.
+        - `s` starts snipe mode for a precise screen position.
+        - `rs` / `ds` / `ms` right-click, double-click, or move with snipe mode.
+
+        ## Command Line
+
+        `:` opens command-line mode. Use `:help` for the topic index and
+        `:help plugins` for plugin docs. `:open <query>` and `:flashlight <query>`
+        search source candidates.
+
+        ## Active Mappings
+
+        ```text
+        \(helpText(config: config, showModes: showModes))
+        ```
+        """)
+  }
+
   static func helpText(config: Config, showModes: Bool) -> String {
     let normal = groupedKeys(config.mode.mappings(for: .normal))
     let insert = groupedKeys(config.mode.mappings(for: .insert))
@@ -311,6 +362,7 @@ enum NormalModeDispatcher {
 
   private static var commandLineHelpLines: [String] {
     var lines = commandLineSpecs.map { $0.helpLine }
+    lines.append(":help [topic]")
     lines.append(":open <query>")
     lines.append(":flashlight <query>")
     return lines
@@ -348,6 +400,8 @@ enum NormalModeDispatcher {
     case cut
     case paste
     case copyAll
+    case plugins
+    case help(topic: String?)
   }
 
   static func commandLineCommand(_ raw: String) -> CommandLineCommand? {
@@ -368,6 +422,27 @@ enum NormalModeDispatcher {
       return query
     }
     return commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true)
+  }
+
+  static func commandLineHelpTopic(_ raw: String) -> String?? {
+    var body = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if body.hasPrefix(":") {
+      body.removeFirst()
+    }
+    body.removeLeadingWhitespace()
+    guard !body.isEmpty else { return nil }
+    let lower = body.lowercased()
+    guard lower == "h" || lower == "help" || lower.hasPrefix("h ") || lower.hasPrefix("help ")
+    else { return nil }
+    let nameLength = lower.hasPrefix("help") ? 4 : 1
+    let nameEnd = body.index(body.startIndex, offsetBy: nameLength)
+    if body.count == nameLength {
+      return .some(nil)
+    }
+    guard body[nameEnd].isWhitespace else { return nil }
+    let restStart = body.index(after: nameEnd)
+    let topic = String(body[restStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return .some(topic.isEmpty ? nil : topic)
   }
 
   private static func commandLineQuery(
@@ -473,7 +548,27 @@ enum NormalModeDispatcher {
     CommandLineSpec(names: ["d[elete]", "cut"], bangPolicy: .rejected) { _ in .cut },
     CommandLineSpec(names: ["pu[t]", "paste"], bangPolicy: .rejected) { _ in .paste },
     CommandLineSpec(names: ["%y[ank]"], bangPolicy: .rejected) { _ in .copyAll },
+    CommandLineSpec(names: ["plugins"], bangPolicy: .rejected) { _ in .plugins },
   ]
+
+  static func pluginCommandLineInvocation(_ raw: String) -> (
+    command: String, name: String, args: [String], raw: String
+  )? {
+    var body = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if body.hasPrefix(":") {
+      body.removeFirst()
+    }
+    body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !body.isEmpty else { return nil }
+    let parts = body.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    guard parts.count >= 2 else { return nil }
+    return (
+      command: parts[0],
+      name: parts[1],
+      args: Array(parts.dropFirst(2)),
+      raw: raw
+    )
+  }
 
   private static func parseCommandLine(_ raw: String) -> (body: String, bang: Bool)? {
     var command = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

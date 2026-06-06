@@ -44,7 +44,7 @@ if ! security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>/dev/null |
   grep -q "\"$SIGN_IDENTITY\""; then
   cat <<EOF >&2
 ERROR: signing identity "$SIGN_IDENTITY" not found in $KEYCHAIN_PATH.
-Run Scripts/install-release.sh once first; it creates the stable dev identity.
+Run Scripts/dev.sh once first; it creates the stable dev identity.
 EOF
   exit 1
 fi
