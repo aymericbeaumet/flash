@@ -29,7 +29,7 @@ final class CommandLineTextField: NSTextField {
   override var acceptsFirstResponder: Bool { true }
 }
 
-final class HelpTextView: NSTextView {
+final class ModalTextView: NSTextView {
   weak var overlayCoordinator: OverlayCoordinator?
 
   override var acceptsFirstResponder: Bool { true }
@@ -38,14 +38,14 @@ final class HelpTextView: NSTextView {
     let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
     let ignoredChar = event.charactersIgnoringModifiers?.lowercased().first
     if event.keyCode == 53 || (modifiers.contains(.control) && ignoredChar == "c") {
-      overlayCoordinator?.overlayDidCancelHelp()
+      overlayCoordinator?.overlayDidCancelModal()
       return
     }
     super.keyDown(with: event)
   }
 
   override func cancelOperation(_ sender: Any?) {
-    overlayCoordinator?.overlayDidCancelHelp()
+    overlayCoordinator?.overlayDidCancelModal()
   }
 }
 
@@ -57,6 +57,7 @@ final class OverlayPanel: NSPanel {
   private let contentLayer = CALayer()
   private var hintLayers: [CAGradientLayer] = []
   private var labelLayers: [CATextLayer] = []
+  private var snipeBoundaryLayers: [CALayer] = []
   private var hintLayerPool: [CAGradientLayer] = []
   private var labelLayerPool: [CATextLayer] = []
   private let modeBadgeLayer = CAGradientLayer()
@@ -65,8 +66,8 @@ final class OverlayPanel: NSPanel {
   private let commandPromptLabel = CATextLayer()
   private let commandCaretLayer = CALayer()
   private let commandTextField = CommandLineTextField(frame: .zero)
-  private let helpScrollView = NSScrollView(frame: .zero)
-  private let helpTextView = HelpTextView(frame: .zero)
+  private let modalScrollView = NSScrollView(frame: .zero)
+  private let modalTextView = ModalTextView(frame: .zero)
   private let candidateFinderResultsLayer = CAGradientLayer()
   private let candidateFinderResultsLabel = CATextLayer()
   private let activeWindowBorderLayer = CAShapeLayer()
@@ -182,9 +183,9 @@ final class OverlayPanel: NSPanel {
 
     self.contentView = view
     configureCommandTextField()
-    configureHelpTextView()
+    configureModalTextView()
     view.addSubview(commandTextField)
-    view.addSubview(helpScrollView)
+    view.addSubview(modalScrollView)
   }
 
   /// Allocate `count` chip+label layers and stash them in the pools. Called
@@ -208,9 +209,9 @@ final class OverlayPanel: NSPanel {
       return isVisible && isKeyWindow
         && (firstResponder === commandTextField || commandTextField.currentEditor() != nil)
     }
-    if inputMode == .help {
+    if inputMode == .modal {
       return isVisible && isKeyWindow
-        && (firstResponder === self || firstResponder === helpTextView)
+        && (firstResponder === self || firstResponder === modalTextView)
     }
     return isVisible && isKeyWindow && firstResponder === self
   }
@@ -231,8 +232,8 @@ final class OverlayPanel: NSPanel {
   private var clickLocalMonitor: Any?
   private var pointerIntentGlobalMonitor: Any?
   private var pointerIntentLocalMonitor: Any?
-  private var helpClickGlobalMonitor: Any?
-  private var helpClickLocalMonitor: Any?
+  private var modalClickGlobalMonitor: Any?
+  private var modalClickLocalMonitor: Any?
 
   func display(hints: [AssignedHint]) {
     FlashLog.trace("[overlay] display hints=\(hints.count) input=\(inputMode)")
@@ -323,7 +324,7 @@ final class OverlayPanel: NSPanel {
     // (N `addSublayer` calls) was N tree mutations on the host layer,
     // each of which triggers AppKit's needs-display bookkeeping.
     var newSublayers: [CALayer] = []
-    newSublayers.reserveCapacity(hints.count + 1)
+    newSublayers.reserveCapacity(hints.count * 2 + 1)
     if debugEnabled {
       newSublayers.append(debugShapeLayer)
     }
@@ -331,8 +332,12 @@ final class OverlayPanel: NSPanel {
     hintLayers.reserveCapacity(hints.count)
     labelLayers.reserveCapacity(hints.count)
 
-    for hint in hints {
+    for (idx, hint) in hints.enumerated() {
       let targetFrame = hint.target.frame
+      let isSnipeHint = hint.target.providerID == "snipe"
+      let isFinalSnipeHint =
+        isSnipeHint
+        && Self.snipeDepth(from: hint.target.id).map(SnipeGrid.isFinalDisplayDepth) == true
       let local = CGRect(
         x: targetFrame.minX - frame.minX,
         y: targetFrame.minY - frame.minY,
@@ -343,6 +348,15 @@ final class OverlayPanel: NSPanel {
         lastTargetLocalRects.append(local)
       }
 
+      if isSnipeHint {
+        let boundary = Self.makeSnipeBoundaryLayer(
+          index: idx,
+          finalStep: isFinalSnipeHint)
+        boundary.frame = local
+        newSublayers.append(boundary)
+        snipeBoundaryLayers.append(boundary)
+      }
+
       let chip = dequeueHintLayer()
       // The chip pool retains visual state across activations. If the
       // previous overlay was dismissed mid-filter (e.g. by typing the
@@ -350,6 +364,7 @@ final class OverlayPanel: NSPanel {
       // Without this reset, the next activation pulls hidden chips out
       // of the pool and the user sees only the debug outlines.
       chip.isHidden = false
+      chip.opacity = isFinalSnipeHint ? 0.5 : 1
       let label = dequeueLabelLayer()
       label.isHidden = false
       // CATextLayer's own `font` + `fontSize` properties are the
@@ -377,11 +392,10 @@ final class OverlayPanel: NSPanel {
       label.frame = CGRect(
         x: 0, y: labelYOffset, width: chipW, height: labelHeight)
 
-      let chipGlobal = Self.chipFrame(
-        target: targetFrame,
-        width: chipW,
-        height: chipHeight
-      )
+      let chipGlobal =
+        isSnipeHint
+        ? Self.centeredChipFrame(target: targetFrame, width: chipW, height: chipHeight)
+        : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
       let chipLocal = CGRect(
         x: chipGlobal.minX - frame.minX,
         y: chipGlobal.minY - frame.minY,
@@ -454,7 +468,7 @@ final class OverlayPanel: NSPanel {
     commandPromptVisible = false
     commandPromptPrefix = ":"
     commandCaretLayer.isHidden = true
-    hideHelpTextView()
+    hideModalTextView()
     hideCommandTextField()
     clearCandidateFinderResults()
     commandLineText = ""
@@ -474,10 +488,10 @@ final class OverlayPanel: NSPanel {
       syncCommandTextFieldSelection()
       return
     }
-    if inputMode == .help {
-      helpTextView.overlayCoordinator = coordinator
-      helpScrollView.isHidden = false
-      makeFirstResponder(helpTextView)
+    if inputMode == .modal {
+      modalTextView.overlayCoordinator = coordinator
+      modalScrollView.isHidden = false
+      makeFirstResponder(modalTextView)
       return
     }
     makeFirstResponder(self)
@@ -673,38 +687,38 @@ final class OverlayPanel: NSPanel {
     removePointerIntentMonitors()
   }
 
-  private func installHelpDismissMonitors() {
-    removeHelpDismissMonitors()
+  private func installModalDismissMonitors() {
+    removeModalDismissMonitors()
     let clickMask: NSEvent.EventTypeMask = [
       .leftMouseDown, .rightMouseDown, .otherMouseDown,
     ]
-    helpClickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) {
+    modalClickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) {
       [weak self] _ in
       DispatchQueue.main.async {
-        guard let self, self.inputMode == .help else { return }
-        self.coordinator?.overlayDidCancelHelp()
+        guard let self, self.inputMode == .modal else { return }
+        self.coordinator?.overlayDidCancelModal()
       }
     }
-    helpClickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) {
+    modalClickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) {
       [weak self] event in
-      guard let self, self.inputMode == .help else { return event }
+      guard let self, self.inputMode == .modal else { return event }
       guard event.window === self else { return event }
-      if self.helpScrollView.frame.contains(event.locationInWindow) {
+      if self.modalScrollView.frame.contains(event.locationInWindow) {
         return event
       }
       DispatchQueue.main.async {
-        self.coordinator?.overlayDidCancelHelp()
+        self.coordinator?.overlayDidCancelModal()
       }
       return nil
     }
   }
 
-  private func removeHelpDismissMonitors() {
-    for m in [helpClickGlobalMonitor, helpClickLocalMonitor] {
+  private func removeModalDismissMonitors() {
+    for m in [modalClickGlobalMonitor, modalClickLocalMonitor] {
       if let m { NSEvent.removeMonitor(m) }
     }
-    helpClickGlobalMonitor = nil
-    helpClickLocalMonitor = nil
+    modalClickGlobalMonitor = nil
+    modalClickLocalMonitor = nil
   }
 
   /// Show a transient banner centered on the focused screen. Multi-line strings (with
@@ -787,8 +801,8 @@ final class OverlayPanel: NSPanel {
 
   private var bannerToken: UInt64 = 0
 
-  func displayHelp(_ text: String) {
-    FlashLog.trace("[overlay] display_help chars=\(text.count)")
+  func displayModal(_ text: String) {
+    FlashLog.trace("[overlay] display_modal chars=\(text.count)")
     bannerToken &+= 1
 
     CATransaction.begin()
@@ -801,7 +815,7 @@ final class OverlayPanel: NSPanel {
     let frame = ensurePanelFrame()
     recycleAll()
     commandPromptVisible = false
-    inputMode = .help
+    inputMode = .modal
 
     let screen = NSScreen.main ?? NSScreen.screens.first
     let visible = screen?.visibleFrame ?? frame
@@ -836,16 +850,16 @@ final class OverlayPanel: NSPanel {
     var sublayers: [CALayer] = [chip]
     appendModeBadgeLayerIfNeeded(to: &sublayers, panelFrame: frame)
     contentLayer.sublayers = sublayers
-    configureHelpTextView(
+    configureModalTextView(
       text: text,
       panelLocalFrame: chip.frame.insetBy(dx: 1, dy: 1),
       fontSize: fontSize,
       lineHeight: lineHeight,
       longestLine: longestLine,
       lineCount: lines.count)
-    helpScrollView.isHidden = false
+    modalScrollView.isHidden = false
     ignoresMouseEvents = false
-    installHelpDismissMonitors()
+    installModalDismissMonitors()
     transientContentVisible = true
   }
 
@@ -1135,37 +1149,37 @@ final class OverlayPanel: NSPanel {
     commandTextField.backgroundColor = .clear
   }
 
-  private func configureHelpTextView() {
-    helpScrollView.isHidden = true
-    helpScrollView.drawsBackground = false
-    helpScrollView.borderType = .noBorder
-    helpScrollView.hasVerticalScroller = true
-    helpScrollView.hasHorizontalScroller = true
-    helpScrollView.autohidesScrollers = true
-    helpScrollView.scrollerStyle = .overlay
-    helpTextView.isEditable = false
-    helpTextView.isSelectable = true
-    helpTextView.isRichText = false
-    helpTextView.importsGraphics = false
-    helpTextView.drawsBackground = false
-    helpTextView.textColor = Self.nordSnowStorm2
-    helpTextView.insertionPointColor = Self.nordSnowStorm2
-    helpTextView.allowsUndo = false
-    helpTextView.isHorizontallyResizable = true
-    helpTextView.isVerticallyResizable = true
-    helpTextView.minSize = NSSize(width: 0, height: 0)
-    helpTextView.maxSize = NSSize(
+  private func configureModalTextView() {
+    modalScrollView.isHidden = true
+    modalScrollView.drawsBackground = false
+    modalScrollView.borderType = .noBorder
+    modalScrollView.hasVerticalScroller = true
+    modalScrollView.hasHorizontalScroller = true
+    modalScrollView.autohidesScrollers = true
+    modalScrollView.scrollerStyle = .overlay
+    modalTextView.isEditable = false
+    modalTextView.isSelectable = true
+    modalTextView.isRichText = false
+    modalTextView.importsGraphics = false
+    modalTextView.drawsBackground = false
+    modalTextView.textColor = Self.nordSnowStorm2
+    modalTextView.insertionPointColor = Self.nordSnowStorm2
+    modalTextView.allowsUndo = false
+    modalTextView.isHorizontallyResizable = true
+    modalTextView.isVerticallyResizable = true
+    modalTextView.minSize = NSSize(width: 0, height: 0)
+    modalTextView.maxSize = NSSize(
       width: CGFloat.greatestFiniteMagnitude,
       height: CGFloat.greatestFiniteMagnitude)
-    helpTextView.textContainerInset = NSSize(width: 18, height: 14)
-    helpTextView.textContainer?.widthTracksTextView = false
-    helpTextView.textContainer?.containerSize = NSSize(
+    modalTextView.textContainerInset = NSSize(width: 18, height: 14)
+    modalTextView.textContainer?.widthTracksTextView = false
+    modalTextView.textContainer?.containerSize = NSSize(
       width: CGFloat.greatestFiniteMagnitude,
       height: CGFloat.greatestFiniteMagnitude)
-    helpScrollView.documentView = helpTextView
+    modalScrollView.documentView = modalTextView
   }
 
-  private func configureHelpTextView(
+  private func configureModalTextView(
     text: String,
     panelLocalFrame: CGRect,
     fontSize: CGFloat,
@@ -1174,22 +1188,22 @@ final class OverlayPanel: NSPanel {
     lineCount: Int
   ) {
     let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
-    helpTextView.overlayCoordinator = coordinator
-    helpTextView.font = font
-    helpTextView.textColor = Self.nordSnowStorm2
-    helpTextView.string = text
-    helpScrollView.frame = panelLocalFrame
+    modalTextView.overlayCoordinator = coordinator
+    modalTextView.font = font
+    modalTextView.textColor = Self.nordSnowStorm2
+    modalTextView.string = text
+    modalScrollView.frame = panelLocalFrame
     let contentWidth = max(
       panelLocalFrame.width,
-      CGFloat(longestLine) * fontSize * 0.62 + helpTextView.textContainerInset.width * 2 + 24)
+      CGFloat(longestLine) * fontSize * 0.62 + modalTextView.textContainerInset.width * 2 + 24)
     let contentHeight = max(
       panelLocalFrame.height,
-      lineHeight * CGFloat(lineCount) + helpTextView.textContainerInset.height * 2 + 8)
-    helpTextView.frame = CGRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
-    helpTextView.textContainer?.containerSize = NSSize(
+      lineHeight * CGFloat(lineCount) + modalTextView.textContainerInset.height * 2 + 8)
+    modalTextView.frame = CGRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
+    modalTextView.textContainer?.containerSize = NSSize(
       width: contentWidth,
       height: CGFloat.greatestFiniteMagnitude)
-    helpTextView.needsDisplay = true
+    modalTextView.needsDisplay = true
   }
 
   private func configureCommandTextField(
@@ -1214,13 +1228,13 @@ final class OverlayPanel: NSPanel {
     }
   }
 
-  private func hideHelpTextView() {
-    removeHelpDismissMonitors()
-    helpScrollView.isHidden = true
-    helpTextView.string = ""
-    helpTextView.overlayCoordinator = nil
+  private func hideModalTextView() {
+    removeModalDismissMonitors()
+    modalScrollView.isHidden = true
+    modalTextView.string = ""
+    modalTextView.overlayCoordinator = nil
     ignoresMouseEvents = true
-    if firstResponder === helpTextView {
+    if firstResponder === modalTextView {
       makeFirstResponder(self)
     }
   }
@@ -1578,11 +1592,12 @@ final class OverlayPanel: NSPanel {
     labelLayerPool.append(contentsOf: labelLayers)
     hintLayers.removeAll(keepingCapacity: true)
     labelLayers.removeAll(keepingCapacity: true)
+    snipeBoundaryLayers.removeAll(keepingCapacity: true)
     debugShapeLayer.path = nil
     debugShapeLayer.isHidden = true
     activeWindowBorderLayer.path = nil
     commandCaretLayer.isHidden = true
-    hideHelpTextView()
+    hideModalTextView()
     clearCandidateFinderResults()
     lastTargetLocalRects.removeAll(keepingCapacity: true)
   }
@@ -1632,6 +1647,14 @@ final class OverlayPanel: NSPanel {
     return CGRect(x: x, y: y, width: width, height: height)
   }
 
+  static func centeredChipFrame(target: CGRect, width: CGFloat, height: CGFloat) -> CGRect {
+    CGRect(
+      x: target.midX - width / 2,
+      y: target.midY - height / 2,
+      width: width,
+      height: height)
+  }
+
   /// Convenience overload. Used by `commit` (`hint.target.frame` is the
   /// only thing it knows) to derive the click point — the renderer
   /// inside `display(hints:)` calls the `(target:width:height:)` form
@@ -1651,6 +1674,34 @@ final class OverlayPanel: NSPanel {
 
   static func chipHeight(forFontSize fontSize: CGFloat) -> CGFloat {
     fontSize + 4
+  }
+
+  private static let snipeBoundaryColors: [NSColor] = [
+    NSColor(calibratedRed: 0.94, green: 0.27, blue: 0.31, alpha: 1),
+    NSColor(calibratedRed: 0.96, green: 0.55, blue: 0.19, alpha: 1),
+    NSColor(calibratedRed: 0.98, green: 0.80, blue: 0.25, alpha: 1),
+    NSColor(calibratedRed: 0.35, green: 0.72, blue: 0.38, alpha: 1),
+    NSColor(calibratedRed: 0.23, green: 0.64, blue: 0.82, alpha: 1),
+    NSColor(calibratedRed: 0.42, green: 0.47, blue: 0.91, alpha: 1),
+    NSColor(calibratedRed: 0.72, green: 0.39, blue: 0.86, alpha: 1),
+    NSColor(calibratedRed: 0.94, green: 0.43, blue: 0.71, alpha: 1),
+  ]
+
+  private static func makeSnipeBoundaryLayer(index: Int, finalStep: Bool) -> CALayer {
+    let color = snipeBoundaryColors[index % snipeBoundaryColors.count]
+    let layer = CALayer()
+    layer.actions = OverlayPanel.noActions
+    layer.borderWidth = finalStep ? 1 : 2
+    layer.cornerRadius = finalStep ? 2 : 3
+    layer.borderColor = color.withAlphaComponent(finalStep ? 0.95 : 0.9).cgColor
+    layer.backgroundColor = color.withAlphaComponent(finalStep ? 0.08 : 0.05).cgColor
+    return layer
+  }
+
+  private static func snipeDepth(from id: String) -> Int? {
+    let parts = id.split(separator: ":", maxSplits: 2)
+    guard parts.count == 3, parts[0] == "snipe" else { return nil }
+    return Int(parts[1])
   }
 
   static func unionScreenFrame() -> NSRect {
@@ -1762,7 +1813,7 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingAction?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
-  func overlayDidCancelHelp()
+  func overlayDidCancelModal()
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool

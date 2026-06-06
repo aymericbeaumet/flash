@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "side": "vimiumOnly",
+      "rect": [8, 900, 36, 16],
+      "reason": "Vimium marks the Cristel logo/home anchor backed by inline SVG; Firefox AX does not expose it as a page target in this snapshot.",
+      "domSelector": "a"
+    },
+    {
+      "side": "vimiumOnly",
+      "rect": [8, 706, 1865, 35],
+      "reason": "Vimium marks a large Cristel FAQ visual tile; Firefox AX does not expose this anchor as a page target in this snapshot.",
+      "domSelector": "a"
+    }
+  ]
+}

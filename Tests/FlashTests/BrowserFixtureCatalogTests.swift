@@ -41,4 +41,30 @@ final class BrowserFixtureCatalogTests: XCTestCase {
     XCTAssertEqual(try catalog.select(named: ["baseline-synthetic-001"]).count, 1)
     XCTAssertThrowsError(try catalog.select(named: ["missing"]))
   }
+
+  func testAllowListMatchesShiftedEquivalentTargetsByKind() {
+    let allowList = OracleAllowList(entries: [
+      AllowListEntry(
+        side: .flashOnly,
+        rect: [1366.5, 871, 284, 46.5],
+        reason: "fixture chrome drift",
+        axRole: "AXLink")
+    ])
+
+    XCTAssertTrue(
+      allowList.contains(
+        rect: CGRect(x: 1510, y: 841, width: 284, height: 46),
+        side: .flashOnly,
+        axRole: "AXLink"))
+    XCTAssertFalse(
+      allowList.contains(
+        rect: CGRect(x: 1510, y: 841, width: 284, height: 46),
+        side: .flashOnly,
+        axRole: "AXButton"))
+    XCTAssertFalse(
+      allowList.contains(
+        rect: CGRect(x: 1510, y: 841, width: 200, height: 46),
+        side: .flashOnly,
+        axRole: "AXLink"))
+  }
 }

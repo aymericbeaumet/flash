@@ -55,7 +55,7 @@ final class MappingsCoordinator {
       let status = hotkeys.register(
         modifiers: parsed.modifiers, virtualKey: parsed.virtualKey
       ) { [weak self] in
-        self?.fire(mapping, scope: scope)
+        self?.fire(mapping, scope: scope, parsed: parsed)
       }
       if status == noErr {
         FlashLog.debug("[mappings] registered \"\(mapping.key)\"")
@@ -77,12 +77,12 @@ final class MappingsCoordinator {
     }) else {
       return false
     }
-    fire(active.mapping, scope: active.scope)
+    fire(active.mapping, scope: active.scope, parsed: active.parsed)
     return true
   }
 
-  private func fire(_ mapping: ModeMapping, scope: ModeScope) {
-    guard mappingApplies(scope: scope) else { return }
+  private func fire(_ mapping: ModeMapping, scope: ModeScope, parsed: ParsedHotkey) {
+    guard mappingApplies(scope: scope, parsed: parsed) else { return }
     let diagnostic = mapping.action.diagnosticDescription
     let now = Date()
     if lastFireDiagnostic == diagnostic, now.timeIntervalSince(lastFireAt) < 0.08 {
@@ -94,9 +94,18 @@ final class MappingsCoordinator {
     mappingDispatch?(mapping.action)
   }
 
-  private func mappingApplies(scope: ModeScope) -> Bool {
+  private func mappingApplies(scope: ModeScope, parsed: ParsedHotkey) -> Bool {
+    Self.mappingApplies(scope: scope, currentMode: currentMode?(), modifiers: parsed.modifiers)
+  }
+
+  static func mappingApplies(
+    scope: ModeScope,
+    currentMode: FlashMode?,
+    modifiers: UInt32
+  ) -> Bool {
+    if currentMode == .normal, modifiers & UInt32(cmdKey) != 0 { return false }
     guard scope != .all else { return true }
-    guard let current = currentMode?() else { return false }
+    guard let current = currentMode else { return false }
     switch (scope, current) {
     case (.normal, .normal), (.insert, .insert):
       return true

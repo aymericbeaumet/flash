@@ -86,12 +86,18 @@ public enum OracleDiff {
           suppressedByAllowList: false))
     }
     for (vi, v) in vimium.enumerated() where !matchedV.contains(vi) {
-      let suppressed = allowList.contains(rect: v.screenRect, side: .vimiumOnly)
+      let suppressed = allowList.contains(
+        rect: v.screenRect,
+        side: .vimiumOnly,
+        domSelector: v.tag)
       entries.append(
         DiffEntry(kind: .vimiumOnly(v), suppressedByAllowList: suppressed))
     }
     for (fi, f) in flash.enumerated() where !matchedF.contains(fi) {
-      let suppressed = allowList.contains(rect: f.frame, side: .flashOnly)
+      let suppressed = allowList.contains(
+        rect: f.frame,
+        side: .flashOnly,
+        axRole: f.role)
       entries.append(
         DiffEntry(kind: .flashOnly(f), suppressedByAllowList: suppressed))
     }

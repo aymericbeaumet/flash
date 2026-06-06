@@ -83,6 +83,24 @@
       "rect": [239.5, 418, 259, 58.5],
       "reason": "Firefox AX exposes a visible X navigation link that Vimium does not mark in this snapshot.",
       "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [336, 272, 259, 58],
+      "reason": "Firefox AX exposes a visible X overflow-navigation control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [336, 220, 102, 52],
+      "reason": "Firefox AX exposes a visible X compose link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [336, 12, 259, 64],
+      "reason": "Firefox AX exposes a visible X account-menu control that Vimium does not mark in this snapshot.",
+      "axRole": "AXButton"
     }
   ]
 }

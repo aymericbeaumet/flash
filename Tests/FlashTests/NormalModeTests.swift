@@ -488,6 +488,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("%y"), .copyAll)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":%yan"), .copyAll)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":plugins"), .plugins)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":mappings"), .mappings)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":map"), .mappings)
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("qa"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("q!!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("p!"))
@@ -532,6 +534,26 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(hints[0].target.frame, CGRect(x: 0, y: 100, width: 50, height: 100))
     XCTAssertEqual(hints[7].target.frame, CGRect(x: 350, y: 100, width: 50, height: 100))
     XCTAssertEqual(hints[15].target.frame, CGRect(x: 350, y: 0, width: 50, height: 100))
+  }
+
+  func testSnipeGridCommitsAfterThreeSelections() {
+    let region = SnipeGrid.Region(frame: CGRect(x: 0, y: 0, width: 1440, height: 900))
+    let first = SnipeGrid.hints(in: region, depth: 0, alphabet: Array("abcdefghijklmnop"))
+    let secondRegion = SnipeGrid.Region(frame: first[0].target.frame)
+    XCTAssertFalse(SnipeGrid.shouldCommit(region: secondRegion, depth: 1))
+
+    let second = SnipeGrid.hints(in: secondRegion, depth: 1, alphabet: Array("abcdefghijklmnop"))
+    let finalRegion = SnipeGrid.Region(frame: second[0].target.frame)
+    XCTAssertFalse(SnipeGrid.shouldCommit(region: finalRegion, depth: 2))
+    XCTAssertTrue(SnipeGrid.isFinalDisplayDepth(2))
+
+    let final = SnipeGrid.hints(in: finalRegion, depth: 2, alphabet: Array("abcdefghijklmnop"))
+    XCTAssertGreaterThanOrEqual(final.count, 4)
+    for hint in final {
+      XCTAssertGreaterThanOrEqual(hint.target.frame.width, 18)
+      XCTAssertGreaterThanOrEqual(hint.target.frame.height, 18)
+      XCTAssertTrue(SnipeGrid.shouldCommit(region: SnipeGrid.Region(frame: hint.target.frame), depth: 3))
+    }
   }
 
   func testPluginCommandLineInvocationParser() throws {
@@ -818,13 +840,34 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(help.contains("INSERT"))
   }
 
+  func testMappingsTextListsResolvedScopesAndLeaderMappings() {
+    var config = Config.default
+    config.mode.all = [
+      ModeMapping(key: "cmd+space", action: .flashCommand(.flashlight))
+    ]
+    config.mode.normal = [
+      ModeMapping(key: "\\c", action: .shellCommand(["sh", "/tmp/toggle_caffeinate.sh"]))
+    ]
+    config.mode.insert = [
+      ModeMapping(key: "ctrl+space", action: .flashCommand(.mouseTarget(.click(.leftClick))))
+    ]
+    let text = NormalModeDispatcher.mappingsText(config: config)
+    XCTAssertTrue(text.contains("# Mappings"))
+    XCTAssertTrue(text.contains("Normal leader: `\\`"))
+    XCTAssertTrue(text.contains("all"))
+    XCTAssertTrue(text.contains("normal"))
+    XCTAssertTrue(text.contains("insert"))
+    XCTAssertTrue(text.contains("cmd+space"))
+    XCTAssertTrue(text.contains("\\c"))
+    XCTAssertTrue(text.contains("[\"sh\", \"/tmp/toggle_caffeinate.sh\"]"))
+  }
+
   func testConfiguredMappingsOverrideDefaults() {
     let mappings = [
       ModeMapping(key: "j", action: .flashCommand(.scroll(.up))),
       ModeMapping(key: "zz", action: .flashCommand(.reload)),
       ModeMapping(key: "tab", action: .flashCommand(.movementForward)),
       ModeMapping(key: "delete_forward", action: .flashCommand(.scroll(.halfPageDown))),
-      ModeMapping(key: "cmd+delete", action: .flashCommand(.scroll(.halfPageUp))),
     ]
     XCTAssertEqual(command(chars: "j", mappings: mappings), .scroll(.up))
     XCTAssertEqual(transition(chars: "z", mappings: mappings).pending, "z")
@@ -835,13 +878,25 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       transition(keyCode: kVK_ForwardDelete, chars: "", mappings: mappings).command,
       .scroll(.halfPageDown))
-    XCTAssertEqual(
+  }
+
+  func testCommandModifiedMappingsAreConsumedInNormalMode() {
+    let mappings = [
+      ModeMapping(key: "cmd+delete", action: .flashCommand(.scroll(.halfPageUp))),
+      ModeMapping(key: "cmd+tab", action: .flashCommand(.movementForward)),
+    ]
+    XCTAssertNil(
       transition(
         keyCode: kVK_Delete,
         chars: "\u{7F}",
         flags: [.command],
-        mappings: mappings).command,
-      .scroll(.halfPageUp))
+        mappings: mappings).action)
+    XCTAssertNil(
+      transition(
+        keyCode: kVK_Tab,
+        chars: "\t",
+        flags: [.command],
+        mappings: mappings).action)
   }
 
   func testConfiguredShellMappingsProduceActions() {
@@ -865,6 +920,18 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       transition(pending: "space", chars: "c", mappings: mappings).command,
       .reload)
+  }
+
+  func testBackslashLeaderShellMappingProducesAction() {
+    let action = MappingAction.shellCommand(["sh", "/tmp/toggle"])
+    let mappings = [
+      ModeMapping(key: "\\c", action: action),
+      ModeMapping(key: "\\space", action: .flashCommand(.flashlight)),
+    ]
+    let first = transition(chars: "\\", mappings: mappings)
+    XCTAssertEqual(first.pending, "\\")
+    let second = transition(pending: "\\", chars: "c", mappings: mappings)
+    XCTAssertEqual(second.action, action)
   }
 
   func testEscapeConsumesWithoutLeavingNormalMode() {

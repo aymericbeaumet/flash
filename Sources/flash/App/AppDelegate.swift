@@ -680,7 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           + "rule=normal_requires_hint_focus")
       normalModePendingCommandToken &+= 1
       resetModeInputState()
-      if overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder || overlay.inputMode == .help {
+      if overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder || overlay.inputMode == .modal {
         overlay.hide()
       }
       applyModeOverlay()
@@ -858,8 +858,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       FlashLog.trace("[mode] close_modal input=candidate_finder reason=\(reason)")
       clearCandidateFinderState()
       overlay.hide()
-    case .help:
-      FlashLog.trace("[mode] close_modal input=help reason=\(reason)")
+    case .modal:
+      FlashLog.trace("[mode] close_modal input=modal reason=\(reason)")
       overlay.hide()
     case .hints, .normal:
       break
@@ -1119,7 +1119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var shouldCaptureNormalModeInput: Bool {
     guard flashMode == .normal, currentHints.isEmpty, !activationInFlight else { return false }
     switch overlay.inputMode {
-    case .commandLine, .help, .candidateFinder:
+    case .commandLine, .modal, .candidateFinder:
       return false
     case .hints, .normal:
       return true
@@ -1306,7 +1306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clearCandidateFinderState()
     overlay.hide()
     overlay.setActiveWindowBorder(around: nil)
-    overlay.displayHelp(HelpDocs.render(topic: topic, config: config, showModes: modeBadgeEnabled))
+    overlay.displayModal(HelpDocs.render(topic: topic, config: config, showModes: modeBadgeEnabled))
   }
 
   private func showPlugins() {
@@ -1316,7 +1316,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clearCandidateFinderState()
     overlay.hide()
     overlay.setActiveWindowBorder(around: nil)
-    overlay.displayHelp(pluginManager.statusText())
+    overlay.displayModal(pluginManager.statusText())
+  }
+
+  private func showMappings() {
+    normalModePendingCommandToken &+= 1
+    overlay.normalModePending = ""
+    clearTransientHintState(reason: "enter_mappings")
+    clearCandidateFinderState()
+    overlay.hide()
+    overlay.setActiveWindowBorder(around: nil)
+    overlay.displayModal(NormalModeDispatcher.mappingsText(config: config))
   }
 
   private func enterCandidateFinderMode(scope: CandidateScope) {
@@ -1371,7 +1381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .candidateFinder:
       candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
       refreshCandidateFinder(query: overlay.candidateFinderQuery)
-    case .hints, .normal, .help:
+    case .hints, .normal, .modal:
       return
     }
   }
@@ -1561,6 +1571,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMappedCommand(.copyAll)
     case .plugins:
       showPlugins()
+    case .mappings:
+      showMappings()
     case .help(let topic):
       showHelp(topic: topic)
     }
@@ -2377,12 +2389,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     mappings.handle(event: event)
   }
 
-  func overlayDidCancelHelp() {
+  func overlayDidCancelModal() {
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
     overlay.hide()
     applyModeOverlay()
-    refreshCurrentModeSideEffects(reason: "help_cancel")
+    refreshCurrentModeSideEffects(reason: "modal_cancel")
   }
 
   func overlayDidCancelCommandLine() {

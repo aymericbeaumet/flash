@@ -72,17 +72,16 @@ enum NormalModeInterpreter {
     let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
     if keyCode == 53 { return .consume }
 
+    if independent.contains(.command) || independent.contains(.option) {
+      return .consume
+    }
+
     if let mapping = modifiedMapping(
       keyCode: keyCode,
       modifierFlags: independent,
       mappings: mappings)
     {
       return .action(mapping.action)
-    }
-
-    let hasCommandOrOption = independent.contains(.command) || independent.contains(.option)
-    if hasCommandOrOption {
-      return .consume
     }
 
     let hasControl = independent.contains(.control)
@@ -230,6 +229,12 @@ enum NormalModeInterpreter {
 enum NormalModeDispatcher {
   static let scrollStepPixels: Int32 = 60
 
+  private struct MappingRow {
+    var scope: String
+    var key: String
+    var action: String
+  }
+
   enum ScrollKind: Hashable {
     case left
     case right
@@ -280,9 +285,10 @@ enum NormalModeDispatcher {
 
         ## Command Line
 
-        `:` opens command-line mode. Use `:help` for the topic index and
-        `:help plugins` for plugin docs. `:open <query>` and `:flashlight <query>`
-        search source candidates.
+        `:` opens command-line mode. Use `:help` for the topic index,
+        `:help plugins` for plugin docs, and `:mappings` for the resolved
+        mapping table. `:open <query>` and `:flashlight <query>` search source
+        candidates.
 
         ## Active Mappings
 
@@ -350,6 +356,48 @@ enum NormalModeDispatcher {
     return lines.joined(separator: "\n")
   }
 
+  static func mappingsText(config: Config) -> String {
+    let rows =
+      mappingRows(scope: "all", mappings: config.mode.all)
+      + mappingRows(scope: "normal", mappings: config.mode.normal)
+      + mappingRows(scope: "insert", mappings: config.mode.insert)
+    let scopeWidth = max("SCOPE".count, rows.map(\.scope.count).max() ?? 0)
+    let keyWidth = max("KEY".count, rows.map(\.key.count).max() ?? 0)
+    var lines = [
+      "# Mappings",
+      "",
+      "Normal leader: `\(config.mode.normalLeader ?? "<unset>")`",
+      "",
+    ]
+    guard !rows.isEmpty else {
+      lines.append("No mappings are configured.")
+      return lines.joined(separator: "\n")
+    }
+    lines.append("```text")
+    lines.append(
+      padded("SCOPE", width: scopeWidth)
+        + "  " + padded("KEY", width: keyWidth)
+        + "  ACTION")
+    for row in rows {
+      lines.append(
+        padded(row.scope, width: scopeWidth)
+          + "  " + padded(row.key, width: keyWidth)
+          + "  " + row.action)
+    }
+    lines.append("```")
+    return lines.joined(separator: "\n")
+  }
+
+  private static func mappingRows(scope: String, mappings: [ModeMapping]) -> [MappingRow] {
+    mappings.map { mapping in
+      MappingRow(
+        scope: scope,
+        key: mapping.key,
+        action: mapping.action.diagnosticDescription
+      )
+    }
+  }
+
   private static func appendCommandLineHelp(to lines: inout [String], visible: Bool) {
     guard visible else { return }
     lines.append("")
@@ -401,6 +449,7 @@ enum NormalModeDispatcher {
     case paste
     case copyAll
     case plugins
+    case mappings
     case help(topic: String?)
   }
 
@@ -549,6 +598,7 @@ enum NormalModeDispatcher {
     CommandLineSpec(names: ["pu[t]", "paste"], bangPolicy: .rejected) { _ in .paste },
     CommandLineSpec(names: ["%y[ank]"], bangPolicy: .rejected) { _ in .copyAll },
     CommandLineSpec(names: ["plugins"], bangPolicy: .rejected) { _ in .plugins },
+    CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
   ]
 
   static func pluginCommandLineInvocation(_ raw: String) -> (

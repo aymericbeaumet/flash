@@ -11,3 +11,5 @@ Important defaults:
 - `n` sends Cmd-N to open a new window.
 - `f`, `rf`, `df`, and `mf` target discovered clickable elements.
 - `s`, `rs`, `ds`, and `ms` use snipe mode for precise screen positions.
+- `:mappings` opens the resolved mapping table, including expanded leader
+  bindings and argv mappings.

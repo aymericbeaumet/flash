@@ -11,7 +11,7 @@ enum OverlayInputMode: Equatable {
   case hints
   case normal
   case commandLine
-  case help
+  case modal
   case candidateFinder
 }
 
@@ -75,8 +75,8 @@ extension OverlayPanel {
     }
 
     if inputMode == .commandLine { return super.performKeyEquivalent(with: event) }
-    if inputMode == .help {
-      return handleHelpKeyEvent(event)
+    if inputMode == .modal {
+      return handleModalKeyEvent(event)
     }
     if inputMode == .candidateFinder {
       return handleCandidateFinderKeyEvent(event)
@@ -135,8 +135,8 @@ extension OverlayPanel {
     }
 
     if inputMode == .commandLine { return false }
-    if inputMode == .help {
-      return handleHelpKeyEvent(event)
+    if inputMode == .modal {
+      return handleModalKeyEvent(event)
     }
     if inputMode == .candidateFinder {
       return handleCandidateFinderKeyEvent(event)
@@ -172,15 +172,15 @@ extension OverlayPanel {
   }
 
   @discardableResult
-  private func handleHelpKeyEvent(_ event: NSEvent) -> Bool {
+  private func handleModalKeyEvent(_ event: NSEvent) -> Bool {
     guard let coordinator = coordinator else { return false }
     let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
     let ignoredChar =
       NormalModeInterpreter.firstCharacter(event.charactersIgnoringModifiers)?
       .lowercased().first
     if event.keyCode == 53 || (modifiers.contains(.control) && ignoredChar == "c") {
-      FlashLog.trace("[input] help cancel key=\(event.keyCode)")
-      coordinator.overlayDidCancelHelp()
+      FlashLog.trace("[input] modal cancel key=\(event.keyCode)")
+      coordinator.overlayDidCancelModal()
     }
     return true
   }

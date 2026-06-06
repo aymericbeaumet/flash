@@ -83,6 +83,29 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(HotkeySyntax.parse(hotkey: ""))
   }
 
+  func testCommandMappingsAreCaughtButDoNotDispatchInNormalMode() {
+    XCTAssertFalse(
+      MappingsCoordinator.mappingApplies(
+        scope: .all,
+        currentMode: .normal,
+        modifiers: UInt32(cmdKey)))
+    XCTAssertFalse(
+      MappingsCoordinator.mappingApplies(
+        scope: .normal,
+        currentMode: .normal,
+        modifiers: UInt32(cmdKey | shiftKey)))
+    XCTAssertTrue(
+      MappingsCoordinator.mappingApplies(
+        scope: .all,
+        currentMode: .insert,
+        modifiers: UInt32(cmdKey)))
+    XCTAssertTrue(
+      MappingsCoordinator.mappingApplies(
+        scope: .normal,
+        currentMode: .normal,
+        modifiers: UInt32(optionKey)))
+  }
+
   // MARK: - Action parsing
 
   func testParseFlashMouseTarget() {
