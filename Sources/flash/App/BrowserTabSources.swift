@@ -163,7 +163,7 @@ enum BrowserTabSources {
       return
     }
 
-    app.activate(options: [.activateAllWindows])
+    RunningApplicationActivation.activate(app, options: [.activateAllWindows])
     let url = item.url?.absoluteString ?? item.sourcePayload ?? ""
     guard !url.isEmpty, let appName else {
       DispatchQueue.main.async { completion(.resolved(pid: pid)) }
@@ -339,7 +339,7 @@ final class FirefoxTabsSource: FlashSource {
       let tabs = BrowserTabSources.axTabElements(in: window)
       guard index <= tabs.count else { continue }
       if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
-        runningApp.activate(options: [.activateAllWindows])
+        RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
       }
       AXCandidateSourceHelpers.resolveAXItem(
         Candidate(

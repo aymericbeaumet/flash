@@ -204,4 +204,26 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertLessThan(compact, full)
   }
 
+  func testCandidateFinderTextHeightUsesMeasuredContent() {
+    let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+    let text = NSAttributedString(
+      string: "  [app] Cursor\n> [app] Finder",
+      attributes: [.font: font])
+
+    let measured = OverlayPanel.candidateFinderTextHeight(text, fallbackFont: font)
+    let singleLine = OverlayPanel.candidateFinderTextHeight(
+      NSAttributedString(string: "  [app] Cursor", attributes: [.font: font]),
+      fallbackFont: font)
+    let expected = ceil(
+      max(
+        font.ascender - font.descender + font.leading,
+        text.boundingRect(
+          with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+          options: [.usesLineFragmentOrigin, .usesFontLeading]).height))
+
+    XCTAssertEqual(measured, expected)
+    XCTAssertGreaterThan(measured, singleLine * 1.5)
+    XCTAssertLessThan(measured, (12 + 5) * 3)
+  }
+
 }

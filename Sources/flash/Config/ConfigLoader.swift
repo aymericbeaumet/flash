@@ -96,6 +96,7 @@ enum ConfigLoader {
   ) -> Config {
     var config = Config()
     var currentTable: [String] = []
+    var pendingModeMappings: [PendingModeMapping] = []
 
     for logicalLine in logicalLines(from: text) {
       let lineNumber = logicalLine.lineNumber
@@ -144,10 +145,19 @@ enum ConfigLoader {
         location: location,
         sourceURL: sourceURL,
         environment: environment,
+        pendingModeMappings: &pendingModeMappings,
         into: &config)
     }
+    applyPendingModeMappings(pendingModeMappings, into: &config)
     config.prepareDerivedValues()
     return config
+  }
+
+  private struct PendingModeMapping {
+    var scope: ModeScope
+    var key: String
+    var action: MappingAction
+    var location: ConfigLocation
   }
 
   private struct LogicalLine {
@@ -309,17 +319,20 @@ enum ConfigLoader {
     location: ConfigLocation,
     sourceURL: URL?,
     environment: [String: String],
+    pendingModeMappings: inout [PendingModeMapping],
     into config: inout Config
   ) {
-    if table.count == 2, table[0] == "mode", let scope = ModeScope(rawValue: table[1]),
+    if table.count == 3, table[0] == "mode", table[2] == "mappings",
+      let scope = ModeScope(rawValue: table[1]),
       !key.isEmpty
     {
-      let action = parseString(value).flatMap { parseMappingAction(rawString: $0) }
+      let action = parseMappingValue(value, sourceURL: sourceURL)
       if let action {
-        setModeMapping(scope: scope, key: key, action: action, into: &config)
+        pendingModeMappings.append(
+          PendingModeMapping(scope: scope, key: key, action: action, location: location))
       } else {
         config.addDiagnostic(
-          "mapping \"\(key)\" must be a quoted flash:// action",
+          "mapping \"\(key)\" must be a quoted flash:// action or a non-empty string array command",
           location: location)
       }
       return
@@ -377,6 +390,16 @@ enum ConfigLoader {
       } else {
         config.addDiagnostic(
           "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\" }",
+          location: location)
+      }
+
+    case ["mode", "normal", "leader"]:
+      if let parsed = parseString(value), !parsed.isEmpty {
+        config.mode.normalLeader = canonicalNormalModeKeyToken(parsed)
+        config.recordLocation(path: "mode.normal.leader", location: location)
+      } else {
+        config.addDiagnostic(
+          "mode.normal.leader must be a non-empty quoted string",
           location: location)
       }
 
@@ -464,6 +487,11 @@ enum ConfigLoader {
       }
 
     default:
+      if table.count == 2, table[0] == "mode", ModeScope(rawValue: table[1]) != nil {
+        config.addDiagnostic(
+          "mode.\(table[1]) mappings must be declared under [mode.\(table[1]).mappings]",
+          location: location)
+      }
       break
     }
   }
@@ -485,6 +513,94 @@ enum ConfigLoader {
     case .insert:
       config.mode.insert.removeAll { $0.key == key }
       config.mode.insert.append(mapping)
+    }
+  }
+
+  private static func applyPendingModeMappings(
+    _ mappings: [PendingModeMapping],
+    into config: inout Config
+  ) {
+    for mapping in mappings {
+      guard let key = resolvedMappingKey(mapping.key, scope: mapping.scope, config: config) else {
+        config.addDiagnostic(
+          "mapping \"\(mapping.key)\" uses <leader> but mode.normal.leader is not set",
+          location: mapping.location)
+        continue
+      }
+      setModeMapping(scope: mapping.scope, key: key, action: mapping.action, into: &config)
+    }
+  }
+
+  private static func resolvedMappingKey(
+    _ key: String,
+    scope: ModeScope,
+    config: Config
+  ) -> String? {
+    guard key.contains("<leader>") else { return key }
+    guard scope == .normal, let leader = config.mode.normalLeader else { return nil }
+    return key.replacingOccurrences(of: "<leader>", with: leader)
+  }
+
+  private static func parseMappingValue(_ value: String, sourceURL: URL?) -> MappingAction? {
+    if let raw = parseString(value) {
+      return parseMappingAction(rawString: raw)
+    }
+    if let argv = parseStringArray(value),
+      let executable = argv.first,
+      !executable.isEmpty
+    {
+      return .shellCommand(argv.map { resolveCommandArgument($0, sourceURL: sourceURL) })
+    }
+    return nil
+  }
+
+  private static func resolveCommandArgument(_ value: String, sourceURL: URL?) -> String {
+    guard value.contains("/"), !value.hasPrefix("/"), !value.hasPrefix("~"),
+      let sourceURL
+    else {
+      return value
+    }
+    let bases = commandResolutionBases(sourceURL: sourceURL)
+    let candidates = bases.map {
+      $0.appendingPathComponent(value).standardizedFileURL
+    }
+    if let existing = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+      return existing.path
+    }
+    return candidates.first?.path ?? value
+  }
+
+  private static func commandResolutionBases(sourceURL: URL) -> [URL] {
+    var bases = [sourceURL.deletingLastPathComponent()]
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let dotfilesURL = home.appendingPathComponent(".dotfiles/.config/flash/flash.toml")
+    if sameFile(sourceURL, dotfilesURL) {
+      bases.append(dotfilesURL.deletingLastPathComponent())
+    }
+    return bases
+  }
+
+  private static func sameFile(_ lhs: URL, _ rhs: URL) -> Bool {
+    let fm = FileManager.default
+    guard
+      let lhsAttrs = try? fm.attributesOfItem(atPath: lhs.path),
+      let rhsAttrs = try? fm.attributesOfItem(atPath: rhs.path),
+      let lhsDevice = lhsAttrs[.systemNumber] as? NSNumber,
+      let rhsDevice = rhsAttrs[.systemNumber] as? NSNumber,
+      let lhsFile = lhsAttrs[.systemFileNumber] as? NSNumber,
+      let rhsFile = rhsAttrs[.systemFileNumber] as? NSNumber
+    else {
+      return false
+    }
+    return lhsDevice == rhsDevice && lhsFile == rhsFile
+  }
+
+  private static func canonicalNormalModeKeyToken(_ value: String) -> String {
+    switch value {
+    case " ":
+      return "space"
+    default:
+      return value
     }
   }
 

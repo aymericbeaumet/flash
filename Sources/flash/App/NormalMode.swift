@@ -10,23 +10,36 @@ enum FlashMode: Equatable {
 
 struct NormalModeTransition: Equatable {
   var pending: String
-  var command: URLCommand?
+  var action: MappingAction?
   var repeatCount: Int
   var passThrough: Bool
 
+  var command: URLCommand? { action?.command }
+
   static func command(_ command: URLCommand, repeatCount: Int = 1) -> NormalModeTransition {
+    action(.flashCommand(command), repeatCount: repeatCount)
+  }
+
+  static func action(_ action: MappingAction, repeatCount: Int = 1) -> NormalModeTransition {
     NormalModeTransition(
-      pending: "", command: command, repeatCount: max(1, repeatCount), passThrough: false)
+      pending: "", action: action, repeatCount: max(1, repeatCount), passThrough: false)
   }
 
   static func pending(_ pending: String) -> NormalModeTransition {
-    NormalModeTransition(pending: pending, command: nil, repeatCount: 1, passThrough: false)
+    NormalModeTransition(pending: pending, action: nil, repeatCount: 1, passThrough: false)
   }
 
   static let consume = NormalModeTransition(
-    pending: "", command: nil, repeatCount: 1, passThrough: false)
+    pending: "", action: nil, repeatCount: 1, passThrough: false)
   static let passThrough = NormalModeTransition(
-    pending: "", command: nil, repeatCount: 1, passThrough: true)
+    pending: "", action: nil, repeatCount: 1, passThrough: true)
+}
+
+struct PendingNormalModeCommand: Equatable {
+  var action: MappingAction
+  var repeatCount: Int
+
+  var command: URLCommand? { action.command }
 }
 
 enum NormalModeInterpreter {
@@ -64,7 +77,7 @@ enum NormalModeInterpreter {
       modifierFlags: independent,
       mappings: mappings)
     {
-      return .command(mapping.action.command)
+      return .action(mapping.action)
     }
 
     let hasCommandOrOption = independent.contains(.command) || independent.contains(.option)
@@ -99,7 +112,7 @@ enum NormalModeInterpreter {
       let exact = mappings.first(where: { $0.key == sequence })
       let hasLonger = mappings.contains { $0.key != sequence && $0.key.hasPrefix(sequence) }
       if let mapping = exact, !hasLonger {
-        return .command(mapping.action.command, repeatCount: state.repeatCount)
+        return .action(mapping.action, repeatCount: state.repeatCount)
       }
       if exact != nil || hasLonger {
         return .pending(state.appendingPrefix(sequence))
@@ -116,12 +129,12 @@ enum NormalModeInterpreter {
   static func pendingCommand(
     pending: String,
     mappings: [ModeMapping] = Config.Mode.defaultNormalMappings
-  ) -> (command: URLCommand, repeatCount: Int)? {
+  ) -> PendingNormalModeCommand? {
     let state = pendingState(pending)
     guard !state.prefix.isEmpty,
       let mapping = mappings.first(where: { $0.key == state.prefix })
     else { return nil }
-    return (mapping.action.command, state.repeatCount)
+    return PendingNormalModeCommand(action: mapping.action, repeatCount: state.repeatCount)
   }
 
   static func pendingSequenceTimedOut(
@@ -199,6 +212,8 @@ enum NormalModeInterpreter {
       keys.append(String(ignoredChar))
     }
     switch Int(keyCode) {
+    case kVK_Space:
+      if !keys.contains("space") { keys.append("space") }
     case kVK_Tab:
       if !keys.contains("tab") { keys.append("tab") }
     case kVK_ForwardDelete:
@@ -245,8 +260,8 @@ enum NormalModeDispatcher {
     let actionWidth = max("ACTION".count, rows.map(\.0.count).max() ?? 0)
     let normalWidth = max("NORMAL".count, rows.map(\.1.count).max() ?? 0)
     let commandLineVisible =
-      !(normal[.commandMode] ?? []).isEmpty
-      || !(insert[.commandMode] ?? []).isEmpty
+      !(normal[.flashCommand(.commandMode)] ?? []).isEmpty
+      || !(insert[.flashCommand(.commandMode)] ?? []).isEmpty
     var lines: [String] = []
     if !showModes {
       let mappingWidth = max("MAPPING".count, rows.map(\.1.count).max() ?? 0)
@@ -300,10 +315,10 @@ enum NormalModeDispatcher {
     return lines
   }
 
-  private static func groupedKeys(_ mappings: [ModeMapping]) -> [URLCommand: [String]] {
-    var grouped: [URLCommand: [String]] = [:]
+  private static func groupedKeys(_ mappings: [ModeMapping]) -> [MappingAction: [String]] {
+    var grouped: [MappingAction: [String]] = [:]
     for mapping in mappings {
-      grouped[mapping.action.command, default: []].append(mapping.key)
+      grouped[mapping.action, default: []].append(mapping.key)
     }
     return grouped
   }

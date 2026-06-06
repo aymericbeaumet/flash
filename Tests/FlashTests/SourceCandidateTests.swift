@@ -109,6 +109,20 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertNotNil(CandidateFinder.score(query: "gmail.com", candidate: tab))
   }
 
+  func testOpenCandidateScoringMatchesBrowserTabTitleDomainAlias() throws {
+    let tab = CandidateFinder.prepare(
+      candidate(
+        kind: .browserTab,
+        source: "firefox",
+        name: "Gmail",
+        subtitle: "browser tab",
+        bundleIdentifier: "org.mozilla.firefox",
+        pid: 123,
+        url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
+
+    XCTAssertNotNil(CandidateFinder.score(query: "gmail.com", candidate: tab))
+  }
+
   func testApplicationSourceCanResolveFinderFromCoreServices() throws {
     let source = ApplicationSource()
     let finder = try XCTUnwrap(

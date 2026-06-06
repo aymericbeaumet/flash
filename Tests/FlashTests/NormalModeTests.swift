@@ -83,6 +83,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "g").pending, "g")
     XCTAssertEqual(command(pending: "g", chars: "g"), .scroll(.top))
     XCTAssertEqual(command(chars: "G", ignoring: "g", flags: [.shift]), .scroll(.bottom))
+    XCTAssertEqual(command(chars: "H", ignoring: "h", flags: [.shift]), .historyBack)
+    XCTAssertEqual(command(chars: "L", ignoring: "l", flags: [.shift]), .historyForward)
     XCTAssertEqual(command(pending: "g", chars: "f"), .nextFrame)
     XCTAssertEqual(command(pending: "g", chars: "F", ignoring: "f", flags: [.shift]), .mainFrame)
     XCTAssertEqual(command(pending: "g", chars: "t"), .tabNext)
@@ -234,6 +236,15 @@ final class NormalModeTests: XCTestCase {
         mode: .normal,
         hasHints: false,
         activationInFlight: true))
+  }
+
+  func testCommandLineExitAlwaysReturnsToNormalMode() {
+    XCTAssertEqual(
+      AppDelegate.commandLineExitMode(currentMode: .insert),
+      .normal)
+    XCTAssertEqual(
+      AppDelegate.commandLineExitMode(currentMode: .normal),
+      .normal)
   }
 
   func testModeOverlayCaptureIsOnlyPossibleInIdleNormalMode() {
@@ -649,13 +660,14 @@ final class NormalModeTests: XCTestCase {
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "f", "rf", "df", "mf", "u", "ctrl-r", "x", "/", "o", "O", "r", "t", "MAPPINGS",
+      "gg", "G", "H", "L", "f", "rf", "df", "mf", "u", "ctrl-r", "x", "/", "o", "O", "r", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "gt", "gT", "gN", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <query>", "flash://mouse_click",
       "flash://app_open_finder?all=1", "flash://mouse_click?right=1",
-      "flash://mouse_click?double=1", "flash://app_back", "flash://app_forward",
+      "flash://mouse_click?double=1", "flash://history_back", "flash://history_forward",
+      "flash://movement_back", "flash://movement_forward",
       "flash://tab_select", "flash://tab_new_insert", "?"]
     {
       XCTAssertTrue(
@@ -677,6 +689,16 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(help.contains(":q[uit]"))
   }
 
+  func testHelpTextListsShellCommandMappings() {
+    var config = Config.default
+    config.mode.normal = [
+      ModeMapping(key: "zz", action: .shellCommand(["sh", "~/bin/toggle-colors"]))
+    ]
+    let help = NormalModeDispatcher.helpText(config: config, showModes: true)
+    XCTAssertTrue(help.contains("zz"))
+    XCTAssertTrue(help.contains("[\"sh\", \"~/bin/toggle-colors\"]"))
+  }
+
   func testHelpTextWithoutModeCellUsesSimpleMappingColumn() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: false)
     XCTAssertTrue(help.contains("ACTION"))
@@ -691,7 +713,7 @@ final class NormalModeTests: XCTestCase {
     let mappings = [
       ModeMapping(key: "j", action: .flashCommand(.scroll(.up))),
       ModeMapping(key: "zz", action: .flashCommand(.reload)),
-      ModeMapping(key: "tab", action: .flashCommand(.appForward)),
+      ModeMapping(key: "tab", action: .flashCommand(.movementForward)),
       ModeMapping(key: "delete_forward", action: .flashCommand(.scroll(.halfPageDown))),
       ModeMapping(key: "cmd+delete", action: .flashCommand(.scroll(.halfPageUp))),
     ]
@@ -700,7 +722,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "z", chars: "z", mappings: mappings), .reload)
     XCTAssertEqual(
       transition(keyCode: kVK_Tab, chars: "\t", mappings: mappings).command,
-      .appForward)
+      .movementForward)
     XCTAssertEqual(
       transition(keyCode: kVK_ForwardDelete, chars: "", mappings: mappings).command,
       .scroll(.halfPageDown))
@@ -711,6 +733,29 @@ final class NormalModeTests: XCTestCase {
         flags: [.command],
         mappings: mappings).command,
       .scroll(.halfPageUp))
+  }
+
+  func testConfiguredShellMappingsProduceActions() {
+    let action = MappingAction.shellCommand(["sh", "~/bin/toggle-colors"])
+    let mappings = [
+      ModeMapping(key: "zz", action: action)
+    ]
+    let first = transition(chars: "z", mappings: mappings)
+    XCTAssertEqual(first.pending, "z")
+    let second = transition(pending: "z", chars: "z", mappings: mappings)
+    XCTAssertEqual(second.action, action)
+    XCTAssertNil(second.command)
+  }
+
+  func testSpaceTokenCanBeUsedInNormalModeSequences() {
+    let mappings = [
+      ModeMapping(key: "spacec", action: .flashCommand(.reload))
+    ]
+    let first = transition(keyCode: kVK_Space, chars: " ", mappings: mappings)
+    XCTAssertEqual(first.pending, "space")
+    XCTAssertEqual(
+      transition(pending: "space", chars: "c", mappings: mappings).command,
+      .reload)
   }
 
   func testEscapeConsumesWithoutLeavingNormalMode() {

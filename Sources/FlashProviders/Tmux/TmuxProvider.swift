@@ -159,7 +159,7 @@ public final class TmuxProvider: JumpProvider {
     if let pid = item.pid,
       let app = NSRunningApplication(processIdentifier: pid)
     {
-      app.activate(options: [.activateAllWindows])
+      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
     }
     if let tmux = Self.tmuxPath, let target = item.tmuxTarget {
       var args = ["switch-client"]

@@ -38,7 +38,7 @@ enum AXCandidateSourceHelpers {
     if let pid = item.pid,
       let app = NSRunningApplication(processIdentifier: pid)
     {
-      app.activate(options: [.activateAllWindows])
+      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
     }
     if let element = item.targetElement {
       if AXUIElementPerformAction(element, kAXPressAction as CFString) != .success {

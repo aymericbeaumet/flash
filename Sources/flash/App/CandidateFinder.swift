@@ -141,7 +141,7 @@ enum CandidateFinder {
   }
 
   private static func searchText(_ candidate: Candidate) -> String {
-    "\(candidate.source) \(candidate.name) \(urlSearchText(candidate))"
+    "\(candidate.source) \(candidate.name) \(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate))"
   }
 
   private static func urlSearchText(_ candidate: Candidate) -> String {
@@ -150,6 +150,22 @@ enum CandidateFinder {
     }
     guard let url = candidate.url else { return "" }
     return url.isFileURL ? url.path : url.absoluteString
+  }
+
+  private static func browserTabTitleDomainAliases(_ candidate: Candidate) -> String {
+    guard
+      candidate.kind == .browserTab,
+      let url = candidate.url,
+      let host = url.host
+    else { return "" }
+    let parts = host.split(separator: ".")
+    guard let suffix = parts.last, suffix.count >= 2 else { return "" }
+    let separators = CharacterSet.alphanumerics.inverted
+    let tokens = candidate.name
+      .components(separatedBy: separators)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return tokens.map { "\($0).\(suffix)" }.joined(separator: " ")
   }
 
   private static func fieldScore(

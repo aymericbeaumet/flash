@@ -4,16 +4,16 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `open -g flash://mouse_click`, the `flash` CLI, or a configured native mapping, overlays hint labels on the focused app's clickable elements and clicks one when the user types its hint. It also supports normal/insert/command modes, `flash://alert_show?message=...` / `flash://alert_dismiss` for a temporary centered toast, and `flash://help_show` for the mapping view. No menu bar, no Dock icon, no preferences window.
+A headless, resident macOS app that, when triggered by `open -g flash://mouse_click`, the `flash` CLI, or a configured native mapping, overlays hint labels on the focused app's clickable elements and clicks one when the user types its hint. It also supports normal/insert/command modes, `flash://alert_show?message=...` / `flash://show_alert?message=...` / `flash://alert_dismiss` for a temporary centered toast, and `flash://help_show` for the mapping view. No menu bar, no Dock icon, no preferences window.
 
-Activation can come through the `flash://` URL scheme, through the one-shot `flash` / `flashctl` CLI, or through Flash's `[mode.all]` / `[mode.normal]` / `[mode.insert]` Carbon registry for modified-key mappings. Mapping values must be `flash://...` commands and are dispatched through the same `URLCommand` parser as URL-scheme AppleEvents.
+Activation can come through the `flash://` URL scheme, through the one-shot `flash` / `flashctl` CLI, or through Flash's `[mode.all.mappings]` / `[mode.normal.mappings]` / `[mode.insert.mappings]` Carbon registry for modified-key mappings. Mapping values can be `flash://...` commands dispatched through the same `URLCommand` parser as URL-scheme AppleEvents, or explicit argv arrays launched only from that configured mapping.
 
 ## Hard rules (do not violate)
 
-1. **No UI surface** beyond the transparent hint overlay, the mode cell / command-line cell, the help and open-app overlays, and explicit `flash://alert_show` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
-2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit modified-key entries in `[mode.all]`, `[mode.normal]`, or `[mode.insert]`. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint, normal-mode, command-line, help, and open-app typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
+1. **No UI surface** beyond the transparent hint overlay, the mode cell / command-line cell, the help and open-app overlays, and explicit `flash://alert_show` / `flash://show_alert` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
+2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint, normal-mode, command-line, help, and open-app typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
 3. **Autolaunch is installer-owned.** `Scripts/install-release.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
-4. **No second resident process / no custom IPC protocol.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native mappings dispatch `URLCommand` in-process. The `flash` / `flashctl` CLI is allowed only as a fast one-shot launcher that opens `flash://...` through Launch Services. Don't add Unix sockets, mach services, background helpers, or any always-running client.
+4. **No second resident process / no custom IPC protocol.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native mappings dispatch pre-resolved `MappingAction` values in the resident app. A configured argv-array mapping may launch that one-shot child process, but don't add Unix sockets, mach services, background helpers, or any always-running client. The `flash` / `flashctl` CLI is allowed only as a fast one-shot launcher that opens `flash://...` through Launch Services.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **TOML parser is hand-rolled** (small subset). Don't add `TOMLKit` / `Toml` / other deps unless we outgrow what we can hand-roll cleanly.
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
@@ -74,8 +74,8 @@ AGENTS.md                            # This file
 
 ## Activation flow (read this before editing the hot path)
 
-1. External tool runs `open -g flash://mouse_click[?right=1|double=1]`, the `flash` CLI opens the equivalent `flash://...` URL, or a configured `[mode.*]` Carbon mapping fires a parsed `URLCommand`.
-2. URL-scheme activation routes via Launch Services to the running instance as a `kAEGetURL` Apple Event; native mappings dispatch in-process.
+1. External tool runs `open -g flash://mouse_click[?right=1|double=1]`, the `flash` CLI opens the equivalent `flash://...` URL, or a configured `[mode.*]` mapping fires a pre-resolved `MappingAction` (`flash://` in-process command or explicit argv array).
+2. URL-scheme activation routes via Launch Services to the running instance as a `kAEGetURL` Apple Event; native mappings dispatch a pre-resolved action inside the resident process.
 3. `URLEventHandler` parses URL host/query for AppleEvents and provides the shared parser used by mapping config loading.
 4. `AppDelegate.activate(action:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
 5. `AppMonitor.discoverAsync` first tries the AX-event-driven prepared model (see *Prepared model contract* below). On hit, native AX-backed `[AssignedHint]` values are delivered to main without an activation-time AX walk. Tmux remains activation-only because its output is volatile.
@@ -212,7 +212,7 @@ A `JumpTarget.activate` closure overrides the default action. Use it when the un
 
 `~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, the constrained inline string table used by `mode.labels`, `#` line comments, and trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or arbitrary inline tables. Add support only if you actually need it.
 
-The user-facing top-level sections are exactly `[hints]`, `[open]`, `[mode]`, `[mode.all]`, `[mode.normal]`, `[mode.insert]`, and `[debug]`, in that order in `config.default.toml`.
+The user-facing top-level sections are exactly `[hints]`, `[open]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
 
 **`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
@@ -225,9 +225,10 @@ Keys:
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
-| `[mode.all]` entries               | `flash://` mapping | none             |
-| `[mode.normal]` entries            | `flash://` mapping | built-in normal map |
-| `[mode.insert]` entries            | `flash://` mapping | none             |
+| `[mode.all.mappings]` entries      | `flash://` or argv-array mapping | none             |
+| `mode.normal.leader`               | string         | unset               |
+| `[mode.normal.mappings]` entries   | `flash://` or argv-array mapping | built-in normal map |
+| `[mode.insert.mappings]` entries   | `flash://` or argv-array mapping | none             |
 | `debug.show_bounds`                | bool           | `false`              |
 | `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.profile`                    | bool           | `false`              |
@@ -259,33 +260,33 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
 
 ### Mode Mappings
 
-`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the mode-cell text. The mode-cell width is derived from the longest configured label. `[mode.all]`, `[mode.normal]`, and `[mode.insert]` map `"key" = "flash://action"`.
+`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the mode-cell text. The mode-cell width is derived from the longest configured label. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = "flash://action"` or `"key" = ["executable", "arg"]`. `[mode.normal] leader = "space"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`.
 
-- `[mode.all]` applies in insert and normal modes.
-- `[mode.normal]` applies only while the overlay is capturing normal-mode input.
-- `[mode.insert]` applies only in insert mode.
+- `[mode.all.mappings]` applies in insert and normal modes.
+- `[mode.normal.mappings]` applies only while the overlay is capturing normal-mode input.
+- `[mode.insert.mappings]` applies only in insert mode.
 
-Values must be `flash://...` actions. Shell arrays, non-Flash URLs, and bare action names are deliberately unsupported in mapping tables. The one-shot CLI is the escape hatch for external automation.
+Values must be `flash://...` actions or non-empty string arrays. Bare shell strings, non-Flash URL strings, and bare action names are deliberately unsupported in mapping tables. String arrays are launched as argv with leading `~` expanded in each element; relative path arguments containing `/` are resolved from the config file location at load time, so `["../../scripts/toggle"]` works for dotfiles-managed configs without going through a shell parser.
 
-Native modified-key mappings are registered through Carbon when the key contains `"+"`; unmodified normal-mode mappings are read only while the overlay panel owns keyboard input. `[mode.normal]` entries extend the built-in normal map and override only matching keys, so unrelated defaults stay available unless that exact key is remapped.
+Native modified-key mappings are registered through Carbon when the key contains `"+"`; unmodified normal-mode mappings are read only while the overlay panel owns keyboard input. `[mode.normal.mappings]` entries extend the built-in normal map and override only matching keys, so unrelated defaults stay available unless that exact key is remapped.
 
-When any `[mode.all]` mapping resolves to `flash://mode_normal`, Flash enters advanced mode:
+When any `[mode.all.mappings]` mapping resolves to `flash://mode_normal`, Flash enters advanced mode:
 
 - starts in normal mode by default;
 - always displays the mode cell using configured `mode.labels`, including in the help view;
 - extends `flash://help_show` with ACTION / NORMAL / INSERT columns.
 
-`flash://mode_normal` is the only accepted normal-mode action. `[mode.normal]` and `[mode.insert]` mappings to it do not enable advanced mode by themselves. When no `[mode.all]` advanced-mode mapping is configured, the mode cell is hidden and help stays simple while still listing the normal map.
+`flash://mode_normal` is the only accepted normal-mode action. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the mode cell is hidden and help stays simple while still listing the normal map.
 
 ### URL Actions
 
 Every action Flash takes must have a corresponding `flash://` action parsed by `URLEventHandler`. Keep `URLCommand`, parser wiring, `URLCommand.diagnosticDescription`, mapping help, README, default config examples, and tests in sync.
 
-Normal-mode action URLs currently include: `flash://mouse_click[?right=1|double=1]`, `flash://mouse_move`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://url_copy`, `flash://frame_next`, `flash://frame_main`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select[?index=<n>]`, `flash://tab_close`, `flash://app_back`, `flash://app_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, and `flash://clipboard_copy_all`.
+Normal-mode action URLs currently include: `flash://mouse_click[?right=1|double=1]`, `flash://mouse_move`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://url_copy`, `flash://frame_next`, `flash://frame_main`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select[?index=<n>]`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, and `flash://clipboard_copy_all`.
 
 `:open <query>` results render above the command line, ordered bottom-to-top with the best match closest to the prompt. Candidate snapshots are cached ahead of use through `SourceRegistry`: app bundles are warmed and cached by `ApplicationSource`, while tmux windows, browser tabs, Slack channels, and future contexts are queried only from currently active sources. Typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`.
 
-App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, and `flash://flash_quit`.
+App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://show_alert?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, and `flash://flash_quit`.
 
 ### Normal-Mode Audit Rule
 

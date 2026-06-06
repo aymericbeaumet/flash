@@ -43,10 +43,16 @@ final class ConfigLoaderTests: XCTestCase {
       .tabNewInsert)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-o" })?.action.command,
-      .appBack)
+      .movementBack)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
-      .appForward)
+      .movementForward)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "H" })?.action.command,
+      .historyBack)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "L" })?.action.command,
+      .historyForward)
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
     XCTAssertEqual(c.mode.labels.insert, "INSERT")
     XCTAssertEqual(c.mode.labels.command, "COMMAND")
@@ -197,6 +203,8 @@ final class ConfigLoaderTests: XCTestCase {
       """
       [hints]
       magic_modifiers = ["shift"]
+      [mode.all.mappings]
+      "alt+shift+c" = ["sh", "~/.dotfiles/scripts/toggle-colors"]
       [debug]
       log_level = "debug"
       """)
@@ -208,12 +216,16 @@ final class ConfigLoaderTests: XCTestCase {
     let debug = try XCTUnwrap(root["debug"] as? [String: Any])
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
     let open = try XCTUnwrap(root["open"] as? [String: Any])
+    let allMappings = try XCTUnwrap(mode["all"] as? [[String: Any]])
     XCTAssertEqual(hints["keys"] as? String, "<qwerty_homerow+qwerty_toprow>")
     XCTAssertEqual(hints["min_length"] as? Int, 1)
     XCTAssertEqual(hints["magic_modifiers"] as? [String], ["shift"])
     XCTAssertEqual(overlay["font_size"] as? Double, 12)
     XCTAssertEqual(debug["log_level"] as? String, "debug")
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
+    XCTAssertEqual(
+      allMappings.first?["action"] as? [String],
+      ["sh", "~/.dotfiles/scripts/toggle-colors"])
     XCTAssertEqual(open["ignored_apps"] as? [String], [])
   }
 
@@ -392,7 +404,7 @@ final class ConfigLoaderTests: XCTestCase {
 
   func testInvalidMappingValueProducesWarning() {
     let toml = """
-      [mode.all]
+      [mode.all.mappings]
       "cmd+ctrl+b" = "https://example.com"
       """
     let c = ConfigLoader.parse(toml)
@@ -401,11 +413,50 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.warnings[0].contains("mapping"))
   }
 
+  func testParsesModeCommandArrayMapping() {
+    let toml = """
+      [mode.all.mappings]
+      "alt+shift+c" = ["sh", "~/.dotfiles/scripts/toggle-colors"]
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertTrue(c.warnings.isEmpty)
+    XCTAssertEqual(c.mode.all.count, 1)
+    XCTAssertEqual(c.mode.all[0].key, "alt+shift+c")
+    XCTAssertEqual(c.mode.all[0].action, .shellCommand(["sh", "~/.dotfiles/scripts/toggle-colors"]))
+    XCTAssertFalse(c.mode.containsAdvancedModeMapping)
+  }
+
+  func testRelativeCommandArrayPathsResolveFromConfigLocation() {
+    let sourceURL = URL(fileURLWithPath: "/tmp/dotfiles/.config/flash/flash.toml")
+    let toml = """
+      [mode.normal.mappings]
+      "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
+      [mode.normal]
+      leader = "space"
+      """
+    let c = ConfigLoader.parse(toml, sourceURL: sourceURL)
+    let mapping = c.mode.normal.first { $0.key == "spacec" }
+    XCTAssertEqual(
+      mapping?.action,
+      .shellCommand(["/tmp/dotfiles/scripts/toggle_caffeinate.sh"]))
+  }
+
+  func testRejectsEmptyModeCommandArrayMapping() {
+    let toml = """
+      [mode.all.mappings]
+      "cmd+ctrl+b" = []
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertEqual(c.warnings.count, 1)
+    XCTAssertTrue(c.warnings[0].contains("cmd+ctrl+b"))
+    XCTAssertTrue(c.warnings[0].contains("non-empty string array command"))
+  }
+
   func testParsesModeMappings() {
     let toml = """
-      [mode.insert]
+      [mode.insert.mappings]
       "ctrl+alt+n" = "flash://mode_normal"
-      [mode.normal]
+      [mode.normal.mappings]
       "j" = "flash://scroll_up"
       """
     let c = ConfigLoader.parse(toml)
@@ -419,21 +470,21 @@ final class ConfigLoaderTests: XCTestCase {
   func testAdvancedModeMappingIsDetectedOnlyFromAllScope() {
     let inAll = ConfigLoader.parse(
       """
-      [mode.all]
+      [mode.all.mappings]
       "cmd+ctrl+n" = "flash://mode_normal"
       """)
     XCTAssertTrue(inAll.mode.containsAdvancedModeMapping)
 
     let inInsert = ConfigLoader.parse(
       """
-      [mode.insert]
+      [mode.insert.mappings]
       "cmd+ctrl+n" = "flash://mode_normal"
       """)
     XCTAssertFalse(inInsert.mode.containsAdvancedModeMapping)
 
     let inNormalOnly = ConfigLoader.parse(
       """
-      [mode.normal]
+      [mode.normal.mappings]
       "cmd+ctrl+n" = "flash://mode_normal"
       """)
     XCTAssertFalse(inNormalOnly.mode.containsAdvancedModeMapping)
@@ -441,13 +492,47 @@ final class ConfigLoaderTests: XCTestCase {
 
   func testModeTableExtendsDefaultMappingsAndOverridesSameKey() {
     let toml = """
-      [mode.normal]
+      [mode.normal.mappings]
       "j" = "flash://scroll_up"
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "i" })?.action.command, .insertMode)
     XCTAssertEqual(c.mode.normal.filter { $0.key == "j" }.count, 1)
+  }
+
+  func testNormalLeaderExpandsMappingsAfterParsingAllTables() {
+    let toml = """
+      [mode.normal.mappings]
+      "<leader>c" = "flash://app_reload"
+      [mode.normal]
+      leader = "space"
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertEqual(c.mode.normalLeader, "space")
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "spacec" })?.action.command, .reload)
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
+    XCTAssertTrue(c.warnings.isEmpty)
+  }
+
+  func testLeaderMappingsRequireNormalLeader() {
+    let toml = """
+      [mode.normal.mappings]
+      "<leader>c" = "flash://app_reload"
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertTrue(c.warnings.contains { $0.contains("uses <leader>") })
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
+  }
+
+  func testOldModeMappingTablesAreRejected() {
+    let toml = """
+      [mode.normal]
+      "j" = "flash://scroll_up"
+      """
+    let c = ConfigLoader.parse(toml)
+    XCTAssertTrue(c.warnings.contains { $0.contains("[mode.normal.mappings]") })
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.down))
   }
 
   func testCLIBeatsEnv() {
@@ -574,7 +659,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testLoadingErrorAlertIncludesMappingWarnings() {
     let c = ConfigLoader.parse(
       """
-      [mode.all]
+      [mode.all.mappings]
       "cmd+ctrl+b" = "mouse_click"
       """)
     let message = c.loadingErrorAlertMessage

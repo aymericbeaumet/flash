@@ -139,6 +139,14 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(message, "Wi-Fi OFF")
   }
 
+  func testParseFlashShowAlertAlias() {
+    let action = parseMappingAction(rawString: "flash://show_alert?message=test")
+    guard case .flashCommand(.showAlert(let message)) = action else {
+      return XCTFail("expected .showAlert")
+    }
+    XCTAssertEqual(message, "test")
+  }
+
   func testParseFlashDismissAlert() {
     let action = parseMappingAction(rawString: "flash://alert_dismiss")
     guard case .flashCommand(.dismissAlert) = action else {
@@ -161,6 +169,33 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingAction(rawString: "open -a Foo"))
   }
 
+  func testShellCommandActionDiagnosticUsesArraySyntax() {
+    let action = MappingAction.shellCommand(["sh", "~/.dotfiles/scripts/toggle-colors"])
+    XCTAssertEqual(action.diagnosticDescription, "[\"sh\", \"~/.dotfiles/scripts/toggle-colors\"]")
+    XCTAssertNil(action.command)
+  }
+
+  func testCommandMappingRunnerLaunchPlanUsesEnvForBareExecutable() throws {
+    let plan = try XCTUnwrap(
+      CommandMappingRunner.launchPlan(for: ["sh", "~/.dotfiles/scripts/toggle-colors"]))
+    XCTAssertEqual(plan.executableURL.path, "/usr/bin/env")
+    XCTAssertEqual(plan.arguments.first, "sh")
+    XCTAssertEqual(
+      plan.arguments.dropFirst().first,
+      FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".dotfiles/scripts/toggle-colors").path)
+  }
+
+  func testCommandMappingRunnerLaunchPlanExpandsDirectExecutable() throws {
+    let plan = try XCTUnwrap(
+      CommandMappingRunner.launchPlan(for: ["~/bin/toggle-colors", "--quiet"]))
+    XCTAssertEqual(
+      plan.executableURL.path,
+      FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("bin/toggle-colors").path)
+    XCTAssertEqual(plan.arguments, ["--quiet"])
+  }
+
   func testParseFlashModeActions() {
     XCTAssertEqual(parseMappingAction(rawString: "flash://mode_insert")?.command, .insertMode)
     XCTAssertEqual(parseMappingAction(rawString: "flash://mode_command")?.command, .commandMode)
@@ -179,8 +214,12 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(parseMappingAction(rawString: "flash://tab_new")?.command, .tabNew)
     XCTAssertEqual(parseMappingAction(rawString: "flash://tab_new_insert")?.command, .tabNewInsert)
     XCTAssertEqual(parseMappingAction(rawString: "flash://tab_close")?.command, .tabClose)
-    XCTAssertEqual(parseMappingAction(rawString: "flash://app_back")?.command, .appBack)
-    XCTAssertEqual(parseMappingAction(rawString: "flash://app_forward")?.command, .appForward)
+    XCTAssertEqual(parseMappingAction(rawString: "flash://history_back")?.command, .historyBack)
+    XCTAssertEqual(parseMappingAction(rawString: "flash://history_forward")?.command, .historyForward)
+    XCTAssertEqual(parseMappingAction(rawString: "flash://movement_back")?.command, .movementBack)
+    XCTAssertEqual(parseMappingAction(rawString: "flash://movement_forward")?.command, .movementForward)
+    XCTAssertEqual(parseMappingAction(rawString: "flash://app_back")?.command, .movementBack)
+    XCTAssertEqual(parseMappingAction(rawString: "flash://app_forward")?.command, .movementForward)
     XCTAssertEqual(parseMappingAction(rawString: "flash://app_quit")?.command, .quitApp(force: false))
     XCTAssertEqual(
       parseMappingAction(rawString: "flash://app_quit?force=1")?.command,
@@ -197,6 +236,7 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingAction(rawString: "flash://unknown_command"))
     XCTAssertNil(parseMappingAction(rawString: "flash://app_open"))  // no name
     XCTAssertNil(parseMappingAction(rawString: "flash://alert_show"))  // no message
+    XCTAssertNil(parseMappingAction(rawString: "flash://show_alert"))  // no message
     XCTAssertNil(parseMappingAction(rawString: "flash://usage"))
   }
 
@@ -287,7 +327,6 @@ final class HotkeySyntaxTests: XCTestCase {
       "flash://cut",
       "flash://paste",
       "flash://copy_all",
-      "flash://show_alert?message=hello",
       "flash://dismiss_alert",
       "flash://help",
       "flash://dismiss_hints",

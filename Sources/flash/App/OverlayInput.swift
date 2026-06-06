@@ -121,7 +121,7 @@ extension OverlayPanel {
       FlashLog.trace(
         "[input] normal key=\(event.keyCode) chars=\(event.characters ?? "nil") "
           + "ignoring=\(event.charactersIgnoringModifiers ?? "nil") pending_before=\(pendingBeforeTimeout) "
-          + "pending_after=\(transition.pending) command=\(transition.command?.diagnosticDescription ?? "nil") "
+          + "pending_after=\(transition.pending) action=\(transition.action?.diagnosticDescription ?? "nil") "
           + "repeat=\(transition.repeatCount) pass_through=\(transition.passThrough)")
       if transition.passThrough { return true }
       normalModePending = transition.pending
@@ -129,7 +129,7 @@ extension OverlayPanel {
         normalModePendingUpdatedAt = now
       }
       coordinator.overlayDidHandleNormalMode(
-        transition.command,
+        transition.action,
         repeatCount: transition.repeatCount)
       return true
     }

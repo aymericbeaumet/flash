@@ -13,6 +13,8 @@ import Foundation
 ///   - `flashCommand` → fed back to the shared `URLCommand` handler
 ///     (the same one `URLEventHandler` uses for live `flash://...`
 ///     URLs from `open` / `osascript`). All in-process; no shell-out.
+///   - `shellCommand` → launched as an argv array exactly because the
+///     user configured that explicit native mapping.
 final class MappingsCoordinator {
 
   private struct ActiveMapping {
@@ -22,20 +24,20 @@ final class MappingsCoordinator {
   }
 
   private let hotkeys = HotKeyManager()
-  private var flashDispatch: ((URLCommand) -> Void)?
+  private var mappingDispatch: ((MappingAction) -> Void)?
   private var currentMode: (() -> FlashMode)?
   private var activeMappings: [ActiveMapping] = []
   private var lastFireDiagnostic: String?
   private var lastFireAt: Date = .distantPast
 
-  func start(dispatch: @escaping (URLCommand) -> Void, currentMode: @escaping () -> FlashMode) {
-    flashDispatch = dispatch
+  func start(dispatch: @escaping (MappingAction) -> Void, currentMode: @escaping () -> FlashMode) {
+    mappingDispatch = dispatch
     self.currentMode = currentMode
   }
 
   func stop() {
     hotkeys.unregisterAll()
-    flashDispatch = nil
+    mappingDispatch = nil
     currentMode = nil
   }
 
@@ -89,7 +91,7 @@ final class MappingsCoordinator {
     lastFireDiagnostic = diagnostic
     lastFireAt = now
     FlashLog.debug("[mappings] fired \(diagnostic)")
-    flashDispatch?(mapping.action.command)
+    mappingDispatch?(mapping.action)
   }
 
   private func mappingApplies(scope: ModeScope) -> Bool {

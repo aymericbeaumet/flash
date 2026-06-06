@@ -6,7 +6,8 @@ enum ModeScope: String, CaseIterable, Hashable {
   case insert
 }
 
-/// One entry from `[mode.all]`, `[mode.normal]`, or `[mode.insert]`.
+/// One entry from `[mode.all.mappings]`, `[mode.normal.mappings]`, or
+/// `[mode.insert.mappings]`.
 /// The key is the mapping lhs and the action is resolved at config load.
 struct ModeMapping: Equatable {
   let key: String
@@ -15,8 +16,9 @@ struct ModeMapping: Equatable {
 
 /// What a mapping fires. Resolved at config load so Carbon callbacks
 /// and overlay key handling never parse URL strings on the hot path.
-enum MappingAction: Equatable {
+enum MappingAction: Hashable {
   case flashCommand(URLCommand)
+  case shellCommand([String])
 }
 
 func parseMappingAction(rawString s: String) -> MappingAction? {
@@ -25,10 +27,12 @@ func parseMappingAction(rawString s: String) -> MappingAction? {
 }
 
 extension MappingAction {
-  var command: URLCommand {
+  var command: URLCommand? {
     switch self {
     case .flashCommand(let command):
       return command
+    case .shellCommand:
+      return nil
     }
   }
 
@@ -36,6 +40,23 @@ extension MappingAction {
     switch self {
     case .flashCommand(let command):
       return command.diagnosticDescription
+    case .shellCommand(let argv):
+      return "[" + argv.map(Self.tomlQuotedString).joined(separator: ", ") + "]"
     }
+  }
+
+  var configValue: Any {
+    switch self {
+    case .flashCommand(let command):
+      return command.diagnosticDescription
+    case .shellCommand(let argv):
+      return argv
+    }
+  }
+
+  private static func tomlQuotedString(_ value: String) -> String {
+    "\"" + value
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"") + "\""
   }
 }

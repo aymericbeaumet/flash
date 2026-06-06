@@ -20,6 +20,13 @@ final class ProviderReadinessTests: XCTestCase {
     XCTAssertTrue(AccessibilityProvider.webClickableRoles.contains("AXComboBox"))
   }
 
+  func testAccessibilityProviderIncludesNativeControlRolesFromAXPeers() {
+    XCTAssertTrue(AccessibilityProvider.roles.contains("AXSlider"))
+    XCTAssertTrue(AccessibilityProvider.roles.contains("AXIncrementor"))
+    XCTAssertTrue(AccessibilityProvider.roles.contains("AXHandle"))
+    XCTAssertFalse(AccessibilityProvider.webClickableRoles.contains("AXSlider"))
+  }
+
 }
 
 private final class StubProvider: JumpProvider {

@@ -18,8 +18,30 @@ final class CommandLineTextField: NSTextField {
   override var acceptsFirstResponder: Bool { true }
 }
 
+final class HelpTextView: NSTextView {
+  weak var overlayCoordinator: OverlayCoordinator?
+
+  override var acceptsFirstResponder: Bool { true }
+
+  override func keyDown(with event: NSEvent) {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let ignoredChar = event.charactersIgnoringModifiers?.lowercased().first
+    if event.keyCode == 53 || (modifiers.contains(.control) && ignoredChar == "c") {
+      overlayCoordinator?.overlayDidCancelHelp()
+      return
+    }
+    super.keyDown(with: event)
+  }
+
+  override func cancelOperation(_ sender: Any?) {
+    overlayCoordinator?.overlayDidCancelHelp()
+  }
+}
+
 final class OverlayPanel: NSPanel {
   private static let candidateFinderMaxRows = 6
+  private static let candidateFinderHorizontalPadding: CGFloat = 7
+  private static let candidateFinderVerticalPadding: CGFloat = 5
 
   private let contentLayer = CALayer()
   private var hintLayers: [CAGradientLayer] = []
@@ -32,6 +54,8 @@ final class OverlayPanel: NSPanel {
   private let commandPromptLabel = CATextLayer()
   private let commandCaretLayer = CALayer()
   private let commandTextField = CommandLineTextField(frame: .zero)
+  private let helpScrollView = NSScrollView(frame: .zero)
+  private let helpTextView = HelpTextView(frame: .zero)
   private let candidateFinderResultsLayer = CAGradientLayer()
   private let candidateFinderResultsLabel = CATextLayer()
   private let activeWindowBorderLayer = CAShapeLayer()
@@ -137,6 +161,7 @@ final class OverlayPanel: NSPanel {
     candidateFinderResultsLayer.masksToBounds = true
     candidateFinderResultsLayer.actions = OverlayPanel.noActions
     candidateFinderResultsLabel.alignmentMode = .left
+    candidateFinderResultsLabel.isWrapped = false
     candidateFinderResultsLabel.actions = OverlayPanel.noActions
     candidateFinderResultsLayer.sublayers = [candidateFinderResultsLabel]
     activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
@@ -146,7 +171,9 @@ final class OverlayPanel: NSPanel {
 
     self.contentView = view
     configureCommandTextField()
+    configureHelpTextView()
     view.addSubview(commandTextField)
+    view.addSubview(helpScrollView)
   }
 
   /// Allocate `count` chip+label layers and stash them in the pools. Called
@@ -169,6 +196,10 @@ final class OverlayPanel: NSPanel {
     if inputMode == .commandLine {
       return isVisible && isKeyWindow
         && (firstResponder === commandTextField || commandTextField.currentEditor() != nil)
+    }
+    if inputMode == .help {
+      return isVisible && isKeyWindow
+        && (firstResponder === self || firstResponder === helpTextView)
     }
     return isVisible && isKeyWindow && firstResponder === self
   }
@@ -410,6 +441,7 @@ final class OverlayPanel: NSPanel {
     commandPromptVisible = false
     commandPromptPrefix = ":"
     commandCaretLayer.isHidden = true
+    hideHelpTextView()
     hideCommandTextField()
     clearCandidateFinderResults()
     commandLineText = ""
@@ -427,6 +459,12 @@ final class OverlayPanel: NSPanel {
       commandTextField.isHidden = false
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
+      return
+    }
+    if inputMode == .help {
+      helpTextView.overlayCoordinator = coordinator
+      helpScrollView.isHidden = false
+      makeFirstResponder(helpTextView)
       return
     }
     makeFirstResponder(self)
@@ -515,26 +553,16 @@ final class OverlayPanel: NSPanel {
   /// running prefix.
   private func installInputMonitors() {
     removeInputMonitors()
-    let dismiss: () -> Void = { [weak self] in
-      // Hop to main to keep all coordinator interactions on the same
-      // thread as display(). NSEvent monitors fire on main already,
-      // but the local-monitor closure may return synchronously; the
-      // dispatch ensures we don't reentrantly tear down the monitor
-      // while it's executing.
-      DispatchQueue.main.async {
-        self?.coordinator?.overlayDidCancel()
-      }
-    }
     let pointerDismiss: () -> Void = { [weak self] in
       DispatchQueue.main.async {
         self?.coordinator?.overlayDidCancelByPointer()
       }
     }
     scrollGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { _ in
-      dismiss()
+      pointerDismiss()
     }
     scrollLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-      dismiss()
+      pointerDismiss()
       return event
     }
     // Mouse-button presses (single, double, or right click) dismiss
@@ -565,10 +593,11 @@ final class OverlayPanel: NSPanel {
     let clickMask: NSEvent.EventTypeMask = [
       .leftMouseDown, .rightMouseDown, .otherMouseDown,
     ]
-    pointerIntentGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) { _ in
+    let pointerMask = clickMask.union(.scrollWheel)
+    pointerIntentGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: pointerMask) { _ in
       pointerIntent()
     }
-    pointerIntentLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) { event in
+    pointerIntentLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: pointerMask) { event in
       pointerIntent()
       return event
     }
@@ -737,22 +766,20 @@ final class OverlayPanel: NSPanel {
     chip.cornerRadius = 8
     chip.borderColor = NSColor(calibratedRed: 0.30, green: 0.34, blue: 0.40, alpha: 1).cgColor
 
-    let label = dequeueLabelLayer()
-    label.frame = CGRect(x: 18, y: 16, width: width - 36, height: height - 30)
-    label.contentsScale = scale
-    label.alignmentMode = .left
-    label.isWrapped = false
-    label.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
-    label.fontSize = fontSize
-    label.foregroundColor = NSColor(calibratedRed: 0.91, green: 0.93, blue: 0.96, alpha: 1).cgColor
-    label.string = text
-
-    chip.sublayers = [label]
+    chip.sublayers = nil
     hintLayers.append(chip)
-    labelLayers.append(label)
     var sublayers: [CALayer] = [chip]
     appendModeBadgeLayerIfNeeded(to: &sublayers, panelFrame: frame)
     contentLayer.sublayers = sublayers
+    configureHelpTextView(
+      text: text,
+      panelLocalFrame: chip.frame.insetBy(dx: 1, dy: 1),
+      fontSize: fontSize,
+      lineHeight: lineHeight,
+      longestLine: longestLine,
+      lineCount: lines.count)
+    helpScrollView.isHidden = false
+    ignoresMouseEvents = false
     transientContentVisible = true
   }
 
@@ -1042,6 +1069,63 @@ final class OverlayPanel: NSPanel {
     commandTextField.backgroundColor = .clear
   }
 
+  private func configureHelpTextView() {
+    helpScrollView.isHidden = true
+    helpScrollView.drawsBackground = false
+    helpScrollView.borderType = .noBorder
+    helpScrollView.hasVerticalScroller = true
+    helpScrollView.hasHorizontalScroller = true
+    helpScrollView.autohidesScrollers = true
+    helpScrollView.scrollerStyle = .overlay
+    helpTextView.isEditable = false
+    helpTextView.isSelectable = true
+    helpTextView.isRichText = false
+    helpTextView.importsGraphics = false
+    helpTextView.drawsBackground = false
+    helpTextView.textColor = Self.nordSnowStorm2
+    helpTextView.insertionPointColor = Self.nordSnowStorm2
+    helpTextView.allowsUndo = false
+    helpTextView.isHorizontallyResizable = true
+    helpTextView.isVerticallyResizable = true
+    helpTextView.minSize = NSSize(width: 0, height: 0)
+    helpTextView.maxSize = NSSize(
+      width: CGFloat.greatestFiniteMagnitude,
+      height: CGFloat.greatestFiniteMagnitude)
+    helpTextView.textContainerInset = NSSize(width: 18, height: 14)
+    helpTextView.textContainer?.widthTracksTextView = false
+    helpTextView.textContainer?.containerSize = NSSize(
+      width: CGFloat.greatestFiniteMagnitude,
+      height: CGFloat.greatestFiniteMagnitude)
+    helpScrollView.documentView = helpTextView
+  }
+
+  private func configureHelpTextView(
+    text: String,
+    panelLocalFrame: CGRect,
+    fontSize: CGFloat,
+    lineHeight: CGFloat,
+    longestLine: Int,
+    lineCount: Int
+  ) {
+    let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
+    helpTextView.overlayCoordinator = coordinator
+    helpTextView.font = font
+    helpTextView.textColor = Self.nordSnowStorm2
+    helpTextView.string = text
+    helpScrollView.frame = panelLocalFrame
+    let contentWidth = max(
+      panelLocalFrame.width,
+      CGFloat(longestLine) * fontSize * 0.62 + helpTextView.textContainerInset.width * 2 + 24)
+    let contentHeight = max(
+      panelLocalFrame.height,
+      lineHeight * CGFloat(lineCount) + helpTextView.textContainerInset.height * 2 + 8)
+    helpTextView.frame = CGRect(x: 0, y: 0, width: contentWidth, height: contentHeight)
+    helpTextView.textContainer?.containerSize = NSSize(
+      width: contentWidth,
+      height: CGFloat.greatestFiniteMagnitude)
+    helpTextView.needsDisplay = true
+  }
+
   private func configureCommandTextField(
     promptFrame: CGRect,
     font: NSFont,
@@ -1060,6 +1144,16 @@ final class OverlayPanel: NSPanel {
   private func hideCommandTextField() {
     commandTextField.isHidden = true
     if firstResponder === commandTextField || commandTextField.currentEditor() != nil {
+      makeFirstResponder(self)
+    }
+  }
+
+  private func hideHelpTextView() {
+    helpScrollView.isHidden = true
+    helpTextView.string = ""
+    helpTextView.overlayCoordinator = nil
+    ignoresMouseEvents = true
+    if firstResponder === helpTextView {
       makeFirstResponder(self)
     }
   }
@@ -1198,13 +1292,22 @@ final class OverlayPanel: NSPanel {
     let lines = candidateFinderResultsMeasurementText.split(
       separator: "\n",
       omittingEmptySubsequences: false)
-    let lineCount = max(lines.count, 1)
     let longest = lines.map(\.count).max() ?? candidateFinderResultsMeasurementText.count
-    let lineHeight = fontSize + 5
     let x = commandPromptLayer.frame.minX
     let maxWidth = max(180, visible.maxX - panelFrame.minX - x - 10)
-    let width = min(max(220, CGFloat(longest) * fontSize * 0.62 + 18), maxWidth)
-    let height = lineHeight * CGFloat(lineCount) + 10
+    let width = min(
+      max(
+        220,
+        CGFloat(longest) * fontSize * 0.62 + Self.candidateFinderHorizontalPadding * 2 + 4),
+      maxWidth)
+    let attributedText =
+      candidateFinderResultsAttributedText
+      ?? NSAttributedString(
+        string: candidateFinderResultsMeasurementText,
+        attributes: [.font: labelFont])
+    let labelWidth = max(1, width - Self.candidateFinderHorizontalPadding * 2)
+    let labelHeight = Self.candidateFinderTextHeight(attributedText, fallbackFont: labelFont)
+    let height = labelHeight + Self.candidateFinderVerticalPadding * 2
     let y = commandPromptLayer.frame.maxY + 6
 
     candidateFinderResultsLayer.frame = Self.snap(
@@ -1218,14 +1321,30 @@ final class OverlayPanel: NSPanel {
     ]
     candidateFinderResultsLayer.borderColor = palette.border.cgColor
 
-    candidateFinderResultsLabel.frame = CGRect(x: 7, y: 5, width: width - 14, height: height - 10)
+    candidateFinderResultsLabel.frame = CGRect(
+      x: Self.candidateFinderHorizontalPadding,
+      y: Self.candidateFinderVerticalPadding,
+      width: labelWidth,
+      height: labelHeight)
     candidateFinderResultsLabel.font = labelFont
     candidateFinderResultsLabel.fontSize = fontSize
     candidateFinderResultsLabel.foregroundColor = Self.nordSnowStorm1.cgColor
     candidateFinderResultsLabel.contentsScale = scale
     candidateFinderResultsLabel.alignmentMode = .left
-    candidateFinderResultsLabel.string =
-      candidateFinderResultsAttributedText ?? NSAttributedString(string: candidateFinderResultsMeasurementText)
+    candidateFinderResultsLabel.isWrapped = false
+    candidateFinderResultsLabel.string = attributedText
+  }
+
+  static func candidateFinderTextHeight(
+    _ text: NSAttributedString,
+    fallbackFont: NSFont
+  ) -> CGFloat {
+    let fontLineHeight = ceil(fallbackFont.ascender - fallbackFont.descender + fallbackFont.leading)
+    guard text.length > 0 else { return fontLineHeight }
+    let measured = text.boundingRect(
+      with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+      options: [.usesLineFragmentOrigin, .usesFontLeading])
+    return ceil(max(fontLineHeight, measured.height))
   }
 
   private func modeBadgePalette() -> ModeBadgePalette {
@@ -1396,6 +1515,7 @@ final class OverlayPanel: NSPanel {
     debugShapeLayer.isHidden = true
     activeWindowBorderLayer.path = nil
     commandCaretLayer.isHidden = true
+    hideHelpTextView()
     clearCandidateFinderResults()
     lastTargetLocalRects.removeAll(keepingCapacity: true)
   }
@@ -1573,7 +1693,7 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidCancelByPointer()
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)
   func overlayDidUpdatePrefix(_ prefix: String)
-  func overlayDidHandleNormalMode(_ command: URLCommand?, repeatCount: Int)
+  func overlayDidHandleNormalMode(_ action: MappingAction?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
   func overlayDidCancelHelp()
   func overlayDidCancelCommandLine()

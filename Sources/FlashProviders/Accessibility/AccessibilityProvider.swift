@@ -14,12 +14,11 @@ import FlashCore
 /// Performance contract:
 ///   - Exactly one batched IPC per visited element via
 ///     `AXUIElementCopyMultipleAttributeValues`.
-///   - Walks the full `kAXChildrenAttribute` tree. We deliberately do not
-///     prefer `kAXVisibleChildrenAttribute` / `kAXVisibleRows`: virtualised-
-///     list optimisations hide scrolled-off rows from the dump, which made
-///     it impossible to tell whether a missing element was absent from the
-///     AX tree or just being filtered. Geometric and visibility filtering
-///     happens later in `AppMonitor.collectFocusedTargets`.
+///   - Walks the full `kAXChildrenAttribute` tree, then supplements native
+///     table/outline containers with `kAXVisibleRowsAttribute` when available.
+///     This keeps the complete tree path deterministic while still catching
+///     virtualised native lists that expose rows only through the visible-row
+///     attribute.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
 ///     returned targets is deterministic).
 ///   - No per-IPC timeout. macOS default (6 s) is in place. Any tighter
@@ -50,6 +49,7 @@ public final class AccessibilityProvider: JumpProvider {
     "AXMenuItem", "AXMenuButton",
     "AXPopUpButton",
     "AXCheckBox", "AXRadioButton",
+    "AXSlider", "AXIncrementor", "AXHandle",
     "AXTab",
     "AXDisclosureTriangle",
     // Text inputs
@@ -142,7 +142,7 @@ public final class AccessibilityProvider: JumpProvider {
       return
     }
     if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
-      runningApp.activate(options: [.activateAllWindows])
+      RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
     }
     let tab = tabs[index - 1]
     let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
@@ -564,12 +564,9 @@ public final class AccessibilityProvider: JumpProvider {
       }
     }
 
-    // Always walk `kAXChildrenAttribute`. We deliberately do NOT prefer
-    // `kAXVisibleChildren` / `kAXVisibleRows` even though that would skip
-    // scrolled-off rows in NSTableView / NSOutlineView / NSCollectionView:
-    // visible filtering is geometric and happens after discovery, so
-    // traversal must still see elements that AX marks non-visible but
-    // positions inside the focused window.
+    // Always walk `kAXChildrenAttribute`. Native table/outline views sometimes
+    // expose their virtualised rows only through `kAXVisibleRowsAttribute`, so
+    // add that list as a supplement instead of replacing the child walk.
     //
     // **Single-attribute children fallback**: the batched IPC can
     // occasionally drop `kAXChildrenAttribute` (returns an error
@@ -587,6 +584,10 @@ public final class AccessibilityProvider: JumpProvider {
         children = arr
       }
     }
+    children = Self.childrenIncludingVisibleRows(
+      for: element,
+      role: role,
+      children: children)
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
     let nowInsideWebArea = insideWebArea || role == "AXWebArea"
@@ -697,6 +698,30 @@ public final class AccessibilityProvider: JumpProvider {
       return primary.frame.height
     }
     return NSScreen.main?.frame.height ?? 1080
+  }
+
+  private static func childrenIncludingVisibleRows(
+    for element: AXUIElement,
+    role: String?,
+    children: [AXUIElement]
+  ) -> [AXUIElement] {
+    guard role == "AXTable" || role == "AXOutline" else { return children }
+    var rawRows: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, kAXVisibleRowsAttribute as CFString, &rawRows)
+        == .success,
+      let rows = rawRows as? [AXUIElement],
+      !rows.isEmpty
+    else { return children }
+
+    var seen = Set<CFHashCode>()
+    var combined: [AXUIElement] = []
+    combined.reserveCapacity(children.count + rows.count)
+    for child in children + rows {
+      guard seen.insert(CFHash(child)).inserted else { continue }
+      combined.append(child)
+    }
+    return combined
   }
 
   private func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {

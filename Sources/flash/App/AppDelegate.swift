@@ -165,7 +165,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     urlHandler = URLEventHandler(handler: dispatch)
     mappings.start(
-      dispatch: dispatch,
+      dispatch: { [weak self] action in
+        self?.performMappingAction(action)
+      },
       currentMode: { [weak self] in self?.flashMode ?? .insert })
 
     if let app = NSWorkspace.shared.frontmostApplication,
@@ -197,9 +199,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .commandMode:
       enterCommandLineMode()
     case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .copyURL,
-      .nextFrame, .mainFrame, .tabNext, .tabPrev, .tabSelect, .appBack, .appForward, .quitApp,
-      .save, .saveAndQuit, .print, .openDocument, .newWindow, .tabNew, .tabNewInsert, .copy, .cut,
-      .paste, .copyAll:
+      .nextFrame, .mainFrame, .tabNext, .tabPrev, .tabSelect, .historyBack, .historyForward,
+      .movementBack, .movementForward, .quitApp, .save, .saveAndQuit, .print, .openDocument,
+      .newWindow, .tabNew, .tabNewInsert, .copy, .cut, .paste, .copyAll:
       performMappedCommand(cmd)
     case .showAlert(let message):
       configErrorAlertVisible = false
@@ -476,6 +478,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     FlashLog.trace(
       "[overlay] cancel hints=\(currentHints.count) in_flight=\(activationInFlight) "
         + "mode=\(flashMode) gen=\(activationGen) input=\(overlay.inputMode)")
+    if overlay.inputMode == .commandLine {
+      finishCommandLineInteraction(reason: "cancel_overlay")
+      return
+    }
     // Dismissal observers fire on every app switch, including when no
     // transient overlay is up. Even then, re-render the mode badge so
     // normal mode can immediately recapture keyboard input.
@@ -619,6 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       overlay.setActiveWindowBorder(around: nil)
     case .normal:
       normalModeRecaptureToken &+= 1
+      closeModalStateForModeExit(reason: "leave_normal_\(reason)")
     }
   }
 
@@ -704,6 +711,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
     currentPrefix = ""
+  }
+
+  private func closeModalStateForModeExit(reason: String) {
+    switch overlay.inputMode {
+    case .commandLine:
+      FlashLog.trace("[mode] close_modal input=command_line reason=\(reason)")
+      resetCommandLineState()
+      overlay.hide()
+    case .candidateFinder:
+      FlashLog.trace("[mode] close_modal input=candidate_finder reason=\(reason)")
+      clearCandidateFinderState()
+      overlay.hide()
+    case .help:
+      FlashLog.trace("[mode] close_modal input=help reason=\(reason)")
+      overlay.hide()
+    case .hints, .normal:
+      break
+    }
   }
 
   private func updateInsertModeActiveWindowBorder(reason: String) {
@@ -1028,10 +1053,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       tabPrevInNormalMode(repeatCount: repeatCount)
     case .tabSelect(let explicitIndex):
       tabSelectInNormalMode(index: explicitIndex ?? repeatCount)
-    case .appBack:
-      navigateAppHistory(direction: .back)
-    case .appForward:
-      navigateAppHistory(direction: .forward)
+    case .historyBack:
+      navigateTargetHistory(direction: .back, repeatCount: repeatCount)
+    case .historyForward:
+      navigateTargetHistory(direction: .forward, repeatCount: repeatCount)
+    case .movementBack:
+      navigateMovementHistory(direction: .back)
+    case .movementForward:
+      navigateMovementHistory(direction: .forward)
     case .quitApp(let force):
       quitNormalModeTargetApp(force: force)
     case .save:
@@ -1068,6 +1097,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       showHelp()
     case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .moveWindow:
       handleURLCommand(command)
+    }
+  }
+
+  private func performMappingAction(_ action: MappingAction, repeatCount: Int = 1) {
+    switch action {
+    case .flashCommand(let command):
+      performMappedCommand(command, repeatCount: repeatCount)
+    case .shellCommand(let argv):
+      let repeatCount = normalizedRepeatCount(repeatCount)
+      FlashLog.debug(
+        "[mappings] action=\(action.diagnosticDescription) repeat=\(repeatCount)")
+      for _ in 0..<repeatCount {
+        CommandMappingRunner.run(argv)
+      }
     }
   }
 
@@ -1111,6 +1154,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .normal, .insert:
       return true
     }
+  }
+
+  static func commandLineExitMode(currentMode: FlashMode) -> FlashMode {
+    .normal
   }
 
   private func showHelp() {
@@ -1307,16 +1354,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       submitSelectedCommandLineApp()
       return
     }
-    overlay.hide()
-    resetCommandLineState()
-    applyModeOverlay(captureOverride: false)
-    refreshCurrentModeSideEffects(reason: "command_submit")
     guard let command = NormalModeDispatcher.commandLineCommand(raw) else {
       FlashLog.debug("[normal_mode] unknown command \(raw)")
-      applyModeOverlay()
-      refreshCurrentModeSideEffects(reason: "command_unknown")
+      finishCommandLineInteraction(reason: "command_unknown")
       return
     }
+    finishCommandLineInteraction(reason: "command_submit")
     performCommandLineCommand(command)
   }
 
@@ -1357,15 +1400,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func submitSelectedCommandLineApp() {
     guard !candidateFinderMatches.isEmpty else {
-      overlay.hide()
-      resetCommandLineState()
-      applyModeOverlay()
-      refreshCurrentModeSideEffects(reason: "command_open_empty")
+      finishCommandLineInteraction(reason: "command_open_empty")
       return
     }
     let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
       .candidate
+    finishCommandLineInteraction(reason: "command_open")
     openSourceItem(candidate)
+  }
+
+  private func finishCommandLineInteraction(reason: String) {
+    overlay.hide()
+    resetCommandLineState()
+    transitionMode(to: Self.commandLineExitMode(currentMode: flashMode), reason: reason)
   }
 
   private func resetCommandLineState() {
@@ -1464,6 +1511,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       self.scheduleNormalModeRecapture()
     }
+  }
+
+  private func navigateTargetHistory(direction: NavigationDirection, repeatCount: Int) {
+    let key: CGKeyCode
+    switch direction {
+    case .back:
+      key = CGKeyCode(kVK_ANSI_LeftBracket)
+    case .forward:
+      key = CGKeyCode(kVK_ANSI_RightBracket)
+    }
+    sendNormalModeKey(key, flags: .maskCommand, repeatCount: repeatCount)
   }
 
   private func sendNormalModeKeySequence(_ keys: [(CGKeyCode, CGEventFlags)]) {
@@ -1674,7 +1732,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     return nil
   }
 
-  private enum AppHistoryDirection {
+  private enum NavigationDirection {
     case back
     case forward
   }
@@ -1721,7 +1779,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         + "forward=\(movementForwardStack.count)")
   }
 
-  private func navigateAppHistory(direction: AppHistoryDirection) {
+  private func navigateMovementHistory(direction: NavigationDirection) {
     let current = currentMovementEntry()
     if let current { movementCurrent = current }
 
@@ -1862,7 +1920,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private func storeMovementStacks(
     source: [MovementEntry],
     destination: [MovementEntry],
-    direction: AppHistoryDirection
+    direction: NavigationDirection
   ) {
     switch direction {
     case .back:
@@ -1897,14 +1955,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
-  func overlayDidHandleNormalMode(_ command: URLCommand?, repeatCount: Int) {
+  func overlayDidHandleNormalMode(_ action: MappingAction?, repeatCount: Int) {
     guard flashMode == .normal else { return }
     normalModePendingCommandToken &+= 1
-    guard let command else {
+    guard let action else {
       schedulePendingNormalModeCommandIfNeeded()
       return
     }
-    performMappedCommand(command, repeatCount: repeatCount)
+    performMappingAction(action, repeatCount: repeatCount)
   }
 
   private func schedulePendingNormalModeCommandIfNeeded() {
@@ -1921,7 +1979,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard self.flashMode == .normal, self.overlay.normalModePending == pendingText else { return }
       self.overlay.normalModePending = ""
       self.normalModePendingCommandToken &+= 1
-      self.performMappedCommand(pending.command, repeatCount: pending.repeatCount)
+      self.performMappingAction(pending.action, repeatCount: pending.repeatCount)
     }
   }
 
@@ -2035,7 +2093,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // Restore focus to the target app before dispatching, so AXPress / the
     // synthesized click both reach the intended window.
     if let pid, let app = NSRunningApplication(processIdentifier: pid) {
-      app.activate()
+      RunningApplicationActivation.activate(app, options: [])
     }
     // Hold the activation gate closed across the click dispatch. Without
     // this, the 20-ms delay below opens a window where a fresh
@@ -2084,10 +2142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   func overlayDidCancelCommandLine() {
-    resetCommandLineState()
-    overlay.hide()
-    applyModeOverlay()
-    refreshCurrentModeSideEffects(reason: "command_cancel")
+    finishCommandLineInteraction(reason: "command_cancel")
   }
 
   func overlayDidUpdateCommandLine(

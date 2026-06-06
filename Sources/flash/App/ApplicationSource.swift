@@ -81,7 +81,7 @@ final class ApplicationSource: FlashSource {
   ) {
     if let pid = item.pid {
       if let app = NSRunningApplication(processIdentifier: pid) {
-        app.activate(options: [.activateAllWindows])
+        RunningApplicationActivation.activate(app, options: [.activateAllWindows])
       }
       DispatchQueue.main.async {
         completion(.resolved(pid: pid))

@@ -76,6 +76,7 @@ struct Config {
     var all: [ModeMapping] = []
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
+    var normalLeader: String?
     var labels = Labels()
 
     static let defaultNormalMappings: [ModeMapping] = [
@@ -89,11 +90,13 @@ struct Config {
       ModeMapping(key: "ctrl-u", action: .flashCommand(.scroll(.halfPageUp))),
       ModeMapping(key: "gg", action: .flashCommand(.scroll(.top))),
       ModeMapping(key: "G", action: .flashCommand(.scroll(.bottom))),
+      ModeMapping(key: "H", action: .flashCommand(.historyBack)),
+      ModeMapping(key: "L", action: .flashCommand(.historyForward)),
       ModeMapping(key: "gt", action: .flashCommand(.tabNext)),
       ModeMapping(key: "gT", action: .flashCommand(.tabPrev)),
       ModeMapping(key: "gN", action: .flashCommand(.tabSelect(index: nil))),
-      ModeMapping(key: "ctrl-o", action: .flashCommand(.appBack)),
-      ModeMapping(key: "ctrl-i", action: .flashCommand(.appForward)),
+      ModeMapping(key: "ctrl-o", action: .flashCommand(.movementBack)),
+      ModeMapping(key: "ctrl-i", action: .flashCommand(.movementForward)),
       ModeMapping(key: "gf", action: .flashCommand(.nextFrame)),
       ModeMapping(key: "gF", action: .flashCommand(.mainFrame)),
       ModeMapping(key: "i", action: .flashCommand(.insertMode)),
@@ -192,7 +195,18 @@ struct Config {
   }
 
   var resolvedConfigJSON: String {
-    compactJSON([
+    let modeJSON: [String: Any] = [
+      "all": mode.all.map(Self.mappingJSONValue),
+      "insert": mode.insert.map(Self.mappingJSONValue),
+      "labels": [
+        "command": mode.labels.command,
+        "insert": mode.labels.insert,
+        "normal": mode.labels.normal,
+      ],
+      "normal": mode.normal.map(Self.mappingJSONValue),
+      "normal_leader": mode.normalLeader ?? NSNull(),
+    ]
+    return compactJSON([
       "debug": [
         "bounds_bg": debug.boundsBG,
         "bounds_fg": debug.boundsFG,
@@ -206,16 +220,7 @@ struct Config {
         "magic_modifiers": hints.magicModifiers,
         "min_length": hints.minLength,
       ],
-      "mode": [
-        "all": mode.all.map(Self.mappingJSONValue),
-        "insert": mode.insert.map(Self.mappingJSONValue),
-        "labels": [
-          "command": mode.labels.command,
-          "insert": mode.labels.insert,
-          "normal": mode.labels.normal,
-        ],
-        "normal": mode.normal.map(Self.mappingJSONValue),
-      ],
+      "mode": modeJSON,
       "open": [
         "ignored_apps": open.ignoredApps
       ],
@@ -232,7 +237,7 @@ struct Config {
 
   private static func mappingJSONValue(_ mapping: ModeMapping) -> [String: Any] {
     [
-      "action": mapping.action.diagnosticDescription,
+      "action": mapping.action.configValue,
       "key": mapping.key,
     ]
   }
@@ -348,10 +353,14 @@ extension URLCommand {
         return "flash://tab_select?index=\(index)"
       }
       return "flash://tab_select"
-    case .appBack:
-      return "flash://app_back"
-    case .appForward:
-      return "flash://app_forward"
+    case .historyBack:
+      return "flash://history_back"
+    case .historyForward:
+      return "flash://history_forward"
+    case .movementBack:
+      return "flash://movement_back"
+    case .movementForward:
+      return "flash://movement_forward"
     case .quitApp(let force):
       return force ? "flash://app_quit?force=1" : "flash://app_quit"
     case .save:
