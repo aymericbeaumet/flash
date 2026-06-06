@@ -57,12 +57,19 @@ public enum CandidateKind: Sendable {
 
 public struct Candidate: @unchecked Sendable {
   public var kind: CandidateKind
+  /// Stable source id used for routing resolution back to the source.
   public var sourceID: String
+  /// Short user-facing source name, such as "app", "tmux", or "firefox".
   public var source: String
   public var pid: pid_t?
+  /// Primary searchable name. Candidate presentation and matching are built
+  /// around the source/name/url contract.
   public var name: String
   public var subtitle: String
   public var bundleIdentifier: String
+  /// Openable destination whenever one exists. App candidates must use an
+  /// absolute file URL to the .app bundle; browser tabs and other external
+  /// resources should use their canonical URL.
   public var url: URL?
   public var tmuxClientTTY: String?
   public var tmuxTarget: String?

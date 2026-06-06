@@ -7,6 +7,8 @@ struct CandidateMatch {
 }
 
 enum CandidateFinder {
+  private static let aliveTieBreakScoreMargin = 500
+
   static func displayTitle(source: String, name: String) -> String {
     "[\(source)] \(name)"
   }
@@ -95,6 +97,11 @@ enum CandidateFinder {
 
   static func sortedMatches(_ matches: [CandidateMatch]) -> [CandidateMatch] {
     matches.sorted { lhs, rhs in
+      let scoreDelta = lhs.score - rhs.score
+      if abs(scoreDelta) >= aliveTieBreakScoreMargin {
+        return lhs.score > rhs.score
+      }
+
       let lhsAlive = isAlive(lhs.candidate)
       let rhsAlive = isAlive(rhs.candidate)
       if lhsAlive != rhsAlive { return lhsAlive }
@@ -149,6 +156,10 @@ enum CandidateFinder {
       return url
     }
     guard let url = candidate.url else { return "" }
+    if candidate.kind == .app, url.isFileURL {
+      let appName = url.deletingPathExtension().lastPathComponent
+      return "\(appName) \(candidate.bundleIdentifier)"
+    }
     return url.isFileURL ? url.path : url.absoluteString
   }
 

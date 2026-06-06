@@ -94,6 +94,32 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(sorted.map(\.candidate.name), ["Finder notes", "Finder"])
   }
 
+  func testStrongTextScoreOutranksAliveTieBreaker() {
+    let deadExact = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "app",
+        name: "System Settings",
+        subtitle: "app",
+        bundleIdentifier: "com.apple.systempreferences",
+        pid: nil))
+    let aliveWeak = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "app",
+        name: "Messages",
+        subtitle: "app",
+        bundleIdentifier: "com.apple.MobileSMS",
+        pid: 123))
+
+    let sorted = CandidateFinder.sortedMatches([
+      CandidateMatch(candidate: aliveWeak, score: 10_000),
+      CandidateMatch(candidate: deadExact, score: 11_000),
+    ])
+
+    XCTAssertEqual(sorted.map(\.candidate.name), ["System Settings", "Messages"])
+  }
+
   func testOpenCandidateScoringMatchesURL() throws {
     let tab = CandidateFinder.prepare(
       candidate(
@@ -123,6 +149,28 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertNotNil(CandidateFinder.score(query: "gmail.com", candidate: tab))
   }
 
+  func testAppCandidateScoringIgnoresCommonFilePathPrefixes() throws {
+    let messages = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "app",
+        name: "Messages",
+        subtitle: "app",
+        bundleIdentifier: "com.apple.MobileSMS",
+        url: URL(fileURLWithPath: "/System/Applications/Messages.app")))
+    let settings = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "app",
+        name: "System Settings",
+        subtitle: "app",
+        bundleIdentifier: "com.apple.systempreferences",
+        url: URL(fileURLWithPath: "/System/Applications/System Settings.app")))
+
+    XCTAssertNil(CandidateFinder.score(query: "settings", candidate: messages))
+    XCTAssertNotNil(CandidateFinder.score(query: "settings", candidate: settings))
+  }
+
   func testApplicationSourceCanResolveFinderFromCoreServices() throws {
     let source = ApplicationSource()
     let finder = try XCTUnwrap(
@@ -132,6 +180,26 @@ final class SourceCandidateTests: XCTestCase {
 
     XCTAssertEqual(finder.name, "Finder")
     XCTAssertEqual(finder.bundleIdentifier, "com.apple.finder")
+    XCTAssertEqual(finder.url?.isFileURL, true)
+    XCTAssertTrue(finder.url?.path.hasPrefix("/") ?? false)
+  }
+
+  func testApplicationSourceSystemSettingsCandidateHasOpenableFileURL() throws {
+    let expectedURL = URL(fileURLWithPath: "/System/Applications/System Settings.app")
+    guard FileManager.default.fileExists(atPath: expectedURL.path) else {
+      throw XCTSkip("System Settings.app is not present at the standard macOS path")
+    }
+    let source = ApplicationSource()
+    let settings = try XCTUnwrap(
+      source.candidate(
+        matching: "System Settings",
+        in: FlashSourceEnvironment(runningApplications: [])))
+
+    XCTAssertEqual(settings.name, "System Settings")
+    XCTAssertEqual(settings.bundleIdentifier, "com.apple.systempreferences")
+    XCTAssertEqual(settings.url?.isFileURL, true)
+    XCTAssertEqual(settings.url?.standardizedFileURL.path, expectedURL.standardizedFileURL.path)
+    XCTAssertTrue(settings.url?.absoluteString.hasPrefix("file://") ?? false)
   }
 
   func testBrowserTabDisplayTitleIncludesSourceTitleAndURL() throws {

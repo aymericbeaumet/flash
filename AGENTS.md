@@ -198,11 +198,12 @@ Steps:
 
 1. Create the source in `Sources/FlashProviders/<Group>/` when it is reusable jump-target logic, or under `Sources/flash/App/` when it is app-owned `:open` / command-resolution glue.
 2. Implement the protocol. For jump targets, return a complete deterministic `[JumpTarget]` set with **global NSScreen coordinates** (bottom-left origin of primary screen). Do not deadline-truncate output.
-3. Pick an activation policy. Use `.always` only for cheap universal sources, `.bundleIDs(...)` for app-scoped sources like Slack/browser tabs, and `.terminalBundles` for terminal-backed sources. `SourceRegistry` instantiates non-`.always` sources only while a matching app is running.
-4. Register a `SourceDescriptor` in `Sources/flash/App/SourceRegistry.swift`. Pick a priority for overlapping jump targets — higher wins. Existing jump-target scale:
+3. For `:open` / `:flashlight` items, return `Candidate` values using the canonical `{ source, name, url }` contract. `source` is a short stable label, `name` is the primary title, and `url` should be openable whenever present. App candidates must use an absolute `file://` URL to the `.app` bundle; browser tabs and external resources should use their canonical openable URL. Omit `url` only when the source must resolve through source-specific payload or AX state.
+4. Pick an activation policy. Use `.always` only for cheap universal sources, `.bundleIDs(...)` for app-scoped sources like Slack/browser tabs, and `.terminalBundles` for terminal-backed sources. `SourceRegistry` instantiates non-`.always` sources only while a matching app is running.
+5. Register a `SourceDescriptor` in `Sources/flash/App/SourceRegistry.swift`. Pick a priority for overlapping jump targets — higher wins. Existing jump-target scale:
    - 20: `TmuxProvider` (terminals with a tmux client in the process subtree)
    - 10: generic `AccessibilityProvider` (universal AX walker; also handles browser in-page DOM via `AXWebArea` descendants)
-5. Add focused tests. At minimum cover source activation gating in `SourceRegistryTests` or the source's parsing/resolution helpers, then update README when user-facing behavior changes.
+6. Add focused tests. At minimum cover source activation gating in `SourceRegistryTests` or the source's parsing/resolution helpers, then update README when user-facing behavior changes.
 
 Flash deliberately uses **only two jump-target sources**: `AccessibilityProvider` as the universal default, and `TmuxProvider` for terminals whose visible content macOS Accessibility cannot see. App-specific sources may contribute `:open` items or custom resolution when that data does not belong in the AX walker. There is no DOM bridge / `do JavaScript` provider — browser page content reaches us through `AXWebArea` descendants the same way every other web area does. If you find yourself reaching for AppleScript-based discovery, surface that to the user instead of adding it.
 

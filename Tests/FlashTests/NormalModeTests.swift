@@ -638,7 +638,7 @@ final class NormalModeTests: XCTestCase {
         path: "/Applications/Postico 2.app"))
 
     XCTAssertEqual(prepared.displayTitle, "[app] Postico 2")
-    XCTAssertEqual(prepared.normalizedSearchText, "app postico 2 applications postico 2 app")
+    XCTAssertEqual(prepared.normalizedSearchText, "app postico 2 postico 2 com eggerapps postico")
   }
 
   func testCandidateFinderPreparedBrowserTabIncludesBrowserTitleAndURL() {
