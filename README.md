@@ -119,6 +119,11 @@ leader = "\\"
 
 [debug]
 log_level = "info"
+# show_bounds = false
+# bounds_bg = "#00000000"
+# bounds_fg = "#FF3B9A"
+# profile = false
+# slow_ms = 100
 # http_host = localhost:4242
 ```
 

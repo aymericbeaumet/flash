@@ -224,16 +224,11 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   private static func role(of element: AXUIElement) -> String? {
-    stringAttribute(element, kAXRoleAttribute as String)
+    AXAttribute.role(element)
   }
 
   private static func children(of element: AXUIElement) -> [AXUIElement] {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
-      == .success,
-      let children = raw as? [AXUIElement]
-    else { return [] }
-    return children
+    AXAttribute.children(element)
   }
 
   private static func tabElements(in root: AXUIElement) -> [AXUIElement] {
@@ -257,40 +252,15 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   private static func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw,
-      CFGetTypeID(value) == AXUIElementGetTypeID()
-    else { return nil }
-    return (value as! AXUIElement)
+    AXAttribute.element(element, name)
   }
 
   private static func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw
-    else { return nil }
-    return value as? String
-  }
-
-  private static func boolAttribute(_ element: AXUIElement, _ name: String) -> Bool? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw
-    else { return nil }
-    return value as? Bool
+    AXAttribute.string(element, name)
   }
 
   private static func urlAttribute(_ element: AXUIElement, _ name: String) -> String? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw
-    else { return nil }
-    if let url = value as? URL { return url.absoluteString }
-    if CFGetTypeID(value) == CFURLGetTypeID() {
-      return (value as! URL).absoluteString
-    }
-    return value as? String
+    AXAttribute.url(element, name)
   }
 
   // Cached CFTypeID for AXValue. AXUIElementCopyMultipleAttributeValues
@@ -561,7 +531,6 @@ public final class AccessibilityProvider: FlashSource {
         role: capturedRole,
         accessibilityLabel: label,
         url: url,
-        acceptsTextInput: Self.acceptsTextInput(captured, role: capturedRole),
         pid: pid,
         activate: activate,
         providerID: identifier
@@ -670,30 +639,6 @@ public final class AccessibilityProvider: FlashSource {
       )
       if state.confirmedTargets.count >= Self.maxTargets { return }
     }
-  }
-
-  private static func acceptsTextInput(_ element: AXUIElement, role initialRole: String) -> Bool {
-    var current = element
-    var role = initialRole
-    for _ in 0..<8 {
-      if textInputRoles.contains(role) {
-        return true
-      }
-      if boolAttribute(current, "AXIsEditable") == true {
-        return true
-      }
-      if elementAttribute(current, "AXEditableAncestor") != nil
-        || elementAttribute(current, "AXHighestEditableAncestor") != nil
-      {
-        return true
-      }
-      guard let parent = elementAttribute(current, kAXParentAttribute as String) else {
-        return false
-      }
-      current = parent
-      role = Self.role(of: current) ?? ""
-    }
-    return false
   }
 
   /// Parallel resolution of action-name IPCs for tentative targets that

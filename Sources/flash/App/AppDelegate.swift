@@ -203,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.debugConfig = config.debug
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
-    overlay.normalModeMappings = config.mode.mappings(for: .normal)
+    overlay.normalModeMappings = config.mode.compiledNormal
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
     // Pay the layer-allocation cost at launch instead of on the first
     // activation. 256 covers the steady state for most apps; further
@@ -3100,7 +3100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.debugConfig = cfg.debug
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
-    overlay.normalModeMappings = cfg.mode.mappings(for: .normal)
+    overlay.normalModeMappings = cfg.mode.compiledNormal
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
     registry.updateOpenConfig(cfg.open)
     pluginManager.updateConfig(cfg)

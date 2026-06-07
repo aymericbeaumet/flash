@@ -159,7 +159,10 @@ final class NormalModeTests: XCTestCase {
   func testRightAndDoubleClickHintModeSequences() {
     XCTAssertEqual(transition(chars: "r").pending, "r")
     XCTAssertEqual(
-      NormalModeInterpreter.pendingCommand(pending: "r")?.command,
+      NormalModeInterpreter.pendingCommand(
+        pending: "r",
+        mappings: CompiledMappings(Config.Mode.defaultNormalMappings)
+      )?.command,
       .reload(force: false))
     XCTAssertEqual(command(chars: "R", ignoring: "r", flags: [.shift]), .reload(force: true))
     XCTAssertEqual(command(pending: "r", chars: "f"), .mouseTarget(.click(.rightClick)))
@@ -194,7 +197,7 @@ final class NormalModeTests: XCTestCase {
         modifierFlags: [.command],
         characters: " ",
         charactersIgnoringModifiers: " ",
-        mappings: Config.Mode.defaultNormalMappings
+        mappings: CompiledMappings(Config.Mode.defaultNormalMappings)
       ).command)
     XCTAssertEqual(transition(chars: "r").pending, "r")
     XCTAssertEqual(command(chars: ":"), .commandMode)
@@ -1118,7 +1121,8 @@ final class NormalModeTests: XCTestCase {
       keyCode: 53,
       modifierFlags: [],
       characters: nil,
-      charactersIgnoringModifiers: nil)
+      charactersIgnoringModifiers: nil,
+      mappings: CompiledMappings(Config.Mode.defaultNormalMappings))
     XCTAssertNil(t.command)
     XCTAssertEqual(t.pending, "")
   }
@@ -1129,7 +1133,8 @@ final class NormalModeTests: XCTestCase {
       keyCode: 53,
       modifierFlags: [],
       characters: nil,
-      charactersIgnoringModifiers: nil)
+      charactersIgnoringModifiers: nil,
+      mappings: CompiledMappings(Config.Mode.defaultNormalMappings))
     XCTAssertNil(t.command)
     XCTAssertEqual(t.pending, "")
   }
@@ -1183,7 +1188,7 @@ final class NormalModeTests: XCTestCase {
       modifierFlags: flags,
       characters: chars,
       charactersIgnoringModifiers: ignoring ?? chars.lowercased(),
-      mappings: mappings)
+      mappings: CompiledMappings(mappings))
   }
 
   private func candidateFinderCandidate(

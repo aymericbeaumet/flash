@@ -226,6 +226,23 @@ struct Config {
       }
     }
 
+    /// O(1)-lookup view used on every keystroke. Refreshed by
+    /// `prepareDerivedValues()` after every config load / reload.
+    private(set) var compiledNormal = CompiledMappings()
+    private(set) var compiledInsert = CompiledMappings()
+
+    func compiledMappings(for mode: FlashMode) -> CompiledMappings {
+      switch mode {
+      case .normal: return compiledNormal
+      case .insert: return compiledInsert
+      }
+    }
+
+    mutating func recompileMappings() {
+      compiledNormal = CompiledMappings(mappings(for: .normal))
+      compiledInsert = CompiledMappings(mappings(for: .insert))
+    }
+
     mutating func refreshLeaderDerivedDefaults() {
       let leaderRaw = normalLeader ?? Self.defaultNormalLeader
       guard let leaderInternal = NormalModeInterpreter.translateLeader(leaderRaw) else { return }
@@ -255,8 +272,11 @@ struct Config {
   var plugins = Plugins()
   var mode = Mode()
   var debug = Debug()
-  var warnings: [String] = []
   var diagnostics: [ConfigDiagnostic] = []
+  /// Plain-string view over `diagnostics`. Existed as a parallel
+  /// mutable field; collapsed to a computed projection so the two
+  /// can't drift.
+  var warnings: [String] { diagnostics.map(\.message) }
   var valueLocations: [String: ConfigLocation] = [:]
   /// Prepared from `hints.keys` by `ConfigLoader` after TOML/env/CLI
   /// precedence has settled. Activation should use this stored value
@@ -280,18 +300,17 @@ struct Config {
 
   mutating func addDiagnostic(_ message: String, location: ConfigLocation? = nil) {
     diagnostics.append(ConfigDiagnostic(message: message, location: location))
-    warnings.append(message)
   }
 
   mutating func removeDiagnostics(where predicate: (String) -> Bool) {
     diagnostics.removeAll { predicate($0.message) }
-    warnings.removeAll(where: predicate)
   }
 
   mutating func prepareDerivedValues() {
     mode.refreshLeaderDerivedDefaults()
     resolvedAlphabet = Alphabet.resolve(hints.keys)
     removeAmbiguousShiftMagicModifier()
+    mode.recompileMappings()
   }
 
   private mutating func removeAmbiguousShiftMagicModifier() {

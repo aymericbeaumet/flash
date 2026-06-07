@@ -1,6 +1,7 @@
 import AppKit
 import FlashCore
 import QuartzCore
+import os
 
 enum OverlayModeBadgeStyle {
   case insert
@@ -100,7 +101,7 @@ final class OverlayPanel: NSPanel {
     }
   }
   var normalModePendingUpdatedAt: Date?
-  var normalModeMappings: [ModeMapping] = Config.Mode.defaultNormalMappings
+  var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
@@ -113,6 +114,82 @@ final class OverlayPanel: NSPanel {
   // Fallback border colour when the configured `hint_border` is malformed.
   private static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
 
+  // MARK: Screen snapshot cache
+  //
+  // `NSScreen.screens` walks WindowServer's display list — measurable on
+  // multi-display setups, and we call it 3–4× per activation across
+  // `display(hints:)`, `displayBanner`, `displayModal`,
+  // `ensurePanelFrame`, `configureModeBadge`, `configureCommandPrompt`,
+  // and `configureCandidateFinderResults`. The geometry only changes
+  // on `didChangeScreenParametersNotification`, so we cache once and
+  // invalidate on that notification (observed from `init` below).
+
+  struct ScreenSnapshot {
+    var screens: [(scale: CGFloat, frame: CGRect)]
+    var unionFrame: CGRect
+    var mainFrame: CGRect?
+    var mainScale: CGFloat
+    var mainVisibleFrame: CGRect
+  }
+
+  private static var snapshotLock = os_unfair_lock_s()
+  private static var cachedSnapshot: ScreenSnapshot?
+
+  static func currentScreenSnapshot() -> ScreenSnapshot {
+    os_unfair_lock_lock(&snapshotLock)
+    if let cached = cachedSnapshot {
+      os_unfair_lock_unlock(&snapshotLock)
+      return cached
+    }
+    os_unfair_lock_unlock(&snapshotLock)
+    let snapshot = buildScreenSnapshot()
+    os_unfair_lock_lock(&snapshotLock)
+    cachedSnapshot = snapshot
+    os_unfair_lock_unlock(&snapshotLock)
+    return snapshot
+  }
+
+  static func invalidateScreenSnapshot() {
+    os_unfair_lock_lock(&snapshotLock)
+    cachedSnapshot = nil
+    os_unfair_lock_unlock(&snapshotLock)
+  }
+
+  private static func buildScreenSnapshot() -> ScreenSnapshot {
+    var union: NSRect = .null
+    var screens: [(scale: CGFloat, frame: CGRect)] = []
+    for s in NSScreen.screens {
+      union = union.union(s.frame)
+      screens.append((s.backingScaleFactor, s.frame))
+    }
+    if union.isNull, let main = NSScreen.main { union = main.frame }
+    let main = NSScreen.main ?? NSScreen.screens.first
+    return ScreenSnapshot(
+      screens: screens,
+      unionFrame: union,
+      mainFrame: main?.frame,
+      mainScale: main?.backingScaleFactor ?? 2,
+      mainVisibleFrame: main?.visibleFrame ?? union)
+  }
+
+  // MARK: Pre-baked CGColors
+  //
+  // The Nord palette is built from `NSColor`; `cgColor` does a runtime
+  // conversion. These hot paths read CGColors 3–6 times per activation
+  // (mode badge, command prompt, candidate finder, banner, modal), so
+  // build them once and reuse.
+  private static let nordPolarNight0CG = nordPolarNight0.cgColor
+  private static let nordPolarNight1CG = nordPolarNight1.cgColor
+  private static let nordSnowStorm0CG = nordSnowStorm0.cgColor
+  private static let nordSnowStorm1CG = nordSnowStorm1.cgColor
+  private static let nordSnowStorm2CG = nordSnowStorm2.cgColor
+  private static let nordFrost2CG = nordFrost2.cgColor
+  private static let nordAuroraGreenCG = nordAuroraGreen.cgColor
+  private static let nordAuroraYellowCG = nordAuroraYellow.cgColor
+  private static let nordAuroraPurpleCG = nordAuroraPurple.cgColor
+
+  private var screenParametersObserver: NSObjectProtocol?
+
   init() {
     let frame = OverlayPanel.unionScreenFrame()
     super.init(
@@ -121,6 +198,13 @@ final class OverlayPanel: NSPanel {
       backing: .buffered,
       defer: false
     )
+    screenParametersObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didChangeScreenParametersNotification,
+      object: nil,
+      queue: .main
+    ) { _ in
+      OverlayPanel.invalidateScreenSnapshot()
+    }
     self.level = .screenSaver
     self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
     self.isOpaque = false
@@ -160,7 +244,7 @@ final class OverlayPanel: NSPanel {
     commandPromptLabel.alignmentMode = .left
     commandPromptLabel.actions = OverlayPanel.noActions
     commandCaretLayer.actions = OverlayPanel.noActions
-    commandCaretLayer.backgroundColor = Self.nordSnowStorm2.cgColor
+    commandCaretLayer.backgroundColor = Self.nordSnowStorm2CG
     commandCaretLayer.isHidden = true
     commandPromptLayer.sublayers = [commandPromptLabel, commandCaretLayer]
     candidateFinderResultsLayer.cornerRadius = 4
@@ -172,7 +256,7 @@ final class OverlayPanel: NSPanel {
     candidateFinderResultsLabel.actions = OverlayPanel.noActions
     candidateFinderResultsLayer.sublayers = [candidateFinderResultsLabel]
     activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
-    activeWindowBorderLayer.strokeColor = Self.nordFrost2.cgColor
+    activeWindowBorderLayer.strokeColor = Self.nordFrost2CG
     activeWindowBorderLayer.lineWidth = 2
     activeWindowBorderLayer.actions = OverlayPanel.noActions
 
@@ -181,6 +265,15 @@ final class OverlayPanel: NSPanel {
     configureModalTextView()
     view.addSubview(commandTextField)
     view.addSubview(modalScrollView)
+    installPointerMonitors()
+  }
+
+  deinit {
+    if let observer = screenParametersObserver {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    removePointerMonitors()
+    removeModalDismissMonitors()
   }
 
   /// Allocate `count` chip+label layers and stash them in the pools. Called
@@ -211,22 +304,20 @@ final class OverlayPanel: NSPanel {
     return isVisible && isKeyWindow && firstResponder === self
   }
 
-  /// Active scroll event monitor — non-nil while the overlay is up.
-  /// We use NSEvent's *global* monitor for `.scrollWheel` because the
-  /// panel has `ignoresMouseEvents = true` so scroll events go to
-  /// whichever app is under the cursor, not to us. A global monitor
-  /// observes those events without intercepting them, which is what
-  /// we want: dismiss the overlay but let the user's scroll reach
-  /// the underlying app uninterrupted. The local monitor catches the
-  /// (rare) case where the overlay or another Flash window is
-  /// frontmost when a scroll arrives — without this the user could
-  /// scroll our own UI without dismissing.
-  private var scrollGlobalMonitor: Any?
-  private var scrollLocalMonitor: Any?
-  private var clickGlobalMonitor: Any?
-  private var clickLocalMonitor: Any?
-  private var pointerIntentGlobalMonitor: Any?
-  private var pointerIntentLocalMonitor: Any?
+  /// Single pair of NSEvent monitors (global + local) that dismiss the
+  /// overlay on scroll or any mouse button press. We use NSEvent's
+  /// *global* monitor because the panel has `ignoresMouseEvents = true`
+  /// so scroll/click events go to whichever app is under the cursor,
+  /// not to us — we observe them without intercepting so the underlying
+  /// app still gets them. The local monitor catches the rare case where
+  /// the overlay or another Flash window is frontmost when a pointer
+  /// event arrives.
+  ///
+  /// Installed once at `init` and left running. The callback gates on
+  /// the current overlay state, so install/remove churn per activation
+  /// is gone.
+  private var pointerGlobalMonitor: Any?
+  private var pointerLocalMonitor: Any?
   private var modalClickGlobalMonitor: Any?
   private var modalClickLocalMonitor: Any?
 
@@ -237,15 +328,11 @@ final class OverlayPanel: NSPanel {
     defer {
       CATransaction.commit()
       captureKeyboardInput()
-      installInputMonitors()
     }
 
-    let frame = OverlayPanel.unionScreenFrame()
-    if self.frame != frame {
-      self.setFrame(frame, display: false)
-      self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
-      contentLayer.frame = contentView?.bounds ?? .zero
-    }
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let frame = snapshot.unionFrame
+    applyPanelFrame(frame)
 
     recycleAll()
     transientContentVisible = true
@@ -263,20 +350,23 @@ final class OverlayPanel: NSPanel {
     // the host screen's backingScaleFactor, so on a mixed-DPI dual-
     // monitor setup the chip layer's scale must follow the screen the
     // chip lands on, not `NSScreen.main`.
-    let screensInPanel: [(scale: CGFloat, panelRect: CGRect)] = {
-      let panelOrigin = frame.origin
-      return NSScreen.screens.map { s in
-        let r = CGRect(
-          x: s.frame.minX - panelOrigin.x,
-          y: s.frame.minY - panelOrigin.y,
-          width: s.frame.width,
-          height: s.frame.height
-        )
-        return (s.backingScaleFactor, r)
-      }
-    }()
+    let panelOrigin = frame.origin
+    let screensInPanel: [(scale: CGFloat, panelRect: CGRect)] = snapshot.screens.map { s in
+      let r = CGRect(
+        x: s.frame.minX - panelOrigin.x,
+        y: s.frame.minY - panelOrigin.y,
+        width: s.frame.width,
+        height: s.frame.height
+      )
+      return (s.scale, r)
+    }
+    // Single-display fast path: the per-chip linear scan over the
+    // panel-local screen list resolves to the same scale every time,
+    // so skip the loop and CGPoint construction entirely.
+    let singleDisplayScale: CGFloat? =
+      screensInPanel.count == 1 ? screensInPanel[0].scale : nil
     let fallbackScale =
-      NSScreen.main?.backingScaleFactor ?? screensInPanel.first?.scale ?? 2
+      snapshot.mainScale
 
     // Hoisted out of the per-chip loop: colors, font, and chip height
     // are identical for every chip in this activation. Chip *width*
@@ -408,11 +498,17 @@ final class OverlayPanel: NSPanel {
       // chip + 1px border + text were rasterised at NSScreen.main's
       // scale even when the host window was on a different-DPI
       // display, which looked muddy/blurry.
-      let chipMid = CGPoint(x: chipLocal.midX, y: chipLocal.midY)
-      var chipScale = fallbackScale
-      for sp in screensInPanel where sp.panelRect.contains(chipMid) {
-        chipScale = sp.scale
-        break
+      let chipScale: CGFloat
+      if let single = singleDisplayScale {
+        chipScale = single
+      } else {
+        let chipMid = CGPoint(x: chipLocal.midX, y: chipLocal.midY)
+        var resolved = fallbackScale
+        for sp in screensInPanel where sp.panelRect.contains(chipMid) {
+          resolved = sp.scale
+          break
+        }
+        chipScale = resolved
       }
       // Snap to device-pixel grid so the 1pt border lands on integer
       // device-pixels (otherwise it gets anti-aliased into two half-
@@ -431,7 +527,10 @@ final class OverlayPanel: NSPanel {
       }
       label.contentsScale = chipScale
 
-      chip.sublayers = [label]
+      // `recycleAll()` already cleared `sublayers`, so attaching with
+      // `addSublayer(label)` skips the per-chip array alloc that
+      // `chip.sublayers = [label]` carried.
+      chip.addSublayer(label)
       newSublayers.append(chip)
       hintLayers.append(chip)
       labelLayers.append(label)
@@ -472,7 +571,6 @@ final class OverlayPanel: NSPanel {
     FlashLog.trace(
       "[overlay] hide transient=\(transientContentVisible) mode_badge=\(modeBadgeVisible) "
         + "capture=\(modeBadgeCapturesInput) input=\(inputMode)")
-    removeInputMonitors()
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"
@@ -522,10 +620,7 @@ final class OverlayPanel: NSPanel {
   ) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    defer {
-      CATransaction.commit()
-      updatePointerIntentMonitors()
-    }
+    defer { CATransaction.commit() }
 
     modeBadgeText = text
     modeBadgeStyle = style
@@ -577,9 +672,10 @@ final class OverlayPanel: NSPanel {
     renderModeBadgeOnlyOrHide()
   }
 
-  /// Install (idempotent) the dismissal event monitors. Calling this
-  /// twice is safe — the second call removes the previous monitors
-  /// before installing fresh ones.
+  /// Install the dismissal event monitors once at `init`. The closures
+  /// gate on overlay state so transient (hint) and capture (normal-mode)
+  /// surfaces share one monitor pair instead of churning install/remove
+  /// per activation.
   ///
   /// Dismissal triggers: scroll wheel, any mouse-button press. Mouse
   /// move is intentionally NOT a dismissal trigger because the
@@ -587,56 +683,47 @@ final class OverlayPanel: NSPanel {
   /// for a key. Non-matching keystrokes are dismissed by
   /// `AppDelegate.overlayDidCommit` when no hint label matches the
   /// running prefix.
-  private func installInputMonitors() {
-    removeInputMonitors()
-    let pointerDismiss: (OverlayPointerIntent) -> Void = { [weak self] intent in
-      DispatchQueue.main.async {
-        self?.coordinator?.overlayDidCancelByPointer(intent)
-      }
-    }
-    scrollGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { _ in
-      pointerDismiss(.scroll)
-    }
-    scrollLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-      pointerDismiss(.scroll)
-      return event
-    }
-    // Mouse-button presses (single, double, or right click) dismiss
-    // immediately. The user has clearly chosen a different action
-    // than typing a hint; keep the overlay out of the way. The
-    // local monitor catches clicks on the overlay/Flash itself —
-    // without it the overlay would persist if the user clicked one
-    // of its chips.
-    let clickMask: NSEvent.EventTypeMask = [
-      .leftMouseDown, .rightMouseDown, .otherMouseDown,
+  private func installPointerMonitors() {
+    let mask: NSEvent.EventTypeMask = [
+      .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
     ]
-    clickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) { _ in
-      pointerDismiss(.click(Self.pointerClick()))
+    pointerGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
+      [weak self] event in
+      self?.deliverPointerIntent(for: event)
     }
-    clickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) { event in
-      pointerDismiss(.click(Self.pointerClick(event)))
+    pointerLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {
+      [weak self] event in
+      self?.deliverPointerIntent(for: event)
       return event
     }
   }
 
-  private func installPointerIntentMonitors() {
-    removePointerIntentMonitors()
-    let pointerIntent: (OverlayPointerIntent) -> Void = { [weak self] intent in
-      DispatchQueue.main.async {
-        self?.coordinator?.overlayDidCancelByPointer(intent)
-      }
+  private func deliverPointerIntent(for event: NSEvent) {
+    guard pointerMonitorShouldDispatch() else { return }
+    let intent: OverlayPointerIntent =
+      event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event))
+    DispatchQueue.main.async { [weak self] in
+      self?.coordinator?.overlayDidCancelByPointer(intent)
     }
-    let clickMask: NSEvent.EventTypeMask = [
-      .leftMouseDown, .rightMouseDown, .otherMouseDown,
-    ]
-    let pointerMask = clickMask.union(.scrollWheel)
-    pointerIntentGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: pointerMask) { event in
-      pointerIntent(event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event)))
-    }
-    pointerIntentLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: pointerMask) { event in
-      pointerIntent(event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event)))
-      return event
-    }
+  }
+
+  private func pointerMonitorShouldDispatch() -> Bool {
+    // Transient surfaces (hint chips, banner, modal-without-text) all
+    // dismiss on pointer input. Normal-mode capture also dismisses,
+    // matching the previous "pointerIntent" gate.
+    if transientContentVisible { return true }
+    return Self.pointerIntentMonitorShouldRun(
+      inputMode: inputMode,
+      modeBadgeVisible: modeBadgeVisible,
+      modeBadgeCapturesInput: modeBadgeCapturesInput)
+  }
+
+  static func pointerIntentMonitorShouldRun(
+    inputMode: OverlayInputMode,
+    modeBadgeVisible: Bool,
+    modeBadgeCapturesInput: Bool
+  ) -> Bool {
+    inputMode == .normal && modeBadgeVisible && modeBadgeCapturesInput
   }
 
   private static func pointerClick(_ event: NSEvent? = nil) -> OverlayPointerClick {
@@ -657,43 +744,12 @@ final class OverlayPanel: NSPanel {
       modifiers: modifiers)
   }
 
-  private func removePointerIntentMonitors() {
-    for m in [pointerIntentGlobalMonitor, pointerIntentLocalMonitor] {
+  private func removePointerMonitors() {
+    for m in [pointerGlobalMonitor, pointerLocalMonitor] {
       if let m { NSEvent.removeMonitor(m) }
     }
-    pointerIntentGlobalMonitor = nil
-    pointerIntentLocalMonitor = nil
-  }
-
-  private func updatePointerIntentMonitors() {
-    if Self.pointerIntentMonitorShouldRun(
-      inputMode: inputMode,
-      modeBadgeVisible: modeBadgeVisible,
-      modeBadgeCapturesInput: modeBadgeCapturesInput)
-    {
-      installPointerIntentMonitors()
-    } else {
-      removePointerIntentMonitors()
-    }
-  }
-
-  static func pointerIntentMonitorShouldRun(
-    inputMode: OverlayInputMode,
-    modeBadgeVisible: Bool,
-    modeBadgeCapturesInput: Bool
-  ) -> Bool {
-    inputMode == .normal && modeBadgeVisible && modeBadgeCapturesInput
-  }
-
-  private func removeInputMonitors() {
-    for m in [scrollGlobalMonitor, scrollLocalMonitor, clickGlobalMonitor, clickLocalMonitor] {
-      if let m { NSEvent.removeMonitor(m) }
-    }
-    scrollGlobalMonitor = nil
-    scrollLocalMonitor = nil
-    clickGlobalMonitor = nil
-    clickLocalMonitor = nil
-    removePointerIntentMonitors()
+    pointerGlobalMonitor = nil
+    pointerLocalMonitor = nil
   }
 
   private func installModalDismissMonitors() {
@@ -734,8 +790,8 @@ final class OverlayPanel: NSPanel {
   /// `\n`) are rendered as wrapped text. Used to signal edge cases (no targets,
   /// Accessibility denied) — staying within the "transparent hint overlay only" UI rule.
   func displayBanner(_ text: String, durationMs: Int? = 700) {
-    bannerToken &+= 1
-    let myToken = bannerToken
+    transientDisplayToken &+= 1
+    let myToken = transientDisplayToken
 
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -744,12 +800,9 @@ final class OverlayPanel: NSPanel {
       orderFrontRegardless()
     }
 
-    let frame = OverlayPanel.unionScreenFrame()
-    if self.frame != frame {
-      self.setFrame(frame, display: false)
-      self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
-      contentLayer.frame = contentView?.bounds ?? .zero
-    }
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let frame = snapshot.unionFrame
+    applyPanelFrame(frame)
     recycleAll()
 
     let fontSize = max(CGFloat(overlayConfig.fontSize), 16)
@@ -762,7 +815,7 @@ final class OverlayPanel: NSPanel {
     label.foregroundColor = (nsColor(fromHex: overlayConfig.hintFG) ?? .black).cgColor
     label.alignmentMode = .center
     label.isWrapped = true
-    label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+    label.contentsScale = snapshot.mainScale
     label.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
 
     let lineHeight = fontSize + 6
@@ -770,9 +823,9 @@ final class OverlayPanel: NSPanel {
     let chipHeight = lineHeight * CGFloat(lines.count) + 16
     let centerX: CGFloat
     let centerY: CGFloat
-    if let main = NSScreen.main {
-      centerX = main.frame.midX - frame.minX
-      centerY = main.frame.midY - frame.minY
+    if let main = snapshot.mainFrame {
+      centerX = main.midX - frame.minX
+      centerY = main.midY - frame.minY
     } else {
       centerX = (contentView?.bounds.midX ?? 0)
       centerY = (contentView?.bounds.midY ?? 0)
@@ -802,17 +855,17 @@ final class OverlayPanel: NSPanel {
     if let durationMs {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(durationMs)) { [weak self] in
         // Only hide if a newer banner hasn't replaced us — otherwise we'd hide it early.
-        guard let self, self.bannerToken == myToken else { return }
+        guard let self, self.transientDisplayToken == myToken else { return }
         self.hide()
       }
     }
   }
 
-  private var bannerToken: UInt64 = 0
+  private var transientDisplayToken: UInt64 = 0
 
   func displayModal(_ text: String) {
     FlashLog.trace("[overlay] display_modal chars=\(text.count)")
-    bannerToken &+= 1
+    transientDisplayToken &+= 1
 
     CATransaction.begin()
     CATransaction.setDisableActions(true)
@@ -826,9 +879,9 @@ final class OverlayPanel: NSPanel {
     commandPromptVisible = false
     inputMode = .modal
 
-    let screen = NSScreen.main ?? NSScreen.screens.first
-    let visible = screen?.visibleFrame ?? frame
-    let scale = screen?.backingScaleFactor ?? 2
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let visible = snapshot.mainVisibleFrame
+    let scale = snapshot.mainScale
     let fontSize = max(CGFloat(overlayConfig.fontSize), 13)
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     let longestLine = lines.map(\.count).max() ?? text.count
@@ -935,13 +988,13 @@ final class OverlayPanel: NSPanel {
       targetFrame: targetFrame,
       panelFrame: panelFrame,
       lineWidth: lineWidth)
-    let scale = NSScreen.main?.backingScaleFactor ?? NSScreen.screens.first?.backingScaleFactor ?? 2
+    let scale = OverlayPanel.currentScreenSnapshot().mainScale
     let snapped = Self.snap(local, scale: scale)
     let path = CGMutablePath()
     path.addRoundedRect(in: snapped, cornerWidth: 4, cornerHeight: 4)
     activeWindowBorderLayer.frame = contentLayer.bounds
     activeWindowBorderLayer.path = path
-    activeWindowBorderLayer.strokeColor = Self.nordFrost2.cgColor
+    activeWindowBorderLayer.strokeColor = Self.nordFrost2CG
     activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
     activeWindowBorderLayer.lineWidth = lineWidth
 
@@ -969,20 +1022,26 @@ final class OverlayPanel: NSPanel {
   }
 
   private struct ModeBadgePalette {
-    var top: NSColor
-    var bottom: NSColor
-    var foreground: NSColor
-    var border: NSColor
+    var topCG: CGColor
+    var bottomCG: CGColor
+    var foregroundCG: CGColor
+    var borderCG: CGColor
   }
 
   private func ensurePanelFrame() -> CGRect {
     let frame = OverlayPanel.unionScreenFrame()
-    if self.frame != frame {
-      self.setFrame(frame, display: false)
-      self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
-      contentLayer.frame = contentView?.bounds ?? .zero
-    }
+    applyPanelFrame(frame)
     return frame
+  }
+
+  /// Idempotent panel + contentView + contentLayer frame sync. Called
+  /// by `display`, `displayBanner`, and `ensurePanelFrame` so the
+  /// "are we already at this frame?" branch is in one place.
+  private func applyPanelFrame(_ frame: CGRect) {
+    guard self.frame != frame else { return }
+    self.setFrame(frame, display: false)
+    self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
+    contentLayer.frame = contentView?.bounds ?? .zero
   }
 
   private func renderModeBadgeOnlyOrHide() {
@@ -1062,27 +1121,24 @@ final class OverlayPanel: NSPanel {
       currentText: text,
       fontSize: fontSize)
     let height = fontSize + 8
-    let screen = NSScreen.main ?? NSScreen.screens.first
-    let visible = screen?.visibleFrame ?? panelFrame
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let visible = snapshot.mainVisibleFrame
     let localX = visible.minX - panelFrame.minX + 10
     let localY = visible.minY - panelFrame.minY + 10
-    let scale = screen?.backingScaleFactor ?? 2
+    let scale = snapshot.mainScale
     modeBadgeLayer.frame = Self.snap(
       CGRect(x: localX, y: localY, width: width, height: height),
       scale: scale)
     modeBadgeLayer.contentsScale = scale
     modeBadgeLayer.opacity = 1
     let palette = modeBadgePalette()
-    modeBadgeLayer.colors = [
-      palette.bottom.cgColor,
-      palette.top.cgColor,
-    ]
-    modeBadgeLayer.borderColor = palette.border.cgColor
+    modeBadgeLayer.colors = [palette.bottomCG, palette.topCG]
+    modeBadgeLayer.borderColor = palette.borderCG
 
     modeBadgeLabel.frame = CGRect(x: 0, y: 4, width: width, height: fontSize + 2)
     modeBadgeLabel.font = labelFont
     modeBadgeLabel.fontSize = fontSize
-    modeBadgeLabel.foregroundColor = palette.foreground.cgColor
+    modeBadgeLabel.foregroundColor = palette.foregroundCG
     modeBadgeLabel.contentsScale = scale
     modeBadgeLabel.string = text
   }
@@ -1102,9 +1158,9 @@ final class OverlayPanel: NSPanel {
         + String(commandLineText[cursorStringIndex...])
       prompt = "\(commandPromptPrefix)\(commandWithCursor)"
     }
-    let screen = NSScreen.main ?? NSScreen.screens.first
-    let visible = screen?.visibleFrame ?? panelFrame
-    let scale = screen?.backingScaleFactor ?? 2
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let visible = snapshot.mainVisibleFrame
+    let scale = snapshot.mainScale
     let gap: CGFloat = 6
     let height = modeBadgeLayer.frame.height
     let localX = modeBadgeLayer.frame.maxX + gap
@@ -1117,11 +1173,8 @@ final class OverlayPanel: NSPanel {
       scale: scale)
     commandPromptLayer.contentsScale = scale
     let palette = commandPalette()
-    commandPromptLayer.colors = [
-      palette.bottom.cgColor,
-      palette.top.cgColor,
-    ]
-    commandPromptLayer.borderColor = palette.border.cgColor
+    commandPromptLayer.colors = [palette.bottomCG, palette.topCG]
+    commandPromptLayer.borderColor = palette.borderCG
 
     let horizontalPadding: CGFloat = 4
     let availableTextWidth = max(10, width - horizontalPadding * 2)
@@ -1153,7 +1206,7 @@ final class OverlayPanel: NSPanel {
       height: fontSize + 2)
     commandPromptLabel.font = labelFont
     commandPromptLabel.fontSize = fontSize
-    commandPromptLabel.foregroundColor = Self.nordSnowStorm2.cgColor
+    commandPromptLabel.foregroundColor = Self.nordSnowStorm2CG
     commandPromptLabel.contentsScale = scale
     commandPromptLabel.alignmentMode = .left
     commandPromptLabel.string = prompt
@@ -1397,9 +1450,9 @@ final class OverlayPanel: NSPanel {
     guard candidateFinderResultsVisible else { return }
     let fontSize = max(CGFloat(overlayConfig.fontSize), 11)
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
-    let screen = NSScreen.main ?? NSScreen.screens.first
-    let visible = screen?.visibleFrame ?? panelFrame
-    let scale = screen?.backingScaleFactor ?? 2
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let visible = snapshot.mainVisibleFrame
+    let scale = snapshot.mainScale
     let lines = candidateFinderResultsMeasurementText.split(
       separator: "\n",
       omittingEmptySubsequences: false)
@@ -1426,11 +1479,8 @@ final class OverlayPanel: NSPanel {
       scale: scale)
     candidateFinderResultsLayer.contentsScale = scale
     let palette = commandPalette()
-    candidateFinderResultsLayer.colors = [
-      palette.bottom.cgColor,
-      palette.top.cgColor,
-    ]
-    candidateFinderResultsLayer.borderColor = palette.border.cgColor
+    candidateFinderResultsLayer.colors = [palette.bottomCG, palette.topCG]
+    candidateFinderResultsLayer.borderColor = palette.borderCG
 
     candidateFinderResultsLabel.frame = CGRect(
       x: Self.candidateFinderHorizontalPadding,
@@ -1439,7 +1489,7 @@ final class OverlayPanel: NSPanel {
       height: labelHeight)
     candidateFinderResultsLabel.font = labelFont
     candidateFinderResultsLabel.fontSize = fontSize
-    candidateFinderResultsLabel.foregroundColor = Self.nordSnowStorm1.cgColor
+    candidateFinderResultsLabel.foregroundColor = Self.nordSnowStorm1CG
     candidateFinderResultsLabel.contentsScale = scale
     candidateFinderResultsLabel.alignmentMode = .left
     candidateFinderResultsLabel.isWrapped = false
@@ -1458,36 +1508,31 @@ final class OverlayPanel: NSPanel {
     return ceil(max(fontLineHeight, measured.height))
   }
 
+  private static let insertPalette = ModeBadgePalette(
+    topCG: nordPolarNight1CG,
+    bottomCG: nordPolarNight0CG,
+    foregroundCG: nordFrost2CG,
+    borderCG: nordFrost2CG)
+  private static let normalPalette = ModeBadgePalette(
+    topCG: nordPolarNight1CG,
+    bottomCG: nordPolarNight0CG,
+    foregroundCG: nordAuroraGreenCG,
+    borderCG: nordAuroraGreenCG)
+  private static let commandPaletteValue = ModeBadgePalette(
+    topCG: nordPolarNight1CG,
+    bottomCG: nordPolarNight0CG,
+    foregroundCG: nordAuroraPurpleCG,
+    borderCG: nordAuroraPurpleCG)
+
   private func modeBadgePalette() -> ModeBadgePalette {
     switch modeBadgeStyle {
-    case .insert:
-      return ModeBadgePalette(
-        top: Self.nordPolarNight1,
-        bottom: Self.nordPolarNight0,
-        foreground: Self.nordFrost2,
-        border: Self.nordFrost2)
-    case .normal:
-      return ModeBadgePalette(
-        top: Self.nordPolarNight1,
-        bottom: Self.nordPolarNight0,
-        foreground: Self.nordAuroraGreen,
-        border: Self.nordAuroraGreen)
-    case .command:
-      return ModeBadgePalette(
-        top: Self.nordPolarNight1,
-        bottom: Self.nordPolarNight0,
-        foreground: Self.nordAuroraPurple,
-        border: Self.nordAuroraPurple)
+    case .insert: return Self.insertPalette
+    case .normal: return Self.normalPalette
+    case .command: return Self.commandPaletteValue
     }
   }
 
-  private func commandPalette() -> ModeBadgePalette {
-    ModeBadgePalette(
-      top: Self.nordPolarNight1,
-      bottom: Self.nordPolarNight0,
-      foreground: Self.nordAuroraPurple,
-      border: Self.nordAuroraPurple)
-  }
+  private func commandPalette() -> ModeBadgePalette { Self.commandPaletteValue }
 
   private static let nordPolarNight0 = NSColor(calibratedRed: 0.18, green: 0.20, blue: 0.25, alpha: 1)
   private static let nordPolarNight1 = NSColor(calibratedRed: 0.23, green: 0.26, blue: 0.32, alpha: 1)
@@ -1517,6 +1562,8 @@ final class OverlayPanel: NSPanel {
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let fgNS = nsColor(fromHex: overlayConfig.hintFG) ?? .black
     var visible = Set<Int>()
+    var cache: [AttributedLabelKey: NSAttributedString] = [:]
+    cache.reserveCapacity(hints.count)
     for (idx, hint) in hints.enumerated() {
       guard idx < hintLayers.count, idx < labelLayers.count else { break }
       let chip = hintLayers[idx]
@@ -1532,15 +1579,31 @@ final class OverlayPanel: NSPanel {
         // string's weight — see the note in `display(hints:)`. Cheap;
         // CATextLayer compares font references and noops on equal.
         l.font = labelFont
-        l.string = Self.attributedLabel(
-          display: hint.display, typedPrefixLen: prefixLen,
-          font: labelFont, fgNS: fgNS)
+        // Memoise per `(display, typedPrefixLen)`. Two hints with the
+        // same label produce the same attributed string; without the
+        // memo we allocated one `NSMutableAttributedString` per match,
+        // per keystroke (≈200 allocs on a heavy page filter).
+        let key = AttributedLabelKey(display: hint.display, typedPrefixLen: prefixLen)
+        if let cached = cache[key] {
+          l.string = cached
+        } else {
+          let attr = Self.attributedLabel(
+            display: hint.display, typedPrefixLen: prefixLen,
+            font: labelFont, fgNS: fgNS)
+          cache[key] = attr
+          l.string = attr
+        }
       }
     }
     if debugConfig.showBounds {
       rebuildDebugPath(visibleIndices: visible)
     }
     CATransaction.commit()
+  }
+
+  private struct AttributedLabelKey: Hashable {
+    let display: String
+    let typedPrefixLen: Int
   }
 
   /// Centered paragraph style — immutable, allocated once.
@@ -1749,10 +1812,7 @@ final class OverlayPanel: NSPanel {
   }
 
   static func unionScreenFrame() -> NSRect {
-    var u: NSRect = .null
-    for s in NSScreen.screens { u = u.union(s.frame) }
-    if u.isNull, let main = NSScreen.main { return main.frame }
-    return u
+    currentScreenSnapshot().unionFrame
   }
 
   /// Hex → NSColor with a tiny memo. `display(hints:)` parses 4 hex
@@ -1761,17 +1821,22 @@ final class OverlayPanel: NSPanel {
   /// constant across activations until the user edits flash.toml.
   /// Sentinel `NSColor.clear` represents "parse failure" so we can
   /// distinguish nil-cached from absent-from-cache.
+  ///
+  /// Cache is keyed on the *normalised* hex (whitespace trimmed,
+  /// leading `#` removed, lowercased). The previous version keyed on
+  /// the raw input, so `"#FFAA00"` and `" #ffaa00 "` got separate
+  /// entries and the per-frame parse ran on every variant.
   private var colorCache: [String: NSColor] = [:]
   private static let parseFailureSentinel = NSColor.clear
 
   private func nsColor(fromHex hex: String) -> NSColor? {
-    if let cached = colorCache[hex] {
+    var s = hex.trimmingCharacters(in: .whitespaces).lowercased()
+    if s.hasPrefix("#") { s.removeFirst() }
+    if let cached = colorCache[s] {
       return cached === OverlayPanel.parseFailureSentinel ? nil : cached
     }
-    var s = hex.trimmingCharacters(in: .whitespaces)
-    if s.hasPrefix("#") { s.removeFirst() }
     guard let v = UInt64(s, radix: 16) else {
-      colorCache[hex] = OverlayPanel.parseFailureSentinel
+      colorCache[s] = OverlayPanel.parseFailureSentinel
       return nil
     }
     let result: NSColor?
@@ -1790,7 +1855,7 @@ final class OverlayPanel: NSPanel {
     default:
       result = nil
     }
-    colorCache[hex] = result ?? OverlayPanel.parseFailureSentinel
+    colorCache[s] = result ?? OverlayPanel.parseFailureSentinel
     return result
   }
 }

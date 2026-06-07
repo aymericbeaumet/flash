@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
+import FlashProviders
 
 enum FlashMode: Equatable {
   case insert
@@ -64,7 +65,7 @@ enum NormalModeInterpreter {
     modifierFlags: NSEvent.ModifierFlags,
     characters: String?,
     charactersIgnoringModifiers: String?,
-    mappings: [ModeMapping] = Config.Mode.defaultNormalMappings
+    mappings: CompiledMappings
   ) -> NormalModeTransition {
     let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
     if keyCode == 53 { return .consume }
@@ -112,17 +113,8 @@ enum NormalModeInterpreter {
     }
     for key in keys {
       let sequence = state.prefix + key
-      let exact = mappings.first(where: { $0.key == sequence })
-      // A "longer" mapping must be a typed-sequence continuation — not a
-      // named key that happens to begin with the same letters. Without
-      // the atomic-key filter, a user mapping like `"tab" = ...` would
-      // stall a plain `t` keystroke for sequenceTimeoutMs because `tab`
-      // string-prefixes `t`.
-      let hasLonger = mappings.contains {
-        $0.key != sequence
-          && !Self.atomicKeyNames.contains($0.key)
-          && $0.key.hasPrefix(sequence)
-      }
+      let exact = mappings.mapping(for: sequence)
+      let hasLonger = mappings.hasStrictPrefix(sequence)
       if let mapping = exact, !hasLonger {
         return .action(mapping.action, repeatCount: state.repeatCount)
       }
@@ -148,11 +140,11 @@ enum NormalModeInterpreter {
 
   static func pendingCommand(
     pending: String,
-    mappings: [ModeMapping] = Config.Mode.defaultNormalMappings
+    mappings: CompiledMappings
   ) -> PendingNormalModeCommand? {
     let state = pendingState(pending)
     guard !state.prefix.isEmpty,
-      let mapping = mappings.first(where: { $0.key == state.prefix })
+      let mapping = mappings.mapping(for: state.prefix)
     else { return nil }
     return PendingNormalModeCommand(action: mapping.action, repeatCount: state.repeatCount)
   }
@@ -187,17 +179,11 @@ enum NormalModeInterpreter {
   private static func modifiedMapping(
     keyCode: UInt16,
     modifierFlags: NSEvent.ModifierFlags,
-    mappings: [ModeMapping]
+    mappings: CompiledMappings
   ) -> ModeMapping? {
     let carbonModifiers = Self.carbonModifiers(from: modifierFlags)
     guard carbonModifiers != 0 else { return nil }
-    return mappings.first { mapping in
-      guard mapping.key.contains("+"),
-        let parsed = HotkeySyntax.parse(hotkey: mapping.key)
-      else { return false }
-      return parsed.modifiers == carbonModifiers
-        && parsed.virtualKey == UInt32(keyCode)
-    }
+    return mappings.chordMapping(modifiers: carbonModifiers, virtualKey: UInt32(keyCode))
   }
 
   private static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
@@ -1964,59 +1950,28 @@ enum NormalModeDispatcher {
   }
 
   private static func role(of element: AXUIElement) -> String? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &raw) == .success
-    else { return nil }
-    return raw as? String
+    AXAttribute.role(element)
   }
 
   private static func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success else {
-      return nil
-    }
-    return raw as? String
+    AXAttribute.string(element, name)
   }
 
   private static func numberAttribute(_ element: AXUIElement, _ name: String) -> Double? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw
-    else { return nil }
-    if CFGetTypeID(value) == CFNumberGetTypeID() {
-      return (value as! NSNumber).doubleValue
-    }
-    if let number = value as? NSNumber {
-      return number.doubleValue
-    }
-    return nil
+    AXAttribute.number(element, name)
   }
 
   private static func boolAttribute(_ element: AXUIElement, _ name: String) -> Bool? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success else {
-      return nil
-    }
-    return raw as? Bool
+    AXAttribute.bool(element, name)
   }
 
+  /// Like `AXAttribute.url` but rejects empty/whitespace-only strings,
+  /// which is the AX behaviour callers in this file rely on. Provider
+  /// callers tolerate empty strings, so they use `AXAttribute.url`
+  /// directly.
   private static func urlAttribute(_ element: AXUIElement, _ name: String) -> String? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw
-    else { return nil }
-    if CFGetTypeID(value) == CFURLGetTypeID() {
-      return (value as! URL).absoluteString
-    }
-    if let url = value as? URL {
-      return url.absoluteString
-    }
-    if let string = value as? String,
-      !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    {
-      return string
-    }
-    return nil
+    guard let value = AXAttribute.url(element, name) else { return nil }
+    return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
   }
 
   private static func frame(
@@ -2037,47 +1992,19 @@ enum NormalModeDispatcher {
   }
 
   private static func pointAttribute(_ element: AXUIElement, _ name: String) -> CGPoint? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw,
-      CFGetTypeID(value) == AXValueGetTypeID()
-    else { return nil }
-    let axValue = value as! AXValue
-    guard AXValueGetType(axValue) == .cgPoint else { return nil }
-    var point = CGPoint.zero
-    guard AXValueGetValue(axValue, .cgPoint, &point) else { return nil }
-    return point
+    AXAttribute.point(element, name)
   }
 
   private static func sizeAttribute(_ element: AXUIElement, _ name: String) -> CGSize? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw,
-      CFGetTypeID(value) == AXValueGetTypeID()
-    else { return nil }
-    let axValue = value as! AXValue
-    guard AXValueGetType(axValue) == .cgSize else { return nil }
-    var size = CGSize.zero
-    guard AXValueGetValue(axValue, .cgSize, &size) else { return nil }
-    return size
+    AXAttribute.size(element, name)
   }
 
   private static func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
-      let value = raw,
-      CFGetTypeID(value) == AXUIElementGetTypeID()
-    else { return nil }
-    return (value as! AXUIElement)
+    AXAttribute.element(element, name)
   }
 
   private static func children(of element: AXUIElement) -> [AXUIElement] {
-    var raw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
-      == .success,
-      let children = raw as? [AXUIElement]
-    else { return [] }
-    return children
+    AXAttribute.children(element)
   }
 
 }

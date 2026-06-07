@@ -135,23 +135,25 @@ enum HintAssigner {
 
   /// Returns the full K^L candidate space sorted by ergonomic score
   /// (descending), with a deterministic key-order tiebreak. Memoised by
-  /// (alphabet identity, length, leftHand identity, key scores) — for the
-  /// typical `<qwerty>` preset and L=2/3 this cache is populated once per
-  /// session and every subsequent activation skips the sort entirely.
+  /// `(alphabet, leftHand, keyScores, length)` via a bounded LRU.
+  ///
+  /// In steady state the user runs one alphabet preset, so cache hits
+  /// dominate; the LRU cap (`cacheCapacity`) keeps memory bounded even
+  /// across config-reload-driven score permutations.
   static func sortedCandidates(
     alphabet: [Character],
     leftHand: Set<Character>,
     keyScores: [Character: Int] = [:],
     length: Int
   ) -> [String] {
-    let key = makeCacheKey(
+    let key = CacheKey(
       alphabet: alphabet,
       leftHand: leftHand,
       keyScores: keyScores,
       length: length
     )
     os_unfair_lock_lock(&cacheLock)
-    if let cached = cache[key] {
+    if let cached = cache.value(for: key) {
       os_unfair_lock_unlock(&cacheLock)
       return cached
     }
@@ -165,12 +167,73 @@ enum HintAssigner {
     )
 
     os_unfair_lock_lock(&cacheLock)
-    cache[key] = computed
+    cache.set(key, value: computed)
     os_unfair_lock_unlock(&cacheLock)
     return computed
   }
 
-  private static var cache: [String: [String]] = [:]
+  /// Hashable cache key. Replaces the previous String-based key that
+  /// allocated a fresh `String` on every lookup. Set membership is
+  /// captured by a sorted `[Character]` so two calls with the same
+  /// inputs hash identically without going through a `String`.
+  private struct CacheKey: Hashable {
+    let alphabet: [Character]
+    let leftHandSorted: [Character]
+    let scoresSorted: [Int]
+    let scoreChars: [Character]
+    let length: Int
+
+    init(
+      alphabet: [Character],
+      leftHand: Set<Character>,
+      keyScores: [Character: Int],
+      length: Int
+    ) {
+      self.alphabet = alphabet
+      self.leftHandSorted = leftHand.sorted()
+      // Sort keys for determinism; pack chars and scores in parallel
+      // arrays so Hashable produces a stable hash.
+      let sortedKeys = keyScores.keys.sorted()
+      self.scoreChars = sortedKeys
+      self.scoresSorted = sortedKeys.map { keyScores[$0] ?? 0 }
+      self.length = length
+    }
+  }
+
+  /// Tiny LRU. The expected working set is one or two entries per
+  /// session (the active alphabet preset at L=2 and L=3), so a
+  /// capacity of 8 covers every realistic workload while preventing
+  /// an unbounded grow under exotic config reloads.
+  private struct LRU {
+    let capacity: Int
+    private var dict: [CacheKey: [String]] = [:]
+    private var order: [CacheKey] = []
+
+    init(capacity: Int) { self.capacity = max(1, capacity) }
+
+    mutating func value(for key: CacheKey) -> [String]? {
+      guard let value = dict[key] else { return nil }
+      if let idx = order.firstIndex(of: key) {
+        order.remove(at: idx)
+        order.append(key)
+      }
+      return value
+    }
+
+    mutating func set(_ key: CacheKey, value: [String]) {
+      if dict[key] != nil {
+        if let idx = order.firstIndex(of: key) { order.remove(at: idx) }
+      } else if order.count >= capacity, let oldest = order.first {
+        order.removeFirst()
+        dict.removeValue(forKey: oldest)
+      }
+      dict[key] = value
+      order.append(key)
+    }
+  }
+
+  private static let cacheCapacity = 8
+  private static var cache = LRU(capacity: cacheCapacity)
   private static var cacheLock = os_unfair_lock_s()
 
   private enum Score {
@@ -180,27 +243,11 @@ enum HintAssigner {
     static let sameKey = -50_000
   }
 
-  private static func makeCacheKey(
-    alphabet: [Character],
-    leftHand: Set<Character>,
-    keyScores: [Character: Int],
-    length: Int
-  ) -> String {
-    var key = ""
-    key.reserveCapacity(alphabet.count * 5 + leftHand.count + 8)
-    for c in alphabet {
-      key.append(c)
-      key.append(":")
-      key.append(String(keyScores[c] ?? 0))
-      key.append(",")
-    }
-    key.append("|")
-    // Iterate the set in sorted order for a stable identity.
-    for c in leftHand.sorted() { key.append(c) }
-    key.append("|")
-    key.append(String(length))
-    return key
-  }
+  /// Maximum supported label length when packing indices into a UInt64.
+  /// Five bits per position lets the alphabet hold up to 32 characters
+  /// (more than any real hint preset). Twelve positions × 5 bits = 60
+  /// bits, well under the 64-bit ceiling.
+  private static let maxPackedLength = 12
 
   private static func computeSortedCandidates(
     alphabet: [Character],
@@ -218,13 +265,70 @@ enum HintAssigner {
     var keyScoreByIndex = [Int](repeating: 0, count: k)
     for (i, ch) in alphabet.enumerated() { keyScoreByIndex[i] = keyScores[ch] ?? 0 }
 
+    // When length fits in our packed UInt64 (and the alphabet fits
+    // in 5 bits per slot) we sort a single `[(score, packedIndices)]`
+    // array and never allocate per-candidate `[Int]` storage. Falls
+    // back to the boxed form only for exotic configurations.
+    if length <= maxPackedLength, k <= 32 {
+      var candidates = [(score: Int, packed: UInt64, ordinal: UInt64)]()
+      candidates.reserveCapacity(total)
+      var indices = [Int](repeating: 0, count: length)
+      for n in 0..<total {
+        var value = n
+        for pos in (0..<length).reversed() {
+          indices[pos] = value % k
+          value /= k
+        }
+        var score = 0
+        for i in 0..<length {
+          score += keyScoreByIndex[indices[i]] * Score.keyWeight
+        }
+        for i in 1..<length {
+          let a = indices[i - 1]
+          let b = indices[i]
+          if a == b {
+            score += Score.sameKey
+          } else if leftByIndex[a] != leftByIndex[b] {
+            score += Score.handAlternation
+          } else {
+            score += Score.sameHand
+          }
+        }
+        var packed: UInt64 = 0
+        for i in 0..<length {
+          packed |= UInt64(indices[i] & 0x1F) << (UInt64(i) * 5)
+        }
+        // Ordinal preserves the deterministic key-order tiebreak — the
+        // earlier-generated permutation wins on score ties.
+        candidates.append((score: score, packed: packed, ordinal: UInt64(n)))
+      }
+
+      candidates.sort { a, b in
+        if a.score != b.score { return a.score > b.score }
+        return a.ordinal < b.ordinal
+      }
+
+      var labels = [String]()
+      labels.reserveCapacity(total)
+      var buf: [Character] = Array(repeating: alphabet[0], count: length)
+      for c in candidates {
+        for i in 0..<length {
+          let idx = Int((c.packed >> (UInt64(i) * 5)) & 0x1F)
+          buf[i] = alphabet[idx]
+        }
+        labels.append(String(buf))
+      }
+      return labels
+    }
+
+    // Fallback path for L > 12 or K > 32 (no realistic config hits
+    // this, but keep the unpacked sort so behaviour stays identical).
     struct Candidate {
-      var indices: [Int]  // alphabet positions, length L
+      var indices: [Int]
       var score: Int
     }
     var candidates = [Candidate]()
     candidates.reserveCapacity(total)
-
     var indices = [Int](repeating: 0, count: length)
     for n in 0..<total {
       var value = n

@@ -308,7 +308,6 @@ private struct PluginWireTarget {
   var role: String?
   var label: String?
   var url: String?
-  var acceptsTextInput: Bool
   var pid: pid_t?
   var sourceID: String
 }
@@ -472,7 +471,6 @@ final class PluginProcess {
         role: wire.role,
         accessibilityLabel: wire.label,
         url: wire.url,
-        acceptsTextInput: wire.acceptsTextInput,
         pid: wire.pid ?? context.processID,
         activate: { [weak self] action in
           self?.activateTarget(wire.id, action: action)
@@ -528,7 +526,6 @@ final class PluginProcess {
         role: wire.role,
         accessibilityLabel: wire.label,
         url: wire.url,
-        acceptsTextInput: wire.acceptsTextInput,
         pid: wire.pid ?? context.processID,
         activate: { [weak self] action in
           self?.activateTarget(wire.id, action: action)
@@ -780,12 +777,14 @@ final class PluginProcess {
   }
 
   private func writeJSON(_ object: [String: Any]) {
+    // Drop `.sortedKeys` on the hot path: per-message stable ordering
+    // costs CPU we don't need for runtime IPC, and Foundation's default
+    // (insertion-order-ish) order is fine for plugin protocols.
     guard JSONSerialization.isValidJSONObject(object),
-      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
-      let line = String(data: data, encoding: .utf8),
-      let out = "\(line)\n".data(using: .utf8)
+      var data = try? JSONSerialization.data(withJSONObject: object)
     else { return }
-    try? stdinPipe?.fileHandleForWriting.write(contentsOf: out)
+    data.append(10)  // newline
+    try? stdinPipe?.fileHandleForWriting.write(contentsOf: data)
   }
 
   private func handleStdout(_ data: Data) {
@@ -793,13 +792,30 @@ final class PluginProcess {
     queue.async { [weak self] in
       guard let self else { return }
       self.stdoutBuffer.append(data)
-      while let newline = self.stdoutBuffer.firstIndex(of: 10) {
-        let lineData = self.stdoutBuffer[..<newline]
-        self.stdoutBuffer.removeSubrange(...newline)
-        guard let line = String(data: lineData, encoding: .utf8),
-          !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { continue }
-        self.handleProtocolLine(line)
+      // Linear scan with a moving cursor avoids the previous O(n²)
+      // behaviour: `firstIndex(of:)` scanned from index 0 each
+      // iteration and `removeSubrange(...newline)` memmove'd the
+      // remaining buffer left on every line. For a bulk push of 1000
+      // lines that turned into ~500k byte moves. Now we scan once
+      // and drop the consumed prefix at the end.
+      var cursor = self.stdoutBuffer.startIndex
+      let end = self.stdoutBuffer.endIndex
+      var lastConsumed = self.stdoutBuffer.startIndex
+      while cursor < end {
+        if self.stdoutBuffer[cursor] == 10 {
+          let lineRange = lastConsumed..<cursor
+          if !lineRange.isEmpty,
+            let line = String(data: self.stdoutBuffer[lineRange], encoding: .utf8),
+            !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          {
+            self.handleProtocolLine(line)
+          }
+          lastConsumed = self.stdoutBuffer.index(after: cursor)
+        }
+        cursor = self.stdoutBuffer.index(after: cursor)
+      }
+      if lastConsumed > self.stdoutBuffer.startIndex {
+        self.stdoutBuffer.removeSubrange(self.stdoutBuffer.startIndex..<lastConsumed)
       }
     }
   }
@@ -915,7 +931,6 @@ final class PluginProcess {
       role: raw["role"] as? String,
       label: raw["label"] as? String,
       url: raw["url"] as? String,
-      acceptsTextInput: raw["accepts_text_input"] as? Bool ?? false,
       pid: (raw["pid"] as? Int).map(pid_t.init),
       sourceID: raw["source_id"] as? String ?? sourceID)
   }
@@ -1105,9 +1120,17 @@ final class PluginProcess {
       includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
       options: [.skipsHiddenFiles]
     ) else { return }
+    // Watch directories only. The previous code opened one fd per file
+    // in the plugin tree, so a plugin with `node_modules` (typically
+    // 30k+ files) blew past the default `ulimit -n` (256–2560). DirOnly
+    // still triggers reload on any file write inside a watched dir, so
+    // semantics are equivalent for the dev-iteration use case.
     watchPath(root)
     for case let url as URL in enumerator {
-      watchPath(url)
+      let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey])
+      if resourceValues?.isDirectory == true {
+        watchPath(url)
+      }
     }
   }
 
@@ -1274,10 +1297,21 @@ final class PluginFlashSource: FlashSource {
 }
 
 final class PluginManager {
+  private struct ActionKey: Hashable {
+    let command: String
+    let name: String
+  }
+
   private let queue = DispatchQueue(label: "flash.plugins", qos: .utility)
   private let baseDataDir: URL
   private var pluginsByID: [String: PluginProcess] = [:]
   private var sourceAdaptersByID: [String: PluginFlashSource] = [:]
+  /// Pre-computed action lookup index: `(command, name)` →
+  /// `PluginProcess`. Built from `pluginsByID` whenever the plugin set
+  /// changes; per-invoke lookup is then O(1) instead of walking every
+  /// plugin × every action × `localizedCaseInsensitiveCompare`.
+  /// Keys are lowercased; lookups use the same normalisation.
+  private var actionIndex: [ActionKey: PluginProcess] = [:]
   private var watchFiles: Bool = false
   var onStateChanged: (() -> Void)?
 
@@ -1299,6 +1333,7 @@ final class PluginManager {
         plugin.stop()
       }
       pluginsByID.removeAll()
+      actionIndex.removeAll()
       sourceAdaptersByID.removeAll()
     }
   }
@@ -1319,15 +1354,9 @@ final class PluginManager {
   }
 
   func invoke(command: String, name: String, args: [String], raw: String) -> Bool {
-    let matches = queue.sync {
-      pluginsByID.values.filter { plugin in
-        plugin.actions.contains {
-          $0.command.localizedCaseInsensitiveCompare(command) == .orderedSame
-            && $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
-        }
-      }
-    }
-    guard let plugin = matches.first else { return false }
+    let key = ActionKey(command: command.lowercased(), name: name.lowercased())
+    let plugin = queue.sync { actionIndex[key] }
+    guard let plugin else { return false }
     plugin.invokeAction(command: command, name: name, args: args, raw: raw) { ok in
       FlashLog.debug("[plugin_action] command=\(command) name=\(name) ok=\(ok)")
     }
@@ -1341,14 +1370,25 @@ final class PluginManager {
   }
 
   func hasAction(command: String, name: String) -> Bool {
-    queue.sync {
-      pluginsByID.values.contains { plugin in
-      plugin.actions.contains {
-        $0.command.localizedCaseInsensitiveCompare(command) == .orderedSame
-          && $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
+    let key = ActionKey(command: command.lowercased(), name: name.lowercased())
+    return queue.sync { actionIndex[key] != nil }
+  }
+
+  /// Rebuild the action lookup index. Must be called from `queue` after
+  /// `pluginsByID` changes.
+  private func rebuildActionIndex() {
+    var next: [ActionKey: PluginProcess] = [:]
+    for plugin in pluginsByID.values {
+      for registration in plugin.actions {
+        let key = ActionKey(
+          command: registration.command.lowercased(),
+          name: registration.name.lowercased())
+        // First plugin to register an action wins on collision, matching
+        // the previous walk's first-match semantics.
+        if next[key] == nil { next[key] = plugin }
       }
     }
-    }
+    actionIndex = next
   }
 
   func statusText() -> String {
@@ -1447,6 +1487,7 @@ final class PluginManager {
       pluginsByID.removeValue(forKey: id)
       sourceAdaptersByID.removeValue(forKey: id)
     }
+    rebuildActionIndex()
     notifyStateChanged()
   }
 
@@ -1490,7 +1531,12 @@ final class PluginManager {
     }
   }
 
-  private func runShell(_ command: String) -> Bool {
+  /// Runs `command` via `/bin/sh -lc`, bounded by a 60s timeout. The
+  /// timeout protects config reload from a network-stalled `git pull`
+  /// or `git clone` — without it, a stuck shell hangs the whole plugin
+  /// reload until the OS eventually kills the orphan process. On
+  /// timeout the child is terminated and `false` is returned.
+  private func runShell(_ command: String, timeoutSeconds: TimeInterval = 60) -> Bool {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
     process.arguments = ["-lc", command]
@@ -1498,11 +1544,20 @@ final class PluginManager {
     process.standardError = FileHandle.nullDevice
     do {
       try process.run()
-      process.waitUntilExit()
-      return process.terminationStatus == 0
     } catch {
       return false
     }
+    let timeout = DispatchTime.now() + .nanoseconds(Int(timeoutSeconds * 1_000_000_000))
+    let killer = DispatchQueue.global(qos: .utility)
+    let workItem = DispatchWorkItem {
+      if process.isRunning {
+        process.terminate()
+      }
+    }
+    killer.asyncAfter(deadline: timeout, execute: workItem)
+    process.waitUntilExit()
+    workItem.cancel()
+    return process.terminationStatus == 0
   }
 
   private func shellQuote(_ value: String) -> String {

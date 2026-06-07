@@ -65,7 +65,7 @@ final class AppMonitor {
     config = cfg
     os_unfair_lock_unlock(&configLock)
 
-    let bump = { [weak self] in
+    MainThreadHopper.runOrAsync { [weak self] in
       guard let self else { return }
       self.configRevision &+= 1
       guard let app = NSWorkspace.shared.frontmostApplication else { return }
@@ -73,11 +73,6 @@ final class AppMonitor {
       guard pid > 0 else { return }
       self.invalidatePreparedModel(for: pid)
       self.scheduleModelRefresh(for: pid, reason: "config")
-    }
-    if Thread.isMainThread {
-      bump()
-    } else {
-      DispatchQueue.main.async { bump() }
     }
   }
 
@@ -103,9 +98,24 @@ final class AppMonitor {
   private var preparedModels = PreparedModelStore()
   private var dirtyTokens: [pid_t: UInt64] = [:]
   private var observers: [pid_t: ObserverEntry] = [:]
-  private var modelDebounce: [pid_t: DispatchWorkItem] = [:]
+  /// Coalesced model refresh scheduling. The previous implementation
+  /// allocated a fresh `DispatchWorkItem` for every observed AX event
+  /// and cancelled the previous one. Under scroll storms
+  /// (`kAXValueChangedNotification` fires per frame) this churned
+  /// 60+ allocations per second on main. The new approach keeps one
+  /// dispatch in flight per pid; new events extend the deadline and
+  /// the in-flight closure re-arms itself if the burst is still
+  /// active when it wakes.
+  private var modelRefreshArmed: Set<pid_t> = []
+  private var modelRefreshDeadline: [pid_t: DispatchTime] = [:]
+  private var modelRefreshReason: [pid_t: String] = [:]
   private var maintenanceRefresh: [pid_t: DispatchWorkItem] = [:]
-  private var pendingModelCompletions: [pid_t: [(PreparedModel?) -> Void]] = [:]
+  /// Only the latest activation waiter matters — earlier waiters are
+  /// stale activations whose generation has already moved on. A scalar
+  /// per pid replaces the previous unbounded array; if a second
+  /// activation lands while a walk is in flight, it overwrites the
+  /// first instead of stacking.
+  private var pendingModelCompletion: [pid_t: (PreparedModel?) -> Void] = [:]
   private var workspaceObservers: [NSObjectProtocol] = []
   private var localObservers: [NSObjectProtocol] = []
 
@@ -136,12 +146,8 @@ final class AppMonitor {
     // source — we add it to the main run loop below, so we're already
     // on main here. Hop anyway to make the invariant explicit and
     // bullet-proof against future relocation of the source.
-    if Thread.isMainThread {
+    MainThreadHopper.runOrAsync {
       monitor.onAXEvent(pid: pid, notification: notificationName)
-    } else {
-      DispatchQueue.main.async {
-        monitor.onAXEvent(pid: pid, notification: notificationName)
-      }
     }
   }
 
@@ -184,66 +190,12 @@ final class AppMonitor {
     }
   }
 
-  // MARK: Chromium AX wake
-  //
-  // Chrome and other Chromium-based browsers ship their accessibility
-  // engine OFF by default and only enable it when an assistive
-  // technology asks for it (the cost is real — Chromium documents
-  // a perceptible CPU/memory hit when full a11y is on). Setting
-  // `AXEnhancedUserInterface = true` or `AXManualAccessibility = true`
-  // on the app element is the public signal Chromium watches for.
-  //
-  // Waking lazily at first walk doesn't help: Chrome's a11y tree is
-  // built asynchronously after the attribute is set, so the first
-  // discover() sees an empty tree. Setting these attributes
-  // proactively (at Flash startup for already-running Chromium apps,
-  // and on `didLaunchApplicationNotification` for new ones) gives the
-  // tree time to populate before the user ever triggers Flash.
-  //
-  // Belt-and-suspenders: `AccessibilityProvider.discover` still sets
-  // the same attributes on every walk so a Chromium variant we
-  // didn't recognise here still wakes the first time the user
-  // triggers Flash on it.
-  static let chromiumBundleIDs: Set<String> = [
-    "com.google.Chrome",
-    "com.google.Chrome.canary",
-    "com.google.Chrome.beta",
-    "com.google.Chrome.dev",
-    "org.chromium.Chromium",
-    "com.brave.Browser",
-    "com.brave.Browser.beta",
-    "com.brave.Browser.nightly",
-    "com.microsoft.edgemac",
-    "com.microsoft.edgemac.Beta",
-    "com.microsoft.edgemac.Dev",
-    "com.microsoft.edgemac.Canary",
-    "company.thebrowser.Browser",
-    "com.vivaldi.Vivaldi",
-    "com.operasoftware.Opera",
-    "com.operasoftware.OperaNext",
-    "com.operasoftware.OperaDeveloper",
-  ]
-
   private func wakeChromiumAccessibilityForAllRunningApps() {
-    for app in NSWorkspace.shared.runningApplications {
-      maybeWakeChromiumAccessibility(for: app)
-    }
+    ChromiumAccessibilityWaker.wakeAllRunningApps(on: axQueue)
   }
 
   private func maybeWakeChromiumAccessibility(for app: NSRunningApplication) {
-    guard let bid = app.bundleIdentifier, Self.chromiumBundleIDs.contains(bid) else { return }
-    let pid = app.processIdentifier
-    guard pid > 0 else { return }
-    // Dispatch to axQueue so the AX IPC doesn't block the main thread —
-    // Chromium can take tens of ms to ack the attribute write under load.
-    axQueue.async {
-      let appEl = AXUIElementCreateApplication(pid)
-      let trueRef = kCFBooleanTrue as CFTypeRef
-      _ = AXUIElementSetAttributeValue(
-        appEl, "AXEnhancedUserInterface" as CFString, trueRef)
-      _ = AXUIElementSetAttributeValue(
-        appEl, "AXManualAccessibility" as CFString, trueRef)
-    }
+    ChromiumAccessibilityWaker.maybeWake(app: app, on: axQueue)
   }
 
   func stop() {
@@ -343,17 +295,12 @@ final class AppMonitor {
   }
 
   func invalidateAfterUserAction(pid: pid_t, reason: String) {
-    let bump = { [weak self] in
+    MainThreadHopper.runOrAsync { [weak self] in
       guard let self, pid > 0 else { return }
       self.dirtyTokens[pid, default: 0] &+= 1
       self.invalidatePreparedModel(for: pid)
       self.scheduleModelRefresh(for: pid, reason: reason)
       FlashLog.debug("[ax] model_invalidated pid=\(pid) reason=\(reason)")
-    }
-    if Thread.isMainThread {
-      bump()
-    } else {
-      DispatchQueue.main.async { bump() }
     }
   }
 
@@ -432,34 +379,55 @@ final class AppMonitor {
   }
 
   private func cancelRefreshWork(for pid: pid_t) {
-    modelDebounce[pid]?.cancel()
-    modelDebounce.removeValue(forKey: pid)
+    modelRefreshArmed.remove(pid)
+    modelRefreshDeadline.removeValue(forKey: pid)
+    modelRefreshReason.removeValue(forKey: pid)
     maintenanceRefresh[pid]?.cancel()
     maintenanceRefresh.removeValue(forKey: pid)
-    pendingModelCompletions.removeValue(forKey: pid)
+    pendingModelCompletion.removeValue(forKey: pid)
   }
 
   private func cancelAllRefreshWork() {
-    for work in modelDebounce.values { work.cancel() }
-    modelDebounce.removeAll()
+    modelRefreshArmed.removeAll()
+    modelRefreshDeadline.removeAll()
+    modelRefreshReason.removeAll()
     for work in maintenanceRefresh.values { work.cancel() }
     maintenanceRefresh.removeAll()
-    pendingModelCompletions.removeAll()
+    pendingModelCompletion.removeAll()
   }
 
-  /// Debounced model refresh. Multiple events arriving within 80 ms
-  /// coalesce into a single background walk. The deadline pushes back
-  /// on every fresh event, so a steady stream (e.g. scrolling) stays
-  /// quiet until it settles.
+  /// Debounced model refresh. Multiple events arriving within
+  /// `modelDebounceMs` coalesce into a single background walk. The
+  /// deadline pushes back on every fresh event so a steady stream
+  /// (e.g. scrolling) stays quiet until it settles. We allocate at
+  /// most one in-flight closure per pid for the whole burst.
   private func scheduleModelRefresh(for pid: pid_t, reason: String) {
-    modelDebounce[pid]?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      self?.runModelRefresh(pid: pid, reason: reason, profiler: nil, completion: nil)
+    let deadline = DispatchTime.now() + .milliseconds(Self.modelDebounceMs)
+    modelRefreshDeadline[pid] = deadline
+    modelRefreshReason[pid] = reason
+    guard modelRefreshArmed.insert(pid).inserted else { return }
+    armRefreshTimer(pid: pid, deadline: deadline)
+  }
+
+  private func armRefreshTimer(pid: pid_t, deadline: DispatchTime) {
+    DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
+      guard let self else { return }
+      guard let extended = self.modelRefreshDeadline[pid] else {
+        self.modelRefreshArmed.remove(pid)
+        self.modelRefreshReason.removeValue(forKey: pid)
+        return
+      }
+      if DispatchTime.now() < extended {
+        // A new event extended the deadline while we were waiting.
+        // Re-arm rather than fire now so a burst still backs off.
+        self.armRefreshTimer(pid: pid, deadline: extended)
+        return
+      }
+      let reason = self.modelRefreshReason.removeValue(forKey: pid) ?? "debounced"
+      self.modelRefreshArmed.remove(pid)
+      self.modelRefreshDeadline.removeValue(forKey: pid)
+      self.runModelRefresh(pid: pid, reason: reason, profiler: nil, completion: nil)
     }
-    modelDebounce[pid] = work
-    DispatchQueue.main.asyncAfter(
-      deadline: .now() + .milliseconds(Self.modelDebounceMs),
-      execute: work)
   }
 
   private func scheduleMaintenanceRefresh(for model: PreparedModel) {
@@ -484,8 +452,12 @@ final class AppMonitor {
     profiler: FlashProfiler?,
     completion: ((PreparedModel?) -> Void)?
   ) {
-    modelDebounce[pid]?.cancel()
-    modelDebounce.removeValue(forKey: pid)
+    // Any in-flight debounce closure for this pid has already finished
+    // its check (it's the one calling us, or activation jumped the
+    // queue). Clear the bookkeeping defensively.
+    modelRefreshArmed.remove(pid)
+    modelRefreshDeadline.removeValue(forKey: pid)
+    modelRefreshReason.removeValue(forKey: pid)
 
     guard PermissionCheck.isAccessibilityTrusted else {
       completion?(nil)
@@ -519,8 +491,10 @@ final class AppMonitor {
       return
     }
     guard preparedModels.beginRebuild(pid: pid) else {
+      // Last-writer-wins: only the latest activation waiter matters,
+      // earlier waiters are already-stale activations.
       if let completion {
-        pendingModelCompletions[pid, default: []].append(completion)
+        pendingModelCompletion[pid] = completion
       }
       return
     }
@@ -543,7 +517,7 @@ final class AppMonitor {
       profiler?.mark("model_build_done", detail: "hints=\(built.hints.count)")
       DispatchQueue.main.async {
         let shouldRunQueued = self.preparedModels.finishRebuild(pid: pid)
-        let waiters = self.pendingModelCompletions.removeValue(forKey: pid) ?? []
+        let waiter = self.pendingModelCompletion.removeValue(forKey: pid)
         defer {
           if shouldRunQueued {
             self.scheduleModelRefresh(for: pid, reason: "queued")
@@ -565,9 +539,7 @@ final class AppMonitor {
         }
         let validModel = tokenStillMatches && revisionStillMatches && stillFocused ? built : nil
         completion?(validModel)
-        for waiter in waiters {
-          waiter(validModel)
-        }
+        waiter?(validModel)
       }
     }
   }
@@ -946,165 +918,3 @@ final class AppMonitor {
   }
 }
 
-/// Z-order snapshot of every on-screen window, with each window's
-/// genuinely-visible portion already computed. Built from a single
-/// `CGWindowListCopyWindowInfo` call.
-///
-/// The painter's algorithm: iterate windows front → back (the order
-/// CGWindowList returns them in). For each window, subtract every
-/// already-seen (higher-z) window's bounds from this one's. What's left
-/// is the part of the window the user can actually see. Then push this
-/// window's bounds onto the occluder list so the next window down gets
-/// chopped by it too.
-///
-/// Higher-layer windows (the Dock, the menu bar, status items, the
-/// notification centre) are kept as occluders but excluded from the
-/// per-pid region map — they're not user-clickable surfaces Flash should
-/// hint, but they DO cover stuff behind them, so they need to chop the
-/// regions of the apps they overlay.
-struct WindowSnapshot {
-  struct Entry {
-    let pid: pid_t
-    let layer: Int
-    /// NSScreen-coord bounds (origin bottom-left of primary).
-    let nsBounds: CGRect
-  }
-
-  /// All on-screen windows in z-order (front-most first).
-  let entries: [Entry]
-
-  /// Per-pid disjoint rectangles in NSScreen coords that represent the
-  /// pid's currently-visible pixels (after subtracting every higher-z
-  /// window). Empty for pids that are fully occluded.
-  let visibleRegions: [pid_t: [CGRect]]
-
-  /// Front-most layer-0 window for the focused pid, before occlusion
-  /// subtraction. Providers that need full-window geometry (tmux cell
-  /// math) use this frame; AppMonitor filters returned targets against
-  /// `visibleRegions` afterward.
-  let activeWindowFrame: CGRect?
-
-  static func build(
-    primaryH: CGFloat,
-    onlyComputingVisibleRegionsFor focusedPid: pid_t,
-    ignoringPids: Set<pid_t> = []
-  )
-    -> WindowSnapshot
-  {
-    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
-      return WindowSnapshot(entries: [], visibleRegions: [:], activeWindowFrame: nil)
-    }
-    let entries = entries(from: info, primaryH: primaryH)
-      .filter { !ignoringPids.contains($0.pid) }
-    return build(
-      entries: entries,
-      focusedPid: focusedPid)
-  }
-
-  static func entries(from info: [[String: Any]], primaryH: CGFloat) -> [Entry] {
-    var entries: [Entry] = []
-    entries.reserveCapacity(info.count)
-    for w in info {
-      guard let wpid = w[kCGWindowOwnerPID as String] as? Int32,
-        let boundsDict = w[kCGWindowBounds as String] as? [String: Any],
-        let cgBounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
-      else { continue }
-      // Skip zero-area or pathological bounds — they can't occlude
-      // anything and can't host hints.
-      if cgBounds.width <= 0 || cgBounds.height <= 0 { continue }
-      let layer = (w[kCGWindowLayer as String] as? Int) ?? 0
-      let ns = CGRect(
-        x: cgBounds.minX,
-        y: primaryH - cgBounds.minY - cgBounds.height,
-        width: cgBounds.width,
-        height: cgBounds.height
-      )
-      entries.append(Entry(pid: pid_t(wpid), layer: layer, nsBounds: ns))
-    }
-    return entries
-  }
-
-  static func build(entries: [Entry], focusedPid: pid_t) -> WindowSnapshot {
-    // The "active window" is the front-most layer-0 window owned by the
-    // focused pid. CGWindowList returns windows in z-order, so the
-    // first hit is the right one. Every other window — including other
-    // windows of the same app on another monitor — is treated purely
-    // as an occluder, never as a hintable surface. This is what keeps
-    // hints scoped to the single active window.
-    var activeWindowIndex: Int? = nil
-    for (idx, e) in entries.enumerated() where e.layer == 0 && e.pid == focusedPid {
-      activeWindowIndex = idx
-      break
-    }
-
-    var byPid: [pid_t: [CGRect]] = [:]
-    var occluders: [CGRect] = []
-    occluders.reserveCapacity(entries.count)
-    for (idx, e) in entries.enumerated() {
-      if idx == activeWindowIndex {
-        var fragments: [CGRect] = [e.nsBounds]
-        for occluder in occluders {
-          if fragments.isEmpty { break }
-          var next: [CGRect] = []
-          next.reserveCapacity(fragments.count * 2)
-          for frag in fragments {
-            subtract(frag, hole: occluder, into: &next)
-          }
-          // Fragmentation guard. A window cross-hatched by many
-          // higher-z windows can blow up the fragment count
-          // quadratically; cap at 32 — we only need the
-          // *approximate* visible region, not pixel-perfect.
-          if next.count > 32 {
-            fragments = next
-            break
-          }
-          fragments = next
-        }
-        if !fragments.isEmpty {
-          byPid[e.pid, default: []].append(contentsOf: fragments)
-        }
-      }
-      occluders.append(e.nsBounds)
-    }
-
-    let activeWindowFrame = activeWindowIndex.map { entries[$0].nsBounds }
-    return WindowSnapshot(
-      entries: entries,
-      visibleRegions: byPid,
-      activeWindowFrame: activeWindowFrame)
-  }
-
-  /// Rectangle subtraction in NSScreen-coord (Y-up) space. Returns up to
-  /// four non-overlapping fragments: top strip, bottom strip, left
-  /// strip (within the y-range of the hole), right strip. The math is
-  /// symmetric in Y so this also works in Y-down — the strip labels
-  /// are only descriptive.
-  private static func subtract(_ rect: CGRect, hole: CGRect, into out: inout [CGRect]) {
-    let i = rect.intersection(hole)
-    if i.isNull || i.width <= 0 || i.height <= 0 {
-      out.append(rect)
-      return
-    }
-    if i.equalTo(rect) {
-      // Fully consumed by the hole — nothing left to emit.
-      return
-    }
-    // Top strip (above the hole in Y-up).
-    if i.maxY < rect.maxY {
-      out.append(CGRect(x: rect.minX, y: i.maxY, width: rect.width, height: rect.maxY - i.maxY))
-    }
-    // Bottom strip (below the hole).
-    if i.minY > rect.minY {
-      out.append(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: i.minY - rect.minY))
-    }
-    // Left strip (only within the y-range of the hole).
-    if i.minX > rect.minX {
-      out.append(CGRect(x: rect.minX, y: i.minY, width: i.minX - rect.minX, height: i.height))
-    }
-    // Right strip (likewise).
-    if i.maxX < rect.maxX {
-      out.append(CGRect(x: i.maxX, y: i.minY, width: rect.maxX - i.maxX, height: i.height))
-    }
-  }
-}
