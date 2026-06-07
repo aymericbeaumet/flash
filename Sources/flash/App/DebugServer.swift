@@ -2,7 +2,8 @@ import Foundation
 import Network
 
 final class DebugServer {
-  let hostPort: String
+  let host: String
+  let port: Int
   private(set) var listeningPort: UInt16?
   private let stateProvider: () -> [String: Any]
   private let queue = DispatchQueue(label: "flash.debug_server", qos: .utility)
@@ -13,14 +14,15 @@ final class DebugServer {
   private var eventConnections: [UUID: NWConnection] = [:]
   private let maxLogs = 2_000
 
-  init(hostPort: String, stateProvider: @escaping () -> [String: Any]) {
-    self.hostPort = hostPort
+  init(host: String, port: Int, stateProvider: @escaping () -> [String: Any]) {
+    self.host = host
+    self.port = port
     self.stateProvider = stateProvider
   }
 
   func start() {
-    guard let endpoint = Self.parse(hostPort: hostPort) else {
-      FlashLog.warn("[debug] invalid http_host \(hostPort)")
+    guard let endpoint = Self.parse(host: host, port: port) else {
+      FlashLog.warn("[debug] invalid inspector_host/port \(host):\(port)")
       return
     }
     do {
@@ -32,10 +34,10 @@ final class DebugServer {
         if case .ready = state {
           let port = listener.port?.rawValue
           self?.listeningPort = port
-          FlashLog.info("[debug] server listening http://\(endpoint.host):\(port ?? 0)")
+          FlashLog.info("[debug] inspector listening http://\(endpoint.host):\(port ?? 0)")
         }
         if case .failed(let error) = state {
-          FlashLog.warn("[debug] server failed \(error)")
+          FlashLog.warn("[debug] inspector failed \(error)")
         }
       }
       listener.start(queue: queue)
@@ -45,7 +47,7 @@ final class DebugServer {
         self?.append(record)
       }
     } catch {
-      FlashLog.warn("[debug] could not start server \(hostPort): \(error)")
+      FlashLog.warn("[debug] could not start inspector \(host):\(port): \(error)")
     }
   }
 
@@ -221,24 +223,15 @@ final class DebugServer {
     return string
   }
 
-  static func parse(hostPort: String) -> (host: String, port: NWEndpoint.Port)? {
-    let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
-    let hostRaw: String
-    let portRaw: String
-    if trimmed.hasPrefix("[::1]:") {
-      hostRaw = "::1"
-      portRaw = String(trimmed.dropFirst("[::1]:".count))
-    } else {
-      let parts = trimmed.split(separator: ":", maxSplits: 1).map(String.init)
-      guard parts.count == 2 else { return nil }
-      hostRaw = parts[0]
-      portRaw = parts[1]
-    }
-    guard ["localhost", "127.0.0.1", "::1"].contains(hostRaw),
-      let portInt = UInt16(portRaw),
-      let port = NWEndpoint.Port(rawValue: portInt)
+  /// Validates a configured `(host, port)` pair before binding. Allows
+  /// `port == 0` for "let the OS pick" (used by tests). The user-facing
+  /// config validation in `ConfigLoader` is stricter (`1..65535`).
+  static func parse(host: String, port: Int) -> (host: String, port: NWEndpoint.Port)? {
+    guard ["localhost", "127.0.0.1", "::1"].contains(host),
+      (0...65535).contains(port),
+      let endpointPort = NWEndpoint.Port(rawValue: UInt16(port))
     else { return nil }
-    return (hostRaw, port)
+    return (host, endpointPort)
   }
 
   static func isLoopback(endpoint: NWEndpoint) -> Bool {

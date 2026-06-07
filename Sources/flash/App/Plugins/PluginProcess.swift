@@ -274,9 +274,13 @@ final class PluginProcess {
     var params = extra
     params["name"] = name
     params["context"] = contextJSON(context)
-    sendRequest(method: "sourceAction", params: params) { response in
+    sendRequest(method: "sourceAction", params: params) { [weak self] response in
       let didPerform = response?["did_perform"] as? Bool ?? false
       let pid = response?["target_pid"] as? Int
+      FlashLog.trace(
+        "[plugin] source_action plugin=\(self?.manifest.id ?? "?") name=\(name) "
+          + "did_perform=\(didPerform) target_pid=\(pid.map(String.init) ?? "nil")",
+        source: "plugin:\(self?.manifest.id ?? "?")")
       DispatchQueue.main.async {
         completion(didPerform ? .performed(pid: pid.map(pid_t.init)) : .unhandled)
       }

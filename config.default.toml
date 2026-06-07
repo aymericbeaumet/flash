@@ -146,6 +146,9 @@ slow_ms = 100
 # ~/Library/Logs/Flash/flash.log. Set "trace" to include AX tree dumps.
 log_level = "info"
 
-# Optional loopback-only dense debug page with live logs and Flash/plugin state.
-# Example:
-# http_host = localhost:4242
+# Optional loopback-only dense debug page with live logs and Flash/plugin
+# state. Set `inspector_enabled = true` to start the HTTP server; host is
+# restricted to `localhost` / `127.0.0.1` / `::1`.
+inspector_enabled = false
+inspector_host = "localhost"
+inspector_port = 4242

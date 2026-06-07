@@ -527,14 +527,30 @@ enum ConfigLoader {
           "debug.log_level must be one of: trace, debug, info, warn, error, fatal",
           location: location)
       }
-    case ["debug", "http_host"]:
-      if let raw = parseHTTPHost(value), !raw.isEmpty {
-        config.debug.httpHost = raw
-        config.recordLocation(path: "debug.http_host", location: location)
+    case ["debug", "inspector_enabled"]:
+      if let parsed = parseBool(value) {
+        config.debug.inspectorEnabled = parsed
+        config.recordLocation(path: "debug.inspector_enabled", location: location)
       } else {
         config.addDiagnostic(
-          "debug.http_host must be a quoted string or bare host:port",
+          "debug.inspector_enabled must be true or false", location: location)
+      }
+    case ["debug", "inspector_host"]:
+      if let raw = parseInspectorHost(value), !raw.isEmpty {
+        config.debug.inspectorHost = raw
+        config.recordLocation(path: "debug.inspector_host", location: location)
+      } else {
+        config.addDiagnostic(
+          "debug.inspector_host must be \"localhost\", \"127.0.0.1\", or \"::1\"",
           location: location)
+      }
+    case ["debug", "inspector_port"]:
+      if let parsed = parseInt(value), (1...65535).contains(parsed) {
+        config.debug.inspectorPort = parsed
+        config.recordLocation(path: "debug.inspector_port", location: location)
+      } else {
+        config.addDiagnostic(
+          "debug.inspector_port must be an integer in 1..65535", location: location)
       }
     case ["debug", "watch_plugins"]:
       if let parsed = parseBool(value) {
@@ -717,17 +733,10 @@ enum ConfigLoader {
   private static func parseInt(_ v: String) -> Int? { Int(v) }
   private static func parseDouble(_ v: String) -> Double? { Double(v) }
 
-  private static func parseHTTPHost(_ v: String) -> String? {
-    if let quoted = parseString(v) { return quoted }
-    let trimmed = v.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty,
-      trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
-      trimmed.contains(":"),
-      !trimmed.contains("\""),
-      !trimmed.contains("["),
-      !trimmed.contains("]")
-    else { return nil }
-    return trimmed
+  private static func parseInspectorHost(_ v: String) -> String? {
+    let raw = parseString(v) ?? v.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard ["localhost", "127.0.0.1", "::1"].contains(raw) else { return nil }
+    return raw
   }
 
   /// Parse a TOML inline table with string values:

@@ -94,6 +94,45 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(sorted.map(\.candidate.name), ["Finder notes", "Finder"])
   }
 
+  func testTmuxWindowsOutrankBrowserTabsOnCloseScores() {
+    let browserTab = CandidateFinder.prepare(
+      candidate(
+        kind: .browserTab,
+        source: "firefox",
+        name: "agentic",
+        subtitle: "browser tab",
+        bundleIdentifier: "org.mozilla.firefox",
+        pid: 4242,
+        url: URL(string: "https://example.test/agentic")))
+    let tmuxWindow = CandidateFinder.prepare(
+      candidate(
+        kind: .tmuxWindow,
+        source: "tmux",
+        name: "agentic",
+        subtitle: "tmux window",
+        bundleIdentifier: "",
+        pid: 4242))
+
+    // Score the same query against both — the tier tie-break in
+    // sortedMatches should put tmux first regardless of close fuzzy
+    // delta.
+    let sorted = CandidateFinder.sortedMatches([
+      CandidateMatch(candidate: browserTab, score: 10_120),
+      CandidateMatch(candidate: tmuxWindow, score: 10_160),
+    ])
+    XCTAssertEqual(sorted.map(\.candidate.source), ["tmux", "firefox"])
+
+    // Even when the browser tab edges ahead on the raw score (within
+    // the alive-tie margin), the tier bias still settles in tmux's
+    // favour because the comparator runs source-tier comparison
+    // before falling back to alphabetical.
+    let sortedReversed = CandidateFinder.sortedMatches([
+      CandidateMatch(candidate: browserTab, score: 10_160),
+      CandidateMatch(candidate: tmuxWindow, score: 10_120),
+    ])
+    XCTAssertEqual(sortedReversed.map(\.candidate.source), ["tmux", "firefox"])
+  }
+
   func testStrongTextScoreOutranksAliveTieBreaker() {
     let deadExact = CandidateFinder.prepare(
       candidate(

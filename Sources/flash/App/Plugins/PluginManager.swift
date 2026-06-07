@@ -356,7 +356,7 @@ extension PluginManager {
       install and start do not run login flows.
 
       `flash://plugins` or `:plugins` opens the plugin status modal. When
-      `[debug] http_host = localhost:4242` is set, the debug page shows live
+      `[debug] inspector_enabled = true` is set, the inspector page shows live
       logs, resolved config, and plugin state.
       """)
 }

@@ -672,23 +672,15 @@ extension AppDelegate {
   }
 
   func showHelp(topic: String? = nil) {
-    normalModePendingCommandToken &+= 1
-    overlay.normalModePending = ""
-    clearTransientHintState(reason: "enter_help")
-    clearCandidateFinderState()
-    overlay.hide()
-    overlay.setActiveWindowBorder(around: nil)
-    overlay.displayModal(HelpDocs.render(topic: topic, config: config, showModes: modeBadgeEnabled))
+    presentModal(reason: "enter_help") { [self] in
+      HelpDocs.render(topic: topic, config: config, showModes: modeBadgeEnabled)
+    }
   }
 
   func showPlugins() {
-    normalModePendingCommandToken &+= 1
-    overlay.normalModePending = ""
-    clearTransientHintState(reason: "enter_plugins")
-    clearCandidateFinderState()
-    overlay.hide()
-    overlay.setActiveWindowBorder(around: nil)
-    overlay.displayModal(pluginManager.statusText())
+    presentModal(reason: "enter_plugins") { [self] in
+      pluginManager.statusText()
+    }
   }
 
   private func runPluginsSubcommand(_ sub: NormalModeDispatcher.PluginsSubcommand) {
@@ -706,18 +698,33 @@ extension AppDelegate {
         summary = "Reloading: \(ids.joined(separator: ", "))"
       }
       FlashLog.info("[plugins] reload command ids=\(ids.joined(separator: ","))")
-      overlay.displayModal("PLUGINS RELOAD\n\n\(summary)")
+      presentModal(reason: "plugins_reload") { "PLUGINS RELOAD\n\n\(summary)" }
     }
   }
 
   private func showMappings() {
+    presentModal(reason: "enter_mappings") { [self] in
+      NormalModeDispatcher.mappingsText(config: config)
+    }
+  }
+
+  /// Single entry point for every modal surface (`:help`, `:plugins`,
+  /// `:mappings`, plugin-reload toast, future modals). Centralises the
+  /// pre-modal cleanup (mode-pending bump, hint/candidate-finder reset,
+  /// border clear) so the four call sites can't drift on a missed
+  /// step. Pass a body closure rather than a pre-rendered string so the
+  /// modal-text generator isn't run while the overlay is still busy.
+  private func presentModal(
+    reason: String,
+    body: () -> String
+  ) {
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
-    clearTransientHintState(reason: "enter_mappings")
+    clearTransientHintState(reason: reason)
     clearCandidateFinderState()
     overlay.hide()
     overlay.setActiveWindowBorder(around: nil)
-    overlay.displayModal(NormalModeDispatcher.mappingsText(config: config))
+    overlay.displayModal(body())
   }
 
   private func enterCandidateFinderMode(scope: CandidateScope) {
@@ -1016,6 +1023,19 @@ extension AppDelegate {
       submitSelectedCommandLineApp()
       return
     }
+    // Selected sub-command completions (`:help con` → `:help config`)
+    // take precedence over the raw text. Without this, the raw form
+    // gets parsed as `:help con` and the user sees "con not found"
+    // even though `config` was visibly highlighted. `applySelected…`
+    // clears the completion state before recursing, so the recursive
+    // call falls through to the normal command / help parser without
+    // looping.
+    if !commandLineCompletionMatches.isEmpty,
+      commandLineCompletionMatchesAreSubCommand,
+      applySelectedCommandLineCompletion()
+    {
+      return
+    }
     if let helpTopic = NormalModeDispatcher.commandLineHelpTopic(raw) {
       finishCommandLineInteraction(reason: "help_submit")
       showHelp(topic: helpTopic)
@@ -1046,6 +1066,17 @@ extension AppDelegate {
     }
     FlashLog.debug("[normal_mode] unknown command \(raw)")
     finishCommandLineInteraction(reason: "command_unknown")
+  }
+
+  /// True when the active completion list is for a **sub-command**
+  /// (`:help <topic>`, `:plugins <sub>`, `:<plugin> <action>`) rather
+  /// than the top-level command list. Top-level completions are
+  /// suggestions for the bare verb (`:q<cr>` shouldn't expand to
+  /// `:quit` just because `quit` happens to be selected); sub-command
+  /// completions are what the user is actively narrowing.
+  private var commandLineCompletionMatchesAreSubCommand: Bool {
+    let prefix = commandLineCompletionPrefix
+    return prefix.count > 1 && prefix.hasSuffix(" ")
   }
 
   private func performCommandLineCommand(_ command: NormalModeDispatcher.CommandLineCommand) {

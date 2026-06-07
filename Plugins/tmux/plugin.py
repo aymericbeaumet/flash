@@ -164,34 +164,55 @@ def is_ancestor(ancestor_pid, descendant_pid, parent_map, max_hops=64):
 def list_clients(tmux_path):
     raw = run_tmux(
         tmux_path,
-        ["list-clients", "-F", "#{client_tty}\t#{session_name}\t#{client_pid}"],
+        [
+            "list-clients", "-F",
+            "#{client_tty}\t#{session_name}\t#{client_pid}\t#{client_activity}",
+        ],
     )
     if raw is None:
         return []
     out = []
     for line in raw.splitlines():
-        parts = line.split("\t", 2)
-        if len(parts) != 3:
+        parts = line.split("\t", 3)
+        if len(parts) < 3:
             continue
         try:
             client_pid = int(parts[2])
         except ValueError:
             continue
-        out.append({"tty": parts[0], "session": parts[1], "client_pid": client_pid})
+        activity = 0
+        if len(parts) >= 4:
+            try:
+                activity = int(parts[3])
+            except ValueError:
+                pass
+        out.append({
+            "tty": parts[0],
+            "session": parts[1],
+            "client_pid": client_pid,
+            "activity": activity,
+        })
     return out
 
 
 def client_hosted_by(tmux_path, focused_pid):
+    """Pick the tmux client whose terminal app instance hosts `focused_pid`.
+    For terminals that use a single process for multiple windows (most
+    notably Alacritty), `focused_pid` is the SAME for every window — the
+    process-tree heuristic finds every client. Tie-break by
+    `client_activity` so we pick the one the user is actively typing in.
+    """
     if focused_pid is None:
         return None
     clients = list_clients(tmux_path)
     if not clients:
         return None
     pmap = parent_pid_map()
-    for client in clients:
-        if is_ancestor(focused_pid, client["client_pid"], pmap):
-            return client
-    return None
+    matches = [c for c in clients if is_ancestor(focused_pid, c["client_pid"], pmap)]
+    if not matches:
+        return None
+    matches.sort(key=lambda c: c["activity"], reverse=True)
+    return matches[0]
 
 
 def parse_two_ints(line):

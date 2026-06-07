@@ -85,7 +85,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.mode.insert.isEmpty)
     XCTAssertTrue(c.open.ignoredApps.isEmpty)
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
-    XCTAssertNil(c.debug.httpHost)
+    XCTAssertFalse(c.debug.inspectorEnabled)
+    XCTAssertEqual(c.debug.inspectorHost, "localhost")
+    XCTAssertEqual(c.debug.inspectorPort, 4242)
     XCTAssertFalse(c.debug.watchPlugins)
   }
 
@@ -204,20 +206,40 @@ final class ConfigLoaderTests: XCTestCase {
       })
   }
 
-  func testParsesDebugHTTPHostBareAndQuoted() {
-    let bare = ConfigLoader.parse(
+  func testParsesInspectorEnabledHostPort() {
+    let cfg = ConfigLoader.parse(
       """
       [debug]
-      http_host = localhost:4242
+      inspector_enabled = true
+      inspector_host = "127.0.0.1"
+      inspector_port = 4343
       """)
-    XCTAssertEqual(bare.debug.httpHost, "localhost:4242")
+    XCTAssertTrue(cfg.debug.inspectorEnabled)
+    XCTAssertEqual(cfg.debug.inspectorHost, "127.0.0.1")
+    XCTAssertEqual(cfg.debug.inspectorPort, 4343)
+    XCTAssertTrue(cfg.loadingDiagnostics.isEmpty)
+  }
 
-    let quoted = ConfigLoader.parse(
+  func testRejectsNonLoopbackInspectorHost() {
+    let cfg = ConfigLoader.parse(
       """
       [debug]
-      http_host = "127.0.0.1:4343"
+      inspector_host = "example.com"
       """)
-    XCTAssertEqual(quoted.debug.httpHost, "127.0.0.1:4343")
+    XCTAssertEqual(cfg.debug.inspectorHost, "localhost")
+    XCTAssertTrue(
+      cfg.loadingDiagnostics.contains { $0.message.contains("inspector_host") })
+  }
+
+  func testRejectsOutOfRangeInspectorPort() {
+    let cfg = ConfigLoader.parse(
+      """
+      [debug]
+      inspector_port = 70000
+      """)
+    XCTAssertEqual(cfg.debug.inspectorPort, 4242)
+    XCTAssertTrue(
+      cfg.loadingDiagnostics.contains { $0.message.contains("inspector_port") })
   }
 
   func testParsesMultilineStringArrayComments() {
@@ -306,7 +328,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(hints["magic_modifiers"] as? [String], ["shift"])
     XCTAssertEqual(overlay["font_size"] as? Double, 12)
     XCTAssertEqual(debug["log_level"] as? String, "debug")
-    XCTAssertTrue(debug.keys.contains("http_host"))
+    XCTAssertTrue(debug.keys.contains("inspector_enabled"))
+    XCTAssertTrue(debug.keys.contains("inspector_host"))
+    XCTAssertTrue(debug.keys.contains("inspector_port"))
     XCTAssertEqual(debug["watch_plugins"] as? Bool, false)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
     XCTAssertEqual(

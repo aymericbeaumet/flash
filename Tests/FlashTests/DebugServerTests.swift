@@ -4,25 +4,26 @@ import XCTest
 @testable import flash
 
 final class DebugServerTests: XCTestCase {
-  func testParsesLoopbackHTTPHost() {
-    let localhost = DebugServer.parse(hostPort: "localhost:4242")
+  func testParsesLoopbackHostAndPort() {
+    let localhost = DebugServer.parse(host: "localhost", port: 4242)
     XCTAssertEqual(localhost?.host, "localhost")
     XCTAssertEqual(localhost?.port.rawValue, 4242)
 
-    let ipv4 = DebugServer.parse(hostPort: "127.0.0.1:4343")
+    let ipv4 = DebugServer.parse(host: "127.0.0.1", port: 4343)
     XCTAssertEqual(ipv4?.host, "127.0.0.1")
     XCTAssertEqual(ipv4?.port.rawValue, 4343)
 
-    let ipv6 = DebugServer.parse(hostPort: "[::1]:4444")
+    let ipv6 = DebugServer.parse(host: "::1", port: 4444)
     XCTAssertEqual(ipv6?.host, "::1")
     XCTAssertEqual(ipv6?.port.rawValue, 4444)
   }
 
-  func testRejectsNonLoopbackHTTPHost() {
-    XCTAssertNil(DebugServer.parse(hostPort: "0.0.0.0:4242"))
-    XCTAssertNil(DebugServer.parse(hostPort: "192.168.1.10:4242"))
-    XCTAssertNil(DebugServer.parse(hostPort: "localhost"))
-    XCTAssertNil(DebugServer.parse(hostPort: "localhost:not-a-port"))
+  func testRejectsNonLoopbackHostAndOutOfRangePort() {
+    XCTAssertNil(DebugServer.parse(host: "0.0.0.0", port: 4242))
+    XCTAssertNil(DebugServer.parse(host: "192.168.1.10", port: 4242))
+    XCTAssertNil(DebugServer.parse(host: "example.com", port: 4242))
+    XCTAssertNil(DebugServer.parse(host: "localhost", port: -1))
+    XCTAssertNil(DebugServer.parse(host: "localhost", port: 70000))
   }
 
   func testLoopbackEndpointFilter() {
@@ -41,7 +42,7 @@ final class DebugServerTests: XCTestCase {
   }
 
   func testServesStateJSON() throws {
-    let server = DebugServer(hostPort: "localhost:0") {
+    let server = DebugServer(host: "localhost", port: 0) {
       ["ok": true]
     }
     server.start()
@@ -58,7 +59,7 @@ final class DebugServerTests: XCTestCase {
   }
 
   func testServesDenseDebugPageWithLiveLogControls() throws {
-    let server = DebugServer(hostPort: "localhost:0") {
+    let server = DebugServer(host: "localhost", port: 0) {
       ["ok": true]
     }
     server.start()

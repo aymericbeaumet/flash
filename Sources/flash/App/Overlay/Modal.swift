@@ -6,6 +6,17 @@ import QuartzCore
 /// the focused screen. Owns the NSScrollView / NSTextView wiring and
 /// the click-outside dismissal monitors.
 extension OverlayPanel {
+  /// Modal backdrop gradient: dark Polar-Night-ish stops baked once so
+  /// `displayModal` doesn't allocate new CGColors per render. All
+  /// modal surfaces (help, plugins, mappings, plugin-reload toast)
+  /// share these.
+  static let modalBackgroundColors: [CGColor] = [
+    NSColor(calibratedRed: 0.08, green: 0.09, blue: 0.11, alpha: 1).cgColor,
+    NSColor(calibratedRed: 0.14, green: 0.15, blue: 0.18, alpha: 1).cgColor,
+  ]
+  static let modalBorderCGColor: CGColor =
+    NSColor(calibratedRed: 0.30, green: 0.34, blue: 0.40, alpha: 1).cgColor
+
   func displayModal(_ text: String) {
     FlashLog.trace("[overlay] display_modal chars=\(text.count)")
     transientDisplayToken &+= 1
@@ -43,12 +54,15 @@ extension OverlayPanel {
       CGRect(x: localX, y: localY, width: width, height: height),
       scale: scale)
     chip.contentsScale = scale
-    chip.colors = [
-      NSColor(calibratedRed: 0.08, green: 0.09, blue: 0.11, alpha: 1).cgColor,
-      NSColor(calibratedRed: 0.14, green: 0.15, blue: 0.18, alpha: 1).cgColor,
-    ]
+    chip.colors = Self.modalBackgroundColors
+    // Reset chip state — the pool can hand back a chip that was
+    // hidden / dimmed by `filter(prefix:)` on a previous activation,
+    // and we'd inherit `isHidden = true` here, which is why the help
+    // modal was rendering with no visible background.
+    chip.isHidden = false
+    chip.opacity = 1
     chip.cornerRadius = 8
-    chip.borderColor = NSColor(calibratedRed: 0.30, green: 0.34, blue: 0.40, alpha: 1).cgColor
+    chip.borderColor = Self.modalBorderCGColor
 
     chip.sublayers = nil
     hintLayers.append(chip)

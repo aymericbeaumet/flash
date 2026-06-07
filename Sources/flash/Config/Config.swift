@@ -97,9 +97,15 @@ struct Config {
     /// stuck-mode/input issue, `debug` for broader diagnostics, or
     /// `warn` / `error` / `fatal` to mute the steady-state traces.
     var logLevel: FlashLog.Level = .info
-    /// Optional loopback HTTP server for live logs + state inspection.
-    /// Accepted hostnames are validated by DebugServer before binding.
-    var httpHost: String?
+    /// When true, Flash binds a loopback-only HTTP server that exposes
+    /// live logs + state inspection. Off by default — turn on with
+    /// `debug.inspector_enabled = true`.
+    var inspectorEnabled: Bool = false
+    /// Loopback hostname the inspector binds on. Restricted to
+    /// `localhost` / `127.0.0.1` / `::1` (validated at start).
+    var inspectorHost: String = "localhost"
+    /// TCP port the inspector listens on.
+    var inspectorPort: Int = 4242
     /// When true, every plugin watches its directory tree and triggers a
     /// reload on any file change. Off by default — plugins re-install
     /// when their content actually changes, so this is purely a dev
@@ -346,7 +352,9 @@ struct Config {
       "debug": [
         "bounds_bg": debug.boundsBG,
         "bounds_fg": debug.boundsFG,
-        "http_host": debug.httpHost ?? NSNull(),
+        "inspector_enabled": debug.inspectorEnabled,
+        "inspector_host": debug.inspectorHost,
+        "inspector_port": debug.inspectorPort,
         "log_level": debug.logLevel.name,
         "profile": debug.profile,
         "show_bounds": debug.showBounds,

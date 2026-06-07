@@ -141,6 +141,18 @@ enum CandidateFinder {
       let lhsAlive = isAlive(lhs.candidate)
       let rhsAlive = isAlive(rhs.candidate)
       if lhsAlive != rhsAlive { return lhsAlive }
+
+      // Strict tier tie-break: when two scores are close enough to land
+      // here (delta < `aliveTieBreakScoreMargin`), prefer the
+      // higher-priority source. This is what makes tmux windows
+      // reliably rank above browser tabs in :flashlight — the
+      // sourcePrecedenceBonus alone could be eroded by a slightly
+      // longer browser-tab title match, so the comparator settles it
+      // directly before falling back to the raw score.
+      let lhsTier = sourcePrecedenceTierIndex(for: lhs.candidate.source)
+      let rhsTier = sourcePrecedenceTierIndex(for: rhs.candidate.source)
+      if lhsTier != rhsTier { return lhsTier < rhsTier }
+
       if lhs.score != rhs.score { return lhs.score > rhs.score }
 
       let titleOrder = lhs.candidate.name.localizedCaseInsensitiveCompare(rhs.candidate.name)
@@ -158,6 +170,17 @@ enum CandidateFinder {
 
       return lhs.candidate.sourceID < rhs.candidate.sourceID
     }
+  }
+
+  /// Tier index used by `sortedMatches` as a strict tie-break. Lower is
+  /// higher priority. Sources not in `sourcePrecedenceTiers` land at
+  /// `tiers.count`, ranking below every named tier.
+  static func sourcePrecedenceTierIndex(for source: String) -> Int {
+    let lowered = source.lowercased()
+    for (index, tier) in sourcePrecedenceTiers.enumerated() {
+      if tier.contains(lowered) { return index }
+    }
+    return sourcePrecedenceTiers.count
   }
 
   private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {
