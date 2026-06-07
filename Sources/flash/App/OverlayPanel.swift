@@ -49,7 +49,7 @@ final class OverlayPanel: NSPanel {
   private static let candidateFinderHorizontalPadding: CGFloat = 7
   private static let candidateFinderVerticalPadding: CGFloat = 5
 
-  private let contentLayer = CALayer()
+  let contentLayer = CALayer()
   private var hintLayers: [CAGradientLayer] = []
   private var labelLayers: [CATextLayer] = []
   private var mouseGridBoundaryLayers: [CALayer] = []
@@ -61,22 +61,22 @@ final class OverlayPanel: NSPanel {
   private let commandPromptLabel = CATextLayer()
   private let commandCaretLayer = CALayer()
   private let commandTextField = CommandLineTextField(frame: .zero)
-  private let modalScrollView = NSScrollView(frame: .zero)
+  let modalScrollView = NSScrollView(frame: .zero)
   private let modalTextView = ModalTextView(frame: .zero)
   private let candidateFinderResultsLayer = CAGradientLayer()
   private let candidateFinderResultsLabel = CATextLayer()
-  private let activeWindowBorderLayer = CAShapeLayer()
-  private var modeBadgeVisible = false
+  let activeWindowBorderLayer = CAShapeLayer()
+  var modeBadgeVisible = false
   private var modeBadgeText = "INSERT"
-  private var modeBadgeStyle: OverlayModeBadgeStyle = .insert
-  private var modeBadgeCapturesInput = false
+  var modeBadgeStyle: OverlayModeBadgeStyle = .insert
+  var modeBadgeCapturesInput = false
   private var commandPromptVisible = false
   private var commandPromptPrefix = ":"
   private var candidateFinderResultsVisible = false
   private var candidateFinderResultsMeasurementText = ""
   private var candidateFinderResultsAttributedText: NSAttributedString?
-  private var activeWindowBorderToken: UInt64 = 0
-  private var transientContentVisible = false
+  var activeWindowBorderToken: UInt64 = 0
+  var transientContentVisible = false
   private var suppressCommandTextFieldChange = false
 
   /// One shape layer holds every debug border, drawn as a single CGPath. This
@@ -178,15 +178,6 @@ final class OverlayPanel: NSPanel {
   // conversion. These hot paths read CGColors 3–6 times per activation
   // (mode badge, command prompt, candidate finder, banner, modal), so
   // build them once and reuse.
-  private static let nordPolarNight0CG = nordPolarNight0.cgColor
-  private static let nordPolarNight1CG = nordPolarNight1.cgColor
-  private static let nordSnowStorm0CG = nordSnowStorm0.cgColor
-  private static let nordSnowStorm1CG = nordSnowStorm1.cgColor
-  private static let nordSnowStorm2CG = nordSnowStorm2.cgColor
-  private static let nordFrost2CG = nordFrost2.cgColor
-  private static let nordAuroraGreenCG = nordAuroraGreen.cgColor
-  private static let nordAuroraYellowCG = nordAuroraYellow.cgColor
-  private static let nordAuroraPurpleCG = nordAuroraPurple.cgColor
 
   private var screenParametersObserver: NSObjectProtocol?
 
@@ -316,10 +307,10 @@ final class OverlayPanel: NSPanel {
   /// Installed once at `init` and left running. The callback gates on
   /// the current overlay state, so install/remove churn per activation
   /// is gone.
-  private var pointerGlobalMonitor: Any?
-  private var pointerLocalMonitor: Any?
-  private var modalClickGlobalMonitor: Any?
-  private var modalClickLocalMonitor: Any?
+  var pointerGlobalMonitor: Any?
+  var pointerLocalMonitor: Any?
+  var modalClickGlobalMonitor: Any?
+  var modalClickLocalMonitor: Any?
 
   func display(hints: [AssignedHint]) {
     FlashLog.trace("[overlay] display hints=\(hints.count) input=\(inputMode)")
@@ -672,119 +663,6 @@ final class OverlayPanel: NSPanel {
     renderModeBadgeOnlyOrHide()
   }
 
-  /// Install the dismissal event monitors once at `init`. The closures
-  /// gate on overlay state so transient (hint) and capture (normal-mode)
-  /// surfaces share one monitor pair instead of churning install/remove
-  /// per activation.
-  ///
-  /// Dismissal triggers: scroll wheel, any mouse-button press. Mouse
-  /// move is intentionally NOT a dismissal trigger because the
-  /// pointer can drift past the overlay while the user is reaching
-  /// for a key. Non-matching keystrokes are dismissed by
-  /// `AppDelegate.overlayDidCommit` when no hint label matches the
-  /// running prefix.
-  private func installPointerMonitors() {
-    let mask: NSEvent.EventTypeMask = [
-      .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
-    ]
-    pointerGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) {
-      [weak self] event in
-      self?.deliverPointerIntent(for: event)
-    }
-    pointerLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) {
-      [weak self] event in
-      self?.deliverPointerIntent(for: event)
-      return event
-    }
-  }
-
-  private func deliverPointerIntent(for event: NSEvent) {
-    guard pointerMonitorShouldDispatch() else { return }
-    let intent: OverlayPointerIntent =
-      event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event))
-    DispatchQueue.main.async { [weak self] in
-      self?.coordinator?.overlayDidCancelByPointer(intent)
-    }
-  }
-
-  private func pointerMonitorShouldDispatch() -> Bool {
-    // Transient surfaces (hint chips, banner, modal-without-text) all
-    // dismiss on pointer input. Normal-mode capture also dismisses,
-    // matching the previous "pointerIntent" gate.
-    if transientContentVisible { return true }
-    return Self.pointerIntentMonitorShouldRun(
-      inputMode: inputMode,
-      modeBadgeVisible: modeBadgeVisible,
-      modeBadgeCapturesInput: modeBadgeCapturesInput)
-  }
-
-  static func pointerIntentMonitorShouldRun(
-    inputMode: OverlayInputMode,
-    modeBadgeVisible: Bool,
-    modeBadgeCapturesInput: Bool
-  ) -> Bool {
-    inputMode == .normal && modeBadgeVisible && modeBadgeCapturesInput
-  }
-
-  private static func pointerClick(_ event: NSEvent? = nil) -> OverlayPointerClick {
-    let action: JumpAction
-    if event?.type == .rightMouseDown {
-      action = .rightClick
-    } else if (event?.clickCount ?? 1) >= 2 {
-      action = .doubleClick
-    } else {
-      action = .leftClick
-    }
-    let modifiers = ClickModifiers(
-      eventFlags: event?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? [],
-      allowed: .all)
-    return OverlayPointerClick(
-      action: action,
-      location: NSEvent.mouseLocation,
-      modifiers: modifiers)
-  }
-
-  private func removePointerMonitors() {
-    for m in [pointerGlobalMonitor, pointerLocalMonitor] {
-      if let m { NSEvent.removeMonitor(m) }
-    }
-    pointerGlobalMonitor = nil
-    pointerLocalMonitor = nil
-  }
-
-  private func installModalDismissMonitors() {
-    removeModalDismissMonitors()
-    let clickMask: NSEvent.EventTypeMask = [
-      .leftMouseDown, .rightMouseDown, .otherMouseDown,
-    ]
-    modalClickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) {
-      [weak self] _ in
-      DispatchQueue.main.async {
-        guard let self, self.inputMode == .modal else { return }
-        self.coordinator?.overlayDidCancelModal()
-      }
-    }
-    modalClickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) {
-      [weak self] event in
-      guard let self, self.inputMode == .modal else { return event }
-      guard event.window === self else { return event }
-      if self.modalScrollView.frame.contains(event.locationInWindow) {
-        return event
-      }
-      DispatchQueue.main.async {
-        self.coordinator?.overlayDidCancelModal()
-      }
-      return nil
-    }
-  }
-
-  private func removeModalDismissMonitors() {
-    for m in [modalClickGlobalMonitor, modalClickLocalMonitor] {
-      if let m { NSEvent.removeMonitor(m) }
-    }
-    modalClickGlobalMonitor = nil
-    modalClickLocalMonitor = nil
-  }
 
   /// Show a transient banner centered on the focused screen. Multi-line strings (with
   /// `\n`) are rendered as wrapped text. Used to signal edge cases (no targets,
@@ -966,69 +844,9 @@ final class OverlayPanel: NSPanel {
     updateModeBadge(text: modeLabels.command, visible: true, captureInput: true, style: .command)
   }
 
-  func setActiveWindowBorder(around targetFrame: CGRect?) {
-    activeWindowBorderToken &+= 1
 
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer { CATransaction.commit() }
 
-    guard let targetFrame, !targetFrame.isNull, targetFrame.width > 0, targetFrame.height > 0 else {
-      activeWindowBorderLayer.path = nil
-      var sublayers = contentLayer.sublayers ?? []
-      sublayers.removeAll { $0 === activeWindowBorderLayer }
-      contentLayer.sublayers = sublayers
-      orderOutIfNoPersistentContent()
-      return
-    }
-
-    let panelFrame = ensurePanelFrame()
-    let lineWidth: CGFloat = 2
-    let local = Self.activeWindowBorderLocalRect(
-      targetFrame: targetFrame,
-      panelFrame: panelFrame,
-      lineWidth: lineWidth)
-    let scale = OverlayPanel.currentScreenSnapshot().mainScale
-    let snapped = Self.snap(local, scale: scale)
-    let path = CGMutablePath()
-    path.addRoundedRect(in: snapped, cornerWidth: 4, cornerHeight: 4)
-    activeWindowBorderLayer.frame = contentLayer.bounds
-    activeWindowBorderLayer.path = path
-    activeWindowBorderLayer.strokeColor = Self.nordFrost2CG
-    activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
-    activeWindowBorderLayer.lineWidth = lineWidth
-
-    var sublayers = contentLayer.sublayers ?? []
-    if !sublayers.contains(where: { $0 === activeWindowBorderLayer }) {
-      sublayers.append(activeWindowBorderLayer)
-    }
-    contentLayer.sublayers = sublayers
-    if !isVisible {
-      orderFrontRegardless()
-    }
-  }
-
-  static func activeWindowBorderLocalRect(
-    targetFrame: CGRect,
-    panelFrame: CGRect,
-    lineWidth: CGFloat
-  ) -> CGRect {
-    let inset = lineWidth / 2
-    return CGRect(
-      x: targetFrame.minX - panelFrame.minX + inset,
-      y: targetFrame.minY - panelFrame.minY + inset,
-      width: targetFrame.width - inset * 2,
-      height: targetFrame.height - inset * 2)
-  }
-
-  private struct ModeBadgePalette {
-    var topCG: CGColor
-    var bottomCG: CGColor
-    var foregroundCG: CGColor
-    var borderCG: CGColor
-  }
-
-  private func ensurePanelFrame() -> CGRect {
+  func ensurePanelFrame() -> CGRect {
     let frame = OverlayPanel.unionScreenFrame()
     applyPanelFrame(frame)
     return frame
@@ -1086,7 +904,7 @@ final class OverlayPanel: NSPanel {
     }
   }
 
-  private func orderOutIfNoPersistentContent() {
+  func orderOutIfNoPersistentContent() {
     guard
       !transientContentVisible,
       !modeBadgeVisible,
@@ -1508,41 +1326,6 @@ final class OverlayPanel: NSPanel {
     return ceil(max(fontLineHeight, measured.height))
   }
 
-  private static let insertPalette = ModeBadgePalette(
-    topCG: nordPolarNight1CG,
-    bottomCG: nordPolarNight0CG,
-    foregroundCG: nordFrost2CG,
-    borderCG: nordFrost2CG)
-  private static let normalPalette = ModeBadgePalette(
-    topCG: nordPolarNight1CG,
-    bottomCG: nordPolarNight0CG,
-    foregroundCG: nordAuroraGreenCG,
-    borderCG: nordAuroraGreenCG)
-  private static let commandPaletteValue = ModeBadgePalette(
-    topCG: nordPolarNight1CG,
-    bottomCG: nordPolarNight0CG,
-    foregroundCG: nordAuroraPurpleCG,
-    borderCG: nordAuroraPurpleCG)
-
-  private func modeBadgePalette() -> ModeBadgePalette {
-    switch modeBadgeStyle {
-    case .insert: return Self.insertPalette
-    case .normal: return Self.normalPalette
-    case .command: return Self.commandPaletteValue
-    }
-  }
-
-  private func commandPalette() -> ModeBadgePalette { Self.commandPaletteValue }
-
-  private static let nordPolarNight0 = NSColor(calibratedRed: 0.18, green: 0.20, blue: 0.25, alpha: 1)
-  private static let nordPolarNight1 = NSColor(calibratedRed: 0.23, green: 0.26, blue: 0.32, alpha: 1)
-  private static let nordSnowStorm0 = NSColor(calibratedRed: 0.85, green: 0.87, blue: 0.91, alpha: 1)
-  private static let nordSnowStorm1 = NSColor(calibratedRed: 0.90, green: 0.91, blue: 0.94, alpha: 1)
-  private static let nordSnowStorm2 = NSColor(calibratedRed: 0.93, green: 0.94, blue: 0.96, alpha: 1)
-  private static let nordFrost2 = NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.82, alpha: 1)
-  private static let nordAuroraGreen = NSColor(calibratedRed: 0.64, green: 0.75, blue: 0.55, alpha: 1)
-  private static let nordAuroraYellow = NSColor(calibratedRed: 0.92, green: 0.80, blue: 0.55, alpha: 1)
-  private static let nordAuroraPurple = NSColor(calibratedRed: 0.71, green: 0.56, blue: 0.68, alpha: 1)
 
   static func modeBadgeWidth(
     labels: Config.Mode.Labels,
