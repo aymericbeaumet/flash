@@ -35,13 +35,7 @@ final class ModalTextView: NSTextView {
   override var acceptsFirstResponder: Bool { true }
 
   override func keyDown(with event: NSEvent) {
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let ignoredChar = event.charactersIgnoringModifiers?.lowercased().first
-    if event.keyCode == 53 || (modifiers.contains(.control) && ignoredChar == "c") {
-      overlayCoordinator?.overlayDidCancelModal()
-      return
-    }
-    super.keyDown(with: event)
+    overlayCoordinator?.overlayDidPassThroughModalKey(event)
   }
 
   override func cancelOperation(_ sender: Any?) {
@@ -57,7 +51,7 @@ final class OverlayPanel: NSPanel {
   private let contentLayer = CALayer()
   private var hintLayers: [CAGradientLayer] = []
   private var labelLayers: [CATextLayer] = []
-  private var snipeBoundaryLayers: [CALayer] = []
+  private var mouseGridBoundaryLayers: [CALayer] = []
   private var hintLayerPool: [CAGradientLayer] = []
   private var labelLayerPool: [CATextLayer] = []
   private let modeBadgeLayer = CAGradientLayer()
@@ -291,7 +285,6 @@ final class OverlayPanel: NSPanel {
     // width sized to the first hint clipped/squished every label
     // with a different length.
     let gradientColors: [CGColor] = [bgBottom.cgColor, bgTop.cgColor]
-    let fgCG = fg.cgColor
     let borderCG = border?.cgColor ?? OverlayPanel.fallbackBorderCGColor
     // Single weight, bold monospaced — labels always render in bold so
     // small chips stay readable. Once the user has typed a prefix,
@@ -334,10 +327,10 @@ final class OverlayPanel: NSPanel {
 
     for (idx, hint) in hints.enumerated() {
       let targetFrame = hint.target.frame
-      let isSnipeHint = hint.target.providerID == "snipe"
-      let isFinalSnipeHint =
-        isSnipeHint
-        && Self.snipeDepth(from: hint.target.id).map(SnipeGrid.isFinalDisplayDepth) == true
+      let isMouseGridHint = hint.target.providerID == "mouse_grid"
+      let isFinalMouseGridHint =
+        isMouseGridHint
+        && Self.mouseGridDepth(from: hint.target.id).map(MouseGrid.isFinalDisplayDepth) == true
       let local = CGRect(
         x: targetFrame.minX - frame.minX,
         y: targetFrame.minY - frame.minY,
@@ -348,13 +341,16 @@ final class OverlayPanel: NSPanel {
         lastTargetLocalRects.append(local)
       }
 
-      if isSnipeHint {
-        let boundary = Self.makeSnipeBoundaryLayer(
+      let mouseGridPalette = isMouseGridHint
+        ? Self.mouseGridChipPalette(index: idx, foreground: fg)
+        : nil
+      if isMouseGridHint {
+        let boundary = Self.makeMouseGridBoundaryLayer(
           index: idx,
-          finalStep: isFinalSnipeHint)
+          finalStep: isFinalMouseGridHint)
         boundary.frame = local
         newSublayers.append(boundary)
-        snipeBoundaryLayers.append(boundary)
+        mouseGridBoundaryLayers.append(boundary)
       }
 
       let chip = dequeueHintLayer()
@@ -364,7 +360,7 @@ final class OverlayPanel: NSPanel {
       // Without this reset, the next activation pulls hidden chips out
       // of the pool and the user sees only the debug outlines.
       chip.isHidden = false
-      chip.opacity = isFinalSnipeHint ? 0.5 : 1
+      chip.opacity = 1
       let label = dequeueLabelLayer()
       label.isHidden = false
       // CATextLayer's own `font` + `fontSize` properties are the
@@ -376,10 +372,11 @@ final class OverlayPanel: NSPanel {
       // a stale regular-weight font from a previous render.
       label.font = labelFont
       label.fontSize = fontSize
+      let labelColor = mouseGridPalette?.foreground ?? fg
       label.string = Self.attributedLabel(
         display: hint.display, typedPrefixLen: 0,
-        font: labelFont, fgNS: fg)
-      label.foregroundColor = fgCG
+        font: labelFont, fgNS: labelColor)
+      label.foregroundColor = labelColor.cgColor
 
       let labelLen = hint.display.count
       let chipW: CGFloat
@@ -390,10 +387,13 @@ final class OverlayPanel: NSPanel {
         widthByLen[labelLen] = chipW
       }
       label.frame = CGRect(
-        x: 0, y: labelYOffset, width: chipW, height: labelHeight)
+        x: 0,
+        y: labelYOffset,
+        width: chipW,
+        height: labelHeight)
 
       let chipGlobal =
-        isSnipeHint
+        isMouseGridHint
         ? Self.centeredChipFrame(target: targetFrame, width: chipW, height: chipHeight)
         : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
       let chipLocal = CGRect(
@@ -418,8 +418,16 @@ final class OverlayPanel: NSPanel {
       // intensity rows and reads as pixelated).
       chip.frame = Self.snap(chipLocal, scale: chipScale)
       chip.contentsScale = chipScale
-      chip.colors = gradientColors
-      chip.borderColor = borderCG
+      if let mouseGridPalette {
+        chip.colors = [
+          mouseGridPalette.bottom.cgColor,
+          mouseGridPalette.top.cgColor,
+        ]
+        chip.borderColor = mouseGridPalette.border.cgColor
+      } else {
+        chip.colors = gradientColors
+        chip.borderColor = borderCG
+      }
       label.contentsScale = chipScale
 
       chip.sublayers = [label]
@@ -1432,10 +1440,10 @@ final class OverlayPanel: NSPanel {
     switch modeBadgeStyle {
     case .insert:
       return ModeBadgePalette(
-        top: Self.nordPolarNight1,
-        bottom: Self.nordPolarNight0,
-        foreground: Self.nordFrost2,
-        border: Self.nordFrost2)
+        top: Self.nordFrost2,
+        bottom: Self.nordFrost2,
+        foreground: Self.nordPolarNight0,
+        border: Self.nordPolarNight0.withAlphaComponent(0.70))
     case .normal:
       return ModeBadgePalette(
         top: Self.nordPolarNight1,
@@ -1592,7 +1600,7 @@ final class OverlayPanel: NSPanel {
     labelLayerPool.append(contentsOf: labelLayers)
     hintLayers.removeAll(keepingCapacity: true)
     labelLayers.removeAll(keepingCapacity: true)
-    snipeBoundaryLayers.removeAll(keepingCapacity: true)
+    mouseGridBoundaryLayers.removeAll(keepingCapacity: true)
     debugShapeLayer.path = nil
     debugShapeLayer.isHidden = true
     activeWindowBorderLayer.path = nil
@@ -1676,7 +1684,7 @@ final class OverlayPanel: NSPanel {
     fontSize + 4
   }
 
-  private static let snipeBoundaryColors: [NSColor] = [
+  private static let mouseGridColors: [NSColor] = [
     NSColor(calibratedRed: 0.94, green: 0.27, blue: 0.31, alpha: 1),
     NSColor(calibratedRed: 0.96, green: 0.55, blue: 0.19, alpha: 1),
     NSColor(calibratedRed: 0.98, green: 0.80, blue: 0.25, alpha: 1),
@@ -1687,8 +1695,22 @@ final class OverlayPanel: NSPanel {
     NSColor(calibratedRed: 0.94, green: 0.43, blue: 0.71, alpha: 1),
   ]
 
-  private static func makeSnipeBoundaryLayer(index: Int, finalStep: Bool) -> CALayer {
-    let color = snipeBoundaryColors[index % snipeBoundaryColors.count]
+  private static func mouseGridColor(index: Int) -> NSColor {
+    mouseGridColors[index % mouseGridColors.count]
+  }
+
+  private static func mouseGridChipPalette(
+    index: Int,
+    foreground: NSColor
+  ) -> (top: NSColor, bottom: NSColor, foreground: NSColor, border: NSColor) {
+    let base = mouseGridColor(index: index)
+    let top = base.blended(withFraction: 0.40, of: NSColor.white) ?? base
+    let bottom = base.blended(withFraction: 0.08, of: NSColor.black) ?? base
+    return (top: top, bottom: bottom, foreground: foreground, border: base)
+  }
+
+  private static func makeMouseGridBoundaryLayer(index: Int, finalStep: Bool) -> CALayer {
+    let color = mouseGridColor(index: index)
     let layer = CALayer()
     layer.actions = OverlayPanel.noActions
     layer.borderWidth = finalStep ? 1 : 2
@@ -1698,9 +1720,9 @@ final class OverlayPanel: NSPanel {
     return layer
   }
 
-  private static func snipeDepth(from id: String) -> Int? {
+  private static func mouseGridDepth(from id: String) -> Int? {
     let parts = id.split(separator: ":", maxSplits: 2)
-    guard parts.count == 3, parts[0] == "snipe" else { return nil }
+    guard parts.count == 3, parts[0] == "mouse_grid" else { return nil }
     return Int(parts[1])
   }
 
@@ -1814,6 +1836,7 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidHandleNormalMode(_ action: MappingAction?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
   func overlayDidCancelModal()
+  func overlayDidPassThroughModalKey(_ event: NSEvent)
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool

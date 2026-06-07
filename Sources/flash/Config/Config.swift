@@ -162,10 +162,10 @@ struct Config {
       ModeMapping(key: "rf", action: .flashCommand(.mouseTarget(.click(.rightClick)))),
       ModeMapping(key: "df", action: .flashCommand(.mouseTarget(.click(.doubleClick)))),
       ModeMapping(key: "mf", action: .flashCommand(.mouseTarget(.move))),
-      ModeMapping(key: "s", action: .flashCommand(.mouseSnipe(.click(.leftClick)))),
-      ModeMapping(key: "rs", action: .flashCommand(.mouseSnipe(.click(.rightClick)))),
-      ModeMapping(key: "ds", action: .flashCommand(.mouseSnipe(.click(.doubleClick)))),
-      ModeMapping(key: "ms", action: .flashCommand(.mouseSnipe(.move))),
+      ModeMapping(key: "F", action: .flashCommand(.mouseGrid(.click(.leftClick)))),
+      ModeMapping(key: "rF", action: .flashCommand(.mouseGrid(.click(.rightClick)))),
+      ModeMapping(key: "dF", action: .flashCommand(.mouseGrid(.click(.doubleClick)))),
+      ModeMapping(key: "mF", action: .flashCommand(.mouseGrid(.move))),
       ModeMapping(key: "u", action: .flashCommand(.undo)),
       ModeMapping(key: "ctrl-r", action: .flashCommand(.redo)),
       ModeMapping(key: "x", action: .flashCommand(.close)),
@@ -381,8 +381,8 @@ extension URLCommand {
     switch self {
     case .mouseTarget(let command):
       return "flash://mouse_target\(command.querySuffix)"
-    case .mouseSnipe(let command):
-      return "flash://mouse_snipe\(command.querySuffix)"
+    case .mouseGrid(let command):
+      return "flash://mouse_grid\(command.querySuffix)"
     case .normalMode:
       return "flash://mode_normal"
     case .insertMode:

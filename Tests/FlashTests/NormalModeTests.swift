@@ -141,14 +141,14 @@ final class NormalModeTests: XCTestCase {
   func testMoveMouseSequence() {
     XCTAssertEqual(transition(chars: "m").pending, "m")
     XCTAssertEqual(command(pending: "m", chars: "f"), .mouseTarget(.move))
-    XCTAssertEqual(command(pending: "m", chars: "s"), .mouseSnipe(.move))
+    XCTAssertEqual(command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.move))
     XCTAssertNil(command(pending: "m", chars: "x"))
   }
 
-  func testFIsHintModeAndShiftFIsUnmapped() {
+  func testFIsMouseTargetAndShiftFIsMouseGrid() {
     XCTAssertEqual(command(chars: "f"), .mouseTarget(.click(.leftClick)))
-    XCTAssertEqual(command(chars: "s"), .mouseSnipe(.click(.leftClick)))
-    XCTAssertNil(command(chars: "F", ignoring: "f", flags: [.shift]))
+    XCTAssertEqual(command(chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.leftClick)))
+    XCTAssertNil(command(chars: "s"))
   }
 
   func testRightAndDoubleClickHintModeSequences() {
@@ -157,10 +157,10 @@ final class NormalModeTests: XCTestCase {
       NormalModeInterpreter.pendingCommand(pending: "r")?.command,
       .reload)
     XCTAssertEqual(command(pending: "r", chars: "f"), .mouseTarget(.click(.rightClick)))
-    XCTAssertEqual(command(pending: "r", chars: "s"), .mouseSnipe(.click(.rightClick)))
+    XCTAssertEqual(command(pending: "r", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.rightClick)))
     XCTAssertEqual(transition(chars: "d").pending, "d")
     XCTAssertEqual(command(pending: "d", chars: "f"), .mouseTarget(.click(.doubleClick)))
-    XCTAssertEqual(command(pending: "d", chars: "s"), .mouseSnipe(.click(.doubleClick)))
+    XCTAssertEqual(command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.doubleClick)))
   }
 
   func testHintCommitEntersInsertOnlyForTextInputLeftClickTargets() {
@@ -521,39 +521,66 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(unknown.contains("Unknown Help Topic"))
   }
 
-  func testSnipeGridUsesDeterministicSingleKeyCells() {
-    let region = SnipeGrid.Region(frame: CGRect(x: 0, y: 0, width: 400, height: 200))
-    let hints = SnipeGrid.hints(
+  func testMouseGridUsesDeterministicSingleKeyCells() {
+    let region = MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 400, height: 200))
+    let hints = MouseGrid.hints(
       in: region,
       depth: 0,
       alphabet: Array("abcdefghijklmnop"))
 
-    XCTAssertEqual(hints.count, 16)
+    XCTAssertEqual(hints.count, 4)
     XCTAssertEqual(hints.first?.label, "a")
-    XCTAssertEqual(hints.last?.label, "p")
-    XCTAssertEqual(hints[0].target.frame, CGRect(x: 0, y: 100, width: 50, height: 100))
-    XCTAssertEqual(hints[7].target.frame, CGRect(x: 350, y: 100, width: 50, height: 100))
-    XCTAssertEqual(hints[15].target.frame, CGRect(x: 350, y: 0, width: 50, height: 100))
+    XCTAssertEqual(hints.last?.label, "d")
+    XCTAssertEqual(hints[0].target.frame, CGRect(x: 0, y: 100, width: 200, height: 100))
+    XCTAssertEqual(hints[1].target.frame, CGRect(x: 200, y: 100, width: 200, height: 100))
+    XCTAssertEqual(hints[3].target.frame, CGRect(x: 200, y: 0, width: 200, height: 100))
   }
 
-  func testSnipeGridCommitsAfterThreeSelections() {
-    let region = SnipeGrid.Region(frame: CGRect(x: 0, y: 0, width: 1440, height: 900))
-    let first = SnipeGrid.hints(in: region, depth: 0, alphabet: Array("abcdefghijklmnop"))
-    let secondRegion = SnipeGrid.Region(frame: first[0].target.frame)
-    XCTAssertFalse(SnipeGrid.shouldCommit(region: secondRegion, depth: 1))
+  func testMouseGridCommitsAfterThreeSelections() {
+    let alphabet = Array("abcdefghijklmnop")
+    let region = MouseGrid.preparedRegion(
+      MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 1440, height: 900)),
+      alphabet: alphabet)
+    XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 4, rows: 3))
+    let first = MouseGrid.hints(in: region, depth: 0, alphabet: alphabet)
+    XCTAssertEqual(first.count, region.grid?.cellCount)
+    let secondRegion = MouseGrid.Region(frame: first[0].target.frame, grid: region.grid)
+    XCTAssertFalse(MouseGrid.shouldCommit(region: secondRegion, depth: 1))
 
-    let second = SnipeGrid.hints(in: secondRegion, depth: 1, alphabet: Array("abcdefghijklmnop"))
-    let finalRegion = SnipeGrid.Region(frame: second[0].target.frame)
-    XCTAssertFalse(SnipeGrid.shouldCommit(region: finalRegion, depth: 2))
-    XCTAssertTrue(SnipeGrid.isFinalDisplayDepth(2))
+    let second = MouseGrid.hints(in: secondRegion, depth: 1, alphabet: alphabet)
+    XCTAssertEqual(second.count, region.grid?.cellCount)
+    let finalRegion = MouseGrid.Region(frame: second[0].target.frame, grid: region.grid)
+    XCTAssertFalse(MouseGrid.shouldCommit(region: finalRegion, depth: 2))
+    XCTAssertTrue(MouseGrid.isFinalDisplayDepth(2))
 
-    let final = SnipeGrid.hints(in: finalRegion, depth: 2, alphabet: Array("abcdefghijklmnop"))
-    XCTAssertGreaterThanOrEqual(final.count, 4)
+    let final = MouseGrid.hints(in: finalRegion, depth: 2, alphabet: alphabet)
+    XCTAssertEqual(final.count, region.grid?.cellCount)
     for hint in final {
       XCTAssertGreaterThanOrEqual(hint.target.frame.width, 18)
       XCTAssertGreaterThanOrEqual(hint.target.frame.height, 18)
-      XCTAssertTrue(SnipeGrid.shouldCommit(region: SnipeGrid.Region(frame: hint.target.frame), depth: 3))
+      XCTAssertTrue(
+        MouseGrid.shouldCommit(
+          region: MouseGrid.Region(frame: hint.target.frame, grid: region.grid),
+          depth: 3))
     }
+  }
+
+  func testFinalMouseGridCellsTouchWithoutGaps() {
+    let alphabet = Array("abcdefghijklmnop")
+    let region = MouseGrid.preparedRegion(
+      MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 160, height: 160)),
+      alphabet: alphabet)
+    XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 2, rows: 2))
+    let first = MouseGrid.hints(in: region, depth: 0, alphabet: alphabet)
+    let secondRegion = MouseGrid.Region(frame: first[0].target.frame, grid: region.grid)
+    let second = MouseGrid.hints(in: secondRegion, depth: 1, alphabet: alphabet)
+    let finalRegion = MouseGrid.Region(frame: second[0].target.frame, grid: region.grid)
+    let final = MouseGrid.hints(in: finalRegion, depth: 2, alphabet: alphabet)
+    XCTAssertEqual(final.count, 4)
+    XCTAssertEqual(final[0].target.frame, CGRect(x: 0, y: 140, width: 20, height: 20))
+    XCTAssertEqual(final[1].target.frame, CGRect(x: 20, y: 140, width: 20, height: 20))
+    XCTAssertEqual(final[2].target.frame, CGRect(x: 0, y: 120, width: 20, height: 20))
+    XCTAssertEqual(final[3].target.frame, CGRect(x: 20, y: 120, width: 20, height: 20))
   }
 
   func testPluginCommandLineInvocationParser() throws {
@@ -791,13 +818,13 @@ final class NormalModeTests: XCTestCase {
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "H", "L", "f", "rf", "df", "mf", "s", "rs", "ds", "ms", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "t", "MAPPINGS",
+      "gg", "G", "H", "L", "f", "rf", "df", "mf", "F", "rF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "gt", "gT", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <query>", ":flashlight <query>", "flash://mouse_target",
       "flash://flashlight", "flash://mouse_target?right=1",
-      "flash://mouse_target?double=1", "flash://mouse_snipe", "flash://history_back", "flash://history_forward",
+      "flash://mouse_target?double=1", "flash://mouse_grid", "flash://history_back", "flash://history_forward",
       "flash://movement_back", "flash://movement_forward",
       "flash://tab_select?index=1", "flash://tab_new_insert", "?"]
     {

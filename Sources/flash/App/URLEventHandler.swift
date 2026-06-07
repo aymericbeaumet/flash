@@ -3,7 +3,7 @@ import FlashCore
 
 enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
-  case mouseSnipe(MouseCommand)
+  case mouseGrid(MouseCommand)
   case normalMode
   case insertMode
   case commandMode
@@ -158,7 +158,8 @@ final class URLEventHandler: NSObject {
   /// `URLCommand`, so the compiler points out any missed wiring.
   private static let commands: [String: (FlashURLQuery) -> URLCommand?] = [
     "mouse_target": { q in mouseCommand(q).map(URLCommand.mouseTarget) },
-    "mouse_snipe": { q in mouseCommand(q).map(URLCommand.mouseSnipe) },
+    "mouse_grid": { q in mouseCommand(q).map(URLCommand.mouseGrid) },
+    "mouse_snipe": { q in mouseCommand(q).map(URLCommand.mouseGrid) },
     "mouse_click": { q in mouseCommand(q).map(URLCommand.mouseTarget) },
     "mode_normal": { _ in .normalMode },
     "mode_insert": { _ in .insertMode },
@@ -234,7 +235,7 @@ final class URLEventHandler: NSObject {
 
   static let usageText = """
     flash://mouse_target[?right=1|double=1|move=1]
-    flash://mouse_snipe[?right=1|double=1|move=1]
+    flash://mouse_grid[?right=1|double=1|move=1]
     flash://mode_normal
     flash://mode_insert
     flash://mode_command
@@ -301,7 +302,7 @@ extension URLEventHandler {
       parser is used by Launch Services, the `flash` / `flashctl` CLI, and
       configured in-process mappings.
 
-      `mouse_target` selects an app-discovered target. `mouse_snipe` selects a
+      `mouse_target` selects an app-discovered target. `mouse_grid` selects a
       precise screen position by repeatedly narrowing a deterministic grid.
 
       ```text

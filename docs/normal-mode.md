@@ -10,6 +10,6 @@ Important defaults:
 - `g1` through `g9` select indexed tabs when the focused source supports it.
 - `n` sends Cmd-N to open a new window.
 - `f`, `rf`, `df`, and `mf` target discovered clickable elements.
-- `s`, `rs`, `ds`, and `ms` use snipe mode for precise screen positions.
+- `F`, `rF`, `dF`, and `mF` use mouse grid mode for precise screen positions.
 - `:mappings` opens the resolved mapping table, including expanded leader
   bindings and argv mappings.

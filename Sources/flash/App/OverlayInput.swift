@@ -174,14 +174,8 @@ extension OverlayPanel {
   @discardableResult
   private func handleModalKeyEvent(_ event: NSEvent) -> Bool {
     guard let coordinator = coordinator else { return false }
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let ignoredChar =
-      NormalModeInterpreter.firstCharacter(event.charactersIgnoringModifiers)?
-      .lowercased().first
-    if event.keyCode == 53 || (modifiers.contains(.control) && ignoredChar == "c") {
-      FlashLog.trace("[input] modal cancel key=\(event.keyCode)")
-      coordinator.overlayDidCancelModal()
-    }
+    FlashLog.trace("[input] modal pass_through key=\(event.keyCode)")
+    coordinator.overlayDidPassThroughModalKey(event)
     return true
   }
 

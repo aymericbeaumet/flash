@@ -27,21 +27,21 @@ Every action is available as `flash://...` and can be invoked with `open`, the C
 ```bash
 open -g flash://mouse_target
 open -g flash://mouse_target?right=1
-open -g flash://mouse_snipe
+open -g flash://mouse_grid
 open -g flash://mode_normal
 open -g flash://help_show
 open -g flash://help_show?topic=plugins
 open -g flash://flash_quit
 
 flash mouse_target
-flash mouse_snipe move=1
+flash mouse_grid move=1
 flash mode_normal
 flash app_open name=Firefox
 flash window_move position=lefthalf
 flash help_show
 ```
 
-Common actions include `flash://mouse_target`, `flash://mouse_target?right=1`, `flash://mouse_target?double=1`, `flash://mouse_target?move=1`, `flash://mouse_snipe`, `flash://mouse_snipe?right=1`, `flash://mouse_snipe?double=1`, `flash://mouse_snipe?move=1`, `flash://scroll_down`, `flash://scroll_half_page_up`, `flash://scroll_half_page_down`, `flash://scroll_top`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select?index=<n>`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder`, `flash://flashlight`, `flash://url_copy`, `flash://app_save`, `flash://app_save_and_quit`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://app_open?name=<app>`, `flash://window_move?position=<slot>&screen=<n>`, `flash://plugins`, `flash://plugin_action?command=<command>&name=<action>`, `flash://hints_dismiss`, `flash://alert_dismiss`, `flash://alert_show?message=<text>`, and `flash://show_alert?message=<text>`.
+Common actions include `flash://mouse_target`, `flash://mouse_target?right=1`, `flash://mouse_target?double=1`, `flash://mouse_target?move=1`, `flash://mouse_grid`, `flash://mouse_grid?right=1`, `flash://mouse_grid?double=1`, `flash://mouse_grid?move=1`, `flash://scroll_down`, `flash://scroll_half_page_up`, `flash://scroll_half_page_down`, `flash://scroll_top`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select?index=<n>`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder`, `flash://flashlight`, `flash://url_copy`, `flash://app_save`, `flash://app_save_and_quit`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://app_open?name=<app>`, `flash://window_move?position=<slot>&screen=<n>`, `flash://plugins`, `flash://plugin_action?command=<command>&name=<action>`, `flash://hints_dismiss`, `flash://alert_dismiss`, `flash://alert_show?message=<text>`, and `flash://show_alert?message=<text>`.
 
 ## Configuration
 
@@ -96,10 +96,10 @@ leader = "\\"
 "rf" = "flash://mouse_target?right=1"
 "df" = "flash://mouse_target?double=1"
 "mf" = "flash://mouse_target?move=1"
-"s" = "flash://mouse_snipe"
-"rs" = "flash://mouse_snipe?right=1"
-"ds" = "flash://mouse_snipe?double=1"
-"ms" = "flash://mouse_snipe?move=1"
+"F" = "flash://mouse_grid"
+"rF" = "flash://mouse_grid?right=1"
+"dF" = "flash://mouse_grid?double=1"
+"mF" = "flash://mouse_grid?move=1"
 "u" = "flash://app_undo"
 "ctrl-r" = "flash://app_redo"
 "x" = "flash://window_close"

@@ -3,6 +3,7 @@ import Network
 
 final class DebugServer {
   let hostPort: String
+  private(set) var listeningPort: UInt16?
   private let stateProvider: () -> [String: Any]
   private let queue = DispatchQueue(label: "flash.debug_server", qos: .utility)
   private var listener: NWListener?
@@ -22,13 +23,16 @@ final class DebugServer {
       return
     }
     do {
-      let parameters = NWParameters.tcp
-      parameters.requiredLocalEndpoint = .hostPort(host: endpoint.host, port: endpoint.port)
-      let listener = try NWListener(using: parameters)
+      let listener = try NWListener(using: .tcp, on: endpoint.port)
       listener.newConnectionHandler = { [weak self] connection in
         self?.handle(connection)
       }
-      listener.stateUpdateHandler = { state in
+      listener.stateUpdateHandler = { [weak self] state in
+        if case .ready = state {
+          let port = listener.port?.rawValue
+          self?.listeningPort = port
+          FlashLog.info("[debug] server listening http://\(endpoint.host):\(port ?? 0)")
+        }
         if case .failed(let error) = state {
           FlashLog.warn("[debug] server failed \(error)")
         }
@@ -38,7 +42,6 @@ final class DebugServer {
       logSinkID = FlashLog.addSink { [weak self] record in
         self?.append(record)
       }
-      FlashLog.info("[debug] server listening http://\(hostPort)")
     } catch {
       FlashLog.warn("[debug] could not start server \(hostPort): \(error)")
     }
@@ -77,6 +80,10 @@ final class DebugServer {
   }
 
   private func handle(_ connection: NWConnection) {
+    guard Self.isLoopback(endpoint: connection.endpoint) else {
+      connection.cancel()
+      return
+    }
     connection.start(queue: queue)
     connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, _, _ in
       guard let self else {
@@ -199,7 +206,7 @@ final class DebugServer {
     return string
   }
 
-  private static func parse(hostPort: String) -> (host: NWEndpoint.Host, port: NWEndpoint.Port)? {
+  static func parse(hostPort: String) -> (host: String, port: NWEndpoint.Port)? {
     let trimmed = hostPort.trimmingCharacters(in: .whitespacesAndNewlines)
     let hostRaw: String
     let portRaw: String
@@ -216,7 +223,21 @@ final class DebugServer {
       let portInt = UInt16(portRaw),
       let port = NWEndpoint.Port(rawValue: portInt)
     else { return nil }
-    return (NWEndpoint.Host(hostRaw), port)
+    return (hostRaw, port)
+  }
+
+  static func isLoopback(endpoint: NWEndpoint) -> Bool {
+    guard case .hostPort(let host, _) = endpoint else { return false }
+    switch host {
+    case .name(let name, _):
+      return name == "localhost"
+    case .ipv4(let address):
+      return address.rawValue.first == 127
+    case .ipv6(let address):
+      return address == IPv6Address("::1")
+    default:
+      return false
+    }
   }
 
   private static let pageHTML = """

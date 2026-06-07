@@ -129,8 +129,11 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingAction(rawString: "flash://mouse_target?move=1")?.command,
       .mouseTarget(.move))
     XCTAssertEqual(
+      parseMappingAction(rawString: "flash://mouse_grid?move=1")?.command,
+      .mouseGrid(.move))
+    XCTAssertEqual(
       parseMappingAction(rawString: "flash://mouse_snipe?move=1")?.command,
-      .mouseSnipe(.move))
+      .mouseGrid(.move))
     XCTAssertEqual(
       parseMappingAction(rawString: "flash://mouse_click")?.command,
       .mouseTarget(.click(.leftClick)))

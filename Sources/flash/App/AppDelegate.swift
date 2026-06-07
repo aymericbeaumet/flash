@@ -39,8 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case click
     case copyURL
     case moveMouse
-    case snipeClick
-    case snipeMove
+    case mouseGridClick
+    case mouseGridMove
   }
 
   private struct MovementEntry {
@@ -112,8 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var editableFocusSuppressedPID: pid_t?
   private var selectedInitialMode = false
   private var sourceAppPID: pid_t?
-  private var snipeRegion: SnipeGrid.Region?
-  private var snipeDepth = 0
+  private var mouseGridRegion: MouseGrid.Region?
+  private var mouseGridDepth = 0
   private var movementCurrent: MovementEntry?
   private var movementBackStack: [MovementEntry] = []
   private var movementForwardStack: [MovementEntry] = []
@@ -216,8 +216,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     switch cmd {
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: nil)
-    case .mouseSnipe(let command):
-      activateMouseSnipe(command, contextOverride: nil)
+    case .mouseGrid(let command):
+      activateMouseGrid(command, contextOverride: nil)
     case .normalMode:
       enterNormalMode()
     case .insertMode:
@@ -401,25 +401,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     activate(action: command.action, commitBehavior: behavior, contextOverride: contextOverride)
   }
 
-  private func activateMouseSnipe(_ command: MouseCommand, contextOverride: AppContext?) {
+  private func activateMouseGrid(_ command: MouseCommand, contextOverride: AppContext?) {
     let context = contextOverride ?? currentNonFlashContext() ?? normalModeContext()
-    let region = SnipeGrid.initialRegion(
-      context: context,
-      screens: NSScreen.screens,
-      fallback: OverlayPanel.unionScreenFrame())
-    snipeRegion = region
-    snipeDepth = 0
+    let region = MouseGrid.preparedRegion(
+      MouseGrid.initialRegion(
+        context: context,
+        screens: NSScreen.screens,
+        fallback: OverlayPanel.unionScreenFrame()),
+      alphabet: config.resolvedAlphabet.chars)
+    mouseGridRegion = region
+    mouseGridDepth = 0
     sourceAppPID = context?.processID
     pendingAction = command.action
-    pendingHintCommitBehavior = command.isMove ? .snipeMove : .snipeClick
+    pendingHintCommitBehavior = command.isMove ? .mouseGridMove : .mouseGridClick
     currentPrefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
-    displaySnipeRegion(region, depth: 0)
+    displayMouseGridRegion(region, depth: 0)
   }
 
-  private func displaySnipeRegion(_ region: SnipeGrid.Region, depth: Int) {
-    let hints = SnipeGrid.hints(
+  private func displayMouseGridRegion(_ region: MouseGrid.Region, depth: Int) {
+    let region = MouseGrid.preparedRegion(region, alphabet: config.resolvedAlphabet.chars)
+    mouseGridRegion = region
+    let hints = MouseGrid.hints(
       in: region,
       depth: depth,
       alphabet: config.resolvedAlphabet.chars)
@@ -613,8 +617,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     currentHints = []
     currentPrefix = ""
     sourceAppPID = nil
-    snipeRegion = nil
-    snipeDepth = 0
+    mouseGridRegion = nil
+    mouseGridDepth = 0
     pendingHintCommitBehavior = .click
     invalidateActivation(reason: "cancel_overlay")
     applyModeOverlay()
@@ -1172,8 +1176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: .all)
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: normalModeContext())
-    case .mouseSnipe(let command):
-      activateMouseSnipe(command, contextOverride: normalModeContext())
+    case .mouseGrid(let command):
+      activateMouseGrid(command, contextOverride: normalModeContext())
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()
@@ -2242,8 +2246,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   private func commit(hint: AssignedHint, clickModifiers: ClickModifiers) {
-    if pendingHintCommitBehavior == .snipeClick || pendingHintCommitBehavior == .snipeMove {
-      commitSnipeCell(hint: hint, clickModifiers: clickModifiers)
+    if pendingHintCommitBehavior == .mouseGridClick || pendingHintCommitBehavior == .mouseGridMove {
+      commitMouseGridCell(hint: hint, clickModifiers: clickModifiers)
       return
     }
     if pendingHintCommitBehavior == .copyURL {
@@ -2254,8 +2258,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       currentHints = []
       currentPrefix = ""
       sourceAppPID = nil
-      snipeRegion = nil
-      snipeDepth = 0
+      mouseGridRegion = nil
+      mouseGridDepth = 0
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
@@ -2270,8 +2274,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       currentHints = []
       currentPrefix = ""
       sourceAppPID = nil
-      snipeRegion = nil
-      snipeDepth = 0
+      mouseGridRegion = nil
+      mouseGridDepth = 0
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
@@ -2323,8 +2327,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     currentHints = []
     currentPrefix = ""
     sourceAppPID = nil
-    snipeRegion = nil
-    snipeDepth = 0
+    mouseGridRegion = nil
+    mouseGridDepth = 0
     pendingHintCommitBehavior = .click
     if shouldEnterInsertAfterCommit {
       enterInsertMode(reason: .hintCommit)
@@ -2340,24 +2344,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
-  private func commitSnipeCell(hint: AssignedHint, clickModifiers: ClickModifiers) {
-    let nextRegion = SnipeGrid.Region(frame: hint.target.frame)
-    let nextDepth = snipeDepth + 1
-    if !SnipeGrid.shouldCommit(region: nextRegion, depth: nextDepth) {
-      snipeRegion = nextRegion
-      snipeDepth = nextDepth
+  private func commitMouseGridCell(hint: AssignedHint, clickModifiers: ClickModifiers) {
+    let nextRegion = MouseGrid.Region(frame: hint.target.frame, grid: mouseGridRegion?.grid)
+    let nextDepth = mouseGridDepth + 1
+    if !MouseGrid.shouldCommit(region: nextRegion, depth: nextDepth) {
+      mouseGridRegion = nextRegion
+      mouseGridDepth = nextDepth
       currentPrefix = ""
-      displaySnipeRegion(nextRegion, depth: nextDepth)
+      displayMouseGridRegion(nextRegion, depth: nextDepth)
       return
     }
 
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
-    let shouldMove = pendingHintCommitBehavior == .snipeMove
+    let shouldMove = pendingHintCommitBehavior == .mouseGridMove
     overlay.hide()
     currentHints = []
     currentPrefix = ""
-    snipeRegion = nil
-    snipeDepth = 0
+    mouseGridRegion = nil
+    mouseGridDepth = 0
     activationGen &+= 1
     sourceAppPID = nil
     pendingHintCommitBehavior = .click
@@ -2370,7 +2374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         modifiers: clickModifiers)
     }
     applyModeOverlay()
-    refreshCurrentModeSideEffects(reason: shouldMove ? "snipe_move_commit" : "snipe_click_commit")
+    refreshCurrentModeSideEffects(reason: shouldMove ? "mouse_grid_move_commit" : "mouse_grid_click_commit")
   }
 
   static func hintCommitShouldEnterInsertMode(
@@ -2395,6 +2399,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.hide()
     applyModeOverlay()
     refreshCurrentModeSideEffects(reason: "modal_cancel")
+  }
+
+  func overlayDidPassThroughModalKey(_ event: NSEvent) {
+    let targetPID = currentNonFlashContext()?.processID ?? normalModeTargetPID
+    overlayDidCancelModal()
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
+      _ = ActionDispatcher.forwardKeyDown(event, to: targetPID)
+    }
   }
 
   func overlayDidCancelCommandLine() {

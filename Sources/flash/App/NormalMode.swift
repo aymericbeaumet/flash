@@ -280,8 +280,8 @@ enum NormalModeDispatcher {
         - `rf` right-clicks a discovered target.
         - `df` double-clicks a discovered target.
         - `mf` moves the cursor to a discovered target.
-        - `s` starts snipe mode for a precise screen position.
-        - `rs` / `ds` / `ms` right-click, double-click, or move with snipe mode.
+        - `F` starts mouse grid mode for a precise screen position.
+        - `rF` / `dF` / `mF` right-click, double-click, or move with mouse grid mode.
 
         ## Command Line
 

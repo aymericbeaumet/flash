@@ -35,11 +35,11 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == "mf" })?.action.command,
       .mouseTarget(.move))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "s" })?.action.command,
-      .mouseSnipe(.click(.leftClick)))
+      c.mode.normal.first(where: { $0.key == "F" })?.action.command,
+      .mouseGrid(.click(.leftClick)))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "ms" })?.action.command,
-      .mouseSnipe(.move))
+      c.mode.normal.first(where: { $0.key == "mF" })?.action.command,
+      .mouseGrid(.move))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "yy" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "o" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "O" }))
