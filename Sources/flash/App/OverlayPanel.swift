@@ -101,6 +101,7 @@ final class OverlayPanel: NSPanel {
   }
   var normalModePendingUpdatedAt: Date?
   var normalModeMappings: [ModeMapping] = Config.Mode.defaultNormalMappings
+  var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
   }
@@ -874,6 +875,7 @@ final class OverlayPanel: NSPanel {
   func displayCommandLine(
     _ text: String,
     suggestions: [CandidateDisplayItem]? = nil,
+    emptyText: String = "no matching app",
     cursorIndex: Int? = nil
   ) {
     FlashLog.trace(
@@ -884,7 +886,7 @@ final class OverlayPanel: NSPanel {
     commandPromptVisible = true
     commandPromptPrefix = ""
     if let suggestions {
-      setCandidateFinderResults(items: suggestions, emptyText: "no matching app")
+      setCandidateFinderResults(items: suggestions, emptyText: emptyText)
     } else {
       clearCandidateFinderResults()
     }
@@ -923,6 +925,7 @@ final class OverlayPanel: NSPanel {
       var sublayers = contentLayer.sublayers ?? []
       sublayers.removeAll { $0 === activeWindowBorderLayer }
       contentLayer.sublayers = sublayers
+      orderOutIfNoPersistentContent()
       return
     }
 
@@ -947,6 +950,9 @@ final class OverlayPanel: NSPanel {
       sublayers.append(activeWindowBorderLayer)
     }
     contentLayer.sublayers = sublayers
+    if !isVisible {
+      orderFrontRegardless()
+    }
   }
 
   static func activeWindowBorderLocalRect(
@@ -985,18 +991,22 @@ final class OverlayPanel: NSPanel {
     defer { CATransaction.commit() }
 
     let frame = ensurePanelFrame()
-    if modeBadgeVisible {
+    let activeWindowBorderVisible = activeWindowBorderLayer.path != nil
+    if modeBadgeVisible || activeWindowBorderVisible {
       configureModeBadge(panelFrame: frame)
       configureCommandPrompt(panelFrame: frame)
       configureCandidateFinderResults(panelFrame: frame)
-      var sublayers: [CALayer] = [modeBadgeLayer]
+      var sublayers: [CALayer] = []
+      if modeBadgeVisible {
+        sublayers.append(modeBadgeLayer)
+      }
       if commandPromptVisible {
         sublayers.append(commandPromptLayer)
       }
       if candidateFinderResultsVisible {
         sublayers.append(candidateFinderResultsLayer)
       }
-      if activeWindowBorderLayer.path != nil {
+      if activeWindowBorderVisible {
         sublayers.append(activeWindowBorderLayer)
       }
       contentLayer.sublayers = sublayers
@@ -1015,6 +1025,18 @@ final class OverlayPanel: NSPanel {
       contentLayer.sublayers = nil
       orderOut(nil)
     }
+  }
+
+  private func orderOutIfNoPersistentContent() {
+    guard
+      !transientContentVisible,
+      !modeBadgeVisible,
+      !modeBadgeCapturesInput,
+      !commandPromptVisible,
+      !candidateFinderResultsVisible,
+      activeWindowBorderLayer.path == nil
+    else { return }
+    orderOut(nil)
   }
 
   private func appendModeBadgeLayerIfNeeded(to sublayers: inout [CALayer], panelFrame: CGRect) {
@@ -1440,10 +1462,10 @@ final class OverlayPanel: NSPanel {
     switch modeBadgeStyle {
     case .insert:
       return ModeBadgePalette(
-        top: Self.nordFrost2,
-        bottom: Self.nordFrost2,
-        foreground: Self.nordPolarNight0,
-        border: Self.nordPolarNight0.withAlphaComponent(0.70))
+        top: Self.nordPolarNight1,
+        bottom: Self.nordPolarNight0,
+        foreground: Self.nordFrost2,
+        border: Self.nordFrost2)
     case .normal:
       return ModeBadgePalette(
         top: Self.nordPolarNight1,

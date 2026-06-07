@@ -3,638 +3,80 @@
     {
       "name": "baseline-synthetic-001",
       "file": "baseline-synthetic-001.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
+      "kind": "synthetic",
+      "category": "synthetic-controls"
     },
     {
-      "name": "baseline-synthetic-002",
-      "file": "baseline-synthetic-002.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-003",
-      "file": "baseline-synthetic-003.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-004",
-      "file": "baseline-synthetic-004.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-005",
-      "file": "baseline-synthetic-005.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-006",
-      "file": "baseline-synthetic-006.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-007",
-      "file": "baseline-synthetic-007.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-008",
-      "file": "baseline-synthetic-008.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-009",
-      "file": "baseline-synthetic-009.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-010",
-      "file": "baseline-synthetic-010.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-011",
-      "file": "baseline-synthetic-011.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-012",
-      "file": "baseline-synthetic-012.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-013",
-      "file": "baseline-synthetic-013.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-014",
-      "file": "baseline-synthetic-014.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-015",
-      "file": "baseline-synthetic-015.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-016",
-      "file": "baseline-synthetic-016.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-017",
-      "file": "baseline-synthetic-017.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-018",
-      "file": "baseline-synthetic-018.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-019",
-      "file": "baseline-synthetic-019.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
-      "name": "baseline-synthetic-020",
-      "file": "baseline-synthetic-020.html",
-      "category": "synthetic-controls",
-      "kind": "synthetic"
-    },
-    {
+      "kind": "synthetic",
+      "category": "synthetic-layout",
       "name": "layout-synthetic-021",
-      "file": "layout-synthetic-021.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
+      "file": "layout-synthetic-021.html"
     },
     {
-      "name": "layout-synthetic-022",
-      "file": "layout-synthetic-022.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-023",
-      "file": "layout-synthetic-023.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-024",
-      "file": "layout-synthetic-024.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-025",
-      "file": "layout-synthetic-025.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-026",
-      "file": "layout-synthetic-026.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-027",
-      "file": "layout-synthetic-027.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-028",
-      "file": "layout-synthetic-028.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-029",
-      "file": "layout-synthetic-029.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-030",
-      "file": "layout-synthetic-030.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-031",
-      "file": "layout-synthetic-031.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-032",
-      "file": "layout-synthetic-032.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-033",
-      "file": "layout-synthetic-033.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-034",
-      "file": "layout-synthetic-034.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-035",
-      "file": "layout-synthetic-035.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-036",
-      "file": "layout-synthetic-036.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-037",
-      "file": "layout-synthetic-037.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-038",
-      "file": "layout-synthetic-038.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-039",
-      "file": "layout-synthetic-039.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "layout-synthetic-040",
-      "file": "layout-synthetic-040.html",
-      "category": "synthetic-layout",
-      "kind": "synthetic"
-    },
-    {
-      "name": "docs-reference-041",
+      "kind": "realistic",
+      "category": "docs-reference",
       "file": "docs-reference-041.html",
-      "category": "docs-reference",
-      "kind": "realistic"
+      "name": "docs-reference-041"
     },
     {
-      "name": "docs-reference-042",
-      "file": "docs-reference-042.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-043",
-      "file": "docs-reference-043.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-044",
-      "file": "docs-reference-044.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-045",
-      "file": "docs-reference-045.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-046",
-      "file": "docs-reference-046.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-047",
-      "file": "docs-reference-047.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-048",
-      "file": "docs-reference-048.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-049",
-      "file": "docs-reference-049.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-050",
-      "file": "docs-reference-050.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-051",
-      "file": "docs-reference-051.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "docs-reference-052",
-      "file": "docs-reference-052.html",
-      "category": "docs-reference",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-053",
+      "kind": "realistic",
+      "category": "article-news",
       "file": "article-news-053.html",
-      "category": "article-news",
-      "kind": "realistic"
+      "name": "article-news-053"
     },
     {
-      "name": "article-news-054",
-      "file": "article-news-054.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-055",
-      "file": "article-news-055.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-056",
-      "file": "article-news-056.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-057",
-      "file": "article-news-057.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-058",
-      "file": "article-news-058.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-059",
-      "file": "article-news-059.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-060",
-      "file": "article-news-060.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-061",
-      "file": "article-news-061.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-062",
-      "file": "article-news-062.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-063",
-      "file": "article-news-063.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
-      "name": "article-news-064",
-      "file": "article-news-064.html",
-      "category": "article-news",
-      "kind": "realistic"
-    },
-    {
+      "kind": "realistic",
+      "category": "forum-thread",
       "name": "forum-thread-065",
-      "file": "forum-thread-065.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-066",
-      "file": "forum-thread-066.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-067",
-      "file": "forum-thread-067.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-068",
-      "file": "forum-thread-068.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-069",
-      "file": "forum-thread-069.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-070",
-      "file": "forum-thread-070.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-071",
-      "file": "forum-thread-071.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-072",
-      "file": "forum-thread-072.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-073",
-      "file": "forum-thread-073.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-074",
-      "file": "forum-thread-074.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-075",
-      "file": "forum-thread-075.html",
-      "category": "forum-thread",
-      "kind": "realistic"
-    },
-    {
-      "name": "forum-thread-076",
-      "file": "forum-thread-076.html",
-      "category": "forum-thread",
-      "kind": "realistic"
+      "file": "forum-thread-065.html"
     },
     {
       "name": "developer-code-077",
       "file": "developer-code-077.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-078",
-      "file": "developer-code-078.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-079",
-      "file": "developer-code-079.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-080",
-      "file": "developer-code-080.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-081",
-      "file": "developer-code-081.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-082",
-      "file": "developer-code-082.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-083",
-      "file": "developer-code-083.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-084",
-      "file": "developer-code-084.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-085",
-      "file": "developer-code-085.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-086",
-      "file": "developer-code-086.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-087",
-      "file": "developer-code-087.html",
-      "category": "developer-code",
-      "kind": "realistic"
-    },
-    {
-      "name": "developer-code-088",
-      "file": "developer-code-088.html",
-      "category": "developer-code",
-      "kind": "realistic"
+      "kind": "realistic",
+      "category": "developer-code"
     },
     {
       "name": "commerce-listing-089",
       "file": "commerce-listing-089.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
+      "kind": "realistic",
+      "category": "commerce-listing"
     },
     {
-      "name": "commerce-listing-090",
-      "file": "commerce-listing-090.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-091",
-      "file": "commerce-listing-091.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-092",
-      "file": "commerce-listing-092.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-093",
-      "file": "commerce-listing-093.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-094",
-      "file": "commerce-listing-094.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-095",
-      "file": "commerce-listing-095.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-096",
-      "file": "commerce-listing-096.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-097",
-      "file": "commerce-listing-097.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-098",
-      "file": "commerce-listing-098.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-099",
-      "file": "commerce-listing-099.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "commerce-listing-100",
-      "file": "commerce-listing-100.html",
-      "category": "commerce-listing",
-      "kind": "realistic"
-    },
-    {
-      "name": "collected-test-google-search-001",
+      "kind": "collected",
+      "category": "collected-regression",
       "file": "collected-test-google-search-001.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "name": "collected-test-google-search-001"
     },
     {
-      "name": "collected-reddit-the-heart-of-the-internet-001",
       "file": "collected-reddit-the-heart-of-the-internet-001.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "name": "collected-reddit-the-heart-of-the-internet-001",
+      "kind": "collected",
+      "category": "collected-regression"
     },
     {
+      "kind": "collected",
+      "category": "collected-regression",
       "name": "collected-feed-linkedin-001",
-      "file": "collected-feed-linkedin-001.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "file": "collected-feed-linkedin-001.html"
     },
     {
-      "name": "collected-patches-linkedin-001",
-      "file": "collected-patches-linkedin-001.html",
+      "kind": "collected",
       "category": "collected-regression",
-      "kind": "collected"
+      "name": "collected-patches-linkedin-001",
+      "file": "collected-patches-linkedin-001.html"
     },
     {
       "name": "collected-instagram-google-search-001",
       "file": "collected-instagram-google-search-001.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "kind": "collected",
+      "category": "collected-regression"
     },
     {
-      "name": "collected-instagram-001",
-      "file": "collected-instagram-001.html",
       "category": "collected-regression",
-      "kind": "collected"
+      "kind": "collected",
+      "name": "collected-instagram-001",
+      "file": "collected-instagram-001.html"
     },
     {
       "name": "collected-home-x-001",
@@ -655,52 +97,52 @@
       "kind": "collected"
     },
     {
-      "name": "collected-20-facebook-002",
+      "category": "collected-regression",
+      "kind": "collected",
       "file": "collected-20-facebook-002.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "name": "collected-20-facebook-002"
     },
     {
-      "name": "collected-20-facebook-003",
+      "category": "collected-regression",
+      "kind": "collected",
       "file": "collected-20-facebook-003.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "name": "collected-20-facebook-003"
     },
     {
-      "name": "collected-u-s-military-turned-gps-into-a-global-numbers-st-001",
+      "category": "collected-regression",
+      "kind": "collected",
       "file": "collected-u-s-military-turned-gps-into-a-global-numbers-st-001.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "name": "collected-u-s-military-turned-gps-into-a-global-numbers-st-001"
     },
     {
-      "name": "collected-the-go-programming-language-001",
-      "file": "collected-the-go-programming-language-001.html",
+      "kind": "collected",
       "category": "collected-regression",
-      "kind": "collected"
+      "name": "collected-the-go-programming-language-001",
+      "file": "collected-the-go-programming-language-001.html"
     },
     {
       "name": "collected-rust-programming-language-001",
       "file": "collected-rust-programming-language-001.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "kind": "collected",
+      "category": "collected-regression"
     },
     {
       "name": "collected-cristel-google-search-001",
       "file": "collected-cristel-google-search-001.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "kind": "collected",
+      "category": "collected-regression"
     },
     {
+      "kind": "collected",
+      "category": "collected-regression",
       "name": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-001",
-      "file": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-001.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "file": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-001.html"
     },
     {
-      "name": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-002",
       "file": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-002.html",
-      "category": "collected-regression",
-      "kind": "collected"
+      "name": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-002",
+      "kind": "collected",
+      "category": "collected-regression"
     },
     {
       "name": "collected-casseroles-inox-haut-de-gamme-cristel-001",
@@ -709,26 +151,74 @@
       "kind": "collected"
     },
     {
-      "name": "collected-po-le-en-inox-bross-amovible-strate-amovible-po--001",
       "file": "collected-po-le-en-inox-bross-amovible-strate-amovible-po--001.html",
+      "name": "collected-po-le-en-inox-bross-amovible-strate-amovible-po--001",
       "category": "collected-regression",
       "kind": "collected"
     },
     {
-      "name": "collected-la-cocotte-magique-google-search-001",
       "file": "collected-la-cocotte-magique-google-search-001.html",
+      "name": "collected-la-cocotte-magique-google-search-001",
       "category": "collected-regression",
       "kind": "collected"
     },
     {
       "name": "collected-guild-wars-3-revealed-franchise-wide-sale-redact-001",
       "file": "collected-guild-wars-3-revealed-franchise-wide-sale-redact-001.html",
+      "kind": "collected",
+      "category": "collected-regression"
+    },
+    {
+      "file": "collected-welcome-please-verify-your-email-address-redacte-001.html",
+      "name": "collected-welcome-please-verify-your-email-address-redacte-001",
       "category": "collected-regression",
       "kind": "collected"
     },
     {
-      "name": "collected-welcome-please-verify-your-email-address-redacte-001",
-      "file": "collected-welcome-please-verify-your-email-address-redacte-001.html",
+      "kind": "collected",
+      "category": "collected-regression",
+      "name": "collected-best-spotify-cli-google-search-001",
+      "file": "collected-best-spotify-cli-google-search-001.html"
+    },
+    {
+      "category": "collected-regression",
+      "kind": "collected",
+      "name": "collected-linear-cli-google-search-001",
+      "file": "collected-linear-cli-google-search-001.html"
+    },
+    {
+      "name": "collected-new-chat-claude-001",
+      "file": "collected-new-chat-claude-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-mobilier-et-d-corations-int-rieur-et-ext-rieur-i-001",
+      "file": "collected-mobilier-et-d-corations-int-rieur-et-ext-rieur-i-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-tous-nos-produits-ikea-001",
+      "file": "collected-tous-nos-produits-ikea-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-am-nagement-ext-rieur-ikea-001",
+      "file": "collected-am-nagement-ext-rieur-ikea-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-caillebotis-pas-cher-sol-dalle-terrasse-ikea-001",
+      "file": "collected-caillebotis-pas-cher-sol-dalle-terrasse-ikea-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-caillebotis-pas-cher-sol-dalle-terrasse-ikea-002",
+      "file": "collected-caillebotis-pas-cher-sol-dalle-terrasse-ikea-002.html",
       "category": "collected-regression",
       "kind": "collected"
     }

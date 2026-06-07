@@ -32,6 +32,7 @@ struct ModeOverlaySnapshot: Equatable {
   var visible: Bool
   var captureInput: Bool
   var inputMode: OverlayInputMode
+  var refreshActiveWindowBorder: Bool
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
@@ -109,6 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var candidateFinderAllAppsCacheReady = false
   private var candidateFinderAllAppsRefreshInFlight = false
   private var candidateFinderLiveRefreshTimer: DispatchSourceTimer?
+  private var commandLineCompletionPrefix: String = ""
+  private var commandLineCompletionItems: [NormalModeDispatcher.CommandLineCompletion] = []
+  private var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
+  private var commandLineCompletionSelectedIndex = 0
+  private var commandLineCompletionQuery: String = ""
   private var editableFocusSuppressedPID: pid_t?
   private var selectedInitialMode = false
   private var sourceAppPID: pid_t?
@@ -118,12 +124,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private var movementBackStack: [MovementEntry] = []
   private var movementForwardStack: [MovementEntry] = []
   private var movementNavigationTargetKey: String?
+  private var appCurrent: pid_t?
+  private var appBackStack: [pid_t] = []
+  private var appForwardStack: [pid_t] = []
+  private var appNavigationTargetPID: pid_t?
+  /// Vim-style marks. `m<letter>` records the focused app at the
+  /// moment the user pressed it; `` `<letter> `` re-activates that
+  /// app. PIDs aren't stable across launches, so the bundle id is
+  /// used as the durable handle and pid is the fast-path lookup.
+  private var marks: [Character: MarkState] = [:]
+
+  private struct MarkState {
+    let bundleID: String
+    let pid: pid_t
+    let recordedAt: Date
+  }
   private var workspaceTokens: [NSObjectProtocol] = []
   private var resignKeyToken: NSObjectProtocol?
   private var normalModeRecaptureToken: UInt64 = 0
   private var normalModeCaptureVerificationToken: UInt64 = 0
   private var normalModePendingCommandToken: UInt64 = 0
   private var normalModeScrollSuppressionUntil: Date?
+  private var normalModeDragGlobalMonitor: Any?
+  private var normalModeDragLocalMonitor: Any?
+  private var normalModeDragAction: JumpAction = .leftClick
+  private var normalModeDragModifiers: ClickModifiers = []
   private var windowGeometryChangeToken: UInt64 = 0
   private var windowGeometryChangeInProgress = false
   private var activeWindowBorderTrackingTimer: DispatchSourceTimer?
@@ -178,6 +203,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.debugConfig = config.debug
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
+    overlay.normalModeMappings = config.mode.mappings(for: .normal)
+    overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
     // Pay the layer-allocation cost at launch instead of on the first
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
@@ -198,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       app.bundleIdentifier != Bundle.main.bundleIdentifier
     {
       movementCurrent = .app(pid: app.processIdentifier)
+      appCurrent = app.processIdentifier
     }
     watchConfigFile()
     selectInitialModeIfNeeded()
@@ -227,8 +255,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .flashlight,
       .copyURL,
       .nextFrame, .mainFrame, .tabNext, .tabPrev, .tabSelect, .historyBack, .historyForward,
-      .movementBack, .movementForward, .quitApp, .save, .saveAndQuit, .print, .openDocument,
-      .newWindow, .tabNew, .tabNewInsert, .copy, .cut, .paste, .copyAll:
+      .movementBack, .movementForward, .appPrev, .appNext,
+      .setMark, .jumpToMark,
+      .quitApp, .save, .saveAndQuit, .print,
+      .openDocument, .newWindow, .tabNew, .tabNewInsert, .copy, .cut, .paste, .copyAll:
       performMappedCommand(cmd)
     case .showAlert(let message):
       configErrorAlertVisible = false
@@ -610,7 +640,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     if currentHints.isEmpty && !activationInFlight {
       overlay.hide()
       applyModeOverlay()
-      refreshCurrentModeSideEffects(reason: "cancel_idle")
       return
     }
     overlay.hide()
@@ -622,7 +651,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pendingHintCommitBehavior = .click
     invalidateActivation(reason: "cancel_overlay")
     applyModeOverlay()
-    refreshCurrentModeSideEffects(reason: "cancel_overlay")
   }
 
   private var lastPermissionPromptAt: Date?
@@ -681,7 +709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     {
       FlashLog.debug(
         "[mode] enter_insert_denied reason=\(reason.logValue) "
-          + "rule=normal_requires_hint_focus")
+          + "rule=normal_requires_user_mouse_or_input")
       normalModePendingCommandToken &+= 1
       clearTransientHintState(reason: "enter_insert_denied_\(reason.logValue)")
       resetModeInputState()
@@ -800,7 +828,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       overlay.hide()
     }
     applyModeOverlay()
-    updateInsertModeActiveWindowBorder(reason: "enter_\(reason)")
   }
 
   private func refreshCurrentModeSideEffects(reason: String) {
@@ -964,7 +991,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     hasHints: Bool,
     windowGeometryChangeInProgress: Bool
   ) -> Bool {
-    modeBadgeEnabled && mode == .insert && !hasHints && !windowGeometryChangeInProgress
+    // Insert mode shows nothing — no badge, no border, no overlay
+    // chrome. User asked for a pristine window in insert mode and
+    // ergonomic feedback only in normal mode (via the mode badge).
+    false
   }
 
   static func activeWindowBorderTrackingShouldRun(
@@ -1024,7 +1054,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       text: mode == .normal ? labels.normal : labels.insert,
       visible: visible,
       captureInput: capture,
-      inputMode: capture ? .normal : .hints)
+      inputMode: capture ? .normal : .hints,
+      refreshActiveWindowBorder: mode == .insert)
   }
 
   private func applyModeOverlay(captureOverride: Bool? = nil) {
@@ -1040,6 +1071,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         + "override=\(String(describing: captureOverride)) "
         + "visible=\(modeBadgeEnabled) hints=\(currentHints.count) in_flight=\(activationInFlight)")
     overlay.inputMode = snapshot.inputMode
+    if snapshot.refreshActiveWindowBorder {
+      updateInsertModeActiveWindowBorder(reason: "apply_mode_overlay")
+    }
     overlay.setModeBadge(
       text: snapshot.text,
       visible: snapshot.visible,
@@ -1208,6 +1242,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       navigateMovementHistory(direction: .back)
     case .movementForward:
       navigateMovementHistory(direction: .forward)
+    case .appPrev:
+      navigateAppMRU(direction: .back)
+    case .appNext:
+      navigateAppMRU(direction: .forward)
+    case .setMark(let letter):
+      setMark(letter: letter)
+    case .jumpToMark(let letter):
+      jumpToMark(letter: letter)
     case .quitApp(let force):
       quitNormalModeTargetApp(force: force)
     case .save:
@@ -1328,6 +1370,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.hide()
     overlay.setActiveWindowBorder(around: nil)
     overlay.displayModal(pluginManager.statusText())
+  }
+
+  private func runPluginsSubcommand(_ sub: NormalModeDispatcher.PluginsSubcommand) {
+    switch sub {
+    case .modal, .list:
+      // Both surface the same status table; `:plugins` opens the modal
+      // (legacy), `:plugins list` aliases to it explicitly.
+      showPlugins()
+    case .reload:
+      let ids = pluginManager.reloadAll()
+      let summary: String
+      if ids.isEmpty {
+        summary = "No plugins are loaded."
+      } else {
+        summary = "Reloading: \(ids.joined(separator: ", "))"
+      }
+      FlashLog.info("[plugins] reload command ids=\(ids.joined(separator: ","))")
+      overlay.displayModal("PLUGINS RELOAD\n\n\(summary)")
+    }
   }
 
   private func showMappings() {
@@ -1453,20 +1514,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     let command = Self.commandLineBuffer(from: text)
     overlay.commandLineText = command
     overlay.commandLineCursorIndex = cursorIndex ?? command.count
-    guard let query = NormalModeDispatcher.commandLineCandidateQuery(command) else {
-      clearCandidateFinderState()
-      overlay.displayCommandLine(command, cursorIndex: overlay.commandLineCursorIndex)
+    if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
+      clearCommandLineCompletionState()
+      if candidateFinderCandidates.isEmpty {
+        candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
+        candidateFinderSelectedIndex = 0
+      }
+      updateCandidateMatches(query: query)
+      overlay.displayCommandLine(
+        command,
+        suggestions: candidateFinderDisplayItems(windowSize: 5),
+        cursorIndex: overlay.commandLineCursorIndex)
       return
     }
-    if candidateFinderCandidates.isEmpty {
-      candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
-      candidateFinderSelectedIndex = 0
+    if let context = commandLineCompletionContext(for: command) {
+      clearCandidateFinderState()
+      updateCommandLineCompletions(context: context)
+      overlay.displayCommandLine(
+        command,
+        suggestions: commandLineCompletionDisplayItems(windowSize: 6),
+        emptyText: "no matching command",
+        cursorIndex: overlay.commandLineCursorIndex)
+      return
     }
-    updateCandidateMatches(query: query)
-    overlay.displayCommandLine(
+    clearCandidateFinderState()
+    clearCommandLineCompletionState()
+    overlay.displayCommandLine(command, cursorIndex: overlay.commandLineCursorIndex)
+  }
+
+  private func commandLineCompletionContext(for command: String)
+    -> NormalModeDispatcher.CommandLineCompletionContext?
+  {
+    let actions = pluginManager.actionRegistrations()
+    var subcommands: [String: [String]] = [:]
+    var commandsOrdered: [String] = []
+    for action in actions {
+      let key = action.command.lowercased()
+      if subcommands[key] == nil {
+        subcommands[key] = []
+        commandsOrdered.append(key)
+      }
+      if !subcommands[key]!.contains(where: {
+        $0.localizedCaseInsensitiveCompare(action.name) == .orderedSame
+      }) {
+        subcommands[key]?.append(action.name)
+      }
+    }
+    let topics = HelpDocs.allTopics(config: config, showModes: true)
+      .flatMap { [$0.name] + $0.aliases }
+    return NormalModeDispatcher.commandLineCompletions(
       command,
-      suggestions: candidateFinderDisplayItems(windowSize: 5),
-      cursorIndex: overlay.commandLineCursorIndex)
+      pluginCommands: commandsOrdered,
+      pluginSubcommands: subcommands,
+      helpTopics: topics)
+  }
+
+  private func updateCommandLineCompletions(
+    context: NormalModeDispatcher.CommandLineCompletionContext
+  ) {
+    let previousLabel: String? = commandLineCompletionMatches.indices.contains(
+      commandLineCompletionSelectedIndex)
+      ? commandLineCompletionMatches[commandLineCompletionSelectedIndex].completion.label : nil
+    commandLineCompletionPrefix = context.prefix
+    commandLineCompletionItems = context.items
+    commandLineCompletionQuery = context.query
+    let trimmedQuery = context.query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let scored: [CommandLineCompletionMatch] = context.items.compactMap { item in
+      if trimmedQuery.isEmpty {
+        return CommandLineCompletionMatch(completion: item, score: 0)
+      }
+      guard
+        let score = NormalModeDispatcher.fuzzyScore(
+          query: trimmedQuery, candidate: item.label)
+      else { return nil }
+      return CommandLineCompletionMatch(completion: item, score: score)
+    }
+    let sorted = scored.sorted { lhs, rhs in
+      if lhs.score != rhs.score { return lhs.score > rhs.score }
+      return lhs.completion.label.localizedCaseInsensitiveCompare(rhs.completion.label)
+        == .orderedAscending
+    }
+    commandLineCompletionMatches = sorted
+    if sorted.isEmpty {
+      commandLineCompletionSelectedIndex = 0
+      return
+    }
+    if let previousLabel,
+      let restored = sorted.firstIndex(where: { $0.completion.label == previousLabel })
+    {
+      commandLineCompletionSelectedIndex = restored
+    } else {
+      commandLineCompletionSelectedIndex = min(
+        max(commandLineCompletionSelectedIndex, 0), sorted.count - 1)
+    }
+  }
+
+  private func commandLineCompletionDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
+    guard !commandLineCompletionMatches.isEmpty else { return [] }
+    let maxStart = max(0, commandLineCompletionMatches.count - windowSize)
+    let start = min(
+      max(0, commandLineCompletionSelectedIndex - windowSize / 2), maxStart)
+    let end = min(commandLineCompletionMatches.count, start + windowSize)
+    return commandLineCompletionMatches[start..<end].enumerated().map { offset, match in
+      CandidateDisplayItem(
+        title: match.completion.label,
+        highlightedRanges: commandLineCompletionQuery.isEmpty
+          ? []
+          : NormalModeDispatcher.fuzzyHighlightRanges(
+            query: commandLineCompletionQuery, candidate: match.completion.label),
+        isSelected: start + offset == commandLineCompletionSelectedIndex)
+    }
+  }
+
+  private func clearCommandLineCompletionState() {
+    commandLineCompletionPrefix = ""
+    commandLineCompletionItems = []
+    commandLineCompletionMatches = []
+    commandLineCompletionSelectedIndex = 0
+    commandLineCompletionQuery = ""
   }
 
   static func commandLineBuffer(from raw: String) -> String {
@@ -1476,11 +1641,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private func updateCandidateMatches(query: String) {
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
     candidateFinderCurrentQuery = trimmed
+    // Normalize the query once per keystroke rather than once per
+    // candidate. With ~1k candidates in the pool and ~10 chars of
+    // typing, this saves ~10k normalize calls per query.
+    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(trimmed)
+    let fuzzyScore = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
     let scored: [CandidateMatch] = candidateFinderCandidates.compactMap { candidate in
       if trimmed.isEmpty {
         return CandidateMatch(candidate: candidate, score: 0)
       }
-      guard let score = CandidateFinder.score(query: trimmed, candidate: candidate) else { return nil }
+      guard
+        let score = CandidateFinder.score(
+          normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
+      else { return nil }
       return CandidateMatch(candidate: candidate, score: score)
     }
     candidateFinderMatches = CandidateFinder.sortedMatches(scored)
@@ -1544,6 +1717,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       finishCommandLineInteraction(reason: "plugin_command_submit")
       return
     }
+    let topLevelEmpty =
+      commandLineCompletionPrefix == ":" && commandLineCompletionQuery.isEmpty
+    if !commandLineCompletionMatches.isEmpty,
+      !topLevelEmpty,
+      applySelectedCommandLineCompletion()
+    {
+      return
+    }
     FlashLog.debug("[normal_mode] unknown command \(raw)")
     finishCommandLineInteraction(reason: "command_unknown")
   }
@@ -1580,12 +1761,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMappedCommand(.paste)
     case .copyAll:
       performMappedCommand(.copyAll)
-    case .plugins:
-      showPlugins()
+    case .plugins(let sub):
+      runPluginsSubcommand(sub)
     case .mappings:
       showMappings()
     case .help(let topic):
       showHelp(topic: topic)
+    }
+  }
+
+  private func applySelectedCommandLineCompletion() -> Bool {
+    guard !commandLineCompletionMatches.isEmpty else { return false }
+    let index = min(
+      commandLineCompletionSelectedIndex, commandLineCompletionMatches.count - 1)
+    let match = commandLineCompletionMatches[index]
+    let completion = match.completion
+    let prefix = commandLineCompletionPrefix
+    let newBuffer = prefix + completion.insertion
+    switch completion.kind {
+    case .acceptsArgs:
+      refreshCommandLine(text: newBuffer, cursorIndex: newBuffer.count)
+      return true
+    case .terminal, .pluginAction:
+      clearCommandLineCompletionState()
+      submitCommandLine(newBuffer)
+      return true
     }
   }
 
@@ -1612,6 +1812,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.candidateFinderQuery = ""
     candidateFinderScope = .all
     clearCandidateFinderState()
+    clearCommandLineCompletionState()
   }
 
   private func clearCandidateFinderState() {
@@ -1768,7 +1969,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       action: { registry, context, completion in
         registry.tabNext(in: context, completion: completion)
       },
-      fallback: { [weak self] count in
+      fallback: { [weak self] _, count in
         self?.sendNormalModeKey(
           CGKeyCode(kVK_ANSI_RightBracket),
           flags: [.maskCommand, .maskShift],
@@ -1783,7 +1984,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       action: { registry, context, completion in
         registry.tabPrev(in: context, completion: completion)
       },
-      fallback: { [weak self] count in
+      fallback: { [weak self] _, count in
         self?.sendNormalModeKey(
           CGKeyCode(kVK_ANSI_LeftBracket),
           flags: [.maskCommand, .maskShift],
@@ -1798,8 +1999,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       action: { registry, context, completion in
         registry.tabNew(in: context, completion: completion)
       },
-      fallback: { [weak self] count in
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count)
+      fallback: { [weak self] context, count in
+        let key = AppDelegate.tabNewFallbackKey(forBundleIdentifier: context.bundleIdentifier)
+        self?.sendNormalModeKey(key, flags: .maskCommand, repeatCount: count)
       })
   }
 
@@ -1810,9 +2012,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       action: { registry, context, completion in
         registry.tabClose(in: context, completion: completion)
       },
-      fallback: { [weak self] count in
+      fallback: { [weak self] _, count in
         self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
       })
+  }
+
+  /// macOS terminals that have no native tabs (only windows). For these
+  /// bundles, tab_new / :tabnew fall back to cmd-N so the gesture still
+  /// produces a new workspace. tmux is handled by TmuxProvider one level
+  /// up — when an attached tmux client is present, `new-window` runs
+  /// before this fallback ever fires.
+  static let tabNewWindowOnlyBundleIdentifiers: Set<String> = [
+    "org.alacritty",
+    "io.alacritty",
+  ]
+
+  static func tabNewFallbackKey(forBundleIdentifier bundleIdentifier: String) -> CGKeyCode {
+    if tabNewWindowOnlyBundleIdentifiers.contains(bundleIdentifier) {
+      return CGKeyCode(kVK_ANSI_N)
+    }
+    return CGKeyCode(kVK_ANSI_T)
   }
 
   private func performTabSourceAction(
@@ -1823,7 +2042,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       AppContext,
       @escaping (SourceActionResult) -> Void
     ) -> Void,
-    fallback: @escaping (Int) -> Void
+    fallback: @escaping (AppContext, Int) -> Void
   ) {
     guard let context = normalModeContext() else {
       FlashLog.debug("[normal_mode] no target app for \(name)")
@@ -1846,7 +2065,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           attempt(remaining - 1)
           return
         }
-        fallback(remaining)
+        fallback(context, remaining)
       }
     }
 
@@ -1862,8 +2081,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     registry.tabNew(in: context) { [weak self] result in
       guard let self else { return }
       if !result.didPerform {
+        let key = AppDelegate.tabNewFallbackKey(forBundleIdentifier: context.bundleIdentifier)
         NormalModeDispatcher.sendKey(
-          virtualKey: CGKeyCode(kVK_ANSI_T),
+          virtualKey: key,
           flags: .maskCommand,
           to: context.processID)
       }
@@ -1900,7 +2120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     _ command: URLCommand,
     bundleIdentifier: String
   ) -> Bool {
-    guard TmuxProvider.terminalBundles.contains(bundleIdentifier) else { return false }
+    guard TerminalBundles.identifiers.contains(bundleIdentifier) else { return false }
     switch command {
     case .undo, .redo:
       return true
@@ -1942,7 +2162,131 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func recordAppActivation(_ pid: pid_t) {
     recordMovement(.app(pid: pid), source: "app_activation")
+    recordAppMRU(pid)
   }
+
+  private func recordAppMRU(_ pid: pid_t) {
+    if appNavigationTargetPID == pid {
+      appNavigationTargetPID = nil
+      appCurrent = pid
+      return
+    }
+    if let current = appCurrent, current == pid { return }
+    if let current = appCurrent {
+      if appBackStack.last != current {
+        appBackStack.append(current)
+      }
+    }
+    appCurrent = pid
+    appForwardStack.removeAll(keepingCapacity: true)
+  }
+
+  // MARK: Vim-style marks
+
+  private func setMark(letter: String) {
+    guard let key = Self.normalizedMarkKey(letter) else {
+      FlashLog.debug("[marks] reject set letter=\(letter) reason=invalid")
+      return
+    }
+    guard let context = normalModeContext() ?? currentNonFlashContext() else {
+      FlashLog.debug("[marks] set letter=\(key) reason=no_focused_app")
+      return
+    }
+    marks[key] = MarkState(
+      bundleID: context.bundleIdentifier,
+      pid: context.processID,
+      recordedAt: Date())
+    FlashLog.debug(
+      "[marks] set letter=\(key) bundle=\(context.bundleIdentifier) pid=\(context.processID)")
+    scheduleNormalModeRecapture()
+  }
+
+  private func jumpToMark(letter: String) {
+    guard let key = Self.normalizedMarkKey(letter) else {
+      FlashLog.debug("[marks] reject jump letter=\(letter) reason=invalid")
+      return
+    }
+    guard let mark = marks[key] else {
+      FlashLog.debug("[marks] jump letter=\(key) reason=unset")
+      return
+    }
+    if let runningApp = NSRunningApplication(processIdentifier: mark.pid),
+      !runningApp.isTerminated
+    {
+      FlashLog.debug("[marks] jump letter=\(key) pid=\(mark.pid)")
+      RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
+      normalModeTargetPID = mark.pid
+      scheduleNormalModeRecapture()
+      return
+    }
+    // PID dead → fall back to the durable bundle identifier so a
+    // restarted app still answers the jump.
+    if let fallback =
+      NSWorkspace.shared.runningApplications.first(where: {
+        $0.bundleIdentifier == mark.bundleID && !$0.isTerminated
+      })
+    {
+      FlashLog.debug(
+        "[marks] jump_fallback letter=\(key) bundle=\(mark.bundleID) pid=\(fallback.processIdentifier)")
+      marks[key] = MarkState(
+        bundleID: mark.bundleID, pid: fallback.processIdentifier, recordedAt: mark.recordedAt)
+      RunningApplicationActivation.activate(fallback, options: [.activateAllWindows])
+      normalModeTargetPID = fallback.processIdentifier
+      scheduleNormalModeRecapture()
+      return
+    }
+    FlashLog.debug("[marks] jump letter=\(key) reason=app_not_running bundle=\(mark.bundleID)")
+  }
+
+  private static func normalizedMarkKey(_ raw: String) -> Character? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let ch = trimmed.first, trimmed.count == 1, ch.isLetter || ch.isNumber else {
+      return nil
+    }
+    return Character(ch.lowercased())
+  }
+
+  private func navigateAppMRU(direction: NavigationDirection) {
+    var source: [pid_t]
+    var destination: [pid_t]
+    switch direction {
+    case .back:
+      source = appBackStack
+      destination = appForwardStack
+    case .forward:
+      source = appForwardStack
+      destination = appBackStack
+    }
+    let flashBundleID = Bundle.main.bundleIdentifier
+    while let candidate = source.popLast() {
+      guard let app = NSRunningApplication(processIdentifier: candidate),
+        !app.isTerminated,
+        app.bundleIdentifier != flashBundleID
+      else { continue }
+      if let current = appCurrent, current != candidate {
+        destination.append(current)
+      }
+      switch direction {
+      case .back:
+        appBackStack = source
+        appForwardStack = destination
+      case .forward:
+        appForwardStack = source
+        appBackStack = destination
+      }
+      appNavigationTargetPID = candidate
+      appCurrent = candidate
+      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+      return
+    }
+    switch direction {
+    case .back:
+      appBackStack = source
+    case .forward:
+      appForwardStack = source
+    }
+  }
+
 
   private func recordMovement(_ entry: MovementEntry, source: String) {
     guard let identity = movementIdentity(entry) else { return }
@@ -2179,13 +2523,106 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterInsertMode(reason: .pointerClick)
     }
     if let replayClick {
+      beginNormalModeDrag(initial: replayClick)
+    }
+  }
+
+  /// Replay the user's in-progress mouse gesture so the underlying app
+  /// sees either a single click (release with no movement) or a real
+  /// drag (press → drag → release). The mouseDown is deferred until we
+  /// detect actual movement, so a quick press-release degrades cleanly
+  /// to the prior `synthesizeClick` behavior.
+  ///
+  /// We stamp synthetic events via `eventSourceUserData` and ignore the
+  /// tag in our own monitor — otherwise the dragged events we post would
+  /// re-trigger the monitor and feed themselves back in a tight loop.
+  private func beginNormalModeDrag(initial: OverlayPointerClick) {
+    stopNormalModeDrag()
+    normalModeDragAction = initial.action
+    normalModeDragModifiers = initial.modifiers
+    let initialLocation = initial.location
+    let initialAction = initial.action
+    let initialModifiers = initial.modifiers
+    let isDoubleClick = initialAction == .doubleClick
+    var dragStarted = false
+    let dragThreshold: CGFloat = 4
+
+    if isDoubleClick {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
         _ = ActionDispatcher.synthesizeClick(
-          at: replayClick.location,
-          action: replayClick.action,
-          modifiers: replayClick.modifiers)
+          at: initialLocation,
+          action: initialAction,
+          modifiers: initialModifiers)
+      }
+      return
+    }
+
+    let mask: NSEvent.EventTypeMask = [
+      .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+      .leftMouseUp, .rightMouseUp, .otherMouseUp,
+    ]
+
+    let handle: (NSEvent) -> Void = { [weak self] event in
+      guard let self else { return }
+      if event.cgEvent?.getIntegerValueField(.eventSourceUserData)
+        == ActionDispatcher.syntheticMouseEventTag
+      {
+        return
+      }
+      let point = NSEvent.mouseLocation
+      switch event.type {
+      case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+        let dx = point.x - initialLocation.x
+        let dy = point.y - initialLocation.y
+        if !dragStarted, (dx * dx + dy * dy) < dragThreshold * dragThreshold {
+          return
+        }
+        if !dragStarted {
+          dragStarted = true
+          _ = ActionDispatcher.synthesizeMouseButton(
+            at: initialLocation,
+            phase: .down,
+            action: initialAction,
+            modifiers: initialModifiers)
+        }
+        _ = ActionDispatcher.synthesizeMouseButton(
+          at: point,
+          phase: .dragged,
+          action: initialAction,
+          modifiers: initialModifiers)
+      case .leftMouseUp, .rightMouseUp, .otherMouseUp:
+        if dragStarted {
+          _ = ActionDispatcher.synthesizeMouseButton(
+            at: point,
+            phase: .up,
+            action: initialAction,
+            modifiers: initialModifiers)
+        } else {
+          _ = ActionDispatcher.synthesizeClick(
+            at: initialLocation,
+            action: initialAction,
+            modifiers: initialModifiers)
+        }
+        self.stopNormalModeDrag()
+      default:
+        break
       }
     }
+
+    normalModeDragGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { event in
+      handle(event)
+    }
+    normalModeDragLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { event in
+      handle(event)
+      return event
+    }
+  }
+
+  private func stopNormalModeDrag() {
+    if let m = normalModeDragGlobalMonitor { NSEvent.removeMonitor(m) }
+    if let m = normalModeDragLocalMonitor { NSEvent.removeMonitor(m) }
+    normalModeDragGlobalMonitor = nil
+    normalModeDragLocalMonitor = nil
   }
 
   func overlayDidHandleNormalMode(_ action: MappingAction?, repeatCount: Int) {
@@ -2207,7 +2644,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     let token = normalModePendingCommandToken
     let pendingText = overlay.normalModePending
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(180)) { [weak self] in
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(NormalModeInterpreter.sequenceTimeoutMs)
+    ) { [weak self] in
       guard let self, self.normalModePendingCommandToken == token else { return }
       guard self.flashMode == .normal, self.overlay.normalModePending == pendingText else { return }
       self.overlay.normalModePending = ""
@@ -2282,7 +2721,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
-      refreshCurrentModeSideEffects(reason: "copy_url_commit")
       return
     }
     if pendingHintCommitBehavior == .moveMouse {
@@ -2298,14 +2736,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
-      refreshCurrentModeSideEffects(reason: "move_mouse_commit")
       return
     }
 
     let action = pendingAction
     let shouldEnterInsertAfterCommit =
       flashMode == .normal
-      && Self.hintCommitShouldEnterInsertMode(hint.target, action: action)
+      && Self.mouseTargetCommitShouldEnterInsertMode(action: action)
     let shouldRestoreNormalMode = flashMode == .normal && !shouldEnterInsertAfterCommit
     // The target carries its owning pid (always the focused app at
     // walk time). Fall back to the activation-time focused pid if the
@@ -2376,6 +2813,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
     let shouldMove = pendingHintCommitBehavior == .mouseGridMove
+    let shouldEnterInsertAfterCommit =
+      flashMode == .normal
+      && Self.mouseGridCommitShouldEnterInsertMode(isMove: shouldMove)
     overlay.hide()
     currentHints = []
     currentPrefix = ""
@@ -2392,20 +2832,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         action: pendingAction,
         modifiers: clickModifiers)
     }
-    applyModeOverlay()
-    refreshCurrentModeSideEffects(reason: shouldMove ? "mouse_grid_move_commit" : "mouse_grid_click_commit")
+    if shouldEnterInsertAfterCommit {
+      enterInsertMode(reason: .hintCommit)
+    } else {
+      applyModeOverlay()
+    }
   }
 
-  static func hintCommitShouldEnterInsertMode(
-    _ target: JumpTarget,
-    action: JumpAction = .leftClick
-  ) -> Bool {
-    action == .leftClick && target.acceptsTextInput
+  static func mouseTargetCommitShouldEnterInsertMode(action: JumpAction = .leftClick) -> Bool {
+    switch action {
+    case .leftClick, .rightClick, .doubleClick:
+      return true
+    }
+  }
+
+  static func mouseGridCommitShouldEnterInsertMode(isMove: Bool) -> Bool {
+    !isMove
   }
 
   private func usesTmuxProvider(_ context: AppContext?) -> Bool {
     guard let context else { return false }
-    return registry.chain(for: context).contains { $0.identifier == "tmux" }
+    return registry.chain(for: context).contains { $0.identifier == "plugin.tmux" }
   }
 
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
@@ -2417,7 +2864,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.normalModePending = ""
     overlay.hide()
     applyModeOverlay()
-    refreshCurrentModeSideEffects(reason: "modal_cancel")
   }
 
   func overlayDidPassThroughModalKey(_ event: NSEvent) {
@@ -2449,22 +2895,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool {
-    guard NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil else {
-      return false
-    }
-    guard !candidateFinderMatches.isEmpty else {
+    if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil {
+      guard !candidateFinderMatches.isEmpty else {
+        refreshCommandLine(
+          text: overlay.commandLineText,
+          cursorIndex: overlay.commandLineCursorIndex)
+        return true
+      }
+      candidateFinderSelectedIndex = min(
+        max(candidateFinderSelectedIndex + delta, 0),
+        candidateFinderMatches.count - 1)
       refreshCommandLine(
         text: overlay.commandLineText,
         cursorIndex: overlay.commandLineCursorIndex)
       return true
     }
-    candidateFinderSelectedIndex = min(
-      max(candidateFinderSelectedIndex + delta, 0),
-      candidateFinderMatches.count - 1)
-    refreshCommandLine(
-      text: overlay.commandLineText,
-      cursorIndex: overlay.commandLineCursorIndex)
-    return true
+    if !commandLineCompletionMatches.isEmpty {
+      commandLineCompletionSelectedIndex = min(
+        max(commandLineCompletionSelectedIndex + delta, 0),
+        commandLineCompletionMatches.count - 1)
+      refreshCommandLine(
+        text: overlay.commandLineText,
+        cursorIndex: overlay.commandLineCursorIndex)
+      return true
+    }
+    return false
   }
 
   func overlayDidSubmitCommandLine(_ command: String) {
@@ -2475,7 +2930,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clearCandidateFinderState()
     overlay.hide()
     applyModeOverlay()
-    refreshCurrentModeSideEffects(reason: "candidate_finder_cancel")
   }
 
   func overlayDidUpdateCandidateFinderQuery(_ query: String) {
@@ -2519,7 +2973,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.hide()
     resetCommandLineState()
     applyModeOverlay(captureOverride: true)
-    refreshCurrentModeSideEffects(reason: "source_open")
 
     registry.resolveCandidate(candidate) { [weak self] result in
       guard let self else { return }
@@ -2648,6 +3101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
     overlay.normalModeMappings = cfg.mode.mappings(for: .normal)
+    overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
     registry.updateOpenConfig(cfg.open)
     pluginManager.updateConfig(cfg)
     pluginManager.emit(

@@ -70,7 +70,13 @@ final class SlackSource: FlashSource {
     var out: [AXUIElement] = []
     var queue = [root]
     var index = 0
-    while index < queue.count, index < 3_000 {
+    // Slack's Electron AX tree can be deep — collapsed sections, DMs,
+    // huddles, threads, the workspace switcher all add nodes. The
+    // previous 3k cap silently truncated the walk on busy workspaces,
+    // which is why some channels appeared in flashlight and others
+    // didn't. Bump to 30k; AX queries are cached per-element so the
+    // walk stays bounded by the actual tree size, not the cap.
+    while index < queue.count, index < 30_000 {
       let element = queue[index]
       index += 1
       if slackChannelName(for: element) != nil {

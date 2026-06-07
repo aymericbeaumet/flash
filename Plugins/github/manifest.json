@@ -1,0 +1,18 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "version": "0.1.0",
+  "description": "GitHub issue and pull request actions backed by gh.",
+  "install": "./install.sh",
+  "start": "./start.sh",
+  "events": [
+    "config.*"
+  ],
+  "actions": [
+    { "command": "github", "name": "login", "description": "Authenticate gh" },
+    { "command": "github", "name": "status", "description": "Show gh authentication status" },
+    { "command": "github", "name": "issues", "description": "List GitHub issues" },
+    { "command": "github", "name": "prs", "description": "List GitHub pull requests" },
+    { "command": "github", "name": "run", "description": "Run gh with raw arguments" }
+  ]
+}

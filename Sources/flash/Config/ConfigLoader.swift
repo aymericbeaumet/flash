@@ -326,10 +326,17 @@ enum ConfigLoader {
       let scope = ModeScope(rawValue: table[1]),
       !key.isEmpty
     {
+      guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
+        config.addDiagnostic(
+          "mapping \"\(key)\" uses invalid syntax — non-letter/number keys must be wrapped in <name>",
+          location: location)
+        return
+      }
       let action = parseMappingValue(value, sourceURL: sourceURL)
       if let action {
         pendingModeMappings.append(
-          PendingModeMapping(scope: scope, key: key, action: action, location: location))
+          PendingModeMapping(
+            scope: scope, key: canonical, action: action, location: location))
       } else {
         config.addDiagnostic(
           "mapping \"\(key)\" must be a quoted flash:// action or a non-empty string array command",
@@ -428,6 +435,16 @@ enum ConfigLoader {
           location: location)
       }
 
+    case ["mode", "sequence_timeout_ms"]:
+      if let parsed = parseInt(value), parsed >= 0 {
+        config.mode.sequenceTimeoutMs = parsed
+        config.recordLocation(path: "mode.sequence_timeout_ms", location: location)
+      } else {
+        config.addDiagnostic(
+          "mode.sequence_timeout_ms must be a non-negative integer",
+          location: location)
+      }
+
     case ["overlay", "font_size"]:
       if let parsed = parseDouble(value) {
         config.overlay.fontSize = parsed
@@ -519,6 +536,14 @@ enum ConfigLoader {
           "debug.http_host must be a quoted string or bare host:port",
           location: location)
       }
+    case ["debug", "watch_plugins"]:
+      if let parsed = parseBool(value) {
+        config.debug.watchPlugins = parsed
+        config.recordLocation(path: "debug.watch_plugins", location: location)
+      } else {
+        config.addDiagnostic(
+          "debug.watch_plugins must be true or false", location: location)
+      }
 
     default:
       if table.count == 2, table[0] == "mode", ModeScope(rawValue: table[1]) != nil {
@@ -577,8 +602,13 @@ enum ConfigLoader {
     config: Config
   ) -> String? {
     guard key.contains("<leader>") else { return key }
-    guard scope == .normal, let leader = config.mode.normalLeader else { return nil }
-    return key.replacingOccurrences(of: "<leader>", with: leader)
+    guard scope == .normal, let leaderRaw = config.mode.normalLeader else { return nil }
+    guard let leaderInternal = leaderToInternal(leaderRaw) else { return nil }
+    return key.replacingOccurrences(of: "<leader>", with: leaderInternal)
+  }
+
+  private static func leaderToInternal(_ raw: String) -> String? {
+    NormalModeInterpreter.translateLeader(raw)
   }
 
   private static func parseMappingValue(_ value: String, sourceURL: URL?) -> MappingAction? {
@@ -928,6 +958,11 @@ enum ConfigLoader {
       if let lvl = FlashLog.Level.parse(value) {
         config.debug.logLevel = lvl
         config.clearLocation(path: "debug.log_level")
+      }
+    case "debug-watch-plugins":
+      if let b = boolFromString(value) {
+        config.debug.watchPlugins = b
+        config.clearLocation(path: "debug.watch_plugins")
       }
 
     // `--config=` is consumed by `resolvePath`; ignore here so it

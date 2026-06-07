@@ -2,23 +2,28 @@ import FlashBrowserTestSupport
 import XCTest
 
 final class BrowserFixtureCatalogTests: XCTestCase {
-  func testCatalogContainsOneHundredDiverseFixtures() throws {
+  func testCatalogCoversEverySyntheticTemplateAndAllCollectedSnapshots() throws {
     let fixturesDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
       .appendingPathComponent("Tests/BrowserSnapshots", isDirectory: true)
     let catalog = try BrowserFixtureCatalog.load(from: fixturesDir)
 
-    XCTAssertGreaterThanOrEqual(catalog.fixtures.count, 100)
     XCTAssertEqual(Set(catalog.fixtures.map(\.name)).count, catalog.fixtures.count)
 
     let byCategory = Dictionary(grouping: catalog.fixtures, by: \.category)
-    XCTAssertGreaterThanOrEqual(byCategory.count, 7)
-    XCTAssertEqual(byCategory["synthetic-controls"]?.count, 20)
-    XCTAssertEqual(byCategory["synthetic-layout"]?.count, 20)
-    XCTAssertEqual(byCategory["docs-reference"]?.count, 12)
-    XCTAssertEqual(byCategory["article-news"]?.count, 12)
-    XCTAssertEqual(byCategory["forum-thread"]?.count, 12)
-    XCTAssertEqual(byCategory["developer-code"]?.count, 12)
-    XCTAssertEqual(byCategory["commerce-listing"]?.count, 12)
+    // Each synthetic template now has exactly one canonical fixture; the
+    // numbered duplicates that previously padded each category were just
+    // re-labelled clones of the same DOM and added no signal coverage.
+    XCTAssertEqual(byCategory["synthetic-controls"]?.count, 1)
+    XCTAssertEqual(byCategory["synthetic-layout"]?.count, 1)
+    XCTAssertEqual(byCategory["docs-reference"]?.count, 1)
+    XCTAssertEqual(byCategory["article-news"]?.count, 1)
+    XCTAssertEqual(byCategory["forum-thread"]?.count, 1)
+    XCTAssertEqual(byCategory["developer-code"]?.count, 1)
+    XCTAssertEqual(byCategory["commerce-listing"]?.count, 1)
+    // Collected fixtures are real-world page captures and are kept
+    // 1:1 with the snapshots/ files.
+    let collected = byCategory["collected-regression"] ?? []
+    XCTAssertGreaterThanOrEqual(collected.count, 20)
 
     for fixture in catalog.fixtures {
       let path =

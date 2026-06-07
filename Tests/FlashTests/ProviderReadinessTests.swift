@@ -11,8 +11,6 @@ final class ProviderReadinessTests: XCTestCase {
 
   func testBuiltInProviderPolicies() {
     XCTAssertEqual(AccessibilityProvider().readinessPolicy, .continuous)
-    XCTAssertEqual(TmuxProvider().readinessPolicy, .volatile)
-    XCTAssertTrue(TmuxProvider().resultsAreVolatile)
   }
 
   func testAccessibilityProviderTreatsComboboxAsEditableTarget() {
@@ -29,7 +27,7 @@ final class ProviderReadinessTests: XCTestCase {
 
 }
 
-private final class StubProvider: JumpProvider {
+private final class StubProvider: FlashSource {
   let identifier = "stub"
   let priority = 0
 

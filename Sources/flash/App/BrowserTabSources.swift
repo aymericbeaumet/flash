@@ -288,345 +288,43 @@ enum BrowserTabSources {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed.isEmpty ? nil : trimmed
   }
-}
 
-final class FirefoxTabsSource: FlashSource {
-  let identifier = "firefox-tabs"
-  let displayName = "firefox"
-  let priority = 30
-  let capabilities: FlashSourceCapabilities = [.candidates, .tabSelection]
-  let activationPolicy: FlashSourceActivationPolicy = .bundleIDs(
-    BrowserTabSources.firefoxBundleIdentifiers)
-
-  func discover(in context: AppContext) throws -> [JumpTarget] { [] }
-
-  func supports(_ context: AppContext) -> Bool {
-    BrowserTabSources.firefoxBundleIdentifiers.contains(context.bundleIdentifier)
-  }
-
-  func candidates(
+  static func scriptBackedItems(
+    sourceID: String,
     in environment: FlashSourceEnvironment,
-    scope: CandidateScope
+    bundleIdentifiers: Set<String>,
+    scriptBuilder: (String) -> String
   ) -> [Candidate] {
-    BrowserTabSources.axTabCandidates(
-      sourceID: identifier,
-      in: environment,
-      bundleIdentifiers: BrowserTabSources.firefoxBundleIdentifiers)
-  }
-
-  func resolveCandidate(
-    _ item: Candidate,
-    in environment: FlashSourceEnvironment,
-    completion: @escaping (CandidateResolution) -> Void
-  ) {
-    AXCandidateSourceHelpers.resolveAXItem(item, completion: completion)
-  }
-
-  func tabSelect(
-    at index: Int,
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    guard index > 0 else {
-      DispatchQueue.main.async { completion(.unhandled) }
-      return
-    }
-    let app = AXUIElementCreateApplication(context.processID)
-    let windows = AXCandidateSourceHelpers.elementArrayAttribute(
-      app, kAXWindowsAttribute as String)
-    for window in windows {
-      let tabs = BrowserTabSources.axTabElements(in: window)
-      guard index <= tabs.count else { continue }
-      if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
-        RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
+    var out: [Candidate] = []
+    var seen = Set<String>()
+    for app in runningBrowserApps(in: environment, bundleIdentifiers: bundleIdentifiers) {
+      let appName = app.localizedName ?? "Browser"
+      let sourceName = sourceName(bundleID: app.bundleIdentifier ?? "", appName: appName)
+      guard let raw = runAppleScript(scriptBuilder(appName)) else { continue }
+      for tab in parseTabLines(raw) {
+        let key = "\(app.processIdentifier)|\(tab.url)|\(tab.title)"
+        guard seen.insert(key).inserted else { continue }
+        if let item = browserTabItem(
+          sourceID: sourceID,
+          source: sourceName,
+          app: app,
+          title: tab.title,
+          url: tab.url,
+          sourcePayload: tab.url)
+        {
+          out.append(item)
+        }
       }
-      AXCandidateSourceHelpers.resolveAXItem(
-        Candidate(
-          kind: .browserTab,
-          sourceID: identifier,
-          source: displayName,
-          pid: context.processID,
-          name: "tab \(index)",
-          subtitle: "browser tab",
-          bundleIdentifier: context.bundleIdentifier,
-          url: nil,
-          tmuxClientTTY: nil,
-          tmuxTarget: nil,
-          targetElement: tabs[index - 1])
-      ) { result in
-        completion(result.didResolve ? .performed(pid: result.targetPID) : .unhandled)
-      }
-      return
     }
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-
-}
-
-final class SafariTabsSource: FlashSource {
-  let identifier = "safari-tabs"
-  let displayName = "safari"
-  let priority = 30
-  let capabilities: FlashSourceCapabilities = [.candidates, .tabSelection, .tabCreation]
-  let activationPolicy: FlashSourceActivationPolicy = .bundleIDs(
-    BrowserTabSources.safariBundleIdentifiers)
-
-  func discover(in context: AppContext) throws -> [JumpTarget] { [] }
-
-  func supports(_ context: AppContext) -> Bool {
-    BrowserTabSources.safariBundleIdentifiers.contains(context.bundleIdentifier)
-  }
-
-  func candidates(
-    in environment: FlashSourceEnvironment,
-    scope: CandidateScope
-  ) -> [Candidate] {
-    let scriptItems = scriptBackedItems(
-      sourceID: identifier,
-      in: environment,
-      bundleIdentifiers: BrowserTabSources.safariBundleIdentifiers,
-      scriptBuilder: safariTabsScript(appName:))
-    if !scriptItems.isEmpty { return scriptItems }
-    return BrowserTabSources.axTabCandidates(
-      sourceID: identifier,
-      in: environment,
-      bundleIdentifiers: BrowserTabSources.safariBundleIdentifiers)
-  }
-
-  func resolveCandidate(
-    _ item: Candidate,
-    in environment: FlashSourceEnvironment,
-    completion: @escaping (CandidateResolution) -> Void
-  ) {
-    BrowserTabSources.resolveURLBackedTab(
-      item,
-      appName: appName(for: item, environment: environment),
-      completion: completion)
-  }
-
-  func tabSelect(
-    at index: Int,
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    guard let appName = appName(for: context.processID, environment: environment), index > 0 else {
-      DispatchQueue.main.async { completion(.unhandled) }
-      return
-    }
-    let script = """
-      tell application \(BrowserTabSources.scriptString(appName))
-        activate
-        set tabIndex to \(index)
-        repeat with w in windows
-          if (count of tabs of w) >= tabIndex then
-            set current tab of w to tab tabIndex of w
-            set index of w to 1
-            return "ok"
-          end if
-          set tabIndex to tabIndex - (count of tabs of w)
-        end repeat
-      end tell
-      return "missing"
-      """
-    BrowserTabSources.runAppleScriptAsync(script) { result in
-      completion(result == "ok" ? .performed(pid: context.processID) : .unhandled)
-    }
-  }
-
-  func tabNew(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    guard let appName = appName(for: context.processID, environment: environment) else {
-      DispatchQueue.main.async { completion(.unhandled) }
-      return
-    }
-    let script = """
-      tell application \(BrowserTabSources.scriptString(appName))
-        activate
-        if (count of windows) is 0 then
-          make new document
-        else
-          tell front window
-            set current tab to (make new tab)
-          end tell
-        end if
-        return "ok"
-      end tell
-      """
-    BrowserTabSources.runAppleScriptAsync(script) { result in
-      completion(result == "ok" ? .performed(pid: context.processID) : .unhandled)
-    }
-  }
-
-  private func safariTabsScript(appName: String) -> String {
-    """
-    set out to ""
-    tell application \(BrowserTabSources.scriptString(appName))
-      repeat with w in windows
-        repeat with t in tabs of w
-          try
-            set out to out & (name of t as text) & tab & (URL of t as text) & linefeed
-          end try
-        end repeat
-      end repeat
-    end tell
     return out
-    """
-  }
-}
-
-final class ChromiumTabsSource: FlashSource {
-  let identifier = "chromium-tabs"
-  let displayName = "chrome"
-  let priority = 30
-  let capabilities: FlashSourceCapabilities = [.candidates, .tabSelection, .tabCreation]
-  let activationPolicy: FlashSourceActivationPolicy = .bundleIDs(
-    BrowserTabSources.chromiumBundleIdentifiers)
-
-  func discover(in context: AppContext) throws -> [JumpTarget] { [] }
-
-  func supports(_ context: AppContext) -> Bool {
-    BrowserTabSources.chromiumBundleIdentifiers.contains(context.bundleIdentifier)
   }
 
-  func candidates(
-    in environment: FlashSourceEnvironment,
-    scope: CandidateScope
-  ) -> [Candidate] {
-    scriptBackedItems(
-      sourceID: identifier,
-      in: environment,
-      bundleIdentifiers: BrowserTabSources.chromiumBundleIdentifiers,
-      scriptBuilder: chromiumTabsScript(appName:))
+  static func appName(for item: Candidate, environment: FlashSourceEnvironment) -> String? {
+    guard let pid = item.pid else { return nil }
+    return appName(for: pid, environment: environment)
   }
 
-  func resolveCandidate(
-    _ item: Candidate,
-    in environment: FlashSourceEnvironment,
-    completion: @escaping (CandidateResolution) -> Void
-  ) {
-    BrowserTabSources.resolveURLBackedTab(
-      item,
-      appName: appName(for: item, environment: environment),
-      completion: completion)
+  static func appName(for pid: pid_t, environment: FlashSourceEnvironment) -> String? {
+    environment.runningApplications.first { $0.processIdentifier == pid }?.localizedName
   }
-
-  func tabSelect(
-    at index: Int,
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    guard let appName = appName(for: context.processID, environment: environment), index > 0 else {
-      DispatchQueue.main.async { completion(.unhandled) }
-      return
-    }
-    let script = """
-      tell application \(BrowserTabSources.scriptString(appName))
-        activate
-        set tabIndex to \(index)
-        repeat with w in windows
-          if (count of tabs of w) >= tabIndex then
-            set active tab index of w to tabIndex
-            set index of w to 1
-            return "ok"
-          end if
-          set tabIndex to tabIndex - (count of tabs of w)
-        end repeat
-      end tell
-      return "missing"
-      """
-    BrowserTabSources.runAppleScriptAsync(script) { result in
-      completion(result == "ok" ? .performed(pid: context.processID) : .unhandled)
-    }
-  }
-
-  func tabNew(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    guard let appName = appName(for: context.processID, environment: environment) else {
-      DispatchQueue.main.async { completion(.unhandled) }
-      return
-    }
-    let script = """
-      tell application \(BrowserTabSources.scriptString(appName))
-        activate
-        if (count of windows) is 0 then
-          make new window
-        else
-          tell front window to make new tab
-        end if
-        return "ok"
-      end tell
-      """
-    BrowserTabSources.runAppleScriptAsync(script) { result in
-      completion(result == "ok" ? .performed(pid: context.processID) : .unhandled)
-    }
-  }
-
-  private func chromiumTabsScript(appName: String) -> String {
-    """
-    set out to ""
-    tell application \(BrowserTabSources.scriptString(appName))
-      repeat with w in windows
-        repeat with t in tabs of w
-          try
-            set out to out & (title of t as text) & tab & (URL of t as text) & linefeed
-          end try
-        end repeat
-      end repeat
-    end tell
-    return out
-    """
-  }
-}
-
-private func scriptBackedItems(
-  sourceID: String,
-  in environment: FlashSourceEnvironment,
-  bundleIdentifiers: Set<String>,
-  scriptBuilder: (String) -> String
-) -> [Candidate] {
-  var out: [Candidate] = []
-  var seen = Set<String>()
-  for app in BrowserTabSources.runningBrowserApps(
-    in: environment,
-    bundleIdentifiers: bundleIdentifiers)
-  {
-    let appName = app.localizedName ?? "Browser"
-    let sourceName = BrowserTabSources.sourceName(
-      bundleID: app.bundleIdentifier ?? "",
-      appName: appName)
-    guard let raw = BrowserTabSources.runAppleScript(scriptBuilder(appName)) else { continue }
-    for tab in BrowserTabSources.parseTabLines(raw) {
-      let key = "\(app.processIdentifier)|\(tab.url)|\(tab.title)"
-      guard seen.insert(key).inserted else { continue }
-      if let item = BrowserTabSources.browserTabItem(
-        sourceID: sourceID,
-        source: sourceName,
-        app: app,
-        title: tab.title,
-        url: tab.url,
-        sourcePayload: tab.url)
-      {
-        out.append(item)
-      }
-    }
-  }
-  return out
-}
-
-private func appName(for item: Candidate, environment: FlashSourceEnvironment) -> String? {
-  guard let pid = item.pid else { return nil }
-  return appName(for: pid, environment: environment)
-}
-
-private func appName(for pid: pid_t, environment: FlashSourceEnvironment) -> String? {
-  environment.runningApplications.first { $0.processIdentifier == pid }?.localizedName
 }

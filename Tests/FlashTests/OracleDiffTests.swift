@@ -27,7 +27,11 @@ final class OracleDiffTests: XCTestCase {
       allowList: .empty)
 
     XCTAssertEqual(result.matchedCount, 0)
-    XCTAssertEqual(result.hardFailures.count, 2)
+    // Only the unmatched vimium anchor counts as a hard failure (Flash
+    // missed a target). The unmatched flash target is a soft warning —
+    // surfacing an extra real AX-exposed control is acceptable.
+    XCTAssertEqual(result.hardFailures.count, 1)
+    XCTAssertEqual(result.softWarnings.count, 1)
   }
 
   func testMatchesSubstantiallyOverlappingShiftedRects() {

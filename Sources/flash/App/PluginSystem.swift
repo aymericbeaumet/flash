@@ -97,6 +97,71 @@ struct PluginManifest: Codable, Equatable {
   var start: String
   var events: [PluginEventSubscription]
   var actions: [PluginActionRegistration]
+  var priority: Int
+  var volatile: Bool
+  /// Bundle identifiers the source applies to. When non-empty, restricts
+  /// `supports()` and jump-target discovery to these apps. Mirrors the
+  /// `bundle_ids` filter used on event subscriptions but applies even when
+  /// the manifest doesn't subscribe to `focus.changed`.
+  var bundleIDs: [String]
+
+  enum CodingKeys: String, CodingKey {
+    case id, name, version, description, install, start, events, actions, priority
+    case volatile
+    case bundleIDs = "bundle_ids"
+  }
+
+  init(
+    id: String, name: String, version: String, description: String,
+    install: String, start: String,
+    events: [PluginEventSubscription] = [],
+    actions: [PluginActionRegistration] = [],
+    priority: Int = 25,
+    volatile: Bool = false,
+    bundleIDs: [String] = []
+  ) {
+    self.id = id
+    self.name = name
+    self.version = version
+    self.description = description
+    self.install = install
+    self.start = start
+    self.events = events
+    self.actions = actions
+    self.priority = priority
+    self.volatile = volatile
+    self.bundleIDs = bundleIDs
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.id = try c.decode(String.self, forKey: .id)
+    self.name = try c.decode(String.self, forKey: .name)
+    self.version = try c.decode(String.self, forKey: .version)
+    self.description = try c.decode(String.self, forKey: .description)
+    self.install = try c.decode(String.self, forKey: .install)
+    self.start = try c.decode(String.self, forKey: .start)
+    self.events = try c.decodeIfPresent([PluginEventSubscription].self, forKey: .events) ?? []
+    self.actions = try c.decodeIfPresent([PluginActionRegistration].self, forKey: .actions) ?? []
+    self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
+    self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
+    self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(id, forKey: .id)
+    try c.encode(name, forKey: .name)
+    try c.encode(version, forKey: .version)
+    try c.encode(description, forKey: .description)
+    try c.encode(install, forKey: .install)
+    try c.encode(start, forKey: .start)
+    if !events.isEmpty { try c.encode(events, forKey: .events) }
+    if !actions.isEmpty { try c.encode(actions, forKey: .actions) }
+    try c.encode(priority, forKey: .priority)
+    if volatile { try c.encode(volatile, forKey: .volatile) }
+    if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
+  }
 
   static func load(from root: URL) throws -> PluginManifest {
     let url = root.appendingPathComponent("manifest.json")
@@ -180,6 +245,14 @@ struct PluginEvent {
   var bundleID: String?
   var configPath: String?
   var focused: Bool?
+  /// Front window frame (screen coordinates). Optional — only meaningful
+  /// for app-scoped events like `focus.changed`, `ax.changed`. Passed
+  /// through to plugins as `payload.front_window_frame`.
+  var frontWindowFrame: CGRect?
+  /// Process id of the focused app for the event. Some events embed this
+  /// in `payload.pid` already; setting this here also lets PluginProcess
+  /// scope its snapshot to the right context.
+  var pid: pid_t?
 }
 
 struct PluginStatusSnapshot {
@@ -267,15 +340,23 @@ final class PluginProcess {
   private var dynamicActions: [PluginActionRegistration] = []
   private var lastError: String?
   private var lastLog: String?
+  private var watchFilesEnabled: Bool
   var onStatusChanged: (() -> Void)?
 
-  init(root: URL, manifest: PluginManifest, origin: PluginOrigin, baseDataDir: URL) {
+  init(
+    root: URL,
+    manifest: PluginManifest,
+    origin: PluginOrigin,
+    baseDataDir: URL,
+    watchFiles: Bool = false
+  ) {
     self.root = root
     self.manifest = manifest
     self.origin = origin
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.dynamicActions = manifest.actions
+    self.watchFilesEnabled = watchFiles
   }
 
   var identifier: String { manifest.id }
@@ -306,12 +387,124 @@ final class PluginProcess {
     }
   }
 
+  /// Toggle the per-plugin file watcher at runtime. Called when the
+  /// debug.watch_plugins config flips. Off → stop watching but keep
+  /// the process running; on → install watchers if the process is up.
+  func setWatchFiles(_ enabled: Bool) {
+    queue.async { [weak self] in
+      guard let self, self.watchFilesEnabled != enabled else { return }
+      self.watchFilesEnabled = enabled
+      if enabled, self.process?.isRunning == true {
+        self.installFileWatchers()
+      } else if !enabled {
+        self.removeFileWatchers()
+      }
+    }
+  }
+
   func sendEvent(_ event: PluginEvent) {
     guard manifest.events.contains(where: { $0.matches(event) }) else { return }
+    var payload = event.payload
+    if let bundleID = event.bundleID, payload["bundle_id"] == nil {
+      payload["bundle_id"] = bundleID
+    }
+    if let pid = event.pid, payload["pid"] == nil {
+      payload["pid"] = Int(pid)
+    }
+    if let frame = event.frontWindowFrame, !frame.isNull,
+      payload["front_window_frame"] == nil
+    {
+      payload["front_window_frame"] = [
+        "x": frame.minX,
+        "y": frame.minY,
+        "width": frame.width,
+        "height": frame.height,
+      ]
+    }
     sendNotification(method: "event", params: [
       "name": event.name,
-      "payload": event.payload,
+      "payload": payload,
     ])
+  }
+
+  /// Synchronous-style discover for volatile plugins. Sends a
+  /// `discoverTargets` RPC and waits up to `timeout` for the plugin to
+  /// return a snapshot of jump targets for the given context. Used on
+  /// each activation when the manifest declares `volatile: true`.
+  func discoverTargets(context: AppContext, timeout: TimeInterval) -> [JumpTarget] {
+    let semaphore = DispatchSemaphore(value: 0)
+    var snapshot: PluginSnapshot?
+    let frame: [String: Any] = [
+      "x": context.frontWindowFrame.minX,
+      "y": context.frontWindowFrame.minY,
+      "width": context.frontWindowFrame.width,
+      "height": context.frontWindowFrame.height,
+    ]
+    let params: [String: Any] = [
+      "bundle_id": context.bundleIdentifier,
+      "pid": Int(context.processID),
+      "front_window_frame": frame,
+    ]
+    sendRequest(method: "discoverTargets", params: params) { [weak self] response in
+      guard let self else {
+        semaphore.signal()
+        return
+      }
+      if let response {
+        snapshot = self.applyDiscoveryResponse(response, defaultPID: context.processID)
+      }
+      semaphore.signal()
+    }
+    _ = semaphore.wait(timeout: .now() + timeout)
+    let snap = snapshot ?? {
+      lock.lock()
+      let s = self.snapshot
+      lock.unlock()
+      return s
+    }()
+    if let contextPID = snap.contextPID, contextPID != context.processID {
+      return []
+    }
+    return snap.targets.map { wire in
+      JumpTarget(
+        id: wire.id,
+        frame: wire.frame,
+        role: wire.role,
+        accessibilityLabel: wire.label,
+        url: wire.url,
+        acceptsTextInput: wire.acceptsTextInput,
+        pid: wire.pid ?? context.processID,
+        activate: { [weak self] action in
+          self?.activateTarget(wire.id, action: action)
+          return true
+        },
+        providerID: wire.sourceID)
+    }
+  }
+
+  private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginSnapshot {
+    let sourceID = params["source_id"] as? String ?? "plugin.\(manifest.id)"
+    let contextPID = (params["context_pid"] as? Int).map(pid_t.init) ?? defaultPID
+    let targetItems = (params["targets"] as? [[String: Any]] ?? [])
+      .compactMap { Self.target(from: $0, sourceID: sourceID) }
+    let candidateItems = (params["candidates"] as? [[String: Any]] ?? [])
+      .compactMap {
+        Self.candidate(
+          from: $0,
+          pluginID: manifest.id,
+          pluginName: manifest.name,
+          sourceID: sourceID)
+      }
+    let snap = PluginSnapshot(
+      targets: targetItems,
+      candidates: candidateItems,
+      contextPID: contextPID,
+      updatedAt: Date())
+    lock.lock()
+    snapshot = snap
+    lock.unlock()
+    notifyStatus()
+    return snap
   }
 
   func candidates(scope: CandidateScope) -> [Candidate] {
@@ -353,8 +546,8 @@ final class PluginProcess {
       "candidate": candidateJSON(candidate)
     ]
     sendRequest(method: "resolveCandidate", params: params) { response in
-      let didResolve = response?["did_resolve"] as? Bool ?? response?["didResolve"] as? Bool ?? false
-      let pid = response?["target_pid"] as? Int ?? response?["targetPID"] as? Int
+      let didResolve = response?["did_resolve"] as? Bool ?? false
+      let pid = response?["target_pid"] as? Int
       DispatchQueue.main.async {
         completion(didResolve ? .resolved(pid: pid.map(pid_t.init)) : .unresolved)
       }
@@ -377,7 +570,7 @@ final class PluginProcess {
         "raw": raw,
       ]
     ) { response in
-      let ok = response?["ok"] as? Bool ?? response?["did_perform"] as? Bool ?? false
+      let ok = response?["ok"] as? Bool ?? false
       DispatchQueue.main.async {
         completion?(ok)
       }
@@ -394,8 +587,8 @@ final class PluginProcess {
     params["name"] = name
     params["context"] = contextJSON(context)
     sendRequest(method: "sourceAction", params: params) { response in
-      let didPerform = response?["did_perform"] as? Bool ?? response?["didPerform"] as? Bool ?? false
-      let pid = response?["target_pid"] as? Int ?? response?["targetPID"] as? Int
+      let didPerform = response?["did_perform"] as? Bool ?? false
+      let pid = response?["target_pid"] as? Int
       DispatchQueue.main.async {
         completion(didPerform ? .performed(pid: pid.map(pid_t.init)) : .unhandled)
       }
@@ -442,7 +635,9 @@ final class PluginProcess {
       try installIfNeeded()
       setState(.starting)
       try launch()
-      installFileWatchers()
+      if watchFilesEnabled {
+        installFileWatchers()
+      }
       startHeartbeat()
       FlashLog.plugin(.info, pluginID: manifest.id, message: "[plugin] started reason=\(reason)")
     } catch {
@@ -507,6 +702,7 @@ final class PluginProcess {
       "plugin_id": manifest.id,
       "version": manifest.version,
     ]) { [weak self] _ in
+      self?.clearError()
       self?.setState(.ready)
     }
   }
@@ -544,6 +740,7 @@ final class PluginProcess {
     env["FLASH_PLUGIN_ID"] = manifest.id
     env["FLASH_PLUGIN_VERSION"] = manifest.version
     env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
   }
 
@@ -716,7 +913,7 @@ final class PluginProcess {
       id: id,
       frame: CGRect(x: x, y: y, width: width, height: height),
       role: raw["role"] as? String,
-      label: raw["label"] as? String ?? raw["accessibility_label"] as? String,
+      label: raw["label"] as? String,
       url: raw["url"] as? String,
       acceptsTextInput: raw["accepts_text_input"] as? Bool ?? false,
       pid: (raw["pid"] as? Int).map(pid_t.init),
@@ -730,7 +927,7 @@ final class PluginProcess {
     sourceID: String
   ) -> Candidate? {
     guard let name = raw["name"] as? String, !name.isEmpty else { return nil }
-    let source = raw["source"] as? String ?? raw["display_source"] as? String ?? pluginName
+    let source = raw["source"] as? String ?? pluginName
     let kind = candidateKind(raw["kind"] as? String)
     let url = (raw["url"] as? String).flatMap(URL.init(string:))
     return Candidate(
@@ -740,7 +937,7 @@ final class PluginProcess {
       pid: (raw["pid"] as? Int).map(pid_t.init),
       name: name,
       subtitle: raw["subtitle"] as? String ?? "",
-      bundleIdentifier: raw["bundle_id"] as? String ?? raw["bundleIdentifier"] as? String ?? "",
+      bundleIdentifier: raw["bundle_id"] as? String ?? "",
       url: url,
       tmuxClientTTY: nil,
       tmuxTarget: nil,
@@ -777,11 +974,11 @@ final class PluginProcess {
     switch raw {
     case "app":
       return .app
-    case "tmuxWindow", "tmux_window":
+    case "tmux_window":
       return .tmuxWindow
-    case "browserTab", "browser_tab":
+    case "browser_tab":
       return .browserTab
-    case "slackChannel", "slack_channel":
+    case "slack_channel":
       return .slackChannel
     case let value?:
       return .plugin(value)
@@ -887,6 +1084,13 @@ final class PluginProcess {
     notifyStatus()
   }
 
+  private func clearError() {
+    lock.lock()
+    lastError = nil
+    lock.unlock()
+    notifyStatus()
+  }
+
   private func notifyStatus() {
     DispatchQueue.main.async { [weak self] in
       self?.onStatusChanged?()
@@ -952,17 +1156,27 @@ final class PluginFlashSource: FlashSource {
 
   var identifier: String { "plugin.\(plugin.identifier)" }
   var displayName: String { plugin.manifest.name }
-  var priority: Int { 25 }
+  var priority: Int { plugin.manifest.priority }
   var capabilities: FlashSourceCapabilities {
     [
       .jumpTargets, .candidates, .appActivation, .tabSelection, .tabCreation, .tabNavigation,
       .tabClosing,
     ]
   }
-  var activationPolicy: FlashSourceActivationPolicy { .always }
-  var readinessPolicy: FlashSourceReadinessPolicy { .continuous }
+  var activationPolicy: FlashSourceActivationPolicy {
+    let manifestBundles = Set(plugin.manifest.bundleIDs)
+    return manifestBundles.isEmpty ? .always : .bundleIDs(manifestBundles)
+  }
+  var readinessPolicy: FlashSourceReadinessPolicy {
+    plugin.manifest.volatile ? .volatile : .continuous
+  }
+  var resultsAreVolatile: Bool { plugin.manifest.volatile }
 
   func supports(_ context: AppContext) -> Bool {
+    let manifestBundles = plugin.manifest.bundleIDs
+    if !manifestBundles.isEmpty {
+      return manifestBundles.contains(context.bundleIdentifier)
+    }
     let event = PluginEvent(
       name: "focus.changed",
       payload: [:],
@@ -973,7 +1187,10 @@ final class PluginFlashSource: FlashSource {
   }
 
   func discover(in context: AppContext) throws -> [JumpTarget] {
-    plugin.targets(for: context)
+    if plugin.manifest.volatile {
+      return plugin.discoverTargets(context: context, timeout: 0.5)
+    }
+    return plugin.targets(for: context)
   }
 
   func candidates(
@@ -988,6 +1205,18 @@ final class PluginFlashSource: FlashSource {
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   ) {
+    // Activate the candidate's owning app on the main thread before
+    // the plugin runs its own resolve. Without this step a tmux
+    // window pick would correctly run `switch-client` but the
+    // terminal app would stay in the background, so the user has
+    // to manually click it to see the new window.
+    if let pid = candidate.pid,
+      let app = NSRunningApplication(processIdentifier: pid)
+    {
+      DispatchQueue.main.async {
+        RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+      }
+    }
     plugin.resolveCandidate(candidate, completion: completion)
   }
 
@@ -1049,6 +1278,7 @@ final class PluginManager {
   private let baseDataDir: URL
   private var pluginsByID: [String: PluginProcess] = [:]
   private var sourceAdaptersByID: [String: PluginFlashSource] = [:]
+  private var watchFiles: Bool = false
   var onStateChanged: (() -> Void)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
@@ -1102,6 +1332,12 @@ final class PluginManager {
       FlashLog.debug("[plugin_action] command=\(command) name=\(name) ok=\(ok)")
     }
     return true
+  }
+
+  func actionRegistrations() -> [PluginActionRegistration] {
+    queue.sync {
+      pluginsByID.values.flatMap { $0.actions }
+    }
   }
 
   func hasAction(command: String, name: String) -> Bool {
@@ -1166,6 +1402,7 @@ final class PluginManager {
   }
 
   private func reloadDesiredPlugins(config: Config) {
+    watchFiles = config.debug.watchPlugins
     var desired: [(root: URL, origin: PluginOrigin)] = officialPluginRoots().map {
       ($0, .official)
     }
@@ -1186,6 +1423,7 @@ final class PluginManager {
         nextIDs.insert(manifest.id)
         let existing = pluginsByID[manifest.id]
         if existing?.root == item.root, existing?.manifest == manifest {
+          existing?.setWatchFiles(watchFiles)
           continue
         }
         existing?.stop()
@@ -1193,7 +1431,8 @@ final class PluginManager {
           root: item.root,
           manifest: manifest,
           origin: item.origin,
-          baseDataDir: baseDataDir)
+          baseDataDir: baseDataDir,
+          watchFiles: watchFiles)
         plugin.onStatusChanged = { [weak self] in self?.notifyStateChanged() }
         pluginsByID[manifest.id] = plugin
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin)
@@ -1209,6 +1448,22 @@ final class PluginManager {
       sourceAdaptersByID.removeValue(forKey: id)
     }
     notifyStateChanged()
+  }
+
+  /// Stop every loaded plugin and restart it. Triggered by
+  /// `:plugins reload`. Returns the IDs that were restarted so
+  /// callers can include them in a confirmation alert.
+  @discardableResult
+  func reloadAll() -> [String] {
+    let ids: [String] = queue.sync {
+      let snapshot = Array(pluginsByID.keys).sorted()
+      for id in snapshot {
+        pluginsByID[id]?.reload(reason: "plugins_reload")
+      }
+      return snapshot
+    }
+    notifyStateChanged()
+    return ids
   }
 
   private func materialize(_ ref: PluginReference) -> (root: URL, origin: PluginOrigin)? {
@@ -1254,24 +1509,37 @@ final class PluginManager {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
   }
 
-  private func officialPluginRoots() -> [URL] {
+  static func manifestRoots(in candidates: [URL], fileManager fm: FileManager = .default) -> [URL] {
     var roots: [URL] = []
-    let fm = FileManager.default
+    var seenBases = Set<String>()
+    var seenRoots = Set<String>()
+    for candidate in candidates {
+      let bases = [candidate, candidate.resolvingSymlinksInPath()]
+      for base in bases where seenBases.insert(base.path).inserted {
+        guard let children = try? fm.contentsOfDirectory(
+          at: base,
+          includingPropertiesForKeys: [.isDirectoryKey],
+          options: [.skipsHiddenFiles])
+        else { continue }
+        for child in children {
+          let root = child.resolvingSymlinksInPath()
+          guard fm.fileExists(atPath: root.appendingPathComponent("manifest.json").path) else {
+            continue
+          }
+          guard seenRoots.insert(root.path).inserted else { continue }
+          roots.append(root)
+        }
+      }
+    }
+    return roots
+  }
+
+  private func officialPluginRoots() -> [URL] {
     let candidates = [
       Bundle.main.resourceURL?.appendingPathComponent("Plugins"),
       URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Plugins"),
     ].compactMap { $0 }
-    for base in candidates {
-      guard let children = try? fm.contentsOfDirectory(
-        at: base,
-        includingPropertiesForKeys: [.isDirectoryKey],
-        options: [.skipsHiddenFiles])
-      else { continue }
-      roots.append(contentsOf: children.filter {
-        fm.fileExists(atPath: $0.appendingPathComponent("manifest.json").path)
-      })
-    }
-    return roots
+    return Self.manifestRoots(in: candidates)
   }
 
   private func notifyStateChanged() {
@@ -1318,6 +1586,12 @@ extension PluginManager {
       focused AX changes. They can also register command actions. For example,
       a Spotify plugin can register the `spotify` command and a `pause` action,
       which users run as `:spotify pause`.
+
+      Official bundled plugins are installed under `FLASH_PLUGIN_DATA_DIR`;
+      they do not write CLI binaries into global shell paths. Bundled commands
+      include `:spotify`, `:github`, `:linear`, `:slack`, and `:notion`.
+      Authentication is explicit through actions such as `:github login`;
+      install and start do not run login flows.
 
       `flash://plugins` or `:plugins` opens the plugin status modal. When
       `[debug] http_host = localhost:4242` is set, the debug page shows live

@@ -4,6 +4,129 @@ import XCTest
 @testable import flash
 
 final class PluginSystemTests: XCTestCase {
+  func testOfficialPluginManifestsLoadAndRegisterExpectedActions() throws {
+    let roots = try officialPluginRoots()
+    let manifests = try roots.map { try PluginManifest.load(from: $0) }
+    let ids = Set(manifests.map(\.id))
+    XCTAssertEqual(
+      ids,
+      [
+        "contacts", "github", "linear", "media", "notes", "notion", "reminders",
+        "slack", "spotify", "tmux",
+      ])
+
+    let runActionRequired: Set<String> = [
+      "github", "linear", "media", "notion", "slack", "spotify",
+    ]
+    for manifest in manifests {
+      XCTAssertEqual(manifest.install, "./install.sh")
+      XCTAssertEqual(manifest.start, "./start.sh")
+      XCTAssertFalse(manifest.description.isEmpty)
+      if runActionRequired.contains(manifest.id) {
+        XCTAssertTrue(
+          manifest.actions.contains { $0.name == "run" },
+          "\(manifest.id) is missing the run action")
+      }
+    }
+    let tmux = try XCTUnwrap(manifests.first { $0.id == "tmux" })
+    XCTAssertEqual(tmux.install, "./install.sh")
+    XCTAssertEqual(tmux.start, "./start.sh")
+    XCTAssertTrue(tmux.volatile)
+    XCTAssertEqual(tmux.priority, 20)
+    XCTAssertTrue(tmux.bundleIDs.contains("org.alacritty"))
+
+    XCTAssertTrue(actionNames(for: "spotify", manifests: manifests).isSuperset(of: [
+      "login", "status", "pause", "play", "toggle", "next", "previous", "search", "run",
+    ]))
+    XCTAssertTrue(actionNames(for: "github", manifests: manifests).isSuperset(of: [
+      "login", "status", "issues", "prs", "run",
+    ]))
+    XCTAssertTrue(actionNames(for: "linear", manifests: manifests).isSuperset(of: [
+      "login", "mine", "query", "start", "view", "pr", "create", "run",
+    ]))
+    XCTAssertTrue(actionNames(for: "slack", manifests: manifests).isSuperset(of: [
+      "login", "version", "run",
+    ]))
+    XCTAssertTrue(actionNames(for: "notion", manifests: manifests).isSuperset(of: [
+      "login", "version", "api", "workers", "run",
+    ]))
+  }
+
+  func testOfficialPluginInstallScriptsAvoidGlobalInstallTargets() throws {
+    let pluginRoot = repositoryRoot().appendingPathComponent("Plugins")
+    let banned = [
+      "sudo", "brew install", "npm install -g", "deno install -g", "/usr/local/bin",
+      "$HOME/.local/bin", "~/.local/bin",
+    ]
+    let files = try FileManager.default.contentsOfDirectory(
+      at: pluginRoot,
+      includingPropertiesForKeys: nil,
+      options: [.skipsHiddenFiles])
+    for file in files where file.pathExtension == "py" || file.pathExtension == "sh" {
+      let body = try String(contentsOf: file)
+      for needle in banned {
+        XCTAssertFalse(body.contains(needle), "\(file.path) contains \(needle)")
+      }
+    }
+    for root in try officialPluginRoots() {
+      for name in ["install.sh", "start.sh", "plugin.py"] {
+        let body = try String(contentsOf: root.appendingPathComponent(name))
+        for needle in banned {
+          XCTAssertFalse(body.contains(needle), "\(root.path)/\(name) contains \(needle)")
+        }
+      }
+    }
+  }
+
+  func testOfficialPluginsRespondOverJSONDWithMockedCLIs() throws {
+    let cases = [
+      ("github", "gh"),
+      ("linear", "linear"),
+      ("notion", "ntn"),
+      ("slack", "slack"),
+      ("spotify", "spotify_player"),
+    ]
+    for (pluginID, binary) in cases {
+      try runPluginSmoke(pluginID: pluginID, binary: binary)
+    }
+  }
+
+  func testManifestRootDiscoveryFollowsSymlinkedBundleDirectory() throws {
+    let temp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-plugin-symlink-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: temp) }
+
+    let bundlePlugins = temp.appendingPathComponent("real/Plugins")
+    let pluginRoot = bundlePlugins.appendingPathComponent("sample")
+    try FileManager.default.createDirectory(at: pluginRoot, withIntermediateDirectories: true)
+    try """
+      {
+        "id": "sample",
+        "name": "Sample",
+        "version": "0.1.0",
+        "description": "Sample plugin",
+        "install": "./install.sh",
+        "start": "./start.sh",
+        "events": [],
+        "actions": []
+      }
+      """.write(
+        to: pluginRoot.appendingPathComponent("manifest.json"),
+        atomically: true,
+        encoding: .utf8)
+
+    let linkedPlugins = temp.appendingPathComponent("app/Contents/Resources/Plugins")
+    try FileManager.default.createDirectory(
+      at: linkedPlugins.deletingLastPathComponent(),
+      withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+      at: linkedPlugins,
+      withDestinationURL: bundlePlugins)
+
+    let roots = PluginManager.manifestRoots(in: [linkedPlugins])
+    XCTAssertEqual(roots.map(\.path), [pluginRoot.path])
+  }
+
   func testManifestLoadsRequiredFields() throws {
     let root = try temporaryPluginRoot(
       manifest:
@@ -117,5 +240,121 @@ final class PluginSystemTests: XCTestCase {
       atomically: true,
       encoding: .utf8)
     return root
+  }
+
+  private func repositoryRoot() -> URL {
+    URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+  }
+
+  private func officialPluginRoots() throws -> [URL] {
+    let root = repositoryRoot().appendingPathComponent("Plugins")
+    return try FileManager.default.contentsOfDirectory(
+      at: root,
+      includingPropertiesForKeys: [.isDirectoryKey],
+      options: [.skipsHiddenFiles])
+      .filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("manifest.json").path) }
+      .sorted { $0.lastPathComponent < $1.lastPathComponent }
+  }
+
+  private func actionNames(for id: String, manifests: [PluginManifest]) -> Set<String> {
+    let manifest = manifests.first { $0.id == id }
+    return Set(manifest?.actions.map(\.name) ?? [])
+  }
+
+  private func runPluginSmoke(pluginID: String, binary: String) throws {
+    let temp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-plugin-smoke-\(pluginID)-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: temp) }
+    let dataDir = temp.appendingPathComponent("data")
+    let binDir = dataDir.appendingPathComponent("bin")
+    try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+    let mock = binDir.appendingPathComponent(binary)
+    try """
+      #!/bin/sh
+      printf '\(binary) %s\\n' "$*"
+      """.write(to: mock, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mock.path)
+
+    let pluginRoot = repositoryRoot().appendingPathComponent("Plugins/\(pluginID)")
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["python3", "-B", pluginRoot.appendingPathComponent("plugin.py").path]
+    process.currentDirectoryURL = pluginRoot
+    var env = ProcessInfo.processInfo.environment
+    env["FLASH_PLUGIN_ID"] = pluginID
+    env["FLASH_PLUGIN_VERSION"] = "0.1.0"
+    env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
+    process.environment = env
+
+    let stdin = Pipe()
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
+    try process.run()
+
+    let lines = try [
+      jsonLine(["id": 1, "jsonrpc": "2.0", "method": "initialize", "params": [:]]),
+      jsonLine(["id": -1, "jsonrpc": "2.0", "method": "heartbeat", "params": [:]]),
+      jsonLine([
+        "id": 2,
+        "jsonrpc": "2.0",
+        "method": "action.invoke",
+        "params": [
+          "args": ["--version"],
+          "command": pluginID,
+          "name": "run",
+          "raw": ":\(pluginID) run --version",
+        ],
+      ]),
+      jsonLine(["jsonrpc": "2.0", "method": "shutdown", "params": ["reason": "test"]]),
+    ].joined(separator: "\n") + "\n"
+    stdin.fileHandleForWriting.write(Data(lines.utf8))
+    stdin.fileHandleForWriting.closeFile()
+
+    if finished.wait(timeout: .now() + 5) != .success {
+      process.terminate()
+      XCTFail("\(pluginID) plugin did not exit")
+      return
+    }
+
+    let stderrBody = String(
+      data: stderr.fileHandleForReading.readDataToEndOfFile(),
+      encoding: .utf8) ?? ""
+    XCTAssertEqual(process.terminationStatus, 0, stderrBody)
+
+    let stdoutBody = String(
+      data: stdout.fileHandleForReading.readDataToEndOfFile(),
+      encoding: .utf8) ?? ""
+    let messages = try stdoutBody.split(separator: "\n").map { line -> [String: Any] in
+      let data = Data(String(line).utf8)
+      return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+    XCTAssertEqual(responseOK(id: 1, messages: messages), true, stdoutBody)
+    XCTAssertEqual(responseOK(id: -1, messages: messages), true, stdoutBody)
+    XCTAssertEqual(responseOK(id: 2, messages: messages), true, stdoutBody)
+  }
+
+  private func jsonLine(_ object: [String: Any]) throws -> String {
+    let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    return String(data: data, encoding: .utf8) ?? "{}"
+  }
+
+  private func responseOK(id: Int, messages: [[String: Any]]) -> Bool? {
+    for message in messages {
+      guard (message["id"] as? NSNumber)?.intValue == id else { continue }
+      let result = message["result"] as? [String: Any]
+      return result?["ok"] as? Bool
+    }
+    return nil
   }
 }

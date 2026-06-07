@@ -1,0 +1,17 @@
+{
+  "id": "slack",
+  "name": "Slack",
+  "version": "0.1.0",
+  "description": "Slack CLI actions backed by the Slack developer CLI.",
+  "install": "./install.sh",
+  "start": "./start.sh",
+  "events": [
+    { "match": "apps.*", "bundle_ids": ["com.tinyspeck.slackmacgap"] },
+    "config.*"
+  ],
+  "actions": [
+    { "command": "slack", "name": "login", "description": "Authenticate the Slack CLI" },
+    { "command": "slack", "name": "version", "description": "Show Slack CLI version" },
+    { "command": "slack", "name": "run", "description": "Run slack with raw arguments" }
+  ]
+}

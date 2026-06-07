@@ -4,13 +4,13 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `open -g flash://mouse_target`, the `flash` CLI, or a configured native mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, managed stdio plugins, `flash://mouse_grid` screen-position targeting, `flash://alert_show?message=...` / `flash://show_alert?message=...` / `flash://alert_dismiss` for a temporary centered toast, and `flash://help_show` / `flash://plugins` modal views. No menu bar, no Dock icon, no preferences window.
+A headless, resident macOS app that, when triggered by `open -g flash://mouse_target`, the `flash` CLI, or a configured native mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, managed stdio plugins, `flash://mouse_grid` screen-position targeting, `flash://alert_show?message=...` / `flash://alert_dismiss` for a temporary centered toast, and `flash://help_show` / `flash://plugins` modal views. No menu bar, no Dock icon, no preferences window.
 
 Activation can come through the `flash://` URL scheme, through the one-shot `flash` / `flashctl` CLI, or through Flash's `[mode.all.mappings]` / `[mode.normal.mappings]` / `[mode.insert.mappings]` Carbon registry for modified-key mappings. Mapping values can be `flash://...` commands dispatched through the same `URLCommand` parser as URL-scheme AppleEvents, or explicit argv arrays launched only from that configured mapping.
 
 ## Hard rules (do not violate)
 
-1. **No UI surface** beyond the transparent hint overlay, the mode cell / command-line cell, the help and open-app overlays, and explicit `flash://alert_show` / `flash://show_alert` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
+1. **No UI surface** beyond the transparent hint overlay, the mode cell / command-line cell, the help and open-app overlays, and explicit `flash://alert_show` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
 2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint, normal-mode, command-line, help, and open-app typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
 3. **Autolaunch is dev-script-owned.** `Scripts/dev.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
 4. **No unowned resident helpers / no custom external IPC.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through JSOND over stdin/stdout with stderr reserved for unexpected errors; Flash owns their lifecycle, heartbeat, reload, and shutdown. Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The `flash` / `flashctl` CLI is allowed only as a fast one-shot launcher that opens `flash://...` through Launch Services.
@@ -18,6 +18,8 @@ Activation can come through the `flash://` URL scheme, through the one-shot `fla
 6. **TOML parser is hand-rolled** (small subset). Don't add `TOMLKit` / `Toml` / other deps unless we outgrow what we can hand-roll cleanly.
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
 8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(action:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
+9. **No backward-compatibility shims on master.** Flash has one user — the maintainer. When a config field, action name, mapping syntax, internal API, or wire format is renamed, update every call site, the defaults, the user's `~/.config/flash/flash.toml`, the bundled plugins, and the tests in the same change. **Do not** add legacy aliases, dual-syntax parsers, dual-key JSON readers (`as? T ?? response?["camelCase"]` etc.), `typealias OldName = NewName`, `// removed` placeholders, deprecation comments, or transitional accept-both paths. Reject malformed input loudly rather than silently translating it. The goal is the smallest possible code per feature. When in doubt, delete the old name — the maintainer can recover from `git log` if needed.
+10. **Dev deploys go through `./Scripts/dev.sh`.** It owns the build → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash.app` → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/dev.sh` (no args).
 
 If a request would violate any of the above, surface it to the user instead of silently complying.
 
@@ -31,7 +33,7 @@ Sources/
     AppContext.swift                 # Front-app context: bundle, pid, window frame
     JumpTarget.swift                 # A clickable thing with a screen rect + optional activate closure
     JumpAction.swift                 # .leftClick | .rightClick | .doubleClick
-    JumpProvider.swift               # FlashSource protocol; jump targets, :open items, activation policy
+    FlashSource.swift                # FlashSource protocol + readiness/activation policy + capability set
     TargetFinalizer.swift            # Shared visible-region filter + smaller-frame-wins dedup before label assignment
   FlashProviders/                    # Built-in jump-target sources (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
@@ -54,7 +56,10 @@ Sources/
       DebugServer.swift              # loopback-only dense HTTP/SSE debug page
       CandidateFinder.swift                # Shared :open candidate preparation and app merge helpers
       ApplicationSource.swift        # Running/installed app source and flash://app_open resolver
-      BrowserTabSources.swift        # :open browser tabs, enabled only while supported browsers run
+      BrowserTabSources.swift        # Shared helpers for :open browser tabs (bundle IDs, AX/AppleScript utilities)
+      FirefoxTabsSource.swift        # FirefoxTabsSource — AX-driven, enabled only while Firefox is running
+      SafariTabsSource.swift         # SafariTabsSource — AppleScript with AX fallback, enabled only while Safari is running
+      ChromiumTabsSource.swift       # ChromiumTabsSource — AppleScript-driven, enabled only while a Chromium-family browser is running
       SlackSource.swift              # :open Slack channels, enabled only while Slack runs
     Config/
       Config.swift                   # Decoded model — defaults here MUST match config.default.toml
@@ -65,6 +70,7 @@ Sources/
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, TargetFinalizer, WindowSnapshot, browser fixture catalog, shared integration support, plus live TmuxIntegrationTests.
 Tests/BrowserSnapshots/              # Browser integration manifest + 100 offline HTML snapshots used by Scripts/test-integration-browser.sh.
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
+Plugins/                             # Official bundled stdio plugins symlinked into the dev app
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
 Scripts/dev.sh                               # Debug build → staging .app → /Applications/Flash.app, stable dev-signed, plugin symlinks, login autolaunch
 Scripts/test-integration-native.sh           # Build/sign/run native AppKit integration fixture + oracle
@@ -172,7 +178,7 @@ If you add a new visible property (gradient, shadow path, …), add its key to `
 
 ## Adding a new source
 
-A source conforms to `FlashSource` in `FlashCore` (`JumpProvider` is a compatibility alias). A source can contribute jump targets, `:open` items, document URL resolution, app activation, or any combination through `capabilities`:
+A source conforms to `FlashSource` in `FlashCore`. A source can contribute jump targets, `:open` items, document URL resolution, app activation, or any combination through `capabilities`:
 
 ```swift
 public protocol FlashSource: AnyObject {
@@ -259,7 +265,8 @@ Logs are newline-delimited JSON written to stderr and
 
 `plugins.third_party` accepts only `github:user/project` and `file:<path>`.
 Official bundled plugins under `Contents/Resources/Plugins` are always enabled
-in this version and are not configurable. Every plugin root must contain
+in this version and are not configurable. In the checkout they live under root
+`Plugins/` so `Scripts/dev.sh` can symlink them into the installed app. Every plugin root must contain
 `manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`,
 event subscriptions, and action registrations. `install` and `start` are
 npm-style shell strings run from the plugin root; Flash passes
@@ -267,6 +274,8 @@ npm-style shell strings run from the plugin root; Flash passes
 Plugins speak JSOND over stdin/stdout: host input on stdin, successful or
 failed protocol results on stdout, unexpected errors on stderr. Plugins can
 log through the Flash logger by sending `flash.log` JSOND notifications.
+Official plugin installers must keep downloaded CLI binaries under their own
+`FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
 
 `debug.http_host = localhost:4242` enables a loopback-only single-page debug
 server with live logs, resolved config, focused app state, and plugin state.
@@ -307,13 +316,13 @@ Normal-mode action URLs currently include: `flash://mouse_target[?right=1|double
 
 `:open <query>` and `:flashlight <query>` results render above the command line, ordered bottom-to-top with the best match closest to the prompt. Candidate snapshots are cached ahead of use through `SourceRegistry`: app bundles are warmed and cached by `ApplicationSource`, while tmux windows, browser tabs, Slack channels, plugins, and future contexts are queried only from currently active sources. Typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin ids are internal routing keys and must not be required search text for `:open` / `:flashlight`; plugin candidates should provide their own `source` / `name` labels.
 
-App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://show_alert?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, `flash://plugins`, and `flash://flash_quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
+App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, `flash://plugins`, and `flash://flash_quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
 
 ### Normal-Mode Audit Rule
 
 Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The current valid insert transitions are:
 
-- A committed left-click `f` hint whose target accepts text input, such as an editable input or tmux/terminal content.
+- A committed `f` or `F` click hint, including modified, right-click, and double-click commits; these are explicit mouse interactions by the user.
 - A normal-mode `i` keypress handled by the overlay's normal-mode interpreter.
 - A physical pointer click while idle normal mode is capturing input; Flash enters insert mode and replays the click so it reaches the underlying app.
 

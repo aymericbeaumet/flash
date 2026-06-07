@@ -1,0 +1,26 @@
+{
+  "id": "tmux",
+  "name": "tmux",
+  "version": "0.1.0",
+  "description": "Hints tmux panes/links and exposes a tmux window finder.",
+  "install": "./install.sh",
+  "start": "./start.sh",
+  "priority": 20,
+  "volatile": true,
+  "bundle_ids": [
+    "org.alacritty",
+    "io.alacritty",
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "dev.warp.Warp-Stable",
+    "co.zeit.hyperterm",
+    "co.zeit.hyper"
+  ],
+  "events": [
+    { "match": "focus.changed" },
+    { "match": "apps.terminated" },
+    "flash.started"
+  ]
+}

@@ -56,16 +56,28 @@ final class ConfigLoaderTests: XCTestCase {
       .tabNewInsert)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-o" })?.action.command,
-      .movementBack)
+      .appPrev)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
-      .movementForward)
+      .appNext)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "H" })?.action.command,
+      c.mode.normal.first(where: { $0.key == "[h" })?.action.command,
       .historyBack)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "L" })?.action.command,
+      c.mode.normal.first(where: { $0.key == "]h" })?.action.command,
       .historyForward)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "[t" })?.action.command,
+      .tabPrev)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "]t" })?.action.command,
+      .tabNext)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "[a" })?.action.command,
+      .appPrev)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "]a" })?.action.command,
+      .appNext)
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
     XCTAssertEqual(c.mode.labels.insert, "INSERT")
     XCTAssertEqual(c.mode.labels.command, "COMMAND")
@@ -74,6 +86,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.open.ignoredApps.isEmpty)
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
     XCTAssertNil(c.debug.httpHost)
+    XCTAssertFalse(c.debug.watchPlugins)
   }
 
   func testParsesModeLabelsInlineTable() {
@@ -294,6 +307,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(overlay["font_size"] as? Double, 12)
     XCTAssertEqual(debug["log_level"] as? String, "debug")
     XCTAssertTrue(debug.keys.contains("http_host"))
+    XCTAssertEqual(debug["watch_plugins"] as? Bool, false)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
     XCTAssertEqual(
       allMappings.first?["action"] as? [String],
@@ -383,6 +397,22 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 42)
+  }
+
+  func testParsesDebugWatchPlugins() {
+    let on = ConfigLoader.parse("[debug]\nwatch_plugins = true")
+    XCTAssertTrue(on.debug.watchPlugins)
+    XCTAssertTrue(on.loadingDiagnostics.isEmpty)
+
+    let off = ConfigLoader.parse("[debug]\nwatch_plugins = false")
+    XCTAssertFalse(off.debug.watchPlugins)
+
+    let bad = ConfigLoader.parse("[debug]\nwatch_plugins = \"yes\"")
+    XCTAssertFalse(bad.debug.watchPlugins)
+    XCTAssertTrue(
+      bad.loadingDiagnostics.contains {
+        $0.message.contains("debug.watch_plugins must be true or false")
+      })
   }
 
   func testIgnoresComments() {
@@ -505,7 +535,7 @@ final class ConfigLoaderTests: XCTestCase {
       [mode.normal.mappings]
       "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
       [mode.normal]
-      leader = "space"
+      leader = "<space>"
       """
     let c = ConfigLoader.parse(toml, sourceURL: sourceURL)
     let mapping = c.mode.normal.first { $0.key == "spacec" }
@@ -579,10 +609,10 @@ final class ConfigLoaderTests: XCTestCase {
       [mode.normal.mappings]
       "<leader>c" = "flash://app_reload"
       [mode.normal]
-      leader = "space"
+      leader = "<space>"
       """
     let c = ConfigLoader.parse(toml)
-    XCTAssertEqual(c.mode.normalLeader, "space")
+    XCTAssertEqual(c.mode.normalLeader, "<space>")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "spacec" })?.action.command,
       .reload(force: false))
@@ -592,15 +622,15 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.warnings.isEmpty)
   }
 
-  func testNormalLeaderParsesEscapedBackslash() {
+  func testNormalLeaderAcceptsBackslashFullname() {
     let toml = #"""
       [mode.normal.mappings]
-      "<leader>space" = "flash://flashlight"
+      "<leader><space>" = "flash://flashlight"
       [mode.normal]
-      leader = "\\"
+      leader = "<backslash>"
       """#
     let c = ConfigLoader.parse(toml)
-    XCTAssertEqual(c.mode.normalLeader, "\\")
+    XCTAssertEqual(c.mode.normalLeader, "<backslash>")
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "\\space" })?.action.command, .flashlight)
     XCTAssertTrue(c.warnings.isEmpty)
   }

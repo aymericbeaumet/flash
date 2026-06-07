@@ -1,0 +1,18 @@
+{
+  "id": "reminders",
+  "name": "Reminders",
+  "version": "0.1.0",
+  "description": "Surface macOS Reminders entries in flashlight, plus `:reminders` open helper.",
+  "install": "./install.sh",
+  "start": "./start.sh",
+  "priority": 12,
+  "events": [
+    "flash.started",
+    "config.*",
+    { "match": "apps.*", "bundle_ids": ["com.apple.reminders"] }
+  ],
+  "actions": [
+    { "command": "reminders", "name": "open", "description": "Open Reminders.app" },
+    { "command": "reminders", "name": "refresh", "description": "Refresh the cached reminders list" }
+  ]
+}

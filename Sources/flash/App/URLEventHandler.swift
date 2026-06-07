@@ -26,6 +26,10 @@ enum URLCommand: Hashable {
   case historyForward
   case movementBack
   case movementForward
+  case appPrev
+  case appNext
+  case setMark(letter: String)
+  case jumpToMark(letter: String)
   case quitApp(force: Bool)
   case save
   case saveAndQuit(force: Bool)
@@ -190,8 +194,16 @@ final class URLEventHandler: NSObject {
     "history_forward": { _ in .historyForward },
     "movement_back": { _ in .movementBack },
     "movement_forward": { _ in .movementForward },
-    "app_back": { _ in .movementBack },
-    "app_forward": { _ in .movementForward },
+    "app_previous": { _ in .appPrev },
+    "app_next": { _ in .appNext },
+    "set_mark": { q in
+      guard let letter = q.value("letter"), !letter.isEmpty else { return nil }
+      return .setMark(letter: letter)
+    },
+    "jump_to_mark": { q in
+      guard let letter = q.value("letter"), !letter.isEmpty else { return nil }
+      return .jumpToMark(letter: letter)
+    },
     "app_quit": { q in .quitApp(force: q.bool("force")) },
     "app_save": { _ in .save },
     "app_save_and_quit": { q in .saveAndQuit(force: q.bool("force")) },
@@ -205,10 +217,6 @@ final class URLEventHandler: NSObject {
     "clipboard_paste": { _ in .paste },
     "clipboard_copy_all": { _ in .copyAll },
     "alert_show": { q in
-      guard let message = q.value("message"), !message.isEmpty else { return nil }
-      return .showAlert(message: message)
-    },
-    "show_alert": { q in
       guard let message = q.value("message"), !message.isEmpty else { return nil }
       return .showAlert(message: message)
     },
@@ -265,6 +273,8 @@ final class URLEventHandler: NSObject {
     flash://history_forward
     flash://movement_back
     flash://movement_forward
+    flash://app_previous
+    flash://app_next
     flash://app_quit[?force=1]
     flash://app_save
     flash://app_save_and_quit[?force=1]
@@ -278,7 +288,6 @@ final class URLEventHandler: NSObject {
     flash://clipboard_paste
     flash://clipboard_copy_all
     flash://alert_show?message=<text>
-    flash://show_alert?message=<text>
     flash://alert_dismiss
     flash://hints_dismiss
     flash://app_open?name=<app>

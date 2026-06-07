@@ -26,7 +26,7 @@ final class TargetFinalizerTests: XCTestCase {
     XCTAssertEqual(labels.map(\.count).max(), 1)
   }
 
-  func testDedupKeepsSmallerOverlappingTarget() {
+  func testDedupKeepsBothWhenSmallerIsMuchSmallerThanLarger() {
     let visible = CGRect(x: 0, y: 0, width: 300, height: 300)
     let large = candidate(
       id: "large",
@@ -37,8 +37,30 @@ final class TargetFinalizerTests: XCTestCase {
       frame: CGRect(x: 30, y: 30, width: 30, height: 30),
       priority: 10)
 
+    // A small inner control nested inside a much larger clickable
+    // container is a legitimate, independent hint target (think
+    // `<button><div role="button">…</div></button>` or an icon button
+    // inside a wide row link). Both must survive dedup.
     let finalized = TargetFinalizer.finalize([large, small], visibleRegions: [visible])
-    XCTAssertEqual(finalized.map(\.id), ["small"])
+    XCTAssertEqual(Set(finalized.map(\.id)), Set(["large", "small"]))
+  }
+
+  func testDedupCollapsesNearlyIdenticalRectsKeepingSmaller() {
+    let visible = CGRect(x: 0, y: 0, width: 300, height: 300)
+    let outer = candidate(
+      id: "outer",
+      frame: CGRect(x: 20, y: 20, width: 100, height: 40),
+      priority: 10)
+    let inner = candidate(
+      id: "inner",
+      frame: CGRect(x: 22, y: 22, width: 96, height: 36),
+      priority: 10)
+
+    // Same logical control surfaced twice (Firefox's `<a><img/></a>`
+    // emitting AXLink and a near-identical AXImage). The smaller —
+    // more precise — frame survives.
+    let finalized = TargetFinalizer.finalize([outer, inner], visibleRegions: [visible])
+    XCTAssertEqual(finalized.map(\.id), ["inner"])
   }
 
   func testDedupTieKeepsHigherPriorityProvider() {

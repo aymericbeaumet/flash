@@ -104,11 +104,12 @@ extension OverlayPanel {
       if NormalModeInterpreter.pendingSequenceTimedOut(
         pending: normalModePending,
         lastInputAt: normalModePendingUpdatedAt,
-        now: now)
+        now: now,
+        timeoutMs: normalModeSequenceTimeoutMs)
       {
         FlashLog.trace(
           "[input] normal pending_timeout pending=\(normalModePending) "
-            + "timeout_ms=\(NormalModeInterpreter.sequenceTimeoutMs)")
+            + "timeout_ms=\(normalModeSequenceTimeoutMs)")
         normalModePending = ""
       }
       let transition = NormalModeInterpreter.interpret(
@@ -122,8 +123,7 @@ extension OverlayPanel {
         "[input] normal key=\(event.keyCode) chars=\(event.characters ?? "nil") "
           + "ignoring=\(event.charactersIgnoringModifiers ?? "nil") pending_before=\(pendingBeforeTimeout) "
           + "pending_after=\(transition.pending) action=\(transition.action?.diagnosticDescription ?? "nil") "
-          + "repeat=\(transition.repeatCount) pass_through=\(transition.passThrough)")
-      if transition.passThrough { return true }
+          + "repeat=\(transition.repeatCount)")
       normalModePending = transition.pending
       if !transition.pending.isEmpty {
         normalModePendingUpdatedAt = now

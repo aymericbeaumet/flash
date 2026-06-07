@@ -1,8 +1,7 @@
 import AppKit
 import QuartzCore
 
-/// Hammerspoon-style transient centered alert for `flash://alert_show` /
-/// `flash://show_alert`.
+/// Hammerspoon-style transient centered alert for `flash://alert_show`.
 ///
 /// Mirrors `hs.alert.defaultStyle`: black 75% fill, white stroke/text,
 /// 27pt system font, radius 27, 2s display, 0.15s fade out. Only one

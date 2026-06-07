@@ -12,7 +12,6 @@ struct NormalModeTransition: Equatable {
   var pending: String
   var action: MappingAction?
   var repeatCount: Int
-  var passThrough: Bool
 
   var command: URLCommand? { action?.command }
 
@@ -22,17 +21,15 @@ struct NormalModeTransition: Equatable {
 
   static func action(_ action: MappingAction, repeatCount: Int = 1) -> NormalModeTransition {
     NormalModeTransition(
-      pending: "", action: action, repeatCount: max(1, repeatCount), passThrough: false)
+      pending: "", action: action, repeatCount: max(1, repeatCount))
   }
 
   static func pending(_ pending: String) -> NormalModeTransition {
-    NormalModeTransition(pending: pending, action: nil, repeatCount: 1, passThrough: false)
+    NormalModeTransition(pending: pending, action: nil, repeatCount: 1)
   }
 
   static let consume = NormalModeTransition(
-    pending: "", action: nil, repeatCount: 1, passThrough: false)
-  static let passThrough = NormalModeTransition(
-    pending: "", action: nil, repeatCount: 1, passThrough: true)
+    pending: "", action: nil, repeatCount: 1)
 }
 
 struct PendingNormalModeCommand: Equatable {
@@ -44,7 +41,7 @@ struct PendingNormalModeCommand: Equatable {
 
 enum NormalModeInterpreter {
   private static let maxRepeatCount = 999
-  static let sequenceTimeoutMs = 1_000
+  static let sequenceTimeoutMs = 300
 
   private struct PendingState {
     var count: Int?
@@ -72,16 +69,23 @@ enum NormalModeInterpreter {
     let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
     if keyCode == 53 { return .consume }
 
-    if independent.contains(.command) || independent.contains(.option) {
-      return .consume
-    }
-
     if let mapping = modifiedMapping(
       keyCode: keyCode,
       modifierFlags: independent,
       mappings: mappings)
     {
       return .action(mapping.action)
+    }
+
+    if independent.contains(.command) || independent.contains(.option) {
+      // Hermetic normal mode: any Cmd/Opt-prefixed chord without an
+      // explicit mapping is swallowed. If the user wants Cmd+W to
+      // close a tab, Cmd+L to focus the URL bar, etc., they bind it
+      // in `[mode.normal.mappings]`. The previous "forward Cmd+letter
+      // to the focused app" path leaked OS shortcuts (Cmd+Tab,
+      // Cmd+Shift+T, Cmd+L) through normal mode and silently
+      // dropped capture into the underlying window.
+      return .consume
     }
 
     let hasControl = independent.contains(.control)
@@ -109,7 +113,16 @@ enum NormalModeInterpreter {
     for key in keys {
       let sequence = state.prefix + key
       let exact = mappings.first(where: { $0.key == sequence })
-      let hasLonger = mappings.contains { $0.key != sequence && $0.key.hasPrefix(sequence) }
+      // A "longer" mapping must be a typed-sequence continuation — not a
+      // named key that happens to begin with the same letters. Without
+      // the atomic-key filter, a user mapping like `"tab" = ...` would
+      // stall a plain `t` keystroke for sequenceTimeoutMs because `tab`
+      // string-prefixes `t`.
+      let hasLonger = mappings.contains {
+        $0.key != sequence
+          && !Self.atomicKeyNames.contains($0.key)
+          && $0.key.hasPrefix(sequence)
+      }
       if let mapping = exact, !hasLonger {
         return .action(mapping.action, repeatCount: state.repeatCount)
       }
@@ -119,6 +132,14 @@ enum NormalModeInterpreter {
     }
     return .consume
   }
+
+  /// Mapping keys that name a single named keystroke (Tab, Space, the
+  /// forward-delete key) rather than a sequence of characters the user
+  /// types one at a time. Excluded from the sequence-continuation
+  /// search so a `t` keystroke doesn't get stuck waiting for `ab`.
+  static let atomicKeyNames: Set<String> = [
+    "tab", "space", "delete_forward", "forward_delete",
+  ]
 
   static func firstCharacter(_ value: String?) -> Character? {
     guard let value, let first = value.first else { return nil }
@@ -143,7 +164,7 @@ enum NormalModeInterpreter {
     timeoutMs: Int = sequenceTimeoutMs
   ) -> Bool {
     guard !pending.isEmpty, let lastInputAt else { return false }
-    return now.timeIntervalSince(lastInputAt) * 1_000 > Double(timeoutMs)
+    return now.timeIntervalSince(lastInputAt) * 1_000 >= Double(timeoutMs)
   }
 
   private static func pendingState(_ pending: String) -> PendingState {
@@ -197,8 +218,20 @@ enum NormalModeInterpreter {
     actualChar: Character?
   ) -> [String] {
     if hasControl {
-      guard let ignoredChar else { return [] }
-      return ["ctrl-\(ignoredChar)"]
+      // Prefer `charactersIgnoringModifiers` when it gives a real
+      // letter/digit, since it's keyboard-layout-aware. Fall back to
+      // the keyCode for control combos that surface as ASCII control
+      // characters (Ctrl+I → HT/\t, Ctrl+O → SI, Ctrl+M → CR) so
+      // bindings like `ctrl-i`/`ctrl-o` still match.
+      if let ignoredChar, ignoredChar.isASCII,
+        ignoredChar.isLetter || ignoredChar.isNumber
+      {
+        return ["ctrl-\(ignoredChar)"]
+      }
+      if let letter = keyCodeLetter(keyCode) {
+        return ["ctrl-\(letter)"]
+      }
+      return []
     }
     var keys: [String] = []
     if let actualChar {
@@ -223,6 +256,269 @@ enum NormalModeInterpreter {
       break
     }
     return keys
+  }
+
+  /// Map a hardware keyCode to the lowercase ASCII letter/digit it
+  /// represents on a US-ANSI keyboard layout. Used to recover the key
+  /// identity when `charactersIgnoringModifiers` is unusable (e.g.,
+  /// Ctrl+I returning the HT control character).
+  private static func keyCodeLetter(_ keyCode: UInt16) -> Character? {
+    switch Int(keyCode) {
+    case kVK_ANSI_A: return "a"
+    case kVK_ANSI_B: return "b"
+    case kVK_ANSI_C: return "c"
+    case kVK_ANSI_D: return "d"
+    case kVK_ANSI_E: return "e"
+    case kVK_ANSI_F: return "f"
+    case kVK_ANSI_G: return "g"
+    case kVK_ANSI_H: return "h"
+    case kVK_ANSI_I: return "i"
+    case kVK_ANSI_J: return "j"
+    case kVK_ANSI_K: return "k"
+    case kVK_ANSI_L: return "l"
+    case kVK_ANSI_M: return "m"
+    case kVK_ANSI_N: return "n"
+    case kVK_ANSI_O: return "o"
+    case kVK_ANSI_P: return "p"
+    case kVK_ANSI_Q: return "q"
+    case kVK_ANSI_R: return "r"
+    case kVK_ANSI_S: return "s"
+    case kVK_ANSI_T: return "t"
+    case kVK_ANSI_U: return "u"
+    case kVK_ANSI_V: return "v"
+    case kVK_ANSI_W: return "w"
+    case kVK_ANSI_X: return "x"
+    case kVK_ANSI_Y: return "y"
+    case kVK_ANSI_Z: return "z"
+    case kVK_ANSI_0: return "0"
+    case kVK_ANSI_1: return "1"
+    case kVK_ANSI_2: return "2"
+    case kVK_ANSI_3: return "3"
+    case kVK_ANSI_4: return "4"
+    case kVK_ANSI_5: return "5"
+    case kVK_ANSI_6: return "6"
+    case kVK_ANSI_7: return "7"
+    case kVK_ANSI_8: return "8"
+    case kVK_ANSI_9: return "9"
+    default: return nil
+    }
+  }
+
+  /// Parse a user-facing key string into a sequence of internal-form
+  /// atoms.
+  ///
+  /// **Syntax (single source of truth):**
+  ///   - Letters/digits and any printable ASCII punctuation are
+  ///     literal: `h`, `1`, `'`, `[`, `:`, `?`, `/`.
+  ///   - The three syntactic markers `+`, `<`, `>` cannot appear
+  ///     bare; use `<plus>`, `<less>`, `<greater>` instead.
+  ///   - `<name>` accepts any of:
+  ///       - a single bare-allowed character (`<a>` == `a`,
+  ///         `<'>` == `'`);
+  ///       - a punctuation fullname (`<colon>` == `:`,
+  ///         `<lbracket>` == `[`, `<backslash>` == `\`);
+  ///       - a named non-typeable key (`<tab>`, `<space>`,
+  ///         `<escape>`, `<enter>`, `<delete>`, `<delete_forward>`,
+  ///         `<up>`, `<down>`, `<left>`, `<right>`, `<home>`,
+  ///         `<end>`, `<pageup>`, `<pagedown>`);
+  ///       - `<leader>` (substituted later from `mode.normal.leader`).
+  ///   - Modifier chords use `+`: `ctrl+i`, `cmd+shift+<lbracket>`,
+  ///     `cmd+<delete>`. Modifier aliases: `cmd`/`command`,
+  ///     `ctrl`/`control`, `shift`, `alt`/`opt`/`option`.
+  ///   - Whitespace is stripped throughout so `ctrl+i <leader>c` and
+  ///     `ctrl+i<leader>c` are equivalent.
+  ///
+  /// Returns nil for any malformed input. Each returned atom is the
+  /// interpreter's internal token (single char, named key word, or
+  /// "<leader>" placeholder).
+  static func parseKeySequence(_ raw: String) -> [String]? {
+    let stripped = String(raw.filter { !$0.isWhitespace })
+    guard !stripped.isEmpty else { return nil }
+    var atoms: [String] = []
+    var idx = stripped.startIndex
+    while idx < stripped.endIndex {
+      if let chord = readModifierChord(stripped, from: &idx) {
+        atoms.append(chord)
+        continue
+      }
+      let ch = stripped[idx]
+      if ch == "<" {
+        guard let inner = readAngleBracketed(stripped, from: &idx),
+          let translated = translateNamedKey(inner)
+        else { return nil }
+        atoms.append(translated)
+        continue
+      }
+      if isBareKeyChar(ch) {
+        atoms.append(String(ch))
+        idx = stripped.index(after: idx)
+        continue
+      }
+      return nil
+    }
+    return atoms
+  }
+
+  /// Canonicalize a mapping-key string into the interpreter's flat
+  /// internal form (sequence of atoms joined back into a string the
+  /// interpreter prefix-matches against).
+  static func canonicalizeMappingKey(_ raw: String) -> String? {
+    parseKeySequence(raw)?.joined()
+  }
+
+  /// Translate the configured leader value into the interpreter's
+  /// internal token form. Must resolve to exactly one atom — leader
+  /// is a single keystroke, never a chord/sequence.
+  static func translateLeader(_ raw: String) -> String? {
+    guard let atoms = parseKeySequence(raw), atoms.count == 1 else { return nil }
+    let atom = atoms[0]
+    return atom == "<leader>" ? nil : atom
+  }
+
+  /// True when `ch` may appear bare in mapping/leader syntax. Reserves
+  /// the syntactic markers and rejects whitespace + non-printable.
+  static func isBareKeyChar(_ ch: Character) -> Bool {
+    if ch == "+" || ch == "<" || ch == ">" { return false }
+    guard ch.isASCII, let code = ch.asciiValue else { return false }
+    return code >= 0x21 && code <= 0x7E
+  }
+
+  /// Map an `<name>` payload to the interpreter's internal token.
+  /// `leader` stays as the `<leader>` placeholder for late
+  /// substitution. Single bare-allowed characters are a literal
+  /// alias (so `<a>` is identical to bare `a`).
+  static func translateNamedKey(_ name: String) -> String? {
+    if name == "leader" { return "<leader>" }
+    if name.count == 1, let ch = name.first, isBareKeyChar(ch) {
+      return String(ch)
+    }
+    if let punct = punctuationCharacter(for: name) {
+      return String(punct)
+    }
+    return Self.namedKeyAliases.contains(name) ? name : nil
+  }
+
+  /// Reverse of `translateNamedKey` for help-text formatting. Returns
+  /// the user-facing fullname surrounded by `<>`, or nil for ordinary
+  /// alphanumeric input.
+  static func fullName(forCharacter ch: Character) -> String? {
+    Self.punctuationFullNames[ch]
+  }
+
+  /// Punctuation chars accepted as `<fullname>` tokens. Lookup is by
+  /// fullname so the canonicalizer can map `<lbracket>` → `[`.
+  private static let punctuationFullNames: [Character: String] = [
+    ":": "colon",
+    ";": "semicolon",
+    ",": "comma",
+    ".": "period",
+    "/": "slash",
+    "?": "question",
+    "!": "bang",
+    "'": "apostrophe",
+    "\"": "quote",
+    "[": "lbracket",
+    "]": "rbracket",
+    "{": "lbrace",
+    "}": "rbrace",
+    "(": "lparen",
+    ")": "rparen",
+    "<": "less",
+    ">": "greater",
+    "-": "minus",
+    "_": "underscore",
+    "=": "equal",
+    "+": "plus",
+    "*": "asterisk",
+    "&": "ampersand",
+    "^": "caret",
+    "%": "percent",
+    "$": "dollar",
+    "#": "hash",
+    "@": "at",
+    "~": "tilde",
+    "`": "backtick",
+    "\\": "backslash",
+    "|": "pipe",
+  ]
+
+  private static func punctuationCharacter(for fullname: String) -> Character? {
+    Self.punctuationFullNames.first { $0.value == fullname }?.key
+  }
+
+  /// Named keys other than punctuation that the interpreter or
+  /// HotkeySyntax can route. Kept narrow: only the keys we actually
+  /// emit or accept.
+  private static let namedKeyAliases: Set<String> = [
+    "tab", "space",
+    "delete", "backspace",
+    "delete_forward", "forward_delete",
+    "return", "enter",
+    "escape", "esc",
+    "up", "down", "left", "right",
+    "home", "end",
+    "pageup", "pagedown",
+  ]
+
+  private static let modifierAliases: [(token: String, canonical: String)] = [
+    ("command", "cmd"),
+    ("control", "ctrl"),
+    ("option", "alt"),
+    ("opt", "alt"),
+    ("cmd", "cmd"),
+    ("ctrl", "ctrl"),
+    ("shift", "shift"),
+    ("alt", "alt"),
+  ]
+
+  private static func readModifierChord(_ s: String, from idx: inout String.Index) -> String? {
+    var probe = idx
+    var collected: [String] = []
+    while probe < s.endIndex {
+      let lower = s[probe...].lowercased()
+      var matched: (String, String)?
+      for (token, canonical) in modifierAliases {
+        if lower.hasPrefix(token + "+") {
+          matched = (token, canonical)
+          break
+        }
+      }
+      guard let (token, canonical) = matched else { break }
+      collected.append(canonical)
+      probe = s.index(probe, offsetBy: token.count + 1)
+    }
+    guard !collected.isEmpty else { return nil }
+    guard probe < s.endIndex else { return nil }
+    let key: String
+    if s[probe] == "<" {
+      var local = probe
+      guard let inner = readAngleBracketed(s, from: &local),
+        let translated = translateNamedKey(inner)
+      else { return nil }
+      key = translated
+      probe = local
+    } else if isBareKeyChar(s[probe]) {
+      key = String(s[probe])
+      probe = s.index(after: probe)
+    } else {
+      return nil
+    }
+    idx = probe
+    let usesCmdOrAlt = collected.contains("cmd") || collected.contains("alt")
+    if !usesCmdOrAlt, collected.count == 1, collected[0] == "ctrl" {
+      return "ctrl-\(key)"
+    }
+    return (collected + [key]).joined(separator: "+")
+  }
+
+  private static func readAngleBracketed(_ s: String, from idx: inout String.Index) -> String? {
+    precondition(s[idx] == "<")
+    guard let end = s[s.index(after: idx)...].firstIndex(of: ">") else {
+      return nil
+    }
+    let inner = String(s[s.index(after: idx)..<end])
+    idx = s.index(after: end)
+    return inner.isEmpty ? nil : inner
   }
 }
 
@@ -264,11 +560,13 @@ enum NormalModeDispatcher {
         - `ctrl-d` / `ctrl-u` scroll by half a page.
         - `gg` scrolls to the top.
         - `G` scrolls to the bottom.
-        - Counts prefix actions: `10u`, `2gT`, and similar forms repeat the action.
+        - Counts prefix actions: `10u`, `2[t`, and similar forms repeat the action.
 
         ## Tabs And Windows
 
-        - `gt` / `gT` moves to the next or previous tab.
+        - `[t` / `]t` moves to the previous or next tab.
+        - `[h` / `]h` walks the focused target's page history.
+        - `[a` / `]a` cycles previous/next app in MRU order.
         - `g1` ... `g9` select a numbered tab when the focused source supports it.
         - In browsers this maps to tab selection.
         - `n` opens a new window with Cmd-N.
@@ -276,12 +574,13 @@ enum NormalModeDispatcher {
 
         ## Mouse Targets
 
-        - `f` targets clickable elements discovered from the focused app.
-        - `rf` right-clicks a discovered target.
-        - `df` double-clicks a discovered target.
+        - `f` targets clickable elements discovered from the focused app, then enters insert mode.
+        - `rf` right-clicks a discovered target, then enters insert mode.
+        - `df` double-clicks a discovered target, then enters insert mode.
         - `mf` moves the cursor to a discovered target.
-        - `F` starts mouse grid mode for a precise screen position.
-        - `rF` / `dF` / `mF` right-click, double-click, or move with mouse grid mode.
+        - `F` starts mouse grid mode for a precise screen position, then enters insert mode after the click.
+        - `rF` / `dF` right-click or double-click with mouse grid mode, then enter insert mode.
+        - `mF` moves the cursor with mouse grid mode.
 
         ## Command Line
 
@@ -331,7 +630,7 @@ enum NormalModeDispatcher {
             + "  " + padded(row.1, width: mappingWidth))
       }
       lines.append("")
-      lines.append("Counts: N{mapping}, e.g. 10u or 3gt")
+      lines.append("Counts: N{mapping}, e.g. 10u or 3]t")
       appendCommandLineHelp(to: &lines, visible: commandLineVisible)
       return lines.joined(separator: "\n")
     }
@@ -351,7 +650,7 @@ enum NormalModeDispatcher {
           + "  " + row.2)
     }
     lines.append("")
-    lines.append("Counts: N{mapping}, e.g. 10u or 3gt")
+    lines.append("Counts: N{mapping}, e.g. 10u or 3]t")
     appendCommandLineHelp(to: &lines, visible: commandLineVisible)
     return lines.joined(separator: "\n")
   }
@@ -413,6 +712,7 @@ enum NormalModeDispatcher {
     lines.append(":help [topic]")
     lines.append(":open <query>")
     lines.append(":flashlight <query>")
+    lines.append(":plugins list / :plugins ls / :plugins reload")
     return lines
   }
 
@@ -448,18 +748,55 @@ enum NormalModeDispatcher {
     case cut
     case paste
     case copyAll
-    case plugins
+    case plugins(PluginsSubcommand)
     case mappings
     case help(topic: String?)
   }
 
+  enum PluginsSubcommand: Equatable {
+    /// Bare `:plugins` — show the modal status view (current behavior).
+    case modal
+    /// `:plugins list` / `:plugins ls` — render the status table inline.
+    case list
+    /// `:plugins reload` — stop and restart every loaded plugin.
+    case reload
+  }
+
   static func commandLineCommand(_ raw: String) -> CommandLineCommand? {
+    if let plugins = pluginsCommand(raw) {
+      return plugins
+    }
     guard let parsed = parseCommandLine(raw) else { return nil }
     let matches = commandLineSpecs.compactMap { spec in
       spec.command(for: parsed.body, bang: parsed.bang)
     }
     guard matches.count == 1 else { return nil }
     return matches[0]
+  }
+
+  /// `:plugins`, `:plugins list`, `:plugins ls`, `:plugins reload`.
+  /// Returns nil when the input is not a `:plugins` invocation so the
+  /// generic command-spec table runs.
+  private static func pluginsCommand(_ raw: String) -> CommandLineCommand? {
+    var body = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard body.hasPrefix(":") else { return nil }
+    body.removeFirst()
+    body = body.trimmingCharacters(in: .whitespaces)
+    let parts = body.split(whereSeparator: { $0.isWhitespace }).map { String($0).lowercased() }
+    guard let head = parts.first, head == "plugins" else { return nil }
+    let args = Array(parts.dropFirst())
+    if args.isEmpty {
+      return .plugins(.modal)
+    }
+    guard args.count == 1 else { return nil }
+    switch args[0] {
+    case "list", "ls":
+      return .plugins(.list)
+    case "reload":
+      return .plugins(.reload)
+    default:
+      return nil
+    }
   }
 
   static func commandLineOpenAppQuery(_ raw: String) -> String? {
@@ -582,7 +919,7 @@ enum NormalModeDispatcher {
       .saveAndQuit(force: $0)
     },
     CommandLineSpec(names: ["p[rint]"], bangPolicy: .rejected) { _ in .print },
-    CommandLineSpec(names: ["e[dit]", "open"], bangPolicy: .rejected) { _ in .open },
+    CommandLineSpec(names: ["open", "e[dit]"], bangPolicy: .rejected) { _ in .open },
     CommandLineSpec(names: ["new"], bangPolicy: .rejected) { _ in .newWindow },
     CommandLineSpec(names: ["tabnew", "tabedit", "tabe"], bangPolicy: .rejected) {
       _ in .newTab
@@ -597,9 +934,120 @@ enum NormalModeDispatcher {
     CommandLineSpec(names: ["d[elete]", "cut"], bangPolicy: .rejected) { _ in .cut },
     CommandLineSpec(names: ["pu[t]", "paste"], bangPolicy: .rejected) { _ in .paste },
     CommandLineSpec(names: ["%y[ank]"], bangPolicy: .rejected) { _ in .copyAll },
-    CommandLineSpec(names: ["plugins"], bangPolicy: .rejected) { _ in .plugins },
+    CommandLineSpec(names: ["plugins"], bangPolicy: .rejected) { _ in .plugins(.modal) },
     CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
   ]
+
+  struct CommandLineCompletion: Equatable {
+    enum Kind: Equatable {
+      case terminal
+      case acceptsArgs
+      case pluginAction
+    }
+    var label: String
+    var insertion: String
+    var kind: Kind
+  }
+
+  struct CommandLineCompletionContext: Equatable {
+    var prefix: String
+    var query: String
+    var items: [CommandLineCompletion]
+  }
+
+  static func commandLineCompletions(
+    _ raw: String,
+    pluginCommands: [String],
+    pluginSubcommands: [String: [String]],
+    helpTopics: [String] = []
+  ) -> CommandLineCompletionContext? {
+    var body = raw
+    body.removeLeadingWhitespace()
+    guard body.hasPrefix(":") else { return nil }
+    body.removeFirst()
+
+    if body.first(where: { $0.isWhitespace }) == nil {
+      let items = topLevelCompletions(pluginCommands: pluginCommands)
+      return CommandLineCompletionContext(prefix: ":", query: body, items: items)
+    }
+
+    let parts = body.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+    guard parts.count == 2 else { return nil }
+    let command = String(parts[0]).lowercased()
+    let rest = String(parts[1])
+    guard rest.first(where: { $0.isWhitespace }) == nil else { return nil }
+
+    // Built-in `help` completes against the topic registry. Future
+    // commands plug in here the same way: assemble a list and emit
+    // a `pluginAction`-shaped completion. For dynamic candidate-style
+    // commands (`open`, `flashlight`) the existing
+    // `candidateFinderQuery` path renders results live and is the
+    // place to wire async / loading state when needed.
+    if command == "help" {
+      let items = helpTopics.sorted().map { topic in
+        CommandLineCompletion(label: topic, insertion: topic, kind: .pluginAction)
+      }
+      return CommandLineCompletionContext(
+        prefix: ":\(command) ", query: rest, items: items)
+    }
+    if command == "plugins" {
+      let items = pluginsBuiltinSubcommands.map { name in
+        CommandLineCompletion(label: name, insertion: name, kind: .pluginAction)
+      }
+      return CommandLineCompletionContext(
+        prefix: ":\(command) ", query: rest, items: items)
+    }
+
+    let actions = pluginSubcommands.first { key, _ in
+      key.localizedCaseInsensitiveCompare(command) == .orderedSame
+    }?.value ?? []
+    guard !actions.isEmpty else { return nil }
+    let items = actions.map { name in
+      CommandLineCompletion(label: name, insertion: name, kind: .pluginAction)
+    }
+    return CommandLineCompletionContext(
+      prefix: ":\(command) ", query: rest, items: items)
+  }
+
+  private static let acceptsArgsCompletionNames: Set<String> = [
+    "open", "flashlight", "help", "plugins",
+  ]
+
+  /// Built-in subcommands surfaced by `:plugins <tab>`. Kept in lockstep
+  /// with `pluginsCommand(_:)`.
+  static let pluginsBuiltinSubcommands: [String] = ["list", "ls", "reload"]
+
+  private static func topLevelCompletions(pluginCommands: [String])
+    -> [CommandLineCompletion]
+  {
+    var items: [CommandLineCompletion] = []
+    var seen = Set<String>()
+    // Only the primary (first) name per spec is surfaced. Aliases
+    // (`tabe`, `wq`, `cut`, …) still work as command-line input but
+    // don't pollute the suggestion list.
+    for spec in commandLineSpecs {
+      guard let primary = spec.names.first else { continue }
+      let full = primary.full
+      guard !full.hasPrefix("%") else { continue }
+      guard seen.insert(full).inserted else { continue }
+      let kind: CommandLineCompletion.Kind =
+        acceptsArgsCompletionNames.contains(full) ? .acceptsArgs : .terminal
+      let insertion = kind == .acceptsArgs ? "\(full) " : full
+      items.append(CommandLineCompletion(label: full, insertion: insertion, kind: kind))
+    }
+    for extra in ["help", "flashlight"] where seen.insert(extra).inserted {
+      items.append(
+        CommandLineCompletion(label: extra, insertion: "\(extra) ", kind: .acceptsArgs))
+    }
+    let dedupedPlugins = Array(Set(pluginCommands.map { $0.lowercased() })).sorted()
+    for command in dedupedPlugins where seen.insert(command).inserted {
+      items.append(
+        CommandLineCompletion(
+          label: command, insertion: "\(command) ", kind: .acceptsArgs))
+    }
+    items.sort { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+    return items
+  }
 
   static func pluginCommandLineInvocation(_ raw: String) -> (
     command: String, name: String, args: [String], raw: String

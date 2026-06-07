@@ -100,6 +100,11 @@ struct Config {
     /// Optional loopback HTTP server for live logs + state inspection.
     /// Accepted hostnames are validated by DebugServer before binding.
     var httpHost: String?
+    /// When true, every plugin watches its directory tree and triggers a
+    /// reload on any file change. Off by default — plugins re-install
+    /// when their content actually changes, so this is purely a dev
+    /// loop for iterating on plugin code without bouncing Flash.
+    var watchPlugins: Bool = false
   }
   struct Open {
     var ignoredApps: [String] = []
@@ -126,58 +131,91 @@ struct Config {
     var insert: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
     var labels = Labels()
+    /// How long the interpreter waits for the next key in a pending
+    /// sequence before resolving the longest matching prefix.
+    /// Vim's `timeoutlen`. Lower → faster commits, more two-key
+    /// collisions; higher → slower commits, fewer surprises.
+    var sequenceTimeoutMs: Int = Self.defaultSequenceTimeoutMs
+    static let defaultSequenceTimeoutMs = 300
 
+    /// Single-atom key form, parsed via `NormalModeInterpreter.parseKeySequence`.
+    /// Use `\` bare or `<backslash>` — both resolve to the same key.
     static let defaultNormalLeader = "\\"
 
-    static let defaultNormalMappings: [ModeMapping] = [
-      ModeMapping(key: "h", action: .flashCommand(.scroll(.left))),
-      ModeMapping(key: "j", action: .flashCommand(.scroll(.down))),
-      ModeMapping(key: "k", action: .flashCommand(.scroll(.up))),
-      ModeMapping(key: "l", action: .flashCommand(.scroll(.right))),
-      ModeMapping(key: "ctrl-e", action: .flashCommand(.scroll(.down))),
-      ModeMapping(key: "ctrl-y", action: .flashCommand(.scroll(.up))),
-      ModeMapping(key: "ctrl-d", action: .flashCommand(.scroll(.halfPageDown))),
-      ModeMapping(key: "ctrl-u", action: .flashCommand(.scroll(.halfPageUp))),
-      ModeMapping(key: "gg", action: .flashCommand(.scroll(.top))),
-      ModeMapping(key: "G", action: .flashCommand(.scroll(.bottom))),
-      ModeMapping(key: "H", action: .flashCommand(.historyBack)),
-      ModeMapping(key: "L", action: .flashCommand(.historyForward)),
-      ModeMapping(key: "gt", action: .flashCommand(.tabNext)),
-      ModeMapping(key: "gT", action: .flashCommand(.tabPrev)),
-      ModeMapping(key: "g1", action: .flashCommand(.tabSelect(index: 1))),
-      ModeMapping(key: "g2", action: .flashCommand(.tabSelect(index: 2))),
-      ModeMapping(key: "g3", action: .flashCommand(.tabSelect(index: 3))),
-      ModeMapping(key: "g4", action: .flashCommand(.tabSelect(index: 4))),
-      ModeMapping(key: "g5", action: .flashCommand(.tabSelect(index: 5))),
-      ModeMapping(key: "g6", action: .flashCommand(.tabSelect(index: 6))),
-      ModeMapping(key: "g7", action: .flashCommand(.tabSelect(index: 7))),
-      ModeMapping(key: "g8", action: .flashCommand(.tabSelect(index: 8))),
-      ModeMapping(key: "g9", action: .flashCommand(.tabSelect(index: 9))),
-      ModeMapping(key: "ctrl-o", action: .flashCommand(.movementBack)),
-      ModeMapping(key: "ctrl-i", action: .flashCommand(.movementForward)),
-      ModeMapping(key: "gf", action: .flashCommand(.nextFrame)),
-      ModeMapping(key: "gF", action: .flashCommand(.mainFrame)),
-      ModeMapping(key: "i", action: .flashCommand(.insertMode)),
-      ModeMapping(key: "f", action: .flashCommand(.mouseTarget(.click(.leftClick)))),
-      ModeMapping(key: "rf", action: .flashCommand(.mouseTarget(.click(.rightClick)))),
-      ModeMapping(key: "df", action: .flashCommand(.mouseTarget(.click(.doubleClick)))),
-      ModeMapping(key: "mf", action: .flashCommand(.mouseTarget(.move))),
-      ModeMapping(key: "F", action: .flashCommand(.mouseGrid(.click(.leftClick)))),
-      ModeMapping(key: "rF", action: .flashCommand(.mouseGrid(.click(.rightClick)))),
-      ModeMapping(key: "dF", action: .flashCommand(.mouseGrid(.click(.doubleClick)))),
-      ModeMapping(key: "mF", action: .flashCommand(.mouseGrid(.move))),
-      ModeMapping(key: "u", action: .flashCommand(.undo)),
-      ModeMapping(key: "ctrl-r", action: .flashCommand(.redo)),
-      ModeMapping(key: "x", action: .flashCommand(.close)),
-      ModeMapping(key: "n", action: .flashCommand(.newWindow)),
-      ModeMapping(key: "t", action: .flashCommand(.tabNewInsert)),
-      ModeMapping(key: "/", action: .flashCommand(.find)),
-      ModeMapping(key: "\(Self.defaultNormalLeader)space", action: .flashCommand(.flashlight)),
-      ModeMapping(key: "r", action: .flashCommand(.reload(force: false))),
-      ModeMapping(key: "R", action: .flashCommand(.reload(force: true))),
-      ModeMapping(key: "?", action: .flashCommand(.showUsage(topic: nil))),
-      ModeMapping(key: ":", action: .flashCommand(.commandMode)),
-    ]
+    static let defaultNormalMappings: [ModeMapping] = makeDefaultNormalMappings()
+
+    private static func makeDefaultNormalMappings() -> [ModeMapping] {
+      // Bare punctuation is allowed by the parser; defaults stay
+      // concise. Use `<name>` only for keys that can't be typed bare
+      // (`<leader>`, `<space>`) or for emphasis on a non-obvious key.
+      var raw: [(String, MappingAction)] = [
+        ("h", .flashCommand(.scroll(.left))),
+        ("j", .flashCommand(.scroll(.down))),
+        ("k", .flashCommand(.scroll(.up))),
+        ("l", .flashCommand(.scroll(.right))),
+        ("ctrl+e", .flashCommand(.scroll(.down))),
+        ("ctrl+y", .flashCommand(.scroll(.up))),
+        ("ctrl+d", .flashCommand(.scroll(.halfPageDown))),
+        ("ctrl+u", .flashCommand(.scroll(.halfPageUp))),
+        ("gg", .flashCommand(.scroll(.top))),
+        ("G", .flashCommand(.scroll(.bottom))),
+        ("[h", .flashCommand(.historyBack)),
+        ("]h", .flashCommand(.historyForward)),
+        ("[t", .flashCommand(.tabPrev)),
+        ("]t", .flashCommand(.tabNext)),
+        ("[a", .flashCommand(.appPrev)),
+        ("]a", .flashCommand(.appNext)),
+        ("g1", .flashCommand(.tabSelect(index: 1))),
+        ("g2", .flashCommand(.tabSelect(index: 2))),
+        ("g3", .flashCommand(.tabSelect(index: 3))),
+        ("g4", .flashCommand(.tabSelect(index: 4))),
+        ("g5", .flashCommand(.tabSelect(index: 5))),
+        ("g6", .flashCommand(.tabSelect(index: 6))),
+        ("g7", .flashCommand(.tabSelect(index: 7))),
+        ("g8", .flashCommand(.tabSelect(index: 8))),
+        ("g9", .flashCommand(.tabSelect(index: 9))),
+        ("ctrl+o", .flashCommand(.appPrev)),
+        ("ctrl+i", .flashCommand(.appNext)),
+        ("gt", .flashCommand(.tabNext)),
+        ("gT", .flashCommand(.tabPrev)),
+        ("gf", .flashCommand(.nextFrame)),
+        ("gF", .flashCommand(.mainFrame)),
+        ("i", .flashCommand(.insertMode)),
+        ("f", .flashCommand(.mouseTarget(.click(.leftClick)))),
+        ("rf", .flashCommand(.mouseTarget(.click(.rightClick)))),
+        ("df", .flashCommand(.mouseTarget(.click(.doubleClick)))),
+        ("mf", .flashCommand(.mouseTarget(.move))),
+        ("F", .flashCommand(.mouseGrid(.click(.leftClick)))),
+        ("rF", .flashCommand(.mouseGrid(.click(.rightClick)))),
+        ("dF", .flashCommand(.mouseGrid(.click(.doubleClick)))),
+        ("mF", .flashCommand(.mouseGrid(.move))),
+        ("u", .flashCommand(.undo)),
+        ("ctrl+r", .flashCommand(.redo)),
+        ("x", .flashCommand(.close)),
+        ("n", .flashCommand(.newWindow)),
+        ("t", .flashCommand(.tabNewInsert)),
+        ("/", .flashCommand(.find)),
+        ("<leader><space>", .flashCommand(.flashlight)),
+        ("r", .flashCommand(.reload(force: false))),
+        ("R", .flashCommand(.reload(force: true))),
+        ("?", .flashCommand(.showUsage(topic: nil))),
+        (":", .flashCommand(.commandMode)),
+      ]
+      // Vim-style marks: `m<letter>` sets, `` `<letter> `` jumps.
+      // Generated rather than hand-listed so the 52 mappings (26+26)
+      // stay in sync if more letter ranges are added later.
+      for letter in "abcdefghijklmnopqrstuvwxyz" {
+        let l = String(letter)
+        raw.append(("m\(l)", .flashCommand(.setMark(letter: l))))
+        raw.append(("`\(l)", .flashCommand(.jumpToMark(letter: l))))
+      }
+      return raw.map { (key, action) in
+        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
+          preconditionFailure("default mapping key \"\(key)\" failed canonicalization")
+        }
+        return ModeMapping(key: canonical, action: action)
+      }
+    }
 
     func mappings(for mode: FlashMode) -> [ModeMapping] {
       switch mode {
@@ -189,17 +227,12 @@ struct Config {
     }
 
     mutating func refreshLeaderDerivedDefaults() {
-      let defaultKey = "\(Self.defaultNormalLeader)space"
-      let resolvedKey = "\(normalLeader ?? Self.defaultNormalLeader)space"
-      guard resolvedKey != defaultKey else { return }
-      guard
-        let defaultIndex = normal.firstIndex(where: {
-          $0.key == defaultKey && $0.action == .flashCommand(.flashlight)
-        })
-      else { return }
-      normal.remove(at: defaultIndex)
-      if !normal.contains(where: { $0.key == resolvedKey }) {
-        normal.append(ModeMapping(key: resolvedKey, action: .flashCommand(.flashlight)))
+      let leaderRaw = normalLeader ?? Self.defaultNormalLeader
+      guard let leaderInternal = NormalModeInterpreter.translateLeader(leaderRaw) else { return }
+      for index in normal.indices where normal[index].key.contains("<leader>") {
+        let mapping = normal[index]
+        let resolved = mapping.key.replacingOccurrences(of: "<leader>", with: leaderInternal)
+        normal[index] = ModeMapping(key: resolved, action: mapping.action)
       }
     }
 
@@ -230,7 +263,11 @@ struct Config {
   /// instead of re-parsing layout selectors.
   private(set) var resolvedAlphabet: Alphabet.Resolved = Alphabet.resolve(Alphabet.defaultKeys)
 
-  static let `default` = Config()
+  static let `default`: Config = {
+    var config = Config()
+    config.prepareDerivedValues()
+    return config
+  }()
   static let ambiguousShiftMagicModifierWarningPrefix = "hints.magic_modifiers includes \"shift\""
 
   mutating func recordLocation(path: String, location: ConfigLocation?) {
@@ -295,6 +332,7 @@ struct Config {
         "profile": debug.profile,
         "show_bounds": debug.showBounds,
         "slow_ms": debug.slowMs,
+        "watch_plugins": debug.watchPlugins,
       ],
       "hints": [
         "keys": hints.keys,
@@ -440,6 +478,14 @@ extension URLCommand {
       return "flash://movement_back"
     case .movementForward:
       return "flash://movement_forward"
+    case .appPrev:
+      return "flash://app_previous"
+    case .appNext:
+      return "flash://app_next"
+    case .setMark(let letter):
+      return "flash://set_mark?letter=\(letter)"
+    case .jumpToMark(let letter):
+      return "flash://jump_to_mark?letter=\(letter)"
     case .quitApp(let force):
       return force ? "flash://app_quit?force=1" : "flash://app_quit"
     case .save:

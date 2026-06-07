@@ -22,7 +22,7 @@ final class SourceRegistry {
   init(
     descriptors: [SourceDescriptor]? = nil,
     openConfig: Config.Open = .init(),
-    terminalBundleIDs: Set<String> = TmuxProvider.terminalBundles,
+    terminalBundleIDs: Set<String> = TerminalBundles.identifiers,
     runningApplications: [NSRunningApplication]? = nil,
     runningApplicationsProvider: (() -> [NSRunningApplication])? = nil,
     pluginSourcesProvider: (() -> [FlashSource])? = nil
@@ -47,9 +47,6 @@ final class SourceRegistry {
         },
         SourceDescriptor(identifier: "accessibility", activationPolicy: .always) {
           AccessibilityProvider()
-        },
-        SourceDescriptor(identifier: "tmux", activationPolicy: .terminalBundles) {
-          TmuxProvider()
         },
         SourceDescriptor(
           identifier: "firefox-tabs",
@@ -276,8 +273,12 @@ final class SourceRegistry {
 
   func source(identifier: String) -> FlashSource? {
     lock.lock()
-    defer { lock.unlock() }
-    return activeSourcesByID[identifier]
+    if let builtIn = activeSourcesByID[identifier] {
+      lock.unlock()
+      return builtIn
+    }
+    lock.unlock()
+    return pluginSourcesProvider().first { $0.identifier == identifier }
   }
 
   private func performSourceAction(

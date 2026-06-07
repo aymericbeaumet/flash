@@ -6,6 +6,11 @@ struct CandidateMatch {
   var score: Int
 }
 
+struct CommandLineCompletionMatch {
+  var completion: NormalModeDispatcher.CommandLineCompletion
+  var score: Int
+}
+
 enum CandidateFinder {
   private static let aliveTieBreakScoreMargin = 500
 
@@ -32,9 +37,14 @@ enum CandidateFinder {
     normalize: (String) -> String = NormalModeDispatcher.normalizedSearchText
   ) -> Candidate {
     var prepared = candidate
-    prepared.displayTitle = displayTitle(candidate)
-    prepared.normalizedSearchText = normalize(
-      searchText(candidate))
+    let display = displayTitle(candidate)
+    prepared.displayTitle = display
+    prepared.normalizedSearchText = normalize(searchText(candidate))
+    prepared.normalizedScoringFields = NormalizedScoringFields(
+      title: normalize(candidate.name),
+      sourceTitle: normalize("\(candidate.source) \(candidate.name)"),
+      url: normalize(urlSearchText(candidate)),
+      displayTitle: normalize(display))
     return prepared
   }
 
@@ -46,50 +56,76 @@ enum CandidateFinder {
       normalizedQuery:normalizedCandidate:)
   ) -> Int? {
     let normalizedQuery = normalize(query.trimmingCharacters(in: .whitespacesAndNewlines))
-    if normalizedQuery.isEmpty { return 0 }
+    return score(normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
+  }
 
+  /// Hot path used by the live ranker. The caller pre-normalizes the
+  /// query once and reuses the candidate's pre-normalized scoring
+  /// fields (populated in `prepare`). Saves O(fields × candidates)
+  /// `normalizedSearchText` calls per keystroke; matters at ~1k
+  /// candidates with notes/contacts/reminders all in the pool.
+  static func score(
+    normalizedQuery: String,
+    candidate: Candidate,
+    fuzzyScore: (String, String) -> Int?
+  ) -> Int? {
+    if normalizedQuery.isEmpty { return 0 }
+    let fields = candidate.normalizedScoringFields
     var best: Int?
-    if let titleScore = fieldScore(
-      query: normalizedQuery,
-      field: candidate.name,
-      base: 10_000,
-      normalize: normalize,
-      fuzzyScore: fuzzyScore)
+    if let titleScore = fieldScoreNormalized(
+      query: normalizedQuery, normalized: fields.title, base: 10_000, fuzzyScore: fuzzyScore)
     {
       best = max(best ?? titleScore, titleScore)
     }
-    if let sourceTitleScore = fieldScore(
-      query: normalizedQuery,
-      field: "\(candidate.source) \(candidate.name)",
-      base: 8_000,
-      normalize: normalize,
-      fuzzyScore: fuzzyScore)
+    if let sourceTitleScore = fieldScoreNormalized(
+      query: normalizedQuery, normalized: fields.sourceTitle, base: 8_000, fuzzyScore: fuzzyScore)
     {
       best = max(best ?? sourceTitleScore, sourceTitleScore)
     }
-    if let urlScore = fieldScore(
-      query: normalizedQuery,
-      field: urlSearchText(candidate),
-      base: 9_000,
-      normalize: normalize,
-      fuzzyScore: fuzzyScore)
+    if let urlScore = fieldScoreNormalized(
+      query: normalizedQuery, normalized: fields.url, base: 9_000, fuzzyScore: fuzzyScore)
     {
       best = max(best ?? urlScore, urlScore)
     }
-    if let displayScore = fieldScore(
-      query: normalizedQuery,
-      field: candidate.displayTitle,
-      base: 7_000,
-      normalize: normalize,
-      fuzzyScore: fuzzyScore)
+    if let displayScore = fieldScoreNormalized(
+      query: normalizedQuery, normalized: fields.displayTitle, base: 7_000, fuzzyScore: fuzzyScore)
     {
       best = max(best ?? displayScore, displayScore)
     }
     if let searchScore = fuzzyScore(normalizedQuery, candidate.normalizedSearchText) {
       best = max(best ?? searchScore, searchScore)
     }
-    return best
+    guard var resolved = best else { return nil }
+    resolved += sourcePrecedenceBonus(for: candidate.source)
+    return resolved
   }
+
+  /// Tier bonus the user asked for: when two candidates fuzzy-match
+  /// equally well, prefer apps > tmux windows > browser tabs >
+  /// slack > notes / reminders / contacts. The bonus is a small
+  /// fixed offset per tier, well below the inter-base spacing
+  /// (`titleScore` jumps by 1k between exact/prefix/contains), so it
+  /// only breaks ties without overriding strong content matches.
+  static func sourcePrecedenceBonus(for source: String) -> Int {
+    let lowered = source.lowercased()
+    for (index, tier) in sourcePrecedenceTiers.enumerated() {
+      if tier.contains(lowered) {
+        return (sourcePrecedenceTiers.count - index) * 40
+      }
+    }
+    return 0
+  }
+
+  private static let sourcePrecedenceTiers: [Set<String>] = [
+    ["app"],
+    ["tmux"],
+    [
+      "firefox", "firefox-dev", "safari", "chrome", "chromium",
+      "brave", "edge", "arc", "vivaldi", "opera",
+    ],
+    ["slack"],
+    ["notes", "reminders", "contacts"],
+  ]
 
   static func isAlive(_ candidate: Candidate) -> Bool {
     candidate.pid != nil
@@ -186,19 +222,28 @@ enum CandidateFinder {
     normalize: (String) -> String,
     fuzzyScore: (String, String) -> Int?
   ) -> Int? {
-    let normalizedField = normalize(field)
-    guard !normalizedField.isEmpty else { return nil }
-    if normalizedField == query {
-      return base + 1_000
+    fieldScoreNormalized(
+      query: query, normalized: normalize(field), base: base, fuzzyScore: fuzzyScore)
+  }
+
+  /// Same scoring rules as `fieldScore`, but the caller has already
+  /// normalized the field. Used by the live ranking path.
+  private static func fieldScoreNormalized(
+    query: String,
+    normalized: String,
+    base: Int,
+    fuzzyScore: (String, String) -> Int?
+  ) -> Int? {
+    guard !normalized.isEmpty else { return nil }
+    if normalized == query { return base + 1_000 }
+    if normalized.hasPrefix(query) {
+      return base + 700 - min(200, normalized.count - query.count)
     }
-    if normalizedField.hasPrefix(query) {
-      return base + 700 - min(200, normalizedField.count - query.count)
+    if let range = normalized.range(of: query) {
+      let offset = normalized.distance(from: normalized.startIndex, to: range.lowerBound)
+      return base + 400 - min(300, offset * 4) - min(120, normalized.count - query.count)
     }
-    if let range = normalizedField.range(of: query) {
-      let offset = normalizedField.distance(from: normalizedField.startIndex, to: range.lowerBound)
-      return base + 400 - min(300, offset * 4) - min(120, normalizedField.count - query.count)
-    }
-    guard let fuzzy = fuzzyScore(query, normalizedField) else { return nil }
+    guard let fuzzy = fuzzyScore(query, normalized) else { return nil }
     return base + min(300, fuzzy)
   }
 

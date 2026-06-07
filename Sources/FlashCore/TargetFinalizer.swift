@@ -129,11 +129,29 @@ private struct SpatialDedup {
     }
   }
 
+  /// Two rects are considered duplicates when they substantially cover the
+  /// same screen real estate. The intent is to drop AX wrappers that
+  /// repeat a single logical control — Firefox's `<a><img/></a>` (AXLink
+  /// and AXImage with identical frames), or two web-area providers each
+  /// emitting the same anchor.
+  ///
+  /// We require the smaller rect to fill most of the larger one: when a
+  /// tiny inner control sits inside a much larger clickable container
+  /// (e.g. a small icon button nested inside a large `<button>`), the
+  /// outer control is its own legitimate hint target and must survive.
+  /// Requiring `smaller / larger > 0.5` keeps the same-rect collapse
+  /// (ratio ≈ 1) while letting nested independent controls coexist.
   private func overlapsSubstantially(_ a: CGRect, _ b: CGRect) -> Bool {
     let inter = a.intersection(b)
     if inter.isNull { return false }
     let interArea = inter.width * inter.height
-    let smaller = min(a.width * a.height, b.width * b.height)
-    return smaller > 0 && interArea / smaller > 0.6
+    let aArea = a.width * a.height
+    let bArea = b.width * b.height
+    let smaller = min(aArea, bArea)
+    let larger = max(aArea, bArea)
+    guard smaller > 0, larger > 0 else { return false }
+    let containment = interArea / smaller
+    let sizeRatio = smaller / larger
+    return containment > 0.6 && sizeRatio > 0.5
   }
 }

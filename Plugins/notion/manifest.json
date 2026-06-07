@@ -1,0 +1,18 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "version": "0.1.0",
+  "description": "Notion API and worker actions backed by ntn.",
+  "install": "./install.sh",
+  "start": "./start.sh",
+  "events": [
+    "config.*"
+  ],
+  "actions": [
+    { "command": "notion", "name": "login", "description": "Authenticate ntn" },
+    { "command": "notion", "name": "version", "description": "Show ntn version" },
+    { "command": "notion", "name": "api", "description": "Run a Notion API request" },
+    { "command": "notion", "name": "workers", "description": "Run a Notion Workers command" },
+    { "command": "notion", "name": "run", "description": "Run ntn with raw arguments" }
+  ]
+}

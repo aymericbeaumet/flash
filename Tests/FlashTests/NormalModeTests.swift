@@ -83,12 +83,14 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "g").pending, "g")
     XCTAssertEqual(command(pending: "g", chars: "g"), .scroll(.top))
     XCTAssertEqual(command(chars: "G", ignoring: "g", flags: [.shift]), .scroll(.bottom))
-    XCTAssertEqual(command(chars: "H", ignoring: "h", flags: [.shift]), .historyBack)
-    XCTAssertEqual(command(chars: "L", ignoring: "l", flags: [.shift]), .historyForward)
+    XCTAssertEqual(command(pending: "[", chars: "h"), .historyBack)
+    XCTAssertEqual(command(pending: "]", chars: "h"), .historyForward)
     XCTAssertEqual(command(pending: "g", chars: "f"), .nextFrame)
     XCTAssertEqual(command(pending: "g", chars: "F", ignoring: "f", flags: [.shift]), .mainFrame)
-    XCTAssertEqual(command(pending: "g", chars: "t"), .tabNext)
-    XCTAssertEqual(command(pending: "g", chars: "T", ignoring: "t", flags: [.shift]), .tabPrev)
+    XCTAssertEqual(command(pending: "]", chars: "t"), .tabNext)
+    XCTAssertEqual(command(pending: "[", chars: "t"), .tabPrev)
+    XCTAssertEqual(command(pending: "[", chars: "a"), .appPrev)
+    XCTAssertEqual(command(pending: "]", chars: "a"), .appNext)
     XCTAssertEqual(command(pending: "g", chars: "4"), .tabSelect(index: 4))
     XCTAssertEqual(command(chars: "n"), .newWindow)
     XCTAssertEqual(command(chars: "t"), .tabNewInsert)
@@ -102,11 +104,11 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(undo.command, .undo)
     XCTAssertEqual(undo.repeatCount, 10)
 
-    let previousTab = transition(pending: "2g", chars: "T", ignoring: "t", flags: [.shift])
+    let previousTab = transition(pending: "2[", chars: "t")
     XCTAssertEqual(previousTab.command, .tabPrev)
     XCTAssertEqual(previousTab.repeatCount, 2)
 
-    let nextTab = transition(pending: "2g", chars: "t")
+    let nextTab = transition(pending: "2]", chars: "t")
     XCTAssertEqual(nextTab.command, .tabNext)
     XCTAssertEqual(nextTab.repeatCount, 2)
 
@@ -121,16 +123,17 @@ final class NormalModeTests: XCTestCase {
 
   func testPendingSequenceTimesOut() {
     let start = Date(timeIntervalSince1970: 1_000)
+    XCTAssertEqual(NormalModeInterpreter.sequenceTimeoutMs, 300)
     XCTAssertFalse(
       NormalModeInterpreter.pendingSequenceTimedOut(
         pending: "g",
         lastInputAt: start,
-        now: start.addingTimeInterval(0.5)))
+        now: start.addingTimeInterval(0.299)))
     XCTAssertTrue(
       NormalModeInterpreter.pendingSequenceTimedOut(
         pending: "g",
         lastInputAt: start,
-        now: start.addingTimeInterval(1.2)))
+        now: start.addingTimeInterval(0.301)))
   }
 
   func testCopySequences() {
@@ -142,7 +145,9 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "m").pending, "m")
     XCTAssertEqual(command(pending: "m", chars: "f"), .mouseTarget(.move))
     XCTAssertEqual(command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.move))
-    XCTAssertNil(command(pending: "m", chars: "x"))
+    // `m<letter>` now sets a vim-style mark instead of being unmapped.
+    XCTAssertEqual(command(pending: "m", chars: "x"), .setMark(letter: "x"))
+    XCTAssertEqual(command(pending: "`", chars: "x"), .jumpToMark(letter: "x"))
   }
 
   func testFIsMouseTargetAndShiftFIsMouseGrid() {
@@ -164,39 +169,18 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.doubleClick)))
   }
 
-  func testHintCommitEntersInsertOnlyForTextInputLeftClickTargets() {
+  func testMouseTargetCommitEntersInsertForAllClickActions() {
     XCTAssertTrue(
-      AppDelegate.hintCommitShouldEnterInsertMode(
-        JumpTarget(
-          id: "tmux",
-          frame: CGRect(x: 0, y: 0, width: 10, height: 10),
-          role: nil,
-          acceptsTextInput: true,
-          providerID: "tmux")))
+      AppDelegate.mouseTargetCommitShouldEnterInsertMode(action: .leftClick))
     XCTAssertTrue(
-      AppDelegate.hintCommitShouldEnterInsertMode(
-        JumpTarget(
-          id: "input",
-          frame: CGRect(x: 0, y: 0, width: 10, height: 10),
-          role: "AXTextField",
-          acceptsTextInput: true,
-          providerID: "accessibility")))
-    XCTAssertFalse(
-      AppDelegate.hintCommitShouldEnterInsertMode(
-        JumpTarget(
-          id: "button",
-          frame: CGRect(x: 0, y: 0, width: 10, height: 10),
-          role: "AXButton",
-          providerID: "accessibility")))
-    XCTAssertFalse(
-      AppDelegate.hintCommitShouldEnterInsertMode(
-        JumpTarget(
-          id: "input-right-click",
-          frame: CGRect(x: 0, y: 0, width: 10, height: 10),
-          role: "AXTextField",
-          acceptsTextInput: true,
-          providerID: "accessibility"),
-        action: .rightClick))
+      AppDelegate.mouseTargetCommitShouldEnterInsertMode(action: .rightClick))
+    XCTAssertTrue(
+      AppDelegate.mouseTargetCommitShouldEnterInsertMode(action: .doubleClick))
+  }
+
+  func testMouseGridCommitEntersInsertForClicksButNotMoves() {
+    XCTAssertTrue(AppDelegate.mouseGridCommitShouldEnterInsertMode(isMove: false))
+    XCTAssertFalse(AppDelegate.mouseGridCommitShouldEnterInsertMode(isMove: true))
   }
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
@@ -224,7 +208,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(command(chars: "O", ignoring: "o", flags: [.shift]))
     let modified = transition(chars: "r", flags: [.command])
     XCTAssertNil(modified.command)
-    XCTAssertFalse(modified.passThrough)
+    // Hermetic normal mode: any Cmd/Opt chord without an explicit
+    // mapping is swallowed, never forwarded to the focused app.
     XCTAssertEqual(modified.pending, "")
   }
 
@@ -311,7 +296,8 @@ final class NormalModeTests: XCTestCase {
         text: "INSERT",
         visible: true,
         captureInput: false,
-        inputMode: .hints))
+        inputMode: .hints,
+        refreshActiveWindowBorder: true))
     XCTAssertEqual(
       AppDelegate.modeOverlaySnapshot(
         mode: .normal,
@@ -324,7 +310,8 @@ final class NormalModeTests: XCTestCase {
         text: "NORMAL",
         visible: true,
         captureInput: true,
-        inputMode: .normal))
+        inputMode: .normal,
+        refreshActiveWindowBorder: false))
     XCTAssertFalse(
       AppDelegate.modeOverlaySnapshot(
         mode: .normal,
@@ -351,11 +338,17 @@ final class NormalModeTests: XCTestCase {
         captureOverride: true).captureInput)
   }
 
-  func testActiveWindowBorderIsHiddenDuringWindowGeometryChanges() {
-    XCTAssertTrue(
+  func testActiveWindowBorderIsAlwaysHidden() {
+    XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         mode: .insert,
         modeBadgeEnabled: true,
+        hasHints: false,
+        windowGeometryChangeInProgress: false))
+    XCTAssertFalse(
+      AppDelegate.activeWindowBorderShouldBeVisible(
+        mode: .insert,
+        modeBadgeEnabled: false,
         hasHints: false,
         windowGeometryChangeInProgress: false))
     XCTAssertFalse(
@@ -488,7 +481,15 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("put"), .paste)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("%y"), .copyAll)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":%yan"), .copyAll)
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":plugins"), .plugins)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":plugins"), .plugins(.modal))
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineCommand(":plugins list"), .plugins(.list))
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineCommand(":plugins ls"), .plugins(.list))
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineCommand(":plugins reload"), .plugins(.reload))
+    XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins bogus"))
+    XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins list extra"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":mappings"), .mappings)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":map"), .mappings)
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("qa"))
@@ -513,10 +514,22 @@ final class NormalModeTests: XCTestCase {
     let index = HelpDocs.render(topic: nil, config: .default, showModes: true)
     XCTAssertTrue(index.contains("`plugins`"))
     XCTAssertTrue(index.contains("`normal-mode`"))
+    XCTAssertTrue(index.contains("`marks`"), "marks topic should appear in the index")
+    XCTAssertTrue(index.contains("`mark`"), "marks alias should be visible in the index")
+    XCTAssertTrue(index.contains("`flashlight`"), "flashlight topic should appear in the index")
 
     let plugins = HelpDocs.render(topic: "plugins", config: .default, showModes: true)
     XCTAssertTrue(plugins.contains("# Plugins"))
     XCTAssertTrue(plugins.contains("manifest.json"))
+
+    let marks = HelpDocs.render(topic: "marks", config: .default, showModes: true)
+    XCTAssertTrue(marks.contains("# Marks"))
+    XCTAssertTrue(marks.contains("m<letter>") || marks.contains("`ma`") || marks.contains("ma "))
+
+    let mark = HelpDocs.render(topic: "mark", config: .default, showModes: true)
+    XCTAssertEqual(
+      mark, marks,
+      ":help mark must resolve to the same body as :help marks")
 
     let unknown = HelpDocs.render(topic: "missing", config: .default, showModes: true)
     XCTAssertTrue(unknown.contains("Unknown Help Topic"))
@@ -607,6 +620,118 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineOpenAppQuery("edit firefox"))
   }
 
+  func testCommandLineCompletionsTopLevelEmptyBody() throws {
+    let context = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":",
+        pluginCommands: ["spotify", "github"],
+        pluginSubcommands: ["spotify": ["play", "pause"], "github": ["prs"]]))
+    XCTAssertEqual(context.prefix, ":")
+    XCTAssertEqual(context.query, "")
+    let labels = context.items.map(\.label)
+    XCTAssertTrue(labels.contains("quit"))
+    XCTAssertTrue(labels.contains("write"))
+    XCTAssertTrue(labels.contains("open"))
+    XCTAssertTrue(labels.contains("help"))
+    XCTAssertTrue(labels.contains("flashlight"))
+    XCTAssertTrue(labels.contains("spotify"))
+    XCTAssertTrue(labels.contains("github"))
+    XCTAssertFalse(labels.contains { $0.hasPrefix("%") })
+    XCTAssertFalse(labels.contains("edit"), "alias should not appear when `open` is primary")
+    XCTAssertFalse(labels.contains("tabedit"), "alias of tabnew should not appear")
+    XCTAssertFalse(labels.contains("tabe"), "short alias of tabnew should not appear")
+    XCTAssertFalse(labels.contains("grep"), "alias of find should not appear")
+    XCTAssertFalse(labels.contains("vimgrep"), "alias of find should not appear")
+    XCTAssertFalse(labels.contains("copy"), "alias of yank should not appear")
+    XCTAssertFalse(labels.contains("cut"), "alias of delete should not appear")
+    XCTAssertFalse(labels.contains("paste"), "alias of put should not appear")
+    XCTAssertEqual(
+      labels, labels.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending },
+      "completions should be sorted alphabetically")
+    let spotify = try XCTUnwrap(context.items.first { $0.label == "spotify" })
+    XCTAssertEqual(spotify.insertion, "spotify ")
+    XCTAssertEqual(spotify.kind, .acceptsArgs)
+    let quit = try XCTUnwrap(context.items.first { $0.label == "quit" })
+    XCTAssertEqual(quit.insertion, "quit")
+    XCTAssertEqual(quit.kind, .terminal)
+    let open = try XCTUnwrap(context.items.first { $0.label == "open" })
+    XCTAssertEqual(open.insertion, "open ")
+    XCTAssertEqual(open.kind, .acceptsArgs)
+  }
+
+  func testCommandLineCompletionsTopLevelWithPartialQuery() throws {
+    let context = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":sp",
+        pluginCommands: ["spotify"],
+        pluginSubcommands: ["spotify": ["play"]]))
+    XCTAssertEqual(context.prefix, ":")
+    XCTAssertEqual(context.query, "sp")
+  }
+
+  func testCommandLineCompletionsPluginSubcommands() throws {
+    let context = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":spotify ",
+        pluginCommands: ["spotify"],
+        pluginSubcommands: ["spotify": ["play", "pause", "next"]]))
+    XCTAssertEqual(context.prefix, ":spotify ")
+    XCTAssertEqual(context.query, "")
+    XCTAssertEqual(Set(context.items.map(\.label)), ["play", "pause", "next"])
+    XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginAction })
+  }
+
+  func testCommandLineCompletionsPluginSubcommandsWithFilter() throws {
+    let context = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":spotify pa",
+        pluginCommands: ["spotify"],
+        pluginSubcommands: ["spotify": ["play", "pause", "next"]]))
+    XCTAssertEqual(context.prefix, ":spotify ")
+    XCTAssertEqual(context.query, "pa")
+  }
+
+  func testCommandLineCompletionsReturnsNilWhenNoMatch() {
+    XCTAssertNil(
+      NormalModeDispatcher.commandLineCompletions(
+        ":spotify play extra",
+        pluginCommands: ["spotify"],
+        pluginSubcommands: ["spotify": ["play"]]))
+    XCTAssertNil(
+      NormalModeDispatcher.commandLineCompletions(
+        ":unknown ",
+        pluginCommands: ["spotify"],
+        pluginSubcommands: ["spotify": ["play"]]))
+    XCTAssertNil(
+      NormalModeDispatcher.commandLineCompletions(
+        "no colon",
+        pluginCommands: [],
+        pluginSubcommands: [:]))
+  }
+
+  func testCommandLineCompletionsPluginsBuiltinSubcommands() throws {
+    let context = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":plugins ",
+        pluginCommands: [],
+        pluginSubcommands: [:]))
+    XCTAssertEqual(context.prefix, ":plugins ")
+    XCTAssertEqual(context.query, "")
+    XCTAssertEqual(Set(context.items.map(\.label)), ["list", "ls", "reload"])
+    XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginAction })
+  }
+
+  func testCommandLineCompletionsTopLevelIncludesPlugins() throws {
+    let context = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":",
+        pluginCommands: [],
+        pluginSubcommands: [:]))
+    let plugins = try XCTUnwrap(context.items.first { $0.label == "plugins" })
+    XCTAssertEqual(plugins.insertion, "plugins ")
+    XCTAssertEqual(plugins.kind, .acceptsArgs)
+  }
+
   func testCommandLineCandidateQueryAcceptsFlashlight() {
     XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":open firefox"), "firefox")
     XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight"), "")
@@ -664,27 +789,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       NormalModeDispatcher.fuzzyHighlightRanges(query: "tm 2", candidate: "tmux work:2 server"),
       [0..<2, 10..<11])
-  }
-
-  func testTmuxFinderListsUnattachedSessionWindows() {
-    let clients = TmuxProvider.tmuxFinderClients(
-      raw: "/dev/ttys001\twork\t123\n"
-    ) { pid in
-      pid == 123 ? 456 : nil
-    }
-    let windows = TmuxProvider.tmuxFinderWindowSpecs(
-      windowListRaw: "work\t0\tshell\nside\t2\tserver logs\n",
-      clients: clients)
-
-    XCTAssertEqual(windows.count, 2)
-    XCTAssertEqual(windows[0].title, "work:0 shell")
-    XCTAssertEqual(windows[0].target, "work:0")
-    XCTAssertEqual(windows[0].tty, "/dev/ttys001")
-    XCTAssertEqual(windows[0].terminalPID, 456)
-    XCTAssertEqual(windows[1].title, "side:2 server logs")
-    XCTAssertEqual(windows[1].target, "side:2")
-    XCTAssertEqual(windows[1].tty, "/dev/ttys001")
-    XCTAssertEqual(windows[1].terminalPID, 456)
   }
 
   func testCandidateFinderDisplayTitleIncludesSourceName() {
@@ -845,17 +949,32 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "org.mozilla.firefox"))
   }
 
+  func testTabNewFallbackKeyUsesCmdNForAlacrittyAndCmdTOtherwise() {
+    XCTAssertEqual(
+      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "org.alacritty"),
+      CGKeyCode(kVK_ANSI_N))
+    XCTAssertEqual(
+      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "io.alacritty"),
+      CGKeyCode(kVK_ANSI_N))
+    XCTAssertEqual(
+      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "com.apple.Terminal"),
+      CGKeyCode(kVK_ANSI_T))
+    XCTAssertEqual(
+      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "com.google.Chrome"),
+      CGKeyCode(kVK_ANSI_T))
+  }
+
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "H", "L", "f", "rf", "df", "mf", "F", "rF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "R", "t", "MAPPINGS",
-      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "gt", "gT", "g1", "g9", "N{mapping}",
+      "gg", "G", "[h", "]h", "f", "rf", "df", "mf", "F", "rF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "R", "t", "MAPPINGS",
+      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "[t", "]t", "[a", "]a", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <query>", ":flashlight <query>", "flash://mouse_target",
       "flash://flashlight", "flash://mouse_target?right=1",
       "flash://mouse_target?double=1", "flash://mouse_grid", "flash://history_back", "flash://history_forward",
-      "flash://movement_back", "flash://movement_forward",
+      "flash://app_previous", "flash://app_next",
       "flash://app_reload?force=1", "flash://tab_select?index=1", "flash://tab_new_insert", "?"]
     {
       XCTAssertTrue(
@@ -937,23 +1056,25 @@ final class NormalModeTests: XCTestCase {
       .scroll(.halfPageDown))
   }
 
-  func testCommandModifiedMappingsAreConsumedInNormalMode() {
+  func testCommandModifiedMappingsDispatchConfiguredActionsInNormalMode() {
     let mappings = [
       ModeMapping(key: "cmd+delete", action: .flashCommand(.scroll(.halfPageUp))),
       ModeMapping(key: "cmd+tab", action: .flashCommand(.movementForward)),
     ]
-    XCTAssertNil(
+    XCTAssertEqual(
       transition(
         keyCode: kVK_Delete,
         chars: "\u{7F}",
         flags: [.command],
-        mappings: mappings).action)
-    XCTAssertNil(
+        mappings: mappings).command,
+      .scroll(.halfPageUp))
+    XCTAssertEqual(
       transition(
         keyCode: kVK_Tab,
         chars: "\t",
         flags: [.command],
-        mappings: mappings).action)
+        mappings: mappings).command,
+      .movementForward)
   }
 
   func testConfiguredShellMappingsProduceActions() {
@@ -999,7 +1120,6 @@ final class NormalModeTests: XCTestCase {
       characters: nil,
       charactersIgnoringModifiers: nil)
     XCTAssertNil(t.command)
-    XCTAssertFalse(t.passThrough)
     XCTAssertEqual(t.pending, "")
   }
 
@@ -1011,7 +1131,6 @@ final class NormalModeTests: XCTestCase {
       characters: nil,
       charactersIgnoringModifiers: nil)
     XCTAssertNil(t.command)
-    XCTAssertFalse(t.passThrough)
     XCTAssertEqual(t.pending, "")
   }
 
@@ -1044,7 +1163,7 @@ final class NormalModeTests: XCTestCase {
     chars: String,
     ignoring: String? = nil,
     flags: NSEvent.ModifierFlags = [],
-    mappings: [ModeMapping] = Config.Mode.defaultNormalMappings
+    mappings: [ModeMapping] = Config.default.mode.normal
   ) -> URLCommand? {
     transition(pending: pending, chars: chars, ignoring: ignoring, flags: flags, mappings: mappings)
       .command
@@ -1056,7 +1175,7 @@ final class NormalModeTests: XCTestCase {
     chars: String,
     ignoring: String? = nil,
     flags: NSEvent.ModifierFlags = [],
-    mappings: [ModeMapping] = Config.Mode.defaultNormalMappings
+    mappings: [ModeMapping] = Config.default.mode.normal
   ) -> NormalModeTransition {
     NormalModeInterpreter.interpret(
       pending: pending,

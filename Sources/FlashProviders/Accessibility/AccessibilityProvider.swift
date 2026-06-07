@@ -32,11 +32,11 @@ import FlashCore
 ///     `pendingTargets` during the walk and resolved in parallel after
 ///     it completes, so the IPC pipeline isn't serialised on inline
 ///     follow-up reads.
-public final class AccessibilityProvider: JumpProvider {
+public final class AccessibilityProvider: FlashSource {
   public let identifier: String = "accessibility"
   public let displayName: String = "accessibility"
   public let priority: Int = 10
-  public let readinessPolicy: JumpProviderReadinessPolicy = .continuous
+  public let readinessPolicy: FlashSourceReadinessPolicy = .continuous
   public let capabilities: FlashSourceCapabilities = [.jumpTargets, .documentURL, .tabSelection]
 
   /// Roles we recognise in native (non-web) AX trees. Broader than the

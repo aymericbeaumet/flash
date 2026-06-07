@@ -1,0 +1,18 @@
+{
+  "id": "contacts",
+  "name": "Contacts",
+  "version": "0.1.0",
+  "description": "Surface macOS Contacts entries in flashlight, plus `:contacts` open helper.",
+  "install": "./install.sh",
+  "start": "./start.sh",
+  "priority": 12,
+  "events": [
+    "flash.started",
+    "config.*",
+    { "match": "apps.*", "bundle_ids": ["com.apple.AddressBook"] }
+  ],
+  "actions": [
+    { "command": "contacts", "name": "open", "description": "Open Contacts.app" },
+    { "command": "contacts", "name": "refresh", "description": "Refresh the cached contacts list" }
+  ]
+}

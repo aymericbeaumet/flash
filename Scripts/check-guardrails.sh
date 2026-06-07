@@ -59,6 +59,13 @@ check_absent \
   "performance\\.concurrent_walk|BrowserScriptProvider|cache_ttl|hints\\.scope|hints\\.layout|hints-layout|FLASH_HINTS_LAYOUT" \
   Sources README.md
 
+if [[ -d Plugins ]]; then
+  check_absent \
+    "plugin installs must stay localized to FLASH_PLUGIN_DATA_DIR" \
+    "sudo|brew install|npm install -g|deno install -g|/usr/local/bin|\\$HOME/\\.local/bin|~/\\.local/bin" \
+    Plugins
+fi
+
 if [[ $fail -ne 0 ]]; then
   exit 1
 fi
