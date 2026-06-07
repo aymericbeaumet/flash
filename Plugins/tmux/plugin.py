@@ -61,10 +61,10 @@ _PATH_TAIL = r"(?::\d+(?::\d+)?)?"
 _BOUNDARY = r"[^\s\"'`,\[\]\(\)<>]+"
 LINK_PATTERN = re.compile(
     r"https?://" + _BOUNDARY + r"[A-Za-z0-9/_-]"  # http(s)://...
-    r"|~/" + _BOUNDARY + _PATH_TAIL  # ~/path/...
-    r"|/[A-Za-z0-9._-][^\s\"'`,\[\]\(\)<>]*" + _PATH_TAIL  # /abs/path
-    r"|\.{1,2}/" + _BOUNDARY + _PATH_TAIL  # ./rel or ../rel
-    r"|[\w.-]+\.[A-Za-z][\w-]*" + _PATH_TAIL  # file.ext / file.ext:LN
+    + r"|~/" + _BOUNDARY + _PATH_TAIL  # ~/path/...
+    + r"|/[A-Za-z0-9._-][^\s\"'`,\[\]\(\)<>]*" + _PATH_TAIL  # /abs/path
+    + r"|\.{1,2}/" + _BOUNDARY + _PATH_TAIL  # ./rel or ../rel
+    + r"|[\w.-]+\.[A-Za-z][\w-]*" + _PATH_TAIL  # file.ext / file.ext:LN
 )
 # Per-pane hint cap. A `man` page or scrollback can produce hundreds of
 # matches; only the first N are surfaced so the overlay stays readable.
