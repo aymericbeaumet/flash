@@ -30,13 +30,18 @@ final class PluginProcess {
   private var dynamicActions: [PluginActionRegistration] = []
   private var lastError: String?
   private var lastLog: String?
+  /// Mirrors `Config.Plugins.watchingEnabled`. When false, plugin file
+  /// watchers are not installed and the plugin only restarts when
+  /// content changes propagate via an explicit `:plugins reload`.
+  private var watchFiles: Bool
   var onStatusChanged: (() -> Void)?
 
   init(
     root: URL,
     manifest: PluginManifest,
     origin: PluginOrigin,
-    baseDataDir: URL
+    baseDataDir: URL,
+    watchFiles: Bool = true
   ) {
     self.root = root
     self.manifest = manifest
@@ -44,6 +49,7 @@ final class PluginProcess {
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.dynamicActions = manifest.actions
+    self.watchFiles = watchFiles
   }
 
   var identifier: String { manifest.id }
@@ -158,14 +164,28 @@ final class PluginProcess {
     let contextPID = (params["context_pid"] as? Int).map(pid_t.init) ?? defaultPID
     let targetItems = (params["targets"] as? [[String: Any]] ?? [])
       .compactMap { Self.target(from: $0, sourceID: sourceID) }
-    let candidateItems = (params["candidates"] as? [[String: Any]] ?? [])
-      .compactMap {
+    // `discoverTargets` callers (e.g. the tmux plugin) only return
+    // targets — the response carries no `candidates` field. Preserving
+    // the existing candidates is what lets `:flashlight` keep showing
+    // tmux windows between activations; previously every `f` press in
+    // alacritty wiped the candidate list to 0 until the next
+    // `snapshot.updated` notification re-filled it on the focus tick.
+    let previousCandidates: [Candidate]
+    lock.lock()
+    previousCandidates = snapshot.candidates
+    lock.unlock()
+    let candidateItems: [Candidate]
+    if let raw = params["candidates"] as? [[String: Any]] {
+      candidateItems = raw.compactMap {
         Self.candidate(
           from: $0,
           pluginID: manifest.id,
           pluginName: manifest.name,
           sourceID: sourceID)
       }
+    } else {
+      candidateItems = previousCandidates
+    }
     let snap = PluginSnapshot(
       targets: targetItems,
       candidates: candidateItems,
@@ -309,7 +329,9 @@ final class PluginProcess {
       try installIfNeeded()
       setState(.starting)
       try launch()
-      installFileWatchers()
+      if watchFiles {
+        installFileWatchers()
+      }
       startHeartbeat()
       FlashLog.plugin(.info, pluginID: manifest.id, message: "[plugin] started reason=\(reason)")
     } catch {

@@ -232,15 +232,17 @@ Keys:
 | `hints.keys`                       | string         | `"<qwerty_homerow+qwerty_toprow>"` |
 | `hints.min_length`                 | int            | `1`                  |
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
+| `hints.mouse_grid_steps`           | int (1..6)     | `3`                  |
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
+| `plugins.watching_enabled`         | bool           | `true`               |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
 | `[mode.all.mappings]` entries      | `flash://` or argv-array mapping | none             |
 | `mode.normal.leader`               | string         | `"\\"`             |
 | `[mode.normal.mappings]` entries   | `flash://` or argv-array mapping | built-in normal map |
 | `[mode.insert.mappings]` entries   | `flash://` or argv-array mapping | none             |
-| `debug.show_bounds`                | bool           | `false`              |
-| `debug.bounds_bg` / `bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
+| `debug.show_hint_bounds`                | bool           | `false`              |
+| `debug.hint_bounds_bg` / `hint_bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.profile`                    | bool           | `false`              |
 | `debug.slow_ms`                    | int            | `100`                |
 | `debug.log_level`                  | string         | `"info"`             |

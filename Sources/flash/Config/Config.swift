@@ -62,6 +62,12 @@ struct Config {
     var keys: String = Alphabet.defaultKeys
     var minLength: Int = 1
     var magicModifiers: [String] = ["cmd", "ctrl", "alt", "shift"]
+    /// Number of selection steps for `flash://mouse_grid`. The final
+    /// step is sized to the precision target (≈ `MouseGrid.finalMinimumCell`);
+    /// earlier steps zoom out by the same grid shape, raised to the
+    /// step's power. Larger values give finer precision but require more
+    /// keystrokes per click.
+    var mouseGridSteps: Int = 3
   }
   struct Overlay {
     var fontSize: Double = 12
@@ -78,12 +84,12 @@ struct Config {
     /// When true, every detected target is outlined alongside its hint chip.
     /// Useful for diagnosing missing or misplaced hints — you can see exactly
     /// which AX rect Flash decided to use.
-    var showBounds: Bool = false
+    var showHintBounds: Bool = false
     /// Fill for the debug outline rectangle. Default transparent.
-    var boundsBG: String = "#00000000"
+    var hintBoundsBG: String = "#00000000"
     /// Stroke for the debug outline rectangle. Mirrors the `hint_fg` slot:
     /// it's the foreground colour of the bounds shape.
-    var boundsFG: String = "#FF3B9A"
+    var hintBoundsFG: String = "#FF3B9A"
     /// Emit a profiling trace for every activation and background
     /// precompute. Slow activations are still logged when this is false
     /// if `slowMs` is positive.
@@ -115,6 +121,11 @@ struct Config {
     /// bundled plugins are always enabled in v1 and are discovered from
     /// the app bundle, not this list.
     var thirdParty: [PluginReference] = []
+    /// When true (the default), each plugin's directory tree is watched
+    /// and any file change triggers a plugin reload. Set to false to
+    /// disable hot-reload — useful if a plugin keeps a noisy log
+    /// somewhere in its tree that would otherwise restart-loop it.
+    var watchingEnabled: Bool = true
   }
   struct Mode {
     struct Labels: Equatable {
@@ -166,6 +177,12 @@ struct Config {
         ("]t", .flashCommand(.tabNext)),
         ("[a", .flashCommand(.appPrev)),
         ("]a", .flashCommand(.appNext)),
+        // Shadow the system app switcher so the user stays inside
+        // Flash's normal-mode loop. Carbon registration is scope-bound:
+        // entering insert mode unregisters the binding and the Dock
+        // switcher works as usual.
+        ("cmd+tab", .flashCommand(.appNext)),
+        ("cmd+shift+tab", .flashCommand(.appPrev)),
         ("g1", .flashCommand(.tabSelect(index: 1))),
         ("g2", .flashCommand(.tabSelect(index: 2))),
         ("g3", .flashCommand(.tabSelect(index: 3))),
@@ -345,20 +362,21 @@ struct Config {
     ]
     return compactJSON([
       "debug": [
-        "bounds_bg": debug.boundsBG,
-        "bounds_fg": debug.boundsFG,
+        "hint_bounds_bg": debug.hintBoundsBG,
+        "hint_bounds_fg": debug.hintBoundsFG,
         "http_inspector_enabled": debug.httpInspectorEnabled,
         "http_inspector_host": debug.httpInspectorHost,
         "http_inspector_port": debug.httpInspectorPort,
         "log_level": debug.logLevel.name,
         "profile": debug.profile,
-        "show_bounds": debug.showBounds,
+        "show_hint_bounds": debug.showHintBounds,
         "slow_ms": debug.slowMs,
       ],
       "hints": [
         "keys": hints.keys,
         "magic_modifiers": hints.magicModifiers,
         "min_length": hints.minLength,
+        "mouse_grid_steps": hints.mouseGridSteps,
       ],
       "mode": modeJSON,
       "open": [
@@ -372,7 +390,8 @@ struct Config {
         "hint_fg": overlay.hintFG,
       ],
       "plugins": [
-        "third_party": plugins.thirdParty.map(\.raw)
+        "third_party": plugins.thirdParty.map(\.raw),
+        "watching_enabled": plugins.watchingEnabled,
       ],
       "warnings": warnings,
     ])

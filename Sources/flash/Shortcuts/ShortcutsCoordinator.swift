@@ -27,6 +27,8 @@ final class MappingsCoordinator {
   private var mappingDispatch: ((MappingAction) -> Void)?
   private var currentMode: (() -> FlashMode)?
   private var activeMappings: [ActiveMapping] = []
+  private var configuredMode: Config.Mode = .init()
+  private var lastAppliedFlashMode: FlashMode = .insert
   private var lastFireDiagnostic: String?
   private var lastFireAt: Date = .distantPast
 
@@ -42,9 +44,29 @@ final class MappingsCoordinator {
   }
 
   func apply(mode: Config.Mode) {
+    configuredMode = mode
+    rebuild(for: lastAppliedFlashMode)
+  }
+
+  /// Re-register Carbon hotkeys for the current flash mode. The mode
+  /// matters for scope == .normal / .insert because Carbon registrations
+  /// are global — a registered .normal hotkey would still **consume**
+  /// the key combo system-wide while in insert mode, leaving it without
+  /// a dispatch path. That's broken for system shortcuts like `cmd+tab`:
+  /// the user expects them to pass through to the Dock when Flash is in
+  /// insert. Re-registering on mode flips lets scope-bound shortcuts
+  /// switch between "Flash captures" and "system handles".
+  func applyForFlashMode(_ flashMode: FlashMode) {
+    guard flashMode != lastAppliedFlashMode else { return }
+    rebuild(for: flashMode)
+  }
+
+  private func rebuild(for flashMode: FlashMode) {
+    lastAppliedFlashMode = flashMode
     hotkeys.unregisterAll()
     activeMappings.removeAll(keepingCapacity: true)
-    for (scope, mapping) in Self.nativeMappings(in: mode) {
+    for (scope, mapping) in Self.nativeMappings(in: configuredMode) {
+      guard Self.scopeIsActive(scope, for: flashMode) else { continue }
       guard let parsed = HotkeySyntax.parse(hotkey: mapping.key) else {
         if mapping.key.contains("+") {
           FlashLog.warn("[mappings] could not parse native mapping \"\(mapping.key)\"")
@@ -64,6 +86,14 @@ final class MappingsCoordinator {
           "[mappings] could not register \"\(mapping.key)\" — "
             + "status=\(status); another app may already own this hotkey")
       }
+    }
+  }
+
+  static func scopeIsActive(_ scope: ModeScope, for flashMode: FlashMode) -> Bool {
+    switch scope {
+    case .all: return true
+    case .normal: return flashMode == .normal
+    case .insert: return flashMode == .insert
     }
   }
 

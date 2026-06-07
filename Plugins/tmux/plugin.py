@@ -369,7 +369,7 @@ def build_target(target_id, x, y, width, height, role, label, pid):
     }
 
 
-def discover_targets_for_context(tmux_path, params):
+def discover_targets_for_context(plugin, tmux_path, params):
     if not tmux_path:
         return {"targets": []}
     pid = params.get("pid")
@@ -440,15 +440,22 @@ def discover_targets_for_context(tmux_path, params):
     pane_chip_cells = 3
     pane_targets = []
     raw_links = []
+    target_actions = {}
     for i, pane in enumerate(panes):
         center_col = pane["left"] + pane["cols"] // 2
         center_row = top_offset + pane["top"] + pane["rows"] // 2
         chip_x = min_x + pad_x + (center_col - pane_chip_cells // 2) * cell_w
         chip_y = min_y + win_h - pad_y - (center_row + 1) * cell_h
+        target_id = f"tmux-{pid}-p{i}"
         pane_targets.append(build_target(
-            f"tmux-{pid}-p{i}", chip_x, chip_y,
+            target_id, chip_x, chip_y,
             pane_chip_cells * cell_w, cell_h,
             role="tmux-pane", label=pane["id"], pid=pid))
+        target_actions[target_id] = {
+            "kind": "pane",
+            "pane_id": pane["id"],
+            "client_tty": client["tty"],
+        }
 
         raw = run_tmux(tmux_path, ["capture-pane", "-t", pane["id"], "-p"])
         if raw is None:
@@ -489,11 +496,16 @@ def discover_targets_for_context(tmux_path, params):
         # the leading `h`/`~`/`/` glyph.
         x = min_x + pad_x + link["screen_col"] * cell_w
         y = min_y + win_h - pad_y - (link["screen_row"] + 1) * cell_h
+        target_id = f"tmux-{pid}-l{idx}"
         targets.append(build_target(
-            f"tmux-{pid}-l{idx}",
-            x, y, cell_w, cell_h,
+            target_id, x, y, cell_w, cell_h,
             role="tmux-link", label=link["text"], pid=pid))
+        target_actions[target_id] = {
+            "kind": "link",
+            "text": link["text"],
+        }
 
+    plugin.target_actions = target_actions
     return {"targets": targets, "context_pid": int(pid)}
 
 
@@ -720,9 +732,47 @@ def refresh_candidate_snapshot(plugin, tmux_path):
     plugin.emit_snapshot(candidates=candidates, source_id=SOURCE_ID)
 
 
+def activate_target_action(tmux_path, action_entry, action):
+    """Dispatch a hint activation by role.
+
+    Pane chips call `select-pane` against the tmux pane_id captured at
+    discovery time — synthesised mouse clicks at the chip centre don't
+    move tmux's active pane unless mouse-mode is enabled, so we drive
+    tmux directly. Links are routed through macOS `open`.
+    """
+    if action_entry is None:
+        return False
+    kind = action_entry.get("kind")
+    if kind == "pane":
+        pane_id = action_entry.get("pane_id")
+        tty = action_entry.get("client_tty") or ""
+        if not pane_id:
+            return False
+        args = ["select-pane"]
+        if tty:
+            args.extend(["-c", tty])
+        args.extend(["-t", pane_id])
+        return run_tmux(tmux_path, args) is not None
+    if kind == "link":
+        text = action_entry.get("text") or ""
+        if not text:
+            return False
+        try:
+            subprocess.Popen(
+                ["open", text],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except (OSError, ValueError):
+            return False
+    return False
+
+
 def main():
     tmux_path = find_tmux()
     plugin = FlashPlugin(PLUGIN_ID)
+    plugin.target_actions = {}
     if not tmux_path:
         plugin.log("warn", "[tmux] tmux binary not found")
 
@@ -731,7 +781,7 @@ def main():
             refresh_candidate_snapshot(plugin, tmux_path)
 
     def on_discover(_plugin, params):
-        return discover_targets_for_context(tmux_path, params)
+        return discover_targets_for_context(plugin, tmux_path, params)
 
     def on_source_action(_plugin, name, params):
         return perform_source_action(tmux_path, name, params)
@@ -739,10 +789,20 @@ def main():
     def on_resolve(_plugin, candidate):
         return resolve_candidate(tmux_path, candidate)
 
+    def on_activate(_plugin, target_id, action):
+        entry = plugin.target_actions.get(target_id)
+        if not activate_target_action(tmux_path, entry, action):
+            plugin.log(
+                "debug",
+                "[tmux] activate dropped",
+                {"target_id": target_id, "action": action},
+            )
+
     plugin.on_event = on_event
     plugin.on_discover_targets = on_discover
     plugin.on_source_action = on_source_action
     plugin.on_resolve_candidate = on_resolve
+    plugin.on_activate_target = on_activate
     refresh_candidate_snapshot(plugin, tmux_path)
     plugin.serve()
 

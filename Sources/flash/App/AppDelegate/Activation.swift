@@ -18,12 +18,14 @@ extension AppDelegate {
 
   func activateMouseGrid(_ command: MouseCommand, contextOverride: AppContext?) {
     let context = contextOverride ?? currentNonFlashContext() ?? normalModeContext()
+    let steps = config.hints.mouseGridSteps
     let region = MouseGrid.preparedRegion(
       MouseGrid.initialRegion(
         context: context,
         screens: NSScreen.screens,
         fallback: OverlayPanel.unionScreenFrame()),
-      alphabet: config.resolvedAlphabet.chars)
+      alphabet: config.resolvedAlphabet.chars,
+      steps: steps)
     mouseGridRegion = region
     mouseGridDepth = 0
     sourceAppPID = context?.processID
@@ -32,16 +34,20 @@ extension AppDelegate {
     currentPrefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
+    overlay.mouseGridSteps = steps
     displayMouseGridRegion(region, depth: 0)
   }
 
   func displayMouseGridRegion(_ region: MouseGrid.Region, depth: Int) {
-    let region = MouseGrid.preparedRegion(region, alphabet: config.resolvedAlphabet.chars)
+    let steps = config.hints.mouseGridSteps
+    let region = MouseGrid.preparedRegion(
+      region, alphabet: config.resolvedAlphabet.chars, steps: steps)
     mouseGridRegion = region
     let hints = MouseGrid.hints(
       in: region,
       depth: depth,
-      alphabet: config.resolvedAlphabet.chars)
+      alphabet: config.resolvedAlphabet.chars,
+      steps: steps)
     guard !hints.isEmpty else {
       applyModeOverlay()
       return

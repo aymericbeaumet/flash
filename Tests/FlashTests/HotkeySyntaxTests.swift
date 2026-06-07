@@ -119,6 +119,28 @@ final class HotkeySyntaxTests: XCTestCase {
         modifiers: UInt32(cmdKey)))
   }
 
+  func testScopeIsActiveGovernsCarbonRegistration() {
+    // `applyForFlashMode` filters Carbon registrations through
+    // `scopeIsActive`. A `.normal`-scope mapping (e.g. `cmd+tab`) must
+    // be **unregistered** in insert mode so the Dock app switcher gets
+    // the key combo. `.all` mappings stay registered in both modes.
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .normal))
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .insert))
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.normal, for: .normal))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.normal, for: .insert))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .normal))
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.insert, for: .insert))
+  }
+
+  func testDefaultNormalMappingsIncludeCmdTab() {
+    let cmdTab = Config.Mode.defaultNormalMappings.first { $0.key == "cmd+tab" }
+    XCTAssertEqual(cmdTab?.action.command, .appNext)
+    let cmdShiftTab = Config.Mode.defaultNormalMappings.first {
+      $0.key == "cmd+shift+tab"
+    }
+    XCTAssertEqual(cmdShiftTab?.action.command, .appPrev)
+  }
+
   // MARK: - Action parsing
 
   func testParseFlashMouseTarget() {

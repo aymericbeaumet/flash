@@ -465,9 +465,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#000000")
     XCTAssertEqual(c.overlay.hintBGBottom, "#111111")
     XCTAssertEqual(c.overlay.hintBorder, "#222222")
-    XCTAssertTrue(c.debug.showBounds)
-    XCTAssertEqual(c.debug.boundsBG, "#11223344")
-    XCTAssertEqual(c.debug.boundsFG, "#55667788")
+    XCTAssertTrue(c.debug.showHintBounds)
+    XCTAssertEqual(c.debug.hintBoundsBG, "#11223344")
+    XCTAssertEqual(c.debug.hintBoundsFG, "#55667788")
     XCTAssertTrue(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 250)
     XCTAssertEqual(c.debug.logLevel, .debug)
@@ -503,9 +503,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
     XCTAssertEqual(c.overlay.hintBGBottom, "#998877")
     XCTAssertEqual(c.overlay.hintBorder, "#665544")
-    XCTAssertTrue(c.debug.showBounds)
-    XCTAssertEqual(c.debug.boundsBG, "#11111111")
-    XCTAssertEqual(c.debug.boundsFG, "#22222222")
+    XCTAssertTrue(c.debug.showHintBounds)
+    XCTAssertEqual(c.debug.hintBoundsBG, "#11111111")
+    XCTAssertEqual(c.debug.hintBoundsFG, "#22222222")
     XCTAssertTrue(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 175)
     XCTAssertEqual(c.debug.logLevel, .fatal)
@@ -722,14 +722,14 @@ final class ConfigLoaderTests: XCTestCase {
     for v in ["true", "1", "yes", "on", "TRUE", "Yes"] {
       let c = ConfigLoader.applyOverrides(
         to: base, arguments: ["flash", "--debug-show-bounds=\(v)"], environment: [:])
-      XCTAssertTrue(c.debug.showBounds, "expected `\(v)` to parse as true")
+      XCTAssertTrue(c.debug.showHintBounds, "expected `\(v)` to parse as true")
     }
     for v in ["false", "0", "no", "off", "FALSE"] {
       var b = base
-      b.debug.showBounds = true
+      b.debug.showHintBounds = true
       let c = ConfigLoader.applyOverrides(
         to: b, arguments: ["flash", "--debug-show-bounds=\(v)"], environment: [:])
-      XCTAssertFalse(c.debug.showBounds, "expected `\(v)` to parse as false")
+      XCTAssertFalse(c.debug.showHintBounds, "expected `\(v)` to parse as false")
     }
   }
 

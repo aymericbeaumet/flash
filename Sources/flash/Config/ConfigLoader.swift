@@ -369,6 +369,15 @@ enum ConfigLoader {
           "hints.magic_modifiers must be an array of strings",
           location: location)
       }
+    case ["hints", "mouse_grid_steps"]:
+      if let parsed = parseInt(value), parsed >= 1, parsed <= 6 {
+        config.hints.mouseGridSteps = parsed
+        config.recordLocation(path: "hints.mouse_grid_steps", location: location)
+      } else {
+        config.addDiagnostic(
+          "hints.mouse_grid_steps must be an integer between 1 and 6",
+          location: location)
+      }
 
     case ["open", "ignored_apps"]:
       if let parsed = parseStringArray(value) {
@@ -378,6 +387,15 @@ enum ConfigLoader {
         config.addDiagnostic(
           "open.ignored_apps must be an array of strings",
           location: location)
+      }
+
+    case ["plugins", "watching_enabled"]:
+      if let parsed = parseBool(value) {
+        config.plugins.watchingEnabled = parsed
+        config.recordLocation(path: "plugins.watching_enabled", location: location)
+      } else {
+        config.addDiagnostic(
+          "plugins.watching_enabled must be true or false", location: location)
       }
 
     case ["plugins", "third_party"]:
@@ -483,26 +501,26 @@ enum ConfigLoader {
         config.addDiagnostic("overlay.hint_border must be a quoted string", location: location)
       }
 
-    case ["debug", "show_bounds"]:
+    case ["debug", "show_hint_bounds"]:
       if let parsed = parseBool(value) {
-        config.debug.showBounds = parsed
-        config.recordLocation(path: "debug.show_bounds", location: location)
+        config.debug.showHintBounds = parsed
+        config.recordLocation(path: "debug.show_hint_bounds", location: location)
       } else {
-        config.addDiagnostic("debug.show_bounds must be true or false", location: location)
+        config.addDiagnostic("debug.show_hint_bounds must be true or false", location: location)
       }
-    case ["debug", "bounds_bg"]:
+    case ["debug", "hint_bounds_bg"]:
       if let parsed = parseString(value) {
-        config.debug.boundsBG = parsed
-        config.recordLocation(path: "debug.bounds_bg", location: location)
+        config.debug.hintBoundsBG = parsed
+        config.recordLocation(path: "debug.hint_bounds_bg", location: location)
       } else {
-        config.addDiagnostic("debug.bounds_bg must be a quoted string", location: location)
+        config.addDiagnostic("debug.hint_bounds_bg must be a quoted string", location: location)
       }
-    case ["debug", "bounds_fg"]:
+    case ["debug", "hint_bounds_fg"]:
       if let parsed = parseString(value) {
-        config.debug.boundsFG = parsed
-        config.recordLocation(path: "debug.bounds_fg", location: location)
+        config.debug.hintBoundsFG = parsed
+        config.recordLocation(path: "debug.hint_bounds_fg", location: location)
       } else {
-        config.addDiagnostic("debug.bounds_fg must be a quoted string", location: location)
+        config.addDiagnostic("debug.hint_bounds_fg must be a quoted string", location: location)
       }
     case ["debug", "profile"]:
       if let parsed = parseBool(value) {
@@ -935,15 +953,15 @@ enum ConfigLoader {
 
     case "debug-show-bounds":
       if let b = boolFromString(value) {
-        config.debug.showBounds = b
-        config.clearLocation(path: "debug.show_bounds")
+        config.debug.showHintBounds = b
+        config.clearLocation(path: "debug.show_hint_bounds")
       }
     case "debug-bounds-bg":
-      config.debug.boundsBG = value
-      config.clearLocation(path: "debug.bounds_bg")
+      config.debug.hintBoundsBG = value
+      config.clearLocation(path: "debug.hint_bounds_bg")
     case "debug-bounds-fg":
-      config.debug.boundsFG = value
-      config.clearLocation(path: "debug.bounds_fg")
+      config.debug.hintBoundsFG = value
+      config.clearLocation(path: "debug.hint_bounds_fg")
     case "debug-profile":
       if let b = boolFromString(value) {
         config.debug.profile = b

@@ -320,7 +320,9 @@ extension AppDelegate {
   private func commitMouseGridCell(hint: AssignedHint, clickModifiers: ClickModifiers) {
     let nextRegion = MouseGrid.Region(frame: hint.target.frame, grid: mouseGridRegion?.grid)
     let nextDepth = mouseGridDepth + 1
-    if !MouseGrid.shouldCommit(region: nextRegion, depth: nextDepth) {
+    if !MouseGrid.shouldCommit(
+      region: nextRegion, depth: nextDepth, steps: config.hints.mouseGridSteps)
+    {
       mouseGridRegion = nextRegion
       mouseGridDepth = nextDepth
       currentPrefix = ""

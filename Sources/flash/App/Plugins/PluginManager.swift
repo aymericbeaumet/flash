@@ -175,7 +175,8 @@ final class PluginManager {
           root: item.root,
           manifest: manifest,
           origin: item.origin,
-          baseDataDir: baseDataDir)
+          baseDataDir: baseDataDir,
+          watchFiles: config.plugins.watchingEnabled)
         plugin.onStatusChanged = { [weak self] in self?.notifyStateChanged() }
         pluginsByID[manifest.id] = plugin
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin)

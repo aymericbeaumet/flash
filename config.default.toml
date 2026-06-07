@@ -24,6 +24,12 @@ min_length = 1
 # Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
+# Selection steps for flash://mouse_grid. The final step's grid is sized to
+# the precision target (~18pt cells, aspect-matched to the screen so vertical
+# monitors get a tall grid); earlier steps share the same shape so each
+# selection zooms in geometrically. Valid range: 1–6.
+mouse_grid_steps = 3
+
 [open]
 # App candidates hidden from :open and flash://app_open?name=...
 # Entries match display name, bundle identifier, bundle path, .app filename,
@@ -37,6 +43,11 @@ ignored_apps = []
 #   github:user/project
 #   file:<path>
 third_party = []
+
+# When true (the default), each plugin's directory tree is watched and a
+# file change triggers a plugin reload. Set to false to disable
+# hot-reload across every plugin.
+watching_enabled = true
 
 [mode]
 # Labels shown in the mode overlay. The overlay width is based on the
@@ -87,6 +98,11 @@ leader = "\\"
 "]t" = "flash://tab_next"
 "[a" = "flash://app_previous"
 "]a" = "flash://app_next"
+# cmd+tab / cmd+shift+tab shadow the system app switcher while in normal
+# mode. Carbon hotkeys are scope-bound, so entering insert mode releases
+# the registration and macOS's Dock switcher takes over again.
+"cmd+tab" = "flash://app_next"
+"cmd+shift+tab" = "flash://app_previous"
 "g1" = "flash://tab_select?index=1"
 "g2" = "flash://tab_select?index=2"
 "g3" = "flash://tab_select?index=3"
@@ -128,11 +144,11 @@ leader = "\\"
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its
 # hint chip. Useful when diagnosing missing or misplaced hints.
-show_bounds = false
+show_hint_bounds = false
 
 # Fill + stroke for the debug outline rectangle.
-bounds_bg = "#00000000"
-bounds_fg = "#FF3B9A"
+hint_bounds_bg = "#00000000"
+hint_bounds_fg = "#FF3B9A"
 
 # Emit profiling traces as JSON log lines.
 profile = false

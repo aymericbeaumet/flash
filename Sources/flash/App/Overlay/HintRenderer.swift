@@ -82,11 +82,11 @@ extension OverlayPanel {
     var widthByLen: [Int: CGFloat] = [:]
     widthByLen.reserveCapacity(2)
 
-    let debugEnabled = debugConfig.showBounds
+    let debugEnabled = debugConfig.showHintBounds
     if debugEnabled {
       debugShapeLayer.strokeColor =
-        (nsColor(fromHex: debugConfig.boundsFG) ?? NSColor.systemPink).cgColor
-      debugShapeLayer.fillColor = (nsColor(fromHex: debugConfig.boundsBG) ?? NSColor.clear).cgColor
+        (nsColor(fromHex: debugConfig.hintBoundsFG) ?? NSColor.systemPink).cgColor
+      debugShapeLayer.fillColor = (nsColor(fromHex: debugConfig.hintBoundsBG) ?? NSColor.clear).cgColor
     }
     lastTargetLocalRects.removeAll(keepingCapacity: true)
     if debugEnabled {
@@ -111,7 +111,8 @@ extension OverlayPanel {
       let isMouseGridHint = hint.target.providerID == "mouse_grid"
       let isFinalMouseGridHint =
         isMouseGridHint
-        && Self.mouseGridDepth(from: hint.target.id).map(MouseGrid.isFinalDisplayDepth) == true
+        && Self.mouseGridDepth(from: hint.target.id)
+          .map { MouseGrid.isFinalDisplayDepth($0, steps: mouseGridSteps) } == true
       let local = CGRect(
         x: targetFrame.minX - frame.minX,
         y: targetFrame.minY - frame.minY,
@@ -366,7 +367,7 @@ extension OverlayPanel {
         }
       }
     }
-    if debugConfig.showBounds {
+    if debugConfig.showHintBounds {
       rebuildDebugPath(visibleIndices: visible)
     }
     CATransaction.commit()

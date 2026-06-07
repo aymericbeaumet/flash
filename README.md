@@ -119,9 +119,9 @@ leader = "\\"
 
 [debug]
 log_level = "info"
-# show_bounds = false
-# bounds_bg = "#00000000"
-# bounds_fg = "#FF3B9A"
+# show_hint_bounds = false
+# hint_bounds_bg = "#00000000"
+# hint_bounds_fg = "#FF3B9A"
 # profile = false
 # slow_ms = 100
 # http_inspector_enabled = false

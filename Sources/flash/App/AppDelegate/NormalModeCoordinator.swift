@@ -109,6 +109,10 @@ extension AppDelegate {
 
   private func modeDidEnter(_ mode: FlashMode, from previousMode: FlashMode, reason: String) {
     FlashLog.trace("[mode] did_enter mode=\(mode) from=\(previousMode) reason=\(reason)")
+    // Re-register scope-bound Carbon hotkeys. `.normal`-scope shortcuts
+    // (e.g. cmd+tab) need to be unregistered on insert entry so the
+    // system handler can see the key combo again.
+    mappings.applyForFlashMode(mode)
     switch mode {
     case .normal:
       modeDidEnterNormal(reason: reason)
@@ -449,6 +453,19 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
+    if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
+      // The user clicked the menu bar (system menu, app menu, or status
+      // item). Recapturing key window here races the menu's open: the
+      // 0ms recapture entry fires before the async pointer-monitor path
+      // can transition to insert, and steals key back so the menu closes
+      // the same instant it opened. The user then has to click again to
+      // reopen it. Letting the menu interact freely is the right call —
+      // `overlayDidCancelByPointer` will still flip Flash into insert
+      // mode on the async path, so the badge updates without disturbing
+      // the menu.
+      FlashLog.trace("[mode] pointer_recapture_skip target=menu_bar")
+      return
+    }
     FlashLog.trace(
       "[mode] pointer_recapture_force target=\(Self.pointerFocusLossTarget()) "
         + "reason=normal_mode_focus_contract")
