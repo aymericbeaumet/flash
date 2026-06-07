@@ -30,15 +30,13 @@ final class PluginProcess {
   private var dynamicActions: [PluginActionRegistration] = []
   private var lastError: String?
   private var lastLog: String?
-  private var watchFilesEnabled: Bool
   var onStatusChanged: (() -> Void)?
 
   init(
     root: URL,
     manifest: PluginManifest,
     origin: PluginOrigin,
-    baseDataDir: URL,
-    watchFiles: Bool = false
+    baseDataDir: URL
   ) {
     self.root = root
     self.manifest = manifest
@@ -46,7 +44,6 @@ final class PluginProcess {
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.dynamicActions = manifest.actions
-    self.watchFilesEnabled = watchFiles
   }
 
   var identifier: String { manifest.id }
@@ -74,21 +71,6 @@ final class PluginProcess {
       guard let self else { return }
       self.stopOnQueue(reason: reason)
       self.startOnQueue(reason: reason)
-    }
-  }
-
-  /// Toggle the per-plugin file watcher at runtime. Called when the
-  /// debug.watch_plugins config flips. Off → stop watching but keep
-  /// the process running; on → install watchers if the process is up.
-  func setWatchFiles(_ enabled: Bool) {
-    queue.async { [weak self] in
-      guard let self, self.watchFilesEnabled != enabled else { return }
-      self.watchFilesEnabled = enabled
-      if enabled, self.process?.isRunning == true {
-        self.installFileWatchers()
-      } else if !enabled {
-        self.removeFileWatchers()
-      }
     }
   }
 
@@ -327,9 +309,7 @@ final class PluginProcess {
       try installIfNeeded()
       setState(.starting)
       try launch()
-      if watchFilesEnabled {
-        installFileWatchers()
-      }
+      installFileWatchers()
       startHeartbeat()
       FlashLog.plugin(.info, pluginID: manifest.id, message: "[plugin] started reason=\(reason)")
     } catch {

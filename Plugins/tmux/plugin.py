@@ -481,11 +481,17 @@ def discover_targets_for_context(tmux_path, params):
     raw_links.sort(key=lambda link: (link["screen_row"], link["screen_col"]))
     targets = list(pane_targets)
     for idx, link in enumerate(raw_links):
+        # Anchor the chip on the FIRST character of the link. Emitting
+        # the full link-length frame made `chipFrame(...)` left-align
+        # the chip across the whole link, and the hint label rendered
+        # past the first character. A single-cell frame instead causes
+        # OverlayPanel's chipFrame logic to centre the chip exactly on
+        # the leading `h`/`~`/`/` glyph.
         x = min_x + pad_x + link["screen_col"] * cell_w
         y = min_y + win_h - pad_y - (link["screen_row"] + 1) * cell_h
         targets.append(build_target(
             f"tmux-{pid}-l{idx}",
-            x, y, len(link["text"]) * cell_w, cell_h,
+            x, y, cell_w, cell_h,
             role="tmux-link", label=link["text"], pid=pid))
 
     return {"targets": targets, "context_pid": int(pid)}
@@ -511,28 +517,47 @@ def build_candidates(tmux_path):
             terminal_pid_by_session[session] = find_top_level_ancestor(
                 client["client_pid"], pmap)
 
+    # Pull the active pane's command and current path for each window so
+    # the candidate list can disambiguate windows that share a name (e.g.
+    # 12 windows all called "flash"). Without these, the finder shows
+    # `headquarter:6 flash` for every entry and there's no way to tell
+    # which is which. With them: `headquarter:6 flash · nvim ·
+    # ~/workspace/flash`.
     raw = run_tmux(
         tmux_path,
         [
             "list-windows", "-a", "-F",
-            "#{session_name}\t#{window_index}\t#{window_name}",
+            "#{session_name}\t#{window_index}\t#{window_name}\t"
+            + "#{pane_current_command}\t#{pane_current_path}",
         ],
     )
     if raw is None:
         return []
+    home = os.path.expanduser("~")
     out = []
     for line in raw.split("\n"):
         if not line:
             continue
-        parts = line.split("\t", 2)
-        if len(parts) != 3:
+        parts = line.split("\t", 4)
+        if len(parts) < 3:
             continue
-        session, index, name = parts
-        name = name.strip()
+        session = parts[0]
+        index = parts[1]
+        name = parts[2].strip()
+        command = parts[3].strip() if len(parts) >= 4 else ""
+        cwd = parts[4].strip() if len(parts) >= 5 else ""
+        if cwd.startswith(home):
+            cwd = "~" + cwd[len(home):]
         client = client_by_session.get(session) or (clients[0] if clients else None)
         terminal_pid = terminal_pid_by_session.get(session)
-        title = f"{session}:{index} {name}" if name else f"{session}:{index}"
-        subtitle = f"tmux {session} {name}" if name else f"tmux {session}"
+        head = f"{session}:{index} {name}" if name else f"{session}:{index}"
+        extras = [v for v in (command, cwd) if v]
+        title = head if not extras else f"{head} · " + " · ".join(extras)
+        subtitle_extras = [v for v in (name, command, cwd) if v]
+        subtitle = (
+            "tmux " + " ".join([session] + subtitle_extras)
+            if subtitle_extras else f"tmux {session}"
+        )
         target = f"{session}:{index}"
         candidate = {
             "kind": "tmux_window",

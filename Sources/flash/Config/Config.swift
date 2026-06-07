@@ -99,18 +99,13 @@ struct Config {
     var logLevel: FlashLog.Level = .info
     /// When true, Flash binds a loopback-only HTTP server that exposes
     /// live logs + state inspection. Off by default — turn on with
-    /// `debug.inspector_enabled = true`.
-    var inspectorEnabled: Bool = false
+    /// `debug.http_inspector_enabled = true`.
+    var httpInspectorEnabled: Bool = false
     /// Loopback hostname the inspector binds on. Restricted to
     /// `localhost` / `127.0.0.1` / `::1` (validated at start).
-    var inspectorHost: String = "localhost"
+    var httpInspectorHost: String = "localhost"
     /// TCP port the inspector listens on.
-    var inspectorPort: Int = 4242
-    /// When true, every plugin watches its directory tree and triggers a
-    /// reload on any file change. Off by default — plugins re-install
-    /// when their content actually changes, so this is purely a dev
-    /// loop for iterating on plugin code without bouncing Flash.
-    var watchPlugins: Bool = false
+    var httpInspectorPort: Int = 4242
   }
   struct Open {
     var ignoredApps: [String] = []
@@ -352,14 +347,13 @@ struct Config {
       "debug": [
         "bounds_bg": debug.boundsBG,
         "bounds_fg": debug.boundsFG,
-        "inspector_enabled": debug.inspectorEnabled,
-        "inspector_host": debug.inspectorHost,
-        "inspector_port": debug.inspectorPort,
+        "http_inspector_enabled": debug.httpInspectorEnabled,
+        "http_inspector_host": debug.httpInspectorHost,
+        "http_inspector_port": debug.httpInspectorPort,
         "log_level": debug.logLevel.name,
         "profile": debug.profile,
         "show_bounds": debug.showBounds,
         "slow_ms": debug.slowMs,
-        "watch_plugins": debug.watchPlugins,
       ],
       "hints": [
         "keys": hints.keys,

@@ -22,7 +22,7 @@ final class DebugServer {
 
   func start() {
     guard let endpoint = Self.parse(host: host, port: port) else {
-      FlashLog.warn("[debug] invalid inspector_host/port \(host):\(port)")
+      FlashLog.warn("[debug] invalid http_inspector_host/port \(host):\(port)")
       return
     }
     do {
@@ -34,10 +34,10 @@ final class DebugServer {
         if case .ready = state {
           let port = listener.port?.rawValue
           self?.listeningPort = port
-          FlashLog.info("[debug] inspector listening http://\(endpoint.host):\(port ?? 0)")
+          FlashLog.info("[debug] http inspector listening http://\(endpoint.host):\(port ?? 0)")
         }
         if case .failed(let error) = state {
-          FlashLog.warn("[debug] inspector failed \(error)")
+          FlashLog.warn("[debug] http inspector failed \(error)")
         }
       }
       listener.start(queue: queue)
@@ -47,7 +47,7 @@ final class DebugServer {
         self?.append(record)
       }
     } catch {
-      FlashLog.warn("[debug] could not start inspector \(host):\(port): \(error)")
+      FlashLog.warn("[debug] could not start http inspector \(host):\(port): \(error)")
     }
   }
 

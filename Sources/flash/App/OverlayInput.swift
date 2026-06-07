@@ -174,7 +174,23 @@ extension OverlayPanel {
   @discardableResult
   private func handleModalKeyEvent(_ event: NSEvent) -> Bool {
     guard let coordinator = coordinator else { return false }
-    FlashLog.trace("[input] modal pass_through key=\(event.keyCode)")
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let ignoredChar =
+      NormalModeInterpreter.firstCharacter(event.charactersIgnoringModifiers)?
+      .lowercased().first
+    // Dismissal triggers: Esc, vim-style `q`, Ctrl-C, and Cmd-W. Every
+    // other key is consumed silently — modal mode is hermetic, keys
+    // never leak to the focused app.
+    let isEsc = event.keyCode == 53
+    let isQ = modifiers.isEmpty && ignoredChar == "q"
+    let isCtrlC = modifiers == .control && ignoredChar == "c"
+    let isCmdW = modifiers == .command && ignoredChar == "w"
+    if isEsc || isQ || isCtrlC || isCmdW {
+      FlashLog.trace("[input] modal dismiss key=\(event.keyCode)")
+      coordinator.overlayDidCancelModal()
+      return true
+    }
+    FlashLog.trace("[input] modal consume key=\(event.keyCode)")
     coordinator.overlayDidPassThroughModalKey(event)
     return true
   }

@@ -147,8 +147,8 @@ slow_ms = 100
 log_level = "info"
 
 # Optional loopback-only dense debug page with live logs and Flash/plugin
-# state. Set `inspector_enabled = true` to start the HTTP server; host is
+# state. Set `http_inspector_enabled = true` to start the HTTP server; host is
 # restricted to `localhost` / `127.0.0.1` / `::1`.
-inspector_enabled = false
-inspector_host = "localhost"
-inspector_port = 4242
+http_inspector_enabled = false
+http_inspector_host = "localhost"
+http_inspector_port = 4242

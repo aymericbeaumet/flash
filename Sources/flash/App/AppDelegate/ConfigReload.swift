@@ -150,13 +150,13 @@ extension AppDelegate {
   }
 
   func configureDebugServer(for cfg: Config) {
-    guard cfg.debug.inspectorEnabled else {
+    guard cfg.debug.httpInspectorEnabled else {
       debugServer?.stop()
       debugServer = nil
       return
     }
-    let host = cfg.debug.inspectorHost
-    let port = cfg.debug.inspectorPort
+    let host = cfg.debug.httpInspectorHost
+    let port = cfg.debug.httpInspectorPort
     if debugServer?.host == host, debugServer?.port == port {
       debugServer?.broadcastState()
       return

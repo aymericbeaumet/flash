@@ -244,9 +244,9 @@ Keys:
 | `debug.profile`                    | bool           | `false`              |
 | `debug.slow_ms`                    | int            | `100`                |
 | `debug.log_level`                  | string         | `"info"`             |
-| `debug.inspector_enabled`          | bool           | `false`              |
-| `debug.inspector_host`             | string         | `"localhost"` (also accepts `127.0.0.1`, `::1`) |
-| `debug.inspector_port`             | int (1..65535) | `4242`               |
+| `debug.http_inspector_enabled`          | bool           | `false`              |
+| `debug.http_inspector_host`             | string         | `"localhost"` (also accepts `127.0.0.1`, `::1`) |
+| `debug.http_inspector_port`             | int (1..65535) | `4242`               |
 
 `hints.magic_modifiers` supports `"cmd"`, `"ctrl"`, `"alt"`, and `"shift"`.
 If the resolved `hints.keys` contains non-letter characters, Flash logs a warning
@@ -279,10 +279,10 @@ log through the Flash logger by sending `flash.log` JSOND notifications.
 Official plugin installers must keep downloaded CLI binaries under their own
 `FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
 
-Setting `debug.inspector_enabled = true` starts a loopback-only single-page
+Setting `debug.http_inspector_enabled = true` starts a loopback-only single-page
 debug server with live logs, resolved config, focused app state, and plugin
-state, bound to `debug.inspector_host` (`localhost` / `127.0.0.1` / `::1`)
-and `debug.inspector_port`. Keep it dense and diagnostic-focused; do not
+state, bound to `debug.http_inspector_host` (`localhost` / `127.0.0.1` / `::1`)
+and `debug.http_inspector_port`. Keep it dense and diagnostic-focused; do not
 turn it into a preference UI.
 
 Performance behaviours are **not configurable.** The prepared AX model,

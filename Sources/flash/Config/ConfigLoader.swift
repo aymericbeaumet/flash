@@ -527,40 +527,31 @@ enum ConfigLoader {
           "debug.log_level must be one of: trace, debug, info, warn, error, fatal",
           location: location)
       }
-    case ["debug", "inspector_enabled"]:
+    case ["debug", "http_inspector_enabled"]:
       if let parsed = parseBool(value) {
-        config.debug.inspectorEnabled = parsed
-        config.recordLocation(path: "debug.inspector_enabled", location: location)
+        config.debug.httpInspectorEnabled = parsed
+        config.recordLocation(path: "debug.http_inspector_enabled", location: location)
       } else {
         config.addDiagnostic(
-          "debug.inspector_enabled must be true or false", location: location)
+          "debug.http_inspector_enabled must be true or false", location: location)
       }
-    case ["debug", "inspector_host"]:
+    case ["debug", "http_inspector_host"]:
       if let raw = parseInspectorHost(value), !raw.isEmpty {
-        config.debug.inspectorHost = raw
-        config.recordLocation(path: "debug.inspector_host", location: location)
+        config.debug.httpInspectorHost = raw
+        config.recordLocation(path: "debug.http_inspector_host", location: location)
       } else {
         config.addDiagnostic(
-          "debug.inspector_host must be \"localhost\", \"127.0.0.1\", or \"::1\"",
+          "debug.http_inspector_host must be \"localhost\", \"127.0.0.1\", or \"::1\"",
           location: location)
       }
-    case ["debug", "inspector_port"]:
+    case ["debug", "http_inspector_port"]:
       if let parsed = parseInt(value), (1...65535).contains(parsed) {
-        config.debug.inspectorPort = parsed
-        config.recordLocation(path: "debug.inspector_port", location: location)
+        config.debug.httpInspectorPort = parsed
+        config.recordLocation(path: "debug.http_inspector_port", location: location)
       } else {
         config.addDiagnostic(
-          "debug.inspector_port must be an integer in 1..65535", location: location)
+          "debug.http_inspector_port must be an integer in 1..65535", location: location)
       }
-    case ["debug", "watch_plugins"]:
-      if let parsed = parseBool(value) {
-        config.debug.watchPlugins = parsed
-        config.recordLocation(path: "debug.watch_plugins", location: location)
-      } else {
-        config.addDiagnostic(
-          "debug.watch_plugins must be true or false", location: location)
-      }
-
     default:
       if table.count == 2, table[0] == "mode", ModeScope(rawValue: table[1]) != nil {
         config.addDiagnostic(
@@ -968,12 +959,6 @@ enum ConfigLoader {
         config.debug.logLevel = lvl
         config.clearLocation(path: "debug.log_level")
       }
-    case "debug-watch-plugins":
-      if let b = boolFromString(value) {
-        config.debug.watchPlugins = b
-        config.clearLocation(path: "debug.watch_plugins")
-      }
-
     // `--config=` is consumed by `resolvePath`; ignore here so it
     // doesn't show up as an unknown key.
     case "config":

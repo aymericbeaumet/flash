@@ -96,8 +96,12 @@ final class HotkeySyntaxTests: XCTestCase {
         modifiers: UInt32(cmdKey)))
   }
 
-  func testNormalScopeCommandMappingsAreCaughtButDoNotDispatchInNormalMode() {
-    XCTAssertFalse(
+  func testNormalScopeCommandMappingsDispatchInNormalMode() {
+    // `[mode.normal.mappings]` cmd-prefixed mappings must fire when in
+    // normal mode. The previous behaviour blocked them, which meant
+    // configuring `"cmd+a" = "flash://..."` under `[mode.normal.mappings]`
+    // silently did nothing.
+    XCTAssertTrue(
       MappingsCoordinator.mappingApplies(
         scope: .normal,
         currentMode: .normal,
@@ -107,6 +111,12 @@ final class HotkeySyntaxTests: XCTestCase {
         scope: .normal,
         currentMode: .normal,
         modifiers: UInt32(optionKey)))
+    // Normal-scope cmd-mappings must NOT fire when we're in insert mode.
+    XCTAssertFalse(
+      MappingsCoordinator.mappingApplies(
+        scope: .normal,
+        currentMode: .insert,
+        modifiers: UInt32(cmdKey)))
   }
 
   // MARK: - Action parsing

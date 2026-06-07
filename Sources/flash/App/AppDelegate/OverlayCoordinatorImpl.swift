@@ -383,12 +383,14 @@ extension AppDelegate {
     applyModeOverlay()
   }
 
+  /// Modal mode is hermetic: keys are swallowed, never forwarded to the
+  /// focused app. Dismissal flows through `cancelOperation` (Esc / Ctrl-C)
+  /// or click-outside via the modal dismiss monitors, never via an
+  /// arbitrary keystroke leaking into the underlying window. Only Insert
+  /// mode forwards input to the focused app.
   func overlayDidPassThroughModalKey(_ event: NSEvent) {
-    let targetPID = currentNonFlashContext()?.processID ?? normalModeTargetPID
-    overlayDidCancelModal()
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
-      _ = ActionDispatcher.forwardKeyDown(event, to: targetPID)
-    }
+    FlashLog.trace(
+      "[modal] consume key=\(event.keyCode) chars=\(event.charactersIgnoringModifiers ?? "")")
   }
 
   func overlayDidCancelCommandLine() {

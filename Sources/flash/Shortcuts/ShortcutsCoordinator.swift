@@ -104,7 +104,6 @@ final class MappingsCoordinator {
     modifiers: UInt32
   ) -> Bool {
     guard scope != .all else { return true }
-    if currentMode == .normal, modifiers & UInt32(cmdKey) != 0 { return false }
     guard let current = currentMode else { return false }
     switch (scope, current) {
     case (.normal, .normal), (.insert, .insert):

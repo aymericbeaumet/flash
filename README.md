@@ -124,9 +124,9 @@ log_level = "info"
 # bounds_fg = "#FF3B9A"
 # profile = false
 # slow_ms = 100
-# inspector_enabled = false
-# inspector_host = "localhost"
-# inspector_port = 4242
+# http_inspector_enabled = false
+# http_inspector_host = "localhost"
+# http_inspector_port = 4242
 ```
 
 `[mode] labels` controls the mode-cell text; its width follows the longest configured label. `[mode.all.mappings]` applies in insert and normal modes. `[mode.normal]` holds normal-mode options such as `leader = "\\"`. `[mode.normal.mappings]` extends the built-in normal-mode map and overrides only matching keys. `[mode.insert.mappings]` applies only in insert mode. Values can be `flash://...` actions or explicit command arrays such as `["sh", "~/bin/toggle-colors"]`; bare shell strings and non-Flash URLs are rejected. Relative argv paths containing `/` resolve from the config file location.
@@ -137,7 +137,7 @@ When a `[mode.all.mappings]` mapping points to `flash://mode_normal`, Flash show
 
 Normal mode supports counts such as `10u` and `2[t`, `gg` / `G` for instant top/bottom scrolling, `g1` through `g9` for environment-specific indexed selection, `r` / `R` for reload / force reload, `[h` / `]h` for target page history, `[t` / `]t` for tab previous/next, `[a` / `]a` for app previous/next (MRU), `ctrl-o` / `ctrl-i` for Flash movement history, command-line mode with `:`, and `?` for help. Command-line forms include `:help [topic]`, `:q[uit]`, `:q[uit]!`, `:w[rite]`, `:p[rint]`, `:e[dit]`, `:open`, `:open <query>`, `:flashlight`, `:flashlight <query>`, `:plugins`, `:<plugin-command> <action> [args...]`, `:new`, `:tabnew`, `:bd[elete]`, `:cl[ose]`, `:find`, `:u[ndo]`, `:red[o]`, `:y[ank]`, `:d[elete]`, `:pu[t]`, and `:%y[ank]`. `:open <query>` and `:flashlight <query>` show typo-tolerant results above the command line across source-labelled results such as `[app] Firefox`, `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, and `[slack] #general`; use arrows or tab / shift-tab to select and return to open. Source candidates follow the `{ source, name, url }` contract, and `url` is openable whenever present; app URLs are absolute `file://` URLs to the `.app` bundle. `[open] ignored_apps = ["Flash", "com.flash.app"]` hides matching app candidates from `:open`, `:flashlight`, and `flash://app_open?name=...`.
 
-Setting `[debug] inspector_enabled = true` starts a loopback-only single-page debug view with live logs, resolved config, focused app state, and plugin state. The host (`inspector_host`) is restricted to `localhost` / `127.0.0.1` / `::1`; the default port is `4242`. Every log line carries a `source` field such as `core:AppDelegate.swift.activate(...)` or `plugin:spotify`.
+Setting `[debug] http_inspector_enabled = true` starts a loopback-only single-page debug view with live logs, resolved config, focused app state, and plugin state. The host (`http_inspector_host`) is restricted to `localhost` / `127.0.0.1` / `::1`; the default port is `4242`. Every log line carries a `source` field such as `core:AppDelegate.swift.activate(...)` or `plugin:spotify`.
 
 Flash stays in normal mode until the user presses `i`, commits an `f` / `F` mouse-click hint, or physically clicks while idle normal mode is capturing input. Hint clicks may include configured modifier passthrough, right-clicks, or double-clicks; they are treated as explicit mouse interactions by the user. Physical clicks are replayed so they reach the underlying app. External `flash://mode_insert`, passive focus changes, app focus requests, menu-bar clicks, status-bar popups, and `flash://app_find` do not switch to insert mode while advanced normal mode is active.
 

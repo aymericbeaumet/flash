@@ -85,10 +85,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.mode.insert.isEmpty)
     XCTAssertTrue(c.open.ignoredApps.isEmpty)
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
-    XCTAssertFalse(c.debug.inspectorEnabled)
-    XCTAssertEqual(c.debug.inspectorHost, "localhost")
-    XCTAssertEqual(c.debug.inspectorPort, 4242)
-    XCTAssertFalse(c.debug.watchPlugins)
+    XCTAssertFalse(c.debug.httpInspectorEnabled)
+    XCTAssertEqual(c.debug.httpInspectorHost, "localhost")
+    XCTAssertEqual(c.debug.httpInspectorPort, 4242)
   }
 
   func testParsesModeLabelsInlineTable() {
@@ -210,13 +209,13 @@ final class ConfigLoaderTests: XCTestCase {
     let cfg = ConfigLoader.parse(
       """
       [debug]
-      inspector_enabled = true
-      inspector_host = "127.0.0.1"
-      inspector_port = 4343
+      http_inspector_enabled = true
+      http_inspector_host = "127.0.0.1"
+      http_inspector_port = 4343
       """)
-    XCTAssertTrue(cfg.debug.inspectorEnabled)
-    XCTAssertEqual(cfg.debug.inspectorHost, "127.0.0.1")
-    XCTAssertEqual(cfg.debug.inspectorPort, 4343)
+    XCTAssertTrue(cfg.debug.httpInspectorEnabled)
+    XCTAssertEqual(cfg.debug.httpInspectorHost, "127.0.0.1")
+    XCTAssertEqual(cfg.debug.httpInspectorPort, 4343)
     XCTAssertTrue(cfg.loadingDiagnostics.isEmpty)
   }
 
@@ -224,22 +223,22 @@ final class ConfigLoaderTests: XCTestCase {
     let cfg = ConfigLoader.parse(
       """
       [debug]
-      inspector_host = "example.com"
+      http_inspector_host = "example.com"
       """)
-    XCTAssertEqual(cfg.debug.inspectorHost, "localhost")
+    XCTAssertEqual(cfg.debug.httpInspectorHost, "localhost")
     XCTAssertTrue(
-      cfg.loadingDiagnostics.contains { $0.message.contains("inspector_host") })
+      cfg.loadingDiagnostics.contains { $0.message.contains("http_inspector_host") })
   }
 
   func testRejectsOutOfRangeInspectorPort() {
     let cfg = ConfigLoader.parse(
       """
       [debug]
-      inspector_port = 70000
+      http_inspector_port = 70000
       """)
-    XCTAssertEqual(cfg.debug.inspectorPort, 4242)
+    XCTAssertEqual(cfg.debug.httpInspectorPort, 4242)
     XCTAssertTrue(
-      cfg.loadingDiagnostics.contains { $0.message.contains("inspector_port") })
+      cfg.loadingDiagnostics.contains { $0.message.contains("http_inspector_port") })
   }
 
   func testParsesMultilineStringArrayComments() {
@@ -328,10 +327,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(hints["magic_modifiers"] as? [String], ["shift"])
     XCTAssertEqual(overlay["font_size"] as? Double, 12)
     XCTAssertEqual(debug["log_level"] as? String, "debug")
-    XCTAssertTrue(debug.keys.contains("inspector_enabled"))
-    XCTAssertTrue(debug.keys.contains("inspector_host"))
-    XCTAssertTrue(debug.keys.contains("inspector_port"))
-    XCTAssertEqual(debug["watch_plugins"] as? Bool, false)
+    XCTAssertTrue(debug.keys.contains("http_inspector_enabled"))
+    XCTAssertTrue(debug.keys.contains("http_inspector_host"))
+    XCTAssertTrue(debug.keys.contains("http_inspector_port"))
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
     XCTAssertEqual(
       allMappings.first?["action"] as? [String],
@@ -421,22 +419,6 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.debug.profile)
     XCTAssertEqual(c.debug.slowMs, 42)
-  }
-
-  func testParsesDebugWatchPlugins() {
-    let on = ConfigLoader.parse("[debug]\nwatch_plugins = true")
-    XCTAssertTrue(on.debug.watchPlugins)
-    XCTAssertTrue(on.loadingDiagnostics.isEmpty)
-
-    let off = ConfigLoader.parse("[debug]\nwatch_plugins = false")
-    XCTAssertFalse(off.debug.watchPlugins)
-
-    let bad = ConfigLoader.parse("[debug]\nwatch_plugins = \"yes\"")
-    XCTAssertFalse(bad.debug.watchPlugins)
-    XCTAssertTrue(
-      bad.loadingDiagnostics.contains {
-        $0.message.contains("debug.watch_plugins must be true or false")
-      })
   }
 
   func testIgnoresComments() {

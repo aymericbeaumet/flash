@@ -19,7 +19,6 @@ final class PluginManager {
   /// plugin × every action × `localizedCaseInsensitiveCompare`.
   /// Keys are lowercased; lookups use the same normalisation.
   private var actionIndex: [ActionKey: PluginProcess] = [:]
-  private var watchFiles: Bool = false
   var onStateChanged: (() -> Void)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
@@ -149,7 +148,6 @@ final class PluginManager {
   }
 
   private func reloadDesiredPlugins(config: Config) {
-    watchFiles = config.debug.watchPlugins
     var desired: [(root: URL, origin: PluginOrigin)] = officialPluginRoots().map {
       ($0, .official)
     }
@@ -170,7 +168,6 @@ final class PluginManager {
         nextIDs.insert(manifest.id)
         let existing = pluginsByID[manifest.id]
         if existing?.root == item.root, existing?.manifest == manifest {
-          existing?.setWatchFiles(watchFiles)
           continue
         }
         existing?.stop()
@@ -178,8 +175,7 @@ final class PluginManager {
           root: item.root,
           manifest: manifest,
           origin: item.origin,
-          baseDataDir: baseDataDir,
-          watchFiles: watchFiles)
+          baseDataDir: baseDataDir)
         plugin.onStatusChanged = { [weak self] in self?.notifyStateChanged() }
         pluginsByID[manifest.id] = plugin
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin)
@@ -356,7 +352,7 @@ extension PluginManager {
       install and start do not run login flows.
 
       `flash://plugins` or `:plugins` opens the plugin status modal. When
-      `[debug] inspector_enabled = true` is set, the inspector page shows live
+      `[debug] http_inspector_enabled = true` is set, the http inspector page shows live
       logs, resolved config, and plugin state.
       """)
 }
