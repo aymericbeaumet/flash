@@ -1,0 +1,574 @@
+import AppKit
+import FlashCore
+import QuartzCore
+
+/// The hint-chip render path: lays out one `CAGradientLayer` chip per
+/// `AssignedHint`, dim-renders matched prefix on every keystroke
+/// (`filter`), recycles chips into a pool to amortise the
+/// `CALayer` allocation cost, and handles the per-screen scale
+/// resolution for crisp 1pt borders on mixed-DPI setups.
+///
+/// Mouse-grid hints share this code path and ship as a separate frame
+/// + palette pair drawn through the same chip layer.
+extension OverlayPanel {
+  func display(hints: [AssignedHint]) {
+    FlashLog.trace("[overlay] display hints=\(hints.count) input=\(inputMode)")
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer {
+      CATransaction.commit()
+      captureKeyboardInput()
+    }
+
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let frame = snapshot.unionFrame
+    applyPanelFrame(frame)
+
+    recycleAll()
+    transientContentVisible = true
+    commandPromptVisible = false
+
+    let bgTop = nsColor(fromHex: overlayConfig.hintBGTop) ?? .systemYellow
+    let bgBottom = nsColor(fromHex: overlayConfig.hintBGBottom) ?? bgTop
+    let fg = nsColor(fromHex: overlayConfig.hintFG) ?? .black
+    let border = nsColor(fromHex: overlayConfig.hintBorder)
+    let fontSize = CGFloat(overlayConfig.fontSize)
+    // Resolve per-screen backing scale per chip below — but precompute
+    // a sorted list of (screen, frameInPanelLocal) pairs once so the
+    // per-chip lookup is a tight linear scan over (usually) one or two
+    // screens. Hint chips render fuzzy when contentsScale doesn't match
+    // the host screen's backingScaleFactor, so on a mixed-DPI dual-
+    // monitor setup the chip layer's scale must follow the screen the
+    // chip lands on, not `NSScreen.main`.
+    let panelOrigin = frame.origin
+    let screensInPanel: [(scale: CGFloat, panelRect: CGRect)] = snapshot.screens.map { s in
+      let r = CGRect(
+        x: s.frame.minX - panelOrigin.x,
+        y: s.frame.minY - panelOrigin.y,
+        width: s.frame.width,
+        height: s.frame.height
+      )
+      return (s.scale, r)
+    }
+    // Single-display fast path: the per-chip linear scan over the
+    // panel-local screen list resolves to the same scale every time,
+    // so skip the loop and CGPoint construction entirely.
+    let singleDisplayScale: CGFloat? =
+      screensInPanel.count == 1 ? screensInPanel[0].scale : nil
+    let fallbackScale =
+      snapshot.mainScale
+
+    // Hoisted out of the per-chip loop: colors, font, and chip height
+    // are identical for every chip in this activation. Chip *width*
+    // is per-hint — `HintAssigner` now packs singles + 2-char labels
+    // in the same activation (so the user can commit a 1-key hint
+    // whenever the target count allows), and using a single uniform
+    // width sized to the first hint clipped/squished every label
+    // with a different length.
+    let gradientColors: [CGColor] = [bgBottom.cgColor, bgTop.cgColor]
+    let borderCG = border?.cgColor ?? OverlayPanel.fallbackBorderCGColor
+    // Single weight, bold monospaced — labels always render in bold so
+    // small chips stay readable. Once the user has typed a prefix,
+    // those leading characters re-render at 30% alpha via
+    // `attributedLabel(...)`; the weight stays bold so glyph advance
+    // and therefore chip width don't change across keystrokes.
+    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let chipHeight = Self.chipHeight(forFontSize: fontSize)
+    let labelYOffset = (chipHeight - fontSize - 2) / 2
+    let labelHeight = fontSize + 2
+    // The full label space in HintAssigner caps out at a handful of
+    // distinct lengths (usually 1 and 2). Cache `chipWidth` by length
+    // so we pay the arithmetic once per distinct length, not per chip.
+    var widthByLen: [Int: CGFloat] = [:]
+    widthByLen.reserveCapacity(2)
+
+    let debugEnabled = debugConfig.showBounds
+    if debugEnabled {
+      debugShapeLayer.strokeColor =
+        (nsColor(fromHex: debugConfig.boundsFG) ?? NSColor.systemPink).cgColor
+      debugShapeLayer.fillColor = (nsColor(fromHex: debugConfig.boundsBG) ?? NSColor.clear).cgColor
+    }
+    lastTargetLocalRects.removeAll(keepingCapacity: true)
+    if debugEnabled {
+      lastTargetLocalRects.reserveCapacity(hints.count)
+    }
+
+    // Build sublayers off-tree, then batch-attach with a single
+    // assignment to `contentLayer.sublayers`. The previous approach
+    // (N `addSublayer` calls) was N tree mutations on the host layer,
+    // each of which triggers AppKit's needs-display bookkeeping.
+    var newSublayers: [CALayer] = []
+    newSublayers.reserveCapacity(hints.count * 2 + 1)
+    if debugEnabled {
+      newSublayers.append(debugShapeLayer)
+    }
+
+    hintLayers.reserveCapacity(hints.count)
+    labelLayers.reserveCapacity(hints.count)
+
+    for (idx, hint) in hints.enumerated() {
+      let targetFrame = hint.target.frame
+      let isMouseGridHint = hint.target.providerID == "mouse_grid"
+      let isFinalMouseGridHint =
+        isMouseGridHint
+        && Self.mouseGridDepth(from: hint.target.id).map(MouseGrid.isFinalDisplayDepth) == true
+      let local = CGRect(
+        x: targetFrame.minX - frame.minX,
+        y: targetFrame.minY - frame.minY,
+        width: targetFrame.width,
+        height: targetFrame.height
+      )
+      if debugEnabled {
+        lastTargetLocalRects.append(local)
+      }
+
+      let mouseGridPalette = isMouseGridHint
+        ? Self.mouseGridChipPalette(index: idx, foreground: fg)
+        : nil
+      if isMouseGridHint {
+        let boundary = Self.makeMouseGridBoundaryLayer(
+          index: idx,
+          finalStep: isFinalMouseGridHint)
+        boundary.frame = local
+        newSublayers.append(boundary)
+        mouseGridBoundaryLayers.append(boundary)
+      }
+
+      let chip = dequeueHintLayer()
+      // The chip pool retains visual state across activations. If the
+      // previous overlay was dismissed mid-filter (e.g. by typing the
+      // first character of a hint), most chips were `isHidden = true`.
+      // Without this reset, the next activation pulls hidden chips out
+      // of the pool and the user sees only the debug outlines.
+      chip.isHidden = false
+      chip.opacity = 1
+      let label = dequeueLabelLayer()
+      label.isHidden = false
+      // CATextLayer's own `font` + `fontSize` properties are the
+      // authoritative source for weight + size; the per-attribute
+      // `.font` in the attributed string is treated as a hint and is
+      // unreliable for the system monospaced face (SF Mono). Setting
+      // both keeps every codepath that touches the layer in
+      // lockstep, including when chips are reused from the pool with
+      // a stale regular-weight font from a previous render.
+      label.font = labelFont
+      label.fontSize = fontSize
+      let labelColor = mouseGridPalette?.foreground ?? fg
+      label.string = Self.attributedLabel(
+        display: hint.display, typedPrefixLen: 0,
+        font: labelFont, fgNS: labelColor)
+      label.foregroundColor = labelColor.cgColor
+
+      let labelLen = hint.display.count
+      let chipW: CGFloat
+      if let cached = widthByLen[labelLen] {
+        chipW = cached
+      } else {
+        chipW = Self.chipWidth(forLabelLength: labelLen, fontSize: fontSize)
+        widthByLen[labelLen] = chipW
+      }
+      label.frame = CGRect(
+        x: 0,
+        y: labelYOffset,
+        width: chipW,
+        height: labelHeight)
+
+      let chipGlobal =
+        isMouseGridHint
+        ? Self.centeredChipFrame(target: targetFrame, width: chipW, height: chipHeight)
+        : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
+      let chipLocal = CGRect(
+        x: chipGlobal.minX - frame.minX,
+        y: chipGlobal.minY - frame.minY,
+        width: chipGlobal.width,
+        height: chipGlobal.height
+      )
+      // Pick the screen this chip is rendered on so the chip and its
+      // label use the correct backing scale. Without this the gradient
+      // chip + 1px border + text were rasterised at NSScreen.main's
+      // scale even when the host window was on a different-DPI
+      // display, which looked muddy/blurry.
+      let chipScale: CGFloat
+      if let single = singleDisplayScale {
+        chipScale = single
+      } else {
+        let chipMid = CGPoint(x: chipLocal.midX, y: chipLocal.midY)
+        var resolved = fallbackScale
+        for sp in screensInPanel where sp.panelRect.contains(chipMid) {
+          resolved = sp.scale
+          break
+        }
+        chipScale = resolved
+      }
+      // Snap to device-pixel grid so the 1pt border lands on integer
+      // device-pixels (otherwise it gets anti-aliased into two half-
+      // intensity rows and reads as pixelated).
+      chip.frame = Self.snap(chipLocal, scale: chipScale)
+      chip.contentsScale = chipScale
+      if let mouseGridPalette {
+        chip.colors = [
+          mouseGridPalette.bottom.cgColor,
+          mouseGridPalette.top.cgColor,
+        ]
+        chip.borderColor = mouseGridPalette.border.cgColor
+      } else {
+        chip.colors = gradientColors
+        chip.borderColor = borderCG
+      }
+      label.contentsScale = chipScale
+
+      // `recycleAll()` already cleared `sublayers`, so attaching with
+      // `addSublayer(label)` skips the per-chip array alloc that
+      // `chip.sublayers = [label]` carried.
+      chip.addSublayer(label)
+      newSublayers.append(chip)
+      hintLayers.append(chip)
+      labelLayers.append(label)
+    }
+    appendModeBadgeLayerIfNeeded(to: &newSublayers, panelFrame: frame)
+
+    contentLayer.sublayers = newSublayers
+    if debugEnabled {
+      rebuildDebugPath(visibleIndices: nil)
+      debugShapeLayer.isHidden = false
+    } else {
+      debugShapeLayer.isHidden = true
+      debugShapeLayer.path = nil
+    }
+  }
+
+  private func rebuildDebugPath(visibleIndices: Set<Int>?) {
+    let path = CGMutablePath()
+    for (idx, rect) in lastTargetLocalRects.enumerated() {
+      if let visibleIndices, !visibleIndices.contains(idx) { continue }
+      path.addRect(rect)
+    }
+    debugShapeLayer.path = path
+  }
+
+  static let noActions: [String: CAAction] = [
+    "position": NSNull(), "bounds": NSNull(), "frame": NSNull(),
+    "transform": NSNull(), "contents": NSNull(), "hidden": NSNull(),
+    "opacity": NSNull(), "backgroundColor": NSNull(), "cornerRadius": NSNull(),
+    "borderWidth": NSNull(), "borderColor": NSNull(), "foregroundColor": NSNull(),
+    "masksToBounds": NSNull(),
+    "onOrderIn": NSNull(), "onOrderOut": NSNull(), "sublayers": NSNull(),
+    "path": NSNull(), "strokeColor": NSNull(), "fillColor": NSNull(), "lineWidth": NSNull(),
+    "colors": NSNull(),
+  ]
+
+  func hide() {
+    FlashLog.trace(
+      "[overlay] hide transient=\(transientContentVisible) mode_badge=\(modeBadgeVisible) "
+        + "capture=\(modeBadgeCapturesInput) input=\(inputMode)")
+    transientContentVisible = false
+    commandPromptVisible = false
+    commandPromptPrefix = ":"
+    commandCaretLayer.isHidden = true
+    hideModalTextView()
+    hideCommandTextField()
+    clearCandidateFinderResults()
+    commandLineText = ""
+    commandLineCursorIndex = 0
+    candidateFinderQuery = ""
+    recycleAll()
+    renderModeBadgeOnlyOrHide()
+  }
+
+  func captureKeyboardInput() {
+    FlashLog.trace("[overlay] capture_keyboard key_before=\(isKeyWindow) input=\(inputMode)")
+    orderFrontRegardless()
+    makeKey()
+    if inputMode == .commandLine {
+      commandTextField.isHidden = false
+      makeFirstResponder(commandTextField)
+      syncCommandTextFieldSelection()
+      return
+    }
+    if inputMode == .modal {
+      modalTextView.overlayCoordinator = coordinator
+      modalScrollView.isHidden = false
+      makeFirstResponder(modalTextView)
+      return
+    }
+    makeFirstResponder(self)
+  }
+
+
+
+
+
+
+
+
+
+
+  func ensurePanelFrame() -> CGRect {
+    let frame = OverlayPanel.unionScreenFrame()
+    applyPanelFrame(frame)
+    return frame
+  }
+
+  /// Idempotent panel + contentView + contentLayer frame sync. Called
+  /// by `display`, `displayBanner`, and `ensurePanelFrame` so the
+  /// "are we already at this frame?" branch is in one place.
+  func applyPanelFrame(_ frame: CGRect) {
+    guard self.frame != frame else { return }
+    self.setFrame(frame, display: false)
+    self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
+    contentLayer.frame = contentView?.bounds ?? .zero
+  }
+
+
+
+
+
+
+  func filter(prefix: String, hints: [AssignedHint]) {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    let upper = prefix.uppercased()
+    let prefixLen = upper.count
+    let fontSize = CGFloat(overlayConfig.fontSize)
+    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let fgNS = nsColor(fromHex: overlayConfig.hintFG) ?? .black
+    var visible = Set<Int>()
+    var cache: [AttributedLabelKey: NSAttributedString] = [:]
+    cache.reserveCapacity(hints.count)
+    for (idx, hint) in hints.enumerated() {
+      guard idx < hintLayers.count, idx < labelLayers.count else { break }
+      let chip = hintLayers[idx]
+      let matches = hint.display.hasPrefix(upper)
+      chip.isHidden = !matches
+      // Only rebuild the visible chips' labels — hidden chips don't
+      // contribute to what the user sees and there's nothing wasted in
+      // leaving their previous-prefix label state in place.
+      if matches {
+        visible.insert(idx)
+        let l = labelLayers[idx]
+        // Keep CATextLayer's own font in lockstep with the attributed
+        // string's weight — see the note in `display(hints:)`. Cheap;
+        // CATextLayer compares font references and noops on equal.
+        l.font = labelFont
+        // Memoise per `(display, typedPrefixLen)`. Two hints with the
+        // same label produce the same attributed string; without the
+        // memo we allocated one `NSMutableAttributedString` per match,
+        // per keystroke (≈200 allocs on a heavy page filter).
+        let key = AttributedLabelKey(display: hint.display, typedPrefixLen: prefixLen)
+        if let cached = cache[key] {
+          l.string = cached
+        } else {
+          let attr = Self.attributedLabel(
+            display: hint.display, typedPrefixLen: prefixLen,
+            font: labelFont, fgNS: fgNS)
+          cache[key] = attr
+          l.string = attr
+        }
+      }
+    }
+    if debugConfig.showBounds {
+      rebuildDebugPath(visibleIndices: visible)
+    }
+    CATransaction.commit()
+  }
+
+  private struct AttributedLabelKey: Hashable {
+    let display: String
+    let typedPrefixLen: Int
+  }
+
+  /// Centered paragraph style — immutable, allocated once.
+  /// CATextLayer ignores `alignmentMode` when its string is an
+  /// NSAttributedString, so alignment rides along as a
+  /// `.paragraphStyle` attribute. Shared across every chip label;
+  /// NSParagraphStyle is documented thread-safe for read-only use.
+  static let centeredParagraphStyle: NSParagraphStyle = {
+    let p = NSMutableParagraphStyle()
+    p.alignment = .center
+    return p.copy() as! NSParagraphStyle
+  }()
+
+  /// Build the chip label's attributed string. The whole label renders
+  /// in `font` (bold monospaced); the first `typedPrefixLen` characters
+  /// re-render at 30 % alpha (i.e. 70 % transparent) so the un-typed
+  /// remainder visually dominates the chip. Weight never changes —
+  /// glyph advances must not vary with prefix length, since the chip
+  /// width was already computed in `display(hints:)`.
+  ///
+  /// Takes NSColor directly (not CGColor) so the caller can hoist the
+  /// color alloc out of the per-chip loop — `NSColor(cgColor:)` is
+  /// hundreds of nanoseconds per call and the per-keystroke filter
+  /// rebuild calls this N times.
+  private static func attributedLabel(
+    display: String,
+    typedPrefixLen: Int,
+    font: NSFont,
+    fgNS: NSColor
+  ) -> NSAttributedString {
+    let attr = NSMutableAttributedString(string: display)
+    let full = NSRange(location: 0, length: (display as NSString).length)
+    attr.addAttributes(
+      [
+        .font: font,
+        .foregroundColor: fgNS,
+        .paragraphStyle: centeredParagraphStyle,
+      ],
+      range: full
+    )
+    let typedLen = min(max(typedPrefixLen, 0), full.length)
+    if typedLen > 0 {
+      attr.addAttribute(
+        .foregroundColor,
+        value: fgNS.withAlphaComponent(0.3),
+        range: NSRange(location: 0, length: typedLen)
+      )
+    }
+    return attr
+  }
+
+  /// Round `rect` to the device-pixel grid for `scale`. A 1pt border
+  /// drawn on a half-pixel x/y looks like two adjacent half-intensity
+  /// pixel rows, which the eye reads as fuzzy. Snapping the frame's
+  /// origin and size to multiples of `1/scale` puts the border on a
+
+  func recycleAll() {
+    // Batch detach: one assignment to `sublayers` instead of N
+    // removeFromSuperlayer calls. The debugShapeLayer is re-added by
+    // display(hints:) if debug is enabled, so detaching it here too is
+    // safe — it's not retained anywhere else.
+    contentLayer.sublayers = nil
+    for chip in hintLayers {
+      // Each chip has exactly one sublayer (its label). Wipe so the
+      // chip is clean when next dequeued from the pool.
+      chip.sublayers = nil
+      hintLayerPool.append(chip)
+    }
+    labelLayerPool.append(contentsOf: labelLayers)
+    hintLayers.removeAll(keepingCapacity: true)
+    labelLayers.removeAll(keepingCapacity: true)
+    mouseGridBoundaryLayers.removeAll(keepingCapacity: true)
+    debugShapeLayer.path = nil
+    debugShapeLayer.isHidden = true
+    activeWindowBorderLayer.path = nil
+    commandCaretLayer.isHidden = true
+    hideModalTextView()
+    clearCandidateFinderResults()
+    lastTargetLocalRects.removeAll(keepingCapacity: true)
+  }
+
+  func makeChipLayer() -> CAGradientLayer {
+    let l = CAGradientLayer()
+    // Static styling that never changes after creation — set once at
+    // pool-fill time so the per-chip render loop only touches frame +
+    // colors.
+    l.cornerRadius = 3
+    l.borderWidth = 1
+    l.actions = OverlayPanel.noActions
+    return l
+  }
+
+  func makeLabelLayer() -> CATextLayer {
+    let l = CATextLayer()
+    l.alignmentMode = .center
+    l.actions = OverlayPanel.noActions
+    return l
+  }
+
+  func dequeueHintLayer() -> CAGradientLayer {
+    if let last = hintLayerPool.popLast() { return last }
+    return makeChipLayer()
+  }
+
+  func dequeueLabelLayer() -> CATextLayer {
+    if let last = labelLayerPool.popLast() { return last }
+    return makeLabelLayer()
+  }
+
+  /// Chip's bounding rect in global NSScreen coordinates, for a target
+  /// rect + uniform chip size.
+  ///
+  /// Centring is gated on height first:
+  ///  - If the target's height is under 130 % of the chip height, the
+  ///    chip is centred vertically on the target's midpoint.
+  ///  - Horizontal centring additionally requires the target's width to
+  ///    be under 130 % of the chip width.
+  ///  - Otherwise the chip anchors to the target's top-left corner.
+  static func chipFrame(target: CGRect, width: CGFloat, height: CGFloat) -> CGRect {
+    let centerY = target.height < height * 1.3
+    let centerX = centerY && target.width < width * 1.3
+    let x = centerX ? target.midX - width / 2 : target.minX
+    let y = centerY ? target.midY - height / 2 : target.maxY - height
+    return CGRect(x: x, y: y, width: width, height: height)
+  }
+
+  static func centeredChipFrame(target: CGRect, width: CGFloat, height: CGFloat) -> CGRect {
+    CGRect(
+      x: target.midX - width / 2,
+      y: target.midY - height / 2,
+      width: width,
+      height: height)
+  }
+
+  /// Convenience overload. Used by `commit` (`hint.target.frame` is the
+  /// only thing it knows) to derive the click point — the renderer
+  /// inside `display(hints:)` calls the `(target:width:height:)` form
+  /// directly so it can reuse the per-render uniform chip size.
+  static func chipFrame(for hint: AssignedHint, fontSize: CGFloat) -> CGRect {
+    let width = chipWidth(forLabelLength: hint.display.count, fontSize: fontSize)
+    let height = chipHeight(forFontSize: fontSize)
+    return chipFrame(target: hint.target.frame, width: width, height: height)
+  }
+
+  /// Centralised chip-dimension formulas so the renderer in
+  /// `display(hints:)` and the click-point computation in `commit`
+  /// never drift out of sync.
+  static func chipWidth(forLabelLength labelLen: Int, fontSize: CGFloat) -> CGFloat {
+    max(14, CGFloat(labelLen) * fontSize * 0.6 + 6)
+  }
+
+  static func chipHeight(forFontSize fontSize: CGFloat) -> CGFloat {
+    fontSize + 4
+  }
+
+  private static let mouseGridColors: [NSColor] = [
+    NSColor(calibratedRed: 0.94, green: 0.27, blue: 0.31, alpha: 1),
+    NSColor(calibratedRed: 0.96, green: 0.55, blue: 0.19, alpha: 1),
+    NSColor(calibratedRed: 0.98, green: 0.80, blue: 0.25, alpha: 1),
+    NSColor(calibratedRed: 0.35, green: 0.72, blue: 0.38, alpha: 1),
+    NSColor(calibratedRed: 0.23, green: 0.64, blue: 0.82, alpha: 1),
+    NSColor(calibratedRed: 0.42, green: 0.47, blue: 0.91, alpha: 1),
+    NSColor(calibratedRed: 0.72, green: 0.39, blue: 0.86, alpha: 1),
+    NSColor(calibratedRed: 0.94, green: 0.43, blue: 0.71, alpha: 1),
+  ]
+
+  private static func mouseGridColor(index: Int) -> NSColor {
+    mouseGridColors[index % mouseGridColors.count]
+  }
+
+  private static func mouseGridChipPalette(
+    index: Int,
+    foreground: NSColor
+  ) -> (top: NSColor, bottom: NSColor, foreground: NSColor, border: NSColor) {
+    let base = mouseGridColor(index: index)
+    let top = base.blended(withFraction: 0.40, of: NSColor.white) ?? base
+    let bottom = base.blended(withFraction: 0.08, of: NSColor.black) ?? base
+    return (top: top, bottom: bottom, foreground: foreground, border: base)
+  }
+
+  private static func makeMouseGridBoundaryLayer(index: Int, finalStep: Bool) -> CALayer {
+    let color = mouseGridColor(index: index)
+    let layer = CALayer()
+    layer.actions = OverlayPanel.noActions
+    layer.borderWidth = finalStep ? 1 : 2
+    layer.cornerRadius = finalStep ? 2 : 3
+    layer.borderColor = color.withAlphaComponent(finalStep ? 0.95 : 0.9).cgColor
+    layer.backgroundColor = color.withAlphaComponent(finalStep ? 0.08 : 0.05).cgColor
+    return layer
+  }
+
+  private static func mouseGridDepth(from id: String) -> Int? {
+    let parts = id.split(separator: ":", maxSplits: 2)
+    guard parts.count == 3, parts[0] == "mouse_grid" else { return nil }
+    return Int(parts[1])
+  }
+}
