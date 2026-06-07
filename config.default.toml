@@ -115,6 +115,7 @@ leader = "\\"
 "/" = "flash://app_find"
 "<leader>space" = "flash://flashlight"
 "r" = "flash://app_reload"
+"R" = "flash://app_reload?force=1"
 "?" = "flash://help_show"
 ":" = "flash://mode_command"
 

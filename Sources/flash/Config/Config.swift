@@ -173,7 +173,8 @@ struct Config {
       ModeMapping(key: "t", action: .flashCommand(.tabNewInsert)),
       ModeMapping(key: "/", action: .flashCommand(.find)),
       ModeMapping(key: "\(Self.defaultNormalLeader)space", action: .flashCommand(.flashlight)),
-      ModeMapping(key: "r", action: .flashCommand(.reload)),
+      ModeMapping(key: "r", action: .flashCommand(.reload(force: false))),
+      ModeMapping(key: "R", action: .flashCommand(.reload(force: true))),
       ModeMapping(key: "?", action: .flashCommand(.showUsage(topic: nil))),
       ModeMapping(key: ":", action: .flashCommand(.commandMode)),
     ]
@@ -400,8 +401,8 @@ extension URLCommand {
       case .top: return "flash://scroll_top"
       case .bottom: return "flash://scroll_bottom"
       }
-    case .reload:
-      return "flash://app_reload"
+    case .reload(let force):
+      return force ? "flash://app_reload?force=1" : "flash://app_reload"
     case .undo:
       return "flash://app_undo"
     case .redo:

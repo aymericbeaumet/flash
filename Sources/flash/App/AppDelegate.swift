@@ -683,6 +683,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         "[mode] enter_insert_denied reason=\(reason.logValue) "
           + "rule=normal_requires_hint_focus")
       normalModePendingCommandToken &+= 1
+      clearTransientHintState(reason: "enter_insert_denied_\(reason.logValue)")
       resetModeInputState()
       if overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder || overlay.inputMode == .modal {
         overlay.hide()
@@ -700,6 +701,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   private func transitionMode(to nextMode: FlashMode, reason: String) {
     let previousMode = flashMode
+    normalModePendingCommandToken &+= 1
+    resetModeInputState()
     closeModalStateForModeExit(reason: "enter_\(nextMode)_\(reason)")
     if previousMode != nextMode {
       modeWillLeave(previousMode, to: nextMode, reason: reason)
@@ -734,6 +737,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     currentHints = []
     currentPrefix = ""
     sourceAppPID = nil
+    mouseGridRegion = nil
+    mouseGridDepth = 0
+    pendingAction = .leftClick
     pendingHintCommitBehavior = .click
     if hadActivation {
       invalidateActivation(reason: reason)
@@ -1147,8 +1153,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterCommandLineMode()
     case .scroll(let kind):
       scrollNormalMode(kind, repeatCount: repeatCount)
-    case .reload:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_R), flags: .maskCommand, repeatCount: repeatCount)
+    case .reload(let force):
+      let flags: CGEventFlags = force ? [.maskCommand, .maskShift] : .maskCommand
+      sendNormalModeKey(CGKeyCode(kVK_ANSI_R), flags: flags, repeatCount: repeatCount)
     case .undo:
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_Z),
@@ -1729,6 +1736,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       applyModeOverlay()
       return
     }
+    if let key = Self.nativeBrowserTabIndexKey(
+      index: index,
+      bundleIdentifier: context.bundleIdentifier)
+    {
+      sendNormalModeKey(key, flags: .maskCommand)
+      return
+    }
     registry.tabSelect(at: index, in: context) { [weak self] result in
       guard let self else { return }
       if result.didPerform {
@@ -1860,6 +1874,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self?.enterInsertMode(reason: .normalModeInput)
       }
     }
+  }
+
+  static func nativeBrowserTabIndexKey(index: Int, bundleIdentifier: String) -> CGKeyCode? {
+    guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) else { return nil }
+    return tabIndexKeyCode(index)
   }
 
   private static func tabIndexKeyCode(_ index: Int) -> CGKeyCode? {

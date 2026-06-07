@@ -8,7 +8,7 @@ enum URLCommand: Hashable {
   case insertMode
   case commandMode
   case scroll(NormalModeDispatcher.ScrollKind)
-  case reload
+  case reload(force: Bool)
   case undo
   case redo
   case close
@@ -172,7 +172,7 @@ final class URLEventHandler: NSObject {
     "scroll_half_page_down": { _ in .scroll(.halfPageDown) },
     "scroll_top": { _ in .scroll(.top) },
     "scroll_bottom": { _ in .scroll(.bottom) },
-    "app_reload": { _ in .reload },
+    "app_reload": { q in .reload(force: q.bool("force")) },
     "app_undo": { _ in .undo },
     "app_redo": { _ in .redo },
     "window_close": { _ in .close },
@@ -247,7 +247,7 @@ final class URLEventHandler: NSObject {
     flash://scroll_half_page_down
     flash://scroll_top
     flash://scroll_bottom
-    flash://app_reload
+    flash://app_reload[?force=1]
     flash://app_undo
     flash://app_redo
     flash://window_close

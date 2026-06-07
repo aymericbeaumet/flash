@@ -83,22 +83,25 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(HotkeySyntax.parse(hotkey: ""))
   }
 
-  func testCommandMappingsAreCaughtButDoNotDispatchInNormalMode() {
-    XCTAssertFalse(
+  func testAllScopeCommandMappingsDispatchInNormalMode() {
+    XCTAssertTrue(
       MappingsCoordinator.mappingApplies(
         scope: .all,
         currentMode: .normal,
         modifiers: UInt32(cmdKey)))
-    XCTAssertFalse(
-      MappingsCoordinator.mappingApplies(
-        scope: .normal,
-        currentMode: .normal,
-        modifiers: UInt32(cmdKey | shiftKey)))
     XCTAssertTrue(
       MappingsCoordinator.mappingApplies(
         scope: .all,
         currentMode: .insert,
         modifiers: UInt32(cmdKey)))
+  }
+
+  func testNormalScopeCommandMappingsAreCaughtButDoNotDispatchInNormalMode() {
+    XCTAssertFalse(
+      MappingsCoordinator.mappingApplies(
+        scope: .normal,
+        currentMode: .normal,
+        modifiers: UInt32(cmdKey | shiftKey)))
     XCTAssertTrue(
       MappingsCoordinator.mappingApplies(
         scope: .normal,
@@ -257,6 +260,10 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(
       parseMappingAction(rawString: "flash://app_open_finder?all=1")?.command,
       .candidateFinder(all: true))
+    XCTAssertEqual(parseMappingAction(rawString: "flash://app_reload")?.command, .reload(force: false))
+    XCTAssertEqual(
+      parseMappingAction(rawString: "flash://app_reload?force=1")?.command,
+      .reload(force: true))
     XCTAssertEqual(parseMappingAction(rawString: "flash://flashlight")?.command, .flashlight)
     XCTAssertEqual(parseMappingAction(rawString: "flash://tab_next")?.command, .tabNext)
     XCTAssertEqual(parseMappingAction(rawString: "flash://tab_previous")?.command, .tabPrev)

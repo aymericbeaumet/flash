@@ -155,7 +155,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "r").pending, "r")
     XCTAssertEqual(
       NormalModeInterpreter.pendingCommand(pending: "r")?.command,
-      .reload)
+      .reload(force: false))
+    XCTAssertEqual(command(chars: "R", ignoring: "r", flags: [.shift]), .reload(force: true))
     XCTAssertEqual(command(pending: "r", chars: "f"), .mouseTarget(.click(.rightClick)))
     XCTAssertEqual(command(pending: "r", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.rightClick)))
     XCTAssertEqual(transition(chars: "d").pending, "d")
@@ -815,10 +816,39 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "org.alacritty"))
   }
 
+  func testBrowserIndexedTabSelectionUsesNativeShortcut() {
+    XCTAssertEqual(
+      AppDelegate.nativeBrowserTabIndexKey(
+        index: 1,
+        bundleIdentifier: "org.mozilla.firefox"),
+      CGKeyCode(kVK_ANSI_1))
+    XCTAssertEqual(
+      AppDelegate.nativeBrowserTabIndexKey(
+        index: 3,
+        bundleIdentifier: "com.apple.Safari"),
+      CGKeyCode(kVK_ANSI_3))
+    XCTAssertEqual(
+      AppDelegate.nativeBrowserTabIndexKey(
+        index: 9,
+        bundleIdentifier: "com.google.Chrome"),
+      CGKeyCode(kVK_ANSI_9))
+  }
+
+  func testNativeBrowserIndexedTabSelectionDoesNotHandleOtherApps() {
+    XCTAssertNil(
+      AppDelegate.nativeBrowserTabIndexKey(
+        index: 1,
+        bundleIdentifier: "org.alacritty"))
+    XCTAssertNil(
+      AppDelegate.nativeBrowserTabIndexKey(
+        index: 10,
+        bundleIdentifier: "org.mozilla.firefox"))
+  }
+
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "H", "L", "f", "rf", "df", "mf", "F", "rF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "t", "MAPPINGS",
+      "gg", "G", "H", "L", "f", "rf", "df", "mf", "F", "rF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "R", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "gt", "gT", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
@@ -826,7 +856,7 @@ final class NormalModeTests: XCTestCase {
       "flash://flashlight", "flash://mouse_target?right=1",
       "flash://mouse_target?double=1", "flash://mouse_grid", "flash://history_back", "flash://history_forward",
       "flash://movement_back", "flash://movement_forward",
-      "flash://tab_select?index=1", "flash://tab_new_insert", "?"]
+      "flash://app_reload?force=1", "flash://tab_select?index=1", "flash://tab_new_insert", "?"]
     {
       XCTAssertTrue(
         help.contains(mapping),
@@ -838,7 +868,7 @@ final class NormalModeTests: XCTestCase {
   func testHelpTextIsDerivedFromConfiguredMappings() {
     var config = Config.default
     config.mode.normal = [
-      ModeMapping(key: "zz", action: .flashCommand(.reload))
+      ModeMapping(key: "zz", action: .flashCommand(.reload(force: false)))
     ]
     let help = NormalModeDispatcher.helpText(config: config, showModes: true)
     XCTAssertTrue(help.contains("zz"))
@@ -892,13 +922,13 @@ final class NormalModeTests: XCTestCase {
   func testConfiguredMappingsOverrideDefaults() {
     let mappings = [
       ModeMapping(key: "j", action: .flashCommand(.scroll(.up))),
-      ModeMapping(key: "zz", action: .flashCommand(.reload)),
+      ModeMapping(key: "zz", action: .flashCommand(.reload(force: false))),
       ModeMapping(key: "tab", action: .flashCommand(.movementForward)),
       ModeMapping(key: "delete_forward", action: .flashCommand(.scroll(.halfPageDown))),
     ]
     XCTAssertEqual(command(chars: "j", mappings: mappings), .scroll(.up))
     XCTAssertEqual(transition(chars: "z", mappings: mappings).pending, "z")
-    XCTAssertEqual(command(pending: "z", chars: "z", mappings: mappings), .reload)
+    XCTAssertEqual(command(pending: "z", chars: "z", mappings: mappings), .reload(force: false))
     XCTAssertEqual(
       transition(keyCode: kVK_Tab, chars: "\t", mappings: mappings).command,
       .movementForward)
@@ -940,13 +970,13 @@ final class NormalModeTests: XCTestCase {
 
   func testSpaceTokenCanBeUsedInNormalModeSequences() {
     let mappings = [
-      ModeMapping(key: "spacec", action: .flashCommand(.reload))
+      ModeMapping(key: "spacec", action: .flashCommand(.reload(force: false)))
     ]
     let first = transition(keyCode: kVK_Space, chars: " ", mappings: mappings)
     XCTAssertEqual(first.pending, "space")
     XCTAssertEqual(
       transition(pending: "space", chars: "c", mappings: mappings).command,
-      .reload)
+      .reload(force: false))
   }
 
   func testBackslashLeaderShellMappingProducesAction() {

@@ -583,7 +583,9 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normalLeader, "space")
-    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "spacec" })?.action.command, .reload)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "spacec" })?.action.command,
+      .reload(force: false))
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "spacespace" })?.action.command, .flashlight)
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "\\space" && $0.action.command == .flashlight }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
