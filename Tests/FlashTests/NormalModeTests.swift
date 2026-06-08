@@ -282,7 +282,7 @@ final class NormalModeTests: XCTestCase {
         captureOverride: true),
       ModeOverlaySnapshot(
         text: "INSERT",
-        visible: true,
+        visible: false,
         captureInput: false,
         inputMode: .hints,
         refreshActiveWindowBorder: true))
@@ -757,7 +757,7 @@ final class NormalModeTests: XCTestCase {
   func testFuzzyScoreMatchesSlackHashtagChannelByChannelName() {
     let candidate = CandidateFinder.prepare(
       Candidate(
-        kind: .slackChannel,
+        kind: .plugin("slack_channel"),
         sourceID: "slack",
         source: "slack",
         pid: 123,
@@ -765,8 +765,6 @@ final class NormalModeTests: XCTestCase {
         subtitle: "Slack channel",
         bundleIdentifier: "com.tinyspeck.slackmacgap",
         url: nil,
-        tmuxClientTTY: nil,
-        tmuxTarget: nil,
         targetElement: nil))
 
     XCTAssertEqual(candidate.normalizedSearchText, "slack #schedule")
@@ -856,7 +854,7 @@ final class NormalModeTests: XCTestCase {
   func testCandidateFinderPreparedBrowserTabIncludesBrowserTitleAndURL() {
     let prepared = CandidateFinder.prepare(
       Candidate(
-        kind: .browserTab,
+        kind: .plugin("browser_tab"),
         sourceID: "firefox-tabs",
         source: "firefox",
         pid: 123,
@@ -866,8 +864,6 @@ final class NormalModeTests: XCTestCase {
         subtitle: "browser tab",
         bundleIdentifier: "org.mozilla.firefox",
         url: URL(string: "https://mail.google.com/mail/u/0/#inbox"),
-        tmuxClientTTY: nil,
-        tmuxTarget: nil,
         targetElement: nil))
 
     XCTAssertEqual(prepared.displayTitle, "[firefox] Gmail (https://mail.google.com/mail/u/0/#inbox)")
@@ -883,7 +879,7 @@ final class NormalModeTests: XCTestCase {
   func testCandidateFinderPreparedTmuxWindowMatchesSourcePrefixedQuery() {
     let prepared = CandidateFinder.prepare(
       Candidate(
-        kind: .tmuxWindow,
+        kind: .plugin("tmux_window"),
         sourceID: "tmux",
         source: "tmux",
         pid: 123,
@@ -891,8 +887,6 @@ final class NormalModeTests: XCTestCase {
         subtitle: "tmux window",
         bundleIdentifier: "",
         url: nil,
-        tmuxClientTTY: "/dev/ttys001",
-        tmuxTarget: "beside:1",
         targetElement: nil))
 
     XCTAssertEqual(prepared.displayTitle, "[tmux] beside:1 beside-agentic")
@@ -1204,8 +1198,6 @@ final class NormalModeTests: XCTestCase {
       subtitle: "app",
       bundleIdentifier: bundleIdentifier,
       url: URL(fileURLWithPath: path),
-      tmuxClientTTY: nil,
-      tmuxTarget: nil,
       targetElement: nil)
   }
 }

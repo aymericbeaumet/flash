@@ -67,10 +67,9 @@ struct Config {
     var mouseGridSteps: Int = 3
     /// Opacity (0.0..1.0) applied to every mouse-grid chip so the user
     /// can still see what's underneath the precision overlay. 1.0 is
-    /// fully opaque, 0.0 invisible. Default 0.85 — solid enough that
-    /// the gradient + label read clearly, transparent enough that the
-    /// underlying window peeks through.
-    var mouseGridOpacity: Double = 0.85
+    /// fully opaque, 0.0 invisible. Default 0.5 — the underlying window
+    /// stays clearly visible through the precision grid.
+    var mouseGridOpacity: Double = 0.5
   }
   struct Overlay {
     var fontSize: Double = 12

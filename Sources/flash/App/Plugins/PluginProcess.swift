@@ -667,8 +667,6 @@ final class PluginProcess {
       subtitle: raw["subtitle"] as? String ?? "",
       bundleIdentifier: raw["bundle_id"] as? String ?? "",
       url: url,
-      tmuxClientTTY: nil,
-      tmuxTarget: nil,
       targetElement: nil,
       sourcePayload: raw["payload"].flatMap(Self.payloadString))
   }
@@ -702,12 +700,6 @@ final class PluginProcess {
     switch raw {
     case "app":
       return .app
-    case "tmux_window":
-      return .tmuxWindow
-    case "browser_tab":
-      return .browserTab
-    case "slack_channel":
-      return .slackChannel
     case let value?:
       return .plugin(value)
     case nil:

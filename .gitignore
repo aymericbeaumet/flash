@@ -9,6 +9,10 @@ DerivedData/
 *.xcodeproj
 *.xcworkspace
 
+## Rust plugin build output
+Plugins/*/target/
+Plugins/*/flash-plugin-*
+
 ## Editor / OS
 .DS_Store
 .vscode/

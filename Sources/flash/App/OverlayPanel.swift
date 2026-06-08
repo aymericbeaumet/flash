@@ -90,7 +90,7 @@ final class OverlayPanel: NSPanel {
 
   var overlayConfig: Config.Overlay = .init()
   var debugConfig: Config.Debug = .init()
-  var mouseGridOpacity: Float = 0.85
+  var mouseGridOpacity: Float = 0.5
   var modeLabels: Config.Mode.Labels = .init()
   var magicModifiers: ClickModifiers = .defaultMagic
   var inputMode: OverlayInputMode = .hints

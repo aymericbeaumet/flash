@@ -61,8 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
     static func candidate(_ candidate: Candidate) -> MovementEntry {
       let target =
-        candidate.tmuxTarget
-        ?? candidate.url?.absoluteString
+        candidate.url?.absoluteString
         ?? candidate.sourcePayload
         ?? candidate.name
       return MovementEntry(
@@ -102,6 +101,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var candidateFinderSelectedIndex = 0
   var candidateFinderCurrentQuery = ""
   var candidateFinderScope: CandidateScope = .all
+  /// `:emojis` narrows the shared candidate pool to emoji glyphs and routes
+  /// selection to text insertion; every other candidate query excludes them.
+  var candidateFinderEmojiMode = false
   let candidateFinderCacheQueue = DispatchQueue(label: "flash.candidate_finder.cache", qos: .utility)
   var candidateFinderRunningAppsCache: [Candidate] = []
   var candidateFinderRunningAppsCacheReady = false

@@ -3,8 +3,8 @@
   "name": "Media",
   "version": "0.1.0",
   "description": "System media controls (play/pause, next/previous, volume) and now-playing info.",
-  "install": "./install.sh",
-  "start": "./start.sh",
+  "install": "true",
+  "start": "exec ./flash-plugin-media",
   "events": [
     "config.*"
   ],

@@ -22,7 +22,7 @@ final class SourceCandidateTests: XCTestCase {
         bundleIdentifier: "org.mozilla.firefoxdeveloperedition"))
     let tab = CandidateFinder.prepare(
       candidate(
-        kind: .browserTab,
+        kind: .plugin("browser_tab"),
         source: "firefox",
         name: "Notes",
         subtitle: "browser tab",
@@ -48,7 +48,7 @@ final class SourceCandidateTests: XCTestCase {
         pid: nil))
     let alive = CandidateFinder.prepare(
       candidate(
-        kind: .tmuxWindow,
+        kind: .plugin("tmux_window"),
         source: "tmux",
         name: "Zulu",
         subtitle: "tmux window",
@@ -79,7 +79,7 @@ final class SourceCandidateTests: XCTestCase {
         pid: nil))
     let alivePrefix = CandidateFinder.prepare(
       candidate(
-        kind: .browserTab,
+        kind: .plugin("browser_tab"),
         source: "firefox",
         name: "Finder notes",
         subtitle: "browser tab",
@@ -114,7 +114,7 @@ final class SourceCandidateTests: XCTestCase {
         pid: 4242))
     let browserTab = CandidateFinder.prepare(
       candidate(
-        kind: .browserTab,
+        kind: .plugin("browser_tab"),
         source: "firefox",
         name: "Important message inbox",
         subtitle: "browser tab",
@@ -161,7 +161,7 @@ final class SourceCandidateTests: XCTestCase {
   func testTmuxWindowsOutrankBrowserTabsOnCloseScores() {
     let browserTab = CandidateFinder.prepare(
       candidate(
-        kind: .browserTab,
+        kind: .plugin("browser_tab"),
         source: "firefox",
         name: "agentic",
         subtitle: "browser tab",
@@ -170,7 +170,7 @@ final class SourceCandidateTests: XCTestCase {
         url: URL(string: "https://example.test/agentic")))
     let tmuxWindow = CandidateFinder.prepare(
       candidate(
-        kind: .tmuxWindow,
+        kind: .plugin("tmux_window"),
         source: "tmux",
         name: "agentic",
         subtitle: "tmux window",
@@ -226,7 +226,7 @@ final class SourceCandidateTests: XCTestCase {
   func testOpenCandidateScoringMatchesURL() throws {
     let tab = CandidateFinder.prepare(
       candidate(
-        kind: .browserTab,
+        kind: .plugin("browser_tab"),
         source: "firefox",
         name: "Inbox",
         subtitle: "browser tab",
@@ -241,7 +241,7 @@ final class SourceCandidateTests: XCTestCase {
   func testOpenCandidateScoringMatchesBrowserTabTitleDomainAlias() throws {
     let tab = CandidateFinder.prepare(
       candidate(
-        kind: .browserTab,
+        kind: .plugin("browser_tab"),
         source: "firefox",
         name: "Gmail",
         subtitle: "browser tab",
@@ -349,8 +349,6 @@ final class SourceCandidateTests: XCTestCase {
       subtitle: subtitle,
       bundleIdentifier: bundleIdentifier,
       url: url,
-      tmuxClientTTY: nil,
-      tmuxTarget: nil,
       targetElement: nil)
   }
 }

@@ -3,8 +3,8 @@
   "name": "Slack",
   "version": "0.1.0",
   "description": "Slack CLI actions backed by the Slack developer CLI.",
-  "install": "./install.sh",
-  "start": "./start.sh",
+  "install": "true",
+  "start": "exec ./flash-plugin-slack",
   "events": [
     { "match": "apps.*", "bundle_ids": ["com.tinyspeck.slackmacgap"] },
     "config.*"

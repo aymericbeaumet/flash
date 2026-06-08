@@ -3,8 +3,8 @@
   "name": "Spotify",
   "version": "0.1.0",
   "description": "Spotify playback controls backed by spotify_player.",
-  "install": "./install.sh",
-  "start": "./start.sh",
+  "install": "true",
+  "start": "exec ./flash-plugin-spotify",
   "events": [
     { "match": "apps.*", "bundle_ids": ["com.spotify.client"] },
     "config.*"

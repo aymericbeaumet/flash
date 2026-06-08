@@ -3,8 +3,8 @@
   "name": "Notes",
   "version": "0.1.0",
   "description": "Surface macOS Notes entries in flashlight, plus `:notes` open helper.",
-  "install": "./install.sh",
-  "start": "./start.sh",
+  "install": "true",
+  "start": "exec ./flash-plugin-notes",
   "priority": 12,
   "events": [
     "flash.started",

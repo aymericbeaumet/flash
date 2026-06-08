@@ -56,7 +56,7 @@ final class FirefoxTabsSource: FlashSource {
       }
       AXCandidateSourceHelpers.resolveAXItem(
         Candidate(
-          kind: .browserTab,
+          kind: .plugin("browser_tab"),
           sourceID: identifier,
           source: displayName,
           pid: context.processID,
@@ -64,8 +64,6 @@ final class FirefoxTabsSource: FlashSource {
           subtitle: "browser tab",
           bundleIdentifier: context.bundleIdentifier,
           url: nil,
-          tmuxClientTTY: nil,
-          tmuxTarget: nil,
           targetElement: tabs[index - 1])
       ) { result in
         completion(result.didResolve ? .performed(pid: result.targetPID) : .unhandled)

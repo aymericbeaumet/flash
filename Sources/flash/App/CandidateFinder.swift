@@ -18,8 +18,11 @@ enum CandidateFinder {
     "[\(source)] \(name)"
   }
 
+  static let browserTabKind = CandidateKind.plugin("browser_tab")
+  static let emojiKind = CandidateKind.plugin("emoji")
+
   static func displayTitle(_ candidate: Candidate) -> String {
-    guard candidate.kind == .browserTab else {
+    guard candidate.kind == browserTabKind else {
       return displayTitle(source: candidate.source, name: candidate.name)
     }
     return browserTabDisplayTitle(candidate)
@@ -198,7 +201,7 @@ enum CandidateFinder {
   }
 
   private static func browserTabURLString(_ candidate: Candidate) -> String? {
-    guard candidate.kind == .browserTab else { return nil }
+    guard candidate.kind == browserTabKind else { return nil }
     if let url = candidate.url?.absoluteString, !url.isEmpty {
       return url
     }
@@ -224,7 +227,7 @@ enum CandidateFinder {
 
   private static func browserTabTitleDomainAliases(_ candidate: Candidate) -> String {
     guard
-      candidate.kind == .browserTab,
+      candidate.kind == browserTabKind,
       let url = candidate.url,
       let host = url.host
     else { return "" }

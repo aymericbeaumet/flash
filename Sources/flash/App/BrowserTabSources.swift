@@ -86,7 +86,7 @@ enum BrowserTabSources {
     let name = browserTabName(title: title, url: url)
     guard !name.isEmpty else { return nil }
     return Candidate(
-      kind: .browserTab,
+      kind: .plugin("browser_tab"),
       sourceID: sourceID,
       source: source,
       pid: app.processIdentifier,
@@ -94,8 +94,6 @@ enum BrowserTabSources {
       subtitle: "browser tab",
       bundleIdentifier: app.bundleIdentifier ?? "",
       url: url.flatMap(URL.init(string:)),
-      tmuxClientTTY: nil,
-      tmuxTarget: nil,
       targetElement: targetElement,
       sourcePayload: sourcePayload)
   }

@@ -70,9 +70,11 @@ Sources/
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TmuxProvider, TargetFinalizer, WindowSnapshot, browser fixture catalog, shared integration support, plus live TmuxIntegrationTests.
 Tests/BrowserSnapshots/              # Browser integration manifest + 100 offline HTML snapshots used by Scripts/test-integration-browser.sh.
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
-Plugins/                             # Official bundled stdio plugins symlinked into the dev app
+Plugins/                             # Official bundled Rust plugins (one independent crate each), symlinked into the dev app
+flash_plugin_template/               # Generic tokio/JSOND plugin scaffolding crate; no Flash business concepts
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
-Scripts/dev.sh                               # Debug build → staging .app → /Applications/Flash.app, stable dev-signed, plugin symlinks, login autolaunch
+Scripts/build-plugins.sh                     # cargo build --release every Plugins/*/ crate → flash-plugin-<id> binary beside its manifest
+Scripts/dev.sh                               # Build plugins + debug flash → staging .app → /Applications/Flash.app, stable dev-signed, plugin symlinks, login autolaunch
 Scripts/test-integration-native.sh           # Build/sign/run native AppKit integration fixture + oracle
 Scripts/test-integration-electron.sh         # Install pinned Electron fixture deps, build/sign/run Electron oracle
 Scripts/check-guardrails.sh                  # CI hard-rule scanner for banned production APIs / stale config references
@@ -273,13 +275,33 @@ in this version and are not configurable. In the checkout they live under root
 `Plugins/` so `Scripts/dev.sh` can symlink them into the installed app. Every plugin root must contain
 `manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`,
 event subscriptions, and action registrations. `install` and `start` are
-npm-style shell strings run from the plugin root; Flash passes
+shell strings run from the plugin root; Flash passes
 `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`, and `FLASH_PLUGIN_DATA_DIR`.
 Plugins speak JSOND over stdin/stdout: host input on stdin, successful or
 failed protocol results on stdout, unexpected errors on stderr. Plugins can
 log through the Flash logger by sending `flash.log` JSOND notifications.
 Official plugin installers must keep downloaded CLI binaries under their own
 `FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
+
+**Bundled plugins are Rust, macOS-only, and ship as compiled binaries.**
+Each official plugin under `Plugins/<id>/` is an independent (non-workspace)
+Cargo crate depending on the local `flash_plugin_template` crate
+(`flash-plugin = { path = "../../flash_plugin_template" }`), which owns all the
+generic JSOND scaffolding (framing, `initialize`/`heartbeat`/`shutdown`,
+structured logging, a sandboxed `run_cli`, and the tokio runtime) and carries
+**no Flash business concepts**. A plugin's `main.rs` implements the `Plugin`
+trait; everything domain-specific lives there, never in the template. The crate
+hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
+must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
+need safely). `Scripts/build-plugins.sh` compiles every `Plugins/*/Cargo.toml`
+in release mode into a shared `CARGO_TARGET_DIR` (`build/plugin-target`, kept out
+of the watched plugin trees) and copies each `flash-plugin-<id>` binary next to
+its `manifest.json`. The manifest's `start` is `exec ./flash-plugin-<id>` and
+`install` is a no-op `true` — there is no cargo, Python, or interpreter at
+runtime. `Scripts/dev.sh` and `Scripts/package-release.sh` both invoke
+`build-plugins.sh`; dev symlinks the repo `Plugins/` into the app, while release
+stages only `manifest.json` + the binary per plugin (no sources). The compiled
+binaries and per-crate build output are git-ignored.
 
 Setting `debug.http_inspector_enabled = true` starts a loopback-only single-page
 debug server with live logs, resolved config, focused app state, and plugin

@@ -373,9 +373,11 @@ extension AppDelegate {
     let canCapture = mode == .normal && !hasHints && !activationInFlight
     let wantsCapture = captureOverride ?? canCapture
     let capture = canCapture && wantsCapture
+    // Insert mode is deliberately chromeless — no badge — so the focused
+    // app feels untouched. Feedback is normal-mode only.
     return ModeOverlaySnapshot(
       text: mode == .normal ? labels.normal : labels.insert,
-      visible: visible,
+      visible: visible && mode != .insert,
       captureInput: capture,
       inputMode: capture ? .normal : .hints,
       refreshActiveWindowBorder: mode == .insert)
@@ -756,6 +758,7 @@ extension AppDelegate {
     clearTransientHintState(reason: "enter_candidate_finder")
     overlay.candidateFinderQuery = ""
     overlay.commandLineCursorIndex = 0
+    candidateFinderEmojiMode = false
     candidateFinderScope = scope
     candidateFinderCandidates = candidateFinderCandidates(for: scope)
     candidateFinderSelectedIndex = 0
@@ -864,6 +867,7 @@ extension AppDelegate {
     overlay.commandLineText = command
     overlay.commandLineCursorIndex = cursorIndex ?? command.count
     if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
+      candidateFinderEmojiMode = NormalModeDispatcher.commandLineEmojiQuery(command) != nil
       clearCommandLineCompletionState()
       if candidateFinderCandidates.isEmpty {
         candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
@@ -995,7 +999,15 @@ extension AppDelegate {
     // typing, this saves ~10k normalize calls per query.
     let normalizedQuery = NormalModeDispatcher.normalizedSearchText(trimmed)
     let fuzzyScore = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
-    let scored: [CandidateMatch] = candidateFinderCandidates.compactMap { candidate in
+    // Emoji glyphs share the global candidate pool but only surface under
+    // `:emojis`; every other query (`open`, `flashlight`, the `f` finder)
+    // hides them.
+    let pool = candidateFinderCandidates.filter { candidate in
+      candidateFinderEmojiMode
+        ? candidate.kind == CandidateFinder.emojiKind
+        : candidate.kind != CandidateFinder.emojiKind
+    }
+    let scored: [CandidateMatch] = pool.compactMap { candidate in
       if trimmed.isEmpty {
         return CandidateMatch(candidate: candidate, score: 0)
       }
@@ -1194,6 +1206,7 @@ extension AppDelegate {
     candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
+    candidateFinderEmojiMode = false
   }
 
   private func quitNormalModeTargetApp(force: Bool = false) {
@@ -1276,6 +1289,24 @@ extension AppDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + finalDelay) { [weak self] in
       guard let self else { return }
       self.scheduleNormalModeRecapture()
+    }
+  }
+
+  /// Insert an emoji glyph into the focused app: stash it on the
+  /// pasteboard and synthesize Cmd+V into the app that owned focus when
+  /// `:emojis` was invoked. The overlay never takes key focus, so the
+  /// app's text field is still first responder once we dismiss.
+  func insertEmoji(_ glyph: String) {
+    let pid = normalModeContext()?.processID
+    overlay.hide()
+    resetCommandLineState()
+    applyModeOverlay(captureOverride: true)
+    guard !glyph.isEmpty, let pid else { return }
+    NormalModeDispatcher.copy(glyph)
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+      NormalModeDispatcher.sendKey(
+        virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand, to: pid)
+      self?.scheduleNormalModeRecapture()
     }
   }
 

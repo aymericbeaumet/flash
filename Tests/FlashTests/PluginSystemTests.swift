@@ -11,7 +11,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       ids,
       [
-        "contacts", "github", "linear", "media", "notes", "notion", "reminders",
+        "contacts", "emojis", "github", "linear", "media", "notes", "notion", "reminders",
         "slack", "spotify", "tmux",
       ])
 
@@ -19,8 +19,10 @@ final class PluginSystemTests: XCTestCase {
       "github", "linear", "media", "notion", "slack", "spotify",
     ]
     for manifest in manifests {
-      XCTAssertEqual(manifest.install, "./install.sh")
-      XCTAssertEqual(manifest.start, "./start.sh")
+      // Bundled plugins are compiled Rust binaries: `install` is a no-op
+      // and `start` exec's the embedded binary. See Scripts/build-plugins.sh.
+      XCTAssertEqual(manifest.install, "true")
+      XCTAssertEqual(manifest.start, "exec ./flash-plugin-\(manifest.id)")
       XCTAssertFalse(manifest.description.isEmpty)
       if runActionRequired.contains(manifest.id) {
         XCTAssertTrue(
@@ -29,8 +31,8 @@ final class PluginSystemTests: XCTestCase {
       }
     }
     let tmux = try XCTUnwrap(manifests.first { $0.id == "tmux" })
-    XCTAssertEqual(tmux.install, "./install.sh")
-    XCTAssertEqual(tmux.start, "./start.sh")
+    XCTAssertEqual(tmux.install, "true")
+    XCTAssertEqual(tmux.start, "exec ./flash-plugin-tmux")
     XCTAssertTrue(tmux.volatile)
     XCTAssertEqual(tmux.priority, 20)
     XCTAssertTrue(tmux.bundleIDs.contains("org.alacritty"))
@@ -53,26 +55,26 @@ final class PluginSystemTests: XCTestCase {
   }
 
   func testOfficialPluginInstallScriptsAvoidGlobalInstallTargets() throws {
-    let pluginRoot = repositoryRoot().appendingPathComponent("Plugins")
     let banned = [
       "sudo", "brew install", "npm install -g", "deno install -g", "/usr/local/bin",
       "$HOME/.local/bin", "~/.local/bin",
     ]
-    let files = try FileManager.default.contentsOfDirectory(
-      at: pluginRoot,
-      includingPropertiesForKeys: nil,
-      options: [.skipsHiddenFiles])
-    for file in files where file.pathExtension == "py" || file.pathExtension == "sh" {
-      let body = try String(contentsOf: file)
-      for needle in banned {
-        XCTAssertFalse(body.contains(needle), "\(file.path) contains \(needle)")
-      }
-    }
+    // Bundled plugins are Rust binaries with no shell install step: the
+    // manifest's `install`/`start` strings and the crate sources must not
+    // reach for global install locations.
     for root in try officialPluginRoots() {
-      for name in ["install.sh", "start.sh", "plugin.py"] {
-        let body = try String(contentsOf: root.appendingPathComponent(name))
+      let manifest = try PluginManifest.load(from: root)
+      for field in [manifest.install, manifest.start] {
         for needle in banned {
-          XCTAssertFalse(body.contains(needle), "\(root.path)/\(name) contains \(needle)")
+          XCTAssertFalse(field.contains(needle), "\(root.lastPathComponent) manifest contains \(needle)")
+        }
+      }
+      for name in ["Cargo.toml", "src/main.rs"] {
+        let file = root.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: file.path) else { continue }
+        let body = try String(contentsOf: file)
+        for needle in banned {
+          XCTAssertFalse(body.contains(needle), "\(root.lastPathComponent)/\(name) contains \(needle)")
         }
       }
     }
@@ -279,15 +281,19 @@ final class PluginSystemTests: XCTestCase {
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mock.path)
 
     let pluginRoot = repositoryRoot().appendingPathComponent("Plugins/\(pluginID)")
+    let binaryURL = pluginRoot.appendingPathComponent("flash-plugin-\(pluginID)")
+    guard FileManager.default.isExecutableFile(atPath: binaryURL.path) else {
+      throw XCTSkip(
+        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the JSOND smoke test")
+    }
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["python3", "-B", pluginRoot.appendingPathComponent("plugin.py").path]
+    process.executableURL = binaryURL
+    process.arguments = []
     process.currentDirectoryURL = pluginRoot
     var env = ProcessInfo.processInfo.environment
     env["FLASH_PLUGIN_ID"] = pluginID
     env["FLASH_PLUGIN_VERSION"] = "0.1.0"
     env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
     process.environment = env
 

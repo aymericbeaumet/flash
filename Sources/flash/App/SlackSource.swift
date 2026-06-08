@@ -41,7 +41,7 @@ final class SlackSource: FlashSource {
           guard seen.insert(key).inserted else { continue }
           out.append(
             Candidate(
-              kind: .slackChannel,
+              kind: .plugin("slack_channel"),
               sourceID: identifier,
               source: displayName,
               pid: app.processIdentifier,
@@ -49,8 +49,6 @@ final class SlackSource: FlashSource {
               subtitle: "Slack channel",
               bundleIdentifier: bundleID,
               url: nil,
-              tmuxClientTTY: nil,
-              tmuxTarget: nil,
               targetElement: element))
         }
       }

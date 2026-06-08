@@ -82,7 +82,18 @@ extension NormalModeDispatcher {
     if let query = commandLineOpenAppQuery(raw) {
       return query
     }
-    return commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true)
+    if let query = commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true) {
+      return query
+    }
+    return commandLineEmojiQuery(raw)
+  }
+
+  /// Query for `:emojis <text>` (bare `:emojis` lists everything). Shares
+  /// the live candidate-finder rendering with `open`/`flashlight`, but its
+  /// candidate pool is the emoji source and selection inserts the glyph
+  /// rather than activating an app.
+  static func commandLineEmojiQuery(_ raw: String) -> String? {
+    commandLineQuery(raw, name: "emojis", acceptsBareCommand: true)
   }
 
   static func commandLineHelpTopic(_ raw: String) -> String?? {
@@ -285,7 +296,7 @@ extension NormalModeDispatcher {
   }
 
   private static let acceptsArgsCompletionNames: Set<String> = [
-    "open", "flashlight", "help", "plugins",
+    "open", "flashlight", "emojis", "help", "plugins",
   ]
 
   /// Built-in subcommands surfaced by `:plugins <tab>`. Kept in lockstep
@@ -310,7 +321,7 @@ extension NormalModeDispatcher {
       let insertion = kind == .acceptsArgs ? "\(full) " : full
       items.append(CommandLineCompletion(label: full, insertion: insertion, kind: kind))
     }
-    for extra in ["help", "flashlight"] where seen.insert(extra).inserted {
+    for extra in ["help", "flashlight", "emojis"] where seen.insert(extra).inserted {
       items.append(
         CommandLineCompletion(label: extra, insertion: "\(extra) ", kind: .acceptsArgs))
     }

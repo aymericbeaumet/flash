@@ -65,20 +65,19 @@ extension OverlayPanel {
     let availableTextWidth = max(10, width - horizontalPadding * 2)
     let textWidth = ceil((prompt as NSString).size(withAttributes: [.font: labelFont]).width)
     let labelWidth = max(availableTextWidth, textWidth + 2)
-    let cursor = min(max(commandLineCursorIndex, 0), commandLineText.count)
     let scrollOffset: CGFloat
+    let colonWidth = ceil((":" as NSString).size(withAttributes: [.font: labelFont]).width)
     if inputMode == .commandLine {
-      let cursorStringIndex = commandLineText.index(commandLineText.startIndex, offsetBy: cursor)
-      let beforeCursor = String(commandLineText[..<cursorStringIndex])
-      let cursorX = ceil(
-        (beforeCursor as NSString).size(withAttributes: [.font: labelFont]).width)
-      let maxScroll = max(0, textWidth - availableTextWidth)
-      scrollOffset = min(max(0, cursorX - availableTextWidth + 8), maxScroll)
+      // The `:` is a fixed visual prompt, never part of the editable
+      // text. The native field handles body scrolling, so the colon
+      // stays pinned at the left edge and never enters a selection.
+      scrollOffset = 0
       commandCaretLayer.isHidden = true
       configureCommandTextField(
         promptFrame: commandPromptLayer.frame,
         font: labelFont,
-        fontSize: fontSize)
+        fontSize: fontSize,
+        leadingInset: colonWidth)
     } else {
       scrollOffset = 0
       commandCaretLayer.isHidden = true
@@ -94,9 +93,10 @@ extension OverlayPanel {
     commandPromptLabel.foregroundColor = Self.nordSnowStorm2CG
     commandPromptLabel.contentsScale = scale
     commandPromptLabel.alignmentMode = .left
-    commandPromptLabel.string = prompt
     if inputMode == .commandLine {
-      commandPromptLabel.string = ""
+      commandPromptLabel.string = ":"
+    } else {
+      commandPromptLabel.string = prompt
     }
   }
 
@@ -121,14 +121,15 @@ extension OverlayPanel {
   func configureCommandTextField(
     promptFrame: CGRect,
     font: NSFont,
-    fontSize: CGFloat
+    fontSize: CGFloat,
+    leadingInset: CGFloat = 0
   ) {
     commandTextField.font = font
     commandTextField.textColor = Self.nordSnowStorm2
     commandTextField.frame = CGRect(
-      x: promptFrame.minX + 4,
+      x: promptFrame.minX + 4 + leadingInset,
       y: promptFrame.minY + max(0, (promptFrame.height - fontSize - 4) / 2),
-      width: max(10, promptFrame.width - 8),
+      width: max(10, promptFrame.width - 8 - leadingInset),
       height: fontSize + 5)
     commandTextField.isHidden = false
   }
@@ -141,12 +142,21 @@ extension OverlayPanel {
   }
 
 
+  /// Strips the leading `:` prompt glyph. The command-line model keeps
+  /// `:` as the first character of `commandLineText` (every parser keys
+  /// off it), but the editable field — and therefore any selection —
+  /// only ever holds the command body.
+  static func commandLineBody(_ text: String) -> String {
+    text.hasPrefix(":") ? String(text.dropFirst()) : text
+  }
+
   func setCommandTextFieldText(_ text: String, cursorIndex: Int) {
     suppressCommandTextFieldChange = true
     commandLineText = text
     commandLineCursorIndex = cursorIndex
-    if commandTextField.stringValue != text {
-      commandTextField.stringValue = text
+    let body = Self.commandLineBody(text)
+    if commandTextField.stringValue != body {
+      commandTextField.stringValue = body
     }
     syncCommandTextFieldSelection()
     suppressCommandTextFieldChange = false
@@ -155,8 +165,10 @@ extension OverlayPanel {
   func syncCommandTextFieldSelection() {
     guard let editor = commandTextField.currentEditor() as? NSTextView else { return }
     editor.insertionPointColor = Self.nordSnowStorm2
+    let body = commandTextField.stringValue
+    let bodyCursor = max(0, commandLineCursorIndex - 1)
     editor.selectedRange = NSRange(
-      location: utf16Offset(forCharacterOffset: commandLineCursorIndex, in: commandLineText),
+      location: utf16Offset(forCharacterOffset: bodyCursor, in: body),
       length: 0)
   }
 
@@ -192,8 +204,8 @@ extension OverlayPanel: NSTextFieldDelegate {
 
   func controlTextDidChange(_ obj: Notification) {
     guard !suppressCommandTextFieldChange else { return }
-    commandLineText = commandTextField.stringValue
-    commandLineCursorIndex = commandTextFieldCursorIndex()
+    commandLineText = ":" + commandTextField.stringValue
+    commandLineCursorIndex = commandTextFieldCursorIndex() + 1
     FlashLog.trace(
       "[input] command_line edit text=\(commandLineText) cursor=\(commandLineCursorIndex)")
     coordinator?.overlayDidUpdateCommandLine(
@@ -210,11 +222,21 @@ extension OverlayPanel: NSTextFieldDelegate {
     guard control === commandTextField else { return false }
     switch commandSelector {
     case #selector(NSResponder.insertNewline(_:)):
-      let command = commandTextField.stringValue
+      let command = ":" + commandTextField.stringValue
       commandLineText = ""
       commandLineCursorIndex = 0
       FlashLog.trace("[input] command_line submit command=\(command)")
       coordinator?.overlayDidSubmitCommandLine(command)
+      return true
+    case #selector(NSResponder.deleteBackward(_:)):
+      // Backspacing past an empty body dismisses the command line —
+      // the same "erase the prompt to bail" gesture as before, now that
+      // the `:` itself is no longer an editable character.
+      guard commandTextField.stringValue.isEmpty else { return false }
+      commandLineText = ""
+      commandLineCursorIndex = 0
+      FlashLog.trace("[input] command_line cancel reason=prompt_erased")
+      coordinator?.overlayDidCancelCommandLine()
       return true
     case #selector(NSResponder.cancelOperation(_:)):
       commandLineText = ""

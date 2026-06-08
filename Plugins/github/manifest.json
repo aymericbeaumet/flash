@@ -3,8 +3,8 @@
   "name": "GitHub",
   "version": "0.1.0",
   "description": "GitHub issue and pull request actions backed by gh.",
-  "install": "./install.sh",
-  "start": "./start.sh",
+  "install": "true",
+  "start": "exec ./flash-plugin-github",
   "events": [
     "config.*"
   ],

@@ -3,8 +3,8 @@
   "name": "Notion",
   "version": "0.1.0",
   "description": "Notion API and worker actions backed by ntn.",
-  "install": "./install.sh",
-  "start": "./start.sh",
+  "install": "true",
+  "start": "exec ./flash-plugin-notion",
   "events": [
     "config.*"
   ],

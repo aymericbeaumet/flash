@@ -50,9 +50,10 @@ public enum CandidateScope: Sendable {
 
 public enum CandidateKind: Sendable, Equatable {
   case app
-  case tmuxWindow
-  case browserTab
-  case slackChannel
+  /// Any non-app candidate, tagged by its source's wire-kind string
+  /// (e.g. "browser_tab", "slack_channel", "tmux_window"). Both native
+  /// sources and stdio plugins funnel through this single case so the
+  /// runtime carries no per-integration kinds.
   case plugin(String)
 }
 
@@ -72,8 +73,6 @@ public struct Candidate: @unchecked Sendable {
   /// absolute file URL to the .app bundle; browser tabs and other external
   /// resources should use their canonical URL.
   public var url: URL?
-  public var tmuxClientTTY: String?
-  public var tmuxTarget: String?
   public var targetElement: AXUIElement?
   public var sourcePayload: String?
   public var displayTitle: String
@@ -94,8 +93,6 @@ public struct Candidate: @unchecked Sendable {
     subtitle: String,
     bundleIdentifier: String,
     url: URL?,
-    tmuxClientTTY: String?,
-    tmuxTarget: String?,
     targetElement: AXUIElement?,
     sourcePayload: String? = nil,
     displayTitle: String = "",
@@ -110,8 +107,6 @@ public struct Candidate: @unchecked Sendable {
     self.subtitle = subtitle
     self.bundleIdentifier = bundleIdentifier
     self.url = url
-    self.tmuxClientTTY = tmuxClientTTY
-    self.tmuxTarget = tmuxTarget
     self.targetElement = targetElement
     self.sourcePayload = sourcePayload
     self.displayTitle = displayTitle

@@ -531,6 +531,10 @@ extension AppDelegate {
   }
 
   func openSourceItem(_ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true) {
+    if candidate.kind == CandidateFinder.emojiKind {
+      insertEmoji(candidate.sourcePayload ?? "")
+      return
+    }
     if shouldRecordMovement {
       recordMovement(.candidate(candidate), source: "source_open")
     }

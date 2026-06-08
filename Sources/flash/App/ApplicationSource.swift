@@ -79,30 +79,33 @@ final class ApplicationSource: FlashSource {
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   ) {
-    if let pid = item.pid {
-      if let app = NSRunningApplication(processIdentifier: pid) {
-        RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+    // Prefer launching by bundle URL even for already-running apps: this
+    // carries the same "reopen" semantics as clicking the Dock icon, so an
+    // app with zero open windows (e.g. Messages) gets a fresh window instead
+    // of just being raised. `NSRunningApplication.activate` alone never
+    // recreates a window.
+    if let url = item.url {
+      let configuration = NSWorkspace.OpenConfiguration()
+      configuration.activates = true
+      configuration.addsToRecentItems = false
+      NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, _ in
+        DispatchQueue.main.async {
+          completion(.resolved(pid: app?.processIdentifier ?? item.pid))
+        }
       }
+      return
+    }
+
+    if let pid = item.pid, let app = NSRunningApplication(processIdentifier: pid) {
+      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
       DispatchQueue.main.async {
         completion(.resolved(pid: pid))
       }
       return
     }
 
-    guard let url = item.url else {
-      DispatchQueue.main.async {
-        completion(.unresolved)
-      }
-      return
-    }
-
-    let configuration = NSWorkspace.OpenConfiguration()
-    configuration.activates = true
-    configuration.addsToRecentItems = false
-    NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, _ in
-      DispatchQueue.main.async {
-        completion(.resolved(pid: app?.processIdentifier))
-      }
+    DispatchQueue.main.async {
+      completion(.unresolved)
     }
   }
 
@@ -146,8 +149,6 @@ final class ApplicationSource: FlashSource {
       subtitle: "app",
       bundleIdentifier: app.bundleIdentifier ?? "",
       url: app.bundleURL,
-      tmuxClientTTY: nil,
-      tmuxTarget: nil,
       targetElement: nil)
   }
 
@@ -257,8 +258,6 @@ final class ApplicationSource: FlashSource {
       subtitle: "app",
       bundleIdentifier: bundle?.bundleIdentifier ?? "",
       url: url,
-      tmuxClientTTY: nil,
-      tmuxTarget: nil,
       targetElement: nil)
   }
 }

@@ -64,8 +64,6 @@ final class SourceRegistryTests: XCTestCase {
                 subtitle: "source",
                 bundleIdentifier: "",
                 url: nil,
-                tmuxClientTTY: nil,
-                tmuxTarget: nil,
                 targetElement: nil)
             ]
           }
@@ -111,8 +109,6 @@ final class SourceRegistryTests: XCTestCase {
                 subtitle: "source",
                 bundleIdentifier: bundleID,
                 url: nil,
-                tmuxClientTTY: nil,
-                tmuxTarget: nil,
                 targetElement: nil)
             ]
           }

@@ -3,8 +3,8 @@
   "name": "Linear",
   "version": "0.1.0",
   "description": "Linear issue actions backed by linear-cli.",
-  "install": "./install.sh",
-  "start": "./start.sh",
+  "install": "true",
+  "start": "exec ./flash-plugin-linear",
   "events": [
     "config.*"
   ],
