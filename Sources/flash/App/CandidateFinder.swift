@@ -101,11 +101,11 @@ enum CandidateFinder {
   }
 
   /// Tier bonus the user asked for: when two candidates fuzzy-match
-  /// equally well, prefer apps > tmux windows > browser tabs >
-  /// slack > notes / reminders / contacts. The bonus is a small
-  /// fixed offset per tier, well below the inter-base spacing
-  /// (`titleScore` jumps by 1k between exact/prefix/contains), so it
-  /// only breaks ties without overriding strong content matches.
+  /// equally well, prefer tmux windows > browser tabs > apps > slack >
+  /// notes / reminders / contacts. The bonus is a small fixed offset
+  /// per tier, well below the inter-base spacing (`titleScore` jumps
+  /// by 1k between exact/prefix/contains), so it only breaks ties
+  /// without overriding strong content matches.
   static func sourcePrecedenceBonus(for source: String) -> Int {
     let lowered = source.lowercased()
     for (index, tier) in sourcePrecedenceTiers.enumerated() {
@@ -117,12 +117,12 @@ enum CandidateFinder {
   }
 
   private static let sourcePrecedenceTiers: [Set<String>] = [
-    ["app"],
     ["tmux"],
     [
       "firefox", "firefox-dev", "safari", "chrome", "chromium",
       "brave", "edge", "arc", "vivaldi", "opera",
     ],
+    ["app"],
     ["slack"],
     ["notes", "reminders", "contacts"],
   ]
