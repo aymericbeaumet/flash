@@ -52,7 +52,6 @@ final class OverlayPanel: NSPanel {
   let contentLayer = CALayer()
   var hintLayers: [CAGradientLayer] = []
   var labelLayers: [CATextLayer] = []
-  var mouseGridBoundaryLayers: [CALayer] = []
   var hintLayerPool: [CAGradientLayer] = []
   var labelLayerPool: [CATextLayer] = []
   let modeBadgeLayer = CAGradientLayer()
@@ -91,7 +90,6 @@ final class OverlayPanel: NSPanel {
 
   var overlayConfig: Config.Overlay = .init()
   var debugConfig: Config.Debug = .init()
-  var mouseGridSteps: Int = MouseGrid.defaultSteps
   var modeLabels: Config.Mode.Labels = .init()
   var magicModifiers: ClickModifiers = .defaultMagic
   var inputMode: OverlayInputMode = .hints

@@ -19,14 +19,11 @@ enum MouseGrid {
     }
   }
 
-  /// Region edge below which we commit instead of subdividing further —
-  /// even a perfectly aspect-matched grid can't shrink past this without
-  /// producing unhittably-small chips.
+  /// Region edge below which we commit instead of subdividing further.
+  /// At very small regions a further subdivision would produce
+  /// sub-pixel cells the user can't realistically aim at; bail with
+  /// the most recent click point instead.
   static let minimumTerminalSize: CGFloat = 18
-  /// Floor on each side of a single cell at the precision step. The
-  /// grid algorithm picks the densest cols/rows that keeps every final
-  /// cell at least this wide / tall.
-  static let finalMinimumCell: CGFloat = 18
   /// Compile-time fallback when no config object is available (tests,
   /// fixtures). Production callers thread `Config.hints.mouseGridSteps`.
   static let defaultSteps = 3
@@ -100,98 +97,30 @@ enum MouseGrid {
   static func shouldCommit(region: Region, depth: Int, steps: Int = defaultSteps) -> Bool {
     depth >= steps
       || min(region.frame.width, region.frame.height) <= minimumTerminalSize
-      || (isFinalDisplayDepth(depth, steps: steps)
-        && (region.frame.width < finalMinimumCell * 2
-          || region.frame.height < finalMinimumCell * 2))
   }
 
   static func isFinalDisplayDepth(_ depth: Int, steps: Int = defaultSteps) -> Bool {
     depth >= steps - 1
   }
 
-  /// Compute the per-step grid shape by **starting from the final step**:
+  /// Compute the per-step grid shape: always a square NxN with N odd.
+  /// N is the largest odd integer satisfying `N*N <= alphabet.count`,
+  /// so 25-letter alphabets (qwerty homerow + toprow) get 5x5 (= 25
+  /// cells), 49-letter alphabets get 7x7, etc. Aspect-matching the
+  /// grid to the screen is intentionally dropped: square cells let
+  /// the user predict the centre cell on each axis (always present
+  /// because N is odd), and the same shape works on vertical monitors.
   ///
-  ///   - Imagine the precision grid: the densest aspect-matched grid
-  ///     of `alphabet` cells, sized to ≥ `finalMinimumCell` on each side,
-  ///     that fits inside `frame` after `steps - 1` subdivisions.
-  ///   - The same shape is then used at every earlier step (recursive
-  ///     subdivision). After `steps` selections the cell size collapses
-  ///     to roughly the precision target.
-  ///
-  /// Concretely: with `steps = N`, region width `W`, and minimum cell
-  /// `M`, the algorithm picks the largest integer `cols` such that
-  /// `cols^N · M ≤ W` (and likewise for `rows`), then maximises
-  /// `cols · rows` under the alphabet cap. Aspect ratio of the resulting
-  /// grid follows the region's aspect, which handles vertical monitors.
+  /// `frame` and `steps` are kept in the signature for API stability
+  /// (and so the configured step count still controls precision via
+  /// recursion depth), but they no longer feed the grid shape.
   static func fixedGrid(for frame: CGRect, alphabet: [Character], steps: Int) -> Grid {
-    let labelCount = max(4, alphabet.count)
-    let stepCount = max(1, steps)
-    let maxColumns = max(
-      2,
-      Int(floor(pow(max(1, Double(frame.width / finalMinimumCell)), 1.0 / Double(stepCount)))))
-    let maxRows = max(
-      2,
-      Int(floor(pow(max(1, Double(frame.height / finalMinimumCell)), 1.0 / Double(stepCount)))))
-    return gridShape(
-      maxCells: labelCount,
-      aspect: frame.width / max(1, frame.height),
-      maxColumns: maxColumns,
-      maxRows: maxRows)
-  }
-
-  private static func gridShape(
-    maxCells: Int,
-    aspect: CGFloat,
-    maxColumns: Int,
-    maxRows: Int
-  ) -> Grid {
-    let capped = max(4, maxCells)
-    // Odd-axis pass first. Odd cols/rows produce a true centre cell the
-    // user can aim at; an even axis puts the visual centre on a chip
-    // seam. We only fall back to even shapes when no odd shape fits
-    // under the precision-floor caps (`maxColumns/maxRows`), which is
-    // the case for very small regions where 2 is the only valid axis.
-    let oddColMax = maxColumns.isMultiple(of: 2) ? maxColumns - 1 : maxColumns
-    let oddRowMax = maxRows.isMultiple(of: 2) ? maxRows - 1 : maxRows
-    if let oddBest = bestShape(
-      capped: capped, aspect: aspect,
-      colRange: stride(from: 3, through: oddColMax, by: 2),
-      rowRange: stride(from: 3, through: oddRowMax, by: 2))
-    {
-      return Grid(columns: oddBest.columns, rows: oddBest.rows)
+    let target = alphabet.count
+    guard target >= 9 else { return Grid(columns: 2, rows: 2) }
+    var n = 3
+    while (n + 2) * (n + 2) <= target {
+      n += 2
     }
-    let evenBest = bestShape(
-      capped: capped, aspect: aspect,
-      colRange: stride(from: 2, through: max(2, maxColumns), by: 1),
-      rowRange: stride(from: 2, through: max(2, maxRows), by: 1))
-    return Grid(
-      columns: evenBest?.columns ?? 2,
-      rows: evenBest?.rows ?? 2)
-  }
-
-  private static func bestShape<C, R>(
-    capped: Int,
-    aspect: CGFloat,
-    colRange: C,
-    rowRange: R
-  ) -> (columns: Int, rows: Int)?
-  where C: Sequence, C.Element == Int, R: Sequence, R.Element == Int {
-    var best: (columns: Int, rows: Int, cells: Int, score: CGFloat)?
-    for rows in rowRange {
-      for columns in colRange {
-        let cells = rows * columns
-        guard cells <= capped else { continue }
-        let shapeAspect = CGFloat(columns) / CGFloat(rows)
-        let score = abs(log(max(0.01, shapeAspect) / max(0.01, aspect)))
-        if let current = best {
-          if cells > current.cells || (cells == current.cells && score < current.score) {
-            best = (columns, rows, cells, score)
-          }
-        } else {
-          best = (columns, rows, cells, score)
-        }
-      }
-    }
-    return best.map { ($0.columns, $0.rows) }
+    return Grid(columns: n, rows: n)
   }
 }

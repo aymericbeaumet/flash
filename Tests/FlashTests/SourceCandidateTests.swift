@@ -64,15 +64,20 @@ final class SourceCandidateTests: XCTestCase {
   }
 
   func testAliveCandidatesOutrankDeadCandidatesBeforeTextScore() throws {
-    let deadExact = CandidateFinder.prepare(
+    // Both candidates land on the **same** match tier (string prefix),
+    // so their scores stay within `aliveTieBreakScoreMargin` and the
+    // alive-bonus is allowed to settle the tie. Cross-tier matches
+    // (e.g. exact vs prefix, gap ≥ 2000) intentionally bypass this
+    // bump — match quality dominates the alive heuristic.
+    let deadPrefix = CandidateFinder.prepare(
       candidate(
         kind: .app,
         source: "app",
-        name: "Finder",
+        name: "Finder Pro",
         subtitle: "app",
-        bundleIdentifier: "com.example.finder",
+        bundleIdentifier: "com.example.finderpro",
         pid: nil))
-    let aliveTab = CandidateFinder.prepare(
+    let alivePrefix = CandidateFinder.prepare(
       candidate(
         kind: .browserTab,
         source: "firefox",
@@ -82,16 +87,75 @@ final class SourceCandidateTests: XCTestCase {
         pid: 123,
         url: URL(string: "https://docs.example.test/finder")))
 
-    let deadScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: deadExact))
-    let aliveScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: aliveTab))
-    XCTAssertGreaterThan(deadScore, aliveScore)
+    let deadScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: deadPrefix))
+    let aliveScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: alivePrefix))
 
     let sorted = CandidateFinder.sortedMatches([
-      CandidateMatch(candidate: deadExact, score: deadScore),
-      CandidateMatch(candidate: aliveTab, score: aliveScore),
+      CandidateMatch(candidate: deadPrefix, score: deadScore),
+      CandidateMatch(candidate: alivePrefix, score: aliveScore),
     ])
 
-    XCTAssertEqual(sorted.map(\.candidate.name), ["Finder notes", "Finder"])
+    XCTAssertEqual(sorted.map(\.candidate.name), ["Finder notes", "Finder Pro"])
+  }
+
+  func testExactPrefixOnAppNameOutranksContainsOnBrowserTab() throws {
+    // The motivating regression: typing `mes` must surface the
+    // `Messages` app over a browser tab whose title merely contains
+    // `mes` somewhere mid-string. Without the widened match tiers the
+    // browser-tier bonus alone (+40 over app tier) was enough to flip
+    // the order even though the app is a far stronger semantic match.
+    let messagesApp = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "app",
+        name: "Messages",
+        subtitle: "app",
+        bundleIdentifier: "com.apple.mobilesms",
+        pid: 4242))
+    let browserTab = CandidateFinder.prepare(
+      candidate(
+        kind: .browserTab,
+        source: "firefox",
+        name: "Important message inbox",
+        subtitle: "browser tab",
+        bundleIdentifier: "org.mozilla.firefox",
+        pid: 9876,
+        url: URL(string: "https://mail.example.test/")))
+
+    let appScore = try XCTUnwrap(CandidateFinder.score(query: "mes", candidate: messagesApp))
+    let tabScore = try XCTUnwrap(CandidateFinder.score(query: "mes", candidate: browserTab))
+    XCTAssertGreaterThan(appScore, tabScore)
+    let sorted = CandidateFinder.sortedMatches([
+      CandidateMatch(candidate: browserTab, score: tabScore),
+      CandidateMatch(candidate: messagesApp, score: appScore),
+    ])
+    XCTAssertEqual(sorted.map(\.candidate.name), ["Messages", "Important message inbox"])
+  }
+
+  func testWordPrefixOutranksContainsAcrossWordBoundary() throws {
+    // "mes" matching the start of the word "Messages" in "iOS Messages"
+    // (word-prefix, +1500) beats a generic mid-word substring hit
+    // (+800).
+    let iosMessages = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "app",
+        name: "iOS Messages",
+        subtitle: "app",
+        bundleIdentifier: "com.example.iosmessages",
+        pid: 1111))
+    let irrelevantMidword = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "app",
+        name: "Compresso",  // contains "mes" but mid-word
+        subtitle: "app",
+        bundleIdentifier: "com.example.compresso",
+        pid: 2222))
+
+    let wordScore = try XCTUnwrap(CandidateFinder.score(query: "mes", candidate: iosMessages))
+    let midScore = try XCTUnwrap(CandidateFinder.score(query: "mes", candidate: irrelevantMidword))
+    XCTAssertGreaterThan(wordScore, midScore)
   }
 
   func testTmuxWindowsOutrankBrowserTabsOnCloseScores() {

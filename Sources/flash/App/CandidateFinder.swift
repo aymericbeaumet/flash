@@ -251,6 +251,20 @@ enum CandidateFinder {
 
   /// Same scoring rules as `fieldScore`, but the caller has already
   /// normalized the field. Used by the live ranking path.
+  ///
+  /// Score tiers are spaced **far** above the source tier bonus
+  /// (max ~200, see `sourcePrecedenceBonus`) so that match quality
+  /// dominates source priority. The motivating case: typing `mes`
+  /// must surface the `Messages` app (full-string prefix on the app
+  /// name) ahead of a browser tab that happens to contain `mes`
+  /// somewhere — even though browser tabs out-rank apps on tier ties.
+  ///
+  /// Tier layout:
+  ///   - Equal              base + 5000
+  ///   - String prefix      base + 3000  ("messages" matches `mes`)
+  ///   - Word prefix        base + 1500  ("iOS Messages" matches `mes`)
+  ///   - Substring          base +  800
+  ///   - Fuzzy              base +  500 max
   private static func fieldScoreNormalized(
     query: String,
     normalized: String,
@@ -258,17 +272,44 @@ enum CandidateFinder {
     fuzzyScore: (String, String) -> Int?
   ) -> Int? {
     guard !normalized.isEmpty else { return nil }
-    if normalized == query { return base + 1_000 }
+    if normalized == query { return base + 5_000 }
     if normalized.hasPrefix(query) {
-      return base + 700 - min(200, normalized.count - query.count)
+      return base + 3_000 - min(500, normalized.count - query.count)
+    }
+    if hasWordPrefix(normalized: normalized, query: query) {
+      return base + 1_500 - min(300, normalized.count - query.count)
     }
     if let range = normalized.range(of: query) {
       let offset = normalized.distance(from: normalized.startIndex, to: range.lowerBound)
-      return base + 400 - min(300, offset * 4) - min(120, normalized.count - query.count)
+      return base + 800 - min(300, offset * 4) - min(120, normalized.count - query.count)
     }
     guard let fuzzy = fuzzyScore(query, normalized) else { return nil }
-    return base + min(300, fuzzy)
+    return base + min(500, fuzzy)
   }
+
+  /// True when `query` starts at the head of some word inside
+  /// `normalized` — but not at offset 0 (that's the `hasPrefix` tier
+  /// above). Word boundaries are the common app-name / URL
+  /// punctuation: whitespace, `-`, `_`, `/`, `.`, `:`, parentheses.
+  private static func hasWordPrefix(normalized: String, query: String) -> Bool {
+    guard !query.isEmpty else { return false }
+    var afterBoundary = false
+    var idx = normalized.startIndex
+    while idx < normalized.endIndex {
+      if afterBoundary,
+        normalized[idx...].hasPrefix(query)
+      {
+        return true
+      }
+      afterBoundary = wordBoundaryCharacters.contains(normalized[idx])
+      idx = normalized.index(after: idx)
+    }
+    return false
+  }
+
+  private static let wordBoundaryCharacters: Set<Character> = [
+    " ", "\t", "-", "_", "/", ".", ":", "(", ")", "[", "]",
+  ]
 
   static func mergeAppCandidates(
     running: [Candidate],

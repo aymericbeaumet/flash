@@ -34,7 +34,6 @@ extension AppDelegate {
     currentPrefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
-    overlay.mouseGridSteps = steps
     displayMouseGridRegion(region, depth: 0)
   }
 

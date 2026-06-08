@@ -109,10 +109,6 @@ extension OverlayPanel {
     for (idx, hint) in hints.enumerated() {
       let targetFrame = hint.target.frame
       let isMouseGridHint = hint.target.providerID == "mouse_grid"
-      let isFinalMouseGridHint =
-        isMouseGridHint
-        && Self.mouseGridDepth(from: hint.target.id)
-          .map { MouseGrid.isFinalDisplayDepth($0, steps: mouseGridSteps) } == true
       let local = CGRect(
         x: targetFrame.minX - frame.minX,
         y: targetFrame.minY - frame.minY,
@@ -126,14 +122,6 @@ extension OverlayPanel {
       let mouseGridPalette = isMouseGridHint
         ? Self.mouseGridChipPalette(index: idx, foreground: fg)
         : nil
-      if isMouseGridHint {
-        let boundary = Self.makeMouseGridBoundaryLayer(
-          index: idx,
-          finalStep: isFinalMouseGridHint)
-        boundary.frame = local
-        newSublayers.append(boundary)
-        mouseGridBoundaryLayers.append(boundary)
-      }
 
       let chip = dequeueHintLayer()
       // The chip pool retains visual state across activations. If the
@@ -168,16 +156,29 @@ extension OverlayPanel {
         chipW = Self.chipWidth(forLabelLength: labelLen, fontSize: fontSize)
         widthByLen[labelLen] = chipW
       }
+
+      // Mouse-grid chips fill the entire cell — gap-free packing is the
+      // user-visible promise of the grid: clicking *anywhere* in a cell
+      // commits its hint, with no dead "between letters" zone. The
+      // label stays sized to the glyph (same labelFont / fontSize) but
+      // gets centered inside the cell chip.
+      let chipGlobal: CGRect
+      let labelOriginX: CGFloat
+      let labelOriginY: CGFloat
+      if isMouseGridHint {
+        chipGlobal = targetFrame
+        labelOriginX = (chipGlobal.width - chipW) / 2
+        labelOriginY = (chipGlobal.height - fontSize - 2) / 2
+      } else {
+        chipGlobal = Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
+        labelOriginX = 0
+        labelOriginY = labelYOffset
+      }
       label.frame = CGRect(
-        x: 0,
-        y: labelYOffset,
+        x: labelOriginX,
+        y: labelOriginY,
         width: chipW,
         height: labelHeight)
-
-      let chipGlobal =
-        isMouseGridHint
-        ? Self.centeredChipFrame(target: targetFrame, width: chipW, height: chipHeight)
-        : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
       let chipLocal = CGRect(
         x: chipGlobal.minX - frame.minX,
         y: chipGlobal.minY - frame.minY,
@@ -203,16 +204,28 @@ extension OverlayPanel {
       }
       // Snap to device-pixel grid so the 1pt border lands on integer
       // device-pixels (otherwise it gets anti-aliased into two half-
-      // intensity rows and reads as pixelated).
-      chip.frame = Self.snap(chipLocal, scale: chipScale)
+      // intensity rows and reads as pixelated). Mouse-grid chips skip
+      // the snap because they must touch their neighbours exactly —
+      // per-chip rounding can drift cells apart by a pixel and create
+      // a visible "between letters" gap, which is precisely the
+      // anti-feature the grid is supposed to avoid.
+      chip.frame = isMouseGridHint ? chipLocal : Self.snap(chipLocal, scale: chipScale)
       chip.contentsScale = chipScale
+      // Mouse-grid chips set `cornerRadius = 0` + `borderWidth = 0` so
+      // adjacent cells are visually continuous. The pool retains the
+      // tweak across renders, but the next non-mouse-grid render flips
+      // both back; we set them every frame for that reason.
       if let mouseGridPalette {
+        chip.cornerRadius = 0
+        chip.borderWidth = 0
         chip.colors = [
           mouseGridPalette.bottom.cgColor,
           mouseGridPalette.top.cgColor,
         ]
         chip.borderColor = mouseGridPalette.border.cgColor
       } else {
+        chip.cornerRadius = 3
+        chip.borderWidth = 1
         chip.colors = gradientColors
         chip.borderColor = borderCG
       }
@@ -447,7 +460,6 @@ extension OverlayPanel {
     labelLayerPool.append(contentsOf: labelLayers)
     hintLayers.removeAll(keepingCapacity: true)
     labelLayers.removeAll(keepingCapacity: true)
-    mouseGridBoundaryLayers.removeAll(keepingCapacity: true)
     debugShapeLayer.path = nil
     debugShapeLayer.isHidden = true
     activeWindowBorderLayer.path = nil
@@ -502,14 +514,6 @@ extension OverlayPanel {
     return CGRect(x: x, y: y, width: width, height: height)
   }
 
-  static func centeredChipFrame(target: CGRect, width: CGFloat, height: CGFloat) -> CGRect {
-    CGRect(
-      x: target.midX - width / 2,
-      y: target.midY - height / 2,
-      width: width,
-      height: height)
-  }
-
   /// Convenience overload. Used by `commit` (`hint.target.frame` is the
   /// only thing it knows) to derive the click point — the renderer
   /// inside `display(hints:)` calls the `(target:width:height:)` form
@@ -554,17 +558,6 @@ extension OverlayPanel {
     let top = base.blended(withFraction: 0.40, of: NSColor.white) ?? base
     let bottom = base.blended(withFraction: 0.08, of: NSColor.black) ?? base
     return (top: top, bottom: bottom, foreground: foreground, border: base)
-  }
-
-  private static func makeMouseGridBoundaryLayer(index: Int, finalStep: Bool) -> CALayer {
-    let color = mouseGridColor(index: index)
-    let layer = CALayer()
-    layer.actions = OverlayPanel.noActions
-    layer.borderWidth = finalStep ? 1 : 2
-    layer.cornerRadius = finalStep ? 2 : 3
-    layer.borderColor = color.withAlphaComponent(finalStep ? 0.95 : 0.9).cgColor
-    layer.backgroundColor = color.withAlphaComponent(finalStep ? 0.08 : 0.05).cgColor
-    return layer
   }
 
   private static func mouseGridDepth(from id: String) -> Int? {
