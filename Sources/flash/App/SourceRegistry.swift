@@ -49,12 +49,6 @@ final class SourceRegistry {
           AccessibilityProvider()
         },
         SourceDescriptor(
-          identifier: "firefox-tabs",
-          activationPolicy: .bundleIDs(BrowserTabSources.firefoxBundleIdentifiers)
-        ) {
-          FirefoxTabsSource()
-        },
-        SourceDescriptor(
           identifier: "safari-tabs",
           activationPolicy: .bundleIDs(BrowserTabSources.safariBundleIdentifiers)
         ) {

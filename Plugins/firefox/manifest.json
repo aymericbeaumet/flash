@@ -1,0 +1,11 @@
+{
+  "id": "firefox",
+  "name": "firefox",
+  "version": "0.1.0",
+  "description": "Surfaces Firefox tabs as flashlight candidates via the core AX broker.",
+  "install": "true",
+  "start": "exec ./flash-plugin-firefox",
+  "priority": 30,
+  "bundle_ids": ["org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition"],
+  "events": [{ "match": "focus.changed" }]
+}
