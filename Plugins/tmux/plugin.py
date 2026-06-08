@@ -739,30 +739,26 @@ def perform_source_action(tmux_path, name, params):
     return {"did_perform": bool(ok), "target_pid": int(pid)}
 
 
-def resolve_candidate_tty(tmux_path, target_session, stale_tty):
-    """Pick the best tty to drive `switch-client` for `target_session`.
+def resolve_candidate_tty(tmux_path, stale_tty):
+    """Pick the tty to drive `switch-client`.
 
-    Strategy:
-      1. Re-list clients (the stale tty captured at discovery time may
-         be gone — clients reconnect to fresh ttys after a terminal
-         close/reopen).
-      2. Prefer a client already attached to `target_session` — its
-         terminal window is the one the user will see, so the switch
-         lands where they expect.
-      3. Otherwise the most recently active client wins (tmux's own
-         "this is the user's likely focus" signal).
-      4. Last resort: the stale tty captured at discovery, on the off
-         chance tmux re-bound it.
+    The user's intent when they pick a tmux candidate from flashlight is
+    "show me this in the terminal window I'm looking at right now" —
+    not "raise some other terminal window that happens to already host
+    this session". So we switch tmux's most-recently-active client,
+    which for single-process multi-window terminals (Alacritty) maps
+    back to whichever window received the last keystroke — i.e. the
+    one the user just typed `:flashlight` into.
+
+    Preferring a client already on the target session was the bug: it
+    routed the switch to a background terminal window the user couldn't
+    see, leaving the front window untouched.
     """
     clients = list_clients(tmux_path)
-    if clients:
-        same_session = [c for c in clients if c["session"] == target_session]
-        if same_session:
-            same_session.sort(key=lambda c: c["activity"], reverse=True)
-            return same_session[0]["tty"]
-        clients_sorted = sorted(clients, key=lambda c: c["activity"], reverse=True)
-        return clients_sorted[0]["tty"]
-    return stale_tty
+    if not clients:
+        return stale_tty
+    clients.sort(key=lambda c: c["activity"], reverse=True)
+    return clients[0]["tty"]
 
 
 def resolve_candidate(plugin, tmux_path, candidate):
@@ -782,14 +778,14 @@ def resolve_candidate(plugin, tmux_path, candidate):
         return {"did_resolve": False}
     target_session = target.split(":", 1)[0] if ":" in target else target
     stale_tty = payload.get("tmux_client_tty") or ""
-    tty = resolve_candidate_tty(tmux_path, target_session, stale_tty)
+    tty = resolve_candidate_tty(tmux_path, stale_tty)
 
     args = ["switch-client"]
     if tty:
         args.extend(["-c", tty])
     args.extend(["-t", target])
     if run_tmux(tmux_path, args) is not None:
-        return _resolve_with_window_hint(payload, target_session)
+        return _resolve_response(payload)
 
     # The captured tty / re-listed client may both be stale — fall back
     # to `switch-client` without `-c`, which tmux applies to its "best
@@ -797,7 +793,7 @@ def resolve_candidate(plugin, tmux_path, candidate):
     fallback_args = ["switch-client", "-t", target]
     if run_tmux(tmux_path, fallback_args) is not None:
         plugin.log("info", "[tmux] resolve via fallback switch-client", {"target": target})
-        return _resolve_with_window_hint(payload, target_session)
+        return _resolve_response(payload)
 
     plugin.log(
         "warn",
@@ -807,14 +803,15 @@ def resolve_candidate(plugin, tmux_path, candidate):
     return {"did_resolve": False}
 
 
-def _resolve_with_window_hint(payload, target_session):
-    """Include the target session in the response so the resident app
-    can raise the right AX window of a multi-window terminal app
-    (Alacritty, iTerm, Kitty in single-process mode). Without this,
-    `switch-client` succeeds at the tmux layer but the user is still
-    looking at a different terminal window."""
+def _resolve_response(payload):
+    """Return the terminal_pid alongside `did_resolve` so the resident
+    app can activate the terminal app. The session switch already
+    landed on the most-recently-active tmux client (= the user's last
+    typed-in window), so we don't ask the host to raise a different
+    AX window — the front window is the right one and its title
+    will update on the next tmux redraw."""
     terminal_pid = payload.get("terminal_pid")
-    response = {"did_resolve": True, "target_window_title_contains": target_session}
+    response = {"did_resolve": True}
     if terminal_pid is not None:
         response["target_pid"] = int(terminal_pid)
     return response
