@@ -486,6 +486,22 @@ extension AppDelegate {
     return false
   }
 
+  /// `<tab>` in command-line mode. For command/sub-command completions
+  /// this inserts the selected candidate's value (no submit) — the user
+  /// can then keep typing args or hit `<CR>` to send. The candidate
+  /// finder (`:flashlight`/`:open`/`:emojis`) has no insertable value,
+  /// so there `<tab>` keeps its documented role of cycling the
+  /// selection.
+  func overlayDidInsertCommandLineSelection() -> Bool {
+    if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil {
+      return overlayDidMoveCommandLineSelection(1)
+    }
+    if applySelectedCommandLineCompletionInPlace() {
+      return true
+    }
+    return overlayDidMoveCommandLineSelection(1)
+  }
+
   func overlayDidSubmitCommandLine(_ command: String) {
     submitCommandLine(command)
   }

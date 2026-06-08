@@ -238,13 +238,32 @@ extension NormalModeDispatcher {
     CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
   ]
 
+  /// A single completion candidate offered for a command or sub-command.
+  ///
+  /// Every candidate has a **value** (`insertion`) and a **label**
+  /// (`label`). The label is purely cosmetic — it is what the user sees
+  /// in the suggestion list and never affects behaviour. The value is
+  /// what actually lands in the command-line buffer. When a candidate
+  /// has no distinct label, set `label == insertion` so the value shows
+  /// through.
+  ///
+  /// Selection semantics, uniform across built-in and plugin candidates:
+  /// - `<tab>` inserts the candidate's value without sending the command
+  ///   (the user can keep typing args).
+  /// - `<CR>` inserts the candidate's value and sends the command.
+  ///
+  /// `kind` only governs what `<CR>` does once the value is inserted:
+  /// `acceptsArgs` leaves the line open for arguments, while `terminal`
+  /// and `pluginSubcommand` submit immediately.
   struct CommandLineCompletion: Equatable {
     enum Kind: Equatable {
       case terminal
       case acceptsArgs
       case pluginSubcommand
     }
+    /// Cosmetic text shown in the suggestion list.
     var label: String
+    /// The value inserted into the command line on `<tab>`/`<CR>`.
     var insertion: String
     var kind: Kind
   }

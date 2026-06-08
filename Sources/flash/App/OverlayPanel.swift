@@ -388,6 +388,7 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool
+  func overlayDidInsertCommandLineSelection() -> Bool
   func overlayDidSubmitCommandLine(_ command: String)
   func overlayDidCancelCandidateFinder()
   func overlayDidUpdateCandidateFinderQuery(_ query: String)

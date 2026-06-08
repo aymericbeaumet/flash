@@ -1184,6 +1184,22 @@ extension AppDelegate {
     }
   }
 
+  /// Insert the selected completion's **value** (`insertion`) into the
+  /// command line without submitting — the `<tab>` half of the
+  /// candidate contract. The visible `label` is purely cosmetic; what
+  /// lands in the buffer is always the value. Returns false when no
+  /// completion list is active so the caller can fall back to selection
+  /// movement (the candidate finder keeps its documented tab-to-cycle).
+  func applySelectedCommandLineCompletionInPlace() -> Bool {
+    guard !commandLineCompletionMatches.isEmpty else { return false }
+    let index = min(
+      commandLineCompletionSelectedIndex, commandLineCompletionMatches.count - 1)
+    let completion = commandLineCompletionMatches[index].completion
+    let newBuffer = commandLineCompletionPrefix + completion.insertion
+    refreshCommandLine(text: newBuffer, cursorIndex: newBuffer.count)
+    return true
+  }
+
   private func submitSelectedCommandLineApp() {
     guard !candidateFinderMatches.isEmpty else {
       finishCommandLineInteraction(reason: "command_open_empty")

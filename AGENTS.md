@@ -350,6 +350,8 @@ Normal-mode action URLs currently include: `flash://mouse_target[?right=1|double
 
 App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, `flash://plugins`, and `flash://flash_quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
 
+**Command-line candidate contract.** Command and sub-command suggestions (`:help <topic>`, `:plugins <sub>`, `:<plugin> <subcommand>`, the top-level `:<tab>` list) are modelled by `CommandLineCompletion`. Every candidate has a **value** (`insertion`) and a **label** (`label`). The label is purely cosmetic — it is what shows in the suggestion list and never affects behaviour; when omitted, set it equal to the value so the value shows through. Selection semantics are uniform across built-in and plugin candidates: `<tab>` inserts the selected candidate's value into the buffer **without** sending the command (keep typing args), and `<CR>` inserts the value **and** sends the command. Arrow keys (and `<shift-tab>`) cycle the selection. The candidate finder (`:open` / `:flashlight` / `:emojis`) is a separate live-results mechanism with no insertable value, so there `<tab>` / `<shift-tab>` keep their documented role of cycling the result selection before `<CR>` opens.
+
 ### Normal-Mode Audit Rule
 
 Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The current valid insert transitions are:

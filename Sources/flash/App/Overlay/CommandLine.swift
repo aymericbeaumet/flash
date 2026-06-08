@@ -245,7 +245,7 @@ extension OverlayPanel: NSTextFieldDelegate {
       coordinator?.overlayDidCancelCommandLine()
       return true
     case #selector(NSResponder.insertTab(_:)):
-      _ = coordinator?.overlayDidMoveCommandLineSelection(1)
+      _ = coordinator?.overlayDidInsertCommandLineSelection()
       return true
     case #selector(NSResponder.insertBacktab(_:)):
       _ = coordinator?.overlayDidMoveCommandLineSelection(-1)
