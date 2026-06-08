@@ -494,6 +494,8 @@ extension URLCommand {
       return all ? "flash://app_open_finder?all=1" : "flash://app_open_finder"
     case .flashlight:
       return "flash://flashlight"
+    case .emojiPicker:
+      return "flash://emojis"
     case .copyURL:
       return "flash://url_copy"
     case .tabNext:

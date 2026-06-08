@@ -561,6 +561,8 @@ extension AppDelegate {
       enterCommandLineMode(initialText: "open ", candidateFinderScope: all ? .all : .running)
     case .flashlight:
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: .all)
+    case .emojiPicker:
+      enterCommandLineMode(initialText: "emojis ", candidateFinderScope: .all)
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: normalModeContext())
     case .mouseGrid(let command):

@@ -256,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .commandMode:
       enterCommandLineMode()
     case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .flashlight,
+      .emojiPicker,
       .copyURL,
       .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect, .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,

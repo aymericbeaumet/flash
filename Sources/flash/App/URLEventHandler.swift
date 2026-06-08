@@ -16,6 +16,7 @@ enum URLCommand: Hashable {
   case find
   case candidateFinder(all: Bool)
   case flashlight
+  case emojiPicker
   case copyURL
   case tabNext
   case tabPrev
@@ -184,6 +185,7 @@ final class URLEventHandler: NSObject {
     "app_find": { _ in .find },
     "app_open_finder": { q in .candidateFinder(all: q.bool("all")) },
     "flashlight": { _ in .flashlight },
+    "emojis": { _ in .emojiPicker },
     "url_copy": { _ in .copyURL },
     "tab_next": { _ in .tabNext },
     "tab_previous": { _ in .tabPrev },
@@ -263,6 +265,7 @@ final class URLEventHandler: NSObject {
     flash://app_find
     flash://app_open_finder[?all=1]
     flash://flashlight
+    flash://emojis
     flash://url_copy
     flash://tab_next
     flash://tab_previous
