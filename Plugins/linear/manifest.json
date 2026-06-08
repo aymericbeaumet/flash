@@ -8,14 +8,14 @@
   "events": [
     "config.*"
   ],
-  "actions": [
-    { "command": "linear", "name": "login", "description": "Authenticate linear-cli" },
-    { "command": "linear", "name": "mine", "description": "List assigned Linear issues" },
-    { "command": "linear", "name": "query", "description": "Search Linear issues" },
-    { "command": "linear", "name": "start", "description": "Start a Linear issue" },
-    { "command": "linear", "name": "view", "description": "View a Linear issue" },
-    { "command": "linear", "name": "pr", "description": "Create a PR from the current Linear issue" },
-    { "command": "linear", "name": "create", "description": "Create a Linear issue" },
-    { "command": "linear", "name": "run", "description": "Run linear with raw arguments" }
+  "commands": [
+    { "command": "linear", "subcommand": "login", "description": "Authenticate linear-cli" },
+    { "command": "linear", "subcommand": "mine", "description": "List assigned Linear issues" },
+    { "command": "linear", "subcommand": "query", "description": "Search Linear issues" },
+    { "command": "linear", "subcommand": "start", "description": "Start a Linear issue" },
+    { "command": "linear", "subcommand": "view", "description": "View a Linear issue" },
+    { "command": "linear", "subcommand": "pr", "description": "Create a PR from the current Linear issue" },
+    { "command": "linear", "subcommand": "create", "description": "Create a Linear issue" },
+    { "command": "linear", "subcommand": "run", "description": "Run linear with raw arguments" }
   ]
 }

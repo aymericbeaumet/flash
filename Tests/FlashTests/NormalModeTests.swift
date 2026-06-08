@@ -602,7 +602,7 @@ final class NormalModeTests: XCTestCase {
     let invocation = try XCTUnwrap(
       NormalModeDispatcher.pluginCommandLineInvocation(":spotify pause quiet now"))
     XCTAssertEqual(invocation.command, "spotify")
-    XCTAssertEqual(invocation.name, "pause")
+    XCTAssertEqual(invocation.subcommand, "pause")
     XCTAssertEqual(invocation.args, ["quiet", "now"])
 
     XCTAssertNil(NormalModeDispatcher.pluginCommandLineInvocation(":spotify"))
@@ -685,7 +685,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(context.prefix, ":spotify ")
     XCTAssertEqual(context.query, "")
     XCTAssertEqual(Set(context.items.map(\.label)), ["play", "pause", "next"])
-    XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginAction })
+    XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginSubcommand })
   }
 
   func testCommandLineCompletionsPluginSubcommandsWithFilter() throws {
@@ -725,7 +725,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(context.prefix, ":plugins ")
     XCTAssertEqual(context.query, "")
     XCTAssertEqual(Set(context.items.map(\.label)), ["list", "ls", "reload"])
-    XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginAction })
+    XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginSubcommand })
   }
 
   func testCommandLineCompletionsTopLevelIncludesPlugins() throws {

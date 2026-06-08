@@ -82,9 +82,14 @@ struct PluginEventSubscription: Codable, Equatable {
   }
 }
 
-struct PluginActionRegistration: Codable, Hashable {
+/// One subcommand a plugin registers. A plugin exposes one or more
+/// **commands** (the verb the user types after `:`, e.g. `spotify`),
+/// and each command has one or more **subcommands** (e.g. `play`). This
+/// row is the denormalized (command, subcommand) pair the command-line
+/// completion engine and the dispatch index are built from.
+struct PluginCommandRegistration: Codable, Hashable {
   var command: String
-  var name: String
+  var subcommand: String
   var description: String
 }
 
@@ -96,7 +101,7 @@ struct PluginManifest: Codable, Equatable {
   var install: String
   var start: String
   var events: [PluginEventSubscription]
-  var actions: [PluginActionRegistration]
+  var commands: [PluginCommandRegistration]
   var priority: Int
   var volatile: Bool
   /// Bundle identifiers the source applies to. When non-empty, restricts
@@ -106,7 +111,7 @@ struct PluginManifest: Codable, Equatable {
   var bundleIDs: [String]
 
   enum CodingKeys: String, CodingKey {
-    case id, name, version, description, install, start, events, actions, priority
+    case id, name, version, description, install, start, events, commands, priority
     case volatile
     case bundleIDs = "bundle_ids"
   }
@@ -115,7 +120,7 @@ struct PluginManifest: Codable, Equatable {
     id: String, name: String, version: String, description: String,
     install: String, start: String,
     events: [PluginEventSubscription] = [],
-    actions: [PluginActionRegistration] = [],
+    commands: [PluginCommandRegistration] = [],
     priority: Int = 25,
     volatile: Bool = false,
     bundleIDs: [String] = []
@@ -127,7 +132,7 @@ struct PluginManifest: Codable, Equatable {
     self.install = install
     self.start = start
     self.events = events
-    self.actions = actions
+    self.commands = commands
     self.priority = priority
     self.volatile = volatile
     self.bundleIDs = bundleIDs
@@ -142,7 +147,7 @@ struct PluginManifest: Codable, Equatable {
     self.install = try c.decode(String.self, forKey: .install)
     self.start = try c.decode(String.self, forKey: .start)
     self.events = try c.decodeIfPresent([PluginEventSubscription].self, forKey: .events) ?? []
-    self.actions = try c.decodeIfPresent([PluginActionRegistration].self, forKey: .actions) ?? []
+    self.commands = try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
@@ -157,7 +162,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(install, forKey: .install)
     try c.encode(start, forKey: .start)
     if !events.isEmpty { try c.encode(events, forKey: .events) }
-    if !actions.isEmpty { try c.encode(actions, forKey: .actions) }
+    if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
     try c.encode(priority, forKey: .priority)
     if volatile { try c.encode(volatile, forKey: .volatile) }
     if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
@@ -191,11 +196,11 @@ struct PluginManifest: Codable, Equatable {
     else {
       throw PluginError.invalidManifest("manifest.json id must be lowercase [a-z0-9._-]")
     }
-    for action in actions {
-      if action.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || action.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    for command in commands {
+      if command.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || command.subcommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       {
-        throw PluginError.invalidManifest("plugin action command and name must not be empty")
+        throw PluginError.invalidManifest("plugin command and subcommand must not be empty")
       }
     }
   }
@@ -265,7 +270,7 @@ struct PluginStatusSnapshot {
   var uptimeMs: Int?
   var heartbeatAgeMs: Int?
   var sourceCount: Int
-  var actionCount: Int
+  var commandCount: Int
   var targetCount: Int
   var candidateCount: Int
   var snapshotAgeMs: Int?
@@ -275,7 +280,7 @@ struct PluginStatusSnapshot {
 
   var jsonObject: [String: Any] {
     [
-      "action_count": actionCount,
+      "command_count": commandCount,
       "candidate_count": candidateCount,
       "heartbeat_age_ms": heartbeatAgeMs ?? NSNull(),
       "id": id,

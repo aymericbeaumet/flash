@@ -568,12 +568,12 @@ extension URLCommand {
       return "flash://flash_quit"
     case .openApp(let name):
       return "flash://app_open?name=\(name)"
-    case .pluginAction(let command, let name, let args):
-      var parts = ["command=\(command)", "name=\(name)"]
+    case .pluginCommand(let command, let subcommand, let args):
+      var parts = ["command=\(command)", "subcommand=\(subcommand)"]
       if !args.isEmpty {
         parts.append("args=\(args.joined(separator: " "))")
       }
-      return "flash://plugin_action?\(parts.joined(separator: "&"))"
+      return "flash://plugin_command?\(parts.joined(separator: "&"))"
     case .moveWindow(let params):
       var parts: [String] = []
       if let position = params.position {

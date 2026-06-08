@@ -297,7 +297,7 @@ final class DebugServer {
         <div class="info-grid">
           <section><h2>Current State</h2><pre id="state">{}</pre></section>
           <section><h2>Resolved Config</h2><pre id="config">{}</pre></section>
-          <section><h2 id="pluginsTitle">Loaded Plugins</h2><table><thead><tr><th>ID</th><th>State</th><th>PID</th><th>HB</th><th>Snap</th><th>Actions</th><th>Source</th><th>Error</th></tr></thead><tbody id="plugins"></tbody></table></section>
+          <section><h2 id="pluginsTitle">Loaded Plugins</h2><table><thead><tr><th>ID</th><th>State</th><th>PID</th><th>HB</th><th>Snap</th><th>Commands</th><th>Source</th><th>Error</th></tr></thead><tbody id="plugins"></tbody></table></section>
         </div>
         <section class="logs">
           <div class="log-toolbar">
@@ -351,7 +351,7 @@ final class DebugServer {
           configEl.textContent = JSON.stringify(s.config || {}, null, 2);
           const plugins = s.plugins || [];
           pluginsTitleEl.textContent = `Loaded Plugins (${plugins.length})`;
-          pluginsEl.innerHTML = plugins.map(p => `<tr><td>${escapeHTML(p.id)} ${escapeHTML(p.version)}</td><td>${escapeHTML(p.state)}</td><td>${escapeHTML(p.pid ?? '-')}</td><td>${escapeHTML(p.heartbeat_age_ms ?? '-')}</td><td>${escapeHTML(p.target_count)}t/${escapeHTML(p.candidate_count)}c</td><td>${escapeHTML(p.action_count)}</td><td>${escapeHTML(p.origin ?? '-')}</td><td>${escapeHTML(p.last_error ?? '')}</td></tr>`).join('');
+          pluginsEl.innerHTML = plugins.map(p => `<tr><td>${escapeHTML(p.id)} ${escapeHTML(p.version)}</td><td>${escapeHTML(p.state)}</td><td>${escapeHTML(p.pid ?? '-')}</td><td>${escapeHTML(p.heartbeat_age_ms ?? '-')}</td><td>${escapeHTML(p.target_count)}t/${escapeHTML(p.candidate_count)}c</td><td>${escapeHTML(p.command_count)}</td><td>${escapeHTML(p.origin ?? '-')}</td><td>${escapeHTML(p.last_error ?? '')}</td></tr>`).join('');
         }
         function logSearchText(l) {
           return `${l.level || ''} ${l.source || ''} ${l.message || ''} ${JSON.stringify(l.fields || {})}`.toLowerCase();

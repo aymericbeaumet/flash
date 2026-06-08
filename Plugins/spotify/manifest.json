@@ -9,15 +9,15 @@
     { "match": "apps.*", "bundle_ids": ["com.spotify.client"] },
     "config.*"
   ],
-  "actions": [
-    { "command": "spotify", "name": "login", "description": "Authenticate spotify_player" },
-    { "command": "spotify", "name": "status", "description": "Show spotify_player version/status" },
-    { "command": "spotify", "name": "pause", "description": "Pause playback" },
-    { "command": "spotify", "name": "play", "description": "Resume playback" },
-    { "command": "spotify", "name": "toggle", "description": "Toggle play/pause" },
-    { "command": "spotify", "name": "next", "description": "Skip to next track" },
-    { "command": "spotify", "name": "previous", "description": "Skip to previous track" },
-    { "command": "spotify", "name": "search", "description": "Search Spotify" },
-    { "command": "spotify", "name": "run", "description": "Run spotify_player with raw arguments" }
+  "commands": [
+    { "command": "spotify", "subcommand": "login", "description": "Authenticate spotify_player" },
+    { "command": "spotify", "subcommand": "status", "description": "Show spotify_player version/status" },
+    { "command": "spotify", "subcommand": "pause", "description": "Pause playback" },
+    { "command": "spotify", "subcommand": "play", "description": "Resume playback" },
+    { "command": "spotify", "subcommand": "toggle", "description": "Toggle play/pause" },
+    { "command": "spotify", "subcommand": "next", "description": "Skip to next track" },
+    { "command": "spotify", "subcommand": "previous", "description": "Skip to previous track" },
+    { "command": "spotify", "subcommand": "search", "description": "Search Spotify" },
+    { "command": "spotify", "subcommand": "run", "description": "Run spotify_player with raw arguments" }
   ]
 }

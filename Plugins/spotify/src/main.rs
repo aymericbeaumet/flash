@@ -7,10 +7,10 @@ struct Spotify;
 
 impl Plugin for Spotify {
     async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        if method != "action.invoke" {
+        if method != "command.invoke" {
             return json!({ "ok": false, "error": format!("unknown method: {method}") });
         }
-        let name = str_field(&params, "name");
+        let name = str_field(&params, "subcommand");
         let args = string_list(&params, "args");
         let (tail, timeout): (Vec<String>, u64) = match name {
             "login" => (vec!["authenticate".into()], 300),
@@ -23,7 +23,7 @@ impl Plugin for Spotify {
             "search" => (vec!["search".into(), args.join(" ")], 120),
             "run" => (args, 120),
             other => {
-                return json!({ "ok": false, "error": format!("unknown action: {other}") });
+                return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
             }
         };
         let argv = spotify(&ctx, &tail);

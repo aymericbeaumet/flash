@@ -4,7 +4,7 @@ import XCTest
 @testable import flash
 
 final class PluginSystemTests: XCTestCase {
-  func testOfficialPluginManifestsLoadAndRegisterExpectedActions() throws {
+  func testOfficialPluginManifestsLoadAndRegisterExpectedCommands() throws {
     let roots = try officialPluginRoots()
     let manifests = try roots.map { try PluginManifest.load(from: $0) }
     let ids = Set(manifests.map(\.id))
@@ -15,7 +15,7 @@ final class PluginSystemTests: XCTestCase {
         "slack", "spotify", "tmux",
       ])
 
-    let runActionRequired: Set<String> = [
+    let runCommandRequired: Set<String> = [
       "github", "linear", "media", "notion", "slack", "spotify",
     ]
     for manifest in manifests {
@@ -24,10 +24,10 @@ final class PluginSystemTests: XCTestCase {
       XCTAssertEqual(manifest.install, "true")
       XCTAssertEqual(manifest.start, "exec ./flash-plugin-\(manifest.id)")
       XCTAssertFalse(manifest.description.isEmpty)
-      if runActionRequired.contains(manifest.id) {
+      if runCommandRequired.contains(manifest.id) {
         XCTAssertTrue(
-          manifest.actions.contains { $0.name == "run" },
-          "\(manifest.id) is missing the run action")
+          manifest.commands.contains { $0.subcommand == "run" },
+          "\(manifest.id) is missing the run subcommand")
       }
     }
     let tmux = try XCTUnwrap(manifests.first { $0.id == "tmux" })
@@ -37,19 +37,19 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(tmux.priority, 20)
     XCTAssertTrue(tmux.bundleIDs.contains("org.alacritty"))
 
-    XCTAssertTrue(actionNames(for: "spotify", manifests: manifests).isSuperset(of: [
+    XCTAssertTrue(commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
       "login", "status", "pause", "play", "toggle", "next", "previous", "search", "run",
     ]))
-    XCTAssertTrue(actionNames(for: "github", manifests: manifests).isSuperset(of: [
+    XCTAssertTrue(commandNames(for: "github", manifests: manifests).isSuperset(of: [
       "login", "status", "issues", "prs", "run",
     ]))
-    XCTAssertTrue(actionNames(for: "linear", manifests: manifests).isSuperset(of: [
+    XCTAssertTrue(commandNames(for: "linear", manifests: manifests).isSuperset(of: [
       "login", "mine", "query", "start", "view", "pr", "create", "run",
     ]))
-    XCTAssertTrue(actionNames(for: "slack", manifests: manifests).isSuperset(of: [
+    XCTAssertTrue(commandNames(for: "slack", manifests: manifests).isSuperset(of: [
       "login", "version", "run",
     ]))
-    XCTAssertTrue(actionNames(for: "notion", manifests: manifests).isSuperset(of: [
+    XCTAssertTrue(commandNames(for: "notion", manifests: manifests).isSuperset(of: [
       "login", "version", "api", "workers", "run",
     ]))
   }
@@ -110,7 +110,7 @@ final class PluginSystemTests: XCTestCase {
         "install": "./install.sh",
         "start": "./start.sh",
         "events": [],
-        "actions": []
+        "commands": []
       }
       """.write(
         to: pluginRoot.appendingPathComponent("manifest.json"),
@@ -144,8 +144,8 @@ final class PluginSystemTests: XCTestCase {
             { "match": "apps.*", "bundle_ids": ["com.spotify.client"] },
             "config.*"
           ],
-          "actions": [
-            { "command": "spotify", "name": "pause", "description": "Pause playback" }
+          "commands": [
+            { "command": "spotify", "subcommand": "pause", "description": "Pause playback" }
           ]
         }
         """)
@@ -156,8 +156,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.install, "npm install")
     XCTAssertEqual(manifest.start, "npm start")
     XCTAssertEqual(manifest.events.count, 2)
-    XCTAssertEqual(manifest.actions.first?.command, "spotify")
-    XCTAssertEqual(manifest.actions.first?.name, "pause")
+    XCTAssertEqual(manifest.commands.first?.command, "spotify")
+    XCTAssertEqual(manifest.commands.first?.subcommand, "pause")
   }
 
   func testManifestRejectsInvalidID() throws {
@@ -172,7 +172,7 @@ final class PluginSystemTests: XCTestCase {
           "install": "true",
           "start": "true",
           "events": [],
-          "actions": []
+          "commands": []
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -261,9 +261,9 @@ final class PluginSystemTests: XCTestCase {
       .sorted { $0.lastPathComponent < $1.lastPathComponent }
   }
 
-  private func actionNames(for id: String, manifests: [PluginManifest]) -> Set<String> {
+  private func commandNames(for id: String, manifests: [PluginManifest]) -> Set<String> {
     let manifest = manifests.first { $0.id == id }
-    return Set(manifest?.actions.map(\.name) ?? [])
+    return Set(manifest?.commands.map(\.subcommand) ?? [])
   }
 
   private func runPluginSmoke(pluginID: String, binary: String) throws {
@@ -314,11 +314,11 @@ final class PluginSystemTests: XCTestCase {
       jsonLine([
         "id": 2,
         "jsonrpc": "2.0",
-        "method": "action.invoke",
+        "method": "command.invoke",
         "params": [
           "args": ["--version"],
           "command": pluginID,
-          "name": "run",
+          "subcommand": "run",
           "raw": ":\(pluginID) run --version",
         ],
       ]),

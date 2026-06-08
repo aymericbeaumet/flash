@@ -50,7 +50,7 @@ enum URLCommand: Hashable {
   case dismissHints
   case quit
   case openApp(name: String)
-  case pluginAction(command: String, name: String, args: [String])
+  case pluginCommand(command: String, subcommand: String, args: [String])
   case moveWindow(MoveWindowParams)
 }
 
@@ -231,14 +231,14 @@ final class URLEventHandler: NSObject {
       guard let name = q.value("name"), !name.isEmpty else { return nil }
       return .openApp(name: name)
     },
-    "plugin_action": { q in
+    "plugin_command": { q in
       guard let command = q.value("command"), !command.isEmpty,
-        let name = q.value("name"), !name.isEmpty
+        let subcommand = q.value("subcommand"), !subcommand.isEmpty
       else { return nil }
       let args = q.value("args")?
         .split(separator: " ", omittingEmptySubsequences: true)
         .map(String.init) ?? []
-      return .pluginAction(command: command, name: name, args: args)
+      return .pluginCommand(command: command, subcommand: subcommand, args: args)
     },
     "window_move": windowMoveCommand,
   ]
@@ -298,7 +298,7 @@ final class URLEventHandler: NSObject {
     flash://flash_quit
     flash://help_show[?topic=<topic>]
     flash://plugins
-    flash://plugin_action?command=<command>&name=<action>
+    flash://plugin_command?command=<command>&subcommand=<subcommand>
     """
 }
 

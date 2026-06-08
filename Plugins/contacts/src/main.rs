@@ -67,7 +67,7 @@ impl Plugin for Contacts {
     async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
         match method.as_str() {
             "resolveCandidate" => resolve_candidate(&ctx, &params).await,
-            "action.invoke" => invoke(&ctx, &params).await,
+            "command.invoke" => invoke(&ctx, &params).await,
             other => json!({ "ok": false, "error": format!("unknown method: {other}") }),
         }
     }
@@ -133,7 +133,7 @@ async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
 }
 
 async fn invoke(ctx: &Context, params: &Value) -> Value {
-    match str_field(params, "name") {
+    match str_field(params, "subcommand") {
         "open" => ctx
             .run_cli(
                 &[
@@ -149,7 +149,7 @@ async fn invoke(ctx: &Context, params: &Value) -> Value {
             emit_candidates(ctx).await;
             json!({ "ok": true, "stdout": "contacts refreshed", "stderr": "", "status": 0 })
         }
-        other => json!({ "ok": false, "error": format!("unknown action: {other}") }),
+        other => json!({ "ok": false, "error": format!("unknown subcommand: {other}") }),
     }
 }
 

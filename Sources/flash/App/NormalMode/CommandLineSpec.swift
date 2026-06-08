@@ -242,7 +242,7 @@ extension NormalModeDispatcher {
     enum Kind: Equatable {
       case terminal
       case acceptsArgs
-      case pluginAction
+      case pluginSubcommand
     }
     var label: String
     var insertion: String
@@ -279,31 +279,31 @@ extension NormalModeDispatcher {
 
     // Built-in `help` completes against the topic registry. Future
     // commands plug in here the same way: assemble a list and emit
-    // a `pluginAction`-shaped completion. For dynamic candidate-style
+    // a `pluginSubcommand`-shaped completion. For dynamic candidate-style
     // commands (`open`, `flashlight`) the existing
     // `candidateFinderQuery` path renders results live and is the
     // place to wire async / loading state when needed.
     if command == "help" {
       let items = helpTopics.sorted().map { topic in
-        CommandLineCompletion(label: topic, insertion: topic, kind: .pluginAction)
+        CommandLineCompletion(label: topic, insertion: topic, kind: .pluginSubcommand)
       }
       return CommandLineCompletionContext(
         prefix: ":\(command) ", query: rest, items: items)
     }
     if command == "plugins" {
       let items = pluginsBuiltinSubcommands.map { name in
-        CommandLineCompletion(label: name, insertion: name, kind: .pluginAction)
+        CommandLineCompletion(label: name, insertion: name, kind: .pluginSubcommand)
       }
       return CommandLineCompletionContext(
         prefix: ":\(command) ", query: rest, items: items)
     }
 
-    let actions = pluginSubcommands.first { key, _ in
+    let subcommands = pluginSubcommands.first { key, _ in
       key.localizedCaseInsensitiveCompare(command) == .orderedSame
     }?.value ?? []
-    guard !actions.isEmpty else { return nil }
-    let items = actions.map { name in
-      CommandLineCompletion(label: name, insertion: name, kind: .pluginAction)
+    guard !subcommands.isEmpty else { return nil }
+    let items = subcommands.map { name in
+      CommandLineCompletion(label: name, insertion: name, kind: .pluginSubcommand)
     }
     return CommandLineCompletionContext(
       prefix: ":\(command) ", query: rest, items: items)
@@ -350,7 +350,7 @@ extension NormalModeDispatcher {
   }
 
   static func pluginCommandLineInvocation(_ raw: String) -> (
-    command: String, name: String, args: [String], raw: String
+    command: String, subcommand: String, args: [String], raw: String
   )? {
     var body = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if body.hasPrefix(":") {
@@ -362,7 +362,7 @@ extension NormalModeDispatcher {
     guard parts.count >= 2 else { return nil }
     return (
       command: parts[0],
-      name: parts[1],
+      subcommand: parts[1],
       args: Array(parts.dropFirst(2)),
       raw: raw
     )

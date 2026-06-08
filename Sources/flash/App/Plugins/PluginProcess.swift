@@ -27,7 +27,7 @@ final class PluginProcess {
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
   private var fileWatcherFDs: [Int32] = []
   private var reloadWork: DispatchWorkItem?
-  private var dynamicActions: [PluginActionRegistration] = []
+  private var dynamicCommands: [PluginCommandRegistration] = []
   private var lastError: String?
   private var lastLog: String?
   /// Mirrors `Config.Plugins.watchingEnabled`. When false, plugin file
@@ -48,16 +48,16 @@ final class PluginProcess {
     self.origin = origin
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
-    self.dynamicActions = manifest.actions
+    self.dynamicCommands = manifest.commands
     self.watchFiles = watchFiles
   }
 
   var identifier: String { manifest.id }
 
-  var actions: [PluginActionRegistration] {
+  var commands: [PluginCommandRegistration] {
     lock.lock()
     defer { lock.unlock() }
-    return dynamicActions
+    return dynamicCommands
   }
 
   func start() {
@@ -244,19 +244,19 @@ final class PluginProcess {
     }
   }
 
-  func invokeAction(
+  func invokeCommand(
     command: String,
-    name: String,
+    subcommand: String,
     args: [String],
     raw: String,
     completion: ((Bool) -> Void)? = nil
   ) {
     sendRequest(
-      method: "action.invoke",
+      method: "command.invoke",
       params: [
         "args": args,
         "command": command,
-        "name": name,
+        "subcommand": subcommand,
         "raw": raw,
       ]
     ) { response in
@@ -299,7 +299,7 @@ final class PluginProcess {
     let restartCount = self.restartCount
     let lastError = self.lastError
     let lastLog = self.lastLog
-    let actions = dynamicActions
+    let commands = dynamicCommands
     lock.unlock()
     let now = Date()
     return PluginStatusSnapshot(
@@ -312,7 +312,7 @@ final class PluginProcess {
       uptimeMs: startDate.map { Int(now.timeIntervalSince($0) * 1000) },
       heartbeatAgeMs: lastHeartbeatAt.map { Int(now.timeIntervalSince($0) * 1000) },
       sourceCount: snap.targets.isEmpty && snap.candidates.isEmpty ? 0 : 1,
-      actionCount: actions.count,
+      commandCount: commands.count,
       targetCount: snap.targets.count,
       candidateCount: snap.candidates.count,
       snapshotAgeMs: snap.updatedAt.map { Int(now.timeIntervalSince($0) * 1000) },
@@ -576,11 +576,11 @@ final class PluginProcess {
         lastLog = message
       }
       notifyStatus()
-    case "actions.updated":
-      if let raw = params["actions"] as? [[String: Any]] {
-        let actions = raw.compactMap(Self.action(from:))
+    case "commands.updated":
+      if let raw = params["commands"] as? [[String: Any]] {
+        let commands = raw.compactMap(Self.command(from:))
         lock.lock()
-        dynamicActions = actions
+        dynamicCommands = commands
         lock.unlock()
         notifyStatus()
       }
@@ -671,13 +671,13 @@ final class PluginProcess {
       sourcePayload: raw["payload"].flatMap(Self.payloadString))
   }
 
-  private static func action(from raw: [String: Any]) -> PluginActionRegistration? {
+  private static func command(from raw: [String: Any]) -> PluginCommandRegistration? {
     guard let command = raw["command"] as? String,
-      let name = raw["name"] as? String
+      let subcommand = raw["subcommand"] as? String
     else { return nil }
-    return PluginActionRegistration(
+    return PluginCommandRegistration(
       command: command,
-      name: name,
+      subcommand: subcommand,
       description: raw["description"] as? String ?? "")
   }
 

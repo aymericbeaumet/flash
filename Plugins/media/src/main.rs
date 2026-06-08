@@ -43,10 +43,10 @@ struct Media;
 
 impl Plugin for Media {
     async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        if method != "action.invoke" {
+        if method != "command.invoke" {
             return json!({ "ok": false, "error": format!("unknown method: {method}") });
         }
-        let name = str_field(&params, "name").to_string();
+        let name = str_field(&params, "subcommand").to_string();
         let result = match name.as_str() {
             "play" => media_action(&ctx, NX_KEYTYPE_PLAY, "play").await,
             "pause" => media_action(&ctx, NX_KEYTYPE_PLAY, "pause").await,
@@ -86,7 +86,7 @@ impl Plugin for Media {
                 ctx.run_cli(&argv, Duration::from_secs(120)).await
             }
             other => {
-                return json!({ "ok": false, "error": format!("unknown action: {other}") });
+                return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
             }
         };
         result.value()

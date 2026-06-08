@@ -4,21 +4,21 @@ import FlashCore
 import Foundation
 
 final class PluginManager {
-  private struct ActionKey: Hashable {
+  private struct CommandKey: Hashable {
     let command: String
-    let name: String
+    let subcommand: String
   }
 
   private let queue = DispatchQueue(label: "flash.plugins", qos: .utility)
   private let baseDataDir: URL
   private var pluginsByID: [String: PluginProcess] = [:]
   private var sourceAdaptersByID: [String: PluginFlashSource] = [:]
-  /// Pre-computed action lookup index: `(command, name)` →
+  /// Pre-computed command lookup index: `(command, subcommand)` →
   /// `PluginProcess`. Built from `pluginsByID` whenever the plugin set
   /// changes; per-invoke lookup is then O(1) instead of walking every
-  /// plugin × every action × `localizedCaseInsensitiveCompare`.
+  /// plugin × every command × `localizedCaseInsensitiveCompare`.
   /// Keys are lowercased; lookups use the same normalisation.
-  private var actionIndex: [ActionKey: PluginProcess] = [:]
+  private var commandIndex: [CommandKey: PluginProcess] = [:]
   var onStateChanged: (() -> Void)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
@@ -39,7 +39,7 @@ final class PluginManager {
         plugin.stop()
       }
       pluginsByID.removeAll()
-      actionIndex.removeAll()
+      commandIndex.removeAll()
       sourceAdaptersByID.removeAll()
     }
   }
@@ -59,42 +59,42 @@ final class PluginManager {
     }
   }
 
-  func invoke(command: String, name: String, args: [String], raw: String) -> Bool {
-    let key = ActionKey(command: command.lowercased(), name: name.lowercased())
-    let plugin = queue.sync { actionIndex[key] }
+  func invoke(command: String, subcommand: String, args: [String], raw: String) -> Bool {
+    let key = CommandKey(command: command.lowercased(), subcommand: subcommand.lowercased())
+    let plugin = queue.sync { commandIndex[key] }
     guard let plugin else { return false }
-    plugin.invokeAction(command: command, name: name, args: args, raw: raw) { ok in
-      FlashLog.debug("[plugin_action] command=\(command) name=\(name) ok=\(ok)")
+    plugin.invokeCommand(command: command, subcommand: subcommand, args: args, raw: raw) { ok in
+      FlashLog.debug("[plugin_command] command=\(command) subcommand=\(subcommand) ok=\(ok)")
     }
     return true
   }
 
-  func actionRegistrations() -> [PluginActionRegistration] {
+  func commandRegistrations() -> [PluginCommandRegistration] {
     queue.sync {
-      pluginsByID.values.flatMap { $0.actions }
+      pluginsByID.values.flatMap { $0.commands }
     }
   }
 
-  func hasAction(command: String, name: String) -> Bool {
-    let key = ActionKey(command: command.lowercased(), name: name.lowercased())
-    return queue.sync { actionIndex[key] != nil }
+  func hasCommand(command: String, subcommand: String) -> Bool {
+    let key = CommandKey(command: command.lowercased(), subcommand: subcommand.lowercased())
+    return queue.sync { commandIndex[key] != nil }
   }
 
-  /// Rebuild the action lookup index. Must be called from `queue` after
+  /// Rebuild the command lookup index. Must be called from `queue` after
   /// `pluginsByID` changes.
-  private func rebuildActionIndex() {
-    var next: [ActionKey: PluginProcess] = [:]
+  private func rebuildCommandIndex() {
+    var next: [CommandKey: PluginProcess] = [:]
     for plugin in pluginsByID.values {
-      for registration in plugin.actions {
-        let key = ActionKey(
+      for registration in plugin.commands {
+        let key = CommandKey(
           command: registration.command.lowercased(),
-          name: registration.name.lowercased())
-        // First plugin to register an action wins on collision, matching
+          subcommand: registration.subcommand.lowercased())
+        // First plugin to register a command wins on collision, matching
         // the previous walk's first-match semantics.
         if next[key] == nil { next[key] = plugin }
       }
     }
-    actionIndex = next
+    commandIndex = next
   }
 
   func statusText() -> String {
@@ -102,7 +102,7 @@ final class PluginManager {
     guard !snapshots.isEmpty else {
       return "PLUGINS\n\nNo plugins loaded."
     }
-    let headers = ["ID", "STATE", "PID", "HEARTBEAT", "SNAPSHOT", "ACTIONS", "ORIGIN"]
+    let headers = ["ID", "STATE", "PID", "HEARTBEAT", "SNAPSHOT", "COMMANDS", "ORIGIN"]
     let rows = snapshots.map { snapshot in
       [
         "\(snapshot.id) \(snapshot.version)",
@@ -110,7 +110,7 @@ final class PluginManager {
         snapshot.pid.map(String.init) ?? "-",
         snapshot.heartbeatAgeMs.map { "\($0)ms" } ?? "-",
         "\(snapshot.targetCount)t/\(snapshot.candidateCount)c",
-        "\(snapshot.actionCount)",
+        "\(snapshot.commandCount)",
         snapshot.origin,
       ]
     }
@@ -191,7 +191,7 @@ final class PluginManager {
       pluginsByID.removeValue(forKey: id)
       sourceAdaptersByID.removeValue(forKey: id)
     }
-    rebuildActionIndex()
+    rebuildCommandIndex()
     notifyStateChanged()
   }
 
@@ -317,7 +317,7 @@ extension PluginManager {
   static let helpTopic = HelpTopic(
     name: "plugins",
     title: "Plugins",
-    summary: "Managed stdio plugins, manifests, events, and actions.",
+    summary: "Managed stdio plugins, manifests, events, and commands.",
     body: """
       # Plugins
 
@@ -342,14 +342,15 @@ extension PluginManager {
       `source = "plugin:<id>"`.
 
       Plugins can subscribe to events such as `apps.*`, `config.*`, and
-      focused AX changes. They can also register command actions. For example,
-      a Spotify plugin can register the `spotify` command and a `pause` action,
-      which users run as `:spotify pause`.
+      focused AX changes. They can also register commands. Each plugin
+      registers one or more **commands** (the verb after `:`, e.g.
+      `spotify`), and each command has one or more **subcommands** (e.g.
+      `pause`), which users run as `:spotify pause`.
 
       Official bundled plugins are installed under `FLASH_PLUGIN_DATA_DIR`;
       they do not write CLI binaries into global shell paths. Bundled commands
       include `:spotify`, `:github`, `:linear`, `:slack`, and `:notion`.
-      Authentication is explicit through actions such as `:github login`;
+      Authentication is explicit through subcommands such as `:github login`;
       install and start do not run login flows.
 
       `flash://plugins` or `:plugins` opens the plugin status modal. When

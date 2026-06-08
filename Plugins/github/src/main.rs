@@ -7,10 +7,10 @@ struct Github;
 
 impl Plugin for Github {
     async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        if method != "action.invoke" {
+        if method != "command.invoke" {
             return json!({ "ok": false, "error": format!("unknown method: {method}") });
         }
-        let name = str_field(&params, "name");
+        let name = str_field(&params, "subcommand");
         let args = string_list(&params, "args");
         let (argv, timeout): (Vec<String>, u64) = match name {
             "login" => (gh(&["auth", "login", "--web"]), 300),
@@ -19,7 +19,7 @@ impl Plugin for Github {
             "prs" => (list("pr", &args), 120),
             "run" => (gh_args(&args), 120),
             other => {
-                return json!({ "ok": false, "error": format!("unknown action: {other}") });
+                return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
             }
         };
         ctx.run_cli(&argv, Duration::from_secs(timeout))

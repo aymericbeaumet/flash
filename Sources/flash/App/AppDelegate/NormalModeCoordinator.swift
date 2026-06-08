@@ -632,7 +632,7 @@ extension AppDelegate {
       showHelp(topic: topic)
     case .showPlugins:
       showPlugins()
-    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginAction, .moveWindow:
+    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow:
       handleURLCommand(command)
     }
   }
@@ -900,19 +900,19 @@ extension AppDelegate {
   private func commandLineCompletionContext(for command: String)
     -> NormalModeDispatcher.CommandLineCompletionContext?
   {
-    let actions = pluginManager.actionRegistrations()
+    let registrations = pluginManager.commandRegistrations()
     var subcommands: [String: [String]] = [:]
     var commandsOrdered: [String] = []
-    for action in actions {
-      let key = action.command.lowercased()
+    for registration in registrations {
+      let key = registration.command.lowercased()
       if subcommands[key] == nil {
         subcommands[key] = []
         commandsOrdered.append(key)
       }
       if !subcommands[key]!.contains(where: {
-        $0.localizedCaseInsensitiveCompare(action.name) == .orderedSame
+        $0.localizedCaseInsensitiveCompare(registration.subcommand) == .orderedSame
       }) {
-        subcommands[key]?.append(action.name)
+        subcommands[key]?.append(registration.subcommand)
       }
     }
     let topics = HelpDocs.allTopics(config: config, showModes: true)
@@ -1094,7 +1094,7 @@ extension AppDelegate {
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
       pluginManager.invoke(
         command: plugin.command,
-        name: plugin.name,
+        subcommand: plugin.subcommand,
         args: plugin.args,
         raw: plugin.raw)
     {
@@ -1177,7 +1177,7 @@ extension AppDelegate {
     case .acceptsArgs:
       refreshCommandLine(text: newBuffer, cursorIndex: newBuffer.count)
       return true
-    case .terminal, .pluginAction:
+    case .terminal, .pluginSubcommand:
       clearCommandLineCompletionState()
       submitCommandLine(newBuffer)
       return true

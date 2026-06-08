@@ -230,12 +230,12 @@ final class HotkeySyntaxTests: XCTestCase {
   func testParseFlashPlugins() {
     XCTAssertEqual(parseMappingCommand(rawString: "flash://plugins")?.command, .showPlugins)
     let action = parseMappingCommand(
-      rawString: "flash://plugin_action?command=spotify&name=pause&args=quiet")
-    guard case .flashCommand(.pluginAction(let command, let name, let args)) = action else {
-      return XCTFail("expected .pluginAction")
+      rawString: "flash://plugin_command?command=spotify&subcommand=pause&args=quiet")
+    guard case .flashCommand(.pluginCommand(let command, let subcommand, let args)) = action else {
+      return XCTFail("expected .pluginCommand")
     }
     XCTAssertEqual(command, "spotify")
-    XCTAssertEqual(name, "pause")
+    XCTAssertEqual(subcommand, "pause")
     XCTAssertEqual(args, ["quiet"])
   }
 
@@ -319,7 +319,7 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingCommand(rawString: "flash://app_open"))  // no name
     XCTAssertNil(parseMappingCommand(rawString: "flash://alert_show"))  // no message
     XCTAssertNil(parseMappingCommand(rawString: "flash://show_alert"))  // alias removed
-    XCTAssertNil(parseMappingCommand(rawString: "flash://plugin_action?command=spotify"))
+    XCTAssertNil(parseMappingCommand(rawString: "flash://plugin_command?command=spotify"))  // no subcommand
     XCTAssertNil(parseMappingCommand(rawString: "flash://usage"))
   }
 

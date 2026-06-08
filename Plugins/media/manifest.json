@@ -8,17 +8,17 @@
   "events": [
     "config.*"
   ],
-  "actions": [
-    { "command": "media", "name": "play", "description": "Resume playback in the active media app" },
-    { "command": "media", "name": "pause", "description": "Pause playback in the active media app" },
-    { "command": "media", "name": "toggle", "description": "Toggle play/pause in the active media app" },
-    { "command": "media", "name": "next", "description": "Skip to next track" },
-    { "command": "media", "name": "previous", "description": "Skip to previous track" },
-    { "command": "media", "name": "volumeup", "description": "Raise system output volume" },
-    { "command": "media", "name": "volumedown", "description": "Lower system output volume" },
-    { "command": "media", "name": "mute", "description": "Toggle system output mute" },
-    { "command": "media", "name": "get", "description": "Report the currently playing track" },
-    { "command": "media", "name": "status", "description": "Report which media apps are running and their state" },
-    { "command": "media", "name": "run", "description": "Run osascript with raw arguments" }
+  "commands": [
+    { "command": "media", "subcommand": "play", "description": "Resume playback in the active media app" },
+    { "command": "media", "subcommand": "pause", "description": "Pause playback in the active media app" },
+    { "command": "media", "subcommand": "toggle", "description": "Toggle play/pause in the active media app" },
+    { "command": "media", "subcommand": "next", "description": "Skip to next track" },
+    { "command": "media", "subcommand": "previous", "description": "Skip to previous track" },
+    { "command": "media", "subcommand": "volumeup", "description": "Raise system output volume" },
+    { "command": "media", "subcommand": "volumedown", "description": "Lower system output volume" },
+    { "command": "media", "subcommand": "mute", "description": "Toggle system output mute" },
+    { "command": "media", "subcommand": "get", "description": "Report the currently playing track" },
+    { "command": "media", "subcommand": "status", "description": "Report which media apps are running and their state" },
+    { "command": "media", "subcommand": "run", "description": "Run osascript with raw arguments" }
   ]
 }

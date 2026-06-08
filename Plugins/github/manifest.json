@@ -8,11 +8,11 @@
   "events": [
     "config.*"
   ],
-  "actions": [
-    { "command": "github", "name": "login", "description": "Authenticate gh" },
-    { "command": "github", "name": "status", "description": "Show gh authentication status" },
-    { "command": "github", "name": "issues", "description": "List GitHub issues" },
-    { "command": "github", "name": "prs", "description": "List GitHub pull requests" },
-    { "command": "github", "name": "run", "description": "Run gh with raw arguments" }
+  "commands": [
+    { "command": "github", "subcommand": "login", "description": "Authenticate gh" },
+    { "command": "github", "subcommand": "status", "description": "Show gh authentication status" },
+    { "command": "github", "subcommand": "issues", "description": "List GitHub issues" },
+    { "command": "github", "subcommand": "prs", "description": "List GitHub pull requests" },
+    { "command": "github", "subcommand": "run", "description": "Run gh with raw arguments" }
   ]
 }

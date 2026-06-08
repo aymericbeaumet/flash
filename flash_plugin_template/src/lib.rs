@@ -61,7 +61,7 @@ impl Emitter {
 }
 
 /// Result of a [`Context::run_cli`] invocation. Mirrors the `{ok, stdout,
-/// stderr, status}` shape that action results conventionally carry on the
+/// stderr, status}` shape that command results conventionally carry on the
 /// wire, but carries no plugin-specific meaning itself.
 #[derive(Clone, Debug)]
 pub struct CliResult {
@@ -197,7 +197,7 @@ impl Context {
         fields.insert("stderr".to_string(), result.stderr.clone());
         self.emit.log(
             if result.ok { "info" } else { "warn" },
-            &format!("[action] {display}"),
+            &format!("[command] {display}"),
             fields,
         );
         result
@@ -258,7 +258,7 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     /// Dispatch a non-lifecycle request (`discoverTargets`, `sourceAction`,
-    /// `resolveCandidate`, `activateTarget`, `action.invoke`, …) and return
+    /// `resolveCandidate`, `activateTarget`, `command.invoke`, …) and return
     /// the JSON result. For notification-style methods the returned value is
     /// ignored.
     fn handle(

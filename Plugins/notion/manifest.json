@@ -8,11 +8,11 @@
   "events": [
     "config.*"
   ],
-  "actions": [
-    { "command": "notion", "name": "login", "description": "Authenticate ntn" },
-    { "command": "notion", "name": "version", "description": "Show ntn version" },
-    { "command": "notion", "name": "api", "description": "Run a Notion API request" },
-    { "command": "notion", "name": "workers", "description": "Run a Notion Workers command" },
-    { "command": "notion", "name": "run", "description": "Run ntn with raw arguments" }
+  "commands": [
+    { "command": "notion", "subcommand": "login", "description": "Authenticate ntn" },
+    { "command": "notion", "subcommand": "version", "description": "Show ntn version" },
+    { "command": "notion", "subcommand": "api", "description": "Run a Notion API request" },
+    { "command": "notion", "subcommand": "workers", "description": "Run a Notion Workers command" },
+    { "command": "notion", "subcommand": "run", "description": "Run ntn with raw arguments" }
   ]
 }
