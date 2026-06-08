@@ -99,39 +99,50 @@ enum CandidateFinder {
       best = max(best ?? searchScore, searchScore)
     }
     guard var resolved = best else { return nil }
-    resolved += sourcePrecedenceBonus(for: candidate.source)
+    resolved += sourcePrecedenceBonus(for: candidate)
     return resolved
   }
 
   /// Tier bonus the user asked for: when two candidates fuzzy-match
-  /// equally well, prefer tmux windows > browser tabs > apps > slack >
-  /// notes / reminders / contacts. The bonus is a small fixed offset
-  /// per tier, well below the inter-base spacing (`titleScore` jumps
-  /// by 1k between exact/prefix/contains), so it only breaks ties
-  /// without overriding strong content matches.
-  static func sourcePrecedenceBonus(for source: String) -> Int {
-    let lowered = source.lowercased()
-    for (index, tier) in sourcePrecedenceTiers.enumerated() {
-      if tier.contains(lowered) {
-        return (sourcePrecedenceTiers.count - index) * 40
-      }
-    }
-    return 0
+  /// equally well, prefer tmux windows > browser tabs > active apps >
+  /// inactive apps > the rest (slack / notes / reminders / contacts).
+  /// The bonus is a small fixed offset per tier, well below the
+  /// inter-base spacing (`titleScore` jumps by 1k between
+  /// exact/prefix/contains), so it only breaks ties without overriding
+  /// strong content matches.
+  static func sourcePrecedenceBonus(for candidate: Candidate) -> Int {
+    (sourcePrecedenceTierCount - sourcePrecedenceTierIndex(for: candidate)) * 40
   }
 
-  private static let sourcePrecedenceTiers: [Set<String>] = [
-    ["tmux"],
-    [
-      "firefox", "firefox-dev", "safari", "chrome", "chromium",
-      "brave", "edge", "arc", "vivaldi", "opera",
-    ],
-    ["app"],
-    ["slack"],
-    ["notes", "reminders", "contacts"],
+  private static let browserSourceNames: Set<String> = [
+    "firefox", "firefox-dev", "safari", "chrome", "chromium",
+    "brave", "edge", "arc", "vivaldi", "opera",
   ]
+
+  /// Number of distinct precedence tiers (0…N-1), used to scale the
+  /// tie-break bonus. Keep in sync with `sourcePrecedenceTierIndex`.
+  private static let sourcePrecedenceTierCount = 5
 
   static func isAlive(_ candidate: Candidate) -> Bool {
     candidate.pid != nil
+  }
+
+  /// Whether a candidate belongs to the source the user pinned via the
+  /// `:flashlight --<source>` flag. `filter` is already lowercased.
+  /// Matching is lenient: exact source name, a source-name prefix
+  /// (`--fire` → firefox, `--note` → notes), and a small set of group
+  /// aliases (`--browser`/`--tabs`, `--apps`).
+  static func candidateMatchesSourceFilter(_ candidate: Candidate, filter: String) -> Bool {
+    let source = candidate.source.lowercased()
+    if source == filter || source.hasPrefix(filter) { return true }
+    switch filter {
+    case "browser", "browsers", "tab", "tabs":
+      return browserSourceNames.contains(source)
+    case "apps":
+      return source == "app"
+    default:
+      return false
+    }
   }
 
   static func sortedMatches(_ matches: [CandidateMatch]) -> [CandidateMatch] {
@@ -141,20 +152,21 @@ enum CandidateFinder {
         return lhs.score > rhs.score
       }
 
+      // Strict tier tie-break first: when two scores are close enough
+      // to land here (delta < `aliveTieBreakScoreMargin`), prefer the
+      // higher-priority source tier. This is what enforces the user's
+      // ordering — tmux windows > browser tabs > active apps > inactive
+      // apps > the rest — and it must run *before* the generic
+      // alive/dead check, otherwise a live app would leapfrog a tmux
+      // window or browser tab (which often carry no pid of their own).
+      let lhsTier = sourcePrecedenceTierIndex(for: lhs.candidate)
+      let rhsTier = sourcePrecedenceTierIndex(for: rhs.candidate)
+      if lhsTier != rhsTier { return lhsTier < rhsTier }
+
+      // Within a tier, an alive candidate still wins over a dead one.
       let lhsAlive = isAlive(lhs.candidate)
       let rhsAlive = isAlive(rhs.candidate)
       if lhsAlive != rhsAlive { return lhsAlive }
-
-      // Strict tier tie-break: when two scores are close enough to land
-      // here (delta < `aliveTieBreakScoreMargin`), prefer the
-      // higher-priority source. This is what makes tmux windows
-      // reliably rank above browser tabs in :flashlight — the
-      // sourcePrecedenceBonus alone could be eroded by a slightly
-      // longer browser-tab title match, so the comparator settles it
-      // directly before falling back to the raw score.
-      let lhsTier = sourcePrecedenceTierIndex(for: lhs.candidate.source)
-      let rhsTier = sourcePrecedenceTierIndex(for: rhs.candidate.source)
-      if lhsTier != rhsTier { return lhsTier < rhsTier }
 
       if lhs.score != rhs.score { return lhs.score > rhs.score }
 
@@ -176,14 +188,16 @@ enum CandidateFinder {
   }
 
   /// Tier index used by `sortedMatches` as a strict tie-break. Lower is
-  /// higher priority. Sources not in `sourcePrecedenceTiers` land at
-  /// `tiers.count`, ranking below every named tier.
-  static func sourcePrecedenceTierIndex(for source: String) -> Int {
-    let lowered = source.lowercased()
-    for (index, tier) in sourcePrecedenceTiers.enumerated() {
-      if tier.contains(lowered) { return index }
-    }
-    return sourcePrecedenceTiers.count
+  /// higher priority. The "app" source splits into two tiers — running
+  /// apps (pid set) outrank installed-but-not-running apps — so the
+  /// flashlight order is: tmux (0) > browser tabs (1) > active apps (2)
+  /// > inactive apps (3) > the rest (4: slack, notes, reminders, …).
+  static func sourcePrecedenceTierIndex(for candidate: Candidate) -> Int {
+    let lowered = candidate.source.lowercased()
+    if lowered == "tmux" { return 0 }
+    if browserSourceNames.contains(lowered) { return 1 }
+    if lowered == "app" { return candidate.pid != nil ? 2 : 3 }
+    return 4
   }
 
   private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {

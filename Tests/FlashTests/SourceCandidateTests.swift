@@ -197,6 +197,68 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(sortedReversed.map(\.candidate.source), ["tmux", "firefox"])
   }
 
+  func testFlashlightTierOrderTmuxBrowserActiveAppInactiveAppThenRest() {
+    // The exact order the user asked for, exercised with equal scores so
+    // only the tier tie-break decides:
+    //   tmux > browser tab > active app > inactive app > the rest.
+    let tmux = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("tmux_window"), source: "tmux", name: "z-tmux",
+        subtitle: "tmux window", bundleIdentifier: "", pid: nil))
+    let tab = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("browser_tab"), source: "firefox", name: "z-tab",
+        subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox", pid: nil))
+    let activeApp = CandidateFinder.prepare(
+      candidate(
+        kind: .app, source: "app", name: "z-active",
+        subtitle: "app", bundleIdentifier: "com.example.active", pid: 4242))
+    let inactiveApp = CandidateFinder.prepare(
+      candidate(
+        kind: .app, source: "app", name: "z-inactive",
+        subtitle: "app", bundleIdentifier: "com.example.inactive", pid: nil))
+    let note = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("note"), source: "notes", name: "z-note",
+        subtitle: "note", bundleIdentifier: "", pid: nil))
+
+    let sorted = CandidateFinder.sortedMatches([
+      CandidateMatch(candidate: note, score: 0),
+      CandidateMatch(candidate: inactiveApp, score: 0),
+      CandidateMatch(candidate: activeApp, score: 0),
+      CandidateMatch(candidate: tab, score: 0),
+      CandidateMatch(candidate: tmux, score: 0),
+    ])
+
+    XCTAssertEqual(
+      sorted.map(\.candidate.name),
+      ["z-tmux", "z-tab", "z-active", "z-inactive", "z-note"])
+  }
+
+  func testCandidateMatchesSourceFilterPrefixAndGroups() {
+    let note = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("note"), source: "notes", name: "Inbox",
+        subtitle: "note", bundleIdentifier: ""))
+    let firefoxTab = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("browser_tab"), source: "firefox", name: "Gmail",
+        subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox"))
+    let app = CandidateFinder.prepare(
+      candidate(
+        kind: .app, source: "app", name: "Finder",
+        subtitle: "app", bundleIdentifier: "com.apple.finder"))
+
+    XCTAssertTrue(CandidateFinder.candidateMatchesSourceFilter(note, filter: "notes"))
+    XCTAssertTrue(CandidateFinder.candidateMatchesSourceFilter(note, filter: "note"))
+    XCTAssertFalse(CandidateFinder.candidateMatchesSourceFilter(note, filter: "app"))
+    XCTAssertTrue(CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "fire"))
+    XCTAssertTrue(CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "browser"))
+    XCTAssertTrue(CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "tabs"))
+    XCTAssertTrue(CandidateFinder.candidateMatchesSourceFilter(app, filter: "apps"))
+    XCTAssertFalse(CandidateFinder.candidateMatchesSourceFilter(app, filter: "browser"))
+  }
+
   func testStrongTextScoreOutranksAliveTieBreaker() {
     let deadExact = CandidateFinder.prepare(
       candidate(

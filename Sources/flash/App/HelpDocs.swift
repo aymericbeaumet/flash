@@ -203,6 +203,14 @@ enum HelpDocs {
       `:open <args>` is unrelated: it forwards verbatim to `/usr/bin/open`
       (URLs, files, `-a App`) with no finder smarts.
 
+      ## Pinning a source
+
+      Prefix the query with `--<source>` to restrict the pool to one
+      source, e.g. `:flashlight --notes inbox` searches only notes.
+      The token matches a source name (or prefix: `--fire` → firefox)
+      and a few groups: `--browser`/`--tabs`, `--apps`. Bare
+      `:flashlight --notes` lists every note.
+
       ## Ranking
 
       Scoring layers, in order of weight:
@@ -210,8 +218,9 @@ enum HelpDocs {
       1. Exact name / URL match.
       2. Prefix match.
       3. Fuzzy subsequence score.
-      4. Source-precedence bonus — apps and tmux windows rank above
-         browser tabs, which rank above notes/reminders/contacts.
+      4. Source-precedence bonus — tmux windows rank above browser tabs,
+         which rank above active apps, then inactive apps, then the rest
+         (slack / notes / reminders / contacts).
 
       ## Plugin candidates
 

@@ -144,9 +144,22 @@ extension AppDelegate {
     mappings.apply(mode: cfg.mode)
   }
 
+  /// Plugins emit a state notification on every log line, heartbeat, and
+  /// snapshot — far more often than candidates actually change. Coalesce a
+  /// burst into a single refresh on the next runloop tick, and skip the
+  /// (expensive) candidate prewarm entirely unless a candidate surface is
+  /// currently visible. A closed finder re-warms its caches on next open.
   func pluginStateDidChange() {
-    invalidateCandidateFinderCaches(reason: "plugin_state", refreshApps: false)
-    debugServer?.broadcastState()
+    pluginStateRefreshWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      if self.candidateFinderSurfaceActive {
+        self.invalidateCandidateFinderCaches(reason: "plugin_state", refreshApps: false)
+      }
+      self.debugServer?.broadcastState()
+    }
+    pluginStateRefreshWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: work)
   }
 
   func configureDebugServer(for cfg: Config) {

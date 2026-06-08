@@ -102,6 +102,39 @@ extension NormalModeDispatcher {
     return commandLineEmojiQuery(raw)
   }
 
+  struct CandidateFinderQuery: Equatable {
+    /// Lowercased source token from a leading `--<source>` flag, or nil
+    /// when the user didn't pin a source.
+    var sourceFilter: String?
+    /// The residual search text (everything after the optional flag).
+    var text: String
+  }
+
+  /// Splits a candidate-finder query into an optional leading
+  /// `--<source>` filter and the residual search text. Powers
+  /// `:flashlight --notes inbox` (pin the notes source, search "inbox").
+  /// Examples:
+  ///   "--notes inbox" -> (filter: "notes", text: "inbox")
+  ///   "--notes"       -> (filter: "notes", text: "")
+  ///   "inbox"         -> (filter: nil,     text: "inbox")
+  static func candidateFinderSourceFilter(_ query: String) -> CandidateFinderQuery {
+    var body = query
+    body.removeLeadingWhitespace()
+    let fallback = CandidateFinderQuery(
+      sourceFilter: nil,
+      text: query.trimmingCharacters(in: .whitespacesAndNewlines))
+    guard body.hasPrefix("--") else { return fallback }
+    let afterDashes = body.dropFirst(2)
+    let parts = afterDashes.split(
+      maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: { $0.isWhitespace })
+    let token = parts.first.map(String.init) ?? ""
+    guard !token.isEmpty else { return fallback }
+    let rest = parts.count > 1 ? String(parts[1]) : ""
+    return CandidateFinderQuery(
+      sourceFilter: token.lowercased(),
+      text: rest.trimmingCharacters(in: .whitespacesAndNewlines))
+  }
+
   /// Query for `:emojis <text>` (bare `:emojis` lists everything). Shares
   /// the live candidate-finder rendering with `open`/`flashlight`, but its
   /// candidate pool is the emoji source and selection inserts the glyph

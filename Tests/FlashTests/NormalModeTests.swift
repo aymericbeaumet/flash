@@ -749,6 +749,24 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":flashlightgmail"))
   }
 
+  func testCandidateFinderSourceFilterParsesLeadingFlag() {
+    let withText = NormalModeDispatcher.candidateFinderSourceFilter("--notes inbox")
+    XCTAssertEqual(withText.sourceFilter, "notes")
+    XCTAssertEqual(withText.text, "inbox")
+
+    let bare = NormalModeDispatcher.candidateFinderSourceFilter("--notes")
+    XCTAssertEqual(bare.sourceFilter, "notes")
+    XCTAssertEqual(bare.text, "")
+
+    let none = NormalModeDispatcher.candidateFinderSourceFilter("inbox")
+    XCTAssertNil(none.sourceFilter)
+    XCTAssertEqual(none.text, "inbox")
+
+    let upper = NormalModeDispatcher.candidateFinderSourceFilter("  --Firefox   gmail ")
+    XCTAssertEqual(upper.sourceFilter, "firefox")
+    XCTAssertEqual(upper.text, "gmail")
+  }
+
   func testFuzzyScoreMatchesOrderedCharacters() {
     XCTAssertNotNil(NormalModeDispatcher.fuzzyScore(query: "ff", candidate: "Firefox"))
     XCTAssertNotNil(NormalModeDispatcher.fuzzyScore(query: "alc", candidate: "Alacritty"))

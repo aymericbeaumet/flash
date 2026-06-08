@@ -679,6 +679,7 @@ extension AppDelegate {
       clearCandidateFinderState()
     }
     overlay.setActiveWindowBorder(around: nil)
+    prewarmCandidateFinderCaches(reason: "command_line_open")
     let command = Self.commandLineBuffer(from: initialText)
     refreshCommandLine(text: command, cursorIndex: command.count)
   }
@@ -765,12 +766,26 @@ extension AppDelegate {
     candidateFinderCandidates = candidateFinderCandidates(for: scope)
     candidateFinderSelectedIndex = 0
     overlay.setActiveWindowBorder(around: nil)
+    prewarmCandidateFinderCaches(reason: "candidate_finder_open")
     refreshCandidateFinder(query: "")
   }
 
   func prewarmCandidateFinderCaches(reason: String) {
     refreshCandidatesAsync(scope: .running, reason: reason)
     refreshCandidatesAsync(scope: .all, reason: reason)
+  }
+
+  /// True only while the command-line or candidate-finder surface is on
+  /// screen. Used to skip background source queries (live refresh,
+  /// plugin-state churn) while nothing is consuming candidates.
+  var candidateFinderSurfaceActive: Bool {
+    guard overlay != nil else { return false }
+    switch overlay.inputMode {
+    case .commandLine, .candidateFinder:
+      return true
+    case .hints, .normal, .modal:
+      return false
+    }
   }
 
   func invalidateCandidateFinderCaches(reason: String, refreshApps: Bool) {
@@ -789,7 +804,8 @@ extension AppDelegate {
       repeating: .seconds(2),
       leeway: .milliseconds(500))
     timer.setEventHandler { [weak self] in
-      self?.prewarmCandidateFinderCaches(reason: "live")
+      guard let self, self.candidateFinderSurfaceActive else { return }
+      self.prewarmCandidateFinderCaches(reason: "live")
     }
     timer.resume()
     candidateFinderLiveRefreshTimer = timer
@@ -994,7 +1010,12 @@ extension AppDelegate {
   }
 
   private func updateCandidateMatches(query: String) {
-    let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    // A leading `--<source>` flag (e.g. `:flashlight --notes inbox`) pins
+    // the pool to a single source; the residual text is the actual
+    // search query. The flag is only honored outside emoji mode.
+    let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
+    let sourceFilter = candidateFinderEmojiMode ? nil : parsed.sourceFilter
+    let trimmed = parsed.text
     candidateFinderCurrentQuery = trimmed
     // Normalize the query once per keystroke rather than once per
     // candidate. With ~1k candidates in the pool and ~10 chars of
@@ -1005,9 +1026,13 @@ extension AppDelegate {
     // `:emojis`; every other query (`open`, `flashlight`, the `f` finder)
     // hides them.
     let pool = candidateFinderCandidates.filter { candidate in
-      candidateFinderEmojiMode
+      let kindMatches =
+        candidateFinderEmojiMode
         ? candidate.kind == CandidateFinder.emojiKind
         : candidate.kind != CandidateFinder.emojiKind
+      guard kindMatches else { return false }
+      guard let sourceFilter else { return true }
+      return CandidateFinder.candidateMatchesSourceFilter(candidate, filter: sourceFilter)
     }
     let scored: [CandidateMatch] = pool.compactMap { candidate in
       if trimmed.isEmpty {

@@ -112,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var candidateFinderAllAppsCacheReady = false
   var candidateFinderAllAppsRefreshInFlight = false
   var candidateFinderLiveRefreshTimer: DispatchSourceTimer?
+  var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionItems: [NormalModeDispatcher.CommandLineCompletion] = []
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
@@ -427,6 +428,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationWillTerminate(_ notification: Notification) {
     candidateFinderLiveRefreshTimer?.cancel()
     candidateFinderLiveRefreshTimer = nil
+    pluginStateRefreshWork?.cancel()
+    pluginStateRefreshWork = nil
     pluginManager.stop()
     debugServer?.stop()
     debugServer = nil
