@@ -98,42 +98,53 @@ extension OverlayPanel {
     return handleOverlayKeyEvent(event, swallowIgnored: modifiers.contains(.command))
   }
 
+  /// Runs one key through the normal-mode interpreter and dispatches the
+  /// resulting action. Shared by the NSPanel responder path and the
+  /// always-on `NormalModeEventTap`: whichever sees the key first feeds it
+  /// here. The tap swallows the event at the session level, so the panel
+  /// path only runs as a fallback when the tap is absent — they never
+  /// double-process the same keystroke.
+  func processNormalModeKey(_ event: NSEvent) {
+    guard let coordinator = coordinator else { return }
+    let now = Date()
+    let pendingBeforeTimeout = normalModePending
+    if NormalModeInterpreter.pendingSequenceTimedOut(
+      pending: normalModePending,
+      lastInputAt: normalModePendingUpdatedAt,
+      now: now,
+      timeoutMs: normalModeSequenceTimeoutMs)
+    {
+      FlashLog.trace(
+        "[input] normal pending_timeout pending=\(normalModePending) "
+          + "timeout_ms=\(normalModeSequenceTimeoutMs)")
+      normalModePending = ""
+    }
+    let transition = NormalModeInterpreter.interpret(
+      pending: normalModePending,
+      keyCode: event.keyCode,
+      modifierFlags: event.modifierFlags,
+      characters: event.characters,
+      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      mappings: normalModeMappings)
+    FlashLog.trace(
+      "[input] normal key=\(event.keyCode) chars=\(event.characters ?? "nil") "
+        + "ignoring=\(event.charactersIgnoringModifiers ?? "nil") pending_before=\(pendingBeforeTimeout) "
+        + "pending_after=\(transition.pending) action=\(transition.action?.diagnosticDescription ?? "nil") "
+        + "repeat=\(transition.repeatCount)")
+    normalModePending = transition.pending
+    if !transition.pending.isEmpty {
+      normalModePendingUpdatedAt = now
+    }
+    coordinator.overlayDidHandleNormalMode(
+      transition.action,
+      repeatCount: transition.repeatCount)
+  }
+
   @discardableResult
   private func handleOverlayKeyEvent(_ event: NSEvent, swallowIgnored: Bool = false) -> Bool {
     guard let coordinator = coordinator else { return false }
     if inputMode == .normal {
-      let now = Date()
-      let pendingBeforeTimeout = normalModePending
-      if NormalModeInterpreter.pendingSequenceTimedOut(
-        pending: normalModePending,
-        lastInputAt: normalModePendingUpdatedAt,
-        now: now,
-        timeoutMs: normalModeSequenceTimeoutMs)
-      {
-        FlashLog.trace(
-          "[input] normal pending_timeout pending=\(normalModePending) "
-            + "timeout_ms=\(normalModeSequenceTimeoutMs)")
-        normalModePending = ""
-      }
-      let transition = NormalModeInterpreter.interpret(
-        pending: normalModePending,
-        keyCode: event.keyCode,
-        modifierFlags: event.modifierFlags,
-        characters: event.characters,
-        charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-        mappings: normalModeMappings)
-      FlashLog.trace(
-        "[input] normal key=\(event.keyCode) chars=\(event.characters ?? "nil") "
-          + "ignoring=\(event.charactersIgnoringModifiers ?? "nil") pending_before=\(pendingBeforeTimeout) "
-          + "pending_after=\(transition.pending) action=\(transition.action?.diagnosticDescription ?? "nil") "
-          + "repeat=\(transition.repeatCount)")
-      normalModePending = transition.pending
-      if !transition.pending.isEmpty {
-        normalModePendingUpdatedAt = now
-      }
-      coordinator.overlayDidHandleNormalMode(
-        transition.action,
-        repeatCount: transition.repeatCount)
+      processNormalModeKey(event)
       return true
     }
 

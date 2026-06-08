@@ -150,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeScrollSuppressionUntil: Date?
   var normalModeDragGlobalMonitor: Any?
   var normalModeDragLocalMonitor: Any?
+  var normalModeEventTap: NormalModeEventTap?
   var normalModeDragAction: JumpAction = .leftClick
   var normalModeDragModifiers: ClickModifiers = []
   var windowGeometryChangeToken: UInt64 = 0
@@ -231,6 +232,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       movementCurrent = .app(pid: app.processIdentifier)
       appCurrent = app.processIdentifier
     }
+    normalModeEventTap = NormalModeEventTap { [weak self] cgEvent in
+      self?.normalModeEventTapShouldSwallow(cgEvent) ?? false
+    }
+    normalModeEventTap?.install()
+
     watchConfigFile()
     selectInitialModeIfNeeded()
     logPermissionState()

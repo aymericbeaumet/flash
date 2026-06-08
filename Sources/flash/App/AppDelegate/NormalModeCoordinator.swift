@@ -498,7 +498,7 @@ extension AppDelegate {
     return false
   }
 
-  private var shouldCaptureNormalModeInput: Bool {
+  var shouldCaptureNormalModeInput: Bool {
     guard flashMode == .normal, currentHints.isEmpty, !activationInFlight else { return false }
     switch overlay.inputMode {
     case .commandLine, .modal, .candidateFinder:
@@ -506,6 +506,25 @@ extension AppDelegate {
     case .hints, .normal:
       return true
     }
+  }
+
+  /// Decision callback for `NormalModeEventTap`, invoked on the main thread
+  /// for every keyDown. Swallows plain (unmodified) keys while normal mode is
+  /// capturing and routes them through the same interpreter the NSPanel uses,
+  /// closing the entry race where the leading prefix key (e.g. `[` of `[t`)
+  /// leaks to the focused app. Keys carrying command/control/option are left
+  /// untouched so the Carbon hotkey registry (`[mode.*]`) keeps working.
+  func normalModeEventTapShouldSwallow(_ cgEvent: CGEvent) -> Bool {
+    guard shouldCaptureNormalModeInput else { return false }
+    guard let nsEvent = NSEvent(cgEvent: cgEvent) else { return false }
+    let modifiers = nsEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if modifiers.contains(.command) || modifiers.contains(.control)
+      || modifiers.contains(.option)
+    {
+      return false
+    }
+    overlay.processNormalModeKey(nsEvent)
+    return true
   }
 
   func hasNormalModeBinding(_ cfg: Config) -> Bool {
