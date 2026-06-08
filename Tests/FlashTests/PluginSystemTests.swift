@@ -309,46 +309,120 @@ final class PluginSystemTests: XCTestCase {
     process.terminationHandler = { _ in finished.signal() }
     try process.run()
 
-    let lines = try [
-      jsonLine(["id": 1, "jsonrpc": "2.0", "method": "initialize", "params": [:]]),
-      jsonLine(["id": -1, "jsonrpc": "2.0", "method": "heartbeat", "params": [:]]),
-      jsonLine([
-        "id": 2,
-        "jsonrpc": "2.0",
-        "method": "command.invoke",
-        "params": [
-          "args": ["--version"],
-          "command": pluginID,
-          "subcommand": "run",
-          "raw": ":\(pluginID) run --version",
-        ],
-      ]),
-      jsonLine(["jsonrpc": "2.0", "method": "shutdown", "params": ["reason": "test"]]),
-    ].joined(separator: "\n") + "\n"
-    stdin.fileHandleForWriting.write(Data(lines.utf8))
+    // The plugin no longer spawns child processes itself: `run_cli` delegates
+    // to a `cli.run` host RPC. This harness plays the host — it reads the
+    // plugin's stdout, executes any `cli.run` request against the mocked
+    // binary (mirroring the core's sandboxed executor), and feeds the result
+    // back. Only after the `command.invoke` (id 2) response arrives do we send
+    // `shutdown`, so the in-flight CLI call always completes first.
+    let collector = JSONDLineCollector()
+    let writeLock = NSLock()
+    func send(_ object: [String: Any]) {
+      guard let line = try? jsonLine(object) else { return }
+      writeLock.lock()
+      stdin.fileHandleForWriting.write(Data((line + "\n").utf8))
+      writeLock.unlock()
+    }
+    let commandResponded = DispatchSemaphore(value: 0)
+
+    stdout.fileHandleForReading.readabilityHandler = { handle in
+      let data = handle.availableData
+      guard !data.isEmpty else { return }
+      for message in collector.ingest(data) {
+        // A plugin→host request carries both `id` and `method`; a response to
+        // our scripted requests carries `id` but no `method`.
+        if let method = message["method"] as? String,
+          let requestID = (message["id"] as? NSNumber)?.intValue
+        {
+          if method == "cli.run" {
+            let params = message["params"] as? [String: Any] ?? [:]
+            send([
+              "id": requestID, "jsonrpc": "2.0",
+              "result": Self.runMockedCLI(params: params, binDir: binDir),
+            ])
+          }
+          continue
+        }
+        if (message["id"] as? NSNumber)?.intValue == 2 {
+          commandResponded.signal()
+        }
+      }
+    }
+
+    send(["id": 1, "jsonrpc": "2.0", "method": "initialize", "params": [:]])
+    send(["id": -1, "jsonrpc": "2.0", "method": "heartbeat", "params": [:]])
+    send([
+      "id": 2,
+      "jsonrpc": "2.0",
+      "method": "command.invoke",
+      "params": [
+        "args": ["--version"],
+        "command": pluginID,
+        "subcommand": "run",
+        "raw": ":\(pluginID) run --version",
+      ],
+    ])
+
+    if commandResponded.wait(timeout: .now() + 5) != .success {
+      stdout.fileHandleForReading.readabilityHandler = nil
+      process.terminate()
+      XCTFail("\(pluginID) plugin did not respond to command.invoke")
+      return
+    }
+    send(["jsonrpc": "2.0", "method": "shutdown", "params": ["reason": "test"]])
     stdin.fileHandleForWriting.closeFile()
 
     if finished.wait(timeout: .now() + 5) != .success {
+      stdout.fileHandleForReading.readabilityHandler = nil
       process.terminate()
       XCTFail("\(pluginID) plugin did not exit")
       return
     }
+    stdout.fileHandleForReading.readabilityHandler = nil
 
     let stderrBody = String(
       data: stderr.fileHandleForReading.readDataToEndOfFile(),
       encoding: .utf8) ?? ""
     XCTAssertEqual(process.terminationStatus, 0, stderrBody)
 
-    let stdoutBody = String(
-      data: stdout.fileHandleForReading.readDataToEndOfFile(),
-      encoding: .utf8) ?? ""
-    let messages = try stdoutBody.split(separator: "\n").map { line -> [String: Any] in
-      let data = Data(String(line).utf8)
-      return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let messages = collector.messages()
+    XCTAssertEqual(responseOK(id: 1, messages: messages), true, collector.raw())
+    XCTAssertEqual(responseOK(id: -1, messages: messages), true, collector.raw())
+    XCTAssertEqual(responseOK(id: 2, messages: messages), true, collector.raw())
+  }
+
+  /// Mirrors the core's `cli.run` executor for the smoke test: runs the
+  /// requested argv (resolved against the plugin's mocked `bin/` dir) and
+  /// returns the `ok`/`stdout`/`stderr`/`status` shape the SDK expects.
+  private static func runMockedCLI(params: [String: Any], binDir: URL) -> [String: Any] {
+    let argv = (params["argv"] as? [String]) ?? []
+    guard !argv.isEmpty else {
+      return ["ok": false, "status": -1, "stdout": "", "stderr": "empty argv"]
     }
-    XCTAssertEqual(responseOK(id: 1, messages: messages), true, stdoutBody)
-    XCTAssertEqual(responseOK(id: -1, messages: messages), true, stdoutBody)
-    XCTAssertEqual(responseOK(id: 2, messages: messages), true, stdoutBody)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = argv
+    var env = ProcessInfo.processInfo.environment
+    env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
+    process.environment = env
+    let out = Pipe()
+    let err = Pipe()
+    process.standardOutput = out
+    process.standardError = err
+    do {
+      try process.run()
+      let stdout = out.fileHandleForReading.readDataToEndOfFile()
+      let stderr = err.fileHandleForReading.readDataToEndOfFile()
+      process.waitUntilExit()
+      return [
+        "ok": process.terminationStatus == 0,
+        "status": Int(process.terminationStatus),
+        "stdout": String(data: stdout, encoding: .utf8) ?? "",
+        "stderr": String(data: stderr, encoding: .utf8) ?? "",
+      ]
+    } catch {
+      return ["ok": false, "status": 127, "stdout": "", "stderr": "\(error)"]
+    }
   }
 
   private func jsonLine(_ object: [String: Any]) throws -> String {
@@ -363,5 +437,46 @@ final class PluginSystemTests: XCTestCase {
       return result?["ok"] as? Bool
     }
     return nil
+  }
+}
+
+/// Thread-safe accumulator for newline-delimited JSON frames streamed from a
+/// plugin's stdout. `ingest` is called from the pipe's readability handler (a
+/// background queue); `messages`/`raw` are read from the test thread.
+private final class JSONDLineCollector {
+  private let lock = NSLock()
+  private var buffer = Data()
+  private var parsed: [[String: Any]] = []
+  private var rawText = ""
+
+  func ingest(_ data: Data) -> [[String: Any]] {
+    lock.lock()
+    defer { lock.unlock() }
+    buffer.append(data)
+    rawText += String(data: data, encoding: .utf8) ?? ""
+    var fresh: [[String: Any]] = []
+    let newline = UInt8(ascii: "\n")
+    while let index = buffer.firstIndex(of: newline) {
+      let lineData = buffer.subdata(in: buffer.startIndex..<index)
+      buffer.removeSubrange(buffer.startIndex...index)
+      guard !lineData.isEmpty,
+        let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
+      else { continue }
+      parsed.append(object)
+      fresh.append(object)
+    }
+    return fresh
+  }
+
+  func messages() -> [[String: Any]] {
+    lock.lock()
+    defer { lock.unlock() }
+    return parsed
+  }
+
+  func raw() -> String {
+    lock.lock()
+    defer { lock.unlock() }
+    return rawText
   }
 }

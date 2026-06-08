@@ -52,24 +52,16 @@ impl Plugin for Clipboard {
         }
     }
 
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
+    async fn handle(&self, _ctx: Context, method: String, params: Value) -> Value {
         if method != "command.invoke" {
             return json!({ "ok": false, "error": format!("unknown method: {method}") });
         }
-        match str_field(&params, "subcommand") {
-            // copy/paste are intercepted by the host (it synthesizes ⌘C/⌘V);
-            // accept them as no-ops so they stay listed in the command catalog.
+        // `:copy` / `:paste` are top-level commands the host synthesizes as
+        // ⌘C / ⌘V against the focused app; the plugin only advertises them so
+        // they appear in the command catalog. Accept as no-ops.
+        match str_field(&params, "command") {
             "copy" | "paste" => json!({ "ok": true }),
-            "clear" => {
-                {
-                    self.history.lock().unwrap().clear();
-                }
-                let snapshot = self.snapshot();
-                persist(&ctx, &snapshot);
-                emit(&ctx, &snapshot);
-                json!({ "ok": true, "stdout": "clipboard history cleared" })
-            }
-            other => json!({ "ok": false, "error": format!("unknown subcommand: {other}") }),
+            other => json!({ "ok": false, "error": format!("unknown command: {other}") }),
         }
     }
 }

@@ -253,10 +253,11 @@ struct PluginManifest: Codable, Equatable {
       throw PluginError.invalidManifest("manifest.json id must be lowercase [a-z0-9._-]")
     }
     for command in commands {
-      if command.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || command.subcommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      {
-        throw PluginError.invalidManifest("plugin command and subcommand must not be empty")
+      // An empty subcommand registers a *top-level* command (`:copy`), and
+      // `"*"` registers a wildcard that consumes the remainder (`:calc 2 + 2`).
+      // Only the command verb itself is mandatory.
+      if command.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        throw PluginError.invalidManifest("plugin command must not be empty")
       }
     }
   }

@@ -485,10 +485,13 @@ extension NormalModeDispatcher {
     body = body.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !body.isEmpty else { return nil }
     let parts = body.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-    guard parts.count >= 2 else { return nil }
+    guard let command = parts.first else { return nil }
+    // A single token is a top-level command (`:copy`); the plugin registered
+    // it with an empty subcommand. Two or more tokens keep the classic
+    // `command subcommand args…` shape.
     return (
-      command: parts[0],
-      subcommand: parts[1],
+      command: command,
+      subcommand: parts.count >= 2 ? parts[1] : "",
       args: Array(parts.dropFirst(2)),
       raw: raw
     )

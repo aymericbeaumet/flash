@@ -1144,19 +1144,6 @@ extension AppDelegate {
       performCommandLineCommand(command)
       return
     }
-    // `:clipboard copy` / `:clipboard paste` synthesize ⌘C / ⌘V against the
-    // focused app — keystroke synthesis is a host capability, so intercept
-    // these before they would dispatch to the (key-less) clipboard plugin.
-    if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
-      plugin.command.lowercased() == "clipboard",
-      plugin.args.isEmpty,
-      ["copy", "paste"].contains(plugin.subcommand.lowercased())
-    {
-      let sub = plugin.subcommand.lowercased()
-      finishCommandLineInteraction(reason: "clipboard_\(sub)")
-      performMappedCommand(sub == "copy" ? .copy : .paste)
-      return
-    }
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
       pluginManager.invoke(
         command: plugin.command,

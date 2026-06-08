@@ -623,7 +623,13 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(invocation.subcommand, "pause")
     XCTAssertEqual(invocation.args, ["quiet", "now"])
 
-    XCTAssertNil(NormalModeDispatcher.pluginCommandLineInvocation(":spotify"))
+    // A single token is a top-level command (`:copy`): the verb with an empty
+    // subcommand and no args.
+    let topLevel = try XCTUnwrap(NormalModeDispatcher.pluginCommandLineInvocation(":copy"))
+    XCTAssertEqual(topLevel.command, "copy")
+    XCTAssertEqual(topLevel.subcommand, "")
+    XCTAssertEqual(topLevel.args, [])
+
     XCTAssertNil(NormalModeDispatcher.pluginCommandLineInvocation(":"))
   }
 
