@@ -139,8 +139,12 @@ leader = "\\"
 "mF" = "flash://mouse_grid?move=1"
 "u" = "flash://app_undo"
 "ctrl-r" = "flash://app_redo"
-"x" = "flash://window_close"
+# tmux-aware close: kills the current tmux window in the current session
+# when an attached tmux client is focused, otherwise falls back to ⌘W.
+"x" = "flash://tab_close"
 "n" = "flash://window_new"
+# tmux-aware new: opens a new tmux window in the current session (and drops
+# into insert mode) when a tmux client is focused, otherwise falls back to ⌘T.
 "t" = "flash://tab_new_insert"
 "/" = "flash://app_find"
 "<leader>space" = "flash://flashlight"
