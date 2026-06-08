@@ -58,6 +58,6 @@ enum CommandMappingRunner {
   }
 
   private static func argvDiagnostic(_ argv: [String]) -> String {
-    MappingAction.shellCommand(argv).diagnosticDescription
+    MappingCommand.shellCommand(argv).diagnosticDescription
   }
 }

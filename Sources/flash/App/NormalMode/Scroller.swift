@@ -13,7 +13,26 @@ import FlashProviders
 /// change.
 extension NormalModeDispatcher {
   @discardableResult
-  static func scroll(_ kind: ScrollKind, pid: pid_t, windowFrame: CGRect? = nil) -> Bool {
+  static func scroll(
+    _ kind: ScrollKind,
+    pid: pid_t,
+    bundleID: String = "",
+    windowFrame: CGRect? = nil
+  ) -> Bool {
+    // Terminals run their own scroll-aware programs (vim/less/tmux/k9s).
+    // Synthesising a scroll wheel scrolls the terminal grid, not the
+    // program inside it — so for terminal bundles we send the bare vim
+    // keystroke and let whatever's running interpret it. `gg` becomes
+    // two `g` events; `G` is `shift+g`; `ctrl+d`/`ctrl+u` already cover
+    // the half-page case via the default mappings (we just forward the
+    // letter here in case a custom mapping fired into `scroll`).
+    if TerminalBundles.identifiers.contains(bundleID) {
+      if sendTerminalScrollKey(kind, pid: pid) {
+        FlashLog.debug("[normal_mode] scroll method=terminal_keys kind=\(kind)")
+        return true
+      }
+    }
+
     let pageTarget = windowFrame.flatMap { pageScrollTarget(pid: pid, visibleIn: $0) }
     if let pageTarget {
       if scrollPageInstantly(kind, element: pageTarget.element) {
@@ -47,6 +66,29 @@ extension NormalModeDispatcher {
     if performScrollAction(kind, pid: pid) { return true }
     FlashLog.debug("[normal_mode] no instant AX scroller for \(kind)")
     return false
+  }
+
+  private static func sendTerminalScrollKey(_ kind: ScrollKind, pid: pid_t) -> Bool {
+    switch kind {
+    case .left:
+      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_H), flags: [], to: pid)
+    case .right:
+      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_L), flags: [], to: pid)
+    case .up:
+      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_K), flags: [], to: pid)
+    case .down:
+      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_J), flags: [], to: pid)
+    case .halfPageUp:
+      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_U), flags: .maskControl, to: pid)
+    case .halfPageDown:
+      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_D), flags: .maskControl, to: pid)
+    case .top:
+      let first = sendKey(virtualKey: CGKeyCode(kVK_ANSI_G), flags: [], to: pid)
+      let second = sendKey(virtualKey: CGKeyCode(kVK_ANSI_G), flags: [], to: pid)
+      return first && second
+    case .bottom:
+      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_G), flags: .maskShift, to: pid)
+    }
   }
 
   static func adjustedScrollValue(

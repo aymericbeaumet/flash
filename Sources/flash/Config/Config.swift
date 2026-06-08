@@ -84,19 +84,12 @@ struct Config {
     /// When true, every detected target is outlined alongside its hint chip.
     /// Useful for diagnosing missing or misplaced hints — you can see exactly
     /// which AX rect Flash decided to use.
-    var showHintBounds: Bool = false
+    var showHintsBounds: Bool = false
     /// Fill for the debug outline rectangle. Default transparent.
-    var hintBoundsBG: String = "#00000000"
+    var hintsBoundsBG: String = "#00000000"
     /// Stroke for the debug outline rectangle. Mirrors the `hint_fg` slot:
     /// it's the foreground colour of the bounds shape.
-    var hintBoundsFG: String = "#FF3B9A"
-    /// Emit a profiling trace for every activation and background
-    /// precompute. Slow activations are still logged when this is false
-    /// if `slowMs` is positive.
-    var profile: Bool = false
-    /// Log activation profiles whose end-to-end latency is at least this
-    /// many milliseconds. Set to 0 to disable slow-activation logs.
-    var slowMs: Int = 100
+    var hintsBoundsFG: String = "#FF3B9A"
     /// Minimum severity emitted by `FlashLog`. Messages below this
     /// level are dropped before any string interpolation runs.
     /// Defaults to `info` — set to `trace` while investigating a
@@ -160,7 +153,7 @@ struct Config {
       // Bare punctuation is allowed by the parser; defaults stay
       // concise. Use `<name>` only for keys that can't be typed bare
       // (`<leader>`, `<space>`) or for emphasis on a non-obvious key.
-      var raw: [(String, MappingAction)] = [
+      var raw: [(String, MappingCommand)] = [
         ("h", .flashCommand(.scroll(.left))),
         ("j", .flashCommand(.scroll(.down))),
         ("k", .flashCommand(.scroll(.up))),
@@ -183,6 +176,13 @@ struct Config {
         // switcher works as usual.
         ("cmd+tab", .flashCommand(.appNext)),
         ("cmd+shift+tab", .flashCommand(.appPrev)),
+        // First / last tab. Vim-style `g^` / `g$` borrowed from
+        // line-extreme motions: `^` is the first non-blank, `$` is the
+        // end of line. Browsers translate to ⌘1 / ⌘9 (the cross-vendor
+        // convention for first / last tab); plugin sources receive the
+        // `tab_first` / `tab_last` source action.
+        ("g^", .flashCommand(.tabFirst)),
+        ("g$", .flashCommand(.tabLast)),
         ("g1", .flashCommand(.tabSelect(index: 1))),
         ("g2", .flashCommand(.tabSelect(index: 2))),
         ("g3", .flashCommand(.tabSelect(index: 3))),
@@ -196,8 +196,6 @@ struct Config {
         ("ctrl+i", .flashCommand(.appNext)),
         ("gt", .flashCommand(.tabNext)),
         ("gT", .flashCommand(.tabPrev)),
-        ("gf", .flashCommand(.nextFrame)),
-        ("gF", .flashCommand(.mainFrame)),
         ("i", .flashCommand(.insertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick)))),
         ("rf", .flashCommand(.mouseTarget(.click(.rightClick)))),
@@ -362,15 +360,13 @@ struct Config {
     ]
     return compactJSON([
       "debug": [
-        "hint_bounds_bg": debug.hintBoundsBG,
-        "hint_bounds_fg": debug.hintBoundsFG,
+        "hints_bounds_bg": debug.hintsBoundsBG,
+        "hints_bounds_fg": debug.hintsBoundsFG,
         "http_inspector_enabled": debug.httpInspectorEnabled,
         "http_inspector_host": debug.httpInspectorHost,
         "http_inspector_port": debug.httpInspectorPort,
         "log_level": debug.logLevel.name,
-        "profile": debug.profile,
-        "show_hint_bounds": debug.showHintBounds,
-        "slow_ms": debug.slowMs,
+        "show_hints_bounds": debug.showHintsBounds,
       ],
       "hints": [
         "keys": hints.keys,
@@ -497,14 +493,14 @@ extension URLCommand {
       return "flash://flashlight"
     case .copyURL:
       return "flash://url_copy"
-    case .nextFrame:
-      return "flash://frame_next"
-    case .mainFrame:
-      return "flash://frame_main"
     case .tabNext:
       return "flash://tab_next"
     case .tabPrev:
       return "flash://tab_previous"
+    case .tabFirst:
+      return "flash://tab_first"
+    case .tabLast:
+      return "flash://tab_last"
     case .tabSelect(let index):
       if let index {
         return "flash://tab_select?index=\(index)"

@@ -82,11 +82,11 @@ extension OverlayPanel {
     var widthByLen: [Int: CGFloat] = [:]
     widthByLen.reserveCapacity(2)
 
-    let debugEnabled = debugConfig.showHintBounds
+    let debugEnabled = debugConfig.showHintsBounds
     if debugEnabled {
       debugShapeLayer.strokeColor =
-        (nsColor(fromHex: debugConfig.hintBoundsFG) ?? NSColor.systemPink).cgColor
-      debugShapeLayer.fillColor = (nsColor(fromHex: debugConfig.hintBoundsBG) ?? NSColor.clear).cgColor
+        (nsColor(fromHex: debugConfig.hintsBoundsFG) ?? NSColor.systemPink).cgColor
+      debugShapeLayer.fillColor = (nsColor(fromHex: debugConfig.hintsBoundsBG) ?? NSColor.clear).cgColor
     }
     lastTargetLocalRects.removeAll(keepingCapacity: true)
     if debugEnabled {
@@ -367,7 +367,7 @@ extension OverlayPanel {
         }
       }
     }
-    if debugConfig.showHintBounds {
+    if debugConfig.showHintsBounds {
       rebuildDebugPath(visibleIndices: visible)
     }
     CATransaction.commit()

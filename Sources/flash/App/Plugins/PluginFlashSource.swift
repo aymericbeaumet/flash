@@ -112,6 +112,22 @@ final class PluginFlashSource: FlashSource {
     plugin.invokeSourceAction(name: "tab_prev", context: context, extra: [:], completion: completion)
   }
 
+  func tabFirst(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    plugin.invokeSourceAction(name: "tab_first", context: context, extra: [:], completion: completion)
+  }
+
+  func tabLast(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    plugin.invokeSourceAction(name: "tab_last", context: context, extra: [:], completion: completion)
+  }
+
   func tabNew(
     in context: AppContext,
     environment: FlashSourceEnvironment,

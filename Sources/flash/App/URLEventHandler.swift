@@ -17,10 +17,10 @@ enum URLCommand: Hashable {
   case candidateFinder(all: Bool)
   case flashlight
   case copyURL
-  case nextFrame
-  case mainFrame
   case tabNext
   case tabPrev
+  case tabFirst
+  case tabLast
   case tabSelect(index: Int?)
   case historyBack
   case historyForward
@@ -185,10 +185,10 @@ final class URLEventHandler: NSObject {
     "app_open_finder": { q in .candidateFinder(all: q.bool("all")) },
     "flashlight": { _ in .flashlight },
     "url_copy": { _ in .copyURL },
-    "frame_next": { _ in .nextFrame },
-    "frame_main": { _ in .mainFrame },
     "tab_next": { _ in .tabNext },
     "tab_previous": { _ in .tabPrev },
+    "tab_first": { _ in .tabFirst },
+    "tab_last": { _ in .tabLast },
     "tab_select": { q in .tabSelect(index: q.int("index")) },
     "history_back": { _ in .historyBack },
     "history_forward": { _ in .historyForward },
@@ -264,10 +264,10 @@ final class URLEventHandler: NSObject {
     flash://app_open_finder[?all=1]
     flash://flashlight
     flash://url_copy
-    flash://frame_next
-    flash://frame_main
     flash://tab_next
     flash://tab_previous
+    flash://tab_first
+    flash://tab_last
     flash://tab_select[?index=<n>]
     flash://history_back
     flash://history_forward

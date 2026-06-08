@@ -11,22 +11,22 @@ enum ModeScope: String, CaseIterable, Hashable {
 /// The key is the mapping lhs and the action is resolved at config load.
 struct ModeMapping: Equatable {
   let key: String
-  let action: MappingAction
+  let action: MappingCommand
 }
 
 /// What a mapping fires. Resolved at config load so Carbon callbacks
 /// and overlay key handling never parse URL strings on the hot path.
-enum MappingAction: Hashable {
+enum MappingCommand: Hashable {
   case flashCommand(URLCommand)
   case shellCommand([String])
 }
 
-func parseMappingAction(rawString s: String) -> MappingAction? {
+func parseMappingCommand(rawString s: String) -> MappingCommand? {
   guard let cmd = URLEventHandler.parseFlashURL(s) else { return nil }
   return .flashCommand(cmd)
 }
 
-extension MappingAction {
+extension MappingCommand {
   var command: URLCommand? {
     switch self {
     case .flashCommand(let command):

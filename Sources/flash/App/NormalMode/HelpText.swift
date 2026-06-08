@@ -188,8 +188,8 @@ extension NormalModeDispatcher {
     return lines
   }
 
-  private static func groupedKeys(_ mappings: [ModeMapping]) -> [MappingAction: [String]] {
-    var grouped: [MappingAction: [String]] = [:]
+  private static func groupedKeys(_ mappings: [ModeMapping]) -> [MappingCommand: [String]] {
+    var grouped: [MappingCommand: [String]] = [:]
     for mapping in mappings {
       grouped[mapping.action, default: []].append(mapping.key)
     }

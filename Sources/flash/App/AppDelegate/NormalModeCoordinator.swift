@@ -543,10 +543,18 @@ extension AppDelegate {
     case .tabClose:
       tabCloseInNormalMode(repeatCount: repeatCount)
     case .find:
+      // Native find in the underlying app is a typing experience, so
+      // flip into insert mode right after dispatching ⌘F. Without this
+      // Flash stays in normal and swallows every character the user
+      // types into the find field, leaving them stuck staring at an
+      // empty search bar.
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_F),
         flags: .maskCommand,
         repeatCount: repeatCount)
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(60)) { [weak self] in
+        self?.enterInsertMode(reason: .normalModeInput)
+      }
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "open ", candidateFinderScope: all ? .all : .running)
     case .flashlight:
@@ -558,16 +566,14 @@ extension AppDelegate {
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()
-    case .nextFrame:
-      FlashLog.debug("[mappings] frame_next has no AX frame target in the focused app")
-      applyModeOverlay()
-    case .mainFrame:
-      FlashLog.debug("[mappings] frame_main has no AX frame target in the focused app")
-      applyModeOverlay()
     case .tabNext:
       tabNextInNormalMode(repeatCount: repeatCount)
     case .tabPrev:
       tabPrevInNormalMode(repeatCount: repeatCount)
+    case .tabFirst:
+      tabSelectInNormalMode(index: 1)
+    case .tabLast:
+      tabLastInNormalMode()
     case .tabSelect(let explicitIndex):
       tabSelectInNormalMode(index: explicitIndex ?? repeatCount)
     case .historyBack:
@@ -627,7 +633,7 @@ extension AppDelegate {
     }
   }
 
-  func performMappingAction(_ action: MappingAction, repeatCount: Int = 1) {
+  func performMappingCommand(_ action: MappingCommand, repeatCount: Int = 1) {
     switch action {
     case .flashCommand(let command):
       performMappedCommand(command, repeatCount: repeatCount)
@@ -1225,6 +1231,7 @@ extension AppDelegate {
       if NormalModeDispatcher.scroll(
         kind,
         pid: context.processID,
+        bundleID: context.bundleIdentifier,
         windowFrame: context.frontWindowFrame)
       {
         didScroll = true
@@ -1356,6 +1363,28 @@ extension AppDelegate {
           CGKeyCode(kVK_ANSI_LeftBracket),
           flags: [.maskCommand, .maskShift],
           repeatCount: count)
+      })
+  }
+
+  /// Jump to the last tab. Browsers map ⌘9 to "last tab" by convention
+  /// (Chrome, Safari, Firefox), so for those bundles the fast path is a
+  /// single synthesized ⌘9. Plugin-backed sources expose this through
+  /// the `tab_last` source action (the tmux plugin uses `last-window`).
+  private func tabLastInNormalMode() {
+    performTabSourceAction(
+      name: "tab_last",
+      repeatCount: 1,
+      action: { registry, context, completion in
+        registry.tabLast(in: context, completion: completion)
+      },
+      fallback: { [weak self] context, _ in
+        if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
+          self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_9), flags: .maskCommand)
+        } else {
+          FlashLog.debug(
+            "[normal_mode] tab_last unsupported bundle=\(context.bundleIdentifier)")
+          self?.applyModeOverlay()
+        }
       })
   }
 

@@ -16,8 +16,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#FFF785")
     XCTAssertEqual(c.overlay.hintBGBottom, "#FFC542")
     XCTAssertEqual(c.overlay.hintBorder, "#E3BE23")
-    XCTAssertFalse(c.debug.profile)
-    XCTAssertEqual(c.debug.slowMs, 100)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "j" })?.action.command,
       .scroll(.down))
@@ -410,17 +408,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.resolvedAlphabet.layoutName, "colemak")
   }
 
-  func testParsesDebugProfiling() {
-    let toml = """
-      [debug]
-      profile = true
-      slow_ms = 42
-      """
-    let c = ConfigLoader.parse(toml)
-    XCTAssertTrue(c.debug.profile)
-    XCTAssertEqual(c.debug.slowMs, 42)
-  }
-
   func testIgnoresComments() {
     let toml = """
       # a comment
@@ -450,8 +437,6 @@ final class ConfigLoaderTests: XCTestCase {
       "--debug-show-bounds=true",
       "--debug-bounds-bg=#11223344",
       "--debug-bounds-fg=#55667788",
-      "--debug-profile=true",
-      "--debug-slow-ms=250",
       "--debug-log-level=debug",
     ]
     let c = ConfigLoader.applyOverrides(to: base, arguments: args, environment: [:])
@@ -465,11 +450,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#000000")
     XCTAssertEqual(c.overlay.hintBGBottom, "#111111")
     XCTAssertEqual(c.overlay.hintBorder, "#222222")
-    XCTAssertTrue(c.debug.showHintBounds)
-    XCTAssertEqual(c.debug.hintBoundsBG, "#11223344")
-    XCTAssertEqual(c.debug.hintBoundsFG, "#55667788")
-    XCTAssertTrue(c.debug.profile)
-    XCTAssertEqual(c.debug.slowMs, 250)
+    XCTAssertTrue(c.debug.showHintsBounds)
+    XCTAssertEqual(c.debug.hintsBoundsBG, "#11223344")
+    XCTAssertEqual(c.debug.hintsBoundsFG, "#55667788")
     XCTAssertEqual(c.debug.logLevel, .debug)
   }
 
@@ -488,8 +471,6 @@ final class ConfigLoaderTests: XCTestCase {
       "FLASH_DEBUG_SHOW_BOUNDS": "yes",
       "FLASH_DEBUG_BOUNDS_BG": "#11111111",
       "FLASH_DEBUG_BOUNDS_FG": "#22222222",
-      "FLASH_DEBUG_PROFILE": "on",
-      "FLASH_DEBUG_SLOW_MS": "175",
       "FLASH_DEBUG_LOG_LEVEL": "fatal",
     ]
     let c = ConfigLoader.applyOverrides(to: base, arguments: ["flash"], environment: env)
@@ -503,11 +484,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
     XCTAssertEqual(c.overlay.hintBGBottom, "#998877")
     XCTAssertEqual(c.overlay.hintBorder, "#665544")
-    XCTAssertTrue(c.debug.showHintBounds)
-    XCTAssertEqual(c.debug.hintBoundsBG, "#11111111")
-    XCTAssertEqual(c.debug.hintBoundsFG, "#22222222")
-    XCTAssertTrue(c.debug.profile)
-    XCTAssertEqual(c.debug.slowMs, 175)
+    XCTAssertTrue(c.debug.showHintsBounds)
+    XCTAssertEqual(c.debug.hintsBoundsBG, "#11111111")
+    XCTAssertEqual(c.debug.hintsBoundsFG, "#22222222")
     XCTAssertEqual(c.debug.logLevel, .fatal)
   }
 
@@ -722,14 +701,14 @@ final class ConfigLoaderTests: XCTestCase {
     for v in ["true", "1", "yes", "on", "TRUE", "Yes"] {
       let c = ConfigLoader.applyOverrides(
         to: base, arguments: ["flash", "--debug-show-bounds=\(v)"], environment: [:])
-      XCTAssertTrue(c.debug.showHintBounds, "expected `\(v)` to parse as true")
+      XCTAssertTrue(c.debug.showHintsBounds, "expected `\(v)` to parse as true")
     }
     for v in ["false", "0", "no", "off", "FALSE"] {
       var b = base
-      b.debug.showHintBounds = true
+      b.debug.showHintsBounds = true
       let c = ConfigLoader.applyOverrides(
         to: b, arguments: ["flash", "--debug-show-bounds=\(v)"], environment: [:])
-      XCTAssertFalse(c.debug.showHintBounds, "expected `\(v)` to parse as false")
+      XCTAssertFalse(c.debug.showHintsBounds, "expected `\(v)` to parse as false")
     }
   }
 
@@ -801,10 +780,10 @@ final class ConfigLoaderTests: XCTestCase {
   }
 
   func testMalformedKnownConfigValueReportsLineAndColumn() {
-    let c = ConfigLoader.parse("[debug]\nslow_ms = \"fast\"")
+    let c = ConfigLoader.parse("[hints]\nmin_length = \"big\"")
     XCTAssertEqual(c.warnings.count, 1)
-    XCTAssertEqual(c.loadingDiagnostics.first?.location, ConfigLocation(line: 2, column: 11))
-    XCTAssertTrue(c.loadingErrorAlertMessage?.contains("debug.slow_ms must be an integer") == true)
+    XCTAssertEqual(c.loadingDiagnostics.first?.location, ConfigLocation(line: 2, column: 14))
+    XCTAssertTrue(c.loadingErrorAlertMessage?.contains("hints.min_length must be an integer") == true)
   }
 
   private static func parseJSONObject(_ json: String) throws -> [String: Any]? {

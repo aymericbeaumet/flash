@@ -382,7 +382,7 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent)
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)
   func overlayDidUpdatePrefix(_ prefix: String)
-  func overlayDidHandleNormalMode(_ action: MappingAction?, repeatCount: Int)
+  func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
   func overlayDidCancelModal()
   func overlayDidPassThroughModalKey(_ event: NSEvent)

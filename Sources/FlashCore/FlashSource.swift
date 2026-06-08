@@ -245,6 +245,18 @@ public protocol FlashSource: AnyObject {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   )
+  /// Select the first tab in the focused app.
+  func tabFirst(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  )
+  /// Select the last tab in the focused app.
+  func tabLast(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  )
   /// Create a tab in the focused app.
   func tabNew(
     in context: AppContext,
@@ -301,6 +313,20 @@ extension FlashSource {
     DispatchQueue.main.async { completion(.unhandled) }
   }
   public func tabPrev(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    DispatchQueue.main.async { completion(.unhandled) }
+  }
+  public func tabFirst(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    DispatchQueue.main.async { completion(.unhandled) }
+  }
+  public func tabLast(
     in context: AppContext,
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void

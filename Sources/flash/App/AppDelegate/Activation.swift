@@ -67,8 +67,6 @@ extension AppDelegate {
     targetFilter: ((JumpTarget) -> Bool)? = nil,
     contextOverride: AppContext? = nil
   ) {
-    let profiler = FlashProfiler(kind: "activation", debug: config.debug)
-    profiler.mark("url", detail: "action=\(action)")
     FlashLog.trace(
       "[activation] begin action=\(action) behavior=\(commitBehavior) mode=\(flashMode) "
         + "hints=\(currentHints.count) in_flight=\(activationInFlight) gen=\(activationGen)")
@@ -81,33 +79,22 @@ extension AppDelegate {
     // focused window). cancelOverlay() bumps activationGen, so any
     // in-flight discoverAsync completion will see a stale generation
     // and bail before rendering.
-    let wasBusy = activationInFlight || !currentHints.isEmpty
-    if wasBusy {
+    if activationInFlight || !currentHints.isEmpty {
       FlashLog.trace(
         "[activation] restart previous_in_flight=\(activationInFlight) "
           + "previous_hints=\(currentHints.count) gen=\(activationGen)")
       cancelOverlay()
-      profiler.mark(
-        "restart",
-        detail: "in_flight=\(activationInFlight) visible_hints=\(currentHints.count)")
     }
 
-    let contextStart = profiler.intervalStart()
     guard let context = contextOverride ?? currentNonFlashContext() else {
       FlashLog.debug("[activation] no target app")
       FlashLog.trace("[activation] no_context mode=\(flashMode) target_override=\(contextOverride != nil)")
-      profiler.finish(outcome: "no_context")
       applyModeOverlay()
       return
     }
     FlashLog.debug(
       "[activation] target pid=\(context.processID) bundle=\(context.bundleIdentifier) "
         + "source=\(contextOverride == nil ? "focused" : "override")"
-    )
-    profiler.finishInterval(
-      "current_context",
-      since: contextStart,
-      detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)"
     )
     sourceAppPID = context.processID
     pendingAction = action
@@ -116,14 +103,8 @@ extension AppDelegate {
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug
 
-    let permissionStart = profiler.intervalStart()
     if !isAccessibilityTrusted() {
-      profiler.finishInterval(
-        "accessibility_check", since: permissionStart, detail: "trusted=false")
       promptForAccessibility()
-      profiler.finish(
-        outcome: "accessibility_denied",
-        detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)")
       FlashLog.debug(
         "[activation] accessibility_denied pid=\(context.processID) "
           + "bundle=\(context.bundleIdentifier)"
@@ -131,7 +112,6 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    profiler.finishInterval("accessibility_check", since: permissionStart, detail: "trusted=true")
 
     activationGen &+= 1
     let myGen = activationGen
@@ -143,7 +123,6 @@ extension AppDelegate {
         + "bundle=\(context.bundleIdentifier)")
     monitor.discoverAsync(
       context: context,
-      profiler: profiler,
       targetFilter: targetFilter
     ) { [weak self] hints in
       guard let self else { return }
@@ -157,9 +136,6 @@ extension AppDelegate {
       // The walk is done; gate is open for the next activation
       // regardless of whether *this* walk's result is still relevant.
       guard self.activationGen == myGen else {
-        profiler.finish(
-          outcome: "stale_generation",
-          detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)")
         FlashLog.debug(
           "[activation] stale_generation pid=\(context.processID) "
             + "bundle=\(context.bundleIdentifier)"
@@ -175,17 +151,11 @@ extension AppDelegate {
         if !PermissionCheck.isAccessibilityTrusted {
           self.cachedAccessibilityTrusted = false
           self.promptForAccessibility()
-          profiler.finish(
-            outcome: "accessibility_revoked",
-            detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)")
           FlashLog.debug(
             "[activation] accessibility_revoked pid=\(context.processID) "
               + "bundle=\(context.bundleIdentifier)"
           )
         } else {
-          profiler.finish(
-            outcome: "no_targets",
-            detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier)")
           FlashLog.debug(
             "[activation] no_targets pid=\(context.processID) "
               + "bundle=\(context.bundleIdentifier)"
@@ -196,13 +166,7 @@ extension AppDelegate {
       }
       self.currentHints = hints
       self.currentPrefix = ""
-      let displayStart = profiler.intervalStart()
       self.overlay.display(hints: hints)
-      profiler.finishInterval(
-        "overlay_display", since: displayStart, detail: "hints=\(hints.count)")
-      profiler.finish(
-        outcome: "displayed",
-        detail: "pid=\(context.processID) bundle=\(context.bundleIdentifier) hints=\(hints.count)")
       FlashLog.debug(
         "[activation] displayed pid=\(context.processID) "
           + "bundle=\(context.bundleIdentifier) hints=\(hints.count)"

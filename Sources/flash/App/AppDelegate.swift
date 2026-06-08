@@ -218,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     urlHandler = URLEventHandler(handler: dispatch)
     mappings.start(
       dispatch: { [weak self] action in
-        self?.performMappingAction(action)
+        self?.performMappingCommand(action)
       },
       currentMode: { [weak self] in self?.flashMode ?? .insert })
 
@@ -255,7 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterCommandLineMode()
     case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .flashlight,
       .copyURL,
-      .nextFrame, .mainFrame, .tabNext, .tabPrev, .tabSelect, .historyBack, .historyForward,
+      .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect, .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,
       .setMark, .jumpToMark,
       .quitApp, .save, .saveAndQuit, .print,

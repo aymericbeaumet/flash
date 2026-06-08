@@ -1,6 +1,26 @@
 // swift-tools-version: 5.10
 import PackageDescription
 
+// Project-wide swift compiler flags.
+//
+// - `-warnings-as-errors` forces fresh code to compile cleanly; we don't
+//   want to ship master with a backlog of "soft" warnings that mask real
+//   regressions when something genuinely starts misbehaving.
+// - The upcoming-feature flags walk the codebase a few Swift-evolution
+//   defaults early so the Swift-6 transition is a no-op: existential-any
+//   syntax stays explicit, integer-literal narrowing is rejected at
+//   compile time, and importing a module no longer re-exports its own
+//   imports by accident.
+let strictSwiftSettings: [SwiftSetting] = [
+  .unsafeFlags(["-warnings-as-errors"]),
+  .enableUpcomingFeature("ForwardTrailingClosures"),
+  .enableUpcomingFeature("ConciseMagicFile"),
+  .enableUpcomingFeature("BareSlashRegexLiterals"),
+  .enableUpcomingFeature("DeprecateApplicationMain"),
+  .enableUpcomingFeature("ImportObjcForwardDeclarations"),
+  .enableUpcomingFeature("DisableOutwardActorInference"),
+]
+
 let package = Package(
   name: "Flash",
   platforms: [.macOS(.v14)],
@@ -20,11 +40,13 @@ let package = Package(
     .executableTarget(
       name: "flash",
       dependencies: ["FlashCore", "FlashProviders"],
-      path: "Sources/flash"
+      path: "Sources/flash",
+      swiftSettings: strictSwiftSettings
     ),
     .executableTarget(
       name: "flashctl",
-      path: "Sources/flashctl"
+      path: "Sources/flashctl",
+      swiftSettings: strictSwiftSettings
     ),
     .executableTarget(
       name: "flash-vimium-oracle",
@@ -32,40 +54,48 @@ let package = Package(
         "FlashCore", "FlashProviders", "FlashIntegrationTestSupport",
         "FlashBrowserTestSupport",
       ],
-      path: "Sources/flash-vimium-oracle"
+      path: "Sources/flash-vimium-oracle",
+      swiftSettings: strictSwiftSettings
     ),
     .executableTarget(
       name: "flash-native-fixture",
-      path: "Sources/flash-native-fixture"
+      path: "Sources/flash-native-fixture",
+      swiftSettings: strictSwiftSettings
     ),
     .executableTarget(
       name: "flash-native-oracle",
       dependencies: ["FlashCore", "FlashProviders", "FlashIntegrationTestSupport"],
-      path: "Sources/flash-native-oracle"
+      path: "Sources/flash-native-oracle",
+      swiftSettings: strictSwiftSettings
     ),
     .executableTarget(
       name: "flash-electron-oracle",
       dependencies: ["FlashCore", "FlashProviders", "FlashIntegrationTestSupport"],
-      path: "Sources/flash-electron-oracle"
+      path: "Sources/flash-electron-oracle",
+      swiftSettings: strictSwiftSettings
     ),
     .target(
       name: "FlashCore",
-      path: "Sources/FlashCore"
+      path: "Sources/FlashCore",
+      swiftSettings: strictSwiftSettings
     ),
     .target(
       name: "FlashProviders",
       dependencies: ["FlashCore"],
-      path: "Sources/FlashProviders"
+      path: "Sources/FlashProviders",
+      swiftSettings: strictSwiftSettings
     ),
     .target(
       name: "FlashIntegrationTestSupport",
       dependencies: ["FlashCore", "FlashProviders"],
-      path: "Sources/FlashIntegrationTestSupport"
+      path: "Sources/FlashIntegrationTestSupport",
+      swiftSettings: strictSwiftSettings
     ),
     .target(
       name: "FlashBrowserTestSupport",
       dependencies: ["FlashCore", "FlashProviders", "FlashIntegrationTestSupport"],
-      path: "Sources/FlashBrowserTestSupport"
+      path: "Sources/FlashBrowserTestSupport",
+      swiftSettings: strictSwiftSettings
     ),
     .testTarget(
       name: "FlashTests",
@@ -73,7 +103,8 @@ let package = Package(
         "flash", "FlashCore", "FlashProviders", "FlashIntegrationTestSupport",
         "FlashBrowserTestSupport",
       ],
-      path: "Tests/FlashTests"
+      path: "Tests/FlashTests",
+      swiftSettings: strictSwiftSettings
     ),
   ],
   swiftLanguageVersions: [.v5]

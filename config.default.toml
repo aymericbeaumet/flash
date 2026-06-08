@@ -27,7 +27,7 @@ magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 # Selection steps for flash://mouse_grid. The final step's grid is sized to
 # the precision target (~18pt cells, aspect-matched to the screen so vertical
 # monitors get a tall grid); earlier steps share the same shape so each
-# selection zooms in geometrically. Valid range: 1–6.
+# selection zooms in geometrically. Valid range: 2–6.
 mouse_grid_steps = 3
 
 [open]
@@ -53,6 +53,12 @@ watching_enabled = true
 # Labels shown in the mode overlay. The overlay width is based on the
 # longest configured label, so compact labels such as N/I/C shrink it.
 labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
+
+# Time (in ms) the interpreter waits for the next key in a pending
+# sequence before resolving the longest matching prefix. Equivalent to
+# Vim's `timeoutlen`. Lower = faster commit but more two-key collisions;
+# higher = slower commit but fewer surprises. Default 300.
+sequence_timeout_ms = 300
 
 [mode.all.mappings]
 # Mappings available in insert and normal modes.
@@ -103,6 +109,8 @@ leader = "\\"
 # the registration and macOS's Dock switcher takes over again.
 "cmd+tab" = "flash://app_next"
 "cmd+shift+tab" = "flash://app_previous"
+"g^" = "flash://tab_first"
+"g$" = "flash://tab_last"
 "g1" = "flash://tab_select?index=1"
 "g2" = "flash://tab_select?index=2"
 "g3" = "flash://tab_select?index=3"
@@ -114,8 +122,6 @@ leader = "\\"
 "g9" = "flash://tab_select?index=9"
 "ctrl-o" = "flash://movement_back"
 "ctrl-i" = "flash://movement_forward"
-"gf" = "flash://frame_next"
-"gF" = "flash://frame_main"
 "i" = "flash://mode_insert"
 "f" = "flash://mouse_target"
 "rf" = "flash://mouse_target?right=1"
@@ -144,18 +150,11 @@ leader = "\\"
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its
 # hint chip. Useful when diagnosing missing or misplaced hints.
-show_hint_bounds = false
+show_hints_bounds = false
 
 # Fill + stroke for the debug outline rectangle.
-hint_bounds_bg = "#00000000"
-hint_bounds_fg = "#FF3B9A"
-
-# Emit profiling traces as JSON log lines.
-profile = false
-
-# Log activation profiles whose latency is at least this many milliseconds.
-# Set to 0 to disable slow logs.
-slow_ms = 100
+hints_bounds_bg = "#00000000"
+hints_bounds_fg = "#FF3B9A"
 
 # Accepted values: "trace", "debug", "info", "warn", "error", "fatal".
 # Logs are newline-delimited JSON written to stderr and

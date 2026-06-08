@@ -119,11 +119,9 @@ leader = "\\"
 
 [debug]
 log_level = "info"
-# show_hint_bounds = false
-# hint_bounds_bg = "#00000000"
-# hint_bounds_fg = "#FF3B9A"
-# profile = false
-# slow_ms = 100
+# show_hints_bounds = false
+# hints_bounds_bg = "#00000000"
+# hints_bounds_fg = "#FF3B9A"
 # http_inspector_enabled = false
 # http_inspector_host = "localhost"
 # http_inspector_port = 4242

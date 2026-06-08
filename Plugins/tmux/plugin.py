@@ -513,6 +513,13 @@ def discover_targets_for_context(plugin, tmux_path, params):
 
 
 def build_candidates(tmux_path):
+    """Build the candidate snapshot for the tmux window finder.
+
+    Returns either a list of candidates or `None` on transient tmux
+    failure (timeout, exit != 0). Callers should treat `None` as
+    "don't replace the previous snapshot" — a `[]` value is the truthy
+    "no tmux windows exist" answer and should replace.
+    """
     if not tmux_path:
         return []
     clients = list_clients(tmux_path)
@@ -544,7 +551,11 @@ def build_candidates(tmux_path):
         ],
     )
     if raw is None:
-        return []
+        # Transient failure (timeout, exit != 0). Signal to the caller
+        # that the previous snapshot should be preserved instead of
+        # being overwritten with `[]` — that's what made tmux windows
+        # vanish from flashlight between focus events.
+        return None
     home = os.path.expanduser("~")
     out = []
     for line in raw.split("\n"):
@@ -651,6 +662,29 @@ def tab_adjacent(tmux_path, client, direction):
     return switch_client(tmux_path, client["tty"], target)
 
 
+def tab_extreme(tmux_path, client, end):
+    """Jump to the first or last window in the client's session.
+
+    `end` is "first" or "last". We look up the actual lowest/highest
+    window_index for the session rather than relying on tmux's special
+    `^`/`$` targets — the latter aren't supported in all tmux
+    versions and the explicit lookup also lets us bail with a clear
+    failure if the session has gone away.
+    """
+    raw = run_tmux(
+        tmux_path,
+        ["list-windows", "-t", client["session"], "-F", "#{window_index}"],
+    )
+    if raw is None:
+        return False
+    indices = tmux_window_indices(raw)
+    if not indices:
+        return False
+    target_index = indices[0] if end == "first" else indices[-1]
+    return switch_client(
+        tmux_path, client["tty"], f"{client['session']}:{target_index}")
+
+
 def tab_new(tmux_path, client):
     current_path = trimmed(run_tmux(
         tmux_path,
@@ -692,6 +726,10 @@ def perform_source_action(tmux_path, name, params):
         ok = tab_adjacent(tmux_path, client, "next")
     elif name == "tab_prev":
         ok = tab_adjacent(tmux_path, client, "previous")
+    elif name == "tab_first":
+        ok = tab_extreme(tmux_path, client, "first")
+    elif name == "tab_last":
+        ok = tab_extreme(tmux_path, client, "last")
     elif name == "tab_new":
         ok = tab_new(tmux_path, client)
     elif name == "tab_close":
@@ -729,6 +767,13 @@ def resolve_candidate(tmux_path, candidate):
 
 def refresh_candidate_snapshot(plugin, tmux_path):
     candidates = build_candidates(tmux_path)
+    if candidates is None:
+        # tmux is briefly unavailable (timeout / non-zero exit).
+        # Don't push an empty snapshot; the resident app preserves
+        # the previous list when the wire frame omits `candidates`,
+        # so simply skip the emit.
+        plugin.log("debug", "[tmux] candidate refresh skipped — tmux transient failure")
+        return
     plugin.emit_snapshot(candidates=candidates, source_id=SOURCE_ID)
 
 
@@ -745,21 +790,26 @@ def activate_target_action(tmux_path, action_entry, action):
     kind = action_entry.get("kind")
     if kind == "pane":
         pane_id = action_entry.get("pane_id")
-        tty = action_entry.get("client_tty") or ""
         if not pane_id:
             return False
-        args = ["select-pane"]
-        if tty:
-            args.extend(["-c", tty])
-        args.extend(["-t", pane_id])
-        return run_tmux(tmux_path, args) is not None
+        # `select-pane` doesn't take `-c <tty>` (that's for `switch-client`).
+        # The pane_id is global so a bare `-t %NN` is enough — and pane chips
+        # are only emitted for the client's CURRENT window, so we don't need
+        # to switch windows first.
+        return run_tmux(tmux_path, ["select-pane", "-t", pane_id]) is not None
     if kind == "link":
         text = action_entry.get("text") or ""
         if not text:
             return False
+        # `open` doesn't expand `~` itself; URLs pass through unchanged.
+        # `file.ext:LINE[:COL]` editor-jump suffix isn't understood by
+        # Launch Services either, so strip the trailing `:digits` form
+        # before dispatching.
+        target = os.path.expanduser(text)
+        target = re.sub(r"(?::\d+){1,2}$", "", target)
         try:
             subprocess.Popen(
-                ["open", text],
+                ["open", target],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )

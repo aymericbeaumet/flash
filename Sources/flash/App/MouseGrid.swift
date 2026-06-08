@@ -146,18 +146,52 @@ enum MouseGrid {
     maxRows: Int
   ) -> Grid {
     let capped = max(4, maxCells)
-    var best = (columns: 2, rows: 2, cells: 4, score: CGFloat.greatestFiniteMagnitude)
-    for rows in 2...max(2, maxRows) {
-      for columns in 2...max(2, maxColumns) {
+    // Odd-axis pass first. Odd cols/rows produce a true centre cell the
+    // user can aim at; an even axis puts the visual centre on a chip
+    // seam. We only fall back to even shapes when no odd shape fits
+    // under the precision-floor caps (`maxColumns/maxRows`), which is
+    // the case for very small regions where 2 is the only valid axis.
+    let oddColMax = maxColumns.isMultiple(of: 2) ? maxColumns - 1 : maxColumns
+    let oddRowMax = maxRows.isMultiple(of: 2) ? maxRows - 1 : maxRows
+    if let oddBest = bestShape(
+      capped: capped, aspect: aspect,
+      colRange: stride(from: 3, through: oddColMax, by: 2),
+      rowRange: stride(from: 3, through: oddRowMax, by: 2))
+    {
+      return Grid(columns: oddBest.columns, rows: oddBest.rows)
+    }
+    let evenBest = bestShape(
+      capped: capped, aspect: aspect,
+      colRange: stride(from: 2, through: max(2, maxColumns), by: 1),
+      rowRange: stride(from: 2, through: max(2, maxRows), by: 1))
+    return Grid(
+      columns: evenBest?.columns ?? 2,
+      rows: evenBest?.rows ?? 2)
+  }
+
+  private static func bestShape<C, R>(
+    capped: Int,
+    aspect: CGFloat,
+    colRange: C,
+    rowRange: R
+  ) -> (columns: Int, rows: Int)?
+  where C: Sequence, C.Element == Int, R: Sequence, R.Element == Int {
+    var best: (columns: Int, rows: Int, cells: Int, score: CGFloat)?
+    for rows in rowRange {
+      for columns in colRange {
         let cells = rows * columns
         guard cells <= capped else { continue }
         let shapeAspect = CGFloat(columns) / CGFloat(rows)
         let score = abs(log(max(0.01, shapeAspect) / max(0.01, aspect)))
-        if cells > best.cells || (cells == best.cells && score < best.score) {
+        if let current = best {
+          if cells > current.cells || (cells == current.cells && score < current.score) {
+            best = (columns, rows, cells, score)
+          }
+        } else {
           best = (columns, rows, cells, score)
         }
       }
     }
-    return Grid(columns: best.columns, rows: best.rows)
+    return best.map { ($0.columns, $0.rows) }
   }
 }

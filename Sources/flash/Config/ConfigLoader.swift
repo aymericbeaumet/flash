@@ -156,7 +156,7 @@ enum ConfigLoader {
   private struct PendingModeMapping {
     var scope: ModeScope
     var key: String
-    var action: MappingAction
+    var action: MappingCommand
     var location: ConfigLocation
   }
 
@@ -370,12 +370,12 @@ enum ConfigLoader {
           location: location)
       }
     case ["hints", "mouse_grid_steps"]:
-      if let parsed = parseInt(value), parsed >= 1, parsed <= 6 {
+      if let parsed = parseInt(value), parsed >= 2, parsed <= 6 {
         config.hints.mouseGridSteps = parsed
         config.recordLocation(path: "hints.mouse_grid_steps", location: location)
       } else {
         config.addDiagnostic(
-          "hints.mouse_grid_steps must be an integer between 1 and 6",
+          "hints.mouse_grid_steps must be an integer between 2 and 6",
           location: location)
       }
 
@@ -501,40 +501,26 @@ enum ConfigLoader {
         config.addDiagnostic("overlay.hint_border must be a quoted string", location: location)
       }
 
-    case ["debug", "show_hint_bounds"]:
+    case ["debug", "show_hints_bounds"]:
       if let parsed = parseBool(value) {
-        config.debug.showHintBounds = parsed
-        config.recordLocation(path: "debug.show_hint_bounds", location: location)
+        config.debug.showHintsBounds = parsed
+        config.recordLocation(path: "debug.show_hints_bounds", location: location)
       } else {
-        config.addDiagnostic("debug.show_hint_bounds must be true or false", location: location)
+        config.addDiagnostic("debug.show_hints_bounds must be true or false", location: location)
       }
-    case ["debug", "hint_bounds_bg"]:
+    case ["debug", "hints_bounds_bg"]:
       if let parsed = parseString(value) {
-        config.debug.hintBoundsBG = parsed
-        config.recordLocation(path: "debug.hint_bounds_bg", location: location)
+        config.debug.hintsBoundsBG = parsed
+        config.recordLocation(path: "debug.hints_bounds_bg", location: location)
       } else {
-        config.addDiagnostic("debug.hint_bounds_bg must be a quoted string", location: location)
+        config.addDiagnostic("debug.hints_bounds_bg must be a quoted string", location: location)
       }
-    case ["debug", "hint_bounds_fg"]:
+    case ["debug", "hints_bounds_fg"]:
       if let parsed = parseString(value) {
-        config.debug.hintBoundsFG = parsed
-        config.recordLocation(path: "debug.hint_bounds_fg", location: location)
+        config.debug.hintsBoundsFG = parsed
+        config.recordLocation(path: "debug.hints_bounds_fg", location: location)
       } else {
-        config.addDiagnostic("debug.hint_bounds_fg must be a quoted string", location: location)
-      }
-    case ["debug", "profile"]:
-      if let parsed = parseBool(value) {
-        config.debug.profile = parsed
-        config.recordLocation(path: "debug.profile", location: location)
-      } else {
-        config.addDiagnostic("debug.profile must be true or false", location: location)
-      }
-    case ["debug", "slow_ms"]:
-      if let parsed = parseInt(value) {
-        config.debug.slowMs = parsed
-        config.recordLocation(path: "debug.slow_ms", location: location)
-      } else {
-        config.addDiagnostic("debug.slow_ms must be an integer", location: location)
+        config.addDiagnostic("debug.hints_bounds_fg must be a quoted string", location: location)
       }
     case ["debug", "log_level"]:
       if let raw = parseString(value), let lvl = FlashLog.Level.parse(raw) {
@@ -583,7 +569,7 @@ enum ConfigLoader {
   private static func setModeMapping(
     scope: ModeScope,
     key: String,
-    action: MappingAction,
+    action: MappingCommand,
     into config: inout Config
   ) {
     let mapping = ModeMapping(key: key, action: action)
@@ -636,9 +622,9 @@ enum ConfigLoader {
     NormalModeInterpreter.translateLeader(raw)
   }
 
-  private static func parseMappingValue(_ value: String, sourceURL: URL?) -> MappingAction? {
+  private static func parseMappingValue(_ value: String, sourceURL: URL?) -> MappingCommand? {
     if let raw = parseString(value) {
-      return parseMappingAction(rawString: raw)
+      return parseMappingCommand(rawString: raw)
     }
     if let argv = parseStringArray(value),
       let executable = argv.first,
@@ -953,25 +939,15 @@ enum ConfigLoader {
 
     case "debug-show-bounds":
       if let b = boolFromString(value) {
-        config.debug.showHintBounds = b
-        config.clearLocation(path: "debug.show_hint_bounds")
+        config.debug.showHintsBounds = b
+        config.clearLocation(path: "debug.show_hints_bounds")
       }
     case "debug-bounds-bg":
-      config.debug.hintBoundsBG = value
-      config.clearLocation(path: "debug.hint_bounds_bg")
+      config.debug.hintsBoundsBG = value
+      config.clearLocation(path: "debug.hints_bounds_bg")
     case "debug-bounds-fg":
-      config.debug.hintBoundsFG = value
-      config.clearLocation(path: "debug.hint_bounds_fg")
-    case "debug-profile":
-      if let b = boolFromString(value) {
-        config.debug.profile = b
-        config.clearLocation(path: "debug.profile")
-      }
-    case "debug-slow-ms":
-      if let i = Int(value) {
-        config.debug.slowMs = i
-        config.clearLocation(path: "debug.slow_ms")
-      }
+      config.debug.hintsBoundsFG = value
+      config.clearLocation(path: "debug.hints_bounds_fg")
     case "debug-log-level":
       if let lvl = FlashLog.Level.parse(value) {
         config.debug.logLevel = lvl

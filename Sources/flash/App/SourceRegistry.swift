@@ -251,6 +251,26 @@ final class SourceRegistry {
     }
   }
 
+  func tabFirst(
+    in context: AppContext,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performSourceAction(capability: .tabNavigation, context: context, completion: completion) {
+      source, env, done in
+      source.tabFirst(in: context, environment: env, completion: done)
+    }
+  }
+
+  func tabLast(
+    in context: AppContext,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performSourceAction(capability: .tabNavigation, context: context, completion: completion) {
+      source, env, done in
+      source.tabLast(in: context, environment: env, completion: done)
+    }
+  }
+
   func tabNew(
     in context: AppContext,
     completion: @escaping (SourceActionResult) -> Void

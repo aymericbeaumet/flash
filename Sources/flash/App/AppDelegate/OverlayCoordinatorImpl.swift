@@ -24,11 +24,31 @@ extension AppDelegate {
       scheduleNormalModeRecapture()
       return
     }
+    // Menu-bar clicks need to land on the menu service. Both `cancelOverlay`
+    // and `enterInsertMode` `orderOut` / re-apply the overlay panel, and
+    // that re-order trips the menu's modal tracking session before the
+    // menu has even rendered — so the first click "fails" (menu opens
+    // and immediately closes) and the user has to click again. Bail
+    // before any of that: dismiss only transient hints, keep the mode
+    // as-is, and let macOS deliver the click to SystemUIServer.
+    if case .click(let click) = intent,
+      Self.pointIsInMenuBar(click.location),
+      !activationInFlight
+    {
+      FlashLog.trace("[mode] pointer_in_menu_bar mode=\(flashMode) keep_mode=true")
+      if !currentHints.isEmpty {
+        overlay.hide()
+        currentHints = []
+        currentPrefix = ""
+        invalidateActivation(reason: "menu_bar_click")
+      }
+      normalModeScrollSuppressionUntil = nil
+      return
+    }
     let replayClick: OverlayPointerClick?
     if case .click(let click) = intent,
       flashMode == .normal,
-      currentHints.isEmpty,
-      !Self.pointIsInMenuBar(click.location)
+      currentHints.isEmpty
     {
       replayClick = click
     } else {
@@ -142,14 +162,14 @@ extension AppDelegate {
     normalModeDragLocalMonitor = nil
   }
 
-  func overlayDidHandleNormalMode(_ action: MappingAction?, repeatCount: Int) {
+  func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
     guard flashMode == .normal else { return }
     normalModePendingCommandToken &+= 1
     guard let action else {
       schedulePendingNormalModeCommandIfNeeded()
       return
     }
-    performMappingAction(action, repeatCount: repeatCount)
+    performMappingCommand(action, repeatCount: repeatCount)
   }
 
   private func schedulePendingNormalModeCommandIfNeeded() {
@@ -162,13 +182,13 @@ extension AppDelegate {
     let token = normalModePendingCommandToken
     let pendingText = overlay.normalModePending
     DispatchQueue.main.asyncAfter(
-      deadline: .now() + .milliseconds(NormalModeInterpreter.sequenceTimeoutMs)
+      deadline: .now() + .milliseconds(config.mode.sequenceTimeoutMs)
     ) { [weak self] in
       guard let self, self.normalModePendingCommandToken == token else { return }
       guard self.flashMode == .normal, self.overlay.normalModePending == pendingText else { return }
       self.overlay.normalModePending = ""
       self.normalModePendingCommandToken &+= 1
-      self.performMappingAction(pending.action, repeatCount: pending.repeatCount)
+      self.performMappingCommand(pending.action, repeatCount: pending.repeatCount)
     }
   }
 
@@ -253,6 +273,29 @@ extension AppDelegate {
       pendingHintCommitBehavior = .click
       activationGen &+= 1
       applyModeOverlay()
+      return
+    }
+
+    // Shift-modified hint commits open a preview modal instead of
+    // activating, for targets whose label carries useful context that
+    // got truncated to a single hint character. Tmux link chips fall
+    // in that bucket: the chip renders as one cell ("h" of "https://…")
+    // but the full URL is the AX label. The shift toggle is a quick way
+    // to read a URL before deciding to follow it.
+    if clickModifiers.contains(.shift),
+      let role = hint.target.role,
+      role.hasPrefix("tmux-"),
+      let label = hint.target.accessibilityLabel,
+      !label.isEmpty
+    {
+      overlay.displayModal(label)
+      currentHints = []
+      currentPrefix = ""
+      sourceAppPID = nil
+      mouseGridRegion = nil
+      mouseGridDepth = 0
+      pendingHintCommitBehavior = .click
+      activationGen &+= 1
       return
     }
 

@@ -232,19 +232,18 @@ Keys:
 | `hints.keys`                       | string         | `"<qwerty_homerow+qwerty_toprow>"` |
 | `hints.min_length`                 | int            | `1`                  |
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
-| `hints.mouse_grid_steps`           | int (1..6)     | `3`                  |
+| `hints.mouse_grid_steps`           | int (2..6)     | `3`                  |
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
+| `mode.sequence_timeout_ms`         | int (ms)       | `300`                |
 | `[mode.all.mappings]` entries      | `flash://` or argv-array mapping | none             |
 | `mode.normal.leader`               | string         | `"\\"`             |
 | `[mode.normal.mappings]` entries   | `flash://` or argv-array mapping | built-in normal map |
 | `[mode.insert.mappings]` entries   | `flash://` or argv-array mapping | none             |
-| `debug.show_hint_bounds`                | bool           | `false`              |
-| `debug.hint_bounds_bg` / `hint_bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
-| `debug.profile`                    | bool           | `false`              |
-| `debug.slow_ms`                    | int            | `100`                |
+| `debug.show_hints_bounds`                | bool           | `false`              |
+| `debug.hints_bounds_bg` / `hints_bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.log_level`                  | string         | `"info"`             |
 | `debug.http_inspector_enabled`          | bool           | `false`              |
 | `debug.http_inspector_host`             | string         | `"localhost"` (also accepts `127.0.0.1`, `::1`) |
@@ -318,7 +317,7 @@ When any `[mode.all.mappings]` mapping resolves to `flash://mode_normal`, Flash 
 
 Every action Flash takes must have a corresponding `flash://` action parsed by `URLEventHandler`. Keep `URLCommand`, parser wiring, `URLCommand.diagnosticDescription`, mapping help, README, default config examples, and tests in sync.
 
-Normal-mode action URLs currently include: `flash://mouse_target[?right=1|double=1|move=1]`, `flash://mouse_grid[?right=1|double=1|move=1]`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload[?force=1]`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://flashlight`, `flash://url_copy`, `flash://frame_next`, `flash://frame_main`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select?index=<n>`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://plugins`, and `flash://plugin_action?command=<command>&name=<action>`.
+Normal-mode action URLs currently include: `flash://mouse_target[?right=1|double=1|move=1]`, `flash://mouse_grid[?right=1|double=1|move=1]`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload[?force=1]`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://flashlight`, `flash://url_copy`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_first`, `flash://tab_last`, `flash://tab_select?index=<n>`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://plugins`, and `flash://plugin_action?command=<command>&name=<action>`.
 
 `:open <query>` and `:flashlight <query>` results render above the command line, ordered bottom-to-top with the best match closest to the prompt. Candidate snapshots are cached ahead of use through `SourceRegistry`: app bundles are warmed and cached by `ApplicationSource`, while tmux windows, browser tabs, Slack channels, plugins, and future contexts are queried only from currently active sources. Typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin ids are internal routing keys and must not be required search text for `:open` / `:flashlight`; plugin candidates should provide their own `source` / `name` labels.
 
@@ -445,6 +444,21 @@ There are two ways around this and both are off the table:
 2. **Render through a CGS / WindowServer-level window** below the menu
    plane. This uses private SkyLight APIs that aren't part of the public
    AppKit surface. Out of scope.
+
+### `cmd+tab` cannot be fully intercepted without user opt-in
+
+`RegisterEventHotKey` accepts a `cmd+tab` registration and Flash's
+callback fires when the user presses it, but the Dock's system-wide app
+switcher uses a CGEventTap that runs before Carbon's hot-key dispatch
+and consumes the event itself. Both fire — Flash's mapping (e.g.
+`cmd+tab → app_next`) runs **and** the system switcher appears.
+
+The only standard-API workaround is for the user to disable the system
+shortcut in **System Settings → Keyboard → Keyboard Shortcuts → Mission
+Control → "Move focus to next window"** (or the variant on their macOS
+release). After that, Flash's Carbon binding is the only handler. We
+don't auto-disable it on the user's behalf; the default `cmd+tab` mapping
+stays in the normal-mode map for users who've opted in.
 
 Workaround for users: dismiss the menu, trigger Flash on the menu's parent
 button (which is hinted), commit, then read the menu.

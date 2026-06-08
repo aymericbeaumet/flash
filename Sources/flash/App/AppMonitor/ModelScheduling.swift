@@ -62,7 +62,7 @@ extension AppMonitor {
       let reason = self.modelRefreshReason.removeValue(forKey: pid) ?? "debounced"
       self.modelRefreshArmed.remove(pid)
       self.modelRefreshDeadline.removeValue(forKey: pid)
-      self.runModelRefresh(pid: pid, reason: reason, profiler: nil, completion: nil)
+      self.runModelRefresh(pid: pid, reason: reason, completion: nil)
     }
   }
 
@@ -76,7 +76,7 @@ extension AppMonitor {
       let currentToken = self.dirtyTokens[model.pid] ?? 0
       guard currentToken == token, self.configRevision == revision else { return }
       guard NSWorkspace.shared.frontmostApplication?.processIdentifier == model.pid else { return }
-      self.runModelRefresh(pid: model.pid, reason: "maintenance", profiler: nil, completion: nil)
+      self.runModelRefresh(pid: model.pid, reason: "maintenance", completion: nil)
     }
     maintenanceRefresh[model.pid] = work
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: work)
@@ -85,7 +85,6 @@ extension AppMonitor {
   func runModelRefresh(
     pid: pid_t,
     reason: String,
-    profiler: FlashProfiler?,
     completion: ((PreparedModel?) -> Void)?
   ) {
     // Any in-flight debounce closure for this pid has already finished
@@ -135,22 +134,14 @@ extension AppMonitor {
       return
     }
 
-    let enqueueNs = profiler?.intervalStart()
     axQueue.async { [weak self] in
       guard let self else { return }
-      if let enqueueNs {
-        self.finishQueueWait(profiler, since: enqueueNs)
-      }
-      profiler?.mark(
-        "model_build_start", detail: "token=\(startToken) reason=\(reason)")
       let built = self.buildPreparedModel(
         context: context,
         providers: providers,
         cfg: cfg,
         dirtyToken: startToken,
-        configRevision: revision,
-        profiler: profiler)
-      profiler?.mark("model_build_done", detail: "hints=\(built.hints.count)")
+        configRevision: revision)
       DispatchQueue.main.async {
         let shouldRunQueued = self.preparedModels.finishRebuild(pid: pid)
         let waiter = self.pendingModelCompletion.removeValue(forKey: pid)
@@ -166,12 +157,6 @@ extension AppMonitor {
         if tokenStillMatches, revisionStillMatches, stillFocused {
           self.preparedModels.store(built)
           self.scheduleMaintenanceRefresh(for: built)
-          if cfg.debug.profile {
-            FlashLog.info(
-              "[ax] model_ready pid=\(pid) bundle=\(context.bundleIdentifier) "
-                + "hints=\(built.hints.count) token=\(startToken) reason=\(reason)"
-            )
-          }
         }
         let validModel = tokenStillMatches && revisionStillMatches && stillFocused ? built : nil
         completion?(validModel)

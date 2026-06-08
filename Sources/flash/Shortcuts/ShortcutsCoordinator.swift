@@ -7,7 +7,7 @@ import Foundation
 /// On every `apply(mode:)` the Carbon registration set is rebuilt from
 /// scratch. AOT: parsing of the mapping lhs and URL value happens at
 /// config load, before any keypress arrives. The hot path on a Carbon
-/// callback is one switch over the pre-resolved `MappingAction`.
+/// callback is one switch over the pre-resolved `MappingCommand`.
 ///
 /// Dispatch policy:
 ///   - `flashCommand` → fed back to the shared `URLCommand` handler
@@ -24,7 +24,7 @@ final class MappingsCoordinator {
   }
 
   private let hotkeys = HotKeyManager()
-  private var mappingDispatch: ((MappingAction) -> Void)?
+  private var mappingDispatch: ((MappingCommand) -> Void)?
   private var currentMode: (() -> FlashMode)?
   private var activeMappings: [ActiveMapping] = []
   private var configuredMode: Config.Mode = .init()
@@ -32,7 +32,7 @@ final class MappingsCoordinator {
   private var lastFireDiagnostic: String?
   private var lastFireAt: Date = .distantPast
 
-  func start(dispatch: @escaping (MappingAction) -> Void, currentMode: @escaping () -> FlashMode) {
+  func start(dispatch: @escaping (MappingCommand) -> Void, currentMode: @escaping () -> FlashMode) {
     mappingDispatch = dispatch
     self.currentMode = currentMode
   }

@@ -79,14 +79,12 @@ final class NormalModeTests: XCTestCase {
       NormalModeDispatcher.scrollKeyEvents(for: .bottom)[0].flags.contains(.maskCommand))
   }
 
-  func testTopBottomAndFrameSequences() {
+  func testTopBottomAndNavigationSequences() {
     XCTAssertEqual(transition(chars: "g").pending, "g")
     XCTAssertEqual(command(pending: "g", chars: "g"), .scroll(.top))
     XCTAssertEqual(command(chars: "G", ignoring: "g", flags: [.shift]), .scroll(.bottom))
     XCTAssertEqual(command(pending: "[", chars: "h"), .historyBack)
     XCTAssertEqual(command(pending: "]", chars: "h"), .historyForward)
-    XCTAssertEqual(command(pending: "g", chars: "f"), .nextFrame)
-    XCTAssertEqual(command(pending: "g", chars: "F", ignoring: "f", flags: [.shift]), .mainFrame)
     XCTAssertEqual(command(pending: "]", chars: "t"), .tabNext)
     XCTAssertEqual(command(pending: "[", chars: "t"), .tabPrev)
     XCTAssertEqual(command(pending: "[", chars: "a"), .appPrev)
@@ -558,7 +556,9 @@ final class NormalModeTests: XCTestCase {
     let region = MouseGrid.preparedRegion(
       MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 1440, height: 900)),
       alphabet: alphabet)
-    XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 4, rows: 3))
+    // Odd-axis bias: 3x3 (centre cell on each axis) beats 4x3 even
+    // when both fit under the precision-floor caps.
+    XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 3, rows: 3))
     let first = MouseGrid.hints(in: region, depth: 0, alphabet: alphabet)
     XCTAssertEqual(first.count, region.grid?.cellCount)
     let secondRegion = MouseGrid.Region(frame: first[0].target.frame, grid: region.grid)
@@ -971,7 +971,7 @@ final class NormalModeTests: XCTestCase {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
       "gg", "G", "[h", "]h", "f", "rf", "df", "mf", "F", "rF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "R", "t", "MAPPINGS",
-      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "gf", "gF", "[t", "]t", "[a", "]a", "g1", "g9", "N{mapping}",
+      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a", "]a", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <query>", ":flashlight <query>", "flash://mouse_target",
@@ -1081,7 +1081,7 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testConfiguredShellMappingsProduceActions() {
-    let action = MappingAction.shellCommand(["sh", "~/bin/toggle-colors"])
+    let action = MappingCommand.shellCommand(["sh", "~/bin/toggle-colors"])
     let mappings = [
       ModeMapping(key: "zz", action: action)
     ]
@@ -1104,7 +1104,7 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testBackslashLeaderShellMappingProducesAction() {
-    let action = MappingAction.shellCommand(["sh", "/tmp/toggle"])
+    let action = MappingCommand.shellCommand(["sh", "/tmp/toggle"])
     let mappings = [
       ModeMapping(key: "\\c", action: action),
       ModeMapping(key: "\\space", action: .flashCommand(.flashlight)),
