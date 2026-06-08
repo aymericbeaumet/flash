@@ -739,7 +739,33 @@ def perform_source_action(tmux_path, name, params):
     return {"did_perform": bool(ok), "target_pid": int(pid)}
 
 
-def resolve_candidate(tmux_path, candidate):
+def resolve_candidate_tty(tmux_path, target_session, stale_tty):
+    """Pick the best tty to drive `switch-client` for `target_session`.
+
+    Strategy:
+      1. Re-list clients (the stale tty captured at discovery time may
+         be gone — clients reconnect to fresh ttys after a terminal
+         close/reopen).
+      2. Prefer a client already attached to `target_session` — its
+         terminal window is the one the user will see, so the switch
+         lands where they expect.
+      3. Otherwise the most recently active client wins (tmux's own
+         "this is the user's likely focus" signal).
+      4. Last resort: the stale tty captured at discovery, on the off
+         chance tmux re-bound it.
+    """
+    clients = list_clients(tmux_path)
+    if clients:
+        same_session = [c for c in clients if c["session"] == target_session]
+        if same_session:
+            same_session.sort(key=lambda c: c["activity"], reverse=True)
+            return same_session[0]["tty"]
+        clients_sorted = sorted(clients, key=lambda c: c["activity"], reverse=True)
+        return clients_sorted[0]["tty"]
+    return stale_tty
+
+
+def resolve_candidate(plugin, tmux_path, candidate):
     raw_payload = candidate.get("payload")
     payload = {}
     if isinstance(raw_payload, str):
@@ -751,15 +777,47 @@ def resolve_candidate(tmux_path, candidate):
     elif isinstance(raw_payload, dict):
         payload = raw_payload
     target = payload.get("tmux_target")
-    tty = payload.get("tmux_client_tty") or ""
     if not target:
+        plugin.log("warn", "[tmux] resolve missing tmux_target", {"candidate": str(candidate.get("name"))})
         return {"did_resolve": False}
+    target_session = target.split(":", 1)[0] if ":" in target else target
+    stale_tty = payload.get("tmux_client_tty") or ""
+    tty = resolve_candidate_tty(tmux_path, target_session, stale_tty)
+
     args = ["switch-client"]
     if tty:
         args.extend(["-c", tty])
     args.extend(["-t", target])
-    ok = run_tmux(tmux_path, args) is not None
-    return {"did_resolve": bool(ok)}
+    if run_tmux(tmux_path, args) is not None:
+        return _resolve_with_window_hint(payload, target_session)
+
+    # The captured tty / re-listed client may both be stale — fall back
+    # to `switch-client` without `-c`, which tmux applies to its "best
+    # guess" client. Better than silently doing nothing.
+    fallback_args = ["switch-client", "-t", target]
+    if run_tmux(tmux_path, fallback_args) is not None:
+        plugin.log("info", "[tmux] resolve via fallback switch-client", {"target": target})
+        return _resolve_with_window_hint(payload, target_session)
+
+    plugin.log(
+        "warn",
+        "[tmux] resolve failed",
+        {"target": target, "tty": tty, "client_count": str(len(list_clients(tmux_path)))},
+    )
+    return {"did_resolve": False}
+
+
+def _resolve_with_window_hint(payload, target_session):
+    """Include the target session in the response so the resident app
+    can raise the right AX window of a multi-window terminal app
+    (Alacritty, iTerm, Kitty in single-process mode). Without this,
+    `switch-client` succeeds at the tmux layer but the user is still
+    looking at a different terminal window."""
+    terminal_pid = payload.get("terminal_pid")
+    response = {"did_resolve": True, "target_window_title_contains": target_session}
+    if terminal_pid is not None:
+        response["target_pid"] = int(terminal_pid)
+    return response
 
 
 # ---- Plugin glue ------------------------------------------------------------
@@ -837,7 +895,7 @@ def main():
         return perform_source_action(tmux_path, name, params)
 
     def on_resolve(_plugin, candidate):
-        return resolve_candidate(tmux_path, candidate)
+        return resolve_candidate(plugin, tmux_path, candidate)
 
     def on_activate(_plugin, target_id, action):
         entry = plugin.target_actions.get(target_id)

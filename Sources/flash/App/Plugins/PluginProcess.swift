@@ -238,9 +238,46 @@ final class PluginProcess {
     sendRequest(method: "resolveCandidate", params: params) { response in
       let didResolve = response?["did_resolve"] as? Bool ?? false
       let pid = response?["target_pid"] as? Int
+      let windowHint = response?["target_window_title_contains"] as? String
       DispatchQueue.main.async {
+        if didResolve, let pid, let hint = windowHint, !hint.isEmpty {
+          // Multi-window terminals (Alacritty, iTerm, Kitty in
+          // single-process mode) all share one pid across windows, so
+          // `RunningApplication.activate` raises *some* window — not
+          // the one hosting the tmux client we just switched. The
+          // plugin hints which one by sending a title substring; we
+          // find the AX window whose title contains that substring and
+          // raise it explicitly.
+          PluginProcess.raiseWindow(pid: pid_t(pid), titleContains: hint)
+        }
         completion(didResolve ? .resolved(pid: pid.map(pid_t.init)) : .unresolved)
       }
+    }
+  }
+
+  static func raiseWindow(pid: pid_t, titleContains needle: String) {
+    let app = AXUIElementCreateApplication(pid)
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &raw) == .success,
+      let windows = raw as? [AXUIElement]
+    else { return }
+    let lowerNeedle = needle.lowercased()
+    for window in windows {
+      var titleRaw: CFTypeRef?
+      guard
+        AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRaw) == .success,
+        let title = titleRaw as? String,
+        title.lowercased().contains(lowerNeedle)
+      else { continue }
+      // `AXRaise` action when available, otherwise the same effect via
+      // setting `kAXMainAttribute = true` on the window — older Cocoa
+      // apps don't implement the action.
+      if AXUIElementPerformAction(window, kAXRaiseAction as CFString) != .success {
+        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+      }
+      AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, window)
+      return
     }
   }
 

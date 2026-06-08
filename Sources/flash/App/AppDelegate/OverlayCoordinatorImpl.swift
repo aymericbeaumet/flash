@@ -544,8 +544,12 @@ extension AppDelegate {
         self.normalModeTargetPID = pid
         self.suppressEditableFocus(for: pid)
       } else if !result.didResolve {
-        FlashLog.debug(
-          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) name=\(candidate.name)")
+        // Bumped to `warn` because a silent failure here is exactly the
+        // "I picked the tmux window and nothing happened" case — the
+        // log line is the only breadcrumb the user can correlate with
+        // the plugin's own log inside `~/Library/Logs/Flash/flash.log`.
+        FlashLog.warn(
+          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) name=\(candidate.name) display=\(candidate.displayTitle)")
       }
       self.refreshCurrentModeSideEffects(reason: "source_resolved")
       self.scheduleNormalModeRecapture()
