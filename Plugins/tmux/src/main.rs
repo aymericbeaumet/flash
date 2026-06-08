@@ -918,31 +918,14 @@ async fn tab_new(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
 }
 
 async fn tab_close(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
-    let Some(current) = trimmed(
-        run_tmux_default(
-            tmux_path,
-            &[
-                "display-message",
-                "-c",
-                &client.tty,
-                "-p",
-                "#{window_index}",
-            ],
-        )
-        .await,
-    ) else {
-        return false;
-    };
-    run_tmux_default(
-        tmux_path,
-        &[
-            "kill-window",
-            "-t",
-            &format!("{}:{}", client.session, current),
-        ],
-    )
-    .await
-    .is_some()
+    // Target the session directly: tmux resolves a bare session name to its
+    // active window, which is exactly the window every client attached to that
+    // session is viewing. This avoids a fragile `display-message -c <tty>`
+    // round-trip (the previous approach), whose failure made the host fall
+    // back to ⌘W and quit the whole terminal app instead of closing the window.
+    run_tmux_default(tmux_path, &["kill-window", "-t", &client.session])
+        .await
+        .is_some()
 }
 
 async fn perform_source_action(plugin: &Tmux, params: &Value) -> Value {
