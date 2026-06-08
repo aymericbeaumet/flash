@@ -199,8 +199,9 @@ enum HelpDocs {
       - `flash://flashlight` URL.
       - `<leader><space>` in normal mode (default mapping).
       - `:flashlight <query>` in command-line mode.
-      - `:open <query>` is the same finder scoped to candidates that
-        represent an openable app/window.
+
+      `:open <args>` is unrelated: it forwards verbatim to `/usr/bin/open`
+      (URLs, files, `-a App`) with no finder smarts.
 
       ## Ranking
 

@@ -558,7 +558,7 @@ extension AppDelegate {
         self?.enterInsertMode(reason: .normalModeInput)
       }
     case .candidateFinder(let all):
-      enterCommandLineMode(initialText: "open ", candidateFinderScope: all ? .all : .running)
+      enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
     case .flashlight:
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: .all)
     case .emojiPicker:
@@ -1056,6 +1056,14 @@ extension AppDelegate {
   }
 
   func submitCommandLine(_ raw: String) {
+    // `:open <args>` is a dumb forward to `/usr/bin/open` — no app-finding
+    // smarts (that lives in `:flashlight`). Caught first so it never falls
+    // into the candidate-finder or command-spec paths.
+    if let argv = NormalModeDispatcher.commandLineOpenForward(raw) {
+      finishCommandLineInteraction(reason: "open_forward")
+      NormalModeDispatcher.runOpen(argv)
+      return
+    }
     if NormalModeDispatcher.commandLineCandidateQuery(raw) != nil {
       submitSelectedCommandLineApp()
       return

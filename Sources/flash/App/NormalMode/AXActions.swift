@@ -46,6 +46,17 @@ extension NormalModeDispatcher {
     pb.setString(value, forType: .string)
   }
 
+  /// Forward argv to `/usr/bin/open` verbatim. Deliberately dumb: whatever
+  /// the user typed after `:open` is handed straight to the system opener
+  /// (URLs, files, `-a App`, …). All app-finding smartness lives in
+  /// `:flashlight`.
+  static func runOpen(_ args: [String]) {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    proc.arguments = args
+    try? proc.run()
+  }
+
   static func documentURL(pid: pid_t) -> String? {
     let app = AXUIElementCreateApplication(pid)
     var focusedRaw: CFTypeRef?

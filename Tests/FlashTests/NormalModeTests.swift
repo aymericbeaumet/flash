@@ -609,16 +609,22 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.pluginCommandLineInvocation(":"))
   }
 
-  func testCommandLineOpenAppQuery() {
-    XCTAssertNil(NormalModeDispatcher.commandLineOpenAppQuery("open"))
-    XCTAssertEqual(NormalModeDispatcher.commandLineOpenAppQuery("open "), "")
-    XCTAssertEqual(NormalModeDispatcher.commandLineOpenAppQuery(":open firefox"), "firefox")
+  func testCommandLineOpenForward() {
+    // Bare `:open` (with or without trailing whitespace) forwards no args.
+    XCTAssertEqual(NormalModeDispatcher.commandLineOpenForward("open"), [])
+    XCTAssertEqual(NormalModeDispatcher.commandLineOpenForward("open "), [])
+    // Args are split on whitespace and forwarded verbatim to `open`.
     XCTAssertEqual(
-      NormalModeDispatcher.commandLineOpenAppQuery(":open tmux agentic"),
-      "tmux agentic")
-    XCTAssertEqual(NormalModeDispatcher.commandLineOpenAppQuery("  OPEN   Firefox  "), "Firefox")
-    XCTAssertNil(NormalModeDispatcher.commandLineOpenAppQuery("opening firefox"))
-    XCTAssertNil(NormalModeDispatcher.commandLineOpenAppQuery("edit firefox"))
+      NormalModeDispatcher.commandLineOpenForward(":open https://example.com"),
+      ["https://example.com"])
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineOpenForward(":open -a Firefox file.txt"),
+      ["-a", "Firefox", "file.txt"])
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineOpenForward("  OPEN   Firefox  "), ["Firefox"])
+    // Non-`open` lines are not forwarded.
+    XCTAssertNil(NormalModeDispatcher.commandLineOpenForward("opening firefox"))
+    XCTAssertNil(NormalModeDispatcher.commandLineOpenForward("edit firefox"))
   }
 
   func testCommandLineCompletionsTopLevelEmptyBody() throws {
@@ -632,13 +638,13 @@ final class NormalModeTests: XCTestCase {
     let labels = context.items.map(\.label)
     XCTAssertTrue(labels.contains("quit"))
     XCTAssertTrue(labels.contains("write"))
-    XCTAssertTrue(labels.contains("open"))
+    XCTAssertTrue(labels.contains("open"), "`:open` (dumb forward to /usr/bin/open)")
+    XCTAssertTrue(labels.contains("edit"), "`:e[dit]` (Cmd+O document open) is its own command")
     XCTAssertTrue(labels.contains("help"))
     XCTAssertTrue(labels.contains("flashlight"))
     XCTAssertTrue(labels.contains("spotify"))
     XCTAssertTrue(labels.contains("github"))
     XCTAssertFalse(labels.contains { $0.hasPrefix("%") })
-    XCTAssertFalse(labels.contains("edit"), "alias should not appear when `open` is primary")
     XCTAssertFalse(labels.contains("tabedit"), "alias of tabnew should not appear")
     XCTAssertFalse(labels.contains("tabe"), "short alias of tabnew should not appear")
     XCTAssertFalse(labels.contains("grep"), "alias of find should not appear")
@@ -734,7 +740,9 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testCommandLineCandidateQueryAcceptsFlashlight() {
-    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":open firefox"), "firefox")
+    // `:open` is a dumb forward, not a candidate finder — it must not feed
+    // the candidate query path.
+    XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":open firefox"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight"), "")
     XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight gmail.com"), "gmail.com")
     XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery("  FLASHLIGHT   Slack  "), "Slack")
@@ -966,7 +974,7 @@ final class NormalModeTests: XCTestCase {
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a", "]a", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
-      ":open <query>", ":flashlight <query>", "flash://mouse_target",
+      ":open <args>", ":flashlight <query>", "flash://mouse_target",
       "flash://flashlight", "flash://mouse_target?right=1",
       "flash://mouse_target?double=1", "flash://mouse_grid", "flash://history_back", "flash://history_forward",
       "flash://app_previous", "flash://app_next",

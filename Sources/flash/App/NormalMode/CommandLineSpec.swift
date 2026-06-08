@@ -74,14 +74,28 @@ extension NormalModeDispatcher {
     }
   }
 
-  static func commandLineOpenAppQuery(_ raw: String) -> String? {
-    commandLineQuery(raw, name: "open", acceptsBareCommand: false)
+  /// argv for `:open <args>` — the rest of the line split on whitespace,
+  /// forwarded verbatim to `/usr/bin/open`. Returns nil when the line is
+  /// not an `:open` invocation. Bare `:open` (no args) returns `[]`.
+  static func commandLineOpenForward(_ raw: String) -> [String]? {
+    var body = raw.trimmingCharacters(in: .newlines)
+    body.removeLeadingWhitespace()
+    if body.hasPrefix(":") {
+      body.removeFirst()
+      body.removeLeadingWhitespace()
+    }
+    let name = "open"
+    if body.lowercased() == name {
+      return []
+    }
+    guard body.count > name.count else { return nil }
+    let nameEnd = body.index(body.startIndex, offsetBy: name.count)
+    guard body[..<nameEnd].lowercased() == name, body[nameEnd].isWhitespace else { return nil }
+    let rest = String(body[body.index(after: nameEnd)...])
+    return rest.split(whereSeparator: { $0.isWhitespace }).map(String.init)
   }
 
   static func commandLineCandidateQuery(_ raw: String) -> String? {
-    if let query = commandLineOpenAppQuery(raw) {
-      return query
-    }
     if let query = commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true) {
       return query
     }
@@ -205,7 +219,7 @@ extension NormalModeDispatcher {
       .saveAndQuit(force: $0)
     },
     CommandLineSpec(names: ["p[rint]"], bangPolicy: .rejected) { _ in .print },
-    CommandLineSpec(names: ["open", "e[dit]"], bangPolicy: .rejected) { _ in .open },
+    CommandLineSpec(names: ["e[dit]"], bangPolicy: .rejected) { _ in .open },
     CommandLineSpec(names: ["new"], bangPolicy: .rejected) { _ in .newWindow },
     CommandLineSpec(names: ["tabnew", "tabedit", "tabe"], bangPolicy: .rejected) {
       _ in .newTab
@@ -296,7 +310,7 @@ extension NormalModeDispatcher {
   }
 
   private static let acceptsArgsCompletionNames: Set<String> = [
-    "open", "flashlight", "emojis", "help", "plugins",
+    "flashlight", "emojis", "help", "plugins",
   ]
 
   /// Built-in subcommands surfaced by `:plugins <tab>`. Kept in lockstep
@@ -321,7 +335,7 @@ extension NormalModeDispatcher {
       let insertion = kind == .acceptsArgs ? "\(full) " : full
       items.append(CommandLineCompletion(label: full, insertion: insertion, kind: kind))
     }
-    for extra in ["help", "flashlight", "emojis"] where seen.insert(extra).inserted {
+    for extra in ["open", "help", "flashlight", "emojis"] where seen.insert(extra).inserted {
       items.append(
         CommandLineCompletion(label: extra, insertion: "\(extra) ", kind: .acceptsArgs))
     }

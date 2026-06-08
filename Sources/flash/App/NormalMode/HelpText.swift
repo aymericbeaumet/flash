@@ -58,8 +58,8 @@ extension NormalModeDispatcher {
 
         `:` opens command-line mode. Use `:help` for the topic index,
         `:help plugins` for plugin docs, and `:mappings` for the resolved
-        mapping table. `:open <query>` and `:flashlight <query>` search source
-        candidates.
+        mapping table. `:flashlight <query>` searches source candidates;
+        `:open <args>` forwards verbatim to `open` (URLs, files, `-a App`).
 
         ## Active Mappings
 
@@ -182,7 +182,7 @@ extension NormalModeDispatcher {
   private static var commandLineHelpLines: [String] {
     var lines = commandLineSpecs.map { $0.helpLine }
     lines.append(":help [topic]")
-    lines.append(":open <query>")
+    lines.append(":open <args>")
     lines.append(":flashlight <query>")
     lines.append(":plugins list / :plugins ls / :plugins reload")
     return lines
