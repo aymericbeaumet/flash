@@ -148,8 +148,7 @@ final class ApplicationSource: FlashSource {
       name: name,
       subtitle: "app",
       bundleIdentifier: app.bundleIdentifier ?? "",
-      url: app.bundleURL,
-      targetElement: nil)
+      url: app.bundleURL)
   }
 
   private func resolveURL(
@@ -257,8 +256,7 @@ final class ApplicationSource: FlashSource {
       name: name.isEmpty ? url.deletingPathExtension().lastPathComponent : name,
       subtitle: "app",
       bundleIdentifier: bundle?.bundleIdentifier ?? "",
-      url: url,
-      targetElement: nil)
+      url: url)
   }
 }
 

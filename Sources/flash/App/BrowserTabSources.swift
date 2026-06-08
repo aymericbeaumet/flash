@@ -80,7 +80,6 @@ enum BrowserTabSources {
     app: NSRunningApplication,
     title: String,
     url: String?,
-    targetElement: AXUIElement? = nil,
     sourcePayload: String? = nil
   ) -> Candidate? {
     let name = browserTabName(title: title, url: url)
@@ -94,7 +93,6 @@ enum BrowserTabSources {
       subtitle: "browser tab",
       bundleIdentifier: app.bundleIdentifier ?? "",
       url: url.flatMap(URL.init(string:)),
-      targetElement: targetElement,
       sourcePayload: sourcePayload)
   }
 
@@ -221,7 +219,6 @@ enum BrowserTabSources {
             app: app,
             title: title,
             url: url,
-            targetElement: tab,
             sourcePayload: url)
           {
             out.append(item)

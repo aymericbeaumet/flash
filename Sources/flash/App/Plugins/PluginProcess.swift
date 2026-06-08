@@ -924,7 +924,6 @@ final class PluginProcess {
       subtitle: raw["subtitle"] as? String ?? "",
       bundleIdentifier: raw["bundle_id"] as? String ?? "",
       url: url,
-      targetElement: nil,
       sourcePayload: raw["payload"].flatMap(Self.payloadString))
   }
 

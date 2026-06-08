@@ -823,8 +823,7 @@ final class NormalModeTests: XCTestCase {
         name: "#schedule",
         subtitle: "Slack channel",
         bundleIdentifier: "com.tinyspeck.slackmacgap",
-        url: nil,
-        targetElement: nil))
+        url: nil))
 
     XCTAssertEqual(candidate.normalizedSearchText, "slack #schedule")
     XCTAssertNotNil(
@@ -922,8 +921,7 @@ final class NormalModeTests: XCTestCase {
           url: "https://mail.google.com/mail/u/0/#inbox"),
         subtitle: "browser tab",
         bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/mail/u/0/#inbox"),
-        targetElement: nil))
+        url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
 
     XCTAssertEqual(prepared.displayTitle, "[firefox] Gmail (https://mail.google.com/mail/u/0/#inbox)")
     XCTAssertEqual(prepared.source, "firefox")
@@ -945,8 +943,7 @@ final class NormalModeTests: XCTestCase {
         name: "beside:1 beside-agentic",
         subtitle: "tmux window",
         bundleIdentifier: "",
-        url: nil,
-        targetElement: nil))
+        url: nil))
 
     XCTAssertEqual(prepared.displayTitle, "[tmux] beside:1 beside-agentic")
     XCTAssertNotNil(
@@ -1256,7 +1253,6 @@ final class NormalModeTests: XCTestCase {
       name: name,
       subtitle: "app",
       bundleIdentifier: bundleIdentifier,
-      url: URL(fileURLWithPath: path),
-      targetElement: nil)
+      url: URL(fileURLWithPath: path))
   }
 }

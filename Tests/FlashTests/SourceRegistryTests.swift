@@ -63,8 +63,7 @@ final class SourceRegistryTests: XCTestCase {
                 name: "\(scope)",
                 subtitle: "source",
                 bundleIdentifier: "",
-                url: nil,
-                targetElement: nil)
+                url: nil)
             ]
           }
         },
@@ -108,8 +107,7 @@ final class SourceRegistryTests: XCTestCase {
                 name: "Dynamic",
                 subtitle: "source",
                 bundleIdentifier: bundleID,
-                url: nil,
-                targetElement: nil)
+                url: nil)
             ]
           }
         }

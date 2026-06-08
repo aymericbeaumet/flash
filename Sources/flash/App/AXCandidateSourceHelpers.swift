@@ -1,6 +1,4 @@
-import AppKit
 import ApplicationServices
-import FlashCore
 import Foundation
 
 enum AXCandidateSourceHelpers {
@@ -29,24 +27,5 @@ enum AXCandidateSourceHelpers {
       let values = raw as? [AXUIElement]
     else { return [] }
     return values
-  }
-
-  static func resolveAXItem(
-    _ item: Candidate,
-    completion: @escaping (CandidateResolution) -> Void
-  ) {
-    if let pid = item.pid,
-      let app = NSRunningApplication(processIdentifier: pid)
-    {
-      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
-    }
-    if let element = item.targetElement {
-      if AXUIElementPerformAction(element, kAXPressAction as CFString) != .success {
-        _ = AXUIElementSetAttributeValue(element, kAXSelectedAttribute as CFString, kCFBooleanTrue)
-      }
-    }
-    DispatchQueue.main.async {
-      completion(.resolved(pid: item.pid))
-    }
   }
 }

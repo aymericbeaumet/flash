@@ -400,8 +400,7 @@ final class SourceCandidateTests: XCTestCase {
       name: name,
       subtitle: subtitle,
       bundleIdentifier: bundleIdentifier,
-      url: url,
-      targetElement: nil)
+      url: url)
   }
 }
 

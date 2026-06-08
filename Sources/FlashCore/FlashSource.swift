@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 
 public enum FlashSourceReadinessPolicy: Sendable {
   /// Safe to keep prepared from AX/workspace invalidation while the app
@@ -73,7 +72,6 @@ public struct Candidate: @unchecked Sendable {
   /// absolute file URL to the .app bundle; browser tabs and other external
   /// resources should use their canonical URL.
   public var url: URL?
-  public var targetElement: AXUIElement?
   public var sourcePayload: String?
   public var displayTitle: String
   public var normalizedSearchText: String
@@ -99,7 +97,6 @@ public struct Candidate: @unchecked Sendable {
     subtitle: String,
     bundleIdentifier: String,
     url: URL?,
-    targetElement: AXUIElement?,
     sourcePayload: String? = nil,
     displayTitle: String = "",
     normalizedSearchText: String = "",
@@ -114,7 +111,6 @@ public struct Candidate: @unchecked Sendable {
     self.subtitle = subtitle
     self.bundleIdentifier = bundleIdentifier
     self.url = url
-    self.targetElement = targetElement
     self.sourcePayload = sourcePayload
     self.displayTitle = displayTitle
     self.normalizedSearchText = normalizedSearchText
