@@ -24,11 +24,17 @@ min_length = 1
 # Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
-# Selection steps for flash://mouse_grid. The final step's grid is sized to
-# the precision target (~18pt cells, aspect-matched to the screen so vertical
-# monitors get a tall grid); earlier steps share the same shape so each
-# selection zooms in geometrically. Valid range: 2–6.
+# Selection steps for flash://mouse_grid. The grid is always a square
+# NxN with N the largest odd integer such that N*N <= alphabet length
+# (so a 25-letter alphabet lands on 5x5). Each selection zooms into a
+# cell and re-tiles it with the same grid. Larger step counts give
+# finer precision at the cost of more keystrokes. Valid range: 2–6.
 mouse_grid_steps = 3
+
+# Opacity (0.0..1.0) applied to every mouse-grid chip. 1.0 = fully
+# opaque, 0.0 = invisible. The grid fills the screen during a precision
+# click, so a slight translucency keeps the underlying app visible.
+mouse_grid_opacity = 0.85
 
 [open]
 # App candidates hidden from :open and flash://app_open?name=...

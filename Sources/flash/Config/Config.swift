@@ -62,12 +62,15 @@ struct Config {
     var keys: String = Alphabet.defaultKeys
     var minLength: Int = 1
     var magicModifiers: [String] = ["cmd", "ctrl", "alt", "shift"]
-    /// Number of selection steps for `flash://mouse_grid`. The final
-    /// step is sized to the precision target (≈ `MouseGrid.finalMinimumCell`);
-    /// earlier steps zoom out by the same grid shape, raised to the
-    /// step's power. Larger values give finer precision but require more
-    /// keystrokes per click.
+    /// Number of selection steps for `flash://mouse_grid`. Larger values
+    /// give finer precision but require more keystrokes per click.
     var mouseGridSteps: Int = 3
+    /// Opacity (0.0..1.0) applied to every mouse-grid chip so the user
+    /// can still see what's underneath the precision overlay. 1.0 is
+    /// fully opaque, 0.0 invisible. Default 0.85 — solid enough that
+    /// the gradient + label read clearly, transparent enough that the
+    /// underlying window peeks through.
+    var mouseGridOpacity: Double = 0.85
   }
   struct Overlay {
     var fontSize: Double = 12
@@ -372,6 +375,7 @@ struct Config {
         "keys": hints.keys,
         "magic_modifiers": hints.magicModifiers,
         "min_length": hints.minLength,
+        "mouse_grid_opacity": hints.mouseGridOpacity,
         "mouse_grid_steps": hints.mouseGridSteps,
       ],
       "mode": modeJSON,

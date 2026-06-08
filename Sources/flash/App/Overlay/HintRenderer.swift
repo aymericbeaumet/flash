@@ -130,7 +130,12 @@ extension OverlayPanel {
       // Without this reset, the next activation pulls hidden chips out
       // of the pool and the user sees only the debug outlines.
       chip.isHidden = false
-      chip.opacity = 1
+      // Mouse-grid chips render at a user-configurable opacity so the
+      // user can still see what's under the precision grid. Regular
+      // hint chips stay fully opaque (small chips on top of UI
+      // elements — translucency there just makes the label hard to
+      // read against busy backgrounds).
+      chip.opacity = isMouseGridHint ? mouseGridOpacity : 1
       let label = dequeueLabelLayer()
       label.isHidden = false
       // CATextLayer's own `font` + `fontSize` properties are the

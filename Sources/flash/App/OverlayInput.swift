@@ -74,7 +74,10 @@ extension OverlayPanel {
       return handleOverlayKeyEvent(event, swallowIgnored: true)
     }
 
-    if inputMode == .commandLine { return super.performKeyEquivalent(with: event) }
+    if inputMode == .commandLine {
+      if handleCommandLineEditingShortcut(event) { return true }
+      return super.performKeyEquivalent(with: event)
+    }
     if inputMode == .modal {
       return handleModalKeyEvent(event)
     }
@@ -169,6 +172,40 @@ extension OverlayPanel {
     case .ignore:
       return swallowIgnored
     }
+  }
+
+  /// Handles `⌘a` / `⌘c` / `⌘x` / `⌘v` / `⌘z` / `⌘⇧z` while the
+  /// command-line is up. AppKit normally wires these via the Edit menu
+  /// (which translates the key equivalent into the matching action and
+  /// invokes it on the responder chain), but Flash is `LSUIElement` and
+  /// ships no main menu — there's nothing to do the translation, and
+  /// the field editor's standard implementations never get a chance to
+  /// run. We do the translation here for the small set of edit
+  /// shortcuts everyone expects from a single-line text input.
+  private func handleCommandLineEditingShortcut(_ event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    guard modifiers.contains(.command),
+      let char = event.charactersIgnoringModifiers?.lowercased().first,
+      let editor = commandTextField.currentEditor() as? NSTextView
+    else { return false }
+    let isShift = modifiers.contains(.shift)
+    switch char {
+    case "a" where !isShift:
+      editor.selectAll(nil)
+    case "c" where !isShift:
+      editor.copy(nil)
+    case "x" where !isShift:
+      editor.cut(nil)
+    case "v" where !isShift:
+      editor.paste(nil)
+    case "z" where !isShift:
+      editor.undoManager?.undo()
+    case "z" where isShift:
+      editor.undoManager?.redo()
+    default:
+      return false
+    }
+    return true
   }
 
   @discardableResult

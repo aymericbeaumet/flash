@@ -378,6 +378,15 @@ enum ConfigLoader {
           "hints.mouse_grid_steps must be an integer between 2 and 6",
           location: location)
       }
+    case ["hints", "mouse_grid_opacity"]:
+      if let parsed = parseDouble(value), parsed >= 0.0, parsed <= 1.0 {
+        config.hints.mouseGridOpacity = parsed
+        config.recordLocation(path: "hints.mouse_grid_opacity", location: location)
+      } else {
+        config.addDiagnostic(
+          "hints.mouse_grid_opacity must be a number between 0.0 and 1.0",
+          location: location)
+      }
 
     case ["open", "ignored_apps"]:
       if let parsed = parseStringArray(value) {

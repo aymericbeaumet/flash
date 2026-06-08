@@ -233,6 +233,7 @@ Keys:
 | `hints.min_length`                 | int            | `1`                  |
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
 | `hints.mouse_grid_steps`           | int (2..6)     | `3`                  |
+| `hints.mouse_grid_opacity`         | float (0..1)   | `0.85`               |
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
