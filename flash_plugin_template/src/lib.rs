@@ -110,6 +110,31 @@ impl Context {
         self.data_dir.join("bin")
     }
 
+    /// Run an AppleScript snippet via `osascript -e`. Convenience over
+    /// [`run_cli`](Context::run_cli) for the many plugins that shell out to
+    /// macOS apps.
+    pub async fn run_osascript(&self, script: &str, timeout: Duration) -> CliResult {
+        self.run_cli(
+            &[
+                "/usr/bin/osascript".to_string(),
+                "-e".to_string(),
+                script.to_string(),
+            ],
+            timeout,
+        )
+        .await
+    }
+
+    /// Emit a `snapshot.updated` notification carrying `candidates` (and no
+    /// jump targets) for `source_id`. Wraps the boilerplate every
+    /// candidate-emitting plugin repeats.
+    pub fn emit_snapshot(&self, source_id: &str, candidates: Vec<Value>) {
+        self.emit.notify(
+            "snapshot.updated",
+            json!({ "targets": [], "candidates": candidates, "source_id": source_id }),
+        );
+    }
+
     pub fn log(&self, level: &str, message: &str) {
         self.emit.log(level, message, BTreeMap::new());
     }
@@ -223,7 +248,27 @@ pub fn string_list(value: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn shorten(value: &str) -> String {
+/// Quote a string as an AppleScript literal, escaping backslashes and double
+/// quotes. Use for any value interpolated into an `osascript` snippet.
+pub fn applescript_quote(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// Parse a candidate's `payload` field, which conventionally carries either a
+/// stringified JSON object or an inline object. Returns `{}` when absent or
+/// unparseable.
+pub fn parse_payload(candidate: &Value) -> Value {
+    match candidate.get("payload") {
+        Some(Value::String(raw)) => serde_json::from_str(raw).unwrap_or_else(|_| json!({})),
+        Some(value @ Value::Object(_)) => value.clone(),
+        _ => json!({}),
+    }
+}
+
+/// Truncate a string to a fixed character budget, appending an ellipsis when
+/// it overflows. Used to keep logged/forwarded output bounded.
+pub fn shorten(value: &str) -> String {
     const LIMIT: usize = 2000;
     let trimmed = value.trim();
     if trimmed.chars().count() <= LIMIT {

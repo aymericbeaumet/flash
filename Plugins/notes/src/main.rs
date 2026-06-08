@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, str_field, Context, Plugin};
+use flash_plugin::{applescript_quote, parse_payload, run, str_field, Context, Plugin};
 
 const SOURCE_ID: &str = "plugin.notes";
 
@@ -35,11 +35,6 @@ end tell
     )
 }
 
-fn applescript_quote(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
-}
-
 struct Notes;
 
 impl Plugin for Notes {
@@ -66,12 +61,9 @@ impl Plugin for Notes {
 }
 
 async fn emit_candidates(ctx: &Context) {
-    let argv = vec![
-        "/usr/bin/osascript".to_string(),
-        "-e".to_string(),
-        LIST_SCRIPT.to_string(),
-    ];
-    let result = ctx.run_cli(&argv, Duration::from_secs(30)).await;
+    let result = ctx
+        .run_osascript(LIST_SCRIPT, Duration::from_secs(30))
+        .await;
     if !result.ok {
         ctx.log("warn", &format!("[notes] list failed: {}", result.stderr));
         return;
@@ -97,10 +89,7 @@ async fn emit_candidates(ctx: &Context) {
             "payload": json!({ "id": note_id, "title": title }).to_string(),
         }));
     }
-    ctx.emit.notify(
-        "snapshot.updated",
-        json!({ "targets": [], "candidates": candidates, "source_id": SOURCE_ID }),
-    );
+    ctx.emit_snapshot(SOURCE_ID, candidates);
 }
 
 async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
@@ -113,12 +102,9 @@ async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
     if note_id.is_empty() {
         return json!({ "did_resolve": false });
     }
-    let argv = vec![
-        "/usr/bin/osascript".to_string(),
-        "-e".to_string(),
-        select_script(note_id),
-    ];
-    let result = ctx.run_cli(&argv, Duration::from_secs(10)).await;
+    let result = ctx
+        .run_osascript(&select_script(note_id), Duration::from_secs(10))
+        .await;
     json!({ "did_resolve": result.ok })
 }
 
@@ -140,16 +126,6 @@ async fn invoke(ctx: &Context, params: &Value) -> Value {
             json!({ "ok": true, "stdout": "notes refreshed", "stderr": "", "status": 0 })
         }
         other => json!({ "ok": false, "error": format!("unknown subcommand: {other}") }),
-    }
-}
-
-fn parse_payload(candidate: &Value) -> Value {
-    match candidate.get("payload") {
-        Some(Value::String(raw)) => {
-            flash_plugin::serde_json::from_str(raw).unwrap_or_else(|_| json!({}))
-        }
-        Some(value @ Value::Object(_)) => value.clone(),
-        _ => json!({}),
     }
 }
 

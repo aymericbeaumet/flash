@@ -253,7 +253,7 @@ final class PluginProcess {
     subcommand: String,
     args: [String],
     raw: String,
-    completion: ((Bool, pid_t?) -> Void)? = nil
+    completion: ((Bool, pid_t?, String?) -> Void)? = nil
   ) {
     sendRequest(
       method: "command.invoke",
@@ -270,8 +270,11 @@ final class PluginProcess {
       // session it just switched to, so a `:tmux window …` mapping brings
       // that window forward. Optional; most commands omit it.
       let pid = response?["target_pid"] as? Int
+      // A command may also return `stdout` for Flash to surface as a toast
+      // (e.g. the calculator returns "2 + 2 = 4"). Optional.
+      let stdout = (response?["stdout"] as? String).flatMap { $0.isEmpty ? nil : $0 }
       DispatchQueue.main.async {
-        completion?(ok, pid.map(pid_t.init))
+        completion?(ok, pid.map(pid_t.init), stdout)
       }
     }
   }

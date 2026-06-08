@@ -20,6 +20,7 @@ enum CandidateFinder {
 
   static let browserTabKind = CandidateKind.plugin("browser_tab")
   static let emojiKind = CandidateKind.plugin("emoji")
+  static let clipboardKind = CandidateKind.plugin("clipboard")
 
   static func displayTitle(_ candidate: Candidate) -> String {
     guard candidate.kind == browserTabKind else {

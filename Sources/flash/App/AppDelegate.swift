@@ -295,9 +295,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         subcommand: subcommand,
         args: args,
         raw: cmd.diagnosticDescription
-      ) { [weak self] ok, pid in
+      ) { [weak self] ok, pid, stdout in
         guard ok else { return }
         self?.activatePluginCommandTarget(pid)
+        if let stdout { self?.overlay.displayBanner(stdout) }
       }
     case .moveWindow(let params):
       WindowMover.move(params)

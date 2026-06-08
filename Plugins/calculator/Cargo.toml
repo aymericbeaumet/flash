@@ -1,0 +1,30 @@
+[package]
+name = "flash-plugin-calculator"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-calculator"
+path = "src/main.rs"
+
+[dependencies]
+flash-plugin = { path = "../../flash_plugin_template" }
+serde_json = "1"
+meval = "0.2"
+tokio = { version = "1", default-features = false, features = [
+  "rt-multi-thread",
+  "macros",
+  "io-std",
+  "io-util",
+  "process",
+  "time",
+  "sync",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

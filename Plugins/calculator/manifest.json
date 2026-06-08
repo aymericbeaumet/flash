@@ -1,0 +1,11 @@
+{
+  "id": "calculator",
+  "name": "Calculator",
+  "version": "0.1.0",
+  "description": "Evaluate an arithmetic expression: :calc eval <expression>. Result is copied to the clipboard.",
+  "install": "true",
+  "start": "exec ./flash-plugin-calculator",
+  "commands": [
+    { "command": "calc", "subcommand": "eval", "description": "Evaluate an arithmetic expression" }
+  ]
+}

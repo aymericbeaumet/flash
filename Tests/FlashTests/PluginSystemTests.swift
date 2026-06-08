@@ -11,8 +11,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       ids,
       [
-        "contacts", "emojis", "github", "linear", "media", "notes", "notion", "reminders",
-        "slack", "spotify", "tmux",
+        "calculator", "clipboard", "contacts", "emojis", "github", "linear", "media", "notes",
+        "notion", "reminders", "slack", "spotify", "system", "tmux", "web",
       ])
 
     let runCommandRequired: Set<String> = [

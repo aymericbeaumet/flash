@@ -1141,9 +1141,10 @@ extension AppDelegate {
         subcommand: plugin.subcommand,
         args: plugin.args,
         raw: plugin.raw,
-        onResult: { [weak self] ok, pid in
+        onResult: { [weak self] ok, pid, stdout in
           guard ok else { return }
           self?.activatePluginCommandTarget(pid)
+          if let stdout { self?.overlay.displayBanner(stdout) }
         })
     {
       finishCommandLineInteraction(reason: "plugin_command_submit")
@@ -1366,17 +1367,18 @@ extension AppDelegate {
     }
   }
 
-  /// Insert an emoji glyph into the focused app: stash it on the
-  /// pasteboard and synthesize Cmd+V into the app that owned focus when
-  /// `:emojis` was invoked. The overlay never takes key focus, so the
-  /// app's text field is still first responder once we dismiss.
-  func insertEmoji(_ glyph: String) {
+  /// Insert text into the focused app: stash it on the pasteboard and
+  /// synthesize Cmd+V into the app that owned focus when the picker was
+  /// invoked (an emoji glyph, a clipboard-history entry, …). The overlay
+  /// never takes key focus, so the app's text field is still first
+  /// responder once we dismiss.
+  func insertText(_ text: String) {
     let pid = normalModeContext()?.processID
     overlay.hide()
     resetCommandLineState()
     applyModeOverlay(captureOverride: true)
-    guard !glyph.isEmpty, let pid else { return }
-    NormalModeDispatcher.copy(glyph)
+    guard !text.isEmpty, let pid else { return }
+    NormalModeDispatcher.copy(text)
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
       NormalModeDispatcher.sendKey(
         virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand, to: pid)

@@ -1,0 +1,17 @@
+{
+  "id": "web",
+  "name": "Web",
+  "version": "0.1.0",
+  "description": "Open a web search in the default browser: :web <engine> <query>.",
+  "install": "true",
+  "start": "exec ./flash-plugin-web",
+  "commands": [
+    { "command": "web", "subcommand": "google", "description": "Search Google" },
+    { "command": "web", "subcommand": "ddg", "description": "Search DuckDuckGo" },
+    { "command": "web", "subcommand": "gh", "description": "Search GitHub repositories" },
+    { "command": "web", "subcommand": "npm", "description": "Search npm" },
+    { "command": "web", "subcommand": "mdn", "description": "Search MDN" },
+    { "command": "web", "subcommand": "so", "description": "Search Stack Overflow" },
+    { "command": "web", "subcommand": "yt", "description": "Search YouTube" }
+  ]
+}
