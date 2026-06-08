@@ -281,6 +281,18 @@
       "file": "collected-backend-fix-call-history-pagination-dropping-old-001.html",
       "category": "collected-regression",
       "kind": "collected"
+    },
+    {
+      "name": "collected-backend-fix-call-history-pagination-dropping-old-002",
+      "file": "collected-backend-fix-call-history-pagination-dropping-old-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-backend-fix-call-history-pagination-dropping-old-003",
+      "file": "collected-backend-fix-call-history-pagination-dropping-old-003.html",
+      "category": "collected-regression",
+      "kind": "collected"
     }
   ]
 }
