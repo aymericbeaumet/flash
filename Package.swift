@@ -41,6 +41,7 @@ let package = Package(
       name: "flash",
       dependencies: ["FlashCore", "FlashProviders"],
       path: "Sources/flash",
+      resources: [.copy("Resources/inspector.html")],
       swiftSettings: strictSwiftSettings
     ),
     .executableTarget(

@@ -194,8 +194,24 @@ extension AppDelegate {
     }
     let app = NSWorkspace.shared.frontmostApplication
     let focusedPID: Any = app.map { Int($0.processIdentifier) } ?? NSNull()
+    let snapshots = pluginManager.statusSnapshots()
+    var commands = NormalModeDispatcher.coreCommandCatalog()
+    for snapshot in snapshots {
+      for command in snapshot.commands {
+        commands.append([
+          "name": ":\(command.command) \(command.subcommand)",
+          "syntax": ":\(command.command) \(command.subcommand)",
+          "command": command.command,
+          "subcommand": command.subcommand,
+          "description": command.description,
+          "source": snapshot.id,
+          "source_kind": "plugin",
+        ])
+      }
+    }
     return [
       "config": configJSON,
+      "commands": commands,
       "focused_app": [
         "bundle_id": app?.bundleIdentifier ?? NSNull(),
         "localized_name": app?.localizedName ?? NSNull(),
@@ -203,7 +219,7 @@ extension AppDelegate {
       ],
       "mode": "\(flashMode)",
       "overlay": String(describing: overlay?.inputMode),
-      "plugins": pluginManager.stateJSON(),
+      "plugins": snapshots.map(\.jsonObject),
     ]
   }
 

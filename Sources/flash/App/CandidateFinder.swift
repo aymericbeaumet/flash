@@ -43,11 +43,22 @@ enum CandidateFinder {
     let display = displayTitle(candidate)
     prepared.displayTitle = display
     prepared.normalizedSearchText = normalize(searchText(candidate))
+    let normalizedTitle = normalize(candidate.name)
     prepared.normalizedScoringFields = NormalizedScoringFields(
-      title: normalize(candidate.name),
+      title: normalizedTitle,
       sourceTitle: normalize("\(candidate.source) \(candidate.name)"),
       url: normalize(urlSearchText(candidate)),
       displayTitle: normalize(display))
+    // Cheap, locale-free tie-break key. Mirrors the old comparator
+    // chain (name → source → displayTitle → sourceID) but as one plain
+    // string so `sortedMatches` avoids `localizedCaseInsensitiveCompare`
+    // on every tied pair.
+    prepared.sortKey = [
+      normalizedTitle,
+      candidate.source.lowercased(),
+      display.lowercased(),
+      candidate.sourceID.lowercased(),
+    ].joined(separator: "\u{1f}")
     return prepared
   }
 
@@ -145,8 +156,32 @@ enum CandidateFinder {
     }
   }
 
+  /// Decorated record so each candidate's tier / alive / key fields are
+  /// computed once, not on every comparator call. With ~2k tied emojis
+  /// the comparator fires ~20k times; recomputing `source.lowercased()`
+  /// and the fallback display title inside it dominated the cost.
+  private struct SortRecord {
+    var index: Int
+    var score: Int
+    var tier: Int
+    var alive: Bool
+    var key: String
+    var sourceID: String
+  }
+
   static func sortedMatches(_ matches: [CandidateMatch]) -> [CandidateMatch] {
-    matches.sorted { lhs, rhs in
+    let records = matches.enumerated().map { offset, match -> SortRecord in
+      let key = match.candidate.sortKey.isEmpty
+        ? fallbackSortKey(match.candidate) : match.candidate.sortKey
+      return SortRecord(
+        index: offset,
+        score: match.score,
+        tier: sourcePrecedenceTierIndex(for: match.candidate),
+        alive: isAlive(match.candidate),
+        key: key,
+        sourceID: match.candidate.sourceID)
+    }
+    let sorted = records.sorted { lhs, rhs in
       let scoreDelta = lhs.score - rhs.score
       if abs(scoreDelta) >= aliveTieBreakScoreMargin {
         return lhs.score > rhs.score
@@ -159,32 +194,29 @@ enum CandidateFinder {
       // apps > the rest — and it must run *before* the generic
       // alive/dead check, otherwise a live app would leapfrog a tmux
       // window or browser tab (which often carry no pid of their own).
-      let lhsTier = sourcePrecedenceTierIndex(for: lhs.candidate)
-      let rhsTier = sourcePrecedenceTierIndex(for: rhs.candidate)
-      if lhsTier != rhsTier { return lhsTier < rhsTier }
+      if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
 
       // Within a tier, an alive candidate still wins over a dead one.
-      let lhsAlive = isAlive(lhs.candidate)
-      let rhsAlive = isAlive(rhs.candidate)
-      if lhsAlive != rhsAlive { return lhsAlive }
+      if lhs.alive != rhs.alive { return lhs.alive }
 
       if lhs.score != rhs.score { return lhs.score > rhs.score }
 
-      let titleOrder = lhs.candidate.name.localizedCaseInsensitiveCompare(rhs.candidate.name)
-      if titleOrder != .orderedSame { return titleOrder == .orderedAscending }
-
-      let sourceOrder = lhs.candidate.source.localizedCaseInsensitiveCompare(rhs.candidate.source)
-      if sourceOrder != .orderedSame { return sourceOrder == .orderedAscending }
-
-      let lhsDisplay = lhs.candidate.displayTitle.isEmpty
-        ? displayTitle(lhs.candidate) : lhs.candidate.displayTitle
-      let rhsDisplay = rhs.candidate.displayTitle.isEmpty
-        ? displayTitle(rhs.candidate) : rhs.candidate.displayTitle
-      let displayOrder = lhsDisplay.localizedCaseInsensitiveCompare(rhsDisplay)
-      if displayOrder != .orderedSame { return displayOrder == .orderedAscending }
-
-      return lhs.candidate.sourceID < rhs.candidate.sourceID
+      if lhs.key != rhs.key { return lhs.key < rhs.key }
+      return lhs.sourceID < rhs.sourceID
     }
+    return sorted.map { matches[$0.index] }
+  }
+
+  /// Mirrors `Candidate.sortKey` for candidates that skipped `prepare`.
+  private static func fallbackSortKey(_ candidate: Candidate) -> String {
+    let display = candidate.displayTitle.isEmpty
+      ? displayTitle(candidate) : candidate.displayTitle
+    return [
+      candidate.name.lowercased(),
+      candidate.source.lowercased(),
+      display.lowercased(),
+      candidate.sourceID.lowercased(),
+    ].joined(separator: "\u{1f}")
   }
 
   /// Tier index used by `sortedMatches` as a strict tie-break. Lower is

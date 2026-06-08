@@ -30,6 +30,10 @@ final class PluginProcess {
   private var dynamicCommands: [PluginCommandRegistration] = []
   private var lastError: String?
   private var lastLog: String?
+  /// Previous CPU sample (cumulative user+system nanoseconds and the wall
+  /// clock at which it was read) so `statusSnapshot` can derive an
+  /// instantaneous CPU percentage from the delta between two reads.
+  private var lastCPUSample: (totalNs: UInt64, at: Date)?
   /// Mirrors `Config.Plugins.watchingEnabled`. When false, plugin file
   /// watchers are not installed and the plugin only restarts when
   /// content changes propagate via an explicit `:plugins reload`.
@@ -305,13 +309,16 @@ final class PluginProcess {
     let lastError = self.lastError
     let lastLog = self.lastLog
     let commands = dynamicCommands
-    lock.unlock()
     let now = Date()
+    let usage = pid.map { sampleResourceUsageLocked(pid: $0, now: now) }
+    lock.unlock()
     return PluginStatusSnapshot(
       id: manifest.id,
       name: manifest.name,
       version: manifest.version,
+      description: manifest.description,
       origin: origin.label,
+      root: root.path,
       state: state.rawValue,
       pid: pid.map(Int.init),
       uptimeMs: startDate.map { Int(now.timeIntervalSince($0) * 1000) },
@@ -323,7 +330,45 @@ final class PluginProcess {
       snapshotAgeMs: snap.updatedAt.map { Int(now.timeIntervalSince($0) * 1000) },
       restartCount: restartCount,
       lastError: lastError,
-      lastLog: lastLog)
+      lastLog: lastLog,
+      cpuPercent: usage?.cpuPercent ?? nil,
+      memoryBytes: usage?.memoryBytes ?? nil,
+      bundleIDs: manifest.bundleIDs,
+      volatile: manifest.volatile,
+      priority: manifest.priority,
+      commands: commands)
+  }
+
+  /// Read the plugin subprocess's resident memory and CPU time via
+  /// `proc_pid_rusage`, deriving an instantaneous CPU percentage from the
+  /// delta against the previous sample. Mutates `lastCPUSample`, so the
+  /// caller must already hold `lock`. macOS-only by design (the whole
+  /// plugin runtime is).
+  private func sampleResourceUsageLocked(
+    pid: pid_t, now: Date
+  ) -> (cpuPercent: Double?, memoryBytes: Int?) {
+    var info = rusage_info_v4()
+    let rc = withUnsafeMutablePointer(to: &info) { ptr -> Int32 in
+      ptr.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
+        proc_pid_rusage(pid, RUSAGE_INFO_V4, rebound)
+      }
+    }
+    guard rc == 0 else {
+      lastCPUSample = nil
+      return (nil, nil)
+    }
+    let memoryBytes = Int(info.ri_resident_size)
+    let totalNs = info.ri_user_time &+ info.ri_system_time
+    var cpuPercent: Double?
+    if let previous = lastCPUSample {
+      let elapsed = now.timeIntervalSince(previous.at)
+      if elapsed > 0, totalNs >= previous.totalNs {
+        let busyNs = Double(totalNs - previous.totalNs)
+        cpuPercent = (busyNs / (elapsed * 1_000_000_000)) * 100
+      }
+    }
+    lastCPUSample = (totalNs, now)
+    return (cpuPercent, memoryBytes)
   }
 
   private func startOnQueue(reason: String) {

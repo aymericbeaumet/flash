@@ -1,0 +1,21 @@
+{
+  "name": "flash-inspector",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Flash Inspector — live HTTP debug UI served by the flash runtime.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "svelte": "^5.19.0",
+    "svelte-check": "^4.1.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11",
+    "vite-plugin-singlefile": "^2.1.0"
+  }
+}

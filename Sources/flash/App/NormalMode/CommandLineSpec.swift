@@ -271,6 +271,63 @@ extension NormalModeDispatcher {
     CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
   ]
 
+  /// Human-readable descriptions for the built-in command-line commands,
+  /// keyed by primary `full` name. Lives next to `commandLineSpecs` so the
+  /// two stay in sync; consumed by the HTTP inspector's command catalog.
+  private static let coreCommandDescriptions: [String: String] = [
+    "quit": "Quit the focused app (⌘Q)",
+    "write": "Save the focused document (⌘S)",
+    "wq": "Save then quit",
+    "print": "Print the focused document",
+    "edit": "Open the candidate finder (`:open`)",
+    "new": "Open a new window",
+    "tabnew": "Open a new tab",
+    "bdelete": "Close the focused window/tab",
+    "find": "Open the app's native find",
+    "undo": "Undo (⌘Z)",
+    "redo": "Redo (⌘⇧Z)",
+    "yank": "Copy the selection (⌘C)",
+    "delete": "Cut the selection (⌘X)",
+    "put": "Paste (⌘V)",
+    "%yank": "Copy the whole document",
+    "plugins": "List/reload plugins",
+    "mappings": "Show the active key mappings",
+    "open": "Forward args to /usr/bin/open",
+    "help": "Open a help topic",
+    "flashlight": "Fuzzy finder across apps, tabs, and plugins",
+    "emojis": "Emoji picker",
+  ]
+
+  /// Flat catalog of every built-in command-line command, tagged
+  /// `source = "core"`. The HTTP inspector merges this with each plugin's
+  /// declared commands to list every command and where it comes from.
+  static func coreCommandCatalog() -> [[String: Any]] {
+    var result: [[String: Any]] = []
+    var seen = Set<String>()
+    for spec in commandLineSpecs {
+      guard let primary = spec.names.first, seen.insert(primary.full).inserted else { continue }
+      result.append([
+        "name": ":\(primary.full)",
+        "syntax": spec.helpLine,
+        "aliases": spec.names.map { ":\($0.documented)" },
+        "description": coreCommandDescriptions[primary.full] ?? "",
+        "source": "core",
+        "source_kind": "core",
+      ])
+    }
+    for extra in ["open", "help", "flashlight", "emojis"] where seen.insert(extra).inserted {
+      result.append([
+        "name": ":\(extra)",
+        "syntax": ":\(extra) <args>",
+        "aliases": [":\(extra)"],
+        "description": coreCommandDescriptions[extra] ?? "",
+        "source": "core",
+        "source_kind": "core",
+      ])
+    }
+    return result
+  }
+
   /// A single completion candidate offered for a command or sub-command.
   ///
   /// Every candidate has a **value** (`insertion`) and a **label**

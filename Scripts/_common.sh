@@ -167,6 +167,13 @@ assemble_app() {
   mkdir -p "$STAGING_PATH/Contents/Resources"
   cp "$bin_path/flash" "$STAGING_PATH/Contents/MacOS/flash"
   cp "$bin_path/flashctl" "$STAGING_PATH/Contents/MacOS/flashctl"
+  # Bundle.module looks for the SwiftPM resource bundle next to the
+  # executable; without it the inspector serves the missing-resource
+  # fallback instead of the built Svelte UI.
+  if [[ -d "$bin_path/Flash_flash.bundle" ]]; then
+    rm -rf "$STAGING_PATH/Contents/MacOS/Flash_flash.bundle"
+    cp -R "$bin_path/Flash_flash.bundle" "$STAGING_PATH/Contents/MacOS/Flash_flash.bundle"
+  fi
   cp "$PROJECT_DIR/Resources/Info.plist" "$STAGING_PATH/Contents/Info.plist"
   echo "APPL????" >"$STAGING_PATH/Contents/PkgInfo"
 

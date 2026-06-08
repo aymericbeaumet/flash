@@ -58,7 +58,7 @@ final class DebugServerTests: XCTestCase {
     XCTAssertTrue(body.contains("\"ok\":true"), body)
   }
 
-  func testServesDenseDebugPageWithLiveLogControls() throws {
+  func testServesSvelteInspectorBundle() throws {
     let server = DebugServer(host: "localhost", port: 0) {
       ["ok": true]
     }
@@ -73,27 +73,18 @@ final class DebugServerTests: XCTestCase {
     let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/"))
     let body = try fetch(url: url, deadline: deadline)
 
-    XCTAssertTrue(body.contains("class=\"info-grid\""), body)
-    XCTAssertTrue(body.contains("grid-template-columns: repeat(3, minmax(0, 1fr))"), body)
-    XCTAssertTrue(body.contains("Current State"), body)
-    XCTAssertTrue(body.contains("Loaded Plugins"), body)
-    XCTAssertTrue(body.contains("id=\"logSearch\""), body)
-    XCTAssertTrue(body.contains("id=\"logLevel\""), body)
-    XCTAssertTrue(body.contains("id=\"logRows\""), body)
-    XCTAssertTrue(body.contains("id=\"logPauseToggle\""), body)
-    XCTAssertTrue(body.contains("let livePaused = false"), body)
-    XCTAssertTrue(body.contains("function pauseLiveLogs()"), body)
-    XCTAssertTrue(body.contains("function resumeLiveLogs()"), body)
-    XCTAssertTrue(body.contains("function togglePauseLive()"), body)
-    XCTAssertTrue(body.contains("pause-toggle"), body)
-    XCTAssertFalse(body.contains("pendingLiveLogCount"), body)
-    XCTAssertTrue(body.contains("const rowHeight = 24"), body)
-    XCTAssertTrue(body.contains("class=\"timestamp\""), body)
-    XCTAssertTrue(body.contains("class=\"source\""), body)
-    XCTAssertTrue(body.contains("level-warn"), body)
-    XCTAssertFalse(body.contains("id=\"summary\""), body)
-    XCTAssertFalse(body.contains("state xxxx"), body)
-    XCTAssertFalse(body.contains("Recent Events"), body)
+    // The inspector UI is the Svelte single-file bundle shipped as a
+    // resource; assert on stable, non-minified markers rather than the
+    // old inline-JS internals.
+    XCTAssertTrue(body.contains("<title>Flash Inspector</title>"), body)
+    XCTAssertTrue(body.contains("id=\"app\""), body)
+    // The runtime data wiring survives minification as string literals.
+    XCTAssertTrue(body.contains("/events"), body)
+    XCTAssertTrue(body.contains("/state"), body)
+    // Confirms it is the built bundle, not the missing-resource fallback.
+    XCTAssertGreaterThan(body.count, 5_000, "served body looks like the fallback page")
+    // The rename is complete — no "Flash Debug" anywhere.
+    XCTAssertFalse(body.contains("Flash Debug"), body)
   }
 
   private func fetch(url: URL, deadline: Date) throws -> String {

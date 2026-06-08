@@ -541,7 +541,7 @@ extension AppDelegate {
         repeatCount: repeatCount,
         suppressInTerminalFor: command)
     case .close:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: repeatCount)
+      windowCloseInNormalMode(repeatCount: repeatCount)
     case .tabClose:
       tabCloseInNormalMode(repeatCount: repeatCount)
     case .find:
@@ -1490,6 +1490,24 @@ extension AppDelegate {
   private func tabCloseInNormalMode(repeatCount: Int) {
     performTabSourceAction(
       name: "tab_close",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.tabClose(in: context, completion: completion)
+      },
+      fallback: { [weak self] _, count in
+        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
+      })
+  }
+
+  /// `window_close` inside a terminal hosting tmux must close the *tmux*
+  /// window, not the terminal's OS window — sending ⌘W to e.g. Alacritty
+  /// quits the whole terminal, yanking the user out of the app and off
+  /// their tmux session. Route through the tmux source action (it picks
+  /// the next window in the same session itself) and only fall back to
+  /// ⌘W for apps no source claims (browsers, native windows).
+  private func windowCloseInNormalMode(repeatCount: Int) {
+    performTabSourceAction(
+      name: "window_close",
       repeatCount: repeatCount,
       action: { registry, context, completion in
         registry.tabClose(in: context, completion: completion)

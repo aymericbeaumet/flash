@@ -83,6 +83,12 @@ public struct Candidate: @unchecked Sendable {
   /// `CandidateFinder.prepare`. Empty arrays read as "not yet
   /// prepared" — `score` falls back to on-the-fly normalization.
   public var normalizedScoringFields: NormalizedScoringFields
+  /// Stable, lowercased tie-break key precomputed during `prepare`.
+  /// `sortedMatches` compares this with a plain `<` instead of
+  /// `localizedCaseInsensitiveCompare`, which is locale-aware and far
+  /// too slow when an empty query leaves a large pool (e.g. ~2k emojis)
+  /// fully tied on score.
+  public var sortKey: String
 
   public init(
     kind: CandidateKind,
@@ -97,7 +103,8 @@ public struct Candidate: @unchecked Sendable {
     sourcePayload: String? = nil,
     displayTitle: String = "",
     normalizedSearchText: String = "",
-    normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields()
+    normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
+    sortKey: String = ""
   ) {
     self.kind = kind
     self.sourceID = sourceID
@@ -112,6 +119,7 @@ public struct Candidate: @unchecked Sendable {
     self.displayTitle = displayTitle
     self.normalizedSearchText = normalizedSearchText
     self.normalizedScoringFields = normalizedScoringFields
+    self.sortKey = sortKey
   }
 }
 

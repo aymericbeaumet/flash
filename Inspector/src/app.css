@@ -1,0 +1,51 @@
+:root {
+  --bg: #101214;
+  --panel: #171b20;
+  --panel-strong: #1f262d;
+  --border: #303841;
+  --border-soft: #232a31;
+  --text: #e7edf3;
+  --muted: #93a1ad;
+  --accent: #8bd3ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#app {
+  height: 100vh;
+}
+
+input,
+select,
+button {
+  height: 24px;
+  border: 1px solid #34414d;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+button {
+  cursor: pointer;
+  min-width: 56px;
+}
+
+button:hover {
+  border-color: var(--accent);
+}

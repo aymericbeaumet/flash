@@ -264,7 +264,9 @@ struct PluginStatusSnapshot {
   var id: String
   var name: String
   var version: String
+  var description: String
   var origin: String
+  var root: String
   var state: String
   var pid: Int?
   var uptimeMs: Int?
@@ -277,25 +279,49 @@ struct PluginStatusSnapshot {
   var restartCount: Int
   var lastError: String?
   var lastLog: String?
+  /// Instantaneous CPU usage (% of one core) sampled from the plugin's
+  /// own subprocess; `nil` until the second sample lets us compute a
+  /// delta, or when the process isn't running.
+  var cpuPercent: Double?
+  /// Resident set size in bytes for the plugin subprocess.
+  var memoryBytes: Int?
+  /// Bundle identifiers the plugin's source is scoped to (empty = global).
+  var bundleIDs: [String]
+  /// Whether the plugin reloads on file change.
+  var volatile: Bool
+  /// Declared scheduling priority from the manifest.
+  var priority: Int
+  /// Registered commands (command / subcommand / description triples).
+  var commands: [PluginCommandRegistration]
 
   var jsonObject: [String: Any] {
     [
+      "bundle_ids": bundleIDs,
       "command_count": commandCount,
+      "commands": commands.map {
+        ["command": $0.command, "subcommand": $0.subcommand, "description": $0.description]
+      },
       "candidate_count": candidateCount,
+      "cpu_percent": cpuPercent ?? NSNull(),
+      "description": description,
       "heartbeat_age_ms": heartbeatAgeMs ?? NSNull(),
       "id": id,
       "last_error": lastError ?? NSNull(),
       "last_log": lastLog ?? NSNull(),
+      "memory_bytes": memoryBytes ?? NSNull(),
       "name": name,
       "origin": origin,
       "pid": pid ?? NSNull(),
+      "priority": priority,
       "restart_count": restartCount,
+      "root": root,
       "snapshot_age_ms": snapshotAgeMs ?? NSNull(),
       "source_count": sourceCount,
       "state": state,
       "target_count": targetCount,
       "uptime_ms": uptimeMs ?? NSNull(),
       "version": version,
+      "volatile": volatile,
     ]
   }
 }
