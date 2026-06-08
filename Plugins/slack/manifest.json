@@ -2,11 +2,13 @@
   "id": "slack",
   "name": "Slack",
   "version": "0.1.0",
-  "description": "Slack CLI actions backed by the Slack developer CLI.",
+  "description": "Slack CLI actions and a channel finder backed by the AX broker.",
   "install": "true",
   "start": "exec ./flash-plugin-slack",
+  "bundle_ids": ["com.tinyspeck.slackmacgap", "com.tinyspeck.slackmacgap.direct"],
   "events": [
     { "match": "apps.*", "bundle_ids": ["com.tinyspeck.slackmacgap"] },
+    { "match": "focus.changed" },
     "config.*"
   ],
   "commands": [

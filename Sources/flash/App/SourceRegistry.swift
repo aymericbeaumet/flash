@@ -60,12 +60,6 @@ final class SourceRegistry {
         ) {
           ChromiumTabsSource()
         },
-        SourceDescriptor(
-          identifier: "slack",
-          activationPolicy: .bundleIDs(SlackSource.bundleIdentifiers)
-        ) {
-          SlackSource()
-        },
       ]
     refreshRunningApplications(initialRunningApplications)
   }

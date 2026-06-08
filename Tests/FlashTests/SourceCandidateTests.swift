@@ -383,16 +383,6 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(prepared.normalizedSearchText.contains("example"))
   }
 
-  func testSlackChannelParserHandlesHashSeparatedFromName() {
-    XCTAssertEqual(SlackSource.parseChannelName("# general"), "#general")
-    XCTAssertEqual(SlackSource.parseChannelName("general, channel"), "#general")
-  }
-
-  func testSlackBareChannelParserRequiresChannelContextFromCaller() {
-    XCTAssertEqual(SlackSource.parseBareChannelName("release_notes"), "#release_notes")
-    XCTAssertNil(SlackSource.parseBareChannelName("channel"))
-  }
-
   private func candidate(
     kind: CandidateKind,
     source: String,
