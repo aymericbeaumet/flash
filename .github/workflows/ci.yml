@@ -75,10 +75,36 @@ jobs:
       - name: Test
         run: swift test
 
+  inspector:
+    name: Inspector
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: Inspector/pnpm-lock.yaml
+      - name: Install inspector deps
+        working-directory: Inspector
+        run: pnpm install --frozen-lockfile
+      - name: Build inspector bundle
+        working-directory: Inspector
+        run: pnpm build
+      - name: Stage bundle as SwiftPM resource
+        run: cp Inspector/dist/index.html Sources/flash/Resources/inspector.html
+      - name: Require committed bundle to be up to date
+        # The committed resource must match a fresh build of Inspector/.
+        # If this fails, run Scripts/build-inspector.sh and commit the result.
+        run: git diff --exit-code Sources/flash/Resources/inspector.html
+
   homebrew:
     name: Homebrew
     runs-on: macos-15
-    needs: [format, lint, guardrails, build, test]
+    needs: [format, lint, guardrails, build, test, inspector]
     if: github.event_name == 'push'
     permissions:
       contents: write

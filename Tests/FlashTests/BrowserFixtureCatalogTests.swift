@@ -34,6 +34,28 @@ final class BrowserFixtureCatalogTests: XCTestCase {
     }
   }
 
+  /// Reverse of the file-existence check above: guards against an orphaned
+  /// `snapshots/*.html` that no manifest entry references. Such a file would
+  /// never be exercised by the browser oracle yet would silently ship and rot.
+  func testEverySnapshotFileIsReferencedByManifest() throws {
+    let fixturesDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+      .appendingPathComponent("Tests/BrowserSnapshots", isDirectory: true)
+    let snapshotsDir = fixturesDir.appendingPathComponent("snapshots", isDirectory: true)
+    let catalog = try BrowserFixtureCatalog.load(from: fixturesDir)
+
+    let referenced = Set(catalog.fixtures.map(\.file))
+    let onDisk = try FileManager.default
+      .contentsOfDirectory(at: snapshotsDir, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "html" }
+      .map { $0.lastPathComponent }
+
+    for file in onDisk {
+      XCTAssertTrue(
+        referenced.contains(file),
+        "snapshots/\(file) exists on disk but is not listed in manifest.json")
+    }
+  }
+
   func testFixtureSelectionRejectsUnknownNames() throws {
     let catalog = BrowserFixtureCatalog(fixtures: [
       BrowserFixture(

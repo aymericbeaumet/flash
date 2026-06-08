@@ -48,13 +48,9 @@ final class DebugServerTests: XCTestCase {
     server.start()
     defer { server.stop() }
 
-    let deadline = Date().addingTimeInterval(2)
-    while server.listeningPort == nil, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.02)
-    }
-    let port = try XCTUnwrap(server.listeningPort)
+    let port = try waitForListeningPort(server)
     let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/state"))
-    let body = try fetch(url: url, deadline: deadline)
+    let body = try fetch(url: url, deadline: Date().addingTimeInterval(10))
     XCTAssertTrue(body.contains("\"ok\":true"), body)
   }
 
@@ -65,13 +61,9 @@ final class DebugServerTests: XCTestCase {
     server.start()
     defer { server.stop() }
 
-    let deadline = Date().addingTimeInterval(2)
-    while server.listeningPort == nil, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.02)
-    }
-    let port = try XCTUnwrap(server.listeningPort)
+    let port = try waitForListeningPort(server)
     let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port)/"))
-    let body = try fetch(url: url, deadline: deadline)
+    let body = try fetch(url: url, deadline: Date().addingTimeInterval(10))
 
     // The inspector UI is the Svelte single-file bundle shipped as a
     // resource; assert on stable, non-minified markers rather than the
@@ -85,6 +77,17 @@ final class DebugServerTests: XCTestCase {
     XCTAssertGreaterThan(body.count, 5_000, "served body looks like the fallback page")
     // The rename is complete — no "Flash Debug" anywhere.
     XCTAssertFalse(body.contains("Flash Debug"), body)
+  }
+
+  /// Polls until the `NWListener` reaches `.ready` and publishes its port.
+  /// The ceiling is generous so a loaded CI runner doesn't flake; the happy
+  /// path returns within a few milliseconds.
+  private func waitForListeningPort(_ server: DebugServer) throws -> UInt16 {
+    let deadline = Date().addingTimeInterval(10)
+    while server.listeningPort == nil, Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    return try XCTUnwrap(server.listeningPort, "DebugServer never started listening")
   }
 
   private func fetch(url: URL, deadline: Date) throws -> String {

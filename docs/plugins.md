@@ -2,7 +2,8 @@
 
 Plugins are managed child processes owned by Flash. Each plugin has a required
 `manifest.json` with `id`, `name`, `version`, `description`, `install`, and
-`start` strings.
+`start` strings. Optional `request_timeout_ms` (default `2000`) raises the
+per-request RPC deadline for plugins that fan out to the network.
 
 Official bundled plugins are always enabled. Third-party plugins are listed in
 `[plugins] third_party` as `github:user/project` or `file:<path>`.

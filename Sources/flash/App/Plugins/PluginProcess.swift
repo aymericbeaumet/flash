@@ -499,7 +499,7 @@ final class PluginProcess {
       let id = self.requestID
       if let completion {
         self.pending[id] = completion
-        self.queue.asyncAfter(deadline: .now() + .seconds(2)) { [weak self] in
+        self.queue.asyncAfter(deadline: .now() + self.requestTimeout) { [weak self] in
           guard let self, let callback = self.pending.removeValue(forKey: id) else { return }
           callback(nil)
         }
@@ -527,11 +527,25 @@ final class PluginProcess {
     // Drop `.sortedKeys` on the hot path: per-message stable ordering
     // costs CPU we don't need for runtime IPC, and Foundation's default
     // (insertion-order-ish) order is fine for plugin protocols.
+    let label = object["method"] as? String ?? "response"
     guard JSONSerialization.isValidJSONObject(object),
       var data = try? JSONSerialization.data(withJSONObject: object)
-    else { return }
+    else {
+      // A non-serializable message is a runtime bug that would otherwise
+      // vanish silently and only show up as a timed-out RPC; surface it.
+      recordError("[plugin] dropped non-serializable IPC message (method=\(label))")
+      return
+    }
     data.append(10)  // newline
-    try? stdinPipe?.fileHandleForWriting.write(contentsOf: data)
+    do {
+      try stdinPipe?.fileHandleForWriting.write(contentsOf: data)
+    } catch {
+      // A broken pipe during teardown is expected, so only surface a write
+      // failure while the subprocess is supposed to be alive.
+      if process?.isRunning == true {
+        recordError("[plugin] failed to write IPC message (method=\(label)): \(error)")
+      }
+    }
   }
 
   private func handleStdout(_ data: Data) {
@@ -845,6 +859,12 @@ final class PluginProcess {
     self.state = state
     lock.unlock()
     notifyStatus()
+  }
+
+  /// Per-request RPC deadline. Defaults to 2s; a plugin can raise it via
+  /// `request_timeout_ms` in its manifest for slow, network-backed work.
+  private var requestTimeout: DispatchTimeInterval {
+    .milliseconds(max(1, manifest.requestTimeoutMs ?? 2000))
   }
 
   private func recordError(_ message: String) {

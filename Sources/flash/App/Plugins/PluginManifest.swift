@@ -109,11 +109,16 @@ struct PluginManifest: Codable, Equatable {
   /// `bundle_ids` filter used on event subscriptions but applies even when
   /// the manifest doesn't subscribe to `focus.changed`.
   var bundleIDs: [String]
+  /// Per-request RPC timeout in milliseconds. Plugins that fan out to the
+  /// network (e.g. GitHub) can raise this above the 2000ms default so a slow
+  /// response isn't dropped. `nil` uses the default.
+  var requestTimeoutMs: Int?
 
   enum CodingKeys: String, CodingKey {
     case id, name, version, description, install, start, events, commands, priority
     case volatile
     case bundleIDs = "bundle_ids"
+    case requestTimeoutMs = "request_timeout_ms"
   }
 
   init(
@@ -123,7 +128,8 @@ struct PluginManifest: Codable, Equatable {
     commands: [PluginCommandRegistration] = [],
     priority: Int = 25,
     volatile: Bool = false,
-    bundleIDs: [String] = []
+    bundleIDs: [String] = [],
+    requestTimeoutMs: Int? = nil
   ) {
     self.id = id
     self.name = name
@@ -136,6 +142,7 @@ struct PluginManifest: Codable, Equatable {
     self.priority = priority
     self.volatile = volatile
     self.bundleIDs = bundleIDs
+    self.requestTimeoutMs = requestTimeoutMs
   }
 
   init(from decoder: Decoder) throws {
@@ -151,6 +158,7 @@ struct PluginManifest: Codable, Equatable {
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    self.requestTimeoutMs = try c.decodeIfPresent(Int.self, forKey: .requestTimeoutMs)
   }
 
   func encode(to encoder: Encoder) throws {
@@ -166,6 +174,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(priority, forKey: .priority)
     if volatile { try c.encode(volatile, forKey: .volatile) }
     if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
+    if let requestTimeoutMs { try c.encode(requestTimeoutMs, forKey: .requestTimeoutMs) }
   }
 
   static func load(from root: URL) throws -> PluginManifest {

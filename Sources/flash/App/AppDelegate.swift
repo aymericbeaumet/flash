@@ -436,6 +436,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     candidateFinderLiveRefreshTimer = nil
     pluginStateRefreshWork?.cancel()
     pluginStateRefreshWork = nil
+    normalModeEventTap?.uninstall()
+    normalModeEventTap = nil
+    monitor?.stop()
     pluginManager.stop()
     debugServer?.stop()
     debugServer = nil
