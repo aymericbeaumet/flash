@@ -561,6 +561,15 @@ extension AppDelegate {
     registry.resolveCandidate(candidate) { [weak self] result in
       guard let self else { return }
       if let pid = result.targetPID {
+        // Plugin candidates (e.g. a tmux window) run their side effect
+        // inside the plugin process and hand back a `target_pid` for the
+        // app that hosts the result — the plugin can't raise a macOS app
+        // itself, so the core must. App/browser candidates already
+        // activate inside their own source; re-raising the same pid here
+        // is idempotent and keeps the one code path correct for both.
+        if let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated {
+          RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+        }
         self.normalModeTargetPID = pid
         self.suppressEditableFocus(for: pid)
       } else if !result.didResolve {
