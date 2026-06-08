@@ -789,6 +789,15 @@ final class NormalModeTests: XCTestCase {
     let upper = NormalModeDispatcher.candidateFinderSourceFilter("  --Firefox   gmail ")
     XCTAssertEqual(upper.sourceFilter, "firefox")
     XCTAssertEqual(upper.text, "gmail")
+
+    // `@<source>` is equivalent to `--<source>`.
+    let at = NormalModeDispatcher.candidateFinderSourceFilter("@notes inbox")
+    XCTAssertEqual(at.sourceFilter, "notes")
+    XCTAssertEqual(at.text, "inbox")
+
+    let atBare = NormalModeDispatcher.candidateFinderSourceFilter("  @Firefox ")
+    XCTAssertEqual(atBare.sourceFilter, "firefox")
+    XCTAssertEqual(atBare.text, "")
   }
 
   func testFuzzyScoreMatchesOrderedCharacters() {

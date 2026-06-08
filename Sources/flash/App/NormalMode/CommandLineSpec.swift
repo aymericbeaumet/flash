@@ -109,12 +109,13 @@ extension NormalModeDispatcher {
     var text: String
   }
 
-  /// Splits a candidate-finder query into an optional leading
-  /// `--<source>` filter and the residual search text. Powers
-  /// `:flashlight --notes inbox` (pin the notes source, search "inbox").
-  /// Examples:
+  /// Splits a candidate-finder query into an optional leading source filter
+  /// and the residual search text. The filter is written as `@<source>` or
+  /// `--<source>` (both equivalent). Powers `:flashlight @notes inbox` (pin
+  /// the notes source, search "inbox"). Examples:
+  ///   "@notes inbox"  -> (filter: "notes", text: "inbox")
   ///   "--notes inbox" -> (filter: "notes", text: "inbox")
-  ///   "--notes"       -> (filter: "notes", text: "")
+  ///   "@notes"        -> (filter: "notes", text: "")
   ///   "inbox"         -> (filter: nil,     text: "inbox")
   static func candidateFinderSourceFilter(_ query: String) -> CandidateFinderQuery {
     var body = query
@@ -122,9 +123,16 @@ extension NormalModeDispatcher {
     let fallback = CandidateFinderQuery(
       sourceFilter: nil,
       text: query.trimmingCharacters(in: .whitespacesAndNewlines))
-    guard body.hasPrefix("--") else { return fallback }
-    let afterDashes = body.dropFirst(2)
-    let parts = afterDashes.split(
+    let prefixLength: Int
+    if body.hasPrefix("--") {
+      prefixLength = 2
+    } else if body.hasPrefix("@") {
+      prefixLength = 1
+    } else {
+      return fallback
+    }
+    let afterPrefix = body.dropFirst(prefixLength)
+    let parts = afterPrefix.split(
       maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: { $0.isWhitespace })
     let token = parts.first.map(String.init) ?? ""
     guard !token.isEmpty else { return fallback }

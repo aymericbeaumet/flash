@@ -205,11 +205,11 @@ enum HelpDocs {
 
       ## Pinning a source
 
-      Prefix the query with `--<source>` to restrict the pool to one
-      source, e.g. `:flashlight --notes inbox` searches only notes.
-      The token matches a source name (or prefix: `--fire` → firefox)
-      and a few groups: `--browser`/`--tabs`, `--apps`. Bare
-      `:flashlight --notes` lists every note.
+      Prefix the query with `@<source>` (or `--<source>`) to restrict
+      the pool to one source, e.g. `:flashlight @notes inbox` searches
+      only notes. The token matches a source name (or prefix:
+      `@fire` → firefox) and a few groups: `@browser`/`@tabs`, `@apps`.
+      Bare `:flashlight @notes` lists every note.
 
       ## Ranking
 
