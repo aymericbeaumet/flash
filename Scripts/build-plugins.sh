@@ -33,6 +33,13 @@ for manifest in Plugins/*/Cargo.toml; do
   id="$(basename "$dir")"
   bin="flash-plugin-$id"
   echo "==> Building plugin $id ($MODE)"
+  # Stage the new binary at a temp path and swap it in with an atomic
+  # `mv`. Overwriting the destination *in place* (cp/lipo writing to the
+  # existing path) modifies an already-signed Mach-O's bytes, which
+  # invalidates the kernel's cached code-signature and makes the next
+  # exec die with "Killed: 9". A rename installs a fresh inode whose
+  # signature the kernel re-evaluates cleanly.
+  staged="$dir/$bin.staged"
   if [[ "$MODE" == "release" ]]; then
     (cd "$dir" && cargo build --release \
       --target x86_64-apple-darwin \
@@ -40,11 +47,12 @@ for manifest in Plugins/*/Cargo.toml; do
     lipo -create \
       "$TARGET_DIR/x86_64-apple-darwin/release/$bin" \
       "$TARGET_DIR/aarch64-apple-darwin/release/$bin" \
-      -output "$dir/$bin"
+      -output "$staged"
   else
     # dev: debug, current arch, incremental — the fast path.
     (cd "$dir" && cargo build)
-    cp "$TARGET_DIR/debug/$bin" "$dir/$bin"
+    cp "$TARGET_DIR/debug/$bin" "$staged"
   fi
-  chmod +x "$dir/$bin"
+  chmod +x "$staged"
+  mv -f "$staged" "$dir/$bin"
 done
