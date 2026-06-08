@@ -31,6 +31,10 @@ final class PluginManager {
   /// `:calc 2 + 2`). Keyed by lowercased command; consulted only when the
   /// exact `(command, subcommand)` lookup misses.
   private var wildcardCommandIndex: [String: CommandTarget] = [:]
+  /// Owns the single AX (Accessibility) grant and the handle registry that
+  /// backs the `ax.*` host RPCs. Plugins never touch AX directly; they reach
+  /// it through this broker via `handleHostRequest`.
+  private let axBroker = AXBroker()
   var onStateChanged: (() -> Void)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
@@ -129,6 +133,8 @@ final class PluginManager {
     case "host.ping":
       // Round-trip validation of the bidirectional channel.
       reply(["ok": true, "echo": params])
+    case let method where method.hasPrefix("ax."):
+      axBroker.handle(method: method, params: params, reply: reply)
     default:
       FlashLog.warn(
         "[plugin] unknown host method \(method) from \(pluginID)",

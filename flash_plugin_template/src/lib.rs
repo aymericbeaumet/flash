@@ -175,6 +175,76 @@ impl Context {
         }
     }
 
+    /// Walk a subtree of an app's Accessibility tree via the core's AX broker
+    /// and return a flat list of [`AxNode`]s. The broker holds the TCC grant
+    /// and the real `AXUIElement` handles; the plugin receives opaque integer
+    /// handles plus the requested `collect` attributes, applies its own logic
+    /// (e.g. "which of these is a browser tab"), then acts on a node by handle
+    /// via [`ax_perform`](Context::ax_perform) / [`ax_set`](Context::ax_set).
+    ///
+    /// - `pid`: target application.
+    /// - `roots`: `"windows"` to start from the app's windows (the usual case),
+    ///   or `"app"` to start from the application element itself.
+    /// - `follow`: child attribute names to descend through; pass an empty
+    ///   slice to use the broker's default (children + navigation order).
+    /// - `collect`: attribute names to read for every visited node.
+    /// - `max_nodes`: visit budget — the walk stops once this many nodes are
+    ///   collected.
+    pub async fn ax_snapshot(
+        &self,
+        pid: i64,
+        roots: &str,
+        follow: &[&str],
+        collect: &[&str],
+        max_nodes: u64,
+    ) -> Vec<AxNode> {
+        let result = self
+            .call_host(
+                "ax.snapshot",
+                json!({
+                    "pid": pid,
+                    "roots": roots,
+                    "follow": follow,
+                    "collect": collect,
+                    "max_nodes": max_nodes,
+                }),
+            )
+            .await;
+        result
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map(|nodes| nodes.iter().filter_map(AxNode::from_value).collect())
+            .unwrap_or_default()
+    }
+
+    /// Perform an AX action (e.g. `AXPress`) on a handle from a prior
+    /// [`ax_snapshot`](Context::ax_snapshot). Returns whether the action
+    /// succeeded; a stale handle (snapshot superseded) reports `false`.
+    pub async fn ax_perform(&self, handle: u64, action: &str) -> bool {
+        host_ok(
+            self.call_host("ax.perform", json!({ "handle": handle, "action": action }))
+                .await,
+        )
+    }
+
+    /// Set an AX attribute (e.g. `AXSelected = true`) on a snapshot handle.
+    /// `value` may be a bool or a string. Returns whether the set succeeded.
+    pub async fn ax_set(&self, handle: u64, attribute: &str, value: Value) -> bool {
+        host_ok(
+            self.call_host(
+                "ax.set",
+                json!({ "handle": handle, "attribute": attribute, "value": value }),
+            )
+            .await,
+        )
+    }
+
+    /// Bring an application's windows to the front. Used before acting on a
+    /// snapshot handle so the AX action lands on the now-frontmost app.
+    pub async fn ax_activate(&self, pid: i64) -> bool {
+        host_ok(self.call_host("ax.activate", json!({ "pid": pid })).await)
+    }
+
     /// Run an AppleScript snippet via `osascript -e`. Convenience over
     /// [`run_cli`](Context::run_cli) for the many plugins that shell out to
     /// macOS apps.
@@ -268,6 +338,48 @@ impl Context {
             status: result.get("status").and_then(Value::as_i64).unwrap_or(-1) as i32,
         }
     }
+}
+
+/// One node from an [`ax_snapshot`](Context::ax_snapshot) walk. `handle` is an
+/// opaque id the broker uses to find the real `AXUIElement` for follow-up
+/// actions; `root` is the index of the root (e.g. window) this node descends
+/// from; `attrs` holds the requested attributes that were present.
+#[derive(Clone, Debug)]
+pub struct AxNode {
+    pub handle: u64,
+    pub root: usize,
+    pub attrs: BTreeMap<String, String>,
+}
+
+impl AxNode {
+    fn from_value(value: &Value) -> Option<Self> {
+        let handle = value.get("handle")?.as_u64()?;
+        let root = value.get("root").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let attrs = value
+            .get("attrs")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            handle,
+            root,
+            attrs,
+        })
+    }
+
+    /// The collected attribute `name`, if it was present on this node.
+    pub fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.get(name).map(String::as_str)
+    }
+}
+
+/// Read the `ok` flag from a host RPC response, defaulting to `false`.
+fn host_ok(response: Value) -> bool {
+    response.get("ok").and_then(Value::as_bool).unwrap_or(false)
 }
 
 /// Read a JSON object's `key` as a string slice, defaulting to `""`.
