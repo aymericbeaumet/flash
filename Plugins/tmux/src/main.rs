@@ -980,16 +980,17 @@ fn parse_payload(candidate: &Value) -> Value {
     }
 }
 
-/// Pick the tty to drive `switch-client`: the most-recently-active client,
+/// Pick the client to drive `switch-client`: the most-recently-active client,
 /// which for single-process multi-window terminals maps to the window the
-/// user just typed into.
-async fn resolve_candidate_tty(tmux_path: Option<&str>, stale_tty: &str) -> String {
+/// user just typed into. Returns the full client so the caller can both drive
+/// `switch-client` on its tty and resolve the terminal app pid hosting it.
+async fn resolve_active_client(tmux_path: Option<&str>) -> Option<TmuxClient> {
     let mut clients = list_clients(tmux_path).await;
     if clients.is_empty() {
-        return stale_tty.to_string();
+        return None;
     }
     clients.sort_by(|a, b| b.activity.cmp(&a.activity));
-    clients[0].tty.clone()
+    clients.into_iter().next()
 }
 
 async fn resolve_candidate(plugin: &Tmux, ctx: &Context, params: &Value) -> Value {
@@ -1007,11 +1008,15 @@ async fn resolve_candidate(plugin: &Tmux, ctx: &Context, params: &Value) -> Valu
         ctx.log("warn", "[tmux] resolve missing tmux_target");
         return json!({ "did_resolve": false });
     }
-    let stale_tty = payload
-        .get("tmux_client_tty")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let tty = resolve_candidate_tty(tmux_path, stale_tty).await;
+
+    let active = resolve_active_client(tmux_path).await;
+    let tty = active.as_ref().map(|c| c.tty.clone()).unwrap_or_else(|| {
+        payload
+            .get("tmux_client_tty")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    });
 
     let mut args: Vec<&str> = vec!["switch-client"];
     if !tty.is_empty() {
@@ -1020,27 +1025,53 @@ async fn resolve_candidate(plugin: &Tmux, ctx: &Context, params: &Value) -> Valu
     }
     args.push("-t");
     args.push(target);
-    if run_tmux_default(tmux_path, &args).await.is_some() {
-        return resolve_response(&payload);
-    }
-
     // The captured tty may be stale — fall back to `switch-client` without
     // `-c`, which tmux applies to its best-guess client.
-    if run_tmux_default(tmux_path, &["switch-client", "-t", target])
-        .await
-        .is_some()
-    {
-        ctx.log("info", "[tmux] resolve via fallback switch-client");
-        return resolve_response(&payload);
+    let switched = run_tmux_default(tmux_path, &args).await.is_some()
+        || run_tmux_default(tmux_path, &["switch-client", "-t", target])
+            .await
+            .is_some();
+    if !switched {
+        ctx.log("warn", "[tmux] resolve failed");
+        return json!({ "did_resolve": false });
     }
-    ctx.log("warn", "[tmux] resolve failed");
-    json!({ "did_resolve": false })
+
+    // Recompute the terminal pid from the live client we actually drove rather
+    // than the snapshot-time `terminal_pid` baked into the payload: that value
+    // goes stale (or was never resolved) when the client moves between
+    // snapshots, which silently strips the `target_pid` the host needs to raise
+    // the terminal window. Fall back to the payload value only if the live walk
+    // fails.
+    let terminal_pid = match active {
+        Some(ref c) => {
+            let pmap = parent_pid_map().await;
+            find_top_level_ancestor(c.client_pid, &pmap)
+        }
+        None => None,
+    }
+    .or_else(|| payload.get("terminal_pid").and_then(Value::as_i64));
+
+    resolve_response(target, &tty, terminal_pid, ctx)
 }
 
-fn resolve_response(payload: &Value) -> Value {
+fn resolve_response(target: &str, tty: &str, terminal_pid: Option<i64>, ctx: &Context) -> Value {
     let mut response = json!({ "did_resolve": true });
-    if let Some(tp) = payload.get("terminal_pid").and_then(Value::as_i64) {
-        response["target_pid"] = json!(tp);
+    let mut fields = BTreeMap::new();
+    fields.insert("target".to_string(), target.to_string());
+    fields.insert("tty".to_string(), tty.to_string());
+    match terminal_pid {
+        Some(tp) => {
+            response["target_pid"] = json!(tp);
+            fields.insert("terminal_pid".to_string(), tp.to_string());
+            ctx.log_fields("debug", "[tmux] resolved candidate", fields);
+        }
+        None => {
+            ctx.log_fields(
+                "warn",
+                "[tmux] resolved but no terminal pid to raise",
+                fields,
+            );
+        }
     }
     response
 }

@@ -38,14 +38,25 @@ final class PluginProcess {
   /// watchers are not installed and the plugin only restarts when
   /// content changes propagate via an explicit `:plugins reload`.
   private var watchFiles: Bool
+  /// User settings from `[plugin.<id>]`, delivered to the plugin process
+  /// as JSON via `FLASH_PLUGIN_CONFIG`. Retained so a config reload can
+  /// tell whether this plugin's settings changed.
+  let settings: [String: PluginConfigValue]
   var onStatusChanged: (() -> Void)?
+  /// Handles a plugin→host RPC request (`call_host` on the plugin side):
+  /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
+  /// installs this; `reply` is invoked with the JSON result, possibly async
+  /// (e.g. AX work hops to the main thread first).
+  var onHostRequest:
+    ((String, [String: Any], String, @escaping ([String: Any]) -> Void) -> Void)?
 
   init(
     root: URL,
     manifest: PluginManifest,
     origin: PluginOrigin,
     baseDataDir: URL,
-    watchFiles: Bool = true
+    watchFiles: Bool = true,
+    settings: [String: PluginConfigValue] = [:]
   ) {
     self.root = root
     self.manifest = manifest
@@ -54,6 +65,7 @@ final class PluginProcess {
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.dynamicCommands = manifest.commands
     self.watchFiles = watchFiles
+    self.settings = settings
   }
 
   var identifier: String { manifest.id }
@@ -253,16 +265,23 @@ final class PluginProcess {
     subcommand: String,
     args: [String],
     raw: String,
+    meta: [String: String] = [:],
     completion: ((Bool, pid_t?, String?) -> Void)? = nil
   ) {
+    var params: [String: Any] = [
+      "args": args,
+      "command": command,
+      "subcommand": subcommand,
+      "raw": raw,
+    ]
+    // Forward the matched manifest entry's `_`-prefixed metadata verbatim so
+    // the plugin can read e.g. `_url` without re-deriving it.
+    for (key, value) in meta {
+      params[key] = value
+    }
     sendRequest(
       method: "command.invoke",
-      params: [
-        "args": args,
-        "command": command,
-        "subcommand": subcommand,
-        "raw": raw,
-      ]
+      params: params
     ) { response in
       let ok = response?["ok"] as? Bool ?? false
       // A command may name an app (by pid) for Flash to raise once it
@@ -479,6 +498,19 @@ final class PluginProcess {
     try stamp.write(to: stampURL, atomically: true, encoding: .utf8)
   }
 
+  /// `settings` serialized to a JSON object string for the plugin's
+  /// `FLASH_PLUGIN_CONFIG`. `{}` when there are no settings.
+  private var settingsJSON: String {
+    let object = settings.mapValues(\.jsonValue)
+    guard
+      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return "{}"
+    }
+    return json
+  }
+
   private func pluginEnvironment() -> [String: String] {
     var env = ProcessInfo.processInfo.environment
     if env["PATH", default: ""].isEmpty {
@@ -487,6 +519,7 @@ final class PluginProcess {
     env["FLASH_PLUGIN_ID"] = manifest.id
     env["FLASH_PLUGIN_VERSION"] = manifest.version
     env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
+    env["FLASH_PLUGIN_CONFIG"] = settingsJSON
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
   }
@@ -522,6 +555,26 @@ final class PluginProcess {
         "jsonrpc": "2.0",
         "method": method,
         "params": params,
+      ])
+    }
+  }
+
+  private func routeHostRequest(id: Int, method: String, params: [String: Any]) {
+    guard let onHostRequest else {
+      sendResponse(id: id, result: ["ok": false, "error": "host requests unsupported"])
+      return
+    }
+    onHostRequest(method, params, manifest.id) { [weak self] result in
+      self?.sendResponse(id: id, result: result)
+    }
+  }
+
+  private func sendResponse(id: Int, result: [String: Any]) {
+    queue.async { [weak self] in
+      self?.writeJSON([
+        "id": id,
+        "jsonrpc": "2.0",
+        "result": result,
       ])
     }
   }
@@ -623,6 +676,14 @@ final class PluginProcess {
     }
     guard let method = object["method"] as? String else { return }
     let params = object["params"] as? [String: Any] ?? [:]
+    // A frame carrying both an id and a method is a plugin→host request:
+    // route it to the host RPC router and reply with a response frame. (Host
+    // responses carry an id but no method and were handled above; plugin
+    // notifications carry a method but no id and fall through to the switch.)
+    if let requestID = object["id"] as? Int {
+      routeHostRequest(id: requestID, method: method, params: params)
+      return
+    }
     switch method {
     case "flash.log":
       let level = FlashLog.Level.parse(params["level"] as? String ?? "info") ?? .info

@@ -1,0 +1,16 @@
+{
+  "id": "vercel",
+  "name": "Vercel",
+  "version": "0.1.0",
+  "description": "Vercel quicklinks and CLI: :vercel dash, :vercel whoami, :vercel ls, :vercel deploy.",
+  "install": "true",
+  "start": "exec ./flash-plugin-vercel",
+  "commands": [
+    { "command": "vercel", "subcommand": "dash", "description": "Open the Vercel dashboard", "_url": "https://vercel.com/dashboard" },
+    { "command": "vercel", "subcommand": "new", "description": "Create a new Vercel project", "_url": "https://vercel.com/new" },
+    { "command": "vercel", "subcommand": "docs", "description": "Open the Vercel docs", "_url": "https://vercel.com/docs" },
+    { "command": "vercel", "subcommand": "whoami", "description": "Show the logged-in Vercel user", "_cmd": "vercel whoami" },
+    { "command": "vercel", "subcommand": "ls", "description": "List recent deployments", "_cmd": "vercel ls" },
+    { "command": "vercel", "subcommand": "deploy", "description": "Deploy the current directory", "_cmd": "vercel deploy" }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "cloudflare",
+  "name": "Cloudflare",
+  "version": "0.1.0",
+  "description": "Cloudflare quicklinks and CLI: :cloudflare dash, :cloudflare whoami, :cloudflare deploy.",
+  "install": "true",
+  "start": "exec ./flash-plugin-cloudflare",
+  "commands": [
+    { "command": "cloudflare", "subcommand": "dash", "description": "Open the Cloudflare dashboard", "_url": "https://dash.cloudflare.com/" },
+    { "command": "cloudflare", "subcommand": "docs", "description": "Open the Cloudflare developer docs", "_url": "https://developers.cloudflare.com/" },
+    { "command": "cloudflare", "subcommand": "status", "description": "Open the Cloudflare status page", "_url": "https://www.cloudflarestatus.com/" },
+    { "command": "cloudflare", "subcommand": "whoami", "description": "Show the logged-in Cloudflare user (wrangler)", "_cmd": "wrangler whoami" },
+    { "command": "cloudflare", "subcommand": "deploy", "description": "Deploy with wrangler", "_cmd": "wrangler deploy" }
+  ]
+}

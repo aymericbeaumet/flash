@@ -467,8 +467,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("d"), .cut)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("delete"), .cut)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("put"), .paste)
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("%y"), .copyAll)
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":%yan"), .copyAll)
+    XCTAssertNil(NormalModeDispatcher.commandLineCommand("%y"))
+    XCTAssertNil(NormalModeDispatcher.commandLineCommand(":%yan"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":plugins"), .plugins(.modal))
     XCTAssertEqual(
       NormalModeDispatcher.commandLineCommand(":plugins list"), .plugins(.list))
@@ -484,6 +484,24 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("q!!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("p!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("qu!it"))
+  }
+
+  func testCommandLineClipboardModifierParser() {
+    let plain = NormalModeDispatcher.commandLineClipboardModifier(":aws whoami")
+    XCTAssertFalse(plain.capture)
+    XCTAssertEqual(plain.raw, ":aws whoami")
+
+    let afterColon = NormalModeDispatcher.commandLineClipboardModifier(":#aws whoami")
+    XCTAssertTrue(afterColon.capture)
+    XCTAssertEqual(afterColon.raw, ":aws whoami")
+
+    let spaced = NormalModeDispatcher.commandLineClipboardModifier(": # aws whoami")
+    XCTAssertTrue(spaced.capture)
+    XCTAssertEqual(spaced.raw, ":aws whoami")
+
+    let noColon = NormalModeDispatcher.commandLineClipboardModifier("#calc 2 + 2")
+    XCTAssertTrue(noColon.capture)
+    XCTAssertEqual(noColon.raw, "calc 2 + 2")
   }
 
   func testCommandLineHelpTopicParser() throws {

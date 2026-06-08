@@ -151,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeDragGlobalMonitor: Any?
   var normalModeDragLocalMonitor: Any?
   var normalModeEventTap: NormalModeEventTap?
+  var clipboardMonitor: ClipboardMonitor?
   var normalModeDragAction: JumpAction = .leftClick
   var normalModeDragModifiers: ClickModifiers = []
   var windowGeometryChangeToken: UInt64 = 0
@@ -243,6 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     installDismissObservers()
     prewarmCandidateFinderCaches(reason: "launch")
     startCandidateFinderLiveRefresh()
+    startClipboardMonitor()
     pluginManager.emit(
       PluginEvent(name: "flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
   }
@@ -430,6 +432,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
+  /// Start the in-process pasteboard watcher and bridge its callback onto the
+  /// `clipboard.changed` plugin event. Owning the watch here keeps plugins
+  /// free of polling — the clipboard plugin just subscribes to the event.
+  private func startClipboardMonitor() {
+    clipboardMonitor = ClipboardMonitor { [weak self] text in
+      self?.pluginManager.emit(
+        PluginEvent(
+          name: "clipboard.changed",
+          payload: ["text": text],
+          bundleID: nil,
+          configPath: nil,
+          focused: nil))
+    }
+    clipboardMonitor?.start()
+  }
+
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -439,6 +457,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginStateRefreshWork = nil
     normalModeEventTap?.uninstall()
     normalModeEventTap = nil
+    clipboardMonitor?.stop()
+    clipboardMonitor = nil
     monitor?.stop()
     pluginManager.stop()
     debugServer?.stop()

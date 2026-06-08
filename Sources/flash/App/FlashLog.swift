@@ -106,39 +106,45 @@ enum FlashLog {
 
   static func debug(
     _ message: @autoclosure () -> String,
+    fields: [String: String] = [:],
     source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
   ) {
-    emit(.debug, source: source, fields: [:], message)
+    emit(.debug, source: source, fields: fields, message)
   }
   static func trace(
     _ message: @autoclosure () -> String,
+    fields: [String: String] = [:],
     source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
   ) {
-    emit(.trace, source: source, fields: [:], message)
+    emit(.trace, source: source, fields: fields, message)
   }
   static func info(
     _ message: @autoclosure () -> String,
+    fields: [String: String] = [:],
     source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
   ) {
-    emit(.info, source: source, fields: [:], message)
+    emit(.info, source: source, fields: fields, message)
   }
   static func warn(
     _ message: @autoclosure () -> String,
+    fields: [String: String] = [:],
     source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
   ) {
-    emit(.warn, source: source, fields: [:], message)
+    emit(.warn, source: source, fields: fields, message)
   }
   static func error(
     _ message: @autoclosure () -> String,
+    fields: [String: String] = [:],
     source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
   ) {
-    emit(.error, source: source, fields: [:], message)
+    emit(.error, source: source, fields: fields, message)
   }
   static func fatal(
     _ message: @autoclosure () -> String,
+    fields: [String: String] = [:],
     source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
   ) {
-    emit(.fatal, source: source, fields: [:], message)
+    emit(.fatal, source: source, fields: fields, message)
   }
 
   static func plugin(

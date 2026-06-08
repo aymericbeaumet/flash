@@ -344,6 +344,22 @@ enum ConfigLoader {
       }
       return
     }
+    // `[plugin.<id>]` — arbitrary user settings handed to the plugin as
+    // JSON. The value type is inferred (bool / int / double / string array
+    // / string) so a plugin sees naturally-typed JSON.
+    if table.count == 2, table[0] == "plugin", !table[1].isEmpty, !key.isEmpty {
+      let pluginID = table[1]
+      let parsed = parsePluginConfigValue(value)
+      guard let parsed else {
+        config.addDiagnostic(
+          "plugin.\(pluginID).\(key) must be a string, number, boolean, or array of strings",
+          location: location)
+        return
+      }
+      config.plugins.settings[pluginID, default: [:]][key] = parsed
+      config.recordLocation(path: "plugin.\(pluginID).\(key)", location: location)
+      return
+    }
     let path = table + [key]
     switch path {
     case ["hints", "keys"]:
@@ -736,6 +752,19 @@ enum ConfigLoader {
   }
   private static func parseInt(_ v: String) -> Int? { Int(v) }
   private static func parseDouble(_ v: String) -> Double? { Double(v) }
+
+  /// Infer the type of a `[plugin.<id>]` value. Order matters: bool and
+  /// int are checked before string so `true` / `42` come through typed,
+  /// and quoted/array forms are recognized before falling back to a bare
+  /// string.
+  private static func parsePluginConfigValue(_ v: String) -> PluginConfigValue? {
+    if let bool = parseBool(v) { return .bool(bool) }
+    if let int = parseInt(v) { return .int(int) }
+    if let double = parseDouble(v) { return .double(double) }
+    if let array = parseStringArray(v) { return .stringArray(array) }
+    if let string = parseString(v) { return .string(string) }
+    return nil
+  }
 
   private static func parseInspectorHost(_ v: String) -> String? {
     let raw = parseString(v) ?? v.trimmingCharacters(in: .whitespacesAndNewlines)

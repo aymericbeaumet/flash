@@ -91,6 +91,53 @@ struct PluginCommandRegistration: Codable, Hashable {
   var command: String
   var subcommand: String
   var description: String
+  /// Arbitrary `_`-prefixed fields from the manifest entry. Flash itself
+  /// ignores them; they are forwarded verbatim to the plugin on
+  /// `command.invoke` so a plugin can keep per-subcommand data (e.g. `web`
+  /// stores its URL template as `_url`) in the manifest instead of
+  /// duplicating it in code.
+  var meta: [String: String]
+
+  init(command: String, subcommand: String, description: String, meta: [String: String] = [:]) {
+    self.command = command
+    self.subcommand = subcommand
+    self.description = description
+    self.meta = meta
+  }
+
+  private struct DynamicKey: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: DynamicKey.self)
+    func string(_ key: String) -> String? {
+      try? c.decode(String.self, forKey: DynamicKey(stringValue: key))
+    }
+    self.command = string("command") ?? ""
+    self.subcommand = string("subcommand") ?? ""
+    self.description = string("description") ?? ""
+    var meta: [String: String] = [:]
+    for key in c.allKeys where key.stringValue.hasPrefix("_") {
+      if let value = try? c.decode(String.self, forKey: key) {
+        meta[key.stringValue] = value
+      }
+    }
+    self.meta = meta
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: DynamicKey.self)
+    try c.encode(command, forKey: DynamicKey(stringValue: "command"))
+    try c.encode(subcommand, forKey: DynamicKey(stringValue: "subcommand"))
+    try c.encode(description, forKey: DynamicKey(stringValue: "description"))
+    for (key, value) in meta.sorted(by: { $0.key < $1.key }) {
+      try c.encode(value, forKey: DynamicKey(stringValue: key))
+    }
+  }
 }
 
 struct PluginManifest: Codable, Equatable {

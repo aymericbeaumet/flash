@@ -13,6 +13,8 @@
   let viewport = $state<HTMLDivElement | null>(null);
   let scrollTop = $state(0);
   let viewportHeight = $state(400);
+  let selected = $state<LogRecord | null>(null);
+  let copied = $state(false);
 
   const levels = ["trace", "debug", "info", "warn", "error", "fatal"];
 
@@ -62,9 +64,33 @@
     if (viewport) viewport.scrollTop = viewport.scrollHeight;
   }
 
-  function fieldText(l: LogRecord): string {
-    if (!l.fields || Object.keys(l.fields).length === 0) return "";
-    return " " + JSON.stringify(l.fields);
+  function recordJSON(l: LogRecord): string {
+    return JSON.stringify(l, null, 2);
+  }
+
+  function fieldsPreview(l: LogRecord): string {
+    if (!l.fields) return "";
+    const entries = Object.entries(l.fields);
+    if (entries.length === 0) return "";
+    return entries
+      .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+      .join("  ");
+  }
+
+  function selectRow(l: LogRecord) {
+    selected = selected === l ? null : l;
+    copied = false;
+  }
+
+  async function copySelected() {
+    if (!selected) return;
+    try {
+      await navigator.clipboard.writeText(recordJSON(selected));
+      copied = true;
+      setTimeout(() => (copied = false), 1200);
+    } catch {
+      copied = false;
+    }
   }
 </script>
 
@@ -84,28 +110,53 @@
     <span class="count">{filtered.length}/{logs.length}{paused ? " · paused" : ""}</span>
   </div>
 
+  <div class="header">
+    <span>time</span>
+    <span>level</span>
+    <span>source</span>
+    <span>message</span>
+    <span>fields</span>
+  </div>
+
   <div class="viewport" use:measure onscroll={onScroll}>
     <div class="spacer" style="height: {totalHeight}px">
       <div class="rows" style="transform: translateY({topPad}px)">
         {#each slice as l (startIndex + slice.indexOf(l))}
-          <div class="row">
+          <div
+            class="row"
+            class:selected={selected === l}
+            onclick={() => selectRow(l)}
+            role="button"
+            tabindex="0"
+            onkeydown={(e) => e.key === "Enter" && selectRow(l)}
+          >
             <span class="ts">{timestamp(l.time_unix_ms)}</span>
             <span class="lvl lvl-{l.level || 'info'}">{l.level || "info"}</span>
             <span class="src" title={l.source || "-"}>{l.source || "-"}</span>
-            <span class="msg" title={(l.message || "") + fieldText(l)}>
-              {(l.message || "") + fieldText(l)}
-            </span>
+            <span class="msg" title={l.message || ""}>{l.message || ""}</span>
+            <span class="fields" title={fieldsPreview(l)}>{fieldsPreview(l)}</span>
           </div>
         {/each}
       </div>
     </div>
   </div>
+
+  {#if selected}
+    <div class="detail">
+      <div class="detail-bar">
+        <strong>Record</strong>
+        <button onclick={copySelected}>{copied ? "Copied ✓" : "Copy JSON"}</button>
+        <button onclick={() => (selected = null)} title="Close">✕</button>
+      </div>
+      <pre>{recordJSON(selected)}</pre>
+    </div>
+  {/if}
 </div>
 
 <style>
   .logs {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     height: 100%;
     min-height: 0;
   }
@@ -130,6 +181,18 @@
     border-color: var(--accent);
     font-weight: 700;
   }
+  .header {
+    display: grid;
+    grid-template-columns: 180px 60px minmax(140px, 0.28fr) minmax(220px, 0.5fr) minmax(160px, 0.5fr);
+    gap: 8px;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
   .viewport {
     overflow: auto;
     position: relative;
@@ -149,10 +212,17 @@
   .row {
     height: 24px;
     display: grid;
-    grid-template-columns: 180px 60px minmax(160px, 0.4fr) minmax(280px, 1fr);
+    grid-template-columns: 180px 60px minmax(140px, 0.28fr) minmax(220px, 0.5fr) minmax(160px, 0.5fr);
     gap: 8px;
     align-items: center;
     border-bottom: 1px solid var(--border-soft);
+    cursor: pointer;
+  }
+  .row:hover {
+    background: var(--border-soft);
+  }
+  .row.selected {
+    background: var(--border);
   }
   .ts {
     color: var(--muted);
@@ -168,6 +238,13 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .fields {
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 11px;
   }
   .lvl {
     display: inline-block;
@@ -185,4 +262,27 @@
   .lvl-warn { color: #2d2200; background: #ffd166; }
   .lvl-error { color: #fff3f2; background: #d9574f; }
   .lvl-fatal { color: #fff7fb; background: #b21e59; }
+  .detail {
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    max-height: 38%;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+  }
+  .detail-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .detail pre {
+    margin: 0;
+    padding: 8px 10px;
+    overflow: auto;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre;
+  }
 </style>

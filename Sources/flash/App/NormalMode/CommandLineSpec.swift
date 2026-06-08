@@ -22,7 +22,6 @@ extension NormalModeDispatcher {
     case copy
     case cut
     case paste
-    case copyAll
     case plugins(PluginsSubcommand)
     case mappings
     case help(topic: String?)
@@ -266,7 +265,6 @@ extension NormalModeDispatcher {
     CommandLineSpec(names: ["y[ank]", "copy"], bangPolicy: .rejected) { _ in .copy },
     CommandLineSpec(names: ["d[elete]", "cut"], bangPolicy: .rejected) { _ in .cut },
     CommandLineSpec(names: ["pu[t]", "paste"], bangPolicy: .rejected) { _ in .paste },
-    CommandLineSpec(names: ["%y[ank]"], bangPolicy: .rejected) { _ in .copyAll },
     CommandLineSpec(names: ["plugins"], bangPolicy: .rejected) { _ in .plugins(.modal) },
     CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
   ]
@@ -289,7 +287,6 @@ extension NormalModeDispatcher {
     "yank": "Copy the selection (⌘C)",
     "delete": "Cut the selection (⌘X)",
     "put": "Paste (⌘V)",
-    "%yank": "Copy the whole document",
     "plugins": "List/reload plugins",
     "mappings": "Show the active key mappings",
     "open": "Forward args to /usr/bin/open",
@@ -456,6 +453,26 @@ extension NormalModeDispatcher {
     }
     items.sort { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
     return items
+  }
+
+  /// Detect the `#` output-capture modifier. A `#` immediately after the
+  /// `:` prompt (`:#aws whoami`) or at the very head (`#aws whoami`) means
+  /// "run the command and put its stdout on the clipboard". Returns the
+  /// raw with the `#` stripped (the leading `:` preserved so downstream
+  /// parsers are unaffected) plus whether the modifier was present.
+  static func commandLineClipboardModifier(_ raw: String) -> (raw: String, capture: Bool) {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    var hadColon = false
+    var body = trimmed
+    if body.hasPrefix(":") {
+      hadColon = true
+      body.removeFirst()
+      body = body.drop(while: { $0.isWhitespace }).description
+    }
+    guard body.hasPrefix("#") else { return (raw, false) }
+    body.removeFirst()
+    body = body.drop(while: { $0.isWhitespace }).description
+    return ((hadColon ? ":" : "") + body, true)
   }
 
   static func pluginCommandLineInvocation(_ raw: String) -> (

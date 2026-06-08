@@ -57,6 +57,28 @@ struct ConfigDiagnostic: Equatable {
   var alertLine: String { logMessage }
 }
 
+/// A single value inside a `[plugin.<id>]` settings table. Carries enough
+/// type information to round-trip into JSON for the plugin's
+/// `FLASH_PLUGIN_CONFIG`. Equatable so a config reload can detect when a
+/// plugin's settings actually changed and restart only then.
+enum PluginConfigValue: Equatable {
+  case string(String)
+  case int(Int)
+  case double(Double)
+  case bool(Bool)
+  case stringArray([String])
+
+  var jsonValue: Any {
+    switch self {
+    case .string(let value): return value
+    case .int(let value): return value
+    case .double(let value): return value
+    case .bool(let value): return value
+    case .stringArray(let value): return value
+    }
+  }
+}
+
 struct Config {
   struct Hints {
     var keys: String = Alphabet.defaultKeys
@@ -121,6 +143,10 @@ struct Config {
     /// disable hot-reload — useful if a plugin keeps a noisy log
     /// somewhere in its tree that would otherwise restart-loop it.
     var watchingEnabled: Bool = true
+    /// Per-plugin user settings from `[plugin.<id>]` tables. Delivered to
+    /// each plugin as a JSON object via `FLASH_PLUGIN_CONFIG`. Keyed by
+    /// plugin id, then by setting name.
+    var settings: [String: [String: PluginConfigValue]] = [:]
   }
   struct Mode {
     struct Labels: Equatable {
@@ -348,6 +374,20 @@ struct Config {
     )
   }
 
+  /// JSON object string of the `[plugin.<id>]` settings for `pluginID`,
+  /// suitable for `FLASH_PLUGIN_CONFIG`. Returns `{}` when the plugin has
+  /// no settings.
+  func pluginConfigJSON(for pluginID: String) -> String {
+    let table = plugins.settings[pluginID]?.mapValues(\.jsonValue) ?? [:]
+    guard
+      let data = try? JSONSerialization.data(withJSONObject: table, options: [.sortedKeys]),
+      let json = String(data: data, encoding: .utf8)
+    else {
+      return "{}"
+    }
+    return json
+  }
+
   var resolvedConfigJSON: String {
     let modeJSON: [String: Any] = [
       "all": mode.all.map(Self.mappingJSONValue),
@@ -391,6 +431,9 @@ struct Config {
       "plugins": [
         "third_party": plugins.thirdParty.map(\.raw),
         "watching_enabled": plugins.watchingEnabled,
+        "settings": plugins.settings.mapValues { table in
+          table.mapValues(\.jsonValue)
+        },
       ],
       "warnings": warnings,
     ])

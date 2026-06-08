@@ -257,6 +257,30 @@
       "file": "collected-meet-aymeric-h-l-ne-hackaton-ads-001.html",
       "category": "collected-regression",
       "kind": "collected"
+    },
+    {
+      "name": "collected-aymeric-beaumet-software-engineer-posts-talks-pr-001",
+      "file": "collected-aymeric-beaumet-software-engineer-posts-talks-pr-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-developers-please-nurture-your-coding-experience-001",
+      "file": "collected-developers-please-nurture-your-coding-experience-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-projects-by-aymeric-beaumet-aymeric-beaumet-001",
+      "file": "collected-projects-by-aymeric-beaumet-aymeric-beaumet-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-backend-fix-call-history-pagination-dropping-old-001",
+      "file": "collected-backend-fix-call-history-pagination-dropping-old-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
     }
   ]
 }

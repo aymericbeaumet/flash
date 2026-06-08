@@ -2,10 +2,16 @@
   "id": "clipboard",
   "name": "Clipboard",
   "version": "0.1.0",
-  "description": "Clipboard history in flashlight; pick an entry to paste it. Plus :clipboard clear.",
+  "description": "Clipboard history in flashlight; pick an entry to paste it. Plus :clipboard copy/paste/clear.",
   "install": "true",
   "start": "exec ./flash-plugin-clipboard",
+  "events": [
+    "flash.started",
+    { "match": "clipboard.changed" }
+  ],
   "commands": [
+    { "command": "clipboard", "subcommand": "copy", "description": "Copy the selection (⌘C)" },
+    { "command": "clipboard", "subcommand": "paste", "description": "Paste (⌘V)" },
     { "command": "clipboard", "subcommand": "clear", "description": "Clear the clipboard history" }
   ]
 }

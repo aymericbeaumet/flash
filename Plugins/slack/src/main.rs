@@ -12,10 +12,20 @@ impl Plugin for Slack {
         }
         let name = str_field(&params, "subcommand");
         let args = string_list(&params, "args");
+        // `[plugin.slack] cli = "/path/to/slack"` overrides the executable;
+        // defaults to `slack` on PATH.
+        let cli = {
+            let configured = ctx.config_str("cli");
+            if configured.is_empty() {
+                "slack".to_string()
+            } else {
+                configured
+            }
+        };
         let (argv, timeout): (Vec<String>, u64) = match name {
-            "login" => (vec!["slack".into(), "login".into()], 300),
-            "version" => (vec!["slack".into(), "version".into()], 120),
-            "run" => (prepend("slack", &args), 120),
+            "login" => (vec![cli, "login".into()], 300),
+            "version" => (vec![cli, "version".into()], 120),
+            "run" => (prepend(&cli, &args), 120),
             other => {
                 return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
             }

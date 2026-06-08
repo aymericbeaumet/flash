@@ -189,6 +189,33 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
+  func testParsesPluginSettingsTables() throws {
+    let c = ConfigLoader.parse(
+      """
+      [plugin.slack]
+      cli = "/opt/homebrew/bin/slack"
+      retries = 3
+      verbose = true
+
+      [plugin.web]
+      engines = ["google", "ddg"]
+      """)
+
+    XCTAssertEqual(c.plugins.settings["slack"]?["cli"], .string("/opt/homebrew/bin/slack"))
+    XCTAssertEqual(c.plugins.settings["slack"]?["retries"], .int(3))
+    XCTAssertEqual(c.plugins.settings["slack"]?["verbose"], .bool(true))
+    XCTAssertEqual(c.plugins.settings["web"]?["engines"], .stringArray(["google", "ddg"]))
+
+    let slackJSON = c.pluginConfigJSON(for: "slack")
+    let data = try XCTUnwrap(slackJSON.data(using: .utf8))
+    let object = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual(object["cli"] as? String, "/opt/homebrew/bin/slack")
+    XCTAssertEqual(object["retries"] as? Int, 3)
+    XCTAssertEqual(object["verbose"] as? Bool, true)
+    XCTAssertEqual(c.pluginConfigJSON(for: "absent"), "{}")
+  }
+
   func testInvalidPluginReferenceReportsDiagnostic() {
     let c = ConfigLoader.parse(
       """

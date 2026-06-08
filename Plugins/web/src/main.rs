@@ -10,10 +10,14 @@ impl Plugin for Web {
         if method != "command.invoke" {
             return json!({ "ok": false, "error": format!("unknown method: {method}") });
         }
-        let engine = str_field(&params, "subcommand");
-        let Some(template) = template_for(engine) else {
+        // The URL template lives in the manifest as the `_url` field of the
+        // matched subcommand, forwarded here by the host. The plugin holds no
+        // engine table of its own — add engines by editing manifest.json.
+        let template = str_field(&params, "_url");
+        if template.is_empty() {
+            let engine = str_field(&params, "subcommand");
             return json!({ "ok": false, "error": format!("unknown engine: {engine}") });
-        };
+        }
         let query = string_list(&params, "args").join(" ");
         if query.trim().is_empty() {
             return json!({ "ok": false, "error": "empty query" });
@@ -23,19 +27,6 @@ impl Plugin for Web {
             .await
             .value()
     }
-}
-
-fn template_for(engine: &str) -> Option<&'static str> {
-    Some(match engine {
-        "google" => "https://www.google.com/search?q=%s",
-        "ddg" => "https://duckduckgo.com/?q=%s",
-        "gh" => "https://github.com/search?q=%s&type=repositories",
-        "npm" => "https://www.npmjs.com/search?q=%s",
-        "mdn" => "https://developer.mozilla.org/en-US/search?q=%s",
-        "so" => "https://stackoverflow.com/search?q=%s",
-        "yt" => "https://www.youtube.com/results?search_query=%s",
-        _ => return None,
-    })
 }
 
 /// Percent-encode a query for use in a URL query component. Encodes every

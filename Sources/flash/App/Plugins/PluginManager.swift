@@ -9,6 +9,13 @@ final class PluginManager {
     let subcommand: String
   }
 
+  /// A resolved command target: the owning plugin plus the matched manifest
+  /// entry's `_`-prefixed metadata, forwarded to the plugin on invoke.
+  private struct CommandTarget {
+    let plugin: PluginProcess
+    let meta: [String: String]
+  }
+
   private let queue = DispatchQueue(label: "flash.plugins", qos: .utility)
   private let baseDataDir: URL
   private var pluginsByID: [String: PluginProcess] = [:]
@@ -18,7 +25,12 @@ final class PluginManager {
   /// changes; per-invoke lookup is then O(1) instead of walking every
   /// plugin × every command × `localizedCaseInsensitiveCompare`.
   /// Keys are lowercased; lookups use the same normalisation.
-  private var commandIndex: [CommandKey: PluginProcess] = [:]
+  private var commandIndex: [CommandKey: CommandTarget] = [:]
+  /// Commands that register the wildcard subcommand `"*"`: the verb takes
+  /// no fixed subcommand and consumes the whole remainder as args (e.g.
+  /// `:calc 2 + 2`). Keyed by lowercased command; consulted only when the
+  /// exact `(command, subcommand)` lookup misses.
+  private var wildcardCommandIndex: [String: CommandTarget] = [:]
   var onStateChanged: (() -> Void)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
@@ -40,6 +52,7 @@ final class PluginManager {
       }
       pluginsByID.removeAll()
       commandIndex.removeAll()
+      wildcardCommandIndex.removeAll()
       sourceAdaptersByID.removeAll()
     }
   }
@@ -73,17 +86,55 @@ final class PluginManager {
     raw: String,
     onResult: ((Bool, pid_t?, String?) -> Void)? = nil
   ) -> Bool {
-    let key = CommandKey(command: command.lowercased(), subcommand: subcommand.lowercased())
-    let plugin = queue.sync { commandIndex[key] }
-    guard let plugin else { return false }
-    plugin.invokeCommand(command: command, subcommand: subcommand, args: args, raw: raw) {
+    let lcCommand = command.lowercased()
+    let key = CommandKey(command: lcCommand, subcommand: subcommand.lowercased())
+    // Exact `(command, subcommand)` first; on a miss, fall back to a wildcard
+    // command that consumes the whole remainder (the parsed subcommand token
+    // is really the first arg, e.g. `:calc 2 + 2`).
+    let resolved: (target: CommandTarget, subcommand: String, args: [String])? = queue.sync {
+      if let target = commandIndex[key] {
+        return (target, subcommand, args)
+      }
+      if let target = wildcardCommandIndex[lcCommand] {
+        return (target, "", [subcommand] + args)
+      }
+      return nil
+    }
+    guard let resolved else { return false }
+    resolved.target.plugin.invokeCommand(
+      command: command, subcommand: resolved.subcommand, args: resolved.args, raw: raw,
+      meta: resolved.target.meta
+    ) {
       ok, pid, stdout in
       FlashLog.debug(
-        "[plugin_command] command=\(command) subcommand=\(subcommand) ok=\(ok) "
+        "[plugin_command] command=\(command) subcommand=\(resolved.subcommand) ok=\(ok) "
           + "target_pid=\(pid.map(String.init) ?? "nil")")
       onResult?(ok, pid, stdout)
     }
     return true
+  }
+
+  /// Routes a plugin→host RPC request to the matching core capability and
+  /// delivers the JSON result via `reply`. This is the single entry point
+  /// through which plugins reach native APIs the core owns (the AX broker,
+  /// app activation, …) — plugins never touch those APIs directly. `reply`
+  /// may be called asynchronously; AX methods hop to the main thread first.
+  func handleHostRequest(
+    method: String,
+    params: [String: Any],
+    pluginID: String,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    switch method {
+    case "host.ping":
+      // Round-trip validation of the bidirectional channel.
+      reply(["ok": true, "echo": params])
+    default:
+      FlashLog.warn(
+        "[plugin] unknown host method \(method) from \(pluginID)",
+        fields: ["method": method, "plugin": pluginID])
+      reply(["ok": false, "error": "unknown host method: \(method)"])
+    }
   }
 
   func commandRegistrations() -> [PluginCommandRegistration] {
@@ -93,25 +144,33 @@ final class PluginManager {
   }
 
   func hasCommand(command: String, subcommand: String) -> Bool {
-    let key = CommandKey(command: command.lowercased(), subcommand: subcommand.lowercased())
-    return queue.sync { commandIndex[key] != nil }
+    let lcCommand = command.lowercased()
+    let key = CommandKey(command: lcCommand, subcommand: subcommand.lowercased())
+    return queue.sync { commandIndex[key] != nil || wildcardCommandIndex[lcCommand] != nil }
   }
 
   /// Rebuild the command lookup index. Must be called from `queue` after
   /// `pluginsByID` changes.
   private func rebuildCommandIndex() {
-    var next: [CommandKey: PluginProcess] = [:]
+    var next: [CommandKey: CommandTarget] = [:]
+    var wildcard: [String: CommandTarget] = [:]
     for plugin in pluginsByID.values {
       for registration in plugin.commands {
-        let key = CommandKey(
-          command: registration.command.lowercased(),
-          subcommand: registration.subcommand.lowercased())
+        let command = registration.command.lowercased()
+        let subcommand = registration.subcommand.lowercased()
+        let target = CommandTarget(plugin: plugin, meta: registration.meta)
+        if subcommand == "*" {
+          if wildcard[command] == nil { wildcard[command] = target }
+          continue
+        }
+        let key = CommandKey(command: command, subcommand: subcommand)
         // First plugin to register a command wins on collision, matching
         // the previous walk's first-match semantics.
-        if next[key] == nil { next[key] = plugin }
+        if next[key] == nil { next[key] = target }
       }
     }
     commandIndex = next
+    wildcardCommandIndex = wildcard
   }
 
   func statusText() -> String {
@@ -179,12 +238,17 @@ final class PluginManager {
       do {
         let manifest = try PluginManifest.load(from: item.root)
         if nextIDs.contains(manifest.id) {
-          FlashLog.warn("[plugins] duplicate plugin id \(manifest.id) ignored")
+          FlashLog.warn(
+            "[plugins] duplicate plugin id \(manifest.id) ignored",
+            fields: ["id": manifest.id, "root": item.root.path])
           continue
         }
         nextIDs.insert(manifest.id)
+        let settings = config.plugins.settings[manifest.id] ?? [:]
         let existing = pluginsByID[manifest.id]
-        if existing?.root == item.root, existing?.manifest == manifest {
+        if existing?.root == item.root, existing?.manifest == manifest,
+          existing?.settings == settings
+        {
           continue
         }
         existing?.stop()
@@ -193,13 +257,24 @@ final class PluginManager {
           manifest: manifest,
           origin: item.origin,
           baseDataDir: baseDataDir,
-          watchFiles: config.plugins.watchingEnabled)
+          watchFiles: config.plugins.watchingEnabled,
+          settings: settings)
         plugin.onStatusChanged = { [weak self] in self?.notifyStateChanged() }
+        plugin.onHostRequest = { [weak self] method, params, pluginID, reply in
+          self?.handleHostRequest(
+            method: method, params: params, pluginID: pluginID, reply: reply)
+        }
         pluginsByID[manifest.id] = plugin
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin)
         plugin.start()
       } catch {
-        FlashLog.warn("[plugins] failed to load \(item.root.path): \(error)")
+        FlashLog.warn(
+          "[plugins] failed to load \(item.root.path): \(error)",
+          fields: [
+            "root": item.root.path,
+            "origin": String(describing: item.origin),
+            "error": String(describing: error),
+          ])
       }
     }
 
@@ -246,7 +321,9 @@ final class PluginManager {
         }
         return (root, .github(ref.raw))
       } catch {
-        FlashLog.warn("[plugins] failed to materialize \(ref.raw): \(error)")
+        FlashLog.warn(
+          "[plugins] failed to materialize \(ref.raw): \(error)",
+          fields: ["ref": ref.raw, "root": root.path, "error": String(describing: error)])
         return nil
       }
     }

@@ -944,6 +944,10 @@ extension AppDelegate {
         subcommands[key] = []
         commandsOrdered.append(key)
       }
+      // `"*"` marks a wildcard command (whole remainder is args, e.g.
+      // `:calc 2 + 2`); the verb is still completable, but there is no
+      // concrete subcommand to suggest.
+      if registration.subcommand == "*" { continue }
       if !subcommands[key]!.contains(where: {
         $0.localizedCaseInsensitiveCompare(registration.subcommand) == .orderedSame
       }) {
@@ -1099,7 +1103,12 @@ extension AppDelegate {
     CandidateFinder.displayTitle(source: source, name: title)
   }
 
-  func submitCommandLine(_ raw: String) {
+  func submitCommandLine(_ rawInput: String) {
+    // `#` output-capture modifier (`:#aws whoami`): strip it up front so all
+    // downstream parsing sees a clean command line, and remember to route the
+    // command's stdout onto the clipboard rather than just a toast.
+    let (raw, captureOutput) =
+      NormalModeDispatcher.commandLineClipboardModifier(rawInput)
     // `:open <args>` is a dumb forward to `/usr/bin/open` — no app-finding
     // smarts (that lives in `:flashlight`). Caught first so it never falls
     // into the candidate-finder or command-spec paths.
@@ -1135,6 +1144,19 @@ extension AppDelegate {
       performCommandLineCommand(command)
       return
     }
+    // `:clipboard copy` / `:clipboard paste` synthesize ⌘C / ⌘V against the
+    // focused app — keystroke synthesis is a host capability, so intercept
+    // these before they would dispatch to the (key-less) clipboard plugin.
+    if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
+      plugin.command.lowercased() == "clipboard",
+      plugin.args.isEmpty,
+      ["copy", "paste"].contains(plugin.subcommand.lowercased())
+    {
+      let sub = plugin.subcommand.lowercased()
+      finishCommandLineInteraction(reason: "clipboard_\(sub)")
+      performMappedCommand(sub == "copy" ? .copy : .paste)
+      return
+    }
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
       pluginManager.invoke(
         command: plugin.command,
@@ -1144,7 +1166,13 @@ extension AppDelegate {
         onResult: { [weak self] ok, pid, stdout in
           guard ok else { return }
           self?.activatePluginCommandTarget(pid)
-          if let stdout { self?.overlay.displayBanner(stdout) }
+          guard let stdout, !stdout.isEmpty else { return }
+          if captureOutput {
+            NormalModeDispatcher.copy(stdout)
+            self?.overlay.displayBanner("Copied: \(stdout)")
+          } else {
+            self?.overlay.displayBanner(stdout)
+          }
         })
     {
       finishCommandLineInteraction(reason: "plugin_command_submit")
@@ -1203,8 +1231,6 @@ extension AppDelegate {
       performMappedCommand(.cut)
     case .paste:
       performMappedCommand(.paste)
-    case .copyAll:
-      performMappedCommand(.copyAll)
     case .plugins(let sub):
       runPluginsSubcommand(sub)
     case .mappings:

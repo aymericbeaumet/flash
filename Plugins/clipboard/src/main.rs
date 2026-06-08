@@ -1,12 +1,10 @@
 use std::sync::Mutex;
-use std::time::Duration;
 
 use flash_plugin::serde_json::{json, Value};
 use flash_plugin::{run, str_field, Context, Plugin};
 
 const SOURCE_ID: &str = "plugin.clipboard";
 const HISTORY_CAP: usize = 50;
-const POLL_INTERVAL_MS: u64 = 700;
 const PREVIEW_CHARS: usize = 80;
 
 struct Clipboard {
@@ -20,35 +18,37 @@ impl Plugin for Clipboard {
             *hist = load(&ctx);
         }
         emit(&ctx, &self.snapshot());
+    }
 
-        loop {
-            tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
-            let result = ctx
-                .run_cli(&["/usr/bin/pbpaste".to_string()], Duration::from_secs(5))
-                .await;
-            if !result.ok {
-                continue;
-            }
-            let text = result.stdout;
-            if text.is_empty() {
-                continue;
-            }
-            let changed = {
-                let mut hist = self.history.lock().unwrap();
-                if hist.first().map(String::as_str) == Some(text.as_str()) {
-                    false
-                } else {
-                    hist.retain(|entry| entry != &text);
-                    hist.insert(0, text);
-                    hist.truncate(HISTORY_CAP);
-                    true
+    // The core owns the pasteboard watch (it reads NSPasteboard's changeCount
+    // in-process — macOS exposes no change notification) and pushes new text
+    // here as `clipboard.changed`. The plugin never polls `pbpaste`.
+    async fn on_event(&self, ctx: Context, name: String, payload: Value) {
+        match name.as_str() {
+            "flash.started" => emit(&ctx, &self.snapshot()),
+            "clipboard.changed" => {
+                let text = str_field(&payload, "text").to_string();
+                if text.is_empty() {
+                    return;
                 }
-            };
-            if changed {
-                let snapshot = self.snapshot();
-                persist(&ctx, &snapshot);
-                emit(&ctx, &snapshot);
+                let changed = {
+                    let mut hist = self.history.lock().unwrap();
+                    if hist.first().map(String::as_str) == Some(text.as_str()) {
+                        false
+                    } else {
+                        hist.retain(|entry| entry != &text);
+                        hist.insert(0, text);
+                        hist.truncate(HISTORY_CAP);
+                        true
+                    }
+                };
+                if changed {
+                    let snapshot = self.snapshot();
+                    persist(&ctx, &snapshot);
+                    emit(&ctx, &snapshot);
+                }
             }
+            _ => {}
         }
     }
 
@@ -57,6 +57,9 @@ impl Plugin for Clipboard {
             return json!({ "ok": false, "error": format!("unknown method: {method}") });
         }
         match str_field(&params, "subcommand") {
+            // copy/paste are intercepted by the host (it synthesizes ⌘C/⌘V);
+            // accept them as no-ops so they stay listed in the command catalog.
+            "copy" | "paste" => json!({ "ok": true }),
             "clear" => {
                 {
                     self.history.lock().unwrap().clear();

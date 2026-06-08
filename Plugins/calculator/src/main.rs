@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{applescript_quote, run, str_field, string_list, Context, Plugin};
+use flash_plugin::{applescript_quote, run, string_list, Context, Plugin};
 
 struct Calculator;
 
@@ -10,10 +10,8 @@ impl Plugin for Calculator {
         if method != "command.invoke" {
             return json!({ "ok": false, "error": format!("unknown method: {method}") });
         }
-        if str_field(&params, "subcommand") != "eval" {
-            let sub = str_field(&params, "subcommand");
-            return json!({ "ok": false, "error": format!("unknown subcommand: {sub}") });
-        }
+        // Registered as a wildcard command, so the whole remainder arrives as
+        // args (`:calc 2 + 2` and `:calc 2+2` both work).
         let expr = string_list(&params, "args").join(" ");
         let expr = expr.trim();
         if expr.is_empty() {
