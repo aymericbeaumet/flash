@@ -237,7 +237,7 @@ extension AppDelegate {
       "If Flash IS already in the list (toggle ON):",
       "  The grant is bound to the previous binary's hash.",
       "  Toggle Flash OFF then ON to re-bind to the current build.",
-      "  (./Scripts/dev.sh resets this for you next time.)",
+      "  (./Scripts/install.sh --dev resets this for you next time.)",
       "",
       "System Settings has been opened.",
     ]

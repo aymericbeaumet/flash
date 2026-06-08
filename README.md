@@ -7,7 +7,7 @@ System-wide hint-driven find and jump for macOS. Flash is a resident, headless a
 ## Build
 
 ```bash
-./Scripts/dev.sh
+./Scripts/install.sh --dev
 ```
 
 Open it once so macOS knows where it lives:
@@ -18,7 +18,7 @@ open /Applications/Flash.app
 
 Then grant **Accessibility** in *System Settings -> Privacy & Security -> Accessibility*.
 
-`./Scripts/dev.sh` signs Flash with the stable local "Flash Dev" identity, installs `/Applications/Flash.app`, registers login autolaunch through `~/Library/LaunchAgents/com.flash.app.autolaunch.plist`, starts the resident app, installs `flash` / `flashctl` symlinks in `~/.local/bin`, and symlinks bundled plugins from the checkout for live reload during development.
+`./Scripts/install.sh --dev` signs Flash with the stable local "Flash Dev" identity, installs `/Applications/Flash.app`, registers login autolaunch through `~/Library/LaunchAgents/com.flash.app.autolaunch.plist`, starts the resident app, installs `flash` / `flashctl` symlinks in `~/.local/bin`, and symlinks bundled plugins from the checkout for live reload during development. Use `--release` for an optimized universal (Intel + Apple Silicon) build of both the app and the bundled plugins.
 
 ## Actions
 
@@ -179,7 +179,7 @@ Public SPI lives in `FlashCore` (`FlashSource`, `JumpTarget`, `AppContext`, `Jum
 ```bash
 swift build
 swift test
-./Scripts/dev.sh
+./Scripts/install.sh --dev
 ```
 
 The installed resident process runs from `/Applications/Flash.app`; `swift build` does not update the app macOS is using. Reinstall after every code change before manual UI verification.

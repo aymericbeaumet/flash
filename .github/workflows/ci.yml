@@ -125,7 +125,8 @@ jobs:
             export FLASH_MARKETING_VERSION="${{ steps.meta.outputs.marketing_version }}"
           fi
           export FLASH_BUNDLE_VERSION="${{ github.run_number }}"
-          bash Scripts/package-release.sh "$zip_path"
+          export FLASH_ZIP_PATH="$zip_path"
+          bash Scripts/build.sh --release
           echo "zip_path=$zip_path" >> "$GITHUB_OUTPUT"
           echo "sha256=$(cat "$zip_path.sha256")" >> "$GITHUB_OUTPUT"
 

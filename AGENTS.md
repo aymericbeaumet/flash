@@ -12,14 +12,14 @@ Activation can come through the `flash://` URL scheme, through the one-shot `fla
 
 1. **No UI surface** beyond the transparent hint overlay, the mode cell / command-line cell, the help and open-app overlays, and explicit `flash://alert_show` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
 2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint, normal-mode, command-line, help, and open-app typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
-3. **Autolaunch is dev-script-owned.** `Scripts/dev.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
+3. **Autolaunch is install-script-owned.** `Scripts/install.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
 4. **No unowned resident helpers / no custom external IPC.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through JSOND over stdin/stdout with stderr reserved for unexpected errors; Flash owns their lifecycle, heartbeat, reload, and shutdown. Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The `flash` / `flashctl` CLI is allowed only as a fast one-shot launcher that opens `flash://...` through Launch Services.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **TOML parser is hand-rolled** (small subset). Don't add `TOMLKit` / `Toml` / other deps unless we outgrow what we can hand-roll cleanly.
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
 8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(action:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
 9. **No backward-compatibility shims on master.** Flash has one user — the maintainer. When a config field, action name, mapping syntax, internal API, or wire format is renamed, update every call site, the defaults, the user's `~/.config/flash/flash.toml`, the bundled plugins, and the tests in the same change. **Do not** add legacy aliases, dual-syntax parsers, dual-key JSON readers (`as? T ?? response?["camelCase"]` etc.), `typealias OldName = NewName`, `// removed` placeholders, deprecation comments, or transitional accept-both paths. Reject malformed input loudly rather than silently translating it. The goal is the smallest possible code per feature. When in doubt, delete the old name — the maintainer can recover from `git log` if needed.
-10. **Dev deploys go through `./Scripts/dev.sh`.** It owns the build → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash.app` → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/dev.sh` (no args).
+10. **Dev deploys go through `./Scripts/install.sh --dev`.** It owns the build → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash.app` → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/install.sh --dev`.
 
 If a request would violate any of the above, surface it to the user instead of silently complying.
 
@@ -73,8 +73,10 @@ Tests/ElectronFixture/               # Pinned minimal Electron app used by Scrip
 Plugins/                             # Official bundled Rust plugins (one independent crate each), symlinked into the dev app
 flash_plugin_template/               # Generic tokio/JSOND plugin scaffolding crate; no Flash business concepts
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
-Scripts/build-plugins.sh                     # cargo build --release every Plugins/*/ crate → flash-plugin-<id> binary beside its manifest
-Scripts/dev.sh                               # Build plugins + debug flash → staging .app → /Applications/Flash.app, stable dev-signed, plugin symlinks, login autolaunch
+Scripts/build-plugins.sh                     # cargo build [dev|release] every Plugins/*/ crate → flash-plugin-<id> binary beside its manifest (release = universal lipo)
+Scripts/_common.sh                           # Shared constants + helpers (signing identity, login agent, app assembly) sourced by build.sh / install.sh
+Scripts/build.sh                             # Build Flash.app into build/ without installing. --dev = fast debug current-arch; --release = universal optimized + zip
+Scripts/install.sh                           # build.sh then install to /Applications/Flash.app + restart. --dev = stable dev-signed, plugin symlinks; --release = universal
 Scripts/test-integration-native.sh           # Build/sign/run native AppKit integration fixture + oracle
 Scripts/test-integration-electron.sh         # Install pinned Electron fixture deps, build/sign/run Electron oracle
 Scripts/check-guardrails.sh                  # CI hard-rule scanner for banned production APIs / stale config references
@@ -272,7 +274,7 @@ Logs are newline-delimited JSON written to stderr and
 `plugins.third_party` accepts only `github:user/project` and `file:<path>`.
 Official bundled plugins under `Contents/Resources/Plugins` are always enabled
 in this version and are not configurable. In the checkout they live under root
-`Plugins/` so `Scripts/dev.sh` can symlink them into the installed app. Every plugin root must contain
+`Plugins/` so `Scripts/install.sh --dev` can symlink them into the installed app. Every plugin root must contain
 `manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`,
 event subscriptions, and action registrations. `install` and `start` are
 shell strings run from the plugin root; Flash passes
@@ -293,13 +295,15 @@ structured logging, a sandboxed `run_cli`, and the tokio runtime) and carries
 trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
 must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
-need safely). `Scripts/build-plugins.sh` compiles every `Plugins/*/Cargo.toml`
-in release mode into a shared `CARGO_TARGET_DIR` (`build/plugin-target`, kept out
-of the watched plugin trees) and copies each `flash-plugin-<id>` binary next to
-its `manifest.json`. The manifest's `start` is `exec ./flash-plugin-<id>` and
+need safely). `Scripts/build-plugins.sh [dev|release]` compiles every
+`Plugins/*/Cargo.toml` into a shared `CARGO_TARGET_DIR` (`build/plugin-target`,
+kept out of the watched plugin trees) and copies each `flash-plugin-<id>` binary
+next to its `manifest.json`. `dev` is a debug build for the current arch only
+(fast, incremental); `release` is an optimized universal binary (x86_64 + arm64)
+joined with `lipo`. The manifest's `start` is `exec ./flash-plugin-<id>` and
 `install` is a no-op `true` — there is no cargo, Python, or interpreter at
-runtime. `Scripts/dev.sh` and `Scripts/package-release.sh` both invoke
-`build-plugins.sh`; dev symlinks the repo `Plugins/` into the app, while release
+runtime. `Scripts/build.sh` / `Scripts/install.sh` invoke `build-plugins.sh` with
+the matching mode; dev symlinks the repo `Plugins/` into the app, while release
 stages only `manifest.json` + the binary per plugin (no sources). The compiled
 binaries and per-crate build output are git-ignored.
 
@@ -377,21 +381,21 @@ Not required:
 
 ### TCC and rebuilds
 
-`./Scripts/dev.sh` signs with the stable self-signed "Flash Dev" identity and installs a user LaunchAgent at `~/Library/LaunchAgents/com.flash.app.autolaunch.plist` so Flash starts at login. The first run with that identity resets Accessibility once so the next grant binds to the stable certificate; subsequent rebuilds should preserve the grant.
+`./Scripts/install.sh --dev` signs with the stable self-signed "Flash Dev" identity and installs a user LaunchAgent at `~/Library/LaunchAgents/com.flash.app.autolaunch.plist` so Flash starts at login. The first run with that identity resets Accessibility once so the next grant binds to the stable certificate; subsequent rebuilds should preserve the grant.
 
 ## Build / install / verify
 
-**Every app-code change requires reinstalling** to see it in action. Flash is a resident background process launched out of `/Applications/Flash.app`; there is no app-code live-reload, dev server, or attached debugger flow. Plugin files can live-reload through `PluginManager` when bundled plugins are symlinked by `Scripts/dev.sh`. `swift build` produces a binary in `.build/` that the resident process is *not* using — only the copy under `/Applications/Flash.app/Contents/MacOS/flash` matters. So the developer loop is:
+**Every app-code change requires reinstalling** to see it in action. Flash is a resident background process launched out of `/Applications/Flash.app`; there is no app-code live-reload, dev server, or attached debugger flow. Plugin files can live-reload through `PluginManager` when bundled plugins are symlinked by `Scripts/install.sh --dev`. `swift build` produces a binary in `.build/` that the resident process is *not* using — only the copy under `/Applications/Flash.app/Contents/MacOS/flash` matters. So the developer loop is:
 
 ```bash
 # Make code change → run install (NOT just `swift build`)
-./Scripts/dev.sh
+./Scripts/install.sh --dev
 
 # Trigger and verify
 open -g flash://mouse_target
 ```
 
-`./Scripts/dev.sh` is what builds debug, codesigns, quits the running instance, replaces the bundle, symlinks bundled plugins for live reload, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs.
+`./Scripts/install.sh --dev` is what builds debug, codesigns, quits the running instance, replaces the bundle, symlinks bundled plugins for live reload, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs. `./Scripts/build.sh --dev` does the same build without installing; `--release` produces an optimized universal (Intel + Apple Silicon) `.app` + zip.
 
 ```bash
 # Build only (debug; type-check + unit tests, NOT for behaviour verification)
@@ -401,10 +405,10 @@ swift build
 swift test
 
 # Build debug, install to /Applications/Flash.app, relaunch — required after every change
-./Scripts/dev.sh
+./Scripts/install.sh --dev
 ```
 
-`dev.sh`:
+`install.sh --dev`:
 
 1. `swift build -c debug --product flash` and `swift build -c debug --product flashctl`
 2. Assembles `build/Flash.app` from the resident binary, `flashctl`, and `Resources/Info.plist`
@@ -432,7 +436,7 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `TmuxProviderTests`). Deterministic, run in milliseconds, no external state. `TmuxProviderTests` covers the tokenization rules (`extractWords`), the cell-geometry math (`resolveGeometry`), the status-bar parser (`parseStatusInfo`), the TOML alacritty-config reader, and `parseTwoInts`. Run on every `swift test`.
 - **Live tmux integration** (`TmuxIntegrationTests`). Boots an isolated tmux server under a per-test socket (`tmux -L flash-it-<uuid> -f /dev/null`) and asserts the binary's CLI contract Flash depends on: the `#{pane_*}` / `#{client_*}` / `#{status}` / `#{status-position}` format strings; that `capture-pane -p` returns the rendered grid; that horizontal + vertical splits yield the expected `pane_left` / `pane_top`. Catches breakage from tmux upgrades silently changing format-string semantics — the only realistic regression source for `TmuxProvider`. Skipped when no `tmux` binary is found on the probe paths. Runs in ~10 s.
-- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with a pinned reference extension, builds/codesigns the browser oracle runner, then runs the 100-file offline corpus from `Tests/BrowserSnapshots` through a parallel worker pool. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures reference marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch and overmatch against the browser reference. Run order: build + sign once (`./Scripts/dev.sh` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
+- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with a pinned reference extension, builds/codesigns the browser oracle runner, then runs the 100-file offline corpus from `Tests/BrowserSnapshots` through a parallel worker pool. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures reference marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch and overmatch against the browser reference. Run order: build + sign once (`./Scripts/install.sh --dev` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
 - **Native AppKit integration** (`Scripts/test-integration-native.sh`). Builds/codesigns `flash-native-fixture` and `flash-native-oracle`, launches a deterministic AppKit window, compares generic AX targets against expected controls, verifies AXPress mutates a fixture state file, and records the open-NSMenu limitation under the no-key-capture production rule. It covers buttons, image-backed buttons, duplicate labels, checkboxes, radio buttons, popups, search/text areas, tabs, rows, and negative controls such as disabled/hidden/decorative/slider elements. It does not add production global key capture or private APIs, and the script kills its test apps on exit/interruption.
 - **Electron integration** (`Scripts/test-integration-electron.sh`). Runs `npm ci` for the pinned Electron fixture, builds/codesigns `flash-electron-oracle`, launches Electron with a deterministic DOM fixture, reads expected target JSON emitted by the fixture, compares it against Flash's generic AX provider output, and verifies AX activation mutates fixture state. The script kills its oracle app and fixture Electron process on exit/interruption.
 
@@ -440,13 +444,13 @@ Run order:
 
 ```bash
 swift test                                           # unit + live tmux
-./Scripts/dev.sh                                     # one-time: creates the Flash Dev signing identity
+./Scripts/install.sh --dev                           # one-time: creates the Flash Dev signing identity
 ./Scripts/test-integration-browser.sh                # builds + signs + runs the browser corpus
 ./Scripts/test-integration-native.sh                 # builds + signs + runs native AppKit fixture
 ./Scripts/test-integration-electron.sh               # installs pinned Electron fixture and runs oracle
 ```
 
-Anything that requires the full overlay / commit pipeline (chip rendering, key handling, AXPress against a live focused app) is still **manually verified**: run `./Scripts/dev.sh`, grant permissions if needed, then exercise the app in real target apps.
+Anything that requires the full overlay / commit pipeline (chip rendering, key handling, AXPress against a live focused app) is still **manually verified**: run `./Scripts/install.sh --dev`, grant permissions if needed, then exercise the app in real target apps.
 
 Do not claim UI-level changes "work" based on the type-checker alone. State explicitly when you couldn't verify visually.
 
