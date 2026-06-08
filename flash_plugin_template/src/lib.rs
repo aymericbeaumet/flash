@@ -12,7 +12,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -146,6 +145,14 @@ impl Context {
     /// request id; the serve loop correlates the host's response back to this
     /// call. Returns a JSON error object if the host doesn't answer in time.
     pub async fn call_host(&self, method: &str, params: Value) -> Value {
+        self.call_host_timeout(method, params, Duration::from_secs(5))
+            .await
+    }
+
+    /// Like [`call_host`](Context::call_host) but with an explicit deadline,
+    /// for host capabilities that may legitimately run longer than the default
+    /// (e.g. a network-backed CLI behind `cli.run`).
+    pub async fn call_host_timeout(&self, method: &str, params: Value, timeout: Duration) -> Value {
         let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         if let Ok(mut pending) = self.host_pending.lock() {
@@ -157,7 +164,7 @@ impl Context {
             "method": method,
             "params": params,
         }));
-        match tokio::time::timeout(Duration::from_secs(5), rx).await {
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(value)) => value,
             _ => {
                 if let Ok(mut pending) = self.host_pending.lock() {
@@ -213,104 +220,52 @@ impl Context {
         }
     }
 
-    /// Run an external command inside the plugin's sandbox. `HOME` and the
-    /// XDG base dirs are redirected under `data_dir`, and `data_dir/bin` is
-    /// prepended to `PATH` so plugin-provisioned CLIs resolve first. Bounded
-    /// by `timeout`; on overrun the child is killed and status 124 returned.
-    ///
-    /// Emits one structured log line per call (`debug` on success, `warn` on
-    /// failure). For high-frequency polling use [`run_cli_quiet`] instead, so
-    /// the log isn't flooded with one line per poll.
+    /// Run an external command through the core's `cli.run` capability. The
+    /// core — not the plugin — spawns the process inside this plugin's sandbox
+    /// (`HOME` and the XDG base dirs redirected under its data dir, `bin/`
+    /// prepended to `PATH`), bounds it by `timeout` (status 124 on overrun),
+    /// and emits one structured log line per call. The template itself never
+    /// touches the process API: all native execution lives in the core.
     pub async fn run_cli(&self, argv: &[String], timeout: Duration) -> CliResult {
-        let started = std::time::Instant::now();
-        let result = self.run_cli_quiet(argv, timeout).await;
-        let duration_ms = started.elapsed().as_millis();
-
-        let program = argv.first().cloned().unwrap_or_default();
-        let program_name = Path::new(&program)
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or(program);
-        let argc = argv.len().saturating_sub(1);
-        let mut fields = BTreeMap::new();
-        fields.insert("program".to_string(), program_name.clone());
-        fields.insert("command".to_string(), shorten(&argv.join(" ")));
-        fields.insert("argc".to_string(), argc.to_string());
-        fields.insert("status".to_string(), result.status.to_string());
-        fields.insert("duration_ms".to_string(), duration_ms.to_string());
-        fields.insert("ok".to_string(), result.ok.to_string());
-        fields.insert("stdout".to_string(), result.stdout.clone());
-        fields.insert("stderr".to_string(), result.stderr.clone());
-        let outcome = if result.ok {
-            "ok".to_string()
-        } else {
-            format!("failed (status {})", result.status)
-        };
-        self.emit.log(
-            if result.ok { "debug" } else { "warn" },
-            &format!("ran {program_name}: {outcome} in {duration_ms}ms"),
-            fields,
-        );
-        result
+        self.run_cli_inner(argv, timeout, false).await
     }
 
-    /// Same sandboxing and timeout semantics as [`run_cli`](Context::run_cli)
-    /// but emits no log line. Use for commands run on a tight loop (a
-    /// clipboard watcher polling `pbpaste`, a status poller) where a per-call
-    /// log line would balloon the log file. The caller owns surfacing failures.
+    /// Same as [`run_cli`](Context::run_cli) but asks the core to skip the
+    /// per-call log line. Use for commands run on a tight loop where a log
+    /// line per call would balloon the log file. The caller owns surfacing
+    /// failures.
     pub async fn run_cli_quiet(&self, argv: &[String], timeout: Duration) -> CliResult {
-        let Some((program, args)) = argv.split_first() else {
-            return CliResult {
-                ok: false,
-                stdout: String::new(),
-                stderr: "missing command".into(),
-                status: -1,
-            };
-        };
+        self.run_cli_inner(argv, timeout, true).await
+    }
 
-        let mut command = tokio::process::Command::new(program);
-        command
-            .args(args)
-            .current_dir(&self.data_dir)
-            .env("HOME", self.home_dir())
-            .env("XDG_CONFIG_HOME", self.config_dir())
-            .env("XDG_CACHE_HOME", self.cache_dir())
-            .env("XDG_DATA_HOME", self.share_dir())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let existing_path = std::env::var("PATH").unwrap_or_default();
-        command.env(
-            "PATH",
-            format!("{}:{}", self.bin_dir().display(), existing_path),
-        );
-
-        let spawned = command.output();
-        match tokio::time::timeout(timeout, spawned).await {
-            Ok(Ok(output)) => CliResult {
-                ok: output.status.success(),
-                stdout: shorten(&String::from_utf8_lossy(&output.stdout)),
-                stderr: shorten(&String::from_utf8_lossy(&output.stderr)),
-                status: output.status.code().unwrap_or(-1),
-            },
-            Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => CliResult {
-                ok: false,
-                stdout: String::new(),
-                stderr: format!("command not found: {program}"),
-                status: 127,
-            },
-            Ok(Err(err)) => CliResult {
-                ok: false,
-                stdout: String::new(),
-                stderr: err.to_string(),
-                status: -1,
-            },
-            Err(_) => CliResult {
-                ok: false,
-                stdout: String::new(),
-                stderr: format!("command timed out after {}s", timeout.as_secs()),
-                status: 124,
-            },
+    async fn run_cli_inner(&self, argv: &[String], timeout: Duration, quiet: bool) -> CliResult {
+        // Allow the host a little longer than the command's own deadline so the
+        // core (which enforces the real timeout and kills the child) is what
+        // reports a 124, not our outer `call_host` watchdog.
+        let result = self
+            .call_host_timeout(
+                "cli.run",
+                json!({
+                    "argv": argv,
+                    "timeout_ms": timeout.as_millis() as u64,
+                    "quiet": quiet,
+                }),
+                timeout + Duration::from_secs(2),
+            )
+            .await;
+        CliResult {
+            ok: result.get("ok").and_then(Value::as_bool).unwrap_or(false),
+            stdout: result
+                .get("stdout")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            stderr: result
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| result.get("error").and_then(Value::as_str).unwrap_or(""))
+                .to_string(),
+            status: result.get("status").and_then(Value::as_i64).unwrap_or(-1) as i32,
         }
     }
 }

@@ -560,6 +560,16 @@ final class PluginProcess {
   }
 
   private func routeHostRequest(id: Int, method: String, params: [String: Any]) {
+    // `cli.run` is served here, by the very process that owns this plugin's
+    // sandbox — the core executes the subprocess so the plugin never touches
+    // the process API. Everything else routes up to the host RPC router
+    // (AX broker, app activation, …) installed by PluginManager.
+    if method == "cli.run" {
+      runHostCLI(params) { [weak self] result in
+        self?.sendResponse(id: id, result: result)
+      }
+      return
+    }
     guard let onHostRequest else {
       sendResponse(id: id, result: ["ok": false, "error": "host requests unsupported"])
       return
@@ -567,6 +577,125 @@ final class PluginProcess {
     onHostRequest(method, params, manifest.id) { [weak self] result in
       self?.sendResponse(id: id, result: result)
     }
+  }
+
+  /// Executes `cli.run`: spawns `argv` inside this plugin's sandbox (HOME and
+  /// the XDG base dirs redirected under `dataDir`, `dataDir/bin` prepended to
+  /// PATH), bounded by `timeout_ms`. Mirrors the old in-plugin runner so the
+  /// `Context::run_cli` contract is unchanged for plugins. Runs off the plugin
+  /// IPC queue so a slow command never stalls protocol I/O; `reply` lands on a
+  /// background queue and `sendResponse` re-hops to `queue` to write.
+  private func runHostCLI(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    let argv = params["argv"] as? [String] ?? []
+    guard let program = argv.first, !program.isEmpty else {
+      reply(["ok": false, "stdout": "", "stderr": "missing command", "status": -1])
+      return
+    }
+    let timeoutMs = (params["timeout_ms"] as? Int) ?? 5000
+    let quiet = params["quiet"] as? Bool ?? false
+    let dataDir = self.dataDir
+    let pluginID = manifest.id
+    DispatchQueue.global(qos: .utility).async { [weak self] in
+      let started = Date()
+      let result = Self.runSandboxedCLI(
+        argv: argv, dataDir: dataDir, timeoutMs: timeoutMs)
+      if !quiet {
+        let durationMs = Int(Date().timeIntervalSince(started) * 1000)
+        let programName = (program as NSString).lastPathComponent
+        let ok = result["ok"] as? Bool ?? false
+        let status = result["status"] as? Int ?? -1
+        let fields: [String: String] = [
+          "program": programName,
+          "command": Self.shorten(argv.joined(separator: " ")),
+          "argc": String(argv.count - 1),
+          "status": String(status),
+          "duration_ms": String(durationMs),
+          "ok": String(ok),
+          "stdout": (result["stdout"] as? String) ?? "",
+          "stderr": (result["stderr"] as? String) ?? "",
+        ]
+        let outcome = ok ? "ok" : "failed (status \(status))"
+        FlashLog.plugin(
+          ok ? .debug : .warn,
+          pluginID: pluginID,
+          message: "ran \(programName): \(outcome) in \(durationMs)ms",
+          fields: fields)
+        self?.lock.lock()
+        self?.lastLog = "ran \(programName): \(outcome)"
+        self?.lock.unlock()
+        self?.notifyStatus()
+      }
+      reply(result)
+    }
+  }
+
+  /// Runs `argv` with the plugin sandbox env and a hard timeout, returning the
+  /// `{ok, stdout, stderr, status}` wire shape. `124` on timeout, `127` when
+  /// the program is not found — matching the prior in-plugin semantics.
+  private static func runSandboxedCLI(
+    argv: [String], dataDir: URL, timeoutMs: Int
+  ) -> [String: Any] {
+    let process = Process()
+    // Run through `env` so a bare program name resolves against the sandbox
+    // PATH (and absolute paths still work), matching the old runner.
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = argv
+    process.currentDirectoryURL = dataDir
+    var env = ProcessInfo.processInfo.environment
+    if (env["PATH"] ?? "").isEmpty {
+      env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    }
+    let bin = dataDir.appendingPathComponent("bin").path
+    env["PATH"] = bin + ":" + (env["PATH"] ?? "")
+    env["HOME"] = dataDir.appendingPathComponent("home").path
+    env["XDG_CONFIG_HOME"] = dataDir.appendingPathComponent("config").path
+    env["XDG_CACHE_HOME"] = dataDir.appendingPathComponent("cache").path
+    env["XDG_DATA_HOME"] = dataDir.appendingPathComponent("share").path
+    process.environment = env
+    let out = Pipe()
+    let err = Pipe()
+    process.standardOutput = out
+    process.standardError = err
+    process.standardInput = FileHandle.nullDevice
+    do {
+      try process.run()
+    } catch let error as NSError where error.code == NSFileNoSuchFileError {
+      return ["ok": false, "stdout": "", "stderr": "command not found: \(argv[0])", "status": 127]
+    } catch {
+      return ["ok": false, "stdout": "", "stderr": "\(error)", "status": -1]
+    }
+    let timeout = DispatchTime.now() + .milliseconds(max(1, timeoutMs))
+    let killer = DispatchWorkItem {
+      if process.isRunning { process.terminate() }
+    }
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: timeout, execute: killer)
+    let outData = out.fileHandleForReading.readDataToEndOfFile()
+    let errData = err.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    let timedOut = killer.isCancelled == false && process.terminationReason == .uncaughtSignal
+    killer.cancel()
+    let stdout = Self.shorten(String(data: outData, encoding: .utf8) ?? "")
+    let stderr = Self.shorten(String(data: errData, encoding: .utf8) ?? "")
+    if timedOut {
+      return [
+        "ok": false, "stdout": stdout,
+        "stderr": "command timed out after \(timeoutMs)ms", "status": 124,
+      ]
+    }
+    let status = Int(process.terminationStatus)
+    return ["ok": status == 0, "stdout": stdout, "stderr": stderr, "status": status]
+  }
+
+  /// Truncate to a fixed character budget so a chatty command can't push a
+  /// giant frame back over IPC. Mirrors the SDK's `shorten`.
+  private static func shorten(_ value: String) -> String {
+    let limit = 2000
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.count <= limit { return trimmed }
+    return String(trimmed.prefix(limit - 3)) + "..."
   }
 
   private func sendResponse(id: Int, result: [String: Any]) {
