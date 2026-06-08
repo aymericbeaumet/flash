@@ -251,6 +251,12 @@
       "file": "collected-google-ads-for-small-local-service-businesses-go-001.html",
       "category": "collected-regression",
       "kind": "collected"
+    },
+    {
+      "name": "collected-raycast-google-cloud-console-001",
+      "file": "collected-raycast-google-cloud-console-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
     }
   ]
 }

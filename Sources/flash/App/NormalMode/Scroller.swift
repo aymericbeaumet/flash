@@ -19,28 +19,22 @@ extension NormalModeDispatcher {
     bundleID: String = "",
     windowFrame: CGRect? = nil
   ) -> Bool {
-    // Terminals run their own scroll-aware programs (vim/less/tmux/k9s).
-    // Synthesising a scroll wheel scrolls the terminal grid, not the
-    // program inside it — so for terminal bundles we send the bare vim
-    // keystroke and let whatever's running interpret it. `gg` becomes
-    // two `g` events; `G` is `shift+g`; `ctrl+d`/`ctrl+u` already cover
-    // the half-page case via the default mappings (we just forward the
-    // letter here in case a custom mapping fired into `scroll`).
-    if TerminalBundles.identifiers.contains(bundleID) {
-      if sendTerminalScrollKey(kind, pid: pid) {
-        FlashLog.debug("[normal_mode] scroll method=terminal_keys kind=\(kind)")
-        return true
-      }
-    }
-
+    // Hermetic policy: never emit a character keystroke as part of a
+    // scroll command. The user's `h` / `j` / `k` / `l` mappings in
+    // normal mode must not surface as typed text in the focused app —
+    // not in vim, not in a shell prompt, nowhere. We try AX
+    // scroll-bar value, then a synthesised scroll wheel (which is a
+    // separate `CGEvent` type and never inserts a glyph), then AX
+    // actions (`AXScroll*`). The earlier fallback to arrow / page /
+    // letter keys was the leak path.
     let pageTarget = windowFrame.flatMap { pageScrollTarget(pid: pid, visibleIn: $0) }
     if let pageTarget {
       if scrollPageInstantly(kind, element: pageTarget.element) {
-        FlashLog.debug("[normal_mode] scroll method=page_ax_edge kind=\(kind)")
+        FlashLog.debug("[normal_mode] scroll method=page_ax_edge kind=\(kind) bundle=\(bundleID)")
         return true
       }
       if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: pageTarget.frame) {
-        FlashLog.debug("[normal_mode] scroll method=page_wheel kind=\(kind)")
+        FlashLog.debug("[normal_mode] scroll method=page_wheel kind=\(kind) bundle=\(bundleID)")
         return true
       }
     }
@@ -48,47 +42,26 @@ extension NormalModeDispatcher {
     switch kind {
     case .top, .bottom:
       if scrollInstantly(kind, pid: pid) {
-        FlashLog.debug("[normal_mode] scroll method=ax_value kind=\(kind)")
+        FlashLog.debug("[normal_mode] scroll method=ax_value kind=\(kind) bundle=\(bundleID)")
         return true
       }
     default:
       if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: nil) {
-        FlashLog.debug("[normal_mode] scroll method=wheel kind=\(kind)")
+        FlashLog.debug("[normal_mode] scroll method=wheel kind=\(kind) bundle=\(bundleID)")
         return true
       }
       if scrollInstantly(kind, pid: pid) {
-        FlashLog.debug("[normal_mode] scroll method=ax_value kind=\(kind)")
+        FlashLog.debug("[normal_mode] scroll method=ax_value kind=\(kind) bundle=\(bundleID)")
         return true
       }
     }
 
-    if sendScrollKey(kind, pid: pid) { return true }
-    if performScrollAction(kind, pid: pid) { return true }
-    FlashLog.debug("[normal_mode] no instant AX scroller for \(kind)")
-    return false
-  }
-
-  private static func sendTerminalScrollKey(_ kind: ScrollKind, pid: pid_t) -> Bool {
-    switch kind {
-    case .left:
-      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_H), flags: [], to: pid)
-    case .right:
-      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_L), flags: [], to: pid)
-    case .up:
-      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_K), flags: [], to: pid)
-    case .down:
-      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_J), flags: [], to: pid)
-    case .halfPageUp:
-      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_U), flags: .maskControl, to: pid)
-    case .halfPageDown:
-      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_D), flags: .maskControl, to: pid)
-    case .top:
-      let first = sendKey(virtualKey: CGKeyCode(kVK_ANSI_G), flags: [], to: pid)
-      let second = sendKey(virtualKey: CGKeyCode(kVK_ANSI_G), flags: [], to: pid)
-      return first && second
-    case .bottom:
-      return sendKey(virtualKey: CGKeyCode(kVK_ANSI_G), flags: .maskShift, to: pid)
+    if performScrollAction(kind, pid: pid) {
+      FlashLog.debug("[normal_mode] scroll method=ax_action kind=\(kind) bundle=\(bundleID)")
+      return true
     }
+    FlashLog.debug("[normal_mode] no hermetic scroller for \(kind) bundle=\(bundleID)")
+    return false
   }
 
   static func adjustedScrollValue(
@@ -275,35 +248,6 @@ extension NormalModeDispatcher {
       return ScrollIntent(axis: .vertical, deltaFraction: nil, edge: .minimum)
     case .bottom:
       return ScrollIntent(axis: .vertical, deltaFraction: nil, edge: .maximum)
-    }
-  }
-
-  private static func sendScrollKey(_ kind: ScrollKind, pid: pid_t) -> Bool {
-    var sent = false
-    for event in scrollKeyEvents(for: kind) {
-      sent = sendKey(virtualKey: event.virtualKey, flags: event.flags, to: pid) || sent
-    }
-    return sent
-  }
-
-  static func scrollKeyEvents(for kind: ScrollKind) -> [(virtualKey: CGKeyCode, flags: CGEventFlags)] {
-    switch kind {
-    case .left:
-      return [(CGKeyCode(kVK_LeftArrow), [])]
-    case .right:
-      return [(CGKeyCode(kVK_RightArrow), [])]
-    case .up:
-      return [(CGKeyCode(kVK_UpArrow), [])]
-    case .down:
-      return [(CGKeyCode(kVK_DownArrow), [])]
-    case .halfPageUp:
-      return [(CGKeyCode(kVK_PageUp), [])]
-    case .halfPageDown:
-      return [(CGKeyCode(kVK_PageDown), [])]
-    case .top:
-      return [(CGKeyCode(kVK_UpArrow), .maskCommand)]
-    case .bottom:
-      return [(CGKeyCode(kVK_DownArrow), .maskCommand)]
     }
   }
 

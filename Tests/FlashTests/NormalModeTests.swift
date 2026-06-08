@@ -66,19 +66,6 @@ final class NormalModeTests: XCTestCase {
         viewportSize: CGSize(width: 1200, height: 900)))
   }
 
-  func testTopBottomUseMacDocumentNavigationKeys() {
-    XCTAssertEqual(NormalModeDispatcher.scrollKeyEvents(for: .top).count, 1)
-    XCTAssertEqual(NormalModeDispatcher.scrollKeyEvents(for: .top)[0].virtualKey, CGKeyCode(kVK_UpArrow))
-    XCTAssertTrue(NormalModeDispatcher.scrollKeyEvents(for: .top)[0].flags.contains(.maskCommand))
-
-    XCTAssertEqual(NormalModeDispatcher.scrollKeyEvents(for: .bottom).count, 1)
-    XCTAssertEqual(
-      NormalModeDispatcher.scrollKeyEvents(for: .bottom)[0].virtualKey,
-      CGKeyCode(kVK_DownArrow))
-    XCTAssertTrue(
-      NormalModeDispatcher.scrollKeyEvents(for: .bottom)[0].flags.contains(.maskCommand))
-  }
-
   func testTopBottomAndNavigationSequences() {
     XCTAssertEqual(transition(chars: "g").pending, "g")
     XCTAssertEqual(command(pending: "g", chars: "g"), .scroll(.top))
