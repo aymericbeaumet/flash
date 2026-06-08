@@ -249,7 +249,7 @@ final class PluginProcess {
     subcommand: String,
     args: [String],
     raw: String,
-    completion: ((Bool) -> Void)? = nil
+    completion: ((Bool, pid_t?) -> Void)? = nil
   ) {
     sendRequest(
       method: "command.invoke",
@@ -261,8 +261,13 @@ final class PluginProcess {
       ]
     ) { response in
       let ok = response?["ok"] as? Bool ?? false
+      // A command may name an app (by pid) for Flash to raise once it
+      // succeeds — e.g. the tmux plugin returns the terminal hosting the
+      // session it just switched to, so a `:tmux window …` mapping brings
+      // that window forward. Optional; most commands omit it.
+      let pid = response?["target_pid"] as? Int
       DispatchQueue.main.async {
-        completion?(ok)
+        completion?(ok, pid.map(pid_t.init))
       }
     }
   }

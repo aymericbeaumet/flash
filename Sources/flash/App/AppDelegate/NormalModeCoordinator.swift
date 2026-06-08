@@ -1096,7 +1096,11 @@ extension AppDelegate {
         command: plugin.command,
         subcommand: plugin.subcommand,
         args: plugin.args,
-        raw: plugin.raw)
+        raw: plugin.raw,
+        onResult: { [weak self] ok, pid in
+          guard ok else { return }
+          self?.activatePluginCommandTarget(pid)
+        })
     {
       finishCommandLineInteraction(reason: "plugin_command_submit")
       return
@@ -1616,6 +1620,24 @@ extension AppDelegate {
   func recordAppActivation(_ pid: pid_t) {
     recordMovement(.app(pid: pid), source: "app_activation")
     recordAppMRU(pid)
+  }
+
+  /// Raise the app a plugin command asked Flash to bring forward (e.g.
+  /// the terminal hosting the tmux session a `:tmux window …` mapping
+  /// just switched to). Activation fires `didActivateApplication`, which
+  /// records the jump into the movement history — so `ctrl-o`/`ctrl-i`
+  /// replay tmux jumps the same as any other Flash navigation.
+  func activatePluginCommandTarget(_ pid: pid_t?) {
+    guard let pid,
+      let app = NSRunningApplication(processIdentifier: pid),
+      !app.isTerminated
+    else { return }
+    RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+    if flashMode == .normal {
+      normalModeTargetPID = pid
+      suppressEditableFocus(for: pid)
+    }
+    scheduleNormalModeRecapture()
   }
 
   private func recordAppMRU(_ pid: pid_t) {

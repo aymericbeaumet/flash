@@ -1045,6 +1045,93 @@ fn resolve_response(payload: &Value) -> Value {
     response
 }
 
+// ---- Commands (`:tmux …` jump-to mappings) ----------------------------------
+
+/// `command.invoke` for `:tmux session <name>` and `:tmux window
+/// <session:index>`. Both switch the user's active tmux client to the
+/// requested target and return the terminal pid hosting it so Flash can
+/// raise that window. The target argument is taken verbatim from the
+/// first command arg, so a mapping like
+/// `flash://plugin_command?command=tmux&subcommand=window&args=main:1`
+/// jumps straight to `main:1`.
+async fn invoke_command(plugin: &Tmux, ctx: &Context, params: &Value) -> Value {
+    let tmux_path = plugin.tmux_path.as_deref();
+    let subcommand = params
+        .get("subcommand")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match subcommand {
+        "session" | "window" => {}
+        other => {
+            return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
+        }
+    }
+
+    let target = params
+        .get("args")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let Some(target) = target else {
+        ctx.log("warn", "[tmux] command missing target argument");
+        return json!({ "ok": false, "error": "missing target argument" });
+    };
+
+    // `session:index` → session is the part before the first colon; a bare
+    // session name has no colon and is used as-is.
+    let session = target.split(':').next().unwrap_or(target);
+
+    let clients = list_clients(tmux_path).await;
+    // Drive `switch-client` with the most-recently-active client, matching
+    // candidate resolution — for single-process multi-window terminals this
+    // is the window the user just typed into.
+    let tty = {
+        let mut sorted = clients.clone();
+        sorted.sort_by(|a, b| b.activity.cmp(&a.activity));
+        sorted.first().map(|c| c.tty.clone()).unwrap_or_default()
+    };
+
+    let mut args: Vec<&str> = vec!["switch-client"];
+    if !tty.is_empty() {
+        args.push("-c");
+        args.push(&tty);
+    }
+    args.push("-t");
+    args.push(target);
+    let switched = run_tmux_default(tmux_path, &args).await.is_some()
+        || run_tmux_default(tmux_path, &["switch-client", "-t", target])
+            .await
+            .is_some();
+    if !switched {
+        ctx.log("warn", "[tmux] command switch-client failed");
+        return json!({ "ok": false, "error": "switch-client failed" });
+    }
+
+    // Terminal pid hosting the target session's client, so Flash can raise
+    // the right window. Falls back to any client when the session has none.
+    let terminal_pid = {
+        let client = clients
+            .iter()
+            .find(|c| c.session == session)
+            .or_else(|| clients.first());
+        match client {
+            Some(c) => {
+                let pmap = parent_pid_map().await;
+                find_top_level_ancestor(c.client_pid, &pmap)
+            }
+            None => None,
+        }
+    };
+
+    let mut response = json!({ "ok": true });
+    if let Some(tp) = terminal_pid {
+        response["target_pid"] = json!(tp);
+    }
+    response
+}
+
 // ---- Activation -------------------------------------------------------------
 
 async fn activate_target(plugin: &Tmux, ctx: &Context, params: &Value) {
@@ -1137,6 +1224,7 @@ impl Plugin for Tmux {
             "discoverTargets" => discover_targets_for_context(self, &params).await,
             "sourceAction" => perform_source_action(self, &params).await,
             "resolveCandidate" => resolve_candidate(self, &ctx, &params).await,
+            "command.invoke" => invoke_command(self, &ctx, &params).await,
             "activateTarget" => {
                 activate_target(self, &ctx, &params).await;
                 json!({})

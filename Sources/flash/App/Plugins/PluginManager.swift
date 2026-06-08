@@ -59,12 +59,28 @@ final class PluginManager {
     }
   }
 
-  func invoke(command: String, subcommand: String, args: [String], raw: String) -> Bool {
+  /// Returns true when a plugin owns `(command, subcommand)` and the
+  /// invocation was dispatched (synchronous ownership check). The plugin
+  /// runs asynchronously; `onResult` delivers its `(ok, targetPID)` once
+  /// it replies. `targetPID`, when present, is an app the command asked
+  /// Flash to raise (see `PluginProcess.invokeCommand`).
+  @discardableResult
+  func invoke(
+    command: String,
+    subcommand: String,
+    args: [String],
+    raw: String,
+    onResult: ((Bool, pid_t?) -> Void)? = nil
+  ) -> Bool {
     let key = CommandKey(command: command.lowercased(), subcommand: subcommand.lowercased())
     let plugin = queue.sync { commandIndex[key] }
     guard let plugin else { return false }
-    plugin.invokeCommand(command: command, subcommand: subcommand, args: args, raw: raw) { ok in
-      FlashLog.debug("[plugin_command] command=\(command) subcommand=\(subcommand) ok=\(ok)")
+    plugin.invokeCommand(command: command, subcommand: subcommand, args: args, raw: raw) {
+      ok, pid in
+      FlashLog.debug(
+        "[plugin_command] command=\(command) subcommand=\(subcommand) ok=\(ok) "
+          + "target_pid=\(pid.map(String.init) ?? "nil")")
+      onResult?(ok, pid)
     }
     return true
   }

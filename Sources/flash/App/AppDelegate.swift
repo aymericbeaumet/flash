@@ -283,11 +283,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .openApp(let name):
       openSourceItem(matching: name)
     case .pluginCommand(let command, let subcommand, let args):
-      _ = pluginManager.invoke(
+      pluginManager.invoke(
         command: command,
         subcommand: subcommand,
         args: args,
-        raw: cmd.diagnosticDescription)
+        raw: cmd.diagnosticDescription
+      ) { [weak self] ok, pid in
+        guard ok else { return }
+        self?.activatePluginCommandTarget(pid)
+      }
     case .moveWindow(let params):
       WindowMover.move(params)
     }

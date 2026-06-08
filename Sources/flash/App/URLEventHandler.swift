@@ -298,7 +298,7 @@ final class URLEventHandler: NSObject {
     flash://flash_quit
     flash://help_show[?topic=<topic>]
     flash://plugins
-    flash://plugin_command?command=<command>&subcommand=<subcommand>
+    flash://plugin_command?command=<command>&subcommand=<subcommand>[&args=<space-separated>]
     """
 }
 

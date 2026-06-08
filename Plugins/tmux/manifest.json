@@ -22,5 +22,17 @@
     { "match": "focus.changed" },
     { "match": "apps.terminated" },
     "flash.started"
+  ],
+  "commands": [
+    {
+      "command": "tmux",
+      "subcommand": "session",
+      "description": "Switch the active tmux client to a session by name and raise its terminal."
+    },
+    {
+      "command": "tmux",
+      "subcommand": "window",
+      "description": "Switch the active tmux client to a session:window target and raise its terminal."
+    }
   ]
 }
