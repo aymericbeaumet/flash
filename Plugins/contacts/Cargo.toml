@@ -9,7 +9,7 @@ name = "flash-plugin-contacts"
 path = "src/main.rs"
 
 [dependencies]
-flash-plugin = { path = "../_flash_plugin_rust" }
+flash_plugin = { path = "../_rust_flash_plugin" }
 serde = { version = "1", features = ["derive"] }
 
 [profile.release]

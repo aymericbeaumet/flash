@@ -59,7 +59,7 @@ name = "flash-plugin-$ID"
 path = "src/main.rs"
 
 [dependencies]
-flash-plugin = { path = "../_flash_plugin_rust" }
+flash_plugin = { path = "../_rust_flash_plugin" }
 
 [profile.release]
 opt-level = "z"

@@ -9,7 +9,7 @@ name = "flash-plugin-media"
 path = "src/main.rs"
 
 [dependencies]
-flash-plugin = { path = "../_flash_plugin_rust" }
+flash_plugin = { path = "../_rust_flash_plugin" }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
   "std",
