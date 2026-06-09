@@ -23,33 +23,65 @@ global shell paths. Current bundled commands:
 
 Authentication is explicit. Install and start do not run login flows.
 
-## Hints and mappings
+## Providers
 
-A plugin can drive two more core surfaces, both gated on the manifest:
+Every surface a plugin drives — hints, candidates, commands, mappings — is one
+entry in a unified `providers` array, tagged by `kind` and gated by the same
+optional, symmetric conditions:
 
-- **`provides_hints`** (bool, default false). Opts the plugin in as a *hints
-  provider* for the apps it matches (`bundle_ids`). Hint selection is
-  exclusive: when `f` fires, only the single highest-priority hints provider
-  supporting the focused app runs — so an opted-in plugin (manifest `priority`
-  defaults to 25, above the core AX walk's 10) fully owns `f`/hints for that
-  app and must return its own targets. Plugins that don't set this keep the
-  core AX hints untouched. To position hint geometry, request
-  `ax.snapshot` with `geometry: true`; each node then carries a
+```json
+"providers": [
+  { "kind": "hints", "bundle_ids": ["org.mozilla.firefox"] },
+  { "kind": "candidates" },
+  {
+    "kind": "commands",
+    "commands": [
+      { "command": "slack", "subcommand": "run", "description": "Run slack" }
+    ]
+  },
+  {
+    "kind": "mappings",
+    "modes": ["normal"],
+    "mappings": [
+      { "key": "ctrl+k", "command": "flash://plugin_command?command=slack&subcommand=run" }
+    ]
+  }
+]
+```
+
+Shared, optional conditions on any entry:
+
+- **`bundle_ids`** — apps the provider applies to (empty = every app). For
+  `commands`/`mappings` the gate folds into each entry, and the entry's own
+  `bundle_ids` wins.
+- **`modes`** — `normal` / `insert` the provider applies to (empty = every
+  mode). Folds into a `mappings` entry's `mode` when the entry doesn't set one.
+- **`priority`** — precedence override; defaults to the manifest `priority`
+  (25).
+
+### kinds
+
+- **`hints`** — opts the plugin in as a *hints provider* for the apps it
+  matches. Hint selection is exclusive: when `f` fires, only the single
+  highest-priority hints provider supporting the focused app runs, so an
+  opted-in plugin (priority 25 > the core AX walk's 10) fully owns `f` for that
+  app and must return its own targets, with no fallback. To position geometry,
+  request `ax.snapshot` with `geometry: true`; each node then carries a
   `frame: [x, y, w, h]` in NSScreen space, ready to drop into a target.
 
-- **`mappings`** (array, default `[]`). Key bindings the plugin contributes.
-  Each entry is mode-scoped, app-conditional, and priority-ordered:
+- **`candidates`** — opts the plugin into the flashlight surface. Candidates are
+  global and additive across plugins; a plugin self-limits its snapshot via the
+  focus events it subscribes to, so this kind is a capability toggle rather than
+  an app/mode gate.
 
-  ```json
-  { "key": "ctrl+k", "mode": "normal", "command": "flash://plugin_command?command=slack&subcommand=run",
-    "bundle_ids": ["com.tinyspeck.slackmacgap"], "priority": 30 }
-  ```
+- **`commands`** — `commands[]` are the `:`-verbs the plugin registers. A
+  `bundle_ids` gate scopes them to the focused app; unconditional commands (the
+  default) are always available.
 
-  `mode` is `normal` (default), `insert`, or `all`. `command` is a `flash://`
-  URL. `bundle_ids` defaults to the manifest's bundles; the binding applies
-  only while one of them is focused. `priority` defaults to the manifest
-  priority (25): config/default mappings sit at 0, so a plugin mapping wins a
-  key collision; a negative priority defers to the built-in default. A plugin
-  may push an updated set at runtime via a `mappings.updated` notification
-  (sibling of `commands.updated`); Flash re-applies it for the focused app
-  without a restart.
+- **`mappings`** — `mappings[]` are key bindings, mode-scoped, app-conditional,
+  and priority-ordered. `command` is a `flash://` URL. Config/default mappings
+  sit at priority 0, so a plugin mapping (priority 25) wins a key collision; a
+  negative priority defers to the built-in default. A plugin may push an updated
+  set at runtime via a `mappings.updated` notification (sibling of
+  `commands.updated`); Flash re-applies it for the focused app without a
+  restart.
