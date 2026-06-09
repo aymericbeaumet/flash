@@ -1,6 +1,6 @@
 use flash_plugin::{
-    run, AxNode, Candidate, CommandResponse, Context, Event, Plugin, Request, ResolveResponse,
-    Response, SourceActionRequest, SourceActionResponse,
+    run, AxNode, Candidate, Context, Event, ResolveResponse, SourceActionRequest,
+    SourceActionResponse,
 };
 
 const SOURCE_ID: &str = "plugin:firefox";
@@ -30,7 +30,9 @@ struct Tab {
 
 struct Firefox;
 
-impl Plugin for Firefox {
+flash_plugin::plugin!(Firefox);
+
+impl FlashPlugin for Firefox {
     // Firefox is focused → re-walk its AX tree and republish the tab list.
     // The host gates *surfacing* these candidates on the active app (the
     // manifest's `bundle_ids`), so emitting whenever Firefox gains focus keeps
@@ -55,14 +57,16 @@ impl Plugin for Firefox {
         ctx.emit_snapshot(SOURCE_ID, candidates);
     }
 
-    async fn handle(&self, ctx: Context, request: Request) -> Response {
-        match request {
-            Request::ResolveCandidate(candidate) => {
-                resolve_candidate(&ctx, &candidate).await.into()
-            }
-            Request::SourceAction(action) => source_action(&ctx, &action).await.into(),
-            _ => CommandResponse::error("unsupported request").into(),
-        }
+    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
+        resolve(&ctx, &candidate).await
+    }
+
+    async fn source_action(
+        &self,
+        ctx: Context,
+        request: SourceActionRequest,
+    ) -> SourceActionResponse {
+        perform_source_action(&ctx, &request).await
     }
 }
 
@@ -189,7 +193,7 @@ fn candidate(tab: &Tab, source: &str, pid: i64) -> Candidate {
 /// candidate's handle from emit time may be stale (any later snapshot for the
 /// pid supersedes it), so re-snapshot and match by url, then title, before
 /// pressing. Falls back to `AXSelected = true` when `AXPress` is unsupported.
-async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     let Some(pid) = candidate.pid else {
         return ResolveResponse::unresolved();
     };
@@ -212,7 +216,10 @@ async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveRespo
 /// `tab_select` (numbered-tab jump): press the Nth tab in document order within
 /// the first window that has at least that many tabs. Ports the old
 /// `FirefoxTabsSource.tabSelect` semantics.
-async fn source_action(ctx: &Context, action: &SourceActionRequest) -> SourceActionResponse {
+async fn perform_source_action(
+    ctx: &Context,
+    action: &SourceActionRequest,
+) -> SourceActionResponse {
     if action.name != "tab_select" {
         return SourceActionResponse::unhandled();
     }

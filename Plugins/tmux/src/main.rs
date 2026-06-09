@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use flash_plugin::{
     run, run_local, ActivateRequest, Candidate, CommandRequest, CommandResponse, Context,
-    DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, Plugin, Request, ResolveResponse,
-    Response, SourceActionRequest, SourceActionResponse,
+    DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, ResolveResponse,
+    SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -966,7 +966,7 @@ async fn resolve_active_client(tmux_path: Option<&str>) -> Option<TmuxClient> {
     clients.into_iter().next()
 }
 
-async fn resolve_candidate(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     let tmux_path = plugin.tmux_path.as_deref();
     let payload = candidate.payload_as::<TmuxPayload>().unwrap_or_default();
     let target = payload.tmux_target.as_str();
@@ -1120,7 +1120,7 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> C
 
 // ---- Activation -------------------------------------------------------------
 
-async fn activate_target(plugin: &Tmux, ctx: &Context, req: &ActivateRequest) {
+async fn activate(plugin: &Tmux, ctx: &Context, req: &ActivateRequest) {
     let tmux_path = plugin.tmux_path.as_deref();
     let target_id = req.target_id.as_str();
     let entry = plugin
@@ -1185,7 +1185,9 @@ struct Tmux {
     target_actions: Mutex<HashMap<String, TargetAction>>,
 }
 
-impl Plugin for Tmux {
+flash_plugin::plugin!(Tmux);
+
+impl FlashPlugin for Tmux {
     async fn on_start(&self, ctx: Context) {
         if self.tmux_path.is_none() {
             ctx.log("warn", "[tmux] tmux binary not found");
@@ -1202,22 +1204,30 @@ impl Plugin for Tmux {
         }
     }
 
-    async fn handle(&self, ctx: Context, request: Request) -> Response {
-        match request {
-            Request::DiscoverTargets(req) => discover_targets_for_context(self, &req).await.into(),
-            Request::SourceAction(req) => perform_source_action(self, &req).await.into(),
-            Request::ResolveCandidate(candidate) => {
-                resolve_candidate(self, &ctx, &candidate).await.into()
-            }
-            Request::Command(cmd) => invoke_command(self, &ctx, &cmd).await.into(),
-            Request::ActivateTarget(req) => {
-                activate_target(self, &ctx, &req).await;
-                Response::None
-            }
-            Request::Unknown { method } => {
-                CommandResponse::error(format!("unknown method: {method}")).into()
-            }
-        }
+    async fn discover_targets(&self, ctx: Context, request: DiscoverRequest) -> DiscoverResponse {
+        let _ = ctx;
+        discover_targets_for_context(self, &request).await
+    }
+
+    async fn source_action(
+        &self,
+        ctx: Context,
+        request: SourceActionRequest,
+    ) -> SourceActionResponse {
+        let _ = ctx;
+        perform_source_action(self, &request).await
+    }
+
+    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
+        resolve(self, &ctx, &candidate).await
+    }
+
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+        invoke_command(self, &ctx, &command).await
+    }
+
+    async fn activate_target(&self, ctx: Context, request: ActivateRequest) {
+        activate(self, &ctx, &request).await;
     }
 }
 

@@ -7,9 +7,7 @@
 //! inserts the glyph into the focused app. The plugin is otherwise inert —
 //! the dataset never changes, so there is nothing to refresh on events.
 
-use flash_plugin::{
-    run, Candidate, CommandResponse, Context, DiscoverResponse, Plugin, Request, Response,
-};
+use flash_plugin::{run, Candidate, Context};
 
 const SOURCE_ID: &str = "plugin:emojis";
 
@@ -40,7 +38,11 @@ fn build_candidates() -> Vec<Candidate> {
 
 struct Emojis;
 
-impl Plugin for Emojis {
+flash_plugin::plugin!(Emojis);
+
+// The host inserts the chosen glyph from each candidate's payload, so the
+// dataset emitted on start is all this plugin drives — every handler defaults.
+impl FlashPlugin for Emojis {
     async fn on_start(&self, ctx: Context) {
         let candidates = build_candidates();
         ctx.log_fields(
@@ -51,13 +53,6 @@ impl Plugin for Emojis {
                 .collect(),
         );
         ctx.emit_snapshot(SOURCE_ID, candidates);
-    }
-
-    async fn handle(&self, _ctx: Context, request: Request) -> Response {
-        match request {
-            Request::DiscoverTargets(_) => DiscoverResponse::targets(vec![]).into(),
-            _ => CommandResponse::error("unsupported request").into(),
-        }
     }
 }
 

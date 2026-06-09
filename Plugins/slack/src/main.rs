@@ -2,8 +2,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use flash_plugin::{
-    run, AxNode, Candidate, CommandRequest, CommandResponse, Context, Event, Plugin, Request,
-    ResolveResponse, Response,
+    run, AxNode, Candidate, CommandRequest, CommandResponse, Context, Event, ResolveResponse,
 };
 
 const CHANNEL_SOURCE_ID: &str = "plugin:slack.channels";
@@ -28,7 +27,9 @@ const MAX_NODES: u64 = 30_000;
 
 struct Slack;
 
-impl Plugin for Slack {
+flash_plugin::plugin!(Slack);
+
+impl FlashPlugin for Slack {
     // Slack focused → re-walk its AX tree and republish the channel list as
     // flashlight candidates. The host gates surfacing on the active app (the
     // manifest's `bundle_ids`), matching the old SlackSource.
@@ -51,19 +52,17 @@ impl Plugin for Slack {
         ctx.emit_snapshot(CHANNEL_SOURCE_ID, candidates);
     }
 
-    async fn handle(&self, ctx: Context, request: Request) -> Response {
-        match request {
-            Request::Command(cmd) => self.invoke_command(&ctx, &cmd).await,
-            Request::ResolveCandidate(candidate) => {
-                resolve_candidate(&ctx, &candidate).await.into()
-            }
-            _ => CommandResponse::error("unsupported request").into(),
-        }
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+        self.invoke_command(&ctx, &command).await
+    }
+
+    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
+        resolve(&ctx, &candidate).await
     }
 }
 
 impl Slack {
-    async fn invoke_command(&self, ctx: &Context, cmd: &CommandRequest) -> Response {
+    async fn invoke_command(&self, ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
         // `[plugin.slack] cli = "/path/to/slack"` overrides the executable;
         // defaults to `slack` on PATH.
         let cli = {
@@ -79,12 +78,12 @@ impl Slack {
             "version" => (vec![cli, "version".into()], 120),
             "run" => (prepend(&cli, &cmd.args), 120),
             other => {
-                return CommandResponse::error(format!("unknown subcommand: {other}")).into();
+                return CommandResponse::error(format!("unknown subcommand: {other}"));
             }
         };
         ctx.run_cli(&argv, Duration::from_secs(timeout))
             .await
-            .into()
+            .into_command()
     }
 }
 
@@ -126,7 +125,7 @@ fn candidate(name: &str, pid: i64) -> Candidate {
 
 /// Resolve a pick: raise Slack, re-snapshot (the emit-time handle may be
 /// stale), find the channel by name, and press it. Falls back to selecting it.
-async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     let Some(pid) = candidate.pid else {
         return ResolveResponse::unresolved();
     };
