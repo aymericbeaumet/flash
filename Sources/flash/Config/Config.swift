@@ -169,7 +169,9 @@ struct Config {
     /// Vim's `timeoutlen`. Lower → faster commits, more two-key
     /// collisions; higher → slower commits, fewer surprises.
     var sequenceTimeoutMs: Int = Self.defaultSequenceTimeoutMs
-    static let defaultSequenceTimeoutMs = 300
+    /// Matches Neovim's `timeoutlen` default so multi-key sequences feel the
+    /// same as in the editor users already have muscle memory for.
+    static let defaultSequenceTimeoutMs = 1000
 
     /// Single-atom key form, parsed via `NormalModeInterpreter.parseKeySequence`.
     /// Use `\` bare or `<backslash>` — both resolve to the same key.

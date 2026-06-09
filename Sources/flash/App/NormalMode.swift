@@ -42,7 +42,7 @@ struct PendingNormalModeCommand: Equatable {
 
 enum NormalModeInterpreter {
   private static let maxRepeatCount = 999
-  static let sequenceTimeoutMs = 300
+  static let sequenceTimeoutMs = 1000
 
   private struct PendingState {
     var count: Int?

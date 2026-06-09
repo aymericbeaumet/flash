@@ -63,8 +63,9 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 # Time (in ms) the interpreter waits for the next key in a pending
 # sequence before resolving the longest matching prefix. Equivalent to
 # Vim's `timeoutlen`. Lower = faster commit but more two-key collisions;
-# higher = slower commit but fewer surprises. Default 300.
-sequence_timeout_ms = 300
+# higher = slower commit but fewer surprises. Matches Neovim's
+# `timeoutlen` default of 1000.
+sequence_timeout_ms = 1000
 
 [mode.all.mappings]
 # Mappings available in insert and normal modes.

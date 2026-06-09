@@ -108,17 +108,17 @@ final class NormalModeTests: XCTestCase {
 
   func testPendingSequenceTimesOut() {
     let start = Date(timeIntervalSince1970: 1_000)
-    XCTAssertEqual(NormalModeInterpreter.sequenceTimeoutMs, 300)
+    XCTAssertEqual(NormalModeInterpreter.sequenceTimeoutMs, 1000)
     XCTAssertFalse(
       NormalModeInterpreter.pendingSequenceTimedOut(
         pending: "g",
         lastInputAt: start,
-        now: start.addingTimeInterval(0.299)))
+        now: start.addingTimeInterval(0.999)))
     XCTAssertTrue(
       NormalModeInterpreter.pendingSequenceTimedOut(
         pending: "g",
         lastInputAt: start,
-        now: start.addingTimeInterval(0.301)))
+        now: start.addingTimeInterval(1.001)))
   }
 
   func testCopySequences() {
