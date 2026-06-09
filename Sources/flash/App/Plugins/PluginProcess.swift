@@ -183,6 +183,7 @@ final class PluginProcess {
           self?.activateTarget(wire.id, action: action)
           return true
         },
+        entersInsertMode: wire.entersInsertMode,
         providerID: wire.sourceID)
     }
   }
@@ -252,6 +253,7 @@ final class PluginProcess {
           self?.activateTarget(wire.id, action: action)
           return true
         },
+        entersInsertMode: wire.entersInsertMode,
         providerID: wire.sourceID)
     }
   }
@@ -941,13 +943,21 @@ final class PluginProcess {
       let height = number(frameRaw["height"]),
       width > 0, height > 0
     else { return nil }
+    let role = raw["role"] as? String
+    // A plugin can state explicitly whether committing this target should
+    // enter insert mode. When it doesn't, fall back to the same AX-role
+    // heuristic the core walk uses so text-field hints still type.
+    let entersInsertMode =
+      raw["enters_insert_mode"] as? Bool
+      ?? JumpTarget.textInputRoles.contains(role ?? "")
     return PluginWireTarget(
       id: id,
       frame: CGRect(x: x, y: y, width: width, height: height),
-      role: raw["role"] as? String,
+      role: role,
       label: raw["label"] as? String,
       url: raw["url"] as? String,
       pid: (raw["pid"] as? Int).map(pid_t.init),
+      entersInsertMode: entersInsertMode,
       sourceID: raw["source_id"] as? String ?? sourceID)
   }
 

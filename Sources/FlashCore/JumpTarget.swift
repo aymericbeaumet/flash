@@ -16,6 +16,11 @@ public struct JumpTarget: @unchecked Sendable {
   public let pid: pid_t?
   public let activate: ((JumpAction) -> Bool)?
   public let providerID: String
+  /// Whether committing a click on this target should switch Flash into
+  /// insert mode. The owning provider decides: a typing surface (text
+  /// field, a tmux pane) sets this true so the user lands ready to type;
+  /// a link or button leaves it false so keyboard navigation continues.
+  public let entersInsertMode: Bool
 
   public init(
     id: String,
@@ -25,6 +30,7 @@ public struct JumpTarget: @unchecked Sendable {
     url: String? = nil,
     pid: pid_t? = nil,
     activate: ((JumpAction) -> Bool)? = nil,
+    entersInsertMode: Bool = false,
     providerID: String
   ) {
     self.id = id
@@ -34,6 +40,13 @@ public struct JumpTarget: @unchecked Sendable {
     self.url = url
     self.pid = pid
     self.activate = activate
+    self.entersInsertMode = entersInsertMode
     self.providerID = providerID
   }
+
+  /// AX roles that represent a typing surface. Committing a click on a
+  /// target with one of these roles puts the user in insert mode.
+  public static let textInputRoles: Set<String> = [
+    "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
+  ]
 }

@@ -157,13 +157,17 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.doubleClick)))
   }
 
-  func testMouseTargetCommitEntersInsertForAllClickActions() {
+  func testMouseTargetCommitEntersInsertOnlyForTypingSurfaces() {
+    let textField = JumpTarget(
+      id: "t", frame: .zero, role: "AXTextField",
+      entersInsertMode: true, providerID: "ax")
+    let link = JumpTarget(
+      id: "l", frame: .zero, role: "AXLink",
+      entersInsertMode: false, providerID: "ax")
     XCTAssertTrue(
-      AppDelegate.mouseTargetCommitShouldEnterInsertMode(action: .leftClick))
-    XCTAssertTrue(
-      AppDelegate.mouseTargetCommitShouldEnterInsertMode(action: .rightClick))
-    XCTAssertTrue(
-      AppDelegate.mouseTargetCommitShouldEnterInsertMode(action: .doubleClick))
+      AppDelegate.mouseTargetCommitShouldEnterInsertMode(target: textField))
+    XCTAssertFalse(
+      AppDelegate.mouseTargetCommitShouldEnterInsertMode(target: link))
   }
 
   func testMouseGridCommitEntersInsertForClicksButNotMoves() {
@@ -282,7 +286,7 @@ final class NormalModeTests: XCTestCase {
         captureOverride: true),
       ModeOverlaySnapshot(
         text: "INSERT",
-        visible: false,
+        visible: true,
         captureInput: false,
         inputMode: .hints,
         refreshActiveWindowBorder: true))

@@ -96,10 +96,6 @@ public final class AccessibilityProvider: FlashSource {
   /// search field is a no-op and a synthesized mouse click on top of an
   /// already-keyed app may land in the wrong subview; setting
   /// `kAXFocusedAttribute = true` is the unambiguous AX-level way.
-  static let textInputRoles: Set<String> = [
-    "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
-  ]
-
   /// Runaway guards rather than real limits. Real AX trees rarely exceed
   /// ~30 levels of depth or a few thousand elements, but the previous
   /// caps (80 / 1500) hid genuine tree content from the dump on
@@ -513,7 +509,7 @@ public final class AccessibilityProvider: FlashSource {
       let activate: ((JumpAction) -> Bool) = { action in
         switch action {
         case .leftClick:
-          if Self.textInputRoles.contains(capturedRole),
+          if JumpTarget.textInputRoles.contains(capturedRole),
             AXClick.setFocus(captured)
           {
             return true
@@ -533,6 +529,7 @@ public final class AccessibilityProvider: FlashSource {
         url: url,
         pid: pid,
         activate: activate,
+        entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
         providerID: identifier
       )
       if role == "AXImage" {

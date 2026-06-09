@@ -373,11 +373,9 @@ extension AppDelegate {
     let canCapture = mode == .normal && !hasHints && !activationInFlight
     let wantsCapture = captureOverride ?? canCapture
     let capture = canCapture && wantsCapture
-    // Insert mode is deliberately chromeless — no badge — so the focused
-    // app feels untouched. Feedback is normal-mode only.
     return ModeOverlaySnapshot(
       text: mode == .normal ? labels.normal : labels.insert,
-      visible: visible && mode != .insert,
+      visible: visible,
       captureInput: capture,
       inputMode: capture ? .normal : .hints,
       refreshActiveWindowBorder: mode == .insert)

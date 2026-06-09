@@ -474,5 +474,6 @@ struct PluginWireTarget {
   var label: String?
   var url: String?
   var pid: pid_t?
+  var entersInsertMode: Bool
   var sourceID: String
 }

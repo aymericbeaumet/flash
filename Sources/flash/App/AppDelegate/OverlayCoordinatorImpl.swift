@@ -302,7 +302,7 @@ extension AppDelegate {
     let action = pendingAction
     let shouldEnterInsertAfterCommit =
       flashMode == .normal
-      && Self.mouseTargetCommitShouldEnterInsertMode(action: action)
+      && Self.mouseTargetCommitShouldEnterInsertMode(target: hint.target)
     let shouldRestoreNormalMode = flashMode == .normal && !shouldEnterInsertAfterCommit
     // The target carries its owning pid (always the focused app at
     // walk time). Fall back to the activation-time focused pid if the
@@ -401,14 +401,19 @@ extension AppDelegate {
     }
   }
 
-  static func mouseTargetCommitShouldEnterInsertMode(action: JumpAction = .leftClick) -> Bool {
-    switch action {
-    case .leftClick, .rightClick, .doubleClick:
-      return true
-    }
+  static func mouseTargetCommitShouldEnterInsertMode(target: JumpTarget) -> Bool {
+    // `f`/`rf`/`df` commit a precise click on a known element. Enter insert
+    // only when that element is a typing surface (the owning provider sets
+    // `entersInsertMode`); clicking a link or button stays in normal mode
+    // so keyboard navigation chains keep going.
+    target.entersInsertMode
   }
 
   static func mouseGridCommitShouldEnterInsertMode(isMove: Bool) -> Bool {
+    // `F`/`rF`/`dF` are a geometric click with no element to introspect, so
+    // they emulate a raw user click and always land in insert mode. Only
+    // the move modifier (`mF`), which just repositions the pointer, stays
+    // in normal mode.
     !isMove
   }
 
