@@ -44,6 +44,14 @@ optional, symmetric conditions:
     "mappings": [
       { "key": "ctrl+k", "command": "flash://plugin_command?command=slack&subcommand=run" }
     ]
+  },
+  {
+    "kind": "shebang",
+    "command": "search",
+    "shebangs": [
+      { "token": "r", "description": "Reddit" },
+      { "token": "*" }
+    ]
   }
 ]
 ```
@@ -84,3 +92,13 @@ Shared, optional conditions on any entry:
   set at runtime via a `mappings.updated` notification (sibling of
   `commands.updated`); Flash re-applies it for the focused app without a
   restart.
+
+- **`shebang`** — `shebangs[]` are flashlight bangs. When a flashlight
+  submission begins with `!<token>` (e.g. `!r cat`), Flash routes the remainder
+  to the provider's `command` (folded into each entry; an entry may override it)
+  instead of resolving a candidate, dispatched as `command.invoke` with the
+  bang `token` as the subcommand — so a `shebang` provider needs no matching
+  `commands` entry. A `token` of `"*"` is a catch-all that claims every
+  otherwise-unclaimed bang, letting one plugin serve a large bang table (e.g.
+  the full DuckDuckGo set) without enumerating it in the manifest. The first
+  plugin to claim a token (or the catch-all) wins.

@@ -88,6 +88,11 @@ final class PluginProcess {
     return dynamicMappings
   }
 
+  /// Flashlight bang registrations. Static from the manifest (no runtime
+  /// update RPC), so this reads straight through rather than caching a
+  /// `dynamic` copy the way commands/mappings do.
+  var shebangs: [PluginShebangRegistration] { manifest.shebangs }
+
   func start() {
     queue.async { [weak self] in
       self?.startOnQueue(reason: "start")

@@ -29,6 +29,23 @@ final class PluginManager {
     }
   }
 
+  /// A resolved flashlight bang target: the owning plugin, the command its
+  /// `command.invoke` carries, and the gate/metadata folded from the manifest.
+  /// Dispatched with the typed bang as the subcommand — so a `shebang` provider
+  /// needs no matching `commands` entry.
+  private struct ShebangTarget {
+    let plugin: PluginProcess
+    let command: String
+    let bundleIDs: [String]
+    let meta: [String: String]
+
+    func matches(bundleID: String?) -> Bool {
+      if bundleIDs.isEmpty { return true }
+      guard let bundleID else { return false }
+      return bundleIDs.contains(bundleID)
+    }
+  }
+
   /// A plugin mapping with its `key`/`command` already canonicalized and
   /// parsed (the work done once at index-rebuild time, not per focus-change).
   /// `bundleIDs` empty ⇒ applies to every app the plugin is otherwise scoped
@@ -55,6 +72,14 @@ final class PluginManager {
   /// `:calc 2 + 2`). Keyed by lowercased command; consulted only when the
   /// exact `(command, subcommand)` lookup misses.
   private var wildcardCommandIndex: [String: CommandTarget] = [:]
+  /// Flashlight bang lookup: lowercased `token` → owning plugin/command.
+  /// Built alongside the command index; consulted at flashlight submit when
+  /// the query starts with `!<token>`.
+  private var shebangIndex: [String: ShebangTarget] = [:]
+  /// Catch-all bang provider (`token == "*"`): handles any `!<token>` not
+  /// claimed by an exact `shebangIndex` entry, so a plugin like `searchengines`
+  /// can serve the whole DuckDuckGo bang table without enumerating it.
+  private var wildcardShebangTarget: ShebangTarget?
   /// Resolved plugin mappings across all loaded plugins, rebuilt whenever the
   /// plugin set or any plugin's mappings change. `mappings(forBundleID:)`
   /// filters this for the focused app.
@@ -89,6 +114,8 @@ final class PluginManager {
       pluginsByID.removeAll()
       commandIndex.removeAll()
       wildcardCommandIndex.removeAll()
+      shebangIndex.removeAll()
+      wildcardShebangTarget = nil
       mappingIndex.removeAll()
       sourceAdaptersByID.removeAll()
     }
@@ -147,6 +174,39 @@ final class PluginManager {
       ok, pid, stdout in
       FlashLog.debug(
         "[plugin_command] command=\(command) subcommand=\(resolved.subcommand) ok=\(ok) "
+          + "target_pid=\(pid.map(String.init) ?? "nil")")
+      onResult?(ok, pid, stdout)
+    }
+    return true
+  }
+
+  /// Returns true when a plugin owns the flashlight bang `token` (an exact
+  /// registration, or a `"*"` catch-all) and the bang was dispatched. `query`
+  /// is the remainder after the bang; it is forwarded both as whitespace-split
+  /// `args` and verbatim as `raw`, with the bang itself as the subcommand. The
+  /// plugin runs asynchronously; `onResult` mirrors ``invoke(command:…)``.
+  @discardableResult
+  func invokeShebang(
+    token: String,
+    query: String,
+    forBundleID bundleID: String? = nil,
+    onResult: ((Bool, pid_t?, String?) -> Void)? = nil
+  ) -> Bool {
+    let lcToken = token.lowercased()
+    let target: ShebangTarget? = queue.sync {
+      if let exact = shebangIndex[lcToken], exact.matches(bundleID: bundleID) { return exact }
+      if let wildcard = wildcardShebangTarget, wildcard.matches(bundleID: bundleID) {
+        return wildcard
+      }
+      return nil
+    }
+    guard let target else { return false }
+    let args = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    target.plugin.invokeCommand(
+      command: target.command, subcommand: token, args: args, raw: query, meta: target.meta
+    ) { ok, pid, stdout in
+      FlashLog.debug(
+        "[plugin_shebang] token=\(token) command=\(target.command) ok=\(ok) "
           + "target_pid=\(pid.map(String.init) ?? "nil")")
       onResult?(ok, pid, stdout)
     }
@@ -229,6 +289,30 @@ final class PluginManager {
     }
     commandIndex = next
     wildcardCommandIndex = wildcard
+  }
+
+  /// Rebuild the flashlight bang index. Must be called from `queue` after
+  /// `pluginsByID` changes. First plugin to claim a token (or the `"*"`
+  /// catch-all) wins, matching the command index's collision semantics.
+  private func rebuildShebangIndex() {
+    var next: [String: ShebangTarget] = [:]
+    var wildcard: ShebangTarget?
+    for plugin in pluginsByID.values {
+      for registration in plugin.shebangs {
+        let token = registration.token.lowercased()
+        guard !token.isEmpty, !registration.command.isEmpty else { continue }
+        let target = ShebangTarget(
+          plugin: plugin, command: registration.command,
+          bundleIDs: registration.bundleIDs, meta: registration.meta)
+        if token == "*" {
+          if wildcard == nil { wildcard = target }
+          continue
+        }
+        if next[token] == nil { next[token] = target }
+      }
+    }
+    shebangIndex = next
+    wildcardShebangTarget = wildcard
   }
 
   /// Rebuild the resolved-mapping index. Must be called from `queue` after
@@ -399,6 +483,7 @@ final class PluginManager {
       sourceAdaptersByID.removeValue(forKey: id)
     }
     rebuildCommandIndex()
+    rebuildShebangIndex()
     rebuildMappingIndex()
     notifyStateChanged()
   }

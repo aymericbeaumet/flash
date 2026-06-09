@@ -534,6 +534,7 @@ extension AppDelegate {
   }
 
   func overlayDidSubmitCandidateFinder() {
+    if dispatchShebangIfPresent(overlay.candidateFinderQuery) { return }
     guard !candidateFinderMatches.isEmpty else {
       overlayDidCancelCandidateFinder()
       return
@@ -541,6 +542,43 @@ extension AppDelegate {
     let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
       .candidate
     openSourceItem(candidate)
+  }
+
+  /// When the flashlight query starts with `!<token>` and a plugin has
+  /// registered that bang (or a `"*"` catch-all), route the remainder to the
+  /// plugin instead of resolving a candidate, then dismiss the finder. A bare
+  /// `!`, or an unregistered token with no catch-all, returns false and falls
+  /// through to the normal candidate submit.
+  private func dispatchShebangIfPresent(_ query: String) -> Bool {
+    let trimmed = query.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasPrefix("!") else { return false }
+    let body = trimmed.dropFirst()
+    let token: String
+    let remainder: String
+    if let separator = body.firstIndex(where: { $0.isWhitespace }) {
+      token = String(body[..<separator])
+      remainder = String(body[body.index(after: separator)...])
+        .trimmingCharacters(in: .whitespaces)
+    } else {
+      token = String(body)
+      remainder = ""
+    }
+    guard !token.isEmpty else { return false }
+    let dispatched = pluginManager.invokeShebang(
+      token: token,
+      query: remainder,
+      forBundleID: currentNonFlashContext()?.bundleIdentifier
+    ) { [weak self] ok, pid, stdout in
+      guard ok, let self else { return }
+      self.activatePluginCommandTarget(pid)
+      guard let stdout, !stdout.isEmpty else { return }
+      self.overlay.displayBanner(stdout)
+    }
+    guard dispatched else { return false }
+    clearCandidateFinderState()
+    overlay.hide()
+    applyModeOverlay()
+    return true
   }
 
   func openSourceItem(matching target: String) {

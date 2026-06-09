@@ -1,6 +1,6 @@
 import Foundation
 
-/// The four surfaces a plugin can drive through the unified provider system.
+/// The surfaces a plugin can drive through the unified provider system.
 /// Each is registered the same way — a `providers[]` entry in the manifest —
 /// gated by the same optional ``ProviderConditions`` and ordered by priority.
 public enum ProviderKind: String, Codable, Sendable, CaseIterable {
@@ -8,6 +8,10 @@ public enum ProviderKind: String, Codable, Sendable, CaseIterable {
   case candidates
   case commands
   case mappings
+  /// Flashlight `!`-prefix bangs (DuckDuckGo-style): a submission beginning
+  /// with `!<token>` routes its remainder to the owning plugin instead of
+  /// resolving a candidate.
+  case shebang
 }
 
 /// Editor mode a provider can be gated to. The empty set (no `modes` declared)

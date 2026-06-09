@@ -159,6 +159,84 @@ struct PluginCommandRegistration: Codable, Hashable {
   }
 }
 
+/// One flashlight bang a plugin registers. When a flashlight submission
+/// starts with `!<token>` (e.g. `!r cat`), core routes the remainder to the
+/// owning `shebang` provider's `command`. A `token` of `"*"` is a catch-all:
+/// the plugin claims every otherwise-unclaimed bang and resolves it itself —
+/// how `searchengines` serves the full DuckDuckGo bang table without
+/// enumerating thousands of entries in the manifest.
+struct PluginShebangRegistration: Codable, Hashable {
+  var token: String
+  /// The plugin command this bang invokes. Normally inherited from the owning
+  /// `shebang` provider's `command` (folded in by ``PluginManifest/shebangs``);
+  /// an entry may override it. Dispatched as the `command` on `command.invoke`,
+  /// with the bang `token` as the subcommand — so a `shebang` provider needs no
+  /// matching `commands` entry.
+  var command: String
+  var description: String
+  /// Apps this bang is gated to (empty = every app). Folded from the owning
+  /// provider's `bundle_ids` by ``PluginManifest/shebangs``.
+  var bundleIDs: [String]
+  /// Arbitrary `_`-prefixed manifest fields forwarded verbatim on invoke, so a
+  /// plugin can keep per-bang data (e.g. a URL template) in the manifest.
+  var meta: [String: String]
+
+  init(
+    token: String,
+    command: String = "",
+    description: String = "",
+    bundleIDs: [String] = [],
+    meta: [String: String] = [:]
+  ) {
+    self.token = token
+    self.command = command
+    self.description = description
+    self.bundleIDs = bundleIDs
+    self.meta = meta
+  }
+
+  private struct DynamicKey: CodingKey {
+    var stringValue: String
+    var intValue: Int? { nil }
+    init(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: DynamicKey.self)
+    func string(_ key: String) -> String? {
+      try? c.decode(String.self, forKey: DynamicKey(stringValue: key))
+    }
+    self.token = string("token") ?? ""
+    self.command = string("command") ?? ""
+    self.description = string("description") ?? ""
+    self.bundleIDs =
+      (try? c.decode([String].self, forKey: DynamicKey(stringValue: "bundle_ids"))) ?? []
+    var meta: [String: String] = [:]
+    for key in c.allKeys where key.stringValue.hasPrefix("_") {
+      if let value = try? c.decode(String.self, forKey: key) {
+        meta[key.stringValue] = value
+      }
+    }
+    self.meta = meta
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: DynamicKey.self)
+    try c.encode(token, forKey: DynamicKey(stringValue: "token"))
+    if !command.isEmpty { try c.encode(command, forKey: DynamicKey(stringValue: "command")) }
+    if !description.isEmpty {
+      try c.encode(description, forKey: DynamicKey(stringValue: "description"))
+    }
+    if !bundleIDs.isEmpty {
+      try c.encode(bundleIDs, forKey: DynamicKey(stringValue: "bundle_ids"))
+    }
+    for (key, value) in meta.sorted(by: { $0.key < $1.key }) {
+      try c.encode(value, forKey: DynamicKey(stringValue: key))
+    }
+  }
+}
+
 /// One key mapping a plugin registers. Mirrors a `[mode.<scope>.mappings]`
 /// config entry but is app- and priority-scoped: the binding applies only
 /// while one of `bundleIDs` (defaulting to the plugin's manifest bundles) is
@@ -233,29 +311,37 @@ struct PluginProvider: Codable, Equatable {
   var modes: [ProviderMode]
   /// Scheduling priority override; `nil` inherits the manifest priority.
   var priority: Int?
+  /// Plugin command shared by every bang in a `shebang` provider's `shebangs`
+  /// (an entry may still override it). Ignored by the other kinds.
+  var command: String
   var commands: [PluginCommandRegistration]
   var mappings: [PluginMappingRegistration]
+  var shebangs: [PluginShebangRegistration]
 
   init(
     kind: ProviderKind,
     bundleIDs: [String] = [],
     modes: [ProviderMode] = [],
     priority: Int? = nil,
+    command: String = "",
     commands: [PluginCommandRegistration] = [],
-    mappings: [PluginMappingRegistration] = []
+    mappings: [PluginMappingRegistration] = [],
+    shebangs: [PluginShebangRegistration] = []
   ) {
     self.kind = kind
     self.bundleIDs = bundleIDs
     self.modes = modes
     self.priority = priority
+    self.command = command
     self.commands = commands
     self.mappings = mappings
+    self.shebangs = shebangs
   }
 
   enum CodingKeys: String, CodingKey {
     case kind
     case bundleIDs = "bundle_ids"
-    case modes, priority, commands, mappings
+    case modes, priority, command, commands, mappings, shebangs
   }
 
   init(from decoder: Decoder) throws {
@@ -264,10 +350,13 @@ struct PluginProvider: Codable, Equatable {
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
     self.modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
     self.commands =
       try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
     self.mappings =
       try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .mappings) ?? []
+    self.shebangs =
+      try c.decodeIfPresent([PluginShebangRegistration].self, forKey: .shebangs) ?? []
   }
 
   func encode(to encoder: Encoder) throws {
@@ -276,8 +365,10 @@ struct PluginProvider: Codable, Equatable {
     if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
     if !modes.isEmpty { try c.encode(modes, forKey: .modes) }
     if let priority { try c.encode(priority, forKey: .priority) }
+    if !command.isEmpty { try c.encode(command, forKey: .command) }
     if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
     if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
+    if !shebangs.isEmpty { try c.encode(shebangs, forKey: .shebangs) }
   }
 
   /// The shared activation gate this provider declares.
@@ -337,6 +428,21 @@ struct PluginManifest: Codable, Equatable {
         if entry.mode == "normal", provider.modes.count == 1 {
           entry.mode = provider.modes[0].rawValue
         }
+        return entry
+      }
+    }
+  }
+
+  /// Bang registrations across every `shebang` provider, each carrying its
+  /// provider's `command` and (folded-in) `bundle_ids` so the flashlight `!`
+  /// dispatch index sees a flat, app-scoped list. The token `"*"` marks a
+  /// catch-all that claims every otherwise-unclaimed bang.
+  var shebangs: [PluginShebangRegistration] {
+    providers.filter { $0.kind == .shebang }.flatMap { provider in
+      provider.shebangs.map { entry in
+        var entry = entry
+        if entry.command.isEmpty { entry.command = provider.command }
+        if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.bundleIDs }
         return entry
       }
     }

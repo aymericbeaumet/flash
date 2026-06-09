@@ -386,6 +386,46 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(mapping.scope, .insert)
   }
 
+  func testShebangProviderFoldsCommandAndScope() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "banger",
+          "name": "Banger",
+          "version": "0.1.0",
+          "description": "Flashlight bangs",
+          "install": "true",
+          "start": "true",
+          "providers": [
+            {
+              "kind": "shebang",
+              "command": "search",
+              "bundle_ids": ["com.example.app"],
+              "shebangs": [
+                { "token": "r", "description": "Reddit" },
+                { "token": "*", "_note": "catch-all" },
+                { "token": "gh", "command": "github", "bundle_ids": ["com.other.app"] }
+              ]
+            }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(Set(manifest.shebangs.map(\.token)), ["r", "*", "gh"])
+    let reddit = try XCTUnwrap(manifest.shebangs.first { $0.token == "r" })
+    XCTAssertEqual(reddit.command, "search", "entry inherits the provider's command")
+    XCTAssertEqual(reddit.bundleIDs, ["com.example.app"], "entry inherits the provider's gate")
+    let catchAll = try XCTUnwrap(manifest.shebangs.first { $0.token == "*" })
+    XCTAssertEqual(catchAll.command, "search")
+    XCTAssertEqual(catchAll.meta["_note"], "catch-all", "_-prefixed fields are retained as meta")
+    let github = try XCTUnwrap(manifest.shebangs.first { $0.token == "gh" })
+    XCTAssertEqual(github.command, "github", "entry's own command wins")
+    XCTAssertEqual(github.bundleIDs, ["com.other.app"], "entry's own bundle_ids win")
+  }
+
   func testProviderEncodeOmitsEmptyFields() throws {
     let provider = PluginProvider(kind: .candidates)
     let data = try JSONEncoder().encode(provider)
