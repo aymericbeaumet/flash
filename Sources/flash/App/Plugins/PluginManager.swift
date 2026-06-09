@@ -11,9 +11,22 @@ final class PluginManager {
 
   /// A resolved command target: the owning plugin plus the matched manifest
   /// entry's `_`-prefixed metadata, forwarded to the plugin on invoke.
+  /// `bundleIDs` carries the command's app gate (empty ⇒ every app), applied at
+  /// lookup against the focused app — the same predicate `ResolvedPluginMapping`
+  /// uses.
   private struct CommandTarget {
     let plugin: PluginProcess
+    let bundleIDs: [String]
     let meta: [String: String]
+
+    /// Whether this command is available while `bundleID` is the focused app.
+    /// An app-scoped command (non-empty `bundleIDs`) needs a known focused app
+    /// that matches; an unconditional command is always available.
+    func matches(bundleID: String?) -> Bool {
+      if bundleIDs.isEmpty { return true }
+      guard let bundleID else { return false }
+      return bundleIDs.contains(bundleID)
+    }
   }
 
   /// A plugin mapping with its `key`/`command` already canonicalized and
@@ -108,18 +121,20 @@ final class PluginManager {
     subcommand: String,
     args: [String],
     raw: String,
+    forBundleID bundleID: String? = nil,
     onResult: ((Bool, pid_t?, String?) -> Void)? = nil
   ) -> Bool {
     let lcCommand = command.lowercased()
     let key = CommandKey(command: lcCommand, subcommand: subcommand.lowercased())
     // Exact `(command, subcommand)` first; on a miss, fall back to a wildcard
     // command that consumes the whole remainder (the parsed subcommand token
-    // is really the first arg, e.g. `:calc 2 + 2`).
+    // is really the first arg, e.g. `:calc 2 + 2`). An app-scoped command is
+    // only owned here when its gate matches the focused app.
     let resolved: (target: CommandTarget, subcommand: String, args: [String])? = queue.sync {
-      if let target = commandIndex[key] {
+      if let target = commandIndex[key], target.matches(bundleID: bundleID) {
         return (target, subcommand, args)
       }
-      if let target = wildcardCommandIndex[lcCommand] {
+      if let target = wildcardCommandIndex[lcCommand], target.matches(bundleID: bundleID) {
         return (target, "", [subcommand] + args)
       }
       return nil
@@ -163,16 +178,32 @@ final class PluginManager {
     }
   }
 
-  func commandRegistrations() -> [PluginCommandRegistration] {
+  /// Command registrations available for completion while `bundleID` is the
+  /// focused app. `nil` keeps only unconditional commands (no app context to
+  /// satisfy an app gate). App-scoped commands appear only for their apps.
+  func commandRegistrations(forBundleID bundleID: String? = nil)
+    -> [PluginCommandRegistration]
+  {
     queue.sync {
-      pluginsByID.values.flatMap { $0.commands }
+      pluginsByID.values.flatMap { $0.commands }.filter { registration in
+        if registration.bundleIDs.isEmpty { return true }
+        guard let bundleID else { return false }
+        return registration.bundleIDs.contains(bundleID)
+      }
     }
   }
 
-  func hasCommand(command: String, subcommand: String) -> Bool {
+  func hasCommand(command: String, subcommand: String, forBundleID bundleID: String? = nil) -> Bool
+  {
     let lcCommand = command.lowercased()
     let key = CommandKey(command: lcCommand, subcommand: subcommand.lowercased())
-    return queue.sync { commandIndex[key] != nil || wildcardCommandIndex[lcCommand] != nil }
+    return queue.sync {
+      if let target = commandIndex[key], target.matches(bundleID: bundleID) { return true }
+      if let target = wildcardCommandIndex[lcCommand], target.matches(bundleID: bundleID) {
+        return true
+      }
+      return false
+    }
   }
 
   /// Rebuild the command lookup index. Must be called from `queue` after
@@ -184,7 +215,8 @@ final class PluginManager {
       for registration in plugin.commands {
         let command = registration.command.lowercased()
         let subcommand = registration.subcommand.lowercased()
-        let target = CommandTarget(plugin: plugin, meta: registration.meta)
+        let target = CommandTarget(
+          plugin: plugin, bundleIDs: registration.bundleIDs, meta: registration.meta)
         if subcommand == "*" {
           if wildcard[command] == nil { wildcard[command] = target }
           continue

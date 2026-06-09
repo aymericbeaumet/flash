@@ -990,7 +990,8 @@ final class PluginProcess {
     return PluginCommandRegistration(
       command: command,
       subcommand: subcommand,
-      description: raw["description"] as? String ?? "")
+      description: raw["description"] as? String ?? "",
+      bundleIDs: raw["bundle_ids"] as? [String] ?? [])
   }
 
   private static func mapping(from raw: [String: Any]) -> PluginMappingRegistration? {

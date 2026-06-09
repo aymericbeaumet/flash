@@ -314,7 +314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         command: command,
         subcommand: subcommand,
         args: args,
-        raw: cmd.diagnosticDescription
+        raw: cmd.diagnosticDescription,
+        forBundleID: currentNonFlashContext()?.bundleIdentifier
       ) { [weak self] ok, pid, stdout in
         guard ok else { return }
         self?.activatePluginCommandTarget(pid)

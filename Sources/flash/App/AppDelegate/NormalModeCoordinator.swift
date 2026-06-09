@@ -936,7 +936,8 @@ extension AppDelegate {
   private func commandLineCompletionContext(for command: String)
     -> NormalModeDispatcher.CommandLineCompletionContext?
   {
-    let registrations = pluginManager.commandRegistrations()
+    let registrations = pluginManager.commandRegistrations(
+      forBundleID: currentNonFlashContext()?.bundleIdentifier)
     var subcommands: [String: [String]] = [:]
     var commandsOrdered: [String] = []
     for registration in registrations {
@@ -1154,6 +1155,7 @@ extension AppDelegate {
         subcommand: plugin.subcommand,
         args: plugin.args,
         raw: plugin.raw,
+        forBundleID: currentNonFlashContext()?.bundleIdentifier,
         onResult: { [weak self] ok, pid, stdout in
           guard ok else { return }
           self?.activatePluginCommandTarget(pid)

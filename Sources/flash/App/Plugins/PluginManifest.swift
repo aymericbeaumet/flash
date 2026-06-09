@@ -91,6 +91,13 @@ struct PluginCommandRegistration: Codable, Hashable {
   var command: String
   var subcommand: String
   var description: String
+  /// Apps this command is gated to (empty = every app). Mirrors
+  /// ``PluginMappingRegistration/bundleIDs``: normally inherited from the
+  /// owning `commands` provider's `bundle_ids` (folded in by
+  /// ``PluginManifest/commands``), so a command only resolves while one of
+  /// these apps is focused. The index gate uses the same predicate as
+  /// mappings.
+  var bundleIDs: [String]
   /// Arbitrary `_`-prefixed fields from the manifest entry. Flash itself
   /// ignores them; they are forwarded verbatim to the plugin on
   /// `command.invoke` so a plugin can keep per-subcommand data (e.g. `web`
@@ -98,10 +105,17 @@ struct PluginCommandRegistration: Codable, Hashable {
   /// duplicating it in code.
   var meta: [String: String]
 
-  init(command: String, subcommand: String, description: String, meta: [String: String] = [:]) {
+  init(
+    command: String,
+    subcommand: String,
+    description: String,
+    bundleIDs: [String] = [],
+    meta: [String: String] = [:]
+  ) {
     self.command = command
     self.subcommand = subcommand
     self.description = description
+    self.bundleIDs = bundleIDs
     self.meta = meta
   }
 
@@ -120,6 +134,8 @@ struct PluginCommandRegistration: Codable, Hashable {
     self.command = string("command") ?? ""
     self.subcommand = string("subcommand") ?? ""
     self.description = string("description") ?? ""
+    self.bundleIDs =
+      (try? c.decode([String].self, forKey: DynamicKey(stringValue: "bundle_ids"))) ?? []
     var meta: [String: String] = [:]
     for key in c.allKeys where key.stringValue.hasPrefix("_") {
       if let value = try? c.decode(String.self, forKey: key) {
@@ -134,6 +150,9 @@ struct PluginCommandRegistration: Codable, Hashable {
     try c.encode(command, forKey: DynamicKey(stringValue: "command"))
     try c.encode(subcommand, forKey: DynamicKey(stringValue: "subcommand"))
     try c.encode(description, forKey: DynamicKey(stringValue: "description"))
+    if !bundleIDs.isEmpty {
+      try c.encode(bundleIDs, forKey: DynamicKey(stringValue: "bundle_ids"))
+    }
     for (key, value) in meta.sorted(by: { $0.key < $1.key }) {
       try c.encode(value, forKey: DynamicKey(stringValue: key))
     }
@@ -292,9 +311,18 @@ struct PluginManifest: Codable, Equatable {
   /// response isn't dropped. `nil` uses the default.
   var requestTimeoutMs: Int?
 
-  /// Denormalized (command, subcommand) rows across every `commands` provider.
+  /// Denormalized (command, subcommand) rows across every `commands` provider,
+  /// with the provider's shared `bundle_ids` folded into each entry (the entry's
+  /// own value wins) so command-index gating sees a flat, app-scoped list — the
+  /// same shape `mappings` exposes.
   var commands: [PluginCommandRegistration] {
-    providers.filter { $0.kind == .commands }.flatMap { $0.commands }
+    providers.filter { $0.kind == .commands }.flatMap { provider in
+      provider.commands.map { entry in
+        var entry = entry
+        if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.bundleIDs }
+        return entry
+      }
+    }
   }
 
   /// Mapping registrations across every `mappings` provider, with the
