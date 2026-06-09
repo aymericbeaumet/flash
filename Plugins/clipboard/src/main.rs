@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use flash_plugin::{run, Candidate, CommandResponse, Context, Event, Plugin, Request, Response};
+use flash_plugin::{run, Candidate, CommandRequest, CommandResponse, Context, Event};
 
 const SOURCE_ID: &str = "plugin:clipboard";
 const HISTORY_FILE: &str = "history.json";
@@ -11,7 +11,9 @@ struct Clipboard {
     history: Mutex<Vec<String>>,
 }
 
-impl Plugin for Clipboard {
+flash_plugin::plugin!(Clipboard);
+
+impl FlashPlugin for Clipboard {
     async fn on_start(&self, ctx: Context) {
         {
             let mut hist = self.history.lock().unwrap();
@@ -52,11 +54,8 @@ impl Plugin for Clipboard {
         }
     }
 
-    async fn handle(&self, _ctx: Context, request: Request) -> Response {
-        let Request::Command(cmd) = request else {
-            return CommandResponse::error("unsupported request").into();
-        };
-        match cmd.command.as_str() {
+    async fn on_command(&self, _ctx: Context, command: CommandRequest) -> CommandResponse {
+        match command.command.as_str() {
             // `:clipboard` opens the host's dedicated history modal. The plugin
             // can't drive macOS UI, so it just hands back the full history
             // (preview + value per entry) as JSON; the host renders the list
@@ -65,8 +64,8 @@ impl Plugin for Clipboard {
             // `:copy` / `:paste` are top-level commands the host synthesizes as
             // ⌘C / ⌘V against the focused app; the plugin only advertises them
             // so they appear in the command catalog. Accept as no-ops.
-            "copy" | "paste" => CommandResponse::ok().into(),
-            other => CommandResponse::error(format!("unknown command: {other}")).into(),
+            "copy" | "paste" => CommandResponse::ok(),
+            other => CommandResponse::error(format!("unknown command: {other}")),
         }
     }
 }
@@ -79,7 +78,7 @@ impl Clipboard {
     /// The full history as a JSON array of `{preview, value}`, most-recent
     /// first — the payload the host's `:clipboard` modal renders. `preview`
     /// is the one-line label; `value` is the full text pasted on selection.
-    fn history_response(&self) -> Response {
+    fn history_response(&self) -> CommandResponse {
         let entries: Vec<HistoryEntry> = self
             .history
             .lock()
@@ -95,9 +94,8 @@ impl Clipboard {
                 ok: true,
                 stdout: Some(json),
                 ..Default::default()
-            }
-            .into(),
-            Err(err) => CommandResponse::error(format!("encode history: {err}")).into(),
+            },
+            Err(err) => CommandResponse::error(format!("encode history: {err}")),
         }
     }
 }

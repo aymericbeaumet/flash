@@ -1,0 +1,14 @@
+[package]
+name = "flash_plugin_macros"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Compile-time manifest.json reader for Flash plugins: generates the typed FlashPlugin trait and Plugin adapter."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+serde_json = "1"

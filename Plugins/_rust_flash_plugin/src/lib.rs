@@ -24,6 +24,11 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot};
 
+/// Generate the typed plugin surface from `manifest.json` at compile time. See
+/// the `flash_plugin_macros` crate. Invoke as `flash_plugin::plugin!(MyPlugin);`
+/// then write `impl FlashPlugin for MyPlugin { … }`.
+pub use flash_plugin_macros::plugin;
+
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
 /// plugin assigned. The serve loop fulfils each entry when the matching host
 /// response arrives. Cloned into [`Context`] so any handler can call the host.
@@ -56,6 +61,12 @@ impl Frame {
     /// Build a `Frame` from an [`AxNode::frame`] `[x, y, w, h]` rect.
     pub fn from_ax(rect: [f64; 4]) -> Self {
         Self::new(rect[0], rect[1], rect[2], rect[3])
+    }
+}
+
+impl From<[f64; 4]> for Frame {
+    fn from(rect: [f64; 4]) -> Self {
+        Self::from_ax(rect)
     }
 }
 
@@ -220,6 +231,42 @@ impl Candidate {
     /// [`payload_json`](Candidate::payload_json)). `None` if absent or malformed.
     pub fn payload_as<T: DeserializeOwned>(&self) -> Option<T> {
         serde_json::from_str(self.payload.as_deref()?).ok()
+    }
+
+    /// The candidate's display name.
+    pub fn as_str(&self) -> &str {
+        &self.name
+    }
+}
+
+impl From<&str> for Candidate {
+    fn from(name: &str) -> Self {
+        Candidate::new(name)
+    }
+}
+
+impl From<String> for Candidate {
+    fn from(name: String) -> Self {
+        Candidate::new(name)
+    }
+}
+
+impl AsRef<str> for Candidate {
+    fn as_ref(&self) -> &str {
+        &self.name
+    }
+}
+
+impl std::ops::Deref for Candidate {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.name
+    }
+}
+
+impl std::fmt::Display for Candidate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
     }
 }
 
