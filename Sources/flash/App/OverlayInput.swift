@@ -140,6 +140,74 @@ extension OverlayPanel {
       repeatCount: transition.repeatCount)
   }
 
+  /// Single capture entry point for the always-on session event tap. Routes a
+  /// keyDown to the handler for the current input mode and returns whether it
+  /// was consumed (swallowed). A non-activating overlay panel can't reliably
+  /// become the system key window over a frontmost foreign app, so this tap —
+  /// not the panel's own key delivery — is the authoritative, hermetic capture
+  /// path for every mode except INSERT (where the tap doesn't run). Returning
+  /// false lets the key reach the focused app: modified chords reserved for the
+  /// Carbon `[mode.*]` registry and global shortcuts (⌘-Tab) pass through.
+  func routeCapturedKey(_ event: NSEvent) -> Bool {
+    switch inputMode {
+    case .normal:
+      let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      if modifiers.contains(.command) || modifiers.contains(.control)
+        || modifiers.contains(.option)
+      {
+        return false
+      }
+      processNormalModeKey(event)
+      return true
+    case .hints:
+      return routeCapturedHintKey(event)
+    case .commandLine:
+      return routeCapturedCommandLineKey(event)
+    case .modal:
+      return handleModalKeyEvent(event)
+    case .candidateFinder:
+      return handleCandidateFinderKeyEvent(event)
+    }
+  }
+
+  private func routeCapturedHintKey(_ event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if modifiers.contains(.command) || modifiers.contains(.control)
+      || modifiers.contains(.option)
+    {
+      // Let a configured hint-mode mapping claim it; otherwise pass through so
+      // ⌘-Tab and the Carbon `[mode.*]` registry still fire — any resulting
+      // focus change tears the hints down through the focus monitor.
+      return coordinator?.overlayDidHandleMapping(event) == true
+    }
+    // Plain keys are hint typing or a dismissal (esc / space / arrows /
+    // backspace); always consume so nothing leaks to the focused app.
+    _ = handleOverlayKeyEvent(event)
+    return true
+  }
+
+  private func routeCapturedCommandLineKey(_ event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if modifiers.contains(.command) {
+      // ⌘a/c/x/v/z edit shortcuts run inline; any other ⌘ chord (⌘-Tab,
+      // ⌘-space, global hotkeys) passes through untouched.
+      if handleCommandLineEditingShortcut(event) { return true }
+      return false
+    }
+    // Drive the real field editor so native single-line editing — cursor
+    // motion, selection, ⌥-delete-word, and Return/Esc/Tab via the delegate —
+    // keeps working even though the event arrived through the tap.
+    if let editor = commandTextField.currentEditor() {
+      editor.keyDown(with: event)
+      return true
+    }
+    // The field editor isn't installed yet (the panel hasn't become key).
+    // Re-arm capture and consume the key to stay hermetic rather than leak it.
+    FlashLog.trace("[input] command_line capture_rearm key=\(event.keyCode)")
+    captureKeyboardInput()
+    return true
+  }
+
   @discardableResult
   private func handleOverlayKeyEvent(_ event: NSEvent, swallowIgnored: Bool = false) -> Bool {
     guard let coordinator = coordinator else { return false }

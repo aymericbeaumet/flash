@@ -549,23 +549,19 @@ extension AppDelegate {
     }
   }
 
-  /// Decision callback for `NormalModeEventTap`, invoked on the main thread
-  /// for every keyDown. Swallows plain (unmodified) keys while normal mode is
-  /// capturing and routes them through the same interpreter the NSPanel uses,
-  /// closing the entry race where the leading prefix key (e.g. `[` of `[t`)
-  /// leaks to the focused app. Keys carrying command/control/option are left
-  /// untouched so the Carbon hotkey registry (`[mode.*]`) keeps working.
+  /// Decision callback for `NormalModeEventTap`, invoked on the main thread for
+  /// every keyDown. INSERT is the only mode that lets keystrokes reach the
+  /// focused app; every other Flash mode is hermetic. The overlay is a
+  /// non-activating panel that can't reliably hold the system key window over a
+  /// frontmost foreign app, so this session-level tap — not the panel's own key
+  /// delivery — is the authoritative capture path. We hand the key to the
+  /// overlay, which routes it by input mode and reports whether it consumed it;
+  /// unconsumed keys (modified chords reserved for the Carbon `[mode.*]`
+  /// registry / ⌘-Tab) pass through untouched.
   func normalModeEventTapShouldSwallow(_ cgEvent: CGEvent) -> Bool {
-    guard shouldCaptureNormalModeInput else { return false }
+    guard flashMode == .normal, !activationInFlight else { return false }
     guard let nsEvent = NSEvent(cgEvent: cgEvent) else { return false }
-    let modifiers = nsEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    if modifiers.contains(.command) || modifiers.contains(.control)
-      || modifiers.contains(.option)
-    {
-      return false
-    }
-    overlay.processNormalModeKey(nsEvent)
-    return true
+    return overlay.routeCapturedKey(nsEvent)
   }
 
   func hasNormalModeBinding(_ cfg: Config) -> Bool {
