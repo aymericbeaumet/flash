@@ -119,10 +119,6 @@ extension OverlayPanel {
         lastTargetLocalRects.append(local)
       }
 
-      let mouseGridPalette = isMouseGridHint
-        ? Self.mouseGridChipPalette(index: idx, foreground: fg)
-        : nil
-
       let chip = dequeueHintLayer()
       // The chip pool retains visual state across activations. If the
       // previous overlay was dismissed mid-filter (e.g. by typing the
@@ -130,12 +126,11 @@ extension OverlayPanel {
       // Without this reset, the next activation pulls hidden chips out
       // of the pool and the user sees only the debug outlines.
       chip.isHidden = false
-      // Mouse-grid chips render at a user-configurable opacity so the
-      // user can still see what's under the precision grid. Regular
-      // hint chips stay fully opaque (small chips on top of UI
-      // elements — translucency there just makes the label hard to
-      // read against busy backgrounds).
-      chip.opacity = isMouseGridHint ? mouseGridOpacity : 1
+      // Every chip layer stays at full opacity. Mouse-grid cell
+      // translucency rides on the tint's colour alpha instead (set
+      // below), so the opaque label chip nested inside each cell — and
+      // therefore the letter — never inherits the see-through tint.
+      chip.opacity = 1
       let label = dequeueLabelLayer()
       label.isHidden = false
       // CATextLayer's own `font` + `fontSize` properties are the
@@ -147,11 +142,10 @@ extension OverlayPanel {
       // a stale regular-weight font from a previous render.
       label.font = labelFont
       label.fontSize = fontSize
-      let labelColor = mouseGridPalette?.foreground ?? fg
       label.string = Self.attributedLabel(
         display: hint.display, typedPrefixLen: 0,
-        font: labelFont, fgNS: labelColor)
-      label.foregroundColor = labelColor.cgColor
+        font: labelFont, fgNS: fg)
+      label.foregroundColor = fg.cgColor
 
       let labelLen = hint.display.count
       let chipW: CGFloat
@@ -162,28 +156,13 @@ extension OverlayPanel {
         widthByLen[labelLen] = chipW
       }
 
-      // Mouse-grid chips fill the entire cell — gap-free packing is the
-      // user-visible promise of the grid: clicking *anywhere* in a cell
-      // commits its hint, with no dead "between letters" zone. The
-      // label stays sized to the glyph (same labelFont / fontSize) but
-      // gets centered inside the cell chip.
-      let chipGlobal: CGRect
-      let labelOriginX: CGFloat
-      let labelOriginY: CGFloat
-      if isMouseGridHint {
-        chipGlobal = targetFrame
-        labelOriginX = (chipGlobal.width - chipW) / 2
-        labelOriginY = (chipGlobal.height - fontSize - 2) / 2
-      } else {
-        chipGlobal = Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
-        labelOriginX = 0
-        labelOriginY = labelYOffset
-      }
-      label.frame = CGRect(
-        x: labelOriginX,
-        y: labelOriginY,
-        width: chipW,
-        height: labelHeight)
+      // Outer chip frame. Mouse-grid cells fill the whole cell (gap-free
+      // packing — clicking *anywhere* in a cell commits its hint, no
+      // dead "between letters" zone); regular hints use the centred
+      // fixed-size chip.
+      let chipGlobal: CGRect = isMouseGridHint
+        ? targetFrame
+        : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
       let chipLocal = CGRect(
         x: chipGlobal.minX - frame.minX,
         y: chipGlobal.minY - frame.minY,
@@ -209,37 +188,71 @@ extension OverlayPanel {
       }
       // Snap to device-pixel grid so the 1pt border lands on integer
       // device-pixels (otherwise it gets anti-aliased into two half-
-      // intensity rows and reads as pixelated). Mouse-grid chips skip
+      // intensity rows and reads as pixelated). Mouse-grid cells skip
       // the snap because they must touch their neighbours exactly —
-      // per-chip rounding can drift cells apart by a pixel and create
-      // a visible "between letters" gap, which is precisely the
-      // anti-feature the grid is supposed to avoid.
+      // per-cell rounding can drift cells apart by a pixel and create a
+      // visible gap, which is precisely the anti-feature the grid avoids.
       chip.frame = isMouseGridHint ? chipLocal : Self.snap(chipLocal, scale: chipScale)
       chip.contentsScale = chipScale
-      // Mouse-grid chips set `cornerRadius = 0` + `borderWidth = 0` so
-      // adjacent cells are visually continuous. The pool retains the
-      // tweak across renders, but the next non-mouse-grid render flips
-      // both back; we set them every frame for that reason.
-      if let mouseGridPalette {
+      label.contentsScale = chipScale
+
+      if isMouseGridHint {
+        // Cell backdrop: a translucent tint so the user still sees the
+        // page underneath to aim. Translucency rides on the colour alpha
+        // (not layer opacity) so the centred label chip nested below
+        // renders fully opaque. `mouseGridOpacity` controls only this
+        // tint — never the letter — so the hint stays readable on any
+        // background (light or dark) without its contrast drifting.
+        let tint = Self.mouseGridColor(index: idx)
+        let alpha = CGFloat(mouseGridOpacity)
         chip.cornerRadius = 0
-        chip.borderWidth = 0
+        chip.borderWidth = 1
         chip.colors = [
-          mouseGridPalette.bottom.cgColor,
-          mouseGridPalette.top.cgColor,
+          (tint.blended(withFraction: 0.08, of: .black) ?? tint)
+            .withAlphaComponent(alpha).cgColor,
+          (tint.blended(withFraction: 0.40, of: .white) ?? tint)
+            .withAlphaComponent(alpha).cgColor,
         ]
-        chip.borderColor = mouseGridPalette.border.cgColor
+        chip.borderColor = tint.withAlphaComponent(min(1, alpha + 0.3)).cgColor
+
+        // Centred hint: the exact "f"-hint chip design (same gradient,
+        // corner radius, border, glyph) so the letter is always crisp
+        // regardless of the underlying page colour.
+        let labelChip = CAGradientLayer()
+        labelChip.actions = OverlayPanel.noActions
+        labelChip.cornerRadius = 3
+        labelChip.borderWidth = 1
+        labelChip.colors = gradientColors
+        labelChip.borderColor = borderCG
+        labelChip.contentsScale = chipScale
+        // Centre on the cell in panel-local space, snap for a crisp
+        // border, then re-express in the cell chip's own coordinates.
+        let labelAbs = Self.snap(
+          CGRect(
+            x: chipLocal.midX - chipW / 2,
+            y: chipLocal.midY - chipHeight / 2,
+            width: chipW,
+            height: chipHeight),
+          scale: chipScale)
+        labelChip.frame = CGRect(
+          x: labelAbs.minX - chipLocal.minX,
+          y: labelAbs.minY - chipLocal.minY,
+          width: labelAbs.width,
+          height: labelAbs.height)
+        label.frame = CGRect(x: 0, y: labelYOffset, width: chipW, height: labelHeight)
+        labelChip.addSublayer(label)
+        chip.addSublayer(labelChip)
       } else {
         chip.cornerRadius = 3
         chip.borderWidth = 1
         chip.colors = gradientColors
         chip.borderColor = borderCG
+        label.frame = CGRect(x: 0, y: labelYOffset, width: chipW, height: labelHeight)
+        // `recycleAll()` already cleared `sublayers`, so attaching with
+        // `addSublayer(label)` skips the per-chip array alloc that
+        // `chip.sublayers = [label]` carried.
+        chip.addSublayer(label)
       }
-      label.contentsScale = chipScale
-
-      // `recycleAll()` already cleared `sublayers`, so attaching with
-      // `addSublayer(label)` skips the per-chip array alloc that
-      // `chip.sublayers = [label]` carried.
-      chip.addSublayer(label)
       newSublayers.append(chip)
       hintLayers.append(chip)
       labelLayers.append(label)
@@ -553,16 +566,6 @@ extension OverlayPanel {
 
   private static func mouseGridColor(index: Int) -> NSColor {
     mouseGridColors[index % mouseGridColors.count]
-  }
-
-  private static func mouseGridChipPalette(
-    index: Int,
-    foreground: NSColor
-  ) -> (top: NSColor, bottom: NSColor, foreground: NSColor, border: NSColor) {
-    let base = mouseGridColor(index: index)
-    let top = base.blended(withFraction: 0.40, of: NSColor.white) ?? base
-    let bottom = base.blended(withFraction: 0.08, of: NSColor.black) ?? base
-    return (top: top, bottom: bottom, foreground: foreground, border: base)
   }
 
   private static func mouseGridDepth(from id: String) -> Int? {
