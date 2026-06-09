@@ -38,10 +38,13 @@ extension OverlayPanel {
   static let nordAuroraYellowCG = nordAuroraYellow.cgColor
   static let nordAuroraPurpleCG = nordAuroraPurple.cgColor
 
+  // INSERT inverts the badge: a filled frost chip with dark text, so the one
+  // mode that lets keystrokes through reads as a solid, unmistakable block
+  // versus the outlined NORMAL/COMMAND badges.
   static let insertPalette = ModeBadgePalette(
-    topCG: nordPolarNight1CG,
-    bottomCG: nordPolarNight0CG,
-    foregroundCG: nordFrost2CG,
+    topCG: nordFrost2CG,
+    bottomCG: nordFrost2CG,
+    foregroundCG: nordPolarNight0CG,
     borderCG: nordFrost2CG)
   static let normalPalette = ModeBadgePalette(
     topCG: nordPolarNight1CG,
