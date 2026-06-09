@@ -1,4 +1,5 @@
 import Foundation
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -81,7 +82,7 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testOfficialPluginsRespondOverJSONDWithMockedCLIs() throws {
+  func testOfficialPluginsRespondOverMessagePackWithMockedCLIs() throws {
     let cases = [
       ("github", "gh"),
       ("linear", "linear"),
@@ -285,7 +286,7 @@ final class PluginSystemTests: XCTestCase {
     let binaryURL = pluginRoot.appendingPathComponent("flash-plugin-\(pluginID)")
     guard FileManager.default.isExecutableFile(atPath: binaryURL.path) else {
       throw XCTSkip(
-        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the JSOND smoke test")
+        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the MessagePack smoke test")
     }
     let process = Process()
     process.executableURL = binaryURL
@@ -315,12 +316,19 @@ final class PluginSystemTests: XCTestCase {
     // binary (mirroring the core's sandboxed executor), and feeds the result
     // back. Only after the `command.invoke` (id 2) response arrives do we send
     // `shutdown`, so the in-flight CLI call always completes first.
-    let collector = JSONDLineCollector()
+    let collector = MessagePackFrameCollector()
     let writeLock = NSLock()
     func send(_ object: [String: Any]) {
-      guard let line = try? jsonLine(object) else { return }
+      guard let payload = try? MessagePack.encode(object) else { return }
+      let count = UInt32(payload.count)
+      var frame = Data(capacity: 4 + payload.count)
+      frame.append(UInt8(truncatingIfNeeded: count >> 24))
+      frame.append(UInt8(truncatingIfNeeded: count >> 16))
+      frame.append(UInt8(truncatingIfNeeded: count >> 8))
+      frame.append(UInt8(truncatingIfNeeded: count))
+      frame.append(payload)
       writeLock.lock()
-      stdin.fileHandleForWriting.write(Data((line + "\n").utf8))
+      stdin.fileHandleForWriting.write(frame)
       writeLock.unlock()
     }
     let commandResponded = DispatchSemaphore(value: 0)
@@ -425,11 +433,6 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  private func jsonLine(_ object: [String: Any]) throws -> String {
-    let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-    return String(data: data, encoding: .utf8) ?? "{}"
-  }
-
   private func responseOK(id: Int, messages: [[String: Any]]) -> Bool? {
     for message in messages {
       guard (message["id"] as? NSNumber)?.intValue == id else { continue }
@@ -440,28 +443,32 @@ final class PluginSystemTests: XCTestCase {
   }
 }
 
-/// Thread-safe accumulator for newline-delimited JSON frames streamed from a
-/// plugin's stdout. `ingest` is called from the pipe's readability handler (a
+/// Thread-safe accumulator for length-prefixed MessagePack frames streamed from
+/// a plugin's stdout. `ingest` is called from the pipe's readability handler (a
 /// background queue); `messages`/`raw` are read from the test thread.
-private final class JSONDLineCollector {
+private final class MessagePackFrameCollector {
   private let lock = NSLock()
   private var buffer = Data()
   private var parsed: [[String: Any]] = []
-  private var rawText = ""
 
   func ingest(_ data: Data) -> [[String: Any]] {
     lock.lock()
     defer { lock.unlock() }
     buffer.append(data)
-    rawText += String(data: data, encoding: .utf8) ?? ""
     var fresh: [[String: Any]] = []
-    let newline = UInt8(ascii: "\n")
-    while let index = buffer.firstIndex(of: newline) {
-      let lineData = buffer.subdata(in: buffer.startIndex..<index)
-      buffer.removeSubrange(buffer.startIndex...index)
-      guard !lineData.isEmpty,
-        let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
-      else { continue }
+    while buffer.count >= 4 {
+      let base = buffer.startIndex
+      let length =
+        (Int(buffer[base]) << 24)
+        | (Int(buffer[base + 1]) << 16)
+        | (Int(buffer[base + 2]) << 8)
+        | Int(buffer[base + 3])
+      guard length >= 0, buffer.count >= 4 + length else { break }
+      let payloadStart = base + 4
+      let payloadEnd = payloadStart + length
+      let payload = buffer.subdata(in: payloadStart..<payloadEnd)
+      buffer.removeSubrange(base..<payloadEnd)
+      guard let object = try? MessagePack.decode(payload) as? [String: Any] else { continue }
       parsed.append(object)
       fresh.append(object)
     }
@@ -474,9 +481,11 @@ private final class JSONDLineCollector {
     return parsed
   }
 
+  /// A rendering of the frames parsed so far, for failure diagnostics (the
+  /// wire is now binary, so there's no raw text to echo).
   func raw() -> String {
     lock.lock()
     defer { lock.unlock() }
-    return rawText
+    return parsed.map { String(describing: $0) }.joined(separator: "\n")
   }
 }

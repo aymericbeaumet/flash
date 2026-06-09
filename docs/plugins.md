@@ -8,9 +8,10 @@ per-request RPC deadline for plugins that fan out to the network.
 Official bundled plugins are always enabled. Third-party plugins are listed in
 `[plugins] third_party` as `github:user/project` or `file:<path>`.
 
-Plugins communicate with Flash through JSOND on stdin/stdout. stderr is reserved
-for unexpected plugin errors. Plugin log messages recorded by Flash use
-`source = "plugin:<id>"`.
+Plugins communicate with Flash through length-prefixed MessagePack on
+stdin/stdout — a 4-byte big-endian payload length followed by a MessagePack
+value. stderr is reserved for unexpected plugin errors. Plugin log messages
+recorded by Flash use `source = "plugin:<id>"`.
 
 Official plugins install their CLI tools under `FLASH_PLUGIN_DATA_DIR`, not into
 global shell paths. Current bundled commands:

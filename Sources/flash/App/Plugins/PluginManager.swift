@@ -436,10 +436,10 @@ extension PluginManager {
       - `FLASH_PLUGIN_VERSION`
       - `FLASH_PLUGIN_DATA_DIR`
 
-      Protocol input is JSOND on stdin. Successful and failed protocol results
-      are JSOND on stdout. Unexpected plugin errors go to stderr. Plugins can
-      log through the protocol and Flash records those messages with
-      `source = "plugin:<id>"`.
+      Protocol I/O is length-prefixed MessagePack on stdin/stdout: a 4-byte
+      big-endian payload length followed by a MessagePack value. Unexpected
+      plugin errors go to stderr. Plugins can log through the protocol and
+      Flash records those messages with `source = "plugin:<id>"`.
 
       Plugins can subscribe to events such as `apps.*`, `config.*`, and
       focused AX changes. They can also register commands. Each plugin

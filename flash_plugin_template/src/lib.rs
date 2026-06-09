@@ -1,8 +1,10 @@
 //! Lightweight tokio scaffolding for Flash plugins.
 //!
 //! This crate is intentionally free of Flash business concepts. It knows
-//! how to speak the JSOND wire protocol over stdin/stdout — framing,
-//! request/response correlation, the `initialize`/`heartbeat`/`shutdown`
+//! how to speak the length-prefixed MessagePack wire protocol over
+//! stdin/stdout — a 4-byte big-endian payload length followed by a
+//! MessagePack-encoded value — plus request/response correlation, the
+//! `initialize`/`heartbeat`/`shutdown`
 //! lifecycle, structured logging, and a sandboxed `run_cli` — and nothing
 //! about targets, candidates, hints, or any specific integration. A plugin
 //! supplies a [`Plugin`] implementation; everything domain-specific (the
@@ -17,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot};
 
 pub use serde_json;
@@ -31,23 +33,24 @@ type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 /// frames emitted from concurrent handlers never interleave. Cheap to clone.
 #[derive(Clone)]
 pub struct Emitter {
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 impl Emitter {
-    /// Emit a raw JSON value as one newline-delimited frame.
+    /// Emit a value as one MessagePack frame. The writer task prepends the
+    /// 4-byte big-endian length prefix; this only enqueues the payload.
     pub fn send(&self, value: Value) {
-        if let Ok(line) = serde_json::to_string(&value) {
-            let _ = self.tx.send(line);
+        if let Ok(payload) = rmp_serde::to_vec(&value) {
+            let _ = self.tx.send(payload);
         }
     }
 
-    /// Emit a JSOND notification (no `id`, no response expected).
+    /// Emit a notification (no `id`, no response expected).
     pub fn notify(&self, method: &str, params: Value) {
         self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }));
     }
 
-    /// Emit a JSOND response for a request `id`. A null id is dropped — it
+    /// Emit a response for a request `id`. A null id is dropped — it
     /// marks a notification the host never expects an answer to.
     pub fn respond(&self, id: Value, result: Value) {
         if id.is_null() {
@@ -503,9 +506,9 @@ fn context_from_env(
     }
 }
 
-/// Run the plugin: spin up a multi-thread tokio runtime and serve the JSOND
-/// protocol until `shutdown` or stdin closes. This is the single entry point
-/// a plugin's `main` calls.
+/// Run the plugin: spin up a multi-thread tokio runtime and serve the
+/// length-prefixed MessagePack protocol until `shutdown` or stdin closes. This
+/// is the single entry point a plugin's `main` calls.
 pub fn run<P: Plugin>(plugin: P) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -516,14 +519,19 @@ pub fn run<P: Plugin>(plugin: P) {
 
 async fn serve<P: Plugin>(plugin: P) {
     let plugin = Arc::new(plugin);
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let writer = tokio::spawn(async move {
-        let mut out = tokio::io::stdout();
-        while let Some(line) = rx.recv().await {
-            if out.write_all(line.as_bytes()).await.is_err() {
+        // 64 KiB buffer coalesces the 4-byte header and payload into one
+        // write syscall per frame; we flush every frame to keep latency low.
+        let mut out = BufWriter::with_capacity(64 * 1024, tokio::io::stdout());
+        while let Some(payload) = rx.recv().await {
+            let len = (payload.len() as u32).to_be_bytes();
+            if out.write_all(&len).await.is_err() {
                 break;
             }
-            let _ = out.write_all(b"\n").await;
+            if out.write_all(&payload).await.is_err() {
+                break;
+            }
             let _ = out.flush().await;
         }
     });
@@ -540,13 +548,24 @@ async fn serve<P: Plugin>(plugin: P) {
         tokio::spawn(async move { plugin.on_start(ctx).await });
     }
 
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        let line = line.trim();
-        if line.is_empty() {
+    let mut stdin = tokio::io::stdin();
+    let mut len_buf = [0u8; 4];
+    loop {
+        // Read the 4-byte big-endian length prefix. A clean EOF here means the
+        // host closed our stdin; anything mid-frame is an unexpected EOF — both
+        // end the serve loop and let the process exit.
+        if stdin.read_exact(&mut len_buf).await.is_err() {
+            break;
+        }
+        let len = u32::from_be_bytes(len_buf) as usize;
+        if len == 0 {
             continue;
         }
-        let Ok(request) = serde_json::from_str::<Value>(line) else {
+        let mut payload = vec![0u8; len];
+        if stdin.read_exact(&mut payload).await.is_err() {
+            break;
+        }
+        let Ok(request) = rmp_serde::from_slice::<Value>(&payload) else {
             continue;
         };
         if !request.is_object() {

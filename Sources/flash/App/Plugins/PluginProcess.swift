@@ -540,7 +540,7 @@ final class PluginProcess {
           callback(nil)
         }
       }
-      self.writeJSON([
+      self.writeFrame([
         "id": id,
         "jsonrpc": "2.0",
         "method": method,
@@ -551,7 +551,7 @@ final class PluginProcess {
 
   private func sendNotification(method: String, params: [String: Any]) {
     queue.async { [weak self] in
-      self?.writeJSON([
+      self?.writeFrame([
         "jsonrpc": "2.0",
         "method": method,
         "params": params,
@@ -700,7 +700,7 @@ final class PluginProcess {
 
   private func sendResponse(id: Int, result: [String: Any]) {
     queue.async { [weak self] in
-      self?.writeJSON([
+      self?.writeFrame([
         "id": id,
         "jsonrpc": "2.0",
         "result": result,
@@ -708,22 +708,29 @@ final class PluginProcess {
     }
   }
 
-  private func writeJSON(_ object: [String: Any]) {
-    // Drop `.sortedKeys` on the hot path: per-message stable ordering
-    // costs CPU we don't need for runtime IPC, and Foundation's default
-    // (insertion-order-ish) order is fine for plugin protocols.
+  private func writeFrame(_ object: [String: Any]) {
     let label = object["method"] as? String ?? "response"
-    guard JSONSerialization.isValidJSONObject(object),
-      var data = try? JSONSerialization.data(withJSONObject: object)
-    else {
-      // A non-serializable message is a runtime bug that would otherwise
-      // vanish silently and only show up as a timed-out RPC; surface it.
-      recordError("[plugin] dropped non-serializable IPC message (method=\(label))")
+    let payload: Data
+    do {
+      payload = try MessagePack.encode(object)
+    } catch {
+      // A non-encodable message is a runtime bug that would otherwise vanish
+      // silently and only show up as a timed-out RPC; surface it.
+      recordError("[plugin] dropped non-encodable IPC message (method=\(label)): \(error)")
       return
     }
-    data.append(10)  // newline
+    // Length-prefixed MessagePack: a 4-byte big-endian payload length, then
+    // the payload itself. The plugin reads the prefix, then exactly that many
+    // bytes — no delimiter scanning and binary-safe.
+    let count = UInt32(payload.count)
+    var frame = Data(capacity: 4 + payload.count)
+    frame.append(UInt8(truncatingIfNeeded: count >> 24))
+    frame.append(UInt8(truncatingIfNeeded: count >> 16))
+    frame.append(UInt8(truncatingIfNeeded: count >> 8))
+    frame.append(UInt8(truncatingIfNeeded: count))
+    frame.append(payload)
     do {
-      try stdinPipe?.fileHandleForWriting.write(contentsOf: data)
+      try stdinPipe?.fileHandleForWriting.write(contentsOf: frame)
     } catch {
       // A broken pipe during teardown is expected, so only surface a write
       // failure while the subprocess is supposed to be alive.
@@ -733,37 +740,61 @@ final class PluginProcess {
     }
   }
 
+  /// Sanity ceiling on a single frame's payload. Real frames are a few KB at
+  /// most; anything larger means the stream desynced and the "length" is
+  /// really payload bytes misread as a prefix.
+  private static let maxFrameBytes = 64 * 1024 * 1024
+
   private func handleStdout(_ data: Data) {
     guard !data.isEmpty else { return }
     queue.async { [weak self] in
       guard let self else { return }
       self.stdoutBuffer.append(data)
-      // Linear scan with a moving cursor avoids the previous O(n²)
-      // behaviour: `firstIndex(of:)` scanned from index 0 each
-      // iteration and `removeSubrange(...newline)` memmove'd the
-      // remaining buffer left on every line. For a bulk push of 1000
-      // lines that turned into ~500k byte moves. Now we scan once
-      // and drop the consumed prefix at the end.
-      var cursor = self.stdoutBuffer.startIndex
-      let end = self.stdoutBuffer.endIndex
-      var lastConsumed = self.stdoutBuffer.startIndex
-      while cursor < end {
-        if self.stdoutBuffer[cursor] == 10 {
-          let lineRange = lastConsumed..<cursor
-          if !lineRange.isEmpty,
-            let line = String(data: self.stdoutBuffer[lineRange], encoding: .utf8),
-            !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          {
-            self.handleProtocolLine(line)
-          }
-          lastConsumed = self.stdoutBuffer.index(after: cursor)
-        }
-        cursor = self.stdoutBuffer.index(after: cursor)
-      }
-      if lastConsumed > self.stdoutBuffer.startIndex {
-        self.stdoutBuffer.removeSubrange(self.stdoutBuffer.startIndex..<lastConsumed)
-      }
+      self.drainFrames()
     }
+  }
+
+  /// Pull every complete length-prefixed MessagePack frame out of
+  /// `stdoutBuffer`, leaving any partial tail for the next stdout chunk. The
+  /// wire is a 4-byte big-endian payload length followed by that many bytes.
+  private func drainFrames() {
+    while stdoutBuffer.count >= 4 {
+      let base = stdoutBuffer.startIndex
+      let length =
+        (Int(stdoutBuffer[base]) << 24)
+        | (Int(stdoutBuffer[base + 1]) << 16)
+        | (Int(stdoutBuffer[base + 2]) << 8)
+        | Int(stdoutBuffer[base + 3])
+      // A length past the ceiling means the stream desynced (a stray write to
+      // the plugin's stdout, say). We can't realign mid-stream, so drop the
+      // buffer and surface it rather than try to allocate gigabytes.
+      guard length >= 0, length <= Self.maxFrameBytes else {
+        recordError("[plugin] invalid frame length \(length); resetting stream")
+        stdoutBuffer.removeAll(keepingCapacity: false)
+        return
+      }
+      guard stdoutBuffer.count >= 4 + length else { return }
+      let payloadStart = base + 4
+      let payloadEnd = payloadStart + length
+      let payload = stdoutBuffer.subdata(in: payloadStart..<payloadEnd)
+      stdoutBuffer.removeSubrange(base..<payloadEnd)
+      handleFrame(payload)
+    }
+  }
+
+  private func handleFrame(_ payload: Data) {
+    let object: [String: Any]
+    do {
+      guard let decoded = try MessagePack.decode(payload) as? [String: Any] else {
+        recordError("[plugin] non-object IPC frame")
+        return
+      }
+      object = decoded
+    } catch {
+      recordError("[plugin] undecodable IPC frame: \(error)")
+      return
+    }
+    handleProtocolMessage(object)
   }
 
   private func handleStderr(_ data: Data) {
@@ -779,13 +810,7 @@ final class PluginProcess {
     }
   }
 
-  private func handleProtocolLine(_ line: String) {
-    guard let data = line.data(using: .utf8),
-      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else {
-      recordError("[plugin] invalid JSOND line")
-      return
-    }
+  private func handleProtocolMessage(_ object: [String: Any]) {
     if let responseID = object["id"] as? Int,
       object["method"] == nil
     {
@@ -1030,7 +1055,7 @@ final class PluginProcess {
       }
     }
     awaitingHeartbeat = true
-    writeJSON([
+    writeFrame([
       "id": -1,
       "jsonrpc": "2.0",
       "method": "heartbeat",
