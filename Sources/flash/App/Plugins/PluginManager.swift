@@ -559,9 +559,9 @@ extension PluginManager {
 
       Official bundled plugins are installed under `FLASH_PLUGIN_DATA_DIR`;
       they do not write CLI binaries into global shell paths. Bundled commands
-      include `:spotify`, `:slack`, and `:notion`. Authentication is explicit
-      through subcommands such as `:slack login`; install and start do not run
-      login flows.
+      include `:spotify` and `:slack`. Authentication is explicit through
+      subcommands such as `:slack login`; install and start do not run login
+      flows.
 
       `flash://plugins` or `:plugins` opens the plugin status modal. When
       `[debug] http_inspector_enabled = true` is set, the http inspector page shows live

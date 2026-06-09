@@ -18,7 +18,6 @@ global shell paths. Current bundled commands:
 
 - `:spotify login|status|pause|play|toggle|next|previous|search|run`
 - `:slack login|version|run`
-- `:notion login|version|api|workers|run`
 - `:media play|pause|toggle|next|previous|volumeup|volumedown|mute|get|status|run`
 
 Authentication is explicit. Install and start do not run login flows.

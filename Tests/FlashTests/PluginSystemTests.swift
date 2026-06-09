@@ -12,12 +12,12 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       ids,
       [
-        "calculator", "clipboard", "contacts", "emojis", "firefox", "media", "notes", "notion",
+        "calculator", "clipboard", "contacts", "emojis", "firefox", "media", "notes",
         "reminders", "safari", "slack", "spotify", "system", "tmux", "web",
       ])
 
     let runCommandRequired: Set<String> = [
-      "media", "notion", "slack", "spotify",
+      "media", "slack", "spotify",
     ]
     for manifest in manifests {
       // Bundled plugins are compiled Rust binaries: `install` is a no-op
@@ -43,9 +43,6 @@ final class PluginSystemTests: XCTestCase {
     ]))
     XCTAssertTrue(commandNames(for: "slack", manifests: manifests).isSuperset(of: [
       "login", "version", "run",
-    ]))
-    XCTAssertTrue(commandNames(for: "notion", manifests: manifests).isSuperset(of: [
-      "login", "version", "api", "workers", "run",
     ]))
   }
 
@@ -77,7 +74,6 @@ final class PluginSystemTests: XCTestCase {
 
   func testOfficialPluginsRespondOverMessagePackWithMockedCLIs() throws {
     let cases = [
-      ("notion", "ntn"),
       ("slack", "slack"),
       ("spotify", "spotify_player"),
     ]
