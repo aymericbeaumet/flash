@@ -6,7 +6,7 @@ use flash_plugin::{
 };
 use serde::{Deserialize, Serialize};
 
-const SOURCE_ID: &str = "plugin.contacts";
+const SOURCE_ID: &str = "plugin:contacts";
 
 const LIST_SCRIPT: &str = r#"
 on safeName(p)

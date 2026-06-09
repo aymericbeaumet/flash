@@ -11,7 +11,7 @@ use flash_plugin::{
     run, Candidate, CommandResponse, Context, DiscoverResponse, Plugin, Request, Response,
 };
 
-const SOURCE_ID: &str = "emoji";
+const SOURCE_ID: &str = "plugin:emojis";
 
 /// `<glyph>\t<lowercase name>` rows, one per line.
 const EMOJI_DATA: &str = include_str!("../emoji.txt");
@@ -30,7 +30,7 @@ fn build_candidates() -> Vec<Candidate> {
                 Candidate::new(format!("{glyph} {name}"))
                     .kind("emoji")
                     .source_id(SOURCE_ID)
-                    .source(SOURCE_ID)
+                    .source("emoji")
                     .subtitle("emoji")
                     .payload(glyph),
             )

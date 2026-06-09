@@ -189,7 +189,7 @@ final class PluginProcess {
   }
 
   private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginSnapshot {
-    let sourceID = params["source_id"] as? String ?? "plugin.\(manifest.id)"
+    let sourceID = params["source_id"] as? String ?? "plugin:\(manifest.id)"
     let contextPID = (params["context_pid"] as? Int).map(pid_t.init) ?? defaultPID
     let targetItems = (params["targets"] as? [[String: Any]] ?? [])
       .compactMap { Self.target(from: $0, sourceID: sourceID) }
@@ -895,7 +895,7 @@ final class PluginProcess {
   }
 
   private func applySnapshot(_ params: [String: Any]) {
-    let sourceID = params["source_id"] as? String ?? "plugin.\(manifest.id)"
+    let sourceID = params["source_id"] as? String ?? "plugin:\(manifest.id)"
     let contextPID = (params["context_pid"] as? Int).map(pid_t.init)
     // Carry previous state forward when a particular slot is missing
     // from the incoming wire frame. Plugins that refresh only one slot

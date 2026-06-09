@@ -6,7 +6,7 @@ use flash_plugin::{
 };
 use serde::{Deserialize, Serialize};
 
-const SOURCE_ID: &str = "plugin.notes";
+const SOURCE_ID: &str = "plugin:notes";
 
 const LIST_SCRIPT: &str = r#"
 tell application "Notes"

@@ -3,7 +3,7 @@ use flash_plugin::{
     Response, SourceActionRequest, SourceActionResponse,
 };
 
-const SOURCE_ID: &str = "plugin.firefox";
+const SOURCE_ID: &str = "plugin:firefox";
 const MAX_NODES: u64 = 3_000;
 const FIREFOX: &str = "org.mozilla.firefox";
 const FIREFOX_DEV: &str = "org.mozilla.firefoxdeveloperedition";

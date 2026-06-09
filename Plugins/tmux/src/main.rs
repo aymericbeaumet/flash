@@ -26,7 +26,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 const PLUGIN_ID: &str = "tmux";
-const SOURCE_ID: &str = "plugin.tmux";
+const SOURCE_ID: &str = "plugin:tmux";
 
 const TMUX_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/usr"];
 

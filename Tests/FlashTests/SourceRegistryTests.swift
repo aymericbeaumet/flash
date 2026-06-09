@@ -134,7 +134,7 @@ final class SourceRegistryTests: XCTestCase {
       name: "Slack", subtitle: "app",
       bundleIdentifier: "com.tinyspeck.slackmacgap", url: nil)
     let clipboardURL = Candidate(
-      kind: CandidateFinder.clipboardKind, sourceID: "plugin.clipboard",
+      kind: CandidateFinder.clipboardKind, sourceID: "plugin:clipboard",
       source: "clipboard", pid: nil,
       name: "https://besideai.slack.com/archives/C0AQP04HU73/p1780958634997229",
       subtitle: "clipboard", bundleIdentifier: "", url: nil)
@@ -148,9 +148,9 @@ final class SourceRegistryTests: XCTestCase {
               "Slack".localizedCaseInsensitiveContains(target) ? slackApp : nil
             })
         },
-        SourceDescriptor(identifier: "plugin.clipboard", activationPolicy: .always) {
+        SourceDescriptor(identifier: "plugin:clipboard", activationPolicy: .always) {
           StubSource(
-            identifier: "plugin.clipboard", priority: 100, capabilities: [.appActivation],
+            identifier: "plugin:clipboard", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
               clipboardURL.name.localizedCaseInsensitiveContains(target) ? clipboardURL : nil
             })
@@ -172,10 +172,10 @@ final class SourceRegistryTests: XCTestCase {
   // than typing it.
   func testCandidateMatchingSkipsInsertTextAndFallsBackToActivatablePlugin() {
     let tmuxWindow = Candidate(
-      kind: .plugin("tmux"), sourceID: "plugin.tmux", source: "tmux", pid: 42,
+      kind: .plugin("tmux"), sourceID: "plugin:tmux", source: "tmux", pid: 42,
       name: "editor", subtitle: "tmux", bundleIdentifier: "", url: nil)
     let clipboardEntry = Candidate(
-      kind: CandidateFinder.clipboardKind, sourceID: "plugin.clipboard",
+      kind: CandidateFinder.clipboardKind, sourceID: "plugin:clipboard",
       source: "clipboard", pid: nil, name: "editor notes", subtitle: "clipboard",
       bundleIdentifier: "", url: nil)
 
@@ -184,9 +184,9 @@ final class SourceRegistryTests: XCTestCase {
         SourceDescriptor(identifier: "app", activationPolicy: .always) {
           StubSource(identifier: "app", priority: 0, capabilities: [.appActivation])
         },
-        SourceDescriptor(identifier: "plugin.clipboard", activationPolicy: .always) {
+        SourceDescriptor(identifier: "plugin:clipboard", activationPolicy: .always) {
           StubSource(
-            identifier: "plugin.clipboard", priority: 100, capabilities: [.appActivation],
+            identifier: "plugin:clipboard", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
               clipboardEntry.name.localizedCaseInsensitiveContains(target) ? clipboardEntry : nil
             })
@@ -194,9 +194,9 @@ final class SourceRegistryTests: XCTestCase {
       ]
       if includeActivatablePlugin {
         descriptors.append(
-          SourceDescriptor(identifier: "plugin.tmux", activationPolicy: .always) {
+          SourceDescriptor(identifier: "plugin:tmux", activationPolicy: .always) {
             StubSource(
-              identifier: "plugin.tmux", priority: 50, capabilities: [.appActivation],
+              identifier: "plugin:tmux", priority: 50, capabilities: [.appActivation],
               matchHandler: { target in
                 tmuxWindow.name.localizedCaseInsensitiveContains(target) ? tmuxWindow : nil
               })
@@ -211,7 +211,7 @@ final class SourceRegistryTests: XCTestCase {
 
     // An activatable plugin candidate is still reachable as a fallback.
     let match = makeRegistry(includeActivatablePlugin: true).candidate(matching: "editor")
-    XCTAssertEqual(match?.sourceID, "plugin.tmux")
+    XCTAssertEqual(match?.sourceID, "plugin:tmux")
     XCTAssertFalse(match.map(CandidateFinder.insertsText) ?? true)
   }
 }

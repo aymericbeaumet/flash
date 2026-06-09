@@ -10,7 +10,7 @@ final class PluginFlashSource: FlashSource {
     self.plugin = plugin
   }
 
-  var identifier: String { "plugin.\(plugin.identifier)" }
+  var identifier: String { "plugin:\(plugin.identifier)" }
   var displayName: String { plugin.manifest.name }
   var priority: Int { plugin.manifest.priority }
   var capabilities: FlashSourceCapabilities {

@@ -6,7 +6,7 @@ use flash_plugin::{
     ResolveResponse, Response,
 };
 
-const CHANNEL_SOURCE_ID: &str = "plugin.slack.channels";
+const CHANNEL_SOURCE_ID: &str = "plugin:slack.channels";
 const SLACK_BUNDLES: &[&str] = &[
     "com.tinyspeck.slackmacgap",
     "com.tinyspeck.slackmacgap.direct",

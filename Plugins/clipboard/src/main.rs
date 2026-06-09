@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use flash_plugin::{run, Candidate, CommandResponse, Context, Event, Plugin, Request, Response};
 
-const SOURCE_ID: &str = "plugin.clipboard";
+const SOURCE_ID: &str = "plugin:clipboard";
 const HISTORY_FILE: &str = "history.json";
 const HISTORY_CAP: usize = 50;
 const PREVIEW_CHARS: usize = 80;

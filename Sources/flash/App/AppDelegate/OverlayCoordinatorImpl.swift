@@ -419,7 +419,7 @@ extension AppDelegate {
 
   func usesTmuxProvider(_ context: AppContext?) -> Bool {
     guard let context else { return false }
-    return registry.chain(for: context).contains { $0.identifier == "plugin.tmux" }
+    return registry.chain(for: context).contains { $0.identifier == "plugin:tmux" }
   }
 
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
