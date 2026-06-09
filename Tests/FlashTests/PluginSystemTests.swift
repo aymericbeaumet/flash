@@ -13,7 +13,8 @@ final class PluginSystemTests: XCTestCase {
       ids,
       [
         "aws", "calculator", "cloudflare", "clipboard", "contacts", "emojis", "firefox", "github",
-        "linear", "media", "notes", "notion", "reminders", "slack", "spotify", "system", "tmux",
+        "linear", "media", "notes", "notion", "reminders", "safari", "slack", "spotify", "system",
+        "tmux",
         "vercel", "web",
       ])
 
@@ -216,6 +217,23 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(json["mode"], "default \"normal\" mode is not encoded")
     XCTAssertNil(json["bundle_ids"], "empty bundle_ids is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
+  }
+
+  func testSafariPluginOverridesHardRefreshBinding() throws {
+    let root = try XCTUnwrap(
+      try officialPluginRoots().first { $0.lastPathComponent == "safari" })
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(manifest.bundleIDs, ["com.apple.Safari"])
+    let mapping = try XCTUnwrap(manifest.mappings.first)
+    XCTAssertEqual(manifest.mappings.count, 1)
+    XCTAssertEqual(mapping.key, "R")
+    XCTAssertEqual(mapping.scope, .normal)
+    // Safari's "Reload Page From Origin" is ⌘⌥R, unlike the ⌘⇧R that the
+    // built-in `R` → flash://app_reload?force=1 default sends for Firefox/Chrome.
+    XCTAssertEqual(mapping.command, "flash://send_key?keys=cmd+option+r")
+    XCTAssertTrue(
+      mapping.bundleIDs.isEmpty,
+      "mapping inherits the manifest's com.apple.Safari scope")
   }
 
   func testManifestRejectsInvalidID() throws {

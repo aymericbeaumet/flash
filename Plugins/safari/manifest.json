@@ -1,0 +1,13 @@
+{
+  "id": "safari",
+  "name": "Safari",
+  "version": "0.1.0",
+  "description": "Browser-specific key overrides for Safari (hard refresh is ⌘⌥R, not ⌘⇧R).",
+  "install": "true",
+  "start": "exec ./flash-plugin-safari",
+  "priority": 30,
+  "bundle_ids": ["com.apple.Safari"],
+  "mappings": [
+    { "key": "R", "mode": "normal", "command": "flash://send_key?keys=cmd+option+r" }
+  ]
+}
