@@ -19,6 +19,10 @@ if [[ "$MODE" == "release" ]]; then
   echo "==> Cleaning (release: full rebuild)"
   swift package clean
   rm -rf "$PROJECT_DIR/build/plugin-target"
+  # Stage the optimized inspector into the committed resource so the
+  # universal swift build below bundles it.
+  echo "==> Building inspector (release, optimized)"
+  "$PROJECT_DIR/Scripts/build-inspector.sh" --release
 fi
 
 echo "==> Building Rust plugins ($MODE)"
@@ -40,6 +44,25 @@ else
 fi
 
 assemble_app "$MODE" "$BIN_PATH" "$SIGN_IDENTITY"
+
+if [[ "$MODE" == "dev" ]]; then
+  # Build the inspector in dev mode and drop it straight into the assembled
+  # bundle, leaving the committed resource pristine so a `--dev` install
+  # never dirties the working tree.
+  echo "==> Building inspector (dev) and staging into the app bundle"
+  "$PROJECT_DIR/Scripts/build-inspector.sh" --dev
+  inspector_html="$STAGING_PATH/Contents/Resources/Flash_flash.bundle/inspector.html"
+  if [[ -f "$inspector_html" ]]; then
+    cp "$PROJECT_DIR/Inspector/dist/index.html" "$inspector_html"
+    # The resource changed after assemble_app signed the bundle, so re-sign.
+    codesign --force --deep \
+      --sign "$SIGN_IDENTITY" \
+      --identifier "$BUNDLE_ID" \
+      "$STAGING_PATH"
+  else
+    echo "WARNING: $inspector_html missing; inspector not refreshed" >&2
+  fi
+fi
 
 if [[ "$MODE" == "release" ]]; then
   MARKETING_VERSION="${FLASH_MARKETING_VERSION:-}"
