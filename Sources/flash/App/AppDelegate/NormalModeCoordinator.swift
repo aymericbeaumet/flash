@@ -166,7 +166,7 @@ extension AppDelegate {
     guard let context = currentNonFlashContext(), context.processID == pid else { return }
     pluginManager.emit(
       PluginEvent(
-        name: "ax.changed",
+        name: "core:ax.changed",
         payload: ["notification": notification, "pid": Int(pid)],
         bundleID: context.bundleIdentifier,
         configPath: nil,

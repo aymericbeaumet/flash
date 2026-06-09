@@ -63,7 +63,7 @@ impl Plugin for Contacts {
     async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
             event.name.as_str(),
-            "flash.started" | "apps.launched" | "config.changed"
+            "core:flash.started" | "core:apps.launched" | "core:config.changed"
         ) {
             emit_candidates(&ctx).await;
         }

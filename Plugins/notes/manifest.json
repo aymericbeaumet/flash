@@ -7,9 +7,9 @@
   "start": "exec ./flash-plugin-notes",
   "priority": 12,
   "events": [
-    "flash.started",
-    "config.*",
-    { "match": "apps.*", "bundle_ids": ["com.apple.Notes"] }
+    "core:flash.started",
+    "core:config.*",
+    { "match": "core:apps.*", "bundle_ids": ["com.apple.Notes"] }
   ],
   "providers": [
     { "kind": "candidates" },

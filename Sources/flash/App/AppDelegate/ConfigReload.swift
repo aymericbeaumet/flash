@@ -123,7 +123,7 @@ extension AppDelegate {
     pluginManager.updateConfig(cfg)
     pluginManager.emit(
       PluginEvent(
-        name: "config.changed",
+        name: "core:config.changed",
         payload: ["resolved": cfg.resolvedConfigJSON],
         bundleID: nil,
         configPath: "*",

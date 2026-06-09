@@ -6,8 +6,8 @@
   "install": "true",
   "start": "exec ./flash-plugin-clipboard",
   "events": [
-    "flash.started",
-    { "match": "clipboard.changed" }
+    "core:flash.started",
+    { "match": "core:clipboard.changed" }
   ],
   "providers": [
     { "kind": "candidates" },

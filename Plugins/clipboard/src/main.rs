@@ -25,8 +25,8 @@ impl Plugin for Clipboard {
     // here as `clipboard.changed`. The plugin never polls `pbpaste`.
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
-            "flash.started" => emit(&ctx, &self.snapshot()),
-            "clipboard.changed" => {
+            "core:flash.started" => emit(&ctx, &self.snapshot()),
+            "core:clipboard.changed" => {
                 let text = event.text.unwrap_or_default();
                 if text.is_empty() {
                     return;

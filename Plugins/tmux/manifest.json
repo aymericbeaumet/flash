@@ -19,9 +19,9 @@
     "co.zeit.hyper"
   ],
   "events": [
-    { "match": "focus.changed" },
-    { "match": "apps.terminated" },
-    "flash.started"
+    { "match": "core:focus.changed" },
+    { "match": "core:apps.terminated" },
+    "core:flash.started"
   ],
   "providers": [
     { "kind": "candidates" },

@@ -130,8 +130,8 @@ final class PluginSystemTests: XCTestCase {
           "install": "npm install",
           "start": "npm start",
           "events": [
-            { "match": "apps.*", "bundle_ids": ["com.spotify.client"] },
-            "config.*"
+            { "match": "core:apps.*", "bundle_ids": ["com.spotify.client"] },
+            "core:config.*"
           ],
           "providers": [
             {
@@ -414,12 +414,12 @@ final class PluginSystemTests: XCTestCase {
 
   func testEventSubscriptionFiltering() {
     let apps = PluginEventSubscription(
-      match: "apps.*",
+      match: "core:apps.*",
       bundleIDs: ["com.spotify.client"])
     XCTAssertTrue(
       apps.matches(
         PluginEvent(
-          name: "apps.launched",
+          name: "core:apps.launched",
           payload: [:],
           bundleID: "com.spotify.client",
           configPath: nil,
@@ -427,17 +427,17 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertFalse(
       apps.matches(
         PluginEvent(
-          name: "apps.launched",
+          name: "core:apps.launched",
           payload: [:],
           bundleID: "com.apple.Safari",
           configPath: nil,
           focused: false)))
 
-    let config = PluginEventSubscription(match: "config.*", paths: ["plugins.*"])
+    let config = PluginEventSubscription(match: "core:config.*", paths: ["plugins.*"])
     XCTAssertTrue(
       config.matches(
         PluginEvent(
-          name: "config.changed",
+          name: "core:config.changed",
           payload: [:],
           bundleID: nil,
           configPath: "plugins.third_party",
@@ -445,7 +445,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertFalse(
       config.matches(
         PluginEvent(
-          name: "config.changed",
+          name: "core:config.changed",
           payload: [:],
           bundleID: nil,
           configPath: "debug.log_level",

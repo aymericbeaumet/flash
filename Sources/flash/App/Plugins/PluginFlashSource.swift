@@ -44,7 +44,7 @@ final class PluginFlashSource: FlashSource {
       return manifestBundles.contains(context.bundleIdentifier)
     }
     let event = PluginEvent(
-      name: "focus.changed",
+      name: "core:focus.changed",
       payload: [:],
       bundleID: context.bundleIdentifier,
       configPath: nil,

@@ -1196,7 +1196,7 @@ impl Plugin for Tmux {
     async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
             event.name.as_str(),
-            "focus.changed" | "flash.started" | "apps.terminated"
+            "core:focus.changed" | "core:flash.started" | "core:apps.terminated"
         ) {
             refresh_candidate_snapshot(self, &ctx).await;
         }

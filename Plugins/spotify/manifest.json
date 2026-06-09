@@ -6,8 +6,8 @@
   "install": "true",
   "start": "exec ./flash-plugin-spotify",
   "events": [
-    { "match": "apps.*", "bundle_ids": ["com.spotify.client"] },
-    "config.*"
+    { "match": "core:apps.*", "bundle_ids": ["com.spotify.client"] },
+    "core:config.*"
   ],
   "providers": [
     {

@@ -33,7 +33,7 @@ impl Plugin for Slack {
     // flashlight candidates. The host gates surfacing on the active app (the
     // manifest's `bundle_ids`), matching the old SlackSource.
     async fn on_event(&self, ctx: Context, event: Event) {
-        if event.name != "focus.changed" {
+        if event.name != "core:focus.changed" {
             return;
         }
         let bundle = event.bundle_id.unwrap_or_default();

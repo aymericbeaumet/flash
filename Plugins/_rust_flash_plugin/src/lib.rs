@@ -332,7 +332,7 @@ impl AxValue {
 // ---------------------------------------------------------------------------
 
 /// A host event delivered to [`Plugin::on_event`]. Match on
-/// [`name`](Event::name) (`focus.changed`, `clipboard.changed`, …); the
+/// [`name`](Event::name) (`core:focus.changed`, `core:clipboard.changed`, …); the
 /// remaining fields are the event payload, present when the event carries them.
 #[derive(Clone, Debug, Default)]
 pub struct Event {
@@ -1018,7 +1018,7 @@ pub trait Plugin: Send + Sync + 'static {
         async {}
     }
 
-    /// Host event (`focus.changed`, `apps.launched`, `config.changed`, …).
+    /// Host event (`core:focus.changed`, `core:apps.launched`, `core:config.changed`, …).
     fn on_event(&self, ctx: Context, event: Event) -> impl Future<Output = ()> + Send {
         let _ = (ctx, event);
         async {}

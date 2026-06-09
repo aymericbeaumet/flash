@@ -7,9 +7,9 @@
   "start": "exec ./flash-plugin-slack",
   "bundle_ids": ["com.tinyspeck.slackmacgap", "com.tinyspeck.slackmacgap.direct"],
   "events": [
-    { "match": "apps.*", "bundle_ids": ["com.tinyspeck.slackmacgap"] },
-    { "match": "focus.changed" },
-    "config.*"
+    { "match": "core:apps.*", "bundle_ids": ["com.tinyspeck.slackmacgap"] },
+    { "match": "core:focus.changed" },
+    "core:config.*"
   ],
   "providers": [
     { "kind": "candidates" },

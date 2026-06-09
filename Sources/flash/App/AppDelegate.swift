@@ -194,7 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     monitor.focusedElementDidChange = { [weak self] pid in
       self?.pluginManager.emit(
         PluginEvent(
-          name: "ax.changed",
+          name: "core:ax.changed",
           payload: ["pid": Int(pid)],
           bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
           configPath: nil,
@@ -263,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     startCandidateFinderLiveRefresh()
     startClipboardMonitor()
     pluginManager.emit(
-      PluginEvent(name: "flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
+      PluginEvent(name: "core:flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
   }
 
   func handleURLCommand(_ cmd: URLCommand) {
@@ -353,7 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.refreshEffectiveMappings(for: app.bundleIdentifier)
         self.pluginManager.emit(
           PluginEvent(
-            name: "focus.changed",
+            name: "core:focus.changed",
             payload: [
               "bundle_id": app.bundleIdentifier ?? "",
               "localized_name": app.localizedName ?? "",
@@ -382,7 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       self.cancelOverlay()
       self.pluginManager.emit(
-        PluginEvent(name: "space.changed", payload: [:], bundleID: nil, configPath: nil, focused: nil))
+        PluginEvent(name: "core:space.changed", payload: [:], bundleID: nil, configPath: nil, focused: nil))
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
       }
@@ -397,7 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.pluginManager.emit(
           PluginEvent(
-            name: "apps.launched",
+            name: "core:apps.launched",
             payload: [
               "bundle_id": app.bundleIdentifier ?? "",
               "localized_name": app.localizedName ?? "",
@@ -422,7 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.pluginManager.emit(
           PluginEvent(
-            name: "apps.terminated",
+            name: "core:apps.terminated",
             payload: [
               "bundle_id": app.bundleIdentifier ?? "",
               "localized_name": app.localizedName ?? "",
@@ -459,7 +459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clipboardMonitor = ClipboardMonitor { [weak self] text in
       self?.pluginManager.emit(
         PluginEvent(
-          name: "clipboard.changed",
+          name: "core:clipboard.changed",
           payload: ["text": text],
           bundleID: nil,
           configPath: nil,

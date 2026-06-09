@@ -551,8 +551,8 @@ extension PluginManager {
       plugin errors go to stderr. Plugins can log through the protocol and
       Flash records those messages with `source = "plugin:<id>"`.
 
-      Plugins can subscribe to events such as `apps.*`, `config.*`, and
-      focused AX changes. They can also register commands. Each plugin
+      Plugins can subscribe to events such as `core:apps.*`, `core:config.*`,
+      and focused AX changes. They can also register commands. Each plugin
       registers one or more **commands** (the verb after `:`, e.g.
       `spotify`), and each command has one or more **subcommands** (e.g.
       `pause`), which users run as `:spotify pause`.

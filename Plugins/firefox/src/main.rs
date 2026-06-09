@@ -36,7 +36,7 @@ impl Plugin for Firefox {
     // manifest's `bundle_ids`), so emitting whenever Firefox gains focus keeps
     // the snapshot fresh without leaking tabs while another app is active.
     async fn on_event(&self, ctx: Context, event: Event) {
-        if event.name != "focus.changed" {
+        if event.name != "core:focus.changed" {
             return;
         }
         let bundle = event.bundle_id.unwrap_or_default();

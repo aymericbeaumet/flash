@@ -6,7 +6,7 @@
   "install": "true",
   "start": "exec ./flash-plugin-media",
   "events": [
-    "config.*"
+    "core:config.*"
   ],
   "providers": [
     {
