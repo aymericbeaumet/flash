@@ -408,13 +408,14 @@ fn build_target(
     role: &str,
     label: &str,
     pid: i64,
+    enters_insert_mode: bool,
 ) -> Value {
     json!({
         "id": target_id,
         "frame": { "x": x, "y": y, "width": width, "height": height },
         "role": role,
         "label": label,
-        "accepts_text_input": true,
+        "enters_insert_mode": enters_insert_mode,
         "pid": pid,
         "source_id": SOURCE_ID,
     })
@@ -545,6 +546,8 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
         let chip_x = min_x + pad_x + (center_col - pane_chip_cells / 2) as f64 * cell_w;
         let chip_y = min_y + win_h - pad_y - (center_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-p{i}");
+        // Clicking a pane focuses it for typing → enter insert mode, like
+        // clicking into any terminal.
         pane_targets.push(build_target(
             &target_id,
             chip_x,
@@ -554,6 +557,7 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
             "tmux-pane",
             &pane.id,
             pid,
+            true,
         ));
         actions.insert(
             target_id,
@@ -601,6 +605,7 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
         let x = min_x + pad_x + link.screen_col as f64 * cell_w;
         let y = min_y + win_h - pad_y - (link.screen_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-l{idx}");
+        // Clicking a link opens/copies it → stay in normal mode.
         targets.push(build_target(
             &target_id,
             x,
@@ -610,6 +615,7 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
             "tmux-link",
             &link.text,
             pid,
+            false,
         ));
         actions.insert(target_id, TargetAction::Link { text: link.text });
     }
