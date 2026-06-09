@@ -22,6 +22,15 @@ enum CandidateFinder {
   static let emojiKind = CandidateKind.plugin("emoji")
   static let clipboardKind = CandidateKind.plugin("clipboard")
 
+  /// Candidates whose "open" action inserts their payload as text rather than
+  /// activating an app or target. `app_open?name=` matching must skip these:
+  /// otherwise a clipboard entry containing the query as a substring (e.g. a
+  /// copied "…slack.com…" URL when resolving "Slack") shadows the real app and
+  /// gets typed into the focused field instead of switching apps.
+  static func insertsText(_ candidate: Candidate) -> Bool {
+    candidate.kind == emojiKind || candidate.kind == clipboardKind
+  }
+
   static func displayTitle(_ candidate: Candidate) -> String {
     guard candidate.kind == browserTabKind else {
       return displayTitle(source: candidate.source, name: candidate.name)

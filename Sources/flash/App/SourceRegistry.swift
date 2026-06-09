@@ -163,10 +163,21 @@ final class SourceRegistry {
       source.capabilities.contains(.appActivation)
         && (sourceID == nil || source.identifier == sourceID)
     }
-    for source in sourceSnapshot {
-      if let item = source.candidate(matching: target, in: env) {
-        return CandidateFinder.prepare(item)
-      }
+    // `app_open?name=` means "activate application X". The app source resolves
+    // names precisely (bundle id / exact running name / `<name>.app` lookup),
+    // so consult it first — otherwise a higher-priority plugin shadows the app
+    // with a loose substring match: a clipboard entry holding a "…slack.com…"
+    // URL, or a "[slack]" channel whose decorated title contains the query.
+    // Skip text-insertion candidates entirely so an app_open can never type
+    // clipboard/emoji content into the focused field.
+    let ordered =
+      sourceSnapshot.filter { $0.identifier == "app" }
+      + sourceSnapshot.filter { $0.identifier != "app" }
+    for source in ordered {
+      guard let item = source.candidate(matching: target, in: env),
+        !CandidateFinder.insertsText(item)
+      else { continue }
+      return CandidateFinder.prepare(item)
     }
     return nil
   }

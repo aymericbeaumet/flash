@@ -547,7 +547,7 @@ extension AppDelegate {
   }
 
   func openSourceItem(_ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true) {
-    if candidate.kind == CandidateFinder.emojiKind || candidate.kind == CandidateFinder.clipboardKind {
+    if CandidateFinder.insertsText(candidate) {
       insertText(candidate.sourcePayload ?? "")
       return
     }
