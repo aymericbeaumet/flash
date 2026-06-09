@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import FlashCore
 
 enum URLCommand: Hashable {
@@ -52,6 +53,7 @@ enum URLCommand: Hashable {
   case openApp(name: String)
   case pluginCommand(command: String, subcommand: String, args: [String])
   case moveWindow(MoveWindowParams)
+  case sendKey(keys: String, keyCode: CGKeyCode, flagsRawValue: UInt64)
 }
 
 enum MouseCommand: Hashable {
@@ -241,6 +243,7 @@ final class URLEventHandler: NSObject {
       return .pluginCommand(command: command, subcommand: subcommand, args: args)
     },
     "window_move": windowMoveCommand,
+    "send_key": sendKeyCommand,
   ]
 
   static let usageText = """
@@ -295,6 +298,7 @@ final class URLEventHandler: NSObject {
     flash://hints_dismiss
     flash://app_open?name=<app>
     flash://window_move?position=<slot>&screen=<n>
+    flash://send_key?keys=<hotkey>
     flash://flash_quit
     flash://help_show[?topic=<topic>]
     flash://plugins
@@ -331,6 +335,33 @@ private func mouseCommand(_ q: FlashURLQuery) -> MouseCommand? {
   if right { return .click(.rightClick) }
   if double { return .click(.doubleClick) }
   return .click(.leftClick)
+}
+
+/// `flash://send_key?keys=<hotkey>` synthesizes one modified keystroke to the
+/// focused app. `keys` uses the exact same syntax as a config hotkey
+/// (`cmd+option+r`, `shift+tab`, `0x24`), so a plugin can override a built-in
+/// keystroke (e.g. Safari's hard refresh is `cmd+option+r`, not the default
+/// `cmd+shift+r`) just by registering an app-scoped mapping that points here.
+/// Rejected at parse time when `keys` is missing or unparseable.
+private func sendKeyCommand(_ q: FlashURLQuery) -> URLCommand? {
+  guard let keys = q.value("keys"), let parsed = HotkeySyntax.parse(hotkey: keys) else {
+    return nil
+  }
+  return .sendKey(
+    keys: keys,
+    keyCode: CGKeyCode(parsed.virtualKey),
+    flagsRawValue: cgEventFlags(carbon: parsed.modifiers).rawValue)
+}
+
+/// Translate Carbon modifier flags (as `HotkeySyntax` emits) into the
+/// `CGEventFlags` the synthesizer consumes.
+private func cgEventFlags(carbon: UInt32) -> CGEventFlags {
+  var flags: CGEventFlags = []
+  if carbon & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
+  if carbon & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
+  if carbon & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
+  if carbon & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
+  return flags
 }
 
 private func windowMoveCommand(_ q: FlashURLQuery) -> URLCommand? {

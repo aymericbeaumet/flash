@@ -545,6 +545,9 @@ extension AppDelegate {
     case .reload(let force):
       let flags: CGEventFlags = force ? [.maskCommand, .maskShift] : .maskCommand
       sendNormalModeKey(CGKeyCode(kVK_ANSI_R), flags: flags, repeatCount: repeatCount)
+    case .sendKey(_, let keyCode, let flagsRawValue):
+      sendNormalModeKey(
+        keyCode, flags: CGEventFlags(rawValue: flagsRawValue), repeatCount: repeatCount)
     case .undo:
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_Z),

@@ -624,6 +624,8 @@ extension URLCommand {
       }
       parts.append("screen=\(params.screen)")
       return "flash://window_move?\(parts.joined(separator: "&"))"
+    case .sendKey(let keys, _, _):
+      return "flash://send_key?keys=\(keys)"
     }
   }
 }

@@ -288,7 +288,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .movementBack, .movementForward, .appPrev, .appNext,
       .setMark, .jumpToMark,
       .quitApp, .save, .saveAndQuit, .print,
-      .openDocument, .newWindow, .tabNew, .tabNewInsert, .copy, .cut, .paste, .copyAll:
+      .openDocument, .newWindow, .tabNew, .tabNewInsert, .copy, .cut, .paste, .copyAll,
+      .sendKey:
       performMappedCommand(cmd)
     case .showAlert(let message):
       configErrorAlertVisible = false
