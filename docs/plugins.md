@@ -17,8 +17,6 @@ Official plugins install their CLI tools under `FLASH_PLUGIN_DATA_DIR`, not into
 global shell paths. Current bundled commands:
 
 - `:spotify login|status|pause|play|toggle|next|previous|search|run`
-- `:github login|status|issues|prs|run`
-- `:linear login|mine|query|start|view|pr|create|run`
 - `:slack login|version|run`
 - `:notion login|version|api|workers|run`
 - `:media play|pause|toggle|next|previous|volumeup|volumedown|mute|get|status|run`
