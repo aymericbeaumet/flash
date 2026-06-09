@@ -24,6 +24,7 @@
     "core:flash.started"
   ],
   "providers": [
+    { "kind": "hints" },
     { "kind": "candidates" },
     {
       "kind": "commands",
