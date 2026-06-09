@@ -707,6 +707,7 @@ extension AppDelegate {
       clearCandidateFinderState()
     }
     overlay.setActiveWindowBorder(around: nil)
+    refreshVolatileCandidateSources(reason: "command_line_open")
     prewarmCandidateFinderCaches(reason: "command_line_open")
     let command = Self.commandLineBuffer(from: initialText)
     refreshCommandLine(text: command, cursorIndex: command.count)
@@ -836,8 +837,35 @@ extension AppDelegate {
     candidateFinderCandidates = candidateFinderCandidates(for: scope)
     candidateFinderSelectedIndex = 0
     overlay.setActiveWindowBorder(around: nil)
+    refreshVolatileCandidateSources(reason: "candidate_finder_open")
     prewarmCandidateFinderCaches(reason: "candidate_finder_open")
     refreshCandidateFinder(query: "")
+  }
+
+  /// Prompt volatile candidate plugins (Firefox tabs, tmux panes, Slack
+  /// channels) to re-walk their source app and republish a fresh snapshot.
+  /// Those plugins refresh on `core:focus.changed`, but while their app stays
+  /// frontmost the cached snapshot goes stale as tabs/panes open and close —
+  /// so flashlight would list tabs from whenever the app last gained focus.
+  /// Re-emitting the focus event for the frontmost app on flashlight open
+  /// pulls a current snapshot; the resulting `snapshot.updated` flows back
+  /// through `pluginStateDidChange` to refresh the still-open finder. Emitted
+  /// only on a genuine user open (never from the plugin-state refresh path) so
+  /// it can't feed back into an emit→snapshot→emit loop.
+  private func refreshVolatileCandidateSources(reason: String) {
+    guard let context = currentNonFlashContext() else { return }
+    FlashLog.trace(
+      "[candidate_finder] refresh_volatile reason=\(reason) bundle=\(context.bundleIdentifier)")
+    pluginManager.emit(
+      PluginEvent(
+        name: "core:focus.changed",
+        payload: [
+          "bundle_id": context.bundleIdentifier,
+          "pid": Int(context.processID),
+        ],
+        bundleID: context.bundleIdentifier,
+        configPath: nil,
+        focused: true))
   }
 
   func prewarmCandidateFinderCaches(reason: String) {
