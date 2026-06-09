@@ -30,6 +30,14 @@ extension OverlayPanel {
 
   private func deliverPointerIntent(for event: NSEvent) {
     guard pointerMonitorShouldDispatch() else { return }
+    // Drop our own synthesized scroll/click events (keyboard-driven
+    // normal-mode scrolling, hint clicks) so they don't bounce back
+    // through this monitor and flip Flash into insert mode.
+    if event.cgEvent?.getIntegerValueField(.eventSourceUserData)
+      == ActionDispatcher.syntheticMouseEventTag
+    {
+      return
+    }
     let intent: OverlayPointerIntent =
       event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event))
     DispatchQueue.main.async { [weak self] in

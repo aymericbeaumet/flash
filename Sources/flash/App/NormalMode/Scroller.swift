@@ -278,6 +278,8 @@ extension NormalModeDispatcher {
     let screenH = primaryScreenHeight()
     let point = scrollWheelPoint(windowFrame: windowFrame, pageFrame: pageFrame)
     event.location = CGPoint(x: point.x, y: screenH - point.y)
+    event.setIntegerValueField(
+      .eventSourceUserData, value: ActionDispatcher.syntheticMouseEventTag)
     event.post(tap: .cghidEventTap)
     return true
   }
