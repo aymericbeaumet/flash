@@ -1,0 +1,75 @@
+# DuckDuckGo bangs: <trigger> <url-template>. The template's {{{s}}} is
+# replaced with the percent-encoded query at runtime. Fields are split on
+# whitespace (trigger and URL never contain spaces), so the file is a drop-in
+# for `curl -s https://duckduckgo.com/bang.js | jq -r '.[]|[.t,.u]|@tsv'`.
+# Regenerate with Scripts/update-ddg-bangs.sh to pull the full ~13k table.
+#
+# This is a curated snapshot of the most-used bangs. Add a line to extend it.
+
+# General search engines
+g https://www.google.com/search?q={{{s}}}
+ddg https://duckduckgo.com/?q={{{s}}}
+b https://www.bing.com/search?q={{{s}}}
+brave https://search.brave.com/search?q={{{s}}}
+kagi https://kagi.com/search?q={{{s}}}
+ecosia https://www.ecosia.org/search?q={{{s}}}
+sp https://www.startpage.com/sp/search?query={{{s}}}
+yandex https://yandex.com/search/?text={{{s}}}
+qw https://www.qwant.com/?q={{{s}}}
+
+# Encyclopedic / reference
+w https://en.wikipedia.org/wiki/Special:Search?search={{{s}}}
+wfr https://fr.wikipedia.org/wiki/Special:Search?search={{{s}}}
+wa https://www.wolframalpha.com/input/?i={{{s}}}
+define https://www.merriam-webster.com/dictionary/{{{s}}}
+ud https://www.urbandictionary.com/define.php?term={{{s}}}
+scholar https://scholar.google.com/scholar?q={{{s}}}
+archive https://web.archive.org/web/*/{{{s}}}
+
+# Code hosting & Q&A
+gh https://github.com/search?q={{{s}}}&type=repositories
+ghc https://github.com/search?q={{{s}}}&type=code
+ghi https://github.com/search?q={{{s}}}&type=issues
+gl https://gitlab.com/search?search={{{s}}}
+so https://stackoverflow.com/search?q={{{s}}}
+mdn https://developer.mozilla.org/en-US/search?q={{{s}}}
+devdocs https://devdocs.io/#q={{{s}}}
+caniuse https://caniuse.com/?search={{{s}}}
+
+# Package registries
+npm https://www.npmjs.com/search?q={{{s}}}
+crates https://crates.io/search?q={{{s}}}
+docsrs https://docs.rs/releases/search?query={{{s}}}
+pypi https://pypi.org/search/?q={{{s}}}
+pkggo https://pkg.go.dev/search?q={{{s}}}
+rubygems https://rubygems.org/search?query={{{s}}}
+packagist https://packagist.org/?query={{{s}}}
+maven https://search.maven.org/search?q={{{s}}}
+hex https://hex.pm/packages?search={{{s}}}
+nixpkgs https://search.nixos.org/packages?query={{{s}}}
+brewformula https://formulae.brew.sh/search/?q={{{s}}}
+dockerhub https://hub.docker.com/search?q={{{s}}}
+
+# Media
+yt https://www.youtube.com/results?search_query={{{s}}}
+gi https://www.google.com/search?tbm=isch&q={{{s}}}
+gif https://giphy.com/search/{{{s}}}
+imdb https://www.imdb.com/find?q={{{s}}}
+spotify https://open.spotify.com/search/{{{s}}}
+sc https://soundcloud.com/search?q={{{s}}}
+
+# Social
+r https://www.reddit.com/search?q={{{s}}}
+hn https://hn.algolia.com/?q={{{s}}}
+x https://twitter.com/search?q={{{s}}}
+mastodon https://mastodon.social/search?q={{{s}}}
+
+# Shopping
+a https://www.amazon.com/s?k={{{s}}}
+ebay https://www.ebay.com/sch/i.html?_nkw={{{s}}}
+
+# Maps & translate
+maps https://www.google.com/maps/search/{{{s}}}
+osm https://www.openstreetmap.org/search?query={{{s}}}
+gt https://translate.google.com/?sl=auto&tl=en&text={{{s}}}
+deepl https://www.deepl.com/translator#auto/en/{{{s}}}

@@ -197,14 +197,15 @@ final class ConfigLoaderTests: XCTestCase {
       retries = 3
       verbose = true
 
-      [plugin.web]
+      [plugin.searchengines]
       engines = ["google", "ddg"]
       """)
 
     XCTAssertEqual(c.plugins.settings["slack"]?["cli"], .string("/opt/homebrew/bin/slack"))
     XCTAssertEqual(c.plugins.settings["slack"]?["retries"], .int(3))
     XCTAssertEqual(c.plugins.settings["slack"]?["verbose"], .bool(true))
-    XCTAssertEqual(c.plugins.settings["web"]?["engines"], .stringArray(["google", "ddg"]))
+    XCTAssertEqual(
+      c.plugins.settings["searchengines"]?["engines"], .stringArray(["google", "ddg"]))
 
     let slackJSON = c.pluginConfigJSON(for: "slack")
     let data = try XCTUnwrap(slackJSON.data(using: .utf8))

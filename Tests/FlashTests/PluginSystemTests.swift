@@ -13,7 +13,7 @@ final class PluginSystemTests: XCTestCase {
       ids,
       [
         "calculator", "clipboard", "contacts", "emojis", "firefox", "media", "notes",
-        "reminders", "safari", "slack", "spotify", "system", "tmux", "web",
+        "reminders", "safari", "searchengines", "slack", "spotify", "system", "tmux",
       ])
 
     let runCommandRequired: Set<String> = [

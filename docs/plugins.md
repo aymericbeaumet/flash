@@ -20,6 +20,11 @@ global shell paths. Current bundled commands:
 - `:slack login|version|run`
 - `:media play|pause|toggle|next|previous|volumeup|volumedown|mute|get|status|run`
 
+The bundled `searchengines` plugin exports no commands; instead it serves
+DuckDuckGo-style bangs in the flashlight (see the `shebang` provider below):
+type `!<bang> <query>`, e.g. `!r cat` opens a Reddit search in the default
+browser.
+
 Authentication is explicit. Install and start do not run login flows.
 
 ## Providers

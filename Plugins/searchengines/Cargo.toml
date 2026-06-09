@@ -1,11 +1,12 @@
 [package]
-name = "flash-plugin-web"
+name = "flash-plugin-searchengines"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+build = "build.rs"
 
 [[bin]]
-name = "flash-plugin-web"
+name = "flash-plugin-searchengines"
 path = "src/main.rs"
 
 [dependencies]
