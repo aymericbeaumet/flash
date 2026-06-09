@@ -14,13 +14,19 @@ final class PluginFlashSource: FlashSource {
   var displayName: String { plugin.manifest.name }
   var priority: Int { plugin.manifest.priority }
   var capabilities: FlashSourceCapabilities {
-    // `.jumpTargets` is gated on the manifest opt-in: hint selection is
-    // exclusive (highest-priority provider wins, no fallback), so a plugin
-    // that doesn't actually produce hints must not advertise the capability
-    // and displace the core AX walk. Candidate/tab caps are unconditional.
-    var caps: FlashSourceCapabilities =
-      [.candidates, .appActivation, .tabSelection, .tabCreation, .tabNavigation, .tabClosing]
+    // Each capability group is gated on the matching provider opt-in so a
+    // plugin only advertises what it declares. `.jumpTargets` follows `hints`
+    // because hint selection is exclusive (highest-priority provider wins, no
+    // fallback) — an empty-returning plugin must not displace the core AX walk.
+    // The candidate/app-activation/tab caps follow `candidates` so a
+    // commands-only plugin isn't consulted on every flashlight query.
+    var caps: FlashSourceCapabilities = []
     if plugin.manifest.providesHints { caps.insert(.jumpTargets) }
+    if plugin.manifest.providesCandidates {
+      caps.formUnion([
+        .candidates, .appActivation, .tabSelection, .tabCreation, .tabNavigation, .tabClosing,
+      ])
+    }
     return caps
   }
   var activationPolicy: FlashSourceActivationPolicy {

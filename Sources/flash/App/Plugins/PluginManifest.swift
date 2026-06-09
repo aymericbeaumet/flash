@@ -322,6 +322,17 @@ struct PluginManifest: Codable, Equatable {
     providers.contains { $0.kind == .hints }
   }
 
+  /// True when any provider opts the plugin into the candidate/flashlight
+  /// surface. Gates the candidate-adjacent capabilities (`.candidates`, plus the
+  /// app-activation and tab operations that act on candidate-like entities) so a
+  /// commands-only plugin isn't consulted on every flashlight query. The
+  /// candidates surface stays global+additive — plugins self-limit their
+  /// snapshot via focus events — so this is a capability toggle, not an
+  /// app/mode gate.
+  var providesCandidates: Bool {
+    providers.contains { $0.kind == .candidates }
+  }
+
   enum CodingKeys: String, CodingKey {
     case id, name, version, description, install, start, events, providers, priority
     case volatile
