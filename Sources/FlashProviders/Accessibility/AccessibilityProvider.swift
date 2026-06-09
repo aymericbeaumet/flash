@@ -498,10 +498,13 @@ public final class AccessibilityProvider: FlashSource {
     {
       roleAllowed = false
     }
+    // `enabled` is checked per-branch below rather than in this gate: a
+    // disabled row/cell can still be the real click target (see the
+    // row/cell branch), whereas every other disabled element stays inert.
     if let posV = posValue, let sizeV = sizeValue,
       let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
       visible.containsInclusive(CGPoint(x: frame.midX, y: frame.midY)),
-      roleAllowed, enabled, !hidden
+      roleAllowed, !hidden
     {
       state.idCounter += 1
       let captured = element
@@ -532,10 +535,22 @@ public final class AccessibilityProvider: FlashSource {
         entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
         providerID: identifier
       )
-      if role == "AXImage" {
+      let isRowOrCell = capturedRole == "AXRow" || capturedRole == "AXCell"
+      if enabled {
+        // Icon-only AXImage buttons defer to the AXPress check (decorative
+        // images report no press action); everything else is confirmed.
+        if role == "AXImage" {
+          state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
+        } else {
+          state.confirmedTargets.append(candidate)
+        }
+      } else if isRowOrCell {
+        // Virtualised list rows/cells frequently report enabled=false even
+        // when they are the real click target — Messages conversation rows
+        // do exactly this, which is why `f` surfaced no hints over the chat
+        // list. Admit them only when they actually expose AXPress so we
+        // recover the actionable rows without hinting genuinely inert UI.
         state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
-      } else {
-        state.confirmedTargets.append(candidate)
       }
     }
 
