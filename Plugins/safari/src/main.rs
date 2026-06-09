@@ -1,4 +1,4 @@
-use flash_plugin::{run, CommandResponse, Context, Plugin, Request, Response};
+use flash_plugin::run;
 
 // Safari exposes no candidates or hints of its own; it exists purely to
 // register the manifest mapping that overrides the built-in hard-refresh
@@ -8,11 +8,11 @@ use flash_plugin::{run, CommandResponse, Context, Plugin, Request, Response};
 // config default). The process just idles so the host keeps the mapping live.
 struct Safari;
 
-impl Plugin for Safari {
-    async fn handle(&self, _ctx: Context, _request: Request) -> Response {
-        CommandResponse::error("unsupported request").into()
-    }
-}
+flash_plugin::plugin!(Safari);
+
+// No providers drive a handler — the manifest mapping is all Safari needs — so
+// every trait method keeps its default.
+impl FlashPlugin for Safari {}
 
 fn main() {
     run(Safari);

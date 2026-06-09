@@ -1,23 +1,22 @@
 use std::time::Duration;
 
-use flash_plugin::{applescript_quote, run, CommandResponse, Context, Plugin, Request, Response};
+use flash_plugin::{applescript_quote, run, CommandRequest, CommandResponse, Context};
 
 struct Calculator;
 
-impl Plugin for Calculator {
-    async fn handle(&self, ctx: Context, request: Request) -> Response {
-        let Request::Command(cmd) = request else {
-            return CommandResponse::error("unsupported request").into();
-        };
+flash_plugin::plugin!(Calculator);
+
+impl FlashPlugin for Calculator {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
         // Registered as a wildcard command, so the whole remainder arrives as
         // args (`:calc 2 + 2` and `:calc 2+2` both work).
-        let expr = cmd.query();
+        let expr = command.query();
         if expr.is_empty() {
-            return CommandResponse::error("empty expression").into();
+            return CommandResponse::error("empty expression");
         }
         let value = match meval::eval_str(&expr) {
             Ok(v) => v,
-            Err(err) => return CommandResponse::error(format!("cannot evaluate: {err}")).into(),
+            Err(err) => return CommandResponse::error(format!("cannot evaluate: {err}")),
         };
         let result = format_num(value);
 
@@ -26,7 +25,7 @@ impl Plugin for Calculator {
         let script = format!("set the clipboard to {}", applescript_quote(&result));
         ctx.run_osascript(&script, Duration::from_secs(10)).await;
 
-        CommandResponse::toast(format!("{expr} = {result}")).into()
+        CommandResponse::toast(format!("{expr} = {result}"))
     }
 }
 

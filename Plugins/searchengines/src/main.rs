@@ -1,28 +1,27 @@
 use std::time::Duration;
 
-use flash_plugin::{run, CommandResponse, Context, Plugin, Request, Response};
+use flash_plugin::{run, CommandRequest, CommandResponse, Context};
 
 // Sorted `BANGS: &[(&str, &str)]` generated from bangs.tsv at build time.
 include!(concat!(env!("OUT_DIR"), "/bangs_generated.rs"));
 
 struct SearchEngines;
 
-impl Plugin for SearchEngines {
-    async fn handle(&self, ctx: Context, request: Request) -> Response {
-        let Request::Command(cmd) = request else {
-            return CommandResponse::error("unsupported request").into();
-        };
+flash_plugin::plugin!(SearchEngines);
+
+impl FlashPlugin for SearchEngines {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
         // The bang the user typed (`!r` → `r`) arrives as the subcommand; the
         // rest of the flashlight line is the query. There is no `:` command:
         // this plugin is reached only through the catch-all shebang provider.
-        let bang = cmd.subcommand.to_ascii_lowercase();
+        let bang = command.subcommand.to_ascii_lowercase();
         let Some(template) = lookup(&bang) else {
-            return CommandResponse::error(format!("unknown bang: !{bang}")).into();
+            return CommandResponse::error(format!("unknown bang: !{bang}"));
         };
-        let url = template.replace("{{{s}}}", &percent_encode(&cmd.query()));
+        let url = template.replace("{{{s}}}", &percent_encode(&command.query()));
         ctx.run_cli(&["/usr/bin/open".to_string(), url], Duration::from_secs(10))
             .await
-            .into()
+            .into_command()
     }
 }
 
