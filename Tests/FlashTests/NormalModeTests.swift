@@ -330,6 +330,30 @@ final class NormalModeTests: XCTestCase {
         captureOverride: true).captureInput)
   }
 
+  func testInsertModeBadgeIsAlwaysVisible() {
+    let labels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    // Even when the badge is otherwise disabled (no normal-mode bindings →
+    // visible: false), INSERT must still render its label.
+    let snapshot = AppDelegate.modeOverlaySnapshot(
+      mode: .insert,
+      labels: labels,
+      visible: false,
+      hasHints: false,
+      activationInFlight: false,
+      captureOverride: nil)
+    XCTAssertTrue(snapshot.visible)
+    XCTAssertEqual(snapshot.text, "INSERT")
+    // NORMAL keeps respecting the disabled flag.
+    XCTAssertFalse(
+      AppDelegate.modeOverlaySnapshot(
+        mode: .normal,
+        labels: labels,
+        visible: false,
+        hasHints: false,
+        activationInFlight: false,
+        captureOverride: nil).visible)
+  }
+
   func testActiveWindowBorderIsAlwaysHidden() {
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(

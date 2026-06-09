@@ -375,7 +375,7 @@ extension AppDelegate {
     let capture = canCapture && wantsCapture
     return ModeOverlaySnapshot(
       text: mode == .normal ? labels.normal : labels.insert,
-      visible: visible,
+      visible: visible || mode == .insert,
       captureInput: capture,
       inputMode: capture ? .normal : .hints,
       refreshActiveWindowBorder: mode == .insert)
