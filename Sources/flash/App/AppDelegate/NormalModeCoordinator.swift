@@ -149,6 +149,8 @@ extension AppDelegate {
   }
 
   private func modeDidEnterInsert(reason: String) {
+    let insertTarget = currentNonFlashContext()
+    let panelKeyAtEntry = overlay.isKeyWindow
     normalModeScrollSuppressionUntil = nil
     normalModeRecaptureToken &+= 1
     normalModePendingCommandToken &+= 1
@@ -159,6 +161,39 @@ extension AppDelegate {
       overlay.hide()
     }
     applyModeOverlay()
+    traceInsertKeyHandoff(
+      target: insertTarget, panelKeyAtEntry: panelKeyAtEntry, reason: reason)
+  }
+
+  /// Diagnostic trace for the INSERT key-window handoff (#1: Messages drops
+  /// the first keystroke). The overlay is a `.nonactivatingPanel`, so the
+  /// focused app stays the *active application* while the panel merely holds
+  /// the *key window*; on INSERT entry the panel resigns key via `orderOut`
+  /// and macOS is meant to hand key back to the app's window. Sample the
+  /// panel key state at entry and again after a short settle delay — if the
+  /// panel still holds key when the user would start typing, the first
+  /// keystroke lands on the resigned panel instead of the app.
+  private func traceInsertKeyHandoff(
+    target: AppContext?,
+    panelKeyAtEntry: Bool,
+    reason: String
+  ) {
+    let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
+    FlashLog.trace(
+      "[mode] insert_handoff reason=\(reason) "
+        + "target=\(target?.bundleIdentifier ?? "nil") "
+        + "pid=\(target.map { String($0.processID) } ?? "nil") "
+        + "panel_key_entry=\(panelKeyAtEntry) panel_key_now=\(overlay.isKeyWindow) "
+        + "frontmost=\(frontmost)")
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
+      guard let self else { return }
+      let frontmostLater =
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
+      FlashLog.trace(
+        "[mode] insert_handoff_settled reason=\(reason) "
+          + "panel_key=\(self.overlay.isKeyWindow) frontmost=\(frontmostLater) "
+          + "mode=\(self.flashMode)")
+    }
   }
 
   func refreshCurrentModeSideEffects(reason: String) {
