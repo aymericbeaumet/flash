@@ -17,9 +17,13 @@ use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, Context, Plugin};
+use flash_plugin::{
+    run, run_local, ActivateRequest, Candidate, CommandRequest, CommandResponse, Context,
+    DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, Plugin, Request, ResolveResponse,
+    Response, SourceActionRequest, SourceActionResponse,
+};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 const PLUGIN_ID: &str = "tmux";
 const SOURCE_ID: &str = "plugin.tmux";
@@ -101,19 +105,14 @@ fn which(program: &str) -> Option<String> {
 }
 
 async fn run_cmd(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let output = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .ok()?
-        .ok()?;
-    if !output.status.success() {
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push(program.to_string());
+    argv.extend(args.iter().map(|s| s.to_string()));
+    let result = run_local(&argv, timeout).await;
+    if !result.ok {
         return None;
     }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    Some(result.stdout)
 }
 
 async fn run_tmux(tmux_path: Option<&str>, args: &[&str], timeout: Duration) -> Option<String> {
@@ -409,47 +408,32 @@ fn build_target(
     label: &str,
     pid: i64,
     enters_insert_mode: bool,
-) -> Value {
-    json!({
-        "id": target_id,
-        "frame": { "x": x, "y": y, "width": width, "height": height },
-        "role": role,
-        "label": label,
-        "enters_insert_mode": enters_insert_mode,
-        "pid": pid,
-        "source_id": SOURCE_ID,
-    })
+) -> JumpTarget {
+    JumpTarget::new(target_id, Frame::new(x, y, width, height))
+        .role(role)
+        .label(label)
+        .enters_insert_mode(enters_insert_mode)
+        .pid(pid)
+        .source_id(SOURCE_ID)
 }
 
-fn frame_num(frame: &Value, key: &str) -> f64 {
-    frame.get(key).and_then(Value::as_f64).unwrap_or(0.0)
-}
-
-async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
+async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> DiscoverResponse {
     let tmux_path = plugin.tmux_path.as_deref();
-    let pid = params.get("pid").and_then(Value::as_i64);
-    let bundle_id = params
-        .get("bundle_id")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let frame = params
-        .get("front_window_frame")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-
-    let Some(pid) = pid else {
-        return json!({ "targets": [] });
+    let Some(pid) = req.pid else {
+        return DiscoverResponse::targets(vec![]);
     };
-    let win_w = frame_num(&frame, "width");
-    let win_h = frame_num(&frame, "height");
-    let min_x = frame_num(&frame, "x");
-    let min_y = frame_num(&frame, "y");
+    let bundle_id = req.bundle_id.as_deref().unwrap_or("");
+    let frame = req.front_window_frame.unwrap_or_default();
+    let win_w = frame.width;
+    let win_h = frame.height;
+    let min_x = frame.x;
+    let min_y = frame.y;
     if tmux_path.is_none() || win_w <= 0.0 || win_h <= 0.0 {
-        return json!({ "targets": [], "context_pid": pid });
+        return DiscoverResponse::targets(vec![]).context_pid(pid);
     }
 
     let Some(client) = client_hosted_by(tmux_path, pid).await else {
-        return json!({ "targets": [], "context_pid": pid });
+        return DiscoverResponse::targets(vec![]).context_pid(pid);
     };
 
     let combined = run_tmux_default(
@@ -464,17 +448,17 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
     )
     .await;
     let Some(combined) = combined else {
-        return json!({ "targets": [], "context_pid": pid });
+        return DiscoverResponse::targets(vec![]).context_pid(pid);
     };
     let combined_lines: Vec<&str> = combined.split('\n').collect();
     if combined_lines.len() < 2 {
-        return json!({ "targets": [], "context_pid": pid });
+        return DiscoverResponse::targets(vec![]).context_pid(pid);
     }
     let Some((client_cols, client_rows)) = parse_two_ints(combined_lines[0]) else {
-        return json!({ "targets": [], "context_pid": pid });
+        return DiscoverResponse::targets(vec![]).context_pid(pid);
     };
     if client_cols <= 0 || client_rows <= 0 {
-        return json!({ "targets": [], "context_pid": pid });
+        return DiscoverResponse::targets(vec![]).context_pid(pid);
     }
 
     let (cell_w, cell_h, pad_x, pad_y) = resolve_geometry(
@@ -497,7 +481,7 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
     )
     .await;
     let Some(pane_list) = pane_list else {
-        return json!({ "targets": [], "context_pid": pid });
+        return DiscoverResponse::targets(vec![]).context_pid(pid);
     };
 
     let mut panes: Vec<Pane> = Vec::new();
@@ -522,7 +506,7 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
         }
     }
     if panes.is_empty() {
-        return json!({ "targets": [], "context_pid": pid });
+        return DiscoverResponse::targets(vec![]).context_pid(pid);
     }
 
     let top_offset = parse_status_top_offset(combined_lines[1]);
@@ -530,7 +514,7 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
     // Pane chip is 3-cells wide so the hint label is readable. Anchored at
     // pane center, chip extends 1 cell left and right.
     let pane_chip_cells: i64 = 3;
-    let mut pane_targets: Vec<Value> = Vec::new();
+    let mut pane_targets: Vec<JumpTarget> = Vec::new();
     let mut actions: HashMap<String, TargetAction> = HashMap::new();
 
     struct RawLink {
@@ -623,14 +607,27 @@ async fn discover_targets_for_context(plugin: &Tmux, params: &Value) -> Value {
     if let Ok(mut guard) = plugin.target_actions.lock() {
         *guard = actions;
     }
-    json!({ "targets": targets, "context_pid": pid })
+    DiscoverResponse::targets(targets).context_pid(pid)
 }
 
 // ---- Candidate (tmux window finder) -----------------------------------------
 
+/// Round-tripped through the host so candidate resolution can re-drive
+/// `switch-client` against the right session/client.
+#[derive(Default, Serialize, Deserialize)]
+struct TmuxPayload {
+    tmux_target: String,
+    #[serde(default)]
+    tmux_client_tty: String,
+    #[serde(default)]
+    client_pid: Option<i64>,
+    #[serde(default)]
+    terminal_pid: Option<i64>,
+}
+
 /// `None` on transient tmux failure (caller preserves the previous snapshot);
 /// `Some(vec)` (possibly empty) is the authoritative current window list.
-async fn build_candidates(tmux_path: Option<&str>) -> Option<Vec<Value>> {
+async fn build_candidates(tmux_path: Option<&str>) -> Option<Vec<Candidate>> {
     if tmux_path.is_none() {
         return Some(Vec::new());
     }
@@ -714,21 +711,20 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<Vec<Value>> {
         };
         let target = format!("{session}:{index}");
 
-        let mut candidate = json!({
-            "kind": "tmux_window",
-            "source_id": SOURCE_ID,
-            "source": PLUGIN_ID,
-            "name": title,
-            "subtitle": subtitle,
-            "payload": {
-                "tmux_target": target,
-                "tmux_client_tty": client.map(|c| c.tty.as_str()).unwrap_or(""),
-                "client_pid": client.map(|c| c.client_pid),
-                "terminal_pid": terminal_pid,
-            },
-        });
+        let payload = TmuxPayload {
+            tmux_target: target,
+            tmux_client_tty: client.map(|c| c.tty.clone()).unwrap_or_default(),
+            client_pid: client.map(|c| c.client_pid),
+            terminal_pid,
+        };
+        let mut candidate = Candidate::new(title)
+            .kind("tmux_window")
+            .source_id(SOURCE_ID)
+            .source(PLUGIN_ID)
+            .subtitle(subtitle)
+            .payload_json(&payload);
         if let Some(tp) = terminal_pid {
-            candidate["pid"] = json!(tp);
+            candidate = candidate.pid(tp);
         }
         out.push(candidate);
     }
@@ -743,10 +739,7 @@ async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
         );
         return;
     };
-    ctx.emit.notify(
-        "snapshot.updated",
-        json!({ "targets": [], "candidates": candidates, "source_id": SOURCE_ID }),
-    );
+    ctx.emit_snapshot(SOURCE_ID, candidates);
 }
 
 // ---- Tab actions ------------------------------------------------------------
@@ -791,8 +784,8 @@ async fn switch_client(tmux_path: Option<&str>, tty: &str, target: &str) -> bool
         .is_some()
 }
 
-async fn tab_select(tmux_path: Option<&str>, client: &TmuxClient, params: &Value) -> bool {
-    let Some(idx) = params.get("index").and_then(Value::as_i64) else {
+async fn tab_select(tmux_path: Option<&str>, client: &TmuxClient, index: Option<i64>) -> bool {
+    let Some(idx) = index else {
         return false;
     };
     if idx <= 0 {
@@ -934,40 +927,31 @@ async fn tab_close(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
         .is_some()
 }
 
-async fn perform_source_action(plugin: &Tmux, params: &Value) -> Value {
+async fn perform_source_action(plugin: &Tmux, req: &SourceActionRequest) -> SourceActionResponse {
     let tmux_path = plugin.tmux_path.as_deref();
-    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    let context = params.get("context").cloned().unwrap_or_else(|| json!({}));
-    let Some(pid) = context.get("pid").and_then(Value::as_i64) else {
-        return json!({ "did_perform": false });
+    let Some(pid) = req.context.pid else {
+        return SourceActionResponse::unhandled();
     };
     let Some(client) = client_hosted_by(tmux_path, pid).await else {
-        return json!({ "did_perform": false });
+        return SourceActionResponse::unhandled();
     };
-    let ok = match name {
-        "tab_select" => tab_select(tmux_path, &client, params).await,
+    let ok = match req.name.as_str() {
+        "tab_select" => tab_select(tmux_path, &client, req.index).await,
         "tab_next" => tab_adjacent(tmux_path, &client, "next").await,
         "tab_prev" => tab_adjacent(tmux_path, &client, "previous").await,
         "tab_first" => tab_extreme(tmux_path, &client, "first").await,
         "tab_last" => tab_extreme(tmux_path, &client, "last").await,
         "tab_new" => tab_new(tmux_path, &client).await,
         "tab_close" => tab_close(tmux_path, &client).await,
-        _ => return json!({ "did_perform": false }),
+        _ => return SourceActionResponse::unhandled(),
     };
-    json!({ "did_perform": ok, "target_pid": pid })
+    SourceActionResponse {
+        did_perform: ok,
+        target_pid: Some(pid),
+    }
 }
 
 // ---- Candidate resolution ---------------------------------------------------
-
-fn parse_payload(candidate: &Value) -> Value {
-    match candidate.get("payload") {
-        Some(Value::String(raw)) => {
-            flash_plugin::serde_json::from_str(raw).unwrap_or_else(|_| json!({}))
-        }
-        Some(value @ Value::Object(_)) => value.clone(),
-        _ => json!({}),
-    }
-}
 
 /// Pick the client to drive `switch-client`: the most-recently-active client,
 /// which for single-process multi-window terminals maps to the window the
@@ -982,30 +966,20 @@ async fn resolve_active_client(tmux_path: Option<&str>) -> Option<TmuxClient> {
     clients.into_iter().next()
 }
 
-async fn resolve_candidate(plugin: &Tmux, ctx: &Context, params: &Value) -> Value {
+async fn resolve_candidate(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     let tmux_path = plugin.tmux_path.as_deref();
-    let candidate = params
-        .get("candidate")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let payload = parse_payload(&candidate);
-    let target = payload
-        .get("tmux_target")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let payload = candidate.payload_as::<TmuxPayload>().unwrap_or_default();
+    let target = payload.tmux_target.as_str();
     if target.is_empty() {
         ctx.log("warn", "[tmux] resolve missing tmux_target");
-        return json!({ "did_resolve": false });
+        return ResolveResponse::unresolved();
     }
 
     let active = resolve_active_client(tmux_path).await;
-    let tty = active.as_ref().map(|c| c.tty.clone()).unwrap_or_else(|| {
-        payload
-            .get("tmux_client_tty")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    });
+    let tty = active
+        .as_ref()
+        .map(|c| c.tty.clone())
+        .unwrap_or_else(|| payload.tmux_client_tty.clone());
 
     let mut args: Vec<&str> = vec!["switch-client"];
     if !tty.is_empty() {
@@ -1022,7 +996,7 @@ async fn resolve_candidate(plugin: &Tmux, ctx: &Context, params: &Value) -> Valu
             .is_some();
     if !switched {
         ctx.log("warn", "[tmux] resolve failed");
-        return json!({ "did_resolve": false });
+        return ResolveResponse::unresolved();
     }
 
     // Recompute the terminal pid from the live client we actually drove rather
@@ -1038,19 +1012,22 @@ async fn resolve_candidate(plugin: &Tmux, ctx: &Context, params: &Value) -> Valu
         }
         None => None,
     }
-    .or_else(|| payload.get("terminal_pid").and_then(Value::as_i64));
+    .or(payload.terminal_pid);
 
     resolve_response(target, &tty, terminal_pid, ctx)
 }
 
-fn resolve_response(target: &str, tty: &str, terminal_pid: Option<i64>, ctx: &Context) -> Value {
-    let mut response = json!({ "did_resolve": true });
+fn resolve_response(
+    target: &str,
+    tty: &str,
+    terminal_pid: Option<i64>,
+    ctx: &Context,
+) -> ResolveResponse {
     let mut fields = BTreeMap::new();
     fields.insert("target".to_string(), target.to_string());
     fields.insert("tty".to_string(), tty.to_string());
     match terminal_pid {
         Some(tp) => {
-            response["target_pid"] = json!(tp);
             fields.insert("terminal_pid".to_string(), tp.to_string());
             ctx.log_fields("debug", "[tmux] resolved candidate", fields);
         }
@@ -1062,7 +1039,7 @@ fn resolve_response(target: &str, tty: &str, terminal_pid: Option<i64>, ctx: &Co
             );
         }
     }
-    response
+    ResolveResponse::resolved(terminal_pid)
 }
 
 // ---- Commands (`:tmux …` jump-to mappings) ----------------------------------
@@ -1074,29 +1051,19 @@ fn resolve_response(target: &str, tty: &str, terminal_pid: Option<i64>, ctx: &Co
 /// first command arg, so a mapping like
 /// `flash://plugin_command?command=tmux&subcommand=window&args=main:1`
 /// jumps straight to `main:1`.
-async fn invoke_command(plugin: &Tmux, ctx: &Context, params: &Value) -> Value {
+async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
     let tmux_path = plugin.tmux_path.as_deref();
-    let subcommand = params
-        .get("subcommand")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    match subcommand {
+    match cmd.subcommand.as_str() {
         "session" | "window" => {}
         other => {
-            return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
+            return CommandResponse::error(format!("unknown subcommand: {other}"));
         }
     }
 
-    let target = params
-        .get("args")
-        .and_then(Value::as_array)
-        .and_then(|a| a.first())
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let target = cmd.args.first().map(|s| s.trim()).filter(|s| !s.is_empty());
     let Some(target) = target else {
         ctx.log("warn", "[tmux] command missing target argument");
-        return json!({ "ok": false, "error": "missing target argument" });
+        return CommandResponse::error("missing target argument");
     };
 
     // `session:index` → session is the part before the first colon; a bare
@@ -1126,7 +1093,7 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, params: &Value) -> Value {
             .is_some();
     if !switched {
         ctx.log("warn", "[tmux] command switch-client failed");
-        return json!({ "ok": false, "error": "switch-client failed" });
+        return CommandResponse::error("switch-client failed");
     }
 
     // Terminal pid hosting the target session's client, so Flash can raise
@@ -1145,21 +1112,17 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, params: &Value) -> Value {
         }
     };
 
-    let mut response = json!({ "ok": true });
-    if let Some(tp) = terminal_pid {
-        response["target_pid"] = json!(tp);
+    match terminal_pid {
+        Some(tp) => CommandResponse::ok().target_pid(tp),
+        None => CommandResponse::ok(),
     }
-    response
 }
 
 // ---- Activation -------------------------------------------------------------
 
-async fn activate_target(plugin: &Tmux, ctx: &Context, params: &Value) {
+async fn activate_target(plugin: &Tmux, ctx: &Context, req: &ActivateRequest) {
     let tmux_path = plugin.tmux_path.as_deref();
-    let target_id = params
-        .get("target_id")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let target_id = req.target_id.as_str();
     let entry = plugin
         .target_actions
         .lock()
@@ -1230,26 +1193,30 @@ impl Plugin for Tmux {
         refresh_candidate_snapshot(self, &ctx).await;
     }
 
-    async fn on_event(&self, ctx: Context, name: String, _payload: Value) {
+    async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
-            name.as_str(),
+            event.name.as_str(),
             "focus.changed" | "flash.started" | "apps.terminated"
         ) {
             refresh_candidate_snapshot(self, &ctx).await;
         }
     }
 
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        match method.as_str() {
-            "discoverTargets" => discover_targets_for_context(self, &params).await,
-            "sourceAction" => perform_source_action(self, &params).await,
-            "resolveCandidate" => resolve_candidate(self, &ctx, &params).await,
-            "command.invoke" => invoke_command(self, &ctx, &params).await,
-            "activateTarget" => {
-                activate_target(self, &ctx, &params).await;
-                json!({})
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        match request {
+            Request::DiscoverTargets(req) => discover_targets_for_context(self, &req).await.into(),
+            Request::SourceAction(req) => perform_source_action(self, &req).await.into(),
+            Request::ResolveCandidate(candidate) => {
+                resolve_candidate(self, &ctx, &candidate).await.into()
             }
-            other => json!({ "ok": false, "error": format!("unknown method: {other}") }),
+            Request::Command(cmd) => invoke_command(self, &ctx, &cmd).await.into(),
+            Request::ActivateTarget(req) => {
+                activate_target(self, &ctx, &req).await;
+                Response::None
+            }
+            Request::Unknown { method } => {
+                CommandResponse::error(format!("unknown method: {method}")).into()
+            }
         }
     }
 }

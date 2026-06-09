@@ -1,18 +1,15 @@
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, str_field, string_list, Context, Plugin};
+use flash_plugin::{run, CommandResponse, Context, Plugin, Request, Response};
 
 struct Spotify;
 
 impl Plugin for Spotify {
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        if method != "command.invoke" {
-            return json!({ "ok": false, "error": format!("unknown method: {method}") });
-        }
-        let name = str_field(&params, "subcommand");
-        let args = string_list(&params, "args");
-        let (tail, timeout): (Vec<String>, u64) = match name {
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        let Request::Command(cmd) = request else {
+            return CommandResponse::error("unsupported request").into();
+        };
+        let (tail, timeout): (Vec<String>, u64) = match cmd.subcommand.as_str() {
             "login" => (vec!["authenticate".into()], 300),
             "status" => (vec!["--version".into()], 120),
             "pause" => (vec!["playback".into(), "pause".into()], 120),
@@ -20,16 +17,16 @@ impl Plugin for Spotify {
             "toggle" => (vec!["playback".into(), "play-pause".into()], 120),
             "next" => (vec!["playback".into(), "next".into()], 120),
             "previous" => (vec!["playback".into(), "previous".into()], 120),
-            "search" => (vec!["search".into(), args.join(" ")], 120),
-            "run" => (args, 120),
+            "search" => (vec!["search".into(), cmd.args.join(" ")], 120),
+            "run" => (cmd.args, 120),
             other => {
-                return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
+                return CommandResponse::error(format!("unknown subcommand: {other}")).into();
             }
         };
         let argv = spotify(&ctx, &tail);
         ctx.run_cli(&argv, Duration::from_secs(timeout))
             .await
-            .value()
+            .into()
     }
 }
 

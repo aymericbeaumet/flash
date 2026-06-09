@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, str_field, string_list, CliResult, Context, Plugin};
+use flash_plugin::{run, CliResult, CommandResponse, Context, Plugin, Request, Response};
 
 // NSSystemDefined media key codes (IOKit IOHIDUsageTables.h, NX_KEYTYPE_*).
 // Posting these as system-defined events lets macOS route the command to
@@ -42,12 +41,11 @@ const PLAYERS: &[Player] = &[
 struct Media;
 
 impl Plugin for Media {
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        if method != "command.invoke" {
-            return json!({ "ok": false, "error": format!("unknown method: {method}") });
-        }
-        let name = str_field(&params, "subcommand").to_string();
-        let result = match name.as_str() {
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        let Request::Command(cmd) = request else {
+            return CommandResponse::error("unsupported request").into();
+        };
+        let result: CliResult = match cmd.subcommand.as_str() {
             "play" => media_action(&ctx, NX_KEYTYPE_PLAY, "play").await,
             "pause" => media_action(&ctx, NX_KEYTYPE_PLAY, "pause").await,
             "toggle" => media_action(&ctx, NX_KEYTYPE_PLAY, "playpause").await,
@@ -82,14 +80,14 @@ impl Plugin for Media {
             "status" => return status(&ctx).await,
             "run" => {
                 let mut argv = vec!["/usr/bin/osascript".to_string()];
-                argv.extend(string_list(&params, "args"));
+                argv.extend_from_slice(&cmd.args);
                 ctx.run_cli(&argv, Duration::from_secs(120)).await
             }
             other => {
-                return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
+                return CommandResponse::error(format!("unknown subcommand: {other}")).into();
             }
         };
-        result.value()
+        result.into()
     }
 }
 
@@ -180,14 +178,9 @@ async fn media_action(ctx: &Context, key_code: i32, fallback: &str) -> CliResult
     applescript_command(ctx, fallback).await
 }
 
-async fn get_current(ctx: &Context) -> Value {
+async fn get_current(ctx: &Context) -> Response {
     let Some(player) = pick_player(ctx, true).await else {
-        return json!({
-            "ok": false,
-            "stdout": "",
-            "stderr": "no supported media app is running",
-            "status": 1,
-        });
+        return CommandResponse::error("no supported media app is running").into();
     };
     let state = app_state(ctx, player.name)
         .await
@@ -211,10 +204,10 @@ async fn get_current(ctx: &Context) -> Value {
     if !track.is_empty() {
         summary = format!("{summary}: {track}");
     }
-    json!({ "ok": true, "stdout": summary, "stderr": "", "status": 0 })
+    CommandResponse::toast(summary).into()
 }
 
-async fn status(ctx: &Context) -> Value {
+async fn status(ctx: &Context) -> Response {
     let mut lines = Vec::new();
     for player in PLAYERS {
         let state = if app_running(ctx, player.name).await {
@@ -236,7 +229,7 @@ async fn status(ctx: &Context) -> Value {
             if muted_flag { " (muted)" } else { "" }
         ));
     }
-    json!({ "ok": true, "stdout": lines.join("\n"), "stderr": "", "status": 0 })
+    CommandResponse::toast(lines.join("\n")).into()
 }
 
 fn post_media_key(key_code: i32) -> bool {

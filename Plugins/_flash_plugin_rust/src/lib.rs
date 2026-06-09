@@ -1,77 +1,230 @@
-//! Lightweight tokio scaffolding for Flash plugins.
+//! Strongly-typed tokio scaffolding for Flash plugins.
 //!
-//! This crate is intentionally free of Flash business concepts. It knows
-//! how to speak the length-prefixed MessagePack wire protocol over
+//! This crate speaks the length-prefixed MessagePack wire protocol over
 //! stdin/stdout — a 4-byte big-endian payload length followed by a
 //! MessagePack-encoded value — plus request/response correlation, the
-//! `initialize`/`heartbeat`/`shutdown`
-//! lifecycle, structured logging, and a sandboxed `run_cli` — and nothing
-//! about targets, candidates, hints, or any specific integration. A plugin
-//! supplies a [`Plugin`] implementation; everything domain-specific (the
-//! shape of a `snapshot.updated` notification, what an `activateTarget`
-//! means) lives in the plugin, not here.
+//! `initialize`/`heartbeat`/`shutdown` lifecycle, structured logging, and a
+//! sandboxed `run_cli`. Everything a plugin touches is a typed value: a plugin
+//! receives a [`Request`] / [`Event`] and returns a [`Response`]; it never
+//! constructs raw JSON. `serde_json` is an implementation detail of the wire
+//! codec and is intentionally *not* re-exported — plugins that need a custom
+//! candidate payload derive `serde` on their own struct.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot};
-
-pub use serde_json;
 
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
 /// plugin assigned. The serve loop fulfils each entry when the matching host
 /// response arrives. Cloned into [`Context`] so any handler can call the host.
 type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 
-/// Serializes outgoing protocol frames onto a single stdout writer task so
-/// frames emitted from concurrent handlers never interleave. Cheap to clone.
-#[derive(Clone)]
-pub struct Emitter {
-    tx: mpsc::UnboundedSender<Vec<u8>>,
+// ---------------------------------------------------------------------------
+// Core value types
+// ---------------------------------------------------------------------------
+
+/// A screen-space rectangle in NSScreen coordinates (origin bottom-left), the
+/// coordinate space Flash hint targets live in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Frame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
-impl Emitter {
-    /// Emit a value as one MessagePack frame. The writer task prepends the
-    /// 4-byte big-endian length prefix; this only enqueues the payload.
-    pub fn send(&self, value: Value) {
-        if let Ok(payload) = rmp_serde::to_vec(&value) {
-            let _ = self.tx.send(payload);
+impl Frame {
+    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
         }
     }
 
-    /// Emit a notification (no `id`, no response expected).
-    pub fn notify(&self, method: &str, params: Value) {
-        self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }));
-    }
-
-    /// Emit a response for a request `id`. A null id is dropped — it
-    /// marks a notification the host never expects an answer to.
-    pub fn respond(&self, id: Value, result: Value) {
-        if id.is_null() {
-            return;
-        }
-        self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
-    }
-
-    /// Emit a structured log line that Flash records as `plugin:<id>`.
-    pub fn log(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
-        self.notify(
-            "flash.log",
-            json!({ "level": level, "message": message, "fields": fields }),
-        );
+    /// Build a `Frame` from an [`AxNode::frame`] `[x, y, w, h]` rect.
+    pub fn from_ax(rect: [f64; 4]) -> Self {
+        Self::new(rect[0], rect[1], rect[2], rect[3])
     }
 }
 
-/// Result of a [`Context::run_cli`] invocation. Mirrors the `{ok, stdout,
-/// stderr, status}` shape that command results conventionally carry on the
-/// wire, but carries no plugin-specific meaning itself.
-#[derive(Clone, Debug)]
+/// A hint target a plugin emits for the `f` family. `id` is echoed back on
+/// [`Request::ActivateTarget`]; `frame` positions the hint label. Optional
+/// fields are omitted from the wire when unset.
+#[derive(Clone, Debug, Serialize)]
+pub struct JumpTarget {
+    pub id: String,
+    pub frame: Frame,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enters_insert_mode: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+}
+
+impl JumpTarget {
+    pub fn new(id: impl Into<String>, frame: Frame) -> Self {
+        Self {
+            id: id.into(),
+            frame,
+            role: None,
+            label: None,
+            url: None,
+            pid: None,
+            enters_insert_mode: None,
+            source_id: None,
+        }
+    }
+
+    pub fn role(mut self, role: impl Into<String>) -> Self {
+        self.role = Some(role.into());
+        self
+    }
+
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
+    }
+
+    pub fn pid(mut self, pid: i64) -> Self {
+        self.pid = Some(pid);
+        self
+    }
+
+    pub fn enters_insert_mode(mut self, enters: bool) -> Self {
+        self.enters_insert_mode = Some(enters);
+        self
+    }
+
+    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
+        self.source_id = Some(source_id.into());
+        self
+    }
+}
+
+/// A flashlight candidate. Outbound (emitted via [`Context::emit_snapshot`])
+/// only `name` is required; inbound (on [`Request::ResolveCandidate`]) the host
+/// echoes back the fields it stored, including the [`payload`](Candidate::payload).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Candidate {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub subtitle: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bundle_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pid: Option<i64>,
+    /// Opaque per-candidate state round-tripped through the host. Set a raw
+    /// string with [`payload`](Candidate::payload) or a structured value with
+    /// [`payload_json`](Candidate::payload_json); read it back with
+    /// [`payload_str`](Candidate::payload_str) / [`payload_as`](Candidate::payload_as).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub payload: Option<String>,
+}
+
+impl Candidate {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
+        self.source_id = Some(source_id.into());
+        self
+    }
+
+    pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
+        self.subtitle = Some(subtitle.into());
+        self
+    }
+
+    pub fn bundle_id(mut self, bundle_id: impl Into<String>) -> Self {
+        self.bundle_id = Some(bundle_id.into());
+        self
+    }
+
+    pub fn url(mut self, url: impl Into<String>) -> Self {
+        self.url = Some(url.into());
+        self
+    }
+
+    pub fn pid(mut self, pid: i64) -> Self {
+        self.pid = Some(pid);
+        self
+    }
+
+    /// Attach a raw string payload.
+    pub fn payload(mut self, payload: impl Into<String>) -> Self {
+        self.payload = Some(payload.into());
+        self
+    }
+
+    /// Attach a structured payload, serialized to a JSON string. Read it back
+    /// on resolution with [`payload_as`](Candidate::payload_as).
+    pub fn payload_json<T: Serialize>(mut self, value: &T) -> Self {
+        if let Ok(raw) = serde_json::to_string(value) {
+            self.payload = Some(raw);
+        }
+        self
+    }
+
+    /// The raw string payload, if present.
+    pub fn payload_str(&self) -> Option<&str> {
+        self.payload.as_deref()
+    }
+
+    /// Decode the payload as `T` (set earlier with
+    /// [`payload_json`](Candidate::payload_json)). `None` if absent or malformed.
+    pub fn payload_as<T: DeserializeOwned>(&self) -> Option<T> {
+        serde_json::from_str(self.payload.as_deref()?).ok()
+    }
+}
+
+/// Result of a [`Context::run_cli`] / [`Context::run_local`] invocation.
+#[derive(Clone, Debug, Default)]
 pub struct CliResult {
     pub ok: bool,
     pub stdout: String,
@@ -80,270 +233,16 @@ pub struct CliResult {
 }
 
 impl CliResult {
-    pub fn value(&self) -> Value {
-        json!({
-            "ok": self.ok,
-            "stdout": self.stdout,
-            "stderr": self.stderr,
-            "status": self.status,
-        })
-    }
-}
-
-/// Per-process runtime handed to every plugin callback. Holds identity, the
-/// sandboxed data directory, and the [`Emitter`]. Cheap to clone (an `Arc`
-/// internally would be overkill — every field is small or already shared).
-#[derive(Clone)]
-pub struct Context {
-    pub plugin_id: String,
-    pub version: String,
-    pub data_dir: PathBuf,
-    pub emit: Emitter,
-    /// User-supplied settings from the `[plugin.<id>]` table of
-    /// `~/.config/flash`, delivered as a JSON object (empty when unset).
-    /// Read with [`Context::config_str`] / [`Context::config_value`].
-    pub config: Value,
-    /// In-flight plugin→host calls awaiting a response; see [`HostPending`].
-    host_pending: HostPending,
-    /// Monotonic id source for plugin→host calls.
-    host_counter: Arc<AtomicU64>,
-}
-
-impl Context {
-    pub fn home_dir(&self) -> PathBuf {
-        self.data_dir.join("home")
-    }
-
-    /// Read a string setting from the plugin's `[plugin.<id>]` config,
-    /// defaulting to `""` when absent or not a string.
-    pub fn config_str(&self, key: &str) -> String {
-        self.config
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    }
-
-    /// Read an arbitrary setting from the plugin's `[plugin.<id>]` config.
-    pub fn config_value(&self, key: &str) -> Option<&Value> {
-        self.config.get(key)
-    }
-    pub fn config_dir(&self) -> PathBuf {
-        self.data_dir.join("config")
-    }
-    pub fn cache_dir(&self) -> PathBuf {
-        self.data_dir.join("cache")
-    }
-    pub fn share_dir(&self) -> PathBuf {
-        self.data_dir.join("share")
-    }
-    pub fn bin_dir(&self) -> PathBuf {
-        self.data_dir.join("bin")
-    }
-
-    /// Call a host RPC method and await its JSON result. This is the channel
-    /// plugins use to reach native capabilities the core owns — most notably
-    /// the Accessibility (AX) broker, which holds the single TCC grant and
-    /// walks/acts on AX trees on the plugin's behalf. The plugin assigns the
-    /// request id; the serve loop correlates the host's response back to this
-    /// call. Returns a JSON error object if the host doesn't answer in time.
-    pub async fn call_host(&self, method: &str, params: Value) -> Value {
-        self.call_host_timeout(method, params, Duration::from_secs(5))
-            .await
-    }
-
-    /// Like [`call_host`](Context::call_host) but with an explicit deadline,
-    /// for host capabilities that may legitimately run longer than the default
-    /// (e.g. a network-backed CLI behind `cli.run`).
-    pub async fn call_host_timeout(&self, method: &str, params: Value, timeout: Duration) -> Value {
-        let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
-        let (tx, rx) = oneshot::channel();
-        if let Ok(mut pending) = self.host_pending.lock() {
-            pending.insert(id, tx);
-        }
-        self.emit.send(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        }));
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(value)) => value,
-            _ => {
-                if let Ok(mut pending) = self.host_pending.lock() {
-                    pending.remove(&id);
-                }
-                json!({ "ok": false, "error": "host call timed out" })
-            }
-        }
-    }
-
-    /// Walk a subtree of an app's Accessibility tree via the core's AX broker
-    /// and return a flat list of [`AxNode`]s. The broker holds the TCC grant
-    /// and the real `AXUIElement` handles; the plugin receives opaque integer
-    /// handles plus the requested `collect` attributes, applies its own logic
-    /// (e.g. "which of these is a browser tab"), then acts on a node by handle
-    /// via [`ax_perform`](Context::ax_perform) / [`ax_set`](Context::ax_set).
-    ///
-    /// - `pid`: target application.
-    /// - `roots`: `"windows"` to start from the app's windows (the usual case),
-    ///   or `"app"` to start from the application element itself.
-    /// - `follow`: child attribute names to descend through; pass an empty
-    ///   slice to use the broker's default (children + navigation order).
-    /// - `collect`: attribute names to read for every visited node.
-    /// - `max_nodes`: visit budget — the walk stops once this many nodes are
-    ///   collected.
-    /// - `geometry`: when true, each node also carries [`AxNode::frame`], an
-    ///   `[x, y, w, h]` rect in NSScreen space ready to drop into a
-    ///   `JumpTarget.frame`. Costs nothing extra on the wire when off.
-    pub async fn ax_snapshot(
-        &self,
-        pid: i64,
-        roots: &str,
-        follow: &[&str],
-        collect: &[&str],
-        max_nodes: u64,
-        geometry: bool,
-    ) -> Vec<AxNode> {
-        let result = self
-            .call_host(
-                "ax.snapshot",
-                json!({
-                    "pid": pid,
-                    "roots": roots,
-                    "follow": follow,
-                    "collect": collect,
-                    "max_nodes": max_nodes,
-                    "geometry": geometry,
-                }),
-            )
-            .await;
-        result
-            .get("nodes")
-            .and_then(Value::as_array)
-            .map(|nodes| nodes.iter().filter_map(AxNode::from_value).collect())
-            .unwrap_or_default()
-    }
-
-    /// Perform an AX action (e.g. `AXPress`) on a handle from a prior
-    /// [`ax_snapshot`](Context::ax_snapshot). Returns whether the action
-    /// succeeded; a stale handle (snapshot superseded) reports `false`.
-    pub async fn ax_perform(&self, handle: u64, action: &str) -> bool {
-        host_ok(
-            self.call_host("ax.perform", json!({ "handle": handle, "action": action }))
-                .await,
-        )
-    }
-
-    /// Set an AX attribute (e.g. `AXSelected = true`) on a snapshot handle.
-    /// `value` may be a bool or a string. Returns whether the set succeeded.
-    pub async fn ax_set(&self, handle: u64, attribute: &str, value: Value) -> bool {
-        host_ok(
-            self.call_host(
-                "ax.set",
-                json!({ "handle": handle, "attribute": attribute, "value": value }),
-            )
-            .await,
-        )
-    }
-
-    /// Bring an application's windows to the front. Used before acting on a
-    /// snapshot handle so the AX action lands on the now-frontmost app.
-    pub async fn ax_activate(&self, pid: i64) -> bool {
-        host_ok(self.call_host("ax.activate", json!({ "pid": pid })).await)
-    }
-
-    /// Run an AppleScript snippet via `osascript -e`. Convenience over
-    /// [`run_cli`](Context::run_cli) for the many plugins that shell out to
-    /// macOS apps.
-    pub async fn run_osascript(&self, script: &str, timeout: Duration) -> CliResult {
-        self.run_cli(
-            &[
-                "/usr/bin/osascript".to_string(),
-                "-e".to_string(),
-                script.to_string(),
-            ],
-            timeout,
-        )
-        .await
-    }
-
-    /// Emit a `snapshot.updated` notification carrying `candidates` (and no
-    /// jump targets) for `source_id`. Wraps the boilerplate every
-    /// candidate-emitting plugin repeats.
-    pub fn emit_snapshot(&self, source_id: &str, candidates: Vec<Value>) {
-        self.emit.notify(
-            "snapshot.updated",
-            json!({ "targets": [], "candidates": candidates, "source_id": source_id }),
-        );
-    }
-
-    pub fn log(&self, level: &str, message: &str) {
-        self.emit.log(level, message, BTreeMap::new());
-    }
-
-    pub fn log_fields(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
-        self.emit.log(level, message, fields);
-    }
-
-    fn prepare_dirs(&self) {
-        for dir in [
-            self.home_dir(),
-            self.config_dir(),
-            self.cache_dir(),
-            self.share_dir(),
-            self.bin_dir(),
-        ] {
-            let _ = std::fs::create_dir_all(dir);
-        }
-    }
-
-    /// Run an external command through the core's `cli.run` capability. The
-    /// core — not the plugin — spawns the process inside this plugin's sandbox
-    /// (`HOME` and the XDG base dirs redirected under its data dir, `bin/`
-    /// prepended to `PATH`), bounds it by `timeout` (status 124 on overrun),
-    /// and emits one structured log line per call. The template itself never
-    /// touches the process API: all native execution lives in the core.
-    pub async fn run_cli(&self, argv: &[String], timeout: Duration) -> CliResult {
-        self.run_cli_inner(argv, timeout, false).await
-    }
-
-    /// Same as [`run_cli`](Context::run_cli) but asks the core to skip the
-    /// per-call log line. Use for commands run on a tight loop where a log
-    /// line per call would balloon the log file. The caller owns surfacing
-    /// failures.
-    pub async fn run_cli_quiet(&self, argv: &[String], timeout: Duration) -> CliResult {
-        self.run_cli_inner(argv, timeout, true).await
-    }
-
-    async fn run_cli_inner(&self, argv: &[String], timeout: Duration, quiet: bool) -> CliResult {
-        // Allow the host a little longer than the command's own deadline so the
-        // core (which enforces the real timeout and kills the child) is what
-        // reports a 124, not our outer `call_host` watchdog.
-        let result = self
-            .call_host_timeout(
-                "cli.run",
-                json!({
-                    "argv": argv,
-                    "timeout_ms": timeout.as_millis() as u64,
-                    "quiet": quiet,
-                }),
-                timeout + Duration::from_secs(2),
-            )
-            .await;
-        CliResult {
-            ok: result.get("ok").and_then(Value::as_bool).unwrap_or(false),
-            stdout: result
-                .get("stdout")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-            stderr: result
-                .get("stderr")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| result.get("error").and_then(Value::as_str).unwrap_or(""))
-                .to_string(),
-            status: result.get("status").and_then(Value::as_i64).unwrap_or(-1) as i32,
+    /// Map into a [`CommandResponse`]: success carries non-empty stdout as a
+    /// toast; failure carries stderr as the error.
+    pub fn into_command(self) -> CommandResponse {
+        let stdout = (!self.stdout.is_empty()).then_some(self.stdout);
+        let error = (!self.ok && !self.stderr.is_empty()).then_some(self.stderr);
+        CommandResponse {
+            ok: self.ok,
+            target_pid: None,
+            stdout,
+            error,
         }
     }
 }
@@ -393,28 +292,654 @@ impl AxNode {
     }
 }
 
+/// A value to write to an AX attribute via [`Context::ax_set`]. Construct from
+/// a `bool` or a string with `.into()`.
+#[derive(Clone, Debug)]
+pub enum AxValue {
+    Bool(bool),
+    Str(String),
+}
+
+impl From<bool> for AxValue {
+    fn from(value: bool) -> Self {
+        AxValue::Bool(value)
+    }
+}
+
+impl From<&str> for AxValue {
+    fn from(value: &str) -> Self {
+        AxValue::Str(value.to_string())
+    }
+}
+
+impl From<String> for AxValue {
+    fn from(value: String) -> Self {
+        AxValue::Str(value)
+    }
+}
+
+impl AxValue {
+    fn to_value(&self) -> Value {
+        match self {
+            AxValue::Bool(b) => json!(b),
+            AxValue::Str(s) => json!(s),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Inbound requests / events
+// ---------------------------------------------------------------------------
+
+/// A host event delivered to [`Plugin::on_event`]. Match on
+/// [`name`](Event::name) (`focus.changed`, `clipboard.changed`, …); the
+/// remaining fields are the event payload, present when the event carries them.
+#[derive(Clone, Debug, Default)]
+pub struct Event {
+    pub name: String,
+    pub bundle_id: Option<String>,
+    pub pid: Option<i64>,
+    pub front_window_frame: Option<Frame>,
+    pub text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct EventWire {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    payload: EventPayload,
+}
+
+#[derive(Default, Deserialize)]
+struct EventPayload {
+    #[serde(default)]
+    bundle_id: Option<String>,
+    #[serde(default)]
+    pid: Option<i64>,
+    #[serde(default)]
+    front_window_frame: Option<Frame>,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+impl Event {
+    fn from_params(params: Value) -> Self {
+        match serde_json::from_value::<EventWire>(params) {
+            Ok(wire) => Event {
+                name: wire.name,
+                bundle_id: wire.payload.bundle_id,
+                pid: wire.payload.pid,
+                front_window_frame: wire.payload.front_window_frame,
+                text: wire.payload.text,
+            },
+            Err(_) => Event::default(),
+        }
+    }
+}
+
+/// A `command.invoke` request: the matched `:`-command, its subcommand, the
+/// trailing args, and the raw URL. Manifest `_`-prefixed metadata is in
+/// [`meta`](CommandRequest::meta).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CommandRequest {
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub subcommand: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub raw: String,
+    #[serde(flatten, default)]
+    pub meta: BTreeMap<String, String>,
+}
+
+impl CommandRequest {
+    /// Read a manifest metadata field (e.g. `_url`), forwarded verbatim by the
+    /// host from the matched manifest entry.
+    pub fn meta(&self, key: &str) -> Option<&str> {
+        self.meta.get(key).map(String::as_str)
+    }
+
+    /// The args joined by a single space, trimmed.
+    pub fn query(&self) -> String {
+        self.args.join(" ").trim().to_string()
+    }
+}
+
+/// A `discoverTargets` request, carrying the focused app's identity and front
+/// window geometry.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct DiscoverRequest {
+    #[serde(default)]
+    pub bundle_id: Option<String>,
+    #[serde(default)]
+    pub pid: Option<i64>,
+    #[serde(default)]
+    pub front_window_frame: Option<Frame>,
+}
+
+/// The focused-app context attached to a [`SourceActionRequest`].
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ActionContext {
+    #[serde(default)]
+    pub bundle_id: Option<String>,
+    #[serde(default)]
+    pub pid: Option<i64>,
+    #[serde(default)]
+    pub front_window_frame: Option<Frame>,
+}
+
+/// A `sourceAction` request (e.g. `tab_select`). `index` is set for the
+/// numbered-tab actions.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SourceActionRequest {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub context: ActionContext,
+    #[serde(default)]
+    pub index: Option<i64>,
+}
+
+/// An `activateTarget` notification: act on the [`JumpTarget`] the plugin
+/// emitted earlier (matched by `target_id`) with the given click `action`.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ActivateRequest {
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub target_id: String,
+}
+
+/// A non-lifecycle request dispatched to [`Plugin::handle`].
+#[derive(Clone, Debug)]
+pub enum Request {
+    Command(CommandRequest),
+    DiscoverTargets(DiscoverRequest),
+    ResolveCandidate(Candidate),
+    SourceAction(SourceActionRequest),
+    ActivateTarget(ActivateRequest),
+    /// Any other method name the host sent. Return a
+    /// [`CommandResponse::error`] for these.
+    Unknown {
+        method: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Outbound responses
+// ---------------------------------------------------------------------------
+
+/// Response to a `command.invoke`.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CommandResponse {
+    pub ok: bool,
+    /// An app to raise once the command succeeds (e.g. the terminal hosting a
+    /// switched-to tmux session).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_pid: Option<i64>,
+    /// Text for Flash to surface as a toast.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl CommandResponse {
+    pub fn ok() -> Self {
+        Self {
+            ok: true,
+            ..Self::default()
+        }
+    }
+
+    /// A successful command whose `message` Flash shows as a toast.
+    pub fn toast(message: impl Into<String>) -> Self {
+        Self {
+            ok: true,
+            stdout: Some(message.into()),
+            ..Self::default()
+        }
+    }
+
+    /// A failed command. The `message` is logged; the host shows no toast.
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(message.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn target_pid(mut self, pid: i64) -> Self {
+        self.target_pid = Some(pid);
+        self
+    }
+}
+
+/// Response to a `discoverTargets`. `targets` is always sent; `candidates` is
+/// omitted to preserve the host's previously emitted candidates (send
+/// `Some(vec)` — even empty — to replace them).
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct DiscoverResponse {
+    pub targets: Vec<JumpTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidates: Option<Vec<Candidate>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pid: Option<i64>,
+}
+
+impl DiscoverResponse {
+    pub fn targets(targets: Vec<JumpTarget>) -> Self {
+        Self {
+            targets,
+            ..Self::default()
+        }
+    }
+
+    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
+        self.source_id = Some(source_id.into());
+        self
+    }
+
+    pub fn context_pid(mut self, pid: i64) -> Self {
+        self.context_pid = Some(pid);
+        self
+    }
+}
+
+/// Response to a `resolveCandidate`.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ResolveResponse {
+    pub did_resolve: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_pid: Option<i64>,
+}
+
+impl ResolveResponse {
+    pub fn unresolved() -> Self {
+        Self::default()
+    }
+
+    pub fn resolved(target_pid: Option<i64>) -> Self {
+        Self {
+            did_resolve: true,
+            target_pid,
+        }
+    }
+}
+
+/// Response to a `sourceAction`.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct SourceActionResponse {
+    pub did_perform: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_pid: Option<i64>,
+}
+
+impl SourceActionResponse {
+    pub fn unhandled() -> Self {
+        Self::default()
+    }
+
+    pub fn performed(target_pid: Option<i64>) -> Self {
+        Self {
+            did_perform: true,
+            target_pid,
+        }
+    }
+}
+
+/// What [`Plugin::handle`] returns. Build one from the matching response type
+/// (or a [`CliResult`]) with `.into()`; return [`Response::None`] for
+/// [`Request::ActivateTarget`], which expects no reply.
+#[derive(Clone, Debug)]
+pub enum Response {
+    Command(CommandResponse),
+    Discover(DiscoverResponse),
+    Resolve(ResolveResponse),
+    SourceAction(SourceActionResponse),
+    None,
+}
+
+impl Response {
+    fn to_value(&self) -> Value {
+        match self {
+            Response::Command(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+            Response::Discover(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+            Response::Resolve(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+            Response::SourceAction(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+            Response::None => Value::Null,
+        }
+    }
+}
+
+impl From<CommandResponse> for Response {
+    fn from(value: CommandResponse) -> Self {
+        Response::Command(value)
+    }
+}
+
+impl From<DiscoverResponse> for Response {
+    fn from(value: DiscoverResponse) -> Self {
+        Response::Discover(value)
+    }
+}
+
+impl From<ResolveResponse> for Response {
+    fn from(value: ResolveResponse) -> Self {
+        Response::Resolve(value)
+    }
+}
+
+impl From<SourceActionResponse> for Response {
+    fn from(value: SourceActionResponse) -> Self {
+        Response::SourceAction(value)
+    }
+}
+
+impl From<CliResult> for Response {
+    fn from(value: CliResult) -> Self {
+        Response::Command(value.into_command())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Emitter / Context
+// ---------------------------------------------------------------------------
+
+/// Serializes outgoing protocol frames onto a single stdout writer task so
+/// frames emitted from concurrent handlers never interleave. Cheap to clone.
+#[derive(Clone)]
+struct Emitter {
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+}
+
+impl Emitter {
+    fn send(&self, value: Value) {
+        if let Ok(payload) = rmp_serde::to_vec(&value) {
+            let _ = self.tx.send(payload);
+        }
+    }
+
+    fn notify(&self, method: &str, params: Value) {
+        self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+    }
+
+    fn respond(&self, id: Value, result: Value) {
+        if id.is_null() {
+            return;
+        }
+        self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+    }
+
+    fn log(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
+        self.notify(
+            "flash.log",
+            json!({ "level": level, "message": message, "fields": fields }),
+        );
+    }
+}
+
+/// Per-process runtime handed to every plugin callback. Holds identity, the
+/// sandboxed data directory, and the wire emitter. Cheap to clone.
+#[derive(Clone)]
+pub struct Context {
+    pub plugin_id: String,
+    pub version: String,
+    pub data_dir: PathBuf,
+    emit: Emitter,
+    /// User-supplied settings from the `[plugin.<id>]` table of
+    /// `~/.config/flash`, delivered as a JSON object (empty when unset).
+    config: Value,
+    host_pending: HostPending,
+    host_counter: Arc<AtomicU64>,
+}
+
+impl Context {
+    pub fn home_dir(&self) -> PathBuf {
+        self.data_dir.join("home")
+    }
+    pub fn config_dir(&self) -> PathBuf {
+        self.data_dir.join("config")
+    }
+    pub fn cache_dir(&self) -> PathBuf {
+        self.data_dir.join("cache")
+    }
+    pub fn share_dir(&self) -> PathBuf {
+        self.data_dir.join("share")
+    }
+    pub fn bin_dir(&self) -> PathBuf {
+        self.data_dir.join("bin")
+    }
+
+    /// Read a string setting from the plugin's `[plugin.<id>]` config,
+    /// defaulting to `""` when absent or not a string.
+    pub fn config_str(&self, key: &str) -> String {
+        self.config
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// Decode a setting from the plugin's `[plugin.<id>]` config as `T`.
+    pub fn config_json<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
+        serde_json::from_value(self.config.get(key)?.clone()).ok()
+    }
+
+    /// Read typed JSON state previously written with
+    /// [`write_state`](Context::write_state) under `share_dir/<name>`.
+    pub fn read_state<T: DeserializeOwned>(&self, name: &str) -> Option<T> {
+        let raw = std::fs::read_to_string(self.share_dir().join(name)).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    /// Persist `value` as JSON to `share_dir/<name>`. Returns whether it wrote.
+    pub fn write_state<T: Serialize>(&self, name: &str, value: &T) -> bool {
+        match serde_json::to_string(value) {
+            Ok(raw) => std::fs::write(self.share_dir().join(name), raw).is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    /// Call a host RPC method and await its JSON result. This is the channel
+    /// plugins use to reach native capabilities the core owns — most notably
+    /// the Accessibility (AX) broker, which holds the single TCC grant. Returns
+    /// a JSON error object if the host doesn't answer in time.
+    async fn call_host(&self, method: &str, params: Value) -> Value {
+        self.call_host_timeout(method, params, Duration::from_secs(5))
+            .await
+    }
+
+    async fn call_host_timeout(&self, method: &str, params: Value, timeout: Duration) -> Value {
+        let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let (tx, rx) = oneshot::channel();
+        if let Ok(mut pending) = self.host_pending.lock() {
+            pending.insert(id, tx);
+        }
+        self.emit.send(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        }));
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(value)) => value,
+            _ => {
+                if let Ok(mut pending) = self.host_pending.lock() {
+                    pending.remove(&id);
+                }
+                json!({ "ok": false, "error": "host call timed out" })
+            }
+        }
+    }
+
+    /// Walk a subtree of an app's Accessibility tree via the core's AX broker
+    /// and return a flat list of [`AxNode`]s.
+    ///
+    /// - `pid`: target application.
+    /// - `roots`: `"windows"` to start from the app's windows (the usual case),
+    ///   or `"app"` to start from the application element itself.
+    /// - `follow`: child attribute names to descend through; pass an empty
+    ///   slice to use the broker's default (children + navigation order).
+    /// - `collect`: attribute names to read for every visited node.
+    /// - `max_nodes`: visit budget — the walk stops once this many nodes are
+    ///   collected.
+    /// - `geometry`: when true, each node also carries [`AxNode::frame`].
+    pub async fn ax_snapshot(
+        &self,
+        pid: i64,
+        roots: &str,
+        follow: &[&str],
+        collect: &[&str],
+        max_nodes: u64,
+        geometry: bool,
+    ) -> Vec<AxNode> {
+        let result = self
+            .call_host(
+                "ax.snapshot",
+                json!({
+                    "pid": pid,
+                    "roots": roots,
+                    "follow": follow,
+                    "collect": collect,
+                    "max_nodes": max_nodes,
+                    "geometry": geometry,
+                }),
+            )
+            .await;
+        result
+            .get("nodes")
+            .and_then(Value::as_array)
+            .map(|nodes| nodes.iter().filter_map(AxNode::from_value).collect())
+            .unwrap_or_default()
+    }
+
+    /// Perform an AX action (e.g. `AXPress`) on a snapshot handle. A stale
+    /// handle (snapshot superseded) reports `false`.
+    pub async fn ax_perform(&self, handle: u64, action: &str) -> bool {
+        host_ok(
+            self.call_host("ax.perform", json!({ "handle": handle, "action": action }))
+                .await,
+        )
+    }
+
+    /// Set an AX attribute (e.g. `AXSelected = true`) on a snapshot handle.
+    pub async fn ax_set(&self, handle: u64, attribute: &str, value: impl Into<AxValue>) -> bool {
+        let value = value.into();
+        host_ok(
+            self.call_host(
+                "ax.set",
+                json!({ "handle": handle, "attribute": attribute, "value": value.to_value() }),
+            )
+            .await,
+        )
+    }
+
+    /// Bring an application's windows to the front.
+    pub async fn ax_activate(&self, pid: i64) -> bool {
+        host_ok(self.call_host("ax.activate", json!({ "pid": pid })).await)
+    }
+
+    /// Run an AppleScript snippet via `osascript -e` (through the sandboxed
+    /// [`run_cli`](Context::run_cli)).
+    pub async fn run_osascript(&self, script: &str, timeout: Duration) -> CliResult {
+        self.run_cli(
+            &[
+                "/usr/bin/osascript".to_string(),
+                "-e".to_string(),
+                script.to_string(),
+            ],
+            timeout,
+        )
+        .await
+    }
+
+    /// Emit a `snapshot.updated` notification carrying `candidates` (and no
+    /// jump targets) for `source_id`.
+    pub fn emit_snapshot(&self, source_id: &str, candidates: Vec<Candidate>) {
+        let candidates: Vec<Value> = candidates
+            .iter()
+            .filter_map(|c| serde_json::to_value(c).ok())
+            .collect();
+        self.emit.notify(
+            "snapshot.updated",
+            json!({ "targets": [], "candidates": candidates, "source_id": source_id }),
+        );
+    }
+
+    pub fn log(&self, level: &str, message: &str) {
+        self.emit.log(level, message, BTreeMap::new());
+    }
+
+    pub fn log_fields(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
+        self.emit.log(level, message, fields);
+    }
+
+    fn prepare_dirs(&self) {
+        for dir in [
+            self.home_dir(),
+            self.config_dir(),
+            self.cache_dir(),
+            self.share_dir(),
+            self.bin_dir(),
+        ] {
+            let _ = std::fs::create_dir_all(dir);
+        }
+    }
+
+    /// Run an external command through the core's `cli.run` capability. The
+    /// core — not the plugin — spawns the process inside this plugin's sandbox
+    /// (`HOME` and the XDG base dirs redirected under its data dir, `bin/`
+    /// prepended to `PATH`), bounds it by `timeout` (status 124 on overrun),
+    /// and emits one structured log line per call.
+    pub async fn run_cli(&self, argv: &[String], timeout: Duration) -> CliResult {
+        self.run_cli_inner(argv, timeout, false).await
+    }
+
+    /// Same as [`run_cli`](Context::run_cli) but asks the core to skip the
+    /// per-call log line.
+    pub async fn run_cli_quiet(&self, argv: &[String], timeout: Duration) -> CliResult {
+        self.run_cli_inner(argv, timeout, true).await
+    }
+
+    async fn run_cli_inner(&self, argv: &[String], timeout: Duration, quiet: bool) -> CliResult {
+        let result = self
+            .call_host_timeout(
+                "cli.run",
+                json!({
+                    "argv": argv,
+                    "timeout_ms": timeout.as_millis() as u64,
+                    "quiet": quiet,
+                }),
+                timeout + Duration::from_secs(2),
+            )
+            .await;
+        CliResult {
+            ok: result.get("ok").and_then(Value::as_bool).unwrap_or(false),
+            stdout: result
+                .get("stdout")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            stderr: result
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| result.get("error").and_then(Value::as_str).unwrap_or(""))
+                .to_string(),
+            status: result.get("status").and_then(Value::as_i64).unwrap_or(-1) as i32,
+        }
+    }
+}
+
 /// Read the `ok` flag from a host RPC response, defaulting to `false`.
 fn host_ok(response: Value) -> bool {
     response.get("ok").and_then(Value::as_bool).unwrap_or(false)
-}
-
-/// Read a JSON object's `key` as a string slice, defaulting to `""`.
-pub fn str_field<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-/// Read a JSON object's `key` as a `Vec<String>` (non-strings skipped).
-pub fn string_list(value: &Value, key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Quote a string as an AppleScript literal, escaping backslashes and double
@@ -422,17 +947,6 @@ pub fn string_list(value: &Value, key: &str) -> Vec<String> {
 pub fn applescript_quote(value: &str) -> String {
     let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
-}
-
-/// Parse a candidate's `payload` field, which conventionally carries either a
-/// stringified JSON object or an inline object. Returns `{}` when absent or
-/// unparseable.
-pub fn parse_payload(candidate: &Value) -> Value {
-    match candidate.get("payload") {
-        Some(Value::String(raw)) => serde_json::from_str(raw).unwrap_or_else(|_| json!({})),
-        Some(value @ Value::Object(_)) => value.clone(),
-        _ => json!({}),
-    }
 }
 
 /// Truncate a string to a fixed character budget, appending an ellipsis when
@@ -447,40 +961,73 @@ pub fn shorten(value: &str) -> String {
     format!("{head}...")
 }
 
-/// A Flash plugin. Implement [`handle`](Plugin::handle) for request methods
-/// the plugin understands; override the lifecycle hooks as needed. Every
-/// method returns a `Send` future so the runtime can drive handlers
-/// concurrently without blocking the heartbeat/serve loop.
+/// Run a command in the plugin's *own* process environment (NOT the sandbox),
+/// bounded by `timeout`. Use this only when a plugin genuinely needs the user's
+/// real environment — e.g. the tmux CLI talking to the user's server socket.
+/// Prefer [`Context::run_cli`] otherwise.
+pub async fn run_local(argv: &[String], timeout: Duration) -> CliResult {
+    let Some((program, args)) = argv.split_first() else {
+        return CliResult {
+            ok: false,
+            stderr: "empty argv".to_string(),
+            status: -1,
+            ..CliResult::default()
+        };
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => CliResult {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            status: output.status.code().unwrap_or(-1),
+        },
+        Ok(Err(err)) => CliResult {
+            ok: false,
+            stderr: err.to_string(),
+            status: -1,
+            ..CliResult::default()
+        },
+        Err(_) => CliResult {
+            ok: false,
+            stderr: "timed out".to_string(),
+            status: 124,
+            ..CliResult::default()
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin trait + runtime
+// ---------------------------------------------------------------------------
+
+/// A Flash plugin. Implement [`handle`](Plugin::handle) for the request methods
+/// the plugin understands; override the lifecycle hooks as needed. Every method
+/// returns a `Send` future so the runtime can drive handlers concurrently
+/// without blocking the heartbeat/serve loop.
 pub trait Plugin: Send + Sync + 'static {
-    /// Called once after `initialize`, on a background task. Use it to seed
-    /// an initial snapshot or kick off provisioning. Blocking here never
-    /// stalls heartbeats.
+    /// Called once after `initialize`, on a background task. Use it to seed an
+    /// initial snapshot or kick off provisioning.
     fn on_start(&self, ctx: Context) -> impl Future<Output = ()> + Send {
         let _ = ctx;
         async {}
     }
 
     /// Host event (`focus.changed`, `apps.launched`, `config.changed`, …).
-    fn on_event(
-        &self,
-        ctx: Context,
-        name: String,
-        payload: Value,
-    ) -> impl Future<Output = ()> + Send {
-        let _ = (ctx, name, payload);
+    fn on_event(&self, ctx: Context, event: Event) -> impl Future<Output = ()> + Send {
+        let _ = (ctx, event);
         async {}
     }
 
-    /// Dispatch a non-lifecycle request (`discoverTargets`, `sourceAction`,
-    /// `resolveCandidate`, `activateTarget`, `command.invoke`, …) and return
-    /// the JSON result. For notification-style methods the returned value is
-    /// ignored.
-    fn handle(
-        &self,
-        ctx: Context,
-        method: String,
-        params: Value,
-    ) -> impl Future<Output = Value> + Send;
+    /// Dispatch a non-lifecycle [`Request`] and return a [`Response`]. For
+    /// [`Request::ActivateTarget`] (a notification) the returned value is
+    /// ignored — return [`Response::None`].
+    fn handle(&self, ctx: Context, request: Request) -> impl Future<Output = Response> + Send;
 
     /// Called on `shutdown` just before the process exits.
     fn on_shutdown(&self, ctx: Context, reason: String) -> impl Future<Output = ()> + Send {
@@ -530,12 +1077,19 @@ pub fn run<P: Plugin>(plugin: P) {
     runtime.block_on(serve(plugin));
 }
 
+/// Decode `params` into a typed request payload, falling back to its default
+/// when the shape doesn't match (so a malformed frame degrades to an empty
+/// request rather than a panic).
+fn decode<T: DeserializeOwned + Default>(params: Value) -> T {
+    serde_json::from_value(params).unwrap_or_default()
+}
+
 async fn serve<P: Plugin>(plugin: P) {
     let plugin = Arc::new(plugin);
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let writer = tokio::spawn(async move {
-        // 64 KiB buffer coalesces the 4-byte header and payload into one
-        // write syscall per frame; we flush every frame to keep latency low.
+        // 64 KiB buffer coalesces the 4-byte header and payload into one write
+        // syscall per frame; we flush every frame to keep latency low.
         let mut out = BufWriter::with_capacity(64 * 1024, tokio::io::stdout());
         while let Some(payload) = rx.recv().await {
             let len = (payload.len() as u32).to_be_bytes();
@@ -622,41 +1176,48 @@ async fn serve<P: Plugin>(plugin: P) {
                 break;
             }
             "event" => {
-                let name = params
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let payload = params.get("payload").cloned().unwrap_or_else(|| json!({}));
+                let event = Event::from_params(params);
                 ctx.emit.respond(id, json!({ "ok": true }));
                 let plugin = plugin.clone();
                 let ctx = ctx.clone();
-                tokio::spawn(async move { plugin.on_event(ctx, name, payload).await });
+                tokio::spawn(async move { plugin.on_event(ctx, event).await });
             }
             "activateTarget" => {
                 // Notification: dispatch through `handle`, never respond.
+                let request = Request::ActivateTarget(decode(params));
                 let plugin = plugin.clone();
                 let ctx = ctx.clone();
                 tokio::spawn(async move {
-                    plugin
-                        .handle(ctx, "activateTarget".to_string(), params)
-                        .await;
+                    plugin.handle(ctx, request).await;
                 });
             }
-            _ => {
+            other => {
+                let request = match other {
+                    "command.invoke" => Request::Command(decode(params)),
+                    "discoverTargets" => Request::DiscoverTargets(decode(params)),
+                    "resolveCandidate" => Request::ResolveCandidate(decode(
+                        params
+                            .get("candidate")
+                            .cloned()
+                            .unwrap_or_else(|| json!({})),
+                    )),
+                    "sourceAction" => Request::SourceAction(decode(params)),
+                    _ => Request::Unknown {
+                        method: other.to_string(),
+                    },
+                };
                 let plugin = plugin.clone();
                 let ctx = ctx.clone();
-                let method = method.clone();
                 tokio::spawn(async move {
-                    let result = plugin.handle(ctx.clone(), method, params).await;
-                    ctx.emit.respond(id, result);
+                    let response = plugin.handle(ctx.clone(), request).await;
+                    ctx.emit.respond(id, response.to_value());
                 });
             }
         }
     }
 
-    // Drop the last emitter handle so the writer task can drain and flush
-    // any queued frames (notably the shutdown response) before we exit.
+    // Drop the last emitter handle so the writer task can drain and flush any
+    // queued frames (notably the shutdown response) before we exit.
     drop(ctx);
     let _ = writer.await;
 }

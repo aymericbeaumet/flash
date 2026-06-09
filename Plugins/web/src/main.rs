@@ -1,31 +1,29 @@
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, str_field, string_list, Context, Plugin};
+use flash_plugin::{run, CommandResponse, Context, Plugin, Request, Response};
 
 struct Web;
 
 impl Plugin for Web {
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        if method != "command.invoke" {
-            return json!({ "ok": false, "error": format!("unknown method: {method}") });
-        }
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        let Request::Command(cmd) = request else {
+            return CommandResponse::error("unsupported request").into();
+        };
         // The URL template lives in the manifest as the `_url` field of the
         // matched subcommand, forwarded here by the host. The plugin holds no
         // engine table of its own — add engines by editing manifest.json.
-        let template = str_field(&params, "_url");
+        let template = cmd.meta("_url").unwrap_or("");
         if template.is_empty() {
-            let engine = str_field(&params, "subcommand");
-            return json!({ "ok": false, "error": format!("unknown engine: {engine}") });
+            return CommandResponse::error(format!("unknown engine: {}", cmd.subcommand)).into();
         }
-        let query = string_list(&params, "args").join(" ");
-        if query.trim().is_empty() {
-            return json!({ "ok": false, "error": "empty query" });
+        let query = cmd.query();
+        if query.is_empty() {
+            return CommandResponse::error("empty query").into();
         }
-        let url = template.replace("%s", &percent_encode(query.trim()));
+        let url = template.replace("%s", &percent_encode(&query));
         ctx.run_cli(&["/usr/bin/open".to_string(), url], Duration::from_secs(10))
             .await
-            .value()
+            .into()
     }
 }
 

@@ -10,17 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 flash-plugin = { path = "../_flash_plugin_rust" }
-serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 regex = "1"
-tokio = { version = "1", default-features = false, features = [
-  "rt-multi-thread",
-  "macros",
-  "io-std",
-  "io-util",
-  "process",
-  "time",
-  "sync",
-] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
   "std",

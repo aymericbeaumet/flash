@@ -1,25 +1,23 @@
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{applescript_quote, run, string_list, Context, Plugin};
+use flash_plugin::{applescript_quote, run, CommandResponse, Context, Plugin, Request, Response};
 
 struct Calculator;
 
 impl Plugin for Calculator {
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        if method != "command.invoke" {
-            return json!({ "ok": false, "error": format!("unknown method: {method}") });
-        }
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        let Request::Command(cmd) = request else {
+            return CommandResponse::error("unsupported request").into();
+        };
         // Registered as a wildcard command, so the whole remainder arrives as
         // args (`:calc 2 + 2` and `:calc 2+2` both work).
-        let expr = string_list(&params, "args").join(" ");
-        let expr = expr.trim();
+        let expr = cmd.query();
         if expr.is_empty() {
-            return json!({ "ok": false, "error": "empty expression" });
+            return CommandResponse::error("empty expression").into();
         }
-        let value = match meval::eval_str(expr) {
+        let value = match meval::eval_str(&expr) {
             Ok(v) => v,
-            Err(err) => return json!({ "ok": false, "error": format!("cannot evaluate: {err}") }),
+            Err(err) => return CommandResponse::error(format!("cannot evaluate: {err}")).into(),
         };
         let result = format_num(value);
 
@@ -28,7 +26,7 @@ impl Plugin for Calculator {
         let script = format!("set the clipboard to {}", applescript_quote(&result));
         ctx.run_osascript(&script, Duration::from_secs(10)).await;
 
-        json!({ "ok": true, "stdout": format!("{expr} = {result}") })
+        CommandResponse::toast(format!("{expr} = {result}")).into()
     }
 }
 

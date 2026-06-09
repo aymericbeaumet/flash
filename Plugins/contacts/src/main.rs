@@ -1,7 +1,10 @@
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{applescript_quote, parse_payload, run, str_field, Context, Plugin};
+use flash_plugin::{
+    applescript_quote, run, Candidate, CommandRequest, CommandResponse, Context, Event, Plugin,
+    Request, ResolveResponse, Response,
+};
+use serde::{Deserialize, Serialize};
 
 const SOURCE_ID: &str = "plugin.contacts";
 
@@ -43,6 +46,13 @@ end tell
     )
 }
 
+/// Round-tripped through the host so resolution can re-select the right person
+/// even after the candidate list refreshes.
+#[derive(Serialize, Deserialize)]
+struct ContactPayload {
+    contact: String,
+}
+
 struct Contacts;
 
 impl Plugin for Contacts {
@@ -50,20 +60,22 @@ impl Plugin for Contacts {
         emit_candidates(&ctx).await;
     }
 
-    async fn on_event(&self, ctx: Context, name: String, _payload: Value) {
+    async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
-            name.as_str(),
+            event.name.as_str(),
             "flash.started" | "apps.launched" | "config.changed"
         ) {
             emit_candidates(&ctx).await;
         }
     }
 
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        match method.as_str() {
-            "resolveCandidate" => resolve_candidate(&ctx, &params).await,
-            "command.invoke" => invoke(&ctx, &params).await,
-            other => json!({ "ok": false, "error": format!("unknown method: {other}") }),
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        match request {
+            Request::ResolveCandidate(candidate) => {
+                resolve_candidate(&ctx, &candidate).await.into()
+            }
+            Request::Command(cmd) => invoke(&ctx, &cmd).await,
+            _ => CommandResponse::error("unsupported request").into(),
         }
     }
 }
@@ -86,40 +98,40 @@ async fn emit_candidates(ctx: &Context) {
         if name.is_empty() || !seen.insert(name.to_string()) {
             continue;
         }
-        candidates.push(json!({
-            "kind": "contact",
-            "source_id": SOURCE_ID,
-            "source": "contacts",
-            "name": name,
-            "subtitle": "Contact",
-            "payload": json!({ "contact": name }).to_string(),
-        }));
+        candidates.push(
+            Candidate::new(name)
+                .kind("contact")
+                .source_id(SOURCE_ID)
+                .source("contacts")
+                .subtitle("Contact")
+                .payload_json(&ContactPayload {
+                    contact: name.to_string(),
+                }),
+        );
     }
     ctx.emit_snapshot(SOURCE_ID, candidates);
 }
 
-async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
-    let candidate = params
-        .get("candidate")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let payload = parse_payload(&candidate);
-    let name = payload
-        .get("contact")
-        .and_then(Value::as_str)
+async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+    let name = candidate
+        .payload_as::<ContactPayload>()
+        .map(|p| p.contact)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| str_field(&candidate, "name"));
+        .unwrap_or_else(|| candidate.name.clone());
     if name.is_empty() {
-        return json!({ "did_resolve": false });
+        return ResolveResponse::unresolved();
     }
     let result = ctx
-        .run_osascript(&select_script(name), Duration::from_secs(10))
+        .run_osascript(&select_script(&name), Duration::from_secs(10))
         .await;
-    json!({ "did_resolve": result.ok })
+    ResolveResponse {
+        did_resolve: result.ok,
+        target_pid: None,
+    }
 }
 
-async fn invoke(ctx: &Context, params: &Value) -> Value {
-    match str_field(params, "subcommand") {
+async fn invoke(ctx: &Context, cmd: &CommandRequest) -> Response {
+    match cmd.subcommand.as_str() {
         "open" => ctx
             .run_cli(
                 &[
@@ -130,12 +142,12 @@ async fn invoke(ctx: &Context, params: &Value) -> Value {
                 Duration::from_secs(10),
             )
             .await
-            .value(),
+            .into(),
         "refresh" => {
             emit_candidates(ctx).await;
-            json!({ "ok": true, "stdout": "contacts refreshed", "stderr": "", "status": 0 })
+            CommandResponse::toast("contacts refreshed").into()
         }
-        other => json!({ "ok": false, "error": format!("unknown subcommand: {other}") }),
+        other => CommandResponse::error(format!("unknown subcommand: {other}")).into(),
     }
 }
 

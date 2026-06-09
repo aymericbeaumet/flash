@@ -1,5 +1,7 @@
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, str_field, AxNode, Context, Plugin};
+use flash_plugin::{
+    run, AxNode, Candidate, CommandResponse, Context, Event, Plugin, Request, ResolveResponse,
+    Response, SourceActionRequest, SourceActionResponse,
+};
 
 const SOURCE_ID: &str = "plugin.firefox";
 const MAX_NODES: u64 = 3_000;
@@ -33,18 +35,18 @@ impl Plugin for Firefox {
     // The host gates *surfacing* these candidates on the active app (the
     // manifest's `bundle_ids`), so emitting whenever Firefox gains focus keeps
     // the snapshot fresh without leaking tabs while another app is active.
-    async fn on_event(&self, ctx: Context, name: String, payload: Value) {
-        if name != "focus.changed" {
+    async fn on_event(&self, ctx: Context, event: Event) {
+        if event.name != "focus.changed" {
             return;
         }
-        let bundle = str_field(&payload, "bundle_id");
-        if !is_firefox(bundle) {
+        let bundle = event.bundle_id.unwrap_or_default();
+        if !is_firefox(&bundle) {
             return;
         }
-        let Some(pid) = payload.get("pid").and_then(Value::as_i64) else {
+        let Some(pid) = event.pid else {
             return;
         };
-        let source = source_name(bundle);
+        let source = source_name(&bundle);
         let tabs = collect_tabs(&ctx, pid).await;
         let candidates = tabs
             .iter()
@@ -53,11 +55,13 @@ impl Plugin for Firefox {
         ctx.emit_snapshot(SOURCE_ID, candidates);
     }
 
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        match method.as_str() {
-            "resolveCandidate" => resolve_candidate(&ctx, &params).await,
-            "sourceAction" => source_action(&ctx, &params).await,
-            other => json!({ "ok": false, "error": format!("unknown method: {other}") }),
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        match request {
+            Request::ResolveCandidate(candidate) => {
+                resolve_candidate(&ctx, &candidate).await.into()
+            }
+            Request::SourceAction(action) => source_action(&ctx, &action).await.into(),
+            _ => CommandResponse::error("unsupported request").into(),
         }
     }
 }
@@ -162,42 +166,36 @@ fn tab_url(node: &AxNode) -> String {
 /// One flashlight candidate for a tab. `source` drives both the browser-tab
 /// precedence tier and the `@firefox` source filter; `payload` carries the url
 /// so resolution can re-match the tab after a fresh snapshot.
-fn candidate(tab: &Tab, source: &str, pid: i64) -> Value {
+fn candidate(tab: &Tab, source: &str, pid: i64) -> Candidate {
     let name = if tab.title.is_empty() {
         tab.url.clone()
     } else {
         tab.title.clone()
     };
-    let mut value = json!({
-        "kind": "browser_tab",
-        "source_id": SOURCE_ID,
-        "source": source,
-        "name": name,
-        "subtitle": "browser tab",
-        "pid": pid,
-        "payload": tab.url,
-    });
+    let mut candidate = Candidate::new(name)
+        .kind("browser_tab")
+        .source_id(SOURCE_ID)
+        .source(source)
+        .subtitle("browser tab")
+        .pid(pid)
+        .payload(tab.url.clone());
     if !tab.url.is_empty() {
-        value["url"] = json!(tab.url);
+        candidate = candidate.url(tab.url.clone());
     }
-    value
+    candidate
 }
 
 /// Resolve a flashlight pick: raise Firefox, then press the matching tab. The
 /// candidate's handle from emit time may be stale (any later snapshot for the
 /// pid supersedes it), so re-snapshot and match by url, then title, before
 /// pressing. Falls back to `AXSelected = true` when `AXPress` is unsupported.
-async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
-    let candidate = params
-        .get("candidate")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let Some(pid) = candidate.get("pid").and_then(Value::as_i64) else {
-        return json!({ "did_resolve": false });
+async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+    let Some(pid) = candidate.pid else {
+        return ResolveResponse::unresolved();
     };
     ctx.ax_activate(pid).await;
-    let url = str_field(&candidate, "url");
-    let name = str_field(&candidate, "name");
+    let url = candidate.url.as_deref().unwrap_or("");
+    let name = candidate.name.as_str();
     let tabs = collect_tabs(ctx, pid).await;
     let target = tabs
         .iter()
@@ -205,34 +203,33 @@ async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
         .or_else(|| tabs.iter().find(|tab| tab.title == name));
     let Some(target) = target else {
         // App was still raised; report resolved so Flash keeps Firefox front.
-        return json!({ "did_resolve": true, "target_pid": pid });
+        return ResolveResponse::resolved(Some(pid));
     };
     press(ctx, target.handle).await;
-    json!({ "did_resolve": true, "target_pid": pid })
+    ResolveResponse::resolved(Some(pid))
 }
 
 /// `tab_select` (numbered-tab jump): press the Nth tab in document order within
 /// the first window that has at least that many tabs. Ports the old
 /// `FirefoxTabsSource.tabSelect` semantics.
-async fn source_action(ctx: &Context, params: &Value) -> Value {
-    if str_field(params, "name") != "tab_select" {
-        return json!({ "did_perform": false });
+async fn source_action(ctx: &Context, action: &SourceActionRequest) -> SourceActionResponse {
+    if action.name != "tab_select" {
+        return SourceActionResponse::unhandled();
     }
-    let index = params.get("index").and_then(Value::as_i64).unwrap_or(0);
-    let pid = params
-        .get("context")
-        .and_then(|c| c.get("pid"))
-        .and_then(Value::as_i64);
-    let (Some(pid), true) = (pid, index > 0) else {
-        return json!({ "did_perform": false });
+    let index = action.index.unwrap_or(0);
+    let (Some(pid), true) = (action.context.pid, index > 0) else {
+        return SourceActionResponse::unhandled();
     };
     ctx.ax_activate(pid).await;
     let tabs = collect_tabs(ctx, pid).await;
     let Some(target) = tabs.get((index - 1) as usize) else {
-        return json!({ "did_perform": false });
+        return SourceActionResponse::unhandled();
     };
     let ok = press(ctx, target.handle).await;
-    json!({ "did_perform": ok, "target_pid": pid })
+    SourceActionResponse {
+        did_perform: ok,
+        target_pid: Some(pid),
+    }
 }
 
 /// Press a tab handle, falling back to selecting it when the element exposes no
@@ -241,7 +238,7 @@ async fn press(ctx: &Context, handle: u64) -> bool {
     if ctx.ax_perform(handle, "AXPress").await {
         return true;
     }
-    ctx.ax_set(handle, "AXSelected", json!(true)).await
+    ctx.ax_set(handle, "AXSelected", true).await
 }
 
 fn main() {

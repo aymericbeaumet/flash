@@ -1,7 +1,10 @@
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{applescript_quote, parse_payload, run, str_field, Context, Plugin};
+use flash_plugin::{
+    applescript_quote, run, Candidate, CommandRequest, CommandResponse, Context, Event, Plugin,
+    Request, ResolveResponse, Response,
+};
+use serde::{Deserialize, Serialize};
 
 const SOURCE_ID: &str = "plugin.notes";
 
@@ -35,6 +38,13 @@ end tell
     )
 }
 
+/// Round-tripped through the host so resolution can re-open the note by id.
+#[derive(Serialize, Deserialize)]
+struct NotePayload {
+    id: String,
+    title: String,
+}
+
 struct Notes;
 
 impl Plugin for Notes {
@@ -42,20 +52,22 @@ impl Plugin for Notes {
         emit_candidates(&ctx).await;
     }
 
-    async fn on_event(&self, ctx: Context, name: String, _payload: Value) {
+    async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
-            name.as_str(),
+            event.name.as_str(),
             "flash.started" | "apps.launched" | "config.changed"
         ) {
             emit_candidates(&ctx).await;
         }
     }
 
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        match method.as_str() {
-            "resolveCandidate" => resolve_candidate(&ctx, &params).await,
-            "command.invoke" => invoke(&ctx, &params).await,
-            other => json!({ "ok": false, "error": format!("unknown method: {other}") }),
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        match request {
+            Request::ResolveCandidate(candidate) => {
+                resolve_candidate(&ctx, &candidate).await.into()
+            }
+            Request::Command(cmd) => invoke(&ctx, &cmd).await,
+            _ => CommandResponse::error("unsupported request").into(),
         }
     }
 }
@@ -80,36 +92,40 @@ async fn emit_candidates(ctx: &Context) {
         if note_id.is_empty() || title.is_empty() || !seen.insert(note_id.to_string()) {
             continue;
         }
-        candidates.push(json!({
-            "kind": "note",
-            "source_id": SOURCE_ID,
-            "source": "notes",
-            "name": title,
-            "subtitle": "Note",
-            "payload": json!({ "id": note_id, "title": title }).to_string(),
-        }));
+        candidates.push(
+            Candidate::new(title)
+                .kind("note")
+                .source_id(SOURCE_ID)
+                .source("notes")
+                .subtitle("Note")
+                .payload_json(&NotePayload {
+                    id: note_id.to_string(),
+                    title: title.to_string(),
+                }),
+        );
     }
     ctx.emit_snapshot(SOURCE_ID, candidates);
 }
 
-async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
-    let candidate = params
-        .get("candidate")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let payload = parse_payload(&candidate);
-    let note_id = payload.get("id").and_then(Value::as_str).unwrap_or("");
+async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+    let note_id = candidate
+        .payload_as::<NotePayload>()
+        .map(|p| p.id)
+        .unwrap_or_default();
     if note_id.is_empty() {
-        return json!({ "did_resolve": false });
+        return ResolveResponse::unresolved();
     }
     let result = ctx
-        .run_osascript(&select_script(note_id), Duration::from_secs(10))
+        .run_osascript(&select_script(&note_id), Duration::from_secs(10))
         .await;
-    json!({ "did_resolve": result.ok })
+    ResolveResponse {
+        did_resolve: result.ok,
+        target_pid: None,
+    }
 }
 
-async fn invoke(ctx: &Context, params: &Value) -> Value {
-    match str_field(params, "subcommand") {
+async fn invoke(ctx: &Context, cmd: &CommandRequest) -> Response {
+    match cmd.subcommand.as_str() {
         "open" => ctx
             .run_cli(
                 &[
@@ -120,12 +136,12 @@ async fn invoke(ctx: &Context, params: &Value) -> Value {
                 Duration::from_secs(10),
             )
             .await
-            .value(),
+            .into(),
         "refresh" => {
             emit_candidates(ctx).await;
-            json!({ "ok": true, "stdout": "notes refreshed", "stderr": "", "status": 0 })
+            CommandResponse::toast("notes refreshed").into()
         }
-        other => json!({ "ok": false, "error": format!("unknown subcommand: {other}") }),
+        other => CommandResponse::error(format!("unknown subcommand: {other}")).into(),
     }
 }
 

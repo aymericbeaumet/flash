@@ -1,7 +1,10 @@
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{applescript_quote, parse_payload, run, str_field, Context, Plugin};
+use flash_plugin::{
+    applescript_quote, run, Candidate, CommandRequest, CommandResponse, Context, Event, Plugin,
+    Request, ResolveResponse, Response,
+};
+use serde::{Deserialize, Serialize};
 
 const SOURCE_ID: &str = "plugin.reminders";
 
@@ -35,6 +38,14 @@ end tell
     )
 }
 
+/// Round-tripped through the host so resolution can re-open the reminder by id.
+#[derive(Serialize, Deserialize)]
+struct ReminderPayload {
+    id: String,
+    list: String,
+    title: String,
+}
+
 struct Reminders;
 
 impl Plugin for Reminders {
@@ -42,20 +53,22 @@ impl Plugin for Reminders {
         emit_candidates(&ctx).await;
     }
 
-    async fn on_event(&self, ctx: Context, name: String, _payload: Value) {
+    async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
-            name.as_str(),
+            event.name.as_str(),
             "flash.started" | "apps.launched" | "config.changed"
         ) {
             emit_candidates(&ctx).await;
         }
     }
 
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        match method.as_str() {
-            "resolveCandidate" => resolve_candidate(&ctx, &params).await,
-            "command.invoke" => invoke(&ctx, &params).await,
-            other => json!({ "ok": false, "error": format!("unknown method: {other}") }),
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        match request {
+            Request::ResolveCandidate(candidate) => {
+                resolve_candidate(&ctx, &candidate).await.into()
+            }
+            Request::Command(cmd) => invoke(&ctx, &cmd).await,
+            _ => CommandResponse::error("unsupported request").into(),
         }
     }
 }
@@ -85,36 +98,41 @@ async fn emit_candidates(ctx: &Context) {
         if rid.is_empty() || title.is_empty() || !seen.insert(rid.to_string()) {
             continue;
         }
-        candidates.push(json!({
-            "kind": "reminder",
-            "source_id": SOURCE_ID,
-            "source": "reminders",
-            "name": title,
-            "subtitle": format!("Reminder — {list_name}"),
-            "payload": json!({ "id": rid, "list": list_name, "title": title }).to_string(),
-        }));
+        candidates.push(
+            Candidate::new(title)
+                .kind("reminder")
+                .source_id(SOURCE_ID)
+                .source("reminders")
+                .subtitle(format!("Reminder — {list_name}"))
+                .payload_json(&ReminderPayload {
+                    id: rid.to_string(),
+                    list: list_name.to_string(),
+                    title: title.to_string(),
+                }),
+        );
     }
     ctx.emit_snapshot(SOURCE_ID, candidates);
 }
 
-async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
-    let candidate = params
-        .get("candidate")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let payload = parse_payload(&candidate);
-    let rid = payload.get("id").and_then(Value::as_str).unwrap_or("");
+async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+    let rid = candidate
+        .payload_as::<ReminderPayload>()
+        .map(|p| p.id)
+        .unwrap_or_default();
     if rid.is_empty() {
-        return json!({ "did_resolve": false });
+        return ResolveResponse::unresolved();
     }
     let result = ctx
-        .run_osascript(&select_script(rid), Duration::from_secs(10))
+        .run_osascript(&select_script(&rid), Duration::from_secs(10))
         .await;
-    json!({ "did_resolve": result.ok })
+    ResolveResponse {
+        did_resolve: result.ok,
+        target_pid: None,
+    }
 }
 
-async fn invoke(ctx: &Context, params: &Value) -> Value {
-    match str_field(params, "subcommand") {
+async fn invoke(ctx: &Context, cmd: &CommandRequest) -> Response {
+    match cmd.subcommand.as_str() {
         "open" => ctx
             .run_cli(
                 &[
@@ -125,12 +143,12 @@ async fn invoke(ctx: &Context, params: &Value) -> Value {
                 Duration::from_secs(10),
             )
             .await
-            .value(),
+            .into(),
         "refresh" => {
             emit_candidates(ctx).await;
-            json!({ "ok": true, "stdout": "reminders refreshed", "stderr": "", "status": 0 })
+            CommandResponse::toast("reminders refreshed").into()
         }
-        other => json!({ "ok": false, "error": format!("unknown subcommand: {other}") }),
+        other => CommandResponse::error(format!("unknown subcommand: {other}")).into(),
     }
 }
 

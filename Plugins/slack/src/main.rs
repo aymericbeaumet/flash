@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, str_field, string_list, AxNode, Context, Plugin};
+use flash_plugin::{
+    run, AxNode, Candidate, CommandRequest, CommandResponse, Context, Event, Plugin, Request,
+    ResolveResponse, Response,
+};
 
 const CHANNEL_SOURCE_ID: &str = "plugin.slack.channels";
 const SLACK_BUNDLES: &[&str] = &[
@@ -30,14 +32,15 @@ impl Plugin for Slack {
     // Slack focused → re-walk its AX tree and republish the channel list as
     // flashlight candidates. The host gates surfacing on the active app (the
     // manifest's `bundle_ids`), matching the old SlackSource.
-    async fn on_event(&self, ctx: Context, name: String, payload: Value) {
-        if name != "focus.changed" {
+    async fn on_event(&self, ctx: Context, event: Event) {
+        if event.name != "focus.changed" {
             return;
         }
-        if !SLACK_BUNDLES.contains(&str_field(&payload, "bundle_id")) {
+        let bundle = event.bundle_id.unwrap_or_default();
+        if !SLACK_BUNDLES.contains(&bundle.as_str()) {
             return;
         }
-        let Some(pid) = payload.get("pid").and_then(Value::as_i64) else {
+        let Some(pid) = event.pid else {
             return;
         };
         let channels = collect_channels(&ctx, pid).await;
@@ -48,19 +51,19 @@ impl Plugin for Slack {
         ctx.emit_snapshot(CHANNEL_SOURCE_ID, candidates);
     }
 
-    async fn handle(&self, ctx: Context, method: String, params: Value) -> Value {
-        match method.as_str() {
-            "command.invoke" => self.invoke_command(&ctx, &params).await,
-            "resolveCandidate" => resolve_candidate(&ctx, &params).await,
-            other => json!({ "ok": false, "error": format!("unknown method: {other}") }),
+    async fn handle(&self, ctx: Context, request: Request) -> Response {
+        match request {
+            Request::Command(cmd) => self.invoke_command(&ctx, &cmd).await,
+            Request::ResolveCandidate(candidate) => {
+                resolve_candidate(&ctx, &candidate).await.into()
+            }
+            _ => CommandResponse::error("unsupported request").into(),
         }
     }
 }
 
 impl Slack {
-    async fn invoke_command(&self, ctx: &Context, params: &Value) -> Value {
-        let name = str_field(params, "subcommand");
-        let args = string_list(params, "args");
+    async fn invoke_command(&self, ctx: &Context, cmd: &CommandRequest) -> Response {
         // `[plugin.slack] cli = "/path/to/slack"` overrides the executable;
         // defaults to `slack` on PATH.
         let cli = {
@@ -71,17 +74,17 @@ impl Slack {
                 configured
             }
         };
-        let (argv, timeout): (Vec<String>, u64) = match name {
+        let (argv, timeout): (Vec<String>, u64) = match cmd.subcommand.as_str() {
             "login" => (vec![cli, "login".into()], 300),
             "version" => (vec![cli, "version".into()], 120),
-            "run" => (prepend(&cli, &args), 120),
+            "run" => (prepend(&cli, &cmd.args), 120),
             other => {
-                return json!({ "ok": false, "error": format!("unknown subcommand: {other}") });
+                return CommandResponse::error(format!("unknown subcommand: {other}")).into();
             }
         };
         ctx.run_cli(&argv, Duration::from_secs(timeout))
             .await
-            .value()
+            .into()
     }
 }
 
@@ -111,37 +114,31 @@ async fn collect_channels(ctx: &Context, pid: i64) -> Vec<Channel> {
     out
 }
 
-fn candidate(name: &str, pid: i64) -> Value {
-    json!({
-        "kind": "slack_channel",
-        "source_id": CHANNEL_SOURCE_ID,
-        "source": "slack",
-        "name": name,
-        "subtitle": "Slack channel",
-        "pid": pid,
-        "payload": name,
-    })
+fn candidate(name: &str, pid: i64) -> Candidate {
+    Candidate::new(name)
+        .kind("slack_channel")
+        .source_id(CHANNEL_SOURCE_ID)
+        .source("slack")
+        .subtitle("Slack channel")
+        .pid(pid)
+        .payload(name)
 }
 
 /// Resolve a pick: raise Slack, re-snapshot (the emit-time handle may be
 /// stale), find the channel by name, and press it. Falls back to selecting it.
-async fn resolve_candidate(ctx: &Context, params: &Value) -> Value {
-    let candidate = params
-        .get("candidate")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let Some(pid) = candidate.get("pid").and_then(Value::as_i64) else {
-        return json!({ "did_resolve": false });
+async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+    let Some(pid) = candidate.pid else {
+        return ResolveResponse::unresolved();
     };
-    let name = str_field(&candidate, "name");
+    let name = candidate.name.as_str();
     ctx.ax_activate(pid).await;
     let channels = collect_channels(ctx, pid).await;
     if let Some(target) = channels.iter().find(|c| c.name == name) {
         if !ctx.ax_perform(target.handle, "AXPress").await {
-            ctx.ax_set(target.handle, "AXSelected", json!(true)).await;
+            ctx.ax_set(target.handle, "AXSelected", true).await;
         }
     }
-    json!({ "did_resolve": true, "target_pid": pid })
+    ResolveResponse::resolved(Some(pid))
 }
 
 /// Derive a channel name from a node's collected attributes, applying the same

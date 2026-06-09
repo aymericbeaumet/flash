@@ -1,9 +1,9 @@
 use std::sync::Mutex;
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, str_field, Context, Plugin};
+use flash_plugin::{run, Candidate, CommandResponse, Context, Event, Plugin, Request, Response};
 
 const SOURCE_ID: &str = "plugin.clipboard";
+const HISTORY_FILE: &str = "history.json";
 const HISTORY_CAP: usize = 50;
 const PREVIEW_CHARS: usize = 80;
 
@@ -15,7 +15,7 @@ impl Plugin for Clipboard {
     async fn on_start(&self, ctx: Context) {
         {
             let mut hist = self.history.lock().unwrap();
-            *hist = load(&ctx);
+            *hist = ctx.read_state(HISTORY_FILE).unwrap_or_default();
         }
         emit(&ctx, &self.snapshot());
     }
@@ -23,11 +23,11 @@ impl Plugin for Clipboard {
     // The core owns the pasteboard watch (it reads NSPasteboard's changeCount
     // in-process — macOS exposes no change notification) and pushes new text
     // here as `clipboard.changed`. The plugin never polls `pbpaste`.
-    async fn on_event(&self, ctx: Context, name: String, payload: Value) {
-        match name.as_str() {
+    async fn on_event(&self, ctx: Context, event: Event) {
+        match event.name.as_str() {
             "flash.started" => emit(&ctx, &self.snapshot()),
             "clipboard.changed" => {
-                let text = str_field(&payload, "text").to_string();
+                let text = event.text.unwrap_or_default();
                 if text.is_empty() {
                     return;
                 }
@@ -44,7 +44,7 @@ impl Plugin for Clipboard {
                 };
                 if changed {
                     let snapshot = self.snapshot();
-                    persist(&ctx, &snapshot);
+                    ctx.write_state(HISTORY_FILE, &snapshot);
                     emit(&ctx, &snapshot);
                 }
             }
@@ -52,16 +52,16 @@ impl Plugin for Clipboard {
         }
     }
 
-    async fn handle(&self, _ctx: Context, method: String, params: Value) -> Value {
-        if method != "command.invoke" {
-            return json!({ "ok": false, "error": format!("unknown method: {method}") });
-        }
+    async fn handle(&self, _ctx: Context, request: Request) -> Response {
+        let Request::Command(cmd) = request else {
+            return CommandResponse::error("unsupported request").into();
+        };
         // `:copy` / `:paste` are top-level commands the host synthesizes as
         // ⌘C / ⌘V against the focused app; the plugin only advertises them so
         // they appear in the command catalog. Accept as no-ops.
-        match str_field(&params, "command") {
-            "copy" | "paste" => json!({ "ok": true }),
-            other => json!({ "ok": false, "error": format!("unknown command: {other}") }),
+        match cmd.command.as_str() {
+            "copy" | "paste" => CommandResponse::ok().into(),
+            other => CommandResponse::error(format!("unknown command: {other}")).into(),
         }
     }
 }
@@ -73,17 +73,15 @@ impl Clipboard {
 }
 
 fn emit(ctx: &Context, history: &[String]) {
-    let candidates: Vec<Value> = history
+    let candidates: Vec<Candidate> = history
         .iter()
         .map(|text| {
-            json!({
-                "kind": "clipboard",
-                "source_id": SOURCE_ID,
-                "source": "clipboard",
-                "name": preview(text),
-                "subtitle": "Clipboard",
-                "payload": text,
-            })
+            Candidate::new(preview(text))
+                .kind("clipboard")
+                .source_id(SOURCE_ID)
+                .source("clipboard")
+                .subtitle("Clipboard")
+                .payload(text.clone())
         })
         .collect();
     ctx.emit_snapshot(SOURCE_ID, candidates);
@@ -97,23 +95,6 @@ fn preview(text: &str) -> String {
     }
     let head: String = collapsed.chars().take(PREVIEW_CHARS - 1).collect();
     format!("{head}…")
-}
-
-fn history_path(ctx: &Context) -> std::path::PathBuf {
-    ctx.share_dir().join("history.json")
-}
-
-fn load(ctx: &Context) -> Vec<String> {
-    let Ok(raw) = std::fs::read_to_string(history_path(ctx)) else {
-        return Vec::new();
-    };
-    flash_plugin::serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
-}
-
-fn persist(ctx: &Context, history: &[String]) {
-    if let Ok(raw) = flash_plugin::serde_json::to_string(history) {
-        let _ = std::fs::write(history_path(ctx), raw);
-    }
 }
 
 fn main() {

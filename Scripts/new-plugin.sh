@@ -60,16 +60,6 @@ path = "src/main.rs"
 
 [dependencies]
 flash-plugin = { path = "../_flash_plugin_rust" }
-serde_json = "1"
-tokio = { version = "1", default-features = false, features = [
-  "rt-multi-thread",
-  "macros",
-  "io-std",
-  "io-util",
-  "process",
-  "time",
-  "sync",
-] }
 
 [profile.release]
 opt-level = "z"
@@ -80,19 +70,18 @@ panic = "abort"
 TOML
 
 cat >"$DIR/src/main.rs" <<'RUST'
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, str_field, Context, Plugin};
+use flash_plugin::{run, CommandResponse, Context, Plugin, Request, Response};
 
 struct PluginImpl;
 
 impl Plugin for PluginImpl {
-    async fn handle(&self, _ctx: Context, method: String, params: Value) -> Value {
-        if method != "command.invoke" {
-            return json!({ "ok": false, "error": format!("unknown method: {method}") });
-        }
-        match str_field(&params, "subcommand") {
-            "ping" => json!({ "ok": true, "stdout": "pong" }),
-            other => json!({ "ok": false, "error": format!("unknown subcommand: {other}") }),
+    async fn handle(&self, _ctx: Context, request: Request) -> Response {
+        let Request::Command(cmd) = request else {
+            return CommandResponse::error("unsupported request").into();
+        };
+        match cmd.subcommand.as_str() {
+            "ping" => CommandResponse::toast("pong").into(),
+            other => CommandResponse::error(format!("unknown subcommand: {other}")).into(),
         }
     }
 }

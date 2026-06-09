@@ -7,15 +7,16 @@
 //! inserts the glyph into the focused app. The plugin is otherwise inert —
 //! the dataset never changes, so there is nothing to refresh on events.
 
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, Context, Plugin};
+use flash_plugin::{
+    run, Candidate, CommandResponse, Context, DiscoverResponse, Plugin, Request, Response,
+};
 
 const SOURCE_ID: &str = "emoji";
 
 /// `<glyph>\t<lowercase name>` rows, one per line.
 const EMOJI_DATA: &str = include_str!("../emoji.txt");
 
-fn build_candidates() -> Vec<Value> {
+fn build_candidates() -> Vec<Candidate> {
     EMOJI_DATA
         .lines()
         .filter_map(|line| {
@@ -25,14 +26,14 @@ fn build_candidates() -> Vec<Value> {
             if glyph.is_empty() || name.is_empty() {
                 return None;
             }
-            Some(json!({
-                "kind": "emoji",
-                "source_id": SOURCE_ID,
-                "source": SOURCE_ID,
-                "name": format!("{glyph} {name}"),
-                "subtitle": "emoji",
-                "payload": glyph,
-            }))
+            Some(
+                Candidate::new(format!("{glyph} {name}"))
+                    .kind("emoji")
+                    .source_id(SOURCE_ID)
+                    .source(SOURCE_ID)
+                    .subtitle("emoji")
+                    .payload(glyph),
+            )
         })
         .collect()
 }
@@ -49,16 +50,13 @@ impl Plugin for Emojis {
                 .into_iter()
                 .collect(),
         );
-        ctx.emit.notify(
-            "snapshot.updated",
-            json!({ "targets": [], "candidates": candidates, "source_id": SOURCE_ID }),
-        );
+        ctx.emit_snapshot(SOURCE_ID, candidates);
     }
 
-    async fn handle(&self, _ctx: Context, method: String, _params: Value) -> Value {
-        match method.as_str() {
-            "discoverTargets" => json!({ "targets": [] }),
-            other => json!({ "ok": false, "error": format!("unknown method: {other}") }),
+    async fn handle(&self, _ctx: Context, request: Request) -> Response {
+        match request {
+            Request::DiscoverTargets(_) => DiscoverResponse::targets(vec![]).into(),
+            _ => CommandResponse::error("unsupported request").into(),
         }
     }
 }

@@ -1,5 +1,4 @@
-use flash_plugin::serde_json::{json, Value};
-use flash_plugin::{run, Context, Plugin};
+use flash_plugin::{run, CommandResponse, Context, Plugin, Request, Response};
 
 // Safari exposes no candidates or hints of its own; it exists purely to
 // register the manifest mapping that overrides the built-in hard-refresh
@@ -10,8 +9,8 @@ use flash_plugin::{run, Context, Plugin};
 struct Safari;
 
 impl Plugin for Safari {
-    async fn handle(&self, _ctx: Context, method: String, _params: Value) -> Value {
-        json!({ "ok": false, "error": format!("unknown method: {method}") })
+    async fn handle(&self, _ctx: Context, _request: Request) -> Response {
+        CommandResponse::error("unsupported request").into()
     }
 }
 
