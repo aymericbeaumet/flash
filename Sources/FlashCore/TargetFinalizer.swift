@@ -1,5 +1,21 @@
 import CoreGraphics
 
+extension CGRect {
+  /// Boundary-inclusive point containment.
+  ///
+  /// `CGRect.contains` treats the max-X and max-Y edges as *outside* (a
+  /// half-open interval). That rejects an element whose center lands exactly
+  /// on the viewport's right or bottom edge — the classic case being a link
+  /// that straddles the top/bottom fold so its center sits precisely on the
+  /// boundary. Vimium keeps such elements (its visible-center test is `>=`
+  /// and `<=` on all four sides), so Flash must use the same closed-interval
+  /// test or it reports a spurious "missed hint" for every edge-straddling
+  /// control.
+  public func containsInclusive(_ point: CGPoint) -> Bool {
+    point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY
+  }
+}
+
 public struct TargetCandidate {
   public let target: JumpTarget
   public let priority: Int
@@ -71,7 +87,7 @@ public enum TargetFinalizer {
     let frame = target.frame
     guard frame.width > 0, frame.height > 0 else { return false }
     let center = CGPoint(x: frame.midX, y: frame.midY)
-    return regions.contains { $0.contains(center) }
+    return regions.contains { $0.containsInclusive(center) }
   }
 
   private static func area(_ rect: CGRect) -> CGFloat {

@@ -3,13 +3,7 @@
     {
       "side": "vimiumOnly",
       "rect": [8, 900, 36, 16],
-      "reason": "Vimium marks the Cristel logo/home anchor backed by inline SVG; Firefox AX does not expose it as a page target in this snapshot.",
-      "domSelector": "a"
-    },
-    {
-      "side": "vimiumOnly",
-      "rect": [8, 706, 1865, 35],
-      "reason": "Vimium marks a large Cristel FAQ visual tile; Firefox AX does not expose this anchor as a page target in this snapshot.",
+      "reason": "Vimium hints the SVG-logo <a href> straight from the DOM, but Firefox exposes it in AX only as an AXGroup/AXImage with no AXPress action (verified via --diagnose), so no pressable AX node exists at this rect. Flash instead hints the adjacent text AXLink that points to the same home URL.",
       "domSelector": "a"
     }
   ]

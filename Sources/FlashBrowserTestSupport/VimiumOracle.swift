@@ -138,7 +138,7 @@ public enum VimiumOracle {
     let flashTargets = waitForStableFlashTargets(
       provider: provider,
       context: context,
-      timeout: 6)
+      timeout: 10)
 
     let anchorsDeadline = Date().addingTimeInterval(anchorsTimeout)
     var decoded: ExtensionPayload?
@@ -246,29 +246,82 @@ public enum VimiumOracle {
       pageScreenRect: pageRect)
   }
 
+  /// Waits for Firefox's accessibility tree to finish materializing *and* for
+  /// the page layout to stop moving, then returns the settled target set.
+  ///
+  /// Two independent races corrupt a naive "two equal readings" gate:
+  ///
+  ///  1. *Incomplete tree.* Firefox builds a page's AX tree incrementally and
+  ///     lazily — window chrome surfaces first, then the document's controls
+  ///     stream in, more slowly the busier the machine is. Settling on the
+  ///     first stable count accepts a chrome-only plateau and returns a
+  ///     partial set, which shows up as spurious vimium-only divergences.
+  ///
+  ///  2. *Reflow.* Captured pages run their own JS (banners animating in,
+  ///     async fonts/images) that shifts every control's position after first
+  ///     paint without changing the control *count*. Flash captures before
+  ///     Vimium does, so if Flash reads during the shift the two see the same
+  ///     buttons ~100pt apart and the diff reports them as unmatched.
+  ///
+  /// Both are caught by settling on a coarse signature — the target count plus
+  /// the median centroid Y. The count catches an incomplete tree; the median Y
+  /// catches a whole-page reflow (a banner pushing every control down moves the
+  /// median sharply) while staying blind to the local sub-pixel jitter of an
+  /// individual animating element, which a per-control comparison would treat
+  /// as perpetual motion and never let the gate settle. A transient count dip
+  /// (a node momentarily vanishing) is ignored so it can neither reset the
+  /// timer nor lower the result. If the page never settles within `timeout`,
+  /// the most recent reading is returned.
   private static func waitForStableFlashTargets(
     provider: AccessibilityProvider,
     context: AppContext,
     timeout: TimeInterval
   ) -> [JumpTarget] {
-    let stableDeadline = Date().addingTimeInterval(timeout)
-    var resolved: [JumpTarget] = []
-    var stableRuns = 0
-    var lastCount = -1
-    while Date() < stableDeadline {
+    let start = Date()
+    let deadline = start.addingTimeInterval(timeout)
+    // Don't accept a "settled" reading before this much wall time has passed.
+    // Some captures inject content on a delay (a banner appearing a second or
+    // two after first paint adds its own controls and pushes the rest of the
+    // page down). The tree looks stable in the meantime, so without a floor the
+    // gate exits before the injection fires and captures the pre-injection
+    // layout — then Vimium, which reads a beat later, sees the post-injection
+    // layout and the diff reports the moved controls as unmatched. Observing
+    // for a minimum window lets the injection land and be absorbed as ordinary
+    // count growth.
+    let minObserve: TimeInterval = 3.0
+    let settle: TimeInterval = 1.0
+    let medianTolerance: CGFloat = 8
+    var current: [JumpTarget] = []
+    var currentMedianY = CGFloat.nan
+    var lastChange = Date()
+    while Date() < deadline {
       let now = (try? provider.discover(in: context)) ?? []
-      if now.count == lastCount, now.count > 0 {
-        stableRuns += 1
-        resolved = now
-        if stableRuns >= 2 { break }
-      } else {
-        lastCount = now.count
-        stableRuns = 0
-        resolved = now
+      let medianY = medianCentroidY(now)
+      let changed =
+        now.count != current.count
+        || currentMedianY.isNaN
+        || abs(medianY - currentMedianY) > medianTolerance
+      if now.count < current.count {
+        // Transient dip — keep the richer snapshot and the settle timer.
+      } else if changed {
+        current = now
+        currentMedianY = medianY
+        lastChange = Date()
+      } else if !current.isEmpty,
+        Date().timeIntervalSince(lastChange) >= settle,
+        Date().timeIntervalSince(start) >= minObserve
+      {
+        break
       }
       Thread.sleep(forTimeInterval: 0.25)
     }
-    return resolved
+    return current
+  }
+
+  private static func medianCentroidY(_ targets: [JumpTarget]) -> CGFloat {
+    guard !targets.isEmpty else { return .nan }
+    let ys = targets.map { $0.frame.midY }.sorted()
+    return ys[ys.count / 2]
   }
 
   private static func maxFlashHintLength(targetCount: Int) -> Int {

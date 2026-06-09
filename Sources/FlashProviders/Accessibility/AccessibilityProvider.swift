@@ -504,7 +504,7 @@ public final class AccessibilityProvider: FlashSource {
     }
     if let posV = posValue, let sizeV = sizeValue,
       let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
-      visible.contains(CGPoint(x: frame.midX, y: frame.midY)),
+      visible.containsInclusive(CGPoint(x: frame.midX, y: frame.midY)),
       roleAllowed, enabled, !hidden
     {
       state.idCounter += 1

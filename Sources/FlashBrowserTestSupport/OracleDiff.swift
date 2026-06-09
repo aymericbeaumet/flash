@@ -68,7 +68,8 @@ public enum OracleDiff {
   public static func classify(
     vimium: [VimiumAnchor],
     flash: [JumpTarget],
-    allowList: OracleAllowList
+    allowList: OracleAllowList,
+    pageRect: CGRect = .zero
   ) -> Result {
     struct Candidate {
       let vIdx: Int
@@ -123,7 +124,8 @@ public enum OracleDiff {
       let suppressed = allowList.contains(
         rect: v.screenRect,
         side: .vimiumOnly,
-        domSelector: v.tag)
+        domSelector: v.tag,
+        pageOrigin: pageRect.origin)
       entries.append(
         DiffEntry(kind: .vimiumOnly(v), suppressedByAllowList: suppressed))
     }
@@ -131,7 +133,8 @@ public enum OracleDiff {
       let suppressed = allowList.contains(
         rect: f.frame,
         side: .flashOnly,
-        axRole: f.role)
+        axRole: f.role,
+        pageOrigin: pageRect.origin)
       entries.append(
         DiffEntry(kind: .flashOnly(f), suppressedByAllowList: suppressed))
     }
@@ -182,8 +185,11 @@ public enum OracleDiff {
   /// JSON shape suitable for pasting into a fixture's `.allowed.json`.
   /// Used by the `--update-allow-list` CLI flag to bootstrap a new
   /// fixture's sidecar.
-  public static func suggestedAllowListJSON(_ result: Result) -> String {
+  public static func suggestedAllowListJSON(_ result: Result, pageRect: CGRect = .zero)
+    -> String
+  {
     var entries: [AllowListEntry] = []
+    let origin = pageRect.origin
     for entry in result.entries {
       guard !entry.suppressedByAllowList else { continue }
       switch entry.kind {
@@ -192,7 +198,7 @@ public enum OracleDiff {
         entries.append(
           AllowListEntry(
             side: .vimiumOnly,
-            rect: rectArray(v.screenRect),
+            rect: rectArray(v.screenRect, pageOrigin: origin),
             reason: "explain why this divergence is acceptable before committing",
             axRole: nil,
             domSelector: v.tag.isEmpty ? nil : v.tag))
@@ -200,7 +206,7 @@ public enum OracleDiff {
         entries.append(
           AllowListEntry(
             side: .flashOnly,
-            rect: rectArray(t.frame),
+            rect: rectArray(t.frame, pageOrigin: origin),
             reason: "explain why this divergence is acceptable before committing",
             axRole: t.role,
             domSelector: nil))
@@ -239,8 +245,11 @@ public enum OracleDiff {
     String(format: "[%.0f,%.0f %.0fx%.0f]", r.minX, r.minY, r.width, r.height)
   }
 
-  private static func rectArray(_ r: CGRect) -> [Double] {
-    [Double(r.minX), Double(r.minY), Double(r.width), Double(r.height)]
+  private static func rectArray(_ r: CGRect, pageOrigin: CGPoint = .zero) -> [Double] {
+    [
+      Double(r.minX - pageOrigin.x), Double(r.minY - pageOrigin.y),
+      Double(r.width), Double(r.height),
+    ]
   }
 
   private static func quote(_ s: String) -> String {

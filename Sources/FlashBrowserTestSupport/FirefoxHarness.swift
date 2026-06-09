@@ -156,19 +156,32 @@ public enum FirefoxHarness {
           // Firefox finishes positioning its window asynchronously
           // after the AX window first reports as present. A too-early
           // AXPosition/Size write gets reverted by Firefox's own
-          // placement. Sleep briefly, set, sleep, set again so the
+          // placement, so each path writes, sleeps, and re-writes so the
           // change sticks.
-          Thread.sleep(forTimeInterval: 0.4)
           if offscreen {
+            // Yank the window off-screen and hand focus back to the
+            // user *before* the settle sleeps, not after. Firefox
+            // self-activates and renders at its default on-screen
+            // position the instant its AX window appears; doing the
+            // first offscreen move + frontmost-restore immediately keeps
+            // that visible/focused window on screen for the shortest
+            // possible time. The later re-writes re-assert the position
+            // after Firefox's async placement would otherwise drag it
+            // back on-screen.
+            moveWindowsOffscreen(pid: app.processIdentifier)
+            previousFrontmost?.activate()
+            Thread.sleep(forTimeInterval: 0.4)
             moveWindowsOffscreen(pid: app.processIdentifier)
             Thread.sleep(forTimeInterval: 0.3)
             moveWindowsOffscreen(pid: app.processIdentifier)
+            previousFrontmost?.activate()
           } else {
+            Thread.sleep(forTimeInterval: 0.4)
             maximizeWindows(pid: app.processIdentifier)
             Thread.sleep(forTimeInterval: 0.3)
             maximizeWindows(pid: app.processIdentifier)
+            previousFrontmost?.activate()
           }
-          previousFrontmost?.activate()
           return app
         }
         throw LaunchError.noAXWindow
@@ -179,11 +192,12 @@ public enum FirefoxHarness {
   }
 
   /// Size every Firefox top-level window to cover the primary
-  /// screen. Firefox is launched in the background (`open -g`) so
-  /// the window stays behind the user's foreground app — but if
-  /// they click Firefox in the Dock they see the fixture page
-  /// rendered at full size, which is useful for inspecting what
-  /// the oracle saw.
+  /// screen. Used only by the non-`offscreen` path: the caller
+  /// restores the user's previously-frontmost app right after, so
+  /// Firefox drops behind it — but if the user clicks Firefox in the
+  /// Dock they see the fixture page rendered at full size, which is
+  /// useful for inspecting what the oracle saw. The oracle itself
+  /// launches `offscreen` to stay out of the user's way.
   private static func maximizeWindows(pid: pid_t) {
     let app = AXUIElementCreateApplication(pid)
     var raw: CFTypeRef?
@@ -409,18 +423,31 @@ public enum FirefoxHarness {
   }
 
   /// Build the `AppContext` Flash would pass to `AccessibilityProvider`
-  /// in production. The front-window frame is set to the full primary
-  /// screen since the test isn't trying to scope hints to a window
-  /// sub-region.
+  /// in production.
+  ///
+  /// `frontWindowFrame` is the per-node visibility pre-clip inside
+  /// `discover`. We deliberately make it effectively unbounded rather
+  /// than the screen frame: the oracle launches Firefox *offscreen*
+  /// (windows parked at ~(-9999,-9999) so they never cover the user's
+  /// desktop or steal focus), which puts every AX node's NSScreen-space
+  /// frame far outside the real screen rect. A screen-sized pre-clip
+  /// would reject all of them and Flash would see zero targets. The
+  /// real, coordinate-correct clipping happens downstream against the
+  /// fiducial-derived `pageScreenRect` (see `VimiumOracle.capture`'s
+  /// `visibleRegions: [pageRect]` and the per-fixture `pageFlash`
+  /// filter), which lives in the same offscreen-shifted space as the
+  /// nodes — so an unbounded pre-clip only lets nodes through to that
+  /// authoritative filter, it doesn't change which targets survive.
   public static func makeContext(for app: NSRunningApplication) -> AppContext {
     let screen =
       NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame
       ?? NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+    let unbounded = CGRect(x: -100_000, y: -100_000, width: 200_000, height: 200_000)
     return AppContext(
       bundleIdentifier: app.bundleIdentifier ?? FirefoxFixture.bundleID,
       processID: app.processIdentifier,
       runningApp: app,
-      frontWindowFrame: screen,
+      frontWindowFrame: unbounded,
       allScreensFrame: screen
     )
   }

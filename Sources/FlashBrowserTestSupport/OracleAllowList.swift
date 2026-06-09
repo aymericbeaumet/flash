@@ -10,8 +10,16 @@ public struct AllowListEntry: Codable {
     case flashOnly
   }
   public let side: Side
-  /// `[x, y, w, h]` in NSScreen coords (post-fiducial transform for
-  /// Vimium-only entries; native AX coords for flashOnly).
+  /// `[x, y, w, h]` in **page-relative** NSScreen-space points: the
+  /// divergence rect with the fiducial-derived `pageScreenRect` origin
+  /// subtracted off (see `OracleDiff.classify`'s `pageOrigin`). Storing
+  /// page-relative instead of absolute screen coords makes the sidecar
+  /// invariant to where Firefox's window actually sits — critical now
+  /// that the oracle parks its windows offscreen, which shifts every
+  /// absolute coordinate by the (clamped) offscreen offset. The legacy
+  /// sidecars were recorded under the old maximize path where the page
+  /// sat at the screen origin, so their absolute values already equal
+  /// page-relative values within tolerance.
   public let rect: [Double]
   public let reason: String
   public let axRole: String?
@@ -60,11 +68,14 @@ public struct OracleAllowList: Codable {
     side: AllowListEntry.Side,
     axRole: String? = nil,
     domSelector: String? = nil,
+    pageOrigin: CGPoint = .zero,
     positionTolerance: CGFloat = 220,
     sizeTolerance: CGFloat = 8
   ) -> Bool {
-    let cx = rect.midX
-    let cy = rect.midY
+    // Stored entries are page-relative; bring the live (absolute-screen)
+    // rect into the same space before comparing centroids.
+    let cx = rect.midX - pageOrigin.x
+    let cy = rect.midY - pageOrigin.y
     for entry in entries where entry.side == side {
       if let expected = entry.axRole, expected != axRole { continue }
       if let expected = entry.domSelector, expected != domSelector { continue }
