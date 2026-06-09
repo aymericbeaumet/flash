@@ -30,6 +30,9 @@ fi
 for manifest in Plugins/*/Cargo.toml; do
   [[ -e "$manifest" ]] || continue
   dir="$(dirname "$manifest")"
+  # A real plugin is defined by its manifest.json; skip support crates such
+  # as the shared SDK at Plugins/_flash_plugin_rust, which has none.
+  [[ -f "$dir/manifest.json" ]] || continue
   id="$(basename "$dir")"
   bin="flash-plugin-$id"
   echo "==> Building plugin $id ($MODE)"

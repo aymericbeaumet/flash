@@ -59,7 +59,7 @@ name = "flash-plugin-$ID"
 path = "src/main.rs"
 
 [dependencies]
-flash-plugin = { path = "../../flash_plugin_template" }
+flash-plugin = { path = "../_flash_plugin_rust" }
 serde_json = "1"
 tokio = { version = "1", default-features = false, features = [
   "rt-multi-thread",

@@ -71,7 +71,7 @@ Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssig
 Tests/BrowserSnapshots/              # Browser integration manifest + 100 offline HTML snapshots used by Scripts/test-integration-browser.sh.
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
 Plugins/                             # Official bundled Rust plugins (one independent crate each), symlinked into the dev app
-flash_plugin_template/               # Generic tokio/JSOND plugin scaffolding crate; no Flash business concepts
+Plugins/_flash_plugin_rust/          # Shared Rust plugin SDK crate (package flash-plugin); no Flash business concepts
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
 Scripts/build-plugins.sh                     # cargo build [dev|release] every Plugins/*/ crate → flash-plugin-<id> binary beside its manifest (release = universal lipo)
 Scripts/_common.sh                           # Shared constants + helpers (signing identity, login agent, app assembly) sourced by build.sh / install.sh
@@ -287,8 +287,8 @@ Official plugin installers must keep downloaded CLI binaries under their own
 
 **Bundled plugins are Rust, macOS-only, and ship as compiled binaries.**
 Each official plugin under `Plugins/<id>/` is an independent (non-workspace)
-Cargo crate depending on the local `flash_plugin_template` crate
-(`flash-plugin = { path = "../../flash_plugin_template" }`), which owns all the
+Cargo crate depending on the local `flash-plugin` SDK crate
+(`flash-plugin = { path = "../_flash_plugin_rust" }`), which owns all the
 generic JSOND scaffolding (framing, `initialize`/`heartbeat`/`shutdown`,
 structured logging, a sandboxed `run_cli`, and the tokio runtime) and carries
 **no Flash business concepts**. A plugin's `main.rs` implements the `Plugin`

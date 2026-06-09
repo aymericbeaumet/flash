@@ -12,7 +12,6 @@ DerivedData/
 ## Rust plugin build output
 Plugins/*/target/
 Plugins/*/flash-plugin-*
-flash_plugin_template/target/
 
 ## Editor / OS
 .DS_Store
