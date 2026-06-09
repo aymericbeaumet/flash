@@ -87,6 +87,14 @@ public struct Candidate: @unchecked Sendable {
   /// too slow when an empty query leaves a large pool (e.g. ~2k emojis)
   /// fully tied on score.
   public var sortKey: String
+  /// a–z0–9 presence bitmask OR'd across every field the live ranker
+  /// scores (the normalized scoring fields + searchText). Populated by
+  /// `CandidateFinder.prepare`. Used as a cheap, *sound* prefilter: a
+  /// candidate whose mask is missing more distinct query characters
+  /// than the fuzzy matcher's edit budget allows can never score, so
+  /// the hot path skips the full scorer. Stays consistent with the
+  /// normalized fields because both are computed together in `prepare`.
+  public var scoringMask: UInt64
 
   public init(
     kind: CandidateKind,
@@ -101,7 +109,8 @@ public struct Candidate: @unchecked Sendable {
     displayTitle: String = "",
     normalizedSearchText: String = "",
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
-    sortKey: String = ""
+    sortKey: String = "",
+    scoringMask: UInt64 = 0
   ) {
     self.kind = kind
     self.sourceID = sourceID
@@ -116,6 +125,7 @@ public struct Candidate: @unchecked Sendable {
     self.normalizedSearchText = normalizedSearchText
     self.normalizedScoringFields = normalizedScoringFields
     self.sortKey = sortKey
+    self.scoringMask = scoringMask
   }
 }
 

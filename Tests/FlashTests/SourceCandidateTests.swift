@@ -383,6 +383,84 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(prepared.normalizedSearchText.contains("example"))
   }
 
+  func testPrefilterNeverRejectsAScoringCandidate() {
+    // Soundness guard for the presence-mask prefilter: it must keep
+    // every candidate the full scorer would accept, or results silently
+    // vanish from the flashlight. The query set mixes exact, prefix,
+    // subsequence, and typo'd spellings to exercise each scoring tier.
+    let candidates = [
+      candidate(
+        kind: .app, source: "app", name: "Finder", subtitle: "app",
+        bundleIdentifier: "com.apple.finder"),
+      candidate(
+        kind: .app, source: "app", name: "Messages", subtitle: "app",
+        bundleIdentifier: "com.apple.MobileSMS"),
+      candidate(
+        kind: .plugin("browser_tab"), source: "firefox", name: "GitHub - flash",
+        subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox",
+        url: URL(string: "https://github.com/aymericbeaumet/flash")),
+      candidate(
+        kind: .plugin("tmux_window"), source: "tmux", name: "vim editor",
+        subtitle: "tmux window", bundleIdentifier: ""),
+      candidate(
+        kind: .plugin("emoji"), source: "emoji", name: "fire", subtitle: "emoji",
+        bundleIdentifier: ""),
+      candidate(
+        kind: .plugin("clipboard"), source: "clipboard",
+        name: "https://news.example.test/article-42", subtitle: "clipboard",
+        bundleIdentifier: ""),
+    ].map { CandidateFinder.prepare($0) }
+
+    let queries = [
+      "f", "fi", "fir", "fire", "finder", "fnider", "mesages", "msg", "git",
+      "github", "gthub", "vim", "editr", "news", "example", "42", "zzz", "xqv",
+      "mes", "fox", "fierfox", "flsh", "flash", "article",
+    ]
+
+    let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    for query in queries {
+      let normalizedQuery = NormalModeDispatcher.normalizedSearchText(query)
+      let prefilter = CandidateFinder.queryPrefilter(normalizedQuery: normalizedQuery)
+      for entry in candidates {
+        guard
+          CandidateFinder.score(
+            normalizedQuery: normalizedQuery, candidate: entry, fuzzyScore: fuzzy) != nil
+        else { continue }
+        XCTAssertTrue(
+          CandidateFinder.passesPrefilter(prefilter, candidateMask: entry.scoringMask),
+          "prefilter wrongly rejected '\(entry.name)' for query '\(query)'")
+      }
+    }
+  }
+
+  func testScoreMatchesEqualsNaiveScanAcrossTheParallelThreshold() {
+    // The prefilter + parallel fan-out must produce exactly the scores a
+    // plain sequential full scan would. The 800-candidate pool crosses
+    // the parallel threshold so the concurrent path is exercised.
+    let pool = (0..<800).map { i in
+      CandidateFinder.prepare(
+        candidate(
+          kind: .plugin("emoji"), source: "emoji",
+          name: "sample item \(i) fire flame", subtitle: "emoji", bundleIdentifier: ""))
+    }
+    let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    for query in ["fire", "sample", "flame", "item", "42", "fier", "zzz"] {
+      let normalizedQuery = NormalModeDispatcher.normalizedSearchText(query)
+      let viaEntry = CandidateFinder.scoreMatches(
+        pool: pool, normalizedQuery: normalizedQuery, fuzzyScore: fuzzy)
+      let naive = pool.compactMap { entry -> CandidateMatch? in
+        guard
+          let score = CandidateFinder.score(
+            normalizedQuery: normalizedQuery, candidate: entry, fuzzyScore: fuzzy)
+        else { return nil }
+        return CandidateMatch(candidate: entry, score: score)
+      }
+      XCTAssertEqual(
+        viaEntry.map(\.score), naive.map(\.score),
+        "score stream diverged from naive scan for query '\(query)'")
+    }
+  }
+
   private func candidate(
     kind: CandidateKind,
     source: String,

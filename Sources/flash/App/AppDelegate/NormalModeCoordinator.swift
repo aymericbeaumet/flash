@@ -1062,16 +1062,8 @@ extension AppDelegate {
         CandidateFinder.candidateMatchesSourceFilter(candidate, filter: $0)
       }
     }
-    let scored: [CandidateMatch] = pool.compactMap { candidate in
-      if trimmed.isEmpty {
-        return CandidateMatch(candidate: candidate, score: 0)
-      }
-      guard
-        let score = CandidateFinder.score(
-          normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
-      else { return nil }
-      return CandidateMatch(candidate: candidate, score: score)
-    }
+    let scored = CandidateFinder.scoreMatches(
+      pool: pool, normalizedQuery: normalizedQuery, fuzzyScore: fuzzyScore)
     candidateFinderMatches = CandidateFinder.sortedMatches(scored)
     if candidateFinderMatches.isEmpty {
       candidateFinderSelectedIndex = 0

@@ -52,13 +52,26 @@ enum CandidateFinder {
     var prepared = candidate
     let display = displayTitle(candidate)
     prepared.displayTitle = display
-    prepared.normalizedSearchText = normalize(searchText(candidate))
+    let normalizedSearchText = normalize(searchText(candidate))
+    prepared.normalizedSearchText = normalizedSearchText
     let normalizedTitle = normalize(candidate.name)
+    let normalizedSourceTitle = normalize("\(candidate.source) \(candidate.name)")
+    let normalizedURL = normalize(urlSearchText(candidate))
+    let normalizedDisplay = normalize(display)
     prepared.normalizedScoringFields = NormalizedScoringFields(
       title: normalizedTitle,
-      sourceTitle: normalize("\(candidate.source) \(candidate.name)"),
-      url: normalize(urlSearchText(candidate)),
-      displayTitle: normalize(display))
+      sourceTitle: normalizedSourceTitle,
+      url: normalizedURL,
+      displayTitle: normalizedDisplay)
+    // Union of the a–z0–9 presence bits across every field `score`
+    // reads. Computed here, once, so the per-keystroke prefilter is a
+    // few integer ops instead of re-scanning strings.
+    prepared.scoringMask =
+      presenceMask(normalizedTitle)
+      | presenceMask(normalizedSourceTitle)
+      | presenceMask(normalizedURL)
+      | presenceMask(normalizedDisplay)
+      | presenceMask(normalizedSearchText)
     // Cheap, locale-free tie-break key. Mirrors the old comparator
     // chain (name → source → displayTitle → sourceID) but as one plain
     // string so `sortedMatches` avoids `localizedCaseInsensitiveCompare`
@@ -70,6 +83,71 @@ enum CandidateFinder {
       candidate.sourceID.lowercased(),
     ].joined(separator: "\u{1f}")
     return prepared
+  }
+
+  /// a–z0–9 presence bitmask of a normalized (lowercased) string.
+  /// Non-alphanumerics — spaces, `#`, any non-ASCII — set no bit, which
+  /// keeps the prefilter conservative: an unmasked character can never
+  /// trigger a false rejection.
+  static func presenceMask(_ normalized: String) -> UInt64 {
+    var mask: UInt64 = 0
+    for scalar in normalized.unicodeScalars {
+      let v = scalar.value
+      if v >= 97, v <= 122 {  // a–z
+        mask |= 1 << UInt64(v - 97)
+      } else if v >= 48, v <= 57 {  // 0–9
+        mask |= 1 << UInt64(v - 48 + 26)
+      }
+    }
+    return mask
+  }
+
+  /// Per-keystroke prefilter key: the query's a–z0–9 presence mask plus
+  /// the fuzzy matcher's edit budget for this query length. Computed
+  /// once per query, then matched against each candidate's `scoringMask`
+  /// via `passesPrefilter`.
+  struct QueryPrefilter {
+    var mask: UInt64
+    var maxEdits: Int
+  }
+
+  static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
+    var mask: UInt64 = 0
+    var compactCount = 0
+    for scalar in normalizedQuery.unicodeScalars {
+      let v = scalar.value
+      if v == 32 { continue }  // space — the matcher strips these before counting
+      compactCount += 1
+      if v >= 97, v <= 122 {
+        mask |= 1 << UInt64(v - 97)
+      } else if v >= 48, v <= 57 {
+        mask |= 1 << UInt64(v - 48 + 26)
+      }
+      // Other searchable scalars (e.g. `#`) still count toward the edit
+      // budget — matching the matcher — but set no mask bit. Omitting
+      // them only makes the prefilter more permissive, never wrongly
+      // rejecting.
+    }
+    return QueryPrefilter(mask: mask, maxEdits: allowedTypoCount(compactCount))
+  }
+
+  /// Sound rejection test: the number of *distinct* query characters
+  /// absent from the candidate is a lower bound on the edits the fuzzy
+  /// matcher would need, so a candidate missing more than the budget
+  /// can never score. Exact/prefix/substring/subsequence matches leave
+  /// zero query characters absent, so they always pass.
+  @inline(__always)
+  static func passesPrefilter(_ prefilter: QueryPrefilter, candidateMask: UInt64) -> Bool {
+    (prefilter.mask & ~candidateMask).nonzeroBitCount <= prefilter.maxEdits
+  }
+
+  /// Mirror of `FuzzyMatcher.allowedTypoCount` (which is private). Kept
+  /// in sync so the prefilter's budget never undershoots the matcher's,
+  /// which would let it reject a candidate the matcher accepts.
+  private static func allowedTypoCount(_ length: Int) -> Int {
+    if length <= 2 { return 0 }
+    if length <= 5 { return 1 }
+    return 2
   }
 
   static func score(
@@ -122,6 +200,57 @@ enum CandidateFinder {
     guard var resolved = best else { return nil }
     resolved += sourcePrecedenceBonus(for: candidate)
     return resolved
+  }
+
+  /// Live-ranker entry point: score a prepared pool against a normalized
+  /// query. Applies the cheap presence-mask prefilter before the full
+  /// scorer, and fans large pools (e.g. the ~2k emoji set) out across
+  /// cores. Small pools stay sequential to dodge dispatch overhead.
+  /// `score` is pure, so concurrent evaluation is safe.
+  static func scoreMatches(
+    pool: [Candidate],
+    normalizedQuery: String,
+    fuzzyScore: (String, String) -> Int?
+  ) -> [CandidateMatch] {
+    if normalizedQuery.isEmpty {
+      return pool.map { CandidateMatch(candidate: $0, score: 0) }
+    }
+    let prefilter = queryPrefilter(normalizedQuery: normalizedQuery)
+    if pool.count >= parallelScoreThreshold {
+      let scored = [CandidateMatch?](unsafeUninitializedCapacity: pool.count) {
+        buffer, initializedCount in
+        DispatchQueue.concurrentPerform(iterations: pool.count) { index in
+          let match = scoreMatch(
+            candidate: pool[index], prefilter: prefilter,
+            normalizedQuery: normalizedQuery, fuzzyScore: fuzzyScore)
+          buffer.baseAddress!.advanced(by: index).initialize(to: match)
+        }
+        initializedCount = pool.count
+      }
+      return scored.compactMap { $0 }
+    }
+    return pool.compactMap { candidate in
+      scoreMatch(
+        candidate: candidate, prefilter: prefilter,
+        normalizedQuery: normalizedQuery, fuzzyScore: fuzzyScore)
+    }
+  }
+
+  private static let parallelScoreThreshold = 600
+
+  @inline(__always)
+  private static func scoreMatch(
+    candidate: Candidate,
+    prefilter: QueryPrefilter,
+    normalizedQuery: String,
+    fuzzyScore: (String, String) -> Int?
+  ) -> CandidateMatch? {
+    guard passesPrefilter(prefilter, candidateMask: candidate.scoringMask) else { return nil }
+    guard
+      let score = score(
+        normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
+    else { return nil }
+    return CandidateMatch(candidate: candidate, score: score)
   }
 
   /// Tier bonus the user asked for: when two candidates fuzzy-match
