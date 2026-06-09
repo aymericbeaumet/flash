@@ -69,6 +69,7 @@ final class AXBroker {
       ?? Self.defaultFollow
     let collect = params["collect"] as? [String] ?? []
     let maxNodes = params["max_nodes"] as? Int ?? 3_000
+    let geometry = params["geometry"] as? Bool ?? false
 
     queue.async { [weak self] in
       guard let self else {
@@ -76,6 +77,10 @@ final class AXBroker {
         return
       }
       self.purge(pid: pid)
+      // Y-flip reference: AX reports top-left origins, NSScreen is
+      // bottom-left. Resolved once per snapshot so every node's frame uses
+      // the same basis. Only needed when geometry is requested.
+      let screenH = geometry ? self.primaryScreenHeight() : 0
       let app = AXUIElementCreateApplication(pid)
       let roots: [AXUIElement]
       switch rootsMode {
@@ -92,8 +97,12 @@ final class AXBroker {
           let element = bfs[index]
           index += 1
           let handle = self.register(pid: pid, element: element)
-          let (attrs, children) = self.readNode(element, collect: collect, follow: follow)
-          nodes.append(["handle": handle, "root": rootIndex, "attrs": attrs])
+          let (attrs, children, frame) = self.readNode(
+            element, collect: collect, follow: follow,
+            geometry: geometry, screenH: screenH)
+          var node: [String: Any] = ["handle": handle, "root": rootIndex, "attrs": attrs]
+          if let frame { node["frame"] = frame }
+          nodes.append(node)
           bfs.append(contentsOf: children)
         }
       }
@@ -187,11 +196,19 @@ final class AXBroker {
   /// an unreadable attribute yields an `AXError` placeholder in its slot rather
   /// than aborting the batch; those slots coerce to "absent", preserving the
   /// prior per-attribute semantics.
+  ///
+  /// When `geometry` is set, `kAXPositionAttribute`+`kAXSizeAttribute` ride the
+  /// *same* batch and the node gets a `frame:[x,y,w,h]` in NSScreen space,
+  /// Y-flipped to match `AccessibilityProvider.frameFromAX` so plugin hints
+  /// land pixel-for-pixel on the core hints.
   private func readNode(
-    _ element: AXUIElement, collect: [String], follow: [String]
-  ) -> (attrs: [String: String], children: [AXUIElement]) {
-    let names = collect + follow
-    guard !names.isEmpty else { return ([:], []) }
+    _ element: AXUIElement, collect: [String], follow: [String],
+    geometry: Bool, screenH: CGFloat
+  ) -> (attrs: [String: String], children: [AXUIElement], frame: [Double]?) {
+    let geometryNames =
+      geometry ? [kAXPositionAttribute as String, kAXSizeAttribute as String] : []
+    let names = collect + follow + geometryNames
+    guard !names.isEmpty else { return ([:], [], nil) }
     var raw: CFArray?
     let status = AXUIElementCopyMultipleAttributeValues(
       element, names as CFArray, AXCopyMultipleAttributeOptions(), &raw)
@@ -204,20 +221,27 @@ final class AXBroker {
       }
       var children: [AXUIElement] = []
       for name in follow { children.append(contentsOf: elementArray(element, name)) }
-      return (attrs, children)
+      let frame = geometry ? frameFromAX(element, screenH: screenH) : nil
+      return (attrs, children, frame)
     }
     var attrs: [String: String] = [:]
     for (offset, name) in collect.enumerated() {
       if let text = coerce(values[offset]) { attrs[name] = text }
     }
     var children: [AXUIElement] = []
-    let base = collect.count
+    let followBase = collect.count
     for offset in follow.indices {
-      if let elems = values[base + offset] as? [AXUIElement] {
+      if let elems = values[followBase + offset] as? [AXUIElement] {
         children.append(contentsOf: elems)
       }
     }
-    return (attrs, children)
+    var frame: [Double]? = nil
+    if geometry {
+      let geometryBase = collect.count + follow.count
+      frame = frameArray(
+        pos: values[geometryBase], size: values[geometryBase + 1], screenH: screenH)
+    }
+    return (attrs, children, frame)
   }
 
   private func elementArray(_ element: AXUIElement, _ name: String) -> [AXUIElement] {
@@ -246,6 +270,51 @@ final class AXBroker {
     if let url = value as? URL { return url.absoluteString }
     if let number = value as? NSNumber { return number.stringValue }
     return nil
+  }
+
+  // MARK: - Geometry
+
+  /// Y-flips a batched position/size pair (the opaque `Any` slots from
+  /// `AXUIElementCopyMultipleAttributeValues`) into NSScreen-space
+  /// `[x, y, w, h]`. Returns nil unless both slots are real `AXValue`s.
+  private func frameArray(pos: Any, size: Any, screenH: CGFloat) -> [Double]? {
+    guard CFGetTypeID(pos as CFTypeRef) == AXValueGetTypeID(),
+      CFGetTypeID(size as CFTypeRef) == AXValueGetTypeID()
+    else { return nil }
+    return frameArray(pos: pos as! AXValue, size: size as! AXValue, screenH: screenH)
+  }
+
+  /// Per-attribute geometry read for the rare batched-read failure fallback.
+  private func frameFromAX(_ element: AXUIElement, screenH: CGFloat) -> [Double]? {
+    var posRaw: CFTypeRef?
+    var sizeRaw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRaw) == .success,
+      AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRaw) == .success,
+      let posRaw, let sizeRaw,
+      CFGetTypeID(posRaw) == AXValueGetTypeID(), CFGetTypeID(sizeRaw) == AXValueGetTypeID()
+    else { return nil }
+    return frameArray(pos: posRaw as! AXValue, size: sizeRaw as! AXValue, screenH: screenH)
+  }
+
+  /// The actual flip. AX reports a top-left origin; NSScreen is bottom-left,
+  /// so `y' = screenH - y - height` — identical to
+  /// `AccessibilityProvider.frameFromAX`.
+  private func frameArray(pos: AXValue, size: AXValue, screenH: CGFloat) -> [Double]? {
+    guard AXValueGetType(pos) == .cgPoint, AXValueGetType(size) == .cgSize else { return nil }
+    var origin = CGPoint.zero
+    var sz = CGSize.zero
+    AXValueGetValue(pos, .cgPoint, &origin)
+    AXValueGetValue(size, .cgSize, &sz)
+    let flippedY = screenH - origin.y - sz.height
+    return [Double(origin.x), Double(flippedY), Double(sz.width), Double(sz.height)]
+  }
+
+  private func primaryScreenHeight() -> CGFloat {
+    if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
+      return primary.frame.height
+    }
+    return NSScreen.main?.frame.height ?? 1080
   }
 
   // MARK: - Param coercion

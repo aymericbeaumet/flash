@@ -16,6 +16,17 @@ final class PluginManager {
     let meta: [String: String]
   }
 
+  /// A plugin mapping with its `key`/`command` already canonicalized and
+  /// parsed (the work done once at index-rebuild time, not per focus-change).
+  /// `bundleIDs` empty ⇒ applies to every app the plugin is otherwise scoped
+  /// to; non-empty ⇒ only those apps.
+  private struct ResolvedPluginMapping {
+    let bundleIDs: [String]
+    let priority: Int
+    let scope: ModeScope
+    let mapping: ModeMapping
+  }
+
   private let queue = DispatchQueue(label: "flash.plugins", qos: .utility)
   private let baseDataDir: URL
   private var pluginsByID: [String: PluginProcess] = [:]
@@ -31,11 +42,19 @@ final class PluginManager {
   /// `:calc 2 + 2`). Keyed by lowercased command; consulted only when the
   /// exact `(command, subcommand)` lookup misses.
   private var wildcardCommandIndex: [String: CommandTarget] = [:]
+  /// Resolved plugin mappings across all loaded plugins, rebuilt whenever the
+  /// plugin set or any plugin's mappings change. `mappings(forBundleID:)`
+  /// filters this for the focused app.
+  private var mappingIndex: [ResolvedPluginMapping] = []
   /// Owns the single AX (Accessibility) grant and the handle registry that
   /// backs the `ax.*` host RPCs. Plugins never touch AX directly; they reach
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
   var onStateChanged: (() -> Void)?
+  /// Fired on the main thread after the mapping index is rebuilt because a
+  /// plugin emitted `mappings.updated`. The app recomputes its effective
+  /// per-app mapping tables in response.
+  var onMappingsChanged: (() -> Void)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
     self.baseDataDir = baseDataDir
@@ -57,6 +76,7 @@ final class PluginManager {
       pluginsByID.removeAll()
       commandIndex.removeAll()
       wildcardCommandIndex.removeAll()
+      mappingIndex.removeAll()
       sourceAdaptersByID.removeAll()
     }
   }
@@ -179,6 +199,62 @@ final class PluginManager {
     wildcardCommandIndex = wildcard
   }
 
+  /// Rebuild the resolved-mapping index. Must be called from `queue` after
+  /// `pluginsByID` or any plugin's mappings change. Canonicalizes the key and
+  /// parses the `flash://` command once here so the focus-change path only
+  /// filters and merges; invalid entries are dropped with a warning.
+  private func rebuildMappingIndex() {
+    var next: [ResolvedPluginMapping] = []
+    for plugin in pluginsByID.values {
+      let manifest = plugin.manifest
+      for registration in plugin.mappings {
+        guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(registration.key) else {
+          FlashLog.warn(
+            "[plugins] mapping key \"\(registration.key)\" from \(manifest.id) "
+              + "failed canonicalization")
+          continue
+        }
+        guard let action = parseMappingCommand(rawString: registration.command) else {
+          FlashLog.warn(
+            "[plugins] mapping command \"\(registration.command)\" from \(manifest.id) "
+              + "is not a valid flash:// URL")
+          continue
+        }
+        let bundleIDs = registration.bundleIDs.isEmpty ? manifest.bundleIDs : registration.bundleIDs
+        next.append(
+          ResolvedPluginMapping(
+            bundleIDs: bundleIDs,
+            priority: registration.priority ?? manifest.priority,
+            scope: registration.scope,
+            mapping: ModeMapping(key: canonical, action: action)))
+      }
+    }
+    mappingIndex = next
+  }
+
+  /// Plugin mappings applicable to `bundleID`, as
+  /// `(priority, scope, mapping)` tuples for `EffectiveMappings.merge`.
+  /// A mapping with no bundle scope applies to every app.
+  func mappings(
+    forBundleID bundleID: String
+  ) -> [(priority: Int, scope: ModeScope, mapping: ModeMapping)] {
+    queue.sync {
+      mappingIndex
+        .filter { $0.bundleIDs.isEmpty || $0.bundleIDs.contains(bundleID) }
+        .map { ($0.priority, $0.scope, $0.mapping) }
+    }
+  }
+
+  /// A plugin's mappings changed at runtime: rebuild the index on `queue`,
+  /// then notify the app to recompute effective tables on the main thread.
+  private func handleMappingsChanged() {
+    queue.async { [weak self] in
+      guard let self else { return }
+      self.rebuildMappingIndex()
+      DispatchQueue.main.async { self.onMappingsChanged?() }
+    }
+  }
+
   func statusText() -> String {
     let snapshots = statusSnapshots()
     guard !snapshots.isEmpty else {
@@ -266,6 +342,7 @@ final class PluginManager {
           watchFiles: config.plugins.watchingEnabled,
           settings: settings)
         plugin.onStatusChanged = { [weak self] in self?.notifyStateChanged() }
+        plugin.onMappingsChanged = { [weak self] in self?.handleMappingsChanged() }
         plugin.onHostRequest = { [weak self] method, params, pluginID, reply in
           self?.handleHostRequest(
             method: method, params: params, pluginID: pluginID, reply: reply)
@@ -290,6 +367,7 @@ final class PluginManager {
       sourceAdaptersByID.removeValue(forKey: id)
     }
     rebuildCommandIndex()
+    rebuildMappingIndex()
     notifyStateChanged()
   }
 

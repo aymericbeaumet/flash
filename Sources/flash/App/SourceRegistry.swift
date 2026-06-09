@@ -126,8 +126,15 @@ final class SourceRegistry {
       }
   }
 
-  func continuousSources(for context: AppContext) -> [FlashSource] {
-    chain(for: context).filter { $0.readinessPolicy == .continuous }
+  /// The single source that owns hints for `context`. Hint selection is
+  /// exclusive: only the highest-priority `.jumpTargets` provider runs, with
+  /// no additive merge and no fallback if it yields nothing. For a generic app
+  /// this is the core AX walk (`accessibility`, priority 10); when a plugin
+  /// opts in via `provides_hints` at a higher priority and supports the app,
+  /// it takes over `f` for that app alone. `chain(for:)` is already
+  /// priority-sorted, so the winner is its head.
+  func hintProvider(for context: AppContext) -> FlashSource? {
+    chain(for: context).first
   }
 
   func anyVolatileSourceApplies(to context: AppContext) -> Bool {

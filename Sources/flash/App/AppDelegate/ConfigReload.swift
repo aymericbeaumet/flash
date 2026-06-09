@@ -118,7 +118,6 @@ extension AppDelegate {
     overlay.debugConfig = cfg.debug
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
-    overlay.normalModeMappings = cfg.mode.compiledNormal
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
     registry.updateOpenConfig(cfg.open)
     pluginManager.updateConfig(cfg)
@@ -139,9 +138,13 @@ extension AppDelegate {
         force: true)
     }
     applyModeOverlay()
-    // Push native mappings too — the Carbon hotkey registry rebuilds
-    // from scratch each call, so add/remove/edit all converge atomically.
-    mappings.apply(mode: cfg.mode)
+    // Recompute the effective mappings (config defaults + plugin mappings)
+    // for the frontmost app and push them to both the overlay and the Carbon
+    // hotkey registry. The new config invalidates every cached effective mode;
+    // the registry rebuilds from scratch, so add/remove/edit converge atomically.
+    invalidateEffectiveMappings()
+    refreshEffectiveMappings(
+      for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
   }
 
   /// Plugins emit a state notification on every log line, heartbeat, and

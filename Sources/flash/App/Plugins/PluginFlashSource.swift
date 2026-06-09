@@ -14,10 +14,14 @@ final class PluginFlashSource: FlashSource {
   var displayName: String { plugin.manifest.name }
   var priority: Int { plugin.manifest.priority }
   var capabilities: FlashSourceCapabilities {
-    [
-      .jumpTargets, .candidates, .appActivation, .tabSelection, .tabCreation, .tabNavigation,
-      .tabClosing,
-    ]
+    // `.jumpTargets` is gated on the manifest opt-in: hint selection is
+    // exclusive (highest-priority provider wins, no fallback), so a plugin
+    // that doesn't actually produce hints must not advertise the capability
+    // and displace the core AX walk. Candidate/tab caps are unconditional.
+    var caps: FlashSourceCapabilities =
+      [.candidates, .appActivation, .tabSelection, .tabCreation, .tabNavigation, .tabClosing]
+    if plugin.manifest.providesHints { caps.insert(.jumpTargets) }
+    return caps
   }
   var activationPolicy: FlashSourceActivationPolicy {
     let manifestBundles = Set(plugin.manifest.bundleIDs)

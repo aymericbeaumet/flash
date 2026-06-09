@@ -140,6 +140,63 @@ struct PluginCommandRegistration: Codable, Hashable {
   }
 }
 
+/// One key mapping a plugin registers. Mirrors a `[mode.<scope>.mappings]`
+/// config entry but is app- and priority-scoped: the binding applies only
+/// while one of `bundleIDs` (defaulting to the plugin's manifest bundles) is
+/// focused, and `priority` decides who wins when several mappings claim the
+/// same key — plugin mappings default to the manifest priority (25), so they
+/// override built-in defaults (priority 0); a negative priority defers to the
+/// defaults. `command` is a `flash://…` URL resolved once at registration.
+struct PluginMappingRegistration: Codable, Hashable {
+  var key: String
+  var mode: String
+  var command: String
+  var bundleIDs: [String]
+  var priority: Int?
+
+  init(
+    key: String,
+    mode: String = "normal",
+    command: String,
+    bundleIDs: [String] = [],
+    priority: Int? = nil
+  ) {
+    self.key = key
+    self.mode = mode
+    self.command = command
+    self.bundleIDs = bundleIDs
+    self.priority = priority
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case key, mode, command
+    case bundleIDs = "bundle_ids"
+    case priority
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.key = try c.decode(String.self, forKey: .key)
+    self.mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "normal"
+    self.command = try c.decode(String.self, forKey: .command)
+    self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(key, forKey: .key)
+    if mode != "normal" { try c.encode(mode, forKey: .mode) }
+    try c.encode(command, forKey: .command)
+    if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
+    if let priority { try c.encode(priority, forKey: .priority) }
+  }
+
+  /// `mode` string → `ModeScope`; an unknown value falls back to `.normal`
+  /// (the common case — overriding `f`/nav keys lives in normal mode).
+  var scope: ModeScope { ModeScope(rawValue: mode) ?? .normal }
+}
+
 struct PluginManifest: Codable, Equatable {
   var id: String
   var name: String
@@ -149,8 +206,18 @@ struct PluginManifest: Codable, Equatable {
   var start: String
   var events: [PluginEventSubscription]
   var commands: [PluginCommandRegistration]
+  /// Key mappings the plugin contributes. Each is mode-scoped,
+  /// app-conditional, and priority-ordered — see `PluginMappingRegistration`.
+  var mappings: [PluginMappingRegistration]
   var priority: Int
   var volatile: Bool
+  /// Opts the plugin in as a *hints provider*: its `.jumpTargets` capability
+  /// is advertised only when this is set. Hint selection is exclusive —
+  /// the single highest-priority hints provider supporting the focused app
+  /// owns `f`/hints for that app — so a plugin that returns no targets must
+  /// not silently replace the core AX walk. Off by default; existing plugins
+  /// keep their candidate/tab capabilities untouched.
+  var providesHints: Bool
   /// Bundle identifiers the source applies to. When non-empty, restricts
   /// `supports()` and jump-target discovery to these apps. Mirrors the
   /// `bundle_ids` filter used on event subscriptions but applies even when
@@ -162,8 +229,9 @@ struct PluginManifest: Codable, Equatable {
   var requestTimeoutMs: Int?
 
   enum CodingKeys: String, CodingKey {
-    case id, name, version, description, install, start, events, commands, priority
+    case id, name, version, description, install, start, events, commands, mappings, priority
     case volatile
+    case providesHints = "provides_hints"
     case bundleIDs = "bundle_ids"
     case requestTimeoutMs = "request_timeout_ms"
   }
@@ -173,8 +241,10 @@ struct PluginManifest: Codable, Equatable {
     install: String, start: String,
     events: [PluginEventSubscription] = [],
     commands: [PluginCommandRegistration] = [],
+    mappings: [PluginMappingRegistration] = [],
     priority: Int = 25,
     volatile: Bool = false,
+    providesHints: Bool = false,
     bundleIDs: [String] = [],
     requestTimeoutMs: Int? = nil
   ) {
@@ -186,8 +256,10 @@ struct PluginManifest: Codable, Equatable {
     self.start = start
     self.events = events
     self.commands = commands
+    self.mappings = mappings
     self.priority = priority
     self.volatile = volatile
+    self.providesHints = providesHints
     self.bundleIDs = bundleIDs
     self.requestTimeoutMs = requestTimeoutMs
   }
@@ -202,8 +274,11 @@ struct PluginManifest: Codable, Equatable {
     self.start = try c.decode(String.self, forKey: .start)
     self.events = try c.decodeIfPresent([PluginEventSubscription].self, forKey: .events) ?? []
     self.commands = try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
+    self.mappings =
+      try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .mappings) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
+    self.providesHints = try c.decodeIfPresent(Bool.self, forKey: .providesHints) ?? false
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
     self.requestTimeoutMs = try c.decodeIfPresent(Int.self, forKey: .requestTimeoutMs)
   }
@@ -218,8 +293,10 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(start, forKey: .start)
     if !events.isEmpty { try c.encode(events, forKey: .events) }
     if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
+    if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
     try c.encode(priority, forKey: .priority)
     if volatile { try c.encode(volatile, forKey: .volatile) }
+    if providesHints { try c.encode(providesHints, forKey: .providesHints) }
     if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
     if let requestTimeoutMs { try c.encode(requestTimeoutMs, forKey: .requestTimeoutMs) }
   }

@@ -120,7 +120,10 @@ extension AppMonitor {
       completion?(nil)
       return
     }
-    let providers = registry.continuousSources(for: context)
+    // Exclusive hints: prepare the model from the single winning provider.
+    // We only reach here when no volatile source applies (checked above), so
+    // the winner is guaranteed continuous and safe to cache.
+    let providers = registry.hintProvider(for: context).map { [$0] } ?? []
     guard !providers.isEmpty else {
       completion?(nil)
       return

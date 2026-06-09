@@ -24,3 +24,34 @@ global shell paths. Current bundled commands:
 - `:media play|pause|toggle|next|previous|volumeup|volumedown|mute|get|status|run`
 
 Authentication is explicit. Install and start do not run login flows.
+
+## Hints and mappings
+
+A plugin can drive two more core surfaces, both gated on the manifest:
+
+- **`provides_hints`** (bool, default false). Opts the plugin in as a *hints
+  provider* for the apps it matches (`bundle_ids`). Hint selection is
+  exclusive: when `f` fires, only the single highest-priority hints provider
+  supporting the focused app runs — so an opted-in plugin (manifest `priority`
+  defaults to 25, above the core AX walk's 10) fully owns `f`/hints for that
+  app and must return its own targets. Plugins that don't set this keep the
+  core AX hints untouched. To position hint geometry, request
+  `ax.snapshot` with `geometry: true`; each node then carries a
+  `frame: [x, y, w, h]` in NSScreen space, ready to drop into a target.
+
+- **`mappings`** (array, default `[]`). Key bindings the plugin contributes.
+  Each entry is mode-scoped, app-conditional, and priority-ordered:
+
+  ```json
+  { "key": "ctrl+k", "mode": "normal", "command": "flash://plugin_command?command=slack&subcommand=run",
+    "bundle_ids": ["com.tinyspeck.slackmacgap"], "priority": 30 }
+  ```
+
+  `mode` is `normal` (default), `insert`, or `all`. `command` is a `flash://`
+  URL. `bundle_ids` defaults to the manifest's bundles; the binding applies
+  only while one of them is focused. `priority` defaults to the manifest
+  priority (25): config/default mappings sit at 0, so a plugin mapping wins a
+  key collision; a negative priority defers to the built-in default. A plugin
+  may push an updated set at runtime via a `mappings.updated` notification
+  (sibling of `commands.updated`); Flash re-applies it for the focused app
+  without a restart.

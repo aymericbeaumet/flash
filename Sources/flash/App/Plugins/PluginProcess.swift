@@ -28,6 +28,7 @@ final class PluginProcess {
   private var fileWatcherFDs: [Int32] = []
   private var reloadWork: DispatchWorkItem?
   private var dynamicCommands: [PluginCommandRegistration] = []
+  private var dynamicMappings: [PluginMappingRegistration] = []
   private var lastError: String?
   private var lastLog: String?
   /// Previous CPU sample (cumulative user+system nanoseconds and the wall
@@ -43,6 +44,10 @@ final class PluginProcess {
   /// tell whether this plugin's settings changed.
   let settings: [String: PluginConfigValue]
   var onStatusChanged: (() -> Void)?
+  /// Fired when the plugin's mappings change at runtime (`mappings.updated`).
+  /// Distinct from `onStatusChanged` so the host only rebuilds its mapping
+  /// index on real mapping edits, not on every log line / heartbeat.
+  var onMappingsChanged: (() -> Void)?
   /// Handles a plugin→host RPC request (`call_host` on the plugin side):
   /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
   /// installs this; `reply` is invoked with the JSON result, possibly async
@@ -64,6 +69,7 @@ final class PluginProcess {
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.dynamicCommands = manifest.commands
+    self.dynamicMappings = manifest.mappings
     self.watchFiles = watchFiles
     self.settings = settings
   }
@@ -74,6 +80,12 @@ final class PluginProcess {
     lock.lock()
     defer { lock.unlock() }
     return dynamicCommands
+  }
+
+  var mappings: [PluginMappingRegistration] {
+    lock.lock()
+    defer { lock.unlock() }
+    return dynamicMappings
   }
 
   func start() {
@@ -866,6 +878,15 @@ final class PluginProcess {
         lock.unlock()
         notifyStatus()
       }
+    case "mappings.updated":
+      if let raw = params["mappings"] as? [[String: Any]] {
+        let mappings = raw.compactMap(Self.mapping(from:))
+        lock.lock()
+        dynamicMappings = mappings
+        lock.unlock()
+        onMappingsChanged?()
+        notifyStatus()
+      }
     default:
       break
     }
@@ -960,6 +981,18 @@ final class PluginProcess {
       command: command,
       subcommand: subcommand,
       description: raw["description"] as? String ?? "")
+  }
+
+  private static func mapping(from raw: [String: Any]) -> PluginMappingRegistration? {
+    guard let key = raw["key"] as? String, !key.isEmpty,
+      let command = raw["command"] as? String, !command.isEmpty
+    else { return nil }
+    return PluginMappingRegistration(
+      key: key,
+      mode: raw["mode"] as? String ?? "normal",
+      command: command,
+      bundleIDs: raw["bundle_ids"] as? [String] ?? [],
+      priority: raw["priority"] as? Int)
   }
 
   private static func number(_ value: Any?) -> Double? {

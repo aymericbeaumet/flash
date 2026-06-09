@@ -80,7 +80,7 @@ fn source_name(bundle: &str) -> String {
 /// role-description marks it as a tab strip entry (or any `AXTab`).
 async fn collect_tabs(ctx: &Context, pid: i64) -> Vec<Tab> {
     let nodes = ctx
-        .ax_snapshot(pid, "windows", &[], COLLECT, MAX_NODES)
+        .ax_snapshot(pid, "windows", &[], COLLECT, MAX_NODES, false)
         .await;
     let window_titles = window_titles(&nodes);
     let mut tabs = Vec::new();

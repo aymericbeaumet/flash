@@ -97,7 +97,8 @@ extension AppMonitor {
     completion: @escaping ([AssignedHint]) -> Void
   ) {
     let cfg = snapshotConfig()
-    let providers = registry.chain(for: context)
+    // Exclusive hints: run only the winning provider, never the whole chain.
+    let providers = registry.hintProvider(for: context).map { [$0] } ?? []
     axQueue.async { [weak self] in
       guard let self else { return }
       let result = self.runAndAssign(

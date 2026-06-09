@@ -160,6 +160,62 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.events.count, 2)
     XCTAssertEqual(manifest.commands.first?.command, "spotify")
     XCTAssertEqual(manifest.commands.first?.subcommand, "pause")
+    XCTAssertTrue(manifest.mappings.isEmpty, "absent mappings key defaults to []")
+  }
+
+  func testManifestDecodesMappingsWithDefaults() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "slack",
+          "name": "Slack",
+          "version": "0.1.0",
+          "description": "Slack",
+          "install": "true",
+          "start": "true",
+          "mappings": [
+            { "key": "q", "command": "flash://plugin_command?command=slack&subcommand=run" },
+            {
+              "key": "ctrl+k",
+              "mode": "insert",
+              "command": "flash://hints_dismiss",
+              "bundle_ids": ["com.tinyspeck.slackmacgap"],
+              "priority": 40
+            }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(manifest.mappings.count, 2)
+
+    let first = try XCTUnwrap(manifest.mappings.first)
+    XCTAssertEqual(first.key, "q")
+    XCTAssertEqual(first.mode, "normal", "mode defaults to normal")
+    XCTAssertEqual(first.scope, .normal)
+    XCTAssertTrue(first.bundleIDs.isEmpty, "bundle_ids defaults to []")
+    XCTAssertNil(first.priority, "priority is optional")
+
+    let second = manifest.mappings[1]
+    XCTAssertEqual(second.mode, "insert")
+    XCTAssertEqual(second.scope, .insert)
+    XCTAssertEqual(second.bundleIDs, ["com.tinyspeck.slackmacgap"])
+    XCTAssertEqual(second.priority, 40)
+  }
+
+  func testMappingRegistrationEncodeOmitsDefaults() throws {
+    let mapping = PluginMappingRegistration(
+      key: "q", command: "flash://hints_dismiss")
+    let data = try JSONEncoder().encode(mapping)
+    let json = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual(json["key"] as? String, "q")
+    XCTAssertEqual(json["command"] as? String, "flash://hints_dismiss")
+    XCTAssertNil(json["mode"], "default \"normal\" mode is not encoded")
+    XCTAssertNil(json["bundle_ids"], "empty bundle_ids is not encoded")
+    XCTAssertNil(json["priority"], "nil priority is not encoded")
   }
 
   func testManifestRejectsInvalidID() throws {

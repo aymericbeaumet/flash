@@ -86,6 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
   let mappings = MappingsCoordinator()
+  /// Per-focused-app effective mapping tables (config + applicable plugin
+  /// mappings), keyed by bundle id ("" for none/unknown). Cleared on config
+  /// reload and when a plugin's mappings change.
+  var effectiveMappingCache: [String: Config.Mode] = [:]
+  /// The effective mode last handed to `MappingsCoordinator`, so a focus
+  /// change only re-registers Carbon hotkeys when the chord set changed.
+  var lastAppliedMappingMode: Config.Mode?
   var lastConfigErrorAlertMessage: String?
   var configErrorAlertVisible = false
 
@@ -200,6 +207,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.onStateChanged = { [weak self] in
       self?.pluginStateDidChange()
     }
+    // A plugin edited its registered mappings: drop the cached effective
+    // modes and re-apply for the frontmost app so the new bindings take
+    // effect without waiting for the next focus change. Fired on main after
+    // the manager has already rebuilt its mapping index.
+    pluginManager.onMappingsChanged = { [weak self] in
+      guard let self else { return }
+      self.invalidateEffectiveMappings()
+      self.refreshEffectiveMappings(
+        for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    }
     pluginManager.start(config: config)
     configureDebugServer(for: config)
 
@@ -209,7 +226,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.debugConfig = config.debug
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
-    overlay.normalModeMappings = config.mode.compiledNormal
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
     // Pay the layer-allocation cost at launch instead of on the first
     // activation. 256 covers the steady state for most apps; further
@@ -226,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self?.performMappingCommand(action)
       },
       currentMode: { [weak self] in self?.flashMode ?? .insert })
+    refreshEffectiveMappings(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
     if let app = NSWorkspace.shared.frontmostApplication,
       app.bundleIdentifier != Bundle.main.bundleIdentifier
@@ -331,6 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.registry.refreshRunningApplications()
+        self.refreshEffectiveMappings(for: app.bundleIdentifier)
         self.pluginManager.emit(
           PluginEvent(
             name: "focus.changed",

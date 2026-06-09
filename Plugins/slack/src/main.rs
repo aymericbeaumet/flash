@@ -93,7 +93,7 @@ struct Channel {
 /// Walk Slack's windows and pull every channel entry out of the AX tree.
 async fn collect_channels(ctx: &Context, pid: i64) -> Vec<Channel> {
     let nodes = ctx
-        .ax_snapshot(pid, "windows", &[], CHANNEL_COLLECT, MAX_NODES)
+        .ax_snapshot(pid, "windows", &[], CHANNEL_COLLECT, MAX_NODES, false)
         .await;
     let mut out = Vec::new();
     let mut seen = HashSet::new();

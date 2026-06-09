@@ -193,6 +193,9 @@ impl Context {
     /// - `collect`: attribute names to read for every visited node.
     /// - `max_nodes`: visit budget — the walk stops once this many nodes are
     ///   collected.
+    /// - `geometry`: when true, each node also carries [`AxNode::frame`], an
+    ///   `[x, y, w, h]` rect in NSScreen space ready to drop into a
+    ///   `JumpTarget.frame`. Costs nothing extra on the wire when off.
     pub async fn ax_snapshot(
         &self,
         pid: i64,
@@ -200,6 +203,7 @@ impl Context {
         follow: &[&str],
         collect: &[&str],
         max_nodes: u64,
+        geometry: bool,
     ) -> Vec<AxNode> {
         let result = self
             .call_host(
@@ -210,6 +214,7 @@ impl Context {
                     "follow": follow,
                     "collect": collect,
                     "max_nodes": max_nodes,
+                    "geometry": geometry,
                 }),
             )
             .await;
@@ -346,12 +351,15 @@ impl Context {
 /// One node from an [`ax_snapshot`](Context::ax_snapshot) walk. `handle` is an
 /// opaque id the broker uses to find the real `AXUIElement` for follow-up
 /// actions; `root` is the index of the root (e.g. window) this node descends
-/// from; `attrs` holds the requested attributes that were present.
+/// from; `attrs` holds the requested attributes that were present; `frame` is
+/// the node's NSScreen-space `[x, y, w, h]`, present only when the snapshot was
+/// taken with `geometry = true`.
 #[derive(Clone, Debug)]
 pub struct AxNode {
     pub handle: u64,
     pub root: usize,
     pub attrs: BTreeMap<String, String>,
+    pub frame: Option<[f64; 4]>,
 }
 
 impl AxNode {
@@ -367,10 +375,15 @@ impl AxNode {
                     .collect()
             })
             .unwrap_or_default();
+        let frame = value.get("frame").and_then(Value::as_array).and_then(|a| {
+            let v: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
+            <[f64; 4]>::try_from(v).ok()
+        });
         Some(Self {
             handle,
             root,
             attrs,
+            frame,
         })
     }
 
