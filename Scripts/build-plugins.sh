@@ -10,11 +10,11 @@ set -euo pipefail
 # `target/` storm) and lets the plugins share compiled dependencies.
 #
 # Usage: build-plugins.sh [dev|release]
-#   dev     — debug build for the current machine arch only. Favors speed:
-#             no optimization, incremental, rebuilds only what changed.
-#   release — optimized universal binary (x86_64 + arm64) via lipo.
+#   dev       — debug build for the current machine arch only. Favors speed:
+#               no optimization, incremental, rebuilds only what changed.
+#   release   — optimized universal binary (x86_64 + arm64) via lipo.
 
-MODE="${1:-dev}"
+MODE="${1:-release}"
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"

@@ -3,14 +3,23 @@ set -euo pipefail
 
 # Build Flash.app into build/Flash.app without installing it.
 #
-# Usage: build.sh [--dev|--release]   (default: --dev)
-#   --dev      debug build for the current arch — fast, incremental, no
-#              optimization. Plugins are symlinked from the live tree.
+# Usage: build.sh [--dev|--release]   (default: --release)
 #   --release  optimized universal build (x86_64 + arm64) for both the app
-#              and the bundled plugins, then zipped + checksummed.
+#              and the bundled plugins, then zipped + checksummed. Always
+#              cleans first so every artifact is rebuilt from scratch.
+#   --dev      fast incremental debug build for the current arch only — no
+#              clean, no optimization. Plugins are symlinked from the live tree.
 
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 parse_mode "$@"
+
+if [[ "$MODE" == "release" ]]; then
+  # Release is always a from-scratch build: drop the swift release products
+  # and the cargo target dir so nothing stale survives into a shipped bundle.
+  echo "==> Cleaning (release: full rebuild)"
+  swift package clean
+  rm -rf "$PROJECT_DIR/build/plugin-target"
+fi
 
 echo "==> Building Rust plugins ($MODE)"
 "$PROJECT_DIR/Scripts/build-plugins.sh" "$MODE"

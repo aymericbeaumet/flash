@@ -4,10 +4,11 @@ set -euo pipefail
 # Build Flash.app and install it to /Applications, then restart the
 # resident process.
 #
-# Usage: install.sh [--dev|--release]   (default: --dev)
-#   --dev      fast debug build for the current arch, signed with the
-#              stable "Flash Dev" identity so TCC grants persist.
-#   --release  optimized universal build (x86_64 + arm64).
+# Usage: install.sh [--dev|--release]   (default: --release)
+#   --release  optimized universal build (x86_64 + arm64), always rebuilt
+#              from scratch.
+#   --dev      fast incremental debug build for the current arch, signed with
+#              the stable "Flash Dev" identity so TCC grants persist.
 
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 parse_mode "$@"

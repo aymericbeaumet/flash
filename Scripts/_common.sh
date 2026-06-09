@@ -21,9 +21,15 @@ CLI_LINK_DIR="$HOME/.local/bin"
 CLI_LINK_PATH="$CLI_LINK_DIR/flash"
 CLICTL_LINK_PATH="$CLI_LINK_DIR/flashctl"
 
-# parse_mode <args...> — sets global MODE to "dev" (default) or "release".
+# parse_mode <args...> — parses CLI flags. Sets:
+#   MODE — "release" (default) or "dev"
+#
+# Accepted forms:
+#   parse_mode             # default: --release
+#   parse_mode --release   # full, clean, universal build
+#   parse_mode --dev       # fast incremental current-arch build
 parse_mode() {
-  MODE="dev"
+  MODE="release"
   for arg in "$@"; do
     case "$arg" in
       --dev) MODE="dev" ;;
