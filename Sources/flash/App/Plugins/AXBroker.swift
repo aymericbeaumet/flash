@@ -92,16 +92,9 @@ final class AXBroker {
           let element = bfs[index]
           index += 1
           let handle = self.register(pid: pid, element: element)
-          var attrs: [String: String] = [:]
-          for name in collect {
-            if let value = self.attribute(element, name) {
-              attrs[name] = value
-            }
-          }
+          let (attrs, children) = self.readNode(element, collect: collect, follow: follow)
           nodes.append(["handle": handle, "root": rootIndex, "attrs": attrs])
-          for childAttr in follow {
-            bfs.append(contentsOf: self.elementArray(element, childAttr))
-          }
+          bfs.append(contentsOf: children)
         }
       }
       reply(["ok": true, "nodes": nodes])
@@ -185,6 +178,48 @@ final class AXBroker {
 
   // MARK: - AX reads
 
+  /// Reads a node's `collect` (string) attributes and `follow` (child element
+  /// arrays) in a *single* `AXUIElementCopyMultipleAttributeValues` IPC round
+  /// trip. Each AX attribute read is an IPC to the target app; the snapshot
+  /// walk visits thousands of nodes, so collapsing the former per-attribute
+  /// copies (~8 `collect` + ~2 `follow` ≈ 10 IPC hops per node) into one call
+  /// is the dominant cost saving for a tree walk. Options is the empty set, so
+  /// an unreadable attribute yields an `AXError` placeholder in its slot rather
+  /// than aborting the batch; those slots coerce to "absent", preserving the
+  /// prior per-attribute semantics.
+  private func readNode(
+    _ element: AXUIElement, collect: [String], follow: [String]
+  ) -> (attrs: [String: String], children: [AXUIElement]) {
+    let names = collect + follow
+    guard !names.isEmpty else { return ([:], []) }
+    var raw: CFArray?
+    let status = AXUIElementCopyMultipleAttributeValues(
+      element, names as CFArray, AXCopyMultipleAttributeOptions(), &raw)
+    guard status == .success, let values = raw as? [Any], values.count == names.count else {
+      // Wholesale failure (rare — a bad element). Fall back to per-attribute
+      // copies so one unreadable attribute can't blank the whole node.
+      var attrs: [String: String] = [:]
+      for name in collect {
+        if let text = attribute(element, name) { attrs[name] = text }
+      }
+      var children: [AXUIElement] = []
+      for name in follow { children.append(contentsOf: elementArray(element, name)) }
+      return (attrs, children)
+    }
+    var attrs: [String: String] = [:]
+    for (offset, name) in collect.enumerated() {
+      if let text = coerce(values[offset]) { attrs[name] = text }
+    }
+    var children: [AXUIElement] = []
+    let base = collect.count
+    for offset in follow.indices {
+      if let elems = values[base + offset] as? [AXUIElement] {
+        children.append(contentsOf: elems)
+      }
+    }
+    return (attrs, children)
+  }
+
   private func elementArray(_ element: AXUIElement, _ name: String) -> [AXUIElement] {
     var raw: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
@@ -193,14 +228,20 @@ final class AXBroker {
     return values
   }
 
-  /// Reads `name` and coerces it to a string. Handles the value types the
-  /// migrated sources need: plain strings, URLs (as `absoluteString`), and
-  /// numbers. Anything else is reported as absent.
+  /// Reads `name` and coerces it to a string. Used only on the rare batched-read
+  /// failure fallback in `readNode`.
   private func attribute(_ element: AXUIElement, _ name: String) -> String? {
     var raw: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success,
       let value = raw
     else { return nil }
+    return coerce(value)
+  }
+
+  /// Coerces an AX attribute value to a string. Handles the value types the
+  /// migrated sources need: plain strings, URLs (as `absoluteString`), and
+  /// numbers. Anything else (including `AXError` placeholders) is absent.
+  private func coerce(_ value: Any) -> String? {
     if let text = value as? String { return text }
     if let url = value as? URL { return url.absoluteString }
     if let number = value as? NSNumber { return number.stringValue }
