@@ -779,29 +779,51 @@ final class NormalModeTests: XCTestCase {
 
   func testCandidateFinderSourceFilterParsesLeadingFlag() {
     let withText = NormalModeDispatcher.candidateFinderSourceFilter("--notes inbox")
-    XCTAssertEqual(withText.sourceFilter, "notes")
+    XCTAssertEqual(withText.sourceFilters, ["notes"])
     XCTAssertEqual(withText.text, "inbox")
 
     let bare = NormalModeDispatcher.candidateFinderSourceFilter("--notes")
-    XCTAssertEqual(bare.sourceFilter, "notes")
+    XCTAssertEqual(bare.sourceFilters, ["notes"])
     XCTAssertEqual(bare.text, "")
 
     let none = NormalModeDispatcher.candidateFinderSourceFilter("inbox")
-    XCTAssertNil(none.sourceFilter)
+    XCTAssertEqual(none.sourceFilters, [])
     XCTAssertEqual(none.text, "inbox")
 
     let upper = NormalModeDispatcher.candidateFinderSourceFilter("  --Firefox   gmail ")
-    XCTAssertEqual(upper.sourceFilter, "firefox")
+    XCTAssertEqual(upper.sourceFilters, ["firefox"])
     XCTAssertEqual(upper.text, "gmail")
 
     // `@<source>` is equivalent to `--<source>`.
     let at = NormalModeDispatcher.candidateFinderSourceFilter("@notes inbox")
-    XCTAssertEqual(at.sourceFilter, "notes")
+    XCTAssertEqual(at.sourceFilters, ["notes"])
     XCTAssertEqual(at.text, "inbox")
 
     let atBare = NormalModeDispatcher.candidateFinderSourceFilter("  @Firefox ")
-    XCTAssertEqual(atBare.sourceFilter, "firefox")
+    XCTAssertEqual(atBare.sourceFilters, ["firefox"])
     XCTAssertEqual(atBare.text, "")
+  }
+
+  func testCandidateFinderSourceFilterSelectorsAnywhereAndMultiple() {
+    // Selectors may appear before or after the query, in any order, and
+    // several of them widen the pool. The two orderings must be identical.
+    let leading = NormalModeDispatcher.candidateFinderSourceFilter("@tmux @slack test")
+    XCTAssertEqual(leading.sourceFilters, ["tmux", "slack"])
+    XCTAssertEqual(leading.text, "test")
+
+    let trailing = NormalModeDispatcher.candidateFinderSourceFilter("test @slack @tmux")
+    XCTAssertEqual(trailing.sourceFilters, ["slack", "tmux"])
+    XCTAssertEqual(trailing.text, "test")
+
+    // Interleaved selectors and multi-word text.
+    let mixed = NormalModeDispatcher.candidateFinderSourceFilter("foo @notes bar --firefox baz")
+    XCTAssertEqual(mixed.sourceFilters, ["notes", "firefox"])
+    XCTAssertEqual(mixed.text, "foo bar baz")
+
+    // A bare `@` / `--` with no name is literal search text, not a selector.
+    let bareAt = NormalModeDispatcher.candidateFinderSourceFilter("@ -- hi")
+    XCTAssertEqual(bareAt.sourceFilters, [])
+    XCTAssertEqual(bareAt.text, "@ -- hi")
   }
 
   func testFuzzyScoreMatchesOrderedCharacters() {

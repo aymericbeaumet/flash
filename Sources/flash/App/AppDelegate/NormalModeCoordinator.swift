@@ -1031,11 +1031,12 @@ extension AppDelegate {
   }
 
   private func updateCandidateMatches(query: String) {
-    // A leading `--<source>` flag (e.g. `:flashlight --notes inbox`) pins
-    // the pool to a single source; the residual text is the actual
-    // search query. The flag is only honored outside emoji mode.
+    // `@<source>` / `--<source>` selectors (e.g. `:flashlight @tmux @slack
+    // test`) pin the pool to those sources; they may appear anywhere and
+    // several widen the pool (OR). The residual text is the actual search
+    // query. Selectors are only honored outside emoji mode.
     let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
-    let sourceFilter = candidateFinderEmojiMode ? nil : parsed.sourceFilter
+    let sourceFilters = candidateFinderEmojiMode ? [] : parsed.sourceFilters
     let trimmed = parsed.text
     candidateFinderCurrentQuery = trimmed
     // Normalize the query once per keystroke rather than once per
@@ -1052,8 +1053,10 @@ extension AppDelegate {
         ? candidate.kind == CandidateFinder.emojiKind
         : candidate.kind != CandidateFinder.emojiKind
       guard kindMatches else { return false }
-      guard let sourceFilter else { return true }
-      return CandidateFinder.candidateMatchesSourceFilter(candidate, filter: sourceFilter)
+      guard !sourceFilters.isEmpty else { return true }
+      return sourceFilters.contains {
+        CandidateFinder.candidateMatchesSourceFilter(candidate, filter: $0)
+      }
     }
     let scored: [CandidateMatch] = pool.compactMap { candidate in
       if trimmed.isEmpty {

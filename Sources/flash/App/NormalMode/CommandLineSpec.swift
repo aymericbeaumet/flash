@@ -102,44 +102,47 @@ extension NormalModeDispatcher {
   }
 
   struct CandidateFinderQuery: Equatable {
-    /// Lowercased source token from a leading `--<source>` flag, or nil
-    /// when the user didn't pin a source.
-    var sourceFilter: String?
-    /// The residual search text (everything after the optional flag).
+    /// Lowercased source tokens from `@<source>` / `--<source>` selectors.
+    /// Selectors may appear anywhere in the query and there may be several;
+    /// empty when the user didn't pin any source.
+    var sourceFilters: [String]
+    /// The residual search text (every non-selector token, space-joined).
     var text: String
   }
 
-  /// Splits a candidate-finder query into an optional leading source filter
-  /// and the residual search text. The filter is written as `@<source>` or
-  /// `--<source>` (both equivalent). Powers `:flashlight @notes inbox` (pin
-  /// the notes source, search "inbox"). Examples:
-  ///   "@notes inbox"  -> (filter: "notes", text: "inbox")
-  ///   "--notes inbox" -> (filter: "notes", text: "inbox")
-  ///   "@notes"        -> (filter: "notes", text: "")
-  ///   "inbox"         -> (filter: nil,     text: "inbox")
+  /// Splits a candidate-finder query into its source selectors and the
+  /// residual search text. A selector is any `@<source>` or `--<source>`
+  /// token (the two forms are equivalent) and may appear *anywhere* in the
+  /// query — so `@tmux @slack test` and `test @slack @tmux` parse
+  /// identically. Multiple selectors widen the pool (OR). A bare `@` / `--`
+  /// with no name is treated as literal search text. Powers
+  /// `:flashlight @notes inbox` (pin notes, search "inbox"). Examples:
+  ///   "@notes inbox"        -> (filters: ["notes"],          text: "inbox")
+  ///   "test @slack @tmux"   -> (filters: ["slack", "tmux"],  text: "test")
+  ///   "--notes"             -> (filters: ["notes"],          text: "")
+  ///   "inbox"               -> (filters: [],                 text: "inbox")
   static func candidateFinderSourceFilter(_ query: String) -> CandidateFinderQuery {
-    var body = query
-    body.removeLeadingWhitespace()
-    let fallback = CandidateFinderQuery(
-      sourceFilter: nil,
-      text: query.trimmingCharacters(in: .whitespacesAndNewlines))
-    let prefixLength: Int
-    if body.hasPrefix("--") {
-      prefixLength = 2
-    } else if body.hasPrefix("@") {
-      prefixLength = 1
-    } else {
-      return fallback
+    var filters: [String] = []
+    var words: [Substring] = []
+    for token in query.split(whereSeparator: { $0.isWhitespace }) {
+      let name: Substring
+      if token.hasPrefix("--") {
+        name = token.dropFirst(2)
+      } else if token.hasPrefix("@") {
+        name = token.dropFirst(1)
+      } else {
+        words.append(token)
+        continue
+      }
+      if name.isEmpty {
+        words.append(token)
+      } else {
+        filters.append(name.lowercased())
+      }
     }
-    let afterPrefix = body.dropFirst(prefixLength)
-    let parts = afterPrefix.split(
-      maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: { $0.isWhitespace })
-    let token = parts.first.map(String.init) ?? ""
-    guard !token.isEmpty else { return fallback }
-    let rest = parts.count > 1 ? String(parts[1]) : ""
     return CandidateFinderQuery(
-      sourceFilter: token.lowercased(),
-      text: rest.trimmingCharacters(in: .whitespacesAndNewlines))
+      sourceFilters: filters,
+      text: words.joined(separator: " "))
   }
 
   /// Query for `:emojis <text>` (bare `:emojis` lists everything). Shares

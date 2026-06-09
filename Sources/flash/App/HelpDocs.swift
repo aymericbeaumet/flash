@@ -205,11 +205,14 @@ enum HelpDocs {
 
       ## Pinning a source
 
-      Prefix the query with `@<source>` (or `--<source>`) to restrict
-      the pool to one source, e.g. `:flashlight @notes inbox` searches
-      only notes. The token matches a source name (or prefix:
-      `@fire` → firefox) and a few groups: `@browser`/`@tabs`, `@apps`.
-      Bare `:flashlight @notes` lists every note.
+      Add `@<source>` (or `--<source>`) selectors *anywhere* in the query
+      to restrict the pool, e.g. `:flashlight @notes inbox` searches only
+      notes. Order is irrelevant — `@tmux @slack test` and
+      `test @slack @tmux` are the same — and several selectors widen the
+      pool (OR): `@tmux @slack` shows both. The token matches a source
+      name (or prefix: `@fire` → firefox) and a few groups:
+      `@browser`/`@tabs`, `@apps`. Bare `:flashlight @notes` lists every
+      note.
 
       ## Ranking
 
