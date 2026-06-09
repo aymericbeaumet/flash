@@ -256,6 +256,166 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root))
   }
 
+  func testManifestProvidersDecodeAcrossKinds() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "multi",
+          "name": "Multi",
+          "version": "0.1.0",
+          "description": "Every surface in one providers table",
+          "install": "true",
+          "start": "true",
+          "providers": [
+            { "kind": "hints", "bundle_ids": ["com.example.app"] },
+            { "kind": "candidates" },
+            {
+              "kind": "commands",
+              "commands": [
+                { "command": "multi", "subcommand": "go", "description": "Go" }
+              ]
+            },
+            {
+              "kind": "mappings",
+              "mappings": [
+                { "key": "q", "command": "flash://hints_dismiss" }
+              ]
+            }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(manifest.providers.count, 4)
+    XCTAssertTrue(manifest.providesHints)
+    XCTAssertTrue(manifest.providesCandidates)
+    XCTAssertEqual(manifest.commands.map(\.subcommand), ["go"])
+    XCTAssertEqual(manifest.mappings.map(\.key), ["q"])
+  }
+
+  func testProvidesFlagsFalseWithoutMatchingProvider() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "cmdsonly",
+          "name": "Commands Only",
+          "version": "0.1.0",
+          "description": "No hints, no candidates",
+          "install": "true",
+          "start": "true",
+          "providers": [
+            {
+              "kind": "commands",
+              "commands": [
+                { "command": "x", "subcommand": "", "description": "X" }
+              ]
+            }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertFalse(manifest.providesHints)
+    XCTAssertFalse(manifest.providesCandidates)
+  }
+
+  func testCommandsProviderBundleIDsFoldIntoEntries() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "scoped",
+          "name": "Scoped",
+          "version": "0.1.0",
+          "description": "App-scoped commands",
+          "install": "true",
+          "start": "true",
+          "providers": [
+            {
+              "kind": "commands",
+              "bundle_ids": ["com.example.app"],
+              "commands": [
+                { "command": "scoped", "subcommand": "here", "description": "Inherits scope" },
+                {
+                  "command": "scoped",
+                  "subcommand": "elsewhere",
+                  "description": "Overrides scope",
+                  "bundle_ids": ["com.other.app"]
+                }
+              ]
+            }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    let here = try XCTUnwrap(manifest.commands.first { $0.subcommand == "here" })
+    XCTAssertEqual(here.bundleIDs, ["com.example.app"], "entry inherits the provider's gate")
+    let elsewhere = try XCTUnwrap(manifest.commands.first { $0.subcommand == "elsewhere" })
+    XCTAssertEqual(elsewhere.bundleIDs, ["com.other.app"], "entry's own bundle_ids win")
+  }
+
+  func testMappingsProviderModeFoldsIntoEntries() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "moded",
+          "name": "Moded",
+          "version": "0.1.0",
+          "description": "Provider-level mode gate",
+          "install": "true",
+          "start": "true",
+          "providers": [
+            {
+              "kind": "mappings",
+              "modes": ["insert"],
+              "mappings": [
+                { "key": "j", "command": "flash://hints_dismiss" }
+              ]
+            }
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    let mapping = try XCTUnwrap(manifest.mappings.first)
+    XCTAssertEqual(mapping.mode, "insert", "single provider mode folds into the default entry")
+    XCTAssertEqual(mapping.scope, .insert)
+  }
+
+  func testProviderEncodeOmitsEmptyFields() throws {
+    let provider = PluginProvider(kind: .candidates)
+    let data = try JSONEncoder().encode(provider)
+    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual(json["kind"] as? String, "candidates")
+    XCTAssertNil(json["bundle_ids"], "empty bundle_ids is not encoded")
+    XCTAssertNil(json["modes"], "empty modes is not encoded")
+    XCTAssertNil(json["priority"], "nil priority is not encoded")
+    XCTAssertNil(json["commands"], "empty commands is not encoded")
+    XCTAssertNil(json["mappings"], "empty mappings is not encoded")
+  }
+
+  func testCommandRegistrationEncodesBundleIDsWhenSet() throws {
+    let registration = PluginCommandRegistration(
+      command: "scoped", subcommand: "here", description: "X", bundleIDs: ["com.example.app"])
+    let data = try JSONEncoder().encode(registration)
+    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual(json["bundle_ids"] as? [String], ["com.example.app"])
+
+    let bare = PluginCommandRegistration(command: "x", subcommand: "", description: "X")
+    let bareData = try JSONEncoder().encode(bare)
+    let bareJSON = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: bareData) as? [String: Any])
+    XCTAssertNil(bareJSON["bundle_ids"], "empty bundle_ids is not encoded")
+  }
+
   func testEventSubscriptionFiltering() {
     let apps = PluginEventSubscription(
       match: "apps.*",
