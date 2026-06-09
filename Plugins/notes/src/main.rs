@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    applescript_quote, run, Candidate, CommandRequest, CommandResponse, Context, Event, Plugin,
-    Request, ResolveResponse, Response,
+    applescript_quote, run, Candidate, CommandRequest, CommandResponse, Context, Event,
+    ResolveResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -47,7 +47,9 @@ struct NotePayload {
 
 struct Notes;
 
-impl Plugin for Notes {
+flash_plugin::plugin!(Notes);
+
+impl FlashPlugin for Notes {
     async fn on_start(&self, ctx: Context) {
         emit_candidates(&ctx).await;
     }
@@ -61,14 +63,12 @@ impl Plugin for Notes {
         }
     }
 
-    async fn handle(&self, ctx: Context, request: Request) -> Response {
-        match request {
-            Request::ResolveCandidate(candidate) => {
-                resolve_candidate(&ctx, &candidate).await.into()
-            }
-            Request::Command(cmd) => invoke(&ctx, &cmd).await,
-            _ => CommandResponse::error("unsupported request").into(),
-        }
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+        invoke(&ctx, &command).await
+    }
+
+    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
+        resolve(&ctx, &candidate).await
     }
 }
 
@@ -107,7 +107,7 @@ async fn emit_candidates(ctx: &Context) {
     ctx.emit_snapshot(SOURCE_ID, candidates);
 }
 
-async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     let note_id = candidate
         .payload_as::<NotePayload>()
         .map(|p| p.id)
@@ -124,7 +124,7 @@ async fn resolve_candidate(ctx: &Context, candidate: &Candidate) -> ResolveRespo
     }
 }
 
-async fn invoke(ctx: &Context, cmd: &CommandRequest) -> Response {
+async fn invoke(ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
     match cmd.subcommand.as_str() {
         "open" => ctx
             .run_cli(
@@ -136,12 +136,12 @@ async fn invoke(ctx: &Context, cmd: &CommandRequest) -> Response {
                 Duration::from_secs(10),
             )
             .await
-            .into(),
+            .into_command(),
         "refresh" => {
             emit_candidates(ctx).await;
-            CommandResponse::toast("notes refreshed").into()
+            CommandResponse::toast("notes refreshed")
         }
-        other => CommandResponse::error(format!("unknown subcommand: {other}")).into(),
+        other => CommandResponse::error(format!("unknown subcommand: {other}")),
     }
 }
 
