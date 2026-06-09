@@ -314,31 +314,55 @@ final class SourceRegistry {
     action: @escaping (FlashSource, FlashSourceEnvironment, @escaping (SourceActionResult) -> Void)
       -> Void
   ) {
+    // Timing breakdown for the tab-action latency investigation: which source
+    // a tab key waits on, and for how long. `refresh_ms` is the synchronous
+    // running-apps refresh; each `source` line is one (possibly plugin-RPC)
+    // attempt; `total_ms` is wall time from entry to resolution.
+    let startedNs = DispatchTime.now().uptimeNanoseconds
     refreshRunningApplications()
+    let refreshMs = Self.elapsedMs(since: startedNs)
     let env = environment
     let sourceSnapshot = sources.filter {
       $0.capabilities.contains(capability) && $0.supports(context)
     }
     guard !sourceSnapshot.isEmpty else {
+      FlashLog.trace(
+        "[source_action] cap=\(capability.rawValue) sources=0 refresh_ms=\(refreshMs) unhandled")
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
 
+    func finish(_ result: SourceActionResult, handledBy: String) {
+      FlashLog.trace(
+        "[source_action] cap=\(capability.rawValue) handled_by=\(handledBy) "
+          + "refresh_ms=\(refreshMs) total_ms=\(Self.elapsedMs(since: startedNs)) "
+          + "did_perform=\(result.didPerform)")
+      completion(result)
+    }
+
     func attempt(_ index: Int) {
       guard index < sourceSnapshot.count else {
-        completion(.unhandled)
+        finish(.unhandled, handledBy: "none")
         return
       }
       let source = sourceSnapshot[index]
+      let attemptNs = DispatchTime.now().uptimeNanoseconds
       action(source, env) { result in
+        FlashLog.trace(
+          "[source_action] source=\(source.identifier) ms=\(Self.elapsedMs(since: attemptNs)) "
+            + "did_perform=\(result.didPerform)")
         if result.didPerform {
-          completion(result)
+          finish(result, handledBy: source.identifier)
         } else {
           attempt(index + 1)
         }
       }
     }
     attempt(0)
+  }
+
+  private static func elapsedMs(since startNs: UInt64) -> Int {
+    Int((DispatchTime.now().uptimeNanoseconds &- startNs) / 1_000_000)
   }
 
   private static func activationPolicyMatches(
