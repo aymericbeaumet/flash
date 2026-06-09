@@ -158,14 +158,35 @@ enum ActionDispatcher {
   }
 
   /// Move the visible pointer to `screenPoint` without clicking.
+  ///
+  /// A warp alone is invisible to the app under the pointer, so the
+  /// destination never lights up its hover/highlight state. After the
+  /// warp we deliver a single synthetic `mouseMoved` carrying the real
+  /// delta from the old position, which the window server hit-tests like
+  /// a genuine move (driving hover, tracking-area enter/exit, etc.).
   @discardableResult
   static func moveCursor(to screenPoint: CGPoint) -> Bool {
     let screenH =
       NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
       ?? NSScreen.main?.frame.height ?? 1080
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
+    let previous = CGEvent(source: nil)?.location ?? cgPoint
     CGWarpMouseCursorPosition(cgPoint)
     CGAssociateMouseAndMouseCursorPosition(1)
+    let source = CGEventSource(stateID: .combinedSessionState)
+    if let move = CGEvent(
+      mouseEventSource: source,
+      mouseType: .mouseMoved,
+      mouseCursorPosition: cgPoint,
+      mouseButton: .left)
+    {
+      move.setIntegerValueField(
+        .mouseEventDeltaX, value: Int64((cgPoint.x - previous.x).rounded()))
+      move.setIntegerValueField(
+        .mouseEventDeltaY, value: Int64((cgPoint.y - previous.y).rounded()))
+      move.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
+      move.post(tap: .cghidEventTap)
+    }
     return true
   }
 
