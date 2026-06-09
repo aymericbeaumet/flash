@@ -6,7 +6,7 @@
   "install": "true",
   "start": "exec ./flash-plugin-contacts",
   "priority": 12,
-  "events": [
+  "subscriptions": [
     "core:flash.started",
     "core:config.*",
     { "match": "core:apps.*", "bundle_ids": ["com.apple.AddressBook"] }

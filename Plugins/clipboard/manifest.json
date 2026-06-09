@@ -5,7 +5,7 @@
   "description": "Clipboard history in flashlight; pick an entry to paste it. Plus top-level :copy and :paste.",
   "install": "true",
   "start": "exec ./flash-plugin-clipboard",
-  "events": [
+  "subscriptions": [
     "core:flash.started",
     { "match": "core:clipboard.changed" }
   ],

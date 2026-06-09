@@ -5,7 +5,7 @@
   "description": "Spotify playback controls backed by spotify_player.",
   "install": "true",
   "start": "exec ./flash-plugin-spotify",
-  "events": [
+  "subscriptions": [
     { "match": "core:apps.*", "bundle_ids": ["com.spotify.client"] },
     "core:config.*"
   ],

@@ -18,7 +18,7 @@
     "co.zeit.hyperterm",
     "co.zeit.hyper"
   ],
-  "events": [
+  "subscriptions": [
     { "match": "core:focus.changed" },
     { "match": "core:apps.terminated" },
     "core:flash.started"

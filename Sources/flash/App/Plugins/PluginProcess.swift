@@ -114,7 +114,7 @@ final class PluginProcess {
   }
 
   func sendEvent(_ event: PluginEvent) {
-    guard manifest.events.contains(where: { $0.matches(event) }) else { return }
+    guard manifest.subscriptions.contains(where: { $0.matches(event) }) else { return }
     var payload = event.payload
     if let bundleID = event.bundleID, payload["bundle_id"] == nil {
       payload["bundle_id"] = bundleID

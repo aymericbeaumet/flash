@@ -384,7 +384,9 @@ struct PluginManifest: Codable, Equatable {
   var description: String
   var install: String
   var start: String
-  var events: [PluginEventSubscription]
+  /// Host events this plugin subscribes to (manifest key `subscriptions`; the
+  /// legacy key `events` still decodes). Empty means "every event".
+  var subscriptions: [PluginEventSubscription]
   /// Every surface the plugin drives, as one unified table — see
   /// ``PluginProvider``. The per-kind views below (`commands`, `mappings`,
   /// `providesHints`) are derived from this so the rest of the host keeps
@@ -468,8 +470,10 @@ struct PluginManifest: Codable, Equatable {
   }
 
   enum CodingKeys: String, CodingKey {
-    case id, name, version, description, install, start, events, providers, priority
+    case id, name, version, description, install, start, subscriptions, providers, priority
     case volatile
+    /// Legacy alias for `subscriptions`, still accepted on decode.
+    case events
     case bundleIDs = "bundle_ids"
     case requestTimeoutMs = "request_timeout_ms"
   }
@@ -477,7 +481,7 @@ struct PluginManifest: Codable, Equatable {
   init(
     id: String, name: String, version: String, description: String,
     install: String, start: String,
-    events: [PluginEventSubscription] = [],
+    subscriptions: [PluginEventSubscription] = [],
     providers: [PluginProvider] = [],
     priority: Int = 25,
     volatile: Bool = false,
@@ -490,7 +494,7 @@ struct PluginManifest: Codable, Equatable {
     self.description = description
     self.install = install
     self.start = start
-    self.events = events
+    self.subscriptions = subscriptions
     self.providers = providers
     self.priority = priority
     self.volatile = volatile
@@ -506,7 +510,10 @@ struct PluginManifest: Codable, Equatable {
     self.description = try c.decode(String.self, forKey: .description)
     self.install = try c.decode(String.self, forKey: .install)
     self.start = try c.decode(String.self, forKey: .start)
-    self.events = try c.decodeIfPresent([PluginEventSubscription].self, forKey: .events) ?? []
+    self.subscriptions =
+      try c.decodeIfPresent([PluginEventSubscription].self, forKey: .subscriptions)
+      ?? c.decodeIfPresent([PluginEventSubscription].self, forKey: .events)
+      ?? []
     self.providers = try c.decodeIfPresent([PluginProvider].self, forKey: .providers) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
@@ -522,7 +529,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(description, forKey: .description)
     try c.encode(install, forKey: .install)
     try c.encode(start, forKey: .start)
-    if !events.isEmpty { try c.encode(events, forKey: .events) }
+    if !subscriptions.isEmpty { try c.encode(subscriptions, forKey: .subscriptions) }
     if !providers.isEmpty { try c.encode(providers, forKey: .providers) }
     try c.encode(priority, forKey: .priority)
     if volatile { try c.encode(volatile, forKey: .volatile) }

@@ -6,7 +6,7 @@
   "install": "true",
   "start": "exec ./flash-plugin-slack",
   "bundle_ids": ["com.tinyspeck.slackmacgap", "com.tinyspeck.slackmacgap.direct"],
-  "events": [
+  "subscriptions": [
     { "match": "core:apps.*", "bundle_ids": ["com.tinyspeck.slackmacgap"] },
     { "match": "core:focus.changed" },
     "core:config.*"

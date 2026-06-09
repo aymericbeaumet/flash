@@ -49,7 +49,8 @@ final class PluginFlashSource: FlashSource {
       bundleID: context.bundleIdentifier,
       configPath: nil,
       focused: true)
-    return plugin.manifest.events.isEmpty || plugin.manifest.events.contains { $0.matches(event) }
+    return plugin.manifest.subscriptions.isEmpty
+      || plugin.manifest.subscriptions.contains { $0.matches(event) }
   }
 
   func discover(in context: AppContext) throws -> [JumpTarget] {

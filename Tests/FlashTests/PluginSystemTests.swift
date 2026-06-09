@@ -130,7 +130,7 @@ final class PluginSystemTests: XCTestCase {
         "description": "Sample plugin",
         "install": "./install.sh",
         "start": "./start.sh",
-        "events": [],
+        "subscriptions": [],
         "providers": []
       }
       """.write(
@@ -161,7 +161,7 @@ final class PluginSystemTests: XCTestCase {
           "description": "Spotify controls",
           "install": "npm install",
           "start": "npm start",
-          "events": [
+          "subscriptions": [
             { "match": "core:apps.*", "bundle_ids": ["com.spotify.client"] },
             "core:config.*"
           ],
@@ -181,10 +181,35 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.id, "spotify")
     XCTAssertEqual(manifest.install, "npm install")
     XCTAssertEqual(manifest.start, "npm start")
-    XCTAssertEqual(manifest.events.count, 2)
+    XCTAssertEqual(manifest.subscriptions.count, 2)
     XCTAssertEqual(manifest.commands.first?.command, "spotify")
     XCTAssertEqual(manifest.commands.first?.subcommand, "pause")
     XCTAssertTrue(manifest.mappings.isEmpty, "absent mappings key defaults to []")
+  }
+
+  func testManifestDecodesLegacyEventsKey() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "spotify",
+          "name": "Spotify",
+          "version": "0.1.0",
+          "description": "Spotify controls",
+          "install": "true",
+          "start": "true",
+          "events": [
+            { "match": "core:apps.*", "bundle_ids": ["com.spotify.client"] },
+            "core:config.*"
+          ]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    XCTAssertEqual(
+      manifest.subscriptions.count, 2,
+      "legacy `events` key still populates `subscriptions`")
   }
 
   func testManifestDecodesMappingsWithDefaults() throws {
@@ -275,7 +300,7 @@ final class PluginSystemTests: XCTestCase {
           "description": "Spotify controls",
           "install": "true",
           "start": "true",
-          "events": [],
+          "subscriptions": [],
           "providers": []
         }
         """)
