@@ -238,9 +238,41 @@ extension OverlayPanel {
       coordinator.overlayDidCancelModal()
       return true
     }
+    if modalSelectable {
+      // The `:clipboard` list: Return / keypad-enter pastes the selection;
+      // arrows, `j`/`k`, and Ctrl-N/Ctrl-P move it. Other keys fall through
+      // to the silent consume below (the list has no text filter).
+      if event.keyCode == 36 || event.keyCode == 76 {
+        coordinator.overlayDidSubmitSelectableModal()
+        return true
+      }
+      let isUp =
+        event.keyCode == 126 || (modifiers.isEmpty && ignoredChar == "k")
+        || (modifiers == .control && ignoredChar == "p")
+      let isDown =
+        event.keyCode == 125 || (modifiers.isEmpty && ignoredChar == "j")
+        || (modifiers == .control && ignoredChar == "n")
+      if isUp {
+        moveSelectableModalSelection(-1)
+        return true
+      }
+      if isDown {
+        moveSelectableModalSelection(1)
+        return true
+      }
+    }
     FlashLog.trace("[input] modal consume key=\(event.keyCode)")
     coordinator.overlayDidPassThroughModalKey(event)
     return true
+  }
+
+  /// Routes a `ModalTextView` keyDown through the modal interpreter when the
+  /// modal is a selectable list, so plain arrows / `j` / `k` / Return reach
+  /// `handleModalKeyEvent`. Read-only modals return false and keep the text
+  /// view's existing pass-through behaviour.
+  func consumeModalKeyDown(_ event: NSEvent) -> Bool {
+    guard modalSelectable else { return false }
+    return handleModalKeyEvent(event)
   }
 
   @discardableResult

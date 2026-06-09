@@ -36,6 +36,7 @@ final class ModalTextView: NSTextView {
   override var acceptsFirstResponder: Bool { true }
 
   override func keyDown(with event: NSEvent) {
+    if let panel = window as? OverlayPanel, panel.consumeModalKeyDown(event) { return }
     overlayCoordinator?.overlayDidPassThroughModalKey(event)
   }
 
@@ -111,6 +112,14 @@ final class OverlayPanel: NSPanel {
     didSet { commandLineCursorIndex = min(max(commandLineCursorIndex, 0), commandLineText.count) }
   }
   var candidateFinderQuery: String = ""
+
+  /// Dedicated `:clipboard` history modal. When `modalSelectable` is set the
+  /// `.modal` surface renders `selectableModalLines` as a navigable list
+  /// (arrows / `j` / `k`, Enter pastes the selection) instead of the
+  /// read-only help / `:plugins` text where every key is consumed.
+  var modalSelectable = false
+  var selectableModalLines: [String] = []
+  var selectableModalSelectedIndex = 0
 
   // Fallback border colour when the configured `hint_border` is malformed.
   static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
@@ -394,4 +403,5 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidUpdateCandidateFinderQuery(_ query: String)
   func overlayDidMoveCandidateFinderSelection(_ delta: Int)
   func overlayDidSubmitCandidateFinder()
+  func overlayDidSubmitSelectableModal()
 }

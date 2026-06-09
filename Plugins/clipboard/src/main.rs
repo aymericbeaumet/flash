@@ -56,10 +56,15 @@ impl Plugin for Clipboard {
         let Request::Command(cmd) = request else {
             return CommandResponse::error("unsupported request").into();
         };
-        // `:copy` / `:paste` are top-level commands the host synthesizes as
-        // ⌘C / ⌘V against the focused app; the plugin only advertises them so
-        // they appear in the command catalog. Accept as no-ops.
         match cmd.command.as_str() {
+            // `:clipboard` opens the host's dedicated history modal. The plugin
+            // can't drive macOS UI, so it just hands back the full history
+            // (preview + value per entry) as JSON; the host renders the list
+            // and pastes the chosen `value`.
+            "clipboard" => self.history_response(),
+            // `:copy` / `:paste` are top-level commands the host synthesizes as
+            // ⌘C / ⌘V against the focused app; the plugin only advertises them
+            // so they appear in the command catalog. Accept as no-ops.
             "copy" | "paste" => CommandResponse::ok().into(),
             other => CommandResponse::error(format!("unknown command: {other}")).into(),
         }
@@ -70,6 +75,37 @@ impl Clipboard {
     fn snapshot(&self) -> Vec<String> {
         self.history.lock().unwrap().clone()
     }
+
+    /// The full history as a JSON array of `{preview, value}`, most-recent
+    /// first — the payload the host's `:clipboard` modal renders. `preview`
+    /// is the one-line label; `value` is the full text pasted on selection.
+    fn history_response(&self) -> Response {
+        let entries: Vec<HistoryEntry> = self
+            .history
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|text| HistoryEntry {
+                preview: preview(text),
+                value: text.clone(),
+            })
+            .collect();
+        match serde_json::to_string(&entries) {
+            Ok(json) => CommandResponse {
+                ok: true,
+                stdout: Some(json),
+                ..Default::default()
+            }
+            .into(),
+            Err(err) => CommandResponse::error(format!("encode history: {err}")).into(),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct HistoryEntry {
+    preview: String,
+    value: String,
 }
 
 fn emit(ctx: &Context, history: &[String]) {

@@ -427,10 +427,28 @@ extension AppDelegate {
   }
 
   func overlayDidCancelModal() {
+    clipboardModalEntries = []
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
     overlay.hide()
     applyModeOverlay()
+  }
+
+  /// Paste the highlighted `:clipboard` entry. The panel owns the selected
+  /// index; map it back to the full value and route through `insertText`
+  /// (stash on the pasteboard, synth ⌘V into the focused app), same as a
+  /// clipboard candidate picked from the flashlight.
+  func overlayDidSubmitSelectableModal() {
+    let index = overlay.selectableModalSelectedIndex
+    guard clipboardModalEntries.indices.contains(index) else {
+      overlayDidCancelModal()
+      return
+    }
+    let value = clipboardModalEntries[index].value
+    clipboardModalEntries = []
+    normalModePendingCommandToken &+= 1
+    overlay.normalModePending = ""
+    insertText(value)
   }
 
   /// Modal mode is hermetic: keys are swallowed, never forwarded to the

@@ -19,6 +19,8 @@ global shell paths. Current bundled commands:
 - `:spotify login|status|pause|play|toggle|next|previous|search|run`
 - `:slack login|version|run`
 - `:media play|pause|toggle|next|previous|volumeup|volumedown|mute|get|status|run`
+- `:clipboard` — open the clipboard history in a navigable modal (`j`/`k`
+  or arrows to move, Return pastes the selected entry into the focused app)
 
 The bundled `searchengines` plugin exports no commands; instead it serves
 DuckDuckGo-style bangs in the flashlight (see the `shebang` provider below):

@@ -46,6 +46,38 @@ final class PluginSystemTests: XCTestCase {
     ]))
   }
 
+  func testClipboardManifestRegistersBrowseCommand() throws {
+    let root = try XCTUnwrap(
+      try officialPluginRoots().first { $0.lastPathComponent == "clipboard" })
+    let manifest = try PluginManifest.load(from: root)
+    let browse = try XCTUnwrap(
+      manifest.commands.first { $0.command == "clipboard" && $0.subcommand.isEmpty },
+      "clipboard plugin must register the bare `:clipboard` history command")
+    XCTAssertFalse(browse.description.isEmpty)
+  }
+
+  func testDecodeClipboardModalEntriesRoundTripsPluginJSON() throws {
+    // The shape the Rust clipboard plugin emits for `:clipboard`.
+    let json = """
+      [{"preview":"hello","value":"hello"},{"preview":"two…","value":"two lines\\nof text"}]
+      """
+    let entries = try XCTUnwrap(AppDelegate.decodeClipboardModalEntries(json))
+    XCTAssertEqual(entries.map(\.preview), ["hello", "two…"])
+    XCTAssertEqual(entries.map(\.value), ["hello", "two lines\nof text"])
+  }
+
+  func testDecodeClipboardModalEntriesAcceptsEmptyHistory() throws {
+    let entries = try XCTUnwrap(AppDelegate.decodeClipboardModalEntries("[]"))
+    XCTAssertTrue(entries.isEmpty)
+  }
+
+  func testDecodeClipboardModalEntriesRejectsMalformedJSON() {
+    XCTAssertNil(AppDelegate.decodeClipboardModalEntries("not json"))
+    XCTAssertNil(
+      AppDelegate.decodeClipboardModalEntries("[{\"preview\":\"x\"}]"),
+      "an entry missing the required `value` field decodes to nil")
+  }
+
   func testOfficialPluginInstallScriptsAvoidGlobalInstallTargets() throws {
     let banned = [
       "sudo", "brew install", "npm install -g", "deno install -g", "/usr/local/bin",

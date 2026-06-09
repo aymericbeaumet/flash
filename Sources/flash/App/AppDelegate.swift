@@ -106,6 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var candidateFinderCandidates: [Candidate] = []
   var candidateFinderMatches: [CandidateMatch] = []
   var candidateFinderSelectedIndex = 0
+  /// Entries backing the dedicated `:clipboard` modal, same order as the
+  /// rendered list; the panel owns the selected index, read back on submit.
+  var clipboardModalEntries: [ClipboardModalEntry] = []
   var candidateFinderCurrentQuery = ""
   var candidateFinderScope: CandidateScope = .all
   /// `:emojis` narrows the shared candidate pool to emoji glyphs and routes

@@ -14,6 +14,7 @@
     {
       "kind": "commands",
       "commands": [
+        { "command": "clipboard", "subcommand": "", "description": "Browse clipboard history" },
         { "command": "copy", "subcommand": "", "description": "Copy the selection (⌘C)" },
         { "command": "paste", "subcommand": "", "description": "Paste (⌘V)" }
       ]

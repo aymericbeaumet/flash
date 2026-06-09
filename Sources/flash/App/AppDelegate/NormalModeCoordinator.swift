@@ -4,6 +4,14 @@ import Carbon.HIToolbox
 import FlashCore
 import FlashProviders
 
+/// One `:clipboard` history row: `preview` is the one-line label rendered in
+/// the modal, `value` the full text pasted on selection. Decoded from the
+/// clipboard plugin's `:clipboard` JSON response.
+struct ClipboardModalEntry: Decodable {
+  let preview: String
+  let value: String
+}
+
 /// Normal-mode coordination — the big one. Handles mode transitions,
 /// the normal-mode interpreter's callbacks, command-line entry, help
 /// rendering, plugin invocation, scroll suppression, the per-app
@@ -775,6 +783,48 @@ extension AppDelegate {
     overlay.displayModal(body())
   }
 
+  /// `:clipboard` — fetch the full history from the clipboard plugin and open
+  /// the dedicated selectable modal. The history travels over the plugin
+  /// command RPC (keeping this surface decoupled from the flashlight candidate
+  /// pool); previews render the list while the full values are stashed in
+  /// `clipboardModalEntries` for the paste on Return.
+  func openClipboardModal() {
+    let dispatched = pluginManager.invoke(
+      command: "clipboard", subcommand: "", args: [], raw: ":clipboard",
+      forBundleID: currentNonFlashContext()?.bundleIdentifier
+    ) { [weak self] ok, _, stdout in
+      guard let self else { return }
+      let entries = (ok ? stdout : nil).flatMap(Self.decodeClipboardModalEntries) ?? []
+      self.clipboardModalEntries = entries
+      guard !entries.isEmpty else {
+        self.presentModal(reason: "clipboard_empty") { "CLIPBOARD\n\nNo history yet." }
+        return
+      }
+      self.presentSelectableModal(reason: "clipboard", lines: entries.map(\.preview))
+    }
+    if !dispatched {
+      clipboardModalEntries = []
+      presentModal(reason: "clipboard_unavailable") { "CLIPBOARD\n\nPlugin unavailable." }
+    }
+  }
+
+  /// Selectable counterpart to `presentModal`: identical pre-modal cleanup,
+  /// but renders `lines` as the navigable `:clipboard` list.
+  private func presentSelectableModal(reason: String, lines: [String]) {
+    normalModePendingCommandToken &+= 1
+    overlay.normalModePending = ""
+    clearTransientHintState(reason: reason)
+    clearCandidateFinderState()
+    overlay.hide()
+    overlay.setActiveWindowBorder(around: nil)
+    overlay.displaySelectableModal(lines: lines)
+  }
+
+  static func decodeClipboardModalEntries(_ json: String) -> [ClipboardModalEntry]? {
+    guard let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode([ClipboardModalEntry].self, from: data)
+  }
+
   private func enterCandidateFinderMode(scope: CandidateScope) {
     guard flashMode == .normal else { return }
     overlay.normalModePending = ""
@@ -1139,6 +1189,16 @@ extension AppDelegate {
     if let command = NormalModeDispatcher.commandLineCommand(raw) {
       finishCommandLineInteraction(reason: "command_submit")
       performCommandLineCommand(command)
+      return
+    }
+    // Bare `:clipboard` opens the dedicated history modal rather than firing
+    // a fire-and-forget plugin command; the host fetches the history and
+    // renders the list itself. `:clipboard <arg>` falls through below.
+    if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
+      plugin.command.lowercased() == "clipboard", plugin.subcommand.isEmpty, plugin.args.isEmpty
+    {
+      finishCommandLineInteraction(reason: "clipboard_submit")
+      openClipboardModal()
       return
     }
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),

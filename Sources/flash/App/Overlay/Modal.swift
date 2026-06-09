@@ -18,7 +18,25 @@ extension OverlayPanel {
     NSColor(calibratedRed: 0.30, green: 0.34, blue: 0.40, alpha: 1).cgColor
 
   func displayModal(_ text: String) {
-    FlashLog.trace("[overlay] display_modal chars=\(text.count)")
+    modalSelectable = false
+    renderModal(text: text, attributed: nil)
+  }
+
+  /// The dedicated `:clipboard` history list: a navigable modal (marker `>`
+  /// on the selection, `j`/`k`/arrows to move) that pastes the chosen entry
+  /// on Return. Fed by the clipboard plugin, never the flashlight candidate
+  /// pool — `modalSelectable` flips `.modal` key handling into list mode.
+  func displaySelectableModal(lines: [String]) {
+    modalSelectable = true
+    selectableModalLines = lines
+    selectableModalSelectedIndex = 0
+    let rendered = renderSelectableModalText(selectedIndex: 0)
+    renderModal(text: rendered.plain, attributed: rendered.attributed)
+    scrollSelectableModal(to: rendered.selectedRange)
+  }
+
+  private func renderModal(text: String, attributed: NSAttributedString?) {
+    FlashLog.trace("[overlay] display_modal chars=\(text.count) selectable=\(modalSelectable)")
     transientDisplayToken &+= 1
 
     CATransaction.begin()
@@ -71,6 +89,7 @@ extension OverlayPanel {
     contentLayer.sublayers = sublayers
     configureModalTextView(
       text: text,
+      attributed: attributed,
       panelLocalFrame: chip.frame.insetBy(dx: 1, dy: 1),
       fontSize: fontSize,
       lineHeight: lineHeight,
@@ -114,6 +133,7 @@ extension OverlayPanel {
 
   func configureModalTextView(
     text: String,
+    attributed: NSAttributedString? = nil,
     panelLocalFrame: CGRect,
     fontSize: CGFloat,
     lineHeight: CGFloat,
@@ -124,7 +144,11 @@ extension OverlayPanel {
     modalTextView.overlayCoordinator = coordinator
     modalTextView.font = font
     modalTextView.textColor = Self.nordSnowStorm2
-    modalTextView.string = text
+    if let attributed {
+      modalTextView.textStorage?.setAttributedString(attributed)
+    } else {
+      modalTextView.string = text
+    }
     modalScrollView.frame = panelLocalFrame
     let contentWidth = max(
       panelLocalFrame.width,
@@ -139,11 +163,70 @@ extension OverlayPanel {
     modalTextView.needsDisplay = true
   }
 
+  /// Move the `:clipboard` selection and re-render in place (no full modal
+  /// rebuild, so the dismiss monitors and keyboard capture stay put).
+  func moveSelectableModalSelection(_ delta: Int) {
+    guard modalSelectable, !selectableModalLines.isEmpty else { return }
+    let last = selectableModalLines.count - 1
+    let next = max(0, min(last, selectableModalSelectedIndex + delta))
+    guard next != selectableModalSelectedIndex else { return }
+    selectableModalSelectedIndex = next
+    let rendered = renderSelectableModalText(selectedIndex: next)
+    modalTextView.textStorage?.setAttributedString(rendered.attributed)
+    scrollSelectableModal(to: rendered.selectedRange)
+  }
+
+  /// Build the list text for `selectableModalLines`: each row gets a `> ` /
+  /// `  ` marker, the selected row is bold with a purple marker. Returns the
+  /// plain string (for sizing), the attributed string (for rendering), and
+  /// the selected row's range (for scroll-into-view).
+  private func renderSelectableModalText(selectedIndex: Int)
+    -> (plain: String, attributed: NSAttributedString, selectedRange: NSRange)
+  {
+    let fontSize = max(CGFloat(overlayConfig.fontSize), 13)
+    let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
+    let selectedFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let attributed = NSMutableAttributedString()
+    var plainLines: [String] = []
+    var selectedRange = NSRange(location: 0, length: 0)
+    for (index, line) in selectableModalLines.enumerated() {
+      if attributed.length > 0 {
+        attributed.append(NSAttributedString(string: "\n", attributes: [.font: baseFont]))
+      }
+      let isSelected = index == selectedIndex
+      let rowText = (isSelected ? "> " : "  ") + line
+      plainLines.append(rowText)
+      let rowStart = attributed.length
+      let row = NSMutableAttributedString(
+        string: rowText,
+        attributes: [
+          .font: isSelected ? selectedFont : baseFont,
+          .foregroundColor: isSelected ? Self.nordSnowStorm2 : Self.nordSnowStorm1,
+        ])
+      if isSelected {
+        row.addAttribute(
+          .foregroundColor, value: Self.nordAuroraPurple,
+          range: NSRange(location: 0, length: min(1, row.length)))
+        selectedRange = NSRange(location: rowStart, length: row.length)
+      }
+      attributed.append(row)
+    }
+    return (plainLines.joined(separator: "\n"), attributed, selectedRange)
+  }
+
+  private func scrollSelectableModal(to range: NSRange) {
+    guard range.length > 0 else { return }
+    modalTextView.scrollRangeToVisible(range)
+  }
+
   func hideModalTextView() {
     removeModalDismissMonitors()
     modalScrollView.isHidden = true
     modalTextView.string = ""
     modalTextView.overlayCoordinator = nil
+    modalSelectable = false
+    selectableModalLines = []
+    selectableModalSelectedIndex = 0
     ignoresMouseEvents = true
     if firstResponder === modalTextView {
       makeFirstResponder(self)
