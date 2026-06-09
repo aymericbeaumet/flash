@@ -7,7 +7,12 @@
   "start": "exec ./flash-plugin-safari",
   "priority": 30,
   "bundle_ids": ["com.apple.Safari"],
-  "mappings": [
-    { "key": "R", "mode": "normal", "command": "flash://send_key?keys=cmd+option+r" }
+  "providers": [
+    {
+      "kind": "mappings",
+      "mappings": [
+        { "key": "R", "mode": "normal", "command": "flash://send_key?keys=cmd+option+r" }
+      ]
+    }
   ]
 }

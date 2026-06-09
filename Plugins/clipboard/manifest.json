@@ -9,8 +9,14 @@
     "flash.started",
     { "match": "clipboard.changed" }
   ],
-  "commands": [
-    { "command": "copy", "subcommand": "", "description": "Copy the selection (⌘C)" },
-    { "command": "paste", "subcommand": "", "description": "Paste (⌘V)" }
+  "providers": [
+    { "kind": "candidates" },
+    {
+      "kind": "commands",
+      "commands": [
+        { "command": "copy", "subcommand": "", "description": "Copy the selection (⌘C)" },
+        { "command": "paste", "subcommand": "", "description": "Paste (⌘V)" }
+      ]
+    }
   ]
 }

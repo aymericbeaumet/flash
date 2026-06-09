@@ -8,11 +8,16 @@
   "events": [
     "config.*"
   ],
-  "commands": [
-    { "command": "notion", "subcommand": "login", "description": "Authenticate ntn" },
-    { "command": "notion", "subcommand": "version", "description": "Show ntn version" },
-    { "command": "notion", "subcommand": "api", "description": "Run a Notion API request" },
-    { "command": "notion", "subcommand": "workers", "description": "Run a Notion Workers command" },
-    { "command": "notion", "subcommand": "run", "description": "Run ntn with raw arguments" }
+  "providers": [
+    {
+      "kind": "commands",
+      "commands": [
+        { "command": "notion", "subcommand": "login", "description": "Authenticate ntn" },
+        { "command": "notion", "subcommand": "version", "description": "Show ntn version" },
+        { "command": "notion", "subcommand": "api", "description": "Run a Notion API request" },
+        { "command": "notion", "subcommand": "workers", "description": "Run a Notion Workers command" },
+        { "command": "notion", "subcommand": "run", "description": "Run ntn with raw arguments" }
+      ]
+    }
   ]
 }

@@ -11,8 +11,14 @@
     "config.*",
     { "match": "apps.*", "bundle_ids": ["com.apple.reminders"] }
   ],
-  "commands": [
-    { "command": "reminders", "subcommand": "open", "description": "Open Reminders.app" },
-    { "command": "reminders", "subcommand": "refresh", "description": "Refresh the cached reminders list" }
+  "providers": [
+    { "kind": "candidates" },
+    {
+      "kind": "commands",
+      "commands": [
+        { "command": "reminders", "subcommand": "open", "description": "Open Reminders.app" },
+        { "command": "reminders", "subcommand": "refresh", "description": "Refresh the cached reminders list" }
+      ]
+    }
   ]
 }

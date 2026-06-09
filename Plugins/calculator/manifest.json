@@ -5,7 +5,12 @@
   "description": "Evaluate an arithmetic expression: :calc 2 + 2. Result is copied to the clipboard.",
   "install": "true",
   "start": "exec ./flash-plugin-calculator",
-  "commands": [
-    { "command": "calc", "subcommand": "*", "description": "Evaluate an arithmetic expression, e.g. :calc 2 + 2" }
+  "providers": [
+    {
+      "kind": "commands",
+      "commands": [
+        { "command": "calc", "subcommand": "*", "description": "Evaluate an arithmetic expression, e.g. :calc 2 + 2" }
+      ]
+    }
   ]
 }

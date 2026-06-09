@@ -12,14 +12,12 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       ids,
       [
-        "aws", "calculator", "cloudflare", "clipboard", "contacts", "emojis", "firefox", "github",
-        "linear", "media", "notes", "notion", "reminders", "safari", "slack", "spotify", "system",
-        "tmux",
-        "vercel", "web",
+        "calculator", "clipboard", "contacts", "emojis", "firefox", "media", "notes", "notion",
+        "reminders", "safari", "slack", "spotify", "system", "tmux", "web",
       ])
 
     let runCommandRequired: Set<String> = [
-      "github", "linear", "media", "notion", "slack", "spotify",
+      "media", "notion", "slack", "spotify",
     ]
     for manifest in manifests {
       // Bundled plugins are compiled Rust binaries: `install` is a no-op
@@ -42,12 +40,6 @@ final class PluginSystemTests: XCTestCase {
 
     XCTAssertTrue(commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
       "login", "status", "pause", "play", "toggle", "next", "previous", "search", "run",
-    ]))
-    XCTAssertTrue(commandNames(for: "github", manifests: manifests).isSuperset(of: [
-      "login", "status", "issues", "prs", "run",
-    ]))
-    XCTAssertTrue(commandNames(for: "linear", manifests: manifests).isSuperset(of: [
-      "login", "mine", "query", "start", "view", "pr", "create", "run",
     ]))
     XCTAssertTrue(commandNames(for: "slack", manifests: manifests).isSuperset(of: [
       "login", "version", "run",
@@ -85,8 +77,6 @@ final class PluginSystemTests: XCTestCase {
 
   func testOfficialPluginsRespondOverMessagePackWithMockedCLIs() throws {
     let cases = [
-      ("github", "gh"),
-      ("linear", "linear"),
       ("notion", "ntn"),
       ("slack", "slack"),
       ("spotify", "spotify_player"),
@@ -113,7 +103,7 @@ final class PluginSystemTests: XCTestCase {
         "install": "./install.sh",
         "start": "./start.sh",
         "events": [],
-        "commands": []
+        "providers": []
       }
       """.write(
         to: pluginRoot.appendingPathComponent("manifest.json"),
@@ -147,8 +137,13 @@ final class PluginSystemTests: XCTestCase {
             { "match": "apps.*", "bundle_ids": ["com.spotify.client"] },
             "config.*"
           ],
-          "commands": [
-            { "command": "spotify", "subcommand": "pause", "description": "Pause playback" }
+          "providers": [
+            {
+              "kind": "commands",
+              "commands": [
+                { "command": "spotify", "subcommand": "pause", "description": "Pause playback" }
+              ]
+            }
           ]
         }
         """)
@@ -175,14 +170,19 @@ final class PluginSystemTests: XCTestCase {
           "description": "Slack",
           "install": "true",
           "start": "true",
-          "mappings": [
-            { "key": "q", "command": "flash://plugin_command?command=slack&subcommand=run" },
+          "providers": [
             {
-              "key": "ctrl+k",
-              "mode": "insert",
-              "command": "flash://hints_dismiss",
-              "bundle_ids": ["com.tinyspeck.slackmacgap"],
-              "priority": 40
+              "kind": "mappings",
+              "mappings": [
+                { "key": "q", "command": "flash://plugin_command?command=slack&subcommand=run" },
+                {
+                  "key": "ctrl+k",
+                  "mode": "insert",
+                  "command": "flash://hints_dismiss",
+                  "bundle_ids": ["com.tinyspeck.slackmacgap"],
+                  "priority": 40
+                }
+              ]
             }
           ]
         }
@@ -248,7 +248,7 @@ final class PluginSystemTests: XCTestCase {
           "install": "true",
           "start": "true",
           "events": [],
-          "commands": []
+          "providers": []
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }

@@ -8,17 +8,22 @@
   "events": [
     "config.*"
   ],
-  "commands": [
-    { "command": "media", "subcommand": "play", "description": "Resume playback in the active media app" },
-    { "command": "media", "subcommand": "pause", "description": "Pause playback in the active media app" },
-    { "command": "media", "subcommand": "toggle", "description": "Toggle play/pause in the active media app" },
-    { "command": "media", "subcommand": "next", "description": "Skip to next track" },
-    { "command": "media", "subcommand": "previous", "description": "Skip to previous track" },
-    { "command": "media", "subcommand": "volumeup", "description": "Raise system output volume" },
-    { "command": "media", "subcommand": "volumedown", "description": "Lower system output volume" },
-    { "command": "media", "subcommand": "mute", "description": "Toggle system output mute" },
-    { "command": "media", "subcommand": "get", "description": "Report the currently playing track" },
-    { "command": "media", "subcommand": "status", "description": "Report which media apps are running and their state" },
-    { "command": "media", "subcommand": "run", "description": "Run osascript with raw arguments" }
+  "providers": [
+    {
+      "kind": "commands",
+      "commands": [
+        { "command": "media", "subcommand": "play", "description": "Resume playback in the active media app" },
+        { "command": "media", "subcommand": "pause", "description": "Pause playback in the active media app" },
+        { "command": "media", "subcommand": "toggle", "description": "Toggle play/pause in the active media app" },
+        { "command": "media", "subcommand": "next", "description": "Skip to next track" },
+        { "command": "media", "subcommand": "previous", "description": "Skip to previous track" },
+        { "command": "media", "subcommand": "volumeup", "description": "Raise system output volume" },
+        { "command": "media", "subcommand": "volumedown", "description": "Lower system output volume" },
+        { "command": "media", "subcommand": "mute", "description": "Toggle system output mute" },
+        { "command": "media", "subcommand": "get", "description": "Report the currently playing track" },
+        { "command": "media", "subcommand": "status", "description": "Report which media apps are running and their state" },
+        { "command": "media", "subcommand": "run", "description": "Run osascript with raw arguments" }
+      ]
+    }
   ]
 }

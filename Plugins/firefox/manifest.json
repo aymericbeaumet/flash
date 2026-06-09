@@ -7,5 +7,8 @@
   "start": "exec ./flash-plugin-firefox",
   "priority": 30,
   "bundle_ids": ["org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition"],
-  "events": [{ "match": "focus.changed" }]
+  "events": [{ "match": "focus.changed" }],
+  "providers": [
+    { "kind": "candidates" }
+  ]
 }

@@ -11,9 +11,15 @@
     { "match": "focus.changed" },
     "config.*"
   ],
-  "commands": [
-    { "command": "slack", "subcommand": "login", "description": "Authenticate the Slack CLI" },
-    { "command": "slack", "subcommand": "version", "description": "Show Slack CLI version" },
-    { "command": "slack", "subcommand": "run", "description": "Run slack with raw arguments" }
+  "providers": [
+    { "kind": "candidates" },
+    {
+      "kind": "commands",
+      "commands": [
+        { "command": "slack", "subcommand": "login", "description": "Authenticate the Slack CLI" },
+        { "command": "slack", "subcommand": "version", "description": "Show Slack CLI version" },
+        { "command": "slack", "subcommand": "run", "description": "Run slack with raw arguments" }
+      ]
+    }
   ]
 }

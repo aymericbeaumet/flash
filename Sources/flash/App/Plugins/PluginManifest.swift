@@ -197,6 +197,76 @@ struct PluginMappingRegistration: Codable, Hashable {
   var scope: ModeScope { ModeScope(rawValue: mode) ?? .normal }
 }
 
+/// One row in a plugin's unified `providers[]` table. Every surface a plugin
+/// drives — hints, candidates, commands, mappings — is one entry here, tagged
+/// by ``ProviderKind`` and gated by the same optional, symmetric conditions
+/// (`bundle_ids`/`modes`/`priority`). Kind-specific payloads ride alongside: a
+/// `commands` provider carries `commands[]`, a `mappings` provider carries
+/// `mappings[]`; `hints`/`candidates` providers just declare the capability and
+/// its conditions, then stream results at runtime over RPC.
+struct PluginProvider: Codable, Equatable {
+  var kind: ProviderKind
+  /// Apps this provider is gated to (empty = every app). Folded into each
+  /// `mappings` entry's own `bundle_ids` (the entry wins) and consumed directly
+  /// for hints/candidates/commands gating.
+  var bundleIDs: [String]
+  /// Editor modes this provider is gated to (empty = every mode).
+  var modes: [ProviderMode]
+  /// Scheduling priority override; `nil` inherits the manifest priority.
+  var priority: Int?
+  var commands: [PluginCommandRegistration]
+  var mappings: [PluginMappingRegistration]
+
+  init(
+    kind: ProviderKind,
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    commands: [PluginCommandRegistration] = [],
+    mappings: [PluginMappingRegistration] = []
+  ) {
+    self.kind = kind
+    self.bundleIDs = bundleIDs
+    self.modes = modes
+    self.priority = priority
+    self.commands = commands
+    self.mappings = mappings
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case kind
+    case bundleIDs = "bundle_ids"
+    case modes, priority, commands, mappings
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.kind = try c.decode(ProviderKind.self, forKey: .kind)
+    self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    self.modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.commands =
+      try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
+    self.mappings =
+      try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .mappings) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(kind, forKey: .kind)
+    if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
+    if !modes.isEmpty { try c.encode(modes, forKey: .modes) }
+    if let priority { try c.encode(priority, forKey: .priority) }
+    if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
+    if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
+  }
+
+  /// The shared activation gate this provider declares.
+  var conditions: ProviderConditions {
+    ProviderConditions(bundleIDs: Set(bundleIDs), modes: Set(modes))
+  }
+}
+
 struct PluginManifest: Codable, Equatable {
   var id: String
   var name: String
@@ -205,19 +275,13 @@ struct PluginManifest: Codable, Equatable {
   var install: String
   var start: String
   var events: [PluginEventSubscription]
-  var commands: [PluginCommandRegistration]
-  /// Key mappings the plugin contributes. Each is mode-scoped,
-  /// app-conditional, and priority-ordered — see `PluginMappingRegistration`.
-  var mappings: [PluginMappingRegistration]
+  /// Every surface the plugin drives, as one unified table — see
+  /// ``PluginProvider``. The per-kind views below (`commands`, `mappings`,
+  /// `providesHints`) are derived from this so the rest of the host keeps
+  /// reading flat lists.
+  var providers: [PluginProvider]
   var priority: Int
   var volatile: Bool
-  /// Opts the plugin in as a *hints provider*: its `.jumpTargets` capability
-  /// is advertised only when this is set. Hint selection is exclusive —
-  /// the single highest-priority hints provider supporting the focused app
-  /// owns `f`/hints for that app — so a plugin that returns no targets must
-  /// not silently replace the core AX walk. Off by default; existing plugins
-  /// keep their candidate/tab capabilities untouched.
-  var providesHints: Bool
   /// Bundle identifiers the source applies to. When non-empty, restricts
   /// `supports()` and jump-target discovery to these apps. Mirrors the
   /// `bundle_ids` filter used on event subscriptions but applies even when
@@ -228,10 +292,39 @@ struct PluginManifest: Codable, Equatable {
   /// response isn't dropped. `nil` uses the default.
   var requestTimeoutMs: Int?
 
+  /// Denormalized (command, subcommand) rows across every `commands` provider.
+  var commands: [PluginCommandRegistration] {
+    providers.filter { $0.kind == .commands }.flatMap { $0.commands }
+  }
+
+  /// Mapping registrations across every `mappings` provider, with the
+  /// provider's shared `bundle_ids`/`modes`/`priority` folded into each entry
+  /// (the entry's own value wins) so downstream resolution sees a flat list.
+  var mappings: [PluginMappingRegistration] {
+    providers.filter { $0.kind == .mappings }.flatMap { provider in
+      provider.mappings.map { entry in
+        var entry = entry
+        if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.bundleIDs }
+        if entry.priority == nil { entry.priority = provider.priority }
+        if entry.mode == "normal", provider.modes.count == 1 {
+          entry.mode = provider.modes[0].rawValue
+        }
+        return entry
+      }
+    }
+  }
+
+  /// True when any provider opts the plugin in as a hints provider. Hint
+  /// selection is exclusive (highest-priority provider supporting the focused
+  /// app wins, no fallback), so a plugin only advertises `.jumpTargets` when it
+  /// declares a `hints` provider.
+  var providesHints: Bool {
+    providers.contains { $0.kind == .hints }
+  }
+
   enum CodingKeys: String, CodingKey {
-    case id, name, version, description, install, start, events, commands, mappings, priority
+    case id, name, version, description, install, start, events, providers, priority
     case volatile
-    case providesHints = "provides_hints"
     case bundleIDs = "bundle_ids"
     case requestTimeoutMs = "request_timeout_ms"
   }
@@ -240,11 +333,9 @@ struct PluginManifest: Codable, Equatable {
     id: String, name: String, version: String, description: String,
     install: String, start: String,
     events: [PluginEventSubscription] = [],
-    commands: [PluginCommandRegistration] = [],
-    mappings: [PluginMappingRegistration] = [],
+    providers: [PluginProvider] = [],
     priority: Int = 25,
     volatile: Bool = false,
-    providesHints: Bool = false,
     bundleIDs: [String] = [],
     requestTimeoutMs: Int? = nil
   ) {
@@ -255,11 +346,9 @@ struct PluginManifest: Codable, Equatable {
     self.install = install
     self.start = start
     self.events = events
-    self.commands = commands
-    self.mappings = mappings
+    self.providers = providers
     self.priority = priority
     self.volatile = volatile
-    self.providesHints = providesHints
     self.bundleIDs = bundleIDs
     self.requestTimeoutMs = requestTimeoutMs
   }
@@ -273,12 +362,9 @@ struct PluginManifest: Codable, Equatable {
     self.install = try c.decode(String.self, forKey: .install)
     self.start = try c.decode(String.self, forKey: .start)
     self.events = try c.decodeIfPresent([PluginEventSubscription].self, forKey: .events) ?? []
-    self.commands = try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
-    self.mappings =
-      try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .mappings) ?? []
+    self.providers = try c.decodeIfPresent([PluginProvider].self, forKey: .providers) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
-    self.providesHints = try c.decodeIfPresent(Bool.self, forKey: .providesHints) ?? false
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
     self.requestTimeoutMs = try c.decodeIfPresent(Int.self, forKey: .requestTimeoutMs)
   }
@@ -292,11 +378,9 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(install, forKey: .install)
     try c.encode(start, forKey: .start)
     if !events.isEmpty { try c.encode(events, forKey: .events) }
-    if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
-    if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
+    if !providers.isEmpty { try c.encode(providers, forKey: .providers) }
     try c.encode(priority, forKey: .priority)
     if volatile { try c.encode(volatile, forKey: .volatile) }
-    if providesHints { try c.encode(providesHints, forKey: .providesHints) }
     if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
     if let requestTimeoutMs { try c.encode(requestTimeoutMs, forKey: .requestTimeoutMs) }
   }

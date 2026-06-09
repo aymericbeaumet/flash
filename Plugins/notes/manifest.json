@@ -11,8 +11,14 @@
     "config.*",
     { "match": "apps.*", "bundle_ids": ["com.apple.Notes"] }
   ],
-  "commands": [
-    { "command": "notes", "subcommand": "open", "description": "Open Notes.app" },
-    { "command": "notes", "subcommand": "refresh", "description": "Refresh the cached notes list" }
+  "providers": [
+    { "kind": "candidates" },
+    {
+      "kind": "commands",
+      "commands": [
+        { "command": "notes", "subcommand": "open", "description": "Open Notes.app" },
+        { "command": "notes", "subcommand": "refresh", "description": "Refresh the cached notes list" }
+      ]
+    }
   ]
 }

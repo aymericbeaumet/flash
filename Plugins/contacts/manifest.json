@@ -11,8 +11,14 @@
     "config.*",
     { "match": "apps.*", "bundle_ids": ["com.apple.AddressBook"] }
   ],
-  "commands": [
-    { "command": "contacts", "subcommand": "open", "description": "Open Contacts.app" },
-    { "command": "contacts", "subcommand": "refresh", "description": "Refresh the cached contacts list" }
+  "providers": [
+    { "kind": "candidates" },
+    {
+      "kind": "commands",
+      "commands": [
+        { "command": "contacts", "subcommand": "open", "description": "Open Contacts.app" },
+        { "command": "contacts", "subcommand": "refresh", "description": "Refresh the cached contacts list" }
+      ]
+    }
   ]
 }
