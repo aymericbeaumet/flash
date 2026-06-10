@@ -109,6 +109,13 @@ extension OverlayPanel {
     for (idx, hint) in hints.enumerated() {
       let targetFrame = hint.target.frame
       let isMouseGridHint = hint.target.providerID == "mouse_grid"
+      // At the final mouse-grid step the chip IS the click point — no
+      // gap-free cell tile is meaningful at that scale. Render those
+      // hints with the regular f-hint look so the cluster reads
+      // cleanly and individual chips never get a redundant translucent
+      // backdrop.
+      let isMouseGridFinalChip =
+        isMouseGridHint && hint.target.role == MouseGrid.finalChipRole
       let local = CGRect(
         x: targetFrame.minX - frame.minX,
         y: targetFrame.minY - frame.minY,
@@ -156,11 +163,13 @@ extension OverlayPanel {
         widthByLen[labelLen] = chipW
       }
 
-      // Outer chip frame. Mouse-grid cells fill the whole cell (gap-free
-      // packing — clicking *anywhere* in a cell commits its hint, no
-      // dead "between letters" zone); regular hints use the centred
-      // fixed-size chip.
-      let chipGlobal: CGRect = isMouseGridHint
+      // Outer chip frame. Mouse-grid *cells* fill the whole cell (gap-
+      // free packing — clicking *anywhere* in a cell commits its hint,
+      // no dead "between letters" zone). Mouse-grid *final chips* and
+      // regular hints both use a centred fixed-size chip — the final
+      // chip's targetFrame already IS the chip rect, so `chipFrame`
+      // centres a fixed-size chip on it identical to the regular path.
+      let chipGlobal: CGRect = (isMouseGridHint && !isMouseGridFinalChip)
         ? targetFrame
         : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
       let chipLocal = CGRect(
@@ -192,11 +201,14 @@ extension OverlayPanel {
       // the snap because they must touch their neighbours exactly —
       // per-cell rounding can drift cells apart by a pixel and create a
       // visible gap, which is precisely the anti-feature the grid avoids.
-      chip.frame = isMouseGridHint ? chipLocal : Self.snap(chipLocal, scale: chipScale)
+      // Cells skip snap so they touch their neighbours exactly; final
+      // chips and regular hints snap for crisp 1pt borders.
+      chip.frame = (isMouseGridHint && !isMouseGridFinalChip)
+        ? chipLocal : Self.snap(chipLocal, scale: chipScale)
       chip.contentsScale = chipScale
       label.contentsScale = chipScale
 
-      if isMouseGridHint {
+      if isMouseGridHint && !isMouseGridFinalChip {
         // Cell backdrop: a translucent tint so the user still sees the
         // page underneath to aim. Translucency rides on the colour alpha
         // (not layer opacity) so the centred label chip nested below
@@ -245,8 +257,27 @@ extension OverlayPanel {
       } else {
         chip.cornerRadius = 3
         chip.borderWidth = 1
-        chip.colors = gradientColors
-        chip.borderColor = borderCG
+        if isMouseGridFinalChip {
+          // Final mouse-grid step only: make the chip background
+          // slightly translucent so the user can see what's behind the
+          // cluster while picking the precise click target. The label
+          // is a sub-layer that keeps its own (fully opaque) colour so
+          // the letter stays bright and readable — only the chip
+          // surround dims.
+          let alpha: CGFloat = 0.7
+          chip.colors = gradientColors.map { color -> CGColor in
+            NSColor(cgColor: color)?
+              .withAlphaComponent(alpha)
+              .cgColor ?? color
+          }
+          chip.borderColor =
+            NSColor(cgColor: borderCG)?
+              .withAlphaComponent(min(1, alpha + 0.2))
+              .cgColor ?? borderCG
+        } else {
+          chip.colors = gradientColors
+          chip.borderColor = borderCG
+        }
         label.frame = CGRect(x: 0, y: labelYOffset, width: chipW, height: labelHeight)
         // `recycleAll()` already cleared `sublayers`, so attaching with
         // `addSublayer(label)` skips the per-chip array alloc that

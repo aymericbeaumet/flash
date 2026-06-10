@@ -38,22 +38,12 @@ const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
 fn link_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // URLs, ~paths, absolute paths, ./ relative paths, file.ext — each
-        // with an optional trailing `:LINE[:COL]` editor-jump suffix.
-        let path_tail = r"(?::\d+(?::\d+)?)?";
-        let boundary = r#"[^\s"'`,\[\]\(\)<>]+"#;
-        let pattern = format!(
-            concat!(
-                r"https?://{boundary}[A-Za-z0-9/_-]",
-                r#"|~/{boundary}{tail}"#,
-                r#"|/[A-Za-z0-9._-][^\s"'`,\[\]\(\)<>]*{tail}"#,
-                r"|\.{{1,2}}/{boundary}{tail}",
-                r"|[\w.-]+\.[A-Za-z][\w-]*{tail}",
-            ),
-            boundary = boundary,
-            tail = path_tail,
-        );
-        Regex::new(&pattern).expect("tmux link regex")
+        // URLs · $VAR / ${VAR} shell-style env-prefixed paths · ~/ and / paths ·
+        // ./ ../ relative paths · dotted host/path tokens · bare file.ext names ·
+        // E#### error codes (Rust/cargo, etc.). The trailing `:LINE[:COL]`
+        // editor-jump suffix is folded into the path-shaped alternatives.
+        let pattern = r#"https?://[\w./\-?&=@%+:~#!$,;*()]+[\w/]|\$\{?\w+\}?(?:/[\w./\-]+)+|(?:~|/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|(?:\.{1,2}/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+(?:/[^\s\]\r\n][^\s\]\r\n]*)+\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+\.[\w-]+(?::\d+(?::\d+)?)?|(?-u:\b)E\d{4}(?-u:\b)"#;
+        Regex::new(pattern).expect("tmux link regex")
     })
 }
 
@@ -113,6 +103,33 @@ async fn run_cmd(program: &str, args: &[&str], timeout: Duration) -> Option<Stri
         return None;
     }
     Some(result.stdout)
+}
+
+/// Run tmux capturing stderr too, so callers can surface why a command
+/// failed instead of just seeing `None`. Used by the mutating tab actions
+/// (`new-window`, `kill-window`) where a silent failure is the worst
+/// outcome — we'd rather log "session 1: no current path" than fall back
+/// to a ⌘N that opens a fresh terminal window.
+async fn run_tmux_capture(
+    tmux_path: Option<&str>,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, String> {
+    let path = tmux_path.ok_or_else(|| "tmux binary not found".to_string())?;
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push(path.to_string());
+    argv.extend(args.iter().map(|s| s.to_string()));
+    let result = run_local(&argv, timeout).await;
+    if result.ok {
+        Ok(result.stdout)
+    } else {
+        let stderr = result.stderr.trim();
+        Err(if stderr.is_empty() {
+            format!("tmux exited status={}", result.status)
+        } else {
+            stderr.to_string()
+        })
+    }
 }
 
 async fn run_tmux(tmux_path: Option<&str>, args: &[&str], timeout: Duration) -> Option<String> {
@@ -530,8 +547,12 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
         let chip_x = min_x + pad_x + (center_col - pane_chip_cells / 2) as f64 * cell_w;
         let chip_y = min_y + win_h - pad_y - (center_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-p{i}");
-        // Clicking a pane focuses it for typing → enter insert mode, like
-        // clicking into any terminal.
+        // Hint commits never auto-enter insert: only the explicit
+        // triggers (`i`, mouse_grid, physical click, AccessibilityProvider
+        // true-text-input targets) do that. A tmux pane is a terminal
+        // surface, not an AX text input, so a pane hint stays in normal
+        // — and shift+hint now behaves exactly like an INSERT-mode
+        // shift+click (raw click delivered, mode unchanged).
         pane_targets.push(build_target(
             &target_id,
             chip_x,
@@ -541,7 +562,7 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             "tmux-pane",
             &pane.id,
             pid,
-            true,
+            false,
         ));
         actions.insert(
             target_id,
@@ -759,25 +780,6 @@ fn target_for_ordinal(ordinal: i64, session: &str, indices: &[String]) -> Option
     Some(format!("{session}:{}", indices[(ordinal - 1) as usize]))
 }
 
-fn target_for_adjacent(
-    direction: &str,
-    session: &str,
-    current_index: &str,
-    indices: &[String],
-) -> Option<String> {
-    if indices.is_empty() {
-        return None;
-    }
-    let offset = indices.iter().position(|i| i == current_index)?;
-    let len = indices.len();
-    let next = if direction == "next" {
-        (offset + 1) % len
-    } else {
-        (offset + len - 1) % len
-    };
-    Some(format!("{session}:{}", indices[next]))
-}
-
 async fn switch_client(tmux_path: Option<&str>, tty: &str, target: &str) -> bool {
     run_tmux_default(tmux_path, &["switch-client", "-c", tty, "-t", target])
         .await
@@ -812,73 +814,37 @@ async fn tab_select(tmux_path: Option<&str>, client: &TmuxClient, index: Option<
 }
 
 async fn tab_adjacent(tmux_path: Option<&str>, client: &TmuxClient, direction: &str) -> bool {
-    let current = trimmed(
-        run_tmux_default(
-            tmux_path,
-            &[
-                "display-message",
-                "-c",
-                &client.tty,
-                "-p",
-                "#{window_index}",
-            ],
-        )
-        .await,
-    );
-    let raw = run_tmux_default(
-        tmux_path,
-        &[
-            "list-windows",
-            "-t",
-            &client.session,
-            "-F",
-            "#{window_index}",
-        ],
-    )
-    .await;
-    let (Some(current), Some(raw)) = (current, raw) else {
-        return false;
+    // Use tmux's native cycle commands instead of list-windows +
+    // find-current + switch-client. `next-window` / `previous-window`
+    // handle wrap-around natively, work uniformly across every client
+    // attached to the session, and don't depend on per-client display
+    // messages that can race against fast presses. Targeting
+    // `<session>:` (trailing colon) explicitly scopes the cycle to this
+    // client's session — generic over clients, no shortcut emulation.
+    let cmd = if direction == "next" {
+        "next-window"
+    } else {
+        "previous-window"
     };
-    let Some(target) =
-        target_for_adjacent(direction, &client.session, &current, &window_indices(&raw))
-    else {
-        return false;
-    };
-    switch_client(tmux_path, &client.tty, &target).await
+    let session_target = format!("{}:", client.session);
+    run_tmux_default(tmux_path, &[cmd, "-t", &session_target])
+        .await
+        .is_some()
 }
 
 async fn tab_extreme(tmux_path: Option<&str>, client: &TmuxClient, end: &str) -> bool {
-    let Some(raw) = run_tmux_default(
-        tmux_path,
-        &[
-            "list-windows",
-            "-t",
-            &client.session,
-            "-F",
-            "#{window_index}",
-        ],
-    )
-    .await
-    else {
-        return false;
-    };
-    let indices = window_indices(&raw);
-    let Some(target_index) = (if end == "first" {
-        indices.first()
-    } else {
-        indices.last()
-    }) else {
-        return false;
-    };
-    switch_client(
-        tmux_path,
-        &client.tty,
-        &format!("{}:{}", client.session, target_index),
-    )
-    .await
+    // First/last via native window indexing: tmux accepts numeric
+    // indices and the special `{start}`/`{end}` aliases. `{end}` is
+    // exactly "the last window in the session" and `{start}` is the
+    // first — no need to list and pick.
+    let alias = if end == "first" { "{start}" } else { "{end}" };
+    let session_target = format!("{}:{}", client.session, alias);
+    run_tmux_default(tmux_path, &["select-window", "-t", &session_target])
+        .await
+        .is_some()
 }
 
-async fn tab_new(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
+async fn tab_new(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) -> bool {
     let current_path = trimmed(
         run_tmux_default(
             tmux_path,
@@ -892,22 +858,64 @@ async fn tab_new(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
         )
         .await,
     );
-    let mut args: Vec<String> = vec![
+    // Trailing colon forces the target to be parsed as `<session>:`
+    // (current window of session) rather than ambiguously matching a
+    // window index — important when the session name is a digit
+    // (e.g. session "1" + window "1" both exist).
+    let session_target = format!("{}:", client.session);
+    let mut attempt: Vec<String> = vec![
         "new-window".into(),
         "-P".into(),
         "-F".into(),
         "#{window_index}".into(),
         "-t".into(),
-        client.session.clone(),
+        session_target.clone(),
     ];
-    if let Some(path) = current_path {
-        args.push("-c".into());
-        args.push(path);
+    if let Some(ref path) = current_path {
+        attempt.push("-c".into());
+        attempt.push(path.clone());
     }
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let Some(created) = trimmed(run_tmux_default(tmux_path, &arg_refs).await) else {
-        return false;
+    let created = match run_tmux_capture(
+        tmux_path,
+        &attempt.iter().map(String::as_str).collect::<Vec<_>>(),
+        Duration::from_secs(2),
+    )
+    .await
+    {
+        Ok(out) => trimmed(Some(out)),
+        Err(err) => {
+            // Most common reason for failure is a `-c <path>` that tmux
+            // can't `chdir` into (path went away, mount went stale, etc.).
+            // Retry once without -c so the new window still opens — just
+            // in $HOME instead of the dead cwd.
+            ctx.log(
+                "warn",
+                &format!(
+                    "[tmux] new-window -t {} failed ({}), retrying without -c",
+                    session_target, err
+                ),
+            );
+            let bare = [
+                "new-window",
+                "-P",
+                "-F",
+                "#{window_index}",
+                "-t",
+                &session_target,
+            ];
+            match run_tmux_capture(tmux_path, &bare, Duration::from_secs(2)).await {
+                Ok(out) => trimmed(Some(out)),
+                Err(err) => {
+                    ctx.log(
+                        "warn",
+                        &format!("[tmux] new-window -t {} failed: {}", session_target, err),
+                    );
+                    None
+                }
+            }
+        }
     };
+    let Some(created) = created else { return false };
     switch_client(
         tmux_path,
         &client.tty,
@@ -927,12 +935,83 @@ async fn tab_close(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
         .is_some()
 }
 
-async fn perform_source_action(plugin: &Tmux, req: &SourceActionRequest) -> SourceActionResponse {
+/// `[m` / `]m`: swap the focused window with its neighbour in the same
+/// session. Tmux is happy to wrap (`-d` keeps the window selected at
+/// its new position), so the user can keep tapping `]m` to bubble a
+/// window to the end without rebinding.
+async fn tab_move(tmux_path: Option<&str>, client: &TmuxClient, direction: &str) -> bool {
+    let neighbour = if direction == "next" { "+1" } else { "-1" };
+    let target = format!("{}:{}", client.session, neighbour);
+    run_tmux_default(tmux_path, &["swap-window", "-d", "-t", &target])
+        .await
+        .is_some()
+}
+
+/// `gg` / `G` inside a tmux client. The host's wheel-delta fallback can't
+/// reach the bottom of a live buffer (wheel-down past the cursor is a
+/// no-op in tmux mouse mode), so the plugin claims the action and drives
+/// it via copy-mode commands directly:
+///
+///   * `top`: enter copy mode (if not already), then `history-top` to
+///     jump to the oldest scrollback line.
+///   * `bottom`: `cancel` exits copy mode, which automatically returns
+///     the view to the live (bottom) buffer. A no-op when not in copy
+///     mode, which is the correct semantics — the user is already at
+///     the bottom.
+async fn scroll_extreme(tmux_path: Option<&str>, client: &TmuxClient, end: &str) -> bool {
+    let session_target = format!("{}:", client.session);
+    match end {
+        "top" => {
+            // -u opens copy mode and pre-scrolls one page up so the
+            // subsequent history-top has something to anchor on for
+            // single-line panes; harmless when scrollback is large.
+            if run_tmux_default(tmux_path, &["copy-mode", "-u", "-t", &session_target])
+                .await
+                .is_none()
+            {
+                return false;
+            }
+            run_tmux_default(
+                tmux_path,
+                &["send-keys", "-t", &session_target, "-X", "history-top"],
+            )
+            .await
+            .is_some()
+        }
+        "bottom" => run_tmux_default(
+            tmux_path,
+            &["send-keys", "-t", &session_target, "-X", "cancel"],
+        )
+        .await
+        .is_some(),
+        _ => false,
+    }
+}
+
+async fn perform_source_action(
+    plugin: &Tmux,
+    ctx: &Context,
+    req: &SourceActionRequest,
+) -> SourceActionResponse {
     let tmux_path = plugin.tmux_path.as_deref();
     let Some(pid) = req.context.pid else {
+        ctx.log(
+            "debug",
+            &format!(
+                "[tmux] source_action {} unhandled: no context.pid",
+                req.name
+            ),
+        );
         return SourceActionResponse::unhandled();
     };
     let Some(client) = client_hosted_by(tmux_path, pid).await else {
+        ctx.log(
+            "debug",
+            &format!(
+                "[tmux] source_action {} unhandled: no tmux client hosted by pid={}",
+                req.name, pid
+            ),
+        );
         return SourceActionResponse::unhandled();
     };
     let ok = match req.name.as_str() {
@@ -941,13 +1020,29 @@ async fn perform_source_action(plugin: &Tmux, req: &SourceActionRequest) -> Sour
         "tab_prev" => tab_adjacent(tmux_path, &client, "previous").await,
         "tab_first" => tab_extreme(tmux_path, &client, "first").await,
         "tab_last" => tab_extreme(tmux_path, &client, "last").await,
-        "tab_new" => tab_new(tmux_path, &client).await,
+        "tab_new" => tab_new(tmux_path, ctx, &client).await,
         "tab_close" => tab_close(tmux_path, &client).await,
+        "tab_move_next" => tab_move(tmux_path, &client, "next").await,
+        "tab_move_previous" => tab_move(tmux_path, &client, "previous").await,
+        "scroll_top" => scroll_extreme(tmux_path, &client, "top").await,
+        "scroll_bottom" => scroll_extreme(tmux_path, &client, "bottom").await,
         _ => return SourceActionResponse::unhandled(),
     };
-    SourceActionResponse {
-        did_perform: ok,
-        target_pid: Some(pid),
+    ctx.log(
+        "debug",
+        &format!(
+            "[tmux] source_action {} client_tty={} session={} ok={}",
+            req.name, client.tty, client.session, ok
+        ),
+    );
+    // A tmux client hosts the focused terminal, so this source owns the
+    // action either way: a failed tmux command must report `failed` (not
+    // `unhandled`) or the host would fall back to a ⌘-keystroke that
+    // doesn't mean "tab" in a terminal.
+    if ok {
+        SourceActionResponse::performed(Some(pid))
+    } else {
+        SourceActionResponse::failed(Some(pid))
     }
 }
 
@@ -1214,8 +1309,7 @@ impl FlashPlugin for Tmux {
         ctx: Context,
         request: SourceActionRequest,
     ) -> SourceActionResponse {
-        let _ = ctx;
-        perform_source_action(self, &request).await
+        perform_source_action(self, &ctx, &request).await
     }
 
     async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {

@@ -24,6 +24,9 @@ enum URLCommand: Hashable {
   case tabFirst
   case tabLast
   case tabSelect(index: Int?)
+  case tabMovePrev
+  case tabMoveNext
+  case tabReopen
   case historyBack
   case historyForward
   case movementBack
@@ -39,7 +42,6 @@ enum URLCommand: Hashable {
   case openDocument
   case newWindow
   case tabNew
-  case tabNewInsert
   case copy
   case cut
   case paste
@@ -194,6 +196,9 @@ final class URLEventHandler: NSObject {
     "tab_first": { _ in .tabFirst },
     "tab_last": { _ in .tabLast },
     "tab_select": { q in .tabSelect(index: q.int("index")) },
+    "tab_move_previous": { _ in .tabMovePrev },
+    "tab_move_next": { _ in .tabMoveNext },
+    "tab_reopen": { _ in .tabReopen },
     "history_back": { _ in .historyBack },
     "history_forward": { _ in .historyForward },
     "movement_back": { _ in .movementBack },
@@ -215,7 +220,6 @@ final class URLEventHandler: NSObject {
     "document_open": { _ in .openDocument },
     "window_new": { _ in .newWindow },
     "tab_new": { _ in .tabNew },
-    "tab_new_insert": { _ in .tabNewInsert },
     "clipboard_copy": { _ in .copy },
     "clipboard_cut": { _ in .cut },
     "clipboard_paste": { _ in .paste },
@@ -247,8 +251,8 @@ final class URLEventHandler: NSObject {
   ]
 
   static let usageText = """
-    flash://mouse_target[?right=1|double=1|move=1]
-    flash://mouse_grid[?right=1|double=1|move=1]
+    flash://mouse_target[?secondary=1|double=1|move=1]
+    flash://mouse_grid[?secondary=1|double=1|move=1]
     flash://mode_normal
     flash://mode_insert
     flash://mode_command
@@ -275,6 +279,9 @@ final class URLEventHandler: NSObject {
     flash://tab_first
     flash://tab_last
     flash://tab_select[?index=<n>]
+    flash://tab_move_previous
+    flash://tab_move_next
+    flash://tab_reopen
     flash://history_back
     flash://history_forward
     flash://movement_back
@@ -288,7 +295,6 @@ final class URLEventHandler: NSObject {
     flash://document_open
     flash://window_new
     flash://tab_new
-    flash://tab_new_insert
     flash://clipboard_copy
     flash://clipboard_cut
     flash://clipboard_paste
@@ -329,10 +335,10 @@ extension URLEventHandler {
 
 private func mouseCommand(_ q: FlashURLQuery) -> MouseCommand? {
   if q.bool("move") { return .move }
-  let right = q.bool("right")
+  let secondary = q.bool("secondary")
   let double = q.bool("double")
-  if right && double { return nil }
-  if right { return .click(.rightClick) }
+  if secondary && double { return nil }
+  if secondary { return .click(.rightClick) }
   if double { return .click(.doubleClick) }
   return .click(.leftClick)
 }

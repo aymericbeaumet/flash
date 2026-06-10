@@ -103,6 +103,14 @@ final class OverlayPanel: NSPanel {
     }
   }
   var normalModePendingUpdatedAt: Date?
+  /// Set when a modified chord with no Flash mapping passes through to
+  /// the focused app (e.g. `ctrl+q` as a tmux prefix). For the duration
+  /// of `normalModeSequenceTimeoutMs` after that pass-through, any
+  /// unmodified keystroke is swallowed without resolving a mapping —
+  /// otherwise a tmux prefix followed by `t` would silently fire
+  /// `tab_new` instead of staying as part of the user's terminal
+  /// sequence. `<esc>` clears the lockout immediately.
+  var normalModeChordLockoutUntil: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var commandLineText: String = "" {
@@ -120,6 +128,11 @@ final class OverlayPanel: NSPanel {
   var modalSelectable = false
   var selectableModalLines: [String] = []
   var selectableModalSelectedIndex = 0
+  /// One-key vim sequence buffer for the modal: when set, the next
+  /// `g` keypress maps to `scrollModal(.top)`. Cleared by any other key
+  /// or by the sequence-timeout fired from
+  /// `consumeModalScrollKey`.
+  var modalScrollGPending = false
 
   // Fallback border colour when the configured `hint_border` is malformed.
   static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
@@ -399,6 +412,7 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool
   func overlayDidInsertCommandLineSelection() -> Bool
   func overlayDidSubmitCommandLine(_ command: String)
+  func overlayDidForceSubmitCommandLineSelection()
   func overlayDidCancelCandidateFinder()
   func overlayDidUpdateCandidateFinderQuery(_ query: String)
   func overlayDidMoveCandidateFinderSelection(_ delta: Int)

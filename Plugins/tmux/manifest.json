@@ -7,6 +7,7 @@
   "start": "exec ./flash-plugin-tmux",
   "priority": 20,
   "volatile": true,
+  "request_timeout_ms": 8000,
   "bundle_ids": [
     "org.alacritty",
     "io.alacritty",

@@ -50,7 +50,19 @@ enum OverlayInputInterpreter {
     guard let chars = charactersIgnoringModifiers, !chars.isEmpty else {
       return .ignore
     }
-    let clickModifiers = ClickModifiers(eventFlags: independentModifiers, allowed: magicModifiers)
+    // Click-pass-through: always allow shift to ride the click, even when
+    // it has been stripped from `magicModifiers` for input-disambiguation
+    // reasons (the auto-strip in `Config.removeAmbiguousShiftMagicModifier`
+    // fires when the alphabet contains non-letters like the default
+    // `qwerty_toprow` digits, so `shift+1` doesn't fight with `!`). Shift
+    // on the synthesized mouse event isn't ambiguous with anything — it
+    // simply becomes a shift+click — so the disambiguation rule that
+    // makes sense at key-input time would break `f`+shift+hint at click
+    // time. Strict modifiers (cmd/ctrl/option) still respect
+    // `magicModifiers` so the cancel gate above remains the source of
+    // truth for unknown chords.
+    let clickAllowed = magicModifiers.union(.shift)
+    let clickModifiers = ClickModifiers(eventFlags: independentModifiers, allowed: clickAllowed)
     return .commit(chars, clickModifiers)
   }
 }
@@ -155,7 +167,38 @@ extension OverlayPanel {
       if modifiers.contains(.command) || modifiers.contains(.control)
         || modifiers.contains(.option)
       {
+        // Carbon takes any chord with a `[mode.*]` mapping before the
+        // event tap sees it; what reaches us is the user typing a
+        // chord Flash doesn't claim — typically a third-party prefix
+        // like ctrl-q for tmux, or a system shortcut. Engage a brief
+        // lockout so the follow-up key (the tmux command, etc.) can't
+        // accidentally resolve a standalone Flash mapping.
+        normalModeChordLockoutUntil = Date().addingTimeInterval(
+          TimeInterval(normalModeSequenceTimeoutMs) / 1_000)
+        if !normalModePending.isEmpty {
+          FlashLog.trace(
+            "[input] normal chord_lockout_clears_pending pending=\(normalModePending)")
+          normalModePending = ""
+        }
+        FlashLog.trace(
+          "[input] normal chord_lockout_arm key=\(event.keyCode) "
+            + "until=\(normalModeChordLockoutUntil.map { String(format: "%.3f", $0.timeIntervalSinceReferenceDate) } ?? "nil")")
         return false
+      }
+      if let lockoutUntil = normalModeChordLockoutUntil,
+        Date() < lockoutUntil
+      {
+        // <esc> drops the lockout instantly so the user can recover
+        // without waiting out the timeout.
+        if event.keyCode == 53 {
+          normalModeChordLockoutUntil = nil
+          FlashLog.trace("[input] normal chord_lockout_cancel reason=esc")
+        } else {
+          FlashLog.trace(
+            "[input] normal chord_lockout_swallow key=\(event.keyCode) "
+              + "chars=\(event.charactersIgnoringModifiers ?? "nil")")
+        }
+        return true
       }
       processNormalModeKey(event)
       return true
@@ -263,7 +306,17 @@ extension OverlayPanel {
   /// shortcuts everyone expects from a single-line text input.
   private func handleCommandLineEditingShortcut(_ event: NSEvent) -> Bool {
     let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    guard modifiers.contains(.command),
+    guard modifiers.contains(.command) else { return false }
+    // ⌘+Return / ⌘+Keypad-Enter: force-submit the selected flashlight
+    // candidate (insert canonical token if it's a bang, then dispatch /
+    // open). Plain Return only INSERTS — `<cmd+cr>` is the explicit
+    // "act on this now" signal so the user can browse + insert without
+    // committing.
+    if event.keyCode == 36 || event.keyCode == 76 {
+      coordinator?.overlayDidForceSubmitCommandLineSelection()
+      return true
+    }
+    guard
       let char = event.charactersIgnoringModifiers?.lowercased().first,
       let editor = commandTextField.currentEditor() as? NSTextView
     else { return false }
@@ -328,10 +381,67 @@ extension OverlayPanel {
         moveSelectableModalSelection(1)
         return true
       }
+    } else if let scroll = consumeModalScrollKey(modifiers: modifiers, char: ignoredChar) {
+      // Text modals (`:help`, `:plugins`, `:mappings`, plugin toasts):
+      // vim-style scroll bindings navigate the modal's own scroll view,
+      // hermetic to the focused app and without leaving modal mode.
+      scrollModal(scroll)
+      return true
     }
     FlashLog.trace("[input] modal consume key=\(event.keyCode)")
     coordinator.overlayDidPassThroughModalKey(event)
     return true
+  }
+
+  /// Maps a modal-mode key to the matching scroll motion. Mirrors the
+  /// `[mode.normal.mappings]` defaults (`j/k`, `ctrl+e/y`, `ctrl+d/u`,
+  /// `gg`, `G`) so modal scroll feels identical to normal-mode scroll.
+  /// Manages a one-key `g` pending state for `gg` — cleared on any other
+  /// key, on shift, or on the sequence timeout.
+  private func consumeModalScrollKey(
+    modifiers: NSEvent.ModifierFlags,
+    char: Character?
+  ) -> OverlayPanel.ModalScrollKind? {
+    guard let char else {
+      modalScrollGPending = false
+      return nil
+    }
+    if modifiers.isEmpty {
+      if char == "j" {
+        modalScrollGPending = false
+        return .lineDown
+      }
+      if char == "k" {
+        modalScrollGPending = false
+        return .lineUp
+      }
+      if char == "g" {
+        if modalScrollGPending {
+          modalScrollGPending = false
+          return .top
+        }
+        modalScrollGPending = true
+        DispatchQueue.main.asyncAfter(
+          deadline: .now() + .milliseconds(normalModeSequenceTimeoutMs)
+        ) { [weak self] in
+          self?.modalScrollGPending = false
+        }
+        return nil
+      }
+    }
+    if modifiers == .shift, char == "g" {
+      modalScrollGPending = false
+      return .bottom
+    }
+    if modifiers == .control {
+      modalScrollGPending = false
+      if char == "e" { return .lineDown }
+      if char == "y" { return .lineUp }
+      if char == "d" { return .halfPageDown }
+      if char == "u" { return .halfPageUp }
+    }
+    modalScrollGPending = false
+    return nil
   }
 
   /// Routes a `ModalTextView` keyDown through the modal interpreter when the

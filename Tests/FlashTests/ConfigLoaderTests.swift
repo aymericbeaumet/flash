@@ -24,7 +24,7 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
       .flashlight)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "rf" })?.action.command,
+      c.mode.normal.first(where: { $0.key == "sf" })?.action.command,
       .mouseTarget(.click(.rightClick)))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "df" })?.action.command,
@@ -51,7 +51,7 @@ final class ConfigLoaderTests: XCTestCase {
       .newWindow)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "t" })?.action.command,
-      .tabNewInsert)
+      .tabNew)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-o" })?.action.command,
       .appPrev)

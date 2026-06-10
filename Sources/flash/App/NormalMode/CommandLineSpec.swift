@@ -101,47 +101,96 @@ extension NormalModeDispatcher {
     return commandLineEmojiQuery(raw)
   }
 
+  /// One `@<field>:<pattern>` attribute filter, post-parse. `field` is the
+  /// candidate attribute the user wants to match against (lowercased,
+  /// canonical); `pattern` is the raw match string and supports a `*`
+  /// wildcard:
+  ///
+  ///   - `firefox`       — exact case-insensitive equality
+  ///   - `fire*`         — starts-with
+  ///   - `*fox`          — ends-with
+  ///   - `*goog*`        — contains
+  ///   - `*`             — catchall (matches every candidate)
+  ///
+  /// Multiple filters on the same field OR within the field; filters across
+  /// different fields AND together — `@source:firefox @source:safari
+  /// @url:*google*` means `(source=firefox OR source=safari) AND url
+  /// contains "google"`.
+  struct AttributeFilter: Equatable {
+    var field: String
+    var pattern: String
+  }
+
   struct CandidateFinderQuery: Equatable {
-    /// Lowercased source tokens from `@<source>` / `--<source>` selectors.
-    /// Selectors may appear anywhere in the query and there may be several;
-    /// empty when the user didn't pin any source.
+    /// Lowercased source tokens from the legacy `@<source>` / `--<source>`
+    /// selectors (kept for backward compatibility; `@source:<name>` is the
+    /// canonical form going forward). Empty when the user didn't pin
+    /// any source. The host expands these into `AttributeFilter`s on
+    /// the `source` field at filter time.
     var sourceFilters: [String]
+    /// `@<field>:<pattern>` selectors — the structured, multi-field
+    /// variant.
+    var attributeFilters: [AttributeFilter]
     /// The residual search text (every non-selector token, space-joined).
     var text: String
   }
 
-  /// Splits a candidate-finder query into its source selectors and the
-  /// residual search text. A selector is any `@<source>` or `--<source>`
-  /// token (the two forms are equivalent) and may appear *anywhere* in the
-  /// query — so `@tmux @slack test` and `test @slack @tmux` parse
-  /// identically. Multiple selectors widen the pool (OR). A bare `@` / `--`
-  /// with no name is treated as literal search text. Powers
-  /// `:flashlight @notes inbox` (pin notes, search "inbox"). Examples:
-  ///   "@notes inbox"        -> (filters: ["notes"],          text: "inbox")
-  ///   "test @slack @tmux"   -> (filters: ["slack", "tmux"],  text: "test")
-  ///   "--notes"             -> (filters: ["notes"],          text: "")
-  ///   "inbox"               -> (filters: [],                 text: "inbox")
+  /// Splits a candidate-finder query into its selectors and the residual
+  /// search text. Two selector forms are recognised, anywhere in the
+  /// query, in any order:
+  ///
+  ///   - `@<field>:<pattern>` — structured attribute filter (canonical).
+  ///     Supported fields: `source`, `kind`, `name`, `url`, `bundle`,
+  ///     `subtitle`. Pattern uses `*` as the wildcard (see
+  ///     `AttributeFilter`).
+  ///   - `@<source>` / `--<source>` — legacy shorthand for
+  ///     `@source:<source>` exact match. Multiple legacy tokens OR.
+  ///
+  /// A bare `@` / `--` / `@:` (no name) is literal search text.
+  ///
+  /// Examples:
+  ///   "@notes inbox"               → src=[notes], attrs=[],            text="inbox"
+  ///   "@source:firefox foo"        → src=[],      attrs=[source:firefox], text="foo"
+  ///   "@url:*google* rust"         → src=[],      attrs=[url:*google*],   text="rust"
+  ///   "@kind:browser_tab"          → src=[],      attrs=[kind:browser_tab], text=""
+  ///   "test"                       → src=[],      attrs=[],            text="test"
   static func candidateFinderSourceFilter(_ query: String) -> CandidateFinderQuery {
-    var filters: [String] = []
+    var sourceFilters: [String] = []
+    var attributeFilters: [AttributeFilter] = []
     var words: [Substring] = []
     for token in query.split(whereSeparator: { $0.isWhitespace }) {
-      let name: Substring
+      let body: Substring
       if token.hasPrefix("--") {
-        name = token.dropFirst(2)
+        body = token.dropFirst(2)
       } else if token.hasPrefix("@") {
-        name = token.dropFirst(1)
+        body = token.dropFirst(1)
       } else {
         words.append(token)
         continue
       }
-      if name.isEmpty {
+      if body.isEmpty {
+        // Bare `@` / `--` — let it through as literal search text.
         words.append(token)
+        continue
+      }
+      if let colon = body.firstIndex(of: ":") {
+        let field = String(body[..<colon]).lowercased()
+        let pattern = String(body[body.index(after: colon)...])
+        // `@:foo` (empty field) or `@field:` (empty pattern) is
+        // ambiguous — fall back to literal text so a typo isn't
+        // silently swallowed.
+        if field.isEmpty || pattern.isEmpty {
+          words.append(token)
+          continue
+        }
+        attributeFilters.append(AttributeFilter(field: field, pattern: pattern))
       } else {
-        filters.append(name.lowercased())
+        sourceFilters.append(body.lowercased())
       }
     }
     return CandidateFinderQuery(
-      sourceFilters: filters,
+      sourceFilters: sourceFilters,
+      attributeFilters: attributeFilters,
       text: words.joined(separator: " "))
   }
 

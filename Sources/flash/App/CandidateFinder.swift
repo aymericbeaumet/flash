@@ -12,30 +12,116 @@ struct CommandLineCompletionMatch {
 }
 
 enum CandidateFinder {
-  private static let aliveTieBreakScoreMargin = 500
-
   static func displayTitle(source: String, name: String) -> String {
     "[\(source)] \(name)"
   }
 
   static let browserTabKind = CandidateKind.plugin("browser_tab")
   static let emojiKind = CandidateKind.plugin("emoji")
-  static let clipboardKind = CandidateKind.plugin("clipboard")
+  /// Synthetic flashlight rows for registered plugin bangs (`!<token>`);
+  /// selecting one dispatches the bang instead of resolving a candidate.
+  static let bangKind = CandidateKind.plugin("bang")
 
   /// Candidates whose "open" action inserts their payload as text rather than
   /// activating an app or target. `app_open?name=` matching must skip these:
-  /// otherwise a clipboard entry containing the query as a substring (e.g. a
-  /// copied "…slack.com…" URL when resolving "Slack") shadows the real app and
-  /// gets typed into the focused field instead of switching apps.
+  /// otherwise an emoji whose searchable name contains the query would get
+  /// typed into the focused field instead of switching apps.
   static func insertsText(_ candidate: Candidate) -> Bool {
-    candidate.kind == emojiKind || candidate.kind == clipboardKind
+    candidate.kind == emojiKind
   }
 
   static func displayTitle(_ candidate: Candidate) -> String {
+    if candidate.kind == bangKind {
+      return bangDisplayTitle(candidate)
+    }
     guard candidate.kind == browserTabKind else {
       return displayTitle(source: candidate.source, name: candidate.name)
     }
     return browserTabDisplayTitle(candidate)
+  }
+
+  /// `[bang] !token (description)` — the description rides in `subtitle`
+  /// and is purely cosmetic; the dispatchable token lives in
+  /// `sourcePayload`.
+  private static func bangDisplayTitle(_ candidate: Candidate) -> String {
+    let description = candidate.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    let name = description.isEmpty ? candidate.name : "\(candidate.name) (\(description))"
+    return displayTitle(source: candidate.source, name: name)
+  }
+
+  /// Parse a flashlight query of the form `<...>!<token>[<...>]`. The
+  /// first `!` anywhere in the (trimmed) query is the bang; the token
+  /// is everything after that `!` up to the next whitespace OR the next
+  /// `!`. Pre-bang text and post-token text both join the remainder so
+  /// the dispatcher sees them as one query — the bang applies to the
+  /// whole input regardless of where the user typed it.
+  ///
+  /// Returns nil when:
+  ///   * the query has no `!`, OR
+  ///   * the first character after the first `!` is whitespace or
+  ///     another `!` (a bare `!`, `! foo`, `!!foo` — empty token).
+  ///
+  /// Examples:
+  ///   `!cla rust` → ("cla", "rust")
+  ///   `foo !bar baz` → ("bar", "foo baz")   — bang anywhere
+  ///   `!cla foo bar` → ("cla", "foo bar")
+  ///   `!cla!u` → ("cla", "!u")              — second `!` literal
+  ///   `!cla !test query` → ("cla", "!test query")
+  ///   `!cla\tfoo` → ("cla", "foo")
+  ///   `!` → nil
+  ///   `! foo` → nil
+  ///   `!!foo` → nil
+  static func parseBang(_ query: String) -> (token: String, remainder: String)? {
+    let trimmed = query.trimmingCharacters(in: .whitespaces)
+    guard let bangIndex = trimmed.firstIndex(of: "!") else { return nil }
+    let afterBang = trimmed.index(after: bangIndex)
+    guard afterBang < trimmed.endIndex else { return nil }
+    var tokenEnd = afterBang
+    while tokenEnd < trimmed.endIndex {
+      let ch = trimmed[tokenEnd]
+      if ch.isWhitespace || ch == "!" { break }
+      tokenEnd = trimmed.index(after: tokenEnd)
+    }
+    let token = String(trimmed[afterBang..<tokenEnd])
+    guard !token.isEmpty else { return nil }
+    // Stitch the remainder from the parts around the bang:
+    //   pre-bang text + post-token text, each trimmed, joined by a
+    //   single space. A `!` immediately after the token is preserved
+    //   (so `!cla!u` keeps `!u` as literal text in the remainder).
+    let preBang = String(trimmed[..<bangIndex]).trimmingCharacters(in: .whitespaces)
+    let postStart: String.Index
+    if tokenEnd < trimmed.endIndex, trimmed[tokenEnd].isWhitespace {
+      postStart = trimmed.index(after: tokenEnd)
+    } else {
+      postStart = tokenEnd
+    }
+    let postToken = String(trimmed[postStart...]).trimmingCharacters(in: .whitespaces)
+    let parts = [preBang, postToken].filter { !$0.isEmpty }
+    return (token, parts.joined(separator: " "))
+  }
+
+  /// Like `parseBang`, plus a `confirmed` flag set when the user typed
+  /// (or tab-completed) a whitespace right after the bang token. Once
+  /// confirmed, the flashlight should stop offering candidates — the
+  /// query semantically belongs to the chosen bang — and the UI should
+  /// underline `!<token>` to acknowledge the lock-in.
+  ///
+  /// Detection works against the raw (un-trimmed) query because the
+  /// trailing space is the signal we care about — `parseBang`'s trim
+  /// erases it.
+  static func parseBangState(_ query: String)
+    -> (token: String, remainder: String, confirmed: Bool, bangRange: Range<String.Index>)?
+  {
+    guard let parsed = parseBang(query) else { return nil }
+    guard let bangIndex = query.firstIndex(of: "!") else { return nil }
+    var tokenEnd = query.index(after: bangIndex)
+    while tokenEnd < query.endIndex {
+      let ch = query[tokenEnd]
+      if ch.isWhitespace || ch == "!" { break }
+      tokenEnd = query.index(after: tokenEnd)
+    }
+    let confirmed = tokenEnd < query.endIndex && query[tokenEnd].isWhitespace
+    return (parsed.token, parsed.remainder, confirmed, bangIndex..<tokenEnd)
   }
 
   static func prepare(
@@ -197,9 +283,7 @@ enum CandidateFinder {
     if let searchScore = fuzzyScore(normalizedQuery, candidate.normalizedSearchText) {
       best = max(best ?? searchScore, searchScore)
     }
-    guard var resolved = best else { return nil }
-    resolved += sourcePrecedenceBonus(for: candidate)
-    return resolved
+    return best
   }
 
   /// Live-ranker entry point: score a prepared pool against a normalized
@@ -253,25 +337,10 @@ enum CandidateFinder {
     return CandidateMatch(candidate: candidate, score: score)
   }
 
-  /// Tier bonus the user asked for: when two candidates fuzzy-match
-  /// equally well, prefer tmux windows > browser tabs > active apps >
-  /// inactive apps > the rest (slack / notes / reminders / contacts).
-  /// The bonus is a small fixed offset per tier, well below the
-  /// inter-base spacing (`titleScore` jumps by 1k between
-  /// exact/prefix/contains), so it only breaks ties without overriding
-  /// strong content matches.
-  static func sourcePrecedenceBonus(for candidate: Candidate) -> Int {
-    (sourcePrecedenceTierCount - sourcePrecedenceTierIndex(for: candidate)) * 40
-  }
-
   private static let browserSourceNames: Set<String> = [
     "firefox", "firefox-dev", "safari", "chrome", "chromium",
     "brave", "edge", "arc", "vivaldi", "opera",
   ]
-
-  /// Number of distinct precedence tiers (0…N-1), used to scale the
-  /// tie-break bonus. Keep in sync with `sourcePrecedenceTierIndex`.
-  private static let sourcePrecedenceTierCount = 5
 
   static func isAlive(_ candidate: Candidate) -> Bool {
     candidate.pid != nil
@@ -292,6 +361,133 @@ enum CandidateFinder {
       return source == "app"
     default:
       return false
+    }
+  }
+
+  /// One pre-compiled attribute pattern. The wildcard parse runs once at
+  /// query time so the hot per-candidate match is a single `String`
+  /// equality / prefix / suffix / contains check — every attribute
+  /// filter pays parsing cost exactly once regardless of pool size.
+  struct CompiledAttributeFilter {
+    let field: Field
+    let needle: String  // lowercased
+    let kind: Kind
+
+    enum Field: Equatable {
+      case source
+      case kind
+      case name
+      case url
+      case bundle
+      case subtitle
+      case unknown  // Field name the user typed that we don't expose; never matches.
+    }
+
+    enum Kind: Equatable {
+      case any  // `*`
+      case exact  // `firefox`
+      case prefix  // `fire*`
+      case suffix  // `*fox`
+      case contains  // `*goog*`
+    }
+
+    static func parse(field: String, pattern: String) -> CompiledAttributeFilter {
+      let normalizedField: Field
+      switch field {
+      case "source": normalizedField = .source
+      case "kind": normalizedField = .kind
+      case "name", "title": normalizedField = .name
+      case "url": normalizedField = .url
+      case "bundle", "bundle_id", "bundleidentifier", "bundleid":
+        normalizedField = .bundle
+      case "subtitle", "description":
+        normalizedField = .subtitle
+      default: normalizedField = .unknown
+      }
+      let raw = pattern.lowercased()
+      let kind: Kind
+      let needle: String
+      let leading = raw.hasPrefix("*")
+      let trailing = raw.hasSuffix("*")
+      let stripped = String(raw.dropFirst(leading ? 1 : 0).dropLast(trailing ? 1 : 0))
+      switch (leading, trailing) {
+      case (true, true) where stripped.isEmpty:
+        kind = .any
+        needle = ""
+      case (true, true):
+        kind = .contains
+        needle = stripped
+      case (true, false):
+        kind = .suffix
+        needle = stripped
+      case (false, true):
+        kind = .prefix
+        needle = stripped
+      case (false, false):
+        kind = .exact
+        needle = raw
+      }
+      return CompiledAttributeFilter(field: normalizedField, needle: needle, kind: kind)
+    }
+
+    /// Match against `candidate`. Returns `false` for `.unknown` fields
+    /// so a typo (`@srouce:firefox`) yields no results rather than the
+    /// full pool — explicit failure is the safer default.
+    func matches(_ candidate: Candidate) -> Bool {
+      guard field != .unknown else { return false }
+      let value = value(of: candidate).lowercased()
+      switch kind {
+      case .any:
+        return true
+      case .exact:
+        return value == needle
+      case .prefix:
+        return value.hasPrefix(needle)
+      case .suffix:
+        return value.hasSuffix(needle)
+      case .contains:
+        return value.contains(needle)
+      }
+    }
+
+    private func value(of candidate: Candidate) -> String {
+      switch field {
+      case .source: return candidate.source
+      case .kind: return candidateKindString(candidate.kind)
+      case .name: return candidate.name
+      case .url: return candidate.url?.absoluteString ?? ""
+      case .bundle: return candidate.bundleIdentifier
+      case .subtitle: return candidate.subtitle
+      case .unknown: return ""
+      }
+    }
+  }
+
+  /// Stringify `CandidateKind` so attribute filters can match on it
+  /// without leaking the enum case syntax.
+  static func candidateKindString(_ kind: CandidateKind) -> String {
+    switch kind {
+    case .app: return "app"
+    case .plugin(let tag): return tag
+    }
+  }
+
+  /// Apply a compiled filter set: group by field, OR within each
+  /// field, AND across fields. Empty input passes everything through.
+  static func applyAttributeFilters(
+    _ candidates: [Candidate],
+    filters: [CompiledAttributeFilter]
+  ) -> [Candidate] {
+    guard !filters.isEmpty else { return candidates }
+    var byField: [CompiledAttributeFilter.Field: [CompiledAttributeFilter]] = [:]
+    for filter in filters {
+      byField[filter.field, default: []].append(filter)
+    }
+    return candidates.filter { candidate in
+      for group in byField.values {
+        guard group.contains(where: { $0.matches(candidate) }) else { return false }
+      }
+      return true
     }
   }
 
@@ -320,26 +516,31 @@ enum CandidateFinder {
         key: key,
         sourceID: match.candidate.sourceID)
     }
+    // Two-band design:
+    //
+    // 1. Bangs (`!<token>`) are a strict top band. A user typing a
+    //    registered bang has expressed an explicit dispatch intent; we
+    //    must surface it above anything else regardless of how the
+    //    fuzzy match would score.
+    //
+    // 2. Everything else is ranked by match quality first. The earlier
+    //    strict-tier sort buried exact prefix matches on app names under
+    //    weak fuzzy hits on browser tabs (e.g. `:flashlight safari`
+    //    surfaced unrelated Firefox pages but not Safari.app). Tier is
+    //    kept only as a tiebreaker — bumps clustered scores in the
+    //    intuitive direction (tmux > browser tabs > active apps > …)
+    //    without overriding the matcher.
     let sorted = records.sorted { lhs, rhs in
-      let scoreDelta = lhs.score - rhs.score
-      if abs(scoreDelta) >= aliveTieBreakScoreMargin {
-        return lhs.score > rhs.score
-      }
-
-      // Strict tier tie-break first: when two scores are close enough
-      // to land here (delta < `aliveTieBreakScoreMargin`), prefer the
-      // higher-priority source tier. This is what enforces the user's
-      // ordering — tmux windows > browser tabs > active apps > inactive
-      // apps > the rest — and it must run *before* the generic
-      // alive/dead check, otherwise a live app would leapfrog a tmux
-      // window or browser tab (which often carry no pid of their own).
-      if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
-
-      // Within a tier, an alive candidate still wins over a dead one.
-      if lhs.alive != rhs.alive { return lhs.alive }
+      let lhsIsBang = lhs.tier == 0
+      let rhsIsBang = rhs.tier == 0
+      if lhsIsBang != rhsIsBang { return lhsIsBang }
 
       if lhs.score != rhs.score { return lhs.score > rhs.score }
 
+      // Score-tied tiebreakers: source tier, alive vs dead, then the
+      // stable composite key.
+      if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
+      if lhs.alive != rhs.alive { return lhs.alive }
       if lhs.key != rhs.key { return lhs.key < rhs.key }
       return lhs.sourceID < rhs.sourceID
     }
@@ -358,17 +559,19 @@ enum CandidateFinder {
     ].joined(separator: "\u{1f}")
   }
 
-  /// Tier index used by `sortedMatches` as a strict tie-break. Lower is
+  /// Tier index used by `sortedMatches` as the primary ordering. Lower is
   /// higher priority. The "app" source splits into two tiers — running
   /// apps (pid set) outrank installed-but-not-running apps — so the
-  /// flashlight order is: tmux (0) > browser tabs (1) > active apps (2)
-  /// > inactive apps (3) > the rest (4: slack, notes, reminders, …).
+  /// flashlight order is: bangs (0) > tmux (1) > browser tabs (2) >
+  /// active apps (3) > inactive apps (4) > the rest (5: slack, notes,
+  /// reminders, …).
   static func sourcePrecedenceTierIndex(for candidate: Candidate) -> Int {
+    if candidate.kind == bangKind { return 0 }
     let lowered = candidate.source.lowercased()
-    if lowered == "tmux" { return 0 }
-    if browserSourceNames.contains(lowered) { return 1 }
-    if lowered == "app" { return candidate.pid != nil ? 2 : 3 }
-    return 4
+    if lowered == "tmux" { return 1 }
+    if browserSourceNames.contains(lowered) { return 2 }
+    if lowered == "app" { return candidate.pid != nil ? 3 : 4 }
+    return 5
   }
 
   private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {
@@ -380,7 +583,10 @@ enum CandidateFinder {
     } else if url.isEmpty {
       title = candidateTitle
     } else {
-      title = "\(candidateTitle) (\(url))"
+      // `·`-joined trailing metadata matches the tmux candidate
+      // convention (`scratch:2 flash · claude · ~/workspace/...`) so
+      // every flashlight row reads with the same rhythm.
+      title = "\(candidateTitle) · \(url)"
     }
     return displayTitle(source: candidate.source, name: title)
   }
@@ -440,12 +646,12 @@ enum CandidateFinder {
   /// Same scoring rules as `fieldScore`, but the caller has already
   /// normalized the field. Used by the live ranking path.
   ///
-  /// Score tiers are spaced **far** above the source tier bonus
-  /// (max ~200, see `sourcePrecedenceBonus`) so that match quality
-  /// dominates source priority. The motivating case: typing `mes`
-  /// must surface the `Messages` app (full-string prefix on the app
-  /// name) ahead of a browser tab that happens to contain `mes`
-  /// somewhere — even though browser tabs out-rank apps on tier ties.
+  /// Match quality is the primary sort key in `sortedMatches` (with
+  /// registered `!<bang>` candidates pinned above everything else). The
+  /// motivating case: typing `mes` must surface the `Messages` app
+  /// (full-string prefix on the app name) ahead of a browser tab that
+  /// happens to contain `mes` somewhere — and typing `safari` must
+  /// surface Safari.app above an unrelated Firefox tab.
   ///
   /// Tier layout:
   ///   - Equal              base + 5000

@@ -1,15 +1,40 @@
 use std::time::Duration;
 
-use flash_plugin::{run, CommandRequest, CommandResponse, Context};
+use flash_plugin::{run, Candidate, CommandRequest, CommandResponse, Context};
 
 // Sorted `BANGS: &[(&str, &str)]` generated from bangs.tsv at build time.
 include!(concat!(env!("OUT_DIR"), "/bangs_generated.rs"));
+
+const SOURCE_ID: &str = "plugin:searchengines";
 
 struct SearchEngines;
 
 flash_plugin::plugin!(SearchEngines);
 
 impl FlashPlugin for SearchEngines {
+    /// Publish every BANGS entry as a kind="bang" candidate so the host
+    /// flashlight can show them as suggestion rows (with proper prefix
+    /// ranking via `CandidateFinder.fieldScoreNormalized`). Without
+    /// this, only aiproviders' explicit-token bangs surface as
+    /// candidates and a typed `!goo` couldn't surface `!google` —
+    /// dispatch worked via the catch-all but the user saw no prefix
+    /// match. Catch-all routing still handles unknown tokens at submit
+    /// time; this is purely about visibility.
+    async fn on_start(&self, ctx: Context) {
+        let candidates: Vec<Candidate> = BANGS
+            .iter()
+            .map(|(token, _)| {
+                Candidate::new(format!("!{token}"))
+                    .kind("bang")
+                    .source_id(SOURCE_ID)
+                    .source("bang")
+                    .subtitle("search engine bang")
+                    .payload(token.to_string())
+            })
+            .collect();
+        ctx.emit_snapshot(SOURCE_ID, candidates);
+    }
+
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
         // The bang the user typed (`!r` → `r`) arrives as the subcommand; the
         // rest of the flashlight line is the query. There is no `:` command:

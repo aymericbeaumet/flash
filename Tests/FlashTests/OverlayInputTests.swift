@@ -59,14 +59,22 @@ final class OverlayInputTests: XCTestCase {
       .commit("n", [.command, .shift]))
   }
 
-  func testShiftCanBeRemovedFromMagicModifiers() {
+  func testShiftAlwaysRidesThroughToClickModifiersEvenWhenStrippedFromMagic() {
+    // Shift is removed from `magicModifiers` automatically when the
+    // alphabet contains non-letters (default `qwerty_toprow` digits) so
+    // that `shift+1` doesn't fight with `!` at input time. But the
+    // ambiguity doesn't apply at click time — a shift-modified mouse
+    // event is unambiguous — so the synthesized click must still see
+    // the shift modifier. Otherwise `f`+shift+hint stops being a real
+    // shift+click, breaking the user's `[[mouse.bindings]]` config in
+    // alacritty / firefox / etc.
     XCTAssertEqual(
       OverlayInputInterpreter.action(
         keyCode: 45,
         modifierFlags: [.shift],
         charactersIgnoringModifiers: "n",
         magicModifiers: [.command, .control, .option]),
-      .commit("n", []))
+      .commit("n", [.shift]))
   }
 
   func testCommandControlOptionLetterCommitsWithAllClickModifiers() {
@@ -108,14 +116,20 @@ final class OverlayInputTests: XCTestCase {
       .commit("n", []))
   }
 
-  func testEmptyMagicModifiersIgnoresShiftAsPlainHintKey() {
+  func testEmptyMagicModifiersStillPassesShiftThroughOnHintCommit() {
+    // Same invariant as
+    // `testShiftAlwaysRidesThroughToClickModifiersEvenWhenStrippedFromMagic`:
+    // empty `magicModifiers` blocks cmd/ctrl/option (the cancel gate
+    // above guards that) but never blocks shift on the click — input
+    // ambiguity at the *character* level is what the strip protects
+    // against, and the click event has no character.
     XCTAssertEqual(
       OverlayInputInterpreter.action(
         keyCode: 45,
         modifierFlags: [.shift],
         charactersIgnoringModifiers: "n",
         magicModifiers: []),
-      .commit("n", []))
+      .commit("n", [.shift]))
   }
 
   func testModifiedBackspaceCancelsInsteadOfEditingPrefix() {

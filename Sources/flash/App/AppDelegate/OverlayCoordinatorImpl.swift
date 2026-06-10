@@ -16,10 +16,9 @@ extension AppDelegate {
     if case .scroll = intent,
       Self.pointerScrollShouldBeSuppressed(
         mode: flashMode,
-        hasHints: !currentHints.isEmpty,
-        suppressionUntil: normalModeScrollSuppressionUntil)
+        hasHints: !currentHints.isEmpty)
     {
-      FlashLog.trace("[mode] suppress_pointer_scroll reason=explicit_normal_momentum")
+      FlashLog.trace("[mode] suppress_pointer_scroll reason=idle_normal_mode")
       applyModeOverlay()
       scheduleNormalModeRecapture()
       return
@@ -42,7 +41,6 @@ extension AppDelegate {
         currentPrefix = ""
         invalidateActivation(reason: "menu_bar_click")
       }
-      normalModeScrollSuppressionUntil = nil
       return
     }
     let replayClick: OverlayPointerClick?
@@ -54,7 +52,6 @@ extension AppDelegate {
     } else {
       replayClick = nil
     }
-    normalModeScrollSuppressionUntil = nil
     cancelOverlay()
     if flashMode != .insert {
       enterInsertMode(reason: .pointerClick)
@@ -276,29 +273,6 @@ extension AppDelegate {
       return
     }
 
-    // Shift-modified hint commits open a preview modal instead of
-    // activating, for targets whose label carries useful context that
-    // got truncated to a single hint character. Tmux link chips fall
-    // in that bucket: the chip renders as one cell ("h" of "https://…")
-    // but the full URL is the AX label. The shift toggle is a quick way
-    // to read a URL before deciding to follow it.
-    if clickModifiers.contains(.shift),
-      let role = hint.target.role,
-      role.hasPrefix("tmux-"),
-      let label = hint.target.accessibilityLabel,
-      !label.isEmpty
-    {
-      overlay.displayModal(label)
-      currentHints = []
-      currentPrefix = ""
-      sourceAppPID = nil
-      mouseGridRegion = nil
-      mouseGridDepth = 0
-      pendingHintCommitBehavior = .click
-      activationGen &+= 1
-      return
-    }
-
     let action = pendingAction
     let shouldEnterInsertAfterCommit =
       flashMode == .normal
@@ -323,6 +297,15 @@ extension AppDelegate {
     // for the same reason, so this keeps the two paths consistent.
     let targetFrame = hint.target.frame
     let clickPoint = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
+    FlashLog.trace(
+      "[commit] action=\(action) role=\(hint.target.role ?? "?") "
+        + "provider=\(hint.target.providerID) "
+        + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y))) "
+        + "modifiers=cmd:\(clickModifiers.contains(.command)) "
+        + "shift:\(clickModifiers.contains(.shift)) "
+        + "ctrl:\(clickModifiers.contains(.control)) "
+        + "alt:\(clickModifiers.contains(.option)) "
+        + "enters_insert=\(hint.target.entersInsertMode)")
 
     if shouldRestoreNormalMode {
       applyModeOverlay(captureOverride: false)
@@ -375,9 +358,7 @@ extension AppDelegate {
 
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
     let shouldMove = pendingHintCommitBehavior == .mouseGridMove
-    let shouldEnterInsertAfterCommit =
-      flashMode == .normal
-      && Self.mouseGridCommitShouldEnterInsertMode(isMove: shouldMove)
+    let priorPID = sourceAppPID
     overlay.hide()
     currentHints = []
     currentPrefix = ""
@@ -388,16 +369,36 @@ extension AppDelegate {
     pendingHintCommitBehavior = .click
     if shouldMove {
       _ = ActionDispatcher.moveCursor(to: point)
-    } else {
-      _ = ActionDispatcher.synthesizeClick(
-        at: point,
-        action: pendingAction,
-        modifiers: clickModifiers)
-    }
-    if shouldEnterInsertAfterCommit {
-      enterInsertMode(reason: .hintCommit)
-    } else {
       applyModeOverlay()
+      return
+    }
+    _ = ActionDispatcher.synthesizeClick(
+      at: point,
+      action: pendingAction,
+      modifiers: clickModifiers)
+    applyModeOverlay()
+    enterInsertModeIfClickedOnTextInput(pid: priorPID, reason: .hintCommit)
+  }
+
+  /// Geometric clicks (`F`/`rF`/`dF` mouse-grid commits, `pointerClick`
+  /// replays) don't know what element they're hitting until the click
+  /// has landed and the focused app has updated AX. After a short
+  /// settle delay, query the focused element's role and only enter
+  /// insert mode if it is a true text-input surface. Otherwise the
+  /// user stays in normal mode (per the explicit-only insert rule —
+  /// they press `i` if they want to type into whatever they just
+  /// clicked).
+  private func enterInsertModeIfClickedOnTextInput(
+    pid: pid_t?,
+    reason: InsertModeTransitionReason
+  ) {
+    guard let pid, flashMode == .normal else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
+      guard let self, self.flashMode == .normal else { return }
+      self.monitor.focusedElementIsEditable(pid: pid) { [weak self] editable in
+        guard let self, editable, self.flashMode == .normal else { return }
+        self.enterInsertMode(reason: reason)
+      }
     }
   }
 
@@ -409,13 +410,12 @@ extension AppDelegate {
     target.entersInsertMode
   }
 
-  static func mouseGridCommitShouldEnterInsertMode(isMove: Bool) -> Bool {
-    // `F`/`rF`/`dF` are a geometric click with no element to introspect, so
-    // they emulate a raw user click and always land in insert mode. Only
-    // the move modifier (`mF`), which just repositions the pointer, stays
-    // in normal mode.
-    !isMove
-  }
+  // `mouseGridCommitShouldEnterInsertMode` removed: `F`/`rF`/`dF` no
+  // longer auto-enter insert. The geometric click can land anywhere —
+  // a button, a tab, a text field, blank canvas — so the only correct
+  // signal is the post-click AX role, queried by
+  // `enterInsertModeIfClickedOnTextInput`. Move (`mF`) was already a
+  // no-op for insert.
 
   func usesTmuxProvider(_ context: AppContext?) -> Bool {
     guard let context else { return false }
@@ -436,8 +436,8 @@ extension AppDelegate {
 
   /// Paste the highlighted `:clipboard` entry. The panel owns the selected
   /// index; map it back to the full value and route through `insertText`
-  /// (stash on the pasteboard, synth ⌘V into the focused app), same as a
-  /// clipboard candidate picked from the flashlight.
+  /// (stash on the pasteboard, synth ⌘V into the focused app), same as an
+  /// emoji picked from the flashlight.
   func overlayDidSubmitSelectableModal() {
     let index = overlay.selectableModalSelectedIndex
     guard clipboardModalEntries.indices.contains(index) else {
@@ -475,6 +475,8 @@ extension AppDelegate {
       overlayDidCancelCommandLine()
       return
     }
+    candidateFinderLastInputAt = Date()
+    candidateFinderUserHasTyped = true
     if resetSelection {
       candidateFinderSelectedIndex = 0
     }
@@ -509,20 +511,42 @@ extension AppDelegate {
     return false
   }
 
-  /// `<tab>` in command-line mode. For command/sub-command completions
-  /// this inserts the selected candidate's value (no submit) — the user
-  /// can then keep typing args or hit `<CR>` to send. The candidate
-  /// finder (`:flashlight`/`:open`/`:emojis`) has no insertable value,
-  /// so there `<tab>` keeps its documented role of cycling the
-  /// selection.
+  /// `<tab>` in command-line mode. Two paths:
+  ///
+  ///   * Command-line *completions* (`:help <topic>`, `:plugins <sub>`,
+  ///     `:<plugin> <action>`): insert the selected completion's
+  ///     `value` into the buffer without sending — the user can keep
+  ///     typing args, or hit `<cr>` to send.
+  ///   * Candidate *finder* (`:flashlight` / `:open` / `:emojis`):
+  ///     `<tab>` acts on the selected candidate the same way `<cr>`
+  ///     does — for bang candidates it inserts the canonical token,
+  ///     for everything else it opens. Cycling moves to arrow keys and
+  ///     `<shift-tab>`.
   func overlayDidInsertCommandLineSelection() -> Bool {
     if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil {
-      return overlayDidMoveCommandLineSelection(1)
+      actOnSelectedCandidateFinderCandidate(submit: false)
+      return true
     }
     if applySelectedCommandLineCompletionInPlace() {
       return true
     }
     return overlayDidMoveCommandLineSelection(1)
+  }
+
+  /// `<cmd+cr>` in command-line mode: force-submit the selected
+  /// flashlight candidate (insert+dispatch for bangs, open for
+  /// everything else). The `<cr>`/`<tab>` path is "insert only" for
+  /// bangs so the user can browse the bang list, insert the canonical
+  /// token, type the query, and only commit when they're ready — this
+  /// is the explicit commit.
+  func overlayDidForceSubmitCommandLineSelection() {
+    if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) == nil {
+      // No flashlight active; mirror plain `<cr>` for a regular command
+      // line so the chord stays predictable.
+      submitCommandLine(overlay.commandLineText)
+      return
+    }
+    actOnSelectedCandidateFinderCandidate(submit: true)
   }
 
   func overlayDidSubmitCommandLine(_ command: String) {
@@ -537,6 +561,8 @@ extension AppDelegate {
 
   func overlayDidUpdateCandidateFinderQuery(_ query: String) {
     candidateFinderSelectedIndex = 0
+    candidateFinderLastInputAt = Date()
+    candidateFinderUserHasTyped = true
     refreshCandidateFinder(query: query)
   }
 
@@ -552,51 +578,22 @@ extension AppDelegate {
   }
 
   func overlayDidSubmitCandidateFinder() {
-    if dispatchShebangIfPresent(overlay.candidateFinderQuery) { return }
     guard !candidateFinderMatches.isEmpty else {
       overlayDidCancelCandidateFinder()
       return
     }
     let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
       .candidate
+    // A bang row carries its token in `sourcePayload`; the selection always
+    // wins, so arrowing onto a non-bang result opens it even when the query
+    // still starts with `!`.
+    if dispatchBangCandidate(candidate, query: candidateFinderCurrentQuery) {
+      clearCandidateFinderState()
+      overlay.hide()
+      applyModeOverlay()
+      return
+    }
     openSourceItem(candidate)
-  }
-
-  /// When the flashlight query starts with `!<token>` and a plugin has
-  /// registered that bang (or a `"*"` catch-all), route the remainder to the
-  /// plugin instead of resolving a candidate, then dismiss the finder. A bare
-  /// `!`, or an unregistered token with no catch-all, returns false and falls
-  /// through to the normal candidate submit.
-  private func dispatchShebangIfPresent(_ query: String) -> Bool {
-    let trimmed = query.trimmingCharacters(in: .whitespaces)
-    guard trimmed.hasPrefix("!") else { return false }
-    let body = trimmed.dropFirst()
-    let token: String
-    let remainder: String
-    if let separator = body.firstIndex(where: { $0.isWhitespace }) {
-      token = String(body[..<separator])
-      remainder = String(body[body.index(after: separator)...])
-        .trimmingCharacters(in: .whitespaces)
-    } else {
-      token = String(body)
-      remainder = ""
-    }
-    guard !token.isEmpty else { return false }
-    let dispatched = pluginManager.invokeShebang(
-      token: token,
-      query: remainder,
-      forBundleID: currentNonFlashContext()?.bundleIdentifier
-    ) { [weak self] ok, pid, stdout in
-      guard ok, let self else { return }
-      self.activatePluginCommandTarget(pid)
-      guard let stdout, !stdout.isEmpty else { return }
-      self.overlay.displayBanner(stdout)
-    }
-    guard dispatched else { return false }
-    clearCandidateFinderState()
-    overlay.hide()
-    applyModeOverlay()
-    return true
   }
 
   func openSourceItem(matching target: String) {

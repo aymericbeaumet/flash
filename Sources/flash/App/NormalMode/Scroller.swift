@@ -45,6 +45,16 @@ extension NormalModeDispatcher {
         FlashLog.debug("[normal_mode] scroll method=ax_value kind=\(kind) bundle=\(bundleID)")
         return true
       }
+      // Wheel fallback for gg/G: a single huge delta sends apps that
+      // honour wheel-delta proportionally (Firefox, most web/Electron
+      // apps) all the way to the edge. Terminals in tmux mouse mode
+      // typically step one line per wheel "click" so this only nudges
+      // them — full top/bottom inside tmux needs the tmux plugin to
+      // claim scroll_top/scroll_bottom (see follow-up roadmap).
+      if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: nil) {
+        FlashLog.debug("[normal_mode] scroll method=edge_wheel kind=\(kind) bundle=\(bundleID)")
+        return true
+      }
     default:
       if synthesizeScrollWheel(kind, windowFrame: windowFrame, pageFrame: nil) {
         FlashLog.debug("[normal_mode] scroll method=wheel kind=\(kind) bundle=\(bundleID)")
@@ -286,8 +296,20 @@ extension NormalModeDispatcher {
 
   private static func scrollWheelPoint(windowFrame: CGRect, pageFrame: CGRect?) -> CGPoint {
     let frame = pageFrame ?? windowFrame
-    let insetX = max(4, min(10, frame.width * 0.01))
-    let x = min(max(frame.maxX - insetX, windowFrame.minX + 4), windowFrame.maxX - 4)
+    // Prefer the user's current cursor location when it sits inside the
+    // window — that's the natural "where I'm looking" for both
+    // tmux/alacritty (cursor lives over the focused pane) and slack
+    // (cursor lives over the channel or thread the user just clicked
+    // into). When the cursor is parked outside the window, fall back to
+    // the page/window centre instead of the old right-edge anchor, so a
+    // multi-pane terminal doesn't always scroll the rightmost pane.
+    let screenH = primaryScreenHeight()
+    let cgCursor = CGEvent(source: nil)?.location ?? .zero
+    let nsCursor = CGPoint(x: cgCursor.x, y: screenH - cgCursor.y)
+    if windowFrame.insetBy(dx: 4, dy: 4).contains(nsCursor) {
+      return nsCursor
+    }
+    let x = min(max(frame.midX, windowFrame.minX + 4), windowFrame.maxX - 4)
     let y = min(max(frame.midY, windowFrame.minY + 4), windowFrame.maxY - 4)
     return CGPoint(x: x, y: y)
   }
@@ -310,10 +332,23 @@ extension NormalModeDispatcher {
       return (vertical: verticalPage, horizontal: 0)
     case .halfPageDown:
       return (vertical: -verticalPage, horizontal: 0)
-    case .top, .bottom:
-      return nil
+    case .top:
+      // Huge positive delta — apps that honour wheel delta proportionally
+      // (Firefox, Slack's Electron view, most web apps) jump to the top
+      // in one event; apps that only step (terminals in tmux mouse mode)
+      // get many steps' worth, which is the closest we can do without
+      // a per-app scroll-to-top affordance.
+      return (vertical: extremeWheelDelta, horizontal: 0)
+    case .bottom:
+      return (vertical: -extremeWheelDelta, horizontal: 0)
     }
   }
+
+  /// One-shot scroll-wheel delta used for gg/G fallback when AX
+  /// scrollbars don't actually scroll (tmux, some Electron apps).
+  /// Picked to be larger than any realistic document height while still
+  /// fitting Int32 with room to spare.
+  private static let extremeWheelDelta: Int32 = 1_000_000
 
   static func primaryScreenHeight() -> CGFloat {
     if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {

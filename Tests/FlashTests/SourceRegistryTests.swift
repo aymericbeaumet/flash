@@ -124,20 +124,20 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(candidateCalls, 1)
   }
 
-  // Regression: `'s` → app_open?name=Slack used to type a copied
-  // "…slack.com…" URL into the focused field. The clipboard plugin (higher
-  // priority) substring-matched "Slack" and, being a text-insertion candidate,
-  // was opened via insertText. app_open must resolve the real Slack app.
-  func testCandidateMatchingPrefersAppSourceOverHigherPriorityClipboardShadow() {
+  // Regression: app_open?name=<app> used to type a text-insertion candidate
+  // into the focused field when a higher-priority plugin substring-matched
+  // the name (originally a copied "…slack.com…" clipboard URL; emoji is the
+  // remaining insert-text kind). app_open must resolve the real app first.
+  func testCandidateMatchingPrefersAppSourceOverHigherPriorityInsertTextShadow() {
     let slackApp = Candidate(
       kind: .app, sourceID: "app", source: "app", pid: nil,
       name: "Slack", subtitle: "app",
       bundleIdentifier: "com.tinyspeck.slackmacgap", url: nil)
-    let clipboardURL = Candidate(
-      kind: CandidateFinder.clipboardKind, sourceID: "plugin:clipboard",
-      source: "clipboard", pid: nil,
-      name: "https://besideai.slack.com/archives/C0AQP04HU73/p1780958634997229",
-      subtitle: "clipboard", bundleIdentifier: "", url: nil)
+    let emojiShadow = Candidate(
+      kind: CandidateFinder.emojiKind, sourceID: "plugin:emojis",
+      source: "emoji", pid: nil,
+      name: "slack key cap",
+      subtitle: "emoji", bundleIdentifier: "", url: nil)
 
     let registry = SourceRegistry(
       descriptors: [
@@ -148,11 +148,11 @@ final class SourceRegistryTests: XCTestCase {
               "Slack".localizedCaseInsensitiveContains(target) ? slackApp : nil
             })
         },
-        SourceDescriptor(identifier: "plugin:clipboard", activationPolicy: .always) {
+        SourceDescriptor(identifier: "plugin:emojis", activationPolicy: .always) {
           StubSource(
-            identifier: "plugin:clipboard", priority: 100, capabilities: [.appActivation],
+            identifier: "plugin:emojis", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
-              clipboardURL.name.localizedCaseInsensitiveContains(target) ? clipboardURL : nil
+              emojiShadow.name.localizedCaseInsensitiveContains(target) ? emojiShadow : nil
             })
         },
       ],
@@ -174,9 +174,9 @@ final class SourceRegistryTests: XCTestCase {
     let tmuxWindow = Candidate(
       kind: .plugin("tmux"), sourceID: "plugin:tmux", source: "tmux", pid: 42,
       name: "editor", subtitle: "tmux", bundleIdentifier: "", url: nil)
-    let clipboardEntry = Candidate(
-      kind: CandidateFinder.clipboardKind, sourceID: "plugin:clipboard",
-      source: "clipboard", pid: nil, name: "editor notes", subtitle: "clipboard",
+    let emojiEntry = Candidate(
+      kind: CandidateFinder.emojiKind, sourceID: "plugin:emojis",
+      source: "emoji", pid: nil, name: "editor pencil", subtitle: "emoji",
       bundleIdentifier: "", url: nil)
 
     func makeRegistry(includeActivatablePlugin: Bool) -> SourceRegistry {
@@ -184,11 +184,11 @@ final class SourceRegistryTests: XCTestCase {
         SourceDescriptor(identifier: "app", activationPolicy: .always) {
           StubSource(identifier: "app", priority: 0, capabilities: [.appActivation])
         },
-        SourceDescriptor(identifier: "plugin:clipboard", activationPolicy: .always) {
+        SourceDescriptor(identifier: "plugin:emojis", activationPolicy: .always) {
           StubSource(
-            identifier: "plugin:clipboard", priority: 100, capabilities: [.appActivation],
+            identifier: "plugin:emojis", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
-              clipboardEntry.name.localizedCaseInsensitiveContains(target) ? clipboardEntry : nil
+              emojiEntry.name.localizedCaseInsensitiveContains(target) ? emojiEntry : nil
             })
         },
       ]
@@ -206,7 +206,7 @@ final class SourceRegistryTests: XCTestCase {
         descriptors: descriptors, terminalBundleIDs: [], runningApplications: [])
     }
 
-    // Only the clipboard (insert-text) candidate matches → nil, not the URL.
+    // Only the emoji (insert-text) candidate matches → nil, never typed text.
     XCTAssertNil(makeRegistry(includeActivatablePlugin: false).candidate(matching: "editor"))
 
     // An activatable plugin candidate is still reachable as a fallback.

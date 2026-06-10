@@ -27,6 +27,19 @@ final class PluginFlashSource: FlashSource {
         .candidates, .appActivation, .tabSelection, .tabCreation, .tabNavigation, .tabClosing,
       ])
     }
+    // Scroll extremes / tab reorder piggy-back on hint provision: the
+    // plugins that need them (terminal sources like tmux) are exactly
+    // the ones that claim hint discovery for their app. Returning
+    // `.unhandled` is cheap for plugins that don't implement the
+    // matching source actions.
+    if plugin.manifest.providesHints {
+      caps.formUnion([.scrollExtremes, .tabReorder])
+    }
+    // `tabReopen` follows candidate provision: browser plugins want it
+    // (they're the ones with a closed-tabs history); tmux does not.
+    if plugin.manifest.providesCandidates {
+      caps.insert(.tabReopen)
+    }
     return caps
   }
   var activationPolicy: FlashSourceActivationPolicy {
@@ -153,5 +166,49 @@ final class PluginFlashSource: FlashSource {
     completion: @escaping (SourceActionResult) -> Void
   ) {
     plugin.invokeSourceAction(name: "tab_close", context: context, extra: [:], completion: completion)
+  }
+
+  func scrollTop(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    plugin.invokeSourceAction(name: "scroll_top", context: context, extra: [:], completion: completion)
+  }
+
+  func scrollBottom(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    plugin.invokeSourceAction(
+      name: "scroll_bottom", context: context, extra: [:], completion: completion)
+  }
+
+  func tabMovePrev(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    plugin.invokeSourceAction(
+      name: "tab_move_previous", context: context, extra: [:], completion: completion)
+  }
+
+  func tabMoveNext(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    plugin.invokeSourceAction(
+      name: "tab_move_next", context: context, extra: [:], completion: completion)
+  }
+
+  func tabReopen(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    plugin.invokeSourceAction(
+      name: "tab_reopen", context: context, extra: [:], completion: completion)
   }
 }

@@ -155,7 +155,7 @@ final class HotkeySyntaxTests: XCTestCase {
     }
 
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://mouse_target?right=1")?.command,
+      parseMappingCommand(rawString: "flash://mouse_target?secondary=1")?.command,
       .mouseTarget(.click(.rightClick)))
     XCTAssertEqual(
       parseMappingCommand(rawString: "flash://mouse_target?double=1")?.command,
@@ -294,7 +294,6 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_select")?.command, .tabSelect(index: nil))
     XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_select?index=4")?.command, .tabSelect(index: 4))
     XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_new")?.command, .tabNew)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_new_insert")?.command, .tabNewInsert)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_close")?.command, .tabClose)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://history_back")?.command, .historyBack)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://history_forward")?.command, .historyForward)

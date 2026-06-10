@@ -35,6 +35,20 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   public static let tabCreation = FlashSourceCapabilities(rawValue: 1 << 5)
   public static let tabNavigation = FlashSourceCapabilities(rawValue: 1 << 6)
   public static let tabClosing = FlashSourceCapabilities(rawValue: 1 << 7)
+  /// Source handles `gg`/`G` (scroll-to-top / scroll-to-bottom). Used by
+  /// providers whose target app cannot be driven by a synthesized wheel
+  /// edge — tmux is the canonical case: wheel-down at the bottom of a
+  /// live buffer is a no-op, so `G` needs `tmux send-keys -X cancel`
+  /// (exit copy mode) rather than another wheel tick.
+  public static let scrollExtremes = FlashSourceCapabilities(rawValue: 1 << 8)
+  /// Source handles `[m`/`]m` (move the focused-window's current tab
+  /// left/right). Tmux runs `swap-window -t -1`/`+1`; browsers have no
+  /// portable shortcut so they don't claim this capability.
+  public static let tabReorder = FlashSourceCapabilities(rawValue: 1 << 9)
+  /// Source handles `T` (reopen the most recently closed tab). Browsers
+  /// claim this via their ⌘⇧T fallback; tmux returns `.unhandled` (no
+  /// equivalent gesture).
+  public static let tabReopen = FlashSourceCapabilities(rawValue: 1 << 10)
 }
 
 public enum SourceTabDirection: Sendable {
@@ -172,17 +186,34 @@ public struct CandidateResolution: Sendable {
 }
 
 public struct SourceActionResult: Sendable {
-  public let targetPID: pid_t?
-  public let didPerform: Bool
-
-  public init(targetPID: pid_t?, didPerform: Bool) {
-    self.targetPID = targetPID
-    self.didPerform = didPerform
+  public enum Disposition: Sendable {
+    /// The source performed the action.
+    case performed
+    /// The source owns this action for the context but could not complete
+    /// it (command error, plugin crash, RPC timeout). Callers must not run
+    /// a generic keystroke fallback after this — if the claim was a
+    /// timeout the real action may still land, and the synthesized key
+    /// would double-fire (e.g. tmux `new-window` *and* ⌘N).
+    case failed
+    /// No source claim: the next source in the chain (or the caller's
+    /// keystroke fallback) may run.
+    case unhandled
   }
 
-  public static let unhandled = SourceActionResult(targetPID: nil, didPerform: false)
+  public let targetPID: pid_t?
+  public let disposition: Disposition
+
+  public init(targetPID: pid_t?, disposition: Disposition) {
+    self.targetPID = targetPID
+    self.disposition = disposition
+  }
+
+  public var didPerform: Bool { disposition == .performed }
+
+  public static let unhandled = SourceActionResult(targetPID: nil, disposition: .unhandled)
+  public static let failed = SourceActionResult(targetPID: nil, disposition: .failed)
   public static func performed(pid: pid_t?) -> SourceActionResult {
-    SourceActionResult(targetPID: pid, didPerform: true)
+    SourceActionResult(targetPID: pid, disposition: .performed)
   }
 }
 
@@ -278,6 +309,36 @@ public protocol FlashSource: AnyObject {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   )
+  /// Scroll the focused app's primary view to the top edge (`gg`).
+  func scrollTop(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  )
+  /// Scroll the focused app's primary view to the bottom edge (`G`).
+  func scrollBottom(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  )
+  /// Move the focused app's current tab one position left (`[m`).
+  func tabMovePrev(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  )
+  /// Move the focused app's current tab one position right (`]m`).
+  func tabMoveNext(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  )
+  /// Reopen the most recently closed tab in the focused app (`T`).
+  func tabReopen(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  )
 }
 
 extension FlashSource {
@@ -350,6 +411,41 @@ extension FlashSource {
     DispatchQueue.main.async { completion(.unhandled) }
   }
   public func tabClose(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    DispatchQueue.main.async { completion(.unhandled) }
+  }
+  public func scrollTop(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    DispatchQueue.main.async { completion(.unhandled) }
+  }
+  public func scrollBottom(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    DispatchQueue.main.async { completion(.unhandled) }
+  }
+  public func tabMovePrev(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    DispatchQueue.main.async { completion(.unhandled) }
+  }
+  public func tabMoveNext(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    DispatchQueue.main.async { completion(.unhandled) }
+  }
+  public func tabReopen(
     in context: AppContext,
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void

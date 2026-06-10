@@ -11,13 +11,16 @@ extension OverlayPanel {
     _ text: String,
     suggestions: [CandidateDisplayItem]? = nil,
     emptyText: String = "no matching app",
-    cursorIndex: Int? = nil
+    cursorIndex: Int? = nil,
+    underlineRange: NSRange? = nil
   ) {
     FlashLog.trace(
       "[overlay] display_command_line text=\(text) cursor=\(cursorIndex ?? text.count) "
-        + "suggestions=\(suggestions?.count ?? 0)")
+        + "suggestions=\(suggestions?.count ?? 0) "
+        + "underline=\(underlineRange.map(NSStringFromRange) ?? "nil")")
     inputMode = .commandLine
-    setCommandTextFieldText(text, cursorIndex: cursorIndex ?? text.count)
+    setCommandTextFieldText(
+      text, cursorIndex: cursorIndex ?? text.count, underlineRange: underlineRange)
     commandPromptVisible = true
     commandPromptPrefix = ""
     if let suggestions {
@@ -140,15 +143,70 @@ extension OverlayPanel {
   }
 
 
-  func setCommandTextFieldText(_ text: String, cursorIndex: Int) {
+  func setCommandTextFieldText(
+    _ text: String, cursorIndex: Int, underlineRange: NSRange? = nil
+  ) {
     suppressCommandTextFieldChange = true
     commandLineText = text
     commandLineCursorIndex = cursorIndex
-    if commandTextField.stringValue != text {
-      commandTextField.stringValue = text
+    let font = commandTextField.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    if let underline = underlineRange,
+      underline.length > 0,
+      underline.location >= 0,
+      underline.location + underline.length <= (text as NSString).length
+    {
+      // Render `!<token>` underlined so the user sees Flash has locked
+      // onto that bang. NSTextField lets `attributedStringValue` flow
+      // into the live field editor (NSTextView) and the editor preserves
+      // attributes during typing because we re-apply on every refresh.
+      let attributed = NSMutableAttributedString(string: text)
+      attributed.addAttribute(
+        .font, value: font,
+        range: NSRange(location: 0, length: (text as NSString).length))
+      attributed.addAttribute(
+        .foregroundColor, value: Self.nordSnowStorm2,
+        range: NSRange(location: 0, length: (text as NSString).length))
+      attributed.addAttributes(
+        [
+          .underlineStyle: NSUnderlineStyle.single.rawValue,
+          .underlineColor: Self.nordAuroraGreen,
+          .foregroundColor: Self.nordAuroraGreen,
+        ],
+        range: underline)
+      if commandTextField.attributedStringValue != attributed {
+        commandTextField.allowsEditingTextAttributes = true
+        commandTextField.attributedStringValue = attributed
+      }
+    } else {
+      if commandTextField.attributedStringValue.length > 0,
+        commandTextField.attributedStringValue.string == text,
+        !attributedStringHasAttributes(commandTextField.attributedStringValue)
+      {
+        // Already plain; leave alone.
+      } else if commandTextField.stringValue != text
+        || attributedStringHasAttributes(commandTextField.attributedStringValue)
+      {
+        commandTextField.allowsEditingTextAttributes = false
+        commandTextField.stringValue = text
+      }
     }
     syncCommandTextFieldSelection()
     suppressCommandTextFieldChange = false
+  }
+
+  private func attributedStringHasAttributes(_ string: NSAttributedString) -> Bool {
+    guard string.length > 0 else { return false }
+    var has = false
+    string.enumerateAttributes(
+      in: NSRange(location: 0, length: string.length),
+      options: []
+    ) { attrs, _, stop in
+      if attrs[.underlineStyle] != nil {
+        has = true
+        stop.pointee = true
+      }
+    }
+    return has
   }
 
   func syncCommandTextFieldSelection() {

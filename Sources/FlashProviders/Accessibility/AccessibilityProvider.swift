@@ -476,8 +476,19 @@ public final class AccessibilityProvider: FlashSource {
     // (rows, cells, disclosure triangles, icon-only AXImage buttons).
     // Disabled elements never hint — they're visible but inert, and
     // the user would just click into a no-op.
-    let allowlist = insideWebArea ? Self.webClickableRoles : Self.roles
-    var roleAllowed = role.map { allowlist.contains($0) } ?? false
+    //
+    // Electron apps (Slack, Discord, etc.) render their entire UI inside
+    // an `AXWebArea`, so the strict web allowlist would skip their
+    // list/row chrome. Admit `AXRow`/`AXCell` here too — the
+    // `isRowOrCell` branch below routes them through the deferred
+    // `AXPress` check, so decorative HTML table cells (no press action)
+    // are filtered out while genuine click targets like Slack channels
+    // come through.
+    let isRowOrCellRole = role == "AXRow" || role == "AXCell"
+    let baseAllowlist = insideWebArea ? Self.webClickableRoles : Self.roles
+    var roleAllowed =
+      role.map { baseAllowlist.contains($0) } ?? false
+      || (insideWebArea && isRowOrCellRole)
     if roleAllowed, role == "AXImage", insideClickable {
       roleAllowed = false
     }
@@ -509,7 +520,20 @@ public final class AccessibilityProvider: FlashSource {
       state.idCounter += 1
       let captured = element
       let capturedRole = role ?? "AXUnknown"
+      // Slack/Discord/Electron expose their channel-list rows as
+      // AXRow inside an AXWebArea, and those rows often advertise
+      // AXPress (so they pass the deferred press check) but the
+      // press is wired only for assistive tech — the real
+      // navigation is JavaScript-driven from a synthesised mouse
+      // event. Bypass the AX activate path for those targets so the
+      // dispatcher falls through to `AXClick.clickAtPoint` (hit-test
+      // at the row's centre) and then a real `CGEvent` click; either
+      // one actually navigates the channel.
+      let bypassAXPressOnActivate = insideWebArea && isRowOrCellRole
       let activate: ((JumpAction) -> Bool) = { action in
+        if bypassAXPressOnActivate {
+          return false
+        }
         switch action {
         case .leftClick:
           if JumpTarget.textInputRoles.contains(capturedRole),
@@ -538,8 +562,11 @@ public final class AccessibilityProvider: FlashSource {
       let isRowOrCell = capturedRole == "AXRow" || capturedRole == "AXCell"
       if enabled {
         // Icon-only AXImage buttons defer to the AXPress check (decorative
-        // images report no press action); everything else is confirmed.
-        if role == "AXImage" {
+        // images report no press action); web-area rows do the same so
+        // HTML <tr>/<td> stays filtered while Slack/Discord/Electron
+        // channel rows (which expose AXPress) come through; everything
+        // else is confirmed.
+        if role == "AXImage" || (insideWebArea && isRowOrCell) {
           state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
         } else {
           state.confirmedTargets.append(candidate)

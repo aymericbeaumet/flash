@@ -123,10 +123,22 @@ extension AppMonitor {
     // serves stale hints because dirty tokens never bump. Skip install
     // entirely; we'll retry on the next focus change, by which time
     // the user has likely granted permission.
-    if !PermissionCheck.isAccessibilityTrusted { return }
+    if !PermissionCheck.isAccessibilityTrusted {
+      if !warnedMissingAXPermission {
+        warnedMissingAXPermission = true
+        FlashLog.warn(
+          "[ax] observer skipped pid=\(pid): Accessibility permission not granted — "
+            + "prepared models go stale until it is")
+      }
+      return
+    }
+    warnedMissingAXPermission = false
     var observer: AXObserver?
     let err = AXObserverCreate(pid, Self.observerCallback, &observer)
-    guard err == .success, let observer else { return }
+    guard err == .success, let observer else {
+      FlashLog.warn("[ax] observer create failed pid=\(pid) err=\(err.rawValue)")
+      return
+    }
 
     let appEl = AXUIElementCreateApplication(pid)
     let ctx = ObserverContext(monitor: self, pid: pid)

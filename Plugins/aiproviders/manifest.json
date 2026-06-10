@@ -1,0 +1,22 @@
+{
+  "id": "aiproviders",
+  "name": "AI Providers",
+  "version": "0.1.0",
+  "description": "Open AI chat providers from the flashlight: !chatgpt, !claude, !gemini, !perplexity, !copilot, !grok — optional query is pre-filled into the new chat.",
+  "install": "true",
+  "start": "exec ./flash-plugin-aiproviders",
+  "providers": [
+    {
+      "kind": "shebang",
+      "command": "aiproviders",
+      "shebangs": [
+        { "token": "chatgpt", "description": "Open ChatGPT (pre-fills query if provided)" },
+        { "token": "claude", "description": "Open Claude (pre-fills query if provided)" },
+        { "token": "gemini", "description": "Open Gemini (pre-fills query if provided)" },
+        { "token": "perplexity", "description": "Open Perplexity search" },
+        { "token": "copilot", "description": "Open Microsoft Copilot" },
+        { "token": "grok", "description": "Open Grok (xAI)" }
+      ]
+    }
+  ]
+}

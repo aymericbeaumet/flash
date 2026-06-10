@@ -55,15 +55,25 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(halfUp?.horizontal, 0)
   }
 
-  func testTopBottomDoNotUseWheelDeltas() {
-    XCTAssertNil(
-      NormalModeDispatcher.scrollWheelDelta(
-        for: .top,
-        viewportSize: CGSize(width: 1200, height: 900)))
-    XCTAssertNil(
-      NormalModeDispatcher.scrollWheelDelta(
-        for: .bottom,
-        viewportSize: CGSize(width: 1200, height: 900)))
+  func testTopBottomUseExtremeWheelDeltasForWheelFallback() {
+    // AX scrollbar value-setters are the primary path for gg/G, but
+    // they don't move every app (tmux has none, some Electron apps
+    // ignore the AX-set). For those apps the dispatcher falls back to
+    // a synthetic wheel event with a huge delta — large enough to
+    // exceed any realistic document height while still fitting Int32.
+    let top = NormalModeDispatcher.scrollWheelDelta(
+      for: .top,
+      viewportSize: CGSize(width: 1200, height: 900))
+    XCTAssertNotNil(top)
+    XCTAssertGreaterThanOrEqual(top?.vertical ?? 0, 100_000)
+    XCTAssertEqual(top?.horizontal, 0)
+
+    let bottom = NormalModeDispatcher.scrollWheelDelta(
+      for: .bottom,
+      viewportSize: CGSize(width: 1200, height: 900))
+    XCTAssertNotNil(bottom)
+    XCTAssertLessThanOrEqual(bottom?.vertical ?? 0, -100_000)
+    XCTAssertEqual(bottom?.horizontal, 0)
   }
 
   func testTopBottomAndNavigationSequences() {
@@ -78,7 +88,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "]", chars: "a"), .appNext)
     XCTAssertEqual(command(pending: "g", chars: "4"), .tabSelect(index: 4))
     XCTAssertEqual(command(chars: "n"), .newWindow)
-    XCTAssertEqual(command(chars: "t"), .tabNewInsert)
+    XCTAssertEqual(command(chars: "t"), .tabNew)
   }
 
   func testRepeatCountsApplyToSingleAndMultiKeyCommands() {
@@ -138,20 +148,20 @@ final class NormalModeTests: XCTestCase {
   func testFIsMouseTargetAndShiftFIsMouseGrid() {
     XCTAssertEqual(command(chars: "f"), .mouseTarget(.click(.leftClick)))
     XCTAssertEqual(command(chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.leftClick)))
-    XCTAssertNil(command(chars: "s"))
+    // `s` is now the secondary-click prefix (`sf`/`sF`), so it leaves a
+    // pending sequence rather than yielding `nil`.
+    XCTAssertEqual(transition(chars: "s").pending, "s")
   }
 
-  func testRightAndDoubleClickHintModeSequences() {
-    XCTAssertEqual(transition(chars: "r").pending, "r")
-    XCTAssertEqual(
-      NormalModeInterpreter.pendingCommand(
-        pending: "r",
-        mappings: CompiledMappings(Config.Mode.defaultNormalMappings)
-      )?.command,
-      .reload(force: false))
+  func testSecondaryAndDoubleClickHintModeSequences() {
+    // `r` stays bound to `reload`; the secondary-click prefix is `s`
+    // (renamed from the old `r*` to drop the sequence-timeout delay on
+    // a bare `r`).
+    XCTAssertEqual(command(chars: "r"), .reload(force: false))
     XCTAssertEqual(command(chars: "R", ignoring: "r", flags: [.shift]), .reload(force: true))
-    XCTAssertEqual(command(pending: "r", chars: "f"), .mouseTarget(.click(.rightClick)))
-    XCTAssertEqual(command(pending: "r", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.rightClick)))
+    XCTAssertEqual(transition(chars: "s").pending, "s")
+    XCTAssertEqual(command(pending: "s", chars: "f"), .mouseTarget(.click(.rightClick)))
+    XCTAssertEqual(command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.rightClick)))
     XCTAssertEqual(transition(chars: "d").pending, "d")
     XCTAssertEqual(command(pending: "d", chars: "f"), .mouseTarget(.click(.doubleClick)))
     XCTAssertEqual(command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.doubleClick)))
@@ -170,10 +180,12 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.mouseTargetCommitShouldEnterInsertMode(target: link))
   }
 
-  func testMouseGridCommitEntersInsertForClicksButNotMoves() {
-    XCTAssertTrue(AppDelegate.mouseGridCommitShouldEnterInsertMode(isMove: false))
-    XCTAssertFalse(AppDelegate.mouseGridCommitShouldEnterInsertMode(isMove: true))
-  }
+  // `mouseGridCommitShouldEnterInsertMode` deleted: F clicks no longer
+  // auto-enter insert. The post-click AX-input check
+  // (`enterInsertModeIfClickedOnTextInput`) is the only path into
+  // insert from a geometric click, and it's tested via behavior in
+  // the manual-verification flow (clicking a search field → insert;
+  // clicking a button → stays normal).
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
     XCTAssertEqual(command(chars: "i"), .insertMode)
@@ -188,7 +200,10 @@ final class NormalModeTests: XCTestCase {
         charactersIgnoringModifiers: " ",
         mappings: CompiledMappings(Config.Mode.defaultNormalMappings)
       ).command)
-    XCTAssertEqual(transition(chars: "r").pending, "r")
+    // With `rf` renamed to `sf`, `r` no longer prefixes any pending
+    // sequence — it resolves to reload on the first keystroke (no
+    // sequence-timeout delay).
+    XCTAssertEqual(command(chars: "r"), .reload(force: false))
     XCTAssertEqual(command(chars: ":"), .commandMode)
     XCTAssertEqual(command(chars: "x"), .close)
     XCTAssertEqual(command(chars: "/"), .find)
@@ -213,33 +228,23 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .advancedModeDisabled))
   }
 
-  func testExplicitNormalScrollSuppressionOnlyAppliesToIdleNormalModeBeforeDeadline() {
-    let now = Date()
-    let until = now.addingTimeInterval(0.5)
+  func testPointerScrollIsSuppressedInIdleNormalMode() {
+    // Wheel ticks in normal mode always pass through to the focused app
+    // (the overlay panel `ignoresMouseEvents`) and must never flip
+    // Flash into insert. Hints visible is the one exception — there
+    // the scroll dismisses the picker.
     XCTAssertTrue(
       AppDelegate.pointerScrollShouldBeSuppressed(
         mode: .normal,
-        hasHints: false,
-        suppressionUntil: until,
-        now: now))
+        hasHints: false))
     XCTAssertFalse(
       AppDelegate.pointerScrollShouldBeSuppressed(
         mode: .normal,
-        hasHints: true,
-        suppressionUntil: until,
-        now: now))
+        hasHints: true))
     XCTAssertFalse(
       AppDelegate.pointerScrollShouldBeSuppressed(
         mode: .insert,
-        hasHints: false,
-        suppressionUntil: until,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.pointerScrollShouldBeSuppressed(
-        mode: .normal,
-        hasHints: false,
-        suppressionUntil: until,
-        now: until.addingTimeInterval(0.001)))
+        hasHints: false))
   }
 
   func testCommandLineEntryIsAllowedFromInsertAndNormalModeEvenWithTransientHints() {
@@ -286,7 +291,7 @@ final class NormalModeTests: XCTestCase {
         captureOverride: true),
       ModeOverlaySnapshot(
         text: "INSERT",
-        visible: true,
+        visible: false,
         captureInput: false,
         inputMode: .hints,
         refreshActiveWindowBorder: true))
@@ -303,7 +308,7 @@ final class NormalModeTests: XCTestCase {
         visible: true,
         captureInput: true,
         inputMode: .normal,
-        refreshActiveWindowBorder: false))
+        refreshActiveWindowBorder: true))
     XCTAssertFalse(
       AppDelegate.modeOverlaySnapshot(
         mode: .normal,
@@ -330,20 +335,28 @@ final class NormalModeTests: XCTestCase {
         captureOverride: true).captureInput)
   }
 
-  func testInsertModeBadgeIsAlwaysVisible() {
+  func testInsertModeBadgeIsHidden() {
     let labels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    // Even when the badge is otherwise disabled (no normal-mode bindings →
-    // visible: false), INSERT must still render its label.
+    // Insert mode swaps the badge for the active-window border, so the
+    // badge stays hidden even when advanced mode (visible: true) is on.
     let snapshot = AppDelegate.modeOverlaySnapshot(
       mode: .insert,
       labels: labels,
-      visible: false,
+      visible: true,
       hasHints: false,
       activationInFlight: false,
       captureOverride: nil)
-    XCTAssertTrue(snapshot.visible)
+    XCTAssertFalse(snapshot.visible)
     XCTAssertEqual(snapshot.text, "INSERT")
-    // NORMAL keeps respecting the disabled flag.
+    // NORMAL keeps respecting the advanced-mode flag.
+    XCTAssertTrue(
+      AppDelegate.modeOverlaySnapshot(
+        mode: .normal,
+        labels: labels,
+        visible: true,
+        hasHints: false,
+        activationInFlight: false,
+        captureOverride: nil).visible)
     XCTAssertFalse(
       AppDelegate.modeOverlaySnapshot(
         mode: .normal,
@@ -354,31 +367,38 @@ final class NormalModeTests: XCTestCase {
         captureOverride: nil).visible)
   }
 
-  func testActiveWindowBorderIsAlwaysHidden() {
-    XCTAssertFalse(
+  func testActiveWindowBorderVisibility() {
+    // Border shows in insert when advanced mode is on, no hints are up,
+    // and no window-geometry transition is in flight.
+    XCTAssertTrue(
       AppDelegate.activeWindowBorderShouldBeVisible(
         mode: .insert,
         modeBadgeEnabled: true,
         hasHints: false,
         windowGeometryChangeInProgress: false))
+    // No advanced mode → no badge/border distinction to draw.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         mode: .insert,
         modeBadgeEnabled: false,
         hasHints: false,
         windowGeometryChangeInProgress: false))
+    // Suspended while the window is moving/resizing so the stroke
+    // doesn't visibly trail behind the chrome.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         mode: .insert,
         modeBadgeEnabled: true,
         hasHints: false,
         windowGeometryChangeInProgress: true))
+    // Normal mode shows the badge instead.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         mode: .normal,
         modeBadgeEnabled: true,
         hasHints: false,
         windowGeometryChangeInProgress: false))
+    // Hints suppress the border so chips aren't double-framed.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         mode: .insert,
@@ -597,6 +617,56 @@ final class NormalModeTests: XCTestCase {
       MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080)),
       alphabet: alphabet)
     XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 5, rows: 5))
+  }
+
+  func testMouseGridFinalStepRendersCompactClusterCenteredOnPastRect() {
+    // 9-cell alphabet → 3x3. Past rectangle is small enough that tile
+    // cells would be smaller than the chip — exactly the case the
+    // compact-cluster layout exists to fix.
+    let alphabet = Array("abcdefghi")
+    let past = CGRect(x: 100, y: 200, width: 60, height: 40)
+    let region = MouseGrid.preparedRegion(
+      MouseGrid.Region(frame: past), alphabet: alphabet)
+    XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 3, rows: 3))
+    let chip = CGSize(width: 14, height: 18)
+    let hints = MouseGrid.hints(
+      in: region,
+      depth: MouseGrid.defaultSteps - 1,
+      alphabet: alphabet,
+      finalChipSize: chip)
+    XCTAssertEqual(hints.count, 9)
+    for hint in hints {
+      XCTAssertEqual(hint.target.role, MouseGrid.finalChipRole)
+      XCTAssertEqual(hint.target.frame.width, chip.width, accuracy: 0.01)
+      XCTAssertEqual(hint.target.frame.height, chip.height, accuracy: 0.01)
+    }
+    // Adjacent chips never overlap: each chip's left edge is at least at
+    // its row neighbour's right edge.
+    let inRowOrder = hints.prefix(3).map(\.target.frame)
+    XCTAssertGreaterThanOrEqual(inRowOrder[1].minX, inRowOrder[0].maxX)
+    XCTAssertGreaterThanOrEqual(inRowOrder[2].minX, inRowOrder[1].maxX)
+    // The cluster is centered on the past rectangle's midpoint.
+    let union = hints.reduce(CGRect.null) { $0.union($1.target.frame) }
+    XCTAssertEqual(union.midX, past.midX, accuracy: 0.01)
+    XCTAssertEqual(union.midY, past.midY, accuracy: 0.01)
+  }
+
+  func testMouseGridIntermediateStepKeepsTileLayoutEvenWithChipSize() {
+    // Sanity check: passing finalChipSize at a non-final depth does
+    // *not* swap layouts — the compact cluster is the user-facing
+    // "we've zoomed in enough" affordance, not an early replacement
+    // for the tile path.
+    let alphabet = Array("abcdefghi")
+    let past = CGRect(x: 0, y: 0, width: 600, height: 600)
+    let region = MouseGrid.preparedRegion(
+      MouseGrid.Region(frame: past), alphabet: alphabet)
+    let hints = MouseGrid.hints(
+      in: region,
+      depth: 0,
+      alphabet: alphabet,
+      finalChipSize: CGSize(width: 14, height: 18))
+    XCTAssertTrue(hints.allSatisfy { $0.target.role == MouseGrid.cellRole })
+    XCTAssertEqual(hints[0].target.frame.width, past.width / 3, accuracy: 0.01)
   }
 
   func testMouseGridCommitsAfterThreeSelections() {
@@ -973,7 +1043,7 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "org.mozilla.firefox",
         url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
 
-    XCTAssertEqual(prepared.displayTitle, "[firefox] Gmail (https://mail.google.com/mail/u/0/#inbox)")
+    XCTAssertEqual(prepared.displayTitle, "[firefox] Gmail · https://mail.google.com/mail/u/0/#inbox")
     XCTAssertEqual(prepared.source, "firefox")
     XCTAssertEqual(prepared.name, "Gmail")
     XCTAssertEqual(prepared.url?.absoluteString, "https://mail.google.com/mail/u/0/#inbox")
@@ -1068,15 +1138,15 @@ final class NormalModeTests: XCTestCase {
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "[h", "]h", "f", "rf", "df", "mf", "F", "rF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "R", "t", "MAPPINGS",
+      "gg", "G", "[h", "]h", "f", "sf", "df", "mf", "F", "sF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "R", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a", "]a", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <args>", ":flashlight <query>", "flash://mouse_target",
-      "flash://flashlight", "flash://mouse_target?right=1",
+      "flash://flashlight", "flash://mouse_target?secondary=1",
       "flash://mouse_target?double=1", "flash://mouse_grid", "flash://history_back", "flash://history_forward",
       "flash://app_previous", "flash://app_next",
-      "flash://app_reload?force=1", "flash://tab_select?index=1", "flash://tab_new_insert", "?"]
+      "flash://app_reload?force=1", "flash://tab_select?index=1", "flash://tab_new", "?"]
     {
       XCTAssertTrue(
         help.contains(mapping),

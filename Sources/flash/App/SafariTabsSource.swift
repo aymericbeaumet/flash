@@ -6,7 +6,9 @@ final class SafariTabsSource: FlashSource {
   let identifier = "safari-tabs"
   let displayName = "safari"
   let priority = 30
-  let capabilities: FlashSourceCapabilities = [.candidates, .tabSelection, .tabCreation]
+  let capabilities: FlashSourceCapabilities = [
+    .candidates, .tabSelection, .tabCreation, .tabClosing,
+  ]
   let activationPolicy: FlashSourceActivationPolicy = .bundleIDs(
     BrowserTabSources.safariBundleIdentifiers)
 
@@ -71,7 +73,11 @@ final class SafariTabsSource: FlashSource {
       return "missing"
       """
     BrowserTabSources.runAppleScriptAsync(script) { result in
-      completion(result == "ok" ? .performed(pid: context.processID) : .unhandled)
+      // App matched (the activationPolicy already gated us to Safari)
+      // and the script ran — a non-"ok" result is the source's claim
+      // failing, not an unrelated context. Return `.failed` so the
+      // host doesn't keystroke-fall-back on top of it.
+      completion(result == "ok" ? .performed(pid: context.processID) : .failed)
     }
   }
 
@@ -99,7 +105,32 @@ final class SafariTabsSource: FlashSource {
       end tell
       """
     BrowserTabSources.runAppleScriptAsync(script) { result in
-      completion(result == "ok" ? .performed(pid: context.processID) : .unhandled)
+      completion(result == "ok" ? .performed(pid: context.processID) : .failed)
+    }
+  }
+
+  func tabClose(
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    guard let appName = BrowserTabSources.appName(for: context.processID, environment: environment)
+    else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    // Closing the last tab via `close current tab` collapses to closing
+    // the window — same as the user pressing ⌘W natively, which is what
+    // we want: the gesture stays "close this thing in this context".
+    let script = """
+      tell application \(BrowserTabSources.scriptString(appName))
+        if (count of windows) is 0 then return "missing"
+        tell front window to close current tab
+        return "ok"
+      end tell
+      """
+    BrowserTabSources.runAppleScriptAsync(script) { result in
+      completion(result == "ok" ? .performed(pid: context.processID) : .failed)
     }
   }
 

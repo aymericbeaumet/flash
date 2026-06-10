@@ -129,14 +129,8 @@ extension AppDelegate {
     }
   }
 
-  private func modeDidEnterNormal(reason: String) {
+  private func modeDidEnterNormal(reason _: String) {
     resetModeInputState()
-    if reason == "explicit_normal" {
-      normalModeScrollSuppressionUntil = Date().addingTimeInterval(
-        TimeInterval(Self.explicitNormalScrollSuppressionMs) / 1_000)
-    } else {
-      normalModeScrollSuppressionUntil = nil
-    }
     if let context = currentNonFlashContext() ?? normalModeContext() {
       normalModeTargetPID = context.processID
       suppressEditableFocus(for: context.processID)
@@ -151,7 +145,6 @@ extension AppDelegate {
   private func modeDidEnterInsert(reason: String) {
     let insertTarget = currentNonFlashContext()
     let panelKeyAtEntry = overlay.isKeyWindow
-    normalModeScrollSuppressionUntil = nil
     normalModeRecaptureToken &+= 1
     normalModePendingCommandToken &+= 1
     resetModeInputState()
@@ -161,6 +154,20 @@ extension AppDelegate {
       overlay.hide()
     }
     applyModeOverlay()
+    // Stuck-input safeguard: explicitly re-activate the focused app so
+    // its main window reclaims key status from the overlay panel.
+    // Without this, apps like Messages can end up in a state where the
+    // text field shows focus (caret blinks) but the first few keystrokes
+    // land on the resigned panel instead of the field — the
+    // `[mode] insert_handoff_settled` trace previously captured this as
+    // `panel_key=true` 120ms after entry. Re-activating is idempotent
+    // when key already moved cleanly, defensive when it didn't.
+    if let target = insertTarget,
+      let app = NSRunningApplication(processIdentifier: target.processID),
+      !app.isTerminated
+    {
+      RunningApplicationActivation.activate(app, options: [])
+    }
     traceInsertKeyHandoff(
       target: insertTarget, panelKeyAtEntry: panelKeyAtEntry, reason: reason)
   }
@@ -357,10 +364,18 @@ extension AppDelegate {
     hasHints: Bool,
     windowGeometryChangeInProgress: Bool
   ) -> Bool {
-    // Insert mode shows nothing — no badge, no border, no overlay
-    // chrome. User asked for a pristine window in insert mode and
-    // ergonomic feedback only in normal mode (via the mode badge).
-    false
+    // Insert mode swaps the mode badge for a colored frame around the
+    // focused window: the badge is information theatre once you're
+    // actually typing, but a peripheral-vision tint stays useful.
+    // Advanced mode (`flash://mode_normal` bound somewhere) is the gate
+    // — without it Flash has no normal/insert distinction to visualise.
+    // The border is suspended while hints are up so chips aren't framed
+    // by a redundant outline, and while the window is moving/resizing
+    // so the stroke doesn't lag visibly behind the chrome.
+    guard mode == .insert, modeBadgeEnabled else { return false }
+    if hasHints { return false }
+    if windowGeometryChangeInProgress { return false }
+    return true
   }
 
   static func activeWindowBorderTrackingShouldRun(
@@ -393,16 +408,16 @@ extension AppDelegate {
     reason == .hintCommit || reason == .normalModeInput || reason == .pointerClick
   }
 
-  static let explicitNormalScrollSuppressionMs = 700
-
+  /// Scroll wheel events in idle normal mode are passive: the overlay
+  /// panel has `ignoresMouseEvents=true` so the scroll already reaches the
+  /// focused app, and we never want a wheel tick to silently flip Flash
+  /// into insert mode. (Hints visible → still cancel: the user is
+  /// scrolling away from the picker.)
   static func pointerScrollShouldBeSuppressed(
     mode: FlashMode,
-    hasHints: Bool,
-    suppressionUntil: Date?,
-    now: Date = Date()
+    hasHints: Bool
   ) -> Bool {
-    guard mode == .normal, !hasHints, let suppressionUntil else { return false }
-    return now < suppressionUntil
+    mode == .normal && !hasHints
   }
 
   static func modeOverlaySnapshot(
@@ -418,10 +433,17 @@ extension AppDelegate {
     let capture = canCapture && wantsCapture
     return ModeOverlaySnapshot(
       text: mode == .normal ? labels.normal : labels.insert,
-      visible: visible || mode == .insert,
+      // Badge shows only in normal mode (and only when advanced mode is
+      // wired). Insert mode swaps it for an active-window border drawn
+      // by `updateInsertModeActiveWindowBorder` — labelling INSERT while
+      // you're actually typing into the focused app reads as noise.
+      visible: visible && mode == .normal,
       captureInput: capture,
       inputMode: capture ? .normal : .hints,
-      refreshActiveWindowBorder: mode == .insert)
+      // Always re-evaluate so a transition out of insert clears the
+      // stale border via `updateInsertModeActiveWindowBorder`'s built-in
+      // hide branch.
+      refreshActiveWindowBorder: true)
   }
 
   func applyModeOverlay(captureOverride: Bool? = nil) {
@@ -604,18 +626,14 @@ extension AppDelegate {
     case .tabClose:
       tabCloseInNormalMode(repeatCount: repeatCount)
     case .find:
-      // Native find in the underlying app is a typing experience, so
-      // flip into insert mode right after dispatching ⌘F. Without this
-      // Flash stays in normal and swallows every character the user
-      // types into the find field, leaving them stuck staring at an
-      // empty search bar.
+      // ⌘F only — the find bar opens, but Flash stays in normal so the
+      // user controls when they actually want to type into it. Per the
+      // explicit-only insert rule, `i` is the user's intent signal; an
+      // auto-flip here would be Flash inferring intent.
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_F),
         flags: .maskCommand,
         repeatCount: repeatCount)
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(60)) { [weak self] in
-        self?.enterInsertMode(reason: .normalModeInput)
-      }
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
     case .flashlight:
@@ -639,6 +657,12 @@ extension AppDelegate {
       tabLastInNormalMode()
     case .tabSelect(let explicitIndex):
       tabSelectInNormalMode(index: explicitIndex ?? repeatCount)
+    case .tabMovePrev:
+      tabMoveInNormalMode(direction: .previous, repeatCount: repeatCount)
+    case .tabMoveNext:
+      tabMoveInNormalMode(direction: .next, repeatCount: repeatCount)
+    case .tabReopen:
+      tabReopenInNormalMode(repeatCount: repeatCount)
     case .historyBack:
       navigateTargetHistory(direction: .back, repeatCount: repeatCount)
     case .historyForward:
@@ -672,8 +696,6 @@ extension AppDelegate {
       sendNormalModeKey(CGKeyCode(kVK_ANSI_N), flags: .maskCommand, repeatCount: repeatCount)
     case .tabNew:
       tabNewInNormalMode(repeatCount: repeatCount)
-    case .tabNewInsert:
-      tabNewAndEnterInsertMode()
     case .copy:
       sendNormalModeKey(CGKeyCode(kVK_ANSI_C), flags: .maskCommand, repeatCount: repeatCount)
     case .cut:
@@ -729,6 +751,7 @@ extension AppDelegate {
     closeModalStateForModeExit(reason: "enter_command")
     clearTransientHintState(reason: "enter_command")
     resetCommandLineState()
+    candidateFinderUserHasTyped = false
     if let candidateFinderScope {
       self.candidateFinderScope = candidateFinderScope
       candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
@@ -797,22 +820,29 @@ extension AppDelegate {
   }
 
   /// Single entry point for every modal surface (`:help`, `:plugins`,
-  /// `:mappings`, plugin-reload toast, future modals). Centralises the
-  /// pre-modal cleanup (mode-pending bump, hint/candidate-finder reset,
-  /// border clear) so the four call sites can't drift on a missed
-  /// step. Pass a body closure rather than a pre-rendered string so the
-  /// modal-text generator isn't run while the overlay is still busy.
+  /// `:mappings`, plugin-reload toast, `:clipboard`, future modals).
+  /// Centralises the pre-modal cleanup so call sites can't drift on a
+  /// missed step; the renderer is the only thing variants pass in.
   private func presentModal(
     reason: String,
     body: () -> String
   ) {
+    prepareModalPresentation(reason: reason)
+    overlay.displayModal(body())
+  }
+
+  /// Shared pre-modal cleanup: mode-pending token bump, hint /
+  /// candidate-finder reset, active-window border clear, overlay
+  /// hide. `presentModal` and `presentSelectableModal` both go through
+  /// it so the surfaces start from an identical state regardless of
+  /// what the user was doing before.
+  private func prepareModalPresentation(reason: String) {
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
     clearTransientHintState(reason: reason)
     clearCandidateFinderState()
     overlay.hide()
     overlay.setActiveWindowBorder(around: nil)
-    overlay.displayModal(body())
   }
 
   /// `:clipboard` — fetch the full history from the clipboard plugin and open
@@ -840,15 +870,11 @@ extension AppDelegate {
     }
   }
 
-  /// Selectable counterpart to `presentModal`: identical pre-modal cleanup,
-  /// but renders `lines` as the navigable `:clipboard` list.
+  /// Selectable counterpart to `presentModal` — same `prepareModal-
+  /// Presentation` setup, but renders `lines` as the navigable list
+  /// surface (currently only `:clipboard`).
   private func presentSelectableModal(reason: String, lines: [String]) {
-    normalModePendingCommandToken &+= 1
-    overlay.normalModePending = ""
-    clearTransientHintState(reason: reason)
-    clearCandidateFinderState()
-    overlay.hide()
-    overlay.setActiveWindowBorder(around: nil)
+    prepareModalPresentation(reason: reason)
     overlay.displaySelectableModal(lines: lines)
   }
 
@@ -884,19 +910,46 @@ extension AppDelegate {
   /// only on a genuine user open (never from the plugin-state refresh path) so
   /// it can't feed back into an emit→snapshot→emit loop.
   private func refreshVolatileCandidateSources(reason: String) {
-    guard let context = currentNonFlashContext() else { return }
-    FlashLog.trace(
-      "[candidate_finder] refresh_volatile reason=\(reason) bundle=\(context.bundleIdentifier)")
-    pluginManager.emit(
-      PluginEvent(
-        name: "core:focus.changed",
-        payload: [
-          "bundle_id": context.bundleIdentifier,
-          "pid": Int(context.processID),
-        ],
-        bundleID: context.bundleIdentifier,
-        configPath: nil,
-        focused: true))
+    if let context = currentNonFlashContext() {
+      FlashLog.trace(
+        "[candidate_finder] refresh_volatile reason=\(reason) bundle=\(context.bundleIdentifier)")
+      pluginManager.emit(
+        PluginEvent(
+          name: "core:focus.changed",
+          payload: [
+            "bundle_id": context.bundleIdentifier,
+            "pid": Int(context.processID),
+          ],
+          bundleID: context.bundleIdentifier,
+          configPath: nil,
+          focused: true))
+    }
+    // Also emit a synthetic focus event for every running browser even
+    // when its app isn't the focused one — Firefox's plugin re-walks
+    // its tab strip on `core:focus.changed{bundle=firefox}` and emits a
+    // snapshot, so without this prompt the user only sees Firefox tabs
+    // in flashlight if they focused Firefox earlier in the session.
+    // SafariTabsSource and ChromiumTabsSource (still in core) pull
+    // their tabs directly from AppleScript per query, so the
+    // double-emission is a no-op for them.
+    let runningApps = NSWorkspace.shared.runningApplications
+    for app in runningApps {
+      guard let bundleID = app.bundleIdentifier,
+        BrowserTabSources.allBundleIdentifiers.contains(bundleID),
+        bundleID != currentNonFlashContext()?.bundleIdentifier,
+        !app.isTerminated
+      else { continue }
+      pluginManager.emit(
+        PluginEvent(
+          name: "core:focus.changed",
+          payload: [
+            "bundle_id": bundleID,
+            "pid": Int(app.processIdentifier),
+          ],
+          bundleID: bundleID,
+          configPath: nil,
+          focused: false))
+    }
   }
 
   func prewarmCandidateFinderCaches(reason: String) {
@@ -928,12 +981,26 @@ extension AppDelegate {
   func startCandidateFinderLiveRefresh() {
     candidateFinderLiveRefreshTimer?.cancel()
     let timer = DispatchSource.makeTimerSource(queue: .main)
+    // 5-second cadence (was 2s) — flashlight tab/window inventories
+    // don't change second-to-second in normal use, and each refresh
+    // pays a SafariTabsSource + ChromiumTabsSource AppleScript round-
+    // trip. The leeway gives Dispatch room to coalesce with other
+    // main-queue work instead of preempting it.
     timer.schedule(
-      deadline: .now() + .seconds(2),
-      repeating: .seconds(2),
-      leeway: .milliseconds(500))
+      deadline: .now() + .seconds(5),
+      repeating: .seconds(5),
+      leeway: .seconds(1))
     timer.setEventHandler { [weak self] in
       guard let self, self.candidateFinderSurfaceActive else { return }
+      // Skip the refresh if the user is actively typing — swapping
+      // the candidate pool under their fingers makes the results
+      // strobe between the old and new snapshot, which reads as a
+      // stutter. They'll get the fresh pool on the next quiet tick.
+      if let last = self.candidateFinderLastInputAt,
+        Date().timeIntervalSince(last) < 0.4
+      {
+        return
+      }
       self.prewarmCandidateFinderCaches(reason: "live")
     }
     timer.resume()
@@ -942,6 +1009,19 @@ extension AppDelegate {
 
   private func refreshVisibleCandidateFinderResultsFromCache() {
     guard overlay != nil else { return }
+    // Initial snapshot is locked until the user types — see
+    // `candidateFinderUserHasTyped`. The async refresh still runs and
+    // writes into the cache so the NEXT flashlight session opens with
+    // the fresher snapshot; we just don't re-render mid-display.
+    // Exception: if the visible pool is empty (cold start), let the
+    // refresh promote candidates as soon as they land so the user
+    // isn't staring at a blank list.
+    if !candidateFinderUserHasTyped, !candidateFinderCandidates.isEmpty {
+      FlashLog.trace(
+        "[candidate_finder] refresh_skip reason=locked_until_first_keystroke "
+          + "visible=\(candidateFinderCandidates.count)")
+      return
+    }
     switch overlay.inputMode {
     case .commandLine:
       guard NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil else {
@@ -990,6 +1070,9 @@ extension AppDelegate {
   }
 
   private func candidateFinderCandidates(for scope: CandidateScope) -> [Candidate] {
+    // Bangs are NOT in the default pool — they only surface when the
+    // user types `!` (see `updateCandidateMatches`'s bang branch). The
+    // default flashlight shows apps/tabs/tmux/etc. without bang noise.
     switch scope {
     case .running:
       if !candidateFinderRunningAppsCacheReady {
@@ -1000,13 +1083,38 @@ extension AppDelegate {
       if !candidateFinderAllAppsCacheReady {
         refreshCandidatesAsync(scope: .all, reason: "cache_miss")
       }
-      return candidateFinderAllAppsCacheReady ? candidateFinderAllAppsCache : candidateFinderRunningAppsCache
+      return candidateFinderAllAppsCacheReady
+        ? candidateFinderAllAppsCache : candidateFinderRunningAppsCache
     }
   }
 
   func refreshCandidateFinder(query: String) {
     updateCandidateMatches(query: query)
     overlay.displayCandidateFinder(query: query, items: candidateFinderDisplayItems())
+  }
+
+  /// Translate the `!<token>` range from the candidate-finder query into
+  /// the full command buffer (`":flashlight !g foo"`). Returns an
+  /// `NSRange` so the panel can drive `attributedStringValue` without
+  /// re-parsing.
+  private func bangRangeInCommand(
+    command: String,
+    query: String,
+    bangRange: Range<String.Index>
+  ) -> NSRange {
+    let bangOffset = query.distance(from: query.startIndex, to: bangRange.lowerBound)
+    let bangLen = query.distance(from: bangRange.lowerBound, to: bangRange.upperBound)
+    let prefixLen = command.count - query.count
+    let location = max(0, prefixLen + bangOffset)
+    let utf16Prefix = command.index(
+      command.startIndex,
+      offsetBy: min(location, command.count))
+    let utf16End = command.index(
+      utf16Prefix,
+      offsetBy: min(bangLen, command.distance(from: utf16Prefix, to: command.endIndex)))
+    let nsLocation = utf16Prefix.utf16Offset(in: command)
+    let nsLength = utf16End.utf16Offset(in: command) - nsLocation
+    return NSRange(location: nsLocation, length: max(0, nsLength))
   }
 
   func refreshCommandLine(text: String, cursorIndex: Int? = nil) {
@@ -1019,6 +1127,28 @@ extension AppDelegate {
       if candidateFinderCandidates.isEmpty {
         candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
         candidateFinderSelectedIndex = 0
+      }
+      // Bang lock: once the user has typed a space after `!<token>`, the
+      // remainder of the query semantically belongs to that bang's
+      // dispatch (e.g. `!g rust language` → "search Google for 'rust
+      // language'"). Showing candidate rows in that state was confusing
+      // — the user was matching against bang names instead of typing
+      // the query — so we drop the suggestions and pass the confirmed
+      // bang range to the panel so it can underline `!g` and visually
+      // acknowledge the lock-in. Backspacing past the space (no
+      // confirmed bang anymore) unlocks and the bang list returns.
+      let bang = CandidateFinder.parseBangState(query)
+      if !candidateFinderEmojiMode, let bang, bang.confirmed {
+        candidateFinderMatches = []
+        candidateFinderSelectedIndex = 0
+        let queryRange = bangRangeInCommand(command: command, query: query, bangRange: bang.bangRange)
+        overlay.displayCommandLine(
+          command,
+          suggestions: nil,
+          emptyText: "",
+          cursorIndex: overlay.commandLineCursorIndex,
+          underlineRange: queryRange)
+        return
       }
       updateCandidateMatches(query: query)
       overlay.displayCommandLine(
@@ -1147,37 +1277,108 @@ extension AppDelegate {
     // `@<source>` / `--<source>` selectors (e.g. `:flashlight @tmux @slack
     // test`) pin the pool to those sources; they may appear anywhere and
     // several widen the pool (OR). The residual text is the actual search
-    // query. Selectors are only honored outside emoji mode.
+    // query. Selectors are only honored outside emoji mode and outside
+    // bang mode.
     let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
     let sourceFilters = candidateFinderEmojiMode ? [] : parsed.sourceFilters
-    let trimmed = parsed.text
-    candidateFinderCurrentQuery = trimmed
-    // Normalize the query once per keystroke rather than once per
-    // candidate. With ~1k candidates in the pool and ~10 chars of
-    // typing, this saves ~10k normalize calls per query.
-    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(trimmed)
-    let fuzzyScore = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
-    // Emoji glyphs share the global candidate pool but only surface under
-    // `:emojis`; every other query (`open`, `flashlight`, the `f` finder)
-    // hides them.
-    let pool = candidateFinderCandidates.filter { candidate in
-      let kindMatches =
-        candidateFinderEmojiMode
-        ? candidate.kind == CandidateFinder.emojiKind
-        : candidate.kind != CandidateFinder.emojiKind
-      guard kindMatches else { return false }
-      guard !sourceFilters.isEmpty else { return true }
-      return sourceFilters.contains {
-        CandidateFinder.candidateMatchesSourceFilter(candidate, filter: $0)
+    let attributeFilters: [CandidateFinder.CompiledAttributeFilter]
+    if candidateFinderEmojiMode {
+      attributeFilters = []
+    } else {
+      attributeFilters = parsed.attributeFilters.map { raw in
+        CandidateFinder.CompiledAttributeFilter.parse(field: raw.field, pattern: raw.pattern)
       }
     }
+    let trimmed = parsed.text
+    candidateFinderCurrentQuery = trimmed
+    let fuzzyScore = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+
+    let (pool, scoringText) = buildCandidateFinderPool(
+      trimmed: trimmed,
+      sourceFilters: sourceFilters,
+      attributeFilters: attributeFilters)
+    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
     let scored = CandidateFinder.scoreMatches(
       pool: pool, normalizedQuery: normalizedQuery, fuzzyScore: fuzzyScore)
     candidateFinderMatches = CandidateFinder.sortedMatches(scored)
+    if !trimmed.isEmpty {
+      let top = candidateFinderMatches.prefix(5).map { match in
+        "\(match.candidate.source):\(match.candidate.name)=\(match.score)"
+      }.joined(separator: "|")
+      FlashLog.trace(
+        "[candidate_finder] q=\"\(trimmed)\" pool=\(pool.count) "
+          + "matches=\(candidateFinderMatches.count) top5=[\(top)]")
+    }
     if candidateFinderMatches.isEmpty {
       candidateFinderSelectedIndex = 0
     } else {
       candidateFinderSelectedIndex = min(max(candidateFinderSelectedIndex, 0), candidateFinderMatches.count - 1)
+    }
+  }
+
+  /// Pick the candidate pool and the text we score against. Two cases:
+  ///
+  ///   * Default mode — the regular pool (apps, tmux, browser tabs, …)
+  ///     filtered by emoji-mode kind + any `@source`/`--source`
+  ///     selectors, scored on the full query.
+  ///   * Bang mode (query starts with `!`) — the pool is **only** the
+  ///     registered plugin bangs, scored on the token typed after `!`.
+  ///     Nothing else competes for the list so the user can browse the
+  ///     bang registry without app rows piling up.
+  private func buildCandidateFinderPool(
+    trimmed: String,
+    sourceFilters: [String],
+    attributeFilters: [CandidateFinder.CompiledAttributeFilter]
+  ) -> (pool: [Candidate], scoringText: String) {
+    if !candidateFinderEmojiMode, let bang = CandidateFinder.parseBang(trimmed) {
+      let bangs = CandidateFinder.prepare(
+        pluginManager.shebangCandidates(
+          forBundleID: currentNonFlashContext()?.bundleIdentifier))
+      return (bangs, bang.token)
+    }
+    let pool = candidateFinderCandidates.filter { candidate in
+      let kindMatches =
+        candidateFinderEmojiMode
+        ? candidate.kind == CandidateFinder.emojiKind
+        : candidate.kind != CandidateFinder.emojiKind && candidate.kind != CandidateFinder.bangKind
+      guard kindMatches else { return false }
+      if !sourceFilters.isEmpty {
+        let any = sourceFilters.contains {
+          CandidateFinder.candidateMatchesSourceFilter(candidate, filter: $0)
+        }
+        guard any else { return false }
+      }
+      return true
+    }
+    let attributeFiltered = CandidateFinder.applyAttributeFilters(
+      pool, filters: attributeFilters)
+    return (attributeFiltered, trimmed)
+  }
+
+  /// Dispatch a selected bang row: route the live query's remainder to the
+  /// owning plugin via `invokeShebang`. Returns false for non-bang
+  /// candidates so callers fall through to the normal open path.
+  func dispatchBangCandidate(_ candidate: Candidate, query: String) -> Bool {
+    guard candidate.kind == CandidateFinder.bangKind,
+      let token = candidate.sourcePayload, !token.isEmpty
+    else { return false }
+    let remainder: String
+    if let bang = CandidateFinder.parseBang(query),
+      bang.token.lowercased() == token.lowercased()
+    {
+      remainder = bang.remainder
+    } else {
+      remainder = ""
+    }
+    return pluginManager.invokeShebang(
+      token: token,
+      query: remainder,
+      forBundleID: currentNonFlashContext()?.bundleIdentifier
+    ) { [weak self] ok, pid, stdout in
+      guard ok, let self else { return }
+      self.activatePluginCommandTarget(pid)
+      guard let stdout, !stdout.isEmpty else { return }
+      self.overlay.displayBanner(stdout)
     }
   }
 
@@ -1380,14 +1581,74 @@ extension AppDelegate {
   }
 
   private func submitSelectedCommandLineApp() {
-    guard !candidateFinderMatches.isEmpty else {
+    actOnSelectedCandidateFinderCandidate(submit: false)
+  }
+
+  /// Single act-on-selection entry point for the flashlight surface.
+  /// `<cr>` and `<tab>` call with `submit=false` (insert-only — for
+  /// bangs this puts `!<token> ` in the buffer so the user keeps
+  /// typing; for everything else this opens the candidate). `<cmd+cr>`
+  /// calls with `submit=true` (for bangs this dispatches with whatever
+  /// remainder was typed; for everything else identical to `<cr>`).
+  func actOnSelectedCandidateFinderCandidate(submit: Bool) {
+    let typedBang = CandidateFinder.parseBang(candidateFinderCurrentQuery)
+    let isEmpty = candidateFinderMatches.isEmpty
+
+    // Bang mode always dispatches on `<cmd+cr>`, and ALSO on `<cr>`/
+    // `<tab>` when no candidate row matches the typed token — that's
+    // how `!google rust` reaches searchengines' catch-all even though
+    // `google` isn't in the explicit-token pool. When candidates DO
+    // match, `<cr>`/`<tab>` fall through to the canonicalization
+    // branch below so the user can browse before committing.
+    if let typed = typedBang, submit || isEmpty {
+      submitTypedBang(typed: typed)
+      return
+    }
+
+    if isEmpty {
       finishCommandLineInteraction(reason: "command_open_empty")
       return
     }
     let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
       .candidate
+    if candidate.kind == CandidateFinder.bangKind,
+      let token = candidate.sourcePayload
+    {
+      // `<cr>`/`<tab>` on a bang row with matches: canonicalize the
+      // buffer to `:flashlight !<token> ` so the cursor sits ready for
+      // the query. The selection is the authority — we don't preserve
+      // any partial token the user typed.
+      let buffer = ":flashlight !\(token) "
+      refreshCommandLine(text: buffer, cursorIndex: buffer.count)
+      return
+    }
     finishCommandLineInteraction(reason: "command_open")
     openSourceItem(candidate)
+  }
+
+  /// `<cmd+cr>` in bang mode. Dispatches whatever the user typed via
+  /// `PluginManager.invokeShebang`, which checks explicit-token
+  /// registrations first then falls back to the catch-all (so
+  /// `!google rust` reaches searchengines even though `google` isn't
+  /// declared in any plugin's manifest). If a candidate row is
+  /// selected AND its token equals the typed token, we still go
+  /// through `invokeShebang` — its lookup is the same — so this path
+  /// is unified.
+  private func submitTypedBang(typed: (token: String, remainder: String)) {
+    let dispatched = pluginManager.invokeShebang(
+      token: typed.token,
+      query: typed.remainder,
+      forBundleID: currentNonFlashContext()?.bundleIdentifier
+    ) { [weak self] ok, pid, stdout in
+      guard ok, let self else { return }
+      self.activatePluginCommandTarget(pid)
+      guard let stdout, !stdout.isEmpty else { return }
+      self.overlay.displayBanner(stdout)
+    }
+    if !dispatched {
+      FlashLog.warn("[normal_mode] no plugin claimed bang !\(typed.token)")
+    }
+    finishCommandLineInteraction(reason: "command_bang_submit")
   }
 
   func finishCommandLineInteraction(reason: String) {
@@ -1444,6 +1705,15 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
+    // gg/G: try a `scrollExtremes` source first (e.g. the tmux plugin
+    // runs `tmux send-keys -X history-top` / `-X cancel`, which moves
+    // *inside* the live buffer rather than blasting wheel ticks at a
+    // pane that's already at the bottom). Falls through to the
+    // hermetic Scroller path when no source claims it.
+    if kind == .top || kind == .bottom {
+      performScrollExtreme(kind, context: context, repeatCount: repeatCount)
+      return
+    }
     var didScroll = false
     for _ in 0..<normalizedRepeatCount(repeatCount) {
       if NormalModeDispatcher.scroll(
@@ -1457,6 +1727,84 @@ extension AppDelegate {
     }
     if didScroll {
       monitor.invalidateAfterUserAction(pid: context.processID, reason: "normal_scroll")
+    }
+    applyModeOverlay()
+  }
+
+  private func performScrollExtreme(
+    _ kind: NormalModeDispatcher.ScrollKind,
+    context: AppContext,
+    repeatCount: Int
+  ) {
+    let registry: SourceRegistry = self.registry
+    let bundleID = context.bundleIdentifier
+    let pid = context.processID
+    let windowFrame = context.frontWindowFrame
+    let normalized = normalizedRepeatCount(repeatCount)
+    let monitor: AppMonitor = self.monitor
+    let completion: (SourceActionResult) -> Void = { [weak self] result in
+      guard let self else { return }
+      switch result.disposition {
+      case .performed:
+        monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll_extreme")
+        self.applyModeOverlay()
+      case .failed:
+        // Source claimed but the underlying command failed — don't
+        // double-fire with the Scroller wheel fallback (it would just
+        // confuse the user with extra motion). Surface and stop.
+        FlashLog.debug("[normal_mode] scroll_extreme failed kind=\(kind) bundle=\(bundleID)")
+        self.applyModeOverlay()
+      case .unhandled:
+        self.scrollViaScroller(
+          kind, pid: pid, bundleID: bundleID, windowFrame: windowFrame, repeats: normalized)
+      }
+    }
+    if kind == .top {
+      registry.scrollTop(in: context, completion: completion)
+    } else {
+      registry.scrollBottom(in: context, completion: completion)
+    }
+  }
+
+  private func scrollViaScroller(
+    _ kind: NormalModeDispatcher.ScrollKind,
+    pid: pid_t,
+    bundleID: String,
+    windowFrame: CGRect?,
+    repeats: Int
+  ) {
+    // gg/G outside a claiming source: in browsers, `cmd+up` /
+    // `cmd+down` is the dependable scroll-to-edge gesture (the
+    // huge-wheel-delta path only nudges Firefox a viewport at a time).
+    // Everything else still goes through the AX scrollbar / wheel
+    // hermetic fallback.
+    if BrowserTabSources.allBundleIdentifiers.contains(bundleID),
+      kind == .top || kind == .bottom
+    {
+      let key: CGKeyCode =
+        kind == .top ? CGKeyCode(kVK_UpArrow) : CGKeyCode(kVK_DownArrow)
+      var didScroll = false
+      for _ in 0..<repeats {
+        if NormalModeDispatcher.sendKey(virtualKey: key, flags: .maskCommand, to: pid) {
+          didScroll = true
+        }
+      }
+      if didScroll {
+        monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll_browser_edge")
+      }
+      applyModeOverlay()
+      return
+    }
+    var didScroll = false
+    for _ in 0..<repeats {
+      if NormalModeDispatcher.scroll(
+        kind, pid: pid, bundleID: bundleID, windowFrame: windowFrame)
+      {
+        didScroll = true
+      }
+    }
+    if didScroll {
+      monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll")
     }
     applyModeOverlay()
   }
@@ -1557,19 +1905,25 @@ extension AppDelegate {
     }
     registry.tabSelect(at: index, in: context) { [weak self] result in
       guard let self else { return }
-      if result.didPerform {
+      switch result.disposition {
+      case .performed:
         if let pid = result.targetPID {
           self.normalModeTargetPID = pid
         }
         self.scheduleNormalModeRecapture()
-        return
+      case .failed:
+        FlashLog.warn(
+          "[normal_mode] tab_select failed in claimed source "
+            + "bundle=\(context.bundleIdentifier) index=\(index)")
+        self.scheduleNormalModeRecapture()
+      case .unhandled:
+        guard let key = Self.tabIndexKeyCode(index) else {
+          FlashLog.debug("[normal_mode] tab_select unsupported index=\(index)")
+          self.applyModeOverlay()
+          return
+        }
+        self.sendNormalModeKey(key, flags: .maskCommand)
       }
-      guard let key = Self.tabIndexKeyCode(index) else {
-        FlashLog.debug("[normal_mode] tab_select unsupported index=\(index)")
-        self.applyModeOverlay()
-        return
-      }
-      self.sendNormalModeKey(key, flags: .maskCommand)
     }
   }
 
@@ -1625,6 +1979,60 @@ extension AppDelegate {
       })
   }
 
+  /// Reorder the focused window's current tab. Tmux runs `swap-window`
+  /// across the source action; browsers (Safari/Chrome/Firefox) ship
+  /// without a portable keyboard shortcut for moving tabs, so the
+  /// fallback is a `warn`-level log naming the bundle — the user knows
+  /// the mapping fired but the host had nothing to send. A future
+  /// browser plugin RPC can synthesize a tab-strip drag to fill the
+  /// gap.
+  private func tabMoveInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
+    let actionName = direction == .next ? "tab_move_next" : "tab_move_previous"
+    performTabSourceAction(
+      name: actionName,
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        if direction == .next {
+          registry.tabMoveNext(in: context, completion: completion)
+        } else {
+          registry.tabMovePrev(in: context, completion: completion)
+        }
+      },
+      fallback: { [weak self] context, _ in
+        FlashLog.warn(
+          "[normal_mode] \(actionName) has no native shortcut on "
+            + "bundle=\(context.bundleIdentifier); bind via a tab-mover "
+            + "extension or override `[m`/`]m` in flash.toml")
+        self?.applyModeOverlay()
+      })
+  }
+
+  /// Reopen the most recently closed tab. Cross-browser standard is
+  /// ⌘⇧T; the plugin source action gets first refusal (tmux returns
+  /// `.unhandled` because there's no concept of a closed tab to reopen)
+  /// so the keystroke fallback only runs in non-terminal contexts that
+  /// actually honour the chord.
+  private func tabReopenInNormalMode(repeatCount: Int) {
+    performTabSourceAction(
+      name: "tab_reopen",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.tabReopen(in: context, completion: completion)
+      },
+      fallback: { [weak self] context, count in
+        if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
+          self?.sendNormalModeKey(
+            CGKeyCode(kVK_ANSI_T),
+            flags: [.maskCommand, .maskShift],
+            repeatCount: count)
+        } else {
+          FlashLog.debug(
+            "[normal_mode] tab_reopen unsupported bundle=\(context.bundleIdentifier)")
+          self?.applyModeOverlay()
+        }
+      })
+  }
+
   private func tabNewInNormalMode(repeatCount: Int) {
     performTabSourceAction(
       name: "tab_new",
@@ -1670,9 +2078,9 @@ extension AppDelegate {
 
   /// macOS terminals that have no native tabs (only windows). For these
   /// bundles, tab_new / :tabnew fall back to cmd-N so the gesture still
-  /// produces a new workspace. tmux is handled by TmuxProvider one level
-  /// up — when an attached tmux client is present, `new-window` runs
-  /// before this fallback ever fires.
+  /// produces a new workspace. tmux is handled by the tmux plugin's
+  /// `tab_new` source action one level up — when an attached tmux client
+  /// is present, `new-window` runs and this fallback never fires.
   static let tabNewWindowOnlyBundleIdentifiers: Set<String> = [
     "org.alacritty",
     "io.alacritty",
@@ -1709,42 +2117,26 @@ extension AppDelegate {
       }
       action(registry, context) { [weak self] result in
         guard let self else { return }
-        if result.didPerform {
+        switch result.disposition {
+        case .performed:
           if let pid = result.targetPID {
             self.normalModeTargetPID = pid
           }
           attempt(remaining - 1)
-          return
+        case .failed:
+          // A source claimed the action but couldn't complete it. The
+          // keystroke fallback must not fire here — see
+          // `SourceActionResult.Disposition.failed`.
+          FlashLog.warn(
+            "[normal_mode] \(name) failed in claimed source bundle=\(context.bundleIdentifier)")
+          self.scheduleNormalModeRecapture()
+        case .unhandled:
+          fallback(context, remaining)
         }
-        fallback(context, remaining)
       }
     }
 
     attempt(count)
-  }
-
-  private func tabNewAndEnterInsertMode() {
-    guard let context = normalModeContext() else {
-      FlashLog.debug("[normal_mode] no target app for tab_new_insert")
-      applyModeOverlay()
-      return
-    }
-    registry.tabNew(in: context) { [weak self] result in
-      guard let self else { return }
-      if !result.didPerform {
-        let key = AppDelegate.tabNewFallbackKey(forBundleIdentifier: context.bundleIdentifier)
-        NormalModeDispatcher.sendKey(
-          virtualKey: key,
-          flags: .maskCommand,
-          to: context.processID)
-      }
-      let targetPID = result.targetPID ?? context.processID
-      self.normalModeTargetPID = targetPID
-      self.suppressEditableFocus(for: targetPID)
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(60)) { [weak self] in
-        self?.enterInsertMode(reason: .normalModeInput)
-      }
-    }
   }
 
   static func nativeBrowserTabIndexKey(index: Int, bundleIdentifier: String) -> CGKeyCode? {

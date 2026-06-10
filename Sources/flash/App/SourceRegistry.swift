@@ -173,10 +173,9 @@ final class SourceRegistry {
     // `app_open?name=` means "activate application X". The app source resolves
     // names precisely (bundle id / exact running name / `<name>.app` lookup),
     // so consult it first — otherwise a higher-priority plugin shadows the app
-    // with a loose substring match: a clipboard entry holding a "…slack.com…"
-    // URL, or a "[slack]" channel whose decorated title contains the query.
-    // Skip text-insertion candidates entirely so an app_open can never type
-    // clipboard/emoji content into the focused field.
+    // with a loose substring match: e.g. a "[slack]" channel whose decorated
+    // title contains the query. Skip text-insertion candidates entirely so an
+    // app_open can never type emoji content into the focused field.
     let ordered =
       sourceSnapshot.filter { $0.identifier == "app" }
       + sourceSnapshot.filter { $0.identifier != "app" }
@@ -297,6 +296,56 @@ final class SourceRegistry {
     }
   }
 
+  func scrollTop(
+    in context: AppContext,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performSourceAction(capability: .scrollExtremes, context: context, completion: completion) {
+      source, env, done in
+      source.scrollTop(in: context, environment: env, completion: done)
+    }
+  }
+
+  func scrollBottom(
+    in context: AppContext,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performSourceAction(capability: .scrollExtremes, context: context, completion: completion) {
+      source, env, done in
+      source.scrollBottom(in: context, environment: env, completion: done)
+    }
+  }
+
+  func tabMovePrev(
+    in context: AppContext,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performSourceAction(capability: .tabReorder, context: context, completion: completion) {
+      source, env, done in
+      source.tabMovePrev(in: context, environment: env, completion: done)
+    }
+  }
+
+  func tabMoveNext(
+    in context: AppContext,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performSourceAction(capability: .tabReorder, context: context, completion: completion) {
+      source, env, done in
+      source.tabMoveNext(in: context, environment: env, completion: done)
+    }
+  }
+
+  func tabReopen(
+    in context: AppContext,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    performSourceAction(capability: .tabReopen, context: context, completion: completion) {
+      source, env, done in
+      source.tabReopen(in: context, environment: env, completion: done)
+    }
+  }
+
   func source(identifier: String) -> FlashSource? {
     lock.lock()
     if let builtIn = activeSourcesByID[identifier] {
@@ -350,10 +399,14 @@ final class SourceRegistry {
       action(source, env) { result in
         FlashLog.trace(
           "[source_action] source=\(source.identifier) ms=\(Self.elapsedMs(since: attemptNs)) "
-            + "did_perform=\(result.didPerform)")
-        if result.didPerform {
+            + "disposition=\(result.disposition)")
+        switch result.disposition {
+        case .performed, .failed:
+          // `.failed` also stops the chain: the source claimed the action
+          // for this context, so a lower-priority source must not re-run
+          // it (and the caller must not keystroke-fallback).
           finish(result, handledBy: source.identifier)
-        } else {
+        case .unhandled:
           attempt(index + 1)
         }
       }

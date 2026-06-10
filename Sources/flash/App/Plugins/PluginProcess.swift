@@ -327,14 +327,32 @@ final class PluginProcess {
     params["name"] = name
     params["context"] = contextJSON(context)
     sendRequest(method: "sourceAction", params: params) { [weak self] response in
-      let didPerform = response?["did_perform"] as? Bool ?? false
-      let pid = response?["target_pid"] as? Int
+      let result: SourceActionResult
+      if let response {
+        let didPerform = response["did_perform"] as? Bool ?? false
+        let handled = response["handled"] as? Bool ?? false
+        let pid = (response["target_pid"] as? Int).map(pid_t.init)
+        if didPerform {
+          result = .performed(pid: pid)
+        } else if handled {
+          result = .failed
+        } else {
+          result = .unhandled
+        }
+      } else {
+        // No reply (RPC timeout, plugin crash mid-call): the plugin was
+        // consulted because it claims this context, and the action may
+        // still complete late — report failed, never unhandled, so the
+        // host can't double-fire a keystroke fallback.
+        result = .failed
+      }
       FlashLog.trace(
         "[plugin] source_action plugin=\(self?.manifest.id ?? "?") name=\(name) "
-          + "did_perform=\(didPerform) target_pid=\(pid.map(String.init) ?? "nil")",
+          + "disposition=\(result.disposition) "
+          + "target_pid=\(result.targetPID.map(String.init) ?? "nil")",
         source: "plugin:\(self?.manifest.id ?? "?")")
       DispatchQueue.main.async {
-        completion(didPerform ? .performed(pid: pid.map(pid_t.init)) : .unhandled)
+        completion(result)
       }
     }
   }

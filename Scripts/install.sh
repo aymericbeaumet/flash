@@ -72,7 +72,7 @@ echo
 echo "Installed: $INSTALL_PATH"
 echo "Triggers:"
 echo "  open -g flash://mouse_target"
-echo "  open -g flash://mouse_target?right=1"
+echo "  open -g flash://mouse_target?secondary=1"
 echo "  open -g flash://hints_dismiss"
 echo "  open -g flash://flash_quit"
 echo "  flash mouse_target"

@@ -194,12 +194,45 @@ struct Config {
         ("ctrl+u", .flashCommand(.scroll(.halfPageUp))),
         ("gg", .flashCommand(.scroll(.top))),
         ("G", .flashCommand(.scroll(.bottom))),
+        // Bracket-pair navigation borrows tpope/vim-unimpaired's `[X` =
+        // previous, `]X` = next convention so muscle memory transfers
+        // straight from Vim. Multi-letter aliases live alongside the
+        // primary binding so users coming from `vim-unimpaired` find
+        // their letters AND desktop users find an intuitive abbreviation.
         ("[h", .flashCommand(.historyBack)),
         ("]h", .flashCommand(.historyForward)),
         ("[t", .flashCommand(.tabPrev)),
         ("]t", .flashCommand(.tabNext)),
+        // `[b`/`]b` — Vim "buffer" prev/next. In a desktop context the
+        // closest analogue is a browser/terminal tab, so this aliases
+        // `[t`/`]t` directly.
+        ("[b", .flashCommand(.tabPrev)),
+        ("]b", .flashCommand(.tabNext)),
+        // `[B`/`]B` — Vim first/last buffer. Aliases `g^`/`g$` (tab
+        // first/last).
+        ("[B", .flashCommand(.tabFirst)),
+        ("]B", .flashCommand(.tabLast)),
+        // Move (reorder) the current tab. `m` for "move" stays as the
+        // primary form because it's the desktop-intuitive abbreviation;
+        // `[e`/`]e` (Vim "exchange") is the unimpaired-style alias.
+        ("[m", .flashCommand(.tabMovePrev)),
+        ("]m", .flashCommand(.tabMoveNext)),
+        ("[e", .flashCommand(.tabMovePrev)),
+        ("]e", .flashCommand(.tabMoveNext)),
         ("[a", .flashCommand(.appPrev)),
         ("]a", .flashCommand(.appNext)),
+        // `[w`/`]w` — Vim's `:wprev`/`:wnext` window-navigation analogue
+        // mapped onto Flash's app MRU (a single app commonly fronts
+        // multiple windows, but those are accessed with the OS native
+        // `Cmd+\`` chord which Flash leaves alone — bouncing across
+        // apps is the actually-useful desktop motion).
+        ("[w", .flashCommand(.appPrev)),
+        ("]w", .flashCommand(.appNext)),
+        // Reopen the most recently closed tab. ⌘⇧T is the cross-browser
+        // standard (Safari/Chrome/Firefox); the host keystroke
+        // fallback delivers it for any non-terminal app, and terminals
+        // (no close-tab history) return `.unhandled`.
+        ("T", .flashCommand(.tabReopen)),
         // Shadow the system app switcher so the user stays inside
         // Flash's normal-mode loop. Carbon registration is scope-bound:
         // entering insert mode unregisters the binding and the Dock
@@ -228,18 +261,23 @@ struct Config {
         ("gT", .flashCommand(.tabPrev)),
         ("i", .flashCommand(.insertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick)))),
-        ("rf", .flashCommand(.mouseTarget(.click(.rightClick)))),
+        // `s` for "secondary click" (right-click). `r` was the old
+        // prefix but it collided with the `r`→`R` reload pair: typing
+        // `r` waited the full sequence-timeout before resolving as
+        // reload, because `rf`/`rF` were still pending. `s` has no such
+        // pair so the keystroke fires instantly.
+        ("sf", .flashCommand(.mouseTarget(.click(.rightClick)))),
         ("df", .flashCommand(.mouseTarget(.click(.doubleClick)))),
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("F", .flashCommand(.mouseGrid(.click(.leftClick)))),
-        ("rF", .flashCommand(.mouseGrid(.click(.rightClick)))),
+        ("sF", .flashCommand(.mouseGrid(.click(.rightClick)))),
         ("dF", .flashCommand(.mouseGrid(.click(.doubleClick)))),
         ("mF", .flashCommand(.mouseGrid(.move))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
         ("x", .flashCommand(.close)),
         ("n", .flashCommand(.newWindow)),
-        ("t", .flashCommand(.tabNewInsert)),
+        ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
         ("<leader><space>", .flashCommand(.flashlight)),
         ("r", .flashCommand(.reload(force: false))),
@@ -556,6 +594,12 @@ extension URLCommand {
         return "flash://tab_select?index=\(index)"
       }
       return "flash://tab_select"
+    case .tabMovePrev:
+      return "flash://tab_move_previous"
+    case .tabMoveNext:
+      return "flash://tab_move_next"
+    case .tabReopen:
+      return "flash://tab_reopen"
     case .historyBack:
       return "flash://history_back"
     case .historyForward:
@@ -586,8 +630,6 @@ extension URLCommand {
       return "flash://window_new"
     case .tabNew:
       return "flash://tab_new"
-    case .tabNewInsert:
-      return "flash://tab_new_insert"
     case .copy:
       return "flash://clipboard_copy"
     case .cut:
@@ -642,7 +684,7 @@ extension MouseCommand {
       case .leftClick:
         return ""
       case .rightClick:
-        return "?right=1"
+        return "?secondary=1"
       case .doubleClick:
         return "?double=1"
       }

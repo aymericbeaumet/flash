@@ -293,6 +293,18 @@
       "file": "collected-backend-fix-call-history-pagination-dropping-old-003.html",
       "category": "collected-regression",
       "kind": "collected"
+    },
+    {
+      "name": "collected-chats-beside-s-inbox-beside-001",
+      "file": "collected-chats-beside-s-inbox-beside-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-hacker-news-001",
+      "file": "collected-hacker-news-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
     }
   ]
 }

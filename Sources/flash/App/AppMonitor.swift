@@ -118,6 +118,10 @@ final class AppMonitor {
   var pendingModelCompletion: [pid_t: (PreparedModel?) -> Void] = [:]
   var workspaceObservers: [NSObjectProtocol] = []
   var localObservers: [NSObjectProtocol] = []
+  /// `installObserver` runs on every focus change; this gates the
+  /// missing-Accessibility-permission warning to one log line per grant
+  /// state instead of one per app switch.
+  var warnedMissingAXPermission = false
 
   struct ObserverEntry {
     let observer: AXObserver

@@ -2,14 +2,27 @@ import AppKit
 import FlashCore
 import QuartzCore
 
-/// Help and `:plugins`-style modal — a scrollable text panel centered on
-/// the focused screen. Owns the NSScrollView / NSTextView wiring and
-/// the click-outside dismissal monitors.
+/// Centered text modal surface (`:help`, `:plugins`, `:mappings`,
+/// `:clipboard`, plugin-reload toast). The same chrome — backdrop
+/// gradient, border, click-outside dismiss monitor, mouse-wheel scroll
+/// — applies to every variant. The only thing that differs between
+/// variants is whether the content is a static blob (`text`) or a
+/// navigable list (`selectableList`); both flow through `renderModal`
+/// so visual consistency is enforced structurally.
 extension OverlayPanel {
+  /// Discriminator passed to `present(_:)` — keeps the two display
+  /// entry points (`displayModal`, `displaySelectableModal`) honest:
+  /// the caller picks the variant once and the modal infrastructure
+  /// handles every other concern identically.
+  enum ModalKind {
+    case text(String)
+    case selectableList(lines: [String])
+  }
+
   /// Modal backdrop gradient: dark Polar-Night-ish stops baked once so
-  /// `displayModal` doesn't allocate new CGColors per render. All
-  /// modal surfaces (help, plugins, mappings, plugin-reload toast)
-  /// share these.
+  /// `renderModal` doesn't allocate new CGColors per render. All modal
+  /// surfaces share these so a `:plugins` table reads visually
+  /// identical to a `:help` topic or the `:clipboard` history.
   static let modalBackgroundColors: [CGColor] = [
     NSColor(calibratedRed: 0.08, green: 0.09, blue: 0.11, alpha: 1).cgColor,
     NSColor(calibratedRed: 0.14, green: 0.15, blue: 0.18, alpha: 1).cgColor,
@@ -17,9 +30,26 @@ extension OverlayPanel {
   static let modalBorderCGColor: CGColor =
     NSColor(calibratedRed: 0.30, green: 0.34, blue: 0.40, alpha: 1).cgColor
 
+  /// Unified entry point. Variant-specific state is set up here so the
+  /// pre-existing `displayModal` / `displaySelectableModal` aliases stay
+  /// as thin call-site sugar (kept for diff readability).
+  func present(_ kind: ModalKind) {
+    switch kind {
+    case .text(let body):
+      modalSelectable = false
+      renderModal(text: body, attributed: nil)
+    case .selectableList(let lines):
+      modalSelectable = true
+      selectableModalLines = lines
+      selectableModalSelectedIndex = 0
+      let rendered = renderSelectableModalText(selectedIndex: 0)
+      renderModal(text: rendered.plain, attributed: rendered.attributed)
+      scrollSelectableModal(to: rendered.selectedRange)
+    }
+  }
+
   func displayModal(_ text: String) {
-    modalSelectable = false
-    renderModal(text: text, attributed: nil)
+    present(.text(text))
   }
 
   /// The dedicated `:clipboard` history list: a navigable modal (marker `>`
@@ -27,12 +57,7 @@ extension OverlayPanel {
   /// on Return. Fed by the clipboard plugin, never the flashlight candidate
   /// pool — `modalSelectable` flips `.modal` key handling into list mode.
   func displaySelectableModal(lines: [String]) {
-    modalSelectable = true
-    selectableModalLines = lines
-    selectableModalSelectedIndex = 0
-    let rendered = renderSelectableModalText(selectedIndex: 0)
-    renderModal(text: rendered.plain, attributed: rendered.attributed)
-    scrollSelectableModal(to: rendered.selectedRange)
+    present(.selectableList(lines: lines))
   }
 
   private func renderModal(text: String, attributed: NSAttributedString?) {
@@ -217,6 +242,59 @@ extension OverlayPanel {
   private func scrollSelectableModal(to range: NSRange) {
     guard range.length > 0 else { return }
     modalTextView.scrollRangeToVisible(range)
+  }
+
+  /// Vim-style scroll inside a (text) modal. The modal is hermetic — keys
+  /// never reach the focused app — so `j`/`k`/`ctrl-e`/`ctrl-y` and the
+  /// page motions navigate the modal's own content instead of the
+  /// underlying terminal. Selectable modals route through
+  /// `moveSelectableModalSelection` instead; non-text modals (no scroll
+  /// view) are a no-op.
+  enum ModalScrollKind {
+    case lineUp
+    case lineDown
+    case halfPageUp
+    case halfPageDown
+    case top
+    case bottom
+  }
+
+  func scrollModal(_ kind: ModalScrollKind) {
+    guard !modalScrollView.isHidden else { return }
+    let lineHeight = max(modalTextView.font?.boundingRectForFont.height ?? 16, 12)
+    let viewportHeight = modalScrollView.contentView.bounds.height
+    let docHeight = modalTextView.bounds.height
+    let maxY = max(0, docHeight - viewportHeight)
+
+    var origin = modalScrollView.contentView.bounds.origin
+    switch kind {
+    case .top:
+      origin.y = 0
+    case .bottom:
+      origin.y = maxY
+    case .lineUp, .lineDown, .halfPageUp, .halfPageDown:
+      let amount: CGFloat
+      switch kind {
+      case .lineUp, .lineDown:
+        amount = lineHeight
+      case .halfPageUp, .halfPageDown:
+        amount = max(viewportHeight / 2, lineHeight * 3)
+      default:
+        amount = 0
+      }
+      let signed: CGFloat
+      switch kind {
+      case .lineUp, .halfPageUp:
+        signed = -amount
+      case .lineDown, .halfPageDown:
+        signed = amount
+      default:
+        signed = 0
+      }
+      origin.y = min(maxY, max(0, origin.y + signed))
+    }
+    modalScrollView.contentView.scroll(to: origin)
+    modalScrollView.reflectScrolledClipView(modalScrollView.contentView)
   }
 
   func hideModalTextView() {

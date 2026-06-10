@@ -122,6 +122,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var candidateFinderAllAppsCacheReady = false
   var candidateFinderAllAppsRefreshInFlight = false
   var candidateFinderLiveRefreshTimer: DispatchSourceTimer?
+  /// Last time the user touched the flashlight query. Used by the
+  /// live-refresh timer to skip a refresh that would swap the pool out
+  /// from under an actively-typed keystroke. Performance: every refresh
+  /// pays a full `registry.candidates(scope:)` walk (AppleScript-backed
+  /// browser tabs are the heavy contributors); skipping mid-typing is
+  /// free CPU back to the user.
+  var candidateFinderLastInputAt: Date?
+  /// `true` after the user types into the flashlight at least once. The
+  /// initial display is locked to the snapshot captured at open time so
+  /// the list doesn't visibly reflow when a slow `refreshCandidatesAsync`
+  /// finishes in the background — the user sees a static, instantly-
+  /// ready list and only sees it change in response to their keystrokes.
+  /// The async refresh is *not* cancelled (the pool stays warm for the
+  /// next session); only the visible re-render is suppressed.
+  var candidateFinderUserHasTyped: Bool = false
   var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionItems: [NormalModeDispatcher.CommandLineCompletion] = []
@@ -157,7 +172,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeRecaptureToken: UInt64 = 0
   var normalModeCaptureVerificationToken: UInt64 = 0
   var normalModePendingCommandToken: UInt64 = 0
-  var normalModeScrollSuppressionUntil: Date?
   var normalModeDragGlobalMonitor: Any?
   var normalModeDragLocalMonitor: Any?
   var normalModeEventTap: NormalModeEventTap?
@@ -287,11 +301,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .flashlight,
       .emojiPicker,
       .copyURL,
-      .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect, .historyBack, .historyForward,
+      .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect,
+      .tabMovePrev, .tabMoveNext, .tabReopen,
+      .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,
       .setMark, .jumpToMark,
       .quitApp, .save, .saveAndQuit, .print,
-      .openDocument, .newWindow, .tabNew, .tabNewInsert, .copy, .cut, .paste, .copyAll,
+      .openDocument, .newWindow, .tabNew, .copy, .cut, .paste, .copyAll,
       .sendKey:
       performMappedCommand(cmd)
     case .showAlert(let message):

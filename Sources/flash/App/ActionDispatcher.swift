@@ -4,25 +4,29 @@ import FlashCore
 import FlashProviders
 
 enum ActionDispatcher {
-  /// Click pipeline, tried in order until one succeeds:
+  /// Click pipeline. Every f/F variant visibly moves the cursor to the
+  /// target first — matching the `mf`/`mF` move-only behaviour — and
+  /// then performs the action. The cursor is left at the click site so
+  /// the user can see (and continue from) where the action landed.
   ///
-  ///   1. `target.activate(action)` — provider-owned best-known path.
+  /// Pipeline (after the visible move):
+  ///   1. Modified click → straight to `synthesizeClick`. AX activate
+  ///      can't carry a shift/cmd modifier, and most modifier-clicks
+  ///      (shift+click selection, opt+click in code editors, …) only
+  ///      mean anything when a real mouse event reaches the app.
+  ///   2. `target.activate(action)` — provider-owned best-known path.
   ///      AccessibilityProvider tries focus-set (text inputs) +
-  ///      AXPress/AXOpen/AXConfirm.
-  ///   2. AX hit-test at the click point (`AXClick.clickAtPoint`).
-  ///      Recovers inert-wrapper cases — the hint element advertised no
-  ///      AX action but the AX node actually under the click point (or
-  ///      one of its ancestors) does. Cursor never moves.
-  ///   3. Synthesized `CGEvent` mouse click (`synthesizeClick`). Last
-  ///      resort: the cursor briefly visits the click site and warps
-  ///      back, hidden so the user never sees the motion.
+  ///      AXPress/AXOpen/AXConfirm. The cursor is already at the
+  ///      target so the visual cue still applies.
+  ///   3. AX hit-test at the click point (`AXClick.clickAtPoint`) —
+  ///      recovers inert-wrapper cases where the chip's element
+  ///      exposes no AX action but the node under the point does.
+  ///   4. Synthesized `CGEvent` mouse click (`synthesizeClick`) — last
+  ///      resort.
   ///
-  /// `clickPoint`, when supplied, is the screen-coord point we should
-  /// click in steps 2 + 3. The expected value is the target's geometric
-  /// centre — the same point AX uses internally for its press-to-click
-  /// fallback. For small AX targets that's also the centre of the
-  /// rendered chip; for wide targets the chip anchors to top-left but
-  /// the click still goes to the target middle.
+  /// `clickPoint`, when supplied, is the screen-coord point we click in
+  /// steps 3 + 4. The expected value is the target's geometric centre
+  /// — the same point AX uses for its own press-to-click fallback.
   static func perform(
     _ action: JumpAction,
     on target: JumpTarget,
@@ -32,8 +36,16 @@ enum ActionDispatcher {
   ) -> Bool {
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
     if !modifiers.isEmpty {
+      // synthesizeClick handles its own visible warp; calling moveCursor
+      // here too would post a redundant mouseMoved.
       return synthesizeClick(at: point, action: action, modifiers: modifiers)
     }
+    // AX press / hit-test paths don't move the cursor themselves, so
+    // pre-move it here for the visible-move-then-act contract. A
+    // following `synthesizeClick` re-warps to the same point — that's
+    // a no-op cursor-wise but keeps the synthetic mouseMoved consistent
+    // with the modified-click path.
+    _ = moveCursor(to: point)
     if let activate = target.activate, activate(action) {
       return true
     }
@@ -46,14 +58,10 @@ enum ActionDispatcher {
   }
 
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left
-  /// origin of primary screen).
-  ///
-  /// We must move the cursor to the click point so the target app's
-  /// hit-test resolves to the intended UI element — but we hide the cursor
-  /// while we do it, warp, click, warp back, then unhide. The user never
-  /// sees the cursor leave its resting place; they see it stay perfectly
-  /// still even though under the hood it has briefly visited the click
-  /// site to deliver the event.
+  /// origin of primary screen). The cursor visibly travels to the click
+  /// point first (`moveCursor` pattern) and stays there — matching the
+  /// `mf`/`mF` move-only behaviour so every f/F variant has the same
+  /// "move, then maybe act" UX.
   @discardableResult
   static func synthesizeClick(
     at screenPoint: CGPoint, action: JumpAction, modifiers: ClickModifiers = []
@@ -71,8 +79,12 @@ enum ActionDispatcher {
     let upType: CGEventType = action == .rightClick ? .rightMouseUp : .leftMouseUp
 
     let clickCount = action == .doubleClick ? 2 : 1
-    var events: [CGEvent] = []
-    events.reserveCapacity(clickCount * 2)
+    struct ClickPair {
+      let down: CGEvent
+      let up: CGEvent
+    }
+    var pairs: [ClickPair] = []
+    pairs.reserveCapacity(clickCount)
     for clickIndex in 1...clickCount {
       guard
         let down = CGEvent(
@@ -86,23 +98,59 @@ enum ActionDispatcher {
       up.flags = modifiers.cgEventFlags
       down.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
       up.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
-      events.append(down)
-      events.append(up)
+      // Stamp synthetic tag so our own pointer monitors drop this event
+      // instead of treating it as a real user click that would dismiss
+      // the overlay or flip mode. Matches `synthesizeMouseButton`.
+      down.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
+      up.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
+      pairs.append(ClickPair(down: down, up: up))
     }
 
-    // Hide the system cursor *before* the warp so the visible jump never
-    // happens on screen. CGDisplayHideCursor/ShowCursor pair must be
-    // balanced — defer guarantees we always unhide on the way out.
-    CGDisplayHideCursor(CGMainDisplayID())
-    defer { CGDisplayShowCursor(CGMainDisplayID()) }
-
+    // Visibly move the cursor to the click site (no hide). The warp is
+    // accompanied by a synthetic `mouseMoved` with the actual delta so
+    // the window server hit-tests it like a real hover-in, driving
+    // tracking areas, hover highlights, and any "hover then click"
+    // app-side state machines.
     CGWarpMouseCursorPosition(cgPoint)
     CGAssociateMouseAndMouseCursorPosition(1)
-    for event in events {
-      event.post(tap: .cghidEventTap)
+    if let move = CGEvent(
+      mouseEventSource: source,
+      mouseType: .mouseMoved,
+      mouseCursorPosition: cgPoint,
+      mouseButton: .left)
+    {
+      move.setIntegerValueField(
+        .mouseEventDeltaX, value: Int64((cgPoint.x - originalCursor.x).rounded()))
+      move.setIntegerValueField(
+        .mouseEventDeltaY, value: Int64((cgPoint.y - originalCursor.y).rounded()))
+      move.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
+      move.post(tap: .cghidEventTap)
     }
-    CGWarpMouseCursorPosition(originalCursor)
-    CGAssociateMouseAndMouseCursorPosition(1)
+    // Brief settle pause: gives the user a frame to register the move
+    // before the click lands, and lets the receiving app's hover
+    // tracking apply so apps that gate click handling on hover state
+    // (think hover-only "open" buttons) see the expected sequence.
+    usleep(20_000)
+    // Real hardware spaces mouseDown→mouseUp by ~30–80ms; some terminal
+    // emulators (alacritty, kitty) need a non-zero hold to forward a
+    // modified click to the application instead of treating it as a
+    // selection gesture. With the events posted back-to-back the
+    // tmux/alacritty pipeline intermittently saw "press" then "click",
+    // and shift-click would silently fall through to ExpandSelection.
+    // 18ms is comfortably above the threshold without being perceptible.
+    let mouseDownHoldUs: useconds_t = 18_000
+    for pair in pairs {
+      pair.down.post(tap: .cghidEventTap)
+      usleep(mouseDownHoldUs)
+      pair.up.post(tap: .cghidEventTap)
+    }
+    let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
+    FlashLog.trace(
+      "[click] synthesize at=(\(Int(screenPoint.x)),\(Int(screenPoint.y))) "
+        + "action=\(action) flags=\(modifiers.cgEventFlags.rawValue) "
+        + "modifiers=cmd:\(modifiers.contains(.command)) "
+        + "shift:\(modifiers.contains(.shift)) ctrl:\(modifiers.contains(.control)) "
+        + "alt:\(modifiers.contains(.option)) frontmost=\(frontmost)")
     return true
   }
 

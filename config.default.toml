@@ -109,8 +109,15 @@ leader = "\\"
 "]h" = "flash://history_forward"
 "[t" = "flash://tab_previous"
 "]t" = "flash://tab_next"
+# Reorder the current tab. In tmux this swap-windows; in browsers there
+# is no portable equivalent so the mapping is a no-op.
+"[m" = "flash://tab_move_previous"
+"]m" = "flash://tab_move_next"
 "[a" = "flash://app_previous"
 "]a" = "flash://app_next"
+# Reopen the most recently closed tab. Browsers receive ⌘⇧T; tmux has no
+# concept of a closed-window history so it returns "unhandled".
+"T" = "flash://tab_reopen"
 # cmd+tab / cmd+shift+tab shadow the system app switcher while in normal
 # mode. Carbon hotkeys are scope-bound, so entering insert mode releases
 # the registration and macOS's Dock switcher takes over again.
@@ -131,11 +138,11 @@ leader = "\\"
 "ctrl-i" = "flash://movement_forward"
 "i" = "flash://mode_insert"
 "f" = "flash://mouse_target"
-"rf" = "flash://mouse_target?right=1"
+"sf" = "flash://mouse_target?secondary=1"
 "df" = "flash://mouse_target?double=1"
 "mf" = "flash://mouse_target?move=1"
 "F" = "flash://mouse_grid"
-"rF" = "flash://mouse_grid?right=1"
+"sF" = "flash://mouse_grid?secondary=1"
 "dF" = "flash://mouse_grid?double=1"
 "mF" = "flash://mouse_grid?move=1"
 "u" = "flash://app_undo"
@@ -144,9 +151,11 @@ leader = "\\"
 # when an attached tmux client is focused, otherwise falls back to ⌘W.
 "x" = "flash://tab_close"
 "n" = "flash://window_new"
-# tmux-aware new: opens a new tmux window in the current session (and drops
-# into insert mode) when a tmux client is focused, otherwise falls back to ⌘T.
-"t" = "flash://tab_new_insert"
+# Context-aware new: opens a new tmux window when a tmux client is focused,
+# a new browser tab in browsers, otherwise falls back to ⌘T (⌘N for window-
+# only terminal bundles like Alacritty without tmux). Stays in normal mode —
+# press `i` afterwards if you want to type.
+"t" = "flash://tab_new"
 "/" = "flash://app_find"
 "<leader>space" = "flash://flashlight"
 "r" = "flash://app_reload"

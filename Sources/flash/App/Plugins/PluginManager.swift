@@ -36,6 +36,7 @@ final class PluginManager {
   private struct ShebangTarget {
     let plugin: PluginProcess
     let command: String
+    let description: String
     let bundleIDs: [String]
     let meta: [String: String]
 
@@ -213,6 +214,67 @@ final class PluginManager {
     return true
   }
 
+  /// The display description for the bang `token` while `bundleID` is the
+  /// focused app: the exact registration's if present, else the `"*"`
+  /// catch-all's. `nil` when no plugin would claim the token — mirroring
+  /// ``invokeShebang(token:query:forBundleID:onResult:)`` exactly, so a
+  /// surfaced bang row can never fail to dispatch.
+  func shebangDescription(token: String, forBundleID bundleID: String? = nil) -> String? {
+    let lcToken = token.lowercased()
+    return queue.sync {
+      if let exact = shebangIndex[lcToken], exact.matches(bundleID: bundleID) {
+        return exact.description
+      }
+      if let wildcard = wildcardShebangTarget, wildcard.matches(bundleID: bundleID) {
+        return wildcard.description
+      }
+      return nil
+    }
+  }
+
+  /// Synthetic flashlight rows for every exact-token bang registration
+  /// (the `"*"` catch-all has no concrete token to list — typed `!<token>`
+  /// queries surface it live instead). Two sources combine here:
+  ///   * **Manifest shebangs** — declared statically in `manifest.json`,
+  ///     gated per registration against the focused app. Used by plugins
+  ///     with a small fixed set of bangs (aiproviders: chatgpt/claude/…).
+  ///   * **Plugin-snapshot bangs** — kind="bang" candidates the plugin
+  ///     publishes via `emit_snapshot`. Used by plugins whose bang list
+  ///     is too large or too dynamic for the manifest (searchengines:
+  ///     ~100 DDG bangs generated from `bangs.tsv` at build time).
+  /// Plugins should not duplicate a token across both surfaces; if they
+  /// do, both rows will appear.
+  func shebangCandidates(forBundleID bundleID: String? = nil) -> [Candidate] {
+    queue.sync {
+      var out: [Candidate] = []
+      for plugin in pluginsByID.values {
+        for registration in plugin.shebangs {
+          let token = registration.token
+          guard token != "*", !token.isEmpty, !registration.command.isEmpty else { continue }
+          if !registration.bundleIDs.isEmpty {
+            guard let bundleID, registration.bundleIDs.contains(bundleID) else { continue }
+          }
+          out.append(
+            Candidate(
+              kind: CandidateFinder.bangKind,
+              sourceID: "bang:\(plugin.identifier)",
+              source: "bang",
+              pid: nil,
+              name: "!\(token)",
+              subtitle: registration.description,
+              bundleIdentifier: "",
+              url: nil,
+              sourcePayload: token))
+        }
+        for snapshot in plugin.candidates(scope: .all)
+        where snapshot.kind == CandidateFinder.bangKind {
+          out.append(snapshot)
+        }
+      }
+      return out
+    }
+  }
+
   /// Routes a plugin→host RPC request to the matching core capability and
   /// delivers the JSON result via `reply`. This is the single entry point
   /// through which plugins reach native APIs the core owns (the AX broker,
@@ -303,6 +365,7 @@ final class PluginManager {
         guard !token.isEmpty, !registration.command.isEmpty else { continue }
         let target = ShebangTarget(
           plugin: plugin, command: registration.command,
+          description: registration.description,
           bundleIDs: registration.bundleIDs, meta: registration.meta)
         if token == "*" {
           if wildcard == nil { wildcard = target }

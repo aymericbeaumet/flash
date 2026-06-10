@@ -38,6 +38,16 @@ extension OverlayPanel {
     {
       return
     }
+    // Modal mode owns its own scroll view: a wheel tick over the help /
+    // `:plugins` / `:clipboard` panel scrolls the content directly via
+    // the embedded `NSScrollView`. Cancelling on every wheel event made
+    // those modals impossible to scroll with the trackpad — the first
+    // tick dismissed the modal before the user could read past the
+    // viewport. Clicks still dismiss (handled by the dedicated modal
+    // dismiss monitors with their own hit-test against the panel).
+    if inputMode == .modal, event.type == .scrollWheel {
+      return
+    }
     let intent: OverlayPointerIntent =
       event.type == .scrollWheel ? .scroll : .click(Self.pointerClick(event))
     DispatchQueue.main.async { [weak self] in

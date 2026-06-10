@@ -177,8 +177,18 @@ extension AppMonitor {
     var collected: [TargetCandidate] = []
     collected.reserveCapacity(256)
     for (providerOrder, provider) in providers.enumerated() {
-      let results =
-        (try? provider.discover(in: focused)) ?? []
+      let results: [JumpTarget]
+      do {
+        results = try provider.discover(in: focused)
+      } catch {
+        // Rule 8 keeps the UI silent on no-targets, but a throwing provider
+        // is the one breadcrumb that explains "pressed f, nothing happened"
+        // — log it instead of swallowing.
+        FlashLog.warn(
+          "[discover] provider=\(provider.identifier) failed: \(error)",
+          fields: ["provider": provider.identifier, "error": String(describing: error)])
+        results = []
+      }
       collected.append(
         contentsOf: results.enumerated().map { ordinal, target in
           TargetCandidate(

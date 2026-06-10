@@ -624,6 +624,11 @@ impl ResolveResponse {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SourceActionResponse {
     pub did_perform: bool,
+    /// True when this source owns the action for the request's context —
+    /// even when the command itself failed. The host only falls back to a
+    /// generic keystroke when the action was *unhandled*; a claimed-but-
+    /// failed action must not double-fire through a synthesized key.
+    pub handled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_pid: Option<i64>,
 }
@@ -636,6 +641,15 @@ impl SourceActionResponse {
     pub fn performed(target_pid: Option<i64>) -> Self {
         Self {
             did_perform: true,
+            handled: true,
+            target_pid,
+        }
+    }
+
+    pub fn failed(target_pid: Option<i64>) -> Self {
+        Self {
+            did_perform: false,
+            handled: true,
             target_pid,
         }
     }

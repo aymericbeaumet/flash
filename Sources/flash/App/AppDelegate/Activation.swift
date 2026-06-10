@@ -43,11 +43,20 @@ extension AppDelegate {
     let region = MouseGrid.preparedRegion(
       region, alphabet: config.resolvedAlphabet.chars, steps: steps)
     mouseGridRegion = region
+    // At the final visible step the renderer swaps to a compact chip
+    // cluster centered on the past rectangle — give MouseGrid the exact
+    // rendered chip dimensions so the cluster's geometry can never
+    // disagree with the chip the user sees.
+    let fontSize = CGFloat(config.overlay.fontSize)
+    let finalChipSize = CGSize(
+      width: OverlayPanel.chipWidth(forLabelLength: 1, fontSize: fontSize),
+      height: OverlayPanel.chipHeight(forFontSize: fontSize))
     let hints = MouseGrid.hints(
       in: region,
       depth: depth,
       alphabet: config.resolvedAlphabet.chars,
-      steps: steps)
+      steps: steps,
+      finalChipSize: finalChipSize)
     guard !hints.isEmpty else {
       applyModeOverlay()
       return

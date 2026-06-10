@@ -1,11 +1,14 @@
 use std::sync::Mutex;
 
-use flash_plugin::{run, Candidate, CommandRequest, CommandResponse, Context, Event};
+use flash_plugin::{run, CommandRequest, CommandResponse, Context, Event};
 
-const SOURCE_ID: &str = "plugin:clipboard";
 const HISTORY_FILE: &str = "history.json";
 const HISTORY_CAP: usize = 50;
 const PREVIEW_CHARS: usize = 80;
+/// Entries above this size are dropped at capture: a multi-megabyte copy
+/// would bloat the 50-entry state file and the `:clipboard` RPC payload for
+/// no practical paste-history value.
+const MAX_ENTRY_BYTES: usize = 128 * 1024;
 
 struct Clipboard {
     history: Mutex<Vec<String>>,
@@ -15,42 +18,36 @@ flash_plugin::plugin!(Clipboard);
 
 impl FlashPlugin for Clipboard {
     async fn on_start(&self, ctx: Context) {
-        {
-            let mut hist = self.history.lock().unwrap();
-            *hist = ctx.read_state(HISTORY_FILE).unwrap_or_default();
-        }
-        emit(&ctx, &self.snapshot());
+        let mut hist = self.history.lock().unwrap();
+        *hist = ctx.read_state(HISTORY_FILE).unwrap_or_default();
     }
 
     // The core owns the pasteboard watch (it reads NSPasteboard's changeCount
     // in-process — macOS exposes no change notification) and pushes new text
-    // here as `clipboard.changed`. The plugin never polls `pbpaste`.
+    // here as `clipboard.changed`. The plugin never polls `pbpaste`. History
+    // is served only through the `:clipboard` command — it is deliberately
+    // not a flashlight candidate source.
     async fn on_event(&self, ctx: Context, event: Event) {
-        match event.name.as_str() {
-            "core:flash.started" => emit(&ctx, &self.snapshot()),
-            "core:clipboard.changed" => {
-                let text = event.text.unwrap_or_default();
-                if text.is_empty() {
-                    return;
-                }
-                let changed = {
-                    let mut hist = self.history.lock().unwrap();
-                    if hist.first().map(String::as_str) == Some(text.as_str()) {
-                        false
-                    } else {
-                        hist.retain(|entry| entry != &text);
-                        hist.insert(0, text);
-                        hist.truncate(HISTORY_CAP);
-                        true
-                    }
-                };
-                if changed {
-                    let snapshot = self.snapshot();
-                    ctx.write_state(HISTORY_FILE, &snapshot);
-                    emit(&ctx, &snapshot);
-                }
+        if event.name != "core:clipboard.changed" {
+            return;
+        }
+        let text = event.text.unwrap_or_default();
+        if text.is_empty() || text.len() > MAX_ENTRY_BYTES {
+            return;
+        }
+        let snapshot = {
+            let mut hist = self.history.lock().unwrap();
+            if hist.first().map(String::as_str) == Some(text.as_str()) {
+                None
+            } else {
+                hist.retain(|entry| entry != &text);
+                hist.insert(0, text);
+                hist.truncate(HISTORY_CAP);
+                Some(hist.clone())
             }
-            _ => {}
+        };
+        if let Some(snapshot) = snapshot {
+            ctx.write_state(HISTORY_FILE, &snapshot);
         }
     }
 
@@ -71,10 +68,6 @@ impl FlashPlugin for Clipboard {
 }
 
 impl Clipboard {
-    fn snapshot(&self) -> Vec<String> {
-        self.history.lock().unwrap().clone()
-    }
-
     /// The full history as a JSON array of `{preview, value}`, most-recent
     /// first — the payload the host's `:clipboard` modal renders. `preview`
     /// is the one-line label; `value` is the full text pasted on selection.
@@ -104,21 +97,6 @@ impl Clipboard {
 struct HistoryEntry {
     preview: String,
     value: String,
-}
-
-fn emit(ctx: &Context, history: &[String]) {
-    let candidates: Vec<Candidate> = history
-        .iter()
-        .map(|text| {
-            Candidate::new(preview(text))
-                .kind("clipboard")
-                .source_id(SOURCE_ID)
-                .source("clipboard")
-                .subtitle("Clipboard")
-                .payload(text.clone())
-        })
-        .collect();
-    ctx.emit_snapshot(SOURCE_ID, candidates);
 }
 
 fn preview(text: &str) -> String {

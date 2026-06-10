@@ -232,10 +232,14 @@ async fn perform_source_action(
     let Some(target) = tabs.get((index - 1) as usize) else {
         return SourceActionResponse::unhandled();
     };
-    let ok = press(ctx, target.handle).await;
-    SourceActionResponse {
-        did_perform: ok,
-        target_pid: Some(pid),
+    // Firefox owns this tab_select claim either way: a successful press is
+    // `performed`, but a failed press must be `failed` (not `unhandled`) so
+    // the host doesn't fall back to a ⌘<digit> keystroke that switches the
+    // wrong tab.
+    if press(ctx, target.handle).await {
+        SourceActionResponse::performed(Some(pid))
+    } else {
+        SourceActionResponse::failed(Some(pid))
     }
 }
 

@@ -26,7 +26,7 @@ Every action is available as `flash://...` and can be invoked with `open`, the C
 
 ```bash
 open -g flash://mouse_target
-open -g flash://mouse_target?right=1
+open -g flash://mouse_target?secondary=1
 open -g flash://mouse_grid
 open -g flash://mode_normal
 open -g flash://help_show
@@ -41,7 +41,7 @@ flash window_move position=lefthalf
 flash help_show
 ```
 
-Common actions include `flash://mouse_target`, `flash://mouse_target?right=1`, `flash://mouse_target?double=1`, `flash://mouse_target?move=1`, `flash://mouse_grid`, `flash://mouse_grid?right=1`, `flash://mouse_grid?double=1`, `flash://mouse_grid?move=1`, `flash://scroll_down`, `flash://scroll_half_page_up`, `flash://scroll_half_page_down`, `flash://scroll_top`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select?index=<n>`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_previous`, `flash://app_next`, `flash://app_reload`, `flash://app_reload?force=1`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder`, `flash://flashlight`, `flash://url_copy`, `flash://app_save`, `flash://app_save_and_quit`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://tab_new_insert`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://app_open?name=<app>`, `flash://window_move?position=<slot>&screen=<n>`, `flash://plugins`, `flash://plugin_command?command=<command>&subcommand=<subcommand>`, `flash://hints_dismiss`, `flash://alert_dismiss`, and `flash://alert_show?message=<text>`.
+Common actions include `flash://mouse_target`, `flash://mouse_target?secondary=1`, `flash://mouse_target?double=1`, `flash://mouse_target?move=1`, `flash://mouse_grid`, `flash://mouse_grid?secondary=1`, `flash://mouse_grid?double=1`, `flash://mouse_grid?move=1`, `flash://scroll_down`, `flash://scroll_half_page_up`, `flash://scroll_half_page_down`, `flash://scroll_top`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_select?index=<n>`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_previous`, `flash://app_next`, `flash://app_reload`, `flash://app_reload?force=1`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder`, `flash://flashlight`, `flash://url_copy`, `flash://app_save`, `flash://app_save_and_quit`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://app_open?name=<app>`, `flash://window_move?position=<slot>&screen=<n>`, `flash://plugins`, `flash://plugin_command?command=<command>&subcommand=<subcommand>`, `flash://hints_dismiss`, `flash://alert_dismiss`, and `flash://alert_show?message=<text>`.
 
 ## Configuration
 
@@ -83,8 +83,11 @@ leader = "\\"
 "]h" = "flash://history_forward"
 "[t" = "flash://tab_previous"
 "]t" = "flash://tab_next"
+"[m" = "flash://tab_move_previous"
+"]m" = "flash://tab_move_next"
 "[a" = "flash://app_previous"
 "]a" = "flash://app_next"
+"T" = "flash://tab_reopen"
 "g1" = "flash://tab_select?index=1"
 "g2" = "flash://tab_select?index=2"
 "g3" = "flash://tab_select?index=3"
@@ -95,18 +98,18 @@ leader = "\\"
 "g8" = "flash://tab_select?index=8"
 "g9" = "flash://tab_select?index=9"
 "f" = "flash://mouse_target"
-"rf" = "flash://mouse_target?right=1"
+"sf" = "flash://mouse_target?secondary=1"
 "df" = "flash://mouse_target?double=1"
 "mf" = "flash://mouse_target?move=1"
 "F" = "flash://mouse_grid"
-"rF" = "flash://mouse_grid?right=1"
+"sF" = "flash://mouse_grid?secondary=1"
 "dF" = "flash://mouse_grid?double=1"
 "mF" = "flash://mouse_grid?move=1"
 "u" = "flash://app_undo"
 "ctrl-r" = "flash://app_redo"
 "x" = "flash://window_close"
 "n" = "flash://window_new"
-"t" = "flash://tab_new_insert"
+"t" = "flash://tab_new"
 "/" = "flash://app_find"
 "<leader>space" = "flash://flashlight"
 "r" = "flash://app_reload"
@@ -170,7 +173,7 @@ Flash is one resident, headless macOS app:
 - **URL actions are canonical.** Native mappings and the CLI resolve to the same `URLCommand` parser used by `flash://` AppleEvents.
 - **AX-event-driven prepared model.** The focused app is pre-walked from Accessibility notifications and config revisions so `flash://mouse_target` can render from a fresh prepared model when available.
 - **Managed plugin children.** App-specific dynamic integrations may run as Flash-owned child processes over stdin/stdout JSOND. No sockets, Mach services, daemonized clients, or arbitrary global key capture are added.
-- **Source chain** per focused app: `TmuxProvider` for terminals running tmux, then generic `AccessibilityProvider` for native and web content exposed through Accessibility. Sources can also feed `:open`, app activation, document URL resolution, and source-owned tab actions.
+- **Source chain** per focused app: the bundled tmux plugin for terminals running tmux, then the generic `AccessibilityProvider` for native and web content exposed through Accessibility. Sources can also feed `:open`, app activation, document URL resolution, and source-owned tab actions.
 
 Public SPI lives in `FlashCore` (`FlashSource`, `JumpTarget`, `AppContext`, `JumpAction`). Add a source by implementing the protocol and registering a `SourceDescriptor` in `Sources/flash/App/SourceRegistry.swift`; choose an activation policy so sources are only loaded while the corresponding app class is running.
 

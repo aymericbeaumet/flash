@@ -60,16 +60,35 @@ enum MouseGrid {
       grid: fixedGrid(for: region.frame, alphabet: alphabet, steps: steps))
   }
 
+  /// Role on intermediate-depth targets — gap-free cell tile, click commits
+  /// the cell centre, the chip's translucent backdrop gives the page tint.
+  static let cellRole = "FlashMouseGridCell"
+  /// Role on the final visible depth — compact chip cluster centered on the
+  /// past rectangle, no translucent backdrop, click commits the chip's own
+  /// centre. The renderer keys off this role to swap layouts.
+  static let finalChipRole = "FlashMouseGridFinalChip"
+
   static func hints(
     in region: Region,
     depth: Int,
     alphabet: [Character],
-    steps: Int = defaultSteps
+    steps: Int = defaultSteps,
+    finalChipSize: CGSize? = nil
   ) -> [AssignedHint] {
     let labels = alphabet.map(String.init)
     guard labels.count >= 4 else { return [] }
     let prepared = preparedRegion(region, alphabet: alphabet, steps: steps)
     guard let grid = prepared.grid, grid.cellCount <= labels.count else { return [] }
+
+    if isFinalDisplayDepth(depth, steps: steps), let finalChipSize {
+      return finalStepHints(
+        in: prepared.frame,
+        depth: depth,
+        grid: grid,
+        labels: labels,
+        chipSize: finalChipSize)
+    }
+
     let frame = prepared.frame
     let cellWidth = frame.width / CGFloat(grid.columns)
     let cellHeight = frame.height / CGFloat(grid.rows)
@@ -85,7 +104,56 @@ enum MouseGrid {
         let target = JumpTarget(
           id: "mouse_grid:\(depth):\(index)",
           frame: frame,
-          role: "FlashMouseGridCell",
+          role: cellRole,
+          providerID: "mouse_grid")
+        out.append(AssignedHint(target: target, label: labels[index]))
+        index += 1
+      }
+    }
+    return out
+  }
+
+  /// Final-step layout: lay the N×N hint chips out in their own tight
+  /// cluster centered on the past rectangle's midpoint, so neighbouring
+  /// chips never overlap even when the past rectangle has shrunk well
+  /// below the chip size. Click points become each chip's own centre —
+  /// what you see is what you commit.
+  private static func finalStepHints(
+    in pastRect: CGRect,
+    depth: Int,
+    grid: Grid,
+    labels: [String],
+    chipSize: CGSize
+  ) -> [AssignedHint] {
+    // Glued grid: the final step has chips touch edge-to-edge with no
+    // gap (and no overlap). The cluster reads as one continuous block,
+    // which is the user signal that this is the *last* step of the
+    // mouse-grid drill-down — nothing more to subdivide.
+    let gap: CGFloat = 0
+    let clusterWidth = CGFloat(grid.columns) * chipSize.width
+      + CGFloat(max(0, grid.columns - 1)) * gap
+    let clusterHeight = CGFloat(grid.rows) * chipSize.height
+      + CGFloat(max(0, grid.rows - 1)) * gap
+    let originX = pastRect.midX - clusterWidth / 2
+    let originY = pastRect.midY - clusterHeight / 2
+
+    var out: [AssignedHint] = []
+    out.reserveCapacity(grid.cellCount)
+    var index = 0
+    for row in 0..<grid.rows {
+      for column in 0..<grid.columns {
+        let chipX = originX + CGFloat(column) * (chipSize.width + gap)
+        // NSScreen coords: row 0 is the top, so the chip's minY counts
+        // down from the cluster's top — same convention the cell-tile
+        // path uses (`frame.maxY - (row+1)*cellHeight`).
+        let chipY = originY + clusterHeight
+          - CGFloat(row + 1) * chipSize.height
+          - CGFloat(row) * gap
+        let frame = CGRect(x: chipX, y: chipY, width: chipSize.width, height: chipSize.height)
+        let target = JumpTarget(
+          id: "mouse_grid:\(depth):\(index)",
+          frame: frame,
+          role: finalChipRole,
           providerID: "mouse_grid")
         out.append(AssignedHint(target: target, label: labels[index]))
         index += 1
