@@ -188,17 +188,23 @@ extension OverlayPanel {
       if let lockoutUntil = normalModeChordLockoutUntil,
         Date() < lockoutUntil
       {
-        // <esc> drops the lockout instantly so the user can recover
-        // without waiting out the timeout.
-        if event.keyCode == 53 {
-          normalModeChordLockoutUntil = nil
-          FlashLog.trace("[input] normal chord_lockout_cancel reason=esc")
-        } else {
-          FlashLog.trace(
-            "[input] normal chord_lockout_swallow key=\(event.keyCode) "
-              + "chars=\(event.charactersIgnoringModifiers ?? "nil")")
-        }
-        return true
+        // Pass the follow-up key through to the focused app rather
+        // than letting Flash interpret it (the lockout's purpose) —
+        // and drop the lockout after one key. Swallowing here was the
+        // worst of both worlds: tmux didn't see its command and the
+        // user's next `i` was eaten silently, so they'd press it
+        // again wondering why nothing happened. One-key passthrough
+        // matches the typical chord-prefix-then-command pattern
+        // (tmux ctrl-q + letter, Karabiner layer + key); subsequent
+        // keys resume normal-mode interpretation. <esc> works the
+        // same as any other key: it clears the lockout and reaches
+        // the focused app, so it can abort an in-progress chord
+        // sequence (e.g. tmux's prefix-pending state).
+        normalModeChordLockoutUntil = nil
+        FlashLog.trace(
+          "[input] normal chord_lockout_passthrough key=\(event.keyCode) "
+            + "chars=\(event.charactersIgnoringModifiers ?? "nil")")
+        return false
       }
       processNormalModeKey(event)
       return true

@@ -122,6 +122,25 @@ enum NormalModeInterpreter {
         return .pending(state.appendingPrefix(sequence))
       }
     }
+    // The new key can't extend the pending sequence to anything
+    // mapped. If we have a pending prefix, drop it and re-interpret
+    // the key from scratch — matches Vim's fallback when a multi-key
+    // sequence is broken by an unmappable continuation. Without this,
+    // pressing `g` and then `i` would silently swallow the `i`
+    // instead of entering insert mode (no `gi` mapping, no `gi…`
+    // extension, so the for-loop falls through and the new key is
+    // lost). The recursion bottoms out immediately: the recursive
+    // call passes an empty `pending`, so it can't re-enter this
+    // branch.
+    if !state.prefix.isEmpty {
+      return interpret(
+        pending: "",
+        keyCode: keyCode,
+        modifierFlags: modifierFlags,
+        characters: characters,
+        charactersIgnoringModifiers: charactersIgnoringModifiers,
+        mappings: mappings)
+    }
     return .consume
   }
 

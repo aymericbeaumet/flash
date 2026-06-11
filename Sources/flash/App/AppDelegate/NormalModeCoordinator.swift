@@ -478,6 +478,22 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecapture() {
+    // Flip `overlay.inputMode` to `.normal` synchronously before
+    // scheduling the retries. The 0 ms entry below is still a
+    // `DispatchQueue.main.asyncAfter` — it doesn't run until the next
+    // runloop turn — so a key event reaching the session tap between
+    // the caller dropping `activationInFlight = false` and that entry
+    // executing would see the stale `inputMode == .hints` left over
+    // from `commit()`'s pre-dispatch `applyModeOverlay(captureOverride:
+    // false)` and route through the hint-typing path. Plain mappings
+    // (`i`, `n`, `t`, `:`, …) get treated as stray hint commits against
+    // an empty hint list and silently cancel instead of firing their
+    // normal-mode action. The scheduled retries still run — they
+    // exist for the panel-didn't-become-key-window case, which is a
+    // separate concern from the inputMode-cache-is-stale race.
+    if shouldCaptureNormalModeInput {
+      applyModeOverlay(captureOverride: true)
+    }
     normalModeRecaptureToken &+= 1
     let token = normalModeRecaptureToken
     FlashLog.trace(

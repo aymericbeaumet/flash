@@ -220,6 +220,26 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(modified.pending, "")
   }
 
+  func testPendingPrefixBrokenByUnmappableKeyFallsBackToFreshInterpretation() {
+    // `g` is a prefix (gg/gt/g1…) but `gi` is unmapped — falling back
+    // to interpreting `i` from scratch lands on insert mode instead of
+    // silently swallowing the keystroke. Same for any other prefix.
+    XCTAssertEqual(command(pending: "g", chars: "i"), .insertMode)
+    XCTAssertEqual(command(pending: "[", chars: "i"), .insertMode)
+    XCTAssertEqual(command(pending: "]", chars: "i"), .insertMode)
+    XCTAssertEqual(command(pending: "g", chars: "n"), .newWindow)
+    XCTAssertEqual(command(pending: "g", chars: "r"), .reload(force: false))
+    // Valid sequence continuations still resolve to the mapped action.
+    XCTAssertEqual(command(pending: "g", chars: "t"), .tabNext)
+    XCTAssertEqual(command(pending: "m", chars: "i"), .setMark(letter: "i"))
+    // No mapping at any depth — the prefix is dropped and the fresh
+    // key is also unmapped, so the result is a clean consume (no
+    // command, no carried-over pending).
+    let unmappable = transition(pending: "g", chars: "z")
+    XCTAssertNil(unmappable.command)
+    XCTAssertEqual(unmappable.pending, "")
+  }
+
   func testNormalModeMayOnlyEnterInsertFromHintCommit() {
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .hintCommit))
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .normalModeInput))
