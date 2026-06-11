@@ -29,6 +29,9 @@ use tokio::sync::{mpsc, oneshot};
 /// then write `impl FlashPlugin for MyPlugin { … }`.
 pub use flash_plugin_macros::plugin;
 
+mod search;
+pub use search::{SearchDocument, SearchFilterSpec, SearchHit, SearchQuerySpec, SearchVisibility};
+
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
 /// plugin assigned. The serve loop fulfils each entry when the matching host
 /// response arrives. Cloned into [`Context`] so any handler can call the host.
@@ -89,6 +92,15 @@ pub struct JumpTarget {
     pub enters_insert_mode: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
+    /// When `true`, the host should drop the plugin-side `activate` path
+    /// (which fires a `target.action` RPC and races with subsequent
+    /// keystrokes — `tmux select-pane` for example is async by nature)
+    /// and instead synthesize a real mouse click at the target's frame.
+    /// The click propagates through the windowing system atomically,
+    /// reaches the underlying app (alacritty → tmux mouse mode for
+    /// panes), and is observed *before* Flash forwards anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefer_host_click: Option<bool>,
 }
 
 impl JumpTarget {
@@ -102,6 +114,7 @@ impl JumpTarget {
             pid: None,
             enters_insert_mode: None,
             source_id: None,
+            prefer_host_click: None,
         }
     }
 
@@ -132,6 +145,11 @@ impl JumpTarget {
 
     pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
         self.source_id = Some(source_id.into());
+        self
+    }
+
+    pub fn prefer_host_click(mut self, prefer: bool) -> Self {
+        self.prefer_host_click = Some(prefer);
         self
     }
 }
@@ -812,12 +830,17 @@ impl Context {
     /// plugins use to reach native capabilities the core owns — most notably
     /// the Accessibility (AX) broker, which holds the single TCC grant. Returns
     /// a JSON error object if the host doesn't answer in time.
-    async fn call_host(&self, method: &str, params: Value) -> Value {
+    pub(crate) async fn call_host(&self, method: &str, params: Value) -> Value {
         self.call_host_timeout(method, params, Duration::from_secs(5))
             .await
     }
 
-    async fn call_host_timeout(&self, method: &str, params: Value, timeout: Duration) -> Value {
+    pub(crate) async fn call_host_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Value {
         let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         if let Ok(mut pending) = self.host_pending.lock() {

@@ -425,6 +425,7 @@ fn build_target(
     label: &str,
     pid: i64,
     enters_insert_mode: bool,
+    prefer_host_click: bool,
 ) -> JumpTarget {
     JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
@@ -432,6 +433,7 @@ fn build_target(
         .enters_insert_mode(enters_insert_mode)
         .pid(pid)
         .source_id(SOURCE_ID)
+        .prefer_host_click(prefer_host_click)
 }
 
 async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> DiscoverResponse {
@@ -563,6 +565,15 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             &pane.id,
             pid,
             false,
+            // Synthesize a real mouse click on the pane center rather
+            // than firing the plugin's `select-pane` RPC. The RPC
+            // returns optimistically (the closure resolves before tmux
+            // actually finishes selecting), so a fast follow-up `i`
+            // landed in the *previous* active pane. A physical click
+            // is observed atomically by alacritty's mouse-mode
+            // forwarder, so tmux selects the pane before the next
+            // keystroke is delivered.
+            true,
         ));
         actions.insert(
             target_id,
@@ -610,7 +621,11 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
         let x = min_x + pad_x + link.screen_col as f64 * cell_w;
         let y = min_y + win_h - pad_y - (link.screen_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-l{idx}");
-        // Clicking a link opens/copies it → stay in normal mode.
+        // Clicking a link opens/copies it → stay in normal mode. The
+        // `activate` RPC path is the right answer here: the plugin runs
+        // `/usr/bin/open` against the URL, which is what the user
+        // wants. A synthesized click would just select text inside
+        // alacritty.
         targets.push(build_target(
             &target_id,
             x,
@@ -620,6 +635,7 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             "tmux-link",
             &link.text,
             pid,
+            false,
             false,
         ));
         actions.insert(target_id, TargetAction::Link { text: link.text });

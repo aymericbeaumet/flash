@@ -21,7 +21,10 @@ extension OverlayPanel {
     hideCommandTextField()
     commandLineText = query
     commandLineCursorIndex = query.count
-    commandPromptPrefix = "Applications> "
+    // No source-locked prefix: flashlight searches every candidate
+    // source uniformly, so labelling the prompt with one ("Applications>")
+    // misrepresents what's actually being filtered.
+    commandPromptPrefix = ""
     commandPromptVisible = true
     setCandidateFinderResults(items: items, emptyText: "no matching app")
     updateModeBadge(text: modeLabels.command, visible: true, captureInput: true, style: .command)

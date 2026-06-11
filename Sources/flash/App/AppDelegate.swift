@@ -78,6 +78,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   var config = Config.default
   let pluginManager = PluginManager()
+  /// Persistent search + frecency layer. Nil when `[search] enabled = false`
+  /// or FTS5 isn't available — in that case the rest of the app keeps
+  /// working with the live in-memory pool, exactly as it does today.
+  var searchService: SearchService?
+  /// Holds the `search.*` RPC broker. `PluginManager.searchBroker` is
+  /// `weak`; we own the lifetime so the broker stays alive while plugins
+  /// hold references.
+  var searchRPCBroker: SearchRPCBroker?
+  /// Bumped on every keystroke. `SearchService.search` captures it at
+  /// submission time and discards any late DB walk that returns after
+  /// the user has typed past the query.
+  var candidateFinderIndexGenerationCounter: UInt64 = 0
   var registry: SourceRegistry!
   var monitor: AppMonitor!
   var debugServer: DebugServer?
@@ -172,12 +184,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeRecaptureToken: UInt64 = 0
   var normalModeCaptureVerificationToken: UInt64 = 0
   var normalModePendingCommandToken: UInt64 = 0
-  var normalModeDragGlobalMonitor: Any?
-  var normalModeDragLocalMonitor: Any?
   var normalModeEventTap: NormalModeEventTap?
   var clipboardMonitor: ClipboardMonitor?
-  var normalModeDragAction: JumpAction = .leftClick
-  var normalModeDragModifiers: ClickModifiers = []
   var windowGeometryChangeToken: UInt64 = 0
   var windowGeometryChangeInProgress = false
   var activeWindowBorderTrackingTimer: DispatchSourceTimer?
@@ -203,6 +211,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     config = ConfigLoader.load()
+    searchService = SearchService(config: config.search)
+    if let service = searchService {
+      let broker = SearchRPCBroker(service: service)
+      searchRPCBroker = broker
+      pluginManager.searchBroker = broker
+    }
     let manager = pluginManager
     registry = SourceRegistry(
       openConfig: config.open,
@@ -502,6 +516,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.stop()
     debugServer?.stop()
     debugServer = nil
+    searchService?.shutdown()
+    searchService = nil
   }
 
 

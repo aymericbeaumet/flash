@@ -43,120 +43,17 @@ extension AppDelegate {
       }
       return
     }
-    let replayClick: OverlayPointerClick?
-    if case .click(let click) = intent,
-      flashMode == .normal,
-      currentHints.isEmpty
-    {
-      replayClick = click
-    } else {
-      replayClick = nil
-    }
     cancelOverlay()
     if flashMode != .insert {
       enterInsertMode(reason: .pointerClick)
     }
-    if let replayClick {
-      beginNormalModeDrag(initial: replayClick)
-    }
-  }
-
-  /// Replay the user's in-progress mouse gesture so the underlying app
-  /// sees either a single click (release with no movement) or a real
-  /// drag (press → drag → release). The mouseDown is deferred until we
-  /// detect actual movement, so a quick press-release degrades cleanly
-  /// to the prior `synthesizeClick` behavior.
-  ///
-  /// We stamp synthetic events via `eventSourceUserData` and ignore the
-  /// tag in our own monitor — otherwise the dragged events we post would
-  /// re-trigger the monitor and feed themselves back in a tight loop.
-  private func beginNormalModeDrag(initial: OverlayPointerClick) {
-    stopNormalModeDrag()
-    normalModeDragAction = initial.action
-    normalModeDragModifiers = initial.modifiers
-    let initialLocation = initial.location
-    let initialAction = initial.action
-    let initialModifiers = initial.modifiers
-    let isDoubleClick = initialAction == .doubleClick
-    var dragStarted = false
-    let dragThreshold: CGFloat = 4
-
-    if isDoubleClick {
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
-        _ = ActionDispatcher.synthesizeClick(
-          at: initialLocation,
-          action: initialAction,
-          modifiers: initialModifiers)
-      }
-      return
-    }
-
-    let mask: NSEvent.EventTypeMask = [
-      .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
-      .leftMouseUp, .rightMouseUp, .otherMouseUp,
-    ]
-
-    let handle: (NSEvent) -> Void = { [weak self] event in
-      guard let self else { return }
-      if event.cgEvent?.getIntegerValueField(.eventSourceUserData)
-        == ActionDispatcher.syntheticMouseEventTag
-      {
-        return
-      }
-      let point = NSEvent.mouseLocation
-      switch event.type {
-      case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
-        let dx = point.x - initialLocation.x
-        let dy = point.y - initialLocation.y
-        if !dragStarted, (dx * dx + dy * dy) < dragThreshold * dragThreshold {
-          return
-        }
-        if !dragStarted {
-          dragStarted = true
-          _ = ActionDispatcher.synthesizeMouseButton(
-            at: initialLocation,
-            phase: .down,
-            action: initialAction,
-            modifiers: initialModifiers)
-        }
-        _ = ActionDispatcher.synthesizeMouseButton(
-          at: point,
-          phase: .dragged,
-          action: initialAction,
-          modifiers: initialModifiers)
-      case .leftMouseUp, .rightMouseUp, .otherMouseUp:
-        if dragStarted {
-          _ = ActionDispatcher.synthesizeMouseButton(
-            at: point,
-            phase: .up,
-            action: initialAction,
-            modifiers: initialModifiers)
-        } else {
-          _ = ActionDispatcher.synthesizeClick(
-            at: initialLocation,
-            action: initialAction,
-            modifiers: initialModifiers)
-        }
-        self.stopNormalModeDrag()
-      default:
-        break
-      }
-    }
-
-    normalModeDragGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { event in
-      handle(event)
-    }
-    normalModeDragLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { event in
-      handle(event)
-      return event
-    }
-  }
-
-  private func stopNormalModeDrag() {
-    if let m = normalModeDragGlobalMonitor { NSEvent.removeMonitor(m) }
-    if let m = normalModeDragLocalMonitor { NSEvent.removeMonitor(m) }
-    normalModeDragGlobalMonitor = nil
-    normalModeDragLocalMonitor = nil
+    // The overlay panel has `ignoresMouseEvents = true`, so the user's
+    // real mouseDown/drag/mouseUp pass through to the underlying app
+    // unaltered. Replaying a synthetic click here was the prior approach;
+    // it doubled left-clicks (cursor jumped, second hit re-triggered the
+    // target) and dismissed the context menu on right-click (the synth
+    // click landed outside the just-opened menu). The transition into
+    // INSERT is enough — the original gesture is the click.
   }
 
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
@@ -494,8 +391,13 @@ extension AppDelegate {
       candidateFinderSelectedIndex = min(
         max(candidateFinderSelectedIndex + delta, 0),
         candidateFinderMatches.count - 1)
-      refreshCommandLine(
-        text: overlay.commandLineText,
+      // Re-render the suggestion list with the new highlighted row only;
+      // skip `refreshCommandLine` so we don't re-run the candidate search
+      // for an unchanged query. Re-running it would reshuffle results as
+      // late async DB hits land while the user is just paging through.
+      overlay.displayCommandLine(
+        overlay.commandLineText,
+        suggestions: candidateFinderDisplayItems(windowSize: 5),
         cursorIndex: overlay.commandLineCursorIndex)
       return true
     }
@@ -503,8 +405,10 @@ extension AppDelegate {
       commandLineCompletionSelectedIndex = min(
         max(commandLineCompletionSelectedIndex + delta, 0),
         commandLineCompletionMatches.count - 1)
-      refreshCommandLine(
-        text: overlay.commandLineText,
+      overlay.displayCommandLine(
+        overlay.commandLineText,
+        suggestions: commandLineCompletionDisplayItems(windowSize: 6),
+        emptyText: "no matching command",
         cursorIndex: overlay.commandLineCursorIndex)
       return true
     }
@@ -574,7 +478,12 @@ extension AppDelegate {
     candidateFinderSelectedIndex = min(
       max(candidateFinderSelectedIndex + delta, 0),
       candidateFinderMatches.count - 1)
-    refreshCandidateFinder(query: overlay.candidateFinderQuery)
+    // Just rerender with the new selection — re-scoring against the
+    // same query would reshuffle results when a late async DB hit
+    // lands mid-navigation.
+    overlay.displayCandidateFinder(
+      query: overlay.candidateFinderQuery,
+      items: candidateFinderDisplayItems())
   }
 
   func overlayDidSubmitCandidateFinder() {
@@ -611,6 +520,10 @@ extension AppDelegate {
     }
     if shouldRecordMovement {
       recordMovement(.candidate(candidate), source: "source_open")
+      // Frecency boost lives in the persistent index, not the
+      // movement stack — record it here so a chosen candidate sorts
+      // higher next time even across restarts.
+      searchService?.recordOpen(candidate)
     }
     overlay.hide()
     resetCommandLineState()

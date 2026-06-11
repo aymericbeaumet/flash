@@ -177,20 +177,40 @@ final class PluginProcess {
       return []
     }
     return snap.targets.map { wire in
-      JumpTarget(
-        id: wire.id,
-        frame: wire.frame,
-        role: wire.role,
-        accessibilityLabel: wire.label,
-        url: wire.url,
-        pid: wire.pid ?? context.processID,
-        activate: { [weak self] action in
-          self?.activateTarget(wire.id, action: action)
-          return true
-        },
-        entersInsertMode: wire.entersInsertMode,
-        providerID: wire.sourceID)
+      hostJumpTarget(from: wire, contextPID: context.processID)
     }
+  }
+
+  /// Materialise a wire-format target as a host `JumpTarget`. When the
+  /// plugin opts into `prefer_host_click`, the `activate` closure is
+  /// dropped AND the host-click flag is propagated so
+  /// `ActionDispatcher.perform` skips its AX hit-test fallback (which
+  /// for terminal surfaces silently "succeeds" via a useless AXPress on
+  /// the enclosing window without ever delivering the click) and goes
+  /// straight to the real synthesized click.
+  private func hostJumpTarget(
+    from wire: PluginWireTarget, contextPID: pid_t
+  ) -> JumpTarget {
+    let activate: ((JumpAction) -> Bool)?
+    if wire.preferHostClick {
+      activate = nil
+    } else {
+      activate = { [weak self] action in
+        self?.activateTarget(wire.id, action: action)
+        return true
+      }
+    }
+    return JumpTarget(
+      id: wire.id,
+      frame: wire.frame,
+      role: wire.role,
+      accessibilityLabel: wire.label,
+      url: wire.url,
+      pid: wire.pid ?? contextPID,
+      activate: activate,
+      entersInsertMode: wire.entersInsertMode,
+      preferHostClick: wire.preferHostClick,
+      providerID: wire.sourceID)
   }
 
   private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginSnapshot {
@@ -247,19 +267,7 @@ final class PluginProcess {
       return []
     }
     return snap.targets.map { wire in
-      JumpTarget(
-        id: wire.id,
-        frame: wire.frame,
-        role: wire.role,
-        accessibilityLabel: wire.label,
-        url: wire.url,
-        pid: wire.pid ?? context.processID,
-        activate: { [weak self] action in
-          self?.activateTarget(wire.id, action: action)
-          return true
-        },
-        entersInsertMode: wire.entersInsertMode,
-        providerID: wire.sourceID)
+      hostJumpTarget(from: wire, contextPID: context.processID)
     }
   }
 
@@ -981,7 +989,8 @@ final class PluginProcess {
       url: raw["url"] as? String,
       pid: (raw["pid"] as? Int).map(pid_t.init),
       entersInsertMode: entersInsertMode,
-      sourceID: raw["source_id"] as? String ?? sourceID)
+      sourceID: raw["source_id"] as? String ?? sourceID,
+      preferHostClick: raw["prefer_host_click"] as? Bool ?? false)
   }
 
   private static func candidate(

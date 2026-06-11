@@ -581,6 +581,87 @@ enum ConfigLoader {
         config.addDiagnostic(
           "debug.http_inspector_port must be an integer in 1..65535", location: location)
       }
+
+    case ["search", "enabled"]:
+      if let parsed = parseBool(value) {
+        config.search.enabled = parsed
+        config.recordLocation(path: "search.enabled", location: location)
+      } else {
+        config.addDiagnostic("search.enabled must be true or false", location: location)
+      }
+    case ["search", "database_path"]:
+      if let parsed = parseString(value) {
+        config.search.databasePath = parsed
+        config.recordLocation(path: "search.database_path", location: location)
+      } else {
+        config.addDiagnostic("search.database_path must be a quoted string", location: location)
+      }
+    case ["search", "mmap_size"]:
+      if let parsed = parseInt(value), parsed >= 0 {
+        config.search.mmapSize = parsed
+        config.recordLocation(path: "search.mmap_size", location: location)
+      } else {
+        config.addDiagnostic("search.mmap_size must be a non-negative integer", location: location)
+      }
+    case ["search", "cache_size_kb"]:
+      if let parsed = parseInt(value), parsed > 0 {
+        config.search.cacheSizeKB = parsed
+        config.recordLocation(path: "search.cache_size_kb", location: location)
+      } else {
+        config.addDiagnostic("search.cache_size_kb must be a positive integer", location: location)
+      }
+    case ["search", "retrieval_limit"]:
+      if let parsed = parseInt(value), parsed > 0, parsed <= 5000 {
+        config.search.retrievalLimit = parsed
+        config.recordLocation(path: "search.retrieval_limit", location: location)
+      } else {
+        config.addDiagnostic(
+          "search.retrieval_limit must be an integer in 1..5000",
+          location: location)
+      }
+    case ["search", "query_min_chars"]:
+      if let parsed = parseInt(value), parsed >= 0, parsed <= 8 {
+        config.search.queryMinChars = parsed
+        config.recordLocation(path: "search.query_min_chars", location: location)
+      } else {
+        config.addDiagnostic(
+          "search.query_min_chars must be an integer in 0..8",
+          location: location)
+      }
+    case ["search", "empty_query_index_results"]:
+      if let parsed = parseBool(value) {
+        config.search.emptyQueryIndexResults = parsed
+        config.recordLocation(path: "search.empty_query_index_results", location: location)
+      } else {
+        config.addDiagnostic(
+          "search.empty_query_index_results must be true or false",
+          location: location)
+      }
+    case ["search", "optimize_interval_writes"]:
+      if let parsed = parseInt(value), parsed >= 1000 {
+        config.search.optimizeIntervalWrites = parsed
+        config.recordLocation(path: "search.optimize_interval_writes", location: location)
+      } else {
+        config.addDiagnostic(
+          "search.optimize_interval_writes must be an integer >= 1000",
+          location: location)
+      }
+    case ["search", "frecency", "enabled"]:
+      if let parsed = parseBool(value) {
+        config.search.frecencyEnabled = parsed
+        config.recordLocation(path: "search.frecency.enabled", location: location)
+      } else {
+        config.addDiagnostic("search.frecency.enabled must be true or false", location: location)
+      }
+    case ["search", "frecency", "half_life_days"]:
+      if let parsed = parseDouble(value), parsed > 0 {
+        config.search.frecencyHalfLifeDays = parsed
+        config.recordLocation(path: "search.frecency.half_life_days", location: location)
+      } else {
+        config.addDiagnostic(
+          "search.frecency.half_life_days must be a positive number",
+          location: location)
+      }
     default:
       if table.count == 2, table[0] == "mode", ModeScope(rawValue: table[1]) != nil {
         config.addDiagnostic(

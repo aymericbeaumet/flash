@@ -155,10 +155,12 @@ extension OverlayPanel {
       underline.location >= 0,
       underline.location + underline.length <= (text as NSString).length
     {
-      // Render `!<token>` underlined so the user sees Flash has locked
-      // onto that bang. NSTextField lets `attributedStringValue` flow
-      // into the live field editor (NSTextView) and the editor preserves
-      // attributes during typing because we re-apply on every refresh.
+      // Render `!<token>` underlined in the COMMAND accent (the same
+      // purple as the COMMAND mode badge) so the lock-in reads as part
+      // of the command surface rather than a generic green highlight.
+      // NSTextField flows `attributedStringValue` into the live field
+      // editor (NSTextView); the editor preserves attributes during
+      // typing because we re-apply on every refresh.
       let attributed = NSMutableAttributedString(string: text)
       attributed.addAttribute(
         .font, value: font,
@@ -169,8 +171,8 @@ extension OverlayPanel {
       attributed.addAttributes(
         [
           .underlineStyle: NSUnderlineStyle.single.rawValue,
-          .underlineColor: Self.nordAuroraGreen,
-          .foregroundColor: Self.nordAuroraGreen,
+          .underlineColor: Self.nordAuroraPurple,
+          .foregroundColor: Self.nordAuroraPurple,
         ],
         range: underline)
       if commandTextField.attributedStringValue != attributed {

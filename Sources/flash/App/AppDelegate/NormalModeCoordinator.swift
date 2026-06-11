@@ -3,6 +3,7 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
 import FlashProviders
+import FlashSearch
 
 /// One `:clipboard` history row: `preview` is the one-line label rendered in
 /// the modal, `value` the full text pasted on selection. Decoded from the
@@ -1078,6 +1079,10 @@ extension AppDelegate {
           self.candidateFinderAllAppsCacheReady = true
           self.candidateFinderAllAppsRefreshInFlight = false
         }
+        // Mirror the freshest live pool into the SearchService so the
+        // plugin RPC's `include_memory` path can fuzzy-match it without
+        // hopping to the main thread.
+        self.searchService?.updateLivePoolSnapshot(candidates)
         FlashLog.trace(
           "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) reason=\(reason)")
         self.refreshVisibleCandidateFinderResultsFromCache()
@@ -1231,14 +1236,20 @@ extension AppDelegate {
     commandLineCompletionQuery = context.query
     let trimmedQuery = context.query.trimmingCharacters(in: .whitespacesAndNewlines)
     let scored: [CommandLineCompletionMatch] = context.items.compactMap { item in
+      // Frecency boost surfaces the user's most-typed commands at the
+      // top of the empty `:` prompt without distorting the order once
+      // they start typing — fuzzy score dominates from the first
+      // character because it's an order of magnitude larger than the
+      // capped boost.
+      let boost = commandFrecencyBoost(label: item.label)
       if trimmedQuery.isEmpty {
-        return CommandLineCompletionMatch(completion: item, score: 0)
+        return CommandLineCompletionMatch(completion: item, score: boost)
       }
       guard
         let score = NormalModeDispatcher.fuzzyScore(
           query: trimmedQuery, candidate: item.label)
       else { return nil }
-      return CommandLineCompletionMatch(completion: item, score: score)
+      return CommandLineCompletionMatch(completion: item, score: score + boost)
     }
     let sorted = scored.sorted { lhs, rhs in
       if lhs.score != rhs.score { return lhs.score > rhs.score }
@@ -1260,7 +1271,28 @@ extension AppDelegate {
     }
   }
 
-  private func commandLineCompletionDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
+  /// Frecency boost for a command-line completion label. Falls back to
+  /// 0 when the SearchService is unavailable (config off, fresh DB,
+  /// label never opened). Used only by `updateCommandLineCompletions`.
+  private func commandFrecencyBoost(label: String) -> Int {
+    guard let searchService else { return 0 }
+    return searchService.frecencyBoost(forKey: FrecencyKey.command(label: label))
+  }
+
+  /// Record a frecency open against a command-line verb (`:flashlight`,
+  /// `:help`, …). Called from every successful `submitCommandLine`
+  /// branch so the empty-`:` prompt surfaces the user's actual habits.
+  private func recordCommandLineFrecency(rawInput: String) {
+    guard let searchService else { return }
+    var trimmed = rawInput.trimmingCharacters(in: .whitespaces)
+    if trimmed.hasPrefix(":") { trimmed.removeFirst() }
+    guard let verb = trimmed.split(whereSeparator: { $0.isWhitespace }).first else { return }
+    let label = verb.lowercased()
+    guard !label.isEmpty else { return }
+    searchService.recordOpen(forKey: FrecencyKey.command(label: label))
+  }
+
+  func commandLineCompletionDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
     guard !commandLineCompletionMatches.isEmpty else { return [] }
     let maxStart = max(0, commandLineCompletionMatches.count - windowSize)
     let start = min(
@@ -1307,16 +1339,68 @@ extension AppDelegate {
     }
     let trimmed = parsed.text
     candidateFinderCurrentQuery = trimmed
-    let fuzzyScore = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
 
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,
       sourceFilters: sourceFilters,
       attributeFilters: attributeFilters)
-    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
-    let scored = CandidateFinder.scoreMatches(
-      pool: pool, normalizedQuery: normalizedQuery, fuzzyScore: fuzzyScore)
-    candidateFinderMatches = CandidateFinder.sortedMatches(scored)
+    let bang = candidateFinderEmojiMode ? nil : CandidateFinder.parseBang(trimmed)
+    let indexQueryText: String?
+    if candidateFinderEmojiMode {
+      // Emoji pool is static and entirely in-memory — the DB has no
+      // rows that would shoulder it. Skip the round-trip.
+      indexQueryText = nil
+    } else if let bang {
+      // Bang mode shows ONLY the registered bangs; the FTS5 index
+      // doesn't carry them. Skip.
+      indexQueryText = bang.remainder.isEmpty ? nil : bang.remainder
+    } else {
+      indexQueryText = trimmed
+    }
+    let scope = CandidateFinderSearchScope(
+      pool: pool,
+      scoringText: scoringText,
+      indexQueryText: indexQueryText,
+      attributeFilters: attributeFilters,
+      indexCollections: nil)
+
+    // Bump the generation so any in-flight DB walk that returns AFTER
+    // this keystroke is dropped silently when its onResults fires.
+    candidateFinderIndexGenerationCounter &+= 1
+    let generation = candidateFinderIndexGenerationCounter
+
+    if let service = searchService {
+      // SearchService.search fires `onResults` synchronously first
+      // (in-memory pool result) and again asynchronously later if the
+      // DB walk found anything new. The closure captures `firstFire`
+      // by reference so it knows whether the in-flight `refreshCandidateFinder`
+      // call (which renders straight after `updateCandidateMatches`
+      // returns) is about to draw the result for us — or whether we
+      // need to re-render ourselves.
+      var firstFire = true
+      service.search(scope: scope, generation: generation) { [weak self] receivedGen, matches in
+        guard let self else { return }
+        guard receivedGen == self.candidateFinderIndexGenerationCounter else { return }
+        self.applyCandidateMatches(matches)
+        if firstFire {
+          firstFire = false
+        } else {
+          self.overlay.displayCandidateFinder(
+            query: query, items: self.candidateFinderDisplayItems())
+        }
+      }
+    } else {
+      // SearchService disabled (config off or FTS5 unavailable): run
+      // the fuzzy scorer inline so flashlight still works. This isn't
+      // a parallel codepath — it's the SearchService scoring shape
+      // collapsed onto one call site for the degraded mode.
+      let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
+      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+      let scored = CandidateFinder.scoreMatches(
+        pool: pool, normalizedQuery: normalizedQuery, fuzzyScore: fuzzy)
+      applyCandidateMatches(CandidateFinder.sortedMatches(scored))
+    }
+
     if !trimmed.isEmpty {
       let top = candidateFinderMatches.prefix(5).map { match in
         "\(match.candidate.source):\(match.candidate.name)=\(match.score)"
@@ -1325,10 +1409,18 @@ extension AppDelegate {
         "[candidate_finder] q=\"\(trimmed)\" pool=\(pool.count) "
           + "matches=\(candidateFinderMatches.count) top5=[\(top)]")
     }
-    if candidateFinderMatches.isEmpty {
+  }
+
+  /// Set `candidateFinderMatches` and clamp the selected index.
+  /// Centralised so the SearchService completion and the disabled-
+  /// mode fallback can't drift on the selection-bounds rules.
+  private func applyCandidateMatches(_ matches: [CandidateMatch]) {
+    candidateFinderMatches = matches
+    if matches.isEmpty {
       candidateFinderSelectedIndex = 0
     } else {
-      candidateFinderSelectedIndex = min(max(candidateFinderSelectedIndex, 0), candidateFinderMatches.count - 1)
+      candidateFinderSelectedIndex = min(
+        max(candidateFinderSelectedIndex, 0), matches.count - 1)
     }
   }
 
@@ -1398,7 +1490,7 @@ extension AppDelegate {
     }
   }
 
-  private func candidateFinderDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
+  func candidateFinderDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
     guard !candidateFinderMatches.isEmpty else { return [] }
     let maxStart = max(0, candidateFinderMatches.count - windowSize)
     let start = min(max(0, candidateFinderSelectedIndex - windowSize / 2), maxStart)
@@ -1432,6 +1524,13 @@ extension AppDelegate {
     // command's stdout onto the clipboard rather than just a toast.
     let (raw, captureOutput) =
       NormalModeDispatcher.commandLineClipboardModifier(rawInput)
+    // Record the verb against the frecency store so the empty-`:`
+    // completion list surfaces what the user actually runs. We record
+    // before dispatch so even an unknown command (typo or
+    // half-finished plugin install) still gets a frequency mark — the
+    // user's intent is what matters; the cost of a bad mark is bounded
+    // by the same decay all other frecency entries pay.
+    recordCommandLineFrecency(rawInput: raw)
     // `:open <args>` is a dumb forward to `/usr/bin/open` — no app-finding
     // smarts (that lives in `:flashlight`). Caught first so it never falls
     // into the candidate-finder or command-spec paths.

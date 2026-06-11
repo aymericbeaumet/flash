@@ -21,6 +21,10 @@ enum ActionDispatcher {
   ///   3. AX hit-test at the click point (`AXClick.clickAtPoint`) —
   ///      recovers inert-wrapper cases where the chip's element
   ///      exposes no AX action but the node under the point does.
+  ///      Skipped when `target.preferHostClick` is set: providers like
+  ///      tmux sit over terminal surfaces whose enclosing AX element
+  ///      reports AXPress success without actually delivering a click,
+  ///      so falling through here would silently strand the user.
   ///   4. Synthesized `CGEvent` mouse click (`synthesizeClick`) — last
   ///      resort.
   ///
@@ -49,7 +53,8 @@ enum ActionDispatcher {
     if let activate = target.activate, activate(action) {
       return true
     }
-    if let pid = target.pid,
+    if !target.preferHostClick,
+      let pid = target.pid,
       AXClick.clickAtPoint(pid: pid, nsScreenPoint: point, action: action)
     {
       return true
@@ -154,56 +159,10 @@ enum ActionDispatcher {
     return true
   }
 
-  enum MouseButtonPhase {
-    case down
-    case dragged
-    case up
-  }
-
   /// Magic number stamped on every mouse event we synthesize so we can
   /// recognise our own events bouncing back through `NSEvent` monitors
   /// and drop them instead of recursing.
   static let syntheticMouseEventTag: Int64 = 0x46_4C_53_44  // "FLSD"
-
-  /// Post a single mouse-button event (down / dragged / up) at the given
-  /// screen point without warping the cursor. Used by the normal-mode
-  /// click+drag pipeline: the physical cursor is already where the user
-  /// pressed, so we just need to deliver matching `CGEvent`s in real time
-  /// as the user drags and releases.
-  @discardableResult
-  static func synthesizeMouseButton(
-    at screenPoint: CGPoint,
-    phase: MouseButtonPhase,
-    action: JumpAction,
-    modifiers: ClickModifiers = []
-  ) -> Bool {
-    let screenH =
-      NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
-      ?? NSScreen.main?.frame.height ?? 1080
-    let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
-    let isRight = action == .rightClick
-    let button: CGMouseButton = isRight ? .right : .left
-    let eventType: CGEventType = {
-      switch phase {
-      case .down: return isRight ? .rightMouseDown : .leftMouseDown
-      case .up: return isRight ? .rightMouseUp : .leftMouseUp
-      case .dragged: return isRight ? .rightMouseDragged : .leftMouseDragged
-      }
-    }()
-    let source = CGEventSource(stateID: .combinedSessionState)
-    guard
-      let event = CGEvent(
-        mouseEventSource: source,
-        mouseType: eventType,
-        mouseCursorPosition: cgPoint,
-        mouseButton: button)
-    else { return false }
-    event.flags = modifiers.cgEventFlags
-    event.setIntegerValueField(.mouseEventClickState, value: 1)
-    event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
-    event.post(tap: .cghidEventTap)
-    return true
-  }
 
   /// Move the visible pointer to `screenPoint` without clicking.
   ///
