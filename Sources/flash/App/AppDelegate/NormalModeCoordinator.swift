@@ -587,21 +587,6 @@ extension AppDelegate {
     }
   }
 
-  /// Decision callback for `NormalModeEventTap`, invoked on the main thread for
-  /// every keyDown. INSERT is the only mode that lets keystrokes reach the
-  /// focused app; every other Flash mode is hermetic. The overlay is a
-  /// non-activating panel that can't reliably hold the system key window over a
-  /// frontmost foreign app, so this session-level tap — not the panel's own key
-  /// delivery — is the authoritative capture path. We hand the key to the
-  /// overlay, which routes it by input mode and reports whether it consumed it;
-  /// unconsumed keys (modified chords reserved for the Carbon `[mode.*]`
-  /// registry / ⌘-Tab) pass through untouched.
-  func normalModeEventTapShouldSwallow(_ cgEvent: CGEvent) -> Bool {
-    guard flashMode == .normal, !activationInFlight else { return false }
-    guard let nsEvent = NSEvent(cgEvent: cgEvent) else { return false }
-    return overlay.routeCapturedKey(nsEvent)
-  }
-
   func hasNormalModeBinding(_ cfg: Config) -> Bool {
     cfg.mode.containsAdvancedModeMapping
   }

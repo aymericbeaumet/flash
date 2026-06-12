@@ -201,7 +201,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeRecaptureToken: UInt64 = 0
   var normalModeCaptureVerificationToken: UInt64 = 0
   var normalModePendingCommandToken: UInt64 = 0
-  var normalModeEventTap: NormalModeEventTap?
   var clipboardMonitor: ClipboardMonitor?
   var windowGeometryChangeToken: UInt64 = 0
   var windowGeometryChangeInProgress = false
@@ -293,11 +292,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       movementCurrent = .app(pid: app.processIdentifier)
       appCurrent = app.processIdentifier
     }
-    normalModeEventTap = NormalModeEventTap { [weak self] cgEvent in
-      self?.normalModeEventTapShouldSwallow(cgEvent) ?? false
-    }
-    normalModeEventTap?.install()
-
     watchConfigFile()
     selectInitialModeIfNeeded()
     logPermissionState()
@@ -520,8 +514,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     candidateFinderLiveRefreshTimer = nil
     pluginStateRefreshWork?.cancel()
     pluginStateRefreshWork = nil
-    normalModeEventTap?.uninstall()
-    normalModeEventTap = nil
     clipboardMonitor?.stop()
     clipboardMonitor = nil
     monitor?.stop()

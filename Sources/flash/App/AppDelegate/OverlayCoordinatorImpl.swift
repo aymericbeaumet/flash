@@ -304,7 +304,7 @@ extension AppDelegate {
     }
   }
 
-  /// Geometric clicks (`F`/`rF`/`dF` mouse-grid commits, `pointerClick`
+  /// Geometric clicks (`F`/`sF`/`dF` mouse-grid commits, `pointerClick`
   /// replays) don't know what element they're hitting until the click
   /// has landed and the focused app has updated AX. After a short
   /// settle delay, query the focused element's role and only enter
@@ -327,14 +327,14 @@ extension AppDelegate {
   }
 
   static func mouseTargetCommitShouldEnterInsertMode(target: JumpTarget) -> Bool {
-    // `f`/`rf`/`df` commit a precise click on a known element. Enter insert
+    // `f`/`sf`/`df` commit a precise click on a known element. Enter insert
     // only when that element is a typing surface (the owning provider sets
     // `entersInsertMode`); clicking a link or button stays in normal mode
     // so keyboard navigation chains keep going.
     target.entersInsertMode
   }
 
-  // `mouseGridCommitShouldEnterInsertMode` removed: `F`/`rF`/`dF` no
+  // `mouseGridCommitShouldEnterInsertMode` removed: `F`/`sF`/`dF` no
   // longer auto-enter insert. The geometric click can land anywhere —
   // a button, a tab, a text field, blank canvas — so the only correct
   // signal is the post-click AX role, queried by

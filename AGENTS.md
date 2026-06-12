@@ -13,7 +13,7 @@ Activation can come through the `flash://` URL scheme, through the one-shot `fla
 1. **No UI surface** beyond the transparent hint overlay, the mode cell / command-line cell, the help and open-app overlays, and explicit `flash://alert_show` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
 2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint, normal-mode, command-line, help, and open-app typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
 3. **Autolaunch is install-script-owned.** `Scripts/install.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
-4. **No unowned resident helpers / no custom external IPC.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through JSOND over stdin/stdout with stderr reserved for unexpected errors; Flash owns their lifecycle, heartbeat, reload, and shutdown. Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The `flash` / `flashctl` CLI is allowed only as a fast one-shot launcher that opens `flash://...` through Launch Services.
+4. **No unowned resident helpers / no custom external IPC.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through length-prefixed MessagePack over stdin/stdout with stderr reserved for unexpected errors; Flash owns their lifecycle, heartbeat, reload, and shutdown. Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The `flash` / `flashctl` CLI is allowed only as a fast one-shot launcher that opens `flash://...` through Launch Services.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **TOML parser is hand-rolled** (small subset). Don't add `TOMLKit` / `Toml` / other deps unless we outgrow what we can hand-roll cleanly.
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
@@ -51,7 +51,7 @@ Sources/
       HintAssigner.swift             # Prefix-free label generator + memoised candidate cache
       ActionDispatcher.swift         # AXPress preferred; CGEvent click fallback
       SourceRegistry.swift           # Built-in source descriptors; activation-gated source loading + priority chain
-      PluginSystem.swift             # manifest.json, JSOND plugin process lifecycle, plugin source adapter
+      PluginSystem.swift             # manifest.json, MessagePack plugin process lifecycle, plugin source adapter
       DebugServer.swift              # loopback-only dense HTTP/SSE debug page
       CandidateFinder.swift                # Shared :open candidate preparation and app merge helpers
       ApplicationSource.swift        # Running/installed app source and flash://app_open resolver
@@ -224,7 +224,7 @@ A `JumpTarget.activate` closure overrides the default action. Use it when the un
 
 `~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, the constrained inline string table used by `mode.labels`, `#` line comments, and trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or arbitrary inline tables. Add support only if you actually need it.
 
-The user-facing top-level sections are exactly `[hints]`, `[open]`, `[plugins]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
+The user-facing top-level sections are exactly `[hints]`, `[open]`, `[plugins]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
 
 **`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
@@ -236,12 +236,15 @@ Keys:
 | `hints.min_length`                 | int            | `1`                  |
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
 | `hints.mouse_grid_steps`           | int (2..6)     | `3`                  |
-| `hints.mouse_grid_opacity`         | float (0..1)   | `0.85`               |
+| `hints.mouse_grid_opacity`         | float (0..1)   | `0.5`                |
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
+| `flashlight.precedence_alive_bonus` | int            | `10`                 |
+| `[flashlight.aliases]` entries     | string         | none                 |
+| `[flashlight.precedence]` entries  | int            | built-in source order |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
-| `mode.sequence_timeout_ms`         | int (ms)       | `300`                |
+| `mode.sequence_timeout_ms`         | int (ms)       | `1000`               |
 | `[mode.all.mappings]` entries      | `flash://` or argv-array mapping | none             |
 | `mode.normal.leader`               | string         | `"\\"`             |
 | `[mode.normal.mappings]` entries   | `flash://` or argv-array mapping | built-in normal map |
@@ -278,9 +281,11 @@ in this version and are not configurable. In the checkout they live under root
 event subscriptions, and command registrations (each command exposes one or more subcommands). `install` and `start` are
 shell strings run from the plugin root; Flash passes
 `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`, and `FLASH_PLUGIN_DATA_DIR`.
-Plugins speak JSOND over stdin/stdout: host input on stdin, successful or
-failed protocol results on stdout, unexpected errors on stderr. Plugins can
-log through the Flash logger by sending `flash.log` JSOND notifications.
+Plugins speak length-prefixed MessagePack over stdin/stdout: a 4-byte
+big-endian payload length followed by a MessagePack value. Host input goes to
+stdin, successful or failed protocol results go to stdout, and unexpected
+errors go to stderr. Plugins can log through the Flash logger by sending
+`flash.log` protocol notifications.
 Official plugin installers must keep downloaded CLI binaries under their own
 `FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
 
@@ -288,7 +293,7 @@ Official plugin installers must keep downloaded CLI binaries under their own
 Each official plugin under `Plugins/<id>/` is an independent (non-workspace)
 Cargo crate depending on the local `flash_plugin` SDK crate
 (`flash_plugin = { path = "../_rust_flash_plugin" }`), which owns all the
-generic JSOND scaffolding (framing, `initialize`/`heartbeat`/`shutdown`,
+generic MessagePack scaffolding (framing, `initialize`/`heartbeat`/`shutdown`,
 structured logging, a sandboxed `run_cli`, and the tokio runtime) and carries
 **no Flash business concepts**. A plugin's `main.rs` implements the `Plugin`
 trait; everything domain-specific lives there, never in the template. The crate

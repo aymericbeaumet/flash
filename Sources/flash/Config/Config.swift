@@ -330,8 +330,8 @@ struct Config {
         // `s` for "secondary click" (right-click). `r` was the old
         // prefix but it collided with the `r`→`R` reload pair: typing
         // `r` waited the full sequence-timeout before resolving as
-        // reload, because `rf`/`rF` were still pending. `s` has no such
-        // pair so the keystroke fires instantly.
+        // reload, because right-click hint sequences also began with `r`.
+        // `s` has no such pair so the keystroke fires instantly.
         ("sf", .flashCommand(.mouseTarget(.click(.rightClick)))),
         ("df", .flashCommand(.mouseTarget(.click(.doubleClick)))),
         ("mf", .flashCommand(.mouseTarget(.move))),

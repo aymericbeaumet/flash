@@ -200,8 +200,8 @@ final class NormalModeTests: XCTestCase {
         charactersIgnoringModifiers: " ",
         mappings: CompiledMappings(Config.Mode.defaultNormalMappings)
       ).command)
-    // With `rf` renamed to `sf`, `r` no longer prefixes any pending
-    // sequence — it resolves to reload on the first keystroke (no
+    // With right-click hints moved to the `s` prefix, `r` no longer prefixes
+    // any pending sequence — it resolves to reload on the first keystroke (no
     // sequence-timeout delay).
     XCTAssertEqual(command(chars: "r"), .reload(force: false))
     XCTAssertEqual(command(chars: ":"), .commandMode)

@@ -55,6 +55,34 @@ third_party = []
 # hot-reload across every plugin.
 watching_enabled = true
 
+[flashlight]
+# Bonus added to candidates backed by a running process, used as a
+# source-order tiebreaker after match quality ties. With the default
+# core.apps precedence below, running apps rank just ahead of installed
+# but inactive apps from the same source.
+precedence_alive_bonus = 10
+
+[flashlight.aliases]
+# Literal token substitutions applied when the token is followed by
+# whitespace. Any leading sigil is part of the key.
+# "!g" = "!google"
+# "@ft" = "@firefox.tabs"
+
+[flashlight.precedence]
+# Source-order tiebreaker applied after match quality ties. Keys are
+# source labels or parent prefixes; entries not listed have weight 0.
+tmux = 100
+firefox = 80
+safari = 80
+chrome = 80
+chromium = 80
+brave = 80
+edge = 80
+arc = 80
+vivaldi = 80
+opera = 80
+"core.apps" = 40
+
 [mode]
 # Labels shown in the mode overlay. The overlay width is based on the
 # longest configured label, so compact labels such as N/I/C shrink it.

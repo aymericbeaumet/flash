@@ -47,11 +47,11 @@ extension NormalModeDispatcher {
         ## Mouse Targets
 
         - `f` targets clickable elements discovered from the focused app, then enters insert mode.
-        - `rf` right-clicks a discovered target, then enters insert mode.
+        - `sf` right-clicks a discovered target, then enters insert mode.
         - `df` double-clicks a discovered target, then enters insert mode.
         - `mf` moves the cursor to a discovered target.
         - `F` starts mouse grid mode for a precise screen position, then enters insert mode after the click.
-        - `rF` / `dF` right-click or double-click with mouse grid mode, then enter insert mode.
+        - `sF` / `dF` right-click or double-click with mouse grid mode, then enter insert mode.
         - `mF` moves the cursor with mouse grid mode.
 
         ## Command Line

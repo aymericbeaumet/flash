@@ -14,10 +14,10 @@ Important defaults:
 - `n` sends Cmd-N to open a new window.
 - `r` reloads the current app view with Cmd-R.
 - `R` force-reloads with Cmd-Shift-R, matching browser hard reload semantics.
-- `f`, `rf`, and `df` target discovered clickable elements, then enter insert
+- `f`, `sf`, and `df` target discovered clickable elements, then enter insert
   mode as explicit mouse interactions.
 - `mf` moves the cursor to a discovered target.
-- `F`, `rF`, and `dF` use mouse grid mode for precise screen clicks, then enter
+- `F`, `sF`, and `dF` use mouse grid mode for precise screen clicks, then enter
   insert mode.
 - `mF` moves the cursor with mouse grid mode.
 - `:mappings` opens the resolved mapping table, including expanded leader

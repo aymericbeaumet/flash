@@ -59,6 +59,19 @@ ignored_apps = []
 [plugins]
 third_party = []
 
+[flashlight]
+precedence_alive_bonus = 10
+
+[flashlight.aliases]
+# "!g" = "!google"
+# "@ft" = "@firefox.tabs"
+
+[flashlight.precedence]
+tmux = 100
+firefox = 80
+safari = 80
+"core.apps" = 40
+
 [mode]
 labels = { normal = "N", insert = "I", command = "C" }
 
@@ -134,7 +147,9 @@ log_level = "info"
 
 When a `[mode.all.mappings]` mapping points to `flash://mode_normal`, Flash shows the persistent mode cell and starts in normal mode. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings do not enable advanced mode. Without an advanced-mode mapping, the mode cell is hidden and Flash behaves as a direct action launcher unless `flash://mode_normal` is invoked manually.
 
-`[plugins] third_party` accepts `github:user/project` and `file:<path>` entries. Every plugin has a `manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`, event subscriptions, and command registrations. Each plugin registers one or more commands (the verb after `:`), and each command has one or more subcommands. Flash runs plugin commands as managed child processes over JSOND: stdin for host input, stdout for protocol results, stderr for unexpected errors. Official bundled plugins are always enabled in this version, install their CLIs under `FLASH_PLUGIN_DATA_DIR`, and include `:spotify`, `:slack`, and `:media` commands with explicit login/status/run subcommands. A plugin command may ask Flash to raise a window by returning a `target_pid`; Flash activates it and records the jump into the `ctrl-o` / `ctrl-i` movement history. The tmux plugin uses this for jump-to commands: `:tmux session <name>` and `:tmux window <session:index>` switch the active tmux client and bring its terminal forward, so you can bind a hotkey such as `flash://plugin_command?command=tmux&subcommand=window&args=main:1`.
+`[flashlight.aliases]` rewrites completed query tokens such as `"!g" = "!google"` or `"@ft" = "@firefox.tabs"`. `[flashlight.precedence]` adjusts source-order tiebreakers after match quality ties; entries not listed fall back to weight `0`, and `precedence_alive_bonus` nudges running app candidates ahead of inactive app rows from the same source.
+
+`[plugins] third_party` accepts `github:user/project` and `file:<path>` entries. Every plugin has a `manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`, event subscriptions, and command registrations. Each plugin registers one or more commands (the verb after `:`), and each command has one or more subcommands. Flash runs plugin commands as managed child processes over length-prefixed MessagePack on stdin/stdout: a 4-byte big-endian payload length followed by a MessagePack value; stderr is reserved for unexpected errors. Official bundled plugins are always enabled in this version, install their CLIs under `FLASH_PLUGIN_DATA_DIR`, and include `:spotify`, `:slack`, and `:media` commands with explicit login/status/run subcommands. A plugin command may ask Flash to raise a window by returning a `target_pid`; Flash activates it and records the jump into the `ctrl-o` / `ctrl-i` movement history. The tmux plugin uses this for jump-to commands: `:tmux session <name>` and `:tmux window <session:index>` switch the active tmux client and bring its terminal forward, so you can bind a hotkey such as `flash://plugin_command?command=tmux&subcommand=window&args=main:1`.
 
 Normal mode supports counts such as `10u` and `2[t`, `gg` / `G` for instant top/bottom scrolling, `g1` through `g9` for environment-specific indexed selection, `r` / `R` for reload / force reload, `[h` / `]h` for target page history, `[t` / `]t` for tab previous/next, `[a` / `]a` for app previous/next (MRU), `ctrl-o` / `ctrl-i` for Flash movement history, command-line mode with `:`, and `?` for help. Command-line forms include `:help [topic]`, `:q[uit]`, `:q[uit]!`, `:w[rite]`, `:p[rint]`, `:e[dit]`, `:open`, `:open <query>`, `:flashlight`, `:flashlight <query>`, `:plugins`, `:<plugin-command> <subcommand> [args...]`, `:new`, `:tabnew`, `:bd[elete]`, `:cl[ose]`, `:find`, `:u[ndo]`, `:red[o]`, `:y[ank]`, `:d[elete]`, `:pu[t]`, and `:%y[ank]`. `:open <query>` and `:flashlight <query>` show typo-tolerant results above the command line across source-labelled results such as `[app] Firefox`, `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, and `[slack] #general`; use arrows or tab / shift-tab to select and return to open. Command and sub-command suggestions (`:help <topic>`, `:plugins <sub>`, `:<plugin-command> <subcommand>`) are separate: each candidate has a visible cosmetic label and an underlying value, `<tab>` inserts the value without sending so you can keep typing arguments, `<CR>` inserts the value and sends, and arrows / shift-tab cycle the selection. Source candidates follow the `{ source, name, url }` contract, and `url` is openable whenever present; app URLs are absolute `file://` URLs to the `.app` bundle. `[open] ignored_apps = ["Flash", "com.flash.app"]` hides matching app candidates from `:open`, `:flashlight`, and `flash://app_open?name=...`.
 
@@ -172,7 +187,7 @@ Flash is one resident, headless macOS app:
 - **No arbitrary global key capture.** Native modified-key mappings use Carbon `RegisterEventHotKey` only for explicit `[mode.*]` entries. No event taps or Input Monitoring. Hint and normal-mode typing happens inside the overlay window through standard `NSWindow` key handling.
 - **URL actions are canonical.** Native mappings and the CLI resolve to the same `URLCommand` parser used by `flash://` AppleEvents.
 - **AX-event-driven prepared model.** The focused app is pre-walked from Accessibility notifications and config revisions so `flash://mouse_target` can render from a fresh prepared model when available.
-- **Managed plugin children.** App-specific dynamic integrations may run as Flash-owned child processes over stdin/stdout JSOND. No sockets, Mach services, daemonized clients, or arbitrary global key capture are added.
+- **Managed plugin children.** App-specific dynamic integrations may run as Flash-owned child processes over length-prefixed MessagePack on stdin/stdout. No sockets, Mach services, daemonized clients, or arbitrary global key capture are added.
 - **Source chain** per focused app: the bundled tmux plugin for terminals running tmux, then the generic `AccessibilityProvider` for native and web content exposed through Accessibility. Sources can also feed `:open`, app activation, document URL resolution, and source-owned tab actions.
 
 Public SPI lives in `FlashCore` (`FlashSource`, `JumpTarget`, `AppContext`, `JumpAction`). Add a source by implementing the protocol and registering a `SourceDescriptor` in `Sources/flash/App/SourceRegistry.swift`; choose an activation policy so sources are only loaded while the corresponding app class is running.

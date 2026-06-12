@@ -99,6 +99,12 @@ enum FlashLog {
     lock.unlock()
   }
 
+  static func wouldEmit(_ level: Level) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return level >= minLevel || !sinks.isEmpty
+  }
+
   static func coreSource(fileID: String, function: String) -> String {
     let file = fileID.split(separator: "/").last.map(String.init) ?? fileID
     return "core:\(file).\(function)"

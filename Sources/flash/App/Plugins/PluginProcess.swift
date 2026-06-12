@@ -143,6 +143,7 @@ final class PluginProcess {
   /// return a snapshot of jump targets for the given context. Used on
   /// each activation when the manifest declares `volatile: true`.
   func discoverTargets(context: AppContext, timeout: TimeInterval) -> [JumpTarget] {
+    let startedAt = DispatchTime.now()
     let semaphore = DispatchSemaphore(value: 0)
     var snapshot: PluginSnapshot?
     let frame: [String: Any] = [
@@ -166,13 +167,35 @@ final class PluginProcess {
       }
       semaphore.signal()
     }
-    _ = semaphore.wait(timeout: .now() + timeout)
+    let waitResult = semaphore.wait(timeout: .now() + timeout)
     let snap = snapshot ?? {
       lock.lock()
       let s = self.snapshot
       lock.unlock()
       return s
     }()
+    let contextMismatch = snap.contextPID.map { $0 != context.processID } ?? false
+    if FlashLog.wouldEmit(.debug) {
+      var fields: [String: String] = [
+        "plugin": manifest.id,
+        "pid": "\(context.processID)",
+        "bundle": context.bundleIdentifier,
+        "snapshot_targets": "\(snap.targets.count)",
+        "targets": "\(contextMismatch ? 0 : snap.targets.count)",
+        "timed_out": "\(waitResult == .timedOut)",
+        "snapshot_fallback": "\(snapshot == nil)",
+        "context_mismatch": "\(contextMismatch)",
+        "timeout_ms": "\(Int((timeout * 1000).rounded()))",
+        "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
+      ]
+      if let contextPID = snap.contextPID {
+        fields["snapshot_pid"] = "\(contextPID)"
+      }
+      FlashLog.debug(
+        "[plugin] discover_targets",
+        fields: fields,
+        source: "plugin:\(manifest.id)")
+    }
     if let contextPID = snap.contextPID, contextPID != context.processID {
       return []
     }
@@ -1238,5 +1261,10 @@ final class PluginProcess {
     }
     reloadWork = work
     queue.asyncAfter(deadline: .now() + .milliseconds(300), execute: work)
+  }
+
+  private static func elapsedMilliseconds(since start: DispatchTime) -> String {
+    let nanos = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
+    return String(format: "%.2f", Double(nanos) / 1_000_000)
   }
 }

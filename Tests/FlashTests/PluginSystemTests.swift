@@ -187,7 +187,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertTrue(manifest.mappings.isEmpty, "absent mappings key defaults to []")
   }
 
-  func testManifestDecodesLegacyEventsKey() throws {
+  func testManifestRejectsUnknownEventsKey() throws {
     let root = try temporaryPluginRoot(
       manifest:
         """
@@ -206,10 +206,9 @@ final class PluginSystemTests: XCTestCase {
         """)
     defer { try? FileManager.default.removeItem(at: root) }
 
-    let manifest = try PluginManifest.load(from: root)
-    XCTAssertEqual(
-      manifest.subscriptions.count, 2,
-      "legacy `events` key still populates `subscriptions`")
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue(String(describing: error).contains("manifest.json unknown field events"))
+    }
   }
 
   func testManifestDecodesMappingsWithDefaults() throws {

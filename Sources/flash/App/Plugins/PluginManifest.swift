@@ -384,8 +384,7 @@ struct PluginManifest: Codable, Equatable {
   var description: String
   var install: String
   var start: String
-  /// Host events this plugin subscribes to (manifest key `subscriptions`; the
-  /// legacy key `events` still decodes). Empty means "every event".
+  /// Host events this plugin subscribes to. Empty means "every event".
   var subscriptions: [PluginEventSubscription]
   /// Every surface the plugin drives, as one unified table — see
   /// ``PluginProvider``. The per-kind views below (`commands`, `mappings`,
@@ -469,11 +468,9 @@ struct PluginManifest: Codable, Equatable {
     providers.contains { $0.kind == .candidates }
   }
 
-  enum CodingKeys: String, CodingKey {
+  enum CodingKeys: String, CodingKey, CaseIterable {
     case id, name, version, description, install, start, subscriptions, providers, priority
     case volatile
-    /// Legacy alias for `subscriptions`, still accepted on decode.
-    case events
     case bundleIDs = "bundle_ids"
     case requestTimeoutMs = "request_timeout_ms"
   }
@@ -510,10 +507,7 @@ struct PluginManifest: Codable, Equatable {
     self.description = try c.decode(String.self, forKey: .description)
     self.install = try c.decode(String.self, forKey: .install)
     self.start = try c.decode(String.self, forKey: .start)
-    self.subscriptions =
-      try c.decodeIfPresent([PluginEventSubscription].self, forKey: .subscriptions)
-      ?? c.decodeIfPresent([PluginEventSubscription].self, forKey: .events)
-      ?? []
+    self.subscriptions = try c.decodeIfPresent([PluginEventSubscription].self, forKey: .subscriptions) ?? []
     self.providers = try c.decodeIfPresent([PluginProvider].self, forKey: .providers) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
@@ -540,9 +534,20 @@ struct PluginManifest: Codable, Equatable {
   static func load(from root: URL) throws -> PluginManifest {
     let url = root.appendingPathComponent("manifest.json")
     let data = try Data(contentsOf: url)
+    try rejectUnknownTopLevelKeys(in: data)
     let manifest = try JSONDecoder().decode(PluginManifest.self, from: data)
     try manifest.validate()
     return manifest
+  }
+
+  private static func rejectUnknownTopLevelKeys(in data: Data) throws {
+    let object = try JSONSerialization.jsonObject(with: data)
+    guard let dictionary = object as? [String: Any] else { return }
+    let allowed = Set(CodingKeys.allCases.map(\.stringValue))
+    let unknown = Set(dictionary.keys).subtracting(allowed)
+    if let key = unknown.sorted().first {
+      throw PluginError.invalidManifest("manifest.json unknown field \(key)")
+    }
   }
 
   func validate() throws {
