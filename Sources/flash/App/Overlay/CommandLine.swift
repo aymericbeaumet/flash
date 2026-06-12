@@ -33,7 +33,9 @@ extension OverlayPanel {
 
   func configureCommandPrompt(panelFrame: CGRect) {
     guard commandPromptVisible else { return }
-    let fontSize = Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize))
+    let fontSize = Self.commandPromptFontSize(
+      statusBarFontSize: Self.statusBarFontSize(
+        overlayFontSize: CGFloat(overlayConfig.fontSize)))
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let prompt: String
     if inputMode == .commandLine {
@@ -48,17 +50,16 @@ extension OverlayPanel {
     }
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let scale = snapshot.mainScale
-    let leftContentMaxX = modeBadgeLayer.frame.minX + modeBadgeButtonLayer.frame.maxX
     let frame = Self.commandPromptFrame(
-      statusBarFrame: modeBadgeLayer.frame,
-      leftContentMaxX: leftContentMaxX,
+      visibleFrame: snapshot.mainVisibleFrame,
+      panelFrame: panelFrame,
       prompt: prompt,
       fontSize: fontSize)
     commandPromptLayer.frame = Self.snap(
       frame,
       scale: scale)
     commandPromptLayer.contentsScale = scale
-    let palette = commandPalette()
+    let palette = commandInputPalette()
     commandPromptLayer.colors = [palette.bottomCG, palette.topCG]
     commandPromptLayer.borderColor = palette.borderCG
 
@@ -135,22 +136,32 @@ extension OverlayPanel {
   }
 
   static func commandPromptFrame(
-    statusBarFrame: CGRect,
-    leftContentMaxX: CGFloat,
+    visibleFrame: CGRect,
+    panelFrame: CGRect,
     prompt: String,
     fontSize: CGFloat
   ) -> CGRect {
-    let localX = leftContentMaxX + statusBarMinimumGap
-    let maxWidth = max(
-      120,
-      statusBarFrame.maxX - localX - statusBarHorizontalPadding)
-    let measuredCount = max(prompt.count, 14)
-    let width = min(max(96, CGFloat(measuredCount) * fontSize * 0.62 + 18), maxWidth)
+    let availableWidth = max(
+      180,
+      visibleFrame.width - statusBarEdgePadding * 2)
+    let maxWidth = max(180, min(620, availableWidth))
+    let measuredCount = max(prompt.count, 18)
+    let naturalWidth = CGFloat(measuredCount) * fontSize * 0.62 + 26
+    let minimumWidth = min(360, maxWidth)
+    let width = min(max(minimumWidth, naturalWidth), maxWidth)
+    let height = ceil(max(fontSize + 16, 32))
+    let minY = visibleFrame.minY - panelFrame.minY + 24
+    let maxY = visibleFrame.maxY - panelFrame.minY - height - 24
+    let centeredY = visibleFrame.midY - panelFrame.minY - height / 2
     return CGRect(
-      x: localX,
-      y: statusBarFrame.minY,
+      x: visibleFrame.midX - panelFrame.minX - width / 2,
+      y: max(minY, min(centeredY, maxY)),
       width: width,
-      height: statusBarFrame.height)
+      height: height)
+  }
+
+  static func commandPromptFontSize(statusBarFontSize: CGFloat) -> CGFloat {
+    max(12, statusBarFontSize - 1)
   }
 
   func hideCommandTextField() {

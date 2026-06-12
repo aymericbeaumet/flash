@@ -8,9 +8,9 @@ import QuartzCore
 /// status-bar layer to keep the surrounding overlay code stable.
 extension OverlayPanel {
   static let statusBarEdgePadding: CGFloat = 28
-  static let statusBarHorizontalPadding: CGFloat = statusBarEdgePadding
   static let statusBarMinimumGap: CGFloat = 12
   static let statusBarMaximumAppNameWidth: CGFloat = 220
+  static let statusBarMinimumRightTextWidth: CGFloat = 240
 
   func setModeBadge(text: String, visible: Bool, captureInput: Bool, mode: FlashMode) {
     FlashLog.trace(
@@ -214,20 +214,13 @@ extension OverlayPanel {
     let maxAppWidth = max(
       0,
       min(Self.statusBarMaximumAppNameWidth, barFrame.width * 0.22))
-    let appWidth = min(measuredAppWidth, maxAppWidth)
-    statusAppLabel.frame = CGRect(
-      x: contentX,
-      y: textY,
-      width: appWidth,
-      height: textHeight)
-    statusAppLabel.font = rightFont
-    statusAppLabel.fontSize = fontSize
-    statusAppLabel.foregroundColor = Self.tmuxGrey245CG
-    statusAppLabel.contentsScale = scale
-    statusAppLabel.isHidden = appText.isEmpty || appWidth <= 0
-    statusAppLabel.string = appText
-
-    let modeX = contentX + appWidth + (appWidth > 0 ? Self.statusBarMinimumGap : 0)
+    let rightDisplayText = Self.statusRightDisplayText(statusRightText)
+    let rightReservedWidth = rightDisplayText.isEmpty
+      ? 0
+      : min(
+        max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
+        barFrame.width * 0.52)
+    let modeX = contentX
     let leftLabel = Self.statusLeftText(modeText: text)
     modeBadgeButtonLayer.frame = CGRect(
       x: modeX,
@@ -239,14 +232,15 @@ extension OverlayPanel {
     modeBadgeButtonLayer.borderColor = palette.borderCG
 
     modeBadgeLabel.frame = CGRect(
-      x: 6,
+      x: 0,
       y: 0,
-      width: max(1, leftWidth - 12),
+      width: max(1, leftWidth),
       height: textHeight)
     modeBadgeLabel.font = labelFont
     modeBadgeLabel.fontSize = fontSize
     modeBadgeLabel.foregroundColor = palette.foregroundCG
     modeBadgeLabel.contentsScale = scale
+    modeBadgeLabel.alignmentMode = .center
     modeBadgeLabel.string = NSAttributedString(
       string: leftLabel,
       attributes: [
@@ -254,7 +248,27 @@ extension OverlayPanel {
         .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
       ])
 
-    let rightX = modeBadgeButtonLayer.frame.maxX + Self.statusBarMinimumGap
+    let appX = modeBadgeButtonLayer.frame.maxX + Self.statusBarMinimumGap
+    let appAvailableWidth = max(
+      0,
+      barFrame.width - appX - Self.statusBarEdgePadding
+        - (rightReservedWidth > 0 ? Self.statusBarMinimumGap + rightReservedWidth : 0))
+    let appWidth = min(measuredAppWidth, maxAppWidth, appAvailableWidth)
+    statusAppLabel.frame = CGRect(
+      x: appX,
+      y: textY,
+      width: appWidth,
+      height: textHeight)
+    statusAppLabel.font = rightFont
+    statusAppLabel.fontSize = fontSize
+    statusAppLabel.foregroundColor = Self.tmuxGrey245CG
+    statusAppLabel.contentsScale = scale
+    statusAppLabel.isHidden = appText.isEmpty || appWidth <= 0
+    statusAppLabel.string = appText
+
+    let rightX =
+      (appWidth > 0 ? statusAppLabel.frame.maxX : modeBadgeButtonLayer.frame.maxX)
+      + Self.statusBarMinimumGap
     let rightWidth = max(
       0,
       barFrame.width - rightX - Self.statusBarEdgePadding)
@@ -267,9 +281,9 @@ extension OverlayPanel {
     statusRightLabel.fontSize = fontSize
     statusRightLabel.foregroundColor = Self.tmuxGrey245CG
     statusRightLabel.contentsScale = scale
-    statusRightLabel.isHidden = commandPromptVisible
+    statusRightLabel.isHidden = rightDisplayText.isEmpty
     statusRightLabel.string = FlashStatusBarRenderer.attributedStatusString(
-      from: Self.statusRightDisplayText(statusRightText),
+      from: rightDisplayText,
       font: rightFont)
   }
 
@@ -279,7 +293,7 @@ extension OverlayPanel {
     fontSize: CGFloat
   ) -> CGFloat {
     let count = max(labels.longestCount, currentText.count)
-    return max(fontSize + 14, CGFloat(count) * fontSize * 0.64 + 8)
+    return max(fontSize + 18, CGFloat(count) * fontSize * 0.66 + 16)
   }
 
   static func statusBarFontSize(overlayFontSize: CGFloat) -> CGFloat {
@@ -364,9 +378,7 @@ extension OverlayPanel {
     candidateFinderResultsVisible: Bool,
     transientContentVisible: Bool
   ) -> Bool {
-    guard modeBadgeVisible, !commandPromptVisible,
-      !candidateFinderResultsVisible, !transientContentVisible
-    else { return false }
+    guard modeBadgeVisible, !transientContentVisible else { return false }
     for screen in snapshot.screens {
       let menuBand = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
       let hoverHeight = max(menuBand, 4)

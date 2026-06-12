@@ -3,7 +3,7 @@ import FlashCore
 import QuartzCore
 
 /// Candidate finder results panel: the list of `:open` /
-/// `:flashlight` matches that appears below the top command-line prompt.
+/// `:flashlight` matches that appears below the centered command-line prompt.
 /// Renders as a single multi-line `CATextLayer` so highlighting comes
 /// for free via `NSAttributedString`.
 extension OverlayPanel {
@@ -52,8 +52,8 @@ extension OverlayPanel {
       return
     }
 
-    // Text draws top-to-bottom; with the prompt in the top status bar,
-    // the highest-ranked row should appear first, closest to the prompt.
+    // Text draws top-to-bottom; the highest-ranked row should appear
+    // first, closest to the prompt.
     let visualItems = shownItems
     let fontSize = max(CGFloat(overlayConfig.fontSize), 11)
     let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
@@ -147,7 +147,7 @@ extension OverlayPanel {
       CGRect(x: x, y: y, width: width, height: height),
       scale: scale)
     candidateFinderResultsLayer.contentsScale = scale
-    let palette = commandPalette()
+    let palette = commandInputPalette()
     candidateFinderResultsLayer.colors = [palette.bottomCG, palette.topCG]
     candidateFinderResultsLayer.borderColor = palette.borderCG
 

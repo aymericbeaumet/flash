@@ -93,17 +93,42 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.insertPalette.foregroundCG, OverlayPanel.nordPolarNight0CG)
   }
 
-  func testCommandPromptFrameLivesInStatusBarAfterModeButton() {
-    let frame = OverlayPanel.commandPromptFrame(
-      statusBarFrame: CGRect(x: 0, y: 1079, width: 1728, height: 38),
-      leftContentMaxX: 70,
-      prompt: ":open firefox",
-      fontSize: 14)
+  func testCommandModeButtonPaletteUsesHighlightedBackground() {
+    XCTAssertEqual(OverlayPanel.commandPaletteValue.topCG, OverlayPanel.nordAuroraPurpleCG)
+    XCTAssertEqual(OverlayPanel.commandPaletteValue.bottomCG, OverlayPanel.nordAuroraPurpleCG)
+    XCTAssertEqual(OverlayPanel.commandPaletteValue.foregroundCG, OverlayPanel.nordPolarNight0CG)
+  }
 
-    XCTAssertEqual(frame.minX, 82)
-    XCTAssertEqual(frame.minY, 1079)
-    XCTAssertEqual(frame.height, 38)
-    XCTAssertGreaterThanOrEqual(frame.width, 120)
+  func testCommandPromptFontSizeIsSmallerThanStatusBar() {
+    XCTAssertEqual(OverlayPanel.commandPromptFontSize(statusBarFontSize: 14), 13)
+    XCTAssertEqual(OverlayPanel.commandPromptFontSize(statusBarFontSize: 13), 12)
+  }
+
+  func testCommandPromptFrameIsCenteredInVisibleScreen() {
+    let frame = OverlayPanel.commandPromptFrame(
+      visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
+      panelFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      prompt: ":open firefox",
+      fontSize: 13)
+
+    XCTAssertEqual(frame.width, 360)
+    XCTAssertEqual(frame.height, 32)
+    XCTAssertEqual(frame.midX, 864)
+    XCTAssertEqual(frame.midY, 539.5)
+  }
+
+  func testStatusBarPlacesActiveAppAfterModeButton() {
+    let panel = OverlayPanel()
+    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    panel.setStatusBarModel(
+      FlashStatusBarModel(
+        appText: "Safari",
+        modeText: "NORMAL",
+        rightText: "#[fg=colour178]Sat Jun 13 09:08"))
+    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+
+    XCTAssertGreaterThan(panel.statusAppLabel.frame.minX, panel.modeBadgeButtonLayer.frame.maxX)
+    XCTAssertEqual(panel.modeBadgeLabel.alignmentMode, .center)
   }
 
   func testStatusBarUsesCurvedScreenEdgePadding() {
@@ -130,7 +155,7 @@ final class StatusBarTests: XCTestCase {
         commandPromptVisible: false,
         candidateFinderResultsVisible: false,
         transientContentVisible: false))
-    XCTAssertFalse(
+    XCTAssertTrue(
       OverlayPanel.statusBarShouldYieldToSystemMenu(
         point: CGPoint(x: 800, y: 1100),
         snapshot: snapshot,
@@ -140,13 +165,13 @@ final class StatusBarTests: XCTestCase {
         transientContentVisible: false))
   }
 
-  func testCandidateFinderResultsRenderBelowTopCommandPrompt() {
+  func testCandidateFinderResultsRenderBelowCenteredCommandPrompt() {
     let y = OverlayPanel.candidateFinderResultsY(
-      commandPromptFrame: CGRect(x: 82, y: 1079, width: 180, height: 38),
+      commandPromptFrame: CGRect(x: 684, y: 523.5, width: 360, height: 32),
       height: 120,
       minimumY: 10)
 
-    XCTAssertEqual(y, 953)
+    XCTAssertEqual(y, 397.5)
   }
 
   func testCandidateFinderResultsClampToVisibleArea() {

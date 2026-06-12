@@ -260,7 +260,7 @@ final class OverlayPanel: NSPanel {
     modeBadgeButtonLayer.cornerRadius = 4
     modeBadgeButtonLayer.borderWidth = 0
     modeBadgeButtonLayer.actions = OverlayPanel.noActions
-    modeBadgeLabel.alignmentMode = .left
+    modeBadgeLabel.alignmentMode = .center
     modeBadgeLabel.actions = OverlayPanel.noActions
     modeBadgeButtonLayer.sublayers = [modeBadgeLabel]
     statusRightLabel.alignmentMode = .right

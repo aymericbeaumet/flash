@@ -53,10 +53,15 @@ extension OverlayPanel {
     foregroundCG: nordAuroraGreenCG,
     borderCG: nordAuroraYellowCG)
   static let commandPaletteValue = ModeBadgePalette(
+    topCG: nordAuroraPurpleCG,
+    bottomCG: nordAuroraPurpleCG,
+    foregroundCG: nordPolarNight0CG,
+    borderCG: nordAuroraYellowCG)
+  static let commandInputPaletteValue = ModeBadgePalette(
     topCG: nordPolarNight0CG,
     bottomCG: nordPolarNight0CG,
-    foregroundCG: nordAuroraPurpleCG,
-    borderCG: nordAuroraYellowCG)
+    foregroundCG: nordSnowStorm2CG,
+    borderCG: nordAuroraPurpleCG)
 
   func modeBadgePalette() -> ModeBadgePalette {
     switch modeBadgeStyle {
@@ -67,4 +72,5 @@ extension OverlayPanel {
   }
 
   func commandPalette() -> ModeBadgePalette { Self.commandPaletteValue }
+  func commandInputPalette() -> ModeBadgePalette { Self.commandInputPaletteValue }
 }
