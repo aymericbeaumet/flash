@@ -92,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var monitor: AppMonitor!
   var debugServer: DebugServer?
   var overlay: OverlayPanel!
+  var statusBarController: FlashStatusBarController?
   var alertPanel: AlertPanel!
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
@@ -273,6 +274,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
     overlay.warmPool(count: 256)
+    statusBarController = FlashStatusBarController(
+      overlay: overlay,
+      pluginSnapshotsProvider: { [weak self] in
+        self?.pluginManager.statusSnapshots() ?? []
+      })
+    statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
     alertPanel = AlertPanel()
 
     let dispatch: (URLCommand) -> Void = { [weak self] cmd in
@@ -388,6 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         return
       }
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        self.statusBarController?.updateFocusedApplication(app)
         self.registry.refreshRunningApplications()
         self.refreshEffectiveMappings(for: app.bundleIdentifier)
         self.pluginManager.emit(
@@ -409,6 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self.cancelOverlay()
         self.scheduleNormalModeRecapture()
       } else {
+        self.statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
         self.cancelOverlay()
         self.scheduleNormalModeRecapture()
       }
@@ -516,6 +525,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginStateRefreshWork = nil
     clipboardMonitor?.stop()
     clipboardMonitor = nil
+    statusBarController?.stop()
+    statusBarController = nil
     monitor?.stop()
     pluginManager.stop()
     debugServer?.stop()

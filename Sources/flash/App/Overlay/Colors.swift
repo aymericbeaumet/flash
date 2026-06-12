@@ -27,6 +27,8 @@ extension OverlayPanel {
   static let nordAuroraGreen = NSColor(calibratedRed: 0.64, green: 0.75, blue: 0.55, alpha: 1)
   static let nordAuroraYellow = NSColor(calibratedRed: 0.92, green: 0.80, blue: 0.55, alpha: 1)
   static let nordAuroraPurple = NSColor(calibratedRed: 0.71, green: 0.56, blue: 0.68, alpha: 1)
+  static let tmuxGrey245 = NSColor(calibratedWhite: 0.54, alpha: 1)
+  static let tmuxRed196 = NSColor(calibratedRed: 1.00, green: 0.00, blue: 0.00, alpha: 1)
 
   static let nordPolarNight0CG = nordPolarNight0.cgColor
   static let nordPolarNight1CG = nordPolarNight1.cgColor
@@ -37,25 +39,24 @@ extension OverlayPanel {
   static let nordAuroraGreenCG = nordAuroraGreen.cgColor
   static let nordAuroraYellowCG = nordAuroraYellow.cgColor
   static let nordAuroraPurpleCG = nordAuroraPurple.cgColor
+  static let tmuxGrey245CG = tmuxGrey245.cgColor
+  static let tmuxRed196CG = tmuxRed196.cgColor
 
-  // INSERT inverts the badge: a filled frost chip with dark text, so the one
-  // mode that lets keystrokes through reads as a solid, unmistakable block
-  // versus the outlined NORMAL/COMMAND badges.
   static let insertPalette = ModeBadgePalette(
     topCG: nordFrost2CG,
     bottomCG: nordFrost2CG,
     foregroundCG: nordPolarNight0CG,
-    borderCG: nordFrost2CG)
+    borderCG: nordAuroraYellowCG)
   static let normalPalette = ModeBadgePalette(
-    topCG: nordPolarNight1CG,
+    topCG: nordPolarNight0CG,
     bottomCG: nordPolarNight0CG,
     foregroundCG: nordAuroraGreenCG,
-    borderCG: nordAuroraGreenCG)
+    borderCG: nordAuroraYellowCG)
   static let commandPaletteValue = ModeBadgePalette(
-    topCG: nordPolarNight1CG,
+    topCG: nordPolarNight0CG,
     bottomCG: nordPolarNight0CG,
     foregroundCG: nordAuroraPurpleCG,
-    borderCG: nordAuroraPurpleCG)
+    borderCG: nordAuroraYellowCG)
 
   func modeBadgePalette() -> ModeBadgePalette {
     switch modeBadgeStyle {

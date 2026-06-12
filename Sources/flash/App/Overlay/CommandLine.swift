@@ -33,7 +33,7 @@ extension OverlayPanel {
 
   func configureCommandPrompt(panelFrame: CGRect) {
     guard commandPromptVisible else { return }
-    let fontSize = max(CGFloat(overlayConfig.fontSize), 11)
+    let fontSize = Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize))
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let prompt: String
     if inputMode == .commandLine {
@@ -47,17 +47,15 @@ extension OverlayPanel {
       prompt = "\(commandPromptPrefix)\(commandWithCursor)"
     }
     let snapshot = OverlayPanel.currentScreenSnapshot()
-    let visible = snapshot.mainVisibleFrame
     let scale = snapshot.mainScale
-    let gap: CGFloat = 6
-    let height = modeBadgeLayer.frame.height
-    let localX = modeBadgeLayer.frame.maxX + gap
-    let localY = modeBadgeLayer.frame.minY
-    let maxWidth = max(120, visible.maxX - panelFrame.minX - localX - 10)
-    let measuredCount = max(prompt.count, 14)
-    let width = min(max(96, CGFloat(measuredCount) * fontSize * 0.62 + 18), maxWidth)
+    let leftContentMaxX = modeBadgeLayer.frame.minX + modeBadgeButtonLayer.frame.maxX
+    let frame = Self.commandPromptFrame(
+      statusBarFrame: modeBadgeLayer.frame,
+      leftContentMaxX: leftContentMaxX,
+      prompt: prompt,
+      fontSize: fontSize)
     commandPromptLayer.frame = Self.snap(
-      CGRect(x: localX, y: localY, width: width, height: height),
+      frame,
       scale: scale)
     commandPromptLayer.contentsScale = scale
     let palette = commandPalette()
@@ -65,7 +63,7 @@ extension OverlayPanel {
     commandPromptLayer.borderColor = palette.borderCG
 
     let horizontalPadding: CGFloat = 4
-    let availableTextWidth = max(10, width - horizontalPadding * 2)
+    let availableTextWidth = max(10, commandPromptLayer.frame.width - horizontalPadding * 2)
     let textWidth = ceil((prompt as NSString).size(withAttributes: [.font: labelFont]).width)
     let labelWidth = max(availableTextWidth, textWidth + 2)
     let scrollOffset: CGFloat = 0
@@ -82,9 +80,10 @@ extension OverlayPanel {
       commandCaretLayer.isHidden = true
       hideCommandTextField()
     }
+    let labelY = max(0, (commandPromptLayer.frame.height - fontSize - 2) / 2)
     commandPromptLabel.frame = CGRect(
       x: horizontalPadding - scrollOffset,
-      y: 4,
+      y: labelY,
       width: labelWidth,
       height: fontSize + 2)
     commandPromptLabel.font = labelFont
@@ -133,6 +132,25 @@ extension OverlayPanel {
       width: max(10, promptFrame.width - 8 - leadingInset),
       height: fontSize + 5)
     commandTextField.isHidden = false
+  }
+
+  static func commandPromptFrame(
+    statusBarFrame: CGRect,
+    leftContentMaxX: CGFloat,
+    prompt: String,
+    fontSize: CGFloat
+  ) -> CGRect {
+    let localX = leftContentMaxX + statusBarMinimumGap
+    let maxWidth = max(
+      120,
+      statusBarFrame.maxX - localX - statusBarHorizontalPadding)
+    let measuredCount = max(prompt.count, 14)
+    let width = min(max(96, CGFloat(measuredCount) * fontSize * 0.62 + 18), maxWidth)
+    return CGRect(
+      x: localX,
+      y: statusBarFrame.minY,
+      width: width,
+      height: statusBarFrame.height)
   }
 
   func hideCommandTextField() {

@@ -132,6 +132,12 @@ extension AppDelegate {
     invalidateCandidateFinderCaches(reason: "config_reload", refreshApps: true)
     monitor.updateConfig(cfg)
     modeBadgeEnabled = hasNormalModeBinding(cfg)
+    if modeBadgeEnabled {
+      statusBarController?.start()
+    } else {
+      statusBarController?.stop()
+      overlay.setStatusRightText("")
+    }
     if !modeBadgeEnabled, flashMode == .normal {
       enterInsertMode(
         reason: .advancedModeDisabled,
@@ -159,6 +165,7 @@ extension AppDelegate {
       if self.candidateFinderSurfaceActive {
         self.invalidateCandidateFinderCaches(reason: "plugin_state", refreshApps: false)
       }
+      self.statusBarController?.refreshPluginSections()
       self.debugServer?.broadcastState()
     }
     pluginStateRefreshWork = work

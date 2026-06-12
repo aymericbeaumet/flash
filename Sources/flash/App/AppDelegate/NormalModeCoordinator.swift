@@ -364,9 +364,8 @@ extension AppDelegate {
     hasHints: Bool,
     windowGeometryChangeInProgress: Bool
   ) -> Bool {
-    // Insert mode swaps the mode badge for a colored frame around the
-    // focused window: the badge is information theatre once you're
-    // actually typing, but a peripheral-vision tint stays useful.
+    // Insert mode keeps the status bar visible and adds a colored frame
+    // around the focused window so the typing target remains obvious.
     // Advanced mode (`flash://mode_normal` bound somewhere) is the gate
     // — without it Flash has no normal/insert distinction to visualise.
     // The border is suspended while hints are up so chips aren't framed
@@ -433,11 +432,9 @@ extension AppDelegate {
     let capture = canCapture && wantsCapture
     return ModeOverlaySnapshot(
       text: mode == .normal ? labels.normal : labels.insert,
-      // Badge shows only in normal mode (and only when advanced mode is
-      // wired). Insert mode swaps it for an active-window border drawn
-      // by `updateInsertModeActiveWindowBorder` — labelling INSERT while
-      // you're actually typing into the focused app reads as noise.
-      visible: visible && mode == .normal,
+      // Advanced mode keeps the status bar visible in both NORMAL and
+      // INSERT. Keyboard capture remains a NORMAL-only concern.
+      visible: visible,
       captureInput: capture,
       inputMode: capture ? .normal : .hints,
       // Always re-evaluate so a transition out of insert clears the
@@ -458,6 +455,7 @@ extension AppDelegate {
       "[mode] overlay mode=\(flashMode) capture=\(snapshot.captureInput) "
         + "override=\(String(describing: captureOverride)) "
         + "visible=\(modeBadgeEnabled) hints=\(currentHints.count) in_flight=\(activationInFlight)")
+    statusBarController?.updateModeLabel(snapshot.text)
     overlay.inputMode = snapshot.inputMode
     if snapshot.refreshActiveWindowBorder {
       updateInsertModeActiveWindowBorder(reason: "apply_mode_overlay")

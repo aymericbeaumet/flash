@@ -3,7 +3,7 @@ import FlashCore
 import QuartzCore
 
 /// Candidate finder results panel: the list of `:open` /
-/// `:flashlight` matches that appears above the command-line prompt.
+/// `:flashlight` matches that appears below the top command-line prompt.
 /// Renders as a single multi-line `CATextLayer` so highlighting comes
 /// for free via `NSAttributedString`.
 extension OverlayPanel {
@@ -52,9 +52,9 @@ extension OverlayPanel {
       return
     }
 
-    // Text draws top-to-bottom, so reverse the visible window: rank 1
-    // appears on the bottom row, closest to the command line.
-    let visualItems = Array(shownItems.reversed())
+    // Text draws top-to-bottom; with the prompt in the top status bar,
+    // the highest-ranked row should appear first, closest to the prompt.
+    let visualItems = shownItems
     let fontSize = max(CGFloat(overlayConfig.fontSize), 11)
     let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let selectedFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
@@ -137,7 +137,11 @@ extension OverlayPanel {
     let labelWidth = max(1, width - Self.candidateFinderHorizontalPadding * 2)
     let labelHeight = Self.candidateFinderTextHeight(attributedText, fallbackFont: labelFont)
     let height = labelHeight + Self.candidateFinderVerticalPadding * 2
-    let y = commandPromptLayer.frame.maxY + 6
+    let minimumY = visible.minY - panelFrame.minY + 10
+    let y = Self.candidateFinderResultsY(
+      commandPromptFrame: commandPromptLayer.frame,
+      height: height,
+      minimumY: minimumY)
 
     candidateFinderResultsLayer.frame = Self.snap(
       CGRect(x: x, y: y, width: width, height: height),
@@ -171,5 +175,13 @@ extension OverlayPanel {
       with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
       options: [.usesLineFragmentOrigin, .usesFontLeading])
     return ceil(max(fontLineHeight, measured.height))
+  }
+
+  static func candidateFinderResultsY(
+    commandPromptFrame: CGRect,
+    height: CGFloat,
+    minimumY: CGFloat
+  ) -> CGFloat {
+    max(minimumY, commandPromptFrame.minY - 6 - height)
   }
 }

@@ -311,7 +311,7 @@ final class NormalModeTests: XCTestCase {
         captureOverride: true),
       ModeOverlaySnapshot(
         text: "INSERT",
-        visible: false,
+        visible: true,
         captureInput: false,
         inputMode: .hints,
         refreshActiveWindowBorder: true))
@@ -355,10 +355,8 @@ final class NormalModeTests: XCTestCase {
         captureOverride: true).captureInput)
   }
 
-  func testInsertModeBadgeIsHidden() {
+  func testModeStatusBarVisibleInInsertWithoutCapturing() {
     let labels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
-    // Insert mode swaps the badge for the active-window border, so the
-    // badge stays hidden even when advanced mode (visible: true) is on.
     let snapshot = AppDelegate.modeOverlaySnapshot(
       mode: .insert,
       labels: labels,
@@ -366,8 +364,9 @@ final class NormalModeTests: XCTestCase {
       hasHints: false,
       activationInFlight: false,
       captureOverride: nil)
-    XCTAssertFalse(snapshot.visible)
+    XCTAssertTrue(snapshot.visible)
     XCTAssertEqual(snapshot.text, "INSERT")
+    XCTAssertFalse(snapshot.captureInput)
     // NORMAL keeps respecting the advanced-mode flag.
     XCTAssertTrue(
       AppDelegate.modeOverlaySnapshot(
@@ -396,7 +395,7 @@ final class NormalModeTests: XCTestCase {
         modeBadgeEnabled: true,
         hasHints: false,
         windowGeometryChangeInProgress: false))
-    // No advanced mode → no badge/border distinction to draw.
+    // No advanced mode → no status bar / border distinction to draw.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         mode: .insert,
@@ -411,7 +410,7 @@ final class NormalModeTests: XCTestCase {
         modeBadgeEnabled: true,
         hasHints: false,
         windowGeometryChangeInProgress: true))
-    // Normal mode shows the badge instead.
+    // Normal mode uses the status bar without an insert-border frame.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         mode: .normal,

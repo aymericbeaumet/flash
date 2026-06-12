@@ -56,7 +56,10 @@ final class OverlayPanel: NSPanel {
   var hintLayerPool: [CAGradientLayer] = []
   var labelLayerPool: [CATextLayer] = []
   let modeBadgeLayer = CAGradientLayer()
+  let statusAppLabel = CATextLayer()
+  let modeBadgeButtonLayer = CAGradientLayer()
   let modeBadgeLabel = CATextLayer()
+  let statusRightLabel = CATextLayer()
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()
@@ -67,7 +70,10 @@ final class OverlayPanel: NSPanel {
   let candidateFinderResultsLabel = CATextLayer()
   let activeWindowBorderLayer = CAShapeLayer()
   var modeBadgeVisible = false
+  var statusAppText = ""
   var modeBadgeText = "INSERT"
+  var statusRightText = ""
+  var statusBarSuppressedForSystemMenu = false
   var modeBadgeStyle: OverlayModeBadgeStyle = .insert
   var modeBadgeCapturesInput = false
   var commandPromptVisible = false
@@ -148,7 +154,7 @@ final class OverlayPanel: NSPanel {
   // invalidate on that notification (observed from `init` below).
 
   struct ScreenSnapshot {
-    var screens: [(scale: CGFloat, frame: CGRect)]
+    var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect)]
     var unionFrame: CGRect
     var mainFrame: CGRect?
     var mainScale: CGFloat
@@ -180,10 +186,10 @@ final class OverlayPanel: NSPanel {
 
   private static func buildScreenSnapshot() -> ScreenSnapshot {
     var union: NSRect = .null
-    var screens: [(scale: CGFloat, frame: CGRect)] = []
+    var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect)] = []
     for s in NSScreen.screens {
       union = union.union(s.frame)
-      screens.append((s.backingScaleFactor, s.frame))
+      screens.append((s.backingScaleFactor, s.frame, s.visibleFrame))
     }
     if union.isNull, let main = NSScreen.main { union = main.frame }
     let main = NSScreen.main ?? NSScreen.screens.first
@@ -203,6 +209,7 @@ final class OverlayPanel: NSPanel {
   // build them once and reuse.
 
   private var screenParametersObserver: NSObjectProtocol?
+  var statusBarHoverTimer: DispatchSourceTimer?
 
   init() {
     let frame = OverlayPanel.unionScreenFrame()
@@ -244,13 +251,21 @@ final class OverlayPanel: NSPanel {
     debugShapeLayer.actions = OverlayPanel.noActions
     contentLayer.addSublayer(debugShapeLayer)
 
-    modeBadgeLayer.cornerRadius = 4
-    modeBadgeLayer.borderWidth = 1
+    modeBadgeLayer.cornerRadius = 0
+    modeBadgeLayer.borderWidth = 0
     modeBadgeLayer.opacity = 1
     modeBadgeLayer.actions = OverlayPanel.noActions
-    modeBadgeLabel.alignmentMode = .center
+    statusAppLabel.alignmentMode = .left
+    statusAppLabel.actions = OverlayPanel.noActions
+    modeBadgeButtonLayer.cornerRadius = 4
+    modeBadgeButtonLayer.borderWidth = 0
+    modeBadgeButtonLayer.actions = OverlayPanel.noActions
+    modeBadgeLabel.alignmentMode = .left
     modeBadgeLabel.actions = OverlayPanel.noActions
-    modeBadgeLayer.sublayers = [modeBadgeLabel]
+    modeBadgeButtonLayer.sublayers = [modeBadgeLabel]
+    statusRightLabel.alignmentMode = .right
+    statusRightLabel.actions = OverlayPanel.noActions
+    modeBadgeLayer.sublayers = [statusAppLabel, modeBadgeButtonLayer, statusRightLabel]
     commandPromptLayer.cornerRadius = 4
     commandPromptLayer.borderWidth = 1
     commandPromptLayer.masksToBounds = true
@@ -280,6 +295,7 @@ final class OverlayPanel: NSPanel {
     view.addSubview(commandTextField)
     view.addSubview(modalScrollView)
     installPointerMonitors()
+    installStatusBarHoverPoller()
   }
 
   deinit {
@@ -288,6 +304,7 @@ final class OverlayPanel: NSPanel {
     }
     removePointerMonitors()
     removeModalDismissMonitors()
+    removeStatusBarHoverPoller()
   }
 
   /// Allocate `count` chip+label layers and stash them in the pools. Called

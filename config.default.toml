@@ -84,8 +84,8 @@ opera = 80
 "core.apps" = 40
 
 [mode]
-# Labels shown in the mode overlay. The overlay width is based on the
-# longest configured label, so compact labels such as N/I/C shrink it.
+# Mode labels shown after the active app name in the persistent status bar
+# when advanced mode is enabled.
 labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 
 # Time (in ms) the interpreter waits for the next key in a pending
