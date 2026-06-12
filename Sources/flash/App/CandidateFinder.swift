@@ -21,6 +21,12 @@ enum CandidateFinder {
   /// Synthetic flashlight rows for registered plugin bangs (`!<token>`);
   /// selecting one dispatches the bang instead of resolving a candidate.
   static let bangKind = CandidateKind.plugin("bang")
+  /// Synthetic flashlight rows for `@<source>` source-filter completion.
+  /// Selecting one rewrites the buffer with the canonical `@source `
+  /// token; it never "opens" anything on its own. Mirrors the bang
+  /// completion flow so `<tab>`/`<cr>`/`<cmd+cr>` stay consistent
+  /// across both completion surfaces.
+  static let sourceKind = CandidateKind.plugin("source")
 
   /// Candidates whose "open" action inserts their payload as text rather than
   /// activating an app or target. `app_open?name=` matching must skip these:
@@ -33,6 +39,13 @@ enum CandidateFinder {
   static func displayTitle(_ candidate: Candidate) -> String {
     if candidate.kind == bangKind {
       return bangDisplayTitle(candidate)
+    }
+    if candidate.kind == sourceKind {
+      // `[source] @firefox.tabs (source filter)` — the subtitle rides
+      // as a descriptor exactly like the bang row's `(description)`.
+      let descriptor = candidate.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+      let name = descriptor.isEmpty ? candidate.name : "\(candidate.name) (\(descriptor))"
+      return displayTitle(source: candidate.source, name: name)
     }
     guard candidate.kind == browserTabKind else {
       return displayTitle(source: candidate.source, name: candidate.name)
@@ -124,6 +137,84 @@ enum CandidateFinder {
     return (parsed.token, parsed.remainder, confirmed, bangIndex..<tokenEnd)
   }
 
+  /// Detect "in-progress `@<source>` completion": the last `@` in the
+  /// query is not yet followed by whitespace, so the user is still
+  /// typing the source token and wants completion suggestions. The
+  /// caller swaps the candidate pool for a list of known sources. A
+  /// confirmed `@source ` (trailing whitespace already present) is
+  /// the normal source-filter case and falls through this check —
+  /// the existing filter parser applies it to the data candidates.
+  static func parseAtSourceCompletion(_ query: String)
+    -> (token: String, atRange: Range<String.Index>)?
+  {
+    guard let atIndex = query.lastIndex(of: "@") else { return nil }
+    var tokenEnd = query.index(after: atIndex)
+    while tokenEnd < query.endIndex,
+      !query[tokenEnd].isWhitespace, query[tokenEnd] != "@", query[tokenEnd] != "!"
+    {
+      tokenEnd = query.index(after: tokenEnd)
+    }
+    // Already confirmed (whitespace or another sigil follows) — not a
+    // completion state.
+    if tokenEnd < query.endIndex { return nil }
+    let token = String(query[query.index(after: atIndex)..<tokenEnd])
+    return (token, atIndex..<tokenEnd)
+  }
+
+  /// Build a synthetic completion candidate for a `@<source>` token.
+  /// Mirrors the shape of the bang completion rows so the same render
+  /// path (`displayTitle`, `bangDisplayTitle`-style label) shows
+  /// `[source] @firefox.tabs` in the flashlight list.
+  static func sourceCompletionCandidate(_ source: String) -> Candidate {
+    Candidate(
+      kind: sourceKind,
+      sourceID: "source:\(source)",
+      source: "source",
+      pid: nil,
+      name: "@\(source)",
+      subtitle: "source filter",
+      bundleIdentifier: "",
+      url: nil,
+      sourcePayload: source)
+  }
+
+  /// Expand a `[flashlight.aliases]` shorthand in the command-line
+  /// buffer. Aliases match a full space-delimited word literally —
+  /// the key carries any leading sigil the user wants (`!g`, `@ft`,
+  /// even bare words). When the character at `cursorIndex - 1` is
+  /// whitespace and the immediately-preceding word equals a
+  /// registered alias key, the buffer is rewritten in place and the
+  /// cursor is shifted by the length delta. Returns `nil` when no
+  /// expansion fires.
+  static func expandFlashlightAlias(
+    text: String,
+    cursorIndex: Int,
+    aliases: [String: String]
+  ) -> (text: String, cursorIndex: Int)? {
+    guard !aliases.isEmpty, cursorIndex > 0 else { return nil }
+    let chars = Array(text)
+    guard cursorIndex <= chars.count else { return nil }
+    guard chars[cursorIndex - 1].isWhitespace else { return nil }
+    // Walk back to the previous word boundary. wordStart..<wordEnd
+    // is the word immediately preceding the just-typed whitespace.
+    var wordStart = cursorIndex - 1
+    while wordStart > 0, !chars[wordStart - 1].isWhitespace {
+      wordStart -= 1
+    }
+    let wordEnd = cursorIndex - 1
+    guard wordStart < wordEnd else { return nil }
+    let word = String(chars[wordStart..<wordEnd])
+    guard let expansion = aliases[word], !expansion.isEmpty else { return nil }
+    // No-op when the alias already resolves to itself (lets users
+    // re-type a canonical token without it being rewritten again).
+    if expansion == word { return nil }
+    let prefix = String(chars[..<wordStart])
+    let suffix = String(chars[wordEnd...])  // whitespace + everything after
+    let newText = prefix + expansion + suffix
+    let delta = expansion.count - word.count
+    return (newText, cursorIndex + delta)
+  }
+
   static func prepare(
     _ candidates: [Candidate],
     normalize: (String) -> String = NormalModeDispatcher.normalizedSearchText
@@ -141,14 +232,25 @@ enum CandidateFinder {
     let normalizedSearchText = normalize(searchText(candidate))
     prepared.normalizedSearchText = normalizedSearchText
     let normalizedTitle = normalize(candidate.name)
+    let titleTokens: [String] =
+      normalizedTitle.isEmpty
+      ? []
+      : normalizedTitle.split(separator: " ").map(String.init)
     let normalizedSourceTitle = normalize("\(candidate.source) \(candidate.name)")
     let normalizedURL = normalize(urlSearchText(candidate))
     let normalizedDisplay = normalize(display)
+    let normalizedAliases = normalize(candidate.searchAliases)
+    let aliasTokens: [String] =
+      normalizedAliases.isEmpty
+      ? []
+      : normalizedAliases.split(separator: " ").map(String.init)
     prepared.normalizedScoringFields = NormalizedScoringFields(
       title: normalizedTitle,
+      titleTokens: titleTokens,
       sourceTitle: normalizedSourceTitle,
       url: normalizedURL,
-      displayTitle: normalizedDisplay)
+      displayTitle: normalizedDisplay,
+      aliases: aliasTokens)
     // Union of the a–z0–9 presence bits across every field `score`
     // reads. Computed here, once, so the per-keystroke prefilter is a
     // few integer ops instead of re-scanning strings.
@@ -157,6 +259,7 @@ enum CandidateFinder {
       | presenceMask(normalizedSourceTitle)
       | presenceMask(normalizedURL)
       | presenceMask(normalizedDisplay)
+      | presenceMask(normalizedAliases)
       | presenceMask(normalizedSearchText)
     // Cheap, locale-free tie-break key. Mirrors the old comparator
     // chain (name → source → displayTitle → sourceID) but as one plain
@@ -265,6 +368,23 @@ enum CandidateFinder {
     {
       best = max(best ?? titleScore, titleScore)
     }
+    // Aliases score on a dedicated tier above the title so a literal
+    // shortcode hit (`pray` → `🙏`) outranks UCD-name prefixes like
+    // `prayer beads`. The match is per token (aliases are pre-tokenized
+    // at prepare time) so an exact token equality earns the full `equal`
+    // bonus instead of the `prefix` tier that joining would otherwise
+    // force.
+    var aliasBest: Int?
+    for token in fields.aliases {
+      if let tokenScore = fieldScoreNormalized(
+        query: normalizedQuery, normalized: token, base: 11_000, fuzzyScore: fuzzyScore)
+      {
+        aliasBest = max(aliasBest ?? tokenScore, tokenScore)
+      }
+    }
+    if let aliasBest {
+      best = max(best ?? aliasBest, aliasBest)
+    }
     if let sourceTitleScore = fieldScoreNormalized(
       query: normalizedQuery, normalized: fields.sourceTitle, base: 8_000, fuzzyScore: fuzzyScore)
     {
@@ -294,13 +414,14 @@ enum CandidateFinder {
   static func scoreMatches(
     pool: [Candidate],
     normalizedQuery: String,
-    fuzzyScore: (String, String) -> Int?
+    fuzzyScore: (String, String) -> Int?,
+    allowParallel: Bool = true
   ) -> [CandidateMatch] {
     if normalizedQuery.isEmpty {
       return pool.map { CandidateMatch(candidate: $0, score: 0) }
     }
     let prefilter = queryPrefilter(normalizedQuery: normalizedQuery)
-    if pool.count >= parallelScoreThreshold {
+    if allowParallel, pool.count >= parallelScoreThreshold {
       let scored = [CandidateMatch?](unsafeUninitializedCapacity: pool.count) {
         buffer, initializedCount in
         DispatchQueue.concurrentPerform(iterations: pool.count) { index in
@@ -337,8 +458,136 @@ enum CandidateFinder {
     return CandidateMatch(candidate: candidate, score: score)
   }
 
-  private static let browserSourceNames: Set<String> = [
-    "firefox", "firefox-dev", "safari", "chrome", "chromium",
+  /// Emoji-mode fast path. The emoji pool is static, small enough for a
+  /// linear scan, and semantically searches only the Unicode name plus
+  /// shortcode aliases. Avoid the generic multi-field fuzzy scorer
+  /// (source/title/url/display/searchText) so each keystroke can render
+  /// the visible list in the same main-thread turn.
+  static func emojiMatches(
+    pool: [Candidate],
+    normalizedQuery: String,
+    limit: Int
+  ) -> [CandidateMatch] {
+    guard limit > 0 else { return [] }
+    if normalizedQuery.isEmpty {
+      return sortedMatches(
+        pool.map { CandidateMatch(candidate: $0, score: 0) },
+        limit: limit)
+    }
+    let prefilter = queryPrefilter(normalizedQuery: normalizedQuery)
+    var matches: [CandidateMatch] = []
+    matches.reserveCapacity(min(pool.count, limit * 2))
+    for candidate in pool {
+      guard passesPrefilter(prefilter, candidateMask: candidate.scoringMask) else { continue }
+      guard let score = emojiScore(normalizedQuery: normalizedQuery, candidate: candidate) else {
+        continue
+      }
+      matches.append(CandidateMatch(candidate: candidate, score: score))
+    }
+    return sortedMatches(matches, limit: limit)
+  }
+
+  private static func emojiScore(normalizedQuery: String, candidate: Candidate) -> Int? {
+    let fields = candidate.normalizedScoringFields
+    var best: Int?
+
+    for alias in fields.aliases {
+      if let score = emojiFieldScore(query: normalizedQuery, normalized: alias, base: 20_000) {
+        best = max(best ?? score, score)
+      }
+    }
+
+    if let titleScore = emojiFieldScore(
+      query: normalizedQuery, normalized: fields.title, base: 10_000)
+    {
+      best = max(best ?? titleScore, titleScore)
+    }
+
+    // The token edit-distance pass is only a fallback. For ordinary
+    // typing (`f`, `fi`, `fire`) the exact/prefix/word-prefix ladder
+    // above already found a good score, and running typo checks across
+    // every emoji title token is visible in the UI.
+    guard best == nil else { return best }
+
+    let compactQuery = normalizedQuery.filter { !$0.isWhitespace }
+    if compactQuery.count >= 3 {
+      for alias in fields.aliases {
+        if let score = emojiTypoScore(query: compactQuery, token: alias, base: 20_000) {
+          best = max(best ?? score, score)
+        }
+      }
+      for token in fields.titleTokens {
+        if let score = emojiTypoScore(query: compactQuery, token: token, base: 10_000) {
+          best = max(best ?? score, score)
+        }
+      }
+    }
+
+    return best
+  }
+
+  /// Same exact/prefix/word-prefix/substring ladder as the generic
+  /// field scorer, minus expensive generic fuzzy fallback.
+  private static func emojiFieldScore(query: String, normalized: String, base: Int) -> Int? {
+    guard !normalized.isEmpty else { return nil }
+    if normalized == query { return base + 5_000 }
+    if normalized.hasPrefix(query) {
+      return base + 3_000 - min(500, normalized.count - query.count)
+    }
+    if hasWordPrefix(normalized: normalized, query: query) {
+      return base + 1_500 - min(300, normalized.count - query.count)
+    }
+    if let range = normalized.range(of: query) {
+      let offset = normalized.distance(from: normalized.startIndex, to: range.lowerBound)
+      return base + 800 - min(300, offset * 4) - min(120, normalized.count - query.count)
+    }
+    return nil
+  }
+
+  private static func emojiTypoScore(query: String, token: String, base: Int) -> Int? {
+    guard !query.isEmpty, !token.isEmpty else { return nil }
+    let maxEdits = allowedTypoCount(query.count)
+    guard maxEdits > 0, query.count <= token.count + maxEdits else { return nil }
+    let prefixLength = min(token.count, query.count + maxEdits)
+    let prefix = String(token.prefix(prefixLength))
+    guard let distance = boundedASCIIDistance(query, prefix, maxDistance: maxEdits) else {
+      return nil
+    }
+    return base + 450 - distance * 24 - abs(prefix.count - query.count) * 3
+      - max(0, token.count - query.count) / 4
+  }
+
+  private static func boundedASCIIDistance(
+    _ lhs: String,
+    _ rhs: String,
+    maxDistance: Int
+  ) -> Int? {
+    let a = Array(lhs.utf8)
+    let b = Array(rhs.utf8)
+    if abs(a.count - b.count) > maxDistance { return nil }
+    var previous = Array(0...b.count)
+    var current = Array(repeating: 0, count: b.count + 1)
+    for i in 1...a.count {
+      current[0] = i
+      var rowMin = current[0]
+      for j in 1...b.count {
+        let substitution = previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)
+        let insertion = current[j - 1] + 1
+        let deletion = previous[j] + 1
+        current[j] = min(substitution, insertion, deletion)
+        rowMin = min(rowMin, current[j])
+      }
+      if rowMin > maxDistance { return nil }
+      swap(&previous, &current)
+    }
+    return previous[b.count] <= maxDistance ? previous[b.count] : nil
+  }
+
+  /// Browser-tab plugin namespaces under the new `<plugin>.<subsource>`
+  /// convention. The group filter (`--tabs`) folds across all of
+  /// these regardless of which subsource the tab came from.
+  private static let browserSourcePrefixes: [String] = [
+    "firefox", "safari", "chrome", "chromium",
     "brave", "edge", "arc", "vivaldi", "opera",
   ]
 
@@ -346,19 +595,28 @@ enum CandidateFinder {
     candidate.pid != nil
   }
 
-  /// Whether a candidate belongs to the source the user pinned via the
-  /// `:flashlight --<source>` flag. `filter` is already lowercased.
-  /// Matching is lenient: exact source name, a source-name prefix
-  /// (`--fire` → firefox, `--note` → notes), and a small set of group
-  /// aliases (`--browser`/`--tabs`, `--apps`).
+  /// Whether a candidate belongs to the source the user pinned via
+  /// `@<filter>` / `--<filter>`. The filter is already lowercased.
+  /// Matching rules, in priority order:
+  ///   1. Exact match against `candidate.source`.
+  ///   2. Dotted-prefix match — `@firefox` matches `firefox.tabs`,
+  ///      `firefox.bookmarks`, … but not an unrelated `firefoxx`
+  ///      that happens to start with `firefox`. The check requires
+  ///      either an exact equality or a `.` right after the filter.
+  ///   3. Group aliases: `tabs`/`browsers` fold the browser plugin
+  ///      namespaces; `apps` folds the core app source.
   static func candidateMatchesSourceFilter(_ candidate: Candidate, filter: String) -> Bool {
     let source = candidate.source.lowercased()
-    if source == filter || source.hasPrefix(filter) { return true }
+    if source == filter { return true }
+    if source.hasPrefix(filter + ".") { return true }
     switch filter {
     case "browser", "browsers", "tab", "tabs":
-      return browserSourceNames.contains(source)
+      for prefix in browserSourcePrefixes {
+        if source == prefix || source.hasPrefix(prefix + ".") { return true }
+      }
+      return false
     case "apps":
-      return source == "app"
+      return source == "core.apps"
     default:
       return false
     }
@@ -498,53 +756,90 @@ enum CandidateFinder {
   private struct SortRecord {
     var index: Int
     var score: Int
-    var tier: Int
+    /// Precedence weight from `PrecedenceTable`. Higher is better.
+    /// Bangs carry the sentinel `bangWeight` so the comparator can
+    /// fast-path the strict top band without a separate flag.
+    var weight: Int
     var alive: Bool
     var key: String
     var sourceID: String
   }
 
-  static func sortedMatches(_ matches: [CandidateMatch]) -> [CandidateMatch] {
+  static func sortedMatches(
+    _ matches: [CandidateMatch],
+    precedence: PrecedenceTable = .default,
+    limit: Int? = nil
+  ) -> [CandidateMatch] {
+    if let limit, limit <= 0 { return [] }
     let records = matches.enumerated().map { offset, match -> SortRecord in
       let key = match.candidate.sortKey.isEmpty
         ? fallbackSortKey(match.candidate) : match.candidate.sortKey
       return SortRecord(
         index: offset,
         score: match.score,
-        tier: sourcePrecedenceTierIndex(for: match.candidate),
+        weight: precedence.weight(for: match.candidate),
         alive: isAlive(match.candidate),
         key: key,
         sourceID: match.candidate.sourceID)
     }
-    // Two-band design:
-    //
-    // 1. Bangs (`!<token>`) are a strict top band. A user typing a
-    //    registered bang has expressed an explicit dispatch intent; we
-    //    must surface it above anything else regardless of how the
-    //    fuzzy match would score.
-    //
-    // 2. Everything else is ranked by match quality first. The earlier
-    //    strict-tier sort buried exact prefix matches on app names under
-    //    weak fuzzy hits on browser tabs (e.g. `:flashlight safari`
-    //    surfaced unrelated Firefox pages but not Safari.app). Tier is
-    //    kept only as a tiebreaker — bumps clustered scores in the
-    //    intuitive direction (tmux > browser tabs > active apps > …)
-    //    without overriding the matcher.
-    let sorted = records.sorted { lhs, rhs in
-      let lhsIsBang = lhs.tier == 0
-      let rhsIsBang = rhs.tier == 0
-      if lhsIsBang != rhsIsBang { return lhsIsBang }
-
-      if lhs.score != rhs.score { return lhs.score > rhs.score }
-
-      // Score-tied tiebreakers: source tier, alive vs dead, then the
-      // stable composite key.
-      if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
-      if lhs.alive != rhs.alive { return lhs.alive }
-      if lhs.key != rhs.key { return lhs.key < rhs.key }
-      return lhs.sourceID < rhs.sourceID
+    let sorted: [SortRecord]
+    if let limit, records.count > limit {
+      sorted = topRecords(records, limit: limit)
+    } else {
+      sorted = records.sorted(by: recordPrecedes)
     }
     return sorted.map { matches[$0.index] }
+  }
+
+  private static func topRecords(_ records: [SortRecord], limit: Int) -> [SortRecord] {
+    var best: [SortRecord] = []
+    best.reserveCapacity(limit)
+    for record in records {
+      if best.count < limit {
+        insertRecord(record, into: &best)
+      } else if let worst = best.last, recordPrecedes(record, worst) {
+        insertRecord(record, into: &best)
+        best.removeLast()
+      }
+    }
+    return best
+  }
+
+  private static func insertRecord(_ record: SortRecord, into records: inout [SortRecord]) {
+    var index = records.count
+    while index > 0, recordPrecedes(record, records[index - 1]) {
+      index -= 1
+    }
+    records.insert(record, at: index)
+  }
+
+  private static func recordPrecedes(_ lhs: SortRecord, _ rhs: SortRecord) -> Bool {
+    // Two-band design:
+    //
+    // 1. Bangs (`!<token>`) are a strict top band — they carry the
+    //    sentinel `bangWeight` so they're easy to detect. A user
+    //    typing a registered bang has expressed an explicit dispatch
+    //    intent; we surface it above anything else regardless of
+    //    how the fuzzy match would score.
+    //
+    // 2. Everything else is ranked by match quality first. The
+    //    precedence weight is the tiebreaker once scores cluster —
+    //    enough to bump the order in the intuitive direction (tmux
+    //    > browser tabs > active apps > …) without overriding the
+    //    matcher. Configured via `[flashlight.precedence]` so users
+    //    can re-weight the table without touching the code.
+    let lhsIsBang = lhs.weight == PrecedenceTable.bangWeight
+    let rhsIsBang = rhs.weight == PrecedenceTable.bangWeight
+    if lhsIsBang != rhsIsBang { return lhsIsBang }
+
+    if lhs.score != rhs.score { return lhs.score > rhs.score }
+
+    // Score-tied tiebreakers: precedence weight (higher first),
+    // alive vs dead, then the stable composite key.
+    if lhs.weight != rhs.weight { return lhs.weight > rhs.weight }
+    if lhs.alive != rhs.alive { return lhs.alive }
+    if lhs.key != rhs.key { return lhs.key < rhs.key }
+    return lhs.sourceID < rhs.sourceID
   }
 
   /// Mirrors `Candidate.sortKey` for candidates that skipped `prepare`.
@@ -559,19 +854,66 @@ enum CandidateFinder {
     ].joined(separator: "\u{1f}")
   }
 
-  /// Tier index used by `sortedMatches` as the primary ordering. Lower is
-  /// higher priority. The "app" source splits into two tiers — running
-  /// apps (pid set) outrank installed-but-not-running apps — so the
-  /// flashlight order is: bangs (0) > tmux (1) > browser tabs (2) >
-  /// active apps (3) > inactive apps (4) > the rest (5: slack, notes,
-  /// reminders, …).
-  static func sourcePrecedenceTierIndex(for candidate: Candidate) -> Int {
-    if candidate.kind == bangKind { return 0 }
-    let lowered = candidate.source.lowercased()
-    if lowered == "tmux" { return 1 }
-    if browserSourceNames.contains(lowered) { return 2 }
-    if lowered == "app" { return candidate.pid != nil ? 3 : 4 }
-    return 5
+  /// Source-precedence weight table built from
+  /// `Config.Flashlight.precedence`. Lookup is a single linear scan
+  /// over the entries (sorted longest-pattern first so the most
+  /// specific match wins). Used by `sortedMatches` as the tiebreaker
+  /// when match scores cluster. Higher weight = ranks earlier.
+  struct PrecedenceTable: Sendable {
+    private let entries: [(pattern: String, weight: Int)]
+    public let aliveBonus: Int
+
+    public init(weights: [String: Int], aliveBonus: Int) {
+      self.entries = weights
+        .map { ($0.key.lowercased(), $0.value) }
+        .sorted { lhs, rhs in
+          if lhs.0.count != rhs.0.count { return lhs.0.count > rhs.0.count }
+          return lhs.0 < rhs.0  // deterministic tie-break for equal-length patterns
+        }
+      self.aliveBonus = aliveBonus
+    }
+
+    /// Compute the total precedence weight for a candidate. Bangs
+    /// short-circuit to a sentinel max so they always lead the
+    /// list; everything else is `base + (alive ? bonus : 0)`.
+    public func weight(for candidate: Candidate) -> Int {
+      if candidate.kind == bangKind { return Self.bangWeight }
+      let lowered = candidate.source.lowercased()
+      var base = 0
+      for entry in entries {
+        if lowered == entry.pattern || lowered.hasPrefix(entry.pattern + ".") {
+          base = entry.weight
+          break
+        }
+      }
+      let bonus = candidate.pid != nil ? aliveBonus : 0
+      return base + bonus
+    }
+
+    /// Sentinel ceiling reserved for bang rows so the comparator
+    /// can detect them without a separate boolean. Far above any
+    /// reasonable user-configured weight.
+    public static let bangWeight = Int.max
+
+    /// Hard-coded fallback used by tests and any code path that
+    /// scores candidates without going through the live config.
+    public static let `default` = PrecedenceTable(
+      weights: Self.defaultWeights,
+      aliveBonus: 10)
+
+    public static let defaultWeights: [String: Int] = [
+      "tmux": 100,
+      "firefox": 80,
+      "safari": 80,
+      "chrome": 80,
+      "chromium": 80,
+      "brave": 80,
+      "edge": 80,
+      "arc": 80,
+      "vivaldi": 80,
+      "opera": 80,
+      "core.apps": 40,
+    ]
   }
 
   private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {
@@ -601,7 +943,7 @@ enum CandidateFinder {
   }
 
   private static func searchText(_ candidate: Candidate) -> String {
-    "\(candidate.source) \(candidate.name) \(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate))"
+    "\(candidate.source) \(candidate.name) \(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate)) \(candidate.searchAliases)"
   }
 
   private static func urlSearchText(_ candidate: Candidate) -> String {

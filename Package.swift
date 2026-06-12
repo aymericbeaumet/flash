@@ -33,24 +33,13 @@ let package = Package(
     .executable(name: "flash-electron-oracle", targets: ["flash-electron-oracle"]),
     .library(name: "FlashCore", targets: ["FlashCore"]),
     .library(name: "FlashProviders", targets: ["FlashProviders"]),
-    .library(name: "FlashSearch", targets: ["FlashSearch"]),
     .library(name: "FlashIntegrationTestSupport", targets: ["FlashIntegrationTestSupport"]),
     .library(name: "FlashBrowserTestSupport", targets: ["FlashBrowserTestSupport"]),
-  ],
-  dependencies: [
-    // Repo's first external dependency. GRDB is used only as a thin
-    // facade around the system SQLite (DatabasePool + DatabaseMigrator
-    // + Row decoding); all FTS/storage SQL is hand-written so a future
-    // GRDB major bump is a trivial swap. Floor `6.29.0` keeps us on
-    // the most-recent 6.x line while remaining compatible with the
-    // tools-5.10 root manifest — a Swift 6 toolchain can consume 7.x
-    // too if a maintainer raises the floor later.
-    .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.0"),
   ],
   targets: [
     .executableTarget(
       name: "flash",
-      dependencies: ["FlashCore", "FlashProviders", "FlashSearch"],
+      dependencies: ["FlashCore", "FlashProviders"],
       path: "Sources/flash",
       resources: [.copy("Resources/inspector.html")],
       swiftSettings: strictSwiftSettings
@@ -98,14 +87,6 @@ let package = Package(
       swiftSettings: strictSwiftSettings
     ),
     .target(
-      name: "FlashSearch",
-      dependencies: [
-        .product(name: "GRDB", package: "GRDB.swift")
-      ],
-      path: "Sources/FlashSearch",
-      swiftSettings: strictSwiftSettings
-    ),
-    .target(
       name: "FlashIntegrationTestSupport",
       dependencies: ["FlashCore", "FlashProviders"],
       path: "Sources/FlashIntegrationTestSupport",
@@ -120,16 +101,10 @@ let package = Package(
     .testTarget(
       name: "FlashTests",
       dependencies: [
-        "flash", "FlashCore", "FlashProviders", "FlashSearch",
+        "flash", "FlashCore", "FlashProviders",
         "FlashIntegrationTestSupport", "FlashBrowserTestSupport",
       ],
       path: "Tests/FlashTests",
-      swiftSettings: strictSwiftSettings
-    ),
-    .testTarget(
-      name: "FlashSearchTests",
-      dependencies: ["FlashSearch"],
-      path: "Tests/FlashSearchTests",
       swiftSettings: strictSwiftSettings
     ),
   ],

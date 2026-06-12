@@ -243,7 +243,14 @@ extension NormalModeDispatcher {
     guard body[..<nameEnd].lowercased() == name else { return nil }
     guard body[nameEnd].isWhitespace else { return nil }
     let restStart = body.index(after: nameEnd)
-    let query = String(body[restStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    // Preserve trailing whitespace: it's the signal `parseBangState`
+    // uses to lock onto a bang. We only strip leading whitespace
+    // between `flashlight` and the user's query, plus newlines (the
+    // command-line buffer should never carry one, but Foundation's
+    // string editing can leak them through paste).
+    var query = String(body[restStart...])
+    query = String(query.drop(while: { $0 == " " || $0 == "\t" }))
+    query = query.replacingOccurrences(of: "\n", with: "")
     return query
   }
 

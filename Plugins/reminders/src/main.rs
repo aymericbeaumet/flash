@@ -102,7 +102,7 @@ async fn emit_candidates(ctx: &Context) {
             Candidate::new(title)
                 .kind("reminder")
                 .source_id(SOURCE_ID)
-                .source("reminders")
+                .source("reminders.tasks")
                 .subtitle(format!("Reminder — {list_name}"))
                 .payload_json(&ReminderPayload {
                     id: rid.to_string(),

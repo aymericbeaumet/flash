@@ -117,7 +117,7 @@ fn candidate(name: &str, pid: i64) -> Candidate {
     Candidate::new(name)
         .kind("slack_channel")
         .source_id(CHANNEL_SOURCE_ID)
-        .source("slack")
+        .source("slack.channels")
         .subtitle("Slack channel")
         .pid(pid)
         .payload(name)
@@ -140,23 +140,16 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     ResolveResponse::resolved(Some(pid))
 }
 
-/// Derive a channel name from a node's collected attributes, applying the same
-/// heuristics the old in-core `SlackSource.slackChannelName` used.
+/// Derive a channel name from a node's collected attributes. Only nodes
+/// whose attributes carry a literal `#`-prefixed token are accepted; the
+/// older "any attribute contains the word channel" fallbacks produced
+/// button labels like `#Add` / `#More` / `#Edit` from strings such as
+/// "Add channel" or "channels and DMs".
 fn channel_name(node: &AxNode) -> Option<String> {
-    let values: Vec<&str> = CHANNEL_COLLECT
-        .iter()
-        .filter_map(|attr| node.attr(attr))
-        .collect();
-    for raw in &values {
+    for attr in CHANNEL_COLLECT {
+        let Some(raw) = node.attr(attr) else { continue };
         if let Some(channel) = parse_channel_name(raw) {
             return Some(channel);
-        }
-    }
-    if values.iter().any(|v| v.to_lowercase().contains("channel")) {
-        for raw in &values {
-            if let Some(channel) = parse_bare_channel_name(raw) {
-                return Some(channel);
-            }
         }
     }
     None
@@ -174,11 +167,6 @@ fn clean_channel_token(raw: &str) -> String {
     raw.chars()
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
         .collect()
-}
-
-fn is_reserved(token: &str, words: &[&str]) -> bool {
-    let lowered = token.to_lowercase();
-    words.contains(&lowered.as_str())
 }
 
 fn parse_channel_name(raw: &str) -> Option<String> {
@@ -206,35 +194,7 @@ fn parse_channel_name(raw: &str) -> Option<String> {
             }
         }
     }
-
-    if !trimmed.to_lowercase().contains("channel") {
-        return None;
-    }
-    const RESERVED: &[&str] = &[
-        "channel", "channels", "public", "private", "unread", "threads", "mentions",
-    ];
-    for token in &tokens {
-        let cleaned = clean_channel_token(token);
-        if cleaned.is_empty() || is_reserved(&cleaned, RESERVED) {
-            continue;
-        }
-        return Some(format!("#{cleaned}"));
-    }
     None
-}
-
-fn parse_bare_channel_name(raw: &str) -> Option<String> {
-    let cleaned = clean_channel_token(raw.trim());
-    if cleaned.is_empty() {
-        return None;
-    }
-    if is_reserved(&cleaned, &["channel", "channels", "public", "private"]) {
-        return None;
-    }
-    if cleaned.chars().count() > 80 {
-        return None;
-    }
-    Some(format!("#{cleaned}"))
 }
 
 fn prepend(program: &str, args: &[String]) -> Vec<String> {
@@ -262,21 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_channel_keyword() {
-        assert_eq!(
-            parse_channel_name("general, channel").as_deref(),
-            Some("#general")
-        );
-        assert_eq!(parse_channel_name("just text").as_deref(), None);
-    }
-
-    #[test]
-    fn bare_channel_names() {
-        assert_eq!(
-            parse_bare_channel_name("release_notes").as_deref(),
-            Some("#release_notes")
-        );
-        assert_eq!(parse_bare_channel_name("channel"), None);
-        assert_eq!(parse_bare_channel_name(""), None);
+    fn rejects_button_labels_without_hash() {
+        // Strings like these used to produce `#Add` / `#Edit` / `#More`
+        // via the channel-keyword fallback; they must not match now.
+        assert_eq!(parse_channel_name("Add channel"), None);
+        assert_eq!(parse_channel_name("Edit channel description"), None);
+        assert_eq!(parse_channel_name("More options for channels"), None);
+        assert_eq!(parse_channel_name("channels and DMs"), None);
+        assert_eq!(parse_channel_name("general, channel"), None);
+        assert_eq!(parse_channel_name("just text"), None);
     }
 }

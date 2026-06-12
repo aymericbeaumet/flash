@@ -305,6 +305,30 @@
       "file": "collected-hacker-news-001.html",
       "category": "collected-regression",
       "kind": "collected"
+    },
+    {
+      "name": "collected-ads-close-the-path-1-2-3-gaps-in-google-ads-conv-001",
+      "file": "collected-ads-close-the-path-1-2-3-gaps-in-google-ads-conv-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-new-chat-claude-002",
+      "file": "collected-new-chat-claude-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-callrail-google-search-001",
+      "file": "collected-callrail-google-search-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-raycast-google-cloud-console-002",
+      "file": "collected-raycast-google-cloud-console-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
     }
   ]
 }

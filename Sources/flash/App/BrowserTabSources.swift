@@ -37,33 +37,38 @@ enum BrowserTabSources {
   static let allBundleIdentifiers =
     safariBundleIdentifiers.union(firefoxBundleIdentifiers).union(chromiumBundleIdentifiers)
 
+  /// Source-label convention: `<plugin>.<subsource>`. Tabs from
+  /// firefox-dev still share the firefox plugin namespace — the
+  /// `-dev` distinction lives in the bundle ID, not the source
+  /// taxonomy. Bare-name browsers (`firefox`, `safari`, …) are still
+  /// matchable via the existing `hasPrefix` rule, so `@firefox`
+  /// continues to fold firefox.tabs / firefox.bookmarks / etc. when
+  /// future cold sources land.
   static func sourceName(bundleID: String, appName: String) -> String {
     switch bundleID {
-    case "org.mozilla.firefox":
-      return "firefox"
-    case "org.mozilla.firefoxdeveloperedition":
-      return "firefox-dev"
+    case "org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition":
+      return "firefox.tabs"
     case "com.google.Chrome", "com.google.Chrome.canary", "com.google.Chrome.beta",
       "com.google.Chrome.dev":
-      return "chrome"
+      return "chrome.tabs"
     case "org.chromium.Chromium":
-      return "chromium"
+      return "chromium.tabs"
     case "com.brave.Browser", "com.brave.Browser.beta", "com.brave.Browser.nightly":
-      return "brave"
+      return "brave.tabs"
     case "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev",
       "com.microsoft.edgemac.Canary":
-      return "edge"
+      return "edge.tabs"
     case "company.thebrowser.Browser":
-      return "arc"
+      return "arc.tabs"
     case "com.vivaldi.Vivaldi":
-      return "vivaldi"
+      return "vivaldi.tabs"
     case "com.operasoftware.Opera", "com.operasoftware.OperaNext",
       "com.operasoftware.OperaDeveloper":
-      return "opera"
+      return "opera.tabs"
     case "com.apple.Safari", "com.apple.SafariTechnologyPreview":
-      return "safari"
+      return "safari.tabs"
     default:
-      return appName.lowercased().replacingOccurrences(of: " ", with: "-")
+      return appName.lowercased().replacingOccurrences(of: " ", with: "-") + ".tabs"
     }
   }
 

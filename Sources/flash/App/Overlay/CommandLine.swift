@@ -253,7 +253,7 @@ extension OverlayPanel: NSTextFieldDelegate {
 
   func controlTextDidChange(_ obj: Notification) {
     guard !suppressCommandTextFieldChange else { return }
-    let raw = commandTextField.stringValue
+    var raw = commandTextField.stringValue
     // The `:` is the leading character of the buffer now; erasing it
     // (an empty field, or text that no longer starts with `:`) is the
     // gesture that drops back to NORMAL.
@@ -264,8 +264,22 @@ extension OverlayPanel: NSTextFieldDelegate {
       coordinator?.overlayDidCancelCommandLine()
       return
     }
+    var cursor = commandTextFieldCursorIndex()
+    // `[flashlight.aliases]` expansion: when the user just typed a
+    // whitespace after `!<key>` and `<key>` is registered, rewrite
+    // the buffer in place before the downstream parsing layer sees
+    // it. The text field's contents + cursor are synced back so the
+    // user sees the canonical bang appear under their cursor.
+    if let expanded = coordinator?.overlayExpandFlashlightAlias(raw, cursorIndex: cursor) {
+      raw = expanded.text
+      cursor = expanded.cursorIndex
+      suppressCommandTextFieldChange = true
+      commandTextField.stringValue = raw
+      suppressCommandTextFieldChange = false
+    }
     commandLineText = raw
-    commandLineCursorIndex = commandTextFieldCursorIndex()
+    commandLineCursorIndex = cursor
+    syncCommandTextFieldSelection()
     FlashLog.trace(
       "[input] command_line edit text=\(commandLineText) cursor=\(commandLineCursorIndex)")
     coordinator?.overlayDidUpdateCommandLine(

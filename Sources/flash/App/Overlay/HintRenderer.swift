@@ -67,6 +67,25 @@ extension OverlayPanel {
     // with a different length.
     let gradientColors: [CGColor] = [bgBottom.cgColor, bgTop.cgColor]
     let borderCG = border?.cgColor ?? OverlayPanel.fallbackBorderCGColor
+    // Important hints (tmux panes, browser tabs) read from a parallel
+    // set of `overlay.important_hint_*` config keys so the user can
+    // restyle them without rebuilding. Fall back to the regular hint
+    // palette when a key fails to parse — a malformed colour leaves
+    // the chip looking like a normal `f` hint instead of a black
+    // sentinel block.
+    let importantBgTop =
+      nsColor(fromHex: overlayConfig.importantHintBGTop) ?? bgTop
+    let importantBgBottom =
+      nsColor(fromHex: overlayConfig.importantHintBGBottom) ?? bgBottom
+    let importantBorder =
+      nsColor(fromHex: overlayConfig.importantHintBorder) ?? border
+    let importantFG =
+      nsColor(fromHex: overlayConfig.importantHintFG) ?? fg
+    let importantGradientColors: [CGColor] = [
+      importantBgBottom.cgColor, importantBgTop.cgColor,
+    ]
+    let importantBorderCG = importantBorder?.cgColor ?? borderCG
+    let importantFGCG = importantFG.cgColor
     // Single weight, bold monospaced — labels always render in bold so
     // small chips stay readable. Once the user has typed a prefix,
     // those leading characters re-render at 30% alpha via
@@ -274,6 +293,13 @@ extension OverlayPanel {
             NSColor(cgColor: borderCG)?
               .withAlphaComponent(min(1, alpha + 0.2))
               .cgColor ?? borderCG
+        } else if hint.target.important {
+          chip.colors = importantGradientColors
+          chip.borderColor = importantBorderCG
+          label.foregroundColor = importantFGCG
+          label.string = Self.attributedLabel(
+            display: hint.display, typedPrefixLen: 0,
+            font: labelFont, fgNS: importantFG)
         } else {
           chip.colors = gradientColors
           chip.borderColor = borderCG
@@ -395,6 +421,7 @@ extension OverlayPanel {
     let fontSize = CGFloat(overlayConfig.fontSize)
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let fgNS = nsColor(fromHex: overlayConfig.hintFG) ?? .black
+    let importantFGNS = nsColor(fromHex: overlayConfig.importantHintFG) ?? fgNS
     var visible = Set<Int>()
     var cache: [AttributedLabelKey: NSAttributedString] = [:]
     cache.reserveCapacity(hints.count)
@@ -413,17 +440,20 @@ extension OverlayPanel {
         // string's weight — see the note in `display(hints:)`. Cheap;
         // CATextLayer compares font references and noops on equal.
         l.font = labelFont
-        // Memoise per `(display, typedPrefixLen)`. Two hints with the
-        // same label produce the same attributed string; without the
-        // memo we allocated one `NSMutableAttributedString` per match,
-        // per keystroke (≈200 allocs on a heavy page filter).
-        let key = AttributedLabelKey(display: hint.display, typedPrefixLen: prefixLen)
+        // Memoise per `(display, typedPrefixLen, important)` — the
+        // important variant's fg colour differs, so it can't share
+        // the regular cache key.
+        let labelFG: NSColor = hint.target.important ? importantFGNS : fgNS
+        let key = AttributedLabelKey(
+          display: hint.display,
+          typedPrefixLen: prefixLen,
+          important: hint.target.important)
         if let cached = cache[key] {
           l.string = cached
         } else {
           let attr = Self.attributedLabel(
             display: hint.display, typedPrefixLen: prefixLen,
-            font: labelFont, fgNS: fgNS)
+            font: labelFont, fgNS: labelFG)
           cache[key] = attr
           l.string = attr
         }
@@ -438,6 +468,7 @@ extension OverlayPanel {
   private struct AttributedLabelKey: Hashable {
     let display: String
     let typedPrefixLen: Int
+    let important: Bool
   }
 
   /// Centered paragraph style — immutable, allocated once.

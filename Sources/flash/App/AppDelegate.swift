@@ -78,15 +78,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   var config = Config.default
   let pluginManager = PluginManager()
-  /// Persistent search + frecency layer. Nil when `[search] enabled = false`
-  /// or FTS5 isn't available — in that case the rest of the app keeps
-  /// working with the live in-memory pool, exactly as it does today.
-  var searchService: SearchService?
-  /// Holds the `search.*` RPC broker. `PluginManager.searchBroker` is
-  /// `weak`; we own the lifetime so the broker stays alive while plugins
-  /// hold references.
-  var searchRPCBroker: SearchRPCBroker?
-  /// Bumped on every keystroke. `SearchService.search` captures it at
+  /// Flat-JSON frecency persistence — keyed by stable item key
+  /// (`app.bundle:…`, `url:…`, `command:…`), boost capped below the
+  /// smallest `CandidateFinder` match-quality tier so it reorders
+  /// within tiers without crossing them. Nil only if the support
+  /// directory can't be created (read-only home, missing permission).
+  var frecencyStore: FrecencyStore?
+  /// Bumped on every keystroke. The scoring queue captures it at
   /// submission time and discards any late DB walk that returns after
   /// the user has typed past the query.
   var candidateFinderIndexGenerationCounter: UInt64 = 0
@@ -115,7 +113,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var flashMode: FlashMode = .insert
   var modeBadgeEnabled = false
   var normalModeTargetPID: pid_t?
-  var candidateFinderCandidates: [Candidate] = []
+  var candidateFinderCandidates: [Candidate] = [] {
+    didSet { candidateFinderCandidatesEpoch &+= 1 }
+  }
+  /// Monotonic counter bumped on every `candidateFinderCandidates`
+  /// reassignment so the filtered-pool cache can detect a stale base
+  /// without comparing 2k-entry arrays element-wise per keystroke.
+  var candidateFinderCandidatesEpoch: UInt64 = 0
+  /// One-slot cache for the per-keystroke pool filter. While the user
+  /// types into flashlight the base pool, `emojiMode`, and selectors
+  /// stay constant — so re-filtering 2k+ candidates on every keystroke
+  /// is pure waste. The cache is invalidated whenever the underlying
+  /// array, emoji mode, or filter signature differs from the prior key.
+  var candidateFinderFilteredPoolCache:
+    (epoch: UInt64, emojiMode: Bool, signature: String, pool: [Candidate])?
   var candidateFinderMatches: [CandidateMatch] = []
   var candidateFinderSelectedIndex = 0
   /// Entries backing the dedicated `:clipboard` modal, same order as the
@@ -126,6 +137,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `:emojis` narrows the shared candidate pool to emoji glyphs and routes
   /// selection to text insertion; every other candidate query excludes them.
   var candidateFinderEmojiMode = false
+  /// One-shot flag: set when the user pressed `<cmd+cr>` on an
+  /// `@<source>` completion row, indicating that after the next
+  /// async-scoring pass settles we should open the top non-bang,
+  /// non-source candidate. Clears itself on consumption so the bare
+  /// keystroke can't trigger an open later.
+  var pendingFlashlightSubmitAfterSourceLock = false
   let candidateFinderCacheQueue = DispatchQueue(label: "flash.candidate_finder.cache", qos: .utility)
   var candidateFinderRunningAppsCache: [Candidate] = []
   var candidateFinderRunningAppsCacheReady = false
@@ -211,12 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     config = ConfigLoader.load()
-    searchService = SearchService(config: config.search)
-    if let service = searchService {
-      let broker = SearchRPCBroker(service: service)
-      searchRPCBroker = broker
-      pluginManager.searchBroker = broker
-    }
+    frecencyStore = FrecencyStore()
     let manager = pluginManager
     registry = SourceRegistry(
       openConfig: config.open,
@@ -516,8 +528,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.stop()
     debugServer?.stop()
     debugServer = nil
-    searchService?.shutdown()
-    searchService = nil
+    frecencyStore?.drain()
+    frecencyStore = nil
   }
 
 

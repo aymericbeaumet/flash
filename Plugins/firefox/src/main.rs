@@ -74,12 +74,12 @@ fn is_firefox(bundle: &str) -> bool {
     bundle == FIREFOX || bundle == FIREFOX_DEV
 }
 
-fn source_name(bundle: &str) -> String {
-    if bundle == FIREFOX_DEV {
-        "firefox-dev".to_string()
-    } else {
-        "firefox".to_string()
-    }
+/// Plugin sources follow `<plugin>.<subsource>`. The release vs
+/// developer edition distinction lives in the bundle id, not the
+/// source label — both surface as `firefox.tabs` so `@firefox` /
+/// `@firefox.tabs` filter them together.
+fn source_name(_bundle: &str) -> String {
+    "firefox.tabs".to_string()
 }
 
 /// Walk Firefox's windows and extract the tab strip. Mirrors the heuristics the

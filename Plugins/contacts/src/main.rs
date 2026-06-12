@@ -102,7 +102,7 @@ async fn emit_candidates(ctx: &Context) {
             Candidate::new(name)
                 .kind("contact")
                 .source_id(SOURCE_ID)
-                .source("contacts")
+                .source("contacts.cards")
                 .subtitle("Contact")
                 .payload_json(&ContactPayload {
                     contact: name.to_string(),

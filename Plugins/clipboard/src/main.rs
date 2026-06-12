@@ -1,8 +1,6 @@
 use std::sync::Mutex;
 
-use flash_plugin::{
-    run, CommandRequest, CommandResponse, Context, Event, SearchDocument, SearchVisibility,
-};
+use flash_plugin::{run, CommandRequest, CommandResponse, Context, Event};
 
 const HISTORY_FILE: &str = "history.json";
 const HISTORY_CAP: usize = 50;
@@ -11,10 +9,6 @@ const PREVIEW_CHARS: usize = 80;
 /// would bloat the 50-entry state file and the `:clipboard` RPC payload for
 /// no practical paste-history value.
 const MAX_ENTRY_BYTES: usize = 128 * 1024;
-/// Suffix passed to `search_*`; the host prefixes it with
-/// `plugin:clipboard:` so the resulting collection name is
-/// `plugin:clipboard:history`. The same name the plan calls out.
-const SEARCH_COLLECTION: &str = "history";
 
 struct Clipboard {
     history: Mutex<Vec<String>>,
@@ -24,20 +18,8 @@ flash_plugin::plugin!(Clipboard);
 
 impl FlashPlugin for Clipboard {
     async fn on_start(&self, ctx: Context) {
-        let initial: Vec<String> = {
-            let mut hist = self.history.lock().unwrap();
-            *hist = ctx.read_state(HISTORY_FILE).unwrap_or_default();
-            hist.clone()
-        };
-        // Seed the persistent index from the file-backed history so a
-        // fresh install (or a `:plugins reload`) starts with the same
-        // rows as the on-disk snapshot. Visibility is Hidden — the
-        // collection persists for `:clipboard`'s own queries but stays
-        // out of the flashlight pool, per the plugin contract.
-        let docs = render_search_docs(&initial);
-        let _ = ctx
-            .search_replace_with_visibility(SEARCH_COLLECTION, &docs, SearchVisibility::Hidden)
-            .await;
+        let mut hist = self.history.lock().unwrap();
+        *hist = ctx.read_state(HISTORY_FILE).unwrap_or_default();
     }
 
     // The core owns the pasteboard watch (it reads NSPasteboard's changeCount
@@ -66,13 +48,6 @@ impl FlashPlugin for Clipboard {
         };
         if let Some(snapshot) = snapshot {
             ctx.write_state(HISTORY_FILE, &snapshot);
-            // Mirror the in-memory cap into the index. Replace (not
-            // upsert) so the eviction that just happened in
-            // `snapshot` deletes the matching FTS row as well.
-            let docs = render_search_docs(&snapshot);
-            let _ = ctx
-                .search_replace_with_visibility(SEARCH_COLLECTION, &docs, SearchVisibility::Hidden)
-                .await;
         }
     }
 
@@ -122,25 +97,6 @@ impl Clipboard {
 struct HistoryEntry {
     preview: String,
     value: String,
-}
-
-/// Translate the in-memory history snapshot into search documents.
-/// `doc_key` is just the entry's index — clipboard entries don't have
-/// a stable id, but slot N consistently identifies "the Nth most
-/// recent." Title is the same preview the modal renders; body is the
-/// full text so multi-word recall ("docker logs api") hits even when
-/// the preview is truncated.
-fn render_search_docs(snapshot: &[String]) -> Vec<SearchDocument> {
-    snapshot
-        .iter()
-        .enumerate()
-        .map(|(index, text)| {
-            SearchDocument::new(format!("slot:{index}"), preview(text))
-                .kind("clipboard-entry")
-                .body(text.clone())
-                .meta("slot", index.to_string())
-        })
-        .collect()
 }
 
 fn preview(text: &str) -> String {

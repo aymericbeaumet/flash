@@ -304,6 +304,12 @@ public final class AccessibilityProvider: FlashSource {
       kAXValueAttribute,  // 7
       kAXURLAttribute,  // 8
       kAXHiddenAttribute,  // 9
+      kAXSubroleAttribute,  // 10 — Firefox/Chrome tabs report role
+                            //      `AXRadioButton`/`AXButton` with
+                            //      subrole `AXTabButton`; surfacing the
+                            //      subrole lets the walk paint those as
+                            //      `important` (tab-strip anchors) in
+                            //      one IPC round-trip.
     ] as CFArray
 
   /// Per-worker mutable state. `WalkState` is per-thread under concurrent
@@ -459,7 +465,7 @@ public final class AccessibilityProvider: FlashSource {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 10 else { return }
+    guard err == .success, let vals = valuesRef as? [Any], vals.count == 11 else { return }
 
     let role = vals[0] as? String
     let posValue = Self.axValue(vals[1])
@@ -470,6 +476,7 @@ public final class AccessibilityProvider: FlashSource {
       Self.stringValue(vals[5]) ?? Self.stringValue(vals[6]) ?? Self.stringValue(vals[7])
     let url = Self.urlValue(vals[8])
     let hidden = (vals[9] as? Bool) ?? false
+    let subrole = vals[10] as? String
 
     // Role allowlist: web pages use the narrower Vimium-equivalent set
     // (true semantic controls only); native apps use the broader set
@@ -548,6 +555,15 @@ public final class AccessibilityProvider: FlashSource {
           return false
         }
       }
+      // Browser tab strips report their entries either as native
+      // `AXTab` or as `AXRadioButton` / `AXButton` with subrole
+      // `AXTabButton` (Firefox + Chromium). Marking them `important`
+      // signals the renderer to paint them in the accent style so the
+      // user can pick out tabs from a dense element grid at a glance.
+      let isTabAnchor =
+        capturedRole == "AXTab"
+        || (subrole == "AXTabButton"
+          && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
       let candidate = JumpTarget(
         id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
         frame: frame,
@@ -557,6 +573,7 @@ public final class AccessibilityProvider: FlashSource {
         pid: pid,
         activate: activate,
         entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
+        important: isTabAnchor,
         providerID: identifier
       )
       let isRowOrCell = capturedRole == "AXRow" || capturedRole == "AXCell"

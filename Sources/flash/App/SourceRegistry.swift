@@ -42,7 +42,7 @@ final class SourceRegistry {
     self.descriptors =
       descriptors
       ?? [
-        SourceDescriptor(identifier: "app", activationPolicy: .always) {
+        SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
           ApplicationSource(ignoredApps: openConfig.ignoredApps)
         },
         SourceDescriptor(identifier: "accessibility", activationPolicy: .always) {
@@ -67,7 +67,7 @@ final class SourceRegistry {
   func updateOpenConfig(_ openConfig: Config.Open) {
     lock.lock()
     self.openConfig = openConfig
-    let appSource = activeSourcesByID["app"] as? ApplicationSource
+    let appSource = activeSourcesByID["core.apps"] as? ApplicationSource
     lock.unlock()
     appSource?.updateIgnoredApps(openConfig.ignoredApps)
   }
@@ -177,8 +177,8 @@ final class SourceRegistry {
     // title contains the query. Skip text-insertion candidates entirely so an
     // app_open can never type emoji content into the focused field.
     let ordered =
-      sourceSnapshot.filter { $0.identifier == "app" }
-      + sourceSnapshot.filter { $0.identifier != "app" }
+      sourceSnapshot.filter { $0.identifier == "core.apps" }
+      + sourceSnapshot.filter { $0.identifier != "core.apps" }
     for source in ordered {
       guard let item = source.candidate(matching: target, in: env),
         !CandidateFinder.insertsText(item)
@@ -191,7 +191,7 @@ final class SourceRegistry {
   func candidate(forProcessID pid: pid_t) -> Candidate? {
     refreshRunningApplications()
     let env = environment
-    for source in sources where source.identifier == "app" {
+    for source in sources where source.identifier == "core.apps" {
       if let appSource = source as? ApplicationSource,
         let item = appSource.candidate(forProcessID: pid, in: env)
       {

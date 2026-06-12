@@ -29,9 +29,6 @@ use tokio::sync::{mpsc, oneshot};
 /// then write `impl FlashPlugin for MyPlugin { … }`.
 pub use flash_plugin_macros::plugin;
 
-mod search;
-pub use search::{SearchDocument, SearchFilterSpec, SearchHit, SearchQuerySpec, SearchVisibility};
-
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
 /// plugin assigned. The serve loop fulfils each entry when the matching host
 /// response arrives. Cloned into [`Context`] so any handler can call the host.
@@ -101,6 +98,13 @@ pub struct JumpTarget {
     /// panes), and is observed *before* Flash forwards anything else.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefer_host_click: Option<bool>,
+    /// Mark a target as structurally important inside its source so
+    /// the host's hint renderer paints it in the accent style (e.g.
+    /// tmux pane chips vs. link chips; firefox tab chips vs. element
+    /// chips). Purely a styling signal — the commit path doesn't
+    /// branch on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub important: Option<bool>,
 }
 
 impl JumpTarget {
@@ -115,6 +119,7 @@ impl JumpTarget {
             enters_insert_mode: None,
             source_id: None,
             prefer_host_click: None,
+            important: None,
         }
     }
 
@@ -152,6 +157,11 @@ impl JumpTarget {
         self.prefer_host_click = Some(prefer);
         self
     }
+
+    pub fn important(mut self, important: bool) -> Self {
+        self.important = Some(important);
+        self
+    }
 }
 
 /// A flashlight candidate. Outbound (emitted via [`Context::emit_snapshot`])
@@ -174,6 +184,12 @@ pub struct Candidate {
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pid: Option<i64>,
+    /// Extra tokens folded into the host's search index for this candidate
+    /// (Slack-style shortcodes, keywords, etc.). Scored as a high-tier
+    /// field so a literal alias match outranks UCD/name prefixes — set
+    /// with [`aliases`](Candidate::aliases).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub search_aliases: Option<String>,
     /// Opaque per-candidate state round-tripped through the host. Set a raw
     /// string with [`payload`](Candidate::payload) or a structured value with
     /// [`payload_json`](Candidate::payload_json); read it back with
@@ -222,6 +238,29 @@ impl Candidate {
 
     pub fn pid(mut self, pid: i64) -> Self {
         self.pid = Some(pid);
+        self
+    }
+
+    /// Attach search aliases — extra tokens the host's ranker treats as
+    /// high-priority synonyms (e.g. emoji shortcodes: `🙏` → `["pray",
+    /// "thanks"]`). Tokens are joined with spaces; empty input clears
+    /// the field.
+    pub fn aliases<I, S>(mut self, aliases: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let joined: String = aliases
+            .into_iter()
+            .map(|s| s.as_ref().trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.search_aliases = if joined.is_empty() {
+            None
+        } else {
+            Some(joined)
+        };
         self
     }
 

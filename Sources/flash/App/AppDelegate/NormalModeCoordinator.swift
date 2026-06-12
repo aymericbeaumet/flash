@@ -3,7 +3,6 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
 import FlashProviders
-import FlashSearch
 
 /// One `:clipboard` history row: `preview` is the one-line label rendered in
 /// the modal, `value` the full text pasted on selection. Decoded from the
@@ -941,19 +940,23 @@ extension AppDelegate {
           configPath: nil,
           focused: true))
     }
-    // Also emit a synthetic focus event for every running browser even
-    // when its app isn't the focused one — Firefox's plugin re-walks
-    // its tab strip on `core:focus.changed{bundle=firefox}` and emits a
-    // snapshot, so without this prompt the user only sees Firefox tabs
-    // in flashlight if they focused Firefox earlier in the session.
-    // SafariTabsSource and ChromiumTabsSource (still in core) pull
-    // their tabs directly from AppleScript per query, so the
-    // double-emission is a no-op for them.
+    // Also emit a synthetic `focus.changed` for every running app
+    // whose bundle id any loaded plugin claims — without this prompt
+    // the plugin only re-walks its AX tree when its app gains focus,
+    // so a user opening flashlight from a different app sees the
+    // last-emitted (or empty) candidate snapshot. The previous
+    // implementation hard-coded the browser carve-out; the union of
+    // plugin `bundle_ids` from `pluginManager.claimedBundleIDs()`
+    // generalises the same logic to slack channels, firefox tabs,
+    // and any future bundle-gated source without per-plugin
+    // book-keeping here.
+    let currentBundleID = currentNonFlashContext()?.bundleIdentifier
+    let claimedBundleIDs = pluginManager.claimedBundleIDs()
     let runningApps = NSWorkspace.shared.runningApplications
     for app in runningApps {
       guard let bundleID = app.bundleIdentifier,
-        BrowserTabSources.allBundleIdentifiers.contains(bundleID),
-        bundleID != currentNonFlashContext()?.bundleIdentifier,
+        claimedBundleIDs.contains(bundleID),
+        bundleID != currentBundleID,
         !app.isTerminated
       else { continue }
       pluginManager.emit(
@@ -1079,10 +1082,6 @@ extension AppDelegate {
           self.candidateFinderAllAppsCacheReady = true
           self.candidateFinderAllAppsRefreshInFlight = false
         }
-        // Mirror the freshest live pool into the SearchService so the
-        // plugin RPC's `include_memory` path can fuzzy-match it without
-        // hopping to the main thread.
-        self.searchService?.updateLivePoolSnapshot(candidates)
         FlashLog.trace(
           "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) reason=\(reason)")
         self.refreshVisibleCandidateFinderResultsFromCache()
@@ -1272,24 +1271,35 @@ extension AppDelegate {
   }
 
   /// Frecency boost for a command-line completion label. Falls back to
-  /// 0 when the SearchService is unavailable (config off, fresh DB,
-  /// label never opened). Used only by `updateCommandLineCompletions`.
+  /// 0 when the store is unavailable (couldn't open the JSON file) or
+  /// the label has never been opened.
   private func commandFrecencyBoost(label: String) -> Int {
-    guard let searchService else { return 0 }
-    return searchService.frecencyBoost(forKey: FrecencyKey.command(label: label))
+    guard let frecencyStore else { return 0 }
+    return frecencyStore.boost(forKey: FrecencyKey.command(label: label))
   }
 
   /// Record a frecency open against a command-line verb (`:flashlight`,
-  /// `:help`, …). Called from every successful `submitCommandLine`
-  /// branch so the empty-`:` prompt surfaces the user's actual habits.
+  /// `:help`, …). Called from every `submitCommandLine` so the empty-
+  /// `:` prompt surfaces the user's actual habits.
   private func recordCommandLineFrecency(rawInput: String) {
-    guard let searchService else { return }
+    guard let frecencyStore else { return }
     var trimmed = rawInput.trimmingCharacters(in: .whitespaces)
     if trimmed.hasPrefix(":") { trimmed.removeFirst() }
     guard let verb = trimmed.split(whereSeparator: { $0.isWhitespace }).first else { return }
     let label = verb.lowercased()
     guard !label.isEmpty else { return }
-    searchService.recordOpen(forKey: FrecencyKey.command(label: label))
+    frecencyStore.recordOpen(itemKey: FrecencyKey.command(label: label))
+  }
+
+  /// Frecency boost for a Candidate. Mirrors the prior SearchService
+  /// behaviour: derive the item key from the candidate (bundle id, URL,
+  /// or sourcePayload envelope) and look up the cached integer boost.
+  /// Used by the in-memory ranker inside `runCandidateFinderSearch`.
+  func candidateFrecencyBoost(_ candidate: Candidate) -> Int {
+    guard let frecencyStore, let key = FrecencyMapper.itemKey(for: candidate) else {
+      return 0
+    }
+    return frecencyStore.boost(forKey: key)
   }
 
   func commandLineCompletionDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
@@ -1322,6 +1332,7 @@ extension AppDelegate {
   }
 
   private func updateCandidateMatches(query: String) {
+    let t0 = CFAbsoluteTimeGetCurrent()
     // `@<source>` / `--<source>` selectors (e.g. `:flashlight @tmux @slack
     // test`) pin the pool to those sources; they may appear anywhere and
     // several widen the pool (OR). The residual text is the actual search
@@ -1344,70 +1355,154 @@ extension AppDelegate {
       trimmed: trimmed,
       sourceFilters: sourceFilters,
       attributeFilters: attributeFilters)
-    let bang = candidateFinderEmojiMode ? nil : CandidateFinder.parseBang(trimmed)
-    let indexQueryText: String?
-    if candidateFinderEmojiMode {
-      // Emoji pool is static and entirely in-memory — the DB has no
-      // rows that would shoulder it. Skip the round-trip.
-      indexQueryText = nil
-    } else if let bang {
-      // Bang mode shows ONLY the registered bangs; the FTS5 index
-      // doesn't carry them. Skip.
-      indexQueryText = bang.remainder.isEmpty ? nil : bang.remainder
-    } else {
-      indexQueryText = trimmed
-    }
-    let scope = CandidateFinderSearchScope(
-      pool: pool,
-      scoringText: scoringText,
-      indexQueryText: indexQueryText,
-      attributeFilters: attributeFilters,
-      indexCollections: nil)
+    let tFiltered = CFAbsoluteTimeGetCurrent()
 
-    // Bump the generation so any in-flight DB walk that returns AFTER
-    // this keystroke is dropped silently when its onResults fires.
+    // Bump the generation so any scoring job that completes AFTER
+    // this keystroke is dropped silently when its callback fires.
     candidateFinderIndexGenerationCounter &+= 1
     let generation = candidateFinderIndexGenerationCounter
+    let isEmojiMode = candidateFinderEmojiMode
 
-    if let service = searchService {
-      // SearchService.search fires `onResults` synchronously first
-      // (in-memory pool result) and again asynchronously later if the
-      // DB walk found anything new. The closure captures `firstFire`
-      // by reference so it knows whether the in-flight `refreshCandidateFinder`
-      // call (which renders straight after `updateCandidateMatches`
-      // returns) is about to draw the result for us — or whether we
-      // need to re-render ourselves.
-      var firstFire = true
-      service.search(scope: scope, generation: generation) { [weak self] receivedGen, matches in
-        guard let self else { return }
-        guard receivedGen == self.candidateFinderIndexGenerationCounter else { return }
-        self.applyCandidateMatches(matches)
-        if firstFire {
-          firstFire = false
-        } else {
-          self.overlay.displayCandidateFinder(
-            query: query, items: self.candidateFinderDisplayItems())
-        }
-      }
-    } else {
-      // SearchService disabled (config off or FTS5 unavailable): run
-      // the fuzzy scorer inline so flashlight still works. This isn't
-      // a parallel codepath — it's the SearchService scoring shape
-      // collapsed onto one call site for the degraded mode.
+    if isEmojiMode {
       let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
-      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
-      let scored = CandidateFinder.scoreMatches(
-        pool: pool, normalizedQuery: normalizedQuery, fuzzyScore: fuzzy)
-      applyCandidateMatches(CandidateFinder.sortedMatches(scored))
+      let sorted = CandidateFinder.emojiMatches(
+        pool: pool,
+        normalizedQuery: normalizedQuery,
+        limit: Self.instantEmojiResultLimit)
+      applyCandidateMatches(sorted)
+      return
     }
 
-    if !trimmed.isEmpty {
-      let top = candidateFinderMatches.prefix(5).map { match in
-        "\(match.candidate.source):\(match.candidate.name)=\(match.score)"
-      }.joined(separator: "|")
-      FlashLog.trace(
-        "[candidate_finder] q=\"\(trimmed)\" pool=\(pool.count) "
-          + "matches=\(candidateFinderMatches.count) top5=[\(top)]")
+    // Score on the dedicated background queue so the keystroke
+    // returns immediately. The caller (refreshCommandLine /
+    // refreshCandidateFinder) re-renders its surface with the
+    // previous match snapshot; the async callback rerenders again
+    // when fresh results land. Generation check drops late results.
+    Self.scoringQueue.async { [weak self] in
+      guard let self else { return }
+      // Drop stale work before any scoring runs. The generation
+      // counter is bumped on the main thread, so by the time this
+      // closure starts a later keystroke may already supersede it.
+      // The old check inside the main-dispatched callback would let
+      // the full scoring + sort run before throwing the result away.
+      guard generation == self.candidateFinderIndexGenerationCounter else { return }
+      let tScoringStart = CFAbsoluteTimeGetCurrent()
+      let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
+      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+      var scored = CandidateFinder.scoreMatches(
+        pool: pool,
+        normalizedQuery: normalizedQuery,
+        fuzzyScore: fuzzy,
+        allowParallel: !isEmojiMode)
+      let tScored = CFAbsoluteTimeGetCurrent()
+      // Apply frecency boost on the same thread before the sort so
+      // the comparator sees the final score; reading the store's
+      // O(1) snapshot is safe off main. Skip the loop entirely when
+      // the store has no entries — the boost is always 0 in that
+      // case and `FrecencyMapper.itemKey` does a non-trivial amount
+      // of per-candidate work that's pure waste here.
+      let store = self.frecencyStore
+      if !isEmojiMode, let store, !store.isEmpty {
+        for index in scored.indices {
+          if let key = FrecencyMapper.itemKey(for: scored[index].candidate) {
+            scored[index].score += store.boost(forKey: key)
+          }
+        }
+      }
+      let sorted = CandidateFinder.sortedMatches(scored, precedence: self.precedenceTable())
+      let tSorted = CFAbsoluteTimeGetCurrent()
+      DispatchQueue.main.async {
+        guard generation == self.candidateFinderIndexGenerationCounter else { return }
+        self.applyCandidateMatches(sorted)
+        self.rerenderCandidateFinderSurface(query: query)
+        // `<cmd+cr>` on a source-completion row sets this flag so we
+        // open the top filtered candidate as soon as the rescoring
+        // settles. Consume one-shot so a later keystroke can't
+        // accidentally trigger an open.
+        if self.pendingFlashlightSubmitAfterSourceLock {
+          self.pendingFlashlightSubmitAfterSourceLock = false
+          self.openTopCandidateFinderMatchAfterSourceLock()
+        }
+        if !trimmed.isEmpty {
+          let tRendered = CFAbsoluteTimeGetCurrent()
+          let top = sorted.prefix(5).map { match in
+            "\(match.candidate.source):\(match.candidate.name)=\(match.score)"
+          }.joined(separator: "|")
+          let dFilter = Int((tFiltered - t0) * 1000)
+          let dScore = Int((tScored - tScoringStart) * 1000)
+          let dSort = Int((tSorted - tScored) * 1000)
+          let dRender = Int((tRendered - tSorted) * 1000)
+          let dTotal = Int((tRendered - t0) * 1000)
+          FlashLog.trace(
+            "[candidate_finder] q=\"\(trimmed)\" pool=\(pool.count) "
+              + "matches=\(sorted.count) "
+              + "total_ms=\(dTotal) filter_ms=\(dFilter) score_ms=\(dScore) "
+              + "sort_ms=\(dSort) render_ms=\(dRender) "
+              + "top5=[\(top)]")
+        }
+      }
+    }
+  }
+
+  /// Open the top non-completion candidate after the user locked in
+  /// a source filter with `<cmd+cr>`. Skips bang + source rows so a
+  /// stale completion row at the top doesn't get "opened" as a no-op.
+  private func openTopCandidateFinderMatchAfterSourceLock() {
+    for match in candidateFinderMatches {
+      let kind = match.candidate.kind
+      if kind == CandidateFinder.bangKind || kind == CandidateFinder.sourceKind {
+        continue
+      }
+      finishCommandLineInteraction(reason: "command_open_after_source_lock")
+      openSourceItem(match.candidate)
+      return
+    }
+  }
+
+  /// Single queue for the per-keystroke fuzzy scoring + sort. Kept
+  /// static so it lives across `updateCandidateMatches` calls without
+  /// being recreated; `userInitiated` keeps it ahead of background
+  /// utility work but never preempts the main thread.
+  private static let scoringQueue = DispatchQueue(
+    label: "flash.candidate.scoring", qos: .userInitiated)
+  /// The emoji picker only renders five rows, but keeping a wider
+  /// slice preserves a short arrow-navigation buffer without sorting
+  /// or retaining the full emoji pool on every keystroke.
+  private static let instantEmojiResultLimit = 64
+
+  /// Build a `PrecedenceTable` from the live config. Called once per
+  /// keystroke (the table is cheap to materialise — `[String: Int]`
+  /// of ~a dozen entries) so config edits take effect on the next
+  /// search without needing a process-level cache.
+  private func precedenceTable() -> CandidateFinder.PrecedenceTable {
+    CandidateFinder.PrecedenceTable(
+      weights: config.flashlight.precedence,
+      aliveBonus: config.flashlight.precedenceAliveBonus)
+  }
+
+  /// Re-render the active candidate-finder surface (command-line
+  /// flashlight prompt OR the dedicated `.candidateFinder` modal) with
+  /// the current `candidateFinderMatches`. Called from the async
+  /// scoring callback so a late-arriving result replaces the stale
+  /// suggestion list without a full `refreshCommandLine` re-parse.
+  private func rerenderCandidateFinderSurface(query: String) {
+    switch overlay.inputMode {
+    case .commandLine:
+      // Skip when the user has already left the flashlight surface
+      // (mode jumped to normal / hints / modal). The async result is
+      // for a surface that no longer exists.
+      guard
+        NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil
+      else { return }
+      overlay.displayCommandLine(
+        overlay.commandLineText,
+        suggestions: candidateFinderDisplayItems(windowSize: 5),
+        cursorIndex: overlay.commandLineCursorIndex)
+    case .candidateFinder:
+      overlay.displayCandidateFinder(
+        query: query, items: candidateFinderDisplayItems())
+    case .hints, .normal, .modal:
+      return
     }
   }
 
@@ -1444,11 +1539,39 @@ extension AppDelegate {
           forBundleID: currentNonFlashContext()?.bundleIdentifier))
       return (bangs, bang.token)
     }
+    // `@<partial>` completion: when the user is in the middle of
+    // typing a source token (no trailing whitespace yet), swap the
+    // pool for source-completion rows derived from the candidates
+    // actually present. This mirrors the bang-completion surface so
+    // `<tab>`/`<cr>` semantics stay identical across both modes.
+    if !candidateFinderEmojiMode,
+      let completion = CandidateFinder.parseAtSourceCompletion(trimmed)
+    {
+      let pool = CandidateFinder.prepare(
+        knownSourceCompletionCandidates())
+      return (pool, completion.token)
+    }
+    // Cache the kind+sourceFilter+attributeFilter pass — while the
+    // user types into flashlight the signature is stable, so the same
+    // ~2k-entry filter ran ~2k times on every keystroke. Keyed by the
+    // base-pool epoch + emoji mode + filter signature; one-slot cache
+    // because consecutive keystrokes always share the same key.
+    let signature = poolFilterSignature(
+      sourceFilters: sourceFilters, attributeFilters: attributeFilters)
+    if let cached = candidateFinderFilteredPoolCache,
+      cached.epoch == candidateFinderCandidatesEpoch,
+      cached.emojiMode == candidateFinderEmojiMode,
+      cached.signature == signature
+    {
+      return (cached.pool, trimmed)
+    }
     let pool = candidateFinderCandidates.filter { candidate in
       let kindMatches =
         candidateFinderEmojiMode
         ? candidate.kind == CandidateFinder.emojiKind
-        : candidate.kind != CandidateFinder.emojiKind && candidate.kind != CandidateFinder.bangKind
+        : candidate.kind != CandidateFinder.emojiKind
+          && candidate.kind != CandidateFinder.bangKind
+          && candidate.kind != CandidateFinder.sourceKind
       guard kindMatches else { return false }
       if !sourceFilters.isEmpty {
         let any = sourceFilters.contains {
@@ -1460,7 +1583,50 @@ extension AppDelegate {
     }
     let attributeFiltered = CandidateFinder.applyAttributeFilters(
       pool, filters: attributeFilters)
+    candidateFinderFilteredPoolCache = (
+      epoch: candidateFinderCandidatesEpoch,
+      emojiMode: candidateFinderEmojiMode,
+      signature: signature,
+      pool: attributeFiltered)
     return (attributeFiltered, trimmed)
+  }
+
+  /// Stable cache key for the current pool-filter inputs. Source
+  /// selectors come from a user-typed token list (`@tmux @apps`); the
+  /// attribute filters compare field+kind+needle. Joining them into a
+  /// short string is cheap enough that the cache key is faster to
+  /// build than even one short filter pass.
+  private func poolFilterSignature(
+    sourceFilters: [String],
+    attributeFilters: [CandidateFinder.CompiledAttributeFilter]
+  ) -> String {
+    var parts: [String] = []
+    parts.reserveCapacity(sourceFilters.count + attributeFilters.count)
+    for filter in sourceFilters {
+      parts.append("s:\(filter)")
+    }
+    for filter in attributeFilters {
+      parts.append("a:\(filter.field):\(filter.kind):\(filter.needle)")
+    }
+    return parts.joined(separator: "|")
+  }
+
+  /// Build one `@<source>` completion row per distinct source label
+  /// present in the live candidate pool. Cached by snapshot identity
+  /// so the same array gets reused while the user is still typing.
+  private func knownSourceCompletionCandidates() -> [Candidate] {
+    var seen = Set<String>()
+    var out: [Candidate] = []
+    for candidate in candidateFinderCandidates {
+      let label = candidate.source
+      guard !label.isEmpty, !seen.contains(label) else { continue }
+      seen.insert(label)
+      out.append(CandidateFinder.sourceCompletionCandidate(label))
+    }
+    // Stable display order: alphabetical by source label. The fuzzy
+    // scorer drives the live ranking once the user types a partial.
+    out.sort { $0.sourcePayload ?? "" < $1.sourcePayload ?? "" }
+    return out
   }
 
   /// Dispatch a selected bang row: route the live query's remainder to the
@@ -1737,8 +1903,52 @@ extension AppDelegate {
       refreshCommandLine(text: buffer, cursorIndex: buffer.count)
       return
     }
+    if candidate.kind == CandidateFinder.sourceKind,
+      let source = candidate.sourcePayload
+    {
+      // Source-completion row. Rewrite the in-progress `@<partial>`
+      // token in the buffer with the canonical `@<source> ` so the
+      // existing source-filter parser applies it to the next refresh,
+      // and the cursor sits ready for the query.
+      //   * `<tab>`/`<cr>` (`submit == false`): canonicalize + stop —
+      //     same shape as Tab/CR on a bang row with matches.
+      //   * `<cmd+cr>` (`submit == true`): canonicalize, then open
+      //     the top filtered candidate once the async rescoring
+      //     settles — same shape as Cmd+CR on a bang dispatching the
+      //     typed remainder. The `pendingFlashlightSubmitAfterSourceLock`
+      //     flag is consumed by the rerender callback in
+      //     `updateCandidateMatches`.
+      if submit {
+        pendingFlashlightSubmitAfterSourceLock = true
+      }
+      replaceInProgressAtSourceToken(with: source)
+      return
+    }
     finishCommandLineInteraction(reason: "command_open")
     openSourceItem(candidate)
+  }
+
+  /// Rewrite the trailing `@<partial>` token inside the live command
+  /// line with `@<source> ` and re-render. Called by Tab/CR/Cmd+CR on
+  /// a source-completion row so the user sees the canonical filter
+  /// appear without leaving the surface.
+  private func replaceInProgressAtSourceToken(with source: String) {
+    let command = overlay.commandLineText
+    guard let query = NormalModeDispatcher.commandLineCandidateQuery(command),
+      let completion = CandidateFinder.parseAtSourceCompletion(query)
+    else { return }
+    // Map the `query`-relative @ range into the absolute command buffer
+    // (the prompt + verb prefix the user can't see in `query`).
+    let prefixLen = command.count - query.count
+    let queryStart = command.index(command.startIndex, offsetBy: prefixLen)
+    let atOffset = query.distance(from: query.startIndex, to: completion.atRange.lowerBound)
+    let endOffset = query.distance(from: query.startIndex, to: completion.atRange.upperBound)
+    let absoluteStart = command.index(queryStart, offsetBy: atOffset)
+    let absoluteEnd = command.index(queryStart, offsetBy: endOffset)
+    let replacement = "@\(source) "
+    let buffer = command.replacingCharacters(in: absoluteStart..<absoluteEnd, with: replacement)
+    let newCursor = command.distance(from: command.startIndex, to: absoluteStart) + replacement.count
+    refreshCommandLine(text: buffer, cursorIndex: newCursor)
   }
 
   /// `<cmd+cr>` in bang mode. Dispatches whatever the user typed via
@@ -2095,12 +2305,13 @@ extension AppDelegate {
   }
 
   /// Reorder the focused window's current tab. Tmux runs `swap-window`
-  /// across the source action; browsers (Safari/Chrome/Firefox) ship
-  /// without a portable keyboard shortcut for moving tabs, so the
-  /// fallback is a `warn`-level log naming the bundle — the user knows
-  /// the mapping fired but the host had nothing to send. A future
-  /// browser plugin RPC can synthesize a tab-strip drag to fill the
-  /// gap.
+  /// across the source action; Firefox honours ⌘⇧Page Up/Down to slide
+  /// the active tab inside its strip, so the host falls back to that
+  /// chord when the plugin layer doesn't claim the action. Browsers
+  /// without a portable shortcut (Safari, Chromium today) get a
+  /// `warn`-level log naming the bundle so the user knows the mapping
+  /// fired but couldn't reach the app — they can bind their own
+  /// shortcut and override `[m`/`]m` in flash.toml.
   private func tabMoveInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
     let actionName = direction == .next ? "tab_move_next" : "tab_move_previous"
     performTabSourceAction(
@@ -2113,13 +2324,35 @@ extension AppDelegate {
           registry.tabMovePrev(in: context, completion: completion)
         }
       },
-      fallback: { [weak self] context, _ in
+      fallback: { [weak self] context, count in
+        guard let self else { return }
+        if Self.bundleSupportsFirefoxStyleTabMove(context.bundleIdentifier) {
+          let key: CGKeyCode = direction == .next
+            ? CGKeyCode(kVK_PageDown) : CGKeyCode(kVK_PageUp)
+          self.sendNormalModeKey(
+            key, flags: [.maskCommand, .maskShift], repeatCount: count)
+          return
+        }
         FlashLog.warn(
           "[normal_mode] \(actionName) has no native shortcut on "
             + "bundle=\(context.bundleIdentifier); bind via a tab-mover "
             + "extension or override `[m`/`]m` in flash.toml")
-        self?.applyModeOverlay()
+        self.applyModeOverlay()
       })
+  }
+
+  /// Bundles whose tab strip honours `⌘⇧Page Up / ⌘⇧Page Down` for
+  /// moving the focused tab left / right. Firefox (release +
+  /// developer edition) is the canonical example; other Mozilla-based
+  /// browsers inherit the same chord.
+  private static let firefoxStyleTabMoveBundles: Set<String> = [
+    "org.mozilla.firefox",
+    "org.mozilla.firefoxdeveloperedition",
+    "org.mozilla.nightly",
+  ]
+
+  static func bundleSupportsFirefoxStyleTabMove(_ bundleID: String) -> Bool {
+    firefoxStyleTabMoveBundles.contains(bundleID)
   }
 
   /// Reopen the most recently closed tab. Cross-browser standard is

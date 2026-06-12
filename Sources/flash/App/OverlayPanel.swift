@@ -418,4 +418,12 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidMoveCandidateFinderSelection(_ delta: Int)
   func overlayDidSubmitCandidateFinder()
   func overlayDidSubmitSelectableModal()
+  /// `[flashlight.aliases]` lookup hook. Returns the rewritten buffer +
+  /// cursor when the latest keystroke landed on `<space>` after a
+  /// registered shorthand bang (`!g ` → `!google `), `nil` otherwise.
+  /// Lives on the coordinator so the alias map is sourced from the
+  /// live config rather than mirrored onto the panel.
+  func overlayExpandFlashlightAlias(
+    _ text: String, cursorIndex: Int
+  ) -> (text: String, cursorIndex: Int)?
 }

@@ -130,7 +130,7 @@ final class SourceRegistryTests: XCTestCase {
   // remaining insert-text kind). app_open must resolve the real app first.
   func testCandidateMatchingPrefersAppSourceOverHigherPriorityInsertTextShadow() {
     let slackApp = Candidate(
-      kind: .app, sourceID: "app", source: "app", pid: nil,
+      kind: .app, sourceID: "core.apps", source: "core.apps", pid: nil,
       name: "Slack", subtitle: "app",
       bundleIdentifier: "com.tinyspeck.slackmacgap", url: nil)
     let emojiShadow = Candidate(
@@ -141,9 +141,9 @@ final class SourceRegistryTests: XCTestCase {
 
     let registry = SourceRegistry(
       descriptors: [
-        SourceDescriptor(identifier: "app", activationPolicy: .always) {
+        SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
           StubSource(
-            identifier: "app", priority: 0, capabilities: [.appActivation],
+            identifier: "core.apps", priority: 0, capabilities: [.appActivation],
             matchHandler: { target in
               "Slack".localizedCaseInsensitiveContains(target) ? slackApp : nil
             })
@@ -161,7 +161,7 @@ final class SourceRegistryTests: XCTestCase {
 
     let match = registry.candidate(matching: "Slack")
 
-    XCTAssertEqual(match?.sourceID, "app")
+    XCTAssertEqual(match?.sourceID, "core.apps")
     XCTAssertEqual(match?.kind, .app)
     XCTAssertFalse(match.map(CandidateFinder.insertsText) ?? true)
   }
@@ -181,8 +181,8 @@ final class SourceRegistryTests: XCTestCase {
 
     func makeRegistry(includeActivatablePlugin: Bool) -> SourceRegistry {
       var descriptors: [SourceDescriptor] = [
-        SourceDescriptor(identifier: "app", activationPolicy: .always) {
-          StubSource(identifier: "app", priority: 0, capabilities: [.appActivation])
+        SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
+          StubSource(identifier: "core.apps", priority: 0, capabilities: [.appActivation])
         },
         SourceDescriptor(identifier: "plugin:emojis", activationPolicy: .always) {
           StubSource(

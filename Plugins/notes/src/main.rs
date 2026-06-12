@@ -96,7 +96,7 @@ async fn emit_candidates(ctx: &Context) {
             Candidate::new(title)
                 .kind("note")
                 .source_id(SOURCE_ID)
-                .source("notes")
+                .source("notes.notes")
                 .subtitle("Note")
                 .payload_json(&NotePayload {
                     id: note_id.to_string(),

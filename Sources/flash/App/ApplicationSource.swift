@@ -3,8 +3,8 @@ import FlashCore
 import Foundation
 
 final class ApplicationSource: FlashSource {
-  let identifier = "app"
-  let displayName = "app"
+  let identifier = "core.apps"
+  let displayName = "core.apps"
   let priority = 0
   let capabilities: FlashSourceCapabilities = [.candidates, .appActivation]
   let activationPolicy: FlashSourceActivationPolicy = .always
@@ -185,6 +185,13 @@ final class ApplicationSource: FlashSource {
       URL(fileURLWithPath: "/System/Applications"),
       URL(fileURLWithPath: "/System/Applications/Utilities"),
       URL(fileURLWithPath: "/System/Library/CoreServices"),
+      // Cryptex apps: macOS Sequoia+ moves Safari (and other system
+      // apps it ships separately from the base OS) into a sealed
+      // cryptographic vault. The `/Applications/Safari.app` symlink
+      // points here and itself carries `UF_HIDDEN`, so add the real
+      // path explicitly as a backstop for setups where the symlink
+      // is removed or unreadable.
+      URL(fileURLWithPath: "/System/Cryptexes/App/System/Applications"),
       home.appendingPathComponent("Applications"),
     ]
   }
@@ -193,11 +200,18 @@ final class ApplicationSource: FlashSource {
     var byIdentifier: [String: Candidate] = [:]
     var byPath: [String: Candidate] = [:]
     for root in roots {
+      // Intentionally NO `.skipsHiddenFiles`: macOS Sequoia+ marks
+      // the `/Applications/Safari.app` symlink (and any other
+      // Cryptex-relocated bundle's stub) with `UF_HIDDEN`, so
+      // skipping hidden entries hides every Cryptex app from
+      // flashlight. The `.app` extension check below already gates
+      // out `.DS_Store` and friends — the hidden flag was never a
+      // useful filter for our purposes.
       guard
         let enumerator = FileManager.default.enumerator(
           at: root,
           includingPropertiesForKeys: [.isDirectoryKey],
-          options: [.skipsHiddenFiles, .skipsPackageDescendants])
+          options: [.skipsPackageDescendants])
       else { continue }
 
       for case let url as URL in enumerator {
@@ -250,8 +264,8 @@ final class ApplicationSource: FlashSource {
     let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
     return Candidate(
       kind: .app,
-      sourceID: "app",
-      source: "app",
+      sourceID: "core.apps",
+      source: "core.apps",
       pid: nil,
       name: name.isEmpty ? url.deletingPathExtension().lastPathComponent : name,
       subtitle: "app",

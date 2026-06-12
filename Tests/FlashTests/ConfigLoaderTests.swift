@@ -83,6 +83,11 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.mode.insert.isEmpty)
     XCTAssertTrue(c.open.ignoredApps.isEmpty)
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
+    XCTAssertTrue(c.flashlight.aliases.isEmpty)
+    XCTAssertEqual(c.flashlight.precedence["tmux"], 100)
+    XCTAssertEqual(c.flashlight.precedence["firefox"], 80)
+    XCTAssertEqual(c.flashlight.precedence["core.apps"], 40)
+    XCTAssertEqual(c.flashlight.precedenceAliveBonus, 10)
     XCTAssertFalse(c.debug.httpInspectorEnabled)
     XCTAssertEqual(c.debug.httpInspectorHost, "localhost")
     XCTAssertEqual(c.debug.httpInspectorPort, 4242)
@@ -187,6 +192,68 @@ final class ConfigLoaderTests: XCTestCase {
       XCTFail("expected file plugin reference")
     }
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testParsesFlashlightAliasesAndPrecedence() {
+    let c = ConfigLoader.parse(
+      #"""
+      [flashlight.aliases]
+      "!g" = "!google"
+      "@ft" = "@firefox.tabs"
+      gh = "!github"
+
+      [flashlight.precedence]
+      Tmux = 200
+      "firefox.tabs" = 120
+      "notes.notes" = -10
+
+      [flashlight]
+      precedence_alive_bonus = 25
+      """#)
+
+    XCTAssertEqual(c.flashlight.aliases["!g"], "!google")
+    XCTAssertEqual(c.flashlight.aliases["@ft"], "@firefox.tabs")
+    XCTAssertEqual(c.flashlight.aliases["gh"], "!github")
+    XCTAssertEqual(c.flashlight.precedence["tmux"], 200)
+    XCTAssertEqual(c.flashlight.precedence["firefox.tabs"], 120)
+    XCTAssertEqual(c.flashlight.precedence["notes.notes"], -10)
+    XCTAssertEqual(c.flashlight.precedenceAliveBonus, 25)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testInvalidFlashlightConfigReportsDiagnosticsAndKeepsDefaults() {
+    let c = ConfigLoader.parse(
+      #"""
+      [flashlight.aliases]
+      "!g" = ""
+      "@ft" = 42
+
+      [flashlight.precedence]
+      firefox = "high"
+
+      [flashlight]
+      precedence_alive_bonus = -1
+      """#)
+
+    XCTAssertTrue(c.flashlight.aliases.isEmpty)
+    XCTAssertEqual(c.flashlight.precedence["firefox"], 80)
+    XCTAssertEqual(c.flashlight.precedenceAliveBonus, 10)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("flashlight.aliases.!g must be a non-empty quoted string")
+      })
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("flashlight.aliases.@ft must be a non-empty quoted string")
+      })
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("flashlight.precedence.firefox must be an integer")
+      })
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("flashlight.precedence_alive_bonus must be a non-negative integer")
+      })
   }
 
   func testParsesPluginSettingsTables() throws {

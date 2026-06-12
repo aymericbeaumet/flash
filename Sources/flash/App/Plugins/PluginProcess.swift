@@ -210,6 +210,7 @@ final class PluginProcess {
       activate: activate,
       entersInsertMode: wire.entersInsertMode,
       preferHostClick: wire.preferHostClick,
+      important: wire.important,
       providerID: wire.sourceID)
   }
 
@@ -990,7 +991,8 @@ final class PluginProcess {
       pid: (raw["pid"] as? Int).map(pid_t.init),
       entersInsertMode: entersInsertMode,
       sourceID: raw["source_id"] as? String ?? sourceID,
-      preferHostClick: raw["prefer_host_click"] as? Bool ?? false)
+      preferHostClick: raw["prefer_host_click"] as? Bool ?? false,
+      important: raw["important"] as? Bool ?? false)
   }
 
   private static func candidate(
@@ -1012,7 +1014,8 @@ final class PluginProcess {
       subtitle: raw["subtitle"] as? String ?? "",
       bundleIdentifier: raw["bundle_id"] as? String ?? "",
       url: url,
-      sourcePayload: raw["payload"].flatMap(Self.payloadString))
+      sourcePayload: raw["payload"].flatMap(Self.payloadString),
+      searchAliases: raw["search_aliases"] as? String ?? "")
   }
 
   private static func command(from raw: [String: Any]) -> PluginCommandRegistration? {

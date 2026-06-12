@@ -6,6 +6,12 @@
 //! filters/fuzzy-matches them behind `:emojis <query>` and, on selection,
 //! inserts the glyph into the focused app. The plugin is otherwise inert —
 //! the dataset never changes, so there is nothing to refresh on events.
+//!
+//! A side dataset of curated Slack-style shortcodes (`aliases.txt`) is
+//! attached as the candidate's search aliases so a literal `:pray:` /
+//! `pray` query ranks `🙏` ahead of UCD-name prefixes like `prayer beads`.
+
+use std::collections::HashMap;
 
 use flash_plugin::{run, Candidate, Context};
 
@@ -13,8 +19,29 @@ const SOURCE_ID: &str = "plugin:emojis";
 
 /// `<glyph>\t<lowercase name>` rows, one per line.
 const EMOJI_DATA: &str = include_str!("../emoji.txt");
+/// `<glyph>\t<space-separated shortcode tokens>` rows, one per line.
+/// Maps to the candidate's `search_aliases` field; missing glyphs are
+/// fine — the plugin falls back to the UCD name alone.
+const ALIAS_DATA: &str = include_str!("../aliases.txt");
+
+fn parse_aliases() -> HashMap<&'static str, &'static str> {
+    ALIAS_DATA
+        .lines()
+        .filter_map(|line| {
+            let (glyph, aliases) = line.split_once('\t')?;
+            let glyph = glyph.trim();
+            let aliases = aliases.trim();
+            if glyph.is_empty() || aliases.is_empty() {
+                None
+            } else {
+                Some((glyph, aliases))
+            }
+        })
+        .collect()
+}
 
 fn build_candidates() -> Vec<Candidate> {
+    let aliases = parse_aliases();
     EMOJI_DATA
         .lines()
         .filter_map(|line| {
@@ -24,14 +51,16 @@ fn build_candidates() -> Vec<Candidate> {
             if glyph.is_empty() || name.is_empty() {
                 return None;
             }
-            Some(
-                Candidate::new(format!("{glyph} {name}"))
-                    .kind("emoji")
-                    .source_id(SOURCE_ID)
-                    .source("emoji")
-                    .subtitle("emoji")
-                    .payload(glyph),
-            )
+            let mut candidate = Candidate::new(format!("{glyph} {name}"))
+                .kind("emoji")
+                .source_id(SOURCE_ID)
+                .source("emojis.glyphs")
+                .subtitle("emoji")
+                .payload(glyph);
+            if let Some(shortcodes) = aliases.get(glyph) {
+                candidate = candidate.aliases(shortcodes.split_whitespace());
+            }
+            Some(candidate)
         })
         .collect()
 }

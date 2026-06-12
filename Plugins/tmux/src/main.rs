@@ -426,6 +426,7 @@ fn build_target(
     pid: i64,
     enters_insert_mode: bool,
     prefer_host_click: bool,
+    important: bool,
 ) -> JumpTarget {
     JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
@@ -434,6 +435,7 @@ fn build_target(
         .pid(pid)
         .source_id(SOURCE_ID)
         .prefer_host_click(prefer_host_click)
+        .important(important)
 }
 
 async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> DiscoverResponse {
@@ -574,6 +576,11 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             // forwarder, so tmux selects the pane before the next
             // keystroke is delivered.
             true,
+            // Important: pane chips are the structural anchors of a
+            // tmux window, so the renderer paints them in the accent
+            // style. Link chips below are everyday clutter and stay
+            // in the default yellow.
+            true,
         ));
         actions.insert(
             target_id,
@@ -635,6 +642,7 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             "tmux-link",
             &link.text,
             pid,
+            false,
             false,
             false,
         ));
@@ -757,7 +765,7 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<Vec<Candidate>> {
         let mut candidate = Candidate::new(title)
             .kind("tmux_window")
             .source_id(SOURCE_ID)
-            .source(PLUGIN_ID)
+            .source("tmux.windows")
             .subtitle(subtitle)
             .payload_json(&payload);
         if let Some(tp) = terminal_pid {
@@ -1064,17 +1072,32 @@ async fn perform_source_action(
 
 // ---- Candidate resolution ---------------------------------------------------
 
-/// Pick the client to drive `switch-client`: the most-recently-active client,
-/// which for single-process multi-window terminals maps to the window the
-/// user just typed into. Returns the full client so the caller can both drive
-/// `switch-client` on its tty and resolve the terminal app pid hosting it.
-async fn resolve_active_client(tmux_path: Option<&str>) -> Option<TmuxClient> {
+/// Pick the client `switch-client` should drive for `target`.
+///
+/// Priority order:
+///   1. A client already attached to the target session. Switching it
+///      between windows of its own session is the least-surprising
+///      gesture — it keeps each terminal window pinned to "its"
+///      session instead of hijacking whichever window was last
+///      active. For Alacritty (multi-process, one client per
+///      window) this is what makes the flashlight pick land in the
+///      window the user mentally associates with the target session.
+///   2. The most-recently-active client. Used when no client is on
+///      the target session — single-process multi-window terminals
+///      land here so the pick reaches the window the user was last
+///      typing in.
+async fn select_client_for_target(tmux_path: Option<&str>, target: &str) -> Option<TmuxClient> {
     let mut clients = list_clients(tmux_path).await;
     if clients.is_empty() {
         return None;
     }
     clients.sort_by(|a, b| b.activity.cmp(&a.activity));
-    clients.into_iter().next()
+    let target_session = target.split(':').next().unwrap_or(target);
+    clients
+        .iter()
+        .find(|c| c.session == target_session)
+        .cloned()
+        .or_else(|| clients.into_iter().next())
 }
 
 async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> ResolveResponse {
@@ -1086,8 +1109,8 @@ async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> Resolve
         return ResolveResponse::unresolved();
     }
 
-    let active = resolve_active_client(tmux_path).await;
-    let tty = active
+    let chosen = select_client_for_target(tmux_path, target).await;
+    let tty = chosen
         .as_ref()
         .map(|c| c.tty.clone())
         .unwrap_or_else(|| payload.tmux_client_tty.clone());
@@ -1110,13 +1133,13 @@ async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> Resolve
         return ResolveResponse::unresolved();
     }
 
-    // Recompute the terminal pid from the live client we actually drove rather
-    // than the snapshot-time `terminal_pid` baked into the payload: that value
-    // goes stale (or was never resolved) when the client moves between
-    // snapshots, which silently strips the `target_pid` the host needs to raise
-    // the terminal window. Fall back to the payload value only if the live walk
-    // fails.
-    let terminal_pid = match active {
+    // Recompute the terminal pid from the client we actually drove
+    // rather than the snapshot-time `terminal_pid` baked into the
+    // payload: that value goes stale (or was never resolved) when
+    // the client moves between snapshots, which silently strips the
+    // `target_pid` the host needs to raise the terminal window.
+    // Fall back to the payload value only if the live walk fails.
+    let terminal_pid = match chosen {
         Some(ref c) => {
             let pmap = parent_pid_map().await;
             find_top_level_ancestor(c.client_pid, &pmap)
@@ -1181,15 +1204,13 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> C
     // session name has no colon and is used as-is.
     let session = target.split(':').next().unwrap_or(target);
 
-    let clients = list_clients(tmux_path).await;
-    // Drive `switch-client` with the most-recently-active client, matching
-    // candidate resolution — for single-process multi-window terminals this
-    // is the window the user just typed into.
-    let tty = {
-        let mut sorted = clients.clone();
-        sorted.sort_by(|a, b| b.activity.cmp(&a.activity));
-        sorted.first().map(|c| c.tty.clone()).unwrap_or_default()
-    };
+    // Drive `switch-client` against the same priority order
+    // `select_client_for_target` uses: prefer a client already on
+    // the target session (keeps each terminal window pinned to its
+    // session), fall back to most-recently-active (single-process
+    // terminals where every window shares one client).
+    let chosen = select_client_for_target(tmux_path, target).await;
+    let tty = chosen.as_ref().map(|c| c.tty.clone()).unwrap_or_default();
 
     let mut args: Vec<&str> = vec!["switch-client"];
     if !tty.is_empty() {
@@ -1207,19 +1228,28 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> C
         return CommandResponse::error("switch-client failed");
     }
 
-    // Terminal pid hosting the target session's client, so Flash can raise
-    // the right window. Falls back to any client when the session has none.
-    let terminal_pid = {
-        let client = clients
-            .iter()
-            .find(|c| c.session == session)
-            .or_else(|| clients.first());
-        match client {
-            Some(c) => {
-                let pmap = parent_pid_map().await;
-                find_top_level_ancestor(c.client_pid, &pmap)
+    // Terminal pid hosting the client we actually drove. Falls
+    // back to any session-matching client when `chosen` is empty,
+    // then to any client at all — same belt-and-braces ladder the
+    // resolve path uses.
+    let terminal_pid = match chosen {
+        Some(ref c) => {
+            let pmap = parent_pid_map().await;
+            find_top_level_ancestor(c.client_pid, &pmap)
+        }
+        None => {
+            let clients = list_clients(tmux_path).await;
+            let fallback = clients
+                .iter()
+                .find(|c| c.session == session)
+                .or_else(|| clients.first());
+            match fallback {
+                Some(c) => {
+                    let pmap = parent_pid_map().await;
+                    find_top_level_ancestor(c.client_pid, &pmap)
+                }
+                None => None,
             }
-            None => None,
         }
     };
 

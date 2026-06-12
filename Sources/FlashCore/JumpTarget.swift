@@ -30,6 +30,14 @@ public struct JumpTarget: @unchecked Sendable {
   /// pane. Without this flag the dispatcher would treat the spurious
   /// AXPress as a successful click and never deliver the real one.
   public let preferHostClick: Bool
+  /// Mark a target as structurally important inside its source so the
+  /// renderer can give it a stronger visual treatment than the rest.
+  /// Used by the tmux plugin for pane chips (vs. link chips) and by
+  /// the firefox plugin for tab chips (vs. element chips) — the user
+  /// can scan a screen full of mixed hints and pick out the
+  /// "top-level" entry at a glance. Purely a styling signal; the
+  /// commit path is unchanged.
+  public let important: Bool
 
   public init(
     id: String,
@@ -41,6 +49,7 @@ public struct JumpTarget: @unchecked Sendable {
     activate: ((JumpAction) -> Bool)? = nil,
     entersInsertMode: Bool = false,
     preferHostClick: Bool = false,
+    important: Bool = false,
     providerID: String
   ) {
     self.id = id
@@ -52,6 +61,7 @@ public struct JumpTarget: @unchecked Sendable {
     self.activate = activate
     self.entersInsertMode = entersInsertMode
     self.preferHostClick = preferHostClick
+    self.important = important
     self.providerID = providerID
   }
 

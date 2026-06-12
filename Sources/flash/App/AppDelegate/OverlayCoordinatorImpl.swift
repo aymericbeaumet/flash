@@ -235,9 +235,27 @@ extension AppDelegate {
       guard let self else { return }
       self.activationInFlight = false
       if shouldRestoreNormalMode {
-        self.scheduleNormalModeRecapture()
+        self.restoreNormalModeAfterCommit(action: action)
       }
     }
+  }
+
+  /// After a hint-commit click lands, hand control back to normal
+  /// mode without stealing key from anything the click just opened.
+  /// Left-click commits run the standard recapture — the panel
+  /// reclaims the key window so the next keystroke is captured
+  /// without leaning on the session event tap. Right-click commits
+  /// skip the `makeKey()` step because the menu the click just
+  /// opened owns its own modal keyboard session; the tap continues
+  /// to route normal-mode keys after the menu dismisses, so we just
+  /// refresh the badge + inputMode without poking the panel.
+  private func restoreNormalModeAfterCommit(action: JumpAction) {
+    if action == .rightClick {
+      applyModeOverlay(captureOverride: false)
+      overlay.inputMode = .normal
+      return
+    }
+    scheduleNormalModeRecapture()
   }
 
   private func commitMouseGridCell(hint: AssignedHint, clickModifiers: ClickModifiers) {
@@ -269,12 +287,21 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
+    let clickAction = pendingAction
     _ = ActionDispatcher.synthesizeClick(
       at: point,
-      action: pendingAction,
+      action: clickAction,
       modifiers: clickModifiers)
-    applyModeOverlay()
-    enterInsertModeIfClickedOnTextInput(pid: priorPID, reason: .hintCommit)
+    if clickAction == .rightClick {
+      // Right-click opened a context menu — same rule as `commit()`:
+      // refresh the badge but don't `makeKey()` on the panel, or the
+      // menu loses its modal session the same instant it appears.
+      applyModeOverlay(captureOverride: false)
+      overlay.inputMode = .normal
+    } else {
+      applyModeOverlay()
+      enterInsertModeIfClickedOnTextInput(pid: priorPID, reason: .hintCommit)
+    }
   }
 
   /// Geometric clicks (`F`/`rF`/`dF` mouse-grid commits, `pointerClick`
@@ -346,6 +373,19 @@ extension AppDelegate {
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
     insertText(value)
+  }
+
+  /// Forward the `[flashlight.aliases]` lookup to the pure helper on
+  /// `CandidateFinder` so the panel can rewrite `!g ` → `!google ` in
+  /// place. Empty alias map (the default) short-circuits inside the
+  /// helper.
+  func overlayExpandFlashlightAlias(
+    _ text: String, cursorIndex: Int
+  ) -> (text: String, cursorIndex: Int)? {
+    CandidateFinder.expandFlashlightAlias(
+      text: text,
+      cursorIndex: cursorIndex,
+      aliases: config.flashlight.aliases)
   }
 
   /// Modal mode is hermetic: keys are swallowed, never forwarded to the
@@ -520,10 +560,12 @@ extension AppDelegate {
     }
     if shouldRecordMovement {
       recordMovement(.candidate(candidate), source: "source_open")
-      // Frecency boost lives in the persistent index, not the
-      // movement stack — record it here so a chosen candidate sorts
-      // higher next time even across restarts.
-      searchService?.recordOpen(candidate)
+      // Frecency persists across restarts via the flat-JSON store,
+      // not the movement stack — record it here so a chosen
+      // candidate sorts higher next time.
+      if let key = FrecencyMapper.itemKey(for: candidate) {
+        frecencyStore?.recordOpen(itemKey: key)
+      }
     }
     overlay.hide()
     resetCommandLineState()

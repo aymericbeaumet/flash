@@ -887,8 +887,20 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":open firefox"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight"), "")
     XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight gmail.com"), "gmail.com")
-    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery("  FLASHLIGHT   Slack  "), "Slack")
+    // Trailing whitespace is preserved on purpose — `parseBangState`
+    // uses it as the signal that the user committed to a bang. Leading
+    // whitespace + tabs between the verb and the argument are still
+    // collapsed because they're syntactic, not part of the query.
+    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery("  FLASHLIGHT   Slack  "), "Slack  ")
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":flashlightgmail"))
+  }
+
+  func testCommandLineCandidateQueryAcceptsEmojiPicker() {
+    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":emojis"), "")
+    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":emojis fire"), "fire")
+    XCTAssertEqual(NormalModeDispatcher.commandLineEmojiQuery("  EMOJIS   heart  "), "heart  ")
+    XCTAssertNil(NormalModeDispatcher.commandLineEmojiQuery(":emojisheart"))
+    XCTAssertNil(NormalModeDispatcher.commandLineEmojiQuery(":flashlight heart"))
   }
 
   func testCandidateFinderSourceFilterParsesLeadingFlag() {
@@ -938,6 +950,47 @@ final class NormalModeTests: XCTestCase {
     let bareAt = NormalModeDispatcher.candidateFinderSourceFilter("@ -- hi")
     XCTAssertEqual(bareAt.sourceFilters, [])
     XCTAssertEqual(bareAt.text, "@ -- hi")
+  }
+
+  func testCandidateFinderSourceFilterParsesStructuredSelectorsWithLegacyFilters() {
+    let parsed = NormalModeDispatcher.candidateFinderSourceFilter(
+      "rust @source:firefox @url:*github* --tmux @kind:browser_tab repo")
+    XCTAssertEqual(parsed.sourceFilters, ["tmux"])
+    XCTAssertEqual(
+      parsed.attributeFilters,
+      [
+        NormalModeDispatcher.AttributeFilter(field: "source", pattern: "firefox"),
+        NormalModeDispatcher.AttributeFilter(field: "url", pattern: "*github*"),
+        NormalModeDispatcher.AttributeFilter(field: "kind", pattern: "browser_tab"),
+      ])
+    XCTAssertEqual(parsed.text, "rust repo")
+  }
+
+  func testFlashlightAliasExpansionRequiresWordBoundaryAndTrailingWhitespace() {
+    let aliases = [
+      "!g": "!google",
+      "@ft": "@firefox.tabs",
+      "gh": "!github",
+    ]
+
+    XCTAssertNil(
+      CandidateFinder.expandFlashlightAlias(
+        text: ":flashlight !g", cursorIndex: 14, aliases: aliases),
+      "alias should not expand until the user types whitespace")
+    XCTAssertNil(
+      CandidateFinder.expandFlashlightAlias(
+        text: ":flashlight big ", cursorIndex: 16, aliases: aliases),
+      "alias keys are whole words, not suffix matches")
+
+    let bare = CandidateFinder.expandFlashlightAlias(
+      text: ":flashlight gh ", cursorIndex: 15, aliases: aliases)
+    XCTAssertEqual(bare?.text, ":flashlight !github ")
+    XCTAssertEqual(bare?.cursorIndex, 20)
+
+    let source = CandidateFinder.expandFlashlightAlias(
+      text: ":flashlight @ft inbox", cursorIndex: 16, aliases: aliases)
+    XCTAssertEqual(source?.text, ":flashlight @firefox.tabs inbox")
+    XCTAssertEqual(source?.cursorIndex, 26)
   }
 
   func testFuzzyScoreMatchesOrderedCharacters() {
@@ -1045,8 +1098,8 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "com.eggerapps.Postico",
         path: "/Applications/Postico 2.app"))
 
-    XCTAssertEqual(prepared.displayTitle, "[app] Postico 2")
-    XCTAssertEqual(prepared.normalizedSearchText, "app postico 2 postico 2 com eggerapps postico")
+    XCTAssertEqual(prepared.displayTitle, "[core.apps] Postico 2")
+    XCTAssertEqual(prepared.normalizedSearchText, "core apps postico 2 postico 2 com eggerapps postico")
   }
 
   func testCandidateFinderPreparedBrowserTabIncludesBrowserTitleAndURL() {
@@ -1387,8 +1440,8 @@ final class NormalModeTests: XCTestCase {
   ) -> Candidate {
     Candidate(
       kind: .app,
-      sourceID: "app",
-      source: "app",
+      sourceID: "core.apps",
+      source: "core.apps",
       pid: pid,
       name: name,
       subtitle: "app",

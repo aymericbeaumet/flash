@@ -87,6 +87,10 @@ public struct Candidate: @unchecked Sendable {
   /// resources should use their canonical URL.
   public var url: URL?
   public var sourcePayload: String?
+  /// Extra space-separated tokens folded into the host's search index
+  /// for this candidate (e.g. emoji Slack-style shortcodes like
+  /// `pray prayer thanks`). Empty when the plugin didn't attach any.
+  public var searchAliases: String
   public var displayTitle: String
   public var normalizedSearchText: String
   /// Per-field normalized forms cached during preparation so the
@@ -120,6 +124,7 @@ public struct Candidate: @unchecked Sendable {
     bundleIdentifier: String,
     url: URL?,
     sourcePayload: String? = nil,
+    searchAliases: String = "",
     displayTitle: String = "",
     normalizedSearchText: String = "",
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
@@ -135,6 +140,7 @@ public struct Candidate: @unchecked Sendable {
     self.bundleIdentifier = bundleIdentifier
     self.url = url
     self.sourcePayload = sourcePayload
+    self.searchAliases = searchAliases
     self.displayTitle = displayTitle
     self.normalizedSearchText = normalizedSearchText
     self.normalizedScoringFields = normalizedScoringFields
@@ -145,20 +151,34 @@ public struct Candidate: @unchecked Sendable {
 
 public struct NormalizedScoringFields: Sendable {
   public var title: String
+  /// Pre-tokenized title words, each entry already normalized. Used by
+  /// source-specific fast paths that need token-level typo checks
+  /// without splitting the same title on every keystroke.
+  public var titleTokens: [String]
   public var sourceTitle: String
   public var url: String
   public var displayTitle: String
+  /// Pre-tokenized alias list, each entry already normalized. Stored as
+  /// an array (not a joined string) so the live ranker doesn't split it
+  /// per candidate per keystroke. Scored on its own tier so a literal
+  /// alias hit (`pray` → `🙏`) outranks UCD-name prefixes (`prayer
+  /// beads`).
+  public var aliases: [String]
 
   public init(
     title: String = "",
+    titleTokens: [String] = [],
     sourceTitle: String = "",
     url: String = "",
-    displayTitle: String = ""
+    displayTitle: String = "",
+    aliases: [String] = []
   ) {
     self.title = title
+    self.titleTokens = titleTokens
     self.sourceTitle = sourceTitle
     self.url = url
     self.displayTitle = displayTitle
+    self.aliases = aliases
   }
 }
 
@@ -453,4 +473,3 @@ extension FlashSource {
     DispatchQueue.main.async { completion(.unhandled) }
   }
 }
-

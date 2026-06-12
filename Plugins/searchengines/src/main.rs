@@ -27,7 +27,7 @@ impl FlashPlugin for SearchEngines {
                 Candidate::new(format!("!{token}"))
                     .kind("bang")
                     .source_id(SOURCE_ID)
-                    .source("bang")
+                    .source("searchengines.bangs")
                     .subtitle("search engine bang")
                     .payload(token.to_string())
             })

@@ -103,43 +103,73 @@ struct Config {
     var hintBGBottom: String = "#FFC542"
     /// 1px border around the chip.
     var hintBorder: String = "#E3BE23"
+    /// Foreground / gradient / border for hints whose target carries
+    /// the `important` flag (tmux panes, browser tabs, …). Defaults
+    /// to a red-ish Nord-aurora-red gradient so important chips
+    /// read as a structural accent against the regular yellow `f`
+    /// chips. Set any field equal to its `hint*` counterpart to opt
+    /// out of the distinction for that surface.
+    var importantHintFG: String = "#ECEFF4"
+    var importantHintBGTop: String = "#BF616A"
+    var importantHintBGBottom: String = "#5C3940"
+    var importantHintBorder: String = "#BF616A"
   }
-  /// Tunables for `FlashSearch`, the persistent search + frecency layer
-  /// that backs flashlight's index merge. Defaults match the install
-  /// plan: enabled on, 128 MB mmap, 64 MB cache, ~2-char minimum query
-  /// length, retrieval cap 512, frecency on with a 14-day half-life.
-  /// Setting `enabled = false` cleanly disables the layer — flashlight
-  /// reverts to today's pure in-memory behavior.
-  struct Search {
-    var enabled: Bool = true
-    /// Empty → default `~/Library/Application Support/Flash/Search/index.db`.
-    /// A `~/`-prefixed path is expanded.
-    var databasePath: String = ""
-    /// Bytes for SQLite's mmap window. Keep aligned with the system
-    /// page size for best performance.
-    var mmapSize: Int = 128 * 1024 * 1024
-    /// KB for SQLite's page cache (negative `cache_size` pragma).
-    var cacheSizeKB: Int = 64 * 1024
-    /// Per-query row cap before the in-memory merge.
-    var retrievalLimit: Int = 512
-    /// Minimum non-bang query length that triggers an index round-trip;
-    /// shorter queries are served by the in-memory pool alone.
-    var queryMinChars: Int = 2
-    /// When false, an empty query returns no DB rows (only the live
-    /// pool, frecency-boosted). When true, the DB is browseable
-    /// (results ordered by `updated_at DESC`).
-    var emptyQueryIndexResults: Bool = false
-    /// FTS `optimize` + `ANALYZE` every N writes. Reasonable default
-    /// for a steady-state index of hundreds of thousands of rows.
-    var optimizeIntervalWrites: Int = 50_000
-    /// Per-key decay half-life. 14d biases toward recency.
-    var frecencyHalfLifeDays: Double = 14.0
-    /// Master enable for the frecency boost in the live ranker. The
-    /// store itself stays online either way so plugin RPCs that opt
-    /// into ranking still work.
-    var frecencyEnabled: Bool = true
-  }
+  /// Tunables for the `:flashlight` command-line surface.
+  struct Flashlight {
+    /// Word-substitution aliases. The key is the exact whitespace-
+    /// delimited token the user types (any leading sigil — `!`, `@`,
+    /// or none — is part of the key, not implicit). The value is
+    /// the literal expansion. When the user types `<key>` followed
+    /// by whitespace the buffer is rewritten in place so downstream
+    /// parsing (bang detection, source filters, fuzzy scoring) sees
+    /// the canonical form. Empty by default — every pair is opt-in
+    /// via `[flashlight.aliases]` in flash.toml.
+    ///
+    /// Example:
+    /// ```toml
+    /// [flashlight.aliases]
+    /// "!g"  = "!google"
+    /// "!gh" = "!github"
+    /// "@ft" = "@firefox.tabs"
+    /// ```
+    var aliases: [String: String] = [:]
+    /// Source precedence weights applied as the tiebreaker once
+    /// match score ties. Keys are source labels (or parent prefixes
+    /// — `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …).
+    /// Higher weight wins. The default table mirrors the previous
+    /// hardcoded order: `tmux > browser tabs > apps > everything
+    /// else`. Override individual rows via `[flashlight.precedence]`
+    /// in flash.toml — entries you don't list fall back to weight 0.
+    ///
+    /// Example:
+    /// ```toml
+    /// [flashlight.precedence]
+    /// tmux            = 200
+    /// "firefox.tabs"  = 80
+    /// "core.apps"     = 40
+    /// ```
+    var precedence: [String: Int] = Self.defaultPrecedence
+    /// Bonus added to any candidate whose `pid != nil` so running
+    /// processes outrank installed-but-not-running rows under the
+    /// same source. With the default `40` weight on `core.apps`
+    /// this gives active apps an effective rank of 50 vs. inactive
+    /// 40, matching the previous explicit running/installed split.
+    var precedenceAliveBonus: Int = 10
 
+    static let defaultPrecedence: [String: Int] = [
+      "tmux": 100,
+      "firefox": 80,
+      "safari": 80,
+      "chrome": 80,
+      "chromium": 80,
+      "brave": 80,
+      "edge": 80,
+      "arc": 80,
+      "vivaldi": 80,
+      "opera": 80,
+      "core.apps": 40,
+    ]
+  }
   struct Debug {
     /// When true, every detected target is outlined alongside its hint chip.
     /// Useful for diagnosing missing or misplaced hints — you can see exactly
@@ -392,7 +422,7 @@ struct Config {
   var plugins = Plugins()
   var mode = Mode()
   var debug = Debug()
-  var search = Search()
+  var flashlight = Flashlight()
   var diagnostics: [ConfigDiagnostic] = []
   /// Plain-string view over `diagnostics`. Existed as a parallel
   /// mutable field; collapsed to a computed projection so the two

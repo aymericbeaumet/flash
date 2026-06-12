@@ -89,11 +89,6 @@ final class PluginManager {
   /// backs the `ax.*` host RPCs. Plugins never touch AX directly; they reach
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
-  /// `search.*` host RPCs are routed here. Weak because the broker
-  /// hangs off `AppDelegate.searchService` — when search is disabled
-  /// (config off or FTS5 missing) this stays `nil` and plugin search
-  /// calls return a clear "unavailable" error rather than crashing.
-  weak var searchBroker: SearchRPCBroker?
   var onStateChanged: (() -> Void)?
   /// Fired on the main thread after the mapping index is rebuilt because a
   /// plugin emitted `mappings.updated`. The app recomputes its effective
@@ -249,6 +244,22 @@ final class PluginManager {
   ///     ~100 DDG bangs generated from `bangs.tsv` at build time).
   /// Plugins should not duplicate a token across both surfaces; if they
   /// do, both rows will appear.
+  /// Union of every `bundle_ids` entry declared by any loaded plugin.
+  /// Lets the flashlight refresh path emit synthetic
+  /// `core:focus.changed` events for every running app whose AX walk
+  /// a plugin owns — even when that app isn't currently focused —
+  /// so the plugin can republish its candidate snapshot before the
+  /// next keystroke lands.
+  func claimedBundleIDs() -> Set<String> {
+    queue.sync {
+      var out = Set<String>()
+      for plugin in pluginsByID.values {
+        for bundleID in plugin.manifest.bundleIDs { out.insert(bundleID) }
+      }
+      return out
+    }
+  }
+
   func shebangCandidates(forBundleID bundleID: String? = nil) -> [Candidate] {
     queue.sync {
       var out: [Candidate] = []
@@ -297,12 +308,6 @@ final class PluginManager {
       reply(["ok": true, "echo": params])
     case let method where method.hasPrefix("ax."):
       axBroker.handle(method: method, params: params, reply: reply)
-    case let method where method.hasPrefix("search."):
-      guard let searchBroker else {
-        reply(["ok": false, "error": "search layer is disabled"])
-        return
-      }
-      searchBroker.handle(method: method, params: params, pluginID: pluginID, reply: reply)
     default:
       FlashLog.warn(
         "[plugin] unknown host method \(method) from \(pluginID)",
