@@ -240,10 +240,8 @@ Keys:
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
-| `statusbar.left`                   | string array   | `["sdk:active_app_name"]` |
-| `statusbar.mode`                   | string         | `"sdk:mode_label"`   |
-| `statusbar.right`                  | string array   | `["sdk:date"]`       |
-| `statusbar.separator`              | string         | `"#[fg=colour245] · "` |
+| `statusbar.left`                   | string         | `"#{mode}"`          |
+| `statusbar.right`                  | string         | `"#{date}"`          |
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |
 | `[flashlight.precedence]` entries  | int            | built-in source order |
@@ -293,12 +291,13 @@ errors go to stderr. Plugins can log through the Flash logger by sending
 Official plugin installers must keep downloaded CLI binaries under their own
 `FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
 
-`[statusbar]` configures the persistent top status bar format. `mode` renders
-inside the highlighted mode cell, `left` renders immediately to the right of
-that cell, and `right` renders on the right side joined with `separator`.
-Supported entry forms are `sdk:active_app_name`, `sdk:active_bundle_identifier`,
-`sdk:mode_label`, `sdk:date`, `plugin:loaded_count`, `plugin:ready_count`,
-`plugin:error_count`, `script:<path>`, and `command:<shell command>`.
+`[statusbar]` configures the persistent top status bar format. `left` renders
+inside the highlighted left cell, and `right` renders on the right side.
+Separators are literal inline text inside those template strings. Supported
+template variables are `#{mode}`, `#{active_app_name}`,
+`#{active_bundle_identifier}`, `#{date}`, `#{plugin:loaded_count}`,
+`#{plugin:ready_count}`, `#{plugin:error_count}`, `#{script:<path>}`, and
+`#{command:<shell command>}`.
 Command/script sections are stale-while-refresh: the previous successful value
 stays visible until a replacement is ready.
 
@@ -355,7 +354,7 @@ When any `[mode.all.mappings]` mapping resolves to `flash://mode_normal`, Flash 
 - always displays the status bar using configured `mode.labels`, including in the help view;
 - extends `flash://help_show` with ACTION / NORMAL / INSERT columns.
 
-The status bar is rendered from `FlashStatusBarTemplate`: sections can read Flash SDK state (`activeAppName`, `modeLabel`, `date`), plugin state (`PluginStatusSnapshot` counts), or command/script output. The default template shows mode + active app name on the left and the dotfiles tmux-style agent/battery/IP/date sections on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The top bar content is inset from the screen edges for rounded display corners, and the Flash status bar yields while the pointer is in the top native menu/status hover band.
+The status bar is rendered from `FlashStatusBarTemplate`: `left` and `right` are template strings that can read Flash SDK state (`mode`, `active_app_name`, `active_bundle_identifier`, `date`), plugin state (`PluginStatusSnapshot` counts), or command/script output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The top bar content is inset from the screen edges for rounded display corners, and the Flash status bar yields while the pointer is in the top native menu/status hover band.
 
 `flash://mode_normal` is the only accepted normal-mode action. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the status bar is hidden and help stays simple while still listing the normal map.
 

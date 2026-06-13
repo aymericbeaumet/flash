@@ -179,13 +179,14 @@ extension OverlayPanel {
 
   private func configureModeBadge(panelFrame: CGRect) {
     let fontSize = Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize))
-    let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let modeFontSize = Self.modeIndicatorFontSize(statusBarFontSize: fontSize)
+    let labelFont = NSFont.monospacedSystemFont(ofSize: modeFontSize, weight: .bold)
     let rightFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let text = modeBadgeText
     let leftWidth = Self.modeBadgeWidth(
       labels: modeLabels,
       currentText: text,
-      fontSize: fontSize)
+      fontSize: modeFontSize)
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let visible = snapshot.mainVisibleFrame
     let screenFrame = snapshot.mainFrame ?? visible
@@ -240,7 +241,7 @@ extension OverlayPanel {
       width: max(1, leftWidth),
       height: textHeight)
     modeBadgeLabel.font = labelFont
-    modeBadgeLabel.fontSize = fontSize
+    modeBadgeLabel.fontSize = modeFontSize
     modeBadgeLabel.foregroundColor = palette.foregroundCG
     modeBadgeLabel.contentsScale = scale
     modeBadgeLabel.alignmentMode = .center
@@ -299,8 +300,12 @@ extension OverlayPanel {
     return max(fontSize + 18, CGFloat(count) * fontSize * 0.66 + 16)
   }
 
-  static func statusBarFontSize(overlayFontSize: CGFloat) -> CGFloat {
-    max(overlayFontSize + 2, 13)
+  static func statusBarFontSize(overlayFontSize _: CGFloat) -> CGFloat {
+    13
+  }
+
+  static func modeIndicatorFontSize(statusBarFontSize: CGFloat) -> CGFloat {
+    statusBarFontSize
   }
 
   static func statusBarHeight(

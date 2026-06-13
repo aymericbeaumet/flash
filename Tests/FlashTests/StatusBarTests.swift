@@ -4,9 +4,14 @@ import XCTest
 @testable import flash
 
 final class StatusBarTests: XCTestCase {
-  func testStatusBarFontSizeIsLargerThanOverlayDefault() {
-    XCTAssertEqual(OverlayPanel.statusBarFontSize(overlayFontSize: 12), 14)
+  func testStatusBarFontSizeIsConstant() {
+    XCTAssertEqual(OverlayPanel.statusBarFontSize(overlayFontSize: 12), 13)
     XCTAssertEqual(OverlayPanel.statusBarFontSize(overlayFontSize: 10), 13)
+    XCTAssertEqual(OverlayPanel.statusBarFontSize(overlayFontSize: 24), 13)
+  }
+
+  func testModeIndicatorUsesStatusBarFontSize() {
+    XCTAssertEqual(OverlayPanel.modeIndicatorFontSize(statusBarFontSize: 13), 13)
   }
 
   func testStatusBarFrameUsesMenuOrNotchBandHeight() {
@@ -37,7 +42,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.statusRightDisplayText(""), "")
   }
 
-  func testDefaultTemplateRendersActiveAppModeAndRightSections() {
+  func testDefaultTemplateRendersModeAndRightSections() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
     let now = Date(timeIntervalSince1970: 1_780_000_000)
@@ -52,7 +57,7 @@ final class StatusBarTests: XCTestCase {
         now: now,
         calendar: calendar))
 
-    XCTAssertEqual(model.appText, "Safari")
+    XCTAssertEqual(model.appText, "")
     XCTAssertEqual(model.modeText, "NORMAL")
     XCTAssertEqual(model.rightText, "#[fg=colour178]Thu May 28 20:26")
     XCTAssertFalse(model.rightText.contains("ip-status"))
@@ -61,17 +66,18 @@ final class StatusBarTests: XCTestCase {
 
   func testStatusTemplateCanReadPluginState() {
     let template = FlashStatusBarTemplate(
-      sections: [
-        FlashStatusBarTemplateSection(
+      left: "",
+      right: "#{plugin:ready_count}/#{plugin:error_count}",
+      variables: [
+        FlashStatusBarTemplateVariable(
           id: "ready",
-          placement: .trailing,
+          token: "plugin:ready_count",
           source: .plugin(.readyCount)),
-        FlashStatusBarTemplateSection(
+        FlashStatusBarTemplateVariable(
           id: "errors",
-          placement: .trailing,
+          token: "plugin:error_count",
           source: .plugin(.errorCount)),
-      ],
-      trailingSeparator: "/")
+      ])
 
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
@@ -114,18 +120,24 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(frame.midY, 539.5)
   }
 
-  func testStatusBarPlacesActiveAppAfterModeButton() {
+  func testStatusBarHidesActiveAppAndUsesConstantModeFont() {
     let panel = OverlayPanel()
     panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
     panel.setStatusBarModel(
       FlashStatusBarModel(
-        appText: "Safari",
+        appText: "",
         modeText: "NORMAL",
         rightText: "#[fg=colour178]Sat Jun 13 09:08"))
     panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
 
-    XCTAssertGreaterThan(panel.statusAppLabel.frame.minX, panel.modeBadgeButtonLayer.frame.maxX)
+    XCTAssertTrue(panel.statusAppLabel.isHidden)
     XCTAssertEqual(panel.modeBadgeLabel.alignmentMode, .center)
+    XCTAssertEqual(
+      panel.modeBadgeLabel.fontSize,
+      OverlayPanel.modeIndicatorFontSize(statusBarFontSize: 13))
+    XCTAssertEqual(
+      panel.statusRightLabel.fontSize,
+      OverlayPanel.statusBarFontSize(overlayFontSize: 12))
   }
 
   func testStatusBarUsesCurvedScreenEdgePadding() {
@@ -213,14 +225,8 @@ final class StatusBarTests: XCTestCase {
     let config = ConfigLoader.parse(
       """
       [statusbar]
-      left = ["sdk:active_app_name"]
-      mode = "sdk:mode_label"
-      right = [
-        "script:~/bin/agent-status.sh",
-        "script:~/bin/battery-status.sh",
-        "sdk:date",
-      ]
-      separator = "#[fg=colour245] · "
+      left = "#{mode}"
+      right = "#{script:~/bin/agent-status.sh}#[fg=colour245] · #{script:~/bin/battery-status.sh}#[fg=colour245] · #{date}"
       """)
 
     let text = FlashStatusBarTemplateEngine.render(

@@ -487,32 +487,18 @@ enum ConfigLoader {
       }
 
     case ["statusbar", "left"]:
-      if let parsed = parseStringArray(value) {
+      if let parsed = parseString(value) {
         config.statusBar.left = parsed
         config.recordLocation(path: "statusbar.left", location: location)
       } else {
-        config.addDiagnostic("statusbar.left must be an array of strings", location: location)
-      }
-    case ["statusbar", "mode"]:
-      if let parsed = parseString(value), !parsed.isEmpty {
-        config.statusBar.mode = parsed
-        config.recordLocation(path: "statusbar.mode", location: location)
-      } else {
-        config.addDiagnostic("statusbar.mode must be a non-empty quoted string", location: location)
+        config.addDiagnostic("statusbar.left must be a quoted template string", location: location)
       }
     case ["statusbar", "right"]:
-      if let parsed = parseStringArray(value) {
+      if let parsed = parseString(value) {
         config.statusBar.right = parsed
         config.recordLocation(path: "statusbar.right", location: location)
       } else {
-        config.addDiagnostic("statusbar.right must be an array of strings", location: location)
-      }
-    case ["statusbar", "separator"]:
-      if let parsed = parseString(value) {
-        config.statusBar.separator = parsed
-        config.recordLocation(path: "statusbar.separator", location: location)
-      } else {
-        config.addDiagnostic("statusbar.separator must be a quoted string", location: location)
+        config.addDiagnostic("statusbar.right must be a quoted template string", location: location)
       }
 
     case ["mode", "labels"]:
@@ -744,71 +730,91 @@ enum ConfigLoader {
   }
 
   private static func applyStatusBarTemplate(sourceURL: URL?, into config: inout Config) {
-    var sections: [FlashStatusBarTemplateSection] = []
-
-    func append(
-      _ rawEntries: [String],
-      placement: FlashStatusBarPlacement,
-      path: String
-    ) {
-      for (index, raw) in rawEntries.enumerated() {
-        guard let source = parseStatusBarSource(raw, sourceURL: sourceURL) else {
-          config.addDiagnostic(
-            "statusbar.\(path) entry \"\(raw)\" must be sdk:<name>, plugin:<name>, script:<path>, or command:<shell>",
-            location: config.valueLocations["statusbar.\(path)"])
-          continue
-        }
-        sections.append(
-          FlashStatusBarTemplateSection(
-            id: statusBarSectionID(path: path, index: index, raw: raw),
-            placement: placement,
-            source: source))
-      }
-    }
-
-    append(config.statusBar.left, placement: .leading, path: "left")
-
-    if let source = parseStatusBarSource(config.statusBar.mode, sourceURL: sourceURL) {
-      sections.append(
-        FlashStatusBarTemplateSection(
-          id: statusBarSectionID(path: "mode", index: 0, raw: config.statusBar.mode),
-          placement: .mode,
-          source: source))
-    } else {
-      config.addDiagnostic(
-        "statusbar.mode entry \"\(config.statusBar.mode)\" must be sdk:<name>, plugin:<name>, script:<path>, or command:<shell>",
-        location: config.valueLocations["statusbar.mode"])
-    }
-
-    append(config.statusBar.right, placement: .trailing, path: "right")
+    let variables =
+      parseStatusBarTemplateVariables(
+        config.statusBar.left,
+        path: "left",
+        sourceURL: sourceURL,
+        into: &config)
+      + parseStatusBarTemplateVariables(
+        config.statusBar.right,
+        path: "right",
+        sourceURL: sourceURL,
+        into: &config)
     config.statusBar.template = FlashStatusBarTemplate(
-      sections: sections,
-      trailingSeparator: config.statusBar.separator)
+      left: config.statusBar.left,
+      right: config.statusBar.right,
+      variables: variables)
   }
 
-  private static func statusBarSectionID(path: String, index: Int, raw: String) -> String {
-    "statusbar.\(path).\(index).\(raw)"
-  }
-
-  private static func parseStatusBarSource(
+  private static func parseStatusBarTemplateVariables(
     _ raw: String,
+    path: String,
+    sourceURL: URL?,
+    into config: inout Config
+  ) -> [FlashStatusBarTemplateVariable] {
+    var variables: [FlashStatusBarTemplateVariable] = []
+    var index = raw.startIndex
+
+    while index < raw.endIndex {
+      if raw[index] == "#",
+        let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
+        open < raw.endIndex,
+        raw[open] == "{"
+      {
+        guard let close = raw[open...].firstIndex(of: "}") else {
+          config.addDiagnostic(
+            "statusbar.\(path) contains an unterminated template variable",
+            location: config.valueLocations["statusbar.\(path)"])
+          return variables
+        }
+        let bodyStart = raw.index(after: open)
+        let token = String(raw[bodyStart..<close])
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let source = parseStatusBarTemplateSource(token, sourceURL: sourceURL) {
+          variables.append(
+            FlashStatusBarTemplateVariable(
+              id: statusBarVariableID(token),
+              token: token,
+              source: source))
+        } else {
+          config.addDiagnostic(
+            "statusbar.\(path) template variable \"\(token)\" must be mode, active_app_name, active_bundle_identifier, date, plugin:<name>, script:<path>, or command:<shell>",
+            location: config.valueLocations["statusbar.\(path)"])
+        }
+        index = raw.index(after: close)
+        continue
+      }
+      index = raw.index(after: index)
+    }
+
+    return variables
+  }
+
+  private static func statusBarVariableID(_ token: String) -> String {
+    "statusbar.template.\(token)"
+  }
+
+  private static func parseStatusBarTemplateSource(
+    _ token: String,
     sourceURL: URL?
   ) -> FlashStatusBarSource? {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, let colon = trimmed.firstIndex(of: ":") else { return nil }
+    let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    switch trimmed {
+    case "mode": return .sdk(.modeLabel)
+    case "active_app_name": return .sdk(.activeAppName)
+    case "active_bundle_identifier": return .sdk(.activeBundleIdentifier)
+    case "date": return .sdk(.date)
+    default: break
+    }
+
+    guard let colon = trimmed.firstIndex(of: ":") else { return nil }
     let kind = String(trimmed[..<colon]).lowercased()
     let body = String(trimmed[trimmed.index(after: colon)...])
       .trimmingCharacters(in: .whitespacesAndNewlines)
     guard !body.isEmpty else { return nil }
     switch kind {
-    case "sdk":
-      switch body {
-      case "active_app_name": return .sdk(.activeAppName)
-      case "active_bundle_identifier": return .sdk(.activeBundleIdentifier)
-      case "mode_label": return .sdk(.modeLabel)
-      case "date": return .sdk(.date)
-      default: return nil
-      }
     case "plugin":
       switch body {
       case "loaded_count": return .plugin(.loadedCount)

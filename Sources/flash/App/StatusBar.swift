@@ -21,12 +21,6 @@ private struct FlashStatusTextStyle {
   var bold = false
 }
 
-enum FlashStatusBarPlacement: Equatable {
-  case leading
-  case mode
-  case trailing
-}
-
 enum FlashStatusBarSDKValue: Equatable {
   case activeAppName
   case activeBundleIdentifier
@@ -69,20 +63,24 @@ enum FlashStatusBarSource: Equatable {
   case command(FlashStatusBarCommand)
 }
 
-struct FlashStatusBarTemplateSection: Equatable {
+struct FlashStatusBarTemplateVariable: Equatable {
   var id: String
-  var placement: FlashStatusBarPlacement
+  var token: String
   var source: FlashStatusBarSource
 }
 
 struct FlashStatusBarTemplate: Equatable {
-  var sections: [FlashStatusBarTemplateSection]
-  var trailingSeparator: String
+  var left: String
+  var right: String
+  var variables: [FlashStatusBarTemplateVariable]
 
-  var commandSections: [FlashStatusBarTemplateSection] {
-    sections.filter {
+  var commandSections: [FlashStatusBarTemplateVariable] {
+    var seen: Set<String> = []
+    return variables.filter {
       if case .command = $0.source { return true }
       return false
+    }.filter {
+      seen.insert($0.id).inserted
     }
   }
 
@@ -128,42 +126,70 @@ enum FlashStatusBarTemplateEngine {
     context: FlashStatusBarContext,
     dynamicValues: [String: String] = [:]
   ) -> FlashStatusBarModel {
-    var leading: [String] = []
-    var mode = ""
-    var trailing: [String] = []
-
-    for section in template.sections {
-      let value = resolve(section: section, context: context, dynamicValues: dynamicValues)
-      guard !value.isEmpty else { continue }
-      switch section.placement {
-      case .leading:
-        leading.append(value)
-      case .mode:
-        if mode.isEmpty { mode = value }
-      case .trailing:
-        trailing.append(value)
-      }
+    var variableByToken: [String: FlashStatusBarTemplateVariable] = [:]
+    for variable in template.variables where variableByToken[variable.token] == nil {
+      variableByToken[variable.token] = variable
     }
 
     return FlashStatusBarModel(
-      appText: leading.joined(separator: " "),
-      modeText: mode.isEmpty ? context.modeLabel : mode,
-      rightText: trailing.joined(separator: template.trailingSeparator))
+      appText: "",
+      modeText: renderString(
+        template.left,
+        variableByToken: variableByToken,
+        context: context,
+        dynamicValues: dynamicValues),
+      rightText: renderString(
+        template.right,
+        variableByToken: variableByToken,
+        context: context,
+        dynamicValues: dynamicValues))
   }
 
-  private static func resolve(
-    section: FlashStatusBarTemplateSection,
+  private static func renderString(
+    _ raw: String,
+    variableByToken: [String: FlashStatusBarTemplateVariable],
     context: FlashStatusBarContext,
     dynamicValues: [String: String]
   ) -> String {
-    switch section.source {
+    var rendered = ""
+    var index = raw.startIndex
+
+    while index < raw.endIndex {
+      if raw[index] == "#",
+        let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
+        open < raw.endIndex,
+        raw[open] == "{",
+        let close = raw[open...].firstIndex(of: "}")
+      {
+        let bodyStart = raw.index(after: open)
+        let token = String(raw[bodyStart..<close])
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let variable = variableByToken[token] {
+          rendered += resolve(variable: variable, context: context, dynamicValues: dynamicValues)
+        }
+        index = raw.index(after: close)
+        continue
+      }
+      rendered.append(raw[index])
+      index = raw.index(after: index)
+    }
+
+    return rendered
+  }
+
+  private static func resolve(
+    variable: FlashStatusBarTemplateVariable,
+    context: FlashStatusBarContext,
+    dynamicValues: [String: String]
+  ) -> String {
+    switch variable.source {
     case .sdk(let value):
       return resolveSDK(value, context: context)
     case .plugin(let value):
       return resolvePlugin(value, snapshots: context.pluginSnapshots)
     case .command:
       return FlashStatusBarRenderer.stripClickRanges(
-        from: dynamicValues[section.id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        from: dynamicValues[variable.id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
     }
   }
 

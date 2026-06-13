@@ -215,35 +215,26 @@ struct Config {
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
   struct StatusBar {
-    static let defaultLeft = ["sdk:active_app_name"]
-    static let defaultMode = "sdk:mode_label"
-    static let defaultRight = [
-      "sdk:date",
-    ]
-    static let defaultSeparator = "#[fg=colour245] · "
+    static let defaultLeft = "#{mode}"
+    static let defaultRight = "#{date}"
 
-    var left: [String] = Self.defaultLeft
-    var mode: String = Self.defaultMode
-    var right: [String] = Self.defaultRight
-    var separator: String = Self.defaultSeparator
+    var left: String = Self.defaultLeft
+    var right: String = Self.defaultRight
     var template: FlashStatusBarTemplate = Self.defaultTemplate
 
     static let defaultTemplate = FlashStatusBarTemplate(
-      sections: [
-        FlashStatusBarTemplateSection(
-          id: "statusbar.left.0.sdk:active_app_name",
-          placement: .leading,
-          source: .sdk(.activeAppName)),
-        FlashStatusBarTemplateSection(
-          id: "statusbar.mode.sdk:mode_label",
-          placement: .mode,
+      left: Self.defaultLeft,
+      right: Self.defaultRight,
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.mode",
+          token: "mode",
           source: .sdk(.modeLabel)),
-        FlashStatusBarTemplateSection(
-          id: "statusbar.right.0.sdk:date",
-          placement: .trailing,
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.date",
+          token: "date",
           source: .sdk(.date)),
-      ],
-      trailingSeparator: Self.defaultSeparator)
+      ])
   }
   struct Mode {
     struct Labels: Equatable {
@@ -576,9 +567,7 @@ struct Config {
       ],
       "statusbar": [
         "left": statusBar.left,
-        "mode": statusBar.mode,
         "right": statusBar.right,
-        "separator": statusBar.separator,
       ],
       "warnings": warnings,
     ])
