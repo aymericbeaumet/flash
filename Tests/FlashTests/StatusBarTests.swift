@@ -41,24 +41,21 @@ final class StatusBarTests: XCTestCase {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
     let now = Date(timeIntervalSince1970: 1_780_000_000)
+    let template = Config.StatusBar.defaultTemplate
 
     let model = FlashStatusBarTemplateEngine.render(
-      template: .default,
+      template: template,
       context: FlashStatusBarContext(
         activeAppName: "Safari",
         activeBundleIdentifier: "com.apple.Safari",
         modeLabel: "NORMAL",
         now: now,
-        calendar: calendar),
-      dynamicValues: [
-        "agent": "#[fg=colour178]Cdx",
-        "battery": "#[range=user|bat fg=colour178]82%#[norange]",
-      ])
+        calendar: calendar))
 
     XCTAssertEqual(model.appText, "Safari")
     XCTAssertEqual(model.modeText, "NORMAL")
-    XCTAssertTrue(model.rightText.contains("#[fg=colour178]Cdx"))
-    XCTAssertTrue(model.rightText.contains("#[fg=colour178]82%"))
+    XCTAssertEqual(model.rightText, "#[fg=colour178]Thu May 28 20:26")
+    XCTAssertFalse(model.rightText.contains("ip-status"))
     XCTAssertFalse(model.rightText.contains("range=user"))
   }
 
@@ -99,9 +96,9 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.commandPaletteValue.foregroundCG, OverlayPanel.nordPolarNight0CG)
   }
 
-  func testCommandPromptFontSizeIsSmallerThanStatusBar() {
-    XCTAssertEqual(OverlayPanel.commandPromptFontSize(statusBarFontSize: 14), 13)
-    XCTAssertEqual(OverlayPanel.commandPromptFontSize(statusBarFontSize: 13), 12)
+  func testCommandPromptFontSizeIsLargeEnoughForCenteredInput() {
+    XCTAssertEqual(OverlayPanel.commandPromptFontSize(statusBarFontSize: 14), 14)
+    XCTAssertEqual(OverlayPanel.commandPromptFontSize(statusBarFontSize: 13), 14)
   }
 
   func testCommandPromptFrameIsCenteredInVisibleScreen() {
@@ -109,10 +106,10 @@ final class StatusBarTests: XCTestCase {
       visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
       panelFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       prompt: ":open firefox",
-      fontSize: 13)
+      fontSize: 14)
 
-    XCTAssertEqual(frame.width, 360)
-    XCTAssertEqual(frame.height, 32)
+    XCTAssertEqual(frame.width, 440)
+    XCTAssertEqual(frame.height, 38)
     XCTAssertEqual(frame.midX, 864)
     XCTAssertEqual(frame.midY, 539.5)
   }
@@ -132,46 +129,51 @@ final class StatusBarTests: XCTestCase {
   }
 
   func testStatusBarUsesCurvedScreenEdgePadding() {
-    XCTAssertEqual(OverlayPanel.statusBarEdgePadding, 28)
+    XCTAssertEqual(OverlayPanel.statusBarEdgePadding, 13)
   }
 
-  func testStatusBarYieldsToNativeSystemBarAtTopEdge() {
-    let snapshot = OverlayPanel.ScreenSnapshot(
-      screens: [(
-        scale: 2,
-        frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
-        visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079)
-      )],
-      unionFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
-      mainFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
-      mainScale: 2,
-      mainVisibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079))
+  func testCommandPromptLayerHasWindowSeparatingShadow() {
+    let panel = OverlayPanel()
 
-    XCTAssertTrue(
-      OverlayPanel.statusBarShouldYieldToSystemMenu(
-        point: CGPoint(x: 800, y: 1100),
-        snapshot: snapshot,
-        modeBadgeVisible: true,
+    XCTAssertFalse(panel.commandPromptLayer.masksToBounds)
+    XCTAssertGreaterThan(panel.commandPromptLayer.shadowOpacity, 0)
+    XCTAssertGreaterThan(panel.commandPromptLayer.shadowRadius, 0)
+  }
+
+  func testPersistentStatusBarUsesNativeMenuFriendlyWindowLevel() {
+    XCTAssertEqual(
+      OverlayPanel.windowLevelForOverlayContent(
+        inputMode: .normal,
         commandPromptVisible: false,
         candidateFinderResultsVisible: false,
-        transientContentVisible: false))
-    XCTAssertTrue(
-      OverlayPanel.statusBarShouldYieldToSystemMenu(
-        point: CGPoint(x: 800, y: 1100),
-        snapshot: snapshot,
-        modeBadgeVisible: true,
+        transientContentVisible: false).rawValue,
+      OverlayPanel.persistentStatusWindowLevel.rawValue)
+  }
+
+  func testTransientSurfacesUseElevatedOverlayWindowLevel() {
+    XCTAssertEqual(
+      OverlayPanel.windowLevelForOverlayContent(
+        inputMode: .commandLine,
         commandPromptVisible: true,
         candidateFinderResultsVisible: false,
-        transientContentVisible: false))
+        transientContentVisible: false).rawValue,
+      OverlayPanel.transientOverlayWindowLevel.rawValue)
+    XCTAssertEqual(
+      OverlayPanel.windowLevelForOverlayContent(
+        inputMode: .modal,
+        commandPromptVisible: false,
+        candidateFinderResultsVisible: false,
+        transientContentVisible: true).rawValue,
+      OverlayPanel.transientOverlayWindowLevel.rawValue)
   }
 
   func testCandidateFinderResultsRenderBelowCenteredCommandPrompt() {
     let y = OverlayPanel.candidateFinderResultsY(
-      commandPromptFrame: CGRect(x: 684, y: 523.5, width: 360, height: 32),
+      commandPromptFrame: CGRect(x: 644, y: 520.5, width: 440, height: 38),
       height: 120,
       minimumY: 10)
 
-    XCTAssertEqual(y, 397.5)
+    XCTAssertEqual(y, 394.5)
   }
 
   func testCandidateFinderResultsClampToVisibleArea() {
@@ -208,19 +210,31 @@ final class StatusBarTests: XCTestCase {
     components.hour = 7
     components.minute = 8
     let now = components.date!
+    let config = ConfigLoader.parse(
+      """
+      [statusbar]
+      left = ["sdk:active_app_name"]
+      mode = "sdk:mode_label"
+      right = [
+        "script:~/bin/agent-status.sh",
+        "script:~/bin/battery-status.sh",
+        "sdk:date",
+      ]
+      separator = "#[fg=colour245] · "
+      """)
 
-    let text = FlashStatusBarRenderer.rightStatus(
-      agent: "#[fg=colour178]Cdx#[fg=colour245] 90%↻3h",
-      battery: "#[range=user|bat-prefs fg=colour178]82%#[norange]",
-      ip: "#[range=user|net-prefs fg=red]no internet#[norange]",
-      now: now,
-      calendar: calendar)
+    let text = FlashStatusBarTemplateEngine.render(
+      template: config.statusBar.template,
+      context: FlashStatusBarContext(now: now, calendar: calendar),
+      dynamicValues: statusBarCommandValues(
+        template: config.statusBar.template,
+        agent: "#[fg=colour178]Cdx#[fg=colour245] 90%↻3h",
+        battery: "#[range=user|bat-prefs fg=colour178]82%#[norange]")).rightText
 
     XCTAssertEqual(
       text,
       "#[fg=colour178]Cdx#[fg=colour245] 90%↻3h#[fg=colour245] · "
         + "#[fg=colour178]82%#[fg=colour245] · "
-        + "#[fg=red]no internet#[fg=colour245] · "
         + "#[fg=colour178]Sat Jun 13 07:08")
   }
 
@@ -278,5 +292,23 @@ final class StatusBarTests: XCTestCase {
       volatile: false,
       priority: 0,
       commands: [])
+  }
+
+  private func statusBarCommandValues(
+    template: FlashStatusBarTemplate,
+    agent: String,
+    battery: String
+  ) -> [String: String] {
+    var values: [String: String] = [:]
+    for section in template.commandSections {
+      guard case .command(let command) = section.source else { continue }
+      let argv = command.argv.joined(separator: " ")
+      if argv.contains("agent-status.sh") {
+        values[section.id] = agent
+      } else if argv.contains("battery-status.sh") {
+        values[section.id] = battery
+      }
+    }
+    return values
   }
 }

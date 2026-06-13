@@ -815,6 +815,16 @@ final class NormalModeTests: XCTestCase {
         pluginSubcommands: ["spotify": ["play"]]))
     XCTAssertEqual(context.prefix, ":")
     XCTAssertEqual(context.query, "sp")
+    XCTAssertEqual(context.items.map(\.label), ["spotify"])
+
+    let typo = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":helps",
+        pluginCommands: ["spotify"],
+        pluginSubcommands: ["spotify": ["play"]]))
+    XCTAssertEqual(typo.prefix, ":")
+    XCTAssertEqual(typo.query, "helps")
+    XCTAssertTrue(typo.items.isEmpty)
   }
 
   func testCommandLineCompletionsPluginSubcommands() throws {

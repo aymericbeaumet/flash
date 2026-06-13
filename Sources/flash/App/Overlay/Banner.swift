@@ -18,6 +18,7 @@ extension OverlayPanel {
     CATransaction.setDisableActions(true)
     defer {
       CATransaction.commit()
+      refreshWindowLevelForCurrentContent()
       orderFrontRegardless()
     }
 

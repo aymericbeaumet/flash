@@ -62,6 +62,11 @@ extension OverlayPanel {
     let palette = commandInputPalette()
     commandPromptLayer.colors = [palette.bottomCG, palette.topCG]
     commandPromptLayer.borderColor = palette.borderCG
+    commandPromptLayer.shadowPath = CGPath(
+      roundedRect: commandPromptLayer.bounds,
+      cornerWidth: commandPromptLayer.cornerRadius,
+      cornerHeight: commandPromptLayer.cornerRadius,
+      transform: nil)
 
     let horizontalPadding: CGFloat = 4
     let availableTextWidth = max(10, commandPromptLayer.frame.width - horizontalPadding * 2)
@@ -144,12 +149,12 @@ extension OverlayPanel {
     let availableWidth = max(
       180,
       visibleFrame.width - statusBarEdgePadding * 2)
-    let maxWidth = max(180, min(620, availableWidth))
+    let maxWidth = max(220, min(720, availableWidth))
     let measuredCount = max(prompt.count, 18)
-    let naturalWidth = CGFloat(measuredCount) * fontSize * 0.62 + 26
-    let minimumWidth = min(360, maxWidth)
+    let naturalWidth = CGFloat(measuredCount) * fontSize * 0.62 + 40
+    let minimumWidth = min(440, maxWidth)
     let width = min(max(minimumWidth, naturalWidth), maxWidth)
-    let height = ceil(max(fontSize + 16, 32))
+    let height = ceil(max(fontSize + 20, 38))
     let minY = visibleFrame.minY - panelFrame.minY + 24
     let maxY = visibleFrame.maxY - panelFrame.minY - height - 24
     let centeredY = visibleFrame.midY - panelFrame.minY - height / 2
@@ -161,7 +166,7 @@ extension OverlayPanel {
   }
 
   static func commandPromptFontSize(statusBarFontSize: CGFloat) -> CGFloat {
-    max(12, statusBarFontSize - 1)
+    max(14, statusBarFontSize)
   }
 
   func hideCommandTextField() {
@@ -357,10 +362,10 @@ extension OverlayPanel: NSTextFieldDelegate {
       _ = coordinator?.overlayDidMoveCommandLineSelection(-1)
       return true
     case #selector(NSResponder.moveUp(_:)):
-      _ = coordinator?.overlayDidMoveCommandLineSelection(1)
+      _ = coordinator?.overlayDidMoveCommandLineSelection(-1)
       return true
     case #selector(NSResponder.moveDown(_:)):
-      _ = coordinator?.overlayDidMoveCommandLineSelection(-1)
+      _ = coordinator?.overlayDidMoveCommandLineSelection(1)
       return true
     default:
       return false

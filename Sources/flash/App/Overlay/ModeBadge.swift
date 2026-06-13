@@ -7,7 +7,7 @@ import QuartzCore
 /// hidden. The historical "mode badge" identifiers now refer to this
 /// status-bar layer to keep the surrounding overlay code stable.
 extension OverlayPanel {
-  static let statusBarEdgePadding: CGFloat = 28
+  static let statusBarEdgePadding: CGFloat = 13
   static let statusBarMinimumGap: CGFloat = 12
   static let statusBarMaximumAppNameWidth: CGFloat = 220
   static let statusBarMinimumRightTextWidth: CGFloat = 240
@@ -73,6 +73,8 @@ extension OverlayPanel {
       contentLayer.sublayers = sublayers
       if captureInput {
         captureKeyboardInput()
+      } else {
+        refreshWindowLevelForCurrentContent()
       }
       return
     }
@@ -137,6 +139,7 @@ extension OverlayPanel {
         if isKeyWindow {
           orderOut(nil)
         }
+        refreshWindowLevelForCurrentContent()
         orderFrontRegardless()
       }
     } else if modeBadgeCapturesInput {
@@ -197,12 +200,12 @@ extension OverlayPanel {
       scale: scale)
     modeBadgeLayer.contentsScale = scale
     modeBadgeLayer.opacity = 1
+    modeBadgeLayer.isHidden = false
     modeBadgeLayer.cornerRadius = 0
     modeBadgeLayer.borderWidth = 0
     let palette = modeBadgePalette()
     modeBadgeLayer.colors = [Self.nordPolarNight0CG, Self.nordPolarNight0CG]
     modeBadgeLayer.borderColor = Self.nordPolarNight0CG
-    refreshStatusBarSystemMenuSuppression(snapshot: snapshot)
 
     let textHeight = fontSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
@@ -335,61 +338,33 @@ extension OverlayPanel {
       from: statusRightText.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 
-  func installStatusBarHoverPoller() {
-    let timer = DispatchSource.makeTimerSource(queue: .main)
-    timer.schedule(deadline: .now(), repeating: .milliseconds(120), leeway: .milliseconds(30))
-    timer.setEventHandler { [weak self] in
-      self?.refreshStatusBarSystemMenuSuppression()
-    }
-    statusBarHoverTimer = timer
-    timer.resume()
-  }
-
-  func removeStatusBarHoverPoller() {
-    statusBarHoverTimer?.cancel()
-    statusBarHoverTimer = nil
-  }
-
-  func refreshStatusBarSystemMenuSuppression(snapshot: ScreenSnapshot? = nil) {
-    let snapshot = snapshot ?? Self.currentScreenSnapshot()
-    let shouldSuppress = Self.statusBarShouldYieldToSystemMenu(
-      point: NSEvent.mouseLocation,
-      snapshot: snapshot,
-      modeBadgeVisible: modeBadgeVisible,
+  func refreshWindowLevelForCurrentContent() {
+    let target = Self.windowLevelForOverlayContent(
+      inputMode: inputMode,
       commandPromptVisible: commandPromptVisible,
       candidateFinderResultsVisible: candidateFinderResultsVisible,
       transientContentVisible: transientContentVisible)
-    guard shouldSuppress != statusBarSuppressedForSystemMenu else {
-      modeBadgeLayer.isHidden = shouldSuppress
-      return
+    if level != target {
+      level = target
     }
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    statusBarSuppressedForSystemMenu = shouldSuppress
-    modeBadgeLayer.isHidden = shouldSuppress
-    CATransaction.commit()
   }
 
-  static func statusBarShouldYieldToSystemMenu(
-    point: CGPoint,
-    snapshot: ScreenSnapshot,
-    modeBadgeVisible: Bool,
+  static func windowLevelForOverlayContent(
+    inputMode: OverlayInputMode,
     commandPromptVisible: Bool,
     candidateFinderResultsVisible: Bool,
     transientContentVisible: Bool
-  ) -> Bool {
-    guard modeBadgeVisible, !transientContentVisible else { return false }
-    for screen in snapshot.screens {
-      let menuBand = max(0, screen.frame.maxY - screen.visibleFrame.maxY)
-      let hoverHeight = max(menuBand, 4)
-      let hoverBand = CGRect(
-        x: screen.frame.minX,
-        y: screen.frame.maxY - hoverHeight,
-        width: screen.frame.width,
-        height: hoverHeight)
-      if hoverBand.contains(point) { return true }
+  ) -> NSWindow.Level {
+    if transientContentVisible
+      || commandPromptVisible
+      || candidateFinderResultsVisible
+      || inputMode == .commandLine
+      || inputMode == .candidateFinder
+      || inputMode == .modal
+    {
+      return transientOverlayWindowLevel
     }
-    return false
+    return persistentStatusWindowLevel
   }
 
 }

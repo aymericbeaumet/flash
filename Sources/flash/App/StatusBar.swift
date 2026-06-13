@@ -49,13 +49,18 @@ struct FlashStatusBarCommand: Equatable {
     self.timeoutSeconds = timeoutSeconds
   }
 
-  static func dotfilesScript(_ name: String, timeoutSeconds: TimeInterval = 6)
+  static func script(_ path: String, timeoutSeconds: TimeInterval = 6)
     -> FlashStatusBarCommand
   {
-    FlashStatusBarCommand(
-      argv: ["/bin/sh", "~/.dotfiles/scripts/\(name)"],
-      timeoutSeconds: timeoutSeconds)
+    FlashStatusBarCommand(argv: ["/bin/sh", path], timeoutSeconds: timeoutSeconds)
   }
+
+  static func shell(_ command: String, timeoutSeconds: TimeInterval = 6)
+    -> FlashStatusBarCommand
+  {
+    FlashStatusBarCommand(argv: ["/bin/sh", "-lc", command], timeoutSeconds: timeoutSeconds)
+  }
+
 }
 
 enum FlashStatusBarSource: Equatable {
@@ -81,34 +86,6 @@ struct FlashStatusBarTemplate: Equatable {
     }
   }
 
-  static let `default` = FlashStatusBarTemplate(
-    sections: [
-      FlashStatusBarTemplateSection(
-        id: "active_app",
-        placement: .leading,
-        source: .sdk(.activeAppName)),
-      FlashStatusBarTemplateSection(
-        id: "mode",
-        placement: .mode,
-        source: .sdk(.modeLabel)),
-      FlashStatusBarTemplateSection(
-        id: "agent",
-        placement: .trailing,
-        source: .command(.dotfilesScript("agent-quota-status.sh"))),
-      FlashStatusBarTemplateSection(
-        id: "battery",
-        placement: .trailing,
-        source: .command(.dotfilesScript("battery-status.sh"))),
-      FlashStatusBarTemplateSection(
-        id: "ip",
-        placement: .trailing,
-        source: .command(.dotfilesScript("ip-status.sh"))),
-      FlashStatusBarTemplateSection(
-        id: "date",
-        placement: .trailing,
-        source: .sdk(.date)),
-    ],
-    trailingSeparator: "#[fg=colour245] · ")
 }
 
 struct FlashStatusBarContext {
@@ -228,26 +205,6 @@ enum FlashStatusBarTemplateEngine {
 }
 
 enum FlashStatusBarRenderer {
-  static func rightStatus(
-    agent: String?,
-    battery: String?,
-    ip: String?,
-    now: Date = Date(),
-    calendar: Calendar = .current,
-    locale: Locale = Locale(identifier: "en_US_POSIX")
-  ) -> String {
-    let context = FlashStatusBarContext(now: now, calendar: calendar, locale: locale)
-    let values = [
-      "agent": agent ?? "",
-      "battery": battery ?? "",
-      "ip": ip ?? "",
-    ]
-    return FlashStatusBarTemplateEngine.render(
-      template: .default,
-      context: context,
-      dynamicValues: values).rightText
-  }
-
   static func dateText(
     now: Date,
     calendar: Calendar = .current,
@@ -400,7 +357,7 @@ enum FlashStatusBarRenderer {
 final class FlashStatusBarController {
   private weak var overlay: OverlayPanel?
   private let queue = DispatchQueue(label: "flash.status_bar", qos: .utility)
-  private let template: FlashStatusBarTemplate
+  private var template: FlashStatusBarTemplate
   private let pluginSnapshotsProvider: () -> [PluginStatusSnapshot]
   private var timer: DispatchSourceTimer?
   private let refreshIntervalSeconds: TimeInterval
@@ -412,7 +369,7 @@ final class FlashStatusBarController {
 
   init(
     overlay: OverlayPanel,
-    template: FlashStatusBarTemplate = .default,
+    template: FlashStatusBarTemplate,
     refreshIntervalSeconds: TimeInterval = 5,
     pluginSnapshotsProvider: @escaping () -> [PluginStatusSnapshot] = { [] }
   ) {
@@ -465,6 +422,16 @@ final class FlashStatusBarController {
       self.activeAppName = app?.localizedName ?? ""
       self.activeBundleIdentifier = app?.bundleIdentifier ?? ""
       self.publishCurrentModel()
+    }
+  }
+
+  func updateTemplate(_ template: FlashStatusBarTemplate) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      self.template = template
+      let commandIDs = Set(template.commandSections.map(\.id))
+      self.dynamicValues = self.dynamicValues.filter { commandIDs.contains($0.key) }
+      self.refreshCommandSections()
     }
   }
 

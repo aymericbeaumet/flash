@@ -1321,7 +1321,14 @@ extension AppDelegate {
     // several widen the pool (OR). The residual text is the actual search
     // query. Selectors are only honored outside emoji mode and outside
     // bang mode.
-    let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
+    let sourceCompletion = CandidateFinder.sourceCompletionState(
+      query: query,
+      emojiMode: candidateFinderEmojiMode)
+    let parsed =
+      sourceCompletion == nil
+      ? NormalModeDispatcher.candidateFinderSourceFilter(query)
+      : NormalModeDispatcher.CandidateFinderQuery(
+        sourceFilters: [], attributeFilters: [], text: query)
     let sourceFilters = candidateFinderEmojiMode ? [] : parsed.sourceFilters
     let attributeFilters: [CandidateFinder.CompiledAttributeFilter]
     if candidateFinderEmojiMode {
@@ -1332,7 +1339,7 @@ extension AppDelegate {
       }
     }
     let trimmed = parsed.text
-    candidateFinderCurrentQuery = trimmed
+    candidateFinderCurrentQuery = sourceCompletion?.token ?? trimmed
 
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,
@@ -1527,8 +1534,9 @@ extension AppDelegate {
     // pool for source-completion rows derived from the candidates
     // actually present. This mirrors the bang-completion surface so
     // `<tab>`/`<cr>` semantics stay identical across both modes.
-    if !candidateFinderEmojiMode,
-      let completion = CandidateFinder.parseAtSourceCompletion(trimmed)
+    if let completion = CandidateFinder.sourceCompletionState(
+      query: trimmed,
+      emojiMode: candidateFinderEmojiMode)
     {
       let pool = CandidateFinder.prepare(
         knownSourceCompletionCandidates())
@@ -1845,7 +1853,7 @@ extension AppDelegate {
   }
 
   private func submitSelectedCommandLineApp() {
-    actOnSelectedCandidateFinderCandidate(submit: false)
+    actOnSelectedCandidateFinderCandidate(submit: false, submitExactBang: true)
   }
 
   /// Single act-on-selection entry point for the flashlight surface.
@@ -1855,29 +1863,39 @@ extension AppDelegate {
   /// calls with `submit=true` (for bangs this dispatches with whatever
   /// remainder was typed; for everything else identical to `<cr>`).
   func actOnSelectedCandidateFinderCandidate(submit: Bool) {
+    actOnSelectedCandidateFinderCandidate(submit: submit, submitExactBang: false)
+  }
+
+  /// `submitExactBang` is the plain-Return path: an exact typed bang
+  /// (`!googlemaps`) should dispatch, while a partial selected bang
+  /// (`!goo` on the `googlemaps` row) still canonicalizes first.
+  private func actOnSelectedCandidateFinderCandidate(submit: Bool, submitExactBang: Bool) {
     let typedBang = CandidateFinder.parseBang(candidateFinderCurrentQuery)
     let isEmpty = candidateFinderMatches.isEmpty
 
-    // Bang mode always dispatches on `<cmd+cr>`, and ALSO on `<cr>`/
-    // `<tab>` when no candidate row matches the typed token — that's
-    // how `!google rust` reaches searchengines' catch-all even though
-    // `google` isn't in the explicit-token pool. When candidates DO
-    // match, `<cr>`/`<tab>` fall through to the canonicalization
-    // branch below so the user can browse before committing.
-    if let typed = typedBang, submit || isEmpty {
-      submitTypedBang(typed: typed)
+    if isEmpty {
+      if let typed = typedBang {
+        submitTypedBang(typed: typed)
+      } else {
+        finishCommandLineInteraction(reason: "command_open_empty")
+      }
       return
     }
 
-    if isEmpty {
-      finishCommandLineInteraction(reason: "command_open_empty")
-      return
-    }
     let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
       .candidate
     if candidate.kind == CandidateFinder.bangKind,
       let token = candidate.sourcePayload
     {
+      if submit
+        || (submitExactBang
+          && CandidateFinder.selectedBangMatchesTypedToken(
+            query: candidateFinderCurrentQuery,
+            selectedToken: token))
+      {
+        submitTypedBang(typed: (token: token, remainder: typedBang?.remainder ?? ""))
+        return
+      }
       // `<cr>`/`<tab>` on a bang row with matches: canonicalize the
       // buffer to `:flashlight !<token> ` so the cursor sits ready for
       // the query. The selection is the authority — we don't preserve

@@ -161,6 +161,20 @@ enum CandidateFinder {
     return (token, atIndex..<tokenEnd)
   }
 
+  static func sourceCompletionState(query: String, emojiMode: Bool)
+    -> (token: String, atRange: Range<String.Index>)?
+  {
+    guard !emojiMode, parseBang(query) == nil else { return nil }
+    guard let completion = parseAtSourceCompletion(query) else { return nil }
+    guard !completion.token.contains(":") else { return nil }
+    return completion
+  }
+
+  static func selectedBangMatchesTypedToken(query: String, selectedToken: String) -> Bool {
+    guard let typed = parseBang(query) else { return false }
+    return typed.token.localizedCaseInsensitiveCompare(selectedToken) == .orderedSame
+  }
+
   /// Build a synthetic completion candidate for a `@<source>` token.
   /// Mirrors the shape of the bang completion rows so the same render
   /// path (`displayTitle`, `bangDisplayTitle`-style label) shows

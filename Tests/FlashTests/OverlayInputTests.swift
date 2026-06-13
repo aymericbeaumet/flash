@@ -163,10 +163,57 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertTrue(CommandLineTextField(frame: .zero).acceptsFirstResponder)
   }
 
+  func testCommandLineArrowDirectionsMatchVisibleList() {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    let textView = NSTextView()
+
+    XCTAssertTrue(
+      panel.control(
+        panel.commandTextField,
+        textView: textView,
+        doCommandBy: #selector(NSResponder.moveUp(_:))))
+    XCTAssertTrue(
+      panel.control(
+        panel.commandTextField,
+        textView: textView,
+        doCommandBy: #selector(NSResponder.moveDown(_:))))
+
+    XCTAssertEqual(coordinator.commandLineSelectionDeltas, [-1, 1])
+  }
+
   func testOverlayNoActionsCoverModeTransitionProperties() {
-    for key in ["frame", "hidden", "backgroundColor", "sublayers", "colors"] {
+    for key in [
+      "frame", "hidden", "backgroundColor", "sublayers", "colors",
+      "shadowColor", "shadowOpacity", "shadowRadius", "shadowOffset", "shadowPath",
+    ] {
       XCTAssertNotNil(OverlayPanel.noActions[key], "missing \(key)")
     }
+  }
+
+  func testReadOnlyModalTextViewConsumesQToDismiss() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .modal
+    panel.modalSelectable = false
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: "q",
+        charactersIgnoringModifiers: "q",
+        isARepeat: false,
+        keyCode: 12))
+
+    XCTAssertTrue(panel.consumeModalKeyDown(event))
+    XCTAssertEqual(coordinator.cancelModalCount, 1)
+    XCTAssertEqual(coordinator.passThroughModalCount, 0)
   }
 
   func testPointerIntentMonitorRunsOnlyForCapturingNormalModeBadge() {
@@ -240,4 +287,43 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertLessThan(measured, (12 + 5) * 3)
   }
 
+}
+
+private final class SpyOverlayCoordinator: OverlayCoordinator {
+  var cancelModalCount = 0
+  var passThroughModalCount = 0
+  var commandLineSelectionDeltas: [Int] = []
+
+  func overlayDidCancel() {}
+  func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
+  func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {}
+  func overlayDidUpdatePrefix(_ prefix: String) {}
+  func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {}
+  func overlayDidHandleMapping(_ event: NSEvent) -> Bool { false }
+  func overlayDidCancelModal() { cancelModalCount += 1 }
+  func overlayDidPassThroughModalKey(_ event: NSEvent) { passThroughModalCount += 1 }
+  func overlayDidCancelCommandLine() {}
+  func overlayDidUpdateCommandLine(
+    _ command: String,
+    cursorIndex: Int,
+    resetSelection: Bool
+  ) {}
+  func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool {
+    commandLineSelectionDeltas.append(delta)
+    return true
+  }
+  func overlayDidInsertCommandLineSelection() -> Bool { false }
+  func overlayDidSubmitCommandLine(_ command: String) {}
+  func overlayDidForceSubmitCommandLineSelection() {}
+  func overlayDidCancelCandidateFinder() {}
+  func overlayDidUpdateCandidateFinderQuery(_ query: String) {}
+  func overlayDidMoveCandidateFinderSelection(_ delta: Int) {}
+  func overlayDidSubmitCandidateFinder() {}
+  func overlayDidSubmitSelectableModal() {}
+  func overlayExpandFlashlightAlias(
+    _ text: String,
+    cursorIndex: Int
+  ) -> (text: String, cursorIndex: Int)? {
+    nil
+  }
 }

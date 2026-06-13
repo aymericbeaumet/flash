@@ -59,6 +59,14 @@ ignored_apps = []
 [plugins]
 third_party = []
 
+[statusbar]
+left = ["sdk:active_app_name"]
+mode = "sdk:mode_label"
+right = [
+  "sdk:date",
+]
+separator = "#[fg=colour245] · "
+
 [flashlight]
 precedence_alive_bonus = 10
 
@@ -143,9 +151,9 @@ log_level = "info"
 # http_inspector_port = 4242
 ```
 
-`[mode] labels` controls the left-side text in the persistent status bar. `[mode.all.mappings]` applies in insert and normal modes. `[mode.normal]` holds normal-mode options such as `leader = "\\"`. `[mode.normal.mappings]` extends the built-in normal-mode map and overrides only matching keys. `[mode.insert.mappings]` applies only in insert mode. Values can be `flash://...` actions or explicit command arrays such as `["sh", "~/bin/toggle-colors"]`; bare shell strings and non-Flash URLs are rejected. Relative argv paths containing `/` resolve from the config file location.
+`[mode] labels` controls the mode text in the persistent status bar. `[statusbar]` controls the bar format: `mode` renders in the highlighted mode cell, `left` renders after that cell, and `right` renders on the right side with `separator`. Entries can read Flash SDK state (`sdk:active_app_name`, `sdk:mode_label`, `sdk:date`), plugin state (`plugin:ready_count`), scripts (`script:~/bin/status.sh`), or shell commands (`command:pmset -g batt`). `[mode.all.mappings]` applies in insert and normal modes. `[mode.normal]` holds normal-mode options such as `leader = "\\"`. `[mode.normal.mappings]` extends the built-in normal-mode map and overrides only matching keys. `[mode.insert.mappings]` applies only in insert mode. Values can be `flash://...` actions or explicit command arrays such as `["sh", "~/bin/toggle-colors"]`; bare shell strings and non-Flash URLs are rejected. Relative argv paths containing `/` resolve from the config file location.
 
-When a `[mode.all.mappings]` mapping points to `flash://mode_normal`, Flash shows the persistent status bar and starts in normal mode. The bar sits in the primary screen's top menu/notch band, insets content away from rounded screen corners, shows the active mode followed by the active app name on the left, and mirrors the local tmux status-right helpers on the right using Nord colors. The right side is rendered through Flash's status template engine, whose sections can resolve Flash SDK state, plugin state, or command/script output; command-backed sections keep their previous value until a replacement is ready. The Flash bar yields while the pointer hugs the top system menu band so the native macOS menu/status bar can appear. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings do not enable advanced mode. Without an advanced-mode mapping, the status bar is hidden and Flash behaves as a direct action launcher unless `flash://mode_normal` is invoked manually.
+When a `[mode.all.mappings]` mapping points to `flash://mode_normal`, Flash shows the persistent status bar and starts in normal mode. The bar sits in the primary screen's top menu/notch band, insets content away from rounded screen corners, and uses Nord colors. Command-backed status sections keep their previous value until a replacement is ready. The Flash bar yields while the pointer hugs the top system menu band so the native macOS menu/status bar can appear. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings do not enable advanced mode. Without an advanced-mode mapping, the status bar is hidden and Flash behaves as a direct action launcher unless `flash://mode_normal` is invoked manually.
 
 `[flashlight.aliases]` rewrites completed query tokens such as `"!g" = "!google"` or `"@ft" = "@firefox.tabs"`. `[flashlight.precedence]` adjusts source-order tiebreakers after match quality ties; entries not listed fall back to weight `0`, and `precedence_alive_bonus` nudges running app candidates ahead of inactive app rows from the same source.
 

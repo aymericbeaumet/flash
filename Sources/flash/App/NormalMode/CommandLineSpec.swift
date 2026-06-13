@@ -440,8 +440,20 @@ extension NormalModeDispatcher {
     body.removeFirst()
 
     if body.first(where: { $0.isWhitespace }) == nil {
-      let items = topLevelCompletions(pluginCommands: pluginCommands)
-      return CommandLineCompletionContext(prefix: ":", query: body, items: items)
+      let query = body
+      var items = topLevelCompletions(pluginCommands: pluginCommands)
+      if !query.isEmpty {
+        let foldedQuery = query.folding(
+          options: [.caseInsensitive, .diacriticInsensitive],
+          locale: .current)
+        items = items.filter {
+          $0.label.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+          ).hasPrefix(foldedQuery)
+        }
+      }
+      return CommandLineCompletionContext(prefix: ":", query: query, items: items)
     }
 
     let parts = body.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)

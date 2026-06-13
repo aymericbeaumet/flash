@@ -340,7 +340,8 @@ extension OverlayPanel {
     "transform": NSNull(), "contents": NSNull(), "hidden": NSNull(),
     "opacity": NSNull(), "backgroundColor": NSNull(), "cornerRadius": NSNull(),
     "borderWidth": NSNull(), "borderColor": NSNull(), "foregroundColor": NSNull(),
-    "masksToBounds": NSNull(),
+    "masksToBounds": NSNull(), "shadowColor": NSNull(), "shadowOpacity": NSNull(),
+    "shadowRadius": NSNull(), "shadowOffset": NSNull(), "shadowPath": NSNull(),
     "onOrderIn": NSNull(), "onOrderOut": NSNull(), "sublayers": NSNull(),
     "path": NSNull(), "strokeColor": NSNull(), "fillColor": NSNull(), "lineWidth": NSNull(),
     "colors": NSNull(),
@@ -366,6 +367,7 @@ extension OverlayPanel {
 
   func captureKeyboardInput() {
     FlashLog.trace("[overlay] capture_keyboard key_before=\(isKeyWindow) input=\(inputMode)")
+    refreshWindowLevelForCurrentContent()
     orderFrontRegardless()
     makeKey()
     if inputMode == .commandLine {

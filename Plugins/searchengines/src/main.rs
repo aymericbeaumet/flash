@@ -76,3 +76,16 @@ fn percent_encode(input: &str) -> String {
 fn main() {
     run(SearchEngines);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn includes_googlemaps_bang() {
+        assert_eq!(
+            lookup("googlemaps"),
+            Some("https://www.google.com/maps/search/{{{s}}}")
+        );
+    }
+}

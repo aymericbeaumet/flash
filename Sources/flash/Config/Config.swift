@@ -214,6 +214,37 @@ struct Config {
     /// plugin id, then by setting name.
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
+  struct StatusBar {
+    static let defaultLeft = ["sdk:active_app_name"]
+    static let defaultMode = "sdk:mode_label"
+    static let defaultRight = [
+      "sdk:date",
+    ]
+    static let defaultSeparator = "#[fg=colour245] · "
+
+    var left: [String] = Self.defaultLeft
+    var mode: String = Self.defaultMode
+    var right: [String] = Self.defaultRight
+    var separator: String = Self.defaultSeparator
+    var template: FlashStatusBarTemplate = Self.defaultTemplate
+
+    static let defaultTemplate = FlashStatusBarTemplate(
+      sections: [
+        FlashStatusBarTemplateSection(
+          id: "statusbar.left.0.sdk:active_app_name",
+          placement: .leading,
+          source: .sdk(.activeAppName)),
+        FlashStatusBarTemplateSection(
+          id: "statusbar.mode.sdk:mode_label",
+          placement: .mode,
+          source: .sdk(.modeLabel)),
+        FlashStatusBarTemplateSection(
+          id: "statusbar.right.0.sdk:date",
+          placement: .trailing,
+          source: .sdk(.date)),
+      ],
+      trailingSeparator: Self.defaultSeparator)
+  }
   struct Mode {
     struct Labels: Equatable {
       var normal: String = "NORMAL"
@@ -420,6 +451,7 @@ struct Config {
   var overlay = Overlay()
   var open = Open()
   var plugins = Plugins()
+  var statusBar = StatusBar()
   var mode = Mode()
   var debug = Debug()
   var flashlight = Flashlight()
@@ -541,6 +573,12 @@ struct Config {
         "settings": plugins.settings.mapValues { table in
           table.mapValues(\.jsonValue)
         },
+      ],
+      "statusbar": [
+        "left": statusBar.left,
+        "mode": statusBar.mode,
+        "right": statusBar.right,
+        "separator": statusBar.separator,
       ],
       "warnings": warnings,
     ])

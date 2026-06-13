@@ -377,12 +377,11 @@ extension OverlayPanel {
     return nil
   }
 
-  /// Routes a `ModalTextView` keyDown through the modal interpreter when the
-  /// modal is a selectable list, so plain arrows / `j` / `k` / Return reach
-  /// `handleModalKeyEvent`. Read-only modals return false and keep the text
-  /// view's existing pass-through behaviour.
+  /// Routes a `ModalTextView` keyDown through the modal interpreter. Read-only
+  /// modals still need global modal exits (`q`, Escape, Ctrl-C, Cmd-W), while
+  /// selectable modals also use it for list motions and Return.
   func consumeModalKeyDown(_ event: NSEvent) -> Bool {
-    guard modalSelectable else { return false }
+    guard inputMode == .modal else { return false }
     return handleModalKeyEvent(event)
   }
 

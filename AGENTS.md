@@ -224,7 +224,7 @@ A `JumpTarget.activate` closure overrides the default action. Use it when the un
 
 `~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, the constrained inline string table used by `mode.labels`, `#` line comments, and trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or arbitrary inline tables. Add support only if you actually need it.
 
-The user-facing top-level sections are exactly `[hints]`, `[open]`, `[plugins]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
+The user-facing top-level sections are exactly `[hints]`, `[open]`, `[plugins]`, `[statusbar]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
 
 **`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
@@ -240,6 +240,10 @@ Keys:
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
+| `statusbar.left`                   | string array   | `["sdk:active_app_name"]` |
+| `statusbar.mode`                   | string         | `"sdk:mode_label"`   |
+| `statusbar.right`                  | string array   | `["sdk:date"]`       |
+| `statusbar.separator`              | string         | `"#[fg=colour245] · "` |
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |
 | `[flashlight.precedence]` entries  | int            | built-in source order |
@@ -288,6 +292,15 @@ errors go to stderr. Plugins can log through the Flash logger by sending
 `flash.log` protocol notifications.
 Official plugin installers must keep downloaded CLI binaries under their own
 `FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
+
+`[statusbar]` configures the persistent top status bar format. `mode` renders
+inside the highlighted mode cell, `left` renders immediately to the right of
+that cell, and `right` renders on the right side joined with `separator`.
+Supported entry forms are `sdk:active_app_name`, `sdk:active_bundle_identifier`,
+`sdk:mode_label`, `sdk:date`, `plugin:loaded_count`, `plugin:ready_count`,
+`plugin:error_count`, `script:<path>`, and `command:<shell command>`.
+Command/script sections are stale-while-refresh: the previous successful value
+stays visible until a replacement is ready.
 
 **Bundled plugins are Rust, macOS-only, and ship as compiled binaries.**
 Each official plugin under `Plugins/<id>/` is an independent (non-workspace)
@@ -358,14 +371,14 @@ Normal-mode action URLs currently include: `flash://mouse_target[?secondary=1|do
 
 **Flashlight bangs.** Registered plugin bangs are exclusively in scope when the user types `!`. With no `!` typed the candidate pool excludes bang candidates entirely; the moment the query starts with `!`, the pool is replaced with the bang registry alone (no app/tab/tmux noise), fuzzy-matched against the token text after `!`. Submitting a bang routes the remainder through `PluginManager.invokeShebang`; the catch-all `"*"` registration is reached through the same path when no exact token matches what the user typed.
 
-**Flashlight key bindings (unified contract).** `<tab>` and `<cr>` are equivalent — both **act on** the selected candidate:
+**Flashlight key bindings (unified contract).** `<tab>` and `<cr>` both **act on** the selected candidate:
 
-- Bang candidate: insert `:flashlight !<token> ` into the buffer (canonicalizes whatever partial token the user typed; cursor lands after the trailing space so they can keep typing the query).
+- Bang candidate: `<tab>` inserts `:flashlight !<token> ` into the buffer (canonicalizes whatever partial token the user typed; cursor lands after the trailing space so they can keep typing the query). `<cr>` does the same for a partial typed token, but dispatches when the typed token exactly matches the selected bang (for example `!googlemaps`).
 - Anything else (app, tab, tmux window, …): open the candidate and dismiss flashlight.
 
 `<cmd+cr>` is **insert + submit**:
 
-- Bang candidate: dispatch the bang with the current buffer's remainder (whatever the user typed after `!<token> `).
+- Bang candidate: dispatch the selected bang with the current buffer's remainder (whatever the user typed after `!<token> `).
 - Anything else: identical to `<cr>` — open the candidate.
 
 Cycling moves to arrow keys, `<shift-tab>`. Command-line *completions* (`:help <topic>`, `:plugins <sub>`, `:<plugin> <action>`) keep their separate contract: `<tab>` inserts the value without sending, `<cr>` inserts + sends — that surface is "build a command" rather than "pick a thing".

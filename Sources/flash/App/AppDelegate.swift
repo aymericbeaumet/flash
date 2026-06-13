@@ -276,6 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.warmPool(count: 256)
     statusBarController = FlashStatusBarController(
       overlay: overlay,
+      template: config.statusBar.template,
       pluginSnapshotsProvider: { [weak self] in
         self?.pluginManager.statusSnapshots() ?? []
       })

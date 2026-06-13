@@ -46,6 +46,8 @@ final class ModalTextView: NSTextView {
 }
 
 final class OverlayPanel: NSPanel {
+  static let transientOverlayWindowLevel: NSWindow.Level = .screenSaver
+  static let persistentStatusWindowLevel: NSWindow.Level = .floating
   static let candidateFinderMaxRows = 6
   static let candidateFinderHorizontalPadding: CGFloat = 7
   static let candidateFinderVerticalPadding: CGFloat = 5
@@ -73,7 +75,6 @@ final class OverlayPanel: NSPanel {
   var statusAppText = ""
   var modeBadgeText = "INSERT"
   var statusRightText = ""
-  var statusBarSuppressedForSystemMenu = false
   var modeBadgeStyle: OverlayModeBadgeStyle = .insert
   var modeBadgeCapturesInput = false
   var commandPromptVisible = false
@@ -209,7 +210,6 @@ final class OverlayPanel: NSPanel {
   // build them once and reuse.
 
   private var screenParametersObserver: NSObjectProtocol?
-  var statusBarHoverTimer: DispatchSourceTimer?
 
   init() {
     let frame = OverlayPanel.unionScreenFrame()
@@ -226,7 +226,7 @@ final class OverlayPanel: NSPanel {
     ) { _ in
       OverlayPanel.invalidateScreenSnapshot()
     }
-    self.level = .screenSaver
+    self.level = Self.persistentStatusWindowLevel
     self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
     self.isOpaque = false
     self.backgroundColor = .clear
@@ -266,9 +266,13 @@ final class OverlayPanel: NSPanel {
     statusRightLabel.alignmentMode = .right
     statusRightLabel.actions = OverlayPanel.noActions
     modeBadgeLayer.sublayers = [statusAppLabel, modeBadgeButtonLayer, statusRightLabel]
-    commandPromptLayer.cornerRadius = 4
-    commandPromptLayer.borderWidth = 1
-    commandPromptLayer.masksToBounds = true
+    commandPromptLayer.cornerRadius = 6
+    commandPromptLayer.borderWidth = 1.5
+    commandPromptLayer.masksToBounds = false
+    commandPromptLayer.shadowColor = NSColor.black.cgColor
+    commandPromptLayer.shadowOpacity = 0.48
+    commandPromptLayer.shadowRadius = 18
+    commandPromptLayer.shadowOffset = CGSize(width: 0, height: -8)
     commandPromptLayer.actions = OverlayPanel.noActions
     commandPromptLabel.alignmentMode = .left
     commandPromptLabel.actions = OverlayPanel.noActions
@@ -295,7 +299,6 @@ final class OverlayPanel: NSPanel {
     view.addSubview(commandTextField)
     view.addSubview(modalScrollView)
     installPointerMonitors()
-    installStatusBarHoverPoller()
   }
 
   deinit {
@@ -304,7 +307,6 @@ final class OverlayPanel: NSPanel {
     }
     removePointerMonitors()
     removeModalDismissMonitors()
-    removeStatusBarHoverPoller()
   }
 
   /// Allocate `count` chip+label layers and stash them in the pools. Called

@@ -549,6 +549,16 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertNil(CandidateFinder.parseAtSourceCompletion("gmail"))
   }
 
+  func testSourceCompletionStateIgnoresEmojiAndBangQueries() {
+    XCTAssertEqual(
+      CandidateFinder.sourceCompletionState(query: "@fire", emojiMode: false)?.token,
+      "fire")
+    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@fire", emojiMode: true))
+    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "!google @fire", emojiMode: false))
+    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@firefox.tabs gmail", emojiMode: false))
+    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@source:fire", emojiMode: false))
+  }
+
   func testExpandFlashlightAliasRewritesShorthand() {
     // Keys are literal words — the sigil is part of the key. Both
     // bang aliases and source-filter aliases ride the same table.
@@ -618,6 +628,25 @@ final class SourceCandidateTests: XCTestCase {
     let multipleBangs = CandidateFinder.parseBang("foo !first bar !second")
     XCTAssertEqual(multipleBangs?.token, "first")
     XCTAssertEqual(multipleBangs?.remainder, "foo bar !second")
+  }
+
+  func testSelectedBangMatchesOnlyExactTypedToken() {
+    XCTAssertTrue(
+      CandidateFinder.selectedBangMatchesTypedToken(
+        query: "!googlemaps",
+        selectedToken: "googlemaps"))
+    XCTAssertTrue(
+      CandidateFinder.selectedBangMatchesTypedToken(
+        query: "!GoogleMaps",
+        selectedToken: "googlemaps"))
+    XCTAssertFalse(
+      CandidateFinder.selectedBangMatchesTypedToken(
+        query: "!goo",
+        selectedToken: "googlemaps"))
+    XCTAssertFalse(
+      CandidateFinder.selectedBangMatchesTypedToken(
+        query: "googlemaps",
+        selectedToken: "googlemaps"))
   }
 
   func testParseBangCapturesTokenAndRemainder() {

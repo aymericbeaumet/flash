@@ -55,6 +55,30 @@ third_party = []
 # hot-reload across every plugin.
 watching_enabled = true
 
+[statusbar]
+# Sections rendered in the persistent top status bar when advanced mode is
+# enabled. `mode` renders as the highlighted mode cell; `left` renders after
+# that cell; `right` renders on the right side using `separator`.
+#
+# Supported entry forms:
+#   sdk:active_app_name
+#   sdk:active_bundle_identifier
+#   sdk:mode_label
+#   sdk:date
+#   plugin:loaded_count
+#   plugin:ready_count
+#   plugin:error_count
+#   script:<path>
+#   command:<shell command>
+left = ["sdk:active_app_name"]
+mode = "sdk:mode_label"
+right = [
+  "sdk:date",
+]
+separator = "#[fg=colour245] · "
+# Example command-backed section:
+# right = ["script:~/bin/custom-status.sh", "sdk:date"]
+
 [flashlight]
 # Bonus added to candidates backed by a running process, used as a
 # source-order tiebreaker after match quality ties. With the default

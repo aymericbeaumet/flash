@@ -83,6 +83,12 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.mode.insert.isEmpty)
     XCTAssertTrue(c.open.ignoredApps.isEmpty)
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
+    XCTAssertEqual(c.statusBar.left, ["sdk:active_app_name"])
+    XCTAssertEqual(c.statusBar.mode, "sdk:mode_label")
+    XCTAssertEqual(c.statusBar.right, ["sdk:date"])
+    XCTAssertFalse(c.statusBar.right.contains { $0.contains("ip-status") })
+    XCTAssertEqual(c.statusBar.separator, "#[fg=colour245] · ")
+    XCTAssertEqual(c.statusBar.template.sections.count, 3)
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
     XCTAssertEqual(c.flashlight.precedence["tmux"], 100)
     XCTAssertEqual(c.flashlight.precedence["firefox"], 80)
@@ -91,6 +97,57 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertFalse(c.debug.httpInspectorEnabled)
     XCTAssertEqual(c.debug.httpInspectorHost, "localhost")
     XCTAssertEqual(c.debug.httpInspectorPort, 4242)
+  }
+
+  func testParsesStatusBarTemplate() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      left = ["sdk:active_bundle_identifier"]
+      mode = "sdk:mode_label"
+      right = [
+        "plugin:ready_count",
+        "script:~/bin/right-status.sh",
+        "command:date +%H:%M",
+      ]
+      separator = " | "
+      """)
+
+    XCTAssertEqual(c.statusBar.left, ["sdk:active_bundle_identifier"])
+    XCTAssertEqual(c.statusBar.mode, "sdk:mode_label")
+    XCTAssertEqual(c.statusBar.separator, " | ")
+    let template = c.statusBar.template
+    XCTAssertEqual(template.trailingSeparator, " | ")
+    XCTAssertEqual(template.sections.map(\.placement), [.leading, .mode, .trailing, .trailing, .trailing])
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+
+    XCTAssertEqual(template.sections[0].source, .sdk(.activeBundleIdentifier))
+    XCTAssertEqual(template.sections[1].source, .sdk(.modeLabel))
+    XCTAssertEqual(template.sections[2].source, .plugin(.readyCount))
+    XCTAssertEqual(
+      template.sections[3].source,
+      .command(FlashStatusBarCommand(argv: ["/bin/sh", "~/bin/right-status.sh"])))
+    XCTAssertEqual(
+      template.sections[4].source,
+      .command(FlashStatusBarCommand(argv: ["/bin/sh", "-lc", "date +%H:%M"])))
+  }
+
+  func testInvalidStatusBarTemplateReportsDiagnostics() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      mode = "sdk:nope"
+      right = ["bogus"]
+      """)
+
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("statusbar.mode entry")
+      })
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("statusbar.right entry")
+      })
   }
 
   func testParsesModeLabelsInlineTable() {
@@ -414,6 +471,7 @@ final class ConfigLoaderTests: XCTestCase {
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
     let open = try XCTUnwrap(root["open"] as? [String: Any])
     let plugins = try XCTUnwrap(root["plugins"] as? [String: Any])
+    let statusBar = try XCTUnwrap(root["statusbar"] as? [String: Any])
     let allMappings = try XCTUnwrap(mode["all"] as? [[String: Any]])
     XCTAssertEqual(hints["keys"] as? String, "<qwerty_homerow+qwerty_toprow>")
     XCTAssertEqual(hints["min_length"] as? Int, 1)
@@ -429,6 +487,11 @@ final class ConfigLoaderTests: XCTestCase {
       ["sh", "~/.dotfiles/scripts/toggle-colors"])
     XCTAssertEqual(open["ignored_apps"] as? [String], [])
     XCTAssertEqual(plugins["third_party"] as? [String], [])
+    XCTAssertEqual(statusBar["left"] as? [String], ["sdk:active_app_name"])
+    XCTAssertEqual(statusBar["mode"] as? String, "sdk:mode_label")
+    XCTAssertEqual(
+      statusBar["right"] as? [String],
+      ["sdk:date"])
   }
 
   func testResolvedHintsKeysJSONIncludesDefaultAndResolvedAlphabet() throws {
