@@ -278,12 +278,12 @@ Logs are newline-delimited JSON written to stderr and
 `debug.log_level = "trace"` includes AX tree dumps. Accepted levels are
 `trace`, `debug`, `info`, `warn`, `error`, and `fatal`.
 
-`plugins.third_party` accepts only `github:user/project` and `file:<path>`.
+`plugins.third_party` accepts only `github:user/project@<commit-sha>` and `file:<path>`. The `@<commit-sha>` pin is mandatory for `github:` references — it must be a full 40-character lowercase hex commit SHA, and the loader rejects anything else (branch names, tags, short SHAs). Third-party `install` / `start` scripts run as the user with full host privileges, so trusting a moving upstream ref would let a compromised plugin author drop arbitrary code on every config reload; the materializer fetches *exactly* the pinned commit and refuses to start a plugin whose checked-out HEAD doesn't match. Plugin manifests may also declare a `capabilities` array listing the sensitive host surfaces they need (currently `"clipboard"` is the only gated capability); events such as `core:clipboard.changed` are filtered out for any plugin that hasn't opted in.
 Official bundled plugins under `Contents/Resources/Plugins` are always enabled
 in this version and are not configurable. In the checkout they live under root
 `Plugins/` so `Scripts/install.sh --dev` can symlink them into the installed app. Every plugin root must contain
-`manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`,
-event subscriptions, and command registrations (each command exposes one or more subcommands). `install` and `start` are
+`manifest.json` with `manifest_version`, `id`, `name`, `version`, `description`, `install`, `start`,
+event subscriptions, and command registrations (each command exposes one or more subcommands). `manifest_version` is a required integer; the host loader rejects any manifest that omits it or that targets a future schema version. `install` and `start` are
 shell strings run from the plugin root; Flash passes
 `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`, and `FLASH_PLUGIN_DATA_DIR`.
 Plugins speak length-prefixed MessagePack over stdin/stdout: a 4-byte
@@ -305,12 +305,19 @@ Command/script sections are stale-while-refresh: the previous successful value
 stays visible until a replacement is ready.
 
 **Bundled plugins are Rust, macOS-only, and ship as compiled binaries.**
-Each official plugin under `Plugins/<id>/` is an independent (non-workspace)
-Cargo crate depending on the local `flash_plugin` SDK crate
-(`flash_plugin = { path = "../_rust_flash_plugin" }`), which owns all the
-generic MessagePack scaffolding (framing, `initialize`/`heartbeat`/`shutdown`,
-structured logging, a sandboxed `run_cli`, background tasks/timers, and the tokio runtime) and carries
-**no Flash business concepts**. A plugin's `main.rs` implements the `Plugin`
+Every official plugin under `Plugins/<id>/` is a member of the
+`Plugins/Cargo.toml` virtual workspace and depends on the local `flash_plugin`
+SDK crate (`flash_plugin = { path = "../_rust_flash_plugin" }`), which owns
+all the generic MessagePack scaffolding (framing,
+`initialize`/`heartbeat`/`shutdown`, structured logging, a sandboxed `run_cli`,
+background tasks/timers, and the tokio runtime) and carries **no Flash
+business concepts**. Shared dep versions (serde, tokio, rmp-serde, objc2,
+…) live in `[workspace.dependencies]` and each crate inherits them via
+`{ workspace = true }`, so every plugin resolves the same transitive graph
+through a single `Plugins/Cargo.lock`. Per-crate Cargo.tomls keep only their
+own plugin-specific deps (`fasteval2` in calculator, etc.) and no
+`[profile.release]` — the size-optimized release profile lives once at the
+workspace root. A plugin's `main.rs` implements the `Plugin`
 trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
 must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we

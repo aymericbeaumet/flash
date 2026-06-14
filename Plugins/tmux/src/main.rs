@@ -19,9 +19,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_local, sleep, spawn_background, ActivateRequest, Candidate, CliResult,
-    CommandRequest, CommandResponse, Context, DiscoverRequest, DiscoverResponse, Event, Frame,
-    JumpTarget, ResolveResponse, SourceActionRequest, SourceActionResponse,
+    run, run_local, sleep, spawn_background, ActivateRequest, Candidate, CliResult, CommandRequest,
+    CommandResponse, Context, DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget,
+    ResolveResponse, SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -310,10 +310,10 @@ fn client_hosted_by_from_map(
             return None;
         }
         let mut fallback = clients;
-        fallback.sort_by(|a, b| b.activity.cmp(&a.activity));
+        fallback.sort_by_key(|c| std::cmp::Reverse(c.activity));
         return fallback.into_iter().next();
     }
-    matches.sort_by(|a, b| b.activity.cmp(&a.activity));
+    matches.sort_by_key(|c| std::cmp::Reverse(c.activity));
     matches.into_iter().next()
 }
 
@@ -524,6 +524,10 @@ struct Pane {
     rows: i64,
 }
 
+// Eleven positional args is on the high side, but `JumpTarget` itself is the
+// shape — collapsing this into a `BuildTargetArgs` struct would just rename
+// the same data without making the call sites clearer.
+#[allow(clippy::too_many_arguments)]
 fn build_target(
     target_id: &str,
     x: f64,
@@ -1252,7 +1256,7 @@ async fn select_client_for_target(tmux_path: Option<&str>, target: &str) -> Opti
     if clients.is_empty() {
         return None;
     }
-    clients.sort_by(|a, b| b.activity.cmp(&a.activity));
+    clients.sort_by_key(|c| std::cmp::Reverse(c.activity));
     let target_session = target.split(':').next().unwrap_or(target);
     clients
         .iter()

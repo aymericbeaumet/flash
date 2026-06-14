@@ -14,15 +14,17 @@ enum HelpDocs {
   static func render(topic rawTopic: String?, config: Config, showModes: Bool) -> String {
     let topics = allTopics(config: config, showModes: showModes)
     guard let rawTopic,
-      !rawTopic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      !rawTopic.trimmed.isEmpty
     else {
       return index(topics)
     }
     let name = normalize(rawTopic)
-    guard let topic = topics.first(where: { topic in
-      normalize(topic.name) == name
-        || topic.aliases.contains(where: { normalize($0) == name })
-    }) else {
+    guard
+      let topic = topics.first(where: { topic in
+        normalize(topic.name) == name
+          || topic.aliases.contains(where: { normalize($0) == name })
+      })
+    else {
       return unknownTopic(name, topics: topics)
     }
     return render(topic)
@@ -273,7 +275,7 @@ enum HelpDocs {
   }
 
   private static func render(_ topic: HelpTopic) -> String {
-    topic.body.trimmingCharacters(in: .whitespacesAndNewlines)
+    topic.body.trimmed
   }
 
   private static func unknownTopic(_ name: String, topics: [HelpTopic]) -> String {
@@ -292,6 +294,6 @@ enum HelpDocs {
   }
 
   private static func normalize(_ raw: String) -> String {
-    raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    raw.trimmed.lowercased()
   }
 }

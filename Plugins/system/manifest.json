@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "system",
   "name": "System",
   "version": "0.1.0",

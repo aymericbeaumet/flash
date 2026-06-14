@@ -70,6 +70,10 @@ public enum CandidateKind: Sendable, Equatable {
   case plugin(String)
 }
 
+// @unchecked Sendable: All stored fields are value types or `URL` (which is
+// `Sendable`). `Candidate` is built once on the source's queue and read from
+// CandidateFinder's ranking queue; consumers treat it as immutable for the
+// lifetime of a flashlight query, so no synchronization is needed.
 public struct Candidate: @unchecked Sendable {
   public var kind: CandidateKind
   /// Stable source id used for routing resolution back to the source.

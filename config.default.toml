@@ -46,8 +46,12 @@ ignored_apps = []
 # Official bundled plugins are always enabled in this version.
 # Third-party plugins are loaded only when listed here.
 # Supported references:
-#   github:user/project
+#   github:user/project@<40-char commit sha>
 #   file:<path>
+# GitHub references must pin a full 40-char commit SHA — branches and tags are
+# rejected because third-party install/start scripts run as the user, and a
+# moving ref would let a compromised plugin author land arbitrary code on each
+# config reload.
 third_party = []
 
 # When true (the default), each plugin's directory tree is watched and a

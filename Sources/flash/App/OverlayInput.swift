@@ -219,7 +219,8 @@ extension OverlayPanel {
       }
       FlashLog.trace(
         "[input] normal chord_lockout_arm key=\(event.keyCode) "
-          + "until=\(normalModeChordLockoutUntil.map { String(format: "%.3f", $0.timeIntervalSinceReferenceDate) } ?? "nil")")
+          + "until=\(normalModeChordLockoutUntil.map { String(format: "%.3f", $0.timeIntervalSinceReferenceDate) } ?? "nil")"
+      )
       return false
     }
     if let lockoutUntil = normalModeChordLockoutUntil,

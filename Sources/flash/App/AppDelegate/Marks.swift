@@ -52,7 +52,8 @@ extension AppDelegate {
       })
     {
       FlashLog.debug(
-        "[marks] jump_fallback letter=\(key) bundle=\(mark.bundleID) pid=\(fallback.processIdentifier)")
+        "[marks] jump_fallback letter=\(key) bundle=\(mark.bundleID) pid=\(fallback.processIdentifier)"
+      )
       marks[key] = MarkState(
         bundleID: mark.bundleID, pid: fallback.processIdentifier, recordedAt: mark.recordedAt)
       RunningApplicationActivation.activate(fallback, options: [.activateAllWindows])
@@ -64,7 +65,7 @@ extension AppDelegate {
   }
 
   private static func normalizedMarkKey(_ raw: String) -> Character? {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = raw.trimmed
     guard let ch = trimmed.first, trimmed.count == 1, ch.isLetter || ch.isNumber else {
       return nil
     }
@@ -112,14 +113,14 @@ extension AppDelegate {
     }
   }
 
-
   func recordMovement(_ entry: MovementEntry, source: String) {
     guard let identity = movementIdentity(entry) else { return }
     if movementNavigationTargetKey == identity.key {
       movementNavigationTargetKey = nil
       movementCurrent = entry
       pruneMovementStacks()
-      FlashLog.trace("[movement] activation target=\(identity.key) raw=\(entry.key) source=navigation")
+      FlashLog.trace(
+        "[movement] activation target=\(identity.key) raw=\(entry.key) source=navigation")
       return
     }
     if let current = movementCurrent,
@@ -129,7 +130,8 @@ extension AppDelegate {
       movementCurrent = entry
       movementNavigationTargetKey = nil
       pruneMovementStacks()
-      FlashLog.trace("[movement] coalesced source=\(source) current=\(identity.key) raw=\(entry.key)")
+      FlashLog.trace(
+        "[movement] coalesced source=\(source) current=\(identity.key) raw=\(entry.key)")
       return
     }
     if let current = movementCurrent,
@@ -137,7 +139,8 @@ extension AppDelegate {
     {
       movementNavigationTargetKey = nil
       pruneMovementStacks()
-      FlashLog.trace("[movement] coalesced_activation source=\(source) current=\(identity.key) raw=\(entry.key)")
+      FlashLog.trace(
+        "[movement] coalesced_activation source=\(source) current=\(identity.key) raw=\(entry.key)")
       return
     }
     if let current = movementCurrent {

@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "aiproviders",
   "name": "AI Providers",
   "version": "0.1.0",

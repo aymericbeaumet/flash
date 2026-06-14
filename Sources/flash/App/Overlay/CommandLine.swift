@@ -136,7 +136,6 @@ extension OverlayPanel {
     commandTextField.backgroundColor = .clear
   }
 
-
   func configureCommandTextField(
     promptFrame: CGRect,
     font: NSFont,
@@ -192,7 +191,6 @@ extension OverlayPanel {
       makeFirstResponder(self)
     }
   }
-
 
   func setCommandTextFieldText(
     _ text: String, cursorIndex: Int, underlineRange: NSRange? = nil
@@ -276,7 +274,8 @@ extension OverlayPanel {
     guard let editor = commandTextField.currentEditor() as? NSTextView else {
       return commandTextField.stringValue.count
     }
-    return characterOffset(forUTF16Offset: editor.selectedRange.location, in: commandTextField.stringValue)
+    return characterOffset(
+      forUTF16Offset: editor.selectedRange.location, in: commandTextField.stringValue)
   }
 
   func utf16Offset(forCharacterOffset offset: Int, in text: String) -> Int {
@@ -287,10 +286,11 @@ extension OverlayPanel {
 
   func characterOffset(forUTF16Offset offset: Int, in text: String) -> Int {
     let clamped = min(max(offset, 0), text.utf16.count)
-    guard let utf16Index = text.utf16.index(
-      text.utf16.startIndex,
-      offsetBy: clamped,
-      limitedBy: text.utf16.endIndex),
+    guard
+      let utf16Index = text.utf16.index(
+        text.utf16.startIndex,
+        offsetBy: clamped,
+        limitedBy: text.utf16.endIndex),
       let index = String.Index(utf16Index, within: text)
     else { return text.count }
     return text.distance(from: text.startIndex, to: index)

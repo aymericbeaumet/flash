@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "tmux",
   "name": "tmux",
   "version": "0.1.0",

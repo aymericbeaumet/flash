@@ -28,7 +28,8 @@ final class SourceRegistry {
     pluginSourcesProvider: (() -> [FlashSource])? = nil
   ) {
     let initialRunningApplications =
-      runningApplications ?? runningApplicationsProvider?() ?? NSWorkspace.shared.runningApplications
+      runningApplications ?? runningApplicationsProvider?()
+      ?? NSWorkspace.shared.runningApplications
     if let runningApplicationsProvider {
       self.runningApplicationsProvider = runningApplicationsProvider
     } else if runningApplications != nil {
@@ -118,7 +119,8 @@ final class SourceRegistry {
   }
 
   func chain(for context: AppContext) -> [FlashSource] {
-    return sources
+    return
+      sources
       .filter { $0.capabilities.contains(.jumpTargets) && $0.supports(context) }
       .sorted { lhs, rhs in
         if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
@@ -175,7 +177,7 @@ final class SourceRegistry {
       let sourceLabels = source.candidateSourceLabels
       let candidates = sourceLabels.isEmpty ? [source.displayName] : sourceLabels
       for raw in candidates {
-        let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = raw.trimmed
         guard !label.isEmpty, !seen.contains(label) else { continue }
         seen.insert(label)
         labels.append(label)
@@ -315,8 +317,7 @@ final class SourceRegistry {
 
   func documentURL(in context: AppContext) -> String? {
     for source in chain(for: context)
-      where source.capabilities.contains(.documentURL)
-    {
+    where source.capabilities.contains(.documentURL) {
       if let url = source.documentURL(in: context) {
         return url
       }
@@ -465,7 +466,8 @@ final class SourceRegistry {
     capability: FlashSourceCapabilities,
     context: AppContext,
     completion: @escaping (SourceActionResult) -> Void,
-    action: @escaping (FlashSource, FlashSourceEnvironment, @escaping (SourceActionResult) -> Void)
+    action:
+      @escaping (FlashSource, FlashSourceEnvironment, @escaping (SourceActionResult) -> Void)
       -> Void
   ) {
     // Timing breakdown for the tab-action latency investigation: which source

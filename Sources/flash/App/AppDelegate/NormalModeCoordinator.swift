@@ -40,7 +40,9 @@ extension AppDelegate {
       normalModePendingCommandToken &+= 1
       clearTransientHintState(reason: "enter_insert_denied_\(reason.logValue)")
       resetModeInputState()
-      if overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder || overlay.inputMode == .modal {
+      if overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder
+        || overlay.inputMode == .modal
+      {
         overlay.hide()
       }
       applyModeOverlay()
@@ -221,7 +223,7 @@ extension AppDelegate {
     beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
   }
 
-  private func modeWillBeginWindowGeometryChange(reason: String) {
+  func modeWillBeginWindowGeometryChange(reason: String) {
     windowGeometryChangeInProgress = true
     FlashLog.trace("[mode] window_geometry_begin mode=\(flashMode) reason=\(reason)")
     switch flashMode {
@@ -232,7 +234,7 @@ extension AppDelegate {
     }
   }
 
-  private func modeDidEndWindowGeometryChange(reason: String) {
+  func modeDidEndWindowGeometryChange(reason: String) {
     windowGeometryChangeInProgress = false
     FlashLog.trace("[mode] window_geometry_end mode=\(flashMode) reason=\(reason)")
     switch flashMode {
@@ -274,133 +276,6 @@ extension AppDelegate {
       overlay.hide()
     case .hints, .normal:
       break
-    }
-  }
-
-  private func updateInsertModeActiveWindowBorder(reason: String) {
-    let context = currentNonFlashContext()
-    guard
-      Self.activeWindowBorderShouldBeVisible(
-        mode: flashMode,
-        modeBadgeEnabled: modeBadgeEnabled,
-        hasHints: !currentHints.isEmpty,
-        windowGeometryChangeInProgress: windowGeometryChangeInProgress)
-    else {
-      overlay.setActiveWindowBorder(around: nil)
-      if !windowGeometryChangeInProgress {
-        stopActiveWindowBorderTracking(reason: "hidden_\(reason)")
-      }
-      return
-    }
-    FlashLog.trace("[mode] insert_border_update reason=\(reason)")
-    overlay.setActiveWindowBorder(around: context?.frontWindowFrame)
-    startActiveWindowBorderTracking(frame: context?.frontWindowFrame, reason: reason)
-  }
-
-  private func startActiveWindowBorderTracking(frame: CGRect?, reason: String) {
-    activeWindowBorderTrackedFrame = frame
-    guard activeWindowBorderTrackingTimer == nil else { return }
-
-    let timer = DispatchSource.makeTimerSource(queue: .main)
-    timer.schedule(
-      deadline: .now() + .milliseconds(Self.activeWindowBorderTrackingIntervalMs),
-      repeating: .milliseconds(Self.activeWindowBorderTrackingIntervalMs),
-      leeway: .milliseconds(Self.activeWindowBorderTrackingLeewayMs))
-    timer.setEventHandler { [weak self] in
-      self?.pollActiveWindowBorderFrame()
-    }
-    activeWindowBorderTrackingTimer = timer
-    FlashLog.trace("[mode] insert_border_tracking_start reason=\(reason)")
-    timer.resume()
-  }
-
-  private func stopActiveWindowBorderTracking(reason: String) {
-    guard let timer = activeWindowBorderTrackingTimer else {
-      activeWindowBorderTrackedFrame = nil
-      return
-    }
-    timer.cancel()
-    activeWindowBorderTrackingTimer = nil
-    activeWindowBorderTrackedFrame = nil
-    FlashLog.trace("[mode] insert_border_tracking_stop reason=\(reason)")
-  }
-
-  private func pollActiveWindowBorderFrame() {
-    guard
-      Self.activeWindowBorderTrackingShouldRun(
-        mode: flashMode,
-        modeBadgeEnabled: modeBadgeEnabled,
-        hasHints: !currentHints.isEmpty)
-    else {
-      stopActiveWindowBorderTracking(reason: "state")
-      return
-    }
-
-    let frame = currentNonFlashContext()?.frontWindowFrame
-    guard
-      !Self.activeWindowBorderFramesApproximatelyEqual(
-        activeWindowBorderTrackedFrame,
-        frame,
-        tolerance: Self.activeWindowBorderFrameTolerance)
-    else { return }
-
-    beginTrackedWindowGeometryChange(reason: "frame_poll", frame: frame)
-  }
-
-  private func beginTrackedWindowGeometryChange(reason: String, frame: CGRect?) {
-    activeWindowBorderTrackedFrame = frame
-    windowGeometryChangeToken &+= 1
-    let token = windowGeometryChangeToken
-    modeWillBeginWindowGeometryChange(reason: reason)
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.windowGeometryQuietMs)) {
-      [weak self] in
-      guard let self, self.windowGeometryChangeToken == token else { return }
-      self.modeDidEndWindowGeometryChange(reason: reason)
-    }
-  }
-
-  static func activeWindowBorderShouldBeVisible(
-    mode: FlashMode,
-    modeBadgeEnabled: Bool,
-    hasHints: Bool,
-    windowGeometryChangeInProgress: Bool
-  ) -> Bool {
-    // Insert mode keeps the status bar visible and adds a colored frame
-    // around the focused window so the typing target remains obvious.
-    // Advanced mode (`flash://mode_normal` bound somewhere) is the gate
-    // — without it Flash has no normal/insert distinction to visualise.
-    // The border is suspended while hints are up so chips aren't framed
-    // by a redundant outline, and while the window is moving/resizing
-    // so the stroke doesn't lag visibly behind the chrome.
-    guard mode == .insert, modeBadgeEnabled else { return false }
-    if hasHints { return false }
-    if windowGeometryChangeInProgress { return false }
-    return true
-  }
-
-  static func activeWindowBorderTrackingShouldRun(
-    mode: FlashMode,
-    modeBadgeEnabled: Bool,
-    hasHints: Bool
-  ) -> Bool {
-    modeBadgeEnabled && mode == .insert && !hasHints
-  }
-
-  static func activeWindowBorderFramesApproximatelyEqual(
-    _ lhs: CGRect?,
-    _ rhs: CGRect?,
-    tolerance: CGFloat
-  ) -> Bool {
-    switch (lhs, rhs) {
-    case (.none, .none):
-      return true
-    case let (.some(lhs), .some(rhs)):
-      return abs(lhs.minX - rhs.minX) <= tolerance
-        && abs(lhs.minY - rhs.minY) <= tolerance
-        && abs(lhs.width - rhs.width) <= tolerance
-        && abs(lhs.height - rhs.height) <= tolerance
-    default:
-      return false
     }
   }
 
@@ -732,7 +607,7 @@ extension AppDelegate {
     }
   }
 
-  private func normalizedRepeatCount(_ repeatCount: Int) -> Int {
+  func normalizedRepeatCount(_ repeatCount: Int) -> Int {
     min(max(repeatCount, 1), 999)
   }
 
@@ -1092,7 +967,8 @@ extension AppDelegate {
           self.candidateFinderAllAppsRefreshInFlight = false
         }
         FlashLog.trace(
-          "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) reason=\(reason)")
+          "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) reason=\(reason)"
+        )
         self.refreshVisibleCandidateFinderResultsFromCache()
       }
     }
@@ -1176,7 +1052,8 @@ extension AppDelegate {
       if !candidateFinderEmojiMode, let bang, bang.confirmed {
         candidateFinderMatches = []
         candidateFinderSelectedIndex = 0
-        let queryRange = bangRangeInCommand(command: command, query: query, bangRange: bang.bangRange)
+        let queryRange = bangRangeInCommand(
+          command: command, query: query, bangRange: bang.bangRange)
         overlay.displayCommandLine(
           command,
           suggestions: nil,
@@ -1242,13 +1119,14 @@ extension AppDelegate {
   private func updateCommandLineCompletions(
     context: NormalModeDispatcher.CommandLineCompletionContext
   ) {
-    let previousLabel: String? = commandLineCompletionMatches.indices.contains(
-      commandLineCompletionSelectedIndex)
+    let previousLabel: String? =
+      commandLineCompletionMatches.indices.contains(
+        commandLineCompletionSelectedIndex)
       ? commandLineCompletionMatches[commandLineCompletionSelectedIndex].completion.label : nil
     commandLineCompletionPrefix = context.prefix
     commandLineCompletionItems = context.items
     commandLineCompletionQuery = context.query
-    let trimmedQuery = context.query.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedQuery = context.query.trimmed
     let scored: [CommandLineCompletionMatch] = context.items.compactMap { item in
       // Frecency boost surfaces the user's most-typed commands at the
       // top of the empty `:` prompt without distorting the order once
@@ -1426,7 +1304,7 @@ extension AppDelegate {
       return
     }
 
-    if scoringText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    if scoringText.trimmed.isEmpty {
       let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
       let scored = CandidateFinder.scoreMatches(
         pool: pool,
@@ -1575,7 +1453,7 @@ extension AppDelegate {
       candidateFinderCandidates = visibleCandidateFinderCandidates(for: candidateFinderScope)
       candidateFinderFilteredPoolCache = nil
     }
-    let queryText = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+    let queryText = trimmed.trimmed
     let querySourceFilters = candidateFinderEmojiMode ? ["emojis.glyphs"] : sourceFilters
     guard candidateFinderEmojiMode || !querySourceFilters.isEmpty || !queryText.isEmpty else {
       candidateFinderSourceQueryKey = ""
@@ -1611,8 +1489,8 @@ extension AppDelegate {
     registry.queryCandidateSources(
       scope: candidateFinderScope,
       text: queryText,
-      sourceFilters: querySourceFilters)
-    { [weak self] candidates, isFinal in
+      sourceFilters: querySourceFilters
+    ) { [weak self] candidates, isFinal in
       guard isFinal else { return }
       guard let self else { return }
       guard generation == self.candidateFinderSourceQueryGenerationCounter,
@@ -1706,7 +1584,8 @@ extension AppDelegate {
       epoch: candidateFinderCandidatesEpoch,
       emojiMode: candidateFinderEmojiMode,
       signature: signature,
-      pool: attributeFiltered)
+      pool: attributeFiltered
+    )
     return (attributeFiltered, trimmed)
   }
 
@@ -2001,8 +1880,10 @@ extension AppDelegate {
       return
     }
 
-    let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
-      .candidate
+    let candidate = candidateFinderMatches[
+      min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)
+    ]
+    .candidate
     if candidate.kind == CandidateFinder.bangKind,
       let token = candidate.sourcePayload
     {
@@ -2063,7 +1944,8 @@ extension AppDelegate {
     let absoluteEnd = command.index(queryStart, offsetBy: endOffset)
     let replacement = "@\(source) "
     let buffer = command.replacingCharacters(in: absoluteStart..<absoluteEnd, with: replacement)
-    let newCursor = command.distance(from: command.startIndex, to: absoluteStart) + replacement.count
+    let newCursor =
+      command.distance(from: command.startIndex, to: absoluteStart) + replacement.count
     refreshCommandLine(text: buffer, cursorIndex: newCursor)
   }
 
@@ -2155,120 +2037,7 @@ extension AppDelegate {
     applyModeOverlay()
   }
 
-  private func scrollNormalMode(
-    _ kind: NormalModeDispatcher.ScrollKind,
-    repeatCount: Int = 1
-  ) {
-    guard let context = normalModeContext() else {
-      FlashLog.debug("[normal_mode] no target app for \(kind)")
-      applyModeOverlay()
-      return
-    }
-    // gg/G: try a `scrollExtremes` source first (e.g. the tmux plugin
-    // runs `tmux send-keys -X history-top` / `-X cancel`, which moves
-    // *inside* the live buffer rather than blasting wheel ticks at a
-    // pane that's already at the bottom). Falls through to the
-    // hermetic Scroller path when no source claims it.
-    if kind == .top || kind == .bottom {
-      performScrollExtreme(kind, context: context, repeatCount: repeatCount)
-      return
-    }
-    var didScroll = false
-    for _ in 0..<normalizedRepeatCount(repeatCount) {
-      if NormalModeDispatcher.scroll(
-        kind,
-        pid: context.processID,
-        bundleID: context.bundleIdentifier,
-        windowFrame: context.frontWindowFrame)
-      {
-        didScroll = true
-      }
-    }
-    if didScroll {
-      monitor.invalidateAfterUserAction(pid: context.processID, reason: "normal_scroll")
-    }
-    applyModeOverlay()
-  }
-
-  private func performScrollExtreme(
-    _ kind: NormalModeDispatcher.ScrollKind,
-    context: AppContext,
-    repeatCount: Int
-  ) {
-    let registry: SourceRegistry = self.registry
-    let bundleID = context.bundleIdentifier
-    let pid = context.processID
-    let windowFrame = context.frontWindowFrame
-    let normalized = normalizedRepeatCount(repeatCount)
-    let monitor: AppMonitor = self.monitor
-    let completion: (SourceActionResult) -> Void = { [weak self] result in
-      guard let self else { return }
-      switch result.disposition {
-      case .performed:
-        monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll_extreme")
-        self.applyModeOverlay()
-      case .failed:
-        // Source claimed but the underlying command failed — don't
-        // double-fire with the Scroller wheel fallback (it would just
-        // confuse the user with extra motion). Surface and stop.
-        FlashLog.debug("[normal_mode] scroll_extreme failed kind=\(kind) bundle=\(bundleID)")
-        self.applyModeOverlay()
-      case .unhandled:
-        self.scrollViaScroller(
-          kind, pid: pid, bundleID: bundleID, windowFrame: windowFrame, repeats: normalized)
-      }
-    }
-    if kind == .top {
-      registry.scrollTop(in: context, completion: completion)
-    } else {
-      registry.scrollBottom(in: context, completion: completion)
-    }
-  }
-
-  private func scrollViaScroller(
-    _ kind: NormalModeDispatcher.ScrollKind,
-    pid: pid_t,
-    bundleID: String,
-    windowFrame: CGRect?,
-    repeats: Int
-  ) {
-    // gg/G outside a claiming source: in browsers, `cmd+up` /
-    // `cmd+down` is the dependable scroll-to-edge gesture (the
-    // huge-wheel-delta path only nudges Firefox a viewport at a time).
-    // Everything else still goes through the AX scrollbar / wheel
-    // hermetic fallback.
-    if BrowserTabSources.allBundleIdentifiers.contains(bundleID),
-      kind == .top || kind == .bottom
-    {
-      let key: CGKeyCode =
-        kind == .top ? CGKeyCode(kVK_UpArrow) : CGKeyCode(kVK_DownArrow)
-      var didScroll = false
-      for _ in 0..<repeats {
-        if NormalModeDispatcher.sendKey(virtualKey: key, flags: .maskCommand, to: pid) {
-          didScroll = true
-        }
-      }
-      if didScroll {
-        monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll_browser_edge")
-      }
-      applyModeOverlay()
-      return
-    }
-    var didScroll = false
-    for _ in 0..<repeats {
-      if NormalModeDispatcher.scroll(
-        kind, pid: pid, bundleID: bundleID, windowFrame: windowFrame)
-      {
-        didScroll = true
-      }
-    }
-    if didScroll {
-      monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll")
-    }
-    applyModeOverlay()
-  }
-
-  private func sendNormalModeKey(
+  func sendNormalModeKey(
     _ key: CGKeyCode,
     flags: CGEventFlags = [],
     repeatCount: Int = 1,
@@ -2345,342 +2114,6 @@ extension AppDelegate {
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
       self?.scheduleNormalModeRecapture()
-    }
-  }
-
-  private func tabSelectInNormalMode(index: Int) {
-    let index = normalizedRepeatCount(index)
-    guard let context = normalModeContext() else {
-      FlashLog.debug("[normal_mode] no target app for tab_select index=\(index)")
-      applyModeOverlay()
-      return
-    }
-    if let key = Self.nativeBrowserTabIndexKey(
-      index: index,
-      bundleIdentifier: context.bundleIdentifier)
-    {
-      sendNormalModeKey(key, flags: .maskCommand)
-      return
-    }
-    registry.tabSelect(at: index, in: context) { [weak self] result in
-      guard let self else { return }
-      switch result.disposition {
-      case .performed:
-        if let pid = result.targetPID {
-          self.normalModeTargetPID = pid
-        }
-        self.scheduleNormalModeRecapture()
-      case .failed:
-        FlashLog.warn(
-          "[normal_mode] tab_select failed in claimed source "
-            + "bundle=\(context.bundleIdentifier) index=\(index)")
-        self.scheduleNormalModeRecapture()
-      case .unhandled:
-        guard let key = Self.tabIndexKeyCode(index) else {
-          FlashLog.debug("[normal_mode] tab_select unsupported index=\(index)")
-          self.applyModeOverlay()
-          return
-        }
-        self.sendNormalModeKey(key, flags: .maskCommand)
-      }
-    }
-  }
-
-  private func tabNextInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "tab_next",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.tabNext(in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        guard let self else { return }
-        guard
-          let shortcut = Self.tabTraversalFallbackShortcut(
-            direction: .forward,
-            bundleIdentifier: context.bundleIdentifier)
-        else {
-          FlashLog.debug(
-            "[normal_mode] tab_next unsupported bundle=\(context.bundleIdentifier)")
-          self.applyModeOverlay()
-          return
-        }
-        self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
-      })
-  }
-
-  private func tabPrevInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "tab_previous",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.tabPrev(in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        guard let self else { return }
-        guard
-          let shortcut = Self.tabTraversalFallbackShortcut(
-            direction: .back,
-            bundleIdentifier: context.bundleIdentifier)
-        else {
-          FlashLog.debug(
-            "[normal_mode] tab_previous unsupported bundle=\(context.bundleIdentifier)")
-          self.applyModeOverlay()
-          return
-        }
-        self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
-      })
-  }
-
-  /// Jump to the last tab. Browsers map ⌘9 to "last tab" by convention
-  /// (Chrome, Safari, Firefox), so for those bundles the fast path is a
-  /// single synthesized ⌘9. Plugin-backed sources expose this through
-  /// the `tab_last` source action (the tmux plugin uses `last-window`).
-  private func tabLastInNormalMode() {
-    performTabSourceAction(
-      name: "tab_last",
-      repeatCount: 1,
-      action: { registry, context, completion in
-        registry.tabLast(in: context, completion: completion)
-      },
-      fallback: { [weak self] context, _ in
-        if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
-          self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_9), flags: .maskCommand)
-        } else {
-          FlashLog.debug(
-            "[normal_mode] tab_last unsupported bundle=\(context.bundleIdentifier)")
-          self?.applyModeOverlay()
-        }
-      })
-  }
-
-  /// Reorder the focused window's current tab. Tmux runs `swap-window`
-  /// across the source action; Firefox honours ⌘⇧Page Up/Down to slide
-  /// the active tab inside its strip, so the host falls back to that
-  /// chord when the plugin layer doesn't claim the action. Browsers
-  /// without a portable shortcut (Safari, Chromium today) get a
-  /// `warn`-level log naming the bundle so the user knows the mapping
-  /// fired but couldn't reach the app — they can bind their own
-  /// shortcut and override `[m`/`]m` in flash.toml.
-  private func tabMoveInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
-    let actionName = direction == .next ? "tab_move_next" : "tab_move_previous"
-    performTabSourceAction(
-      name: actionName,
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        if direction == .next {
-          registry.tabMoveNext(in: context, completion: completion)
-        } else {
-          registry.tabMovePrev(in: context, completion: completion)
-        }
-      },
-      fallback: { [weak self] context, count in
-        guard let self else { return }
-        if Self.bundleSupportsFirefoxStyleTabMove(context.bundleIdentifier) {
-          let key: CGKeyCode = direction == .next
-            ? CGKeyCode(kVK_PageDown) : CGKeyCode(kVK_PageUp)
-          self.sendNormalModeKey(
-            key, flags: [.maskCommand, .maskShift], repeatCount: count)
-          return
-        }
-        FlashLog.warn(
-          "[normal_mode] \(actionName) has no native shortcut on "
-            + "bundle=\(context.bundleIdentifier); bind via a tab-mover "
-            + "extension or override `[m`/`]m` in flash.toml")
-        self.applyModeOverlay()
-      })
-  }
-
-  /// Bundles whose tab strip honours `⌘⇧Page Up / ⌘⇧Page Down` for
-  /// moving the focused tab left / right. Firefox (release +
-  /// developer edition) is the canonical example; other Mozilla-based
-  /// browsers inherit the same chord.
-  private static let firefoxStyleTabMoveBundles: Set<String> = [
-    "org.mozilla.firefox",
-    "org.mozilla.firefoxdeveloperedition",
-    "org.mozilla.nightly",
-  ]
-
-  static func bundleSupportsFirefoxStyleTabMove(_ bundleID: String) -> Bool {
-    firefoxStyleTabMoveBundles.contains(bundleID)
-  }
-
-  /// Reopen the most recently closed tab. Cross-browser standard is
-  /// ⌘⇧T; the plugin source action gets first refusal (tmux returns
-  /// `.unhandled` because there's no concept of a closed tab to reopen)
-  /// so the keystroke fallback only runs in non-terminal contexts that
-  /// actually honour the chord.
-  private func tabReopenInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "tab_reopen",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.tabReopen(in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
-          self?.sendNormalModeKey(
-            CGKeyCode(kVK_ANSI_T),
-            flags: [.maskCommand, .maskShift],
-            repeatCount: count)
-        } else {
-          FlashLog.debug(
-            "[normal_mode] tab_reopen unsupported bundle=\(context.bundleIdentifier)")
-          self?.applyModeOverlay()
-        }
-      })
-  }
-
-  private func tabNewInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "tab_new",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.tabNew(in: context, completion: completion)
-      },
-      fallback: { [weak self] context, count in
-        let key = AppDelegate.tabNewFallbackKey(forBundleIdentifier: context.bundleIdentifier)
-        self?.sendNormalModeKey(key, flags: .maskCommand, repeatCount: count)
-      })
-  }
-
-  private func tabCloseInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "tab_close",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.tabClose(in: context, completion: completion)
-      },
-      fallback: { [weak self] _, count in
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
-      })
-  }
-
-  /// `window_close` inside a terminal hosting tmux must close the *tmux*
-  /// window, not the terminal's OS window — sending ⌘W to e.g. Alacritty
-  /// quits the whole terminal, yanking the user out of the app and off
-  /// their tmux session. Route through the tmux source action (it picks
-  /// the next window in the same session itself) and only fall back to
-  /// ⌘W for apps no source claims (browsers, native windows).
-  private func windowCloseInNormalMode(repeatCount: Int) {
-    performTabSourceAction(
-      name: "window_close",
-      repeatCount: repeatCount,
-      action: { registry, context, completion in
-        registry.tabClose(in: context, completion: completion)
-      },
-      fallback: { [weak self] _, count in
-        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
-      })
-  }
-
-  /// Apps whose "new tab/chat/workspace" action is ⌘N rather than
-  /// ⌘T. Tmux is handled by the tmux plugin's `tab_new` source action
-  /// one level up — when an attached tmux client is present,
-  /// `new-window` runs and this fallback never fires.
-  static let tabNewCommandNBundleIdentifiers: Set<String> = [
-    "com.apple.MobileSMS",
-    "com.apple.Messages",
-    "org.alacritty",
-    "io.alacritty",
-  ]
-
-  static func tabNewFallbackKey(forBundleIdentifier bundleIdentifier: String) -> CGKeyCode {
-    if tabNewCommandNBundleIdentifiers.contains(bundleIdentifier) {
-      return CGKeyCode(kVK_ANSI_N)
-    }
-    return CGKeyCode(kVK_ANSI_T)
-  }
-
-  static let messagesBundleIdentifiers: Set<String> = [
-    "com.apple.MobileSMS",
-    "com.apple.Messages",
-  ]
-
-  private func performTabSourceAction(
-    name: String,
-    repeatCount: Int,
-    action: @escaping (
-      SourceRegistry,
-      AppContext,
-      @escaping (SourceActionResult) -> Void
-    ) -> Void,
-    fallback: @escaping (AppContext, Int) -> Void
-  ) {
-    guard let context = normalModeContext() else {
-      FlashLog.debug("[normal_mode] no target app for \(name)")
-      applyModeOverlay()
-      return
-    }
-    let count = normalizedRepeatCount(repeatCount)
-
-    func attempt(_ remaining: Int) {
-      guard remaining > 0 else {
-        scheduleNormalModeRecapture()
-        return
-      }
-      action(registry, context) { [weak self] result in
-        guard let self else { return }
-        switch result.disposition {
-        case .performed:
-          if let pid = result.targetPID {
-            self.normalModeTargetPID = pid
-          }
-          attempt(remaining - 1)
-        case .failed:
-          // A source claimed the action but couldn't complete it. The
-          // keystroke fallback must not fire here — see
-          // `SourceActionResult.Disposition.failed`.
-          FlashLog.warn(
-            "[normal_mode] \(name) failed in claimed source bundle=\(context.bundleIdentifier)")
-          self.scheduleNormalModeRecapture()
-        case .unhandled:
-          fallback(context, remaining)
-        }
-      }
-    }
-
-    attempt(count)
-  }
-
-  static func nativeBrowserTabIndexKey(index: Int, bundleIdentifier: String) -> CGKeyCode? {
-    guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) else { return nil }
-    return tabIndexKeyCode(index)
-  }
-
-  static func tabTraversalFallbackShortcut(
-    direction: NavigationDirection,
-    bundleIdentifier: String
-  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
-    if messagesBundleIdentifiers.contains(bundleIdentifier) {
-      var flags: CGEventFlags = .maskControl
-      if direction == .back {
-        flags.insert(.maskShift)
-      }
-      return (CGKeyCode(kVK_Tab), flags)
-    }
-    if BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) {
-      let key: CGKeyCode =
-        direction == .forward
-        ? CGKeyCode(kVK_ANSI_RightBracket)
-        : CGKeyCode(kVK_ANSI_LeftBracket)
-      return (key, [.maskCommand, .maskShift])
-    }
-    return nil
-  }
-
-  private static func tabIndexKeyCode(_ index: Int) -> CGKeyCode? {
-    switch index {
-    case 1: return CGKeyCode(kVK_ANSI_1)
-    case 2: return CGKeyCode(kVK_ANSI_2)
-    case 3: return CGKeyCode(kVK_ANSI_3)
-    case 4: return CGKeyCode(kVK_ANSI_4)
-    case 5: return CGKeyCode(kVK_ANSI_5)
-    case 6: return CGKeyCode(kVK_ANSI_6)
-    case 7: return CGKeyCode(kVK_ANSI_7)
-    case 8: return CGKeyCode(kVK_ANSI_8)
-    case 9: return CGKeyCode(kVK_ANSI_9)
-    default: return nil
     }
   }
 

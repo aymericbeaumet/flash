@@ -1,6 +1,10 @@
 import CoreGraphics
 import Darwin
 
+// @unchecked Sendable: `activate` is a non-`@Sendable` closure provided by the
+// owning source. Providers wire up activation on the AX queue and the host
+// invokes the closure on the main thread once committed; the target itself is
+// treated as immutable in between. Other fields are all value types.
 public struct JumpTarget: @unchecked Sendable {
   public let id: String
   public let frame: CGRect

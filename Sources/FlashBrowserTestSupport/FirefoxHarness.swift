@@ -416,8 +416,9 @@ public enum FirefoxHarness {
 
   private static func role(of element: AXUIElement) -> String? {
     var roleRaw: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRaw)
-      == .success
+    guard
+      AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRaw)
+        == .success
     else { return nil }
     return roleRaw as? String
   }

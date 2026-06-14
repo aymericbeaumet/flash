@@ -445,7 +445,8 @@ extension NormalModeDispatcher {
   ]
   static let documentRoles: Set<String> = ["AXWebArea", "AXDocument"]
 
-  private static func pageScrollTarget(pid: pid_t, visibleIn windowFrame: CGRect) -> PageScrollTarget?
+  private static func pageScrollTarget(pid: pid_t, visibleIn windowFrame: CGRect)
+    -> PageScrollTarget?
   {
     guard !windowFrame.isNull, windowFrame.width > 0, windowFrame.height > 0 else {
       return nil

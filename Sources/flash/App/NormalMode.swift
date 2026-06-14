@@ -314,7 +314,6 @@ enum NormalModeInterpreter {
 enum NormalModeDispatcher {
   static let scrollStepPixels: Int32 = 60
 
-
   enum ScrollKind: Hashable {
     case left
     case right
@@ -325,11 +324,6 @@ enum NormalModeDispatcher {
     case top
     case bottom
   }
-
-
-
-
-
 
   static func role(of element: AXUIElement) -> String? {
     AXAttribute.role(element)
@@ -353,7 +347,7 @@ enum NormalModeDispatcher {
   /// directly.
   static func urlAttribute(_ element: AXUIElement, _ name: String) -> String? {
     guard let value = AXAttribute.url(element, name) else { return nil }
-    return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+    return value.trimmed.isEmpty ? nil : value
   }
 
   static func frame(

@@ -383,8 +383,10 @@ final class OverlayInputTests: XCTestCase {
       max(
         font.ascender - font.descender + font.leading,
         text.boundingRect(
-          with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-          options: [.usesLineFragmentOrigin, .usesFontLeading]).height))
+          with: CGSize(
+            width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+          options: [.usesLineFragmentOrigin, .usesFontLeading]
+        ).height))
 
     XCTAssertEqual(measured, expected)
     XCTAssertGreaterThan(measured, singleLine * 1.5)

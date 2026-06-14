@@ -139,7 +139,7 @@ final class ApplicationSource: FlashSource {
   }
 
   private func item(for app: NSRunningApplication) -> Candidate? {
-    let name = app.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let name = app.localizedName?.trimmed ?? ""
     guard !name.isEmpty else { return nil }
     return Candidate(
       kind: .app,
@@ -156,8 +156,15 @@ final class ApplicationSource: FlashSource {
     for target: String,
     environment: FlashSourceEnvironment
   ) -> URL? {
-    if target.hasPrefix("/") {
-      return URL(fileURLWithPath: target)
+    // Reject targets that look like a path. `flash://app_open?name=…` is
+    // reachable from any URL sender (drive-by web pages, AppleEvents),
+    // so an absolute or relative path would let a remote sender launch
+    // an arbitrary `.app` bundle the attacker dropped into a writable
+    // location (`~/Downloads`, `/tmp`). Bundle identifiers and bare app
+    // names route through Launch Services or the curated search roots,
+    // both of which already vet the target.
+    if target.contains("/") || target.hasPrefix("~") {
+      return nil
     }
     let ws = NSWorkspace.shared
     if let url = ws.urlForApplication(withBundleIdentifier: target) {
@@ -262,7 +269,7 @@ final class ApplicationSource: FlashSource {
       (info["CFBundleDisplayName"] as? String)
       ?? (info["CFBundleName"] as? String)
       ?? url.deletingPathExtension().lastPathComponent
-    let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let name = rawName.trimmed
     return Candidate(
       kind: .app,
       sourceID: "core.apps",
@@ -303,6 +310,6 @@ struct IgnoredAppMatcher: Equatable {
   }
 
   private static func normalize(_ value: String) -> String {
-    value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    value.trimmed.lowercased()
   }
 }

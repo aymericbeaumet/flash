@@ -387,9 +387,10 @@ private final class StubSource: FlashSource {
     self.capabilities = capabilities
     self.candidateSourceLabels = candidateSourceLabels
     self.candidatesHandler = candidatesHandler
-    self.queryHandler = queryHandler ?? { request, done in
-      done(candidatesHandler(request.scope))
-    }
+    self.queryHandler =
+      queryHandler ?? { request, done in
+        done(candidatesHandler(request.scope))
+      }
     self.matchHandler = matchHandler
   }
 

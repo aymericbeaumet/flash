@@ -79,6 +79,15 @@ enum FlashLog {
   private static let writeQueue =
     DispatchQueue(label: "flash.log.write", qos: .utility)
 
+  /// Rotate `flash.log` when it exceeds this size. Trace-level logs (which can
+  /// include AX tree dumps) can balloon quickly; without rotation the file
+  /// grows unbounded across a long-running resident session.
+  private static let rotationByteLimit: UInt64 = 10 * 1024 * 1024
+  /// Number of rotated segments kept beside `flash.log` (`flash.log.1` …
+  /// `flash.log.N`). Anything older is deleted on rotation.
+  private static let rotationKeep = 3
+  private static var bytesWrittenSinceRotation: UInt64 = 0
+
   static func setLevel(_ level: Level) {
     lock.lock()
     minLevel = level
@@ -193,7 +202,51 @@ enum FlashLog {
     guard let h, let data = line.data(using: .utf8) else { return }
     writeQueue.async {
       try? h.write(contentsOf: data)
+      bytesWrittenSinceRotation &+= UInt64(data.count)
+      if bytesWrittenSinceRotation >= rotationByteLimit {
+        rotateIfNeeded()
+      }
     }
+  }
+
+  /// Off the write queue: if `flash.log` has grown past `rotationByteLimit`,
+  /// shift `flash.log.(N-1) → flash.log.N` through `flash.log → flash.log.1`
+  /// and reopen a fresh handle. Failures are best-effort; if rotation can't
+  /// happen we keep writing to the existing handle rather than losing entries.
+  private static func rotateIfNeeded() {
+    guard let url = logFileURL() else {
+      bytesWrittenSinceRotation = 0
+      return
+    }
+    let fm = FileManager.default
+    let attrs = try? fm.attributesOfItem(atPath: url.path)
+    let size = (attrs?[.size] as? NSNumber)?.uint64Value ?? 0
+    guard size >= rotationByteLimit else {
+      bytesWrittenSinceRotation = 0
+      return
+    }
+    let base = url.deletingLastPathComponent()
+    let name = url.lastPathComponent
+    // Drop the oldest, then shift each rotated segment up by one.
+    let oldest = base.appendingPathComponent("\(name).\(rotationKeep)")
+    try? fm.removeItem(at: oldest)
+    for index in stride(from: rotationKeep - 1, through: 1, by: -1) {
+      let from = base.appendingPathComponent("\(name).\(index)")
+      let to = base.appendingPathComponent("\(name).\(index + 1)")
+      _ = try? fm.moveItem(at: from, to: to)
+    }
+    let firstRotated = base.appendingPathComponent("\(name).1")
+    _ = try? fm.moveItem(at: url, to: firstRotated)
+    lock.lock()
+    try? handle?.close()
+    handle = openLogFile()
+    lock.unlock()
+    bytesWrittenSinceRotation = 0
+  }
+
+  private static func logFileURL() -> URL? {
+    FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Logs/Flash/flash.log")
   }
 
   static func jsonLine(_ record: Record) -> String {
@@ -202,15 +255,15 @@ enum FlashLog {
       let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
       var line = String(data: data, encoding: .utf8)
     else {
-      return "{\"level\":\"error\",\"message\":\"log serialization failed\",\"source\":\"core:FlashLog\"}\n"
+      return
+        "{\"level\":\"error\",\"message\":\"log serialization failed\",\"source\":\"core:FlashLog\"}\n"
     }
     line.append("\n")
     return line
   }
 
   private static func openLogFile() -> FileHandle? {
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    let url = home.appendingPathComponent("Library/Logs/Flash/flash.log")
+    guard let url = logFileURL() else { return nil }
     let fm = FileManager.default
     try? fm.createDirectory(
       at: url.deletingLastPathComponent(),

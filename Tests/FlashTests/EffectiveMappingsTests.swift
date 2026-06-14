@@ -22,7 +22,9 @@ final class EffectiveMappingsTests: XCTestCase {
     let base = mode(normal: [ModeMapping(key: "q", action: .flashCommand(.undo))])
     let effective = EffectiveMappings.merge(
       base: base,
-      plugin: [(priority: 25, scope: .normal, mapping: ModeMapping(key: "q", action: .flashCommand(.redo)))])
+      plugin: [
+        (priority: 25, scope: .normal, mapping: ModeMapping(key: "q", action: .flashCommand(.redo)))
+      ])
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .redo)
   }
 
@@ -30,7 +32,9 @@ final class EffectiveMappingsTests: XCTestCase {
     let base = mode(normal: [ModeMapping(key: "q", action: .flashCommand(.undo))])
     let effective = EffectiveMappings.merge(
       base: base,
-      plugin: [(priority: -1, scope: .normal, mapping: ModeMapping(key: "q", action: .flashCommand(.redo)))])
+      plugin: [
+        (priority: -1, scope: .normal, mapping: ModeMapping(key: "q", action: .flashCommand(.redo)))
+      ])
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .undo)
   }
 
@@ -53,7 +57,12 @@ final class EffectiveMappingsTests: XCTestCase {
       normal: [ModeMapping(key: "q", action: .flashCommand(.redo))])
     let effective = EffectiveMappings.merge(
       base: base,
-      plugin: [(priority: 25, scope: .normal, mapping: ModeMapping(key: "z", action: .flashCommand(.insertMode)))])
+      plugin: [
+        (
+          priority: 25, scope: .normal,
+          mapping: ModeMapping(key: "z", action: .flashCommand(.insertMode))
+        )
+      ])
     // `all`-scope config entry still wins for the shared key (first-writer-wins
     // over the `all + normal` concat), and the plugin's own key is present.
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .undo)
@@ -67,7 +76,9 @@ final class EffectiveMappingsTests: XCTestCase {
     let base = mode(normal: [ModeMapping(key: "q", action: .flashCommand(.undo))])
     let effective = EffectiveMappings.merge(
       base: base,
-      plugin: [(priority: 0, scope: .normal, mapping: ModeMapping(key: "q", action: .flashCommand(.redo)))])
+      plugin: [
+        (priority: 0, scope: .normal, mapping: ModeMapping(key: "q", action: .flashCommand(.redo)))
+      ])
     XCTAssertEqual(effective.compiledNormal.mapping(for: "q")?.action.command, .redo)
   }
 }

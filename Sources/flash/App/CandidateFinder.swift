@@ -44,18 +44,18 @@ enum CandidateFinder {
     if candidate.kind == emojiKind, let glyph = candidate.sourcePayload, !glyph.isEmpty {
       return glyph
     }
-    let name = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let name = candidate.name.trimmed
     let source =
       candidate.kind == .app
       ? "apps"
-      : candidate.source.trimmingCharacters(in: .whitespacesAndNewlines)
+      : candidate.source.trimmed
     if !source.isEmpty, !name.isEmpty {
       return "@\(source) \(name) "
     }
     if !name.isEmpty {
       return "\(name) "
     }
-    return candidate.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    return candidate.displayTitle.trimmed
   }
 
   static func selectionFinishes(
@@ -67,7 +67,7 @@ enum CandidateFinder {
     if isFinalDestination(candidate) { return true }
     if candidate.finishesCommand || insertsText(candidate) { return true }
     let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
-    let normalizedQuery = normalize(parsed.text.trimmingCharacters(in: .whitespacesAndNewlines))
+    let normalizedQuery = normalize(parsed.text.trimmed)
     guard !normalizedQuery.isEmpty else { return false }
     return normalizedQuery == normalize(candidate.name)
   }
@@ -113,7 +113,7 @@ enum CandidateFinder {
   /// and is purely cosmetic; the dispatchable token lives in
   /// `sourcePayload`.
   private static func bangDisplayTitle(_ candidate: Candidate) -> String {
-    let description = candidate.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    let description = candidate.subtitle.trimmed
     let name = description.isEmpty ? candidate.name : "\(candidate.name) (\(description))"
     return displayTitle(source: candidate.source, name: name)
   }
@@ -442,7 +442,7 @@ enum CandidateFinder {
     fuzzyScore: (String, String) -> Int? = NormalModeDispatcher.fuzzyScore(
       normalizedQuery:normalizedCandidate:)
   ) -> Int? {
-    let normalizedQuery = normalize(query.trimmingCharacters(in: .whitespacesAndNewlines))
+    let normalizedQuery = normalize(query.trimmed)
     return score(normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
   }
 
@@ -877,7 +877,8 @@ enum CandidateFinder {
   ) -> [CandidateMatch] {
     if let limit, limit <= 0 { return [] }
     let records = matches.enumerated().map { offset, match -> SortRecord in
-      let key = match.candidate.sortKey.isEmpty
+      let key =
+        match.candidate.sortKey.isEmpty
         ? fallbackSortKey(match.candidate) : match.candidate.sortKey
       return SortRecord(
         index: offset,
@@ -949,7 +950,8 @@ enum CandidateFinder {
 
   /// Mirrors `Candidate.sortKey` for candidates that skipped `prepare`.
   private static func fallbackSortKey(_ candidate: Candidate) -> String {
-    let display = candidate.displayTitle.isEmpty
+    let display =
+      candidate.displayTitle.isEmpty
       ? displayTitle(candidate) : candidate.displayTitle
     return [
       candidate.name.lowercased(),
@@ -969,7 +971,8 @@ enum CandidateFinder {
     public let aliveBonus: Int
 
     public init(weights: [String: Int], aliveBonus: Int) {
-      self.entries = weights
+      self.entries =
+        weights
         .map { ($0.key.lowercased(), $0.value) }
         .sorted { lhs, rhs in
           if lhs.0.count != rhs.0.count { return lhs.0.count > rhs.0.count }
@@ -1022,7 +1025,7 @@ enum CandidateFinder {
   }
 
   private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {
-    let candidateTitle = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let candidateTitle = candidate.name.trimmed
     let url = browserTabURLString(candidate) ?? ""
     let title: String
     if candidateTitle.isEmpty || candidateTitle == url {
@@ -1039,8 +1042,8 @@ enum CandidateFinder {
   }
 
   private static func tmuxWindowDisplayTitle(_ candidate: Candidate) -> String {
-    let title = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
-    let secondary = candidate.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    let title = candidate.name.trimmed
+    let secondary = candidate.subtitle.trimmed
     let display: String
     if title.isEmpty {
       display = secondary
@@ -1057,7 +1060,7 @@ enum CandidateFinder {
     if let url = candidate.url?.absoluteString, !url.isEmpty {
       return url
     }
-    let payload = candidate.sourcePayload?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let payload = candidate.sourcePayload?.trimmed ?? ""
     return payload.isEmpty ? nil : payload
   }
 
@@ -1095,7 +1098,7 @@ enum CandidateFinder {
     let separators = CharacterSet.alphanumerics.inverted
     let tokens = candidate.name
       .components(separatedBy: separators)
-      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .map { $0.trimmed }
       .filter { !$0.isEmpty }
     return tokens.map { "\($0).\(suffix)" }.joined(separator: " ")
   }

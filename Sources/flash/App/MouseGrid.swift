@@ -130,9 +130,11 @@ enum MouseGrid {
     // which is the user signal that this is the *last* step of the
     // mouse-grid drill-down — nothing more to subdivide.
     let gap: CGFloat = 0
-    let clusterWidth = CGFloat(grid.columns) * chipSize.width
+    let clusterWidth =
+      CGFloat(grid.columns) * chipSize.width
       + CGFloat(max(0, grid.columns - 1)) * gap
-    let clusterHeight = CGFloat(grid.rows) * chipSize.height
+    let clusterHeight =
+      CGFloat(grid.rows) * chipSize.height
       + CGFloat(max(0, grid.rows - 1)) * gap
     let originX = pastRect.midX - clusterWidth / 2
     let originY = pastRect.midY - clusterHeight / 2
@@ -146,7 +148,8 @@ enum MouseGrid {
         // NSScreen coords: row 0 is the top, so the chip's minY counts
         // down from the cluster's top — same convention the cell-tile
         // path uses (`frame.maxY - (row+1)*cellHeight`).
-        let chipY = originY + clusterHeight
+        let chipY =
+          originY + clusterHeight
           - CGFloat(row + 1) * chipSize.height
           - CGFloat(row) * gap
         let frame = CGRect(x: chipX, y: chipY, width: chipSize.width, height: chipSize.height)

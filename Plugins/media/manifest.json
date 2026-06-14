@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "media",
   "name": "Media",
   "version": "0.1.0",

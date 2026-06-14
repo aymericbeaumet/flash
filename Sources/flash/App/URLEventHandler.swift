@@ -132,31 +132,54 @@ final class URLEventHandler: NSObject {
     _ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor
   ) {
     guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
-      let cmd = URLEventHandler.parseFlashURL(raw)
+      let cmd = URLEventHandler.parseAppleEventURL(raw)
     else { return }
     handler(cmd)
   }
 
-  /// Parse a flash command into a `URLCommand`. Used both by the
-  /// live AppleEvent handler (`flash://` URLs from `open` /
-  /// `osascript` / Launch Services) AND by `MappingsCoordinator`
-  /// at config-load time so the hot path already has a resolved
-  /// `URLCommand` and never re-parses a string on a Carbon callback.
-  ///
-  /// The `flash://` scheme is mandatory. Bare command names like
-  /// `"mouse_target"` are rejected — the URL shape is what tells the
-  /// reader "this is a flash command, dispatched in-process" and
-  /// keeps the string form visually distinct from the argv form
-  /// (`["open", ...]`). Any other scheme also returns nil so things
-  /// like `https://...` force the user to spell out the slow path
-  /// as an argv array.
-  static func parseFlashURL(_ raw: String) -> URLCommand? {
+  /// Parse a flash URL received from an external AppleEvent (`open -g flash://`,
+  /// `osascript`, `flashctl`, drive-by browser navigations). Sender is
+  /// untrusted: any process or web page that can construct a URL and hand it to
+  /// Launch Services can trigger this path. Limited to the AppleEvent-safe
+  /// command subset; actions that would let a remote sender hijack the focused
+  /// app (e.g. `send_key`) are rejected here and remain reachable only through
+  /// trusted mapping config.
+  static func parseAppleEventURL(_ raw: String) -> URLCommand? {
+    parseFlashURL(raw, trust: .appleEvent)
+  }
+
+  /// Parse a flash URL coming out of trusted mapping config — `[mode.*.mappings]`
+  /// entries the user wrote in `~/.config/flash/flash.toml`. The full command
+  /// surface is available because the sender is the on-disk config file the
+  /// user controls.
+  static func parseMappingURL(_ raw: String) -> URLCommand? {
+    parseFlashURL(raw, trust: .mapping)
+  }
+
+  /// Distinguishes which command table is consulted. Centralized in
+  /// `parseFlashURL` so each callsite explicitly picks a trust level instead of
+  /// inheriting the maximum surface by default.
+  enum Trust {
+    /// External, untrusted (AppleEvent / Launch Services).
+    case appleEvent
+    /// Trusted (on-disk config the user wrote).
+    case mapping
+  }
+
+  private static func parseFlashURL(_ raw: String, trust: Trust) -> URLCommand? {
     let trimmed = raw.trimmingCharacters(in: .whitespaces)
     guard let components = URLComponents(string: trimmed),
       components.scheme?.lowercased() == "flash"
     else { return nil }
     let name = (components.host ?? components.path).lowercased()
-    guard let parser = Self.commands[name] else { return nil }
+    let parser: ((FlashURLQuery) -> URLCommand?)?
+    switch trust {
+    case .appleEvent:
+      parser = Self.commands[name]
+    case .mapping:
+      parser = Self.commands[name] ?? Self.mappingOnlyCommands[name]
+    }
+    guard let parser else { return nil }
     return parser(FlashURLQuery(items: components.queryItems ?? []))
   }
 
@@ -242,13 +265,21 @@ final class URLEventHandler: NSObject {
       guard let command = q.value("command"), !command.isEmpty,
         let subcommand = q.value("subcommand"), !subcommand.isEmpty
       else { return nil }
-      let args = q.value("args")?
+      let args =
+        q.value("args")?
         .split(separator: " ", omittingEmptySubsequences: true)
         .map(String.init) ?? []
       return .pluginCommand(command: command, subcommand: subcommand, args: args)
     },
     "window_move": windowMoveCommand,
-    "send_key": sendKeyCommand,
+  ]
+
+  /// Commands exposed only to trusted mapping config — never to the AppleEvent
+  /// entry point. `send_key` synthesizes a keystroke into the focused app and
+  /// would let any URL sender drive the foreground app's keyboard if it were
+  /// reachable from `flash://send_key?keys=…` URLs.
+  private static let mappingOnlyCommands: [String: (FlashURLQuery) -> URLCommand?] = [
+    "send_key": sendKeyCommand
   ]
 
   static let usageText = """
@@ -305,7 +336,6 @@ final class URLEventHandler: NSObject {
     flash://hints_dismiss
     flash://app_open?name=<app>
     flash://window_move?position=<slot>&screen=<n>
-    flash://send_key?keys=<hotkey>
     flash://flash_quit
     flash://help_show[?topic=<topic>]
     flash://plugins

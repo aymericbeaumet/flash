@@ -105,7 +105,8 @@ extension OverlayPanel {
     if debugEnabled {
       debugShapeLayer.strokeColor =
         (nsColor(fromHex: debugConfig.hintsBoundsFG) ?? NSColor.systemPink).cgColor
-      debugShapeLayer.fillColor = (nsColor(fromHex: debugConfig.hintsBoundsBG) ?? NSColor.clear).cgColor
+      debugShapeLayer.fillColor =
+        (nsColor(fromHex: debugConfig.hintsBoundsBG) ?? NSColor.clear).cgColor
     }
     lastTargetLocalRects.removeAll(keepingCapacity: true)
     if debugEnabled {
@@ -188,7 +189,8 @@ extension OverlayPanel {
       // regular hints both use a centred fixed-size chip — the final
       // chip's targetFrame already IS the chip rect, so `chipFrame`
       // centres a fixed-size chip on it identical to the regular path.
-      let chipGlobal: CGRect = (isMouseGridHint && !isMouseGridFinalChip)
+      let chipGlobal: CGRect =
+        (isMouseGridHint && !isMouseGridFinalChip)
         ? targetFrame
         : Self.chipFrame(target: targetFrame, width: chipW, height: chipHeight)
       let chipLocal = CGRect(
@@ -222,7 +224,8 @@ extension OverlayPanel {
       // visible gap, which is precisely the anti-feature the grid avoids.
       // Cells skip snap so they touch their neighbours exactly; final
       // chips and regular hints snap for crisp 1pt borders.
-      chip.frame = (isMouseGridHint && !isMouseGridFinalChip)
+      chip.frame =
+        (isMouseGridHint && !isMouseGridFinalChip)
         ? chipLocal : Self.snap(chipLocal, scale: chipScale)
       chip.contentsScale = chipScale
       label.contentsScale = chipScale
@@ -291,8 +294,8 @@ extension OverlayPanel {
           }
           chip.borderColor =
             NSColor(cgColor: borderCG)?
-              .withAlphaComponent(min(1, alpha + 0.2))
-              .cgColor ?? borderCG
+            .withAlphaComponent(min(1, alpha + 0.2))
+            .cgColor ?? borderCG
         } else if hint.target.important {
           chip.colors = importantGradientColors
           chip.borderColor = importantBorderCG
@@ -399,15 +402,6 @@ extension OverlayPanel {
         + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode)")
   }
 
-
-
-
-
-
-
-
-
-
   func ensurePanelFrame() -> CGRect {
     let frame = OverlayPanel.unionScreenFrame()
     applyPanelFrame(frame)
@@ -423,11 +417,6 @@ extension OverlayPanel {
     self.contentView?.frame = NSRect(origin: .zero, size: frame.size)
     contentLayer.frame = contentView?.bounds ?? .zero
   }
-
-
-
-
-
 
   func filter(prefix: String, hints: [AssignedHint]) {
     CATransaction.begin()

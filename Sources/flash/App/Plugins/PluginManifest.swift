@@ -3,6 +3,31 @@ import Darwin
 import FlashCore
 import Foundation
 
+/// Sensitive host capabilities a plugin must explicitly request in its
+/// `manifest.json` to receive. Default-deny: if the manifest doesn't list a
+/// capability here, the host filters out any host events / RPC paths gated by
+/// it. Bundled plugins opt in by adding the capability to their manifest in
+/// the same change as the host gating.
+enum PluginCapability: String, Codable, CaseIterable, Equatable {
+  /// Subscribe to `core:clipboard.changed`, which carries the full clipboard
+  /// text. Most plugins do not need this; password managers, paste history,
+  /// and clipboard transformers do.
+  case clipboard
+}
+
+extension PluginCapability {
+  /// Sensitive event names that require an explicit capability declaration
+  /// before the host delivers them to a plugin's `event` stream.
+  static func required(for eventName: String) -> PluginCapability? {
+    switch eventName {
+    case "core:clipboard.changed":
+      return .clipboard
+    default:
+      return nil
+    }
+  }
+}
+
 struct PluginEventSubscription: Codable, Equatable {
   var match: String
   var bundleIDs: [String]
@@ -386,6 +411,14 @@ struct PluginProvider: Codable, Equatable {
 }
 
 struct PluginManifest: Codable, Equatable {
+  /// Schema version of the manifest file. Bumped on every breaking change to
+  /// the plugin manifest layout; the host refuses to load a manifest that
+  /// doesn't carry this field or carries a future version, so an
+  /// out-of-date plugin / corrupted manifest surfaces a clear diagnostic
+  /// instead of silently dropping commands or events.
+  static let currentSchemaVersion: Int = 1
+
+  var manifestVersion: Int
   var id: String
   var name: String
   var version: String
@@ -410,6 +443,10 @@ struct PluginManifest: Codable, Equatable {
   /// network (e.g. GitHub) can raise this above the 2000ms default so a slow
   /// response isn't dropped. `nil` uses the default.
   var requestTimeoutMs: Int?
+  /// Sensitive host capabilities the plugin requests. Default-deny: omitting
+  /// a capability here means the host filters out any event / RPC path gated
+  /// by it. See ``PluginCapability``.
+  var capabilities: Set<PluginCapability>
 
   /// Denormalized (command, subcommand) rows across every `commands` provider,
   /// with the provider's shared `bundle_ids` folded into each entry (the entry's
@@ -462,7 +499,7 @@ struct PluginManifest: Codable, Equatable {
     var out: [String] = []
     for provider in providers where provider.kind == .candidates {
       for source in provider.sources {
-        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = source.trimmed
         guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
         seen.insert(trimmed)
         out.append(trimmed)
@@ -491,22 +528,27 @@ struct PluginManifest: Codable, Equatable {
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
+    case manifestVersion = "manifest_version"
     case id, name, version, description, install, start, subscriptions, providers, priority
     case volatile
     case bundleIDs = "bundle_ids"
     case requestTimeoutMs = "request_timeout_ms"
+    case capabilities
   }
 
   init(
     id: String, name: String, version: String, description: String,
     install: String, start: String,
+    manifestVersion: Int = currentSchemaVersion,
     subscriptions: [PluginEventSubscription] = [],
     providers: [PluginProvider] = [],
     priority: Int = 25,
     volatile: Bool = false,
     bundleIDs: [String] = [],
-    requestTimeoutMs: Int? = nil
+    requestTimeoutMs: Int? = nil,
+    capabilities: Set<PluginCapability> = []
   ) {
+    self.manifestVersion = manifestVersion
     self.id = id
     self.name = name
     self.version = version
@@ -519,26 +561,32 @@ struct PluginManifest: Codable, Equatable {
     self.volatile = volatile
     self.bundleIDs = bundleIDs
     self.requestTimeoutMs = requestTimeoutMs
+    self.capabilities = capabilities
   }
 
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.manifestVersion = try c.decode(Int.self, forKey: .manifestVersion)
     self.id = try c.decode(String.self, forKey: .id)
     self.name = try c.decode(String.self, forKey: .name)
     self.version = try c.decode(String.self, forKey: .version)
     self.description = try c.decode(String.self, forKey: .description)
     self.install = try c.decode(String.self, forKey: .install)
     self.start = try c.decode(String.self, forKey: .start)
-    self.subscriptions = try c.decodeIfPresent([PluginEventSubscription].self, forKey: .subscriptions) ?? []
+    self.subscriptions =
+      try c.decodeIfPresent([PluginEventSubscription].self, forKey: .subscriptions) ?? []
     self.providers = try c.decodeIfPresent([PluginProvider].self, forKey: .providers) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
     self.requestTimeoutMs = try c.decodeIfPresent(Int.self, forKey: .requestTimeoutMs)
+    let caps = try c.decodeIfPresent([PluginCapability].self, forKey: .capabilities) ?? []
+    self.capabilities = Set(caps)
   }
 
   func encode(to encoder: Encoder) throws {
     var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(manifestVersion, forKey: .manifestVersion)
     try c.encode(id, forKey: .id)
     try c.encode(name, forKey: .name)
     try c.encode(version, forKey: .version)
@@ -551,6 +599,9 @@ struct PluginManifest: Codable, Equatable {
     if volatile { try c.encode(volatile, forKey: .volatile) }
     if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
     if let requestTimeoutMs { try c.encode(requestTimeoutMs, forKey: .requestTimeoutMs) }
+    if !capabilities.isEmpty {
+      try c.encode(capabilities.sorted(by: { $0.rawValue < $1.rawValue }), forKey: .capabilities)
+    }
   }
 
   static func load(from root: URL) throws -> PluginManifest {
@@ -573,6 +624,14 @@ struct PluginManifest: Codable, Equatable {
   }
 
   func validate() throws {
+    // Schema-version guard. A manifest from a future Flash build cannot be
+    // safely loaded by an older host: new required fields would land as
+    // empty defaults, silently muting commands or subscriptions.
+    if manifestVersion < 1 || manifestVersion > Self.currentSchemaVersion {
+      throw PluginError.invalidManifest(
+        "manifest.json manifest_version=\(manifestVersion) is unsupported "
+          + "(host expects 1...\(Self.currentSchemaVersion))")
+    }
     let required = [
       ("id", id),
       ("name", name),
@@ -582,7 +641,7 @@ struct PluginManifest: Codable, Equatable {
       ("start", start),
     ]
     for (field, value) in required {
-      if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      if value.trimmed.isEmpty {
         throw PluginError.invalidManifest("manifest.json field \(field) must not be empty")
       }
     }
@@ -596,7 +655,7 @@ struct PluginManifest: Codable, Equatable {
       // An empty subcommand registers a *top-level* command (`:copy`), and
       // `"*"` registers a wildcard that consumes the remainder (`:calc 2 + 2`).
       // Only the command verb itself is mandatory.
-      if command.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      if command.command.trimmed.isEmpty {
         throw PluginError.invalidManifest("plugin command must not be empty")
       }
     }

@@ -139,7 +139,8 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    plugin.invokeSourceAction(name: "tab_next", context: context, extra: [:], completion: completion)
+    plugin.invokeSourceAction(
+      name: "tab_next", context: context, extra: [:], completion: completion)
   }
 
   func tabPrev(
@@ -147,7 +148,8 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    plugin.invokeSourceAction(name: "tab_prev", context: context, extra: [:], completion: completion)
+    plugin.invokeSourceAction(
+      name: "tab_prev", context: context, extra: [:], completion: completion)
   }
 
   func tabFirst(
@@ -155,7 +157,8 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    plugin.invokeSourceAction(name: "tab_first", context: context, extra: [:], completion: completion)
+    plugin.invokeSourceAction(
+      name: "tab_first", context: context, extra: [:], completion: completion)
   }
 
   func tabLast(
@@ -163,7 +166,8 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    plugin.invokeSourceAction(name: "tab_last", context: context, extra: [:], completion: completion)
+    plugin.invokeSourceAction(
+      name: "tab_last", context: context, extra: [:], completion: completion)
   }
 
   func tabNew(
@@ -179,7 +183,8 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    plugin.invokeSourceAction(name: "tab_close", context: context, extra: [:], completion: completion)
+    plugin.invokeSourceAction(
+      name: "tab_close", context: context, extra: [:], completion: completion)
   }
 
   func scrollTop(
@@ -187,7 +192,8 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    plugin.invokeSourceAction(name: "scroll_top", context: context, extra: [:], completion: completion)
+    plugin.invokeSourceAction(
+      name: "scroll_top", context: context, extra: [:], completion: completion)
   }
 
   func scrollBottom(

@@ -22,7 +22,7 @@ enum MappingCommand: Hashable {
 }
 
 func parseMappingCommand(rawString s: String) -> MappingCommand? {
-  guard let cmd = URLEventHandler.parseFlashURL(s) else { return nil }
+  guard let cmd = URLEventHandler.parseMappingURL(s) else { return nil }
   return .flashCommand(cmd)
 }
 
@@ -55,7 +55,8 @@ extension MappingCommand {
   }
 
   private static func tomlQuotedString(_ value: String) -> String {
-    "\"" + value
+    "\""
+      + value
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "\"", with: "\\\"") + "\""
   }

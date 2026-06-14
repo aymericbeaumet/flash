@@ -216,8 +216,6 @@ final class AppMonitor {
     localObservers.removeAll()
   }
 
-
-
   func lookupPreparedModel(for pid: pid_t) -> PreparedModel? {
     preparedModels.lookup(
       pid: pid,
@@ -228,4 +226,3 @@ final class AppMonitor {
   }
 
 }
-

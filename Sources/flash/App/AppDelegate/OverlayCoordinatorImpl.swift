@@ -532,8 +532,10 @@ extension AppDelegate {
       overlayDidCancelCandidateFinder()
       return
     }
-    let candidate = candidateFinderMatches[min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)]
-      .candidate
+    let candidate = candidateFinderMatches[
+      min(candidateFinderSelectedIndex, candidateFinderMatches.count - 1)
+    ]
+    .candidate
     // A bang row carries its token in `sourcePayload`; the selection always
     // wins, so arrowing onto a non-bang result opens it even when the query
     // still starts with `!`.
@@ -592,7 +594,8 @@ extension AppDelegate {
         // log line is the only breadcrumb the user can correlate with
         // the plugin's own log inside `~/Library/Logs/Flash/flash.log`.
         FlashLog.warn(
-          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) name=\(candidate.name) display=\(candidate.displayTitle)")
+          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) name=\(candidate.name) display=\(candidate.displayTitle)"
+        )
       }
       self.refreshCurrentModeSideEffects(reason: "source_resolved")
       self.scheduleNormalModeRecapture()

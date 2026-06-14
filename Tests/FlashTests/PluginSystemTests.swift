@@ -1,5 +1,5 @@
-import Foundation
 import FlashCore
+import Foundation
 import XCTest
 
 @testable import flash
@@ -38,12 +38,14 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(tmux.priority, 20)
     XCTAssertTrue(tmux.bundleIDs.contains("org.alacritty"))
 
-    XCTAssertTrue(commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
-      "login", "status", "pause", "play", "toggle", "next", "previous", "search", "run",
-    ]))
-    XCTAssertTrue(commandNames(for: "slack", manifests: manifests).isSuperset(of: [
-      "login", "version", "run",
-    ]))
+    XCTAssertTrue(
+      commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
+        "login", "status", "pause", "play", "toggle", "next", "previous", "search", "run",
+      ]))
+    XCTAssertTrue(
+      commandNames(for: "slack", manifests: manifests).isSuperset(of: [
+        "login", "version", "run",
+      ]))
   }
 
   func testClipboardManifestRegistersBrowseCommand() throws {
@@ -90,7 +92,8 @@ final class PluginSystemTests: XCTestCase {
       let manifest = try PluginManifest.load(from: root)
       for field in [manifest.install, manifest.start] {
         for needle in banned {
-          XCTAssertFalse(field.contains(needle), "\(root.lastPathComponent) manifest contains \(needle)")
+          XCTAssertFalse(
+            field.contains(needle), "\(root.lastPathComponent) manifest contains \(needle)")
         }
       }
       for name in ["Cargo.toml", "src/main.rs"] {
@@ -98,7 +101,8 @@ final class PluginSystemTests: XCTestCase {
         guard FileManager.default.fileExists(atPath: file.path) else { continue }
         let body = try String(contentsOf: file)
         for needle in banned {
-          XCTAssertFalse(body.contains(needle), "\(root.lastPathComponent)/\(name) contains \(needle)")
+          XCTAssertFalse(
+            body.contains(needle), "\(root.lastPathComponent)/\(name) contains \(needle)")
         }
       }
     }
@@ -123,20 +127,21 @@ final class PluginSystemTests: XCTestCase {
     let pluginRoot = bundlePlugins.appendingPathComponent("sample")
     try FileManager.default.createDirectory(at: pluginRoot, withIntermediateDirectories: true)
     try """
-      {
-        "id": "sample",
-        "name": "Sample",
-        "version": "0.1.0",
-        "description": "Sample plugin",
-        "install": "./install.sh",
-        "start": "./start.sh",
-        "subscriptions": [],
-        "providers": []
-      }
-      """.write(
-        to: pluginRoot.appendingPathComponent("manifest.json"),
-        atomically: true,
-        encoding: .utf8)
+    {
+      "manifest_version": 1,
+      "id": "sample",
+      "name": "Sample",
+      "version": "0.1.0",
+      "description": "Sample plugin",
+      "install": "./install.sh",
+      "start": "./start.sh",
+      "subscriptions": [],
+      "providers": []
+    }
+    """.write(
+      to: pluginRoot.appendingPathComponent("manifest.json"),
+      atomically: true,
+      encoding: .utf8)
 
     let linkedPlugins = temp.appendingPathComponent("app/Contents/Resources/Plugins")
     try FileManager.default.createDirectory(
@@ -155,6 +160,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "spotify",
           "name": "Spotify",
           "version": "0.1.0",
@@ -192,6 +198,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "spotify",
           "name": "Spotify",
           "version": "0.1.0",
@@ -216,6 +223,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "slack",
           "name": "Slack",
           "version": "0.1.0",
@@ -293,6 +301,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "Spotify",
           "name": "Spotify",
           "version": "0.1.0",
@@ -313,6 +322,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "multi",
           "name": "Multi",
           "version": "0.1.0",
@@ -353,6 +363,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "cmdsonly",
           "name": "Commands Only",
           "version": "0.1.0",
@@ -381,6 +392,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "scoped",
           "name": "Scoped",
           "version": "0.1.0",
@@ -418,6 +430,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "moded",
           "name": "Moded",
           "version": "0.1.0",
@@ -448,6 +461,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
+          "manifest_version": 1,
           "id": "banger",
           "name": "Banger",
           "version": "0.1.0",
@@ -594,9 +608,12 @@ final class PluginSystemTests: XCTestCase {
     return try FileManager.default.contentsOfDirectory(
       at: root,
       includingPropertiesForKeys: [.isDirectoryKey],
-      options: [.skipsHiddenFiles])
-      .filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("manifest.json").path) }
-      .sorted { $0.lastPathComponent < $1.lastPathComponent }
+      options: [.skipsHiddenFiles]
+    )
+    .filter {
+      FileManager.default.fileExists(atPath: $0.appendingPathComponent("manifest.json").path)
+    }
+    .sorted { $0.lastPathComponent < $1.lastPathComponent }
   }
 
   private func commandNames(for id: String, manifests: [PluginManifest]) -> Set<String> {
@@ -613,16 +630,17 @@ final class PluginSystemTests: XCTestCase {
     try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
     let mock = binDir.appendingPathComponent(binary)
     try """
-      #!/bin/sh
-      printf '\(binary) %s\\n' "$*"
-      """.write(to: mock, atomically: true, encoding: .utf8)
+    #!/bin/sh
+    printf '\(binary) %s\\n' "$*"
+    """.write(to: mock, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mock.path)
 
     let pluginRoot = repositoryRoot().appendingPathComponent("Plugins/\(pluginID)")
     let binaryURL = pluginRoot.appendingPathComponent("flash-plugin-\(pluginID)")
     guard FileManager.default.isExecutableFile(atPath: binaryURL.path) else {
       throw XCTSkip(
-        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the MessagePack smoke test")
+        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the MessagePack smoke test"
+      )
     }
     let process = Process()
     process.executableURL = binaryURL
@@ -724,9 +742,10 @@ final class PluginSystemTests: XCTestCase {
     }
     stdout.fileHandleForReading.readabilityHandler = nil
 
-    let stderrBody = String(
-      data: stderr.fileHandleForReading.readDataToEndOfFile(),
-      encoding: .utf8) ?? ""
+    let stderrBody =
+      String(
+        data: stderr.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8) ?? ""
     XCTAssertEqual(process.terminationStatus, 0, stderrBody)
 
     let messages = collector.messages()

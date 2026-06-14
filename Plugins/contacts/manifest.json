@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "contacts",
   "name": "Contacts",
   "version": "0.1.0",

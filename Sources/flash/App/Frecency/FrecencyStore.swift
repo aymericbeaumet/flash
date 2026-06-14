@@ -62,9 +62,10 @@ final class FrecencyStore {
     if let fileURL {
       self.fileURL = fileURL
     } else {
-      let appSupport = FileManager.default.urls(
-        for: .applicationSupportDirectory, in: .userDomainMask
-      ).first
+      let appSupport =
+        FileManager.default.urls(
+          for: .applicationSupportDirectory, in: .userDomainMask
+        ).first
         ?? URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Library/Application Support")
       self.fileURL =
@@ -180,7 +181,8 @@ final class FrecencyStore {
         let decayed = entry.score * exp(-lambda * dt)
         return (key, entry, decayed)
       }
-      let trimmed = scored
+      let trimmed =
+        scored
         .sorted { $0.2 > $1.2 }
         .prefix(configuration.maxEntries)
       var next: [String: Entry] = [:]

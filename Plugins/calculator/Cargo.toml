@@ -11,10 +11,3 @@ path = "src/main.rs"
 [dependencies]
 fasteval2 = "2.1"
 flash_plugin = { path = "../_rust_flash_plugin" }
-
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-strip = true
-panic = "abort"

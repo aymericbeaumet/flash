@@ -1,12 +1,20 @@
 # Plugins
 
 Plugins are managed child processes owned by Flash. Each plugin has a required
-`manifest.json` with `id`, `name`, `version`, `description`, `install`, and
-`start` strings. Optional `request_timeout_ms` (default `2000`) raises the
-per-request RPC deadline for plugins that fan out to the network.
+`manifest.json` with `manifest_version` (required integer, currently `1`), `id`,
+`name`, `version`, `description`, `install`, and `start` strings. Optional
+`request_timeout_ms` (default `2000`) raises the per-request RPC deadline for
+plugins that fan out to the network. Optional `capabilities` lists sensitive
+host surfaces the plugin opts into: today `"clipboard"` gates delivery of
+`core:clipboard.changed`, and the host filters that event out for any plugin
+that hasn't declared the capability.
 
 Official bundled plugins are always enabled. Third-party plugins are listed in
-`[plugins] third_party` as `github:user/project` or `file:<path>`.
+`[plugins] third_party` as `github:user/project@<commit-sha>` or
+`file:<path>`. GitHub references must pin a full 40-character commit SHA —
+moving branches and tags are rejected because a third-party plugin's
+`install` / `start` strings run as the user and a moving upstream ref would
+let arbitrary code land on every config reload.
 
 Plugins communicate with Flash through length-prefixed MessagePack on
 stdin/stdout — a 4-byte big-endian payload length followed by a MessagePack

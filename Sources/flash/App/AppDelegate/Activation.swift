@@ -97,7 +97,8 @@ extension AppDelegate {
 
     guard let context = contextOverride ?? currentNonFlashContext() else {
       FlashLog.debug("[activation] no target app")
-      FlashLog.trace("[activation] no_context mode=\(flashMode) target_override=\(contextOverride != nil)")
+      FlashLog.trace(
+        "[activation] no_context mode=\(flashMode) target_override=\(contextOverride != nil)")
       applyModeOverlay()
       return
     }

@@ -41,6 +41,36 @@ jobs:
       - name: Check hard-rule guardrails
         run: ./Scripts/check-guardrails.sh
 
+  plugins:
+    name: Plugins (cargo)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Cargo registry + workspace target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            Plugins/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Plugins/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: cargo fmt --check
+        working-directory: Plugins
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        working-directory: Plugins
+        # `-D warnings` makes clippy a hard gate so warnings can't accumulate
+        # quietly across the 17-crate workspace.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo build (release)
+        working-directory: Plugins
+        run: cargo build --workspace --release
+      - name: cargo test
+        working-directory: Plugins
+        run: cargo test --workspace
+
   build:
     name: Build
     runs-on: macos-15

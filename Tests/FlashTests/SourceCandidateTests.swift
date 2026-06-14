@@ -559,7 +559,8 @@ final class SourceCandidateTests: XCTestCase {
       "fire")
     XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@fire", emojiMode: true))
     XCTAssertNil(CandidateFinder.sourceCompletionState(query: "!google @fire", emojiMode: false))
-    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@firefox.tabs gmail", emojiMode: false))
+    XCTAssertNil(
+      CandidateFinder.sourceCompletionState(query: "@firefox.tabs gmail", emojiMode: false))
     XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@source:fire", emojiMode: false))
   }
 
@@ -794,8 +795,8 @@ final class SourceCandidateTests: XCTestCase {
     let table = CandidateFinder.PrecedenceTable.default
     XCTAssertEqual(table.weight(for: bang), CandidateFinder.PrecedenceTable.bangWeight)
     XCTAssertEqual(table.weight(for: tmux), 100)
-    XCTAssertEqual(table.weight(for: tab), 90)         // 80 + alive bonus
-    XCTAssertEqual(table.weight(for: activeApp), 50)   // 40 + alive bonus
+    XCTAssertEqual(table.weight(for: tab), 90)  // 80 + alive bonus
+    XCTAssertEqual(table.weight(for: activeApp), 50)  // 40 + alive bonus
     XCTAssertEqual(table.weight(for: inactiveApp), 40)
     XCTAssertEqual(table.weight(for: note), 0)
   }
@@ -907,7 +908,8 @@ final class SourceCandidateTests: XCTestCase {
         bundleIdentifier: "",
         searchAliases: "joy lol cry_laugh"))
 
-    XCTAssertEqual(candidate.normalizedScoringFields.titleTokens, ["face", "with", "tears", "of", "joy"])
+    XCTAssertEqual(
+      candidate.normalizedScoringFields.titleTokens, ["face", "with", "tears", "of", "joy"])
     XCTAssertEqual(candidate.normalizedScoringFields.aliases, ["joy", "lol", "cry", "laugh"])
     XCTAssertNotNil(CandidateFinder.score(query: "joy", candidate: candidate))
     XCTAssertNotNil(CandidateFinder.score(query: "cry", candidate: candidate))
@@ -1034,7 +1036,8 @@ final class SourceCandidateTests: XCTestCase {
 
   func testCommandInsertionTextUsesCanonicalTokensAndSourceQualifiedTitles() {
     XCTAssertEqual(
-      CandidateFinder.commandInsertionText(CandidateFinder.sourceCompletionCandidate("firefox.tabs")),
+      CandidateFinder.commandInsertionText(
+        CandidateFinder.sourceCompletionCandidate("firefox.tabs")),
       "@firefox.tabs ")
     XCTAssertEqual(
       CandidateFinder.commandInsertionText(

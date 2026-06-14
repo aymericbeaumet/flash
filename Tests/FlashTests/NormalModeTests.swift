@@ -139,7 +139,8 @@ final class NormalModeTests: XCTestCase {
   func testMoveMouseSequence() {
     XCTAssertEqual(transition(chars: "m").pending, "m")
     XCTAssertEqual(command(pending: "m", chars: "f"), .mouseTarget(.move))
-    XCTAssertEqual(command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.move))
+    XCTAssertEqual(
+      command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.move))
     // `m<letter>` now sets a vim-style mark instead of being unmapped.
     XCTAssertEqual(command(pending: "m", chars: "x"), .setMark(letter: "x"))
     XCTAssertEqual(command(pending: "`", chars: "x"), .jumpToMark(letter: "x"))
@@ -147,7 +148,8 @@ final class NormalModeTests: XCTestCase {
 
   func testFIsMouseTargetAndShiftFIsMouseGrid() {
     XCTAssertEqual(command(chars: "f"), .mouseTarget(.click(.leftClick)))
-    XCTAssertEqual(command(chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.leftClick)))
+    XCTAssertEqual(
+      command(chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.leftClick)))
     // `s` is now the secondary-click prefix (`sf`/`sF`), so it leaves a
     // pending sequence rather than yielding `nil`.
     XCTAssertEqual(transition(chars: "s").pending, "s")
@@ -161,10 +163,14 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(chars: "R", ignoring: "r", flags: [.shift]), .reload(force: true))
     XCTAssertEqual(transition(chars: "s").pending, "s")
     XCTAssertEqual(command(pending: "s", chars: "f"), .mouseTarget(.click(.rightClick)))
-    XCTAssertEqual(command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.rightClick)))
+    XCTAssertEqual(
+      command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]),
+      .mouseGrid(.click(.rightClick)))
     XCTAssertEqual(transition(chars: "d").pending, "d")
     XCTAssertEqual(command(pending: "d", chars: "f"), .mouseTarget(.click(.doubleClick)))
-    XCTAssertEqual(command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.doubleClick)))
+    XCTAssertEqual(
+      command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]),
+      .mouseGrid(.click(.doubleClick)))
   }
 
   func testMouseTargetCommitEntersInsertOnlyForTypingSurfaces() {
@@ -336,7 +342,8 @@ final class NormalModeTests: XCTestCase {
         visible: true,
         hasHints: false,
         activationInFlight: false,
-        captureOverride: false).captureInput)
+        captureOverride: false
+      ).captureInput)
     XCTAssertFalse(
       AppDelegate.modeOverlaySnapshot(
         mode: .normal,
@@ -344,7 +351,8 @@ final class NormalModeTests: XCTestCase {
         visible: true,
         hasHints: true,
         activationInFlight: false,
-        captureOverride: true).captureInput)
+        captureOverride: true
+      ).captureInput)
     XCTAssertFalse(
       AppDelegate.modeOverlaySnapshot(
         mode: .normal,
@@ -352,7 +360,8 @@ final class NormalModeTests: XCTestCase {
         visible: true,
         hasHints: false,
         activationInFlight: true,
-        captureOverride: true).captureInput)
+        captureOverride: true
+      ).captureInput)
   }
 
   func testModeStatusBarVisibleInInsertWithoutCapturing() {
@@ -375,7 +384,8 @@ final class NormalModeTests: XCTestCase {
         visible: true,
         hasHints: false,
         activationInFlight: false,
-        captureOverride: nil).visible)
+        captureOverride: nil
+      ).visible)
     XCTAssertFalse(
       AppDelegate.modeOverlaySnapshot(
         mode: .normal,
@@ -383,7 +393,8 @@ final class NormalModeTests: XCTestCase {
         visible: false,
         hasHints: false,
         activationInFlight: false,
-        captureOverride: nil).visible)
+        captureOverride: nil
+      ).visible)
   }
 
   func testActiveWindowBorderVisibility() {
@@ -479,9 +490,11 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(
       AppMonitor.windowGeometryNotificationRequiresBorderSuspension(kAXWindowResizedNotification))
     XCTAssertTrue(
-      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(kAXFocusedWindowChangedNotification))
+      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(
+        kAXFocusedWindowChangedNotification))
     XCTAssertTrue(
-      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(kAXMainWindowChangedNotification))
+      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(
+        kAXMainWindowChangedNotification))
     XCTAssertFalse(
       AppMonitor.windowGeometryNotificationRequiresBorderSuspension(kAXValueChangedNotification))
   }
@@ -895,12 +908,14 @@ final class NormalModeTests: XCTestCase {
     // the candidate query path.
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":open firefox"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight"), "")
-    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight gmail.com"), "gmail.com")
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineCandidateQuery(":flashlight gmail.com"), "gmail.com")
     // Trailing whitespace is preserved on purpose — `parseBangState`
     // uses it as the signal that the user committed to a bang. Leading
     // whitespace + tabs between the verb and the argument are still
     // collapsed because they're syntactic, not part of the query.
-    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery("  FLASHLIGHT   Slack  "), "Slack  ")
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineCandidateQuery("  FLASHLIGHT   Slack  "), "Slack  ")
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":flashlightgmail"))
   }
 
@@ -1011,7 +1026,8 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.fuzzyScore(query: "fx", candidate: "Safari"))
 
     let compact = NormalModeDispatcher.fuzzyScore(query: "saf", candidate: "Safari") ?? 0
-    let spread = NormalModeDispatcher.fuzzyScore(query: "saf", candidate: "System Settings Safari") ?? 0
+    let spread =
+      NormalModeDispatcher.fuzzyScore(query: "saf", candidate: "System Settings Safari") ?? 0
     XCTAssertGreaterThan(compact, spread)
   }
 
@@ -1127,7 +1143,8 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "org.mozilla.firefox",
         url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
 
-    XCTAssertEqual(prepared.displayTitle, "[firefox] Gmail · https://mail.google.com/mail/u/0/#inbox")
+    XCTAssertEqual(
+      prepared.displayTitle, "[firefox] Gmail · https://mail.google.com/mail/u/0/#inbox")
     XCTAssertEqual(prepared.source, "firefox")
     XCTAssertEqual(prepared.name, "Gmail")
     XCTAssertEqual(prepared.url?.absoluteString, "https://mail.google.com/mail/u/0/#inbox")
@@ -1262,20 +1279,24 @@ final class NormalModeTests: XCTestCase {
 
   func testHelpTextListsNormalModeMappings() {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
-    for mapping in ["h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "[h", "]h", "f", "sf", "df", "mf", "F", "sF", "dF", "mF", "u", "ctrl-r", "x", "n", "/", "\\space", "r", "R", "t", "MAPPINGS",
-      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a", "]a", "g1", "g9", "N{mapping}",
+    for mapping in [
+      "h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
+      "gg", "G", "[h", "]h", "f", "sf", "df", "mf", "F", "sF", "dF", "mF", "u", "ctrl-r", "x", "n",
+      "/", "\\space", "r", "R", "t", "MAPPINGS",
+      "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a",
+      "]a", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <args>", ":flashlight <query>", "flash://mouse_target",
       "flash://flashlight", "flash://mouse_target?secondary=1",
-      "flash://mouse_target?double=1", "flash://mouse_grid", "flash://history_back", "flash://history_forward",
+      "flash://mouse_target?double=1", "flash://mouse_grid", "flash://history_back",
+      "flash://history_forward",
       "flash://app_previous", "flash://app_next",
-      "flash://app_reload?force=1", "flash://tab_select?index=1", "flash://tab_new", "?"]
-    {
+      "flash://app_reload?force=1", "flash://tab_select?index=1", "flash://tab_new", "?",
+    ] {
       XCTAssertTrue(
         help.contains(mapping),
-      "missing \(mapping)")
+        "missing \(mapping)")
     }
     XCTAssertFalse(help.contains("flash://mode_normal"))
   }
@@ -1362,14 +1383,16 @@ final class NormalModeTests: XCTestCase {
         keyCode: kVK_Delete,
         chars: "\u{7F}",
         flags: [.command],
-        mappings: mappings).command,
+        mappings: mappings
+      ).command,
       .scroll(.halfPageUp))
     XCTAssertEqual(
       transition(
         keyCode: kVK_Tab,
         chars: "\t",
         flags: [.command],
-        mappings: mappings).command,
+        mappings: mappings
+      ).command,
       .movementForward)
   }
 

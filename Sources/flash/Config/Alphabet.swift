@@ -92,7 +92,7 @@ enum Alphabet {
   static let defaultKeys = "<qwerty_homerow+qwerty_toprow>"
 
   static func resolve(_ raw: String?) -> Resolved {
-    let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = (raw ?? "").trimmed
     if trimmed.isEmpty {
       return resolve(defaultKeys)
     }

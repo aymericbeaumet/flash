@@ -163,7 +163,7 @@ enum FlashStatusBarTemplateEngine {
       {
         let bodyStart = raw.index(after: open)
         let token = String(raw[bodyStart..<close])
-          .trimmingCharacters(in: .whitespacesAndNewlines)
+          .trimmed
         if let variable = variableByToken[token] {
           rendered += resolve(variable: variable, context: context, dynamicValues: dynamicValues)
         }
@@ -189,7 +189,7 @@ enum FlashStatusBarTemplateEngine {
       return resolvePlugin(value, snapshots: context.pluginSnapshots)
     case .command:
       return FlashStatusBarRenderer.stripClickRanges(
-        from: dynamicValues[variable.id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        from: dynamicValues[variable.id]?.trimmed ?? "")
     }
   }
 
@@ -199,13 +199,13 @@ enum FlashStatusBarTemplateEngine {
   ) -> String {
     switch value {
     case .activeAppName:
-      let name = context.activeAppName.trimmingCharacters(in: .whitespacesAndNewlines)
+      let name = context.activeAppName.trimmed
       if !name.isEmpty { return name }
-      return context.activeBundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+      return context.activeBundleIdentifier.trimmed
     case .activeBundleIdentifier:
-      return context.activeBundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+      return context.activeBundleIdentifier.trimmed
     case .modeLabel:
-      return context.modeLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+      return context.modeLabel.trimmed
     case .date:
       let date = FlashStatusBarRenderer.dateText(
         now: context.now,
@@ -257,7 +257,8 @@ enum FlashStatusBarRenderer {
       {
         let bodyStart = raw.index(after: open)
         let marker = String(raw[bodyStart..<close])
-        let stripped = marker
+        let stripped =
+          marker
           .split { $0 == " " || $0 == "," }
           .map(String.init)
           .filter { token in
@@ -317,7 +318,8 @@ enum FlashStatusBarRenderer {
   static func attributedStatusString(from raw: String, font: NSFont) -> NSAttributedString {
     let attributed = NSMutableAttributedString()
     for segment in segments(from: raw) {
-      let segmentFont = segment.bold
+      let segmentFont =
+        segment.bold
         ? NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .bold)
         : font
       attributed.append(
@@ -525,7 +527,7 @@ final class FlashStatusBarController {
     guard process.terminationStatus == 0 else { return nil }
     let data = stdout.fileHandleForReading.readDataToEndOfFile()
     guard let output = String(data: data, encoding: .utf8) else { return nil }
-    let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = output.trimmed
     return trimmed.isEmpty ? nil : trimmed
   }
 

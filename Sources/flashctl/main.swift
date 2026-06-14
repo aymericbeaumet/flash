@@ -2,19 +2,19 @@ import AppKit
 import Foundation
 
 private let usage = """
-Usage:
-  flash <action> [query...]
-  flashctl <action> [query...]
+  Usage:
+    flash <action> [query...]
+    flashctl <action> [query...]
 
-Examples:
-  flash mouse_target
-  flash mouse_target double=1
-  flash mouse_grid move=1
-  flash mode_normal
-  flash app_open name=Firefox
-  flash window_move position=lefthalf
-  flash flash://help_show
-"""
+  Examples:
+    flash mouse_target
+    flash mouse_target double=1
+    flash mouse_grid move=1
+    flash mode_normal
+    flash app_open name=Firefox
+    flash window_move position=lefthalf
+    flash flash://help_show
+  """
 
 private func percentEncode(_ value: String) -> String {
   value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value

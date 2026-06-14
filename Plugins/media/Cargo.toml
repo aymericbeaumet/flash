@@ -10,26 +10,11 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_rust_flash_plugin" }
-objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = [
-  "std",
-  "NSGeometry",
-] }
-objc2-app-kit = { version = "0.3", default-features = false, features = [
-  "std",
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSGeometry"] }
+objc2-app-kit = { workspace = true, features = [
   "NSEvent",
   "NSGraphicsContext",
   "objc2-core-graphics",
 ] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = [
-  "std",
-  "CGEvent",
-  "CGEventTypes",
-] }
-
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-strip = true
-panic = "abort"
+objc2-core-graphics = { workspace = true, features = ["CGEvent", "CGEventTypes"] }

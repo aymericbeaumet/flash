@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "reminders",
   "name": "Reminders",
   "version": "0.1.0",

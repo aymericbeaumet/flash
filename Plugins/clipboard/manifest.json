@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "clipboard",
   "name": "Clipboard",
   "version": "0.1.0",
@@ -8,6 +9,7 @@
   "subscriptions": [
     { "match": "core:clipboard.changed" }
   ],
+  "capabilities": ["clipboard"],
   "providers": [
     {
       "kind": "commands",

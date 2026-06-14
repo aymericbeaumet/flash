@@ -1,5 +1,5 @@
-import Foundation
 import FlashCore
+import Foundation
 import XCTest
 
 @testable import flash
@@ -232,18 +232,20 @@ final class ConfigLoaderTests: XCTestCase {
 
   func testParsesPluginReferences() throws {
     let source = URL(fileURLWithPath: "/Users/test/.config/flash/flash.toml")
+    let sha = "1234567890abcdef1234567890abcdef12345678"
     let c = ConfigLoader.parse(
       """
       [plugins]
-      third_party = ["github:user/project", "file:../plugins/spotify"]
+      third_party = ["github:user/project@\(sha)", "file:../plugins/spotify"]
       """,
       sourceURL: source)
 
     XCTAssertEqual(c.plugins.thirdParty.count, 2)
-    XCTAssertEqual(c.plugins.thirdParty[0].raw, "github:user/project")
-    if case .github(let owner, let repository) = c.plugins.thirdParty[0].kind {
+    XCTAssertEqual(c.plugins.thirdParty[0].raw, "github:user/project@\(sha)")
+    if case .github(let owner, let repository, let commit) = c.plugins.thirdParty[0].kind {
       XCTAssertEqual(owner, "user")
       XCTAssertEqual(repository, "project")
+      XCTAssertEqual(commit, sha)
     } else {
       XCTFail("expected github plugin reference")
     }
@@ -253,6 +255,26 @@ final class ConfigLoaderTests: XCTestCase {
       XCTFail("expected file plugin reference")
     }
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testGithubPluginRequiresCommitSHA() throws {
+    // Branch / tag references are rejected: only a full 40-char commit SHA
+    // pin protects against silent upstream-controlled updates.
+    XCTAssertNil(PluginReference.parse("github:user/project"))
+    XCTAssertNil(PluginReference.parse("github:user/project@main"))
+    XCTAssertNil(PluginReference.parse("github:user/project@v1.2.3"))
+    XCTAssertNil(PluginReference.parse("github:user/project@1234567"))  // short SHA
+    XCTAssertNotNil(
+      PluginReference.parse("github:user/project@1234567890abcdef1234567890abcdef12345678"))
+    // Uppercase hex is normalized to lowercase so users can paste straight
+    // from any tool without surprises.
+    let upper = PluginReference.parse(
+      "github:user/project@1234567890ABCDEF1234567890ABCDEF12345678")
+    if case .github(_, _, let commit)? = upper?.kind {
+      XCTAssertEqual(commit, "1234567890abcdef1234567890abcdef12345678")
+    } else {
+      XCTFail("expected normalized lowercase commit")
+    }
   }
 
   func testParsesFlashlightAliasesAndPrecedence() {
@@ -684,7 +706,8 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.warnings.isEmpty)
     XCTAssertEqual(c.mode.all.count, 1)
     XCTAssertEqual(c.mode.all[0].key, "alt+shift+c")
-    XCTAssertEqual(c.mode.all[0].action, .shellCommand(["sh", "~/.dotfiles/scripts/toggle-colors"]))
+    XCTAssertEqual(
+      c.mode.all[0].action, .shellCommand(["sh", "~/.dotfiles/scripts/toggle-colors"]))
     XCTAssertFalse(c.mode.containsAdvancedModeMapping)
   }
 
@@ -775,8 +798,10 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "spacec" })?.action.command,
       .reload(force: false))
-    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "spacespace" })?.action.command, .flashlight)
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == "\\space" && $0.action.command == .flashlight }))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "spacespace" })?.action.command, .flashlight)
+    XCTAssertNil(
+      c.mode.normal.first(where: { $0.key == "\\space" && $0.action.command == .flashlight }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
     XCTAssertTrue(c.warnings.isEmpty)
   }
@@ -920,7 +945,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       paths,
       [
-        "\(home)/.config/flash/flash.toml",
+        "\(home)/.config/flash/flash.toml"
       ])
   }
 
@@ -957,7 +982,8 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse("[hints]\nmin_length = \"big\"")
     XCTAssertEqual(c.warnings.count, 1)
     XCTAssertEqual(c.loadingDiagnostics.first?.location, ConfigLocation(line: 2, column: 14))
-    XCTAssertTrue(c.loadingErrorAlertMessage?.contains("hints.min_length must be an integer") == true)
+    XCTAssertTrue(
+      c.loadingErrorAlertMessage?.contains("hints.min_length must be an integer") == true)
   }
 
   private static func parseJSONObject(_ json: String) throws -> [String: Any]? {

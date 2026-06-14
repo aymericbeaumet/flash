@@ -73,8 +73,8 @@ enum BrowserTabSources {
   }
 
   static func browserTabName(title: String, url: String?) -> String {
-    let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-    let url = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let title = title.trimmed
+    let url = url?.trimmed ?? ""
     if title.isEmpty { return url }
     return title
   }
@@ -115,8 +115,8 @@ enum BrowserTabSources {
   static func scriptString(_ raw: String) -> String {
     "\""
       + raw
-        .replacingOccurrences(of: "\\", with: "\\\\")
-        .replacingOccurrences(of: "\"", with: "\\\"")
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
       + "\""
   }
 
@@ -124,8 +124,8 @@ enum BrowserTabSources {
     raw.split(separator: "\n").compactMap { line in
       let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
       guard parts.count == 2 else { return nil }
-      let title = String(parts[0]).trimmingCharacters(in: .whitespacesAndNewlines)
-      let url = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+      let title = String(parts[0]).trimmed
+      let url = String(parts[1]).trimmed
       guard !title.isEmpty || !url.isEmpty else { return nil }
       return (title: title.isEmpty ? url : title, url: url)
     }
@@ -149,7 +149,7 @@ enum BrowserTabSources {
     DispatchQueue.global(qos: .utility).async {
       let result = runAppleScript(source)
       DispatchQueue.main.async {
-        completion(result?.trimmingCharacters(in: .whitespacesAndNewlines))
+        completion(result?.trimmed)
       }
     }
   }
@@ -276,7 +276,7 @@ enum BrowserTabSources {
       ?? AXCandidateSourceHelpers.stringAttribute(element, kAXDescriptionAttribute as String)
       ?? AXCandidateSourceHelpers.stringAttribute(element, kAXValueAttribute as String)
       ?? fallback
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = raw.trimmed
     return trimmed.isEmpty ? nil : trimmed
   }
 
@@ -285,7 +285,7 @@ enum BrowserTabSources {
       AXCandidateSourceHelpers.urlAttribute(element, kAXURLAttribute as String)
       ?? AXCandidateSourceHelpers.urlAttribute(element, kAXDocumentAttribute as String)
     guard let raw else { return nil }
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = raw.trimmed
     return trimmed.isEmpty ? nil : trimmed
   }
 

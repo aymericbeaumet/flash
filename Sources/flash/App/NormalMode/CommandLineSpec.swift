@@ -1,5 +1,5 @@
-import Foundation
 import FlashCore
+import Foundation
 
 /// Command-line (`:cmd`) command vocabulary, parser, completion engine,
 /// and the spec table used by `helpText` to render `:command` lines.
@@ -52,7 +52,7 @@ extension NormalModeDispatcher {
   /// Returns nil when the input is not a `:plugins` invocation so the
   /// generic command-spec table runs.
   private static func pluginsCommand(_ raw: String) -> CommandLineCommand? {
-    var body = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    var body = raw.trimmed
     guard body.hasPrefix(":") else { return nil }
     body.removeFirst()
     body = body.trimmingCharacters(in: .whitespaces)
@@ -203,7 +203,7 @@ extension NormalModeDispatcher {
   }
 
   static func commandLineHelpTopic(_ raw: String) -> String?? {
-    var body = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    var body = raw.trimmed
     if body.hasPrefix(":") {
       body.removeFirst()
     }
@@ -219,7 +219,7 @@ extension NormalModeDispatcher {
     }
     guard body[nameEnd].isWhitespace else { return nil }
     let restStart = body.index(after: nameEnd)
-    let topic = String(body[restStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    let topic = String(body[restStart...]).trimmed
     return .some(topic.isEmpty ? nil : topic)
   }
 
@@ -484,9 +484,10 @@ extension NormalModeDispatcher {
         prefix: ":\(command) ", query: rest, items: items)
     }
 
-    let subcommands = pluginSubcommands.first { key, _ in
-      key.localizedCaseInsensitiveCompare(command) == .orderedSame
-    }?.value ?? []
+    let subcommands =
+      pluginSubcommands.first { key, _ in
+        key.localizedCaseInsensitiveCompare(command) == .orderedSame
+      }?.value ?? []
     guard !subcommands.isEmpty else { return nil }
     let items = subcommands.map { name in
       CommandLineCompletion(label: name, insertion: name, kind: .pluginSubcommand)
@@ -541,7 +542,7 @@ extension NormalModeDispatcher {
   /// raw with the `#` stripped (the leading `:` preserved so downstream
   /// parsers are unaffected) plus whether the modifier was present.
   static func commandLineClipboardModifier(_ raw: String) -> (raw: String, capture: Bool) {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = raw.trimmed
     var hadColon = false
     var body = trimmed
     if body.hasPrefix(":") {
@@ -558,11 +559,11 @@ extension NormalModeDispatcher {
   static func pluginCommandLineInvocation(_ raw: String) -> (
     command: String, subcommand: String, args: [String], raw: String
   )? {
-    var body = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    var body = raw.trimmed
     if body.hasPrefix(":") {
       body.removeFirst()
     }
-    body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+    body = body.trimmed
     guard !body.isEmpty else { return nil }
     let parts = body.split(whereSeparator: { $0.isWhitespace }).map(String.init)
     guard let command = parts.first else { return nil }
@@ -578,7 +579,7 @@ extension NormalModeDispatcher {
   }
 
   private static func parseCommandLine(_ raw: String) -> (body: String, bang: Bool)? {
-    var command = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    var command = raw.trimmed.lowercased()
     if command.hasPrefix(":") {
       command.removeFirst()
     }

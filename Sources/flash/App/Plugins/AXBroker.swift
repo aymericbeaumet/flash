@@ -65,7 +65,8 @@ final class AXBroker {
       return
     }
     let rootsMode = params["roots"] as? String ?? "windows"
-    let follow = (params["follow"] as? [String]).flatMap { $0.isEmpty ? nil : $0 }
+    let follow =
+      (params["follow"] as? [String]).flatMap { $0.isEmpty ? nil : $0 }
       ?? Self.defaultFollow
     let collect = params["collect"] as? [String] ?? []
     let maxNodes = params["max_nodes"] as? Int ?? 3_000
@@ -277,6 +278,12 @@ final class AXBroker {
   /// Y-flips a batched position/size pair (the opaque `Any` slots from
   /// `AXUIElementCopyMultipleAttributeValues`) into NSScreen-space
   /// `[x, y, w, h]`. Returns nil unless both slots are real `AXValue`s.
+  ///
+  /// Plugin callers can feed arbitrary payloads through `ax.snapshot` /
+  /// `ax.perform`, so the `CFGetTypeID == AXValueGetTypeID()` guards must run
+  /// *before* the force-bridge — Swift's `as!` on CoreFoundation refs cannot
+  /// itself verify the type. A misbehaving plugin must never crash the host
+  /// here.
   private func frameArray(pos: Any, size: Any, screenH: CGFloat) -> [Double]? {
     guard CFGetTypeID(pos as CFTypeRef) == AXValueGetTypeID(),
       CFGetTypeID(size as CFTypeRef) == AXValueGetTypeID()
@@ -285,6 +292,8 @@ final class AXBroker {
   }
 
   /// Per-attribute geometry read for the rare batched-read failure fallback.
+  /// Same trust contract as `frameArray(pos:size:screenH:)` — the CFGetTypeID
+  /// guard above each force-cast is what makes it safe.
   private func frameFromAX(_ element: AXUIElement, screenH: CGFloat) -> [Double]? {
     var posRaw: CFTypeRef?
     var sizeRaw: CFTypeRef?

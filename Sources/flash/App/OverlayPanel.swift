@@ -381,7 +381,6 @@ final class OverlayPanel: NSPanel {
   var modalClickGlobalMonitor: Any?
   var modalClickLocalMonitor: Any?
 
-
   /// single device-pixel row and renders crisp.
   static func snap(_ rect: CGRect, scale: CGFloat) -> CGRect {
     guard scale > 0 else { return rect }
@@ -392,7 +391,6 @@ final class OverlayPanel: NSPanel {
     let h = (rect.size.height * s).rounded() / s
     return CGRect(x: x, y: y, width: w, height: h)
   }
-
 
   static func unionScreenFrame() -> NSRect {
     currentScreenSnapshot().unionFrame
@@ -442,7 +440,6 @@ final class OverlayPanel: NSPanel {
     return result
   }
 }
-
 
 protocol OverlayCoordinator: AnyObject {
   func overlayDidCancel()

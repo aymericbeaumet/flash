@@ -1,5 +1,5 @@
-import Foundation
 import FlashCore
+import Foundation
 
 /// Help-modal text rendering for the normal-mode interpreter. Includes
 /// the per-topic `helpTopic` / `helpText`, the keymap-listing modal

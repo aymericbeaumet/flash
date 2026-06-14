@@ -305,11 +305,11 @@ public final class AccessibilityProvider: FlashSource {
       kAXURLAttribute,  // 8
       kAXHiddenAttribute,  // 9
       kAXSubroleAttribute,  // 10 — Firefox/Chrome tabs report role
-                            //      `AXRadioButton`/`AXButton` with
-                            //      subrole `AXTabButton`; surfacing the
-                            //      subrole lets the walk paint those as
-                            //      `important` (tab-strip anchors) in
-                            //      one IPC round-trip.
+      //      `AXRadioButton`/`AXButton` with
+      //      subrole `AXTabButton`; surfacing the
+      //      subrole lets the walk paint those as
+      //      `important` (tab-strip anchors) in
+      //      one IPC round-trip.
     ] as CFArray
 
   /// Per-worker mutable state. `WalkState` is per-thread under concurrent

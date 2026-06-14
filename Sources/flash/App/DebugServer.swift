@@ -26,7 +26,14 @@ final class DebugServer {
       return
     }
     do {
-      let listener = try NWListener(using: .tcp, on: endpoint.port)
+      // Bind the listener to the loopback interface explicitly. Without
+      // `requiredInterfaceType = .loopback`, `NWListener` accepts on every
+      // local interface — the per-connection `isLoopback` check would still
+      // reject non-loopback peers, but the port would show up in any LAN
+      // portscan. Restricting the listener at bind time is defense in depth.
+      let parameters: NWParameters = .tcp
+      parameters.requiredInterfaceType = .loopback
+      let listener = try NWListener(using: parameters, on: endpoint.port)
       listener.newConnectionHandler = { [weak self] connection in
         self?.handle(connection)
       }
@@ -87,7 +94,8 @@ final class DebugServer {
 
   private func startStateTimer() {
     let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1), leeway: .milliseconds(150))
+    timer.schedule(
+      deadline: .now() + .seconds(1), repeating: .seconds(1), leeway: .milliseconds(150))
     timer.setEventHandler { [weak self] in
       guard let self, !self.eventConnections.isEmpty else { return }
       self.broadcast(event: "state", object: self.stateProvider())
@@ -102,7 +110,8 @@ final class DebugServer {
       return
     }
     connection.start(queue: queue)
-    connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, _, _ in
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) {
+      [weak self] data, _, _, _ in
       guard let self else {
         connection.cancel()
         return
@@ -204,11 +213,13 @@ final class DebugServer {
   }
 
   private func send(_ text: String, connection: NWConnection, close: Bool) {
-    connection.send(content: text.data(using: .utf8), completion: .contentProcessed { _ in
-      if close {
-        connection.cancel()
-      }
-    })
+    connection.send(
+      content: text.data(using: .utf8),
+      completion: .contentProcessed { _ in
+        if close {
+          connection.cancel()
+        }
+      })
   }
 
   private static func response(

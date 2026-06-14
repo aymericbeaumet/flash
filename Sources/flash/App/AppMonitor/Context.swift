@@ -29,7 +29,6 @@ extension AppMonitor {
     return clip(context, to: topWindowFrame(for: pid) ?? context.frontWindowFrame)
   }
 
-
   func clip(_ context: AppContext, to frame: CGRect) -> AppContext {
     AppContext(
       bundleIdentifier: context.bundleIdentifier,

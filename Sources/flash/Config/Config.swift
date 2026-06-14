@@ -1,9 +1,14 @@
-import Foundation
 import FlashCore
+import Foundation
 
 struct PluginReference: Equatable {
   enum Kind: Equatable {
-    case github(owner: String, repository: String)
+    /// GitHub-hosted plugin pinned to a full 40-character commit SHA. The pin
+    /// is mandatory: third-party plugin code runs as the user with full
+    /// host privileges, so a moving `main` would let a compromised plugin
+    /// author (or anyone briefly controlling the repo) silently land new
+    /// install/start scripts on every config reload.
+    case github(owner: String, repository: String, commit: String)
     case file(path: String)
   }
 
@@ -11,23 +16,21 @@ struct PluginReference: Equatable {
   var kind: Kind
 
   static func parse(_ raw: String, sourceURL: URL? = nil) -> PluginReference? {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = raw.trimmed
     if trimmed.hasPrefix("github:") {
-      let slug = String(trimmed.dropFirst("github:".count))
-      let parts = slug.split(separator: "/", maxSplits: 1).map(String.init)
-      guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
-      return PluginReference(raw: trimmed, kind: .github(owner: parts[0], repository: parts[1]))
+      return parseGithub(trimmed)
     }
     if trimmed.hasPrefix("file:") {
       let rawPath = String(trimmed.dropFirst("file:".count))
-        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .trimmed
       guard !rawPath.isEmpty else { return nil }
       let expanded = (rawPath as NSString).expandingTildeInPath
       let resolved: String
       if expanded.hasPrefix("/") {
         resolved = expanded
       } else if let sourceURL {
-        resolved = sourceURL.deletingLastPathComponent()
+        resolved =
+          sourceURL.deletingLastPathComponent()
           .appendingPathComponent(expanded)
           .standardizedFileURL
           .path
@@ -37,6 +40,32 @@ struct PluginReference: Equatable {
       return PluginReference(raw: trimmed, kind: .file(path: resolved))
     }
     return nil
+  }
+
+  /// Parses `github:owner/repo@<40-char-sha>`. Anything else is rejected with
+  /// nil so the loader surfaces a clear diagnostic instead of silently pulling
+  /// a moving branch.
+  private static func parseGithub(_ trimmed: String) -> PluginReference? {
+    let slug = String(trimmed.dropFirst("github:".count))
+    let atSplit = slug.split(separator: "@", maxSplits: 1).map(String.init)
+    guard atSplit.count == 2 else { return nil }
+    let path = atSplit[0]
+    let commit = atSplit[1].lowercased()
+    let parts = path.split(separator: "/", maxSplits: 1).map(String.init)
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty,
+      isFullCommitSHA(commit)
+    else { return nil }
+    return PluginReference(
+      raw: trimmed,
+      kind: .github(owner: parts[0], repository: parts[1], commit: commit))
+  }
+
+  /// Full 40-character lowercase hex commit SHA. Short SHAs are rejected: they
+  /// have weaker collision resistance and don't pin against a future crafted
+  /// commit landing in the upstream repository's object database.
+  private static func isFullCommitSHA(_ value: String) -> Bool {
+    guard value.count == 40 else { return false }
+    return value.allSatisfy { $0.isHexDigit && (!$0.isLetter || $0.isLowercase) }
   }
 }
 

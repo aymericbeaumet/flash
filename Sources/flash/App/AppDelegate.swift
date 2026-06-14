@@ -142,7 +142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `:emojis` narrows the shared candidate pool to emoji glyphs and routes
   /// selection to text insertion; every other candidate query excludes them.
   var candidateFinderEmojiMode = false
-  let candidateFinderCacheQueue = DispatchQueue(label: "flash.candidate_finder.cache", qos: .utility)
+  let candidateFinderCacheQueue = DispatchQueue(
+    label: "flash.candidate_finder.cache", qos: .utility)
   var candidateFinderRunningAppsCache: [Candidate] = []
   var candidateFinderRunningAppsCacheReady = false
   var candidateFinderRunningAppsRefreshInFlight = false
@@ -306,7 +307,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     startCandidateFinderLiveRefresh()
     startClipboardMonitor()
     pluginManager.emit(
-      PluginEvent(name: "core:flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
+      PluginEvent(
+        name: "core:flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
     emitRunningApplicationsSnapshot(reason: "launch")
   }
 
@@ -431,7 +433,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       self.cancelOverlay()
       self.pluginManager.emit(
-        PluginEvent(name: "core:space.changed", payload: [:], bundleID: nil, configPath: nil, focused: nil))
+        PluginEvent(
+          name: "core:space.changed", payload: [:], bundleID: nil, configPath: nil, focused: nil))
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
       }
@@ -558,6 +561,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     frecencyStore?.drain()
     frecencyStore = nil
   }
-
 
 }

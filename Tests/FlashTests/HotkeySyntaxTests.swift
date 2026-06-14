@@ -284,24 +284,30 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(
       parseMappingCommand(rawString: "flash://app_open_finder?all=1")?.command,
       .candidateFinder(all: true))
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://app_reload")?.command, .reload(force: false))
+    XCTAssertEqual(
+      parseMappingCommand(rawString: "flash://app_reload")?.command, .reload(force: false))
     XCTAssertEqual(
       parseMappingCommand(rawString: "flash://app_reload?force=1")?.command,
       .reload(force: true))
     XCTAssertEqual(parseMappingCommand(rawString: "flash://flashlight")?.command, .flashlight)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_next")?.command, .tabNext)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_previous")?.command, .tabPrev)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_select")?.command, .tabSelect(index: nil))
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_select?index=4")?.command, .tabSelect(index: 4))
+    XCTAssertEqual(
+      parseMappingCommand(rawString: "flash://tab_select")?.command, .tabSelect(index: nil))
+    XCTAssertEqual(
+      parseMappingCommand(rawString: "flash://tab_select?index=4")?.command, .tabSelect(index: 4))
     XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_new")?.command, .tabNew)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_close")?.command, .tabClose)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://history_back")?.command, .historyBack)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://history_forward")?.command, .historyForward)
+    XCTAssertEqual(
+      parseMappingCommand(rawString: "flash://history_forward")?.command, .historyForward)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://movement_back")?.command, .movementBack)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://movement_forward")?.command, .movementForward)
+    XCTAssertEqual(
+      parseMappingCommand(rawString: "flash://movement_forward")?.command, .movementForward)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://app_previous")?.command, .appPrev)
     XCTAssertEqual(parseMappingCommand(rawString: "flash://app_next")?.command, .appNext)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://app_quit")?.command, .quitApp(force: false))
+    XCTAssertEqual(
+      parseMappingCommand(rawString: "flash://app_quit")?.command, .quitApp(force: false))
     XCTAssertEqual(
       parseMappingCommand(rawString: "flash://app_quit?force=1")?.command,
       .quitApp(force: true))
@@ -318,7 +324,8 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingCommand(rawString: "flash://app_open"))  // no name
     XCTAssertNil(parseMappingCommand(rawString: "flash://alert_show"))  // no message
     XCTAssertNil(parseMappingCommand(rawString: "flash://show_alert"))  // alias removed
-    XCTAssertNil(parseMappingCommand(rawString: "flash://plugin_command?command=spotify"))  // no subcommand
+    // no subcommand
+    XCTAssertNil(parseMappingCommand(rawString: "flash://plugin_command?command=spotify"))
     XCTAssertNil(parseMappingCommand(rawString: "flash://usage"))
   }
 

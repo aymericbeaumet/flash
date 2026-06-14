@@ -102,9 +102,11 @@ final class MappingsCoordinator {
   func handle(event: NSEvent) -> Bool {
     let modifiers = Self.carbonModifiers(from: event.modifierFlags)
     let virtualKey = UInt32(event.keyCode)
-    guard let active = activeMappings.first(where: {
-      $0.parsed.modifiers == modifiers && $0.parsed.virtualKey == virtualKey
-    }) else {
+    guard
+      let active = activeMappings.first(where: {
+        $0.parsed.modifiers == modifiers && $0.parsed.virtualKey == virtualKey
+      })
+    else {
       return false
     }
     fire(active.mapping, scope: active.scope, parsed: active.parsed)

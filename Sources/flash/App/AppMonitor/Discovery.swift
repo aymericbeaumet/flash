@@ -349,7 +349,8 @@ extension AppMonitor {
     elapsedMilliseconds(from: start, to: DispatchTime.now())
   }
 
-  private static func elapsedMilliseconds(from start: DispatchTime, to end: DispatchTime) -> String {
+  private static func elapsedMilliseconds(from start: DispatchTime, to end: DispatchTime) -> String
+  {
     let nanos = end.uptimeNanoseconds - start.uptimeNanoseconds
     return String(format: "%.2f", Double(nanos) / 1_000_000)
   }

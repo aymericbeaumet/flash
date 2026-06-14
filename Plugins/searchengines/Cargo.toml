@@ -3,7 +3,6 @@ name = "flash-plugin-searchengines"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-build = "build.rs"
 
 [[bin]]
 name = "flash-plugin-searchengines"
@@ -11,10 +10,3 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_rust_flash_plugin" }
-
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-strip = true
-panic = "abort"

@@ -76,7 +76,7 @@ extension NormalModeDispatcher {
         previousWasSpace = true
       }
     }
-    return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    return out.trimmed
   }
 
   private static func orderedHighlightOffsets(
@@ -171,12 +171,16 @@ extension NormalModeDispatcher {
         score += 8
       } else {
         let previous = candidate[candidateIndex - 1]
-        if previous == " " || previous == "-" || previous == "_" || previous == "." || previous == "#" {
+        if previous == " " || previous == "-" || previous == "_" || previous == "."
+          || previous == "#"
+        {
           score += 6
         }
       }
       if let previousMatchIndex {
-        score += candidateIndex == previousMatchIndex + 1 ? 8 : -min(6, candidateIndex - previousMatchIndex - 1)
+        score +=
+          candidateIndex == previousMatchIndex + 1
+          ? 8 : -min(6, candidateIndex - previousMatchIndex - 1)
       }
       previousMatchIndex = candidateIndex
       queryIndex += 1

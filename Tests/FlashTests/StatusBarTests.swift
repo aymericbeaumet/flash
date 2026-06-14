@@ -209,7 +209,8 @@ final class StatusBarTests: XCTestCase {
         inputMode: .normal,
         commandPromptVisible: false,
         candidateFinderResultsVisible: false,
-        transientContentVisible: false).rawValue,
+        transientContentVisible: false
+      ).rawValue,
       OverlayPanel.persistentStatusWindowLevel.rawValue)
     XCTAssertEqual(
       OverlayPanel.persistentStatusWindowLevel.rawValue,
@@ -225,14 +226,16 @@ final class StatusBarTests: XCTestCase {
         inputMode: .commandLine,
         commandPromptVisible: true,
         candidateFinderResultsVisible: false,
-        transientContentVisible: false).rawValue,
+        transientContentVisible: false
+      ).rawValue,
       OverlayPanel.transientOverlayWindowLevel.rawValue)
     XCTAssertEqual(
       OverlayPanel.windowLevelForOverlayContent(
         inputMode: .modal,
         commandPromptVisible: false,
         candidateFinderResultsVisible: false,
-        transientContentVisible: true).rawValue,
+        transientContentVisible: true
+      ).rawValue,
       OverlayPanel.transientOverlayWindowLevel.rawValue)
   }
 
@@ -347,7 +350,8 @@ final class StatusBarTests: XCTestCase {
       dynamicValues: statusBarCommandValues(
         template: config.statusBar.template,
         agent: "#[fg=colour178]Cdx#[fg=colour245] 90%↻3h",
-        battery: "#[range=user|bat-prefs fg=colour178]82%#[norange]")).rightText
+        battery: "#[range=user|bat-prefs fg=colour178]82%#[norange]")
+    ).rightText
 
     XCTAssertEqual(
       text,

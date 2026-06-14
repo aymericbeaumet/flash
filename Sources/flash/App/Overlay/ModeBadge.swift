@@ -211,15 +211,17 @@ extension OverlayPanel {
     let textHeight = fontSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
     let contentX = Self.statusBarEdgePadding
-    let appText = statusAppText.trimmingCharacters(in: .whitespacesAndNewlines)
-    let measuredAppWidth = appText.isEmpty
+    let appText = statusAppText.trimmed
+    let measuredAppWidth =
+      appText.isEmpty
       ? 0
       : ceil((appText as NSString).size(withAttributes: [.font: rightFont]).width)
     let maxAppWidth = max(
       0,
       min(Self.statusBarMaximumAppNameWidth, barFrame.width * 0.22))
     let rightDisplayText = Self.statusRightDisplayText(statusRightText)
-    let rightReservedWidth = rightDisplayText.isEmpty
+    let rightReservedWidth =
+      rightDisplayText.isEmpty
       ? 0
       : min(
         max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
@@ -364,7 +366,7 @@ extension OverlayPanel {
 
   static func statusRightDisplayText(_ statusRightText: String) -> String {
     FlashStatusBarRenderer.stripClickRanges(
-      from: statusRightText.trimmingCharacters(in: .whitespacesAndNewlines))
+      from: statusRightText.trimmed)
   }
 
   func refreshWindowLevelForCurrentContent() {

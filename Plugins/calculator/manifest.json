@@ -1,4 +1,5 @@
 {
+  "manifest_version": 1,
   "id": "calculator",
   "name": "Calculator",
   "version": "0.1.0",

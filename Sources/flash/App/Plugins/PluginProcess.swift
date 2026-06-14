@@ -22,6 +22,14 @@ final class PluginProcess {
   private var heartbeatMisses = 0
   private var heartbeatTimer: DispatchSourceTimer?
   private var restartCount = 0
+  /// Timestamps of recent restart attempts. Bounded restart loop: if
+  /// `restartWindowAttempts` restarts happen within `restartWindowSeconds`,
+  /// the plugin is parked in `.crashed` and stops auto-restarting. The user
+  /// can recover with `:plugins reload`.
+  private var restartTimestamps: [Date] = []
+  private static let restartWindowAttempts = 5
+  private static let restartWindowSeconds: TimeInterval = 300
+  private var restartLoopExhausted = false
   private var requestID: Int = 0
   private var pending: [Int: ([String: Any]?) -> Void] = [:]
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
@@ -52,8 +60,7 @@ final class PluginProcess {
   /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
   /// installs this; `reply` is invoked with the JSON result, possibly async
   /// (e.g. AX work hops to the main thread first).
-  var onHostRequest:
-    ((String, [String: Any], String, @escaping ([String: Any]) -> Void) -> Void)?
+  var onHostRequest: ((String, [String: Any], String, @escaping ([String: Any]) -> Void) -> Void)?
 
   init(
     root: URL,
@@ -108,6 +115,11 @@ final class PluginProcess {
   func reload(reason: String) {
     queue.async { [weak self] in
       guard let self else { return }
+      // User-initiated reload re-arms the bounded restart loop so a previously
+      // exhausted plugin can recover without restarting the resident process.
+      self.restartLoopExhausted = false
+      self.restartTimestamps.removeAll()
+      self.restartCount = 0
       self.stopOnQueue(reason: reason)
       self.startOnQueue(reason: reason)
     }
@@ -115,6 +127,16 @@ final class PluginProcess {
 
   func sendEvent(_ event: PluginEvent) {
     guard manifest.subscriptions.contains(where: { $0.matches(event) }) else { return }
+    // Default-deny capability gate. Events that carry sensitive data
+    // (clipboard text, etc.) reach a plugin only when its manifest
+    // explicitly opts in via `capabilities`. A plugin that drops or
+    // logs this event would otherwise have unsupervised access to the
+    // contents.
+    if let required = PluginCapability.required(for: event.name),
+      !manifest.capabilities.contains(required)
+    {
+      return
+    }
     var payload = event.payload
     if let bundleID = event.bundleID, payload["bundle_id"] == nil {
       payload["bundle_id"] = bundleID
@@ -132,10 +154,12 @@ final class PluginProcess {
         "height": frame.height,
       ]
     }
-    sendNotification(method: "event", params: [
-      "name": event.name,
-      "payload": payload,
-    ])
+    sendNotification(
+      method: "event",
+      params: [
+        "name": event.name,
+        "payload": payload,
+      ])
   }
 
   /// Synchronous-style discover for volatile plugins. Sends a
@@ -168,12 +192,14 @@ final class PluginProcess {
       semaphore.signal()
     }
     let waitResult = semaphore.wait(timeout: .now() + timeout)
-    let snap = snapshot ?? {
-      lock.lock()
-      let s = self.snapshot
-      lock.unlock()
-      return s
-    }()
+    let snap =
+      snapshot
+      ?? {
+        lock.lock()
+        let s = self.snapshot
+        lock.unlock()
+        return s
+      }()
     let contextMismatch = snap.contextPID.map { $0 != context.processID } ?? false
     if FlashLog.wouldEmit(.debug) {
       var fields: [String: String] = [
@@ -237,7 +263,8 @@ final class PluginProcess {
       providerID: wire.sourceID)
   }
 
-  private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginSnapshot {
+  private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginSnapshot
+  {
     let sourceID = params["source_id"] as? String ?? "plugin:\(manifest.id)"
     let contextPID = (params["context_pid"] as? Int).map(pid_t.init) ?? defaultPID
     let targetItems = (params["targets"] as? [[String: Any]] ?? [])
@@ -594,12 +621,19 @@ final class PluginProcess {
     self.stdinPipe = stdin
     self.startDate = Date()
     self.lastHeartbeatAt = Date()
-    sendRequest(method: "initialize", params: [
-      "plugin_id": manifest.id,
-      "version": manifest.version,
-    ]) { [weak self] _ in
+    sendRequest(
+      method: "initialize",
+      params: [
+        "plugin_id": manifest.id,
+        "version": manifest.version,
+      ]
+    ) { [weak self] _ in
       self?.clearError()
       self?.setState(.ready)
+      // Successful startup resets the backoff counter so a transient crash
+      // doesn't accumulate across hours of healthy operation.
+      self?.restartCount = 0
+      self?.restartTimestamps.removeAll()
     }
   }
 
@@ -614,18 +648,54 @@ final class PluginProcess {
     process.arguments = ["-lc", manifest.install]
     process.currentDirectoryURL = root
     process.environment = pluginEnvironment()
-    process.standardOutput = FileHandle.nullDevice
+    let out = Pipe()
     let err = Pipe()
+    process.standardOutput = out
     process.standardError = err
     try process.run()
     process.waitUntilExit()
+    let stdoutData = out.fileHandleForReading.readDataToEndOfFile()
+    let stderrData = err.fileHandleForReading.readDataToEndOfFile()
+    // Persist the install script's output even on success. Third-party
+    // plugin `install` strings run as `/bin/sh -lc <attacker-controllable>`
+    // — when an incident comes to light later, the diagnostics need to be
+    // on disk to figure out what the script actually did. Best-effort:
+    // failures here don't block the install path.
+    writePluginInstallLog(
+      stdout: stdoutData,
+      stderr: stderrData,
+      status: process.terminationStatus)
     if process.terminationStatus != 0 {
-      let data = err.fileHandleForReading.readDataToEndOfFile()
-      let message = String(data: data, encoding: .utf8)?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-      throw PluginError.processLaunch("install failed status=\(process.terminationStatus) \(message ?? "")")
+      let message = String(data: stderrData, encoding: .utf8)?
+        .trimmed
+      throw PluginError.processLaunch(
+        "install failed status=\(process.terminationStatus) \(message ?? "")")
     }
     try stamp.write(to: stampURL, atomically: true, encoding: .utf8)
+  }
+
+  private func writePluginInstallLog(
+    stdout: Data,
+    stderr: Data,
+    status: Int32
+  ) {
+    let fm = FileManager.default
+    let logsDir = fm.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Logs/Flash/plugin-install")
+    try? fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let timestamp = formatter.string(from: Date())
+      .replacingOccurrences(of: ":", with: "-")
+    let path = logsDir.appendingPathComponent("\(manifest.id)-\(timestamp).log")
+    var body = "# plugin=\(manifest.id) version=\(manifest.version) status=\(status)\n"
+    body += "# install=\(manifest.install)\n"
+    body += "# root=\(root.path)\n\n"
+    body += "## stdout\n"
+    body += (String(data: stdout, encoding: .utf8) ?? "<non-utf8>") + "\n"
+    body += "## stderr\n"
+    body += (String(data: stderr, encoding: .utf8) ?? "<non-utf8>") + "\n"
+    try? body.write(to: path, atomically: true, encoding: .utf8)
   }
 
   /// `settings` serialized to a JSON object string for the plugin's
@@ -823,7 +893,7 @@ final class PluginProcess {
   /// giant frame back over IPC. Mirrors the SDK's `shorten`.
   private static func shorten(_ value: String) -> String {
     let limit = 2000
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = value.trimmed
     if trimmed.count <= limit { return trimmed }
     return String(trimmed.prefix(limit - 3)) + "..."
   }
@@ -873,7 +943,11 @@ final class PluginProcess {
   /// Sanity ceiling on a single frame's payload. Real frames are a few KB at
   /// most; anything larger means the stream desynced and the "length" is
   /// really payload bytes misread as a prefix.
-  private static let maxFrameBytes = 64 * 1024 * 1024
+  // Real payloads (candidate snapshots, command responses) sit well under
+  // 1 MiB. The previous 64 MiB ceiling let a misbehaving plugin starve the
+  // host on every frame; 10 MiB still covers any sensible payload while
+  // bounding the worst-case allocation.
+  private static let maxFrameBytes = 10 * 1024 * 1024
 
   private func handleStdout(_ data: Data) {
     guard !data.isEmpty else { return }
@@ -930,7 +1004,7 @@ final class PluginProcess {
   private func handleStderr(_ data: Data) {
     guard !data.isEmpty,
       let message = String(data: data, encoding: .utf8)?
-        .trimmingCharacters(in: .whitespacesAndNewlines),
+        .trimmed,
       !message.isEmpty
     else { return }
     queue.async { [weak self] in
@@ -1181,10 +1255,12 @@ final class PluginProcess {
   }
 
   private func activateTarget(_ targetID: String, action: JumpAction) {
-    sendNotification(method: "activateTarget", params: [
-      "action": actionName(action),
-      "target_id": targetID,
-    ])
+    sendNotification(
+      method: "activateTarget",
+      params: [
+        "action": actionName(action),
+        "target_id": targetID,
+      ])
   }
 
   private func actionName(_ action: JumpAction) -> String {
@@ -1229,6 +1305,19 @@ final class PluginProcess {
   }
 
   private func scheduleRestart() {
+    let now = Date()
+    let windowStart = now.addingTimeInterval(-Self.restartWindowSeconds)
+    restartTimestamps.removeAll(where: { $0 < windowStart })
+    restartTimestamps.append(now)
+    if restartTimestamps.count > Self.restartWindowAttempts {
+      restartLoopExhausted = true
+      recordError(
+        "[plugin] restart loop exhausted: \(restartTimestamps.count) restarts "
+          + "within \(Int(Self.restartWindowSeconds))s — parking in .crashed. "
+          + "Run :plugins reload to retry.")
+      setState(.crashed)
+      return
+    }
     let delay = min(30, max(1, restartCount + 1))
     restartCount += 1
     queue.asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
@@ -1272,11 +1361,13 @@ final class PluginProcess {
   private func installFileWatchers() {
     removeFileWatchers()
     let fm = FileManager.default
-    guard let enumerator = fm.enumerator(
-      at: root,
-      includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
-      options: [.skipsHiddenFiles]
-    ) else { return }
+    guard
+      let enumerator = fm.enumerator(
+        at: root,
+        includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
+        options: [.skipsHiddenFiles]
+      )
+    else { return }
     // Watch directories only. The previous code opened one fd per file
     // in the plugin tree, so a plugin with `node_modules` (typically
     // 30k+ files) blew past the default `ulimit -n` (256–2560). DirOnly
