@@ -107,17 +107,32 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.commandPromptFontSize(statusBarFontSize: 13), 14)
   }
 
-  func testCommandPromptFrameIsCenteredInVisibleScreen() {
+  func testCommandPromptFrameUsesGoldenRatioComplementWidthAndTopOffset() {
+    let screenFrame = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+    let visibleFrame = CGRect(x: 0, y: 0, width: 1728, height: 1079)
+    let statusBarFrame = OverlayPanel.statusBarFrame(
+      screenFrame: screenFrame,
+      visibleFrame: visibleFrame,
+      panelFrame: screenFrame,
+      fontSize: 13)
     let frame = OverlayPanel.commandPromptFrame(
-      visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
-      panelFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      visibleFrame: visibleFrame,
+      screenFrame: screenFrame,
+      statusBarFrame: statusBarFrame,
+      panelFrame: screenFrame,
       prompt: ":open firefox",
       fontSize: 14)
 
-    XCTAssertEqual(frame.width, 440)
+    XCTAssertEqual(
+      frame.width / screenFrame.width,
+      OverlayPanel.commandPromptWidthFraction,
+      accuracy: 0.001)
     XCTAssertEqual(frame.height, 38)
-    XCTAssertEqual(frame.midX, 864)
-    XCTAssertEqual(frame.midY, 539.5)
+    XCTAssertEqual(frame.midX, 864, accuracy: 0.001)
+    XCTAssertEqual(
+      (statusBarFrame.minY - frame.maxY) / visibleFrame.height,
+      OverlayPanel.commandPromptTopOffsetFraction,
+      accuracy: 0.001)
   }
 
   func testStatusBarHidesActiveAppAndUsesConstantModeFont() {
@@ -195,6 +210,42 @@ final class StatusBarTests: XCTestCase {
       minimumY: 10)
 
     XCTAssertEqual(y, 10)
+  }
+
+  func testCandidateFinderResultsWidthStartsAtCommandPromptWidth() {
+    let width = OverlayPanel.candidateFinderResultsWidth(
+      commandPromptWidth: 1_068,
+      longestLineCharacterCount: 8,
+      fontSize: 14,
+      maximumWidth: 1_600)
+
+    XCTAssertEqual(width, 1_068)
+  }
+
+  func testCandidateFinderResultsWidthGrowsWithLongResults() {
+    let width = OverlayPanel.candidateFinderResultsWidth(
+      commandPromptWidth: 1_068,
+      longestLineCharacterCount: 130,
+      fontSize: 14,
+      maximumWidth: 1_600)
+
+    XCTAssertGreaterThan(width, 1_068)
+    XCTAssertLessThan(width, 1_600)
+  }
+
+  func testSystemStatusBarAutoHidePresentationOptionFollowsAdvancedMode() {
+    let current: NSApplication.PresentationOptions = [.autoHideDock]
+    let enabled = AppDelegate.systemStatusBarPresentationOptions(
+      current: current,
+      enabled: true)
+    let disabled = AppDelegate.systemStatusBarPresentationOptions(
+      current: enabled,
+      enabled: false)
+
+    XCTAssertTrue(enabled.contains(.autoHideMenuBar))
+    XCTAssertTrue(enabled.contains(.autoHideDock))
+    XCTAssertFalse(disabled.contains(.autoHideMenuBar))
+    XCTAssertTrue(disabled.contains(.autoHideDock))
   }
 
   func testCandidateFinderResultsKeepBestMatchOnTop() {

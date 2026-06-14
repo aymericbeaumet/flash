@@ -2260,11 +2260,19 @@ extension AppDelegate {
       action: { registry, context, completion in
         registry.tabNext(in: context, completion: completion)
       },
-      fallback: { [weak self] _, count in
-        self?.sendNormalModeKey(
-          CGKeyCode(kVK_ANSI_RightBracket),
-          flags: [.maskCommand, .maskShift],
-          repeatCount: count)
+      fallback: { [weak self] context, count in
+        guard let self else { return }
+        guard
+          let shortcut = Self.tabTraversalFallbackShortcut(
+            direction: .forward,
+            bundleIdentifier: context.bundleIdentifier)
+        else {
+          FlashLog.debug(
+            "[normal_mode] tab_next unsupported bundle=\(context.bundleIdentifier)")
+          self.applyModeOverlay()
+          return
+        }
+        self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
       })
   }
 
@@ -2275,11 +2283,19 @@ extension AppDelegate {
       action: { registry, context, completion in
         registry.tabPrev(in: context, completion: completion)
       },
-      fallback: { [weak self] _, count in
-        self?.sendNormalModeKey(
-          CGKeyCode(kVK_ANSI_LeftBracket),
-          flags: [.maskCommand, .maskShift],
-          repeatCount: count)
+      fallback: { [weak self] context, count in
+        guard let self else { return }
+        guard
+          let shortcut = Self.tabTraversalFallbackShortcut(
+            direction: .back,
+            bundleIdentifier: context.bundleIdentifier)
+        else {
+          FlashLog.debug(
+            "[normal_mode] tab_previous unsupported bundle=\(context.bundleIdentifier)")
+          self.applyModeOverlay()
+          return
+        }
+        self.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
       })
   }
 
@@ -2491,6 +2507,18 @@ extension AppDelegate {
   static func nativeBrowserTabIndexKey(index: Int, bundleIdentifier: String) -> CGKeyCode? {
     guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) else { return nil }
     return tabIndexKeyCode(index)
+  }
+
+  static func tabTraversalFallbackShortcut(
+    direction: NavigationDirection,
+    bundleIdentifier: String
+  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
+    guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) else { return nil }
+    let key: CGKeyCode =
+      direction == .forward
+      ? CGKeyCode(kVK_ANSI_RightBracket)
+      : CGKeyCode(kVK_ANSI_LeftBracket)
+    return (key, [.maskCommand, .maskShift])
   }
 
   private static func tabIndexKeyCode(_ index: Int) -> CGKeyCode? {

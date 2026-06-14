@@ -124,11 +124,11 @@ extension OverlayPanel {
     let longest = lines.map(\.count).max() ?? candidateFinderResultsMeasurementText.count
     let x = commandPromptLayer.frame.minX
     let maxWidth = max(180, visible.maxX - panelFrame.minX - x - 10)
-    let width = min(
-      max(
-        220,
-        CGFloat(longest) * fontSize * 0.62 + Self.candidateFinderHorizontalPadding * 2 + 4),
-      maxWidth)
+    let width = Self.candidateFinderResultsWidth(
+      commandPromptWidth: commandPromptLayer.frame.width,
+      longestLineCharacterCount: longest,
+      fontSize: fontSize,
+      maximumWidth: maxWidth)
     let attributedText =
       candidateFinderResultsAttributedText
       ?? NSAttributedString(
@@ -175,6 +175,18 @@ extension OverlayPanel {
       with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
       options: [.usesLineFragmentOrigin, .usesFontLeading])
     return ceil(max(fontLineHeight, measured.height))
+  }
+
+  static func candidateFinderResultsWidth(
+    commandPromptWidth: CGFloat,
+    longestLineCharacterCount: Int,
+    fontSize: CGFloat,
+    maximumWidth: CGFloat
+  ) -> CGFloat {
+    let naturalWidth =
+      CGFloat(longestLineCharacterCount) * fontSize * 0.62
+      + candidateFinderHorizontalPadding * 2 + 4
+    return min(max(commandPromptWidth, naturalWidth), maximumWidth)
   }
 
   static func candidateFinderResultsY(

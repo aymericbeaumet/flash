@@ -14,7 +14,8 @@ impl FlashPlugin for Calculator {
         if expr.is_empty() {
             return CommandResponse::error("empty expression");
         }
-        let value = match meval::eval_str(&expr) {
+        let mut namespace = fasteval2::EmptyNamespace;
+        let value = match fasteval2::ez_eval(&expr, &mut namespace) {
             Ok(v) => v,
             Err(err) => return CommandResponse::error(format!("cannot evaluate: {err}")),
         };

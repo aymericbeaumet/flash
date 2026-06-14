@@ -27,7 +27,11 @@ else
   exit 1
 fi
 
-"$PKG" install
+if [[ "$PKG" == "pnpm" ]]; then
+  PNPM_CONFIG_UPDATE_NOTIFIER=false "$PKG" install
+else
+  "$PKG" install
+fi
 if [[ "$MODE" == "dev" ]]; then
   "$PKG" run build:dev
 else

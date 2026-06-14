@@ -366,23 +366,37 @@ extension OverlayPanel {
   }
 
   func captureKeyboardInput() {
-    FlashLog.trace("[overlay] capture_keyboard key_before=\(isKeyWindow) input=\(inputMode)")
+    let keyBefore = isKeyWindow
     refreshWindowLevelForCurrentContent()
     orderFrontRegardless()
+    makeKeyAndOrderFront(nil)
     makeKey()
+    let responderDescription: String
     if inputMode == .commandLine {
       commandTextField.isHidden = false
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
+      responderDescription = "command"
+      FlashLog.trace(
+        "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
+          + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode)")
       return
     }
     if inputMode == .modal {
       modalTextView.overlayCoordinator = coordinator
       modalScrollView.isHidden = false
       makeFirstResponder(modalTextView)
+      responderDescription = "modal"
+      FlashLog.trace(
+        "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
+          + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode)")
       return
     }
     makeFirstResponder(self)
+    responderDescription = "panel"
+    FlashLog.trace(
+      "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
+        + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode)")
   }
 
 

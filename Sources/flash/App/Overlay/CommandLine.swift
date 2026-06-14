@@ -7,6 +7,10 @@ import QuartzCore
 /// draws above it. The text field is shown only while the overlay is
 /// actively in `.commandLine` input mode.
 extension OverlayPanel {
+  static let goldenRatioFraction: CGFloat = 0.618_033_988_749_894_8
+  static let commandPromptWidthFraction: CGFloat = 1 - goldenRatioFraction
+  static let commandPromptTopOffsetFraction: CGFloat = 1 - goldenRatioFraction
+
   func displayCommandLine(
     _ text: String,
     suggestions: [CandidateDisplayItem]? = nil,
@@ -49,9 +53,18 @@ extension OverlayPanel {
       prompt = "\(commandPromptPrefix)\(commandWithCursor)"
     }
     let snapshot = OverlayPanel.currentScreenSnapshot()
+    let visible = snapshot.mainVisibleFrame
+    let screenFrame = snapshot.mainFrame ?? visible
+    let statusFrame = Self.statusBarFrame(
+      screenFrame: screenFrame,
+      visibleFrame: visible,
+      panelFrame: panelFrame,
+      fontSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)))
     let scale = snapshot.mainScale
     let frame = Self.commandPromptFrame(
-      visibleFrame: snapshot.mainVisibleFrame,
+      visibleFrame: visible,
+      screenFrame: screenFrame,
+      statusBarFrame: statusFrame,
       panelFrame: panelFrame,
       prompt: prompt,
       fontSize: fontSize)
@@ -142,6 +155,8 @@ extension OverlayPanel {
 
   static func commandPromptFrame(
     visibleFrame: CGRect,
+    screenFrame: CGRect,
+    statusBarFrame: CGRect,
     panelFrame: CGRect,
     prompt: String,
     fontSize: CGFloat
@@ -149,18 +164,20 @@ extension OverlayPanel {
     let availableWidth = max(
       180,
       visibleFrame.width - statusBarEdgePadding * 2)
-    let maxWidth = max(220, min(720, availableWidth))
+    let maxWidth = max(220, availableWidth)
+    let goldenWidth = min(maxWidth, max(220, screenFrame.width * commandPromptWidthFraction))
     let measuredCount = max(prompt.count, 18)
     let naturalWidth = CGFloat(measuredCount) * fontSize * 0.62 + 40
-    let minimumWidth = min(440, maxWidth)
-    let width = min(max(minimumWidth, naturalWidth), maxWidth)
+    let width = min(max(goldenWidth, naturalWidth), maxWidth)
     let height = ceil(max(fontSize + 20, 38))
     let minY = visibleFrame.minY - panelFrame.minY + 24
-    let maxY = visibleFrame.maxY - panelFrame.minY - height - 24
-    let centeredY = visibleFrame.midY - panelFrame.minY - height / 2
+    let topBoundary = min(statusBarFrame.minY, visibleFrame.maxY) - panelFrame.minY
+    let usableHeight = max(0, topBoundary - (visibleFrame.minY - panelFrame.minY))
+    let goldenTopY = topBoundary - usableHeight * commandPromptTopOffsetFraction
+    let maxY = topBoundary - height - 24
     return CGRect(
       x: visibleFrame.midX - panelFrame.minX - width / 2,
-      y: max(minY, min(centeredY, maxY)),
+      y: max(minY, min(goldenTopY - height, maxY)),
       width: width,
       height: height)
   }

@@ -133,6 +133,7 @@ extension AppDelegate {
     invalidateCandidateFinderCaches(reason: "config_reload", refreshApps: true)
     monitor.updateConfig(cfg)
     modeBadgeEnabled = hasNormalModeBinding(cfg)
+    applySystemStatusBarAutoHide(enabled: modeBadgeEnabled)
     if modeBadgeEnabled {
       statusBarController?.start()
     } else {
@@ -242,6 +243,31 @@ extension AppDelegate {
     } else {
       applyModeOverlay()
     }
+  }
+
+  func applySystemStatusBarAutoHide(enabled: Bool) {
+    let current = NSApp.presentationOptions
+    let updated = Self.systemStatusBarPresentationOptions(
+      current: current,
+      enabled: enabled)
+    let changed = updated != current
+    if changed {
+      NSApp.presentationOptions = updated
+    }
+    FlashLog.debug("[statusbar] system_menu_bar_autohide enabled=\(enabled) changed=\(changed)")
+  }
+
+  static func systemStatusBarPresentationOptions(
+    current: NSApplication.PresentationOptions,
+    enabled: Bool
+  ) -> NSApplication.PresentationOptions {
+    var options = current
+    if enabled {
+      options.insert(.autoHideMenuBar)
+    } else {
+      options.remove(.autoHideMenuBar)
+    }
+    return options
   }
 
   private func showConfigErrorAlertIfNeeded(for cfg: Config) {

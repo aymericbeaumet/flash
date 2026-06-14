@@ -13,22 +13,25 @@
 //!   - link chips: per-regex match in `capture-pane -p` output.
 
 use std::collections::{BTreeMap, HashMap};
+use std::os::unix::fs::FileTypeExt;
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_local, ActivateRequest, Candidate, CommandRequest, CommandResponse, Context,
-    DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, ResolveResponse,
+    run, run_local, ActivateRequest, Candidate, CliResult, CommandRequest, CommandResponse,
+    Context, DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, ResolveResponse,
     SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-const PLUGIN_ID: &str = "tmux";
 const SOURCE_ID: &str = "plugin:tmux";
 
 const TMUX_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/usr"];
+const ENV_PATH: &str = "/usr/bin/env";
+const PS_PATH: &str = "/bin/ps";
+const TMUX_FIELD_SEP: &str = "|||";
 
 const LINKS_PER_PANE_LIMIT: usize = 40;
 const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
@@ -105,6 +108,83 @@ async fn run_cmd(program: &str, args: &[&str], timeout: Duration) -> Option<Stri
     Some(result.stdout)
 }
 
+fn tmux_argv(tmux_path: &str, args: &[&str]) -> Vec<String> {
+    let mut argv = Vec::with_capacity(args.len() + 10);
+    argv.push(ENV_PATH.to_string());
+    argv.extend([
+        "-u".to_string(),
+        "TMUX".to_string(),
+        "-u".to_string(),
+        "TMUX_PANE".to_string(),
+        "-u".to_string(),
+        "TMUX_TMPDIR".to_string(),
+        "-u".to_string(),
+        "TMPDIR".to_string(),
+    ]);
+    argv.push(tmux_path.to_string());
+    argv.extend(args.iter().map(|s| s.to_string()));
+    argv
+}
+
+fn tmux_socket_argv(tmux_path: &str, socket_path: &str, args: &[&str]) -> Vec<String> {
+    let mut argv = tmux_argv(tmux_path, &["-S", socket_path]);
+    argv.extend(args.iter().map(|s| s.to_string()));
+    argv
+}
+
+fn tmux_socket_paths() -> Vec<String> {
+    let mut paths = Vec::new();
+    for base in ["/private/tmp", "/tmp"] {
+        let Ok(entries) = std::fs::read_dir(base) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("tmux-") {
+                continue;
+            }
+            let Ok(sockets) = std::fs::read_dir(entry.path()) else {
+                continue;
+            };
+            for socket in sockets.flatten() {
+                let Ok(file_type) = socket.file_type() else {
+                    continue;
+                };
+                if file_type.is_socket() {
+                    paths.push(socket.path().to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn tmux_command_needs_nonempty_output(args: &[&str]) -> bool {
+    matches!(args.first().copied(), Some("list-clients" | "list-windows"))
+}
+
+async fn run_tmux_local(
+    tmux_path: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<CliResult, CliResult> {
+    let needs_nonempty = tmux_command_needs_nonempty_output(args);
+    let mut result = run_local(&tmux_argv(tmux_path, args), timeout).await;
+    if result.ok && (!needs_nonempty || !result.stdout.trim().is_empty()) {
+        return Ok(result);
+    }
+    for socket_path in tmux_socket_paths() {
+        result = run_local(&tmux_socket_argv(tmux_path, &socket_path, args), timeout).await;
+        if result.ok && (!needs_nonempty || !result.stdout.trim().is_empty()) {
+            return Ok(result);
+        }
+    }
+    Err(result)
+}
+
 /// Run tmux capturing stderr too, so callers can surface why a command
 /// failed instead of just seeing `None`. Used by the mutating tab actions
 /// (`new-window`, `kill-window`) where a silent failure is the worst
@@ -116,25 +196,25 @@ async fn run_tmux_capture(
     timeout: Duration,
 ) -> Result<String, String> {
     let path = tmux_path.ok_or_else(|| "tmux binary not found".to_string())?;
-    let mut argv = Vec::with_capacity(args.len() + 1);
-    argv.push(path.to_string());
-    argv.extend(args.iter().map(|s| s.to_string()));
-    let result = run_local(&argv, timeout).await;
-    if result.ok {
-        Ok(result.stdout)
-    } else {
-        let stderr = result.stderr.trim();
-        Err(if stderr.is_empty() {
-            format!("tmux exited status={}", result.status)
-        } else {
-            stderr.to_string()
-        })
+    match run_tmux_local(path, args, timeout).await {
+        Ok(result) => Ok(result.stdout),
+        Err(result) => {
+            let stderr = result.stderr.trim();
+            Err(if stderr.is_empty() {
+                format!("tmux exited status={}", result.status)
+            } else {
+                stderr.to_string()
+            })
+        }
     }
 }
 
 async fn run_tmux(tmux_path: Option<&str>, args: &[&str], timeout: Duration) -> Option<String> {
     let path = tmux_path?;
-    run_cmd(path, args, timeout).await
+    run_tmux_local(path, args, timeout)
+        .await
+        .ok()
+        .map(|result| result.stdout)
 }
 
 async fn run_tmux_default(tmux_path: Option<&str>, args: &[&str]) -> Option<String> {
@@ -154,7 +234,12 @@ fn trimmed(value: Option<String>) -> Option<String> {
 
 async fn parent_pid_map() -> HashMap<i64, i64> {
     let mut map = HashMap::new();
-    let Some(out) = run_cmd("ps", &["-axo", "pid=,ppid="], Duration::from_millis(1500)).await
+    let Some(out) = run_cmd(
+        PS_PATH,
+        &["-axo", "pid=,ppid="],
+        Duration::from_millis(1500),
+    )
+    .await
     else {
         return map;
     };
@@ -207,6 +292,43 @@ fn is_ancestor(ancestor_pid: i64, descendant_pid: i64, parent_map: &HashMap<i64,
     false
 }
 
+fn client_hosted_by_from_map(
+    clients: Vec<TmuxClient>,
+    focused_pid: i64,
+    parent_map: &HashMap<i64, i64>,
+) -> Option<TmuxClient> {
+    let process_sample_can_evaluate_clients = clients
+        .iter()
+        .any(|c| parent_map.contains_key(&c.client_pid));
+    let mut matches: Vec<TmuxClient> = clients
+        .iter()
+        .filter(|c| is_ancestor(focused_pid, c.client_pid, parent_map))
+        .cloned()
+        .collect();
+    if matches.is_empty() {
+        if process_sample_can_evaluate_clients {
+            return None;
+        }
+        let mut fallback = clients;
+        fallback.sort_by(|a, b| b.activity.cmp(&a.activity));
+        return fallback.into_iter().next();
+    }
+    matches.sort_by(|a, b| b.activity.cmp(&a.activity));
+    matches.into_iter().next()
+}
+
+fn split_tmux_fields(line: &str, max_fields: usize) -> Vec<&str> {
+    let by_unit_sep: Vec<&str> = line.splitn(max_fields, TMUX_FIELD_SEP).collect();
+    if by_unit_sep.len() >= max_fields.min(2) {
+        return by_unit_sep;
+    }
+    let by_tab: Vec<&str> = line.splitn(max_fields, '\t').collect();
+    if by_tab.len() >= max_fields.min(2) {
+        return by_tab;
+    }
+    line.splitn(max_fields, char::is_whitespace).collect()
+}
+
 // ---- tmux clients -----------------------------------------------------------
 
 #[derive(Clone)]
@@ -218,21 +340,16 @@ struct TmuxClient {
 }
 
 async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
-    let raw = run_tmux_default(
-        tmux_path,
-        &[
-            "list-clients",
-            "-F",
-            "#{client_tty}\t#{session_name}\t#{client_pid}\t#{client_activity}",
-        ],
-    )
-    .await;
+    let format = format!(
+        "#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
+    );
+    let raw = run_tmux_default(tmux_path, &["list-clients", "-F", &format]).await;
     let Some(raw) = raw else {
         return Vec::new();
     };
     let mut out = Vec::new();
     for line in raw.lines() {
-        let parts: Vec<&str> = line.splitn(4, '\t').collect();
+        let parts = split_tmux_fields(line, 4);
         if parts.len() < 3 {
             continue;
         }
@@ -262,15 +379,7 @@ async fn client_hosted_by(tmux_path: Option<&str>, focused_pid: i64) -> Option<T
         return None;
     }
     let pmap = parent_pid_map().await;
-    let mut matches: Vec<TmuxClient> = clients
-        .into_iter()
-        .filter(|c| is_ancestor(focused_pid, c.client_pid, &pmap))
-        .collect();
-    if matches.is_empty() {
-        return None;
-    }
-    matches.sort_by(|a, b| b.activity.cmp(&a.activity));
-    matches.into_iter().next()
+    client_hosted_by_from_map(clients, focused_pid, &pmap)
 }
 
 fn parse_two_ints(line: &str) -> Option<(i64, i64)> {
@@ -670,50 +779,28 @@ struct TmuxPayload {
     terminal_pid: Option<i64>,
 }
 
-/// `None` on transient tmux failure (caller preserves the previous snapshot);
-/// `Some(vec)` (possibly empty) is the authoritative current window list.
-async fn build_candidates(tmux_path: Option<&str>) -> Option<Vec<Candidate>> {
-    if tmux_path.is_none() {
-        return Some(Vec::new());
-    }
-    let clients = list_clients(tmux_path).await;
-    let mut client_by_session: HashMap<String, TmuxClient> = HashMap::new();
-    for client in &clients {
-        client_by_session
-            .entry(client.session.clone())
+fn client_by_session(clients: &[TmuxClient]) -> HashMap<String, TmuxClient> {
+    let mut out = HashMap::new();
+    for client in clients {
+        out.entry(client.session.clone())
             .or_insert_with(|| client.clone());
     }
-    let pmap = if clients.is_empty() {
-        HashMap::new()
-    } else {
-        parent_pid_map().await
-    };
-    let mut terminal_pid_by_session: HashMap<String, Option<i64>> = HashMap::new();
-    for (session, client) in &client_by_session {
-        terminal_pid_by_session.insert(
-            session.clone(),
-            find_top_level_ancestor(client.client_pid, &pmap),
-        );
-    }
+    out
+}
 
-    let raw = run_tmux_default(
-        tmux_path,
-        &[
-            "list-windows",
-            "-a",
-            "-F",
-            "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_command}\t#{pane_current_path}",
-        ],
-    )
-    .await?;
-
-    let home = std::env::var("HOME").unwrap_or_default();
+fn build_candidates_from_window_list(
+    raw: &str,
+    clients: &[TmuxClient],
+    terminal_pid_by_session: &HashMap<String, Option<i64>>,
+    home: &str,
+) -> Vec<Candidate> {
+    let client_by_session = client_by_session(clients);
     let mut out = Vec::new();
     for line in raw.split('\n') {
         if line.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = line.splitn(5, '\t').collect();
+        let parts = split_tmux_fields(line, 5);
         if parts.len() < 3 {
             continue;
         }
@@ -725,7 +812,7 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<Vec<Candidate>> {
             .get(4)
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
-        if !home.is_empty() && cwd.starts_with(&home) {
+        if !home.is_empty() && cwd.starts_with(home) {
             cwd = format!("~{}", &cwd[home.len()..]);
         }
         let client = client_by_session.get(session).or_else(|| clients.first());
@@ -773,18 +860,83 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<Vec<Candidate>> {
         }
         out.push(candidate);
     }
-    Some(out)
+    out
+}
+
+/// `None` on transient tmux failure (caller preserves the previous snapshot);
+/// `Some(vec)` (possibly empty) is the authoritative current window list.
+struct CandidateBuild {
+    candidates: Vec<Candidate>,
+    client_count: usize,
+    raw_line_count: usize,
+    first_raw_line: String,
+}
+
+async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
+    if tmux_path.is_none() {
+        return Some(CandidateBuild {
+            candidates: Vec::new(),
+            client_count: 0,
+            raw_line_count: 0,
+            first_raw_line: String::new(),
+        });
+    }
+    let clients = list_clients(tmux_path).await;
+    let client_by_session = client_by_session(&clients);
+    let pmap = if clients.is_empty() {
+        HashMap::new()
+    } else {
+        parent_pid_map().await
+    };
+    let mut terminal_pid_by_session: HashMap<String, Option<i64>> = HashMap::new();
+    for (session, client) in &client_by_session {
+        terminal_pid_by_session.insert(
+            session.clone(),
+            find_top_level_ancestor(client.client_pid, &pmap),
+        );
+    }
+
+    let format = format!(
+        "#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}"
+    );
+    let raw = run_tmux_default(tmux_path, &["list-windows", "-a", "-F", &format]).await?;
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let raw_line_count = raw.split('\n').filter(|line| !line.is_empty()).count();
+    let first_raw_line = raw
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(180)
+        .collect::<String>();
+    let candidates =
+        build_candidates_from_window_list(&raw, &clients, &terminal_pid_by_session, &home);
+    Some(CandidateBuild {
+        candidates,
+        client_count: clients.len(),
+        raw_line_count,
+        first_raw_line,
+    })
 }
 
 async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
-    let Some(candidates) = build_candidates(plugin.tmux_path.as_deref()).await else {
+    let Some(build) = build_candidates(plugin.tmux_path.as_deref()).await else {
         ctx.log(
             "debug",
             "[tmux] candidate refresh skipped — tmux transient failure",
         );
         return;
     };
-    ctx.emit_snapshot(SOURCE_ID, candidates);
+    let mut fields = BTreeMap::new();
+    fields.insert("candidates".to_string(), build.candidates.len().to_string());
+    fields.insert("clients".to_string(), build.client_count.to_string());
+    fields.insert("raw_lines".to_string(), build.raw_line_count.to_string());
+    if build.candidates.is_empty() && !build.first_raw_line.is_empty() {
+        fields.insert("first_raw_line".to_string(), build.first_raw_line.clone());
+    }
+    ctx.log_fields("debug", "[tmux] candidate refresh", fields);
+    ctx.emit_snapshot(SOURCE_ID, build.candidates);
 }
 
 // ---- Tab actions ------------------------------------------------------------
@@ -1317,6 +1469,105 @@ fn expand_tilde(text: &str) -> String {
         }
     }
     text.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(tty: &str, session: &str, client_pid: i64, activity: i64) -> TmuxClient {
+        TmuxClient {
+            tty: tty.to_string(),
+            session: session.to_string(),
+            client_pid,
+            activity,
+        }
+    }
+
+    #[test]
+    fn tmux_argv_clears_inherited_tmux_environment() {
+        let argv = tmux_argv("/opt/homebrew/bin/tmux", &["list-clients"]);
+
+        assert_eq!(argv[0], ENV_PATH);
+        assert_eq!(argv[1], "-u");
+        assert_eq!(argv[2], "TMUX");
+        assert_eq!(argv[3], "-u");
+        assert_eq!(argv[4], "TMUX_PANE");
+        assert_eq!(argv[5], "-u");
+        assert_eq!(argv[6], "TMUX_TMPDIR");
+        assert_eq!(argv[7], "-u");
+        assert_eq!(argv[8], "TMPDIR");
+        assert_eq!(argv[9], "/opt/homebrew/bin/tmux");
+        assert_eq!(argv[10], "list-clients");
+    }
+
+    #[test]
+    fn hosted_client_matches_focused_terminal_ancestor() {
+        let clients = vec![
+            client("/dev/ttys001", "other", 2000, 20),
+            client("/dev/ttys000", "scratch", 1443, 10),
+        ];
+        let parent_map = HashMap::from([(1443, 1356), (1356, 1), (2000, 1999), (1999, 1)]);
+
+        let picked = client_hosted_by_from_map(clients, 1356, &parent_map).unwrap();
+
+        assert_eq!(picked.session, "scratch");
+        assert_eq!(picked.tty, "/dev/ttys000");
+    }
+
+    #[test]
+    fn hosted_client_falls_back_to_active_when_parent_map_is_unavailable() {
+        let clients = vec![
+            client("/dev/ttys000", "scratch", 1443, 10),
+            client("/dev/ttys001", "work", 2000, 30),
+        ];
+        let parent_map = HashMap::new();
+
+        let picked = client_hosted_by_from_map(clients, 1356, &parent_map).unwrap();
+
+        assert_eq!(picked.session, "work");
+    }
+
+    #[test]
+    fn hosted_client_does_not_fallback_when_process_sample_knows_clients() {
+        let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
+        let parent_map = HashMap::from([(1443, 2222), (2222, 1)]);
+
+        let picked = client_hosted_by_from_map(clients, 1356, &parent_map);
+
+        assert!(picked.is_none());
+    }
+
+    #[test]
+    fn tmux_field_splitter_accepts_configured_separator_tabs_and_whitespace() {
+        assert_eq!(split_tmux_fields("a|||b|||c", 3), vec!["a", "b", "c"]);
+        assert_eq!(split_tmux_fields("a\tb\tc", 3), vec!["a", "b", "c"]);
+        assert_eq!(split_tmux_fields("a b c", 3), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn window_candidate_builder_emits_windows_from_all_sessions() {
+        let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
+        let terminal_pid_by_session = HashMap::from([("scratch".to_string(), Some(1356))]);
+        let raw = "beside\t1\tbeside-agentic\tclaude\t/Users/ab/workspace/beside\n\
+scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
+
+        let candidates =
+            build_candidates_from_window_list(raw, &clients, &terminal_pid_by_session, "/Users/ab");
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            candidates[0].name,
+            "beside:1 beside-agentic · claude · ~/workspace/beside"
+        );
+        assert_eq!(
+            candidates[1].name,
+            "scratch:2 flash · zsh · ~/workspace/aymericbeaumet/flash"
+        );
+        assert_eq!(candidates[1].source_id.as_deref(), Some(SOURCE_ID));
+        assert_eq!(candidates[1].source.as_deref(), Some("tmux.windows"));
+        assert_eq!(candidates[1].pid, Some(1356));
+    }
 }
 
 // ---- Plugin glue ------------------------------------------------------------

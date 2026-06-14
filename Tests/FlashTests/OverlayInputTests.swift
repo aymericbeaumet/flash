@@ -239,6 +239,74 @@ final class OverlayInputTests: XCTestCase {
         modeBadgeCapturesInput: false))
   }
 
+  func testConfiguredModifiedNormalMappingDoesNotLockOutBracketTabSequence() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    coordinator.mappingEventsToHandle = 1
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let normalModeHotkey = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [.command, .control],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: "[",
+        charactersIgnoringModifiers: "[",
+        isARepeat: false,
+        keyCode: UInt16(kVK_ANSI_LeftBracket)))
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: normalModeHotkey))
+    XCTAssertNil(panel.normalModeChordLockoutUntil)
+
+    panel.processNormalModeKey(
+      try keyEvent(keyCode: kVK_ANSI_LeftBracket, characters: "["))
+    XCTAssertEqual(panel.normalModePending, "[")
+
+    panel.processNormalModeKey(
+      try keyEvent(keyCode: kVK_ANSI_T, characters: "t"))
+    XCTAssertEqual(panel.normalModePending, "")
+    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabPrev])
+  }
+
+  func testConfiguredModifiedNormalMappingDoesNotLockOutRightBracketTabSequence() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    coordinator.mappingEventsToHandle = 1
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let normalModeHotkey = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [.command, .control],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: "[",
+        charactersIgnoringModifiers: "[",
+        isARepeat: false,
+        keyCode: UInt16(kVK_ANSI_LeftBracket)))
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: normalModeHotkey))
+    XCTAssertNil(panel.normalModeChordLockoutUntil)
+
+    panel.processNormalModeKey(
+      try keyEvent(keyCode: kVK_ANSI_RightBracket, characters: "]"))
+    XCTAssertEqual(panel.normalModePending, "]")
+
+    panel.processNormalModeKey(
+      try keyEvent(keyCode: kVK_ANSI_T, characters: "t"))
+    XCTAssertEqual(panel.normalModePending, "")
+    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabNext])
+  }
+
   func testActiveWindowBorderLocalRectTouchesWindowExteriorEdge() {
     let local = OverlayPanel.activeWindowBorderLocalRect(
       targetFrame: CGRect(x: 100, y: 80, width: 500, height: 300),
@@ -289,17 +357,47 @@ final class OverlayInputTests: XCTestCase {
 
 }
 
+private func keyEvent(
+  keyCode: Int,
+  characters: String,
+  charactersIgnoringModifiers: String? = nil,
+  modifierFlags: NSEvent.ModifierFlags = []
+) throws -> NSEvent {
+  try XCTUnwrap(
+    NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: modifierFlags,
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: characters,
+      charactersIgnoringModifiers: charactersIgnoringModifiers ?? characters,
+      isARepeat: false,
+      keyCode: UInt16(keyCode)))
+}
+
 private final class SpyOverlayCoordinator: OverlayCoordinator {
   var cancelModalCount = 0
   var passThroughModalCount = 0
   var commandLineSelectionDeltas: [Int] = []
+  var mappingEventsToHandle = 0
+  var normalModeActions: [(MappingCommand?, Int)] = []
 
   func overlayDidCancel() {}
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {}
   func overlayDidUpdatePrefix(_ prefix: String) {}
-  func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {}
-  func overlayDidHandleMapping(_ event: NSEvent) -> Bool { false }
+  func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
+    if action != nil {
+      normalModeActions.append((action, repeatCount))
+    }
+  }
+  func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
+    guard mappingEventsToHandle > 0 else { return false }
+    mappingEventsToHandle -= 1
+    return true
+  }
   func overlayDidCancelModal() { cancelModalCount += 1 }
   func overlayDidPassThroughModalKey(_ event: NSEvent) { passThroughModalCount += 1 }
   func overlayDidCancelCommandLine() {}

@@ -1202,6 +1202,30 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "org.mozilla.firefox"))
   }
 
+  func testTabTraversalFallbackOnlyEmitsBracketShortcutsForBrowsers() throws {
+    let firefoxPrevious = try XCTUnwrap(
+      AppDelegate.tabTraversalFallbackShortcut(
+        direction: .back,
+        bundleIdentifier: "org.mozilla.firefox"))
+    let safariNext = try XCTUnwrap(
+      AppDelegate.tabTraversalFallbackShortcut(
+        direction: .forward,
+        bundleIdentifier: "com.apple.Safari"))
+
+    XCTAssertEqual(firefoxPrevious.key, CGKeyCode(kVK_ANSI_LeftBracket))
+    XCTAssertEqual(firefoxPrevious.flags, [.maskCommand, .maskShift])
+    XCTAssertEqual(safariNext.key, CGKeyCode(kVK_ANSI_RightBracket))
+    XCTAssertEqual(safariNext.flags, [.maskCommand, .maskShift])
+    XCTAssertNil(
+      AppDelegate.tabTraversalFallbackShortcut(
+        direction: .back,
+        bundleIdentifier: "org.alacritty"))
+    XCTAssertNil(
+      AppDelegate.tabTraversalFallbackShortcut(
+        direction: .forward,
+        bundleIdentifier: "com.example.TextEditor"))
+  }
+
   func testTabNewFallbackKeyUsesCmdNForAlacrittyAndCmdTOtherwise() {
     XCTAssertEqual(
       AppDelegate.tabNewFallbackKey(forBundleIdentifier: "org.alacritty"),

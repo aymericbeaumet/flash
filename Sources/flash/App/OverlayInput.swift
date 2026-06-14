@@ -200,10 +200,16 @@ extension OverlayPanel {
       || modifiers.contains(.option)
     {
       // Carbon handles explicit `[mode.*]` modified-key mappings before
-      // unclaimed chords reach this overlay. Let the unclaimed chord pass
-      // through to the focused app and briefly lock normal-mode interpretation
-      // so a prefix-style chord such as tmux ctrl-q + key cannot accidentally
-      // resolve a standalone Flash mapping.
+      // unclaimed chords reach this overlay. The same key event can still be
+      // offered to the now-key panel after a mode transition, so ask the
+      // coordinator first; a configured mapping must be consumed here rather
+      // than arming the pass-through lockout for the next plain key.
+      if coordinator?.overlayDidHandleMapping(event) == true {
+        return true
+      }
+      // Let the unclaimed chord pass through to the focused app and briefly
+      // lock normal-mode interpretation so a prefix-style chord such as tmux
+      // ctrl-q + key cannot accidentally resolve a standalone Flash mapping.
       normalModeChordLockoutUntil = Date().addingTimeInterval(
         TimeInterval(normalModeSequenceTimeoutMs) / 1_000)
       if !normalModePending.isEmpty {
