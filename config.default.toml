@@ -76,6 +76,8 @@ right = "#{date}"
 # right = "#{script:~/bin/custom-status.sh}#[fg=colour245] · #{date}"
 
 [flashlight]
+# Number of suggestion rows shown below the command bar.
+suggestion_count = 10
 # Bonus added to candidates backed by a running process, used as a
 # source-order tiebreaker after match quality ties. With the default
 # core.apps precedence below, running apps rank just ahead of installed

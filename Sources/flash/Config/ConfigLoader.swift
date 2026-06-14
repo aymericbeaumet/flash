@@ -611,6 +611,17 @@ enum ConfigLoader {
           "overlay.important_hint_border must be a quoted string", location: location)
       }
 
+    case ["flashlight", "suggestion_count"]:
+      if let parsed = parseInt(value), parsed > 0 {
+        config.flashlight.suggestionCount = parsed
+        config.recordLocation(
+          path: "flashlight.suggestion_count", location: location)
+      } else {
+        config.addDiagnostic(
+          "flashlight.suggestion_count must be a positive integer",
+          location: location)
+      }
+
     case ["flashlight", "precedence_alive_bonus"]:
       if let parsed = parseInt(value), parsed >= 0 {
         config.flashlight.precedenceAliveBonus = parsed
@@ -1185,6 +1196,12 @@ enum ConfigLoader {
     case "overlay-important-hint-border":
       config.overlay.importantHintBorder = value
       config.clearLocation(path: "overlay.important_hint_border")
+
+    case "flashlight-suggestion-count":
+      if let i = Int(value), i > 0 {
+        config.flashlight.suggestionCount = i
+        config.clearLocation(path: "flashlight.suggestion_count")
+      }
 
     case "debug-show-bounds":
       if let b = boolFromString(value) {

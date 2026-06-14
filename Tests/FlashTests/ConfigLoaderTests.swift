@@ -88,6 +88,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertFalse(c.statusBar.right.contains("ip-status"))
     XCTAssertEqual(c.statusBar.template.variables.count, 2)
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
+    XCTAssertEqual(c.flashlight.suggestionCount, 10)
     XCTAssertEqual(c.flashlight.precedence["tmux"], 100)
     XCTAssertEqual(c.flashlight.precedence["firefox"], 80)
     XCTAssertEqual(c.flashlight.precedence["core.apps"], 40)
@@ -268,6 +269,7 @@ final class ConfigLoaderTests: XCTestCase {
       "notes.notes" = -10
 
       [flashlight]
+      suggestion_count = 12
       precedence_alive_bonus = 25
       """#)
 
@@ -277,6 +279,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.flashlight.precedence["tmux"], 200)
     XCTAssertEqual(c.flashlight.precedence["firefox.tabs"], 120)
     XCTAssertEqual(c.flashlight.precedence["notes.notes"], -10)
+    XCTAssertEqual(c.flashlight.suggestionCount, 12)
     XCTAssertEqual(c.flashlight.precedenceAliveBonus, 25)
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
@@ -292,10 +295,12 @@ final class ConfigLoaderTests: XCTestCase {
       firefox = "high"
 
       [flashlight]
+      suggestion_count = 0
       precedence_alive_bonus = -1
       """#)
 
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
+    XCTAssertEqual(c.flashlight.suggestionCount, 10)
     XCTAssertEqual(c.flashlight.precedence["firefox"], 80)
     XCTAssertEqual(c.flashlight.precedenceAliveBonus, 10)
     XCTAssertTrue(
@@ -309,6 +314,10 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(
       c.loadingDiagnostics.contains {
         $0.message.contains("flashlight.precedence.firefox must be an integer")
+      })
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("flashlight.suggestion_count must be a positive integer")
       })
     XCTAssertTrue(
       c.loadingDiagnostics.contains {
@@ -471,6 +480,7 @@ final class ConfigLoaderTests: XCTestCase {
     let hints = try XCTUnwrap(root["hints"] as? [String: Any])
     let overlay = try XCTUnwrap(root["overlay"] as? [String: Any])
     let debug = try XCTUnwrap(root["debug"] as? [String: Any])
+    let flashlight = try XCTUnwrap(root["flashlight"] as? [String: Any])
     let mode = try XCTUnwrap(root["mode"] as? [String: Any])
     let open = try XCTUnwrap(root["open"] as? [String: Any])
     let plugins = try XCTUnwrap(root["plugins"] as? [String: Any])
@@ -484,6 +494,8 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(debug.keys.contains("http_inspector_enabled"))
     XCTAssertTrue(debug.keys.contains("http_inspector_host"))
     XCTAssertTrue(debug.keys.contains("http_inspector_port"))
+    XCTAssertEqual(flashlight["suggestion_count"] as? Int, 10)
+    XCTAssertEqual(flashlight["precedence_alive_bonus"] as? Int, 10)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
     XCTAssertEqual(
       allMappings.first?["action"] as? [String],
@@ -592,6 +604,7 @@ final class ConfigLoaderTests: XCTestCase {
       "--overlay-hint-bg-top=#000000",
       "--overlay-hint-bg-bottom=#111111",
       "--overlay-hint-border=#222222",
+      "--flashlight-suggestion-count=14",
       "--debug-show-bounds=true",
       "--debug-bounds-bg=#11223344",
       "--debug-bounds-fg=#55667788",
@@ -608,6 +621,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#000000")
     XCTAssertEqual(c.overlay.hintBGBottom, "#111111")
     XCTAssertEqual(c.overlay.hintBorder, "#222222")
+    XCTAssertEqual(c.flashlight.suggestionCount, 14)
     XCTAssertTrue(c.debug.showHintsBounds)
     XCTAssertEqual(c.debug.hintsBoundsBG, "#11223344")
     XCTAssertEqual(c.debug.hintsBoundsFG, "#55667788")
@@ -626,6 +640,7 @@ final class ConfigLoaderTests: XCTestCase {
       "FLASH_OVERLAY_HINT_BG_TOP": "#AABBCC",
       "FLASH_OVERLAY_HINT_BG_BOTTOM": "#998877",
       "FLASH_OVERLAY_HINT_BORDER": "#665544",
+      "FLASH_FLASHLIGHT_SUGGESTION_COUNT": "13",
       "FLASH_DEBUG_SHOW_BOUNDS": "yes",
       "FLASH_DEBUG_BOUNDS_BG": "#11111111",
       "FLASH_DEBUG_BOUNDS_FG": "#22222222",
@@ -642,6 +657,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#AABBCC")
     XCTAssertEqual(c.overlay.hintBGBottom, "#998877")
     XCTAssertEqual(c.overlay.hintBorder, "#665544")
+    XCTAssertEqual(c.flashlight.suggestionCount, 13)
     XCTAssertTrue(c.debug.showHintsBounds)
     XCTAssertEqual(c.debug.hintsBoundsBG, "#11111111")
     XCTAssertEqual(c.debug.hintsBoundsFG, "#22222222")

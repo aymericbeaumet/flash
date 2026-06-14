@@ -116,6 +116,9 @@ struct Config {
   }
   /// Tunables for the `:flashlight` command-line surface.
   struct Flashlight {
+    /// Number of command-bar suggestions shown for `:flashlight`,
+    /// `:emojis`, source filters, bangs, and command completions.
+    var suggestionCount: Int = 10
     /// Word-substitution aliases. The key is the exact whitespace-
     /// delimited token the user types (any leading sigil — `!`, `@`,
     /// or none — is part of the key, not implicit). The value is
@@ -546,6 +549,12 @@ struct Config {
         "min_length": hints.minLength,
         "mouse_grid_opacity": hints.mouseGridOpacity,
         "mouse_grid_steps": hints.mouseGridSteps,
+      ],
+      "flashlight": [
+        "aliases": flashlight.aliases,
+        "precedence": flashlight.precedence,
+        "precedence_alive_bonus": flashlight.precedenceAliveBonus,
+        "suggestion_count": flashlight.suggestionCount,
       ],
       "mode": modeJSON,
       "open": [

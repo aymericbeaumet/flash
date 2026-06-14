@@ -155,6 +155,9 @@ public struct NormalizedScoringFields: Sendable {
   /// source-specific fast paths that need token-level typo checks
   /// without splitting the same title on every keystroke.
   public var titleTokens: [String]
+  /// Secondary searchable text such as browser URLs or source-provided
+  /// subtitles. Ranked below the primary title.
+  public var secondary: String
   public var sourceTitle: String
   public var url: String
   public var displayTitle: String
@@ -168,6 +171,7 @@ public struct NormalizedScoringFields: Sendable {
   public init(
     title: String = "",
     titleTokens: [String] = [],
+    secondary: String = "",
     sourceTitle: String = "",
     url: String = "",
     displayTitle: String = "",
@@ -175,6 +179,7 @@ public struct NormalizedScoringFields: Sendable {
   ) {
     self.title = title
     self.titleTokens = titleTokens
+    self.secondary = secondary
     self.sourceTitle = sourceTitle
     self.url = url
     self.displayTitle = displayTitle

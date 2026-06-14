@@ -212,16 +212,23 @@ enum HelpDocs {
       pool (OR): `@tmux @slack` shows both. The token matches a source
       name (or prefix: `@fire` → firefox) and a few groups:
       `@browser`/`@tabs`, `@apps`. Bare `:flashlight @notes` lists every
-      note.
+      note. Typing an incomplete source token such as `@fire` shows source
+      suggestions; `<tab>` or `<cr>` inserts the selected canonical source
+      filter.
+
+      Typing `!` shows registered bang suggestions. `<tab>` or `<cr>`
+      inserts the selected bang token, and adding a space locks it for the
+      remaining query.
 
       ## Ranking
 
       Scoring layers, in order of weight:
 
-      1. Exact name / URL match.
+      1. Exact primary-name match.
       2. Prefix match.
-      3. Fuzzy subsequence score.
-      4. Source-precedence bonus — tmux windows rank above browser tabs,
+      3. Secondary metadata match (URL, tmux session/path, source labels).
+      4. Fuzzy subsequence score.
+      5. Source-precedence bonus — tmux windows rank above browser tabs,
          which rank above active apps, then inactive apps, then the rest
          (slack / notes / reminders / contacts).
 

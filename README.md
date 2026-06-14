@@ -64,6 +64,7 @@ left = "#{mode}"
 right = "#{date}"
 
 [flashlight]
+suggestion_count = 10
 precedence_alive_bonus = 10
 
 [flashlight.aliases]
@@ -151,7 +152,7 @@ log_level = "info"
 
 When a `[mode.all.mappings]` mapping points to `flash://mode_normal`, Flash shows the persistent status bar and starts in normal mode. The bar sits in the primary screen's top menu/notch band, insets content away from rounded screen corners, and uses Nord colors. Command-backed status sections keep their previous value until a replacement is ready. The Flash bar yields while the pointer hugs the top system menu band so the native macOS menu/status bar can appear. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings do not enable advanced mode. Without an advanced-mode mapping, the status bar is hidden and Flash behaves as a direct action launcher unless `flash://mode_normal` is invoked manually.
 
-`[flashlight.aliases]` rewrites completed query tokens such as `"!g" = "!google"` or `"@ft" = "@firefox.tabs"`. `[flashlight.precedence]` adjusts source-order tiebreakers after match quality ties; entries not listed fall back to weight `0`, and `precedence_alive_bonus` nudges running app candidates ahead of inactive app rows from the same source.
+`[flashlight] suggestion_count` controls how many rows the command bar shows; the default is `10`. `[flashlight.aliases]` rewrites completed query tokens such as `"!g" = "!google"` or `"@ft" = "@firefox.tabs"`. `[flashlight.precedence]` adjusts source-order tiebreakers after match quality ties; entries not listed fall back to weight `0`, and `precedence_alive_bonus` nudges running app candidates ahead of inactive app rows from the same source.
 
 `[plugins] third_party` accepts `github:user/project` and `file:<path>` entries. Every plugin has a `manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`, event subscriptions, and command registrations. Each plugin registers one or more commands (the verb after `:`), and each command has one or more subcommands. Flash runs plugin commands as managed child processes over length-prefixed MessagePack on stdin/stdout: a 4-byte big-endian payload length followed by a MessagePack value; stderr is reserved for unexpected errors. Official bundled plugins are always enabled in this version, install their CLIs under `FLASH_PLUGIN_DATA_DIR`, and include `:spotify`, `:slack`, and `:media` commands with explicit login/status/run subcommands. A plugin command may ask Flash to raise a window by returning a `target_pid`; Flash activates it and records the jump into the `ctrl-o` / `ctrl-i` movement history. The tmux plugin uses this for jump-to commands: `:tmux session <name>` and `:tmux window <session:index>` switch the active tmux client and bring its terminal forward, so you can bind a hotkey such as `flash://plugin_command?command=tmux&subcommand=window&args=main:1`.
 

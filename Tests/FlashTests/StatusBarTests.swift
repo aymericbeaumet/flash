@@ -261,6 +261,17 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(panel.candidateFinderResultsMeasurementText, "> best\n  second\n  third")
   }
 
+  func testCandidateFinderResultsRenderEverySuppliedSuggestion() {
+    let panel = OverlayPanel()
+    let items = (0..<10).map { index in
+      CandidateDisplayItem(title: "item \(index)", isSelected: index == 0)
+    }
+
+    panel.setCandidateFinderResults(items: items, emptyText: "none")
+
+    XCTAssertEqual(panel.candidateFinderResultsMeasurementText.split(separator: "\n").count, 10)
+  }
+
   func testRightStatusComposesTmuxStatusRightOrder() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!

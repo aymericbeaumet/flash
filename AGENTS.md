@@ -242,6 +242,7 @@ Keys:
 | `plugins.watching_enabled`         | bool           | `true`               |
 | `statusbar.left`                   | string         | `"#{mode}"`          |
 | `statusbar.right`                  | string         | `"#{date}"`          |
+| `flashlight.suggestion_count`      | int            | `10`                 |
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |
 | `[flashlight.precedence]` entries  | int            | built-in source order |

@@ -818,30 +818,26 @@ fn build_candidates_from_window_list(
         let client = client_by_session.get(session).or_else(|| clients.first());
         let terminal_pid = terminal_pid_by_session.get(session).copied().flatten();
 
-        let head = if name.is_empty() {
-            format!("{session}:{index}")
-        } else {
-            format!("{session}:{index} {name}")
-        };
-        let extras: Vec<&str> = [command, cwd.as_str()]
-            .into_iter()
-            .filter(|v| !v.is_empty())
-            .collect();
-        let title = if extras.is_empty() {
-            head.clone()
-        } else {
-            format!("{head} · {}", extras.join(" · "))
-        };
-        let subtitle_extras: Vec<&str> = [name, command, cwd.as_str()]
-            .into_iter()
-            .filter(|v| !v.is_empty())
-            .collect();
-        let subtitle = if subtitle_extras.is_empty() {
-            format!("tmux {session}")
-        } else {
-            format!("tmux {} {}", session, subtitle_extras.join(" "))
-        };
         let target = format!("{session}:{index}");
+        let primary = if name.is_empty() {
+            target.clone()
+        } else {
+            name.to_string()
+        };
+        let mut secondary_parts: Vec<&str> = Vec::new();
+        if !name.is_empty() {
+            secondary_parts.push(target.as_str());
+        }
+        for value in [command, cwd.as_str()] {
+            if !value.is_empty() {
+                secondary_parts.push(value);
+            }
+        }
+        let subtitle = if secondary_parts.is_empty() {
+            String::new()
+        } else {
+            secondary_parts.join(" · ")
+        };
 
         let payload = TmuxPayload {
             tmux_target: target,
@@ -849,7 +845,7 @@ fn build_candidates_from_window_list(
             client_pid: client.map(|c| c.client_pid),
             terminal_pid,
         };
-        let mut candidate = Candidate::new(title)
+        let mut candidate = Candidate::new(primary)
             .kind("tmux_window")
             .source_id(SOURCE_ID)
             .source("tmux.windows")
@@ -1556,13 +1552,15 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             build_candidates_from_window_list(raw, &clients, &terminal_pid_by_session, "/Users/ab");
 
         assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].name, "beside-agentic");
         assert_eq!(
-            candidates[0].name,
-            "beside:1 beside-agentic · claude · ~/workspace/beside"
+            candidates[0].subtitle.as_deref(),
+            Some("beside:1 · claude · ~/workspace/beside")
         );
+        assert_eq!(candidates[1].name, "flash");
         assert_eq!(
-            candidates[1].name,
-            "scratch:2 flash · zsh · ~/workspace/aymericbeaumet/flash"
+            candidates[1].subtitle.as_deref(),
+            Some("scratch:2 · zsh · ~/workspace/aymericbeaumet/flash")
         );
         assert_eq!(candidates[1].source_id.as_deref(), Some(SOURCE_ID));
         assert_eq!(candidates[1].source.as_deref(), Some("tmux.windows"));

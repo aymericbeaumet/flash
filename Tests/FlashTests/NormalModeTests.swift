@@ -1027,7 +1027,7 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "com.tinyspeck.slackmacgap",
         url: nil))
 
-    XCTAssertEqual(candidate.normalizedSearchText, "slack #schedule")
+    XCTAssertEqual(candidate.normalizedSearchText, "slack #schedule slack channel")
     XCTAssertNotNil(
       NormalModeDispatcher.fuzzyScore(
         normalizedQuery: NormalModeDispatcher.normalizedSearchText("#schedule"),
@@ -1108,7 +1108,9 @@ final class NormalModeTests: XCTestCase {
         path: "/Applications/Postico 2.app"))
 
     XCTAssertEqual(prepared.displayTitle, "[core.apps] Postico 2")
-    XCTAssertEqual(prepared.normalizedSearchText, "core apps postico 2 postico 2 com eggerapps postico")
+    XCTAssertEqual(
+      prepared.normalizedSearchText,
+      "core apps postico 2 app postico 2 com eggerapps postico")
   }
 
   func testCandidateFinderPreparedBrowserTabIncludesBrowserTitleAndURL() {
@@ -1142,12 +1144,14 @@ final class NormalModeTests: XCTestCase {
         sourceID: "tmux",
         source: "tmux",
         pid: 123,
-        name: "beside:1 beside-agentic",
-        subtitle: "tmux window",
+        name: "beside-agentic",
+        subtitle: "beside:1 · claude · ~/workspace/beside",
         bundleIdentifier: "",
         url: nil))
 
-    XCTAssertEqual(prepared.displayTitle, "[tmux] beside:1 beside-agentic")
+    XCTAssertEqual(
+      prepared.displayTitle,
+      "[tmux] beside-agentic · beside:1 · claude · ~/workspace/beside")
     XCTAssertNotNil(
       NormalModeDispatcher.fuzzyScore(
         normalizedQuery: NormalModeDispatcher.normalizedSearchText("tmux agentic"),

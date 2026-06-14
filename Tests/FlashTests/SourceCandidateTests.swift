@@ -1013,7 +1013,7 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(firefox.kind, CandidateFinder.sourceKind)
     XCTAssertEqual(firefox.source, "source")
     XCTAssertEqual(firefox.sourcePayload, "firefox.tabs")
-    XCTAssertEqual(firefox.displayTitle, "[source] @firefox.tabs (source filter)")
+    XCTAssertEqual(firefox.displayTitle, "[source] @firefox.tabs")
     XCTAssertNil(firefox.url)
 
     let query = NormalModeDispatcher.normalizedSearchText("fire")
@@ -1025,6 +1025,55 @@ final class SourceCandidateTests: XCTestCase {
       allowParallel: false)
     let sorted = CandidateFinder.sortedMatches(matches)
     XCTAssertEqual(sorted.first?.candidate.sourcePayload, "firefox.tabs")
+  }
+
+  func testBangCompletionStateAcceptsBareBangAndRejectsConfirmedBang() {
+    let bare = CandidateFinder.bangCompletionState(query: "!", emojiMode: false)
+    XCTAssertEqual(bare?.token, "")
+
+    let partial = CandidateFinder.bangCompletionState(query: "!fire", emojiMode: false)
+    XCTAssertEqual(partial?.token, "fire")
+
+    XCTAssertNil(CandidateFinder.bangCompletionState(query: "!fire ", emojiMode: false))
+    XCTAssertNil(CandidateFinder.bangCompletionState(query: "! fire", emojiMode: false))
+    XCTAssertNil(CandidateFinder.bangCompletionState(query: "!", emojiMode: true))
+  }
+
+  func testPrimaryTitleOutranksExactSecondaryMatch() throws {
+    let primary = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("browser_tab"),
+        source: "firefox.tabs",
+        name: "Fire notes",
+        subtitle: "browser tab",
+        bundleIdentifier: "org.mozilla.firefox",
+        url: URL(string: "https://example.test/notes")))
+    let secondary = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("tmux_window"),
+        source: "tmux.windows",
+        name: "scratch",
+        subtitle: "fire",
+        bundleIdentifier: ""))
+
+    let primaryScore = try XCTUnwrap(CandidateFinder.score(query: "fire", candidate: primary))
+    let secondaryScore = try XCTUnwrap(CandidateFinder.score(query: "fire", candidate: secondary))
+
+    XCTAssertGreaterThan(primaryScore, secondaryScore)
+  }
+
+  func testTmuxWindowDisplayShowsPrimaryTitleBeforeSecondaryMetadata() {
+    let tmux = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("tmux_window"),
+        source: "tmux.windows",
+        name: "flash",
+        subtitle: "scratch:2 · zsh · ~/workspace/flash",
+        bundleIdentifier: ""))
+
+    XCTAssertEqual(
+      tmux.displayTitle,
+      "[tmux.windows] flash · scratch:2 · zsh · ~/workspace/flash")
   }
 
   func testBoundedSortMatchesFullSortPrefixForFlashlightMix() {

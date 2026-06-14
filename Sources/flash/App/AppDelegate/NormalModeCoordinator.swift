@@ -1156,7 +1156,7 @@ extension AppDelegate {
       updateCandidateMatches(query: query)
       overlay.displayCommandLine(
         command,
-        suggestions: candidateFinderDisplayItems(windowSize: 5),
+        suggestions: candidateFinderDisplayItems(),
         cursorIndex: overlay.commandLineCursorIndex)
       return
     }
@@ -1165,7 +1165,7 @@ extension AppDelegate {
       updateCommandLineCompletions(context: context)
       overlay.displayCommandLine(
         command,
-        suggestions: commandLineCompletionDisplayItems(windowSize: 6),
+        suggestions: commandLineCompletionDisplayItems(),
         emptyText: "no matching command",
         cursorIndex: overlay.commandLineCursorIndex)
       return
@@ -1285,8 +1285,13 @@ extension AppDelegate {
     return frecencyStore.boost(forKey: key)
   }
 
-  func commandLineCompletionDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
+  private var commandBarSuggestionCount: Int {
+    max(1, config.flashlight.suggestionCount)
+  }
+
+  func commandLineCompletionDisplayItems(windowSize: Int? = nil) -> [CandidateDisplayItem] {
     guard !commandLineCompletionMatches.isEmpty else { return [] }
+    let windowSize = windowSize ?? commandBarSuggestionCount
     let maxStart = max(0, commandLineCompletionMatches.count - windowSize)
     let start = min(
       max(0, commandLineCompletionSelectedIndex - windowSize / 2), maxStart)
@@ -1324,6 +1329,9 @@ extension AppDelegate {
     let sourceCompletion = CandidateFinder.sourceCompletionState(
       query: query,
       emojiMode: candidateFinderEmojiMode)
+    let bangCompletion = CandidateFinder.bangCompletionState(
+      query: query,
+      emojiMode: candidateFinderEmojiMode)
     let parsed =
       sourceCompletion == nil
       ? NormalModeDispatcher.candidateFinderSourceFilter(query)
@@ -1359,6 +1367,20 @@ extension AppDelegate {
         pool: pool,
         normalizedQuery: normalizedQuery,
         limit: Self.instantEmojiResultLimit)
+      applyCandidateMatches(sorted)
+      return
+    }
+
+    if sourceCompletion != nil || bangCompletion != nil || CandidateFinder.parseBang(trimmed) != nil
+    {
+      let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
+      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+      let scored = CandidateFinder.scoreMatches(
+        pool: pool,
+        normalizedQuery: normalizedQuery,
+        fuzzyScore: fuzzy,
+        allowParallel: false)
+      let sorted = CandidateFinder.sortedMatches(scored, precedence: precedenceTable())
       applyCandidateMatches(sorted)
       return
     }
@@ -1486,7 +1508,7 @@ extension AppDelegate {
       else { return }
       overlay.displayCommandLine(
         overlay.commandLineText,
-        suggestions: candidateFinderDisplayItems(windowSize: 5),
+        suggestions: candidateFinderDisplayItems(),
         cursorIndex: overlay.commandLineCursorIndex)
     case .candidateFinder:
       overlay.displayCandidateFinder(
@@ -1524,6 +1546,15 @@ extension AppDelegate {
     attributeFilters: [CandidateFinder.CompiledAttributeFilter]
   ) -> (pool: [Candidate], scoringText: String) {
     if !candidateFinderEmojiMode, let bang = CandidateFinder.parseBang(trimmed) {
+      let bangs = CandidateFinder.prepare(
+        pluginManager.shebangCandidates(
+          forBundleID: currentNonFlashContext()?.bundleIdentifier))
+      return (bangs, bang.token)
+    }
+    if let bang = CandidateFinder.bangCompletionState(
+      query: trimmed,
+      emojiMode: candidateFinderEmojiMode)
+    {
       let bangs = CandidateFinder.prepare(
         pluginManager.shebangCandidates(
           forBundleID: currentNonFlashContext()?.bundleIdentifier))
@@ -1647,8 +1678,9 @@ extension AppDelegate {
     }
   }
 
-  func candidateFinderDisplayItems(windowSize: Int = 6) -> [CandidateDisplayItem] {
+  func candidateFinderDisplayItems(windowSize: Int? = nil) -> [CandidateDisplayItem] {
     guard !candidateFinderMatches.isEmpty else { return [] }
+    let windowSize = windowSize ?? commandBarSuggestionCount
     let maxStart = max(0, candidateFinderMatches.count - windowSize)
     let start = min(max(0, candidateFinderSelectedIndex - windowSize / 2), maxStart)
     let end = min(candidateFinderMatches.count, start + windowSize)

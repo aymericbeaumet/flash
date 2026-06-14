@@ -48,7 +48,6 @@ final class ModalTextView: NSTextView {
 final class OverlayPanel: NSPanel {
   static let transientOverlayWindowLevel: NSWindow.Level = .screenSaver
   static let persistentStatusWindowLevel: NSWindow.Level = .floating
-  static let candidateFinderMaxRows = 6
   static let candidateFinderHorizontalPadding: CGFloat = 7
   static let candidateFinderVerticalPadding: CGFloat = 5
 

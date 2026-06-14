@@ -437,7 +437,7 @@ extension AppDelegate {
       // late async DB hits land while the user is just paging through.
       overlay.displayCommandLine(
         overlay.commandLineText,
-        suggestions: candidateFinderDisplayItems(windowSize: 5),
+        suggestions: candidateFinderDisplayItems(),
         cursorIndex: overlay.commandLineCursorIndex)
       return true
     }
@@ -447,7 +447,7 @@ extension AppDelegate {
         commandLineCompletionMatches.count - 1)
       overlay.displayCommandLine(
         overlay.commandLineText,
-        suggestions: commandLineCompletionDisplayItems(windowSize: 6),
+        suggestions: commandLineCompletionDisplayItems(),
         emptyText: "no matching command",
         cursorIndex: overlay.commandLineCursorIndex)
       return true

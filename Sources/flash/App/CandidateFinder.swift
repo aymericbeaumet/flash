@@ -41,16 +41,15 @@ enum CandidateFinder {
       return bangDisplayTitle(candidate)
     }
     if candidate.kind == sourceKind {
-      // `[source] @firefox.tabs (source filter)` — the subtitle rides
-      // as a descriptor exactly like the bang row's `(description)`.
-      let descriptor = candidate.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
-      let name = descriptor.isEmpty ? candidate.name : "\(candidate.name) (\(descriptor))"
-      return displayTitle(source: candidate.source, name: name)
-    }
-    guard candidate.kind == browserTabKind else {
       return displayTitle(source: candidate.source, name: candidate.name)
     }
-    return browserTabDisplayTitle(candidate)
+    if candidate.kind == browserTabKind {
+      return browserTabDisplayTitle(candidate)
+    }
+    if candidate.kind == .plugin("tmux_window") {
+      return tmuxWindowDisplayTitle(candidate)
+    }
+    return displayTitle(source: candidate.source, name: candidate.name)
   }
 
   /// `[bang] !token (description)` — the description rides in `subtitle`
@@ -170,6 +169,29 @@ enum CandidateFinder {
     return completion
   }
 
+  /// Detect an in-progress `!<bang>` token, including a bare trailing
+  /// `!`. `parseBang` intentionally rejects a bare bang because it
+  /// cannot be dispatched; this state is only for the completion UI.
+  static func bangCompletionState(query: String, emojiMode: Bool)
+    -> (token: String, bangRange: Range<String.Index>)?
+  {
+    guard !emojiMode else { return nil }
+    guard let bangIndex = query.firstIndex(of: "!") else { return nil }
+    let tokenStart = query.index(after: bangIndex)
+    if tokenStart == query.endIndex {
+      return ("", bangIndex..<tokenStart)
+    }
+    guard !query[tokenStart].isWhitespace, query[tokenStart] != "!" else { return nil }
+    var tokenEnd = tokenStart
+    while tokenEnd < query.endIndex {
+      let ch = query[tokenEnd]
+      if ch.isWhitespace || ch == "!" { break }
+      tokenEnd = query.index(after: tokenEnd)
+    }
+    guard tokenEnd == query.endIndex else { return nil }
+    return (String(query[tokenStart..<tokenEnd]), bangIndex..<tokenEnd)
+  }
+
   static func selectedBangMatchesTypedToken(query: String, selectedToken: String) -> Bool {
     guard let typed = parseBang(query) else { return false }
     return typed.token.localizedCaseInsensitiveCompare(selectedToken) == .orderedSame
@@ -186,7 +208,7 @@ enum CandidateFinder {
       source: "source",
       pid: nil,
       name: "@\(source)",
-      subtitle: "source filter",
+      subtitle: "",
       bundleIdentifier: "",
       url: nil,
       sourcePayload: source)
@@ -252,6 +274,7 @@ enum CandidateFinder {
       : normalizedTitle.split(separator: " ").map(String.init)
     let normalizedSourceTitle = normalize("\(candidate.source) \(candidate.name)")
     let normalizedURL = normalize(urlSearchText(candidate))
+    let normalizedSecondary = normalize(secondarySearchText(candidate))
     let normalizedDisplay = normalize(display)
     let normalizedAliases = normalize(candidate.searchAliases)
     let aliasTokens: [String] =
@@ -261,6 +284,7 @@ enum CandidateFinder {
     prepared.normalizedScoringFields = NormalizedScoringFields(
       title: normalizedTitle,
       titleTokens: titleTokens,
+      secondary: normalizedSecondary,
       sourceTitle: normalizedSourceTitle,
       url: normalizedURL,
       displayTitle: normalizedDisplay,
@@ -272,6 +296,7 @@ enum CandidateFinder {
       presenceMask(normalizedTitle)
       | presenceMask(normalizedSourceTitle)
       | presenceMask(normalizedURL)
+      | presenceMask(normalizedSecondary)
       | presenceMask(normalizedDisplay)
       | presenceMask(normalizedAliases)
       | presenceMask(normalizedSearchText)
@@ -400,17 +425,22 @@ enum CandidateFinder {
       best = max(best ?? aliasBest, aliasBest)
     }
     if let sourceTitleScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.sourceTitle, base: 8_000, fuzzyScore: fuzzyScore)
+      query: normalizedQuery, normalized: fields.sourceTitle, base: 3_000, fuzzyScore: fuzzyScore)
     {
       best = max(best ?? sourceTitleScore, sourceTitleScore)
     }
+    if let secondaryScore = fieldScoreNormalized(
+      query: normalizedQuery, normalized: fields.secondary, base: 4_000, fuzzyScore: fuzzyScore)
+    {
+      best = max(best ?? secondaryScore, secondaryScore)
+    }
     if let urlScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.url, base: 9_000, fuzzyScore: fuzzyScore)
+      query: normalizedQuery, normalized: fields.url, base: 4_000, fuzzyScore: fuzzyScore)
     {
       best = max(best ?? urlScore, urlScore)
     }
     if let displayScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.displayTitle, base: 7_000, fuzzyScore: fuzzyScore)
+      query: normalizedQuery, normalized: fields.displayTitle, base: 2_000, fuzzyScore: fuzzyScore)
     {
       best = max(best ?? displayScore, displayScore)
     }
@@ -947,6 +977,20 @@ enum CandidateFinder {
     return displayTitle(source: candidate.source, name: title)
   }
 
+  private static func tmuxWindowDisplayTitle(_ candidate: Candidate) -> String {
+    let title = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let secondary = candidate.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    let display: String
+    if title.isEmpty {
+      display = secondary
+    } else if secondary.isEmpty {
+      display = title
+    } else {
+      display = "\(title) · \(secondary)"
+    }
+    return displayTitle(source: candidate.source, name: display)
+  }
+
   private static func browserTabURLString(_ candidate: Candidate) -> String? {
     guard candidate.kind == browserTabKind else { return nil }
     if let url = candidate.url?.absoluteString, !url.isEmpty {
@@ -957,7 +1001,14 @@ enum CandidateFinder {
   }
 
   private static func searchText(_ candidate: Candidate) -> String {
-    "\(candidate.source) \(candidate.name) \(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate)) \(candidate.searchAliases)"
+    "\(candidate.source) \(candidate.name) \(secondarySearchText(candidate)) \(candidate.searchAliases)"
+  }
+
+  private static func secondarySearchText(_ candidate: Candidate) -> String {
+    if candidate.kind == browserTabKind {
+      return "\(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate))"
+    }
+    return "\(candidate.subtitle) \(urlSearchText(candidate))"
   }
 
   private static func urlSearchText(_ candidate: Candidate) -> String {

@@ -37,7 +37,7 @@ extension OverlayPanel {
   }
 
   func setCandidateFinderResults(items: [CandidateDisplayItem], emptyText: String) {
-    let shownItems = Array(items.prefix(Self.candidateFinderMaxRows))
+    let shownItems = items
     if shownItems.isEmpty {
       candidateFinderResultsMeasurementText = emptyText
       candidateFinderResultsAttributedText = NSAttributedString(
