@@ -1,12 +1,13 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    applescript_quote, run, Candidate, CommandRequest, CommandResponse, Context, Event,
-    ResolveResponse,
+    applescript_quote, run, sleep, spawn_background, Candidate, CommandRequest, CommandResponse,
+    Context, Event, ResolveResponse,
 };
 use serde::{Deserialize, Serialize};
 
 const SOURCE_ID: &str = "plugin:contacts";
+const POLL_SECONDS: u64 = 60;
 
 const LIST_SCRIPT: &str = r#"
 on safeName(p)
@@ -60,6 +61,7 @@ flash_plugin::plugin!(Contacts);
 impl FlashPlugin for Contacts {
     async fn on_start(&self, ctx: Context) {
         emit_candidates(&ctx).await;
+        start_poll(ctx);
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -78,6 +80,15 @@ impl FlashPlugin for Contacts {
     async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
         resolve(&ctx, &candidate).await
     }
+}
+
+fn start_poll(ctx: Context) {
+    spawn_background(async move {
+        loop {
+            sleep(Duration::from_secs(POLL_SECONDS)).await;
+            emit_candidates(&ctx).await;
+        }
+    });
 }
 
 async fn emit_candidates(ctx: &Context) {

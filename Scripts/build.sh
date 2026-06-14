@@ -7,8 +7,9 @@ set -euo pipefail
 #   --release  optimized universal build (x86_64 + arm64) for both the app
 #              and the bundled plugins, then zipped + checksummed. Always
 #              cleans first so every artifact is rebuilt from scratch.
-#   --dev      fast incremental debug build for the current arch only — no
-#              clean, no optimization. Plugins are symlinked from the live tree.
+#   --dev      incremental optimized release build for the current arch only —
+#              no clean, no universal lipo. Plugins are symlinked from the
+#              live tree and the bundle is signed with the dev identity.
 
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 parse_mode "$@"
@@ -35,10 +36,10 @@ if [[ "$MODE" == "release" ]]; then
   BIN_PATH="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
   SIGN_IDENTITY="${FLASH_SIGN_IDENTITY:--}"
 else
-  echo "==> Building flash (debug)"
-  swift build -c debug --product flash
-  swift build -c debug --product flashctl
-  BIN_PATH="$(swift build -c debug --show-bin-path)"
+  echo "==> Building flash (dev release, current arch)"
+  swift build -c release --product flash
+  swift build -c release --product flashctl
+  BIN_PATH="$(swift build -c release --show-bin-path)"
   ensure_signing_identity
   SIGN_IDENTITY="$DEV_SIGN_IDENTITY"
 fi

@@ -321,7 +321,7 @@ final class PluginSystemTests: XCTestCase {
           "start": "true",
           "providers": [
             { "kind": "hints", "bundle_ids": ["com.example.app"] },
-            { "kind": "candidates" },
+            { "kind": "candidates", "sources": ["multi.items"] },
             {
               "kind": "commands",
               "commands": [
@@ -343,6 +343,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.providers.count, 4)
     XCTAssertTrue(manifest.providesHints)
     XCTAssertTrue(manifest.providesCandidates)
+    XCTAssertEqual(manifest.candidateSources, ["multi.items"])
     XCTAssertEqual(manifest.commands.map(\.subcommand), ["go"])
     XCTAssertEqual(manifest.mappings.map(\.key), ["q"])
   }
@@ -490,8 +491,17 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(json["bundle_ids"], "empty bundle_ids is not encoded")
     XCTAssertNil(json["modes"], "empty modes is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
+    XCTAssertNil(json["sources"], "empty sources is not encoded")
     XCTAssertNil(json["commands"], "empty commands is not encoded")
     XCTAssertNil(json["mappings"], "empty mappings is not encoded")
+  }
+
+  func testProviderEncodesCandidateSourcesWhenSet() throws {
+    let provider = PluginProvider(kind: .candidates, sources: ["firefox.tabs"])
+    let data = try JSONEncoder().encode(provider)
+    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual(json["kind"] as? String, "candidates")
+    XCTAssertEqual(json["sources"] as? [String], ["firefox.tabs"])
   }
 
   func testCommandRegistrationEncodesBundleIDsWhenSet() throws {

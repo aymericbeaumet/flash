@@ -38,15 +38,18 @@ extension OverlayPanel {
 
   func setCandidateFinderResults(items: [CandidateDisplayItem], emptyText: String) {
     let shownItems = items
+    let fontSize = Self.candidateFinderFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize))
+    let paragraph = Self.candidateFinderParagraphStyle()
     if shownItems.isEmpty {
       candidateFinderResultsMeasurementText = emptyText
       candidateFinderResultsAttributedText = NSAttributedString(
         string: emptyText,
         attributes: [
           .font: NSFont.monospacedSystemFont(
-            ofSize: max(CGFloat(overlayConfig.fontSize), 11),
+            ofSize: fontSize,
             weight: .medium),
           .foregroundColor: Self.nordSnowStorm0,
+          .paragraphStyle: paragraph,
         ])
       candidateFinderResultsVisible = true
       return
@@ -55,7 +58,6 @@ extension OverlayPanel {
     // Text draws top-to-bottom; the highest-ranked row should appear
     // first, closest to the prompt.
     let visualItems = shownItems
-    let fontSize = max(CGFloat(overlayConfig.fontSize), 11)
     let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let selectedFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
     let highlightFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
@@ -68,7 +70,10 @@ extension OverlayPanel {
 
     for item in visualItems {
       if attributed.length > 0 {
-        attributed.append(NSAttributedString(string: "\n", attributes: [.font: baseFont]))
+        attributed.append(
+          NSAttributedString(
+            string: "\n",
+            attributes: [.font: baseFont, .paragraphStyle: paragraph]))
       }
       let marker = item.isSelected ? "> " : "  "
       let line = marker + item.title
@@ -78,6 +83,7 @@ extension OverlayPanel {
         attributes: [
           .font: item.isSelected ? selectedFont : baseFont,
           .foregroundColor: item.isSelected ? selectedColor : baseColor,
+          .paragraphStyle: paragraph,
         ])
       if item.isSelected {
         lineAttributed.addAttribute(
@@ -113,7 +119,7 @@ extension OverlayPanel {
 
   func configureCandidateFinderResults(panelFrame: CGRect) {
     guard candidateFinderResultsVisible else { return }
-    let fontSize = max(CGFloat(overlayConfig.fontSize), 11)
+    let fontSize = Self.candidateFinderFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize))
     let labelFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let visible = snapshot.mainVisibleFrame
@@ -133,7 +139,7 @@ extension OverlayPanel {
       candidateFinderResultsAttributedText
       ?? NSAttributedString(
         string: candidateFinderResultsMeasurementText,
-        attributes: [.font: labelFont])
+        attributes: [.font: labelFont, .paragraphStyle: Self.candidateFinderParagraphStyle()])
     let labelWidth = max(1, width - Self.candidateFinderHorizontalPadding * 2)
     let labelHeight = Self.candidateFinderTextHeight(attributedText, fallbackFont: labelFont)
     let height = labelHeight + Self.candidateFinderVerticalPadding * 2
@@ -175,6 +181,16 @@ extension OverlayPanel {
       with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
       options: [.usesLineFragmentOrigin, .usesFontLeading])
     return ceil(max(fontLineHeight, measured.height))
+  }
+
+  static func candidateFinderFontSize(overlayFontSize: CGFloat) -> CGFloat {
+    max(overlayFontSize + 1, 12)
+  }
+
+  static func candidateFinderParagraphStyle() -> NSParagraphStyle {
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.lineSpacing = candidateFinderLineSpacing
+    return paragraph
   }
 
   static func candidateFinderResultsWidth(

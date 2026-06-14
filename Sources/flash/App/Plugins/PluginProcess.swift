@@ -283,6 +283,67 @@ final class PluginProcess {
     return items
   }
 
+  func queryCandidates(
+    scope: CandidateScope,
+    query: String,
+    sourceFilters: [String],
+    environment: FlashSourceEnvironment,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    let applications = environment.runningApplications.compactMap { app -> [String: Any]? in
+      guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
+      return [
+        "bundle_id": bundleID,
+        "pid": Int(app.processIdentifier),
+        "localized_name": app.localizedName ?? "",
+      ]
+    }
+    let scopeName: String
+    switch scope {
+    case .running:
+      scopeName = "running"
+    case .all:
+      scopeName = "all"
+    }
+    let params: [String: Any] = [
+      "scope": scopeName,
+      "query": query,
+      "source_filters": sourceFilters,
+      "running_applications": applications,
+    ]
+    sendRequest(method: "candidateQuery", params: params) { [weak self] response in
+      guard let self else {
+        DispatchQueue.main.async { completion([]) }
+        return
+      }
+      guard let raw = response?["candidates"] as? [[String: Any]] else {
+        let fallback = self.candidates(scope: scope)
+        DispatchQueue.main.async { completion(fallback) }
+        return
+      }
+      let sourceID = response?["source_id"] as? String ?? "plugin:\(self.manifest.id)"
+      let items = raw.compactMap {
+        Self.candidate(
+          from: $0,
+          pluginID: self.manifest.id,
+          pluginName: self.manifest.name,
+          sourceID: sourceID)
+      }
+      self.lock.lock()
+      let previous = self.snapshot
+      self.snapshot = PluginSnapshot(
+        targets: previous.targets,
+        candidates: items,
+        contextPID: previous.contextPID,
+        updatedAt: Date())
+      self.lock.unlock()
+      self.notifyStatus()
+      DispatchQueue.main.async {
+        completion(items)
+      }
+    }
+  }
+
   func targets(for context: AppContext) -> [JumpTarget] {
     lock.lock()
     let snap = snapshot
@@ -1038,7 +1099,8 @@ final class PluginProcess {
       bundleIdentifier: raw["bundle_id"] as? String ?? "",
       url: url,
       sourcePayload: raw["payload"].flatMap(Self.payloadString),
-      searchAliases: raw["search_aliases"] as? String ?? "")
+      searchAliases: raw["search_aliases"] as? String ?? "",
+      finishesCommand: raw["finishes_command"] as? Bool ?? false)
   }
 
   private static func command(from raw: [String: Any]) -> PluginCommandRegistration? {
@@ -1096,6 +1158,7 @@ final class PluginProcess {
       "kind": "\(candidate.kind)",
       "name": candidate.name,
       "payload": candidate.sourcePayload ?? NSNull(),
+      "finishes_command": candidate.finishesCommand,
       "pid": candidate.pid.map { Int($0) } ?? NSNull(),
       "source": candidate.source,
       "source_id": candidate.sourceID,

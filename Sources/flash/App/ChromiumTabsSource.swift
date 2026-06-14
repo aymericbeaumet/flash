@@ -6,6 +6,7 @@ final class ChromiumTabsSource: FlashSource {
   let identifier = "chromium-tabs"
   let displayName = "chrome"
   let priority = 30
+  let candidateSourceLabels = ["chromium.tabs"]
   let capabilities: FlashSourceCapabilities = [
     .candidates, .tabSelection, .tabCreation, .tabClosing,
   ]

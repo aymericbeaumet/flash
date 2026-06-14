@@ -33,28 +33,28 @@ struct Firefox;
 flash_plugin::plugin!(Firefox);
 
 impl FlashPlugin for Firefox {
-    // Firefox is focused → re-walk its AX tree and republish the tab list.
-    // The host gates *surfacing* these candidates on the active app (the
-    // manifest's `bundle_ids`), so emitting whenever Firefox gains focus keeps
-    // the snapshot fresh without leaking tabs while another app is active.
     async fn on_event(&self, ctx: Context, event: Event) {
-        if event.name != "core:focus.changed" {
-            return;
+        match event.name.as_str() {
+            "core:apps.snapshot" => {
+                let apps = event
+                    .running_applications
+                    .iter()
+                    .filter(|app| is_firefox(&app.bundle_id))
+                    .map(|app| (app.bundle_id.clone(), app.pid))
+                    .collect::<Vec<_>>();
+                refresh_snapshot(&ctx, apps).await;
+            }
+            "core:focus.changed" | "core:ax.changed" => {
+                let bundle = event.bundle_id.unwrap_or_default();
+                let Some(pid) = event.pid else {
+                    return;
+                };
+                if is_firefox(&bundle) {
+                    refresh_snapshot(&ctx, vec![(bundle, pid)]).await;
+                }
+            }
+            _ => {}
         }
-        let bundle = event.bundle_id.unwrap_or_default();
-        if !is_firefox(&bundle) {
-            return;
-        }
-        let Some(pid) = event.pid else {
-            return;
-        };
-        let source = source_name(&bundle);
-        let tabs = collect_tabs(&ctx, pid).await;
-        let candidates = tabs
-            .iter()
-            .map(|tab| candidate(tab, &source, pid))
-            .collect();
-        ctx.emit_snapshot(SOURCE_ID, candidates);
     }
 
     async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
@@ -68,6 +68,16 @@ impl FlashPlugin for Firefox {
     ) -> SourceActionResponse {
         perform_source_action(&ctx, &request).await
     }
+}
+
+async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, i64)>) {
+    let mut candidates = Vec::new();
+    for (bundle, pid) in apps {
+        let source = source_name(&bundle);
+        let tabs = collect_tabs(ctx, pid).await;
+        candidates.extend(tabs.iter().map(|tab| candidate(tab, &source, pid)));
+    }
+    ctx.emit_snapshot(SOURCE_ID, candidates);
 }
 
 fn is_firefox(bundle: &str) -> bool {

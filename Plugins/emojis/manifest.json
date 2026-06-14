@@ -9,6 +9,6 @@
     "core:flash.started"
   ],
   "providers": [
-    { "kind": "candidates" }
+    { "kind": "candidates", "sources": ["emojis.glyphs"] }
   ]
 }

@@ -50,6 +50,7 @@ final class PluginFlashSource: FlashSource {
     plugin.manifest.volatile ? .volatile : .continuous
   }
   var resultsAreVolatile: Bool { plugin.manifest.volatile }
+  var candidateSourceLabels: [String] { plugin.manifest.candidateSources }
 
   func supports(_ context: AppContext) -> Bool {
     let manifestBundles = plugin.manifest.bundleIDs
@@ -78,6 +79,19 @@ final class PluginFlashSource: FlashSource {
     scope: CandidateScope
   ) -> [Candidate] {
     plugin.candidates(scope: scope)
+  }
+
+  func queryCandidates(
+    in environment: FlashSourceEnvironment,
+    request: CandidateQuery,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    plugin.queryCandidates(
+      scope: request.scope,
+      query: request.text,
+      sourceFilters: request.sourceFilters,
+      environment: environment,
+      completion: completion)
   }
 
   func resolveCandidate(

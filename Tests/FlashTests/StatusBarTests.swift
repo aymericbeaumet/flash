@@ -264,6 +264,14 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(width, 1_068)
   }
 
+  func testCandidateFinderResultsUseLargerTextAndRoomierRows() {
+    XCTAssertEqual(OverlayPanel.candidateFinderFontSize(overlayFontSize: 11), 12)
+    XCTAssertEqual(OverlayPanel.candidateFinderFontSize(overlayFontSize: 13), 14)
+    XCTAssertEqual(OverlayPanel.candidateFinderHorizontalPadding, 8)
+    XCTAssertEqual(OverlayPanel.candidateFinderVerticalPadding, 7)
+    XCTAssertEqual(OverlayPanel.candidateFinderLineSpacing, 2)
+  }
+
   func testCandidateFinderResultsWidthGrowsWithLongResults() {
     let width = OverlayPanel.candidateFinderResultsWidth(
       commandPromptWidth: 1_068,

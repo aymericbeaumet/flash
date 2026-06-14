@@ -347,10 +347,7 @@ extension OverlayPanel: NSTextFieldDelegate {
     guard control === commandTextField else { return false }
     switch commandSelector {
     case #selector(NSResponder.insertNewline(_:)):
-      let raw = commandTextField.stringValue
-      let command = raw.hasPrefix(":") ? raw : ":" + raw
-      commandLineText = ""
-      commandLineCursorIndex = 0
+      let command = syncCommandLineStateFromFieldForCommand()
       FlashLog.trace("[input] command_line submit command=\(command)")
       coordinator?.overlayDidSubmitCommandLine(command)
       return true
@@ -373,6 +370,7 @@ extension OverlayPanel: NSTextFieldDelegate {
       coordinator?.overlayDidCancelCommandLine()
       return true
     case #selector(NSResponder.insertTab(_:)):
+      _ = syncCommandLineStateFromFieldForCommand()
       _ = coordinator?.overlayDidInsertCommandLineSelection()
       return true
     case #selector(NSResponder.insertBacktab(_:)):
@@ -387,5 +385,15 @@ extension OverlayPanel: NSTextFieldDelegate {
     default:
       return false
     }
+  }
+
+  @discardableResult
+  private func syncCommandLineStateFromFieldForCommand() -> String {
+    let raw = commandTextField.stringValue
+    let command = raw.hasPrefix(":") ? raw : ":" + raw
+    let cursor = commandTextFieldCursorIndex() + (raw.hasPrefix(":") ? 0 : 1)
+    commandLineText = command
+    commandLineCursorIndex = min(max(0, cursor), command.count)
+    return command
   }
 }

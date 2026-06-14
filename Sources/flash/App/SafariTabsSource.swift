@@ -6,6 +6,7 @@ final class SafariTabsSource: FlashSource {
   let identifier = "safari-tabs"
   let displayName = "safari"
   let priority = 30
+  let candidateSourceLabels = ["safari.tabs"]
   let capabilities: FlashSourceCapabilities = [
     .candidates, .tabSelection, .tabCreation, .tabClosing,
   ]

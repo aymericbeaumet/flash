@@ -299,8 +299,9 @@ struct PluginMappingRegistration: Codable, Hashable {
 /// by ``ProviderKind`` and gated by the same optional, symmetric conditions
 /// (`bundle_ids`/`modes`/`priority`). Kind-specific payloads ride alongside: a
 /// `commands` provider carries `commands[]`, a `mappings` provider carries
-/// `mappings[]`; `hints`/`candidates` providers just declare the capability and
-/// its conditions, then stream results at runtime over RPC.
+/// `mappings[]`; a `candidates` provider declares `sources[]` so the host can
+/// offer `@<source>` completions without first forcing a snapshot. Runtime
+/// result data still travels over plugin RPC.
 struct PluginProvider: Codable, Equatable {
   var kind: ProviderKind
   /// Apps this provider is gated to (empty = every app). Folded into each
@@ -314,6 +315,9 @@ struct PluginProvider: Codable, Equatable {
   /// Plugin command shared by every bang in a `shebang` provider's `shebangs`
   /// (an entry may still override it). Ignored by the other kinds.
   var command: String
+  /// Candidate source labels owned by a `candidates` provider, e.g.
+  /// `firefox.tabs` or `tmux.windows`.
+  var sources: [String]
   var commands: [PluginCommandRegistration]
   var mappings: [PluginMappingRegistration]
   var shebangs: [PluginShebangRegistration]
@@ -324,6 +328,7 @@ struct PluginProvider: Codable, Equatable {
     modes: [ProviderMode] = [],
     priority: Int? = nil,
     command: String = "",
+    sources: [String] = [],
     commands: [PluginCommandRegistration] = [],
     mappings: [PluginMappingRegistration] = [],
     shebangs: [PluginShebangRegistration] = []
@@ -333,6 +338,7 @@ struct PluginProvider: Codable, Equatable {
     self.modes = modes
     self.priority = priority
     self.command = command
+    self.sources = sources
     self.commands = commands
     self.mappings = mappings
     self.shebangs = shebangs
@@ -341,7 +347,7 @@ struct PluginProvider: Codable, Equatable {
   enum CodingKeys: String, CodingKey {
     case kind
     case bundleIDs = "bundle_ids"
-    case modes, priority, command, commands, mappings, shebangs
+    case modes, priority, command, sources, commands, mappings, shebangs
   }
 
   init(from decoder: Decoder) throws {
@@ -351,6 +357,7 @@ struct PluginProvider: Codable, Equatable {
     self.modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
     self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
+    self.sources = try c.decodeIfPresent([String].self, forKey: .sources) ?? []
     self.commands =
       try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
     self.mappings =
@@ -366,6 +373,7 @@ struct PluginProvider: Codable, Equatable {
     if !modes.isEmpty { try c.encode(modes, forKey: .modes) }
     if let priority { try c.encode(priority, forKey: .priority) }
     if !command.isEmpty { try c.encode(command, forKey: .command) }
+    if !sources.isEmpty { try c.encode(sources, forKey: .sources) }
     if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
     if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
     if !shebangs.isEmpty { try c.encode(shebangs, forKey: .shebangs) }
@@ -447,6 +455,20 @@ struct PluginManifest: Codable, Equatable {
         return entry
       }
     }
+  }
+
+  var candidateSources: [String] {
+    var seen = Set<String>()
+    var out: [String] = []
+    for provider in providers where provider.kind == .candidates {
+      for source in provider.sources {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+        seen.insert(trimmed)
+        out.append(trimmed)
+      }
+    }
+    return out
   }
 
   /// True when any provider opts the plugin in as a hints provider. Hint

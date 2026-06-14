@@ -279,6 +279,10 @@ final class SourceCandidateTests: XCTestCase {
       CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "tabs"))
     XCTAssertTrue(
       CandidateFinder.candidateMatchesSourceFilter(app, filter: "apps"))
+    XCTAssertTrue(
+      CandidateFinder.sourceLabelMatchesFilter("apps", filter: "apps"))
+    XCTAssertTrue(
+      CandidateFinder.sourceLabelMatchesFilter("core.apps", filter: "apps"))
     XCTAssertFalse(
       CandidateFinder.candidateMatchesSourceFilter(app, filter: "browser"))
   }
@@ -1015,6 +1019,7 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(firefox.sourcePayload, "firefox.tabs")
     XCTAssertEqual(firefox.displayTitle, "[source] @firefox.tabs")
     XCTAssertNil(firefox.url)
+    XCTAssertFalse(firefox.finishesCommand)
 
     let query = NormalModeDispatcher.normalizedSearchText("fire")
     let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
@@ -1025,6 +1030,138 @@ final class SourceCandidateTests: XCTestCase {
       allowParallel: false)
     let sorted = CandidateFinder.sortedMatches(matches)
     XCTAssertEqual(sorted.first?.candidate.sourcePayload, "firefox.tabs")
+  }
+
+  func testCommandInsertionTextUsesCanonicalTokensAndSourceQualifiedTitles() {
+    XCTAssertEqual(
+      CandidateFinder.commandInsertionText(CandidateFinder.sourceCompletionCandidate("firefox.tabs")),
+      "@firefox.tabs ")
+    XCTAssertEqual(
+      CandidateFinder.commandInsertionText(
+        candidate(
+          kind: CandidateFinder.bangKind,
+          source: "bang",
+          name: "!google",
+          subtitle: "Google search",
+          bundleIdentifier: "",
+          sourcePayload: "google")),
+      "!google ")
+    XCTAssertEqual(
+      CandidateFinder.commandInsertionText(
+        candidate(
+          kind: .app,
+          source: "core.apps",
+          name: "Messages",
+          subtitle: "app",
+          bundleIdentifier: "com.apple.MobileSMS")),
+      "@apps Messages ")
+    XCTAssertEqual(
+      CandidateFinder.commandInsertionText(
+        candidate(
+          kind: .plugin("browser_tab"),
+          source: "firefox",
+          name: "Gmail",
+          subtitle: "browser tab",
+          bundleIdentifier: "org.mozilla.firefox")),
+      "@firefox Gmail ")
+  }
+
+  func testCandidateSelectionFinishesForFinalDestinationsMarkedRowsAndExactPrimaryTitle() {
+    let app = candidate(
+      kind: .app,
+      source: "core.apps",
+      name: "Messages",
+      subtitle: "app",
+      bundleIdentifier: "com.apple.MobileSMS")
+    let tmux = candidate(
+      kind: .plugin("tmux_window"),
+      source: "tmux.windows",
+      name: "scratch:1 flash",
+      subtitle: "scratch:1 · zsh · ~/workspace/flash",
+      bundleIdentifier: "")
+
+    XCTAssertTrue(CandidateFinder.isFinalDestination(app))
+    XCTAssertTrue(CandidateFinder.selectionFinishes(app, query: "mes"))
+    XCTAssertTrue(CandidateFinder.selectionFinishes(app, query: "@apps Messages "))
+    XCTAssertTrue(CandidateFinder.isFinalDestination(tmux))
+    XCTAssertTrue(CandidateFinder.selectionFinishes(tmux, query: "scr"))
+    var source = CandidateFinder.sourceCompletionCandidate("tmux.windows")
+    source.finishesCommand = true
+    XCTAssertFalse(CandidateFinder.isFinalDestination(source))
+    XCTAssertFalse(CandidateFinder.selectionFinishes(source, query: "@tmux"))
+    XCTAssertFalse(CandidateFinder.selectionFinishes(source, query: "@tmux.windows "))
+    XCTAssertTrue(
+      CandidateFinder.selectionFinishes(
+        candidate(
+          kind: .plugin("notes.note"),
+          source: "notes",
+          name: "Inbox",
+          subtitle: "note",
+          bundleIdentifier: "",
+          finishesCommand: true),
+        query: "in"))
+    XCTAssertTrue(
+      CandidateFinder.selectionFinishes(
+        candidate(
+          kind: CandidateFinder.emojiKind,
+          source: "emoji",
+          name: "grinning face",
+          subtitle: "emoji",
+          bundleIdentifier: "",
+          sourcePayload: "😀"),
+        query: "grin"))
+  }
+
+  func testTabSelectionSubmitsOnlyFinalDestinationRows() {
+    let app = candidate(
+      kind: .app,
+      source: "core.apps",
+      name: "System Settings",
+      subtitle: "app",
+      bundleIdentifier: "com.apple.systempreferences")
+    let tmux = candidate(
+      kind: .plugin("tmux_window"),
+      source: "tmux.windows",
+      name: "scratch:1 flash",
+      subtitle: "scratch:1 · zsh · ~/workspace/flash",
+      bundleIdentifier: "")
+    let browserTab = candidate(
+      kind: .plugin("browser_tab"),
+      source: "firefox.tabs",
+      name: "System Design",
+      subtitle: "browser tab",
+      bundleIdentifier: "org.mozilla.firefox")
+    var source = CandidateFinder.sourceCompletionCandidate("tmux.windows")
+    source.finishesCommand = true
+
+    XCTAssertTrue(
+      CandidateFinder.selectionSubmits(
+        app,
+        query: "syst",
+        submit: false,
+        allowFinisher: false,
+        submitFinalDestinations: true))
+    XCTAssertTrue(
+      CandidateFinder.selectionSubmits(
+        tmux,
+        query: "flash",
+        submit: false,
+        allowFinisher: false,
+        submitFinalDestinations: true))
+    XCTAssertFalse(
+      CandidateFinder.selectionSubmits(
+        browserTab,
+        query: "system",
+        submit: false,
+        allowFinisher: false,
+        submitFinalDestinations: true))
+    XCTAssertFalse(
+      CandidateFinder.selectionSubmits(
+        source,
+        query: "@tmux",
+        submit: false,
+        allowFinisher: false,
+        submitFinalDestinations: true))
   }
 
   func testBangCompletionStateAcceptsBareBangAndRejectsConfirmedBang() {
@@ -1379,7 +1516,9 @@ final class SourceCandidateTests: XCTestCase {
     bundleIdentifier: String,
     pid: pid_t? = nil,
     url: URL? = nil,
-    searchAliases: String = ""
+    sourcePayload: String? = nil,
+    searchAliases: String = "",
+    finishesCommand: Bool = false
   ) -> Candidate {
     Candidate(
       kind: kind,
@@ -1390,7 +1529,9 @@ final class SourceCandidateTests: XCTestCase {
       subtitle: subtitle,
       bundleIdentifier: bundleIdentifier,
       url: url,
-      searchAliases: searchAliases)
+      sourcePayload: sourcePayload,
+      searchAliases: searchAliases,
+      finishesCommand: finishesCommand)
   }
 }
 

@@ -1,9 +1,9 @@
 //! Tmux plugin — ports the former Python tmux plugin to Rust.
 //!
-//! Subscribes to focus.changed to refresh the candidate snapshot (tmux
-//! window finder). On each activation Flash calls discoverTargets with the
-//! focused app's pid + window frame; the plugin returns pane-chip and
-//! link-chip targets in screen coordinates.
+//! Keeps the candidate snapshot warm with an SDK timer fallback (tmux exposes
+//! no native host event stream for window-list changes). On each activation
+//! Flash calls discoverTargets with the focused app's pid + window frame; the
+//! plugin returns pane-chip and link-chip targets in screen coordinates.
 //!
 //! Geometry mirrors the previous implementation:
 //!   - cell size = window / cells (fallback) OR alacritty-style font
@@ -19,9 +19,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_local, ActivateRequest, Candidate, CliResult, CommandRequest, CommandResponse,
-    Context, DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, ResolveResponse,
-    SourceActionRequest, SourceActionResponse,
+    run, run_local, sleep, spawn_background, ActivateRequest, Candidate, CliResult,
+    CommandRequest, CommandResponse, Context, DiscoverRequest, DiscoverResponse, Event, Frame,
+    JumpTarget, ResolveResponse, SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -916,8 +916,8 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
     })
 }
 
-async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
-    let Some(build) = build_candidates(plugin.tmux_path.as_deref()).await else {
+async fn refresh_candidate_snapshot_for_path(tmux_path: Option<&str>, ctx: &Context) {
+    let Some(build) = build_candidates(tmux_path).await else {
         ctx.log(
             "debug",
             "[tmux] candidate refresh skipped — tmux transient failure",
@@ -933,6 +933,19 @@ async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
     }
     ctx.log_fields("debug", "[tmux] candidate refresh", fields);
     ctx.emit_snapshot(SOURCE_ID, build.candidates);
+}
+
+async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
+    refresh_candidate_snapshot_for_path(plugin.tmux_path.as_deref(), ctx).await;
+}
+
+fn start_candidate_poll(tmux_path: Option<String>, ctx: Context) {
+    spawn_background(async move {
+        loop {
+            sleep(Duration::from_secs(2)).await;
+            refresh_candidate_snapshot_for_path(tmux_path.as_deref(), &ctx).await;
+        }
+    });
 }
 
 // ---- Tab actions ------------------------------------------------------------
@@ -1583,6 +1596,7 @@ impl FlashPlugin for Tmux {
             ctx.log("warn", "[tmux] tmux binary not found");
         }
         refresh_candidate_snapshot(self, &ctx).await;
+        start_candidate_poll(self.tmux_path.clone(), ctx);
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {

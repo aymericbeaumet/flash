@@ -19,7 +19,7 @@ Activation can come through the `flash://` URL scheme, through the one-shot `fla
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
 8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(action:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
 9. **No backward-compatibility shims on master.** Flash has one user — the maintainer. When a config field, action name, mapping syntax, internal API, or wire format is renamed, update every call site, the defaults, the user's `~/.config/flash/flash.toml`, the bundled plugins, and the tests in the same change. **Do not** add legacy aliases, dual-syntax parsers, dual-key JSON readers (`as? T ?? response?["camelCase"]` etc.), `typealias OldName = NewName`, `// removed` placeholders, deprecation comments, or transitional accept-both paths. Reject malformed input loudly rather than silently translating it. The goal is the smallest possible code per feature. When in doubt, delete the old name — the maintainer can recover from `git log` if needed.
-10. **Dev deploys go through `./Scripts/install.sh --dev`.** It owns the build → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash.app` → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/install.sh --dev` (incremental, current-arch). Bare `./Scripts/install.sh` defaults to `--release`: a full, clean, universal build — slower, and its ad-hoc signature re-triggers the TCC grant, so reserve it for shipping.
+10. **Dev deploys go through `./Scripts/install.sh --dev`.** It owns the optimized current-arch build → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash.app` → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/install.sh --dev` (incremental, current-arch). Bare `./Scripts/install.sh` defaults to `--release`: a full, clean, universal build — slower, and its ad-hoc signature re-triggers the TCC grant, so reserve it for shipping.
 
 If a request would violate any of the above, surface it to the user instead of silently complying.
 
@@ -72,9 +72,9 @@ Tests/ElectronFixture/               # Pinned minimal Electron app used by Scrip
 Plugins/                             # Official bundled Rust plugins (one independent crate each), symlinked into the dev app
 Plugins/_rust_flash_plugin/          # Shared Rust plugin SDK crate (package flash_plugin); no Flash business concepts
 Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
-Scripts/build-plugins.sh                     # cargo build [dev|release] every Plugins/*/ crate → flash-plugin-<id> binary beside its manifest (release = universal lipo)
+Scripts/build-plugins.sh                     # cargo build [dev|release] every Plugins/*/ crate → flash-plugin-<id> binary beside its manifest (dev = optimized current arch; release = universal lipo)
 Scripts/_common.sh                           # Shared constants + helpers (signing identity, login agent, app assembly) sourced by build.sh / install.sh
-Scripts/build.sh                             # Build Flash.app into build/ without installing. Default --release = clean universal optimized + zip; --dev = fast incremental debug current-arch
+Scripts/build.sh                             # Build Flash.app into build/ without installing. Default --release = clean universal optimized + zip; --dev = fast incremental optimized current-arch
 Scripts/install.sh                           # build.sh then install to /Applications/Flash.app + restart. Default --release = clean universal; --dev = stable dev-signed, plugin symlinks
 Scripts/test-integration-native.sh           # Build/sign/run native AppKit integration fixture + oracle
 Scripts/test-integration-electron.sh         # Install pinned Electron fixture deps, build/sign/run Electron oracle
@@ -191,9 +191,11 @@ public protocol FlashSource: AnyObject {
     var capabilities: FlashSourceCapabilities { get }
     var activationPolicy: FlashSourceActivationPolicy { get }
     var readinessPolicy: FlashSourceReadinessPolicy { get }
+    var candidateSourceLabels: [String] { get }
     func supports(_ context: AppContext) -> Bool
     func discover(in context: AppContext) throws -> [JumpTarget]
     func candidates(in environment: FlashSourceEnvironment, scope: CandidateScope) -> [Candidate]
+    func queryCandidates(in environment: FlashSourceEnvironment, request: CandidateQuery, completion: @escaping ([Candidate]) -> Void)
     func resolveCandidate(_ item: Candidate, in environment: FlashSourceEnvironment, completion: @escaping (CandidateResolution) -> Void)
     func tabSelect(at index: Int, in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
     func tabNext(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
@@ -307,7 +309,7 @@ Each official plugin under `Plugins/<id>/` is an independent (non-workspace)
 Cargo crate depending on the local `flash_plugin` SDK crate
 (`flash_plugin = { path = "../_rust_flash_plugin" }`), which owns all the
 generic MessagePack scaffolding (framing, `initialize`/`heartbeat`/`shutdown`,
-structured logging, a sandboxed `run_cli`, and the tokio runtime) and carries
+structured logging, a sandboxed `run_cli`, background tasks/timers, and the tokio runtime) and carries
 **no Flash business concepts**. A plugin's `main.rs` implements the `Plugin`
 trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
@@ -315,9 +317,14 @@ must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
 need safely). `Scripts/build-plugins.sh [dev|release]` compiles every
 `Plugins/*/Cargo.toml` into a shared `CARGO_TARGET_DIR` (`build/plugin-target`,
 kept out of the watched plugin trees) and copies each `flash-plugin-<id>` binary
-next to its `manifest.json`. `dev` is a debug build for the current arch only
+next to its `manifest.json`. `dev` is an optimized current-arch release build
 (fast, incremental); `release` is an optimized universal binary (x86_64 + arm64)
-joined with `lipo`. The manifest's `start` is `exec ./flash-plugin-<id>` and
+joined with `lipo`. Candidate providers declare `providers[].sources`, keep
+candidate snapshots warm in memory, refresh from light host events such as
+`core:apps.snapshot`, `core:focus.changed`, and `core:ax.changed` when possible,
+and poll only when the underlying source cannot be watched. `candidateQuery`
+returns the warm snapshot by default and may refresh only when the plugin owns
+that timing. The manifest's `start` is `exec ./flash-plugin-<id>` and
 `install` is a no-op `true` — there is no cargo, Python, or interpreter at
 runtime. `Scripts/build.sh` / `Scripts/install.sh` invoke `build-plugins.sh` with
 the matching mode; dev symlinks the repo `Plugins/` into the app, while release
@@ -365,23 +372,13 @@ Every action Flash takes must have a corresponding `flash://` action parsed by `
 
 Normal-mode action URLs currently include: `flash://mouse_target[?secondary=1|double=1|move=1]`, `flash://mouse_grid[?secondary=1|double=1|move=1]`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload[?force=1]`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://flashlight`, `flash://url_copy`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_first`, `flash://tab_last`, `flash://tab_select?index=<n>`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://plugins`, and `flash://plugin_command?command=<command>&subcommand=<subcommand>`.
 
-`:open <query>` and `:flashlight <query>` results render below the centered command line, ordered top-to-bottom with the best match closest to the prompt. Candidate snapshots are cached ahead of use through `SourceRegistry`: app bundles are warmed and cached by `ApplicationSource`, while tmux windows, browser tabs, Slack channels, plugins, and future contexts are queried only from currently active sources. Typing only re-scores prepared strings. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin ids are internal routing keys and must not be required search text for `:open` / `:flashlight`; plugin candidates should provide their own `source` / `name` labels.
+`:open <query>` and `:flashlight <query>` results render below the centered command line, ordered top-to-bottom with the best match closest to the prompt. App bundles are warmed and cached by `ApplicationSource`; plugins own their candidate snapshots and expose source labels via `providers[].sources`. On flashlight open the host renders the core app source immediately and asks every active plugin for its warm snapshot; only plugins that answer before the first-screen deadline are shown initially, and late plugin rows are held until the user types so candidates never reshuffle while the prompt is idle. Typing only re-scores prepared strings and may trigger plugin `candidateQuery` refreshes for pinned source/query text. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin ids are internal routing keys and must not be required search text for `:open` / `:flashlight`; plugin candidates should provide their own `source` / `name` labels.
 
 **Flashlight source ordering.** `CandidateFinder.sortedMatches` ranks results in two bands. Registered `!<bang>` candidates form a strict top band — a typed bang always wins, because a bang signals explicit dispatch intent. All other candidates are ordered by match quality (the field-aware exact/prefix/word-prefix/substring/fuzzy ladder in `fieldScoreNormalized`); source tier is only consulted as a tiebreaker when scores match (`sourcePrecedenceTierIndex`: tmux > browser tabs > active apps (pid set) > inactive apps > rest). The earlier strict-tier sort hid strong prefix matches on app names under weak fuzzy hits on browser tabs (`:flashlight safari` would surface random Firefox pages but not Safari.app) — match quality must lead.
 
 **Flashlight bangs.** Registered plugin bangs are exclusively in scope when the user types `!`. With no `!` typed the candidate pool excludes bang candidates entirely; the moment the query starts with `!`, the pool is replaced with the bang registry alone (no app/tab/tmux noise), fuzzy-matched against the token text after `!`. Submitting a bang routes the remainder through `PluginManager.invokeShebang`; the catch-all `"*"` registration is reached through the same path when no exact token matches what the user typed.
 
-**Flashlight key bindings (unified contract).** `<tab>` and `<cr>` both **act on** the selected candidate:
-
-- Bang candidate: `<tab>` inserts `:flashlight !<token> ` into the buffer (canonicalizes whatever partial token the user typed; cursor lands after the trailing space so they can keep typing the query). `<cr>` does the same for a partial typed token, but dispatches when the typed token exactly matches the selected bang (for example `!googlemaps`).
-- Anything else (app, tab, tmux window, …): open the candidate and dismiss flashlight.
-
-`<cmd+cr>` is **insert + submit**:
-
-- Bang candidate: dispatch the selected bang with the current buffer's remainder (whatever the user typed after `!<token> `).
-- Anything else: identical to `<cr>` — open the candidate.
-
-Cycling moves to arrow keys, `<shift-tab>`. Command-line *completions* (`:help <topic>`, `:plugins <sub>`, `:<plugin> <action>`) keep their separate contract: `<tab>` inserts the value without sending, `<cr>` inserts + sends — that surface is "build a command" rather than "pick a thing".
+**Flashlight key bindings (unified contract).** App and tmux-window rows are final destinations: selecting them with `<tab>` or `<cr>` submits the row, equivalent to `<cmd+cr>`. Synthetic source-filter rows insert `@<source> ` and are never finishers, including on `<cmd+cr>`. Bang rows insert `!<token> `, and non-final real source-owned rows insert `@<source> <name> `. `<cr>` otherwise uses the insert-first path unless the selected candidate is a source-owned finisher (`Candidate.finishesCommand`), an exact primary-title match, or a text-insertion candidate such as an emoji. `<cmd+cr>` is the explicit force-submit/open chord for real candidates. Cycling moves to arrow keys and `<shift-tab>`. Command-line *completions* (`:help <topic>`, `:plugins <sub>`, `:<plugin> <action>`) keep their separate contract: `<tab>` inserts the value without sending, while `<cr>` inserts and then submits only for terminal/plugin-subcommand completions; `acceptsArgs` completions leave the line open.
 
 **Flashlight source pinning.** `:flashlight --<source> <query>` restricts the pool to one source, e.g. `:flashlight --notes inbox`. `NormalModeDispatcher.candidateFinderSourceFilter` parses the leading `--<token>`; `CandidateFinder.candidateMatchesSourceFilter` matches it against `candidate.source` by exact name, name prefix (`--fire` → firefox), or group alias (`--browser`/`--tabs`, `--apps`). Bare `:flashlight --notes` lists every note. The flag is ignored in `:emojis` mode.
 
@@ -391,7 +388,7 @@ App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`
 
 **Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` run `switch-client` against the most-recently-active client and return the terminal pid hosting the target session. Bind them to a key with `flash://plugin_command?command=tmux&subcommand=window&args=main:1` (the `args` query is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
 
-**Command-line candidate contract.** Command and sub-command suggestions (`:help <topic>`, `:plugins <sub>`, `:<plugin> <subcommand>`, the top-level `:<tab>` list) are modelled by `CommandLineCompletion`. Every candidate has a **value** (`insertion`) and a **label** (`label`). The label is purely cosmetic — it is what shows in the suggestion list and never affects behaviour; when omitted, set it equal to the value so the value shows through. Selection semantics are uniform across built-in and plugin candidates: `<tab>` inserts the selected candidate's value into the buffer **without** sending the command (keep typing args), and `<CR>` inserts the value **and** sends the command. Arrow keys (and `<shift-tab>`) cycle the selection. The candidate finder (`:open` / `:flashlight` / `:emojis`) is a separate live-results mechanism with no insertable value, so there `<tab>` / `<shift-tab>` keep their documented role of cycling the result selection before `<CR>` opens.
+**Command-line candidate contract.** Command and sub-command suggestions (`:help <topic>`, `:plugins <sub>`, `:<plugin> <subcommand>`, the top-level `:<tab>` list) are modelled by `CommandLineCompletion`. Every candidate has a **value** (`insertion`) and a **label** (`label`). The label is purely cosmetic — it is what shows in the suggestion list and never affects behaviour; when omitted, set it equal to the value so the value shows through. Selection semantics are uniform across built-in and plugin candidates: `<tab>` inserts the selected candidate's value into the buffer **without** sending the command (keep typing args), and `<CR>` inserts the value, then submits for terminal/plugin-subcommand completions or leaves the line open for `acceptsArgs`. Arrow keys (and `<shift-tab>`) cycle the selection. The candidate finder (`:open` / `:flashlight` / `:emojis`) is a separate live-results mechanism with canonical command insertions; app and tmux-window rows are final destinations and submit on `<tab>`/`<CR>`, `<CR>` may also open when the row is a finisher or exact enough, `<cmd+cr>` force-opens real candidates, and synthetic `[source] @...` rows only insert their source token.
 
 ### Unified Action Contracts
 
@@ -453,7 +450,7 @@ Not required:
 open -g flash://mouse_target
 ```
 
-`./Scripts/install.sh --dev` is what builds debug, codesigns, quits the running instance, replaces the bundle, symlinks bundled plugins for live reload, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs. `./Scripts/build.sh --dev` does the same build without installing; `--release` produces an optimized universal (Intel + Apple Silicon) `.app` + zip.
+`./Scripts/install.sh --dev` is what builds optimized current-arch products, codesigns, quits the running instance, replaces the bundle, symlinks bundled plugins for live reload, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs. `./Scripts/build.sh --dev` does the same build without installing; `--release` produces an optimized universal (Intel + Apple Silicon) `.app` + zip.
 
 ```bash
 # Build only (debug; type-check + unit tests, NOT for behaviour verification)
@@ -462,15 +459,15 @@ swift build
 # Tests
 swift test
 
-# Build debug, install to /Applications/Flash.app, relaunch — required after every app-code change
+# Build optimized current-arch, install to /Applications/Flash.app, relaunch — required after every app-code change
 ./Scripts/install.sh --dev
 ```
 
-`--dev` is the fast inner loop: an incremental debug build for the current arch only (Swift + every plugin), then reinstall + restart. Because dev installs symlink `Contents/Resources/Plugins` to the live `Plugins/` tree and `PluginProcess` watches each plugin directory, rebuilding a plugin binary (the `mv -f` swap in `build-plugins.sh` lands as a `rename`) triggers `scheduleFileReload()` and restarts only that plugin — the resident Flash process and every other plugin keep running. If the watcher doesn't pick up a new plugin binary (e.g. `[plugins] watching_enabled = false`), run `:plugins reload` in Flash's command-line cell. Any change to Swift code, `Resources/Info.plist`, `config.default.toml`, or the bundle / signing flow requires a full `./Scripts/install.sh --dev`.
+`--dev` is the fast inner loop: an incremental optimized current-arch release build (Swift + every plugin), then reinstall + restart. Because dev installs symlink `Contents/Resources/Plugins` to the live `Plugins/` tree and `PluginProcess` watches each plugin directory, rebuilding a plugin binary (the `mv -f` swap in `build-plugins.sh` lands as a `rename`) triggers `scheduleFileReload()` and restarts only that plugin — the resident Flash process and every other plugin keep running. If the watcher doesn't pick up a new plugin binary (e.g. `[plugins] watching_enabled = false`), run `:plugins reload` in Flash's command-line cell. Any change to Swift code, `Resources/Info.plist`, `config.default.toml`, or the bundle / signing flow requires a full `./Scripts/install.sh --dev`.
 
 `install.sh --dev`:
 
-1. `swift build -c debug --product flash` and `swift build -c debug --product flashctl`
+1. `swift build -c release --product flash` and `swift build -c release --product flashctl`
 2. Assembles `build/Flash.app` from the resident binary, `flashctl`, and `Resources/Info.plist`
 3. Codesigns the staging bundle
 4. Quits any running Flash (`osascript`, `open -g flash://flash_quit`, `pkill` fallback)

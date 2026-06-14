@@ -156,17 +156,14 @@ extension AppDelegate {
   }
 
   /// Plugins emit a state notification on every log line, heartbeat, and
-  /// snapshot — far more often than candidates actually change. Coalesce a
-  /// burst into a single refresh on the next runloop tick, and skip the
-  /// (expensive) candidate prewarm entirely unless a candidate surface is
-  /// currently visible. A closed finder re-warms its caches on next open.
+  /// snapshot. Coalesce a burst into a single status/debug refresh. Candidate
+  /// surfaces deliberately do not re-render from plugin-state churn; their
+  /// first-screen and typed-query update points are explicit so rows do not
+  /// reshuffle while the prompt is idle.
   func pluginStateDidChange() {
     pluginStateRefreshWork?.cancel()
     let work = DispatchWorkItem { [weak self] in
       guard let self else { return }
-      if self.candidateFinderSurfaceActive {
-        self.invalidateCandidateFinderCaches(reason: "plugin_state", refreshApps: false)
-      }
       self.statusBarController?.refreshPluginSections()
       self.debugServer?.broadcastState()
     }

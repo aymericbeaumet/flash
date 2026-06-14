@@ -10,8 +10,8 @@ set -euo pipefail
 # `target/` storm) and lets the plugins share compiled dependencies.
 #
 # Usage: build-plugins.sh [dev|release]
-#   dev       — debug build for the current machine arch only. Favors speed:
-#               no optimization, incremental, rebuilds only what changed.
+#   dev       — optimized release build for the current machine arch only.
+#               Incremental and no lipo; used by install.sh --dev.
 #   release   — optimized universal binary (x86_64 + arm64) via lipo.
 
 MODE="${1:-release}"
@@ -52,9 +52,10 @@ for manifest in Plugins/*/Cargo.toml; do
       "$TARGET_DIR/aarch64-apple-darwin/release/$bin" \
       -output "$staged"
   else
-    # dev: debug, current arch, incremental — the fast path.
-    (cd "$dir" && cargo build)
-    cp "$TARGET_DIR/debug/$bin" "$staged"
+    # dev: optimized release, current arch, incremental — fast runtime
+    # without the universal lipo pass.
+    (cd "$dir" && cargo build --release)
+    cp "$TARGET_DIR/release/$bin" "$staged"
   fi
   chmod +x "$staged"
   mv -f "$staged" "$dir/$bin"

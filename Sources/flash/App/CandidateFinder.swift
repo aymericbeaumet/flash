@@ -23,9 +23,7 @@ enum CandidateFinder {
   static let bangKind = CandidateKind.plugin("bang")
   /// Synthetic flashlight rows for `@<source>` source-filter completion.
   /// Selecting one rewrites the buffer with the canonical `@source `
-  /// token; it never "opens" anything on its own. Mirrors the bang
-  /// completion flow so `<tab>`/`<cr>`/`<cmd+cr>` stay consistent
-  /// across both completion surfaces.
+  /// token; it never "opens" anything on its own.
   static let sourceKind = CandidateKind.plugin("source")
 
   /// Candidates whose "open" action inserts their payload as text rather than
@@ -34,6 +32,65 @@ enum CandidateFinder {
   /// typed into the focused field instead of switching apps.
   static func insertsText(_ candidate: Candidate) -> Bool {
     candidate.kind == emojiKind
+  }
+
+  static func commandInsertionText(_ candidate: Candidate) -> String {
+    if candidate.kind == bangKind, let token = candidate.sourcePayload, !token.isEmpty {
+      return "!\(token) "
+    }
+    if candidate.kind == sourceKind, let source = candidate.sourcePayload, !source.isEmpty {
+      return "@\(source) "
+    }
+    if candidate.kind == emojiKind, let glyph = candidate.sourcePayload, !glyph.isEmpty {
+      return glyph
+    }
+    let name = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let source =
+      candidate.kind == .app
+      ? "apps"
+      : candidate.source.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !source.isEmpty, !name.isEmpty {
+      return "@\(source) \(name) "
+    }
+    if !name.isEmpty {
+      return "\(name) "
+    }
+    return candidate.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  static func selectionFinishes(
+    _ candidate: Candidate,
+    query: String,
+    normalize: (String) -> String = NormalModeDispatcher.normalizedSearchText
+  ) -> Bool {
+    if candidate.kind == sourceKind { return false }
+    if isFinalDestination(candidate) { return true }
+    if candidate.finishesCommand || insertsText(candidate) { return true }
+    let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
+    let normalizedQuery = normalize(parsed.text.trimmingCharacters(in: .whitespacesAndNewlines))
+    guard !normalizedQuery.isEmpty else { return false }
+    return normalizedQuery == normalize(candidate.name)
+  }
+
+  static func selectionSubmits(
+    _ candidate: Candidate,
+    query: String,
+    submit: Bool,
+    allowFinisher: Bool = true,
+    submitFinalDestinations: Bool = false
+  ) -> Bool {
+    submit
+      || (submitFinalDestinations && isFinalDestination(candidate))
+      || (allowFinisher && selectionFinishes(candidate, query: query))
+  }
+
+  static func isFinalDestination(_ candidate: Candidate) -> Bool {
+    switch candidate.kind {
+    case .app:
+      return true
+    case .plugin(let kind):
+      return kind == "tmux_window"
+    }
   }
 
   static func displayTitle(_ candidate: Candidate) -> String {
@@ -649,8 +706,8 @@ enum CandidateFinder {
   ///      either an exact equality or a `.` right after the filter.
   ///   3. Group aliases: `tabs`/`browsers` fold the browser plugin
   ///      namespaces; `apps` folds the core app source.
-  static func candidateMatchesSourceFilter(_ candidate: Candidate, filter: String) -> Bool {
-    let source = candidate.source.lowercased()
+  static func sourceLabelMatchesFilter(_ label: String, filter: String) -> Bool {
+    let source = label.lowercased()
     if source == filter { return true }
     if source.hasPrefix(filter + ".") { return true }
     switch filter {
@@ -660,10 +717,14 @@ enum CandidateFinder {
       }
       return false
     case "apps":
-      return source == "core.apps"
+      return source == "apps" || source == "core.apps"
     default:
       return false
     }
+  }
+
+  static func candidateMatchesSourceFilter(_ candidate: Candidate, filter: String) -> Bool {
+    sourceLabelMatchesFilter(candidate.source, filter: filter)
   }
 
   /// One pre-compiled attribute pattern. The wildcard parse runs once at

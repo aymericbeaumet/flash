@@ -109,33 +109,6 @@ extension NormalModeDispatcher {
     return nil
   }
 
-  static func defocusFocusedEditableElement(pid: pid_t) -> Bool {
-    let app = AXUIElementCreateApplication(pid)
-    guard let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
-      isEditable(focused)
-    else { return true }
-
-    if setFocused(focused, false) { return true }
-    if let target = nearestNonEditableAncestor(of: focused),
-      setFocused(target, true)
-    {
-      return true
-    }
-    if let window = elementAttribute(app, kAXFocusedWindowAttribute as String),
-      setFocused(window, true)
-    {
-      return true
-    }
-    if let window = elementAttribute(app, kAXFocusedWindowAttribute as String),
-      AXUIElementSetAttributeValue(app, kAXFocusedUIElementAttribute as CFString, window)
-        == .success
-    {
-      return true
-    }
-    return false
-  }
-
-
   private static func isEditable(_ element: AXUIElement) -> Bool {
     var current = element
     for _ in 0..<8 {
@@ -156,26 +129,6 @@ extension NormalModeDispatcher {
       current = parent
     }
     return false
-  }
-
-  private static func nearestNonEditableAncestor(of element: AXUIElement) -> AXUIElement? {
-    var current = element
-    for _ in 0..<8 {
-      guard let parent = elementAttribute(current, kAXParentAttribute as String) else {
-        return nil
-      }
-      if !isEditable(parent) { return parent }
-      current = parent
-    }
-    return nil
-  }
-
-  private static func setFocused(_ element: AXUIElement, _ focused: Bool) -> Bool {
-    AXUIElementSetAttributeValue(
-      element,
-      kAXFocusedAttribute as CFString,
-      focused ? kCFBooleanTrue : kCFBooleanFalse
-    ) == .success
   }
 
   private static func documentURLNear(_ element: AXUIElement) -> String? {

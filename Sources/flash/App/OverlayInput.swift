@@ -248,9 +248,8 @@ extension OverlayPanel {
     guard modifiers.contains(.command) else { return false }
     // ⌘+Return / ⌘+Keypad-Enter: force-submit the selected flashlight
     // candidate (insert canonical token if it's a bang, then dispatch /
-    // open). Plain Return only INSERTS — `<cmd+cr>` is the explicit
-    // "act on this now" signal so the user can browse + insert without
-    // committing.
+    // open). Plain Return is insert-first and only opens inferred
+    // finishers; `<cmd+cr>` is the explicit "act on this now" signal.
     if event.keyCode == 36 || event.keyCode == 76 {
       coordinator?.overlayDidForceSubmitCommandLineSelection()
       return true

@@ -190,6 +190,11 @@ pub struct Candidate {
     /// with [`aliases`](Candidate::aliases).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub search_aliases: Option<String>,
+    /// Whether Return on this command-bar candidate should perform it
+    /// immediately instead of first inserting candidate text for
+    /// disambiguation. Command-Return always forces submission.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub finishes_command: Option<bool>,
     /// Opaque per-candidate state round-tripped through the host. Set a raw
     /// string with [`payload`](Candidate::payload) or a structured value with
     /// [`payload_json`](Candidate::payload_json); read it back with
@@ -261,6 +266,14 @@ impl Candidate {
         } else {
             Some(joined)
         };
+        self
+    }
+
+    /// Mark this candidate as specific enough for Return to perform
+    /// immediately from the command bar. Leave unset for insert-first
+    /// behavior.
+    pub fn finishes_command(mut self, value: bool) -> Self {
+        self.finishes_command = Some(value);
         self
     }
 
@@ -435,6 +448,19 @@ impl AxValue {
 // Inbound requests / events
 // ---------------------------------------------------------------------------
 
+/// One running regular app visible to Flash. Used by `core:apps.snapshot` and
+/// by candidate query requests so plugins can refresh app-scoped sources while
+/// keeping the data in memory.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct RunningApplication {
+    #[serde(default)]
+    pub bundle_id: String,
+    #[serde(default)]
+    pub pid: i64,
+    #[serde(default)]
+    pub localized_name: String,
+}
+
 /// A host event delivered to [`Plugin::on_event`]. Match on
 /// [`name`](Event::name) (`core:focus.changed`, `core:clipboard.changed`, …); the
 /// remaining fields are the event payload, present when the event carries them.
@@ -445,6 +471,7 @@ pub struct Event {
     pub pid: Option<i64>,
     pub front_window_frame: Option<Frame>,
     pub text: Option<String>,
+    pub running_applications: Vec<RunningApplication>,
 }
 
 #[derive(Deserialize)]
@@ -465,6 +492,8 @@ struct EventPayload {
     front_window_frame: Option<Frame>,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    running_applications: Vec<RunningApplication>,
 }
 
 impl Event {
@@ -476,6 +505,7 @@ impl Event {
                 pid: wire.payload.pid,
                 front_window_frame: wire.payload.front_window_frame,
                 text: wire.payload.text,
+                running_applications: wire.payload.running_applications,
             },
             Err(_) => Event::default(),
         }
@@ -547,6 +577,22 @@ pub struct SourceActionRequest {
     pub index: Option<i64>,
 }
 
+/// A `candidateQuery` request from the flashlight. `query` is the current
+/// residual search text after source filters have been stripped. Empty
+/// `source_filters` means the user has not pinned a source; plugins may return
+/// any candidate source they declared.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CandidateQueryRequest {
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub source_filters: Vec<String>,
+    #[serde(default)]
+    pub running_applications: Vec<RunningApplication>,
+}
+
 /// An `activateTarget` notification: act on the [`JumpTarget`] the plugin
 /// emitted earlier (matched by `target_id`) with the given click `action`.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -562,6 +608,7 @@ pub struct ActivateRequest {
 pub enum Request {
     Command(CommandRequest),
     DiscoverTargets(DiscoverRequest),
+    CandidateQuery(CandidateQueryRequest),
     ResolveCandidate(Candidate),
     SourceAction(SourceActionRequest),
     ActivateTarget(ActivateRequest),
@@ -712,6 +759,35 @@ impl SourceActionResponse {
     }
 }
 
+/// Response to a `candidateQuery`. Omit `candidates` to tell the host to keep
+/// using this plugin's existing snapshot; send `Some(vec)` (even empty) to
+/// replace it with an authoritative fresh result.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CandidateQueryResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidates: Option<Vec<Candidate>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+}
+
+impl CandidateQueryResponse {
+    pub fn snapshot() -> Self {
+        Self::default()
+    }
+
+    pub fn candidates(candidates: Vec<Candidate>) -> Self {
+        Self {
+            candidates: Some(candidates),
+            ..Self::default()
+        }
+    }
+
+    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
+        self.source_id = Some(source_id.into());
+        self
+    }
+}
+
 /// What [`Plugin::handle`] returns. Build one from the matching response type
 /// (or a [`CliResult`]) with `.into()`; return [`Response::None`] for
 /// [`Request::ActivateTarget`], which expects no reply.
@@ -719,6 +795,7 @@ impl SourceActionResponse {
 pub enum Response {
     Command(CommandResponse),
     Discover(DiscoverResponse),
+    CandidateQuery(CandidateQueryResponse),
     Resolve(ResolveResponse),
     SourceAction(SourceActionResponse),
     None,
@@ -729,6 +806,7 @@ impl Response {
         match self {
             Response::Command(r) => serde_json::to_value(r).unwrap_or(Value::Null),
             Response::Discover(r) => serde_json::to_value(r).unwrap_or(Value::Null),
+            Response::CandidateQuery(r) => serde_json::to_value(r).unwrap_or(Value::Null),
             Response::Resolve(r) => serde_json::to_value(r).unwrap_or(Value::Null),
             Response::SourceAction(r) => serde_json::to_value(r).unwrap_or(Value::Null),
             Response::None => Value::Null,
@@ -745,6 +823,12 @@ impl From<CommandResponse> for Response {
 impl From<DiscoverResponse> for Response {
     fn from(value: DiscoverResponse) -> Self {
         Response::Discover(value)
+    }
+}
+
+impl From<CandidateQueryResponse> for Response {
+    fn from(value: CandidateQueryResponse) -> Self {
+        Response::CandidateQuery(value)
     }
 }
 
@@ -1125,6 +1209,22 @@ pub async fn run_local(argv: &[String], timeout: Duration) -> CliResult {
     }
 }
 
+/// Run a background task on the plugin runtime. Prefer this SDK helper over a
+/// direct tokio dependency in plugins; it keeps runtime ownership centralized
+/// in `flash_plugin`.
+pub fn spawn_background<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(future);
+}
+
+/// Sleep on the plugin runtime timer. Used by polling fallbacks when a source
+/// has no lighter host event stream.
+pub async fn sleep(duration: Duration) {
+    tokio::time::sleep(duration).await;
+}
+
 // ---------------------------------------------------------------------------
 // Plugin trait + runtime
 // ---------------------------------------------------------------------------
@@ -1318,6 +1418,7 @@ async fn serve<P: Plugin>(plugin: P) {
                 let request = match other {
                     "command.invoke" => Request::Command(decode(params)),
                     "discoverTargets" => Request::DiscoverTargets(decode(params)),
+                    "candidateQuery" => Request::CandidateQuery(decode(params)),
                     "resolveCandidate" => Request::ResolveCandidate(decode(
                         params
                             .get("candidate")

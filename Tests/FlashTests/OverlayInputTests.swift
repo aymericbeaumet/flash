@@ -183,6 +183,42 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.commandLineSelectionDeltas, [-1, 1])
   }
 
+  func testCommandLineReturnSubmitsWithoutClearingCommandBufferFirst() {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.commandTextField.stringValue = ":flashlight @tmux"
+    panel.commandLineText = ":flashlight @tmux"
+    let textView = NSTextView()
+
+    XCTAssertTrue(
+      panel.control(
+        panel.commandTextField,
+        textView: textView,
+        doCommandBy: #selector(NSResponder.insertNewline(_:))))
+
+    XCTAssertEqual(coordinator.submittedCommands, [":flashlight @tmux"])
+    XCTAssertEqual(panel.commandLineText, ":flashlight @tmux")
+  }
+
+  func testCommandLineTabSyncsTextFieldBeforeAcceptingSelection() {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.commandTextField.stringValue = ":flashlight @tmux"
+    panel.commandLineText = ":flashlight @old"
+    let textView = NSTextView()
+
+    XCTAssertTrue(
+      panel.control(
+        panel.commandTextField,
+        textView: textView,
+        doCommandBy: #selector(NSResponder.insertTab(_:))))
+
+    XCTAssertEqual(coordinator.insertSelectionCount, 1)
+    XCTAssertEqual(panel.commandLineText, ":flashlight @tmux")
+  }
+
   func testOverlayNoActionsCoverModeTransitionProperties() {
     for key in [
       "frame", "hidden", "backgroundColor", "sublayers", "colors",
@@ -381,6 +417,8 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var cancelModalCount = 0
   var passThroughModalCount = 0
   var commandLineSelectionDeltas: [Int] = []
+  var insertSelectionCount = 0
+  var submittedCommands: [String] = []
   var mappingEventsToHandle = 0
   var normalModeActions: [(MappingCommand?, Int)] = []
 
@@ -410,8 +448,13 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     commandLineSelectionDeltas.append(delta)
     return true
   }
-  func overlayDidInsertCommandLineSelection() -> Bool { false }
-  func overlayDidSubmitCommandLine(_ command: String) {}
+  func overlayDidInsertCommandLineSelection() -> Bool {
+    insertSelectionCount += 1
+    return true
+  }
+  func overlayDidSubmitCommandLine(_ command: String) {
+    submittedCommands.append(command)
+  }
   func overlayDidForceSubmitCommandLineSelection() {}
   func overlayDidCancelCandidateFinder() {}
   func overlayDidUpdateCandidateFinderQuery(_ query: String) {}

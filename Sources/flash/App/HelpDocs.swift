@@ -220,6 +220,9 @@ enum HelpDocs {
       inserts the selected bang token, and adding a space locks it for the
       remaining query.
 
+      App and tmux-window rows are final destinations: `<tab>` or `<cr>`
+      submits the selected row directly, the same as `<cmd-cr>`.
+
       ## Ranking
 
       Scoring layers, in order of weight:
@@ -234,8 +237,10 @@ enum HelpDocs {
 
       ## Plugin candidates
 
-      Plugins emit candidates through `snapshot.updated`; flashlight
-      indexes them like any other source. See `:help plugins`.
+      Plugins keep candidate snapshots warm through host events such as
+      `core:apps.snapshot`, `core:focus.changed`, and `core:ax.changed`.
+      Flashlight asks them for a warm snapshot on open and only lets late
+      responses appear after you type.
       """)
 
   private static let overviewTopic = HelpTopic(

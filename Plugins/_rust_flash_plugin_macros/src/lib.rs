@@ -73,6 +73,18 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 async { ::flash_plugin::DiscoverResponse::default() }
             }
 
+            /// Return flashlight candidates for the current query, or keep the
+            /// host-side snapshot when no refresh is needed.
+            fn candidate_query(
+                &self,
+                ctx: ::flash_plugin::Context,
+                request: ::flash_plugin::CandidateQueryRequest,
+            ) -> impl ::core::future::Future<Output = ::flash_plugin::CandidateQueryResponse> + ::core::marker::Send
+            {
+                let _ = (ctx, request);
+                async { ::flash_plugin::CandidateQueryResponse::snapshot() }
+            }
+
             /// Perform a source action (e.g. tab select/cycle).
             fn source_action(
                 &self,
@@ -147,6 +159,11 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                         ::flash_plugin::Request::DiscoverTargets(request) => {
                             ::flash_plugin::Response::Discover(
                                 <Self as FlashPlugin>::discover_targets(self, ctx, request).await,
+                            )
+                        }
+                        ::flash_plugin::Request::CandidateQuery(request) => {
+                            ::flash_plugin::Response::CandidateQuery(
+                                <Self as FlashPlugin>::candidate_query(self, ctx, request).await,
                             )
                         }
                         ::flash_plugin::Request::SourceAction(request) => {

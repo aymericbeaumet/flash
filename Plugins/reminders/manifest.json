@@ -12,7 +12,7 @@
     { "match": "core:apps.*", "bundle_ids": ["com.apple.reminders"] }
   ],
   "providers": [
-    { "kind": "candidates" },
+    { "kind": "candidates", "sources": ["reminders.tasks"] },
     {
       "kind": "commands",
       "commands": [

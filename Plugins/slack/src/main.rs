@@ -30,26 +30,28 @@ struct Slack;
 flash_plugin::plugin!(Slack);
 
 impl FlashPlugin for Slack {
-    // Slack focused → re-walk its AX tree and republish the channel list as
-    // flashlight candidates. The host gates surfacing on the active app (the
-    // manifest's `bundle_ids`), matching the old SlackSource.
     async fn on_event(&self, ctx: Context, event: Event) {
-        if event.name != "core:focus.changed" {
-            return;
+        match event.name.as_str() {
+            "core:apps.snapshot" => {
+                let pids = event
+                    .running_applications
+                    .iter()
+                    .filter(|app| SLACK_BUNDLES.contains(&app.bundle_id.as_str()))
+                    .map(|app| app.pid)
+                    .collect::<Vec<_>>();
+                refresh_snapshot(&ctx, pids).await;
+            }
+            "core:focus.changed" | "core:ax.changed" => {
+                let bundle = event.bundle_id.unwrap_or_default();
+                let Some(pid) = event.pid else {
+                    return;
+                };
+                if SLACK_BUNDLES.contains(&bundle.as_str()) {
+                    refresh_snapshot(&ctx, vec![pid]).await;
+                }
+            }
+            _ => {}
         }
-        let bundle = event.bundle_id.unwrap_or_default();
-        if !SLACK_BUNDLES.contains(&bundle.as_str()) {
-            return;
-        }
-        let Some(pid) = event.pid else {
-            return;
-        };
-        let channels = collect_channels(&ctx, pid).await;
-        let candidates = channels
-            .iter()
-            .map(|channel| candidate(&channel.name, pid))
-            .collect();
-        ctx.emit_snapshot(CHANNEL_SOURCE_ID, candidates);
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
@@ -59,6 +61,15 @@ impl FlashPlugin for Slack {
     async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
         resolve(&ctx, &candidate).await
     }
+}
+
+async fn refresh_snapshot(ctx: &Context, pids: Vec<i64>) {
+    let mut candidates = Vec::new();
+    for pid in pids {
+        let channels = collect_channels(ctx, pid).await;
+        candidates.extend(channels.iter().map(|channel| candidate(&channel.name, pid)));
+    }
+    ctx.emit_snapshot(CHANNEL_SOURCE_ID, candidates);
 }
 
 impl Slack {

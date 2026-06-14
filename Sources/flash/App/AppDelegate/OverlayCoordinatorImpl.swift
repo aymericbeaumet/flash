@@ -462,13 +462,13 @@ extension AppDelegate {
   ///     `value` into the buffer without sending — the user can keep
   ///     typing args, or hit `<cr>` to send.
   ///   * Candidate *finder* (`:flashlight` / `:open` / `:emojis`):
-  ///     `<tab>` acts on the selected candidate the same way `<cr>`
-  ///     does — for bang candidates it inserts the canonical token,
-  ///     for everything else it opens. Cycling moves to arrow keys and
-  ///     `<shift-tab>`.
+  ///     `<tab>` submits final app/tmux-window destinations, otherwise
+  ///     inserts the selected candidate's canonical command text.
+  ///     Cycling moves to arrow keys and `<shift-tab>`.
   func overlayDidInsertCommandLineSelection() -> Bool {
     if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil {
-      actOnSelectedCandidateFinderCandidate(submit: false)
+      actOnSelectedCandidateFinderCandidate(
+        submit: false, allowFinisher: false, submitFinalDestinations: true)
       return true
     }
     if applySelectedCommandLineCompletionInPlace() {
@@ -478,11 +478,12 @@ extension AppDelegate {
   }
 
   /// `<cmd+cr>` in command-line mode: force-submit the selected
-  /// flashlight candidate (insert+dispatch for bangs, open for
-  /// everything else). The `<cr>`/`<tab>` path is "insert only" for
-  /// bangs so the user can browse the bang list, insert the canonical
-  /// token, type the query, and only commit when they're ready — this
-  /// is the explicit commit.
+  /// flashlight candidate (dispatch for bangs, open for real
+  /// candidates). Synthetic source-filter completion rows still only
+  /// insert `@source `. The `<cr>` path is insert-first unless a
+  /// source marks the row as a finisher or the typed primary title is
+  /// exact; `<tab>` submits final app/tmux-window destinations and
+  /// otherwise inserts.
   func overlayDidForceSubmitCommandLineSelection() {
     if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) == nil {
       // No flashlight active; mirror plain `<cr>` for a regular command

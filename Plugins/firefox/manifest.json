@@ -7,8 +7,12 @@
   "start": "exec ./flash-plugin-firefox",
   "priority": 30,
   "bundle_ids": ["org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition"],
-  "subscriptions": [{ "match": "core:focus.changed" }],
+  "subscriptions": [
+    { "match": "core:focus.changed" },
+    { "match": "core:ax.changed" },
+    "core:apps.snapshot"
+  ],
   "providers": [
-    { "kind": "candidates" }
+    { "kind": "candidates", "sources": ["firefox.tabs"] }
   ]
 }

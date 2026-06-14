@@ -404,7 +404,8 @@ extension NormalModeDispatcher {
   /// Selection semantics, uniform across built-in and plugin candidates:
   /// - `<tab>` inserts the candidate's value without sending the command
   ///   (the user can keep typing args).
-  /// - `<CR>` inserts the candidate's value and sends the command.
+  /// - `<CR>` inserts the candidate's value, then either leaves the line
+  ///   open or submits according to `kind`.
   ///
   /// `kind` only governs what `<CR>` does once the value is inserted:
   /// `acceptsArgs` leaves the line open for arguments, while `terminal`

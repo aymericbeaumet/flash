@@ -9,10 +9,12 @@
   "subscriptions": [
     { "match": "core:apps.*", "bundle_ids": ["com.tinyspeck.slackmacgap"] },
     { "match": "core:focus.changed" },
+    { "match": "core:ax.changed" },
+    "core:apps.snapshot",
     "core:config.*"
   ],
   "providers": [
-    { "kind": "candidates" },
+    { "kind": "candidates", "sources": ["slack.channels"] },
     {
       "kind": "commands",
       "commands": [

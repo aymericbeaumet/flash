@@ -8,6 +8,7 @@ final class ApplicationSource: FlashSource {
   let priority = 0
   let capabilities: FlashSourceCapabilities = [.candidates, .appActivation]
   let activationPolicy: FlashSourceActivationPolicy = .always
+  let candidateSourceLabels = ["apps"]
   private let cacheLock = NSLock()
   private var installedItemsCache: [Candidate]?
   private var ignoredAppMatcher: IgnoredAppMatcher

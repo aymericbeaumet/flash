@@ -91,6 +91,11 @@ public struct Candidate: @unchecked Sendable {
   /// for this candidate (e.g. emoji Slack-style shortcodes like
   /// `pray prayer thanks`). Empty when the plugin didn't attach any.
   public var searchAliases: String
+  /// Source-owned hint that selecting this row from the command bar is
+  /// already specific enough to perform immediately on Return. Plain
+  /// candidates default to insert-first; users can still force with
+  /// Command-Return.
+  public var finishesCommand: Bool
   public var displayTitle: String
   public var normalizedSearchText: String
   /// Per-field normalized forms cached during preparation so the
@@ -125,6 +130,7 @@ public struct Candidate: @unchecked Sendable {
     url: URL?,
     sourcePayload: String? = nil,
     searchAliases: String = "",
+    finishesCommand: Bool = false,
     displayTitle: String = "",
     normalizedSearchText: String = "",
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
@@ -141,6 +147,7 @@ public struct Candidate: @unchecked Sendable {
     self.url = url
     self.sourcePayload = sourcePayload
     self.searchAliases = searchAliases
+    self.finishesCommand = finishesCommand
     self.displayTitle = displayTitle
     self.normalizedSearchText = normalizedSearchText
     self.normalizedScoringFields = normalizedScoringFields
@@ -192,6 +199,18 @@ public struct FlashSourceEnvironment {
 
   public init(runningApplications: [NSRunningApplication]) {
     self.runningApplications = runningApplications
+  }
+}
+
+public struct CandidateQuery: Sendable {
+  public let scope: CandidateScope
+  public let text: String
+  public let sourceFilters: [String]
+
+  public init(scope: CandidateScope, text: String, sourceFilters: [String] = []) {
+    self.scope = scope
+    self.text = text
+    self.sourceFilters = sourceFilters
   }
 }
 
@@ -267,6 +286,11 @@ public protocol FlashSource: AnyObject {
   /// changes from terminal output and async tmux activity that the
   /// host terminal doesn't expose to AX at all.
   var resultsAreVolatile: Bool { get }
+  /// User-facing source labels this provider owns for `@<source>` completion
+  /// and source-scoped candidate queries. Labels should be canonical dotted
+  /// source names such as `firefox.tabs` or `tmux.windows`; short prefixes are
+  /// inferred by the host filter matcher.
+  var candidateSourceLabels: [String] { get }
   func supports(_ context: AppContext) -> Bool
   /// Return a complete deterministic target set for the current UI state.
   /// Providers must not deadline-truncate results; a slow complete walk is
@@ -278,6 +302,14 @@ public protocol FlashSource: AnyObject {
     in environment: FlashSourceEnvironment,
     scope: CandidateScope
   ) -> [Candidate]
+  /// Query this source on demand for flashlight candidates. The default uses
+  /// the source's synchronous snapshot on a utility queue; plugins can override
+  /// to refresh or return a cached snapshot over their own RPC.
+  func queryCandidates(
+    in environment: FlashSourceEnvironment,
+    request: CandidateQuery,
+    completion: @escaping ([Candidate]) -> Void
+  )
   /// Resolve a previously returned candidate. The completion must be
   /// called on the main queue.
   func resolveCandidate(
@@ -372,11 +404,24 @@ extension FlashSource {
   public var activationPolicy: FlashSourceActivationPolicy { .always }
   public var readinessPolicy: FlashSourceReadinessPolicy { .activationOnly }
   public var resultsAreVolatile: Bool { readinessPolicy == .volatile }
+  public var candidateSourceLabels: [String] { [] }
   public func candidates(
     in environment: FlashSourceEnvironment,
     scope: CandidateScope
   ) -> [Candidate] {
     []
+  }
+  public func queryCandidates(
+    in environment: FlashSourceEnvironment,
+    request: CandidateQuery,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    DispatchQueue.global(qos: .utility).async {
+      let items = self.candidates(in: environment, scope: request.scope)
+      DispatchQueue.main.async {
+        completion(items)
+      }
+    }
   }
   public func resolveCandidate(
     _ candidate: Candidate,

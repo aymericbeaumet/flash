@@ -160,6 +160,105 @@ final class SourceRegistry {
     return CandidateFinder.prepare(raw)
   }
 
+  func coreAppCandidates(scope: CandidateScope) -> [Candidate] {
+    refreshRunningApplications()
+    let env = environment
+    guard let source = source(identifier: "core.apps") else { return [] }
+    return CandidateFinder.prepare(source.candidates(in: env, scope: scope))
+  }
+
+  func registeredCandidateSourceLabels() -> [String] {
+    refreshRunningApplications()
+    var seen = Set<String>()
+    var labels: [String] = []
+    for source in sources where source.capabilities.contains(.candidates) {
+      let sourceLabels = source.candidateSourceLabels
+      let candidates = sourceLabels.isEmpty ? [source.displayName] : sourceLabels
+      for raw in candidates {
+        let label = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty, !seen.contains(label) else { continue }
+        seen.insert(label)
+        labels.append(label)
+      }
+    }
+    labels.sort()
+    return labels
+  }
+
+  func queryCandidateSources(
+    scope: CandidateScope,
+    text: String,
+    sourceFilters: [String],
+    firstDeadlineMs: Int? = nil,
+    completion: @escaping (_ candidates: [Candidate], _ isFinal: Bool) -> Void
+  ) {
+    refreshRunningApplications()
+    let env = environment
+    let request = CandidateQuery(scope: scope, text: text, sourceFilters: sourceFilters)
+    let sourceSnapshot = sources.filter { source in
+      guard source.identifier != "core.apps",
+        source.identifier.hasPrefix("plugin:"),
+        source.capabilities.contains(.candidates)
+      else { return false }
+      guard !sourceFilters.isEmpty else { return true }
+      let labels =
+        source.candidateSourceLabels.isEmpty
+        ? [source.displayName, source.identifier]
+        : source.candidateSourceLabels
+      return sourceFilters.contains { filter in
+        labels.contains { label in
+          CandidateFinder.sourceLabelMatchesFilter(label, filter: filter)
+        }
+      }
+    }
+    guard !sourceSnapshot.isEmpty else {
+      DispatchQueue.main.async { completion([], true) }
+      return
+    }
+    let resultLock = NSLock()
+    var raw: [Candidate] = []
+    var remaining = sourceSnapshot.count
+    var sentFirst = false
+
+    func snapshotPrepared() -> [Candidate] {
+      resultLock.lock()
+      let items = raw
+      resultLock.unlock()
+      return CandidateFinder.prepare(items)
+    }
+
+    if let firstDeadlineMs {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(firstDeadlineMs)) {
+        resultLock.lock()
+        let shouldSend = !sentFirst && remaining > 0
+        sentFirst = true
+        let items = raw
+        resultLock.unlock()
+        if shouldSend {
+          completion(CandidateFinder.prepare(items), false)
+        }
+      }
+    }
+
+    for source in sourceSnapshot {
+      source.queryCandidates(in: env, request: request) { items in
+        resultLock.lock()
+        raw.append(contentsOf: items)
+        remaining -= 1
+        let isDone = remaining == 0
+        if isDone {
+          sentFirst = true
+        }
+        resultLock.unlock()
+        FlashLog.trace(
+          "[candidate_finder] query_source=\(source.identifier) count=\(items.count)")
+        if isDone {
+          completion(snapshotPrepared(), true)
+        }
+      }
+    }
+  }
+
   func candidate(
     matching target: String,
     sourceID: String? = nil
@@ -353,7 +452,13 @@ final class SourceRegistry {
       return builtIn
     }
     lock.unlock()
-    return pluginSourcesProvider().first { $0.identifier == identifier }
+    let pluginSources = pluginSourcesProvider()
+    if let exact = pluginSources.first(where: { $0.identifier == identifier }) {
+      return exact
+    }
+    return pluginSources.first { source in
+      identifier.hasPrefix(source.identifier + ".")
+    }
   }
 
   private func performSourceAction(

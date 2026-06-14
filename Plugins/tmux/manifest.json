@@ -26,7 +26,7 @@
   ],
   "providers": [
     { "kind": "hints" },
-    { "kind": "candidates" },
+    { "kind": "candidates", "sources": ["tmux.windows"] },
     {
       "kind": "commands",
       "commands": [

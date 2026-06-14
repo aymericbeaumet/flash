@@ -117,6 +117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var candidateFinderCandidates: [Candidate] = [] {
     didSet { candidateFinderCandidatesEpoch &+= 1 }
   }
+  var candidateFinderDynamicCandidates: [Candidate] = []
+  var candidateFinderDeferredCandidates: [Candidate] = []
+  var candidateFinderSourceQueryGenerationCounter: UInt64 = 0
+  var candidateFinderSourceQueryKey: String = ""
   /// Monotonic counter bumped on every `candidateFinderCandidates`
   /// reassignment so the filtered-pool cache can detect a stale base
   /// without comparing 2k-entry arrays element-wise per keystroke.
@@ -138,12 +142,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `:emojis` narrows the shared candidate pool to emoji glyphs and routes
   /// selection to text insertion; every other candidate query excludes them.
   var candidateFinderEmojiMode = false
-  /// One-shot flag: set when the user pressed `<cmd+cr>` on an
-  /// `@<source>` completion row, indicating that after the next
-  /// async-scoring pass settles we should open the top non-bang,
-  /// non-source candidate. Clears itself on consumption so the bare
-  /// keystroke can't trigger an open later.
-  var pendingFlashlightSubmitAfterSourceLock = false
   let candidateFinderCacheQueue = DispatchQueue(label: "flash.candidate_finder.cache", qos: .utility)
   var candidateFinderRunningAppsCache: [Candidate] = []
   var candidateFinderRunningAppsCacheReady = false
@@ -309,6 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     startClipboardMonitor()
     pluginManager.emit(
       PluginEvent(name: "core:flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
+    emitRunningApplicationsSnapshot(reason: "launch")
   }
 
   func handleURLCommand(_ cmd: URLCommand) {
@@ -410,6 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             bundleID: app.bundleIdentifier,
             configPath: nil,
             focused: true))
+        self.emitRunningApplicationsSnapshot(reason: "focus_changed")
         self.recordAppActivation(app.processIdentifier)
         if self.flashMode == .normal {
           self.normalModeTargetPID = app.processIdentifier
@@ -456,6 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             configPath: nil,
             focused: false))
       }
+      self.emitRunningApplicationsSnapshot(reason: "app_launch")
       self.invalidateCandidateFinderCaches(reason: "app_launch", refreshApps: false)
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
@@ -481,6 +482,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             configPath: nil,
             focused: false))
       }
+      self.emitRunningApplicationsSnapshot(reason: "app_terminate")
       self.invalidateCandidateFinderCaches(reason: "app_terminate", refreshApps: false)
     }
     workspaceTokens = [appSwitch, activeSpace, appLaunched, appTerminated]
@@ -515,6 +517,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           focused: nil))
     }
     clipboardMonitor?.start()
+  }
+
+  func emitRunningApplicationsSnapshot(reason: String) {
+    let applications = NSWorkspace.shared.runningApplications.compactMap { app -> [String: Any]? in
+      guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
+      return [
+        "bundle_id": bundleID,
+        "localized_name": app.localizedName ?? "",
+        "pid": Int(app.processIdentifier),
+      ]
+    }
+    pluginManager.emit(
+      PluginEvent(
+        name: "core:apps.snapshot",
+        payload: [
+          "reason": reason,
+          "running_applications": applications,
+        ],
+        bundleID: nil,
+        configPath: nil,
+        focused: nil))
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
