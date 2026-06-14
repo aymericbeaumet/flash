@@ -133,7 +133,7 @@ extension AppDelegate {
     invalidateCandidateFinderCaches(reason: "config_reload", refreshApps: true)
     monitor.updateConfig(cfg)
     modeBadgeEnabled = hasNormalModeBinding(cfg)
-    applySystemStatusBarAutoHide(enabled: modeBadgeEnabled)
+    applySystemStatusBarSpaceReservation(enabled: modeBadgeEnabled)
     if modeBadgeEnabled {
       statusBarController?.start()
     } else {
@@ -245,26 +245,24 @@ extension AppDelegate {
     }
   }
 
-  func applySystemStatusBarAutoHide(enabled: Bool) {
+  func applySystemStatusBarSpaceReservation(enabled: Bool) {
     let current = NSApp.presentationOptions
-    let updated = Self.systemStatusBarPresentationOptions(
+    let updated = Self.systemStatusBarSpaceReservationPresentationOptions(
       current: current,
       enabled: enabled)
     let changed = updated != current
     if changed {
       NSApp.presentationOptions = updated
     }
-    FlashLog.debug("[statusbar] system_menu_bar_autohide enabled=\(enabled) changed=\(changed)")
+    FlashLog.debug("[statusbar] system_menu_bar_reservation enabled=\(enabled) changed=\(changed)")
   }
 
-  static func systemStatusBarPresentationOptions(
+  static func systemStatusBarSpaceReservationPresentationOptions(
     current: NSApplication.PresentationOptions,
     enabled: Bool
   ) -> NSApplication.PresentationOptions {
     var options = current
     if enabled {
-      options.insert(.autoHideMenuBar)
-    } else {
       options.remove(.autoHideMenuBar)
     }
     return options

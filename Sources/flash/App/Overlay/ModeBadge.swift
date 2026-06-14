@@ -308,13 +308,37 @@ extension OverlayPanel {
     statusBarFontSize
   }
 
+  static func nativeStatusBarFallbackHeight() -> CGFloat {
+    currentScreenSnapshot().nativeStatusBarFallbackHeight
+  }
+
+  static func nativeStatusBarHeight(
+    screenFrame: CGRect,
+    visibleFrame: CGRect,
+    fallbackHeight: CGFloat = nativeStatusBarFallbackHeight()
+  ) -> CGFloat {
+    let reservedTopBand = max(0, screenFrame.maxY - visibleFrame.maxY)
+    return max(reservedTopBand, max(0, fallbackHeight))
+  }
+
   static func statusBarHeight(
     screenFrame: CGRect,
     visibleFrame: CGRect,
-    fontSize: CGFloat
+    fontSize _: CGFloat
   ) -> CGFloat {
-    let menuOrNotchBand = max(0, screenFrame.maxY - visibleFrame.maxY)
-    return max(menuOrNotchBand, ceil(fontSize + 10))
+    nativeStatusBarHeight(screenFrame: screenFrame, visibleFrame: visibleFrame)
+  }
+
+  static func statusBarHeight(
+    screenFrame: CGRect,
+    visibleFrame: CGRect,
+    fontSize _: CGFloat,
+    fallbackNativeStatusBarHeight: CGFloat
+  ) -> CGFloat {
+    nativeStatusBarHeight(
+      screenFrame: screenFrame,
+      visibleFrame: visibleFrame,
+      fallbackHeight: fallbackNativeStatusBarHeight)
   }
 
   static func statusBarFrame(

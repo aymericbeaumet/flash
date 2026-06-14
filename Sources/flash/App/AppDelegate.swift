@@ -369,7 +369,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         if let stdout { self?.overlay.displayBanner(stdout) }
       }
     case .moveWindow(let params):
-      WindowMover.move(params)
+      WindowMover.move(params, statusBarReservesSpace: modeBadgeEnabled)
     }
   }
 

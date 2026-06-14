@@ -77,7 +77,8 @@ enum MouseCommand: Hashable {
 
 /// Named positions for `flash://window_move?position=…`. Each value
 /// maps the focused window to a fixed slot of the target screen's
-/// `visibleFrame` (menu bar + Dock excluded). The names mirror the
+/// Flash-usable frame: `visibleFrame` plus Flash's own top status-bar
+/// reservation when advanced mode is active. The names mirror the
 /// shape users expect from Rectangle / Magnet / Hammerspoon
 /// snippets — halves, quarters, a maximized fill, and a centered
 /// "70 × 80 of the screen" common breakpoint.
@@ -98,8 +99,8 @@ enum WindowPosition: String, Hashable {
 /// query keys are optional and orthogonal:
 ///
 /// - `position` (optional): named slot of the target screen's
-///   `visibleFrame`. When omitted, the window keeps its shape and is
-///   only translated (proportionally remapped) onto the target
+///   Flash-usable frame. When omitted, the window keeps its shape and
+///   is only translated (proportionally remapped) onto the target
 ///   screen.
 /// - `screen` (optional): relative monitor offset. `0` (or omitted)
 ///   stays on the window's current screen. `+N` / `-N` cycle forward

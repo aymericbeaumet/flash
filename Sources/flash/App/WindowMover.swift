@@ -2,7 +2,10 @@ import AppKit
 import ApplicationServices
 
 /// Implements `flash://window_move?position=&screen=` against the
-/// focused application's focused window via Accessibility.
+/// focused application's focused window via Accessibility. When the
+/// persistent Flash status bar is active, every target rect is computed
+/// from the screen frame after reserving the top status band, even if
+/// macOS temporarily reports a full-height `visibleFrame`.
 ///
 /// Coordinate spaces:
 ///   - `NSScreen.frame` / `NSScreen.visibleFrame` use the primary
@@ -13,7 +16,7 @@ import ApplicationServices
 /// happens once at the call to `AXValueCreate`.
 enum WindowMover {
 
-  static func move(_ params: MoveWindowParams) {
+  static func move(_ params: MoveWindowParams, statusBarReservesSpace: Bool) {
     guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
     let axApp = AXUIElementCreateApplication(frontApp.processIdentifier)
 
@@ -38,22 +41,32 @@ enum WindowMover {
     let targetIndex = ((currentIndex + params.screen) % count + count) % count
     let currentScreen = screens[currentIndex]
     let targetScreen = screens[targetIndex]
+    let currentUsableFrame = usableFrame(
+      screenFrame: currentScreen.frame,
+      visibleFrame: currentScreen.visibleFrame,
+      statusBarReservesSpace: statusBarReservesSpace,
+      fontSize: OverlayPanel.statusBarFontSize(overlayFontSize: 0))
+    let targetUsableFrame = usableFrame(
+      screenFrame: targetScreen.frame,
+      visibleFrame: targetScreen.visibleFrame,
+      statusBarReservesSpace: statusBarReservesSpace,
+      fontSize: OverlayPanel.statusBarFontSize(overlayFontSize: 0))
 
     let rect: CGRect
     if let position = params.position {
       // `position` always wins, even when `screen` is `0` — it picks
       // a fresh slot on the destination screen regardless of where
       // the window started.
-      rect = rectFor(position: position, in: targetScreen.visibleFrame)
+      rect = rectFor(position: position, in: targetUsableFrame)
     } else if targetIndex != currentIndex {
       // `screen` alone: translate the window onto the new screen
       // while preserving its proportional shape inside the screen's
-      // visible frame (so a left-half on a 4K monitor lands as a
+      // usable frame (so a left-half on a 4K monitor lands as a
       // left-half on a 1080p monitor, not as a clipped 1920px box).
       rect = remap(
         frame: currentFrame,
-        from: currentScreen.visibleFrame,
-        to: targetScreen.visibleFrame)
+        from: currentUsableFrame,
+        to: targetUsableFrame)
     } else {
       // Nothing to do — `screen=0` with no `position` is a no-op
       // (callers that pass neither were already rejected at parse
@@ -65,7 +78,7 @@ enum WindowMover {
 
   /// Proportionally remap `frame` from one visible frame into
   /// another. Both rects are NSScreen Y-up coordinates.
-  private static func remap(
+  static func remap(
     frame: CGRect, from src: CGRect, to dst: CGRect
   ) -> CGRect {
     guard src.width > 0, src.height > 0 else { return frame }
@@ -93,6 +106,27 @@ enum WindowMover {
     return 0
   }
 
+  static func usableFrame(
+    screenFrame: CGRect,
+    visibleFrame: CGRect,
+    statusBarReservesSpace: Bool,
+    fontSize: CGFloat,
+    fallbackNativeStatusBarHeight: CGFloat = OverlayPanel.nativeStatusBarFallbackHeight()
+  ) -> CGRect {
+    guard statusBarReservesSpace else { return visibleFrame }
+    let statusBarHeight = OverlayPanel.statusBarHeight(
+      screenFrame: screenFrame,
+      visibleFrame: visibleFrame,
+      fontSize: fontSize,
+      fallbackNativeStatusBarHeight: fallbackNativeStatusBarHeight)
+    let maxY = screenFrame.maxY - statusBarHeight
+    return CGRect(
+      x: visibleFrame.minX,
+      y: visibleFrame.minY,
+      width: visibleFrame.width,
+      height: max(0, maxY - visibleFrame.minY))
+  }
+
   /// Read the AX position + size and convert to NSScreen coordinates
   /// (bottom-left origin, Y-up).
   private static func readWindowFrameInNSCoords(window: AXUIElement) -> CGRect? {
@@ -118,9 +152,9 @@ enum WindowMover {
     return CGRect(x: pos.x, y: nsY, width: size.width, height: size.height)
   }
 
-  /// Map a `WindowPosition` onto a slot of the supplied visible frame
+  /// Map a `WindowPosition` onto a slot of the supplied usable frame
   /// (in NSScreen / Y-up coordinates).
-  private static func rectFor(
+  static func rectFor(
     position: WindowPosition, in vf: CGRect
   ) -> CGRect {
     let halfW = vf.width / 2

@@ -47,7 +47,7 @@ final class ModalTextView: NSTextView {
 
 final class OverlayPanel: NSPanel {
   static let transientOverlayWindowLevel: NSWindow.Level = .screenSaver
-  static let persistentStatusWindowLevel: NSWindow.Level = .floating
+  static let persistentStatusWindowLevel: NSWindow.Level = .mainMenu
   static let candidateFinderHorizontalPadding: CGFloat = 7
   static let candidateFinderVerticalPadding: CGFloat = 5
 
@@ -159,6 +159,7 @@ final class OverlayPanel: NSPanel {
     var mainFrame: CGRect?
     var mainScale: CGFloat
     var mainVisibleFrame: CGRect
+    var nativeStatusBarFallbackHeight: CGFloat
   }
 
   private static var snapshotLock = os_unfair_lock_s()
@@ -198,7 +199,33 @@ final class OverlayPanel: NSPanel {
       unionFrame: union,
       mainFrame: main?.frame,
       mainScale: main?.backingScaleFactor ?? 2,
-      mainVisibleFrame: main?.visibleFrame ?? union)
+      mainVisibleFrame: main?.visibleFrame ?? union,
+      nativeStatusBarFallbackHeight: measureNativeStatusBarFallbackHeight())
+  }
+
+  private static func measureNativeStatusBarFallbackHeight() -> CGFloat {
+    let statusItemBandHeight = max(0, NSStatusBar.system.thickness)
+    let app = NSApplication.shared
+    if let menuHeight = app.mainMenu?.menuBarHeight, menuHeight > 0 {
+      return max(statusItemBandHeight, menuHeight)
+    }
+
+    let previousMenu = app.mainMenu
+    defer { app.mainMenu = previousMenu }
+
+    // AppKit only resolves the menu-bar reveal height for an installed
+    // main menu. Install a temporary measurement menu and restore the
+    // LSUIElement app's original menu immediately; this must never become
+    // a visible Flash UI surface.
+    let measurementMenu = NSMenu(title: "Flash")
+    let rootItem = NSMenuItem(title: "Flash", action: nil, keyEquivalent: "")
+    let submenu = NSMenu(title: "Flash")
+    submenu.addItem(NSMenuItem(title: "Flash", action: nil, keyEquivalent: ""))
+    rootItem.submenu = submenu
+    measurementMenu.addItem(rootItem)
+    app.mainMenu = measurementMenu
+
+    return max(statusItemBandHeight, measurementMenu.menuBarHeight)
   }
 
   // MARK: Pre-baked CGColors

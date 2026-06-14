@@ -18,6 +18,23 @@ check_absent() {
   fi
 }
 
+check_absent_except() {
+  local label="$1"
+  local pattern="$2"
+  local allowed="$3"
+  shift 3
+  local output
+  output="$(rg -n "$pattern" "$@" 2>/dev/null || true)"
+  if [[ -n "$output" ]]; then
+    output="$(printf '%s\n' "$output" | rg -v "$allowed" || true)"
+  fi
+  if [[ -n "$output" ]]; then
+    echo "GUARDRAIL FAILED: $label" >&2
+    echo "$output" >&2
+    fail=1
+  fi
+}
+
 PROD_SWIFT=(
   Sources/flash
   Sources/FlashCore
@@ -39,9 +56,10 @@ check_absent \
   "ScreenCaptureKit|VisionProvider|VNRecognize|NSScreenCaptureUsageDescription|CGWindowListCreateImage|CGDisplayStream" \
   Sources Resources
 
-check_absent \
+check_absent_except \
   "no production menu bar, Dock, status, or alert UI" \
-  "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|setActivationPolicy\\(\\.regular" \
+  "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|NSMenu\\(|NSMenuItem|\\.mainMenu|setActivationPolicy\\(\\.regular" \
+  'NSStatusBar\.system\.thickness|NSWindow\.Level = \.mainMenu|app\.mainMenu\?\.menuBarHeight|previousMenu = app\.mainMenu|app\.mainMenu = previousMenu|app\.mainMenu = measurementMenu|NSMenu\(title: "Flash"\)|NSMenuItem\(title: "Flash"' \
   Sources/flash Resources/Info.plist
 
 check_absent \

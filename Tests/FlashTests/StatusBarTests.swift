@@ -14,24 +14,59 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.modeIndicatorFontSize(statusBarFontSize: 13), 13)
   }
 
-  func testStatusBarFrameUsesMenuOrNotchBandHeight() {
+  func testStatusBarHeightUsesExactPerScreenReservedBand() {
+    let height = OverlayPanel.statusBarHeight(
+      screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
+      fontSize: 13,
+      fallbackNativeStatusBarHeight: 22)
+
+    XCTAssertEqual(height, 38)
+  }
+
+  func testStatusBarHeightFallsBackToSystemThicknessWhenNativeBandIsAbsent() {
+    let height = OverlayPanel.statusBarHeight(
+      screenFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+      visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
+      fontSize: 13,
+      fallbackNativeStatusBarHeight: 22)
+
+    XCTAssertEqual(height, 22)
+  }
+
+  func testStatusBarHeightUsesMeasuredNativeMenuHeightWhenFoldedBandIsAbsent() {
+    let height = OverlayPanel.statusBarHeight(
+      screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+      visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+      fontSize: 13,
+      fallbackNativeStatusBarHeight: 30)
+
+    XCTAssertEqual(height, 30)
+  }
+
+  func testStatusBarHeightUsesLargerNativeBandWhenBothMeasurementsExist() {
+    let height = OverlayPanel.statusBarHeight(
+      screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1093),
+      fontSize: 13,
+      fallbackNativeStatusBarHeight: 30)
+
+    XCTAssertEqual(height, 30)
+  }
+
+  func testStatusBarFrameUsesExactPerScreenNativeStatusBarHeight() {
     let frame = OverlayPanel.statusBarFrame(
       screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079),
       panelFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
       fontSize: 13)
 
-    XCTAssertEqual(frame, CGRect(x: 0, y: 1079, width: 1728, height: 38))
-  }
-
-  func testStatusBarFrameFallsBackToReadableFontHeight() {
-    let frame = OverlayPanel.statusBarFrame(
-      screenFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
-      visibleFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
-      panelFrame: CGRect(x: 0, y: 0, width: 1000, height: 800),
-      fontSize: 13)
-
-    XCTAssertEqual(frame, CGRect(x: 0, y: 777, width: 1000, height: 23))
+    XCTAssertEqual(
+      frame.height,
+      OverlayPanel.nativeStatusBarHeight(
+        screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+        visibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079)))
+    XCTAssertEqual(frame.maxY, 1117)
   }
 
   func testStatusLeftAndRightTextDoNotUseTmuxFramePipes() {
@@ -122,6 +157,7 @@ final class StatusBarTests: XCTestCase {
       panelFrame: screenFrame,
       prompt: ":open firefox",
       fontSize: 14)
+    let topBoundary = min(statusBarFrame.minY, visibleFrame.maxY)
 
     XCTAssertEqual(
       frame.width / screenFrame.width,
@@ -130,7 +166,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(frame.height, 38)
     XCTAssertEqual(frame.midX, 864, accuracy: 0.001)
     XCTAssertEqual(
-      (statusBarFrame.minY - frame.maxY) / visibleFrame.height,
+      (topBoundary - frame.maxY) / visibleFrame.height,
       OverlayPanel.commandPromptTopOffsetFraction,
       accuracy: 0.001)
   }
@@ -167,7 +203,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(panel.commandPromptLayer.shadowRadius, 0)
   }
 
-  func testPersistentStatusBarUsesNativeMenuFriendlyWindowLevel() {
+  func testPersistentStatusBarStaysBelowNativeStatusBarLevel() {
     XCTAssertEqual(
       OverlayPanel.windowLevelForOverlayContent(
         inputMode: .normal,
@@ -175,6 +211,12 @@ final class StatusBarTests: XCTestCase {
         candidateFinderResultsVisible: false,
         transientContentVisible: false).rawValue,
       OverlayPanel.persistentStatusWindowLevel.rawValue)
+    XCTAssertEqual(
+      OverlayPanel.persistentStatusWindowLevel.rawValue,
+      NSWindow.Level.mainMenu.rawValue)
+    XCTAssertLessThan(
+      OverlayPanel.persistentStatusWindowLevel.rawValue,
+      NSWindow.Level.statusBar.rawValue)
   }
 
   func testTransientSurfacesUseElevatedOverlayWindowLevel() {
@@ -233,16 +275,16 @@ final class StatusBarTests: XCTestCase {
     XCTAssertLessThan(width, 1_600)
   }
 
-  func testSystemStatusBarAutoHidePresentationOptionFollowsAdvancedMode() {
-    let current: NSApplication.PresentationOptions = [.autoHideDock]
-    let enabled = AppDelegate.systemStatusBarPresentationOptions(
+  func testSystemStatusBarSpaceReservationRemovesMenuBarAutoHide() {
+    let current: NSApplication.PresentationOptions = [.autoHideDock, .autoHideMenuBar]
+    let enabled = AppDelegate.systemStatusBarSpaceReservationPresentationOptions(
       current: current,
       enabled: true)
-    let disabled = AppDelegate.systemStatusBarPresentationOptions(
+    let disabled = AppDelegate.systemStatusBarSpaceReservationPresentationOptions(
       current: enabled,
       enabled: false)
 
-    XCTAssertTrue(enabled.contains(.autoHideMenuBar))
+    XCTAssertFalse(enabled.contains(.autoHideMenuBar))
     XCTAssertTrue(enabled.contains(.autoHideDock))
     XCTAssertFalse(disabled.contains(.autoHideMenuBar))
     XCTAssertTrue(disabled.contains(.autoHideDock))
