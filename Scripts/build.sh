@@ -32,13 +32,11 @@ echo "==> Building Rust plugins ($MODE)"
 if [[ "$MODE" == "release" ]]; then
   echo "==> Building flash (release, universal)"
   swift build -c release --arch arm64 --arch x86_64 --product flash
-  swift build -c release --arch arm64 --arch x86_64 --product flashctl
   BIN_PATH="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
   SIGN_IDENTITY="${FLASH_SIGN_IDENTITY:--}"
 else
   echo "==> Building flash (dev release, current arch)"
   swift build -c release --product flash
-  swift build -c release --product flashctl
   BIN_PATH="$(swift build -c release --show-bin-path)"
   ensure_signing_identity
   SIGN_IDENTITY="$DEV_SIGN_IDENTITY"

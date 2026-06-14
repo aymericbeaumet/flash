@@ -117,12 +117,20 @@ public final class AccessibilityProvider: FlashSource {
 
   public func supports(_ context: AppContext) -> Bool { true }
 
-  public func tabSelect(
-    at index: Int,
+  public func performAction(
+    _ action: SourceAction,
     in context: AppContext,
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
+    // Generic AX walker only handles `tab_select` today: it walks the focused
+    // window for tablist children and presses the Nth tab. Everything else
+    // falls through so the next source (or the host keystroke fallback)
+    // can run.
+    guard case .tabSelect(let index) = action else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
     guard index > 0 else {
       DispatchQueue.main.async { completion(.unhandled) }
       return

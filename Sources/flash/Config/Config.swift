@@ -113,7 +113,7 @@ struct Config {
     var keys: String = Alphabet.defaultKeys
     var minLength: Int = 1
     var magicModifiers: [String] = ["cmd", "ctrl", "alt", "shift"]
-    /// Number of selection steps for `flash://mouse_grid`. Larger values
+    /// Number of selection steps for the `mouse_grid` verb. Larger values
     /// give finer precision but require more keystrokes per click.
     var mouseGridSteps: Int = 3
     /// Opacity (0.0..1.0) applied to every mouse-grid chip so the user
@@ -399,7 +399,7 @@ struct Config {
         ("n", .flashCommand(.newWindow)),
         ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
-        ("<leader><space>", .flashCommand(.flashlight)),
+        ("<leader><space>", .flashCommand(.flashlight(restoreMode: false))),
         ("r", .flashCommand(.reload(force: false))),
         ("R", .flashCommand(.reload(force: true))),
         ("?", .flashCommand(.showUsage(topic: nil))),
@@ -670,155 +670,119 @@ struct Config {
 }
 
 extension URLCommand {
+  /// Human-readable form of an in-process verb: `flash <verb> [k=v ...]`.
+  /// Matches the syntax users type into the `flash` CLI and write into
+  /// mapping arrays in `flash.toml`. Used for help text, log lines, and
+  /// the inspector — never re-parsed.
   var diagnosticDescription: String {
+    func verb(_ name: String, _ args: [String] = []) -> String {
+      args.isEmpty ? "flash \(name)" : "flash \(name) " + args.joined(separator: " ")
+    }
     switch self {
     case .mouseTarget(let command):
-      return "flash://mouse_target\(command.querySuffix)"
+      return verb("mouse_target", command.argTokens)
     case .mouseGrid(let command):
-      return "flash://mouse_grid\(command.querySuffix)"
-    case .normalMode:
-      return "flash://mode_normal"
-    case .insertMode:
-      return "flash://mode_insert"
-    case .commandMode:
-      return "flash://mode_command"
+      return verb("mouse_grid", command.argTokens)
+    case .normalMode: return verb("mode_normal")
+    case .insertMode: return verb("mode_insert")
+    case .commandMode: return verb("mode_command")
     case .scroll(let kind):
       switch kind {
-      case .left: return "flash://scroll_left"
-      case .right: return "flash://scroll_right"
-      case .up: return "flash://scroll_up"
-      case .down: return "flash://scroll_down"
-      case .halfPageUp: return "flash://scroll_half_page_up"
-      case .halfPageDown: return "flash://scroll_half_page_down"
-      case .top: return "flash://scroll_top"
-      case .bottom: return "flash://scroll_bottom"
+      case .left: return verb("scroll_left")
+      case .right: return verb("scroll_right")
+      case .up: return verb("scroll_up")
+      case .down: return verb("scroll_down")
+      case .halfPageUp: return verb("scroll_half_page_up")
+      case .halfPageDown: return verb("scroll_half_page_down")
+      case .top: return verb("scroll_top")
+      case .bottom: return verb("scroll_bottom")
       }
     case .reload(let force):
-      return force ? "flash://app_reload?force=1" : "flash://app_reload"
-    case .undo:
-      return "flash://app_undo"
-    case .redo:
-      return "flash://app_redo"
-    case .close:
-      return "flash://window_close"
-    case .tabClose:
-      return "flash://tab_close"
-    case .find:
-      return "flash://app_find"
+      return force ? verb("app_reload", ["force=1"]) : verb("app_reload")
+    case .undo: return verb("app_undo")
+    case .redo: return verb("app_redo")
+    case .close: return verb("window_close")
+    case .tabClose: return verb("tab_close")
+    case .find: return verb("app_find")
     case .candidateFinder(let all):
-      return all ? "flash://app_open_finder?all=1" : "flash://app_open_finder"
-    case .flashlight:
-      return "flash://flashlight"
-    case .emojiPicker:
-      return "flash://emojis"
-    case .copyURL:
-      return "flash://url_copy"
-    case .tabNext:
-      return "flash://tab_next"
-    case .tabPrev:
-      return "flash://tab_previous"
-    case .tabFirst:
-      return "flash://tab_first"
-    case .tabLast:
-      return "flash://tab_last"
+      return all ? verb("app_open_finder", ["all=1"]) : verb("app_open_finder")
+    case .flashlight(let restoreMode):
+      return restoreMode ? verb("flashlight", ["restore_mode=1"]) : verb("flashlight")
+    case .emojiPicker(let restoreMode):
+      return restoreMode ? verb("emojis", ["restore_mode=1"]) : verb("emojis")
+    case .copyURL: return verb("url_copy")
+    case .tabNext: return verb("tab_next")
+    case .tabPrev: return verb("tab_previous")
+    case .tabFirst: return verb("tab_first")
+    case .tabLast: return verb("tab_last")
     case .tabSelect(let index):
-      if let index {
-        return "flash://tab_select?index=\(index)"
-      }
-      return "flash://tab_select"
-    case .tabMovePrev:
-      return "flash://tab_move_previous"
-    case .tabMoveNext:
-      return "flash://tab_move_next"
-    case .tabReopen:
-      return "flash://tab_reopen"
-    case .historyBack:
-      return "flash://history_back"
-    case .historyForward:
-      return "flash://history_forward"
-    case .movementBack:
-      return "flash://movement_back"
-    case .movementForward:
-      return "flash://movement_forward"
-    case .appPrev:
-      return "flash://app_previous"
-    case .appNext:
-      return "flash://app_next"
-    case .setMark(let letter):
-      return "flash://set_mark?letter=\(letter)"
-    case .jumpToMark(let letter):
-      return "flash://jump_to_mark?letter=\(letter)"
+      if let index { return verb("tab_select", ["index=\(index)"]) }
+      return verb("tab_select")
+    case .tabMovePrev: return verb("tab_move_previous")
+    case .tabMoveNext: return verb("tab_move_next")
+    case .tabReopen: return verb("tab_reopen")
+    case .historyBack: return verb("history_back")
+    case .historyForward: return verb("history_forward")
+    case .movementBack: return verb("movement_back")
+    case .movementForward: return verb("movement_forward")
+    case .appPrev: return verb("app_previous")
+    case .appNext: return verb("app_next")
+    case .setMark(let letter): return verb("set_mark", ["letter=\(letter)"])
+    case .jumpToMark(let letter): return verb("jump_to_mark", ["letter=\(letter)"])
     case .quitApp(let force):
-      return force ? "flash://app_quit?force=1" : "flash://app_quit"
-    case .save:
-      return "flash://app_save"
+      return force ? verb("app_quit", ["force=1"]) : verb("app_quit")
+    case .save: return verb("app_save")
     case .saveAndQuit(let force):
-      return force ? "flash://app_save_and_quit?force=1" : "flash://app_save_and_quit"
-    case .print:
-      return "flash://app_print"
-    case .openDocument:
-      return "flash://document_open"
-    case .newWindow:
-      return "flash://window_new"
-    case .tabNew:
-      return "flash://tab_new"
-    case .copy:
-      return "flash://clipboard_copy"
-    case .cut:
-      return "flash://clipboard_cut"
-    case .paste:
-      return "flash://clipboard_paste"
-    case .copyAll:
-      return "flash://clipboard_copy_all"
-    case .showAlert(let message):
-      return "flash://alert_show?message=\(message)"
-    case .dismissAlert:
-      return "flash://alert_dismiss"
+      return force ? verb("app_save_and_quit", ["force=1"]) : verb("app_save_and_quit")
+    case .print: return verb("app_print")
+    case .openDocument: return verb("document_open")
+    case .newWindow: return verb("window_new")
+    case .tabNew: return verb("tab_new")
+    case .copy: return verb("clipboard_copy")
+    case .cut: return verb("clipboard_cut")
+    case .paste: return verb("clipboard_paste")
+    case .copyAll: return verb("clipboard_copy_all")
+    case .showAlert(let message): return verb("alert_show", ["message=\(message)"])
+    case .dismissAlert: return verb("alert_dismiss")
     case .showUsage(let topic):
-      if let topic, !topic.isEmpty {
-        return "flash://help_show?topic=\(topic)"
-      }
-      return "flash://help_show"
-    case .showPlugins:
-      return "flash://plugins"
-    case .dismissHints:
-      return "flash://hints_dismiss"
-    case .quit:
-      return "flash://flash_quit"
-    case .openApp(let name):
-      return "flash://app_open?name=\(name)"
+      if let topic, !topic.isEmpty { return verb("help_show", ["topic=\(topic)"]) }
+      return verb("help_show")
+    case .showPlugins: return verb("plugins")
+    case .dismissHints: return verb("hints_dismiss")
+    case .quit: return verb("flash_quit")
+    case .openApp(let name): return verb("app_open", ["name=\(name)"])
     case .pluginCommand(let command, let subcommand, let args):
-      var parts = ["command=\(command)", "subcommand=\(subcommand)"]
+      var tokens = ["command=\(command)", "subcommand=\(subcommand)"]
       if !args.isEmpty {
-        parts.append("args=\(args.joined(separator: " "))")
+        tokens.append("args=\(args.joined(separator: " "))")
       }
-      return "flash://plugin_command?\(parts.joined(separator: "&"))"
+      return verb("plugin_command", tokens)
     case .moveWindow(let params):
       var parts: [String] = []
       if let position = params.position {
         parts.append("position=\(position.rawValue)")
       }
       parts.append("screen=\(params.screen)")
-      return "flash://window_move?\(parts.joined(separator: "&"))"
+      return verb("window_move", parts)
     case .sendKey(let keys, _, _):
-      return "flash://send_key?keys=\(keys)"
+      return verb("send_key", ["keys=\(keys)"])
     }
   }
 }
 
 extension MouseCommand {
-  var querySuffix: String {
+  /// Arg tokens for `mouse_target` / `mouse_grid` in diagnostic form.
+  /// Empty for a plain left-click, `["secondary=1"]` for right-click,
+  /// `["double=1"]` for double-click, `["move=1"]` for cursor-only move.
+  var argTokens: [String] {
     switch self {
     case .move:
-      return "?move=1"
+      return ["move=1"]
     case .click(let action):
       switch action {
-      case .leftClick:
-        return ""
-      case .rightClick:
-        return "?secondary=1"
-      case .doubleClick:
-        return "?double=1"
+      case .leftClick: return []
+      case .rightClick: return ["secondary=1"]
+      case .doubleClick: return ["double=1"]
       }
     }
   }
@@ -848,8 +812,10 @@ extension Config {
       - `[mode.insert.mappings]`
       - `[debug]`
 
-      Mapping values must be `flash://...` URLs or explicit argv arrays.
-      Relative argv paths containing `/` resolve from the config file.
+      Mapping values are argv arrays. `["flash", "<verb>", "k=v", …]`
+      dispatches the verb in-process; any other head is executed as argv
+      with `~`/env expansion. Relative argv paths containing `/` resolve
+      from the config file location.
 
       `config.default.toml` is the canonical reference for all accepted keys.
       """)

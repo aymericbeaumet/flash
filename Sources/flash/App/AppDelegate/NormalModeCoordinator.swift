@@ -511,10 +511,16 @@ extension AppDelegate {
         repeatCount: repeatCount)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
-    case .flashlight:
-      enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: .all)
-    case .emojiPicker:
-      enterCommandLineMode(initialText: "emojis ", candidateFinderScope: .all)
+    case .flashlight(let restoreMode):
+      enterCommandLineMode(
+        initialText: "flashlight ",
+        candidateFinderScope: .all,
+        restoreMode: restoreMode)
+    case .emojiPicker(let restoreMode):
+      enterCommandLineMode(
+        initialText: "emojis ",
+        candidateFinderScope: .all,
+        restoreMode: restoreMode)
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: normalModeContext())
     case .mouseGrid(let command):
@@ -613,7 +619,8 @@ extension AppDelegate {
 
   func enterCommandLineMode(
     initialText: String = "",
-    candidateFinderScope: CandidateScope? = nil
+    candidateFinderScope: CandidateScope? = nil,
+    restoreMode: Bool = false
   ) {
     guard
       Self.commandLineEntryIsAllowed(
@@ -621,6 +628,11 @@ extension AppDelegate {
         hasHints: !currentHints.isEmpty,
         activationInFlight: activationInFlight)
     else { return }
+    // Snapshot the entry mode *before* `transitionMode` runs anywhere
+    // below so `finishCommandLineInteraction` can put the user back where
+    // they were. Verbs that don't ask for this clear the slot so a stale
+    // value from a prior open doesn't leak.
+    commandLineRestoreModeTarget = restoreMode ? flashMode : nil
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
     closeModalStateForModeExit(reason: "enter_command")
@@ -1316,75 +1328,64 @@ extension AppDelegate {
       return
     }
 
-    // Score on the dedicated background queue so the keystroke
-    // returns immediately. The caller (refreshCommandLine /
-    // refreshCandidateFinder) re-renders its surface with the
-    // previous match snapshot; the async callback rerenders again
-    // when fresh results land. Generation check drops late results.
-    Self.scoringQueue.async { [weak self] in
-      guard let self else { return }
-      // Drop stale work before any scoring runs. The generation
-      // counter is bumped on the main thread, so by the time this
-      // closure starts a later keystroke may already supersede it.
-      // The old check inside the main-dispatched callback would let
-      // the full scoring + sort run before throwing the result away.
-      guard generation == self.candidateFinderIndexGenerationCounter else { return }
-      let tScoringStart = CFAbsoluteTimeGetCurrent()
-      let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
-      let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
-      var scored = CandidateFinder.scoreMatches(
-        pool: pool,
-        normalizedQuery: normalizedQuery,
-        fuzzyScore: fuzzy,
-        allowParallel: !isEmojiMode)
-      let tScored = CFAbsoluteTimeGetCurrent()
-      // Apply frecency boost on the same thread before the sort so
-      // the comparator sees the final score; reading the store's
-      // O(1) snapshot is safe off main. Skip the loop entirely when
-      // the store has no entries — the boost is always 0 in that
-      // case and `FrecencyMapper.itemKey` does a non-trivial amount
-      // of per-candidate work that's pure waste here.
-      let store = self.frecencyStore
-      if !isEmojiMode, let store, !store.isEmpty {
-        for index in scored.indices {
-          if let key = FrecencyMapper.itemKey(for: scored[index].candidate) {
-            scored[index].score += store.boost(forKey: key)
-          }
-        }
-      }
-      let sorted = CandidateFinder.sortedMatches(scored, precedence: self.precedenceTable())
-      let tSorted = CFAbsoluteTimeGetCurrent()
-      DispatchQueue.main.async {
-        guard generation == self.candidateFinderIndexGenerationCounter else { return }
-        self.applyCandidateMatches(sorted)
-        self.rerenderCandidateFinderSurface(query: query)
-        if !trimmed.isEmpty {
-          let tRendered = CFAbsoluteTimeGetCurrent()
-          let top = sorted.prefix(5).map { match in
-            "\(match.candidate.source):\(match.candidate.name)=\(match.score)"
-          }.joined(separator: "|")
-          let dFilter = Int((tFiltered - t0) * 1000)
-          let dScore = Int((tScored - tScoringStart) * 1000)
-          let dSort = Int((tSorted - tScored) * 1000)
-          let dRender = Int((tRendered - tSorted) * 1000)
-          let dTotal = Int((tRendered - t0) * 1000)
-          FlashLog.trace(
-            "[candidate_finder] q=\"\(trimmed)\" pool=\(pool.count) "
-              + "matches=\(sorted.count) "
-              + "total_ms=\(dTotal) filter_ms=\(dFilter) score_ms=\(dScore) "
-              + "sort_ms=\(dSort) render_ms=\(dRender) "
-              + "top5=[\(top)]")
+    // Score on the main thread so the keystroke and its fresh result
+    // land in the same frame. The fuzzy ranker uses the precomputed
+    // scoring masks + normalized fields stashed by `CandidateFinder
+    // .prepare`, so a 3000-candidate pool typically scores + sorts in
+    // ~1–2ms — well under the 16ms frame budget. The earlier
+    // background-queue + async-callback design was visibly choppy: the
+    // keystroke painted with the previous match snapshot, then the
+    // sorted result replaced it a frame later, which felt like a
+    // perceptible delay even when the work itself was sub-millisecond.
+    // The heaviest pools (full installed-app + plugin candidate
+    // counts) stay below ~5k so the synchronous path stays cheap.
+    let tScoringStart = CFAbsoluteTimeGetCurrent()
+    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
+    let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    var scored = CandidateFinder.scoreMatches(
+      pool: pool,
+      normalizedQuery: normalizedQuery,
+      fuzzyScore: fuzzy,
+      allowParallel: !isEmojiMode)
+    let tScored = CFAbsoluteTimeGetCurrent()
+    // Apply frecency boost before the sort so the comparator sees the
+    // final score. Skip the loop entirely when the store has no
+    // entries — the boost is always 0 in that case and
+    // `FrecencyMapper.itemKey` does a non-trivial amount of per-candidate
+    // work that's pure waste here.
+    let store = self.frecencyStore
+    if !isEmojiMode, let store, !store.isEmpty {
+      for index in scored.indices {
+        if let key = FrecencyMapper.itemKey(for: scored[index].candidate) {
+          scored[index].score += store.boost(forKey: key)
         }
       }
     }
+    let sorted = CandidateFinder.sortedMatches(scored, precedence: precedenceTable())
+    let tSorted = CFAbsoluteTimeGetCurrent()
+    // Re-check the generation — a re-entrant call (e.g. caches landing
+    // mid-update) could have already superseded us.
+    guard generation == self.candidateFinderIndexGenerationCounter else { return }
+    applyCandidateMatches(sorted)
+    if !trimmed.isEmpty {
+      let tRendered = CFAbsoluteTimeGetCurrent()
+      let top = sorted.prefix(5).map { match in
+        "\(match.candidate.source):\(match.candidate.name)=\(match.score)"
+      }.joined(separator: "|")
+      let dFilter = Int((tFiltered - t0) * 1000)
+      let dScore = Int((tScored - tScoringStart) * 1000)
+      let dSort = Int((tSorted - tScored) * 1000)
+      let dRender = Int((tRendered - tSorted) * 1000)
+      let dTotal = Int((tRendered - t0) * 1000)
+      FlashLog.trace(
+        "[candidate_finder] q=\"\(trimmed)\" pool=\(pool.count) "
+          + "matches=\(sorted.count) "
+          + "total_ms=\(dTotal) filter_ms=\(dFilter) score_ms=\(dScore) "
+          + "sort_ms=\(dSort) render_ms=\(dRender) "
+          + "top5=[\(top)]")
+    }
   }
 
-  /// Single queue for the per-keystroke fuzzy scoring + sort. Kept
-  /// static so it lives across `updateCandidateMatches` calls without
-  /// being recreated; `userInitiated` keeps it ahead of background
-  /// utility work but never preempts the main thread.
-  private static let scoringQueue = DispatchQueue(
-    label: "flash.candidate.scoring", qos: .userInitiated)
   /// The emoji picker only renders five rows, but keeping a wider
   /// slice preserves a short arrow-navigation buffer without sorting
   /// or retaining the full emoji pool on every keystroke.
@@ -1991,7 +1992,14 @@ extension AppDelegate {
   func finishCommandLineInteraction(reason: String) {
     overlay.hide()
     resetCommandLineState()
-    transitionMode(to: Self.commandLineExitMode(currentMode: flashMode), reason: reason)
+    // Restore the snapshot the entry verb armed (`restore_mode=1`) if any;
+    // otherwise fall through to the default exit target. Clear the slot in
+    // either case so the next open starts fresh.
+    let target =
+      commandLineRestoreModeTarget
+      ?? Self.commandLineExitMode(currentMode: flashMode)
+    commandLineRestoreModeTarget = nil
+    transitionMode(to: target, reason: reason)
   }
 
   func resetCommandLineState() {

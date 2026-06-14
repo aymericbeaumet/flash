@@ -75,9 +75,9 @@ extension AppDelegate {
       }
     }
     if kind == .top {
-      registry.scrollTop(in: context, completion: completion)
+      registry.perform(.scrollTop, in: context, completion: completion)
     } else {
-      registry.scrollBottom(in: context, completion: completion)
+      registry.perform(.scrollBottom, in: context, completion: completion)
     }
   }
 

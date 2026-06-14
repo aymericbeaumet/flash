@@ -4,16 +4,16 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 ## What Flash is
 
-A headless, resident macOS app that, when triggered by `open -g flash://mouse_target`, the `flash` CLI, or a configured native mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, a persistent top status bar when advanced mode is enabled, managed stdio plugins, `flash://mouse_grid` screen-position targeting, `flash://alert_show?message=...` / `flash://alert_dismiss` for a temporary centered toast, and `flash://help_show` / `flash://plugins` modal views. No menu bar, no Dock icon, no preferences window.
+A headless, resident macOS app that, when triggered by `flash mouse_target` from the CLI or a configured mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, a persistent top status bar when advanced mode is enabled, managed stdio plugins, `mouse_grid` screen-position targeting, `alert_show message=...` / `alert_dismiss` for a temporary centered toast, and `help_show` / `plugins` modal views. No menu bar, no Dock icon, no preferences window.
 
-Activation can come through the `flash://` URL scheme, through the one-shot `flash` / `flashctl` CLI, or through Flash's `[mode.all.mappings]` / `[mode.normal.mappings]` / `[mode.insert.mappings]` Carbon registry for modified-key mappings. Mapping values can be `flash://...` commands dispatched through the same `URLCommand` parser as URL-scheme AppleEvents, or explicit argv arrays launched only from that configured mapping.
+Activation comes either through the `flash` CLI (which AppleEvents the verb to the resident over a custom event class) or through Flash's `[mode.all.mappings]` / `[mode.normal.mappings]` / `[mode.insert.mappings]` Carbon registry. Mapping values are always argv arrays. Arrays whose head is `"flash"` resolve through the in-process verb table (the same one the AppleEvent handler consults); any other head is launched as argv with `~` and env expansion on each element. There is no `flash://` URL scheme and no separate `flashctl` binary — the `flash` Mach-O does both jobs.
 
 ## Hard rules (do not violate)
 
-1. **No UI surface** beyond the transparent hint overlay, the advanced-mode status bar / command-line cell, the help and open-app overlays, and explicit `flash://alert_show` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
+1. **No UI surface** beyond the transparent hint overlay, the advanced-mode status bar / command-line cell, the help and open-app overlays, and explicit `alert_show` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
 2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint, normal-mode, command-line, help, and open-app typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
 3. **Autolaunch is install-script-owned.** `Scripts/install.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
-4. **No unowned resident helpers / no custom external IPC.** URL-scheme activation is `NSAppleEventManager` receiving the URL scheme; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through length-prefixed MessagePack over stdin/stdout with stderr reserved for unexpected errors; Flash owns their lifecycle, heartbeat, reload, and shutdown. Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. The `flash` / `flashctl` CLI is allowed only as a fast one-shot launcher that opens `flash://...` through Launch Services.
+4. **No unowned resident helpers / no custom external IPC.** External activation is `NSAppleEventManager` receiving the custom `Flsh`/`Cmd ` event class from the `flash` CLI; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through length-prefixed MessagePack over stdin/stdout with stderr reserved for unexpected errors; Flash owns their lifecycle, heartbeat, reload, and shutdown. Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. Do not re-introduce a `flash://` URL scheme; the only allowed external entry point is the custom AppleEvent sent by the `flash` CLI sibling.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **TOML parser is hand-rolled** (small subset). Don't add `TOMLKit` / `Toml` / other deps unless we outgrow what we can hand-roll cleanly.
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
@@ -40,11 +40,12 @@ Sources/
     Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
   FlashBrowserTestSupport/           # Browser integration fixture catalog, Firefox harness, Marionette client, and reference-marker diff helpers.
   FlashIntegrationTestSupport/       # Shared GUI integration helpers: AX launch/wait/context, matching, timing, recorder.
-  flash/                             # Resident app executable target
-    main.swift                       # NSApplication boot
+  flash/                             # Resident app executable target — fat binary: argv-less = resident, argv = CLI
+    main.swift                       # Branches into FlashCLI when argv > 1; otherwise boots NSApplication
+    FlashCLI.swift                   # CLI half: AppleEvents the verb to the resident, exits
     App/
       AppDelegate.swift              # Orchestrator + OverlayCoordinator
-      URLEventHandler.swift          # Registers GetURL handler; shared parser for URL and mapping commands
+      URLEventHandler.swift          # Registers the `Flsh`/`Cmd ` AppleEvent handler; shared verb table for CLI + mapping commands
       AppMonitor.swift               # Focused-app prepared model + AX walk dispatcher (serial AX queue)
       OverlayPanel.swift             # Reusable transparent NSPanel, CALayer pool, animations disabled
       OverlayInput.swift             # NSPanel.keyDown — the ONLY keyboard code in the project
@@ -54,7 +55,7 @@ Sources/
       PluginSystem.swift             # manifest.json, MessagePack plugin process lifecycle, plugin source adapter
       DebugServer.swift              # loopback-only dense HTTP/SSE debug page
       CandidateFinder.swift                # Shared :open candidate preparation and app merge helpers
-      ApplicationSource.swift        # Running/installed app source and flash://app_open resolver
+      ApplicationSource.swift        # Running/installed app source and `app_open` verb resolver
       BrowserTabSources.swift        # Shared helpers for :open browser tabs (bundle IDs, AX/AppleScript utilities)
       FirefoxTabsSource.swift        # FirefoxTabsSource — AX-driven, enabled only while Firefox is running
       SafariTabsSource.swift         # SafariTabsSource — AppleScript with AX fallback, enabled only while Safari is running
@@ -65,13 +66,12 @@ Sources/
       ConfigLoader.swift             # Hand-rolled TOML subset parser + DispatchSource fs-watch hot-reload
       Alphabet.swift                 # layout selector / literal hints.keys resolution
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
-  flashctl/                          # One-shot CLI that dispatches flash:// URLs to the resident app
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TargetFinalizer, WindowSnapshot, plugin system, source candidates, browser fixture catalog, shared integration support.
 Tests/BrowserSnapshots/              # Browser integration manifest + 100 offline HTML snapshots used by Scripts/test-integration-browser.sh.
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
-Plugins/                             # Official bundled Rust plugins (one independent crate each), symlinked into the dev app
+Plugins/                             # Official bundled Rust plugins, members of the Plugins/Cargo.toml workspace, symlinked into the dev app
 Plugins/_rust_flash_plugin/          # Shared Rust plugin SDK crate (package flash_plugin); no Flash business concepts
-Resources/Info.plist                 # LSUIElement, flash:// URL scheme, usage descriptions
+Resources/Info.plist                 # LSUIElement, AppleEvent usage description
 Scripts/build-plugins.sh                     # cargo build [dev|release] every Plugins/*/ crate → flash-plugin-<id> binary beside its manifest (dev = optimized current arch; release = universal lipo)
 Scripts/_common.sh                           # Shared constants + helpers (signing identity, login agent, app assembly) sourced by build.sh / install.sh
 Scripts/build.sh                             # Build Flash.app into build/ without installing. Default --release = clean universal optimized + zip; --dev = fast incremental optimized current-arch
@@ -85,7 +85,7 @@ AGENTS.md                            # This file
 
 ## Activation flow (read this before editing the hot path)
 
-1. External tool runs `open -g flash://mouse_target[?secondary=1|double=1|move=1]`, `open -g flash://mouse_grid[?secondary=1|double=1|move=1]`, the `flash` CLI opens the equivalent `flash://...` URL, or a configured `[mode.*]` mapping fires a pre-resolved `MappingAction` (`flash://` in-process command or explicit argv array).
+1. The `flash` CLI runs (`flash mouse_target [secondary=1|double=1|move=1]`, `flash mouse_grid [secondary=1|double=1|move=1]`), or a configured `[mode.*]` mapping fires a pre-resolved `MappingAction`. The CLI sends a custom AppleEvent (class `Flsh`, ID `Cmd `); mappings dispatch the same `URLCommand` value directly.
 2. URL-scheme activation routes via Launch Services to the running instance as a `kAEGetURL` Apple Event; native mappings dispatch a pre-resolved action inside the resident process.
 3. `URLEventHandler` parses URL host/query for AppleEvents and provides the shared parser used by mapping config loading.
 4. `AppDelegate.activate(action:)` captures `NSWorkspace.shared.frontmostApplication`'s pid via `AppMonitor.currentContext()`, then takes an activation generation token.
@@ -250,10 +250,10 @@ Keys:
 | `[flashlight.precedence]` entries  | int            | built-in source order |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
 | `mode.sequence_timeout_ms`         | int (ms)       | `1000`               |
-| `[mode.all.mappings]` entries      | `flash://` or argv-array mapping | none             |
+| `[mode.all.mappings]` entries      | argv array mapping (`["flash", "<verb>"...]` or `[<argv>...]`) | none             |
 | `mode.normal.leader`               | string         | `"\\"`             |
-| `[mode.normal.mappings]` entries   | `flash://` or argv-array mapping | built-in normal map |
-| `[mode.insert.mappings]` entries   | `flash://` or argv-array mapping | none             |
+| `[mode.normal.mappings]` entries   | argv array mapping              | built-in normal map |
+| `[mode.insert.mappings]` entries   | argv array mapping              | none             |
 | `debug.show_hints_bounds`                | bool           | `false`              |
 | `debug.hints_bounds_bg` / `hints_bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.log_level`                  | string         | `"info"`             |
@@ -268,7 +268,7 @@ hint-input layer: Flash cannot distinguish `shift+1` from `!`. `[]` disables
 modified clicks.
 
 `open.ignored_apps` excludes app results from `:open` and
-`flash://app_open?name=...`. Entries match an app's display name, bundle
+the `app_open name=...` verb. Entries match an app's display name, bundle
 identifier, full bundle path, `.app` filename, or filename without `.app`,
 case-insensitively.
 
@@ -353,31 +353,31 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
 
 ### Mode Mappings
 
-`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = "flash://action"` or `"key" = ["executable", "arg"]`. `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`.
+`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = ["flash", "<verb>", "key=value"]` (in-process verb) or `"key" = ["<executable>", "<arg>", …]` (argv exec). `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`.
 
 - `[mode.all.mappings]` applies in insert and normal modes.
 - `[mode.normal.mappings]` applies only while the overlay is capturing normal-mode input.
 - `[mode.insert.mappings]` applies only in insert mode.
 
-Values must be `flash://...` actions or non-empty string arrays. Bare shell strings, non-Flash URL strings, and bare action names are deliberately unsupported in mapping tables. String arrays are launched as argv with leading `~` expanded in each element; relative path arguments containing `/` are resolved from the config file location at load time, so `["../../scripts/toggle"]` works for dotfiles-managed configs without going through a shell parser.
+Values must be non-empty string arrays. Bare strings, URLs, and any other shape are deliberately unsupported. Arrays whose head is `"flash"` are interpreted as in-process verb dispatches and resolve through `URLEventHandler.parse(verb:args:)`; any other head is executed directly as argv (no shell wrap) with leading `~` expanded in each element. Relative path arguments containing `/` are resolved from the config file location at load time, so `["../../scripts/toggle"]` works for dotfiles-managed configs.
 
 Native modified-key mappings are registered through Carbon when the key contains `"+"`; unmodified normal-mode mappings are read only while the overlay panel owns keyboard input. `[mode.normal.mappings]` entries extend the built-in normal map and override only matching keys, so unrelated defaults stay available unless that exact key is remapped.
 
-When any `[mode.all.mappings]` mapping resolves to `flash://mode_normal`, Flash enters advanced mode:
+When any `[mode.all.mappings]` mapping resolves to `["flash", "mode_normal"]`, Flash enters advanced mode:
 
 - starts in normal mode by default;
 - always displays the status bar using configured `mode.labels`, including in the help view;
-- extends `flash://help_show` with ACTION / NORMAL / INSERT columns.
+- extends the `help_show` modal with ACTION / NORMAL / INSERT columns.
 
-The status bar is rendered from `FlashStatusBarTemplate`: `left` and `right` are template strings that can read Flash SDK state (`mode`, `active_app_name`, `active_bundle_identifier`, `date`), plugin state (`PluginStatusSnapshot` counts), or command/script output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The top bar content is inset from the screen edges for rounded display corners. When the Flash status bar is enabled, Flash keeps the macOS top-band reservation in place, uses each screen's native reserved top-band height, falls back to the measured native menu-bar reveal height when macOS reports no top-band reservation, stays below the native menu/status bar reveal, and `flash://window_move` computes slots/remaps inside that reserved usable frame. Reading `NSStatusBar.system.thickness` and temporarily measuring `NSMenu.menuBarHeight` are allowed only for this geometry fallback; do not create persistent `NSStatusItem`, menu extras, app menus, or any native menu/status UI.
+The status bar is rendered from `FlashStatusBarTemplate`: `left` and `right` are template strings that can read Flash SDK state (`mode`, `active_app_name`, `active_bundle_identifier`, `date`), plugin state (`PluginStatusSnapshot` counts), or command/script output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The top bar content is inset from the screen edges for rounded display corners. When the Flash status bar is enabled, Flash keeps the macOS top-band reservation in place, uses each screen's native reserved top-band height, falls back to the measured native menu-bar reveal height when macOS reports no top-band reservation, stays below the native menu/status bar reveal, and the `window_move` verb computes slots/remaps inside that reserved usable frame. Reading `NSStatusBar.system.thickness` and temporarily measuring `NSMenu.menuBarHeight` are allowed only for this geometry fallback; do not create persistent `NSStatusItem`, menu extras, app menus, or any native menu/status UI.
 
-`flash://mode_normal` is the only accepted normal-mode action. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the status bar is hidden and help stays simple while still listing the normal map.
+`["flash", "mode_normal"]` is the only accepted normal-mode entry. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the status bar is hidden and help stays simple while still listing the normal map.
 
-### URL Actions
+### Verbs
 
-Every action Flash takes must have a corresponding `flash://` action parsed by `URLEventHandler`. Keep `URLCommand`, parser wiring, `URLCommand.diagnosticDescription`, mapping help, README, default config examples, and tests in sync.
+Every action Flash takes must have a corresponding entry in `URLEventHandler.commands`. Keep `URLCommand`, parser wiring, `URLCommand.diagnosticDescription`, mapping help, README, default config examples, and tests in sync.
 
-Normal-mode action URLs currently include: `flash://mouse_target[?secondary=1|double=1|move=1]`, `flash://mouse_grid[?secondary=1|double=1|move=1]`, `flash://mode_command`, `flash://scroll_left`, `flash://scroll_down`, `flash://scroll_up`, `flash://scroll_right`, `flash://scroll_half_page_down`, `flash://scroll_half_page_up`, `flash://scroll_top`, `flash://scroll_bottom`, `flash://app_reload[?force=1]`, `flash://app_undo`, `flash://app_redo`, `flash://window_close`, `flash://app_find`, `flash://app_open_finder[?all=1]`, `flash://flashlight`, `flash://url_copy`, `flash://tab_next`, `flash://tab_previous`, `flash://tab_first`, `flash://tab_last`, `flash://tab_select?index=<n>`, `flash://tab_close`, `flash://history_back`, `flash://history_forward`, `flash://movement_back`, `flash://movement_forward`, `flash://app_quit[?force=1]`, `flash://app_save`, `flash://app_save_and_quit[?force=1]`, `flash://app_print`, `flash://document_open`, `flash://window_new`, `flash://tab_new`, `flash://clipboard_copy`, `flash://clipboard_cut`, `flash://clipboard_paste`, `flash://clipboard_copy_all`, `flash://plugins`, and `flash://plugin_command?command=<command>&subcommand=<subcommand>`.
+Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]`, `mouse_grid [secondary=1|double=1|move=1]`, `mode_command`, `scroll_left`, `scroll_down`, `scroll_up`, `scroll_right`, `scroll_half_page_down`, `scroll_half_page_up`, `scroll_top`, `scroll_bottom`, `app_reload [force=1]`, `app_undo`, `app_redo`, `window_close`, `app_find`, `app_open_finder [all=1]`, `flashlight`, `url_copy`, `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_select index=<n>`, `tab_close`, `history_back`, `history_forward`, `movement_back`, `movement_forward`, `app_quit [force=1]`, `app_save`, `app_save_and_quit [force=1]`, `app_print`, `document_open`, `window_new`, `tab_new`, `clipboard_copy`, `clipboard_cut`, `clipboard_paste`, `clipboard_copy_all`, `plugins`, and `plugin_command command=<command> subcommand=<subcommand>`.
 
 `:open <query>` and `:flashlight <query>` results render below the centered command line, ordered top-to-bottom with the best match closest to the prompt. App bundles are warmed and cached by `ApplicationSource`; plugins own their candidate snapshots and expose source labels via `providers[].sources`. On flashlight open the host renders the core app source immediately and asks every active plugin for its warm snapshot; only plugins that answer before the first-screen deadline are shown initially, and late plugin rows are held until the user types so candidates never reshuffle while the prompt is idle. Typing only re-scores prepared strings and may trigger plugin `candidateQuery` refreshes for pinned source/query text. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin ids are internal routing keys and must not be required search text for `:open` / `:flashlight`; plugin candidates should provide their own `source` / `name` labels.
 
@@ -391,9 +391,9 @@ Normal-mode action URLs currently include: `flash://mouse_target[?secondary=1|do
 
 **Flashlight attribute filters.** `:flashlight @<field>:<pattern> <query>` is the structured form — multiple selectors can appear anywhere in the query and combine field-wise: filters on the *same* field OR together, filters across *different* fields AND together. Supported fields: `source`, `kind`, `name` (alias `title`), `url`, `bundle` (aliases `bundle_id`/`bundleidentifier`), `subtitle` (alias `description`). Pattern syntax: bare text is case-insensitive exact match, `*` is the wildcard — `*google*` contains, `goo*` prefix, `*ogle` suffix, bare `*` matches anything. Unknown field names match nothing (so a typo like `@srouce:firefox` empties the pool instead of silently passing). The legacy `@<source>` shorthand (no colon) is kept as exact-source sugar. `CandidateFinder.CompiledAttributeFilter.parse` does the compile step once per query and `applyAttributeFilters` is a single linear pass over the pool (≈3 ms for 5 000 candidates × 3 filters on the test runner).
 
-App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`, `flash://alert_dismiss`, `flash://hints_dismiss`, `flash://app_open?name=...`, `flash://window_move?...`, `flash://help_show`, `flash://plugins`, and `flash://flash_quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
+App/system verbs include: `mode_normal`, `alert_show message=...`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, and `flash_quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
 
-**Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` run `switch-client` against the most-recently-active client and return the terminal pid hosting the target session. Bind them to a key with `flash://plugin_command?command=tmux&subcommand=window&args=main:1` (the `args` query is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
+**Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` run `switch-client` against the most-recently-active client and return the terminal pid hosting the target session. Bind them to a key with `["flash", "plugin_command", "command=tmux", "subcommand=window", "args=main:1"]` (the `args` value is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
 
 **Command-line candidate contract.** Command and sub-command suggestions (`:help <topic>`, `:plugins <sub>`, `:<plugin> <subcommand>`, the top-level `:<tab>` list) are modelled by `CommandLineCompletion`. Every candidate has a **value** (`insertion`) and a **label** (`label`). The label is purely cosmetic — it is what shows in the suggestion list and never affects behaviour; when omitted, set it equal to the value so the value shows through. Selection semantics are uniform across built-in and plugin candidates: `<tab>` inserts the selected candidate's value into the buffer **without** sending the command (keep typing args), and `<CR>` inserts the value, then submits for terminal/plugin-subcommand completions or leaves the line open for `acceptsArgs`. Arrow keys (and `<shift-tab>`) cycle the selection. The candidate finder (`:open` / `:flashlight` / `:emojis`) is a separate live-results mechanism with canonical command insertions; app and tmux-window rows are final destinations and submit on `<tab>`/`<CR>`, `<CR>` may also open when the row is a finisher or exact enough, `<cmd+cr>` force-opens real candidates, and synthetic `[source] @...` rows only insert their source token.
 
@@ -401,11 +401,11 @@ App/system URLs include: `flash://mode_normal`, `flash://alert_show?message=...`
 
 Three normal-mode keys carry a single semantic meaning regardless of focused-app context. Plugins/sources own the context-specific dispatch; the host owns the uniform fallback. Adding a new source means deciding which of these you implement and which you let fall through.
 
-**`f` — `flash://mouse_target` (click a hinted target).** A single highest-priority hint provider wins per focused app via `SourceRegistry.chain(for:).first`: built-in `AccessibilityProvider` (priority 10) is the universal default; a plugin opts in via a `hints` provider at higher priority (e.g., `Plugins/tmux` at 20). There is no additive merge. Targets travel through `ActionDispatcher.perform` with one uniform pipeline: any non-empty `ClickModifiers` (cmd/ctrl/alt/shift, gated by `hints.magic_modifiers`) bypasses the per-target `activate` closure and posts a real `CGEvent` mouse-down/up with the flags set — that is how a plugin's semantic activation (e.g. tmux's `select-pane`) is overridden by `shift+f` to deliver a raw click to the underlying app. Insert-mode entry after commit is driven solely by `JumpTarget.entersInsertMode`, which providers set per target.
+**`f` — the `mouse_target` verb (click a hinted target).** A single highest-priority hint provider wins per focused app via `SourceRegistry.chain(for:).first`: built-in `AccessibilityProvider` (priority 10) is the universal default; a plugin opts in via a `hints` provider at higher priority (e.g., `Plugins/tmux` at 20). There is no additive merge. Targets travel through `ActionDispatcher.perform` with one uniform pipeline: any non-empty `ClickModifiers` (cmd/ctrl/alt/shift, gated by `hints.magic_modifiers`) bypasses the per-target `activate` closure and posts a real `CGEvent` mouse-down/up with the flags set — that is how a plugin's semantic activation (e.g. tmux's `select-pane`) is overridden by `shift+f` to deliver a raw click to the underlying app. Insert-mode entry after commit is driven solely by `JumpTarget.entersInsertMode`, which providers set per target.
 
-**`t` — `flash://tab_new` (open a new tab/window in this context).** Routed through `SourceRegistry.tabNew` against every source advertising `.tabCreation`, in priority order. The first source whose disposition is not `.unhandled` wins; on `.failed` the host stops the chain (no keystroke fallback — see *Source action dispositions* below). On `.unhandled` from every source the host synthesizes a context-aware keystroke fallback via `AppDelegate.tabNewFallbackKey`: ⌘N for window-only terminal bundles (Alacritty), ⌘T elsewhere.
+**`t` — the `tab_new` verb (open a new tab/window in this context).** Routed through `SourceRegistry.tabNew` against every source advertising `.tabCreation`, in priority order. The first source whose disposition is not `.unhandled` wins; on `.failed` the host stops the chain (no keystroke fallback — see *Source action dispositions* below). On `.unhandled` from every source the host synthesizes a context-aware keystroke fallback via `AppDelegate.tabNewFallbackKey`: ⌘N for window-only terminal bundles (Alacritty), ⌘T elsewhere.
 
-**`x` — `flash://window_close` (close current tab/window in this context).** Routed through `SourceRegistry.tabClose` against every source advertising `.tabClosing`. On `.unhandled` the fallback is ⌘W. Closing the last tab in a browser via the plugin's AppleScript path collapses to closing the window, matching the native ⌘W feel. The `tabClose` variant exists for `flash://tab_close` and uses the same dispatch.
+**`x` — the `window_close` verb (close current tab/window in this context).** Routed through `SourceRegistry.tabClose` against every source advertising `.tabClosing`. On `.unhandled` the fallback is ⌘W. Closing the last tab in a browser via the plugin's AppleScript path collapses to closing the window, matching the native ⌘W feel. The `tabClose` variant exists for the `tab_close` verb and uses the same dispatch.
 
 **Source action dispositions.** `SourceActionResult.Disposition` is `.performed | .failed | .unhandled`. Use `.unhandled` only when the source doesn't apply to this context (wrong bundle, missing client, etc.); use `.failed` when the source owns this context but the underlying command failed or timed out — the host must NOT keystroke-fall-back after `.failed`, or a synthesized key can double-fire on top of a real (but late) effect. The Rust SDK exposes the same trichotomy as `SourceActionResponse::performed(pid)` / `failed(pid)` / `unhandled()`.
 
@@ -413,14 +413,14 @@ Three normal-mode keys carry a single semantic meaning regardless of focused-app
 
 Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The **complete** set of valid insert transitions is:
 
-- A normal-mode `i` keypress (or its URL twin `flash://mode_insert` invoked by the user).
+- A normal-mode `i` keypress (or its verb twin `mode_insert` invoked by the user).
 - A physical pointer click while idle normal mode is capturing input; Flash enters insert mode and replays the click so it reaches the underlying app.
 - A committed `f` (mouse_target) click on a target whose owning provider set `JumpTarget.entersInsertMode = true`. Only true text-input surfaces qualify: `AccessibilityProvider` sets it on `AXTextField` / `AXSearchField` / `AXTextArea` / `AXComboBox`. Terminal-like targets (e.g. tmux panes) are NOT inputs in this sense and stay normal; the user types `i` after focusing one if they want to type.
 - A committed `F` (mouse_grid) click — **only** when a post-click AX query (`AppMonitor.focusedElementIsEditable`) reports the focused element under that click is a text-input role. Geometric clicks have no AX target up front, so the role check after the click is the only honest signal that the user landed on something typable. `mF` (cursor move) never enters insert.
 
 Nothing else may auto-enter insert. Specifically: `tab_new`, `app_find` (⌘F), focused-element changes, app activation, and configured key sequences must leave the mode alone. Do not reintroduce passive focused-element observers that switch to insert merely because macOS reports an editable focus. While advanced normal mode is active, Flash must aggressively recapture the overlay after app activation, app launch, Space changes, and panel key-focus loss; this intentionally prioritizes keeping normal-mode keyboard capture over preserving native menus or popovers.
 
-One structural exception: when a config reload removes the last `flash://mode_normal` binding (advanced mode no longer wired), Flash forces `.insert` because there is no normal mode without that binding. Reason `.advancedModeDisabled`, `force: true`.
+One structural exception: when a config reload removes the last `["flash", "mode_normal"]` binding (advanced mode no longer wired), Flash forces `.insert` because there is no normal mode without that binding. Reason `.advancedModeDisabled`, `force: true`.
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a layout selector token. Selector syntax is `<$layout[_$row][_$hand]+...>` where layout is `qwerty` / `colemak` / `dvorak`, row is `homerow` / `toprow` / `bottomrow`, and hand is `lefthand` / `righthand`. Examples: `<colemak>`, `<colemak_homerow+colemak_toprow>`, `<colemak_homerow_lefthand+colemak_toprow_righthand>`, `<colemak_lefthand>`. Selectors cannot mix layouts. Layout selectors are scored by the inferred layout's key scores; literal strings are scored by their written order. There is no `hints.layout` key. Resolution lives in `Alphabet.resolve(_:)`.
 
@@ -434,7 +434,7 @@ Required:
 
 Declared / conditional:
 
-- **Automation (`NSAppleEventsUsageDescription`)** — declared for `flash://app_open` mappings that ask Launch Services to launch/reopen/focus another app. Flash still discovers browser page content through `AXWebArea` descendants in the AX tree, not via `do JavaScript`.
+- **Automation (`NSAppleEventsUsageDescription`)** — declared for the `app_open` verb's Launch Services calls (launch/reopen/focus another app) and so the `flash` CLI can AppleEvent into the resident. Flash still discovers browser page content through `AXWebArea` descendants in the AX tree, not via `do JavaScript`.
 
 Not required:
 
@@ -454,7 +454,7 @@ Not required:
 ./Scripts/install.sh --dev
 
 # Trigger and verify
-open -g flash://mouse_target
+flash mouse_target
 ```
 
 `./Scripts/install.sh --dev` is what builds optimized current-arch products, codesigns, quits the running instance, replaces the bundle, symlinks bundled plugins for live reload, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs. `./Scripts/build.sh --dev` does the same build without installing; `--release` produces an optimized universal (Intel + Apple Silicon) `.app` + zip.
@@ -474,16 +474,15 @@ swift test
 
 `install.sh --dev`:
 
-1. `swift build -c release --product flash` and `swift build -c release --product flashctl`
-2. Assembles `build/Flash.app` from the resident binary, `flashctl`, and `Resources/Info.plist`
+1. `swift build -c release --product flash` — the single Mach-O is both resident and CLI
+2. Assembles `build/Flash.app` from the resident binary and `Resources/Info.plist`
 3. Codesigns the staging bundle
-4. Quits any running Flash (`osascript`, `open -g flash://flash_quit`, `pkill` fallback)
+4. Quits any running Flash (`osascript`, `flash flash_quit`, `pkill` fallback)
 5. Replaces `/Applications/Flash.app`
 6. Codesigns the installed copy
-7. `lsregister -f` to refresh URL-scheme routing
-8. Symlinks `~/.local/bin/flash` and `~/.local/bin/flashctl` to the bundled CLI
-9. Symlinks official bundled plugins from the checkout into `Contents/Resources/Plugins`
-10. `open` the installed app so it's resident again
+7. Symlinks `~/.local/bin/flash` to the bundled CLI
+8. Symlinks official bundled plugins from the checkout into `Contents/Resources/Plugins`
+9. `open` the installed app so it's resident again
 
 After install, verify:
 

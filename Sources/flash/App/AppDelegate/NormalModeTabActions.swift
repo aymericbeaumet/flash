@@ -25,7 +25,7 @@ extension AppDelegate {
       sendNormalModeKey(key, flags: .maskCommand)
       return
     }
-    registry.tabSelect(at: index, in: context) { [weak self] result in
+    registry.perform(.tabSelect(index: index), in: context) { [weak self] result in
       guard let self else { return }
       switch result.disposition {
       case .performed:
@@ -54,7 +54,7 @@ extension AppDelegate {
       name: "tab_next",
       repeatCount: repeatCount,
       action: { registry, context, completion in
-        registry.tabNext(in: context, completion: completion)
+        registry.perform(.tabNext, in: context, completion: completion)
       },
       fallback: { [weak self] context, count in
         guard let self else { return }
@@ -77,7 +77,7 @@ extension AppDelegate {
       name: "tab_previous",
       repeatCount: repeatCount,
       action: { registry, context, completion in
-        registry.tabPrev(in: context, completion: completion)
+        registry.perform(.tabPrev, in: context, completion: completion)
       },
       fallback: { [weak self] context, count in
         guard let self else { return }
@@ -104,7 +104,7 @@ extension AppDelegate {
       name: "tab_last",
       repeatCount: 1,
       action: { registry, context, completion in
-        registry.tabLast(in: context, completion: completion)
+        registry.perform(.tabLast, in: context, completion: completion)
       },
       fallback: { [weak self] context, _ in
         if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
@@ -132,9 +132,9 @@ extension AppDelegate {
       repeatCount: repeatCount,
       action: { registry, context, completion in
         if direction == .next {
-          registry.tabMoveNext(in: context, completion: completion)
+          registry.perform(.tabMoveNext, in: context, completion: completion)
         } else {
-          registry.tabMovePrev(in: context, completion: completion)
+          registry.perform(.tabMovePrev, in: context, completion: completion)
         }
       },
       fallback: { [weak self] context, count in
@@ -179,7 +179,7 @@ extension AppDelegate {
       name: "tab_reopen",
       repeatCount: repeatCount,
       action: { registry, context, completion in
-        registry.tabReopen(in: context, completion: completion)
+        registry.perform(.tabReopen, in: context, completion: completion)
       },
       fallback: { [weak self] context, count in
         if BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) {
@@ -200,7 +200,7 @@ extension AppDelegate {
       name: "tab_new",
       repeatCount: repeatCount,
       action: { registry, context, completion in
-        registry.tabNew(in: context, completion: completion)
+        registry.perform(.tabNew, in: context, completion: completion)
       },
       fallback: { [weak self] context, count in
         let key = AppDelegate.tabNewFallbackKey(forBundleIdentifier: context.bundleIdentifier)
@@ -213,7 +213,7 @@ extension AppDelegate {
       name: "tab_close",
       repeatCount: repeatCount,
       action: { registry, context, completion in
-        registry.tabClose(in: context, completion: completion)
+        registry.perform(.tabClose, in: context, completion: completion)
       },
       fallback: { [weak self] _, count in
         self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)
@@ -231,7 +231,7 @@ extension AppDelegate {
       name: "window_close",
       repeatCount: repeatCount,
       action: { registry, context, completion in
-        registry.tabClose(in: context, completion: completion)
+        registry.perform(.tabClose, in: context, completion: completion)
       },
       fallback: { [weak self] _, count in
         self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand, repeatCount: count)

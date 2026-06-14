@@ -168,12 +168,12 @@ enum HelpDocs {
 
       ## URL form
 
-      The same actions are reachable through the URL handler so external
+      The same actions are reachable through the `flash` CLI so external
       tools can drive them:
 
       ```text
-      flash://set_mark?letter=a
-      flash://jump_to_mark?letter=a
+      flash set_mark letter=a
+      flash jump_to_mark letter=a
       ```
 
       ## Notes
@@ -198,7 +198,7 @@ enum HelpDocs {
 
       ## Entry points
 
-      - `flash://flashlight` URL.
+      - `flash flashlight` from the CLI.
       - `<leader><space>` in normal mode (default mapping).
       - `:flashlight <query>` in command-line mode.
 

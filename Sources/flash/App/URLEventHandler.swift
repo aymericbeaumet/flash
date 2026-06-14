@@ -2,6 +2,22 @@ import AppKit
 import Carbon.HIToolbox
 import FlashCore
 
+// Resident-side AppleEvent handler for commands sent in by the `flash` CLI
+// (see `Sources/flash/FlashCLI.swift`). Replaces the old `flash://` URL
+// scheme entirely: any sender that wants to drive Flash from outside the
+// process now constructs a custom AppleEvent (class `Flsh`, ID `Cmd `)
+// with a verb string and a JSON-encoded args dictionary. The URL surface
+// no longer exists, so drive-by browser navigations can't reach this
+// path — sending the event requires either the matching code identity
+// (the CLI sibling of the resident) or explicit `osascript` on the user's
+// own machine.
+//
+// The same verb table is consulted by mapping config: a TOML entry like
+// `"f" = ["flash", "mouse_target"]` is parsed at load time by feeding the
+// remainder of the array through `CommandEventHandler.parse(verb:args:)`,
+// so the in-process path and the AppleEvent path share one source of
+// truth.
+
 enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
   case mouseGrid(MouseCommand)
@@ -16,8 +32,13 @@ enum URLCommand: Hashable {
   case tabClose
   case find
   case candidateFinder(all: Bool)
-  case flashlight
-  case emojiPicker
+  /// `restoreMode` is set when the mapping carries `restore_mode=1`; on
+  /// exit (submit or cancel) the command-line dismiss restores whichever
+  /// mode was active when the verb fired instead of bouncing the user to
+  /// normal. Use case: bind `cmd+ctrl+space` from insert mode to the
+  /// emoji modal and keep typing afterward without re-entering insert.
+  case flashlight(restoreMode: Bool)
+  case emojiPicker(restoreMode: Bool)
   case copyURL
   case tabNext
   case tabPrev
@@ -75,28 +96,12 @@ enum MouseCommand: Hashable {
   }
 }
 
-/// Named positions for `flash://window_move?position=…`. Each value
-/// maps the focused window to a fixed slot of the target screen's
-/// Flash-usable frame: `visibleFrame` plus Flash's own top status-bar
-/// reservation when advanced mode is active. The names mirror the
-/// shape users expect from Rectangle / Magnet / Hammerspoon
-/// snippets — halves, quarters, a maximized fill, and a centered
-/// "70 × 80 of the screen" common breakpoint.
-enum WindowPosition: String, Hashable {
-  case topLeft = "topleft"
-  case topRight = "topright"
-  case bottomLeft = "bottomleft"
-  case bottomRight = "bottomright"
-  case leftHalf = "lefthalf"
-  case rightHalf = "righthalf"
-  case topHalf = "tophalf"
-  case bottomHalf = "bottomhalf"
-  case maximized = "maximized"
-  case centered = "centered"
-}
-
-/// Parameters for `flash://window_move?position=&screen=`. Both
-/// query keys are optional and orthogonal:
+/// Named positions for `flash window_move position=…`. Each value maps the
+/// focused window to a fixed slot of the target screen's Flash-usable
+/// frame: `visibleFrame` plus Flash's own top status-bar reservation
+/// folded in so a slot's height is the height the user actually sees.
+///
+/// Two sub-namespaces of moves are encoded as one enum:
 ///
 /// - `position` (optional): named slot of the target screen's
 ///   Flash-usable frame. When omitted, the window keeps its shape and
@@ -106,9 +111,9 @@ enum WindowPosition: String, Hashable {
 ///   stays on the window's current screen. `+N` / `-N` cycle forward
 ///   / backward through `NSScreen.screens` with modulo wrap.
 ///
-/// The URL parser rejects the empty form (`flash://window_move`) so
-/// a mapping that forgot both keys fails at config load instead of
-/// firing a silent no-op on every press.
+/// The parser rejects the empty form (`flash window_move`) so a mapping
+/// that forgot both keys fails at config load instead of firing a silent
+/// no-op on every press.
 struct MoveWindowParams: Hashable {
   let position: WindowPosition?
   let screen: Int
@@ -122,78 +127,66 @@ final class URLEventHandler: NSObject {
     super.init()
     NSAppleEventManager.shared().setEventHandler(
       self,
-      andSelector: #selector(handleGetURL(_:withReplyEvent:)),
-      forEventClass: AEEventClass(kInternetEventClass),
-      andEventID: AEEventID(kAEGetURL)
+      andSelector: #selector(handleFlashEvent(_:withReplyEvent:)),
+      forEventClass: FlashCLI.appleEventClass,
+      andEventID: FlashCLI.appleEventID
     )
   }
 
-  @objc func handleGetURL(
-    _ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor
+  @objc func handleFlashEvent(
+    _ event: NSAppleEventDescriptor,
+    withReplyEvent reply: NSAppleEventDescriptor
   ) {
-    guard let raw = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
-      let cmd = URLEventHandler.parseAppleEventURL(raw)
+    guard
+      let verb = event.paramDescriptor(forKeyword: FlashCLI.verbKey)?.stringValue,
+      !verb.isEmpty
     else { return }
+    let argsJSON = event.paramDescriptor(forKeyword: FlashCLI.argsKey)?.stringValue ?? "{}"
+    guard let cmd = Self.parse(verb: verb, args: Self.decodeArgs(json: argsJSON)) else {
+      return
+    }
     handler(cmd)
   }
 
-  /// Parse a flash URL received from an external AppleEvent (`open -g flash://`,
-  /// `osascript`, `flashctl`, drive-by browser navigations). Sender is
-  /// untrusted: any process or web page that can construct a URL and hand it to
-  /// Launch Services can trigger this path. Limited to the AppleEvent-safe
-  /// command subset; actions that would let a remote sender hijack the focused
-  /// app (e.g. `send_key`) are rejected here and remain reachable only through
-  /// trusted mapping config.
-  static func parseAppleEventURL(_ raw: String) -> URLCommand? {
-    parseFlashURL(raw, trust: .appleEvent)
+  /// Look up a verb in the dispatch table and turn its args dict into a
+  /// resolved ``URLCommand``. Returns nil for unknown verbs or for verbs
+  /// whose required parameters are missing/invalid — callers (the AE
+  /// handler, the mapping config loader) treat nil as "ignore" and emit a
+  /// diagnostic where appropriate.
+  static func parse(verb: String, args: [String: String]) -> URLCommand? {
+    guard let parser = Self.commands[verb] else { return nil }
+    return parser(VerbArgs(args: args))
   }
 
-  /// Parse a flash URL coming out of trusted mapping config — `[mode.*.mappings]`
-  /// entries the user wrote in `~/.config/flash/flash.toml`. The full command
-  /// surface is available because the sender is the on-disk config file the
-  /// user controls.
-  static func parseMappingURL(_ raw: String) -> URLCommand? {
-    parseFlashURL(raw, trust: .mapping)
-  }
-
-  /// Distinguishes which command table is consulted. Centralized in
-  /// `parseFlashURL` so each callsite explicitly picks a trust level instead of
-  /// inheriting the maximum surface by default.
-  enum Trust {
-    /// External, untrusted (AppleEvent / Launch Services).
-    case appleEvent
-    /// Trusted (on-disk config the user wrote).
-    case mapping
-  }
-
-  private static func parseFlashURL(_ raw: String, trust: Trust) -> URLCommand? {
-    let trimmed = raw.trimmingCharacters(in: .whitespaces)
-    guard let components = URLComponents(string: trimmed),
-      components.scheme?.lowercased() == "flash"
-    else { return nil }
-    let name = (components.host ?? components.path).lowercased()
-    let parser: ((FlashURLQuery) -> URLCommand?)?
-    switch trust {
-    case .appleEvent:
-      parser = Self.commands[name]
-    case .mapping:
-      parser = Self.commands[name] ?? Self.mappingOnlyCommands[name]
+  /// JSON object → `[String: String]`. Non-string values are stringified so
+  /// numeric `index=1` round trips cleanly without a typed schema.
+  private static func decodeArgs(json: String) -> [String: String] {
+    guard
+      let data = json.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return [:] }
+    var out: [String: String] = [:]
+    for (key, value) in object {
+      if let string = value as? String {
+        out[key] = string
+      } else if let bool = value as? Bool {
+        out[key] = bool ? "true" : "false"
+      } else {
+        out[key] = String(describing: value)
+      }
     }
-    guard let parser else { return nil }
-    return parser(FlashURLQuery(items: components.queryItems ?? []))
+    return out
   }
 
-  /// Dispatch table for `flash://<name>` commands. Adding a new
-  /// command is a two-step change:
-  ///   1. add a case to `URLCommand`
-  ///   2. add a parser closure here
-  /// The dispatcher in `AppDelegate` switches exhaustively over
-  /// `URLCommand`, so the compiler points out any missed wiring.
-  private static let commands: [String: (FlashURLQuery) -> URLCommand?] = [
-    "mouse_target": { q in mouseCommand(q).map(URLCommand.mouseTarget) },
-    "mouse_grid": { q in mouseCommand(q).map(URLCommand.mouseGrid) },
-    "mouse_snipe": { q in mouseCommand(q).map(URLCommand.mouseGrid) },
-    "mouse_click": { q in mouseCommand(q).map(URLCommand.mouseTarget) },
+  /// Dispatch table keyed by verb name. Adding a new verb is a two-step
+  /// change: add a case to `URLCommand`, then add the parser closure here.
+  /// `AppDelegate` switches exhaustively over `URLCommand` so the compiler
+  /// flags any missed wiring.
+  private static let commands: [String: (VerbArgs) -> URLCommand?] = [
+    "mouse_target": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
+    "mouse_grid": { a in mouseCommand(a).map(URLCommand.mouseGrid) },
+    "mouse_snipe": { a in mouseCommand(a).map(URLCommand.mouseGrid) },
+    "mouse_click": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
     "mode_normal": { _ in .normalMode },
     "mode_insert": { _ in .insertMode },
     "mode_command": { _ in .commandMode },
@@ -205,21 +198,21 @@ final class URLEventHandler: NSObject {
     "scroll_half_page_down": { _ in .scroll(.halfPageDown) },
     "scroll_top": { _ in .scroll(.top) },
     "scroll_bottom": { _ in .scroll(.bottom) },
-    "app_reload": { q in .reload(force: q.bool("force")) },
+    "app_reload": { a in .reload(force: a.bool("force")) },
     "app_undo": { _ in .undo },
     "app_redo": { _ in .redo },
     "window_close": { _ in .close },
     "tab_close": { _ in .tabClose },
     "app_find": { _ in .find },
-    "app_open_finder": { q in .candidateFinder(all: q.bool("all")) },
-    "flashlight": { _ in .flashlight },
-    "emojis": { _ in .emojiPicker },
+    "app_open_finder": { a in .candidateFinder(all: a.bool("all")) },
+    "flashlight": { a in .flashlight(restoreMode: a.bool("restore_mode")) },
+    "emojis": { a in .emojiPicker(restoreMode: a.bool("restore_mode")) },
     "url_copy": { _ in .copyURL },
     "tab_next": { _ in .tabNext },
     "tab_previous": { _ in .tabPrev },
     "tab_first": { _ in .tabFirst },
     "tab_last": { _ in .tabLast },
-    "tab_select": { q in .tabSelect(index: q.int("index")) },
+    "tab_select": { a in .tabSelect(index: a.int("index")) },
     "tab_move_previous": { _ in .tabMovePrev },
     "tab_move_next": { _ in .tabMoveNext },
     "tab_reopen": { _ in .tabReopen },
@@ -229,17 +222,17 @@ final class URLEventHandler: NSObject {
     "movement_forward": { _ in .movementForward },
     "app_previous": { _ in .appPrev },
     "app_next": { _ in .appNext },
-    "set_mark": { q in
-      guard let letter = q.value("letter"), !letter.isEmpty else { return nil }
+    "set_mark": { a in
+      guard let letter = a.value("letter"), !letter.isEmpty else { return nil }
       return .setMark(letter: letter)
     },
-    "jump_to_mark": { q in
-      guard let letter = q.value("letter"), !letter.isEmpty else { return nil }
+    "jump_to_mark": { a in
+      guard let letter = a.value("letter"), !letter.isEmpty else { return nil }
       return .jumpToMark(letter: letter)
     },
-    "app_quit": { q in .quitApp(force: q.bool("force")) },
+    "app_quit": { a in .quitApp(force: a.bool("force")) },
     "app_save": { _ in .save },
-    "app_save_and_quit": { q in .saveAndQuit(force: q.bool("force")) },
+    "app_save_and_quit": { a in .saveAndQuit(force: a.bool("force")) },
     "app_print": { _ in .print },
     "document_open": { _ in .openDocument },
     "window_new": { _ in .newWindow },
@@ -248,115 +241,110 @@ final class URLEventHandler: NSObject {
     "clipboard_cut": { _ in .cut },
     "clipboard_paste": { _ in .paste },
     "clipboard_copy_all": { _ in .copyAll },
-    "alert_show": { q in
-      guard let message = q.value("message"), !message.isEmpty else { return nil }
+    "alert_show": { a in
+      guard let message = a.value("message"), !message.isEmpty else { return nil }
       return .showAlert(message: message)
     },
     "alert_dismiss": { _ in .dismissAlert },
-    "help_show": { q in .showUsage(topic: q.value("topic")) },
+    "help_show": { a in .showUsage(topic: a.value("topic")) },
     "plugins": { _ in .showPlugins },
     "hints_dismiss": { _ in .dismissHints },
     "flash_quit": { _ in .quit },
-    "app_open": { q in
-      guard let name = q.value("name"), !name.isEmpty else { return nil }
+    "app_open": { a in
+      guard let name = a.value("name"), !name.isEmpty else { return nil }
       return .openApp(name: name)
     },
-    "plugin_command": { q in
-      guard let command = q.value("command"), !command.isEmpty,
-        let subcommand = q.value("subcommand"), !subcommand.isEmpty
+    "plugin_command": { a in
+      guard let command = a.value("command"), !command.isEmpty,
+        let subcommand = a.value("subcommand"), !subcommand.isEmpty
       else { return nil }
       let args =
-        q.value("args")?
+        a.value("args")?
         .split(separator: " ", omittingEmptySubsequences: true)
         .map(String.init) ?? []
       return .pluginCommand(command: command, subcommand: subcommand, args: args)
     },
     "window_move": windowMoveCommand,
-  ]
-
-  /// Commands exposed only to trusted mapping config — never to the AppleEvent
-  /// entry point. `send_key` synthesizes a keystroke into the focused app and
-  /// would let any URL sender drive the foreground app's keyboard if it were
-  /// reachable from `flash://send_key?keys=…` URLs.
-  private static let mappingOnlyCommands: [String: (FlashURLQuery) -> URLCommand?] = [
-    "send_key": sendKeyCommand
+    "send_key": sendKeyCommand,
   ]
 
   static let usageText = """
-    flash://mouse_target[?secondary=1|double=1|move=1]
-    flash://mouse_grid[?secondary=1|double=1|move=1]
-    flash://mode_normal
-    flash://mode_insert
-    flash://mode_command
-    flash://scroll_left
-    flash://scroll_right
-    flash://scroll_up
-    flash://scroll_down
-    flash://scroll_half_page_up
-    flash://scroll_half_page_down
-    flash://scroll_top
-    flash://scroll_bottom
-    flash://app_reload[?force=1]
-    flash://app_undo
-    flash://app_redo
-    flash://window_close
-    flash://tab_close
-    flash://app_find
-    flash://app_open_finder[?all=1]
-    flash://flashlight
-    flash://emojis
-    flash://url_copy
-    flash://tab_next
-    flash://tab_previous
-    flash://tab_first
-    flash://tab_last
-    flash://tab_select[?index=<n>]
-    flash://tab_move_previous
-    flash://tab_move_next
-    flash://tab_reopen
-    flash://history_back
-    flash://history_forward
-    flash://movement_back
-    flash://movement_forward
-    flash://app_previous
-    flash://app_next
-    flash://app_quit[?force=1]
-    flash://app_save
-    flash://app_save_and_quit[?force=1]
-    flash://app_print
-    flash://document_open
-    flash://window_new
-    flash://tab_new
-    flash://clipboard_copy
-    flash://clipboard_cut
-    flash://clipboard_paste
-    flash://clipboard_copy_all
-    flash://alert_show?message=<text>
-    flash://alert_dismiss
-    flash://hints_dismiss
-    flash://app_open?name=<app>
-    flash://window_move?position=<slot>&screen=<n>
-    flash://flash_quit
-    flash://help_show[?topic=<topic>]
-    flash://plugins
-    flash://plugin_command?command=<command>&subcommand=<subcommand>[&args=<space-separated>]
+    flash mouse_target [secondary=1|double=1|move=1]
+    flash mouse_grid [secondary=1|double=1|move=1]
+    flash mode_normal
+    flash mode_insert
+    flash mode_command
+    flash scroll_left
+    flash scroll_right
+    flash scroll_up
+    flash scroll_down
+    flash scroll_half_page_up
+    flash scroll_half_page_down
+    flash scroll_top
+    flash scroll_bottom
+    flash app_reload [force=1]
+    flash app_undo
+    flash app_redo
+    flash window_close
+    flash tab_close
+    flash app_find
+    flash app_open_finder [all=1]
+    flash flashlight
+    flash emojis
+    flash url_copy
+    flash tab_next
+    flash tab_previous
+    flash tab_first
+    flash tab_last
+    flash tab_select index=<n>
+    flash tab_move_previous
+    flash tab_move_next
+    flash tab_reopen
+    flash history_back
+    flash history_forward
+    flash movement_back
+    flash movement_forward
+    flash app_previous
+    flash app_next
+    flash app_quit [force=1]
+    flash app_save
+    flash app_save_and_quit [force=1]
+    flash app_print
+    flash document_open
+    flash window_new
+    flash tab_new
+    flash clipboard_copy
+    flash clipboard_cut
+    flash clipboard_paste
+    flash clipboard_copy_all
+    flash alert_show message=<text>
+    flash alert_dismiss
+    flash hints_dismiss
+    flash app_open name=<app>
+    flash window_move position=<slot> screen=<n>
+    flash flash_quit
+    flash help_show [topic=<topic>]
+    flash plugins
+    flash plugin_command command=<command> subcommand=<subcommand> [args=<space-separated>]
     """
 }
 
 extension URLEventHandler {
   static let helpTopic = HelpTopic(
-    name: "urls",
-    title: "Flash URLs",
-    summary: "URL actions accepted by Flash and flashctl.",
+    name: "verbs",
+    title: "Flash verbs",
+    summary: "Verbs accepted by the `flash` CLI and by mapping config.",
     body: """
-      # Flash URLs
+      # Flash verbs
 
-      Every resident action is addressed through a `flash://` URL. The same
-      parser is used by Launch Services, the `flash` / `flashctl` CLI, and
-      configured in-process mappings.
+      Every resident action has a verb name. The same verb table is used by
+      the `flash` CLI (which AppleEvents the verb to the resident) and by
+      mapping config (which writes `["flash", "<verb>", "key=value", ...]`
+      arrays and resolves them in-process).
 
-      `mouse_target` selects an app-discovered target. `mouse_grid` selects a
-      precise screen position by repeatedly narrowing a deterministic grid.
+      `mouse_target` selects an app-discovered target. `mouse_grid` selects
+      a precise screen position by repeatedly narrowing a deterministic
+      grid.
 
       ```text
       \(URLEventHandler.usageText)
@@ -364,24 +352,43 @@ extension URLEventHandler {
       """)
 }
 
-private func mouseCommand(_ q: FlashURLQuery) -> MouseCommand? {
-  if q.bool("move") { return .move }
-  let secondary = q.bool("secondary")
-  let double = q.bool("double")
+/// Args bag for a verb dispatch. Constructed from the JSON dictionary on
+/// the AppleEvent payload (CLI path) or from a mapping array's `k=v`
+/// tail (config path). The few `bool` / `int` accessors keep the
+/// dispatch table tight.
+struct VerbArgs {
+  let args: [String: String]
+  func value(_ name: String) -> String? {
+    args[name]
+  }
+  func bool(_ name: String) -> Bool {
+    let v = args[name]
+    return v == "1" || v == "true"
+  }
+  func int(_ name: String) -> Int? {
+    args[name].flatMap(Int.init)
+  }
+}
+
+private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
+  if a.bool("move") { return .move }
+  let secondary = a.bool("secondary")
+  let double = a.bool("double")
   if secondary && double { return nil }
   if secondary { return .click(.rightClick) }
   if double { return .click(.doubleClick) }
   return .click(.leftClick)
 }
 
-/// `flash://send_key?keys=<hotkey>` synthesizes one modified keystroke to the
-/// focused app. `keys` uses the exact same syntax as a config hotkey
-/// (`cmd+option+r`, `shift+tab`, `0x24`), so a plugin can override a built-in
-/// keystroke (e.g. Safari's hard refresh is `cmd+option+r`, not the default
-/// `cmd+shift+r`) just by registering an app-scoped mapping that points here.
-/// Rejected at parse time when `keys` is missing or unparseable.
-private func sendKeyCommand(_ q: FlashURLQuery) -> URLCommand? {
-  guard let keys = q.value("keys"), let parsed = HotkeySyntax.parse(hotkey: keys) else {
+/// `flash send_key keys=<hotkey>` synthesizes one modified keystroke to
+/// the focused app. `keys` uses the exact same syntax as a config hotkey
+/// (`cmd+option+r`, `shift+tab`, `0x24`), so a plugin can override a
+/// built-in keystroke (e.g. Safari's hard refresh is `cmd+option+r`, not
+/// the default `cmd+shift+r`) just by registering an app-scoped mapping
+/// that points here. Rejected at parse time when `keys` is missing or
+/// unparseable.
+private func sendKeyCommand(_ a: VerbArgs) -> URLCommand? {
+  guard let keys = a.value("keys"), let parsed = HotkeySyntax.parse(hotkey: keys) else {
     return nil
   }
   return .sendKey(
@@ -401,14 +408,14 @@ private func cgEventFlags(carbon: UInt32) -> CGEventFlags {
   return flags
 }
 
-private func windowMoveCommand(_ q: FlashURLQuery) -> URLCommand? {
-  let rawPosition = q.value("position")
-  let rawScreen = q.value("screen")
-  // Empty form `flash://window_move` is a no-op mapping — flag
-  // it at config load so the user can't mis-write a hotkey.
+private func windowMoveCommand(_ a: VerbArgs) -> URLCommand? {
+  let rawPosition = a.value("position")
+  let rawScreen = a.value("screen")
+  // Empty form `flash window_move` is a no-op mapping — flag it at
+  // config load so the user can't mis-write a hotkey.
   if rawPosition == nil && rawScreen == nil { return nil }
-  // A *typo'd* position (e.g. `position=foo`) is rejected too;
-  // we don't want to silently degrade to "just move screen".
+  // A *typo'd* position (e.g. `position=foo`) is rejected too; we
+  // don't want to silently degrade to "just move screen".
   var position: WindowPosition? = nil
   if let raw = rawPosition {
     guard let p = WindowPosition(rawValue: raw.lowercased()) else {
@@ -417,8 +424,8 @@ private func windowMoveCommand(_ q: FlashURLQuery) -> URLCommand? {
     position = p
   }
   // Swift's Int(_:) already accepts a leading "+" or "-", so
-  // `screen=+1` and `screen=-1` round-trip without a custom
-  // sign parser. A non-numeric `screen=` value is rejected.
+  // `screen=+1` and `screen=-1` round-trip without a custom sign
+  // parser. A non-numeric `screen=` value is rejected.
   let screen: Int
   if let raw = rawScreen {
     guard let n = Int(raw) else { return nil }
@@ -429,21 +436,18 @@ private func windowMoveCommand(_ q: FlashURLQuery) -> URLCommand? {
   return .moveWindow(MoveWindowParams(position: position, screen: screen))
 }
 
-/// Thin wrapper over `[URLQueryItem]` providing the lookups every
-/// flash command parser needs (`value(name)` for strings, `bool(name)`
-/// for `"1"`/`"true"` flags). Kept private so the command table is
-/// the only place that touches query parsing.
-private struct FlashURLQuery {
-  let items: [URLQueryItem]
-  func value(_ name: String) -> String? {
-    items.first { $0.name == name }?.value
-  }
-  func bool(_ name: String) -> Bool {
-    let v = value(name)
-    return v == "1" || v == "true"
-  }
-  func int(_ name: String) -> Int? {
-    guard let raw = value(name), let value = Int(raw), value > 0 else { return nil }
-    return value
-  }
+/// `WindowPosition` is also referenced by `WindowMover`. Keep its
+/// declaration near `URLCommand`/`MoveWindowParams` so they live in one
+/// file.
+enum WindowPosition: String, Hashable {
+  case topLeft = "topleft"
+  case topRight = "topright"
+  case bottomLeft = "bottomleft"
+  case bottomRight = "bottomright"
+  case leftHalf = "lefthalf"
+  case rightHalf = "righthalf"
+  case topHalf = "tophalf"
+  case bottomHalf = "bottomhalf"
+  case maximized = "maximized"
+  case centered = "centered"
 }

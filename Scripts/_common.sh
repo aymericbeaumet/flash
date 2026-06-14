@@ -19,7 +19,6 @@ LOGIN_AGENT_LABEL="com.flash.app.autolaunch"
 LOGIN_AGENT_PATH="$HOME/Library/LaunchAgents/$LOGIN_AGENT_LABEL.plist"
 CLI_LINK_DIR="$HOME/.local/bin"
 CLI_LINK_PATH="$CLI_LINK_DIR/flash"
-CLICTL_LINK_PATH="$CLI_LINK_DIR/flashctl"
 
 # parse_mode <args...> — parses CLI flags. Sets:
 #   MODE — "release" (default) or "dev"
@@ -43,7 +42,9 @@ parse_mode() {
 }
 
 kill_all_flash() {
-  open -g flash://flash_quit >/dev/null 2>&1 || true
+  "$CLI_LINK_PATH" flash_quit >/dev/null 2>&1 ||
+    /Applications/$APP_NAME.app/Contents/MacOS/flash flash_quit >/dev/null 2>&1 ||
+    true
   osascript -e 'tell application "Flash" to quit' >/dev/null 2>&1 || true
   pkill -f "/Applications/$APP_NAME.app/Contents/MacOS/flash" 2>/dev/null || true
   pkill -f "$STAGING_PATH/Contents/MacOS/flash" 2>/dev/null || true
@@ -172,7 +173,6 @@ assemble_app() {
   mkdir -p "$STAGING_PATH/Contents/MacOS"
   mkdir -p "$STAGING_PATH/Contents/Resources"
   cp "$bin_path/flash" "$STAGING_PATH/Contents/MacOS/flash"
-  cp "$bin_path/flashctl" "$STAGING_PATH/Contents/MacOS/flashctl"
   # Ship the SwiftPM resource bundle (the built Svelte inspector). It goes
   # in Contents/Resources/ where Bundle.module resolves it via
   # Bundle.main.resourceURL and where codesign --deep can sign the nested

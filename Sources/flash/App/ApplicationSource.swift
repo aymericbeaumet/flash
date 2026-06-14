@@ -156,8 +156,8 @@ final class ApplicationSource: FlashSource {
     for target: String,
     environment: FlashSourceEnvironment
   ) -> URL? {
-    // Reject targets that look like a path. `flash://app_open?name=…` is
-    // reachable from any URL sender (drive-by web pages, AppleEvents),
+    // Reject targets that look like a path. The `app_open name=…` verb is
+    // reachable from the `flash` CLI and via osascript-driven AppleEvents,
     // so an absolute or relative path would let a remote sender launch
     // an arbitrary `.app` bundle the attacker dropped into a writable
     // location (`~/Downloads`, `/tmp`). Bundle identifiers and bare app

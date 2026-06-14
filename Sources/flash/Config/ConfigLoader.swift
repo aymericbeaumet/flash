@@ -133,7 +133,7 @@ enum ConfigLoader {
         line: lineNumber,
         column: valueColumn(in: rawLine) ?? firstNonWhitespaceColumn(in: rawLine))
       // Allow quoted keys (TOML spec) so `"cmd+ctrl+a" =
-      // "flash://mouse_target"` works in [mode.*] tables — modified
+      // ["flash", "mouse_target"]` works in [mode.*] tables — modified
       // mapping keys contain `+`, which is not a valid bare TOML key.
       if key.hasPrefix("\""), key.hasSuffix("\""), key.count >= 2 {
         key = String(key.dropFirst().dropLast())
@@ -188,7 +188,7 @@ enum ConfigLoader {
             scope: scope, key: canonical, action: action, location: location))
       } else {
         config.addDiagnostic(
-          "mapping \"\(key)\" must be a quoted flash:// action or a non-empty string array command",
+          "mapping \"\(key)\" must be a non-empty string array — `[\"flash\", \"<verb>\", \"k=v\"...]` for in-process verbs or `[<argv>...]` for external commands",
           location: location)
       }
       return
@@ -706,16 +706,23 @@ enum ConfigLoader {
   }
 
   private static func parseMappingValue(_ value: String, sourceURL: URL?) -> MappingCommand? {
-    if let raw = parseString(value) {
-      return parseMappingCommand(rawString: raw)
+    // Mappings are *always* arrays of strings. Plain TOML strings are
+    // rejected on purpose: the array form is the only way to express both
+    // in-process verbs (`["flash", "mouse_target"]`) and external argv
+    // (`["sh", "-c", "..."]`) in one shape.
+    guard
+      let argv = parseStringArray(value),
+      let head = argv.first,
+      !head.isEmpty
+    else { return nil }
+    // External argv: resolve each element (tilde expansion + path search
+    // relative to the config file) before handing to the runner. The
+    // in-process branch routes through the verb parser instead.
+    if head != "flash" {
+      let resolved = argv.map { resolveCommandArgument($0, sourceURL: sourceURL) }
+      return .shellCommand(resolved)
     }
-    if let argv = parseStringArray(value),
-      let executable = argv.first,
-      !executable.isEmpty
-    {
-      return .shellCommand(argv.map { resolveCommandArgument($0, sourceURL: sourceURL) })
-    }
-    return nil
+    return parseMappingCommand(argv: argv)
   }
 
   private static func resolveCommandArgument(_ value: String, sourceURL: URL?) -> String {

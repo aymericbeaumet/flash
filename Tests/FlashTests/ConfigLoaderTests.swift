@@ -22,7 +22,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.normalLeader, "\\")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
-      .flashlight)
+      .flashlight(restoreMode: false))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "sf" })?.action.command,
       .mouseTarget(.click(.rightClick)))
@@ -734,15 +734,15 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.warnings.count, 1)
     XCTAssertTrue(c.warnings[0].contains("cmd+ctrl+b"))
-    XCTAssertTrue(c.warnings[0].contains("non-empty string array command"))
+    XCTAssertTrue(c.warnings[0].contains("non-empty string array"))
   }
 
   func testParsesModeMappings() {
     let toml = """
       [mode.insert.mappings]
-      "ctrl+alt+n" = "flash://mode_normal"
+      "ctrl+alt+n" = [\"flash\", \"mode_normal\"]
       [mode.normal.mappings]
-      "j" = "flash://scroll_up"
+      "j" = [\"flash\", \"scroll_up\"]
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.insert.count, 1)
@@ -756,21 +756,21 @@ final class ConfigLoaderTests: XCTestCase {
     let inAll = ConfigLoader.parse(
       """
       [mode.all.mappings]
-      "cmd+ctrl+n" = "flash://mode_normal"
+      "cmd+ctrl+n" = [\"flash\", \"mode_normal\"]
       """)
     XCTAssertTrue(inAll.mode.containsAdvancedModeMapping)
 
     let inInsert = ConfigLoader.parse(
       """
       [mode.insert.mappings]
-      "cmd+ctrl+n" = "flash://mode_normal"
+      "cmd+ctrl+n" = [\"flash\", \"mode_normal\"]
       """)
     XCTAssertFalse(inInsert.mode.containsAdvancedModeMapping)
 
     let inNormalOnly = ConfigLoader.parse(
       """
       [mode.normal.mappings]
-      "cmd+ctrl+n" = "flash://mode_normal"
+      "cmd+ctrl+n" = [\"flash\", \"mode_normal\"]
       """)
     XCTAssertFalse(inNormalOnly.mode.containsAdvancedModeMapping)
   }
@@ -778,7 +778,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testModeTableExtendsDefaultMappingsAndOverridesSameKey() {
     let toml = """
       [mode.normal.mappings]
-      "j" = "flash://scroll_up"
+      "j" = [\"flash\", \"scroll_up\"]
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
@@ -789,7 +789,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testNormalLeaderExpandsMappingsAfterParsingAllTables() {
     let toml = """
       [mode.normal.mappings]
-      "<leader>c" = "flash://app_reload"
+      "<leader>c" = [\"flash\", \"app_reload\"]
       [mode.normal]
       leader = "<space>"
       """
@@ -799,9 +799,12 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == "spacec" })?.action.command,
       .reload(force: false))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "spacespace" })?.action.command, .flashlight)
+      c.mode.normal.first(where: { $0.key == "spacespace" })?.action.command,
+      .flashlight(restoreMode: false))
     XCTAssertNil(
-      c.mode.normal.first(where: { $0.key == "\\space" && $0.action.command == .flashlight }))
+      c.mode.normal.first(where: {
+        $0.key == "\\space" && $0.action.command == .flashlight(restoreMode: false)
+      }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
     XCTAssertTrue(c.warnings.isEmpty)
   }
@@ -809,20 +812,22 @@ final class ConfigLoaderTests: XCTestCase {
   func testNormalLeaderAcceptsBackslashFullname() {
     let toml = #"""
       [mode.normal.mappings]
-      "<leader><space>" = "flash://flashlight"
+      "<leader><space>" = ["flash", "flashlight"]
       [mode.normal]
       leader = "<backslash>"
       """#
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normalLeader, "<backslash>")
-    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "\\space" })?.action.command, .flashlight)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
+      .flashlight(restoreMode: false))
     XCTAssertTrue(c.warnings.isEmpty)
   }
 
   func testLeaderMappingsRequireNormalScope() {
     let toml = """
       [mode.all.mappings]
-      "<leader>c" = "flash://app_reload"
+      "<leader>c" = [\"flash\", \"app_reload\"]
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.contains { $0.contains("uses <leader>") })
@@ -832,7 +837,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testOldModeMappingTablesAreRejected() {
     let toml = """
       [mode.normal]
-      "j" = "flash://scroll_up"
+      "j" = [\"flash\", \"scroll_up\"]
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.contains { $0.contains("[mode.normal.mappings]") })

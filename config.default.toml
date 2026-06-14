@@ -24,7 +24,7 @@ min_length = 1
 # Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
-# Selection steps for flash://mouse_grid. The grid is always a square
+# Selection steps for the `mouse_grid` verb. The grid is always a square
 # NxN with N the largest odd integer such that N*N <= alphabet length
 # (so a 25-letter alphabet lands on 5x5). Each selection zooms into a
 # cell and re-tiles it with the same grid. Larger step counts give
@@ -37,7 +37,7 @@ mouse_grid_steps = 3
 mouse_grid_opacity = 0.5
 
 [open]
-# App candidates hidden from :open and flash://app_open?name=...
+# App candidates hidden from :open and the `app_open name=...` verb.
 # Entries match display name, bundle identifier, bundle path, .app filename,
 # or app filename without .app, case-insensitively.
 ignored_apps = []
@@ -123,9 +123,9 @@ sequence_timeout_ms = 1000
 
 [mode.all.mappings]
 # Mappings available in insert and normal modes.
-# Values can be quoted flash:// actions or explicit argv arrays. Bare shell
-# strings and non-Flash URLs are rejected; use ["open", ...] / ["sh", ...]
-# when a mapping needs to launch an external command.
+# Every value is an argv array. Arrays starting with "flash" dispatch the
+# verb in-process; any other head is launched as argv (no shell wrap) with
+# `~` and env expansion on each element. Bare strings and URLs are rejected.
 # Relative argv paths containing "/" are resolved from this config file.
 #
 # Native modified-key mappings are registered with Carbon only when the key
@@ -133,12 +133,17 @@ sequence_timeout_ms = 1000
 # capturing normal-mode input.
 #
 # Examples:
-# "ctrl+space" = "flash://mouse_target"
-# "ctrl+alt+n" = "flash://mode_normal" # enables advanced mode
-# "cmd+ctrl+a" = "flash://app_open?name=Alacritty"
-# "alt+h" = "flash://window_move?position=lefthalf"
-# "alt+n" = "flash://window_move?screen=+1"
+# "ctrl+space" = ["flash", "mouse_target"]
+# "ctrl+alt+n" = ["flash", "mode_normal"] # enables advanced mode
+# "cmd+ctrl+a" = ["flash", "app_open", "name=Alacritty"]
+# "alt+h" = ["flash", "window_move", "position=lefthalf"]
+# "alt+n" = ["flash", "window_move", "screen=+1"]
 # "alt+shift+c" = ["sh", "~/bin/toggle-colors"]
+# The `flashlight` and `emojis` verbs accept `restore_mode=1`: when the
+# modal exits (Enter or Escape) the user is put back in whichever mode was
+# active when the mapping fired. Use it for an emoji picker that you can
+# trigger from INSERT and resume typing afterward:
+# "cmd+ctrl+space" = ["flash", "emojis", "restore_mode=1"]
 
 [mode.normal]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
@@ -149,77 +154,77 @@ leader = "\\"
 # that one default mapping; unrelated defaults stay available.
 # Example:
 # "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
-"h" = "flash://scroll_left"
-"j" = "flash://scroll_down"
-"k" = "flash://scroll_up"
-"l" = "flash://scroll_right"
-"ctrl-e" = "flash://scroll_down"
-"ctrl-y" = "flash://scroll_up"
-"ctrl-d" = "flash://scroll_half_page_down"
-"ctrl-u" = "flash://scroll_half_page_up"
-"gg" = "flash://scroll_top"
-"G" = "flash://scroll_bottom"
-"[h" = "flash://history_back"
-"]h" = "flash://history_forward"
-"[t" = "flash://tab_previous"
-"]t" = "flash://tab_next"
+"h" = ["flash", "scroll_left"]
+"j" = ["flash", "scroll_down"]
+"k" = ["flash", "scroll_up"]
+"l" = ["flash", "scroll_right"]
+"ctrl-e" = ["flash", "scroll_down"]
+"ctrl-y" = ["flash", "scroll_up"]
+"ctrl-d" = ["flash", "scroll_half_page_down"]
+"ctrl-u" = ["flash", "scroll_half_page_up"]
+"gg" = ["flash", "scroll_top"]
+"G" = ["flash", "scroll_bottom"]
+"[h" = ["flash", "history_back"]
+"]h" = ["flash", "history_forward"]
+"[t" = ["flash", "tab_previous"]
+"]t" = ["flash", "tab_next"]
 # Reorder the current tab. In tmux this swap-windows; in browsers there
 # is no portable equivalent so the mapping is a no-op.
-"[m" = "flash://tab_move_previous"
-"]m" = "flash://tab_move_next"
-"[a" = "flash://app_previous"
-"]a" = "flash://app_next"
+"[m" = ["flash", "tab_move_previous"]
+"]m" = ["flash", "tab_move_next"]
+"[a" = ["flash", "app_previous"]
+"]a" = ["flash", "app_next"]
 # Reopen the most recently closed tab. Browsers receive ⌘⇧T; tmux has no
 # concept of a closed-window history so it returns "unhandled".
-"T" = "flash://tab_reopen"
+"T" = ["flash", "tab_reopen"]
 # cmd+tab / cmd+shift+tab shadow the system app switcher while in normal
 # mode. Carbon hotkeys are scope-bound, so entering insert mode releases
 # the registration and macOS's Dock switcher takes over again.
-"cmd+tab" = "flash://app_next"
-"cmd+shift+tab" = "flash://app_previous"
-"g^" = "flash://tab_first"
-"g$" = "flash://tab_last"
-"g1" = "flash://tab_select?index=1"
-"g2" = "flash://tab_select?index=2"
-"g3" = "flash://tab_select?index=3"
-"g4" = "flash://tab_select?index=4"
-"g5" = "flash://tab_select?index=5"
-"g6" = "flash://tab_select?index=6"
-"g7" = "flash://tab_select?index=7"
-"g8" = "flash://tab_select?index=8"
-"g9" = "flash://tab_select?index=9"
-"ctrl-o" = "flash://movement_back"
-"ctrl-i" = "flash://movement_forward"
-"i" = "flash://mode_insert"
-"f" = "flash://mouse_target"
-"sf" = "flash://mouse_target?secondary=1"
-"df" = "flash://mouse_target?double=1"
-"mf" = "flash://mouse_target?move=1"
-"F" = "flash://mouse_grid"
-"sF" = "flash://mouse_grid?secondary=1"
-"dF" = "flash://mouse_grid?double=1"
-"mF" = "flash://mouse_grid?move=1"
-"u" = "flash://app_undo"
-"ctrl-r" = "flash://app_redo"
+"cmd+tab" = ["flash", "app_next"]
+"cmd+shift+tab" = ["flash", "app_previous"]
+"g^" = ["flash", "tab_first"]
+"g$" = ["flash", "tab_last"]
+"g1" = ["flash", "tab_select", "index=1"]
+"g2" = ["flash", "tab_select", "index=2"]
+"g3" = ["flash", "tab_select", "index=3"]
+"g4" = ["flash", "tab_select", "index=4"]
+"g5" = ["flash", "tab_select", "index=5"]
+"g6" = ["flash", "tab_select", "index=6"]
+"g7" = ["flash", "tab_select", "index=7"]
+"g8" = ["flash", "tab_select", "index=8"]
+"g9" = ["flash", "tab_select", "index=9"]
+"ctrl-o" = ["flash", "movement_back"]
+"ctrl-i" = ["flash", "movement_forward"]
+"i" = ["flash", "mode_insert"]
+"f" = ["flash", "mouse_target"]
+"sf" = ["flash", "mouse_target", "secondary=1"]
+"df" = ["flash", "mouse_target", "double=1"]
+"mf" = ["flash", "mouse_target", "move=1"]
+"F" = ["flash", "mouse_grid"]
+"sF" = ["flash", "mouse_grid", "secondary=1"]
+"dF" = ["flash", "mouse_grid", "double=1"]
+"mF" = ["flash", "mouse_grid", "move=1"]
+"u" = ["flash", "app_undo"]
+"ctrl-r" = ["flash", "app_redo"]
 # tmux-aware close: kills the current tmux window in the current session
 # when an attached tmux client is focused, otherwise falls back to ⌘W.
-"x" = "flash://tab_close"
-"n" = "flash://window_new"
+"x" = ["flash", "tab_close"]
+"n" = ["flash", "window_new"]
 # Context-aware new: opens a new tmux window when a tmux client is focused,
 # a new browser tab in browsers, otherwise falls back to ⌘T (⌘N for window-
 # only terminal bundles like Alacritty without tmux). Stays in normal mode —
 # press `i` afterwards if you want to type.
-"t" = "flash://tab_new"
-"/" = "flash://app_find"
-"<leader>space" = "flash://flashlight"
-"r" = "flash://app_reload"
-"R" = "flash://app_reload?force=1"
-"?" = "flash://help_show"
-":" = "flash://mode_command"
+"t" = ["flash", "tab_new"]
+"/" = ["flash", "app_find"]
+"<leader>space" = ["flash", "flashlight"]
+"r" = ["flash", "app_reload"]
+"R" = ["flash", "app_reload", "force=1"]
+"?" = ["flash", "help_show"]
+":" = ["flash", "mode_command"]
 
 [mode.insert.mappings]
 # Mappings here apply only after insert mode is already active.
-# Advanced mode is enabled only by binding flash://mode_normal in [mode.all.mappings].
+# Advanced mode is enabled only by binding ["flash", "mode_normal"] in [mode.all.mappings].
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

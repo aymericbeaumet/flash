@@ -268,18 +268,20 @@ struct PluginShebangRegistration: Codable, Hashable {
 /// focused, and `priority` decides who wins when several mappings claim the
 /// same key — plugin mappings default to the manifest priority (25), so they
 /// override built-in defaults (priority 0); a negative priority defers to the
-/// defaults. `command` is a `flash://…` URL resolved once at registration.
+/// defaults. `command` is an argv array matching the mapping syntax:
+/// `["flash", "<verb>", "k=v" ...]` for in-process verbs, anything else for
+/// argv exec.
 struct PluginMappingRegistration: Codable, Hashable {
   var key: String
   var mode: String
-  var command: String
+  var command: [String]
   var bundleIDs: [String]
   var priority: Int?
 
   init(
     key: String,
     mode: String = "normal",
-    command: String,
+    command: [String],
     bundleIDs: [String] = [],
     priority: Int? = nil
   ) {
@@ -300,7 +302,7 @@ struct PluginMappingRegistration: Codable, Hashable {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     self.key = try c.decode(String.self, forKey: .key)
     self.mode = try c.decodeIfPresent(String.self, forKey: .mode) ?? "normal"
-    self.command = try c.decode(String.self, forKey: .command)
+    self.command = try c.decode([String].self, forKey: .command)
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
   }

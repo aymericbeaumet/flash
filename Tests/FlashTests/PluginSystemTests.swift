@@ -234,11 +234,11 @@ final class PluginSystemTests: XCTestCase {
             {
               "kind": "mappings",
               "mappings": [
-                { "key": "q", "command": "flash://plugin_command?command=slack&subcommand=run" },
+                { "key": "q", "command": ["flash", "plugin_command", "command=slack", "subcommand=run"] },
                 {
                   "key": "ctrl+k",
                   "mode": "insert",
-                  "command": "flash://hints_dismiss",
+                  "command": ["flash", "hints_dismiss"],
                   "bundle_ids": ["com.tinyspeck.slackmacgap"],
                   "priority": 40
                 }
@@ -268,12 +268,12 @@ final class PluginSystemTests: XCTestCase {
 
   func testMappingRegistrationEncodeOmitsDefaults() throws {
     let mapping = PluginMappingRegistration(
-      key: "q", command: "flash://hints_dismiss")
+      key: "q", command: ["flash", "hints_dismiss"])
     let data = try JSONEncoder().encode(mapping)
     let json = try XCTUnwrap(
       try JSONSerialization.jsonObject(with: data) as? [String: Any])
     XCTAssertEqual(json["key"] as? String, "q")
-    XCTAssertEqual(json["command"] as? String, "flash://hints_dismiss")
+    XCTAssertEqual(json["command"] as? [String], ["flash", "hints_dismiss"])
     XCTAssertNil(json["mode"], "default \"normal\" mode is not encoded")
     XCTAssertNil(json["bundle_ids"], "empty bundle_ids is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
@@ -289,8 +289,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(mapping.key, "R")
     XCTAssertEqual(mapping.scope, .normal)
     // Safari's "Reload Page From Origin" is ⌘⌥R, unlike the ⌘⇧R that the
-    // built-in `R` → flash://app_reload?force=1 default sends for Firefox/Chrome.
-    XCTAssertEqual(mapping.command, "flash://send_key?keys=cmd+option+r")
+    // built-in `R` → app_reload(force) default sends for Firefox/Chrome.
+    XCTAssertEqual(mapping.command, ["flash", "send_key", "keys=cmd+option+r"])
     XCTAssertTrue(
       mapping.bundleIDs.isEmpty,
       "mapping inherits the manifest's com.apple.Safari scope")
@@ -341,7 +341,7 @@ final class PluginSystemTests: XCTestCase {
             {
               "kind": "mappings",
               "mappings": [
-                { "key": "q", "command": "flash://hints_dismiss" }
+                { "key": "q", "command": ["flash", "hints_dismiss"] }
               ]
             }
           ]
@@ -442,7 +442,7 @@ final class PluginSystemTests: XCTestCase {
               "kind": "mappings",
               "modes": ["insert"],
               "mappings": [
-                { "key": "j", "command": "flash://hints_dismiss" }
+                { "key": "j", "command": ["flash", "hints_dismiss"] }
               ]
             }
           ]

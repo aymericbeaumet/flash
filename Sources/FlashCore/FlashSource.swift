@@ -233,6 +233,66 @@ public struct CandidateResolution: Sendable {
   }
 }
 
+/// Discrete source actions the host can dispatch through ``FlashSource``.
+/// Each case carries the parameters the action needs and knows which
+/// ``FlashSourceCapabilities`` flag gates participation, so a single
+/// dispatch method on the SPI covers what used to be 12 parallel
+/// per-action methods.
+public enum SourceAction: Sendable, Equatable {
+  case tabSelect(index: Int)
+  case tabNext
+  case tabPrev
+  case tabFirst
+  case tabLast
+  case tabNew
+  case tabClose
+  case tabMovePrev
+  case tabMoveNext
+  case tabReopen
+  case scrollTop
+  case scrollBottom
+
+  /// Capability flag a source must advertise to be considered for this action.
+  public var requiredCapability: FlashSourceCapabilities {
+    switch self {
+    case .tabSelect: return .tabSelection
+    case .tabNext, .tabPrev, .tabFirst, .tabLast: return .tabNavigation
+    case .tabNew: return .tabCreation
+    case .tabClose: return .tabClosing
+    case .tabMovePrev, .tabMoveNext: return .tabReorder
+    case .tabReopen: return .tabReopen
+    case .scrollTop, .scrollBottom: return .scrollExtremes
+    }
+  }
+
+  /// Wire-protocol name plugins receive in `SourceActionRequest.name`.
+  public var wireName: String {
+    switch self {
+    case .tabSelect: return "tab_select"
+    case .tabNext: return "tab_next"
+    case .tabPrev: return "tab_prev"
+    case .tabFirst: return "tab_first"
+    case .tabLast: return "tab_last"
+    case .tabNew: return "tab_new"
+    case .tabClose: return "tab_close"
+    case .tabMovePrev: return "tab_move_previous"
+    case .tabMoveNext: return "tab_move_next"
+    case .tabReopen: return "tab_reopen"
+    case .scrollTop: return "scroll_top"
+    case .scrollBottom: return "scroll_bottom"
+    }
+  }
+
+  /// Extra wire-protocol fields the plugin needs to dispatch this action.
+  /// Only ``tabSelect`` currently carries one (the 1-based tab index).
+  public var wireExtras: [String: Any] {
+    switch self {
+    case .tabSelect(let index): return ["index": index]
+    default: return [:]
+    }
+  }
+}
+
 public struct SourceActionResult: Sendable {
   public enum Disposition: Sendable {
     /// The source performed the action.
@@ -321,81 +381,22 @@ public protocol FlashSource: AnyObject {
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   )
-  /// Resolve a user-provided target, such as `flash://app_open?name=`.
+  /// Resolve a user-provided target, such as the `app_open name=` verb.
   func candidate(
     matching target: String,
     in environment: FlashSourceEnvironment
   ) -> Candidate?
   /// Resolve a document URL for the supplied focused context.
   func documentURL(in context: AppContext) -> String?
-  /// Select the 1-based tab index for the focused app.
-  func tabSelect(
-    at index: Int,
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Select the adjacent tab for the focused app.
-  func tabNext(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  func tabPrev(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Select the first tab in the focused app.
-  func tabFirst(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Select the last tab in the focused app.
-  func tabLast(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Create a tab in the focused app.
-  func tabNew(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Close the current tab in the focused app.
-  func tabClose(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Scroll the focused app's primary view to the top edge (`gg`).
-  func scrollTop(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Scroll the focused app's primary view to the bottom edge (`G`).
-  func scrollBottom(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Move the focused app's current tab one position left (`[m`).
-  func tabMovePrev(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Move the focused app's current tab one position right (`]m`).
-  func tabMoveNext(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  )
-  /// Reopen the most recently closed tab in the focused app (`T`).
-  func tabReopen(
+  /// Dispatch a discrete source action (tab navigation, scroll extreme,
+  /// reorder, etc.) against the focused app. Sources opt in per action via
+  /// their ``capabilities`` flags — the registry's chain walk skips any
+  /// source whose ``FlashSourceCapabilities`` doesn't include
+  /// ``SourceAction/requiredCapability``. Sources that don't own the
+  /// action return ``SourceActionResult/unhandled`` so the next source
+  /// (or the host keystroke fallback) can run.
+  func performAction(
+    _ action: SourceAction,
     in context: AppContext,
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
@@ -441,85 +442,8 @@ extension FlashSource {
     nil
   }
   public func documentURL(in context: AppContext) -> String? { nil }
-  public func tabSelect(
-    at index: Int,
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabNext(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabPrev(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabFirst(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabLast(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabNew(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabClose(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func scrollTop(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func scrollBottom(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabMovePrev(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabMoveNext(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    DispatchQueue.main.async { completion(.unhandled) }
-  }
-  public func tabReopen(
+  public func performAction(
+    _ action: SourceAction,
     in context: AppContext,
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void

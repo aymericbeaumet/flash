@@ -2,16 +2,16 @@
 set -euo pipefail
 
 usage() {
-    cat <<'EOF'
+  cat <<'EOF'
 Usage:
   update-homebrew-cask.sh --tap-dir PATH --token TOKEN --version VERSION --url URL --sha256 SHA256
 EOF
 }
 
 die() {
-    echo "error: $*" >&2
-    usage >&2
-    exit 2
+  echo "error: $*" >&2
+  usage >&2
+  exit 2
 }
 
 TAP_DIR=""
@@ -21,35 +21,35 @@ URL=""
 SHA256=""
 
 while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --tap-dir)
-            TAP_DIR="${2:-}"
-            shift 2
-            ;;
-        --token)
-            TOKEN="${2:-}"
-            shift 2
-            ;;
-        --version)
-            VERSION="${2:-}"
-            shift 2
-            ;;
-        --url)
-            URL="${2:-}"
-            shift 2
-            ;;
-        --sha256)
-            SHA256="${2:-}"
-            shift 2
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            die "unknown argument: $1"
-            ;;
-    esac
+  case "$1" in
+    --tap-dir)
+      TAP_DIR="${2:-}"
+      shift 2
+      ;;
+    --token)
+      TOKEN="${2:-}"
+      shift 2
+      ;;
+    --version)
+      VERSION="${2:-}"
+      shift 2
+      ;;
+    --url)
+      URL="${2:-}"
+      shift 2
+      ;;
+    --sha256)
+      SHA256="${2:-}"
+      shift 2
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
 done
 
 [[ -n "$TAP_DIR" ]] || die "--tap-dir is required"
@@ -61,7 +61,7 @@ done
 mkdir -p "$TAP_DIR/Casks"
 CASK_PATH="$TAP_DIR/Casks/$TOKEN.rb"
 
-cat > "$CASK_PATH" <<RUBY
+cat >"$CASK_PATH" <<RUBY
 # This cask is automatically updated by aymericbeaumet/flash. DO NOT EDIT.
 
 cask "$TOKEN" do
@@ -77,8 +77,7 @@ cask "$TOKEN" do
   depends_on macos: ">= :sonoma"
 
   app "Flash.app"
-  binary "#{appdir}/Flash.app/Contents/MacOS/flashctl", target: "flash"
-  binary "#{appdir}/Flash.app/Contents/MacOS/flashctl", target: "flashctl"
+  binary "#{appdir}/Flash.app/Contents/MacOS/flash", target: "flash"
 
   postflight do
     launch_agent = File.expand_path("~/Library/LaunchAgents/com.flash.app.autolaunch.plist")

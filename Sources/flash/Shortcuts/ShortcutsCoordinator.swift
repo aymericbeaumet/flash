@@ -11,8 +11,8 @@ import Foundation
 ///
 /// Dispatch policy:
 ///   - `flashCommand` → fed back to the shared `URLCommand` handler
-///     (the same one `URLEventHandler` uses for live `flash://...`
-///     URLs from `open` / `osascript`). All in-process; no shell-out.
+///     (the same one `URLEventHandler` consults when the AppleEvent
+///     receiver decodes a CLI-sent verb). All in-process; no shell-out.
 ///   - `shellCommand` → launched as an argv array exactly because the
 ///     user configured that explicit native mapping.
 final class MappingsCoordinator {

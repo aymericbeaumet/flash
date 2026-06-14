@@ -121,114 +121,20 @@ final class PluginFlashSource: FlashSource {
     }
   }
 
-  func tabSelect(
-    at index: Int,
+  func performAction(
+    _ action: SourceAction,
     in context: AppContext,
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
+    // The wire format (`SourceActionRequest { name, index }`) is already a
+    // single shape on the plugin side, so this method translates the host's
+    // typed `SourceAction` into the matching wire fields and posts one
+    // `sourceAction` RPC — no per-action dispatch fan-out.
     plugin.invokeSourceAction(
-      name: "tab_select",
+      name: action.wireName,
       context: context,
-      extra: ["index": index],
+      extra: action.wireExtras,
       completion: completion)
-  }
-
-  func tabNext(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "tab_next", context: context, extra: [:], completion: completion)
-  }
-
-  func tabPrev(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "tab_prev", context: context, extra: [:], completion: completion)
-  }
-
-  func tabFirst(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "tab_first", context: context, extra: [:], completion: completion)
-  }
-
-  func tabLast(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "tab_last", context: context, extra: [:], completion: completion)
-  }
-
-  func tabNew(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(name: "tab_new", context: context, extra: [:], completion: completion)
-  }
-
-  func tabClose(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "tab_close", context: context, extra: [:], completion: completion)
-  }
-
-  func scrollTop(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "scroll_top", context: context, extra: [:], completion: completion)
-  }
-
-  func scrollBottom(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "scroll_bottom", context: context, extra: [:], completion: completion)
-  }
-
-  func tabMovePrev(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "tab_move_previous", context: context, extra: [:], completion: completion)
-  }
-
-  func tabMoveNext(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "tab_move_next", context: context, extra: [:], completion: completion)
-  }
-
-  func tabReopen(
-    in context: AppContext,
-    environment: FlashSourceEnvironment,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    plugin.invokeSourceAction(
-      name: "tab_reopen", context: context, extra: [:], completion: completion)
   }
 }

@@ -325,124 +325,23 @@ final class SourceRegistry {
     return nil
   }
 
-  func tabSelect(
-    at index: Int,
+  /// Dispatch `action` through the source chain. The first registered
+  /// source whose ``FlashSourceCapabilities`` includes
+  /// ``SourceAction/requiredCapability`` and supports the focused app gets
+  /// to handle it; on `.unhandled` the next source runs; on `.performed`
+  /// or `.failed` the chain stops and the result is reported. Replaces the
+  /// dozen tab*/scroll* dispatch methods this registry used to expose.
+  func perform(
+    _ action: SourceAction,
     in context: AppContext,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    performSourceAction(capability: .tabSelection, context: context, completion: completion) {
-      source, env, done in
-      source.tabSelect(at: index, in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabNext(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabNavigation, context: context, completion: completion) {
-      source, env, done in
-      source.tabNext(in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabPrev(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabNavigation, context: context, completion: completion) {
-      source, env, done in
-      source.tabPrev(in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabFirst(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabNavigation, context: context, completion: completion) {
-      source, env, done in
-      source.tabFirst(in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabLast(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabNavigation, context: context, completion: completion) {
-      source, env, done in
-      source.tabLast(in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabNew(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabCreation, context: context, completion: completion) {
-      source, env, done in
-      source.tabNew(in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabClose(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabClosing, context: context, completion: completion) {
-      source, env, done in
-      source.tabClose(in: context, environment: env, completion: done)
-    }
-  }
-
-  func scrollTop(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .scrollExtremes, context: context, completion: completion) {
-      source, env, done in
-      source.scrollTop(in: context, environment: env, completion: done)
-    }
-  }
-
-  func scrollBottom(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .scrollExtremes, context: context, completion: completion) {
-      source, env, done in
-      source.scrollBottom(in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabMovePrev(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabReorder, context: context, completion: completion) {
-      source, env, done in
-      source.tabMovePrev(in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabMoveNext(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabReorder, context: context, completion: completion) {
-      source, env, done in
-      source.tabMoveNext(in: context, environment: env, completion: done)
-    }
-  }
-
-  func tabReopen(
-    in context: AppContext,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    performSourceAction(capability: .tabReopen, context: context, completion: completion) {
-      source, env, done in
-      source.tabReopen(in: context, environment: env, completion: done)
+    performSourceAction(
+      capability: action.requiredCapability,
+      context: context,
+      completion: completion
+    ) { source, env, done in
+      source.performAction(action, in: context, environment: env, completion: done)
     }
   }
 

@@ -114,6 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var flashMode: FlashMode = .insert
   var modeBadgeEnabled = false
   var normalModeTargetPID: pid_t?
+  /// Mode to restore on `finishCommandLineInteraction` when the verb that
+  /// opened the modal asked for it (`restore_mode=1`). nil means "exit to
+  /// the default — normal mode". See ``URLCommand/flashlight`` /
+  /// ``URLCommand/emojiPicker``.
+  var commandLineRestoreModeTarget: FlashMode?
   var candidateFinderCandidates: [Candidate] = [] {
     didSet { candidateFinderCandidatesEpoch &+= 1 }
   }
@@ -327,8 +332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterInsertMode()
     case .commandMode:
       enterCommandLineMode()
-    case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .flashlight,
-      .emojiPicker,
+    case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .flashlight(_),
+      .emojiPicker(_),
       .copyURL,
       .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect,
       .tabMovePrev, .tabMoveNext, .tabReopen,

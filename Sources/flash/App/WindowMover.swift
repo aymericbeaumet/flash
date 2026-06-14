@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-/// Implements `flash://window_move?position=&screen=` against the
+/// Implements the `window_move position=… screen=…` verb against the
 /// focused application's focused window via Accessibility. When the
 /// persistent Flash status bar is active, every target rect is computed
 /// from the screen frame after reserving the top status band, even if

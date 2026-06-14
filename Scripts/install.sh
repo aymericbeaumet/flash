@@ -47,10 +47,12 @@ kill_all_flash
 echo "==> Installing login autolaunch"
 install_login_agent
 
-echo "==> Installing CLI symlinks"
+echo "==> Installing CLI symlink"
 mkdir -p "$CLI_LINK_DIR"
-ln -sf "$INSTALL_PATH/Contents/MacOS/flashctl" "$CLI_LINK_PATH"
-ln -sf "$INSTALL_PATH/Contents/MacOS/flashctl" "$CLICTL_LINK_PATH"
+# The `flash` binary is fat: argv-less it runs the resident app, with argv
+# it AppleEvents the verb to the resident and exits. There's only one
+# Mach-O to symlink.
+ln -sf "$INSTALL_PATH/Contents/MacOS/flash" "$CLI_LINK_PATH"
 
 echo "==> Starting fresh resident process"
 open "$INSTALL_PATH"
@@ -64,7 +66,6 @@ echo "  All Flash PIDs: ${ALL_PIDS:-none}"
 echo "  Signed with:    $SIGN_IDENTITY"
 echo "  Login agent:    $LOGIN_AGENT_PATH"
 echo "  CLI:            $CLI_LINK_PATH"
-echo "  CLI:            $CLICTL_LINK_PATH"
 if [[ -z "${NEW_PIDS:-}" ]]; then
   echo "  WARNING: the installed copy is not running. Check Console.app for launch errors."
 fi
@@ -72,9 +73,8 @@ fi
 echo
 echo "Installed: $INSTALL_PATH"
 echo "Triggers:"
-echo "  open -g flash://mouse_target"
-echo "  open -g flash://mouse_target?secondary=1"
-echo "  open -g flash://hints_dismiss"
-echo "  open -g flash://flash_quit"
 echo "  flash mouse_target"
+echo "  flash mouse_target secondary=1"
+echo "  flash hints_dismiss"
+echo "  flash flash_quit"
 echo "  flash help_show"

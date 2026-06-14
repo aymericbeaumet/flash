@@ -396,7 +396,7 @@ final class PluginManager {
 
   /// Rebuild the resolved-mapping index. Must be called from `queue` after
   /// `pluginsByID` or any plugin's mappings change. Canonicalizes the key and
-  /// parses the `flash://` command once here so the focus-change path only
+  /// parses the argv mapping command once here so the focus-change path only
   /// filters and merges; invalid entries are dropped with a warning.
   private func rebuildMappingIndex() {
     var next: [ResolvedPluginMapping] = []
@@ -409,10 +409,10 @@ final class PluginManager {
               + "failed canonicalization")
           continue
         }
-        guard let action = parseMappingCommand(rawString: registration.command) else {
+        guard let action = parseMappingCommand(argv: registration.command) else {
           FlashLog.warn(
-            "[plugins] mapping command \"\(registration.command)\" from \(manifest.id) "
-              + "is not a valid flash:// URL")
+            "[plugins] mapping command \(registration.command) from \(manifest.id) "
+              + "is not a valid argv array (`flash <verb> [k=v]...` or an external command)")
           continue
         }
         let bundleIDs = registration.bundleIDs.isEmpty ? manifest.bundleIDs : registration.bundleIDs
@@ -793,7 +793,7 @@ extension PluginManager {
       subcommands such as `:slack login`; install and start do not run login
       flows.
 
-      `flash://plugins` or `:plugins` opens the plugin status modal. When
+      `flash plugins` or `:plugins` opens the plugin status modal. When
       `[debug] http_inspector_enabled = true` is set, the http inspector page shows live
       logs, resolved config, and plugin state.
       """)

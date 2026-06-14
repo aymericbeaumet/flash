@@ -1190,7 +1190,7 @@ final class PluginProcess {
 
   private static func mapping(from raw: [String: Any]) -> PluginMappingRegistration? {
     guard let key = raw["key"] as? String, !key.isEmpty,
-      let command = raw["command"] as? String, !command.isEmpty
+      let command = raw["command"] as? [String], !command.isEmpty
     else { return nil }
     return PluginMappingRegistration(
       key: key,

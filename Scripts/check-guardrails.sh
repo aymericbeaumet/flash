@@ -63,7 +63,7 @@ check_absent_except \
   Sources/flash Resources/Info.plist
 
 check_absent \
-  "flash://help_show is routed to the alert toast instead of the help overlay" \
+  "the help_show verb is routed to the alert toast instead of the help overlay" \
   "case \\.showUsage:.*alertPanel\\.show" \
   Sources/flash
 

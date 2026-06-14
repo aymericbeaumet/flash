@@ -99,7 +99,7 @@ final class HotkeySyntaxTests: XCTestCase {
   func testNormalScopeCommandMappingsDispatchInNormalMode() {
     // `[mode.normal.mappings]` cmd-prefixed mappings must fire when in
     // normal mode. The previous behaviour blocked them, which meant
-    // configuring `"cmd+a" = "flash://..."` under `[mode.normal.mappings]`
+    // configuring `"cmd+a" = ["flash", "..."]` under `[mode.normal.mappings]`
     // silently did nothing.
     XCTAssertTrue(
       MappingsCoordinator.mappingApplies(
@@ -144,7 +144,7 @@ final class HotkeySyntaxTests: XCTestCase {
   // MARK: - Action parsing
 
   func testParseFlashMouseTarget() {
-    let action = parseMappingCommand(rawString: "flash://mouse_target")
+    let action = parseMappingCommand(argv: ["flash", "mouse_target"])
     guard case .flashCommand(let cmd) = action else {
       return XCTFail("expected .flashCommand")
     }
@@ -155,35 +155,55 @@ final class HotkeySyntaxTests: XCTestCase {
     }
 
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://mouse_target?secondary=1")?.command,
+      parseMappingCommand(argv: ["flash", "mouse_target", "secondary=1"])?.command,
       .mouseTarget(.click(.rightClick)))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://mouse_target?double=1")?.command,
+      parseMappingCommand(argv: ["flash", "mouse_target", "double=1"])?.command,
       .mouseTarget(.click(.doubleClick)))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://mouse_target?move=1")?.command,
+      parseMappingCommand(argv: ["flash", "mouse_target", "move=1"])?.command,
       .mouseTarget(.move))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://mouse_grid?move=1")?.command,
+      parseMappingCommand(argv: ["flash", "mouse_grid", "move=1"])?.command,
       .mouseGrid(.move))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://mouse_snipe?move=1")?.command,
+      parseMappingCommand(argv: ["flash", "mouse_snipe", "move=1"])?.command,
       .mouseGrid(.move))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://mouse_click")?.command,
+      parseMappingCommand(argv: ["flash", "mouse_click"])?.command,
       .mouseTarget(.click(.leftClick)))
-    XCTAssertNil(parseMappingCommand(rawString: "flash://mouse_move"))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_move"]))
+  }
+
+  func testParseFlashlightRestoreMode() {
+    // Default: no flag → restoreMode = false.
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "flashlight"])?.command,
+      .flashlight(restoreMode: false))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "emojis"])?.command,
+      .emojiPicker(restoreMode: false))
+    // With restore_mode=1, the flag is propagated; the mapping rearms the
+    // resident to put the user back in the mode that was active when the
+    // verb fired (so `cmd+ctrl+space = ["flash", "emojis", "restore_mode=1"]`
+    // returns the user to INSERT after the emoji is inserted).
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "emojis", "restore_mode=1"])?.command,
+      .emojiPicker(restoreMode: true))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "flashlight", "restore_mode=true"])?.command,
+      .flashlight(restoreMode: true))
   }
 
   func testParseFlashNormalMode() {
-    let action = parseMappingCommand(rawString: "flash://mode_normal")
+    let action = parseMappingCommand(argv: ["flash", "mode_normal"])
     guard case .flashCommand(.normalMode) = action else {
       return XCTFail("expected .normalMode")
     }
   }
 
   func testParseFlashOpenApp() {
-    let action = parseMappingCommand(rawString: "flash://app_open?name=Alacritty")
+    let action = parseMappingCommand(argv: ["flash", "app_open", "name=Alacritty"])
     guard case .flashCommand(let cmd) = action else {
       return XCTFail("expected .flashCommand")
     }
@@ -195,7 +215,7 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashOpenAppWithSpaces() {
-    let action = parseMappingCommand(rawString: "flash://app_open?name=Postico%202")
+    let action = parseMappingCommand(argv: ["flash", "app_open", "name=Postico 2"])
     guard case .flashCommand(.openApp(let name)) = action else {
       return XCTFail("expected .openApp")
     }
@@ -203,7 +223,7 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashShowAlert() {
-    let action = parseMappingCommand(rawString: "flash://alert_show?message=Wi-Fi%20OFF")
+    let action = parseMappingCommand(argv: ["flash", "alert_show", "message=Wi-Fi OFF"])
     guard case .flashCommand(.showAlert(let message)) = action else {
       return XCTFail("expected .showAlert")
     }
@@ -211,26 +231,27 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashDismissAlert() {
-    let action = parseMappingCommand(rawString: "flash://alert_dismiss")
+    let action = parseMappingCommand(argv: ["flash", "alert_dismiss"])
     guard case .flashCommand(.dismissAlert) = action else {
       return XCTFail("expected .dismissAlert")
     }
   }
 
   func testParseFlashHelp() {
-    let help = parseMappingCommand(rawString: "flash://help_show")
+    let help = parseMappingCommand(argv: ["flash", "help_show"])
     guard case .flashCommand(.showUsage(topic: nil)) = help else {
       return XCTFail("expected .showUsage for help_show")
     }
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://help_show?topic=plugins")?.command,
+      parseMappingCommand(argv: ["flash", "help_show", "topic=plugins"])?.command,
       .showUsage(topic: "plugins"))
   }
 
   func testParseFlashPlugins() {
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://plugins")?.command, .showPlugins)
-    let action = parseMappingCommand(
-      rawString: "flash://plugin_command?command=spotify&subcommand=pause&args=quiet")
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "plugins"])?.command, .showPlugins)
+    let action = parseMappingCommand(argv: [
+      "flash", "plugin_command", "command=spotify", "subcommand=pause", "args=quiet",
+    ])
     guard case .flashCommand(.pluginCommand(let command, let subcommand, let args)) = action else {
       return XCTFail("expected .pluginCommand")
     }
@@ -239,12 +260,16 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(args, ["quiet"])
   }
 
-  func testNonFlashStringIsRejected() {
-    // Mapping actions must be `flash://...` URLs.
-    XCTAssertNil(parseMappingCommand(rawString: "https://example.com"))
-    XCTAssertNil(parseMappingCommand(rawString: "/Applications/Safari.app"))
-    XCTAssertNil(parseMappingCommand(rawString: "Safari"))
-    XCTAssertNil(parseMappingCommand(rawString: "open -a Foo"))
+  func testNonFlashArgvIsTreatedAsShellCommand() {
+    // Any array whose head isn't "flash" is a shell command (argv exec).
+    // The empty array is the only rejection: nothing to run.
+    XCTAssertNil(parseMappingCommand(argv: []))
+    let safariCmd = parseMappingCommand(argv: ["open", "-a", "Safari"])
+    if case .shellCommand(let argv)? = safariCmd {
+      XCTAssertEqual(argv, ["open", "-a", "Safari"])
+    } else {
+      XCTFail("expected .shellCommand for non-flash head")
+    }
   }
 
   func testShellCommandActionDiagnosticUsesArraySyntax() {
@@ -275,63 +300,63 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashModeActions() {
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://mode_insert")?.command, .insertMode)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://mode_command")?.command, .commandMode)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://url_copy")?.command, .copyURL)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "mode_insert"])?.command, .insertMode)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "mode_command"])?.command, .commandMode)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "url_copy"])?.command, .copyURL)
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://app_open_finder")?.command,
+      parseMappingCommand(argv: ["flash", "app_open_finder"])?.command,
       .candidateFinder(all: false))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://app_open_finder?all=1")?.command,
+      parseMappingCommand(argv: ["flash", "app_open_finder", "all=1"])?.command,
       .candidateFinder(all: true))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://app_reload")?.command, .reload(force: false))
+      parseMappingCommand(argv: ["flash", "app_reload"])?.command, .reload(force: false))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://app_reload?force=1")?.command,
+      parseMappingCommand(argv: ["flash", "app_reload", "force=1"])?.command,
       .reload(force: true))
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://flashlight")?.command, .flashlight)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_next")?.command, .tabNext)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_previous")?.command, .tabPrev)
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://tab_select")?.command, .tabSelect(index: nil))
+      parseMappingCommand(argv: ["flash", "flashlight"])?.command, .flashlight(restoreMode: false))
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "tab_next"])?.command, .tabNext)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "tab_previous"])?.command, .tabPrev)
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://tab_select?index=4")?.command, .tabSelect(index: 4))
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_new")?.command, .tabNew)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://tab_close")?.command, .tabClose)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://history_back")?.command, .historyBack)
+      parseMappingCommand(argv: ["flash", "tab_select"])?.command, .tabSelect(index: nil))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://history_forward")?.command, .historyForward)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://movement_back")?.command, .movementBack)
+      parseMappingCommand(argv: ["flash", "tab_select", "index=4"])?.command, .tabSelect(index: 4))
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "tab_new"])?.command, .tabNew)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "tab_close"])?.command, .tabClose)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "history_back"])?.command, .historyBack)
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://movement_forward")?.command, .movementForward)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://app_previous")?.command, .appPrev)
-    XCTAssertEqual(parseMappingCommand(rawString: "flash://app_next")?.command, .appNext)
+      parseMappingCommand(argv: ["flash", "history_forward"])?.command, .historyForward)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "movement_back"])?.command, .movementBack)
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://app_quit")?.command, .quitApp(force: false))
+      parseMappingCommand(argv: ["flash", "movement_forward"])?.command, .movementForward)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "app_previous"])?.command, .appPrev)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "app_next"])?.command, .appNext)
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://app_quit?force=1")?.command,
+      parseMappingCommand(argv: ["flash", "app_quit"])?.command, .quitApp(force: false))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "app_quit", "force=1"])?.command,
       .quitApp(force: true))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://app_save_and_quit")?.command,
+      parseMappingCommand(argv: ["flash", "app_save_and_quit"])?.command,
       .saveAndQuit(force: false))
     XCTAssertEqual(
-      parseMappingCommand(rawString: "flash://app_save_and_quit?force=1")?.command,
+      parseMappingCommand(argv: ["flash", "app_save_and_quit", "force=1"])?.command,
       .saveAndQuit(force: true))
   }
 
   func testInvalidFlashURLRejected() {
-    XCTAssertNil(parseMappingCommand(rawString: "flash://unknown_command"))
-    XCTAssertNil(parseMappingCommand(rawString: "flash://app_open"))  // no name
-    XCTAssertNil(parseMappingCommand(rawString: "flash://alert_show"))  // no message
-    XCTAssertNil(parseMappingCommand(rawString: "flash://show_alert"))  // alias removed
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "unknown_command"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "app_open"]))  // no name
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "alert_show"]))  // no message
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "show_alert"]))  // alias removed
     // no subcommand
-    XCTAssertNil(parseMappingCommand(rawString: "flash://plugin_command?command=spotify"))
-    XCTAssertNil(parseMappingCommand(rawString: "flash://usage"))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "plugin_command", "command=spotify"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "usage"]))
   }
 
   func testParseFlashMoveWindowPositionOnly() {
-    let action = parseMappingCommand(
-      rawString: "flash://window_move?position=lefthalf")
+    let action = parseMappingCommand(argv: ["flash", "window_move", "position=lefthalf"])
     guard case .flashCommand(.moveWindow(let params)) = action else {
       return XCTFail("expected .moveWindow")
     }
@@ -344,16 +369,14 @@ final class HotkeySyntaxTests: XCTestCase {
     // this window to the next display" form. Position must remain
     // nil so WindowMover does a proportional remap instead of
     // snapping to a fixed slot.
-    let next = parseMappingCommand(
-      rawString: "flash://window_move?screen=+1")
+    let next = parseMappingCommand(argv: ["flash", "window_move", "screen=+1"])
     guard case .flashCommand(.moveWindow(let nextP)) = next else {
       return XCTFail("expected .moveWindow for screen=+1")
     }
     XCTAssertNil(nextP.position)
     XCTAssertEqual(nextP.screen, 1)
 
-    let prev = parseMappingCommand(
-      rawString: "flash://window_move?screen=-1")
+    let prev = parseMappingCommand(argv: ["flash", "window_move", "screen=-1"])
     guard case .flashCommand(.moveWindow(let prevP)) = prev else {
       return XCTFail("expected .moveWindow for screen=-1")
     }
@@ -362,8 +385,9 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashMoveWindowPositionAndScreen() {
-    let action = parseMappingCommand(
-      rawString: "flash://window_move?position=maximized&screen=+1")
+    let action = parseMappingCommand(argv: [
+      "flash", "window_move", "position=maximized", "screen=+1",
+    ])
     guard case .flashCommand(.moveWindow(let params)) = action else {
       return XCTFail("expected .moveWindow")
     }
@@ -374,57 +398,14 @@ final class HotkeySyntaxTests: XCTestCase {
   func testParseFlashMoveWindowRejectsInvalidOrEmpty() {
     // Empty form is rejected — a mapping with no query is always a
     // user error, not a "silent no-op" hotkey.
-    XCTAssertNil(parseMappingCommand(rawString: "flash://window_move"))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "window_move"]))
     // A typo'd position must not silently degrade to "just move
     // screen" — reject so the user sees the parse error in logs.
     XCTAssertNil(
-      parseMappingCommand(rawString: "flash://window_move?position=somewhere"))
+      parseMappingCommand(argv: ["flash", "window_move", "position=somewhere"]))
     // Non-numeric `screen=` is also a parse failure.
     XCTAssertNil(
-      parseMappingCommand(rawString: "flash://window_move?screen=next"))
-  }
-
-  func testLegacyFlashActionAliasesAreRejected() {
-    for raw in [
-      "flash://show_hints?right=1",
-      "flash://move_mouse",
-      "flash://normal_mode",
-      "flash://insert_mode",
-      "flash://command_mode",
-      "flash://half_page_up",
-      "flash://half_page_down",
-      "flash://reload",
-      "flash://undo",
-      "flash://redo",
-      "flash://close",
-      "flash://find",
-      "flash://open_candidate_finder?all=1",
-      "flash://copy_url",
-      "flash://next_frame",
-      "flash://main_frame",
-      "flash://next_tab",
-      "flash://previous_tab",
-      "flash://quit_app?force=1",
-      "flash://force_quit_app",
-      "flash://save",
-      "flash://save_and_quit?force=1",
-      "flash://print",
-      "flash://open",
-      "flash://new_window",
-      "flash://new_tab",
-      "flash://copy",
-      "flash://cut",
-      "flash://paste",
-      "flash://copy_all",
-      "flash://dismiss_alert",
-      "flash://help",
-      "flash://dismiss_hints",
-      "flash://quit",
-      "flash://open_app?name=Firefox",
-      "flash://move_window?position=lefthalf",
-    ] {
-      XCTAssertNil(parseMappingCommand(rawString: raw), "legacy alias \(raw)")
-    }
+      parseMappingCommand(argv: ["flash", "window_move", "screen=next"]))
   }
 
 }

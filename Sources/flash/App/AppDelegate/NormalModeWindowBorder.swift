@@ -100,7 +100,7 @@ extension AppDelegate {
   ) -> Bool {
     // Insert mode keeps the status bar visible and adds a colored frame
     // around the focused window so the typing target remains obvious.
-    // Advanced mode (`flash://mode_normal` bound somewhere) is the gate
+    // Advanced mode (`["flash", "mode_normal"]` bound somewhere) is the gate
     // — without it Flash has no normal/insert distinction to visualise.
     // The border is suspended while hints are up so chips aren't framed
     // by a redundant outline, and while the window is moving/resizing

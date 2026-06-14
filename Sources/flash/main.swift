@@ -8,6 +8,16 @@ import Darwin
 // "plugin crash is contained — Flash stays up."
 signal(SIGPIPE, SIG_IGN)
 
+// `flash` is a fat binary: launched with no extra argv (Launch Services
+// opening `/Applications/Flash.app`) it becomes the resident process;
+// launched with argv (`/usr/local/bin/flash mouse_target`) it runs as a
+// one-shot CLI that AppleEvents the verb to the running resident, then
+// exits. This is why `flashctl` no longer exists — the CLI half lives in
+// the same Mach-O as the app.
+if CommandLine.arguments.count > 1 {
+  exit(FlashCLI.run(args: Array(CommandLine.arguments.dropFirst())))
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
