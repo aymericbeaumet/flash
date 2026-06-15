@@ -23,20 +23,28 @@ enum WindowMover {
   ) {
     let axApp = AXUIElementCreateApplication(targetPID)
 
-    // `kAXFocusedWindowAttribute` is the right answer when the app is the
-    // key/focused process, but Flash's overlay panel holds key focus
-    // during normal-mode capture, so the verb caller already excluded
-    // Flash from `targetPID`. With the focused-window query still likely
-    // to return nil for the resigned app, fall back to `kAXMainWindow`
-    // — which tracks the app's frontmost window regardless of which
-    // process currently owns the keyboard.
+    // Resolve the window to move. Three fallbacks because Flash holds
+    // key focus during normal-mode capture, so AX answers vary by app:
+    //   1. `kAXFocusedWindow`  — only populated when the target app is
+    //                            the focused process (i.e. Cocoa apps
+    //                            with retained focus state). Often nil.
+    //   2. `kAXMainWindow`     — the app's frontmost window regardless
+    //                            of who owns the keyboard. Cocoa apps
+    //                            track this; some non-Cocoa apps (e.g.
+    //                            Alacritty) leave it unset.
+    //   3. `kAXWindows[0]`     — the first entry in the app's window
+    //                            list, ordered front-to-back by AX.
+    //                            Works for Alacritty et al. that only
+    //                            expose the list.
     let window: AXUIElement
     if let focused = copyWindowAttribute(axApp, kAXFocusedWindowAttribute) {
       window = focused
     } else if let main = copyWindowAttribute(axApp, kAXMainWindowAttribute) {
       window = main
+    } else if let first = copyFirstWindow(axApp) {
+      window = first
     } else {
-      FlashLog.warn("[window_move] no focused or main window for pid \(targetPID)")
+      FlashLog.warn("[window_move] no AX window for pid \(targetPID)")
       return
     }
 
@@ -150,6 +158,19 @@ enum WindowMover {
     let status = AXUIElementCopyAttributeValue(axApp, attribute as CFString, &ref)
     guard status == .success, let cf = ref else { return nil }
     return (cf as! AXUIElement)
+  }
+
+  /// First entry in the application's `kAXWindowsAttribute` list. AX
+  /// orders the list front-to-back, so `[0]` is the topmost window —
+  /// the right target when the focused/main attributes are nil (e.g.
+  /// Alacritty exposes the windows array but neither shortcut).
+  private static func copyFirstWindow(_ axApp: AXUIElement) -> AXUIElement? {
+    var ref: CFTypeRef?
+    let status = AXUIElementCopyAttributeValue(
+      axApp, kAXWindowsAttribute as CFString, &ref)
+    guard status == .success, let array = ref as? [AXUIElement], let first = array.first
+    else { return nil }
+    return first
   }
 
   /// Read the AX position + size and convert to NSScreen coordinates

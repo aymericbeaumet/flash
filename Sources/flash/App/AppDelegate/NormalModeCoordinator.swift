@@ -408,23 +408,18 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
-    if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
-      // The user clicked the menu bar (system menu, app menu, or status
-      // item). Recapturing key window here races the menu's open: the
-      // 0ms recapture entry fires before the async pointer-monitor path
-      // can transition to insert, and steals key back so the menu closes
-      // the same instant it opened. The user then has to click again to
-      // reopen it. Letting the menu interact freely is the right call —
-      // `overlayDidCancelByPointer` will still flip Flash into insert
-      // mode on the async path, so the badge updates without disturbing
-      // the menu.
-      FlashLog.trace("[mode] pointer_recapture_skip target=menu_bar")
-      return
-    }
+    // Hard contract: a click that takes focus away from Flash is the
+    // user telling us they want to interact with whatever they clicked.
+    // Re-grabbing key window here would yank focus back from the menu
+    // they just opened, the link they just clicked, or the text field
+    // they just tapped — and on Tahoe it would re-activate Flash on
+    // top, which fights the user's gesture continuously. Stay quiet;
+    // normal mode stays selected (the badge is still NORMAL), but the
+    // panel surrenders key focus until the user re-triggers the
+    // configured `enter_normal_mode` binding.
     FlashLog.trace(
-      "[mode] pointer_recapture_force target=\(Self.pointerFocusLossTarget()) "
-        + "reason=normal_mode_focus_contract")
-    scheduleNormalModeRecapture()
+      "[mode] pointer_recapture_skip target=\(Self.pointerFocusLossTarget()) "
+        + "reason=preserve_click_passthrough")
   }
 
   static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]

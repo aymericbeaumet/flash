@@ -43,23 +43,17 @@ extension AppDelegate {
       }
       return
     }
-    // `finishCommandLineInteraction` (called via `cancelOverlay`) already
-    // restores the prior mode (the one that was active when the command
-    // line was entered), so forcing `enterInsertMode` here would clobber
-    // that restoration. Only flip to insert when the pointer click is
-    // dismissing the normal-mode capture surface itself.
-    let wasCommandLine = overlay.inputMode == .commandLine
+    // Hard contract: clicking never changes the mode. The only way out
+    // of NORMAL is `i` (or any explicit `enter_insert_mode` verb), and
+    // the only way into NORMAL is the configured `enter_normal_mode`
+    // binding. A click still passes through to the underlying app
+    // because `ignoresMouseEvents = true`, but the mode stays put.
+    //
+    // Command-line / candidate-finder dismissal stays in `cancelOverlay`
+    // — those *surfaces* close on click, but again without an INSERT
+    // flip; `finishCommandLineInteraction` restores whichever mode the
+    // command line was opened from.
     cancelOverlay()
-    if !wasCommandLine, flashMode != .insert {
-      enterInsertMode(reason: .pointerClick)
-    }
-    // The overlay panel has `ignoresMouseEvents = true`, so the user's
-    // real mouseDown/drag/mouseUp pass through to the underlying app
-    // unaltered. Replaying a synthetic click here was the prior approach;
-    // it doubled left-clicks (cursor jumped, second hit re-triggered the
-    // target) and dismissed the context menu on right-click (the synth
-    // click landed outside the just-opened menu). The transition into
-    // INSERT is enough — the original gesture is the click.
   }
 
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
