@@ -145,6 +145,16 @@ public struct Candidate: @unchecked Sendable {
   /// the hot path skips the full scorer. Stays consistent with the
   /// normalized fields because both are computed together in `prepare`.
   public var scoringMask: UInt64
+  /// a–z0–9 presence bitmask of the *first character* of every token in
+  /// the candidate's searchable fields (title, aliases, source title,
+  /// secondary, display). Populated by `CandidateFinder.prepare`. The
+  /// Algolia-style typeahead gate: when the query is one or two
+  /// characters long, a candidate whose `wordStartMask` doesn't carry
+  /// the query's first character is skipped entirely — there's no way
+  /// for it to be a useful match while the user is still establishing
+  /// intent. Long queries fall through to the existing fuzzy ladder so
+  /// substring-only matches (e.g. `fox` → `Firefox`) still surface.
+  public var wordStartMask: UInt64
 
   public init(
     kind: CandidateKind,
@@ -162,7 +172,8 @@ public struct Candidate: @unchecked Sendable {
     normalizedSearchText: String = "",
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
     sortKey: String = "",
-    scoringMask: UInt64 = 0
+    scoringMask: UInt64 = 0,
+    wordStartMask: UInt64 = 0
   ) {
     self.kind = kind
     self.sourceID = sourceID
@@ -180,6 +191,7 @@ public struct Candidate: @unchecked Sendable {
     self.normalizedScoringFields = normalizedScoringFields
     self.sortKey = sortKey
     self.scoringMask = scoringMask
+    self.wordStartMask = wordStartMask
   }
 }
 

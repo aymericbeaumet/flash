@@ -5,6 +5,67 @@ import XCTest
 @testable import flash
 
 final class SourceCandidateTests: XCTestCase {
+  func testPrepareBuildsWordStartMaskFromTitleAndAliasTokens() throws {
+    let prepared = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "core.apps",
+        name: "AirPort Base Station Agent",
+        subtitle: "app",
+        bundleIdentifier: "com.apple.airport",
+        searchAliases: "wifi router"))
+    // Lower 26 bits are a–z first-letters across all tokens. AirPort →
+    // 'a'; Base → 'b'; Station → 's'; Agent → 'a'; wifi → 'w'; router → 'r'.
+    let bit: (Character) -> UInt64 = { ch in
+      let v = ch.asciiValue!
+      return v >= 97 && v <= 122 ? 1 << UInt64(v - 97) : 0
+    }
+    let expected = bit("a") | bit("b") | bit("s") | bit("w") | bit("r") | bit("c")
+    // `c` because the source title contains "core.apps" — `core` is the
+    // first token there.
+    XCTAssertEqual(prepared.wordStartMask & expected, expected)
+    // 'z' is not a word-start anywhere, so its bit must be unset.
+    XCTAssertEqual(prepared.wordStartMask & bit("z"), 0)
+  }
+
+  func testShortQueryRejectsCandidateWithoutMatchingWordStart() {
+    let memory = CandidateFinder.prepare(
+      candidate(
+        kind: .app,
+        source: "core.apps",
+        name: "Memory Slot Utility",
+        subtitle: "app",
+        bundleIdentifier: ""))
+    let inboxedMessage = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("browser_tab"),
+        source: "firefox",
+        name: "Important inbox message",
+        subtitle: "browser tab",
+        bundleIdentifier: ""))
+    // Query "m" matches a word-start in both. Both pass the gate.
+    XCTAssertNotNil(CandidateFinder.score(query: "m", candidate: memory))
+    XCTAssertNotNil(CandidateFinder.score(query: "m", candidate: inboxedMessage))
+    // Query "z" matches a word-start in neither — gate trips for the
+    // short query and `score` returns nil.
+    XCTAssertNil(CandidateFinder.score(query: "z", candidate: memory))
+    XCTAssertNil(CandidateFinder.score(query: "z", candidate: inboxedMessage))
+  }
+
+  func testLongQueryBypassesWordStartGate() {
+    // "fox" doesn't start any word in "Firefox" but a 3-character query
+    // must still surface this substring-only match — the gate is for
+    // 1–2 char typeahead, not a hard contract for longer searches.
+    let firefox = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("browser_tab"),
+        source: "firefox",
+        name: "Firefox",
+        subtitle: "browser tab",
+        bundleIdentifier: "org.mozilla.firefox"))
+    XCTAssertNotNil(CandidateFinder.score(query: "fox", candidate: firefox))
+  }
+
   func testExactTitleMatchOutranksSourceOrFuzzyMatches() throws {
     let finder = CandidateFinder.prepare(
       candidate(

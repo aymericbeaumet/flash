@@ -1361,7 +1361,15 @@ extension AppDelegate {
         }
       }
     }
-    let sorted = CandidateFinder.sortedMatches(scored, precedence: precedenceTable())
+    // Top-K bounded sort. The display window is `commandBarSuggestionCount`
+    // (default 10), with arrow-key scrolling allowed inside the bounded
+    // set, so a 3x buffer keeps the result list scroll-friendly without
+    // paying for a full O(N log N) sort of every match. `sortedMatches`
+    // already partial-sorts via `topRecords` when `limit` < count, so
+    // wiring the cap here is the entire change.
+    let sortLimit = max(commandBarSuggestionCount * 3, 30)
+    let sorted = CandidateFinder.sortedMatches(
+      scored, precedence: precedenceTable(), limit: sortLimit)
     let tSorted = CFAbsoluteTimeGetCurrent()
     // Re-check the generation — a re-entrant call (e.g. caches landing
     // mid-update) could have already superseded us.
@@ -1479,21 +1487,38 @@ extension AppDelegate {
       candidateFinderDynamicCandidates = candidateFinderDeferredCandidates
     }
     candidateFinderCandidates = visibleCandidateFinderCandidates(for: candidateFinderScope)
-    registry.queryCandidateSources(
-      scope: candidateFinderScope,
-      text: queryText
-    ) { [weak self] candidates, isFinal in
-      guard isFinal else { return }
+    // Plugin source queries are debounced. Without the debounce, a
+    // rapidly-typing user fires a new plugin RPC per keystroke; each
+    // callback lands tens of ms later and reassigns the pool, which
+    // bumps the candidate epoch (didSet detects the new dynamic set as
+    // "different") and invalidates the incremental scoring cache —
+    // alternating fast/slow keystrokes that the user perceives as
+    // jitter. A 60 ms debounce window lets the incremental cache do its
+    // job for in-flight typing while still firing the RPC the moment
+    // the user pauses long enough to care about a freshly-refined
+    // result set.
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(60)) { [weak self] in
       guard let self else { return }
       guard generation == self.candidateFinderSourceQueryGenerationCounter,
         key == self.candidateFinderSourceQueryKey,
         self.candidateFinderSurfaceActive
       else { return }
-      self.candidateFinderDynamicCandidates = candidates
-      self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(
-        for: self.candidateFinderScope)
-      self.updateCandidateMatches(query: query, requestCandidateRefresh: false)
-      self.rerenderCandidateFinderSurface(query: query)
+      self.registry.queryCandidateSources(
+        scope: self.candidateFinderScope,
+        text: queryText
+      ) { [weak self] candidates, isFinal in
+        guard isFinal else { return }
+        guard let self else { return }
+        guard generation == self.candidateFinderSourceQueryGenerationCounter,
+          key == self.candidateFinderSourceQueryKey,
+          self.candidateFinderSurfaceActive
+        else { return }
+        self.candidateFinderDynamicCandidates = candidates
+        self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(
+          for: self.candidateFinderScope)
+        self.updateCandidateMatches(query: query, requestCandidateRefresh: false)
+        self.rerenderCandidateFinderSurface(query: query)
+      }
     }
   }
 

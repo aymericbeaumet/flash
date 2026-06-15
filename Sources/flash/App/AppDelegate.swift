@@ -187,6 +187,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var candidateFinderScope: CandidateScope = .all
   let candidateFinderCacheQueue = DispatchQueue(
     label: "flash.candidate_finder.cache", qos: .utility)
+  /// Per-keystroke scoring runs Pass A (strict word-start tier, sync,
+  /// sub-ms) on the main thread for instant paint, then dispatches
+  /// Pass B (full fuzzy ladder) here so longer queries don't block the
+  /// runloop. The serial label + `.userInteractive` QoS keeps results
+  /// landing in order; the per-call generation check (`candidateFinderIndexGenerationCounter`)
+  /// is what actually cancels a stale scoring job — a new keystroke
+  /// bumps the counter and the next chunk-boundary check in Pass B
+  /// exits early.
+  let candidateFinderScoringQueue = DispatchQueue(
+    label: "flash.candidate_finder.scoring", qos: .userInteractive)
   var candidateFinderRunningAppsCache: [Candidate] = []
   var candidateFinderRunningAppsCacheReady = false
   var candidateFinderRunningAppsRefreshInFlight = false

@@ -356,6 +356,32 @@ enum CandidateFinder {
       | presenceMask(normalizedDisplay)
       | presenceMask(normalizedAliases)
       | presenceMask(normalizedSearchText)
+    // Algolia-style typeahead gate: bits for the first character of
+    // every token across the user-searchable fields. A short query
+    // (1–2 chars) whose first character is missing here can never
+    // produce a useful early-typing match, so `scoreMatch` skips the
+    // candidate without paying for the full fuzzy ladder. Long queries
+    // bypass the gate so substring-only hits (`fox` → `Firefox`) still
+    // land.
+    var wordStarts: UInt64 = 0
+    for token in titleTokens { wordStarts |= firstCharBit(token) }
+    for token in aliasTokens { wordStarts |= firstCharBit(token) }
+    wordStarts |= firstCharBit(normalizedSourceTitle)
+    wordStarts |= firstCharBit(normalizedSecondary)
+    wordStarts |= firstCharBit(normalizedDisplay)
+    // Multi-word secondary/display strings deserve their interior word
+    // starts too — the source title is "core.apps", but matching on
+    // "apps" should still gate-pass.
+    for token in normalizedSourceTitle.split(separator: " ") {
+      wordStarts |= firstCharBit(String(token))
+    }
+    for token in normalizedSecondary.split(separator: " ") {
+      wordStarts |= firstCharBit(String(token))
+    }
+    for token in normalizedDisplay.split(separator: " ") {
+      wordStarts |= firstCharBit(String(token))
+    }
+    prepared.wordStartMask = wordStarts
     // Cheap, locale-free tie-break key. Mirrors the old comparator
     // chain (name → source → displayTitle → sourceID) but as one plain
     // string so `sortedMatches` avoids `localizedCaseInsensitiveCompare`
@@ -386,6 +412,17 @@ enum CandidateFinder {
     return mask
   }
 
+  /// Single-character a–z0–9 bit. Returns 0 for the empty string or any
+  /// leading non-alphanumeric (the `wordStartMask` gate then conservatively
+  /// passes the candidate — no false rejection).
+  static func firstCharBit(_ normalized: String) -> UInt64 {
+    guard let scalar = normalized.unicodeScalars.first else { return 0 }
+    let v = scalar.value
+    if v >= 97, v <= 122 { return 1 << UInt64(v - 97) }
+    if v >= 48, v <= 57 { return 1 << UInt64(v - 48 + 26) }
+    return 0
+  }
+
   /// Per-keystroke prefilter key: the query's a–z0–9 presence mask plus
   /// the fuzzy matcher's edit budget for this query length. Computed
   /// once per query, then matched against each candidate's `scoringMask`
@@ -395,7 +432,24 @@ enum CandidateFinder {
     var maxEdits: Int
   }
 
-  static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
+  /// Short-query typeahead gate. Returns true when the candidate
+  /// passes the word-start bitmap check — used by `scoreMatch` to skip
+  /// the full fuzzy ladder on early keystrokes when the candidate
+  /// can't possibly be a useful match. The gate engages only for
+  /// 1–2 character queries; from 3 chars on, the existing fuzzy
+  /// ladder runs unconditionally so substring-only hits (`fox` →
+  /// `Firefox`) still surface.
+  static func passesWordStartGate(
+    normalizedQuery: String,
+    wordStartMask: UInt64
+  ) -> Bool {
+    guard normalizedQuery.count <= 2 else { return true }
+    let bit = firstCharBit(normalizedQuery)
+    if bit == 0 { return true }  // Non-alphanumeric leader: don't gate.
+    return wordStartMask & bit != 0
+  }
+
+static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     var mask: UInt64 = 0
     var compactCount = 0
     for scalar in normalizedQuery.unicodeScalars {
@@ -456,6 +510,15 @@ enum CandidateFinder {
     fuzzyScore: (String, String) -> Int?
   ) -> Int? {
     if normalizedQuery.isEmpty { return 0 }
+    // Algolia-style typeahead gate (1–2 char queries only). When the
+    // user has barely started typing, prune candidates that don't have
+    // a word starting with the query's first character — they can't
+    // produce a useful match at this length. Long queries fall through
+    // so substring-only hits (`fox` → `Firefox`) still surface.
+    guard
+      passesWordStartGate(
+        normalizedQuery: normalizedQuery, wordStartMask: candidate.wordStartMask)
+    else { return nil }
     let fields = candidate.normalizedScoringFields
     var best: Int?
     if let titleScore = fieldScoreNormalized(
@@ -551,6 +614,8 @@ enum CandidateFinder {
     fuzzyScore: (String, String) -> Int?
   ) -> CandidateMatch? {
     guard passesPrefilter(prefilter, candidateMask: candidate.scoringMask) else { return nil }
+    // `score` applies the word-start gate, so a short query that misses
+    // the candidate's word-start bitmap short-circuits inside the scorer.
     guard
       let score = score(
         normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
