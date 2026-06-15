@@ -102,14 +102,15 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]#{plugin:ready_count} | #{script:~/bin/right-status.sh} | #{command:date +%H:%M}"
+      template = "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]#{plugin:ready_count} | #{plugin:system.battery} | #{script:~/bin/right-status.sh} | #{command:date +%H:%M}"
       """)
 
     let template = c.statusBar.template
     XCTAssertEqual(
       template.template,
       "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]"
-        + "#{plugin:ready_count} | #{script:~/bin/right-status.sh} | "
+        + "#{plugin:ready_count} | #{plugin:system.battery} | "
+        + "#{script:~/bin/right-status.sh} | "
         + "#{command:date +%H:%M}")
     XCTAssertEqual(
       template.variables.map(\.token),
@@ -117,6 +118,7 @@ final class ConfigLoaderTests: XCTestCase {
         "active_bundle_identifier",
         "mode",
         "plugin:ready_count",
+        "plugin:system.battery",
         "script:~/bin/right-status.sh",
         "command:date +%H:%M",
       ])
@@ -127,9 +129,12 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(template.variables[2].source, .plugin(.readyCount))
     XCTAssertEqual(
       template.variables[3].source,
-      .command(FlashStatusBarCommand(argv: ["/bin/sh", "~/bin/right-status.sh"])))
+      .plugin(.statusSegment(pluginID: "system", name: "battery")))
     XCTAssertEqual(
       template.variables[4].source,
+      .command(FlashStatusBarCommand(argv: ["/bin/sh", "~/bin/right-status.sh"])))
+    XCTAssertEqual(
+      template.variables[5].source,
       .command(FlashStatusBarCommand(argv: ["/bin/sh", "-lc", "date +%H:%M"])))
   }
 
@@ -144,12 +149,49 @@ final class ConfigLoaderTests: XCTestCase {
       """)
 
     let t = c.statusBar.template
-    // The backslash at end of line collapses the newline + leading whitespace,
-    // so the parsed template is one continuous string.
+    // Status templates ignore newlines before rendering, so multi-line TOML
+    // strings become one continuous template.
     XCTAssertEqual(
       t.template.trimmingCharacters(in: .whitespacesAndNewlines),
       "#[align=left]#{mode}#[align=right]#{plugin:ready_count} | #{date}")
     XCTAssertEqual(t.variables.map(\.token), ["mode", "plugin:ready_count", "date"])
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testStatusBarTemplateIgnoresNewlines() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = \"\"\"
+      #[align=left]#{mode}
+      #[align=center]#{active_app_name}
+      #[align=right]#{date}
+      \"\"\"
+      """)
+
+    XCTAssertEqual(
+      c.statusBar.template.template,
+      "#[align=left]#{mode}#[align=center]#{active_app_name}#[align=right]#{date}")
+    XCTAssertEqual(
+      c.statusBar.template.variables.map(\.token),
+      ["mode", "active_app_name", "date"])
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testParsesTmuxStatusBarVariables() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "#[align=left]#S@#H #{host_short} #{window_name}"
+      """)
+
+    XCTAssertEqual(
+      c.statusBar.template.variables.map(\.token),
+      ["session_name", "host", "host_short", "window_name"])
+    XCTAssertEqual(c.statusBar.template.variables[0].source, .tmux("session_name"))
+    XCTAssertEqual(c.statusBar.template.variables[1].source, .tmux("host"))
+    XCTAssertEqual(c.statusBar.template.variables[2].source, .tmux("host_short"))
+    XCTAssertEqual(c.statusBar.template.variables[3].source, .tmux("window_name"))
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
@@ -855,7 +897,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testNormalLeaderAcceptsBackslashFullname() {
     let toml = #"""
       [mode.normal.mappings]
-      "<leader><space>" = ["flash", "enter_command", "--input=flashlight "]
+      "<leader><space>" = ["flash", "enter_command_mode", "--input=flashlight "]
       [mode.normal]
       leader = "<backslash>"
       """#

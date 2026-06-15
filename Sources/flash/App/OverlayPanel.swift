@@ -50,7 +50,7 @@ final class OverlayPanel: NSPanel {
   // `.statusBar` (level 25) sits in the band macOS reserves for system
   // status items — windows there can't become key, which locks Flash's
   // normal-mode capture out of the panel and spins the recapture loop
-  // forever. `.mainMenu` (level 24) lets us own key focus; we make the
+  // forever. The main-menu window level (24) lets us own key focus; we make the
   // Flash status bar visually solid by setting an opaque
   // `backgroundColor` on its gradient layer rather than relying on
   // outranking the translucent native menu bar.

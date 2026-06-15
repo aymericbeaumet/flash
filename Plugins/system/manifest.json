@@ -3,10 +3,14 @@
   "id": "system",
   "name": "System",
   "version": "0.1.0",
-  "description": "macOS system commands: lock, sleep, empty trash, toggle dark mode, screensaver, caffeinate.",
+  "description": "macOS system commands and status segments: lock, sleep, battery, empty trash, toggle dark mode, screensaver, caffeinate.",
   "install": "true",
   "start": "exec ./flash-plugin-system",
   "providers": [
+    {
+      "kind": "status",
+      "segments": ["battery"]
+    },
     {
       "kind": "commands",
       "commands": [

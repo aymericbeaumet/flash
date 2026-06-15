@@ -8,6 +8,9 @@ public enum ProviderKind: String, Codable, Sendable, CaseIterable {
   case candidates
   case commands
   case mappings
+  /// Status-bar template segments. Plugins declare stable segment names in
+  /// `providers[]`, then publish values at runtime over the plugin protocol.
+  case status
   /// Flashlight `!`-prefix bangs (DuckDuckGo-style): a submission beginning
   /// with `!<token>` routes its remainder to the owning plugin instead of
   /// resolving a candidate.

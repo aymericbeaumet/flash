@@ -16,7 +16,6 @@ Activation comes either through the `flash` CLI (which AppleEvents the verb to t
 4. **No unowned resident helpers / no custom external IPC.** External activation is `NSAppleEventManager` receiving the custom `Flsh`/`Cmd ` event class from the `flash` CLI; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through length-prefixed MessagePack over stdin/stdout with stderr reserved for unexpected errors; Flash owns their lifecycle, heartbeat, reload, and shutdown. Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. Do not re-introduce a `flash://` URL scheme; the only allowed external entry point is the custom AppleEvent sent by the `flash` CLI sibling.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
 6. **Hand-rolled infrastructure inventory — do not "fix" by adding a dependency.** Several pieces of plumbing in this repo are intentionally hand-rolled to keep the dep graph minimal and the wire formats / parsers under our own version control. Before reaching for a library, check this list first; if your change needs to touch one of these surfaces, extend the hand-roll rather than swap it out. The list (file → what it is → why the hand-roll stays):
-   - `Sources/flash/Config/ConfigTomlTokenizer.swift` + `ConfigLoader.swift` + `ConfigValueParsers.swift` — TOML subset parser. Don't add `TOMLKit` / `Toml` / `swift-toml`; we honour a deliberately small subset (no datetime, no inline arrays-of-tables, etc.) so the diagnostic surface stays narrow.
    - `Sources/FlashCore/MessagePack.swift` — MessagePack codec for the plugin stdio protocol. Don't add a MessagePack package; the wire format is frozen and the host + every Rust plugin sees the same hand-rolled framing.
    - `Sources/flash/App/NormalMode/FuzzyMatcher.swift` + `Sources/flash/App/CandidateFinder.swift` — flashlight fuzzy scorer + LCS-style highlighting + the Algolia-style typeahead path. Don't add `swift-algorithms` or a Fuse-style package; the scoring is tuned to specific ranking invariants (alias tier > title tier, frecency boost contained inside the smallest match-quality tier, the per-candidate `wordStartMask` UInt64 hard-gate on 1–2-char queries, and the top-K partial sort via `sortedMatches(_:limit:)` / `topRecords`). A generic scorer changes ranking silently and the typeahead gate's correctness depends on `prepare()` populating the mask from the same token list the live scorer reads.
    - `Sources/flash/App/HintAssigner.swift` — 8-slot LRU cache for sorted hint candidates. Don't pull `swift-collections` for this; the capacity is fixed and the access pattern is single-writer.
@@ -73,7 +72,7 @@ Sources/
       SlackSource.swift              # :open Slack channels, enabled only while Slack runs
     Config/
       Config.swift                   # Decoded model — defaults here MUST match config.default.toml
-      ConfigLoader.swift             # Hand-rolled TOML subset parser + DispatchSource fs-watch hot-reload
+      ConfigLoader.swift             # TOMLKit-backed TOML loading + DispatchSource fs-watch hot-reload
       Alphabet.swift                 # layout selector / literal hints.keys resolution
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TargetFinalizer, WindowSnapshot, plugin system, source candidates, browser fixture catalog, shared integration support.
@@ -234,7 +233,7 @@ A `JumpTarget.activate` closure overrides the default action. Use it when the un
 
 ## Configuration
 
-`~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. The TOML parser in `Sources/flash/Config/ConfigLoader.swift` is hand-rolled and covers: `[table]`, `[table.sub]`, `[table."quoted.key"]`, `key = "string"`, `key = 42`, `key = true`, `key = ["a","b"]`, the constrained inline string table used by `mode.labels`, `#` line comments, and trailing inline `#` comments. It does **not** support multi-line strings, dotted keys outside tables, or arbitrary inline tables. Add support only if you actually need it.
+`~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. TOML syntax is parsed with the Swift package `TOMLKit`; `Sources/flash/Config/ConfigLoader.swift` owns only Flash's typed schema, validation, source-location indexing for known values, and command-path resolution.
 
 The user-facing top-level sections are exactly `[hints]`, `[open]`, `[plugins]`, `[statusbar]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
 
@@ -252,8 +251,7 @@ Keys:
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
-| `statusbar.left`                   | string         | `"#{mode}"`          |
-| `statusbar.right`                  | string         | `"#{date}"`          |
+| `statusbar.template`               | string         | `"#[align=left]#{mode}#[align=right]#{date}"` |
 | `flashlight.suggestion_count`      | int            | `10`                 |
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |
@@ -293,7 +291,8 @@ Official bundled plugins under `Contents/Resources/Plugins` are always enabled
 in this version and are not configurable. In the checkout they live under root
 `Plugins/` so `Scripts/install.sh --dev` can symlink them into the installed app. Every plugin root must contain
 `manifest.json` with `manifest_version`, `id`, `name`, `version`, `description`, `install`, `start`,
-event subscriptions, and command registrations (each command exposes one or more subcommands). `manifest_version` is a required integer; the host loader rejects any manifest that omits it or that targets a future schema version. `install` and `start` are
+event subscriptions, and provider registrations. Command providers expose one or more subcommands; status providers expose named segments through `segments`.
+`manifest_version` is a required integer; the host loader rejects any manifest that omits it or that targets a future schema version. `install` and `start` are
 shell strings run from the plugin root; Flash passes
 `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`, and `FLASH_PLUGIN_DATA_DIR`.
 Plugins speak length-prefixed MessagePack over stdin/stdout: a 4-byte
@@ -304,15 +303,22 @@ errors go to stderr. Plugins can log through the Flash logger by sending
 Official plugin installers must keep downloaded CLI binaries under their own
 `FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
 
-`[statusbar]` configures the persistent top status bar format. `left` renders
-inside the highlighted left cell, and `right` renders on the right side.
-Separators are literal inline text inside those template strings. Supported
+`[statusbar]` configures the persistent top status bar format. `template`
+is one tmux-style string; `#[align=left]`, `#[align=centre]` / `#[align=center]`,
+and `#[align=right]` route following text into the left, centre, and right
+regions. Separators are literal inline text inside the template. Supported
 template variables are `#{mode}`, `#{active_app_name}`,
 `#{active_bundle_identifier}`, `#{date}`, `#{plugin:loaded_count}`,
-`#{plugin:ready_count}`, `#{plugin:error_count}`, `#{script:<path>}`, and
-`#{command:<shell command>}`.
-Command/script sections are stale-while-refresh: the previous successful value
-stays visible until a replacement is ready.
+`#{plugin:ready_count}`, `#{plugin:error_count}`,
+tmux-compatible variables (`#H`, `#h`, `#S`, `#{host}`, `#{hostname}`,
+`#{host_short}`, `#{user}`, `#{uid}`, `#{pid}`, and other tmux status variables
+that render as empty when Flash has no equivalent), `#{plugin:<plugin>.<segment>}`,
+`#{script:<path>}`, and `#{command:<shell command>}`. For example, the bundled
+system plugin exposes the battery segment as `#{plugin:system.battery}`.
+Template newlines are ignored before rendering. Mode, focused-app, plugin
+status, and date changes re-render from their own change sources. Command/script
+sections are stale-while-refresh and are polled only when present: the previous
+successful value stays visible until a replacement is ready.
 
 **Bundled plugins are Rust, macOS-only, and ship as compiled binaries.**
 Every official plugin under `Plugins/<id>/` is a member of the
@@ -373,21 +379,21 @@ Values must be non-empty string arrays. Bare strings, URLs, and any other shape 
 
 Native modified-key mappings are registered through Carbon when the key contains `"+"`; unmodified normal-mode mappings are read only while the overlay panel owns keyboard input. `[mode.normal.mappings]` entries extend the built-in normal map and override only matching keys, so unrelated defaults stay available unless that exact key is remapped.
 
-When any `[mode.all.mappings]` mapping resolves to `["flash", "mode_normal"]`, Flash enters advanced mode:
+When any `[mode.all.mappings]` mapping resolves to `["flash", "enter_normal_mode"]`, Flash enters advanced mode:
 
 - starts in normal mode by default;
 - always displays the status bar using configured `mode.labels`, including in the help view;
 - extends the `help_show` modal with ACTION / NORMAL / INSERT columns.
 
-The status bar is rendered from `FlashStatusBarTemplate`: `left` and `right` are template strings that can read Flash SDK state (`mode`, `active_app_name`, `active_bundle_identifier`, `date`), plugin state (`PluginStatusSnapshot` counts), or command/script output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The top bar content is inset from the screen edges for rounded display corners. When the Flash status bar is enabled, Flash keeps the macOS top-band reservation in place, uses each screen's native reserved top-band height, falls back to the measured native menu-bar reveal height when macOS reports no top-band reservation, stays below the native menu/status bar reveal, and the `window_move` verb computes slots/remaps inside that reserved usable frame. Reading `NSStatusBar.system.thickness` and temporarily measuring `NSMenu.menuBarHeight` are allowed only for this geometry fallback; do not create persistent `NSStatusItem`, menu extras, app menus, or any native menu/status UI.
+The status bar is rendered from `FlashStatusBarTemplate`: one template string can read Flash SDK state (`mode`, `active_app_name`, `active_bundle_identifier`, `date`), tmux-compatible variables, plugin state (`PluginStatusSnapshot` counts and `status.updated` segment values), or command/script output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The controller is source-driven where possible: mode, focused-app, plugin, and clock changes publish directly; command/script sections get their own poll only when the template contains them. The top bar content is inset from the screen edges for rounded display corners. When the Flash status bar is enabled, Flash keeps the macOS top-band reservation in place, uses each screen's native reserved top-band height, falls back to the measured native menu-bar reveal height when macOS reports no top-band reservation, stays below the native menu/status bar reveal, and the `window_move` verb computes slots/remaps inside that reserved usable frame. Reading `NSStatusBar.system.thickness` and temporarily measuring `NSMenu.menuBarHeight` are allowed only for this geometry fallback; do not create persistent `NSStatusItem`, menu extras, app menus, or any native menu/status UI.
 
-`["flash", "mode_normal"]` is the only accepted normal-mode entry. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the status bar is hidden and help stays simple while still listing the normal map.
+`["flash", "enter_normal_mode"]` is the only accepted normal-mode entry. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the status bar is hidden and help stays simple while still listing the normal map.
 
 ### Verbs
 
 Every action Flash takes must have a corresponding entry in `URLEventHandler.commands`. Keep `URLCommand`, parser wiring, `URLCommand.diagnosticDescription`, mapping help, README, default config examples, and tests in sync.
 
-Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]`, `mouse_grid [secondary=1|double=1|move=1]`, `mode_command`, `scroll_left`, `scroll_down`, `scroll_up`, `scroll_right`, `scroll_half_page_down`, `scroll_half_page_up`, `scroll_top`, `scroll_bottom`, `app_reload [force=1]`, `app_undo`, `app_redo`, `window_close`, `app_find`, `app_open_finder [all=1]`, `flashlight`, `url_copy`, `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_select index=<n>`, `tab_close`, `history_back`, `history_forward`, `movement_back`, `movement_forward`, `app_quit [force=1]`, `app_save`, `app_save_and_quit [force=1]`, `app_print`, `document_open`, `window_new`, `tab_new`, `clipboard_copy`, `clipboard_cut`, `clipboard_paste`, `clipboard_copy_all`, `plugins`, and `plugin_command command=<command> subcommand=<subcommand>`.
+Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]`, `mouse_grid [secondary=1|double=1|move=1]`, `enter_command_mode [input=<text> restore_mode=1]`, `scroll_left`, `scroll_down`, `scroll_up`, `scroll_right`, `scroll_half_page_down`, `scroll_half_page_up`, `scroll_top`, `scroll_bottom`, `app_reload [force=1]`, `app_undo`, `app_redo`, `window_close`, `app_find`, `app_open_finder [all=1]`, `url_copy`, `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_select index=<n>`, `tab_close`, `history_back`, `history_forward`, `movement_back`, `movement_forward`, `app_quit [force=1]`, `app_save`, `app_save_and_quit [force=1]`, `app_print`, `document_open`, `window_new`, `tab_new`, `clipboard_copy`, `clipboard_cut`, `clipboard_paste`, `clipboard_copy_all`, `plugins`, and `plugin_command command=<command> subcommand=<subcommand>`.
 
 `:open <query>` and `:flashlight <query>` results render below the centered command line, ordered top-to-bottom with the best match closest to the prompt. App bundles are warmed and cached by `ApplicationSource`; plugins own their candidate snapshots and expose source labels via `providers[].sources`. On flashlight open the host renders the core app source immediately and asks every active plugin for its warm snapshot; only plugins that answer before the first-screen deadline are shown initially, and late plugin rows are held until the user types so candidates never reshuffle while the prompt is idle. Typing only re-scores prepared strings and may trigger plugin `candidateQuery` refreshes for pinned source/query text. Result titles must include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin ids are internal routing keys and must not be required search text for `:open` / `:flashlight`; plugin candidates should provide their own `source` / `name` labels.
 
@@ -401,7 +407,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]
 
 **Flashlight attribute filters.** `:flashlight @<field>:<pattern> <query>` is the structured form — multiple selectors can appear anywhere in the query and combine field-wise: filters on the *same* field OR together, filters across *different* fields AND together. Supported fields: `source`, `kind`, `name` (alias `title`), `url`, `bundle` (aliases `bundle_id`/`bundleidentifier`), `subtitle` (alias `description`). Pattern syntax: bare text is case-insensitive exact match, `*` is the wildcard — `*google*` contains, `goo*` prefix, `*ogle` suffix, bare `*` matches anything. Unknown field names match nothing (so a typo like `@srouce:firefox` empties the pool instead of silently passing). The legacy `@<source>` shorthand (no colon) is kept as exact-source sugar. `CandidateFinder.CompiledAttributeFilter.parse` does the compile step once per query and `applyAttributeFilters` is a single linear pass over the pool (≈3 ms for 5 000 candidates × 3 filters on the test runner).
 
-App/system verbs include: `mode_normal`, `alert_show message=...`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, and `flash_quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
+App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, `alert_show message=...`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, and `quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
 
 **Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` run `switch-client` against the most-recently-active client and return the terminal pid hosting the target session. Bind them to a key with `["flash", "plugin_command", "--command=tmux", "--subcommand=window", "--args=main:1"]` (the `args` value is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
 
@@ -423,14 +429,14 @@ Three normal-mode keys carry a single semantic meaning regardless of focused-app
 
 Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The **complete** set of valid insert transitions is:
 
-- A normal-mode `i` keypress (or its verb twin `mode_insert` invoked by the user).
+- A normal-mode `i` keypress (or its verb twin `enter_insert_mode` invoked by the user).
 - A physical pointer click while idle normal mode is capturing input; Flash enters insert mode and replays the click so it reaches the underlying app.
 - A committed `f` (mouse_target) click on a target whose owning provider set `JumpTarget.entersInsertMode = true`. Only true text-input surfaces qualify: `AccessibilityProvider` sets it on `AXTextField` / `AXSearchField` / `AXTextArea` / `AXComboBox`. Terminal-like targets (e.g. tmux panes) are NOT inputs in this sense and stay normal; the user types `i` after focusing one if they want to type.
 - A committed `F` (mouse_grid) click — **only** when a post-click AX query (`AppMonitor.focusedElementIsEditable`) reports the focused element under that click is a text-input role. Geometric clicks have no AX target up front, so the role check after the click is the only honest signal that the user landed on something typable. `mF` (cursor move) never enters insert.
 
 Nothing else may auto-enter insert. Specifically: `tab_new`, `app_find` (⌘F), focused-element changes, app activation, and configured key sequences must leave the mode alone. Do not reintroduce passive focused-element observers that switch to insert merely because macOS reports an editable focus. While advanced normal mode is active, Flash must aggressively recapture the overlay after app activation, app launch, Space changes, and panel key-focus loss; this intentionally prioritizes keeping normal-mode keyboard capture over preserving native menus or popovers.
 
-One structural exception: when a config reload removes the last `["flash", "mode_normal"]` binding (advanced mode no longer wired), Flash forces `.insert` because there is no normal mode without that binding. Reason `.advancedModeDisabled`, `force: true`.
+One structural exception: when a config reload removes the last `["flash", "enter_normal_mode"]` binding (advanced mode no longer wired), Flash forces `.insert` because there is no normal mode without that binding. Reason `.advancedModeDisabled`, `force: true`.
 
 `hints.keys` accepts either a literal alphabet (`"asdfghjkl"`, ASCII letters only, deduped) or a layout selector token. Selector syntax is `<$layout[_$row][_$hand]+...>` where layout is `qwerty` / `colemak` / `dvorak`, row is `homerow` / `toprow` / `bottomrow`, and hand is `lefthand` / `righthand`. Examples: `<colemak>`, `<colemak_homerow+colemak_toprow>`, `<colemak_homerow_lefthand+colemak_toprow_righthand>`, `<colemak_lefthand>`. Selectors cannot mix layouts. Layout selectors are scored by the inferred layout's key scores; literal strings are scored by their written order. There is no `hints.layout` key. Resolution lives in `Alphabet.resolve(_:)`.
 

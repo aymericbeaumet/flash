@@ -1080,6 +1080,27 @@ impl Context {
         );
     }
 
+    /// Publish status-bar segment values declared by this plugin's
+    /// `providers[]` `status` entry. The host exposes each value as
+    /// `#{plugin:<plugin-id>.<segment>}` in `[statusbar].template`.
+    pub fn emit_status_segments<I, K, V>(&self, segments: I)
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let mut object = serde_json::Map::new();
+        for (name, value) in segments {
+            let name = name.as_ref().trim();
+            let value = value.as_ref().trim();
+            if !name.is_empty() && !value.is_empty() {
+                object.insert(name.to_string(), json!(value));
+            }
+        }
+        self.emit
+            .notify("status.updated", json!({ "segments": object }));
+    }
+
     pub fn log(&self, level: &str, message: &str) {
         self.emit.log(level, message, BTreeMap::new());
     }

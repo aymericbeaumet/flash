@@ -35,10 +35,16 @@ let package = Package(
     .library(name: "FlashIntegrationTestSupport", targets: ["FlashIntegrationTestSupport"]),
     .library(name: "FlashBrowserTestSupport", targets: ["FlashBrowserTestSupport"]),
   ],
+  dependencies: [
+    .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0")
+  ],
   targets: [
     .executableTarget(
       name: "flash",
-      dependencies: ["FlashCore", "FlashProviders"],
+      dependencies: [
+        "FlashCore", "FlashProviders",
+        .product(name: "TOMLKit", package: "TOMLKit"),
+      ],
       path: "Sources/flash",
       resources: [.copy("Resources/inspector.html")],
       swiftSettings: strictSwiftSettings

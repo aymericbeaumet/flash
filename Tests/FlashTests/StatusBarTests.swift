@@ -124,6 +124,52 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(model.rightText, "1/1")
   }
 
+  func testStatusTemplateCanReadPluginStatusSegment() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=right]#{plugin:system.battery}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "battery",
+          token: "plugin:system.battery",
+          source: .plugin(.statusSegment(pluginID: "system", name: "battery")))
+      ])
+
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(
+        pluginSnapshots: [
+          pluginSnapshot(
+            id: "system",
+            state: "ready",
+            lastError: nil,
+            statusSegments: [
+              "battery": "#[range=user|bat-prefs fg=colour178]82%#[norange]"
+            ]),
+        ]))
+
+    XCTAssertEqual(model.rightText, "#[fg=colour178]82%")
+  }
+
+  func testMissingPluginStatusSegmentRendersEmpty() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=right]#{plugin:system.battery}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "battery",
+          token: "plugin:system.battery",
+          source: .plugin(.statusSegment(pluginID: "system", name: "battery")))
+      ])
+
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(
+        pluginSnapshots: [
+          pluginSnapshot(id: "system", state: "ready", lastError: nil)
+        ]))
+
+    XCTAssertEqual(model.rightText, "")
+  }
+
   func testAlignMarkersRouteToLeftCentreRightBuckets() {
     let template = FlashStatusBarTemplate(
       template: "#[align=left]L#[align=centre]C#[align=right]R",
@@ -134,6 +180,34 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(model.modeText, "L")
     XCTAssertEqual(model.appText, "C")
     XCTAssertEqual(model.rightText, "R")
+  }
+
+  func testStatusTemplateIgnoresNewlinesWhenRendering() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]L\n#[align=centre]C\r\n#[align=right]R",
+      variables: [])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext())
+    XCTAssertEqual(model.modeText, "L")
+    XCTAssertEqual(model.appText, "C")
+    XCTAssertEqual(model.rightText, "R")
+  }
+
+  func testTmuxStatusVariablesRenderKnownHostValuesAndEmptyUnsupportedValues() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]#H #{host_short} #{hostname} #{user} #{uid} #{pid} #{window_name}#S",
+      variables: [])
+
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(
+        hostName: "macbook.local",
+        userName: "ab",
+        userID: 501,
+        processID: 4242))
+
+    XCTAssertEqual(model.modeText, "macbook.local macbook macbook.local ab 501 4242 ")
   }
 
   func testAmericanCenterAliasMatchesBritishCentre() {
@@ -520,7 +594,8 @@ final class StatusBarTests: XCTestCase {
   private func pluginSnapshot(
     id: String,
     state: String,
-    lastError: String?
+    lastError: String?,
+    statusSegments: [String: String] = [:]
   ) -> PluginStatusSnapshot {
     PluginStatusSnapshot(
       id: id,
@@ -546,7 +621,8 @@ final class StatusBarTests: XCTestCase {
       bundleIDs: [],
       volatile: false,
       priority: 0,
-      commands: [])
+      commands: [],
+      statusSegments: statusSegments)
   }
 
   private func statusBarCommandValues(

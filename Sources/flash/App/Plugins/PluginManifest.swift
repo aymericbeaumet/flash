@@ -322,13 +322,14 @@ struct PluginMappingRegistration: Codable, Hashable {
 }
 
 /// One row in a plugin's unified `providers[]` table. Every surface a plugin
-/// drives — hints, candidates, commands, mappings — is one entry here, tagged
+/// drives — hints, candidates, commands, mappings, status segments — is one entry here, tagged
 /// by ``ProviderKind`` and gated by the same optional, symmetric conditions
 /// (`bundle_ids`/`modes`/`priority`). Kind-specific payloads ride alongside: a
 /// `commands` provider carries `commands[]`, a `mappings` provider carries
 /// `mappings[]`; a `candidates` provider declares `sources[]` so the host can
-/// offer `@<source>` completions without first forcing a snapshot. Runtime
-/// result data still travels over plugin RPC.
+/// offer `@<source>` completions without first forcing a snapshot; a `status`
+/// provider declares `segments[]` exposed as `#{plugin:<id>.<segment>}`.
+/// Runtime result data still travels over plugin RPC.
 struct PluginProvider: Codable, Equatable {
   var kind: ProviderKind
   /// Apps this provider is gated to (empty = every app). Folded into each
@@ -345,6 +346,8 @@ struct PluginProvider: Codable, Equatable {
   /// Candidate source labels owned by a `candidates` provider, e.g.
   /// `firefox.tabs` or `tmux.windows`.
   var sources: [String]
+  /// Status-bar segment names owned by a `status` provider, e.g. `battery`.
+  var segments: [String]
   var commands: [PluginCommandRegistration]
   var mappings: [PluginMappingRegistration]
   var shebangs: [PluginShebangRegistration]
@@ -356,6 +359,7 @@ struct PluginProvider: Codable, Equatable {
     priority: Int? = nil,
     command: String = "",
     sources: [String] = [],
+    segments: [String] = [],
     commands: [PluginCommandRegistration] = [],
     mappings: [PluginMappingRegistration] = [],
     shebangs: [PluginShebangRegistration] = []
@@ -366,6 +370,7 @@ struct PluginProvider: Codable, Equatable {
     self.priority = priority
     self.command = command
     self.sources = sources
+    self.segments = segments
     self.commands = commands
     self.mappings = mappings
     self.shebangs = shebangs
@@ -374,7 +379,7 @@ struct PluginProvider: Codable, Equatable {
   enum CodingKeys: String, CodingKey {
     case kind
     case bundleIDs = "bundle_ids"
-    case modes, priority, command, sources, commands, mappings, shebangs
+    case modes, priority, command, sources, segments, commands, mappings, shebangs
   }
 
   init(from decoder: Decoder) throws {
@@ -385,6 +390,7 @@ struct PluginProvider: Codable, Equatable {
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
     self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
     self.sources = try c.decodeIfPresent([String].self, forKey: .sources) ?? []
+    self.segments = try c.decodeIfPresent([String].self, forKey: .segments) ?? []
     self.commands =
       try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
     self.mappings =
@@ -401,6 +407,7 @@ struct PluginProvider: Codable, Equatable {
     if let priority { try c.encode(priority, forKey: .priority) }
     if !command.isEmpty { try c.encode(command, forKey: .command) }
     if !sources.isEmpty { try c.encode(sources, forKey: .sources) }
+    if !segments.isEmpty { try c.encode(segments, forKey: .segments) }
     if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
     if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
     if !shebangs.isEmpty { try c.encode(shebangs, forKey: .shebangs) }
@@ -502,6 +509,20 @@ struct PluginManifest: Codable, Equatable {
     for provider in providers where provider.kind == .candidates {
       for source in provider.sources {
         let trimmed = source.trimmed
+        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+        seen.insert(trimmed)
+        out.append(trimmed)
+      }
+    }
+    return out
+  }
+
+  var statusSegments: [String] {
+    var seen = Set<String>()
+    var out: [String] = []
+    for provider in providers where provider.kind == .status {
+      for segment in provider.segments {
+        let trimmed = segment.trimmed
         guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
         seen.insert(trimmed)
         out.append(trimmed)
@@ -661,6 +682,15 @@ struct PluginManifest: Codable, Equatable {
         throw PluginError.invalidManifest("plugin command must not be empty")
       }
     }
+    let statusAllowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_-")
+    for segment in statusSegments {
+      guard segment.lowercased() == segment,
+        segment.unicodeScalars.allSatisfy({ statusAllowed.contains($0) })
+      else {
+        throw PluginError.invalidManifest(
+          "plugin status segment \(segment) must be lowercase [a-z0-9_-]")
+      }
+    }
   }
 }
 
@@ -751,6 +781,8 @@ struct PluginStatusSnapshot {
   var priority: Int
   /// Registered commands (command / subcommand / description triples).
   var commands: [PluginCommandRegistration]
+  /// Runtime status-bar segments keyed by the manifest-declared segment name.
+  var statusSegments: [String: String]
 
   var jsonObject: [String: Any] {
     [
@@ -776,6 +808,7 @@ struct PluginStatusSnapshot {
       "snapshot_age_ms": snapshotAgeMs ?? NSNull(),
       "source_count": sourceCount,
       "state": state,
+      "status_segments": statusSegments,
       "target_count": targetCount,
       "uptime_ms": uptimeMs ?? NSNull(),
       "version": version,
@@ -787,6 +820,7 @@ struct PluginStatusSnapshot {
 struct PluginSnapshot {
   var targets: [PluginWireTarget] = []
   var candidates: [Candidate] = []
+  var statusSegments: [String: String] = [:]
   var contextPID: pid_t?
   var updatedAt: Date?
 }

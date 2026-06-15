@@ -1236,7 +1236,7 @@ final class NormalModeTests: XCTestCase {
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <args>", ":flashlight <query>", "flash mouse_target",
-      "flash enter_command --input=flashlight ", "flash mouse_target --secondary",
+      "flash enter_command_mode --input=flashlight ", "flash mouse_target --secondary",
       "flash mouse_target --double", "flash mouse_grid", "flash history_back",
       "flash history_forward",
       "flash app_previous", "flash app_next",

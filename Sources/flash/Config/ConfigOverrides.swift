@@ -161,10 +161,47 @@ extension ConfigLoader {
   private static func parseOverrideStringArray(_ v: String) -> [String]? {
     let trimmed = v.trimmingCharacters(in: .whitespaces)
     if trimmed.isEmpty { return [] }
-    if let values = parseStringArray(trimmed) {
+    if let values = parseOverrideQuotedStringArray(trimmed) {
       return values
     }
     return trimmed.split(separator: ",", omittingEmptySubsequences: false)
       .map { $0.trimmingCharacters(in: .whitespaces) }
+  }
+
+  private static func parseOverrideQuotedStringArray(_ v: String) -> [String]? {
+    let trimmed = v.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasPrefix("["), trimmed.hasSuffix("]") else { return nil }
+    let inner = trimmed.dropFirst().dropLast()
+    var out: [String] = []
+    var i = inner.startIndex
+    while i < inner.endIndex {
+      while i < inner.endIndex,
+        inner[i].isWhitespace || inner[i] == ","
+      {
+        i = inner.index(after: i)
+      }
+      if i >= inner.endIndex { break }
+      guard inner[i] == "\"" else { return nil }
+      i = inner.index(after: i)
+      var current = ""
+      while i < inner.endIndex, inner[i] != "\"" {
+        if inner[i] == "\\", inner.index(after: i) < inner.endIndex {
+          i = inner.index(after: i)
+          switch inner[i] {
+          case "n": current.append("\n")
+          case "r": current.append("\r")
+          case "t": current.append("\t")
+          default: current.append(inner[i])
+          }
+        } else {
+          current.append(inner[i])
+        }
+        i = inner.index(after: i)
+      }
+      guard i < inner.endIndex else { return nil }
+      out.append(current)
+      i = inner.index(after: i)
+    }
+    return out
   }
 }

@@ -276,8 +276,10 @@ final class PluginProcess {
     // alacritty wiped the candidate list to 0 until the next
     // `snapshot.updated` notification re-filled it on the focus tick.
     let previousCandidates: [Candidate]
+    let previousStatusSegments: [String: String]
     lock.lock()
     previousCandidates = snapshot.candidates
+    previousStatusSegments = snapshot.statusSegments
     lock.unlock()
     let candidateItems: [Candidate]
     if let raw = params["candidates"] as? [[String: Any]] {
@@ -294,6 +296,7 @@ final class PluginProcess {
     let snap = PluginSnapshot(
       targets: targetItems,
       candidates: candidateItems,
+      statusSegments: previousStatusSegments,
       contextPID: contextPID,
       updatedAt: Date())
     lock.lock()
@@ -359,6 +362,7 @@ final class PluginProcess {
       self.snapshot = PluginSnapshot(
         targets: previous.targets,
         candidates: items,
+        statusSegments: previous.statusSegments,
         contextPID: previous.contextPID,
         updatedAt: Date())
       self.lock.unlock()
@@ -513,7 +517,8 @@ final class PluginProcess {
       bundleIDs: manifest.bundleIDs,
       volatile: manifest.volatile,
       priority: manifest.priority,
-      commands: commands)
+      commands: commands,
+      statusSegments: snap.statusSegments)
   }
 
   /// Read the plugin subprocess's resident memory and CPU time via
@@ -1055,6 +1060,8 @@ final class PluginProcess {
       snapshot = PluginSnapshot()
       lock.unlock()
       notifyStatus()
+    case "status.updated":
+      applyStatusSegments(params)
     case "plugin.status":
       if let message = params["message"] as? String {
         lastLog = message
@@ -1115,8 +1122,39 @@ final class PluginProcess {
     snapshot = PluginSnapshot(
       targets: targetItems,
       candidates: candidateItems,
+      statusSegments: previous.statusSegments,
       contextPID: contextPID,
       updatedAt: Date())
+    lock.unlock()
+    notifyStatus()
+  }
+
+  private func applyStatusSegments(_ params: [String: Any]) {
+    guard let raw = params["segments"] as? [String: Any] else { return }
+    let declared = Set(manifest.statusSegments)
+    guard !declared.isEmpty else { return }
+    lock.lock()
+    let previous = snapshot
+    var next = previous.statusSegments
+    lock.unlock()
+    for (name, value) in raw {
+      let key = name.trimmed
+      guard declared.contains(key) else { continue }
+      guard let text = value as? String else { continue }
+      let trimmed = text.trimmed
+      if trimmed.isEmpty {
+        next.removeValue(forKey: key)
+      } else {
+        next[key] = trimmed
+      }
+    }
+    lock.lock()
+    snapshot = PluginSnapshot(
+      targets: previous.targets,
+      candidates: previous.candidates,
+      statusSegments: next,
+      contextPID: previous.contextPID,
+      updatedAt: previous.updatedAt)
     lock.unlock()
     notifyStatus()
   }

@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 enum FlashStatusTextColor: Equatable {
@@ -63,6 +64,7 @@ enum FlashStatusBarPluginValue: Equatable {
   case loadedCount
   case readyCount
   case errorCount
+  case statusSegment(pluginID: String, name: String)
 }
 
 struct FlashStatusBarCommand: Equatable {
@@ -107,6 +109,7 @@ struct FlashStatusBarCommand: Equatable {
 enum FlashStatusBarSource: Equatable {
   case sdk(FlashStatusBarSDKValue)
   case plugin(FlashStatusBarPluginValue)
+  case tmux(String)
   case command(FlashStatusBarCommand)
 }
 
@@ -134,6 +137,13 @@ struct FlashStatusBarTemplate: Equatable {
     }
   }
 
+  var needsClockRefresh: Bool {
+    variables.contains {
+      if case .sdk(.date) = $0.source { return true }
+      return false
+    }
+  }
+
 }
 
 struct FlashStatusBarContext {
@@ -144,6 +154,10 @@ struct FlashStatusBarContext {
   var calendar: Calendar
   var locale: Locale
   var pluginSnapshots: [PluginStatusSnapshot]
+  var hostName: String
+  var userName: String
+  var userID: UInt32
+  var processID: Int32
 
   init(
     activeAppName: String = "",
@@ -152,7 +166,11 @@ struct FlashStatusBarContext {
     now: Date = Date(),
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX"),
-    pluginSnapshots: [PluginStatusSnapshot] = []
+    pluginSnapshots: [PluginStatusSnapshot] = [],
+    hostName: String = ProcessInfo.processInfo.hostName,
+    userName: String = NSUserName(),
+    userID: UInt32 = getuid(),
+    processID: Int32 = ProcessInfo.processInfo.processIdentifier
   ) {
     self.activeAppName = activeAppName
     self.activeBundleIdentifier = activeBundleIdentifier
@@ -161,6 +179,10 @@ struct FlashStatusBarContext {
     self.calendar = calendar
     self.locale = locale
     self.pluginSnapshots = pluginSnapshots
+    self.hostName = hostName
+    self.userName = userName
+    self.userID = userID
+    self.processID = processID
   }
 }
 
@@ -216,6 +238,7 @@ enum FlashStatusBarTemplateEngine {
     context: FlashStatusBarContext,
     dynamicValues: [String: String]
   ) -> (left: String, centre: String, right: String) {
+    let raw = normalizedTemplate(raw)
     var left = ""
     var centre = ""
     var right = ""
@@ -258,15 +281,33 @@ enum FlashStatusBarTemplateEngine {
           let bodyStart = raw.index(after: after)
           let body = String(raw[bodyStart..<close]).trimmed
           let (token, truncation) = parseTokenTruncation(body)
-          if let variable = variableByToken[token] {
-            var value = resolve(
-              variable: variable, context: context, dynamicValues: dynamicValues)
+          let variable =
+            variableByToken[token]
+            ?? (isTmuxFormatVariable(token)
+              ? FlashStatusBarTemplateVariable(
+                id: "statusbar.template.\(token)",
+                token: token,
+                source: .tmux(token))
+              : nil)
+          if let variable {
+            var value = resolve(variable: variable, context: context, dynamicValues: dynamicValues)
             if let truncation {
               value = applyTruncation(value, truncation: truncation)
             }
             append(value)
           }
           index = raw.index(after: close)
+          continue
+        }
+        if let token = tmuxShortFormatToken(for: raw[after]) {
+          let variable =
+            variableByToken[token]
+            ?? FlashStatusBarTemplateVariable(
+              id: "statusbar.template.\(token)",
+              token: token,
+              source: .tmux(token))
+          append(resolve(variable: variable, context: context, dynamicValues: dynamicValues))
+          index = raw.index(after: after)
           continue
         }
       }
@@ -297,6 +338,36 @@ enum FlashStatusBarTemplateEngine {
     let digits = isTail ? widthSlice.dropFirst() : widthSlice
     guard let width = Int(digits), width > 0 else { return (body, nil) }
     return (token, isTail ? .tail(width) : .head(width))
+  }
+
+  static func normalizedTemplate(_ raw: String) -> String {
+    raw
+      .replacingOccurrences(of: "\r\n", with: "")
+      .replacingOccurrences(of: "\n", with: "")
+      .replacingOccurrences(of: "\r", with: "")
+  }
+
+  static func tmuxShortFormatToken(for character: Character) -> String? {
+    switch character {
+    case "H": return "host"
+    case "h": return "host_short"
+    case "S": return "session_name"
+    case "W": return "window_name"
+    case "I": return "window_index"
+    case "P": return "pane_index"
+    case "D": return "pane_id"
+    default: return nil
+    }
+  }
+
+  static func isTmuxFormatVariable(_ token: String) -> Bool {
+    let trimmed = token.trimmed
+    guard let first = trimmed.first else { return false }
+    if first == "@" {
+      return trimmed.dropFirst().allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+    guard first.isLetter || first == "_" else { return false }
+    return trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
   }
 
   static func applyTruncation(_ value: String, truncation: Truncation) -> String {
@@ -334,6 +405,8 @@ enum FlashStatusBarTemplateEngine {
       return resolveSDK(value, context: context)
     case .plugin(let value):
       return resolvePlugin(value, snapshots: context.pluginSnapshots)
+    case .tmux(let name):
+      return resolveTmux(name, context: context)
     case .command:
       return FlashStatusBarRenderer.stripClickRanges(
         from: dynamicValues[variable.id]?.trimmed ?? "")
@@ -373,6 +446,34 @@ enum FlashStatusBarTemplateEngine {
       return "\(snapshots.filter { $0.state == "ready" }.count)"
     case .errorCount:
       return "\(snapshots.filter { ($0.lastError ?? "").isEmpty == false }.count)"
+    case .statusSegment(let pluginID, let name):
+      guard
+        let text = snapshots.first(where: { $0.id == pluginID })?
+          .statusSegments[name]?
+          .trimmed,
+        !text.isEmpty
+      else { return "" }
+      return FlashStatusBarRenderer.stripClickRanges(from: text)
+    }
+  }
+
+  private static func resolveTmux(_ rawName: String, context: FlashStatusBarContext) -> String {
+    let name = rawName.trimmed.lowercased()
+    switch name {
+    case "host", "hostname":
+      return context.hostName.trimmed
+    case "host_short":
+      let host = context.hostName.trimmed
+      guard let dot = host.firstIndex(of: ".") else { return host }
+      return String(host[..<dot])
+    case "user":
+      return context.userName.trimmed
+    case "uid":
+      return "\(context.userID)"
+    case "pid":
+      return "\(context.processID)"
+    default:
+      return ""
     }
   }
 }
@@ -590,9 +691,14 @@ enum FlashStatusBarRenderer {
 final class FlashStatusBarController {
   private weak var overlay: OverlayPanel?
   private let queue = DispatchQueue(label: "flash.status_bar", qos: .utility)
+  private let commandQueue = DispatchQueue(label: "flash.status_bar.commands", qos: .utility)
   private var template: FlashStatusBarTemplate
   private let pluginSnapshotsProvider: () -> [PluginStatusSnapshot]
-  private var timer: DispatchSourceTimer?
+  private var commandTimer: DispatchSourceTimer?
+  private var clockTimer: DispatchSourceTimer?
+  private var started = false
+  private var commandRefreshGeneration: UInt64 = 0
+  private var commandRefreshInFlight = false
   private let refreshIntervalSeconds: TimeInterval
   private var dynamicValues: [String: String] = [:]
   private var activeAppName = ""
@@ -615,30 +721,25 @@ final class FlashStatusBarController {
   func start() {
     queue.async { [weak self] in
       guard let self else { return }
-      guard self.timer == nil else {
+      guard !self.started else {
         self.publishCurrentModel()
         return
       }
-      self.publishCurrentModel()
-
-      let timer = DispatchSource.makeTimerSource(queue: self.queue)
-      let intervalMs = max(250, Int(self.refreshIntervalSeconds * 1_000))
-      timer.schedule(
-        deadline: .now(),
-        repeating: .milliseconds(intervalMs),
-        leeway: .milliseconds(250))
-      timer.setEventHandler { [weak self] in
-        self?.refreshCommandSections()
-      }
-      self.timer = timer
-      timer.resume()
+      self.started = true
+      self.refreshSourcesForCurrentTemplate()
     }
   }
 
   func stop() {
     queue.async { [weak self] in
-      self?.timer?.cancel()
-      self?.timer = nil
+      guard let self else { return }
+      self.commandTimer?.cancel()
+      self.commandTimer = nil
+      self.clockTimer?.cancel()
+      self.clockTimer = nil
+      self.commandRefreshGeneration &+= 1
+      self.commandRefreshInFlight = false
+      self.started = false
     }
   }
 
@@ -664,7 +765,7 @@ final class FlashStatusBarController {
       self.template = template
       let commandIDs = Set(template.commandSections.map(\.id))
       self.dynamicValues = self.dynamicValues.filter { commandIDs.contains($0.key) }
-      self.refreshCommandSections()
+      self.refreshSourcesForCurrentTemplate()
     }
   }
 
@@ -675,13 +776,88 @@ final class FlashStatusBarController {
   }
 
   private func refreshCommandSections() {
-    for section in template.commandSections {
-      guard case .command(let command) = section.source else { continue }
-      if let output = runCommand(command) {
-        dynamicValues[section.id] = output
+    let sections = template.commandSections
+    guard !sections.isEmpty else {
+      publishCurrentModel()
+      return
+    }
+    guard !commandRefreshInFlight else { return }
+    commandRefreshInFlight = true
+    commandRefreshGeneration &+= 1
+    let generation = commandRefreshGeneration
+    commandQueue.async { [weak self] in
+      guard let self else { return }
+      var updates: [String: String] = [:]
+      for section in sections {
+        guard case .command(let command) = section.source else { continue }
+        if let output = self.runCommand(command) {
+          updates[section.id] = output
+        }
+      }
+      self.queue.async { [weak self] in
+        guard let self else { return }
+        guard generation == self.commandRefreshGeneration else { return }
+        for (id, output) in updates {
+          self.dynamicValues[id] = output
+        }
+        self.commandRefreshInFlight = false
+        self.publishCurrentModel()
       }
     }
-    publishCurrentModel()
+  }
+
+  private func refreshSourcesForCurrentTemplate() {
+    commandTimer?.cancel()
+    commandTimer = nil
+    clockTimer?.cancel()
+    clockTimer = nil
+    commandRefreshGeneration &+= 1
+    commandRefreshInFlight = false
+
+    if template.commandSections.isEmpty {
+      publishCurrentModel()
+    } else {
+      publishCurrentModel()
+      refreshCommandSections()
+      scheduleCommandRefresh()
+    }
+    scheduleClockRefresh()
+  }
+
+  private func scheduleCommandRefresh() {
+    guard !template.commandSections.isEmpty else { return }
+    let timer = DispatchSource.makeTimerSource(queue: queue)
+    let intervalMs = max(250, Int(refreshIntervalSeconds * 1_000))
+    timer.schedule(
+      deadline: .now() + .milliseconds(intervalMs),
+      repeating: .milliseconds(intervalMs),
+      leeway: .milliseconds(250))
+    timer.setEventHandler { [weak self] in
+      self?.refreshCommandSections()
+    }
+    commandTimer = timer
+    timer.resume()
+  }
+
+  private func scheduleClockRefresh() {
+    guard template.needsClockRefresh else { return }
+    let timer = DispatchSource.makeTimerSource(queue: queue)
+    timer.schedule(
+      deadline: .now() + .milliseconds(nextClockRefreshDelayMilliseconds()),
+      leeway: .milliseconds(100))
+    timer.setEventHandler { [weak self] in
+      guard let self else { return }
+      self.publishCurrentModel()
+      self.scheduleClockRefresh()
+    }
+    clockTimer = timer
+    timer.resume()
+  }
+
+  private func nextClockRefreshDelayMilliseconds() -> Int {
+    let now = Date().timeIntervalSince1970
+    let nextMinute = (floor(now / 60) + 1) * 60
+    return max(250, Int((nextMinute - now) * 1_000))
   }
 
   private func publishCurrentModel() {

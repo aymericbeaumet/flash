@@ -254,8 +254,10 @@ struct Config {
     ///   #[fg=…,bold=true]          — inline text styling (passed through
     ///                                 to the renderer).
     ///   #{token}                    — template variable (mode, date,
-    ///                                 plugin:<name>, script:<path>,
-    ///                                 command:<shell>).
+    ///                                 tmux-compatible vars,
+    ///                                 plugin:<count>,
+    ///                                 plugin:<plugin>.<segment>,
+    ///                                 script:<path>, command:<shell>).
     static let defaultTemplateString = "#[align=left]#{mode}#[align=right]#{date}"
     var template: FlashStatusBarTemplate = Self.defaultTemplate
     static let defaultTemplate = FlashStatusBarTemplate(
@@ -720,7 +722,7 @@ extension URLCommand {
     case .enterCommand(let input, let restoreMode):
       var args = [kv("input", input)]
       if restoreMode { args.append(flag("restore-mode")) }
-      return verb("enter_command", args)
+      return verb("enter_command_mode", args)
     case .copyURL: return verb("url_copy")
     case .tabNext: return verb("tab_next")
     case .tabPrev: return verb("tab_previous")

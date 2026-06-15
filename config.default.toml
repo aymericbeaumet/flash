@@ -88,21 +88,31 @@ watching_enabled = true
 #   #{active_app_name}
 #   #{active_bundle_identifier}
 #   #{date}
+#   #{host} / #{hostname} / #H
+#   #{host_short} / #h
+#   #{user}
+#   #{uid}
+#   #{pid}
+#   any other tmux status variable       # accepted, renders as empty when Flash has no equivalent
 #   #{plugin:loaded_count}
 #   #{plugin:ready_count}
 #   #{plugin:error_count}
+#   #{plugin:<plugin>.<segment>}     # e.g. #{plugin:system.battery}
 #   #{script:<path>}
 #   #{command:<shell command>}
 #
-# A triple-quoted multi-line string with backslash–newline continuation
-# lets long templates breathe across rows without affecting the rendered
-# output (the `\` collapses the newline + the next row's leading
-# whitespace into nothing).
+# A triple-quoted multi-line string lets long templates breathe across
+# rows. Newlines in the template are ignored before rendering.
+# Flash re-renders when mode, focused app, plugin status, or the minute
+# clock changes. Command/script sections are polled only when the
+# template contains them and keep their previous successful value until
+# a replacement is ready.
 template = "#[align=left]#{mode}#[align=right]#{date}"
 # Example with a custom right-side composition:
 # template = """
-#   #[align=left]#{mode}\
-#   #[align=right]#{script:~/bin/custom-status.sh}\
+#   #[align=left]#{mode}
+#   #[align=center]#{active_app_name}
+#   #[align=right]#{plugin:system.battery}
 #   #[fg=colour245] · #{date}
 #   """
 
@@ -166,13 +176,13 @@ sequence_timeout_ms = 1000
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
 # "alt+n" = ["flash", "window_move", "--screen=+1"]
 # "alt+shift+c" = ["sh", "~/bin/toggle-colors"]
-# The `enter_command` verb opens the command-line panel pre-seeded with
+# The `enter_command_mode` verb opens the command-line panel pre-seeded with
 # `--input='<text>'`; leading colons are trimmed and a trailing space is
 # auto-appended. `--restore-mode` restores whichever mode was active when
 # the mapping fired once the panel exits (submit or cancel). Use it for
 # an emoji picker that you can trigger from INSERT and resume typing
 # afterward:
-# "cmd+ctrl+space" = ["flash", "enter_command", "--input=:flashlight @source:emojis.glyphs", "--restore-mode"]
+# "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @source:emojis.glyphs", "--restore-mode"]
 
 [mode.normal]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
@@ -245,7 +255,7 @@ leader = "\\"
 # press `i` afterwards if you want to type.
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
-"<leader>space" = ["flash", "enter_command", "--input=:flashlight"]
+"<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight"]
 "r" = ["flash", "app_reload"]
 "R" = ["flash", "app_reload", "--force"]
 "?" = ["flash", "help_show"]

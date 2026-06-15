@@ -46,6 +46,8 @@ final class PluginSystemTests: XCTestCase {
       commandNames(for: "slack", manifests: manifests).isSuperset(of: [
         "login", "version", "run",
       ]))
+    let system = try XCTUnwrap(manifests.first { $0.id == "system" })
+    XCTAssertEqual(system.statusSegments, ["battery"])
   }
 
   func testClipboardManifestRegistersBrowseCommand() throws {
@@ -332,6 +334,7 @@ final class PluginSystemTests: XCTestCase {
           "providers": [
             { "kind": "hints", "bundle_ids": ["com.example.app"] },
             { "kind": "candidates", "sources": ["multi.items"] },
+            { "kind": "status", "segments": ["battery"] },
             {
               "kind": "commands",
               "commands": [
@@ -350,10 +353,11 @@ final class PluginSystemTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
 
     let manifest = try PluginManifest.load(from: root)
-    XCTAssertEqual(manifest.providers.count, 4)
+    XCTAssertEqual(manifest.providers.count, 5)
     XCTAssertTrue(manifest.providesHints)
     XCTAssertTrue(manifest.providesCandidates)
     XCTAssertEqual(manifest.candidateSources, ["multi.items"])
+    XCTAssertEqual(manifest.statusSegments, ["battery"])
     XCTAssertEqual(manifest.commands.map(\.subcommand), ["go"])
     XCTAssertEqual(manifest.mappings.map(\.key), ["q"])
   }
@@ -506,6 +510,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(json["modes"], "empty modes is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
     XCTAssertNil(json["sources"], "empty sources is not encoded")
+    XCTAssertNil(json["segments"], "empty segments is not encoded")
     XCTAssertNil(json["commands"], "empty commands is not encoded")
     XCTAssertNil(json["mappings"], "empty mappings is not encoded")
   }
@@ -516,6 +521,14 @@ final class PluginSystemTests: XCTestCase {
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     XCTAssertEqual(json["kind"] as? String, "candidates")
     XCTAssertEqual(json["sources"] as? [String], ["firefox.tabs"])
+  }
+
+  func testProviderEncodesStatusSegmentsWhenSet() throws {
+    let provider = PluginProvider(kind: .status, segments: ["battery"])
+    let data = try JSONEncoder().encode(provider)
+    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual(json["kind"] as? String, "status")
+    XCTAssertEqual(json["segments"] as? [String], ["battery"])
   }
 
   func testCommandRegistrationEncodesBundleIDsWhenSet() throws {
