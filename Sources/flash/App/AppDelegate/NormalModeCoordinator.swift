@@ -1283,6 +1283,10 @@ extension AppDelegate {
         fuzzyScore: fuzzy,
         allowParallel: false)
       let sorted = CandidateFinder.sortedMatches(scored, precedence: precedenceTable())
+      // Bang / source-completion pools are disjoint from the main flashlight
+      // pool, so a saved incremental cache from a previous keystroke must
+      // not survive into the next plain-query keystroke.
+      candidateFinderIncrementalCache = nil
       applyCandidateMatches(sorted)
       return
     }
@@ -1295,6 +1299,11 @@ extension AppDelegate {
         fuzzyScore: fuzzy,
         allowParallel: false)
       let sorted = CandidateFinder.sortedMatches(scored, precedence: precedenceTable())
+      // Empty query returns the whole filtered pool — a useful starting
+      // point but not a fuzzy-narrowed set, so leave the incremental
+      // cache empty and let the first real keystroke seed it from the
+      // full pool.
+      candidateFinderIncrementalCache = nil
       applyCandidateMatches(sorted)
       return
     }
@@ -1313,8 +1322,30 @@ extension AppDelegate {
     let tScoringStart = CFAbsoluteTimeGetCurrent()
     let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
     let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    let signature = poolFilterSignature(attributeFilters: attributeFilters)
+    // Incremental narrowing: if the new query extends the previous one
+    // and neither the pool nor the attribute filters have changed since
+    // the previous keystroke, no candidate that failed the shorter
+    // query can possibly pass the longer one. Re-score only the
+    // previous match set; the candidate space contracts on every
+    // keystroke and scoring gets monotonically cheaper.
+    let scoringPool: [Candidate]
+    let isIncremental: Bool
+    if let cache = candidateFinderIncrementalCache,
+      cache.epoch == candidateFinderCandidatesEpoch,
+      cache.signature == signature,
+      !cache.normalizedQuery.isEmpty,
+      normalizedQuery.count > cache.normalizedQuery.count,
+      normalizedQuery.hasPrefix(cache.normalizedQuery)
+    {
+      scoringPool = cache.matches.map(\.candidate)
+      isIncremental = true
+    } else {
+      scoringPool = pool
+      isIncremental = false
+    }
     var scored = CandidateFinder.scoreMatches(
-      pool: pool,
+      pool: scoringPool,
       normalizedQuery: normalizedQuery,
       fuzzyScore: fuzzy,
       allowParallel: true)
@@ -1337,6 +1368,12 @@ extension AppDelegate {
     // Re-check the generation — a re-entrant call (e.g. caches landing
     // mid-update) could have already superseded us.
     guard generation == self.candidateFinderIndexGenerationCounter else { return }
+    candidateFinderIncrementalCache = (
+      normalizedQuery: normalizedQuery,
+      matches: sorted,
+      epoch: candidateFinderCandidatesEpoch,
+      signature: signature
+    )
     applyCandidateMatches(sorted)
     if !trimmed.isEmpty {
       let tRendered = CFAbsoluteTimeGetCurrent()
@@ -1350,6 +1387,7 @@ extension AppDelegate {
       let dTotal = Int((tRendered - t0) * 1000)
       FlashLog.trace(
         "[candidate_finder] q=\"\(trimmed)\" pool=\(pool.count) "
+          + "scored=\(scoringPool.count) inc=\(isIncremental) "
           + "matches=\(sorted.count) "
           + "total_ms=\(dTotal) filter_ms=\(dFilter) score_ms=\(dScore) "
           + "sort_ms=\(dSort) render_ms=\(dRender) "
@@ -1960,6 +1998,7 @@ extension AppDelegate {
     candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
+    candidateFinderIncrementalCache = nil
   }
 
   private func quitNormalModeTargetApp(force: Bool = false) {

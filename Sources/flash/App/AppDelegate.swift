@@ -136,6 +136,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// cache is invalidated whenever the underlying array or the filter
   /// signature differs from the prior key.
   var candidateFinderFilteredPoolCache: (epoch: UInt64, signature: String, pool: [Candidate])?
+  /// Incremental-narrowing cache for fuzzy scoring. When the next query
+  /// extends the previous one (`mo` → `mor` → `moria`), no candidate
+  /// that failed `mo` can pass `mor`, so we only need to re-score the
+  /// previous match set. Each keystroke narrows the candidate space and
+  /// the scoring path gets faster as the user types. Invalidated when
+  /// the pool epoch or attribute-filter signature change, since either
+  /// shifts the candidate base.
+  var candidateFinderIncrementalCache:
+    (normalizedQuery: String, matches: [CandidateMatch], epoch: UInt64, signature: String)?
   var candidateFinderMatches: [CandidateMatch] = []
   var candidateFinderSelectedIndex = 0
   /// Entries backing the dedicated `:clipboard` modal, same order as the
