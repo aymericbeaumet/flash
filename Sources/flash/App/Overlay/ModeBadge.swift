@@ -219,6 +219,12 @@ extension OverlayPanel {
     modeBadgeLayer.cornerRadius = 0
     modeBadgeLayer.borderWidth = 0
     let palette = modeBadgePalette()
+    // The panel itself is `isOpaque = false` so the translucent native
+    // menu bar above can bleed through any transparent pixels. Set an
+    // explicit opaque `backgroundColor` (in addition to the gradient
+    // stops) so every pixel of the bar is solid even when the
+    // CAGradientLayer renderer does not.
+    modeBadgeLayer.backgroundColor = Self.nordPolarNight0CG
     modeBadgeLayer.colors = [Self.nordPolarNight0CG, Self.nordPolarNight0CG]
     modeBadgeLayer.borderColor = Self.nordPolarNight0CG
 
@@ -366,6 +372,7 @@ extension OverlayPanel {
         fontSize: fontSize)
       bar.backgroundLayer.frame = Self.snap(barFrame, scale: screen.scale)
       bar.backgroundLayer.contentsScale = screen.scale
+      bar.backgroundLayer.backgroundColor = Self.nordPolarNight0CG
       bar.backgroundLayer.colors = [Self.nordPolarNight0CG, Self.nordPolarNight0CG]
       bar.backgroundLayer.borderColor = Self.nordPolarNight0CG
 

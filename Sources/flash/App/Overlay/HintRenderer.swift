@@ -371,6 +371,18 @@ extension OverlayPanel {
   func captureKeyboardInput() {
     let keyBefore = isKeyWindow
     refreshWindowLevelForCurrentContent()
+    // macOS Tahoe (26) refuses to grant key-window status to a non-
+    // activating panel while another app holds activation, even with
+    // `becomesKeyOnlyIfNeeded = false`. The pre-Tahoe behaviour was to
+    // honour the panel's claim; in Tahoe the panel silently stays
+    // non-key and the normal-mode recapture loop spins. Force an
+    // activation so the panel can be key. The action dispatch path
+    // (`currentNonFlashContext()`) still targets whatever app was
+    // frontmost before Flash activated, so verbs like `r` (`app_reload`)
+    // continue to land on the user's actual workflow app.
+    if !NSApp.isActive {
+      NSApp.activate(ignoringOtherApps: true)
+    }
     orderFrontRegardless()
     makeKeyAndOrderFront(nil)
     makeKey()

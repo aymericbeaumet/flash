@@ -47,11 +47,14 @@ final class ModalTextView: NSTextView {
 
 final class OverlayPanel: NSPanel {
   static let transientOverlayWindowLevel: NSWindow.Level = .screenSaver
-  // `.mainMenu` lives at the same Z-band as the macOS system menu bar, so the
-  // Flash status bar ends up *behind* it and the user sees the translucent
-  // native bar bleed through. `.statusBar` (one above) lets the Flash bar
-  // render on top of the system menu bar with a fully opaque background.
-  static let persistentStatusWindowLevel: NSWindow.Level = .statusBar
+  // `.statusBar` (level 25) sits in the band macOS reserves for system
+  // status items — windows there can't become key, which locks Flash's
+  // normal-mode capture out of the panel and spins the recapture loop
+  // forever. `.mainMenu` (level 24) lets us own key focus; we make the
+  // Flash status bar visually solid by setting an opaque
+  // `backgroundColor` on its gradient layer rather than relying on
+  // outranking the translucent native menu bar.
+  static let persistentStatusWindowLevel: NSWindow.Level = .mainMenu
   static let candidateFinderHorizontalPadding: CGFloat = 8
   static let candidateFinderVerticalPadding: CGFloat = 7
   static let candidateFinderLineSpacing: CGFloat = 2
