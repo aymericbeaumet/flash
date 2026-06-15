@@ -131,12 +131,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// without comparing 2k-entry arrays element-wise per keystroke.
   var candidateFinderCandidatesEpoch: UInt64 = 0
   /// One-slot cache for the per-keystroke pool filter. While the user
-  /// types into flashlight the base pool, `emojiMode`, and selectors
-  /// stay constant — so re-filtering 2k+ candidates on every keystroke
-  /// is pure waste. The cache is invalidated whenever the underlying
-  /// array, emoji mode, or filter signature differs from the prior key.
-  var candidateFinderFilteredPoolCache:
-    (epoch: UInt64, emojiMode: Bool, signature: String, pool: [Candidate])?
+  /// types into flashlight the base pool and selectors stay constant — so
+  /// re-filtering 2k+ candidates on every keystroke is pure waste. The
+  /// cache is invalidated whenever the underlying array or the filter
+  /// signature differs from the prior key.
+  var candidateFinderFilteredPoolCache: (epoch: UInt64, signature: String, pool: [Candidate])?
   var candidateFinderMatches: [CandidateMatch] = []
   var candidateFinderSelectedIndex = 0
   /// Entries backing the dedicated `:clipboard` modal, same order as the
@@ -144,9 +143,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var clipboardModalEntries: [ClipboardModalEntry] = []
   var candidateFinderCurrentQuery = ""
   var candidateFinderScope: CandidateScope = .all
-  /// `:emojis` narrows the shared candidate pool to emoji glyphs and routes
-  /// selection to text insertion; every other candidate query excludes them.
-  var candidateFinderEmojiMode = false
   let candidateFinderCacheQueue = DispatchQueue(
     label: "flash.candidate_finder.cache", qos: .utility)
   var candidateFinderRunningAppsCache: [Candidate] = []

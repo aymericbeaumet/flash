@@ -36,9 +36,10 @@ enum URLCommand: Hashable {
   /// when the mapping carries `--restore-mode`; on exit (submit or cancel)
   /// the command-line dismiss restores whichever mode was active when the
   /// verb fired instead of bouncing the user to normal. Use case:
-  /// `["flash", "enter_command", "--input=emojis ", "--restore-mode"]`
-  /// fired from insert mode opens the emoji picker and returns the user
-  /// to insert after the chosen glyph lands.
+  /// `["flash", "enter_command", "--input=:flashlight @source:emojis.glyphs",
+  /// "--restore-mode"]` fired from insert mode opens the flashlight scoped
+  /// to the emoji source and returns the user to insert after the chosen
+  /// glyph lands.
   case enterCommand(input: String, restoreMode: Bool)
   case copyURL
   case tabNext
@@ -188,9 +189,9 @@ final class URLEventHandler: NSObject {
     "mouse_grid": { a in mouseCommand(a).map(URLCommand.mouseGrid) },
     "mouse_snipe": { a in mouseCommand(a).map(URLCommand.mouseGrid) },
     "mouse_click": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
-    "mode_normal": { _ in .normalMode },
-    "mode_insert": { _ in .insertMode },
-    "mode_command": { _ in .commandMode },
+    "enter_normal_mode": { _ in .normalMode },
+    "enter_insert_mode": { _ in .insertMode },
+    "enter_command_mode": { _ in .commandMode },
     "scroll_left": { _ in .scroll(.left) },
     "scroll_right": { _ in .scroll(.right) },
     "scroll_up": { _ in .scroll(.up) },
@@ -208,15 +209,15 @@ final class URLEventHandler: NSObject {
     "app_open_finder": { a in .candidateFinder(all: a.bool("all")) },
     "enter_command": { a in
       guard let raw = a.value("input"), !raw.isEmpty else { return nil }
-      // Trim every leading colon so `--input=:emojis` and `--input='emojis '`
+      // Trim every leading colon so `--input=:flashlight` and `--input='flashlight '`
       // resolve to the same command-line state — the colon is just the
       // visual prefix the panel shows, the buffer underneath has none.
       var normalized = String(raw.drop(while: { $0 == ":" }))
       // Auto-append a single trailing space so users can write
-      // `--input=emojis` instead of the awkward `--input='emojis '`. The
-      // command-line keyword parsers expect "verb<space><query>", so the
-      // space is required for the seeded buffer to actually enter that
-      // mode rather than reading as raw text.
+      // `--input=:flashlight` instead of the awkward `--input='flashlight '`.
+      // The command-line keyword parsers expect "verb<space><query>", so
+      // the space is required for the seeded buffer to actually enter
+      // that mode rather than reading as raw text.
       while normalized.last == " " { normalized.removeLast() }
       if !normalized.isEmpty { normalized.append(" ") }
       return .enterCommand(input: normalized, restoreMode: a.bool("restore_mode"))
@@ -285,9 +286,9 @@ final class URLEventHandler: NSObject {
   static let usageText = """
     flash mouse_target [--secondary|--double|--move]
     flash mouse_grid [--secondary|--double|--move]
-    flash mode_normal
-    flash mode_insert
-    flash mode_command
+    flash enter_normal_mode
+    flash enter_insert_mode
+    flash enter_command_mode
     flash scroll_left
     flash scroll_right
     flash scroll_up

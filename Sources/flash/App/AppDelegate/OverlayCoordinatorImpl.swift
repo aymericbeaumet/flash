@@ -43,8 +43,14 @@ extension AppDelegate {
       }
       return
     }
+    // `finishCommandLineInteraction` (called via `cancelOverlay`) already
+    // restores the prior mode (the one that was active when the command
+    // line was entered), so forcing `enterInsertMode` here would clobber
+    // that restoration. Only flip to insert when the pointer click is
+    // dismissing the normal-mode capture surface itself.
+    let wasCommandLine = overlay.inputMode == .commandLine
     cancelOverlay()
-    if flashMode != .insert {
+    if !wasCommandLine, flashMode != .insert {
       enterInsertMode(reason: .pointerClick)
     }
     // The overlay panel has `ignoresMouseEvents = true`, so the user's

@@ -46,11 +46,11 @@ enum FlashCLI {
 
     Examples:
       flash mouse_target
-      flash mouse_target double=1
-      flash mouse_grid move=1
-      flash mode_normal
-      flash app_open name=Firefox
-      flash window_move position=lefthalf
+      flash mouse_target --double
+      flash mouse_grid --move
+      flash enter_normal_mode
+      flash app_open --name=Firefox
+      flash window_move --position=lefthalf
       flash help_show
     """
 

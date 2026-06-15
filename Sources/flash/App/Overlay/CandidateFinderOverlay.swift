@@ -141,7 +141,16 @@ extension OverlayPanel {
         string: candidateFinderResultsMeasurementText,
         attributes: [.font: labelFont, .paragraphStyle: Self.candidateFinderParagraphStyle()])
     let labelWidth = max(1, width - Self.candidateFinderHorizontalPadding * 2)
-    let labelHeight = Self.candidateFinderTextHeight(attributedText, fallbackFont: labelFont)
+    // Compute height from the actual rendered line count rather than
+    // `boundingRect` — the latter over-allocates ~1–2 line heights of
+    // slack because of how `NSAttributedString` rounds line fragments
+    // with `usesLineFragmentOrigin`, which left a visibly empty band
+    // below the last candidate.
+    let lineCount = max(1, lines.count)
+    let labelHeight = Self.candidateFinderResultsHeight(
+      lineCount: lineCount,
+      font: labelFont,
+      lineSpacing: Self.candidateFinderLineSpacing)
     let height = labelHeight + Self.candidateFinderVerticalPadding * 2
     let minimumY = visible.minY - panelFrame.minY + 10
     let y = Self.candidateFinderResultsY(
@@ -171,16 +180,19 @@ extension OverlayPanel {
     candidateFinderResultsLabel.string = attributedText
   }
 
-  static func candidateFinderTextHeight(
-    _ text: NSAttributedString,
-    fallbackFont: NSFont
+  /// Exact-fit height for `lineCount` rows of `font`, with `lineSpacing`
+  /// gaps between them (no trailing gap). Replaces the previous
+  /// `boundingRect`-based measurement which left an empty band below the
+  /// last candidate row.
+  static func candidateFinderResultsHeight(
+    lineCount: Int,
+    font: NSFont,
+    lineSpacing: CGFloat
   ) -> CGFloat {
-    let fontLineHeight = ceil(fallbackFont.ascender - fallbackFont.descender + fallbackFont.leading)
-    guard text.length > 0 else { return fontLineHeight }
-    let measured = text.boundingRect(
-      with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-      options: [.usesLineFragmentOrigin, .usesFontLeading])
-    return ceil(max(fontLineHeight, measured.height))
+    let fontLineHeight = ceil(font.ascender - font.descender + font.leading)
+    guard lineCount > 0 else { return fontLineHeight }
+    let gaps = CGFloat(max(0, lineCount - 1)) * lineSpacing
+    return CGFloat(lineCount) * fontLineHeight + gaps
   }
 
   static func candidateFinderFontSize(overlayFontSize: CGFloat) -> CGFloat {

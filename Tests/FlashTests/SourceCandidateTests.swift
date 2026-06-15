@@ -505,15 +505,14 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertNil(CandidateFinder.parseAtSourceCompletion("gmail"))
   }
 
-  func testSourceCompletionStateIgnoresEmojiAndBangQueries() {
+  func testSourceCompletionStateIgnoresBangQueriesAndCompletedSelectors() {
     XCTAssertEqual(
-      CandidateFinder.sourceCompletionState(query: "@fire", emojiMode: false)?.token,
+      CandidateFinder.sourceCompletionState(query: "@fire")?.token,
       "fire")
-    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@fire", emojiMode: true))
-    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "!google @fire", emojiMode: false))
+    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "!google @fire"))
     XCTAssertNil(
-      CandidateFinder.sourceCompletionState(query: "@firefox.tabs gmail", emojiMode: false))
-    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@source:fire", emojiMode: false))
+      CandidateFinder.sourceCompletionState(query: "@firefox.tabs gmail"))
+    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@source:fire"))
   }
 
   func testExpandFlashlightAliasRewritesShorthand() {
@@ -868,100 +867,6 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertNotNil(CandidateFinder.score(query: "laugh", candidate: candidate))
   }
 
-  func testEmojiMatchesUseAliasTierAndBoundedResults() {
-    let foldedHands = CandidateFinder.prepare(
-      candidate(
-        kind: CandidateFinder.emojiKind,
-        source: "emojis.glyphs",
-        name: "🙏 folded hands",
-        subtitle: "emoji",
-        bundleIdentifier: "",
-        searchAliases: "pray prayer thanks"))
-    let prayerBeads = CandidateFinder.prepare(
-      candidate(
-        kind: CandidateFinder.emojiKind,
-        source: "emojis.glyphs",
-        name: "📿 prayer beads",
-        subtitle: "emoji",
-        bundleIdentifier: ""))
-    let fire = CandidateFinder.prepare(
-      candidate(
-        kind: CandidateFinder.emojiKind,
-        source: "emojis.glyphs",
-        name: "🔥 fire",
-        subtitle: "emoji",
-        bundleIdentifier: "",
-        searchAliases: "flame hot"))
-
-    let matches = CandidateFinder.emojiMatches(
-      pool: [prayerBeads, fire, foldedHands],
-      normalizedQuery: NormalModeDispatcher.normalizedSearchText("pray"),
-      limit: 1)
-
-    XCTAssertEqual(matches.map(\.candidate.name), ["🙏 folded hands"])
-  }
-
-  func testEmojiMatchesKeepCheapTypoTolerance() {
-    let fire = CandidateFinder.prepare(
-      candidate(
-        kind: CandidateFinder.emojiKind,
-        source: "emojis.glyphs",
-        name: "🔥 fire",
-        subtitle: "emoji",
-        bundleIdentifier: "",
-        searchAliases: "flame hot"))
-    let grin = CandidateFinder.prepare(
-      candidate(
-        kind: CandidateFinder.emojiKind,
-        source: "emojis.glyphs",
-        name: "😀 grinning face",
-        subtitle: "emoji",
-        bundleIdentifier: "",
-        searchAliases: "grin smile"))
-
-    let aliasTypo = CandidateFinder.emojiMatches(
-      pool: [fire, grin],
-      normalizedQuery: NormalModeDispatcher.normalizedSearchText("flme"),
-      limit: 5)
-    XCTAssertEqual(aliasTypo.first?.candidate.name, "🔥 fire")
-
-    let titleTypo = CandidateFinder.emojiMatches(
-      pool: [fire, grin],
-      normalizedQuery: NormalModeDispatcher.normalizedSearchText("grinnng"),
-      limit: 5)
-    XCTAssertEqual(titleTypo.first?.candidate.name, "😀 grinning face")
-  }
-
-  func testEmojiMatchesFastOnLargePool() {
-    let pool = (0..<2_500).map { i in
-      CandidateFinder.prepare(
-        candidate(
-          kind: CandidateFinder.emojiKind,
-          source: "emojis.glyphs",
-          name: "emoji sample \(i) fire flame heart party grin smile",
-          subtitle: "emoji",
-          bundleIdentifier: "",
-          searchAliases: i % 5 == 0 ? "rocket launch fast" : ""))
-    }
-    func assertFast(_ query: String) {
-      let started = Date()
-      let matches = CandidateFinder.emojiMatches(
-        pool: pool,
-        normalizedQuery: NormalModeDispatcher.normalizedSearchText(query),
-        limit: 64)
-      let elapsedMs = Date().timeIntervalSince(started) * 1_000
-
-      XCTAssertEqual(matches.count, 64)
-      XCTAssertLessThan(
-        elapsedMs, 20,
-        "emoji fast path for \(query) took \(elapsedMs)ms for 2.5k candidates (budget 20ms)")
-    }
-
-    assertFast("")
-    assertFast("f")
-    assertFast("fire")
-  }
-
   func testSourceCompletionCandidateHasStableShapeAndRanksByToken() throws {
     let firefox = CandidateFinder.prepare(
       CandidateFinder.sourceCompletionCandidate("firefox.tabs"))
@@ -1120,15 +1025,14 @@ final class SourceCandidateTests: XCTestCase {
   }
 
   func testBangCompletionStateAcceptsBareBangAndRejectsConfirmedBang() {
-    let bare = CandidateFinder.bangCompletionState(query: "!", emojiMode: false)
+    let bare = CandidateFinder.bangCompletionState(query: "!")
     XCTAssertEqual(bare?.token, "")
 
-    let partial = CandidateFinder.bangCompletionState(query: "!fire", emojiMode: false)
+    let partial = CandidateFinder.bangCompletionState(query: "!fire")
     XCTAssertEqual(partial?.token, "fire")
 
-    XCTAssertNil(CandidateFinder.bangCompletionState(query: "!fire ", emojiMode: false))
-    XCTAssertNil(CandidateFinder.bangCompletionState(query: "! fire", emojiMode: false))
-    XCTAssertNil(CandidateFinder.bangCompletionState(query: "!", emojiMode: true))
+    XCTAssertNil(CandidateFinder.bangCompletionState(query: "!fire "))
+    XCTAssertNil(CandidateFinder.bangCompletionState(query: "! fire"))
   }
 
   func testPrimaryTitleOutranksExactSecondaryMatch() throws {

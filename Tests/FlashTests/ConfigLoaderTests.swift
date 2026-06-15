@@ -770,7 +770,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testParsesModeMappings() {
     let toml = """
       [mode.insert.mappings]
-      "ctrl+alt+n" = [\"flash\", \"mode_normal\"]
+      "ctrl+alt+n" = [\"flash\", \"enter_normal_mode\"]
       [mode.normal.mappings]
       "j" = [\"flash\", \"scroll_up\"]
       """
@@ -786,21 +786,21 @@ final class ConfigLoaderTests: XCTestCase {
     let inAll = ConfigLoader.parse(
       """
       [mode.all.mappings]
-      "cmd+ctrl+n" = [\"flash\", \"mode_normal\"]
+      "cmd+ctrl+n" = [\"flash\", \"enter_normal_mode\"]
       """)
     XCTAssertTrue(inAll.mode.containsAdvancedModeMapping)
 
     let inInsert = ConfigLoader.parse(
       """
       [mode.insert.mappings]
-      "cmd+ctrl+n" = [\"flash\", \"mode_normal\"]
+      "cmd+ctrl+n" = [\"flash\", \"enter_normal_mode\"]
       """)
     XCTAssertFalse(inInsert.mode.containsAdvancedModeMapping)
 
     let inNormalOnly = ConfigLoader.parse(
       """
       [mode.normal.mappings]
-      "cmd+ctrl+n" = [\"flash\", \"mode_normal\"]
+      "cmd+ctrl+n" = [\"flash\", \"enter_normal_mode\"]
       """)
     XCTAssertFalse(inNormalOnly.mode.containsAdvancedModeMapping)
   }

@@ -252,7 +252,7 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.passThroughModalCount, 0)
   }
 
-  func testPointerIntentMonitorRunsOnlyForCapturingNormalModeBadge() {
+  func testPointerIntentMonitorRunsForCapturingNormalModeBadge() {
     XCTAssertTrue(
       OverlayPanel.pointerIntentMonitorShouldRun(
         inputMode: .normal,
@@ -272,6 +272,22 @@ final class OverlayInputTests: XCTestCase {
       OverlayPanel.pointerIntentMonitorShouldRun(
         inputMode: .normal,
         modeBadgeVisible: true,
+        modeBadgeCapturesInput: false))
+  }
+
+  func testPointerIntentMonitorRunsForCommandLineAndCandidateFinder() {
+    // Clicking outside the command bar / candidate list must dismiss
+    // them, regardless of mode-badge visibility — those input modes are
+    // never on screen without a panel the user can click out of.
+    XCTAssertTrue(
+      OverlayPanel.pointerIntentMonitorShouldRun(
+        inputMode: .commandLine,
+        modeBadgeVisible: false,
+        modeBadgeCapturesInput: false))
+    XCTAssertTrue(
+      OverlayPanel.pointerIntentMonitorShouldRun(
+        inputMode: .candidateFinder,
+        modeBadgeVisible: false,
         modeBadgeCapturesInput: false))
   }
 
@@ -369,28 +385,26 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertLessThan(compact, full)
   }
 
-  func testCandidateFinderTextHeightUsesMeasuredContent() {
+  func testCandidateFinderResultsHeightHugsLineCount() {
     let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-    let text = NSAttributedString(
-      string: "  [app] Cursor\n> [app] Finder",
-      attributes: [.font: font])
+    let fontLineHeight = ceil(font.ascender - font.descender + font.leading)
+    let lineSpacing: CGFloat = 2
 
-    let measured = OverlayPanel.candidateFinderTextHeight(text, fallbackFont: font)
-    let singleLine = OverlayPanel.candidateFinderTextHeight(
-      NSAttributedString(string: "  [app] Cursor", attributes: [.font: font]),
-      fallbackFont: font)
-    let expected = ceil(
-      max(
-        font.ascender - font.descender + font.leading,
-        text.boundingRect(
-          with: CGSize(
-            width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-          options: [.usesLineFragmentOrigin, .usesFontLeading]
-        ).height))
+    let single = OverlayPanel.candidateFinderResultsHeight(
+      lineCount: 1, font: font, lineSpacing: lineSpacing)
+    XCTAssertEqual(single, fontLineHeight)
 
-    XCTAssertEqual(measured, expected)
-    XCTAssertGreaterThan(measured, singleLine * 1.5)
-    XCTAssertLessThan(measured, (12 + 5) * 3)
+    let ten = OverlayPanel.candidateFinderResultsHeight(
+      lineCount: 10, font: font, lineSpacing: lineSpacing)
+    // 10 line heights + 9 inter-line gaps (no trailing gap).
+    XCTAssertEqual(ten, fontLineHeight * 10 + lineSpacing * 9)
+
+    // No silent inflation: the value never exceeds the exact-fit
+    // formula, which is what fixes the empty band below the last row.
+    XCTAssertEqual(
+      OverlayPanel.candidateFinderResultsHeight(
+        lineCount: 0, font: font, lineSpacing: lineSpacing),
+      fontLineHeight)
   }
 
 }

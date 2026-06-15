@@ -134,17 +134,18 @@ sequence_timeout_ms = 1000
 #
 # Examples:
 # "ctrl+space" = ["flash", "mouse_target"]
-# "ctrl+alt+n" = ["flash", "mode_normal"] # enables advanced mode
+# "ctrl+alt+n" = ["flash", "enter_normal_mode"] # enables advanced mode
 # "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
 # "alt+h" = ["flash", "window_move", "--position=lefthalf"]
 # "alt+n" = ["flash", "window_move", "--screen=+1"]
 # "alt+shift+c" = ["sh", "~/bin/toggle-colors"]
 # The `enter_command` verb opens the command-line panel pre-seeded with
-# `--input='<text>'`; leading colons are trimmed. `--restore-mode` restores
-# whichever mode was active when the mapping fired once the panel exits
-# (submit or cancel). Use it for an emoji picker that you can trigger from
-# INSERT and resume typing afterward:
-# "cmd+ctrl+space" = ["flash", "enter_command", "--input=emojis ", "--restore-mode"]
+# `--input='<text>'`; leading colons are trimmed and a trailing space is
+# auto-appended. `--restore-mode` restores whichever mode was active when
+# the mapping fired once the panel exits (submit or cancel). Use it for
+# an emoji picker that you can trigger from INSERT and resume typing
+# afterward:
+# "cmd+ctrl+space" = ["flash", "enter_command", "--input=:flashlight @source:emojis.glyphs", "--restore-mode"]
 
 [mode.normal]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
@@ -196,7 +197,7 @@ leader = "\\"
 "g9" = ["flash", "tab_select", "--index=9"]
 "ctrl-o" = ["flash", "movement_back"]
 "ctrl-i" = ["flash", "movement_forward"]
-"i" = ["flash", "mode_insert"]
+"i" = ["flash", "enter_insert_mode"]
 "f" = ["flash", "mouse_target"]
 "sf" = ["flash", "mouse_target", "--secondary"]
 "df" = ["flash", "mouse_target", "--double"]
@@ -217,15 +218,15 @@ leader = "\\"
 # press `i` afterwards if you want to type.
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
-"<leader>space" = ["flash", "enter_command", "--input=flashlight "]
+"<leader>space" = ["flash", "enter_command", "--input=:flashlight"]
 "r" = ["flash", "app_reload"]
 "R" = ["flash", "app_reload", "--force"]
 "?" = ["flash", "help_show"]
-":" = ["flash", "mode_command"]
+":" = ["flash", "enter_command_mode"]
 
 [mode.insert.mappings]
 # Mappings here apply only after insert mode is already active.
-# Advanced mode is enabled only by binding ["flash", "mode_normal"] in [mode.all.mappings].
+# Advanced mode is enabled only by binding ["flash", "enter_normal_mode"] in [mode.all.mappings].
 
 [debug]
 # Set to true to draw the raw detected rect for every target alongside its

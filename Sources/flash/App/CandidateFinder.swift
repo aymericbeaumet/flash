@@ -217,10 +217,10 @@ enum CandidateFinder {
     return (token, atIndex..<tokenEnd)
   }
 
-  static func sourceCompletionState(query: String, emojiMode: Bool)
+  static func sourceCompletionState(query: String)
     -> (token: String, atRange: Range<String.Index>)?
   {
-    guard !emojiMode, parseBang(query) == nil else { return nil }
+    guard parseBang(query) == nil else { return nil }
     guard let completion = parseAtSourceCompletion(query) else { return nil }
     guard !completion.token.contains(":") else { return nil }
     return completion
@@ -229,10 +229,9 @@ enum CandidateFinder {
   /// Detect an in-progress `!<bang>` token, including a bare trailing
   /// `!`. `parseBang` intentionally rejects a bare bang because it
   /// cannot be dispatched; this state is only for the completion UI.
-  static func bangCompletionState(query: String, emojiMode: Bool)
+  static func bangCompletionState(query: String)
     -> (token: String, bangRange: Range<String.Index>)?
   {
-    guard !emojiMode else { return nil }
     guard let bangIndex = query.firstIndex(of: "!") else { return nil }
     let tokenStart = query.index(after: bangIndex)
     if tokenStart == query.endIndex {
@@ -557,131 +556,6 @@ enum CandidateFinder {
         normalizedQuery: normalizedQuery, candidate: candidate, fuzzyScore: fuzzyScore)
     else { return nil }
     return CandidateMatch(candidate: candidate, score: score)
-  }
-
-  /// Emoji-mode fast path. The emoji pool is static, small enough for a
-  /// linear scan, and semantically searches only the Unicode name plus
-  /// shortcode aliases. Avoid the generic multi-field fuzzy scorer
-  /// (source/title/url/display/searchText) so each keystroke can render
-  /// the visible list in the same main-thread turn.
-  static func emojiMatches(
-    pool: [Candidate],
-    normalizedQuery: String,
-    limit: Int
-  ) -> [CandidateMatch] {
-    guard limit > 0 else { return [] }
-    if normalizedQuery.isEmpty {
-      return sortedMatches(
-        pool.map { CandidateMatch(candidate: $0, score: 0) },
-        limit: limit)
-    }
-    let prefilter = queryPrefilter(normalizedQuery: normalizedQuery)
-    var matches: [CandidateMatch] = []
-    matches.reserveCapacity(min(pool.count, limit * 2))
-    for candidate in pool {
-      guard passesPrefilter(prefilter, candidateMask: candidate.scoringMask) else { continue }
-      guard let score = emojiScore(normalizedQuery: normalizedQuery, candidate: candidate) else {
-        continue
-      }
-      matches.append(CandidateMatch(candidate: candidate, score: score))
-    }
-    return sortedMatches(matches, limit: limit)
-  }
-
-  private static func emojiScore(normalizedQuery: String, candidate: Candidate) -> Int? {
-    let fields = candidate.normalizedScoringFields
-    var best: Int?
-
-    for alias in fields.aliases {
-      if let score = emojiFieldScore(query: normalizedQuery, normalized: alias, base: 20_000) {
-        best = max(best ?? score, score)
-      }
-    }
-
-    if let titleScore = emojiFieldScore(
-      query: normalizedQuery, normalized: fields.title, base: 10_000)
-    {
-      best = max(best ?? titleScore, titleScore)
-    }
-
-    // The token edit-distance pass is only a fallback. For ordinary
-    // typing (`f`, `fi`, `fire`) the exact/prefix/word-prefix ladder
-    // above already found a good score, and running typo checks across
-    // every emoji title token is visible in the UI.
-    guard best == nil else { return best }
-
-    let compactQuery = normalizedQuery.filter { !$0.isWhitespace }
-    if compactQuery.count >= 3 {
-      for alias in fields.aliases {
-        if let score = emojiTypoScore(query: compactQuery, token: alias, base: 20_000) {
-          best = max(best ?? score, score)
-        }
-      }
-      for token in fields.titleTokens {
-        if let score = emojiTypoScore(query: compactQuery, token: token, base: 10_000) {
-          best = max(best ?? score, score)
-        }
-      }
-    }
-
-    return best
-  }
-
-  /// Same exact/prefix/word-prefix/substring ladder as the generic
-  /// field scorer, minus expensive generic fuzzy fallback.
-  private static func emojiFieldScore(query: String, normalized: String, base: Int) -> Int? {
-    guard !normalized.isEmpty else { return nil }
-    if normalized == query { return base + 5_000 }
-    if normalized.hasPrefix(query) {
-      return base + 3_000 - min(500, normalized.count - query.count)
-    }
-    if hasWordPrefix(normalized: normalized, query: query) {
-      return base + 1_500 - min(300, normalized.count - query.count)
-    }
-    if let range = normalized.range(of: query) {
-      let offset = normalized.distance(from: normalized.startIndex, to: range.lowerBound)
-      return base + 800 - min(300, offset * 4) - min(120, normalized.count - query.count)
-    }
-    return nil
-  }
-
-  private static func emojiTypoScore(query: String, token: String, base: Int) -> Int? {
-    guard !query.isEmpty, !token.isEmpty else { return nil }
-    let maxEdits = allowedTypoCount(query.count)
-    guard maxEdits > 0, query.count <= token.count + maxEdits else { return nil }
-    let prefixLength = min(token.count, query.count + maxEdits)
-    let prefix = String(token.prefix(prefixLength))
-    guard let distance = boundedASCIIDistance(query, prefix, maxDistance: maxEdits) else {
-      return nil
-    }
-    return base + 450 - distance * 24 - abs(prefix.count - query.count) * 3
-      - max(0, token.count - query.count) / 4
-  }
-
-  private static func boundedASCIIDistance(
-    _ lhs: String,
-    _ rhs: String,
-    maxDistance: Int
-  ) -> Int? {
-    let a = Array(lhs.utf8)
-    let b = Array(rhs.utf8)
-    if abs(a.count - b.count) > maxDistance { return nil }
-    var previous = Array(0...b.count)
-    var current = Array(repeating: 0, count: b.count + 1)
-    for i in 1...a.count {
-      current[0] = i
-      var rowMin = current[0]
-      for j in 1...b.count {
-        let substitution = previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)
-        let insertion = current[j - 1] + 1
-        let deletion = previous[j] + 1
-        current[j] = min(substitution, insertion, deletion)
-        rowMin = min(rowMin, current[j])
-      }
-      if rowMin > maxDistance { return nil }
-      swap(&previous, &current)
-    }
-    return previous[b.count] <= maxDistance ? previous[b.count] : nil
   }
 
   static func isAlive(_ candidate: Candidate) -> Bool {

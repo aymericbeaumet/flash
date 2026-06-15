@@ -649,7 +649,6 @@ extension AppDelegate {
     overlay.setActiveWindowBorder(around: nil)
     prewarmCandidateFinderCaches(reason: "command_line_open")
     let command = Self.commandLineBuffer(from: initialText)
-    candidateFinderEmojiMode = NormalModeDispatcher.commandLineEmojiQuery(command) != nil
     if let candidateFinderScope,
       NormalModeDispatcher.commandLineCandidateQuery(command) != nil
     {
@@ -788,7 +787,6 @@ extension AppDelegate {
     clearTransientHintState(reason: "enter_candidate_finder")
     overlay.candidateFinderQuery = ""
     overlay.commandLineCursorIndex = 0
-    candidateFinderEmojiMode = false
     candidateFinderScope = scope
     candidateFinderDynamicCandidates = []
     candidateFinderDeferredCandidates = []
@@ -1037,7 +1035,6 @@ extension AppDelegate {
     overlay.commandLineText = command
     overlay.commandLineCursorIndex = cursorIndex ?? command.count
     if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
-      candidateFinderEmojiMode = NormalModeDispatcher.commandLineEmojiQuery(command) != nil
       clearCommandLineCompletionState()
       if candidateFinderCandidates.isEmpty {
         candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
@@ -1053,7 +1050,7 @@ extension AppDelegate {
       // acknowledge the lock-in. Backspacing past the space (no
       // confirmed bang anymore) unlocks and the bang list returns.
       let bang = CandidateFinder.parseBangState(query)
-      if !candidateFinderEmojiMode, let bang, bang.confirmed {
+      if let bang, bang.confirmed {
         candidateFinderMatches = []
         candidateFinderSelectedIndex = 0
         let queryRange = bangRangeInCommand(
@@ -1237,25 +1234,15 @@ extension AppDelegate {
     let t0 = CFAbsoluteTimeGetCurrent()
     // `@<field>:<pattern>` selectors (e.g. `:flashlight @source:tmux test`)
     // attach attribute filters to the pool; the residual text is the actual
-    // search query. Selectors are only honored outside emoji mode and outside
-    // bang mode.
-    let sourceCompletion = CandidateFinder.sourceCompletionState(
-      query: query,
-      emojiMode: candidateFinderEmojiMode)
-    let bangCompletion = CandidateFinder.bangCompletionState(
-      query: query,
-      emojiMode: candidateFinderEmojiMode)
+    // search query.
+    let sourceCompletion = CandidateFinder.sourceCompletionState(query: query)
+    let bangCompletion = CandidateFinder.bangCompletionState(query: query)
     let parsed =
       sourceCompletion == nil
       ? NormalModeDispatcher.candidateFinderSourceFilter(query)
       : NormalModeDispatcher.CandidateFinderQuery(attributeFilters: [], text: query)
-    let attributeFilters: [CandidateFinder.CompiledAttributeFilter]
-    if candidateFinderEmojiMode {
-      attributeFilters = []
-    } else {
-      attributeFilters = parsed.attributeFilters.map { raw in
-        CandidateFinder.CompiledAttributeFilter.parse(field: raw.field, pattern: raw.pattern)
-      }
+    let attributeFilters = parsed.attributeFilters.map { raw in
+      CandidateFinder.CompiledAttributeFilter.parse(field: raw.field, pattern: raw.pattern)
     }
     let trimmed = parsed.text
     candidateFinderCurrentQuery = sourceCompletion?.token ?? trimmed
@@ -1277,17 +1264,6 @@ extension AppDelegate {
     // this keystroke is dropped silently when its callback fires.
     candidateFinderIndexGenerationCounter &+= 1
     let generation = candidateFinderIndexGenerationCounter
-    let isEmojiMode = candidateFinderEmojiMode
-
-    if isEmojiMode {
-      let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
-      let sorted = CandidateFinder.emojiMatches(
-        pool: pool,
-        normalizedQuery: normalizedQuery,
-        limit: Self.instantEmojiResultLimit)
-      applyCandidateMatches(sorted)
-      return
-    }
 
     if sourceCompletion != nil || bangCompletion != nil || CandidateFinder.parseBang(trimmed) != nil
     {
@@ -1333,7 +1309,7 @@ extension AppDelegate {
       pool: pool,
       normalizedQuery: normalizedQuery,
       fuzzyScore: fuzzy,
-      allowParallel: !isEmojiMode)
+      allowParallel: true)
     let tScored = CFAbsoluteTimeGetCurrent()
     // Apply frecency boost before the sort so the comparator sees the
     // final score. Skip the loop entirely when the store has no
@@ -1341,7 +1317,7 @@ extension AppDelegate {
     // `FrecencyMapper.itemKey` does a non-trivial amount of per-candidate
     // work that's pure waste here.
     let store = self.frecencyStore
-    if !isEmojiMode, let store, !store.isEmpty {
+    if let store, !store.isEmpty {
       for index in scored.indices {
         if let key = FrecencyMapper.itemKey(for: scored[index].candidate) {
           scored[index].score += store.boost(forKey: key)
@@ -1372,11 +1348,6 @@ extension AppDelegate {
           + "top5=[\(top)]")
     }
   }
-
-  /// The emoji picker only renders five rows, but keeping a wider
-  /// slice preserves a short arrow-navigation buffer without sorting
-  /// or retaining the full emoji pool on every keystroke.
-  private static let instantEmojiResultLimit = 64
 
   /// Build a `PrecedenceTable` from the live config. Called once per
   /// keystroke (the table is cheap to materialise — `[String: Int]`
@@ -1441,7 +1412,7 @@ extension AppDelegate {
       candidateFinderFilteredPoolCache = nil
     }
     let queryText = trimmed.trimmed
-    guard candidateFinderEmojiMode || !queryText.isEmpty else {
+    guard !queryText.isEmpty else {
       candidateFinderSourceQueryKey = ""
       candidateFinderDynamicCandidates = []
       candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
@@ -1455,11 +1426,7 @@ extension AppDelegate {
     case .all:
       scopeKey = "all"
     }
-    let key = [
-      scopeKey,
-      candidateFinderEmojiMode ? "emoji" : "normal",
-      queryText,
-    ].joined(separator: "\u{1f}")
+    let key = [scopeKey, queryText].joined(separator: "\u{1f}")
     guard key != candidateFinderSourceQueryKey else { return }
     candidateFinderSourceQueryKey = key
     candidateFinderSourceQueryGenerationCounter &+= 1
@@ -1493,8 +1460,10 @@ extension AppDelegate {
   /// Pick the candidate pool and the text we score against. Two cases:
   ///
   ///   * Default mode — the regular pool (apps, tmux, browser tabs, …)
-  ///     filtered by emoji-mode kind + any `@<field>:<pattern>` attribute
-  ///     selectors, scored on the full query.
+  ///     filtered by any `@<field>:<pattern>` attribute selectors and
+  ///     scored on the full query. Synthetic bang / source-completion
+  ///     rows are always excluded; emoji rows are excluded unless the
+  ///     user opted in with an explicit `@source:<pattern>` filter.
   ///   * Bang mode (query starts with `!`) — the pool is **only** the
   ///     registered plugin bangs, scored on the token typed after `!`.
   ///     Nothing else competes for the list so the user can browse the
@@ -1503,16 +1472,13 @@ extension AppDelegate {
     trimmed: String,
     attributeFilters: [CandidateFinder.CompiledAttributeFilter]
   ) -> (pool: [Candidate], scoringText: String) {
-    if !candidateFinderEmojiMode, let bang = CandidateFinder.parseBang(trimmed) {
+    if let bang = CandidateFinder.parseBang(trimmed) {
       let bangs = CandidateFinder.prepare(
         pluginManager.shebangCandidates(
           forBundleID: currentNonFlashContext()?.bundleIdentifier))
       return (bangs, bang.token)
     }
-    if let bang = CandidateFinder.bangCompletionState(
-      query: trimmed,
-      emojiMode: candidateFinderEmojiMode)
-    {
+    if let bang = CandidateFinder.bangCompletionState(query: trimmed) {
       let bangs = CandidateFinder.prepare(
         pluginManager.shebangCandidates(
           forBundleID: currentNonFlashContext()?.bundleIdentifier))
@@ -1523,10 +1489,7 @@ extension AppDelegate {
     // pool for source-completion rows derived from the candidates
     // actually present. This mirrors the bang-completion surface so
     // `<tab>`/`<cr>` semantics stay identical across both modes.
-    if let completion = CandidateFinder.sourceCompletionState(
-      query: trimmed,
-      emojiMode: candidateFinderEmojiMode)
-    {
+    if let completion = CandidateFinder.sourceCompletionState(query: trimmed) {
       let pool = CandidateFinder.prepare(
         knownSourceCompletionCandidates())
       return (pool, completion.token)
@@ -1534,28 +1497,32 @@ extension AppDelegate {
     // Cache the kind+attributeFilter pass — while the user types into
     // flashlight the signature is stable, so the same ~2k-entry filter
     // ran ~2k times on every keystroke. Keyed by the base-pool epoch +
-    // emoji mode + filter signature; one-slot cache because consecutive
-    // keystrokes always share the same key.
+    // filter signature; one-slot cache because consecutive keystrokes
+    // always share the same key.
     let signature = poolFilterSignature(attributeFilters: attributeFilters)
     if let cached = candidateFinderFilteredPoolCache,
       cached.epoch == candidateFinderCandidatesEpoch,
-      cached.emojiMode == candidateFinderEmojiMode,
       cached.signature == signature
     {
       return (cached.pool, trimmed)
     }
+    // `@source:<pattern>` is the user opting in to whatever source they
+    // name — including the otherwise-noisy emoji pool. Without an
+    // explicit source filter, emoji rows would clutter every search.
+    let userOptedIntoSource = attributeFilters.contains { $0.field == .source }
     let pool = candidateFinderCandidates.filter { candidate in
-      candidateFinderEmojiMode
-        ? candidate.kind == CandidateFinder.emojiKind
-        : candidate.kind != CandidateFinder.emojiKind
-          && candidate.kind != CandidateFinder.bangKind
-          && candidate.kind != CandidateFinder.sourceKind
+      guard candidate.kind != CandidateFinder.bangKind,
+        candidate.kind != CandidateFinder.sourceKind
+      else { return false }
+      if !userOptedIntoSource, candidate.kind == CandidateFinder.emojiKind {
+        return false
+      }
+      return true
     }
     let attributeFiltered = CandidateFinder.applyAttributeFilters(
       pool, filters: attributeFilters)
     candidateFinderFilteredPoolCache = (
       epoch: candidateFinderCandidatesEpoch,
-      emojiMode: candidateFinderEmojiMode,
       signature: signature,
       pool: attributeFiltered
     )
@@ -1985,7 +1952,6 @@ extension AppDelegate {
     candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
-    candidateFinderEmojiMode = false
   }
 
   private func quitNormalModeTargetApp(force: Bool = false) {

@@ -692,9 +692,9 @@ extension URLCommand {
       return verb("mouse_target", command.argTokens)
     case .mouseGrid(let command):
       return verb("mouse_grid", command.argTokens)
-    case .normalMode: return verb("mode_normal")
-    case .insertMode: return verb("mode_insert")
-    case .commandMode: return verb("mode_command")
+    case .normalMode: return verb("enter_normal_mode")
+    case .insertMode: return verb("enter_insert_mode")
+    case .commandMode: return verb("enter_command_mode")
     case .scroll(let kind):
       switch kind {
       case .left: return verb("scroll_left")

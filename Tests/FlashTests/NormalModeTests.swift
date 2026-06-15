@@ -915,14 +915,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":flashlightgmail"))
   }
 
-  func testCommandLineCandidateQueryAcceptsEmojiPicker() {
-    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":emojis"), "")
-    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":emojis fire"), "fire")
-    XCTAssertEqual(NormalModeDispatcher.commandLineEmojiQuery("  EMOJIS   heart  "), "heart  ")
-    XCTAssertNil(NormalModeDispatcher.commandLineEmojiQuery(":emojisheart"))
-    XCTAssertNil(NormalModeDispatcher.commandLineEmojiQuery(":flashlight heart"))
-  }
-
   func testCandidateFinderSourceFilterParsesStructuredSelectors() {
     // `@<field>:<pattern>` is the only attribute-filter syntax. Bare
     // tokens — `@notes`, `--notes` — are literal search text.
@@ -1254,7 +1246,7 @@ final class NormalModeTests: XCTestCase {
         help.contains(mapping),
         "missing \(mapping)")
     }
-    XCTAssertFalse(help.contains("flash mode_normal"))
+    XCTAssertFalse(help.contains("flash enter_normal_mode"))
   }
 
   func testHelpTextIsDerivedFromConfiguredMappings() {

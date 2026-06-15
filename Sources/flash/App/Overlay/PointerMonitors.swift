@@ -71,7 +71,15 @@ extension OverlayPanel {
     modeBadgeVisible: Bool,
     modeBadgeCapturesInput: Bool
   ) -> Bool {
-    inputMode == .normal && modeBadgeVisible && modeBadgeCapturesInput
+    // Command line + candidate finder both dismiss on any click outside
+    // their (mouse-event-ignoring) panel — the click reaches the
+    // underlying app via `ignoresMouseEvents = true`, and the global
+    // monitor lets us recognise it as an "interact with something else"
+    // signal worth tearing the prompt down for.
+    if inputMode == .commandLine || inputMode == .candidateFinder {
+      return true
+    }
+    return inputMode == .normal && modeBadgeVisible && modeBadgeCapturesInput
   }
 
   private static func pointerClick(_ event: NSEvent? = nil) -> OverlayPointerClick {

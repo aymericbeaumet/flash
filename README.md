@@ -28,13 +28,13 @@ Every action is a *verb* the `flash` CLI sends to the resident over a custom App
 flash mouse_target
 flash mouse_target --secondary
 flash mouse_grid
-flash mode_normal
+flash enter_normal_mode
 flash help_show
 flash help_show --topic=plugins
 flash quit
 flash app_open --name=Firefox
 flash window_move --position=lefthalf
-flash enter_command --input='emojis ' --restore-mode
+flash enter_command --input=':flashlight @source:emojis.glyphs' --restore-mode
 ```
 
 Verb arguments use standard long-flag shell syntax: `--name=value` for values, bare `--flag` for booleans (`--secondary`, `--force`, `--restore-mode`). Hyphens in a flag name are normalized to underscores internally, so `--restore-mode` and `--restore_mode` both reach the dispatcher as `restore_mode`.
@@ -82,7 +82,7 @@ labels = { normal = "N", insert = "I", command = "C" }
 
 [mode.all.mappings]
 # "ctrl+space" = ["flash", "mouse_target"]
-# "ctrl+alt+n" = ["flash", "mode_normal"]
+# "ctrl+alt+n" = ["flash", "enter_normal_mode"]
 
 [mode.normal]
 leader = "\\"
@@ -129,14 +129,14 @@ leader = "\\"
 "n" = ["flash", "window_new"]
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
-"<leader>space" = ["flash", "enter_command", "--input=flashlight "]
+"<leader>space" = ["flash", "enter_command", "--input=:flashlight"]
 "r" = ["flash", "app_reload"]
 "R" = ["flash", "app_reload", "--force"]
 "?" = ["flash", "help_show"]
-":" = ["flash", "mode_command"]
+":" = ["flash", "enter_command_mode"]
 
 [mode.insert.mappings]
-# advanced mode is enabled only by binding ["flash", "mode_normal"] in [mode.all.mappings]
+# advanced mode is enabled only by binding ["flash", "enter_normal_mode"] in [mode.all.mappings]
 
 [debug]
 log_level = "info"
@@ -150,7 +150,7 @@ log_level = "info"
 
 `[mode] labels` controls the mode text available to status-bar templates. `[statusbar]` controls the bar format with two template strings: `left` renders in the highlighted left cell, and `right` renders on the right side. Separators are literal inline text, such as `right = "#{script:~/bin/status.sh}#[fg=colour245] · #{date}"`. Templates can read Flash state (`#{mode}`, `#{active_app_name}`, `#{active_bundle_identifier}`, `#{date}`), plugin state (`#{plugin:ready_count}`), scripts (`#{script:~/bin/status.sh}`), or shell commands (`#{command:pmset -g batt}`). `[mode.all.mappings]` applies in insert and normal modes. `[mode.normal]` holds normal-mode options such as `leader = "\\"`. `[mode.normal.mappings]` extends the built-in normal-mode map and overrides only matching keys. `[mode.insert.mappings]` applies only in insert mode. Every mapping value is a string array. Arrays whose head is `"flash"` are in-process verb dispatches (`["flash", "<verb>", "--key=value", "--flag", …]`); any other head is executed directly as argv with `~`/env expansion on each element (no shell wrap). Relative argv paths containing `/` resolve from the config file location.
 
-When a `[mode.all.mappings]` mapping points to `["flash", "mode_normal"]`, Flash shows the persistent status bar and starts in normal mode. The bar uses the screen's native reserved top-band height, falling back to the measured native menu-bar reveal height when macOS folds that reservation away. It stays below the native macOS menu/status bar reveal, insets content away from rounded screen corners, and uses Nord colors. Command-backed status sections keep their previous value until a replacement is ready. While the bar is enabled, Flash keeps the macOS top-band reservation in place and the `window_move` verb slots/remaps windows inside that reserved usable frame. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings do not enable advanced mode. Without an advanced-mode mapping, the status bar is hidden and Flash behaves as a direct action launcher unless `["flash", "mode_normal"]` is invoked manually.
+When a `[mode.all.mappings]` mapping points to `["flash", "enter_normal_mode"]`, Flash shows the persistent status bar and starts in normal mode. The bar uses the screen's native reserved top-band height, falling back to the measured native menu-bar reveal height when macOS folds that reservation away. It stays below the native macOS menu/status bar reveal, insets content away from rounded screen corners, and uses Nord colors. Command-backed status sections keep their previous value until a replacement is ready. While the bar is enabled, Flash keeps the macOS top-band reservation in place and the `window_move` verb slots/remaps windows inside that reserved usable frame. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings do not enable advanced mode. Without an advanced-mode mapping, the status bar is hidden and Flash behaves as a direct action launcher unless `["flash", "enter_normal_mode"]` is invoked manually.
 
 `[flashlight] suggestion_count` controls how many rows the command bar shows; the default is `10`. `[flashlight.aliases]` rewrites completed query tokens such as `"!g" = "!google"` or `"@ft" = "@firefox.tabs"`. `[flashlight.precedence]` adjusts source-order tiebreakers after match quality ties; entries not listed fall back to weight `0`, and `precedence_alive_bonus` nudges running app candidates ahead of inactive app rows from the same source.
 
@@ -160,7 +160,7 @@ Normal mode supports counts such as `10u` and `2[t`, `gg` / `G` for instant top/
 
 Setting `[debug] http_inspector_enabled = true` starts a loopback-only single-page debug view with live logs, resolved config, focused app state, and plugin state. The host (`http_inspector_host`) is restricted to `localhost` / `127.0.0.1` / `::1`; the default port is `4242`. Every log line carries a `source` field such as `core:AppDelegate.swift.activate(...)` or `plugin:spotify`.
 
-Flash stays in normal mode until the user presses `i`, commits an `f` / `F` mouse-click hint, or physically clicks while idle normal mode is capturing input. Hint clicks may include configured modifier passthrough, right-clicks, or double-clicks; they are treated as explicit mouse interactions by the user. Physical clicks are replayed so they reach the underlying app. External `mode_insert` verbs, passive focus changes, app focus requests, menu-bar clicks, status-bar popups, and the `app_find` verb do not switch to insert mode while advanced normal mode is active.
+Flash stays in normal mode until the user presses `i`, commits an `f` / `F` mouse-click hint, or physically clicks while idle normal mode is capturing input. Hint clicks may include configured modifier passthrough, right-clicks, or double-clicks; they are treated as explicit mouse interactions by the user. Physical clicks are replayed so they reach the underlying app. External `enter_insert_mode` verbs, passive focus changes, app focus requests, menu-bar clicks, status-bar popups, and the `app_find` verb do not switch to insert mode while advanced normal mode is active.
 
 ## External Tools
 

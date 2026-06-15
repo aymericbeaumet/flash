@@ -218,7 +218,7 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashNormalMode() {
-    let action = parseMappingCommand(argv: ["flash", "mode_normal"])
+    let action = parseMappingCommand(argv: ["flash", "enter_normal_mode"])
     guard case .flashCommand(.normalMode) = action else {
       return XCTFail("expected .normalMode")
     }
@@ -322,8 +322,9 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testParseFlashModeActions() {
-    XCTAssertEqual(parseMappingCommand(argv: ["flash", "mode_insert"])?.command, .insertMode)
-    XCTAssertEqual(parseMappingCommand(argv: ["flash", "mode_command"])?.command, .commandMode)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "enter_insert_mode"])?.command, .insertMode)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "enter_command_mode"])?.command, .commandMode)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "url_copy"])?.command, .copyURL)
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "app_open_finder"])?.command,

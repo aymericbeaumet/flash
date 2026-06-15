@@ -51,6 +51,11 @@ extension OverlayPanel {
         if !sublayers.contains(where: { $0 === modeBadgeLayer }) {
           sublayers.append(modeBadgeLayer)
         }
+        for bar in secondaryStatusBars {
+          if !sublayers.contains(where: { $0 === bar.backgroundLayer }) {
+            sublayers.append(bar.backgroundLayer)
+          }
+        }
         if commandPromptVisible,
           !sublayers.contains(where: { $0 === commandPromptLayer })
         {
@@ -125,6 +130,9 @@ extension OverlayPanel {
       var sublayers: [CALayer] = []
       if modeBadgeVisible {
         sublayers.append(modeBadgeLayer)
+        for bar in secondaryStatusBars {
+          sublayers.append(bar.backgroundLayer)
+        }
       }
       if commandPromptVisible {
         sublayers.append(commandPromptLayer)
@@ -170,6 +178,9 @@ extension OverlayPanel {
     guard modeBadgeVisible else { return }
     configureModeBadge(panelFrame: panelFrame)
     sublayers.append(modeBadgeLayer)
+    for bar in secondaryStatusBars {
+      sublayers.append(bar.backgroundLayer)
+    }
     if commandPromptVisible {
       configureCommandPrompt(panelFrame: panelFrame)
       sublayers.append(commandPromptLayer)
@@ -314,11 +325,10 @@ extension OverlayPanel {
       rightDisplayText: rightDisplayText)
   }
 
-  /// Mirror the primary bar onto every other `NSScreen`. Layers are
-  /// allocated lazily and removed (along with their sublayers) when a
-  /// display disconnects. Sublayer changes hop through
-  /// `contentLayer.sublayers = …` so the implicit-animation guard wrapping
-  /// the caller covers them too.
+  /// Mirror the primary bar onto every other `NSScreen`. Configures the
+  /// per-screen `SecondaryStatusBar` layer hierarchies; the caller owns
+  /// `contentLayer.sublayers` insertion (so this stays mode-agnostic and
+  /// can be re-used by the normal / insert / command renderers).
   private func configureSecondaryStatusBars(
     panelFrame: CGRect,
     fontSize: CGFloat,
@@ -338,13 +348,11 @@ extension OverlayPanel {
     // Skip the main screen — its bar is the primary one rendered above.
     let extras = snapshot.screens.filter { $0.frame != mainFrame }
 
-    var sublayers = contentLayer.sublayers ?? []
-
     // Shrink the cache before growing it: if a display disconnected the
     // tail bars become orphans whose layers we want to detach.
     while secondaryStatusBars.count > extras.count {
       let stale = secondaryStatusBars.removeLast()
-      sublayers.removeAll { $0 === stale.backgroundLayer }
+      stale.backgroundLayer.removeFromSuperlayer()
     }
     while secondaryStatusBars.count < extras.count {
       secondaryStatusBars.append(SecondaryStatusBar())
@@ -417,13 +425,7 @@ extension OverlayPanel {
       bar.rightLabel.string = FlashStatusBarRenderer.attributedStatusString(
         from: rightDisplayText,
         font: rightFont)
-
-      if !sublayers.contains(where: { $0 === bar.backgroundLayer }) {
-        sublayers.append(bar.backgroundLayer)
-      }
     }
-
-    contentLayer.sublayers = sublayers
   }
 
   /// Drop every secondary status bar from the rendered layer tree. Called

@@ -90,10 +90,7 @@ extension NormalModeDispatcher {
   }
 
   static func commandLineCandidateQuery(_ raw: String) -> String? {
-    if let query = commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true) {
-      return query
-    }
-    return commandLineEmojiQuery(raw)
+    commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true)
   }
 
   /// One `@<field>:<pattern>` attribute filter, post-parse. `field` is the
@@ -169,14 +166,6 @@ extension NormalModeDispatcher {
     return CandidateFinderQuery(
       attributeFilters: attributeFilters,
       text: words.joined(separator: " "))
-  }
-
-  /// Query for `:emojis <text>` (bare `:emojis` lists everything). Shares
-  /// the live candidate-finder rendering with `open`/`flashlight`, but its
-  /// candidate pool is the emoji source and selection inserts the glyph
-  /// rather than activating an app.
-  static func commandLineEmojiQuery(_ raw: String) -> String? {
-    commandLineQuery(raw, name: "emojis", acceptsBareCommand: true)
   }
 
   static func commandLineHelpTopic(_ raw: String) -> String?? {
@@ -336,7 +325,6 @@ extension NormalModeDispatcher {
     "open": "Forward args to /usr/bin/open",
     "help": "Open a help topic",
     "flashlight": "Fuzzy finder across apps, tabs, and plugins",
-    "emojis": "Emoji picker",
   ]
 
   /// Flat catalog of every built-in command-line command, tagged
@@ -356,7 +344,7 @@ extension NormalModeDispatcher {
         "source_kind": "core",
       ])
     }
-    for extra in ["open", "help", "flashlight", "emojis"] where seen.insert(extra).inserted {
+    for extra in ["open", "help", "flashlight"] where seen.insert(extra).inserted {
       result.append([
         "name": ":\(extra)",
         "syntax": ":\(extra) <args>",
@@ -474,7 +462,7 @@ extension NormalModeDispatcher {
   }
 
   private static let acceptsArgsCompletionNames: Set<String> = [
-    "flashlight", "emojis", "help", "plugins",
+    "flashlight", "help", "plugins",
   ]
 
   /// Built-in subcommands surfaced by `:plugins <tab>`. Kept in lockstep
@@ -499,7 +487,7 @@ extension NormalModeDispatcher {
       let insertion = kind == .acceptsArgs ? "\(full) " : full
       items.append(CommandLineCompletion(label: full, insertion: insertion, kind: kind))
     }
-    for extra in ["open", "help", "flashlight", "emojis"] where seen.insert(extra).inserted {
+    for extra in ["open", "help", "flashlight"] where seen.insert(extra).inserted {
       items.append(
         CommandLineCompletion(label: extra, insertion: "\(extra) ", kind: .acceptsArgs))
     }
