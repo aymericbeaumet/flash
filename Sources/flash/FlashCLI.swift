@@ -63,30 +63,49 @@ enum FlashCLI {
       print(usage)
       return 0
     }
+    // Verbs are typed in their snake_case form (`mouse_target`,
+    // `app_open`, …). Allow a single hyphen as a typo-friendly synonym
+    // for the leading `_` so `flash app-open` works too — every other
+    // `-` is part of a `--flag` and must not be rewritten.
     let verb = first.replacingOccurrences(of: "-", with: "_")
     let argEntries = Array(args.dropFirst())
-    let argDict = parseKeyValueArgs(verb: verb, rest: argEntries)
+    let argDict = parseLongFlagArgs(verb: verb, rest: argEntries)
     return sendVerb(verb, args: argDict)
   }
 
-  /// Parses `key=value` argv into a flat dictionary. Two verb-specific
-  /// conveniences match what users typed before the URL scheme was removed:
-  ///   `flash app_open Firefox`            → name=Firefox
-  ///   `flash alert_show hello world`      → message=hello world
-  /// so existing user muscle memory doesn't break.
-  private static func parseKeyValueArgs(verb: String, rest: [String]) -> [String: String] {
-    if verb == "app_open", rest.count == 1, !rest[0].contains("=") {
+  /// Parse `--name=value` / `--flag` argv into a flat dictionary. Standard
+  /// long-flag shell convention — see `parseVerbArgs` in `Shortcut.swift`
+  /// for the matching config-side parser.
+  ///
+  /// Two verb-specific positional conveniences are kept so existing muscle
+  /// memory still works:
+  ///
+  ///     flash app_open Firefox          → --name=Firefox
+  ///     flash alert_show hello world    → --message="hello world"
+  ///
+  /// Anything that doesn't start with `--` outside those two verbs is
+  /// silently dropped so the user notices their mistake at the verb
+  /// dispatcher (missing required arg) instead of having the bad token
+  /// quietly land somewhere.
+  private static func parseLongFlagArgs(verb: String, rest: [String]) -> [String: String] {
+    if verb == "app_open", rest.count == 1, !rest[0].hasPrefix("--") {
       return ["name": rest[0]]
     }
-    if verb == "alert_show", !rest.contains(where: { $0.contains("=") }) {
+    if verb == "alert_show", !rest.contains(where: { $0.hasPrefix("--") }) {
       return ["message": rest.joined(separator: " ")]
     }
     var out: [String: String] = [:]
     for entry in rest {
-      guard let eq = entry.firstIndex(of: "=") else { continue }
-      let key = String(entry[..<eq])
-      let value = String(entry[entry.index(after: eq)...])
-      out[key] = value
+      guard entry.hasPrefix("--") else { continue }
+      let body = String(entry.dropFirst(2))
+      guard !body.isEmpty else { continue }
+      if let eq = body.firstIndex(of: "=") {
+        let key = String(body[..<eq]).replacingOccurrences(of: "-", with: "_")
+        let value = String(body[body.index(after: eq)...])
+        out[key] = value
+      } else {
+        out[body.replacingOccurrences(of: "-", with: "_")] = "1"
+      }
     }
     return out
   }

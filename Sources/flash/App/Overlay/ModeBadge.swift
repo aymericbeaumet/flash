@@ -69,6 +69,9 @@ extension OverlayPanel {
         sublayers.removeAll { $0 === modeBadgeLayer }
         sublayers.removeAll { $0 === commandPromptLayer }
         sublayers.removeAll { $0 === candidateFinderResultsLayer }
+        for bar in secondaryStatusBars {
+          sublayers.removeAll { $0 === bar.backgroundLayer }
+        }
       }
       contentLayer.sublayers = sublayers
       if captureInput {
@@ -291,6 +294,148 @@ extension OverlayPanel {
     statusRightLabel.string = FlashStatusBarRenderer.attributedStatusString(
       from: rightDisplayText,
       font: rightFont)
+
+    // Same bar on every other screen, sized to that screen's own native
+    // top-band height so a 14"-MBP-with-notch + a square external monitor
+    // both see a bar that exactly covers the reserved menu-bar band on
+    // their own display.
+    configureSecondaryStatusBars(
+      panelFrame: panelFrame,
+      fontSize: fontSize,
+      modeFontSize: modeFontSize,
+      labelFont: labelFont,
+      rightFont: rightFont,
+      palette: palette,
+      leftWidth: leftWidth,
+      leftLabel: leftLabel,
+      appText: appText,
+      maxAppWidth: maxAppWidth,
+      measuredAppWidth: measuredAppWidth,
+      rightDisplayText: rightDisplayText)
+  }
+
+  /// Mirror the primary bar onto every other `NSScreen`. Layers are
+  /// allocated lazily and removed (along with their sublayers) when a
+  /// display disconnects. Sublayer changes hop through
+  /// `contentLayer.sublayers = …` so the implicit-animation guard wrapping
+  /// the caller covers them too.
+  private func configureSecondaryStatusBars(
+    panelFrame: CGRect,
+    fontSize: CGFloat,
+    modeFontSize: CGFloat,
+    labelFont: NSFont,
+    rightFont: NSFont,
+    palette: ModeBadgePalette,
+    leftWidth: CGFloat,
+    leftLabel: String,
+    appText: String,
+    maxAppWidth: CGFloat,
+    measuredAppWidth: CGFloat,
+    rightDisplayText: String
+  ) {
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let mainFrame = snapshot.mainFrame
+    // Skip the main screen — its bar is the primary one rendered above.
+    let extras = snapshot.screens.filter { $0.frame != mainFrame }
+
+    var sublayers = contentLayer.sublayers ?? []
+
+    // Shrink the cache before growing it: if a display disconnected the
+    // tail bars become orphans whose layers we want to detach.
+    while secondaryStatusBars.count > extras.count {
+      let stale = secondaryStatusBars.removeLast()
+      sublayers.removeAll { $0 === stale.backgroundLayer }
+    }
+    while secondaryStatusBars.count < extras.count {
+      secondaryStatusBars.append(SecondaryStatusBar())
+    }
+
+    for (bar, screen) in zip(secondaryStatusBars, extras) {
+      let barFrame = Self.statusBarFrame(
+        screenFrame: screen.frame,
+        visibleFrame: screen.visibleFrame,
+        panelFrame: panelFrame,
+        fontSize: fontSize)
+      bar.backgroundLayer.frame = Self.snap(barFrame, scale: screen.scale)
+      bar.backgroundLayer.contentsScale = screen.scale
+      bar.backgroundLayer.colors = [Self.nordPolarNight0CG, Self.nordPolarNight0CG]
+      bar.backgroundLayer.borderColor = Self.nordPolarNight0CG
+
+      let textHeight = fontSize + 4
+      let textY = max(0, (barFrame.height - textHeight) / 2)
+      let contentX = Self.statusBarEdgePadding
+      let modeX = contentX
+
+      bar.modeButtonLayer.frame = CGRect(
+        x: modeX, y: textY, width: leftWidth, height: textHeight)
+      bar.modeButtonLayer.contentsScale = screen.scale
+      bar.modeButtonLayer.colors = [palette.bottomCG, palette.topCG]
+      bar.modeButtonLayer.borderColor = palette.borderCG
+
+      bar.modeLabel.frame = CGRect(x: 0, y: 0, width: max(1, leftWidth), height: textHeight)
+      bar.modeLabel.font = labelFont
+      bar.modeLabel.fontSize = modeFontSize
+      bar.modeLabel.foregroundColor = palette.foregroundCG
+      bar.modeLabel.contentsScale = screen.scale
+      bar.modeLabel.string = NSAttributedString(
+        string: leftLabel,
+        attributes: [
+          .font: labelFont,
+          .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
+        ])
+
+      let rightReservedWidth =
+        rightDisplayText.isEmpty
+        ? 0
+        : min(
+          max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
+          barFrame.width * 0.52)
+      let appX = bar.modeButtonLayer.frame.maxX + Self.statusBarMinimumGap
+      let appAvailableWidth = max(
+        0,
+        barFrame.width - appX - Self.statusBarEdgePadding
+          - (rightReservedWidth > 0 ? Self.statusBarMinimumGap + rightReservedWidth : 0))
+      let appWidth = min(measuredAppWidth, maxAppWidth, appAvailableWidth)
+      bar.appLabel.frame = CGRect(x: appX, y: textY, width: appWidth, height: textHeight)
+      bar.appLabel.font = rightFont
+      bar.appLabel.fontSize = fontSize
+      bar.appLabel.foregroundColor = Self.tmuxGrey245CG
+      bar.appLabel.contentsScale = screen.scale
+      bar.appLabel.isHidden = appText.isEmpty || appWidth <= 0
+      bar.appLabel.string = appText
+
+      let rightX =
+        (appWidth > 0 ? bar.appLabel.frame.maxX : bar.modeButtonLayer.frame.maxX)
+        + Self.statusBarMinimumGap
+      let rightWidth = max(0, barFrame.width - rightX - Self.statusBarEdgePadding)
+      bar.rightLabel.frame = CGRect(x: rightX, y: textY, width: rightWidth, height: textHeight)
+      bar.rightLabel.font = rightFont
+      bar.rightLabel.fontSize = fontSize
+      bar.rightLabel.foregroundColor = Self.tmuxGrey245CG
+      bar.rightLabel.contentsScale = screen.scale
+      bar.rightLabel.isHidden = rightDisplayText.isEmpty
+      bar.rightLabel.string = FlashStatusBarRenderer.attributedStatusString(
+        from: rightDisplayText,
+        font: rightFont)
+
+      if !sublayers.contains(where: { $0 === bar.backgroundLayer }) {
+        sublayers.append(bar.backgroundLayer)
+      }
+    }
+
+    contentLayer.sublayers = sublayers
+  }
+
+  /// Drop every secondary status bar from the rendered layer tree. Called
+  /// when the mode badge goes invisible so we don't keep extra-screen
+  /// bars on the wallpaper after advanced mode is disabled.
+  func hideSecondaryStatusBars() {
+    guard !secondaryStatusBars.isEmpty else { return }
+    var sublayers = contentLayer.sublayers ?? []
+    for bar in secondaryStatusBars {
+      sublayers.removeAll { $0 === bar.backgroundLayer }
+    }
+    contentLayer.sublayers = sublayers
   }
 
   static func modeBadgeWidth(
@@ -359,7 +504,41 @@ extension OverlayPanel {
       width: screenFrame.width,
       height: height)
   }
+}
 
+/// One status bar rendered on a non-main screen. Mirrors the primary bar's
+/// text — mode pill on the left, focused-app name beside it, and the
+/// `[statusbar].right` template on the right — but sized to that screen's
+/// own native top-band height. Each secondary bar holds its own CALayer
+/// set; the layout helper is the same `statusBarFrame` math the primary
+/// uses, just fed a different `(screenFrame, visibleFrame)`.
+final class SecondaryStatusBar {
+  let backgroundLayer = CAGradientLayer()
+  let modeButtonLayer = CAGradientLayer()
+  let modeLabel = CATextLayer()
+  let appLabel = CATextLayer()
+  let rightLabel = CATextLayer()
+
+  init() {
+    backgroundLayer.cornerRadius = 0
+    backgroundLayer.borderWidth = 0
+    backgroundLayer.opacity = 1
+    backgroundLayer.actions = OverlayPanel.noActions
+    modeButtonLayer.cornerRadius = 4
+    modeButtonLayer.borderWidth = 0
+    modeButtonLayer.actions = OverlayPanel.noActions
+    modeLabel.alignmentMode = .center
+    modeLabel.actions = OverlayPanel.noActions
+    appLabel.alignmentMode = .left
+    appLabel.actions = OverlayPanel.noActions
+    rightLabel.alignmentMode = .right
+    rightLabel.actions = OverlayPanel.noActions
+    modeButtonLayer.sublayers = [modeLabel]
+    backgroundLayer.sublayers = [appLabel, modeButtonLayer, rightLabel]
+  }
+}
+
+extension OverlayPanel {
   static func statusLeftText(modeText: String) -> String {
     modeText
   }

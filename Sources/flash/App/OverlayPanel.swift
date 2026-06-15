@@ -62,6 +62,12 @@ final class OverlayPanel: NSPanel {
   let modeBadgeButtonLayer = CAGradientLayer()
   let modeBadgeLabel = CATextLayer()
   let statusRightLabel = CATextLayer()
+  /// Status bars rendered on every non-main screen. Allocated lazily by
+  /// `configureSecondaryStatusBars` and pruned when displays disconnect.
+  /// Each entry mirrors the primary bar's text but uses its own screen's
+  /// native top-band height so users see the bar at the right vertical
+  /// position regardless of which monitor they look at.
+  var secondaryStatusBars: [SecondaryStatusBar] = []
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()

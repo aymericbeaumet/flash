@@ -195,14 +195,15 @@ extension OverlayPanel {
 
   static func candidateFinderResultsWidth(
     commandPromptWidth: CGFloat,
-    longestLineCharacterCount: Int,
-    fontSize: CGFloat,
+    longestLineCharacterCount _: Int,
+    fontSize _: CGFloat,
     maximumWidth: CGFloat
   ) -> CGFloat {
-    let naturalWidth =
-      CGFloat(longestLineCharacterCount) * fontSize * 0.62
-      + candidateFinderHorizontalPadding * 2 + 4
-    return min(max(commandPromptWidth, naturalWidth), maximumWidth)
+    // Pinned to the prompt's width — a single long candidate title used
+    // to widen the whole panel under the cursor, which feels stuttery
+    // even when the work is cheap. The result rows truncate at their own
+    // edge instead.
+    min(commandPromptWidth, maximumWidth)
   }
 
   static func candidateFinderResultsY(

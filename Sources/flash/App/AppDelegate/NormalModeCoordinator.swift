@@ -511,14 +511,9 @@ extension AppDelegate {
         repeatCount: repeatCount)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
-    case .flashlight(let restoreMode):
+    case .enterCommand(let input, let restoreMode):
       enterCommandLineMode(
-        initialText: "flashlight ",
-        candidateFinderScope: .all,
-        restoreMode: restoreMode)
-    case .emojiPicker(let restoreMode):
-      enterCommandLineMode(
-        initialText: "emojis ",
+        initialText: input,
         candidateFinderScope: .all,
         restoreMode: restoreMode)
     case .mouseTarget(let command):

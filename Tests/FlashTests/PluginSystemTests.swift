@@ -234,7 +234,7 @@ final class PluginSystemTests: XCTestCase {
             {
               "kind": "mappings",
               "mappings": [
-                { "key": "q", "command": ["flash", "plugin_command", "command=slack", "subcommand=run"] },
+                { "key": "q", "command": ["flash", "plugin_command", "--command=slack", "--subcommand=run"] },
                 {
                   "key": "ctrl+k",
                   "mode": "insert",
@@ -290,7 +290,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(mapping.scope, .normal)
     // Safari's "Reload Page From Origin" is ⌘⌥R, unlike the ⌘⇧R that the
     // built-in `R` → app_reload(force) default sends for Firefox/Chrome.
-    XCTAssertEqual(mapping.command, ["flash", "send_key", "keys=cmd+option+r"])
+    XCTAssertEqual(mapping.command, ["flash", "send_key", "--keys=cmd+option+r"])
     XCTAssertTrue(
       mapping.bundleIDs.isEmpty,
       "mapping inherits the manifest's com.apple.Safari scope")

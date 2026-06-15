@@ -399,7 +399,7 @@ struct Config {
         ("n", .flashCommand(.newWindow)),
         ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
-        ("<leader><space>", .flashCommand(.flashlight(restoreMode: false))),
+        ("<leader><space>", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
         ("r", .flashCommand(.reload(force: false))),
         ("R", .flashCommand(.reload(force: true))),
         ("?", .flashCommand(.showUsage(topic: nil))),
@@ -670,13 +670,22 @@ struct Config {
 }
 
 extension URLCommand {
-  /// Human-readable form of an in-process verb: `flash <verb> [k=v ...]`.
+  /// Human-readable form of an in-process verb: `flash <verb> [--k=v ...]`.
   /// Matches the syntax users type into the `flash` CLI and write into
   /// mapping arrays in `flash.toml`. Used for help text, log lines, and
   /// the inspector — never re-parsed.
   var diagnosticDescription: String {
     func verb(_ name: String, _ args: [String] = []) -> String {
       args.isEmpty ? "flash \(name)" : "flash \(name) " + args.joined(separator: " ")
+    }
+    /// Bool-flag arg: `--name` (when on). Off bool flags don't render.
+    func flag(_ name: String) -> String { "--\(name)" }
+    /// Value arg: `--name=value`. The internal key is snake_case; surface
+    /// the hyphenated form so the rendered string can be pasted back into
+    /// a shell or config without translation.
+    func kv(_ name: String, _ value: Any) -> String {
+      let key = name.replacingOccurrences(of: "_", with: "-")
+      return "--\(key)=\(value)"
     }
     switch self {
     case .mouseTarget(let command):
@@ -698,25 +707,25 @@ extension URLCommand {
       case .bottom: return verb("scroll_bottom")
       }
     case .reload(let force):
-      return force ? verb("app_reload", ["force=1"]) : verb("app_reload")
+      return force ? verb("app_reload", [flag("force")]) : verb("app_reload")
     case .undo: return verb("app_undo")
     case .redo: return verb("app_redo")
     case .close: return verb("window_close")
     case .tabClose: return verb("tab_close")
     case .find: return verb("app_find")
     case .candidateFinder(let all):
-      return all ? verb("app_open_finder", ["all=1"]) : verb("app_open_finder")
-    case .flashlight(let restoreMode):
-      return restoreMode ? verb("flashlight", ["restore_mode=1"]) : verb("flashlight")
-    case .emojiPicker(let restoreMode):
-      return restoreMode ? verb("emojis", ["restore_mode=1"]) : verb("emojis")
+      return all ? verb("app_open_finder", [flag("all")]) : verb("app_open_finder")
+    case .enterCommand(let input, let restoreMode):
+      var args = [kv("input", input)]
+      if restoreMode { args.append(flag("restore-mode")) }
+      return verb("enter_command", args)
     case .copyURL: return verb("url_copy")
     case .tabNext: return verb("tab_next")
     case .tabPrev: return verb("tab_previous")
     case .tabFirst: return verb("tab_first")
     case .tabLast: return verb("tab_last")
     case .tabSelect(let index):
-      if let index { return verb("tab_select", ["index=\(index)"]) }
+      if let index { return verb("tab_select", [kv("index", index)]) }
       return verb("tab_select")
     case .tabMovePrev: return verb("tab_move_previous")
     case .tabMoveNext: return verb("tab_move_next")
@@ -727,13 +736,13 @@ extension URLCommand {
     case .movementForward: return verb("movement_forward")
     case .appPrev: return verb("app_previous")
     case .appNext: return verb("app_next")
-    case .setMark(let letter): return verb("set_mark", ["letter=\(letter)"])
-    case .jumpToMark(let letter): return verb("jump_to_mark", ["letter=\(letter)"])
+    case .setMark(let letter): return verb("set_mark", [kv("letter", letter)])
+    case .jumpToMark(let letter): return verb("jump_to_mark", [kv("letter", letter)])
     case .quitApp(let force):
-      return force ? verb("app_quit", ["force=1"]) : verb("app_quit")
+      return force ? verb("app_quit", [flag("force")]) : verb("app_quit")
     case .save: return verb("app_save")
     case .saveAndQuit(let force):
-      return force ? verb("app_save_and_quit", ["force=1"]) : verb("app_save_and_quit")
+      return force ? verb("app_save_and_quit", [flag("force")]) : verb("app_save_and_quit")
     case .print: return verb("app_print")
     case .openDocument: return verb("document_open")
     case .newWindow: return verb("window_new")
@@ -742,47 +751,47 @@ extension URLCommand {
     case .cut: return verb("clipboard_cut")
     case .paste: return verb("clipboard_paste")
     case .copyAll: return verb("clipboard_copy_all")
-    case .showAlert(let message): return verb("alert_show", ["message=\(message)"])
+    case .showAlert(let message): return verb("alert_show", [kv("message", message)])
     case .dismissAlert: return verb("alert_dismiss")
     case .showUsage(let topic):
-      if let topic, !topic.isEmpty { return verb("help_show", ["topic=\(topic)"]) }
+      if let topic, !topic.isEmpty { return verb("help_show", [kv("topic", topic)]) }
       return verb("help_show")
     case .showPlugins: return verb("plugins")
     case .dismissHints: return verb("hints_dismiss")
-    case .quit: return verb("flash_quit")
-    case .openApp(let name): return verb("app_open", ["name=\(name)"])
+    case .quit: return verb("quit")
+    case .openApp(let name): return verb("app_open", [kv("name", name)])
     case .pluginCommand(let command, let subcommand, let args):
-      var tokens = ["command=\(command)", "subcommand=\(subcommand)"]
+      var tokens = [kv("command", command), kv("subcommand", subcommand)]
       if !args.isEmpty {
-        tokens.append("args=\(args.joined(separator: " "))")
+        tokens.append(kv("args", args.joined(separator: " ")))
       }
       return verb("plugin_command", tokens)
     case .moveWindow(let params):
       var parts: [String] = []
       if let position = params.position {
-        parts.append("position=\(position.rawValue)")
+        parts.append(kv("position", position.rawValue))
       }
-      parts.append("screen=\(params.screen)")
+      parts.append(kv("screen", params.screen))
       return verb("window_move", parts)
     case .sendKey(let keys, _, _):
-      return verb("send_key", ["keys=\(keys)"])
+      return verb("send_key", [kv("keys", keys)])
     }
   }
 }
 
 extension MouseCommand {
   /// Arg tokens for `mouse_target` / `mouse_grid` in diagnostic form.
-  /// Empty for a plain left-click, `["secondary=1"]` for right-click,
-  /// `["double=1"]` for double-click, `["move=1"]` for cursor-only move.
+  /// Empty for a plain left-click, `["--secondary"]` for right-click,
+  /// `["--double"]` for double-click, `["--move"]` for cursor-only move.
   var argTokens: [String] {
     switch self {
     case .move:
-      return ["move=1"]
+      return ["--move"]
     case .click(let action):
       switch action {
       case .leftClick: return []
-      case .rightClick: return ["secondary=1"]
-      case .doubleClick: return ["double=1"]
+      case .rightClick: return ["--secondary"]
+      case .doubleClick: return ["--double"]
       }
     }
   }

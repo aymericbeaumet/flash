@@ -86,12 +86,30 @@ final class PluginFlashSource: FlashSource {
     request: CandidateQuery,
     completion: @escaping ([Candidate]) -> Void
   ) {
+    let startedNs = DispatchTime.now().uptimeNanoseconds
     plugin.queryCandidates(
       scope: request.scope,
       query: request.text,
       sourceFilters: request.sourceFilters,
-      environment: environment,
-      completion: completion)
+      environment: environment
+    ) { [identifier = identifier] candidates in
+      let elapsedMs = Int(
+        (DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
+      if candidates.isEmpty {
+        // Empty result is the diagnostic-interesting case: distinguish "the
+        // plugin isn't ready" from "the plugin ran but has nothing to
+        // contribute". The plugin's lifecycle state and snapshot freshness
+        // tell the user whether to wait, reload, or check focus events.
+        FlashLog.trace(
+          "[candidate_finder] plugin_query source=\(identifier) "
+            + "ms=\(elapsedMs) count=0 query=\"\(request.text)\"")
+      } else {
+        FlashLog.trace(
+          "[candidate_finder] plugin_query source=\(identifier) "
+            + "ms=\(elapsedMs) count=\(candidates.count)")
+      }
+      completion(candidates)
+    }
   }
 
   func resolveCandidate(

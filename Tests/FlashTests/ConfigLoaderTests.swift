@@ -22,7 +22,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.normalLeader, "\\")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
-      .flashlight(restoreMode: false))
+      .enterCommand(input: "flashlight ", restoreMode: false))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "sf" })?.action.command,
       .mouseTarget(.click(.rightClick)))
@@ -830,10 +830,11 @@ final class ConfigLoaderTests: XCTestCase {
       .reload(force: false))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "spacespace" })?.action.command,
-      .flashlight(restoreMode: false))
+      .enterCommand(input: "flashlight ", restoreMode: false))
     XCTAssertNil(
       c.mode.normal.first(where: {
-        $0.key == "\\space" && $0.action.command == .flashlight(restoreMode: false)
+        $0.key == "\\space"
+          && $0.action.command == .enterCommand(input: "flashlight ", restoreMode: false)
       }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
     XCTAssertTrue(c.warnings.isEmpty)
@@ -842,7 +843,7 @@ final class ConfigLoaderTests: XCTestCase {
   func testNormalLeaderAcceptsBackslashFullname() {
     let toml = #"""
       [mode.normal.mappings]
-      "<leader><space>" = ["flash", "flashlight"]
+      "<leader><space>" = ["flash", "enter_command", "--input=flashlight "]
       [mode.normal]
       leader = "<backslash>"
       """#
@@ -850,7 +851,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.normalLeader, "<backslash>")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
-      .flashlight(restoreMode: false))
+      .enterCommand(input: "flashlight ", restoreMode: false))
     XCTAssertTrue(c.warnings.isEmpty)
   }
 

@@ -275,15 +275,30 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.candidateFinderLineSpacing, 2)
   }
 
-  func testCandidateFinderResultsWidthGrowsWithLongResults() {
-    let width = OverlayPanel.candidateFinderResultsWidth(
+  func testCandidateFinderResultsWidthIsPinnedToPromptWidth() {
+    // The panel must stay a fixed width — a long candidate title used to
+    // widen the whole flashlight surface under the cursor, which reads
+    // as a stutter even when the work is cheap. Long rows truncate
+    // inside the panel instead.
+    let short = OverlayPanel.candidateFinderResultsWidth(
       commandPromptWidth: 1_068,
-      longestLineCharacterCount: 130,
+      longestLineCharacterCount: 10,
       fontSize: 14,
       maximumWidth: 1_600)
-
-    XCTAssertGreaterThan(width, 1_068)
-    XCTAssertLessThan(width, 1_600)
+    let long = OverlayPanel.candidateFinderResultsWidth(
+      commandPromptWidth: 1_068,
+      longestLineCharacterCount: 200,
+      fontSize: 14,
+      maximumWidth: 1_600)
+    XCTAssertEqual(short, 1_068)
+    XCTAssertEqual(long, 1_068)
+    // The screen cap still wins when the prompt would otherwise overflow.
+    let clamped = OverlayPanel.candidateFinderResultsWidth(
+      commandPromptWidth: 2_000,
+      longestLineCharacterCount: 200,
+      fontSize: 14,
+      maximumWidth: 1_600)
+    XCTAssertEqual(clamped, 1_600)
   }
 
   func testSystemStatusBarSpaceReservationRemovesMenuBarAutoHide() {

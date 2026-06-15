@@ -32,13 +32,14 @@ enum URLCommand: Hashable {
   case tabClose
   case find
   case candidateFinder(all: Bool)
-  /// `restoreMode` is set when the mapping carries `restore_mode=1`; on
-  /// exit (submit or cancel) the command-line dismiss restores whichever
-  /// mode was active when the verb fired instead of bouncing the user to
-  /// normal. Use case: bind `cmd+ctrl+space` from insert mode to the
-  /// emoji modal and keep typing afterward without re-entering insert.
-  case flashlight(restoreMode: Bool)
-  case emojiPicker(restoreMode: Bool)
+  /// Open command-line mode pre-seeded with `input`. `restoreMode` is set
+  /// when the mapping carries `--restore-mode`; on exit (submit or cancel)
+  /// the command-line dismiss restores whichever mode was active when the
+  /// verb fired instead of bouncing the user to normal. Use case:
+  /// `["flash", "enter_command", "--input=emojis ", "--restore-mode"]`
+  /// fired from insert mode opens the emoji picker and returns the user
+  /// to insert after the chosen glyph lands.
+  case enterCommand(input: String, restoreMode: Bool)
   case copyURL
   case tabNext
   case tabPrev
@@ -205,8 +206,15 @@ final class URLEventHandler: NSObject {
     "tab_close": { _ in .tabClose },
     "app_find": { _ in .find },
     "app_open_finder": { a in .candidateFinder(all: a.bool("all")) },
-    "flashlight": { a in .flashlight(restoreMode: a.bool("restore_mode")) },
-    "emojis": { a in .emojiPicker(restoreMode: a.bool("restore_mode")) },
+    "enter_command": { a in
+      guard let raw = a.value("input"), !raw.isEmpty else { return nil }
+      // Trim every leading colon so `--input=:emojis` and
+      // `--input='emojis '` (and `--input='::: open'`) all resolve to the
+      // same command-line state. The colon is just the visual prefix the
+      // command-line panel shows; the buffer underneath has none.
+      let trimmed = String(raw.drop(while: { $0 == ":" }))
+      return .enterCommand(input: trimmed, restoreMode: a.bool("restore_mode"))
+    },
     "url_copy": { _ in .copyURL },
     "tab_next": { _ in .tabNext },
     "tab_previous": { _ in .tabPrev },
@@ -249,7 +257,7 @@ final class URLEventHandler: NSObject {
     "help_show": { a in .showUsage(topic: a.value("topic")) },
     "plugins": { _ in .showPlugins },
     "hints_dismiss": { _ in .dismissHints },
-    "flash_quit": { _ in .quit },
+    "quit": { _ in .quit },
     "app_open": { a in
       guard let name = a.value("name"), !name.isEmpty else { return nil }
       return .openApp(name: name)
@@ -269,8 +277,8 @@ final class URLEventHandler: NSObject {
   ]
 
   static let usageText = """
-    flash mouse_target [secondary=1|double=1|move=1]
-    flash mouse_grid [secondary=1|double=1|move=1]
+    flash mouse_target [--secondary|--double|--move]
+    flash mouse_grid [--secondary|--double|--move]
     flash mode_normal
     flash mode_insert
     flash mode_command
@@ -282,21 +290,20 @@ final class URLEventHandler: NSObject {
     flash scroll_half_page_down
     flash scroll_top
     flash scroll_bottom
-    flash app_reload [force=1]
+    flash app_reload [--force]
     flash app_undo
     flash app_redo
     flash window_close
     flash tab_close
     flash app_find
-    flash app_open_finder [all=1]
-    flash flashlight
-    flash emojis
+    flash app_open_finder [--all]
+    flash enter_command --input='<text>' [--restore-mode]
     flash url_copy
     flash tab_next
     flash tab_previous
     flash tab_first
     flash tab_last
-    flash tab_select index=<n>
+    flash tab_select --index=<n>
     flash tab_move_previous
     flash tab_move_next
     flash tab_reopen
@@ -306,9 +313,9 @@ final class URLEventHandler: NSObject {
     flash movement_forward
     flash app_previous
     flash app_next
-    flash app_quit [force=1]
+    flash app_quit [--force]
     flash app_save
-    flash app_save_and_quit [force=1]
+    flash app_save_and_quit [--force]
     flash app_print
     flash document_open
     flash window_new
@@ -317,15 +324,15 @@ final class URLEventHandler: NSObject {
     flash clipboard_cut
     flash clipboard_paste
     flash clipboard_copy_all
-    flash alert_show message=<text>
+    flash alert_show --message=<text>
     flash alert_dismiss
     flash hints_dismiss
-    flash app_open name=<app>
-    flash window_move position=<slot> screen=<n>
-    flash flash_quit
-    flash help_show [topic=<topic>]
+    flash app_open --name=<app>
+    flash window_move --position=<slot> --screen=<n>
+    flash quit
+    flash help_show [--topic=<topic>]
     flash plugins
-    flash plugin_command command=<command> subcommand=<subcommand> [args=<space-separated>]
+    flash plugin_command --command=<command> --subcommand=<subcommand> [--args=<space-separated>]
     """
 }
 

@@ -157,17 +157,20 @@ extension OverlayPanel {
     screenFrame: CGRect,
     statusBarFrame: CGRect,
     panelFrame: CGRect,
-    prompt: String,
+    prompt _: String,
     fontSize: CGFloat
   ) -> CGRect {
-    let availableWidth = max(
-      180,
-      visibleFrame.width - statusBarEdgePadding * 2)
+    // Width is fixed at the screen's golden fraction — clamped to a
+    // sensible minimum so a tiny external display still gets a usable
+    // input, and to the screen's interior so the panel never bleeds past
+    // the visible region. The prompt text length intentionally does NOT
+    // factor in: a long candidate title used to grow the input under the
+    // user's cursor mid-typing, which read as a perceptual stutter even
+    // when the work was cheap. Long inputs scroll inside the editor
+    // instead.
+    let availableWidth = max(180, visibleFrame.width - statusBarEdgePadding * 2)
     let maxWidth = max(220, availableWidth)
-    let goldenWidth = min(maxWidth, max(220, screenFrame.width * commandPromptWidthFraction))
-    let measuredCount = max(prompt.count, 18)
-    let naturalWidth = CGFloat(measuredCount) * fontSize * 0.62 + 40
-    let width = min(max(goldenWidth, naturalWidth), maxWidth)
+    let width = min(maxWidth, max(220, screenFrame.width * commandPromptWidthFraction))
     let height = ceil(max(fontSize + 20, 38))
     let minY = visibleFrame.minY - panelFrame.minY + 24
     let topBoundary = min(statusBarFrame.minY, visibleFrame.maxY) - panelFrame.minY

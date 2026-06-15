@@ -12,7 +12,7 @@
     {
       "kind": "mappings",
       "mappings": [
-        { "key": "R", "mode": "normal", "command": ["flash", "send_key", "keys=cmd+option+r"] }
+        { "key": "R", "mode": "normal", "command": ["flash", "send_key", "--keys=cmd+option+r"] }
       ]
     }
   ]

@@ -49,6 +49,29 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// claim this via their ⌘⇧T fallback; tmux returns `.unhandled` (no
   /// equivalent gesture).
   public static let tabReopen = FlashSourceCapabilities(rawValue: 1 << 10)
+
+  /// Human-readable list of the flags this set carries, for trace logs.
+  /// Order is stable so log lines diff cleanly between runs.
+  public var traceDescription: String {
+    var names: [String] = []
+    if contains(.jumpTargets) { names.append("jumpTargets") }
+    if contains(.candidates) { names.append("candidates") }
+    if contains(.documentURL) { names.append("documentURL") }
+    if contains(.appActivation) { names.append("appActivation") }
+    if contains(.tabSelection) { names.append("tabSelection") }
+    if contains(.tabCreation) { names.append("tabCreation") }
+    if contains(.tabNavigation) { names.append("tabNavigation") }
+    if contains(.tabClosing) { names.append("tabClosing") }
+    if contains(.scrollExtremes) { names.append("scrollExtremes") }
+    if contains(.tabReorder) { names.append("tabReorder") }
+    if contains(.tabReopen) { names.append("tabReopen") }
+    return names.isEmpty ? "none" : names.joined(separator: "|")
+  }
+}
+
+extension SourceAction {
+  /// Short tag used in source-action trace logs (`tab_next`, `scroll_top`, …).
+  public var traceTag: String { wireName }
 }
 
 public enum SourceTabDirection: Sendable {

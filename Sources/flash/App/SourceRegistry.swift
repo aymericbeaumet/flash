@@ -150,7 +150,22 @@ final class SourceRegistry {
 
   func candidates(scope: CandidateScope) -> [Candidate] {
     refreshRunningApplications()
-    let sourceSnapshot = sources.filter { $0.capabilities.contains(.candidates) }
+    let allSources = sources
+    var sourceSnapshot: [FlashSource] = []
+    var excluded: [String] = []
+    for source in allSources {
+      if source.capabilities.contains(.candidates) {
+        sourceSnapshot.append(source)
+      } else {
+        excluded.append(
+          "\(source.identifier)(caps=\(source.capabilities.traceDescription))")
+      }
+    }
+    if !excluded.isEmpty {
+      FlashLog.trace(
+        "[candidate_finder] candidates_pool considered=\(allSources.count) "
+          + "passing=\(sourceSnapshot.count) excluded=[\(excluded.joined(separator: ","))]")
+    }
     let env = environment
     var raw: [Candidate] = []
     for source in sourceSnapshot {
@@ -197,21 +212,51 @@ final class SourceRegistry {
     refreshRunningApplications()
     let env = environment
     let request = CandidateQuery(scope: scope, text: text, sourceFilters: sourceFilters)
-    let sourceSnapshot = sources.filter { source in
-      guard source.identifier != "core.apps",
-        source.identifier.hasPrefix("plugin:"),
-        source.capabilities.contains(.candidates)
-      else { return false }
-      guard !sourceFilters.isEmpty else { return true }
-      let labels =
-        source.candidateSourceLabels.isEmpty
-        ? [source.displayName, source.identifier]
-        : source.candidateSourceLabels
-      return sourceFilters.contains { filter in
-        labels.contains { label in
-          CandidateFinder.sourceLabelMatchesFilter(label, filter: filter)
+    let allSources = sources
+    var sourceSnapshot: [FlashSource] = []
+    var excluded: [String] = []
+    for source in allSources {
+      let isPlugin = source.identifier.hasPrefix("plugin:")
+      let hasCap = source.capabilities.contains(.candidates)
+      let labelMatches: Bool
+      if sourceFilters.isEmpty {
+        labelMatches = true
+      } else {
+        let labels =
+          source.candidateSourceLabels.isEmpty
+          ? [source.displayName, source.identifier]
+          : source.candidateSourceLabels
+        labelMatches = sourceFilters.contains { filter in
+          labels.contains { label in
+            CandidateFinder.sourceLabelMatchesFilter(label, filter: filter)
+          }
         }
       }
+      let isCore = source.identifier == "core.apps"
+      if !isCore, isPlugin, hasCap, labelMatches {
+        sourceSnapshot.append(source)
+      } else if !isCore {
+        // The core.apps source is handled separately so its exclusion isn't
+        // interesting; only log plugin filters that turned a candidate
+        // away. `gate` reports the first failing predicate so a stale
+        // capability bitmap or missing source label surfaces immediately.
+        let gate: String
+        if !isPlugin {
+          gate = "not_plugin"
+        } else if !hasCap {
+          gate = "missing_cap[has=\(source.capabilities.traceDescription)]"
+        } else {
+          gate =
+            "label_mismatch[filters=\(sourceFilters.joined(separator: ",")),labels=\(source.candidateSourceLabels.joined(separator: ","))]"
+        }
+        excluded.append("\(source.identifier)(\(gate))")
+      }
+    }
+    if !excluded.isEmpty || sourceSnapshot.isEmpty {
+      FlashLog.trace(
+        "[candidate_finder] query_plan text=\"\(text)\" filters=\(sourceFilters) "
+          + "passing=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))] "
+          + "excluded=[\(excluded.joined(separator: ","))]")
     }
     guard !sourceSnapshot.isEmpty else {
       DispatchQueue.main.async { completion([], true) }
@@ -377,15 +422,41 @@ final class SourceRegistry {
     refreshRunningApplications()
     let refreshMs = Self.elapsedMs(since: startedNs)
     let env = environment
-    let sourceSnapshot = sources.filter {
-      $0.capabilities.contains(capability) && $0.supports(context)
+    let allSources = sources
+    var passingChain: [String] = []
+    var excluded: [String] = []
+    var sourceSnapshot: [FlashSource] = []
+    for source in allSources {
+      let hasCap = source.capabilities.contains(capability)
+      let supports = source.supports(context)
+      if hasCap, supports {
+        sourceSnapshot.append(source)
+        passingChain.append(source.identifier)
+      } else {
+        let reason =
+          !hasCap
+          ? "missing_cap[has=\(source.capabilities.traceDescription)]"
+          : "no_supports[bundle=\(context.bundleIdentifier)]"
+        excluded.append("\(source.identifier)(\(reason))")
+      }
+    }
+    if !excluded.isEmpty {
+      FlashLog.trace(
+        "[source_action] action=\(capability.traceDescription) "
+          + "excluded=[\(excluded.joined(separator: ","))]")
     }
     guard !sourceSnapshot.isEmpty else {
       FlashLog.trace(
-        "[source_action] cap=\(capability.rawValue) sources=0 refresh_ms=\(refreshMs) unhandled")
+        "[source_action] action=\(capability.traceDescription) considered=\(allSources.count) "
+          + "passing=0 refresh_ms=\(refreshMs) unhandled "
+          + "bundle=\(context.bundleIdentifier)")
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
+    FlashLog.trace(
+      "[source_action] action=\(capability.traceDescription) "
+        + "chain=[\(passingChain.joined(separator: ","))] "
+        + "refresh_ms=\(refreshMs)")
 
     func finish(_ result: SourceActionResult, handledBy: String) {
       FlashLog.trace(

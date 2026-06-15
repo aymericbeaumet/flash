@@ -216,7 +216,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "\\").pending, "\\")
     XCTAssertEqual(
       transition(pending: "\\", keyCode: kVK_Space, chars: " ").command,
-      .flashlight(restoreMode: false))
+      .enterCommand(input: "flashlight ", restoreMode: false))
     XCTAssertNil(command(chars: "o"))
     XCTAssertNil(command(chars: "O", ignoring: "o", flags: [.shift]))
     let modified = transition(chars: "r", flags: [.command])
@@ -1288,11 +1288,11 @@ final class NormalModeTests: XCTestCase {
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <args>", ":flashlight <query>", "flash mouse_target",
-      "flash flashlight", "flash mouse_target secondary=1",
-      "flash mouse_target double=1", "flash mouse_grid", "flash history_back",
+      "flash enter_command --input=flashlight ", "flash mouse_target --secondary",
+      "flash mouse_target --double", "flash mouse_grid", "flash history_back",
       "flash history_forward",
       "flash app_previous", "flash app_next",
-      "flash app_reload force=1", "flash tab_select index=1", "flash tab_new", "?",
+      "flash app_reload --force", "flash tab_select --index=1", "flash tab_new", "?",
     ] {
       XCTAssertTrue(
         help.contains(mapping),
@@ -1336,7 +1336,9 @@ final class NormalModeTests: XCTestCase {
   func testMappingsTextListsResolvedScopesAndLeaderMappings() {
     var config = Config.default
     config.mode.all = [
-      ModeMapping(key: "cmd+space", action: .flashCommand(.flashlight(restoreMode: false)))
+      ModeMapping(
+        key: "cmd+space",
+        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false)))
     ]
     config.mode.normal = [
       ModeMapping(key: "\\c", action: .shellCommand(["sh", "/tmp/toggle_caffeinate.sh"]))
@@ -1423,7 +1425,9 @@ final class NormalModeTests: XCTestCase {
     let action = MappingCommand.shellCommand(["sh", "/tmp/toggle"])
     let mappings = [
       ModeMapping(key: "\\c", action: action),
-      ModeMapping(key: "\\space", action: .flashCommand(.flashlight(restoreMode: false))),
+      ModeMapping(
+        key: "\\space",
+        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
     ]
     let first = transition(chars: "\\", mappings: mappings)
     XCTAssertEqual(first.pending, "\\")

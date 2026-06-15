@@ -57,7 +57,7 @@ optional, symmetric conditions:
     "kind": "mappings",
     "modes": ["normal"],
     "mappings": [
-      { "key": "ctrl+k", "command": ["flash", "plugin_command", "command=slack", "subcommand=run"] }
+      { "key": "ctrl+k", "command": ["flash", "plugin_command", "--command=slack", "--subcommand=run"] }
     ]
   },
   {

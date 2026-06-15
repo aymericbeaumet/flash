@@ -135,15 +135,16 @@ sequence_timeout_ms = 1000
 # Examples:
 # "ctrl+space" = ["flash", "mouse_target"]
 # "ctrl+alt+n" = ["flash", "mode_normal"] # enables advanced mode
-# "cmd+ctrl+a" = ["flash", "app_open", "name=Alacritty"]
-# "alt+h" = ["flash", "window_move", "position=lefthalf"]
-# "alt+n" = ["flash", "window_move", "screen=+1"]
+# "cmd+ctrl+a" = ["flash", "app_open", "--name=Alacritty"]
+# "alt+h" = ["flash", "window_move", "--position=lefthalf"]
+# "alt+n" = ["flash", "window_move", "--screen=+1"]
 # "alt+shift+c" = ["sh", "~/bin/toggle-colors"]
-# The `flashlight` and `emojis` verbs accept `restore_mode=1`: when the
-# modal exits (Enter or Escape) the user is put back in whichever mode was
-# active when the mapping fired. Use it for an emoji picker that you can
-# trigger from INSERT and resume typing afterward:
-# "cmd+ctrl+space" = ["flash", "emojis", "restore_mode=1"]
+# The `enter_command` verb opens the command-line panel pre-seeded with
+# `--input='<text>'`; leading colons are trimmed. `--restore-mode` restores
+# whichever mode was active when the mapping fired once the panel exits
+# (submit or cancel). Use it for an emoji picker that you can trigger from
+# INSERT and resume typing afterward:
+# "cmd+ctrl+space" = ["flash", "enter_command", "--input=emojis ", "--restore-mode"]
 
 [mode.normal]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
@@ -184,26 +185,26 @@ leader = "\\"
 "cmd+shift+tab" = ["flash", "app_previous"]
 "g^" = ["flash", "tab_first"]
 "g$" = ["flash", "tab_last"]
-"g1" = ["flash", "tab_select", "index=1"]
-"g2" = ["flash", "tab_select", "index=2"]
-"g3" = ["flash", "tab_select", "index=3"]
-"g4" = ["flash", "tab_select", "index=4"]
-"g5" = ["flash", "tab_select", "index=5"]
-"g6" = ["flash", "tab_select", "index=6"]
-"g7" = ["flash", "tab_select", "index=7"]
-"g8" = ["flash", "tab_select", "index=8"]
-"g9" = ["flash", "tab_select", "index=9"]
+"g1" = ["flash", "tab_select", "--index=1"]
+"g2" = ["flash", "tab_select", "--index=2"]
+"g3" = ["flash", "tab_select", "--index=3"]
+"g4" = ["flash", "tab_select", "--index=4"]
+"g5" = ["flash", "tab_select", "--index=5"]
+"g6" = ["flash", "tab_select", "--index=6"]
+"g7" = ["flash", "tab_select", "--index=7"]
+"g8" = ["flash", "tab_select", "--index=8"]
+"g9" = ["flash", "tab_select", "--index=9"]
 "ctrl-o" = ["flash", "movement_back"]
 "ctrl-i" = ["flash", "movement_forward"]
 "i" = ["flash", "mode_insert"]
 "f" = ["flash", "mouse_target"]
-"sf" = ["flash", "mouse_target", "secondary=1"]
-"df" = ["flash", "mouse_target", "double=1"]
-"mf" = ["flash", "mouse_target", "move=1"]
+"sf" = ["flash", "mouse_target", "--secondary"]
+"df" = ["flash", "mouse_target", "--double"]
+"mf" = ["flash", "mouse_target", "--move"]
 "F" = ["flash", "mouse_grid"]
-"sF" = ["flash", "mouse_grid", "secondary=1"]
-"dF" = ["flash", "mouse_grid", "double=1"]
-"mF" = ["flash", "mouse_grid", "move=1"]
+"sF" = ["flash", "mouse_grid", "--secondary"]
+"dF" = ["flash", "mouse_grid", "--double"]
+"mF" = ["flash", "mouse_grid", "--move"]
 "u" = ["flash", "app_undo"]
 "ctrl-r" = ["flash", "app_redo"]
 # tmux-aware close: kills the current tmux window in the current session
@@ -216,9 +217,9 @@ leader = "\\"
 # press `i` afterwards if you want to type.
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
-"<leader>space" = ["flash", "flashlight"]
+"<leader>space" = ["flash", "enter_command", "--input=flashlight "]
 "r" = ["flash", "app_reload"]
-"R" = ["flash", "app_reload", "force=1"]
+"R" = ["flash", "app_reload", "--force"]
 "?" = ["flash", "help_show"]
 ":" = ["flash", "mode_command"]
 
