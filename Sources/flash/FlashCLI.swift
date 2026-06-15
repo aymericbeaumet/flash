@@ -63,37 +63,19 @@ enum FlashCLI {
       print(usage)
       return 0
     }
-    // Verbs are typed in their snake_case form (`mouse_target`,
-    // `app_open`, …). Allow a single hyphen as a typo-friendly synonym
-    // for the leading `_` so `flash app-open` works too — every other
-    // `-` is part of a `--flag` and must not be rewritten.
-    let verb = first.replacingOccurrences(of: "-", with: "_")
+    let verb = first
     let argEntries = Array(args.dropFirst())
-    let argDict = parseLongFlagArgs(verb: verb, rest: argEntries)
+    let argDict = parseLongFlagArgs(rest: argEntries)
     return sendVerb(verb, args: argDict)
   }
 
   /// Parse `--name=value` / `--flag` argv into a flat dictionary. Standard
   /// long-flag shell convention — see `parseVerbArgs` in `Shortcut.swift`
-  /// for the matching config-side parser.
-  ///
-  /// Two verb-specific positional conveniences are kept so existing muscle
-  /// memory still works:
-  ///
-  ///     flash app_open Firefox          → --name=Firefox
-  ///     flash alert_show hello world    → --message="hello world"
-  ///
-  /// Anything that doesn't start with `--` outside those two verbs is
-  /// silently dropped so the user notices their mistake at the verb
-  /// dispatcher (missing required arg) instead of having the bad token
+  /// for the matching config-side parser. Anything that doesn't start with
+  /// `--` is silently dropped so the user notices their mistake at the
+  /// verb dispatcher (missing required arg) instead of having a bad token
   /// quietly land somewhere.
-  private static func parseLongFlagArgs(verb: String, rest: [String]) -> [String: String] {
-    if verb == "app_open", rest.count == 1, !rest[0].hasPrefix("--") {
-      return ["name": rest[0]]
-    }
-    if verb == "alert_show", !rest.contains(where: { $0.hasPrefix("--") }) {
-      return ["message": rest.joined(separator: " ")]
-    }
+  private static func parseLongFlagArgs(rest: [String]) -> [String: String] {
     var out: [String: String] = [:]
     for entry in rest {
       guard entry.hasPrefix("--") else { continue }

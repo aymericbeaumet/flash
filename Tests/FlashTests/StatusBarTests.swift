@@ -203,7 +203,11 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(panel.commandPromptLayer.shadowRadius, 0)
   }
 
-  func testPersistentStatusBarStaysBelowNativeStatusBarLevel() {
+  func testPersistentStatusBarRendersAboveNativeMenuBar() {
+    // The system menu bar lives at `.mainMenu`; we want the Flash status
+    // bar to render on top of it (otherwise the translucent native bar
+    // bleeds through and makes the Flash bar look transparent), so the
+    // persistent level must be strictly higher.
     XCTAssertEqual(
       OverlayPanel.windowLevelForOverlayContent(
         inputMode: .normal,
@@ -214,10 +218,10 @@ final class StatusBarTests: XCTestCase {
       OverlayPanel.persistentStatusWindowLevel.rawValue)
     XCTAssertEqual(
       OverlayPanel.persistentStatusWindowLevel.rawValue,
-      NSWindow.Level.mainMenu.rawValue)
-    XCTAssertLessThan(
-      OverlayPanel.persistentStatusWindowLevel.rawValue,
       NSWindow.Level.statusBar.rawValue)
+    XCTAssertGreaterThan(
+      OverlayPanel.persistentStatusWindowLevel.rawValue,
+      NSWindow.Level.mainMenu.rawValue)
   }
 
   func testTransientSurfacesUseElevatedOverlayWindowLevel() {

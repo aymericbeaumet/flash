@@ -28,10 +28,8 @@ extension NormalModeDispatcher {
   }
 
   enum PluginsSubcommand: Equatable {
-    /// Bare `:plugins` — show the modal status view (current behavior).
+    /// Bare `:plugins` — show the modal status view.
     case modal
-    /// `:plugins list` / `:plugins ls` — render the status table inline.
-    case list
     /// `:plugins reload` — stop and restart every loaded plugin.
     case reload
   }
@@ -48,9 +46,8 @@ extension NormalModeDispatcher {
     return matches[0]
   }
 
-  /// `:plugins`, `:plugins list`, `:plugins ls`, `:plugins reload`.
-  /// Returns nil when the input is not a `:plugins` invocation so the
-  /// generic command-spec table runs.
+  /// `:plugins`, `:plugins reload`. Returns nil when the input is not a
+  /// `:plugins` invocation so the generic command-spec table runs.
   private static func pluginsCommand(_ raw: String) -> CommandLineCommand? {
     var body = raw.trimmed
     guard body.hasPrefix(":") else { return nil }
@@ -64,8 +61,6 @@ extension NormalModeDispatcher {
     }
     guard args.count == 1 else { return nil }
     switch args[0] {
-    case "list", "ls":
-      return .plugins(.list)
     case "reload":
       return .plugins(.reload)
     default:
@@ -122,74 +117,56 @@ extension NormalModeDispatcher {
   }
 
   struct CandidateFinderQuery: Equatable {
-    /// Lowercased source tokens from the legacy `@<source>` / `--<source>`
-    /// selectors (kept for backward compatibility; `@source:<name>` is the
-    /// canonical form going forward). Empty when the user didn't pin
-    /// any source. The host expands these into `AttributeFilter`s on
-    /// the `source` field at filter time.
-    var sourceFilters: [String]
     /// `@<field>:<pattern>` selectors — the structured, multi-field
-    /// variant.
+    /// filter form. The host turns each one into an `AttributeFilter`
+    /// against the matching candidate field at filter time.
     var attributeFilters: [AttributeFilter]
     /// The residual search text (every non-selector token, space-joined).
     var text: String
   }
 
   /// Splits a candidate-finder query into its selectors and the residual
-  /// search text. Two selector forms are recognised, anywhere in the
-  /// query, in any order:
+  /// search text. Selectors are `@<field>:<pattern>` only — the structured
+  /// attribute filter. Supported fields: `source`, `kind`, `name`, `url`,
+  /// `bundle`, `subtitle`. Pattern uses `*` as the wildcard (see
+  /// `AttributeFilter`).
   ///
-  ///   - `@<field>:<pattern>` — structured attribute filter (canonical).
-  ///     Supported fields: `source`, `kind`, `name`, `url`, `bundle`,
-  ///     `subtitle`. Pattern uses `*` as the wildcard (see
-  ///     `AttributeFilter`).
-  ///   - `@<source>` / `--<source>` — legacy shorthand for
-  ///     `@source:<source>` exact match. Multiple legacy tokens OR.
-  ///
-  /// A bare `@` / `--` / `@:` (no name) is literal search text.
+  /// Anything else — including the old bare-`@<source>` shorthand — is
+  /// treated as literal search text.
   ///
   /// Examples:
-  ///   "@notes inbox"               → src=[notes], attrs=[],            text="inbox"
-  ///   "@source:firefox foo"        → src=[],      attrs=[source:firefox], text="foo"
-  ///   "@url:*google* rust"         → src=[],      attrs=[url:*google*],   text="rust"
-  ///   "@kind:browser_tab"          → src=[],      attrs=[kind:browser_tab], text=""
-  ///   "test"                       → src=[],      attrs=[],            text="test"
+  ///   "@source:firefox foo"        → attrs=[source:firefox], text="foo"
+  ///   "@url:*google* rust"         → attrs=[url:*google*],   text="rust"
+  ///   "@kind:browser_tab"          → attrs=[kind:browser_tab], text=""
+  ///   "test"                       → attrs=[],            text="test"
+  ///   "@notes inbox"               → attrs=[],            text="@notes inbox"
   static func candidateFinderSourceFilter(_ query: String) -> CandidateFinderQuery {
-    var sourceFilters: [String] = []
     var attributeFilters: [AttributeFilter] = []
     var words: [Substring] = []
     for token in query.split(whereSeparator: { $0.isWhitespace }) {
-      let body: Substring
-      if token.hasPrefix("--") {
-        body = token.dropFirst(2)
-      } else if token.hasPrefix("@") {
-        body = token.dropFirst(1)
-      } else {
+      guard token.hasPrefix("@") else {
         words.append(token)
         continue
       }
-      if body.isEmpty {
-        // Bare `@` / `--` — let it through as literal search text.
+      let body = token.dropFirst(1)
+      guard let colon = body.firstIndex(of: ":") else {
+        // No colon → not an attribute filter. Treat as literal text so a
+        // user typing `@notes inbox` sees that exact string as their
+        // query rather than a silently-eaten source filter.
         words.append(token)
         continue
       }
-      if let colon = body.firstIndex(of: ":") {
-        let field = String(body[..<colon]).lowercased()
-        let pattern = String(body[body.index(after: colon)...])
-        // `@:foo` (empty field) or `@field:` (empty pattern) is
-        // ambiguous — fall back to literal text so a typo isn't
-        // silently swallowed.
-        if field.isEmpty || pattern.isEmpty {
-          words.append(token)
-          continue
-        }
-        attributeFilters.append(AttributeFilter(field: field, pattern: pattern))
-      } else {
-        sourceFilters.append(body.lowercased())
+      let field = String(body[..<colon]).lowercased()
+      let pattern = String(body[body.index(after: colon)...])
+      // `@:foo` (empty field) or `@field:` (empty pattern) is ambiguous
+      // — fall back to literal text so a typo isn't silently swallowed.
+      if field.isEmpty || pattern.isEmpty {
+        words.append(token)
+        continue
       }
+      attributeFilters.append(AttributeFilter(field: field, pattern: pattern))
     }
     return CandidateFinderQuery(
-      sourceFilters: sourceFilters,
       attributeFilters: attributeFilters,
       text: words.joined(separator: " "))
   }
@@ -502,7 +479,7 @@ extension NormalModeDispatcher {
 
   /// Built-in subcommands surfaced by `:plugins <tab>`. Kept in lockstep
   /// with `pluginsCommand(_:)`.
-  static let pluginsBuiltinSubcommands: [String] = ["list", "ls", "reload"]
+  static let pluginsBuiltinSubcommands: [String] = ["reload"]
 
   private static func topLevelCompletions(pluginCommands: [String])
     -> [CommandLineCompletion]

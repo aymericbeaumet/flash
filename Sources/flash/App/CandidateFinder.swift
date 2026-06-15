@@ -684,47 +684,8 @@ enum CandidateFinder {
     return previous[b.count] <= maxDistance ? previous[b.count] : nil
   }
 
-  /// Browser-tab plugin namespaces under the new `<plugin>.<subsource>`
-  /// convention. The group filter (`--tabs`) folds across all of
-  /// these regardless of which subsource the tab came from.
-  private static let browserSourcePrefixes: [String] = [
-    "firefox", "safari", "chrome", "chromium",
-    "brave", "edge", "arc", "vivaldi", "opera",
-  ]
-
   static func isAlive(_ candidate: Candidate) -> Bool {
     candidate.pid != nil
-  }
-
-  /// Whether a candidate belongs to the source the user pinned via
-  /// `@<filter>` / `--<filter>`. The filter is already lowercased.
-  /// Matching rules, in priority order:
-  ///   1. Exact match against `candidate.source`.
-  ///   2. Dotted-prefix match — `@firefox` matches `firefox.tabs`,
-  ///      `firefox.bookmarks`, … but not an unrelated `firefoxx`
-  ///      that happens to start with `firefox`. The check requires
-  ///      either an exact equality or a `.` right after the filter.
-  ///   3. Group aliases: `tabs`/`browsers` fold the browser plugin
-  ///      namespaces; `apps` folds the core app source.
-  static func sourceLabelMatchesFilter(_ label: String, filter: String) -> Bool {
-    let source = label.lowercased()
-    if source == filter { return true }
-    if source.hasPrefix(filter + ".") { return true }
-    switch filter {
-    case "browser", "browsers", "tab", "tabs":
-      for prefix in browserSourcePrefixes {
-        if source == prefix || source.hasPrefix(prefix + ".") { return true }
-      }
-      return false
-    case "apps":
-      return source == "apps" || source == "core.apps"
-    default:
-      return false
-    }
-  }
-
-  static func candidateMatchesSourceFilter(_ candidate: Candidate, filter: String) -> Bool {
-    sourceLabelMatchesFilter(candidate.source, filter: filter)
   }
 
   /// One pre-compiled attribute pattern. The wildcard parse runs once at

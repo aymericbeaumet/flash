@@ -313,7 +313,6 @@ final class PluginProcess {
   func queryCandidates(
     scope: CandidateScope,
     query: String,
-    sourceFilters: [String],
     environment: FlashSourceEnvironment,
     completion: @escaping ([Candidate]) -> Void
   ) {
@@ -335,7 +334,6 @@ final class PluginProcess {
     let params: [String: Any] = [
       "scope": scopeName,
       "query": query,
-      "source_filters": sourceFilters,
       "running_applications": applications,
     ]
     sendRequest(method: "candidateQuery", params: params) { [weak self] response in

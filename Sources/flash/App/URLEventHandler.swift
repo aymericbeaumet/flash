@@ -208,12 +208,18 @@ final class URLEventHandler: NSObject {
     "app_open_finder": { a in .candidateFinder(all: a.bool("all")) },
     "enter_command": { a in
       guard let raw = a.value("input"), !raw.isEmpty else { return nil }
-      // Trim every leading colon so `--input=:emojis` and
-      // `--input='emojis '` (and `--input='::: open'`) all resolve to the
-      // same command-line state. The colon is just the visual prefix the
-      // command-line panel shows; the buffer underneath has none.
-      let trimmed = String(raw.drop(while: { $0 == ":" }))
-      return .enterCommand(input: trimmed, restoreMode: a.bool("restore_mode"))
+      // Trim every leading colon so `--input=:emojis` and `--input='emojis '`
+      // resolve to the same command-line state — the colon is just the
+      // visual prefix the panel shows, the buffer underneath has none.
+      var normalized = String(raw.drop(while: { $0 == ":" }))
+      // Auto-append a single trailing space so users can write
+      // `--input=emojis` instead of the awkward `--input='emojis '`. The
+      // command-line keyword parsers expect "verb<space><query>", so the
+      // space is required for the seeded buffer to actually enter that
+      // mode rather than reading as raw text.
+      while normalized.last == " " { normalized.removeLast() }
+      if !normalized.isEmpty { normalized.append(" ") }
+      return .enterCommand(input: normalized, restoreMode: a.bool("restore_mode"))
     },
     "url_copy": { _ in .copyURL },
     "tab_next": { _ in .tabNext },

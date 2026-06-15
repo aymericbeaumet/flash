@@ -697,9 +697,7 @@ extension AppDelegate {
 
   private func runPluginsSubcommand(_ sub: NormalModeDispatcher.PluginsSubcommand) {
     switch sub {
-    case .modal, .list:
-      // Both surface the same status table; `:plugins` opens the modal
-      // (legacy), `:plugins list` aliases to it explicitly.
+    case .modal:
       showPlugins()
     case .reload:
       let ids = pluginManager.reloadAll()
@@ -815,7 +813,6 @@ extension AppDelegate {
     registry.queryCandidateSources(
       scope: scope,
       text: "",
-      sourceFilters: [],
       firstDeadlineMs: Self.initialCandidateSourceDeadlineMs
     ) { [weak self] candidates, isFinal in
       guard let self else { return }
@@ -1238,10 +1235,9 @@ extension AppDelegate {
 
   private func updateCandidateMatches(query: String, requestCandidateRefresh: Bool = true) {
     let t0 = CFAbsoluteTimeGetCurrent()
-    // `@<source>` / `--<source>` selectors (e.g. `:flashlight @tmux @slack
-    // test`) pin the pool to those sources; they may appear anywhere and
-    // several widen the pool (OR). The residual text is the actual search
-    // query. Selectors are only honored outside emoji mode and outside
+    // `@<field>:<pattern>` selectors (e.g. `:flashlight @source:tmux test`)
+    // attach attribute filters to the pool; the residual text is the actual
+    // search query. Selectors are only honored outside emoji mode and outside
     // bang mode.
     let sourceCompletion = CandidateFinder.sourceCompletionState(
       query: query,
@@ -1252,9 +1248,7 @@ extension AppDelegate {
     let parsed =
       sourceCompletion == nil
       ? NormalModeDispatcher.candidateFinderSourceFilter(query)
-      : NormalModeDispatcher.CandidateFinderQuery(
-        sourceFilters: [], attributeFilters: [], text: query)
-    let sourceFilters = candidateFinderEmojiMode ? [] : parsed.sourceFilters
+      : NormalModeDispatcher.CandidateFinderQuery(attributeFilters: [], text: query)
     let attributeFilters: [CandidateFinder.CompiledAttributeFilter]
     if candidateFinderEmojiMode {
       attributeFilters = []
@@ -1270,14 +1264,12 @@ extension AppDelegate {
       scheduleCandidateSourceQueryIfNeeded(
         query: query,
         trimmed: trimmed,
-        sourceFilters: sourceFilters,
         sourceCompletionActive: sourceCompletion != nil,
         bangCompletionActive: bangCompletion != nil)
     }
 
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,
-      sourceFilters: sourceFilters,
       attributeFilters: attributeFilters)
     let tFiltered = CFAbsoluteTimeGetCurrent()
 
@@ -1438,7 +1430,6 @@ extension AppDelegate {
   private func scheduleCandidateSourceQueryIfNeeded(
     query: String,
     trimmed: String,
-    sourceFilters: [String],
     sourceCompletionActive: Bool,
     bangCompletionActive: Bool
   ) {
@@ -1450,8 +1441,7 @@ extension AppDelegate {
       candidateFinderFilteredPoolCache = nil
     }
     let queryText = trimmed.trimmed
-    let querySourceFilters = candidateFinderEmojiMode ? ["emojis.glyphs"] : sourceFilters
-    guard candidateFinderEmojiMode || !querySourceFilters.isEmpty || !queryText.isEmpty else {
+    guard candidateFinderEmojiMode || !queryText.isEmpty else {
       candidateFinderSourceQueryKey = ""
       candidateFinderDynamicCandidates = []
       candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
@@ -1468,7 +1458,6 @@ extension AppDelegate {
     let key = [
       scopeKey,
       candidateFinderEmojiMode ? "emoji" : "normal",
-      querySourceFilters.sorted().joined(separator: ","),
       queryText,
     ].joined(separator: "\u{1f}")
     guard key != candidateFinderSourceQueryKey else { return }
@@ -1484,8 +1473,7 @@ extension AppDelegate {
     candidateFinderFilteredPoolCache = nil
     registry.queryCandidateSources(
       scope: candidateFinderScope,
-      text: queryText,
-      sourceFilters: querySourceFilters
+      text: queryText
     ) { [weak self] candidates, isFinal in
       guard isFinal else { return }
       guard let self else { return }
@@ -1505,7 +1493,7 @@ extension AppDelegate {
   /// Pick the candidate pool and the text we score against. Two cases:
   ///
   ///   * Default mode — the regular pool (apps, tmux, browser tabs, …)
-  ///     filtered by emoji-mode kind + any `@source`/`--source`
+  ///     filtered by emoji-mode kind + any `@<field>:<pattern>` attribute
   ///     selectors, scored on the full query.
   ///   * Bang mode (query starts with `!`) — the pool is **only** the
   ///     registered plugin bangs, scored on the token typed after `!`.
@@ -1513,7 +1501,6 @@ extension AppDelegate {
   ///     bang registry without app rows piling up.
   private func buildCandidateFinderPool(
     trimmed: String,
-    sourceFilters: [String],
     attributeFilters: [CandidateFinder.CompiledAttributeFilter]
   ) -> (pool: [Candidate], scoringText: String) {
     if !candidateFinderEmojiMode, let bang = CandidateFinder.parseBang(trimmed) {
@@ -1544,13 +1531,12 @@ extension AppDelegate {
         knownSourceCompletionCandidates())
       return (pool, completion.token)
     }
-    // Cache the kind+sourceFilter+attributeFilter pass — while the
-    // user types into flashlight the signature is stable, so the same
-    // ~2k-entry filter ran ~2k times on every keystroke. Keyed by the
-    // base-pool epoch + emoji mode + filter signature; one-slot cache
-    // because consecutive keystrokes always share the same key.
-    let signature = poolFilterSignature(
-      sourceFilters: sourceFilters, attributeFilters: attributeFilters)
+    // Cache the kind+attributeFilter pass — while the user types into
+    // flashlight the signature is stable, so the same ~2k-entry filter
+    // ran ~2k times on every keystroke. Keyed by the base-pool epoch +
+    // emoji mode + filter signature; one-slot cache because consecutive
+    // keystrokes always share the same key.
+    let signature = poolFilterSignature(attributeFilters: attributeFilters)
     if let cached = candidateFinderFilteredPoolCache,
       cached.epoch == candidateFinderCandidatesEpoch,
       cached.emojiMode == candidateFinderEmojiMode,
@@ -1559,20 +1545,11 @@ extension AppDelegate {
       return (cached.pool, trimmed)
     }
     let pool = candidateFinderCandidates.filter { candidate in
-      let kindMatches =
-        candidateFinderEmojiMode
+      candidateFinderEmojiMode
         ? candidate.kind == CandidateFinder.emojiKind
         : candidate.kind != CandidateFinder.emojiKind
           && candidate.kind != CandidateFinder.bangKind
           && candidate.kind != CandidateFinder.sourceKind
-      guard kindMatches else { return false }
-      if !sourceFilters.isEmpty {
-        let any = sourceFilters.contains {
-          CandidateFinder.candidateMatchesSourceFilter(candidate, filter: $0)
-        }
-        guard any else { return false }
-      }
-      return true
     }
     let attributeFiltered = CandidateFinder.applyAttributeFilters(
       pool, filters: attributeFilters)
@@ -1585,24 +1562,16 @@ extension AppDelegate {
     return (attributeFiltered, trimmed)
   }
 
-  /// Stable cache key for the current pool-filter inputs. Source
-  /// selectors come from a user-typed token list (`@tmux @apps`); the
+  /// Stable cache key for the current pool-filter inputs. The
   /// attribute filters compare field+kind+needle. Joining them into a
   /// short string is cheap enough that the cache key is faster to
   /// build than even one short filter pass.
   private func poolFilterSignature(
-    sourceFilters: [String],
     attributeFilters: [CandidateFinder.CompiledAttributeFilter]
   ) -> String {
-    var parts: [String] = []
-    parts.reserveCapacity(sourceFilters.count + attributeFilters.count)
-    for filter in sourceFilters {
-      parts.append("s:\(filter)")
-    }
-    for filter in attributeFilters {
-      parts.append("a:\(filter.field):\(filter.kind):\(filter.needle)")
-    }
-    return parts.joined(separator: "|")
+    attributeFilters
+      .map { "a:\($0.field):\($0.kind):\($0.needle)" }
+      .joined(separator: "|")
   }
 
   /// Build one `@<source>` completion row per registered candidate source.

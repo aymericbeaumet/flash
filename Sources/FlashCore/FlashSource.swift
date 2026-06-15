@@ -232,12 +232,10 @@ public struct FlashSourceEnvironment {
 public struct CandidateQuery: Sendable {
   public let scope: CandidateScope
   public let text: String
-  public let sourceFilters: [String]
 
-  public init(scope: CandidateScope, text: String, sourceFilters: [String] = []) {
+  public init(scope: CandidateScope, text: String) {
     self.scope = scope
     self.text = text
-    self.sourceFilters = sourceFilters
   }
 }
 

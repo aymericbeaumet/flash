@@ -239,54 +239,6 @@ final class SourceCandidateTests: XCTestCase {
       ["z-bang", "z-tmux", "z-tab", "z-active", "z-inactive", "z-note"])
   }
 
-  func testCandidateMatchesSourceFilterDottedConvention() {
-    // Sources follow `<plugin>.<subsource>`. The filter matches:
-    //   - exact (`@notes.notes` == `notes.notes`)
-    //   - parent prefix (`@notes` matches `notes.notes`, `notes.tags`, …)
-    //   - group aliases (`@tabs` folds every `*.tabs`)
-    // Loose substrings (`@note` against `notes.notes`) no longer
-    // match — explicit aliases handle the shorthand case.
-    let note = CandidateFinder.prepare(
-      candidate(
-        kind: .plugin("note"), source: "notes.notes", name: "Inbox",
-        subtitle: "note", bundleIdentifier: ""))
-    let firefoxTab = CandidateFinder.prepare(
-      candidate(
-        kind: .plugin("browser_tab"), source: "firefox.tabs", name: "Gmail",
-        subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox"))
-    let app = CandidateFinder.prepare(
-      candidate(
-        kind: .app, source: "core.apps", name: "Finder",
-        subtitle: "app", bundleIdentifier: "com.apple.finder"))
-
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(note, filter: "notes.notes"))
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(note, filter: "notes"))
-    XCTAssertFalse(
-      CandidateFinder.candidateMatchesSourceFilter(note, filter: "note"))
-    XCTAssertFalse(
-      CandidateFinder.candidateMatchesSourceFilter(note, filter: "app"))
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "firefox.tabs"))
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "firefox"))
-    XCTAssertFalse(
-      CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "fire"))
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "browser"))
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(firefoxTab, filter: "tabs"))
-    XCTAssertTrue(
-      CandidateFinder.candidateMatchesSourceFilter(app, filter: "apps"))
-    XCTAssertTrue(
-      CandidateFinder.sourceLabelMatchesFilter("apps", filter: "apps"))
-    XCTAssertTrue(
-      CandidateFinder.sourceLabelMatchesFilter("core.apps", filter: "apps"))
-    XCTAssertFalse(
-      CandidateFinder.candidateMatchesSourceFilter(app, filter: "browser"))
-  }
-
   func testHigherScoreWinsEvenOverActiveAppTier() {
     // Score leads: a dead exact match (11k) outranks a live weak match
     // (10k) even though active apps are the higher tier — tier only
@@ -1323,13 +1275,13 @@ final class SourceCandidateTests: XCTestCase {
 
   // MARK: - @field:pattern attribute filter
 
-  func testAttributeFilterParsesStructuredAndLegacyForms() {
-    // Legacy `@<source>` survives untouched (back-compat with users
-    // who have `@notes inbox` in their muscle memory).
-    let legacy = NormalModeDispatcher.candidateFinderSourceFilter("@notes inbox")
-    XCTAssertEqual(legacy.sourceFilters, ["notes"])
-    XCTAssertTrue(legacy.attributeFilters.isEmpty)
-    XCTAssertEqual(legacy.text, "inbox")
+  func testAttributeFilterParsesStructuredForms() {
+    // Bare `@<source>` is no longer a source shorthand — it falls through
+    // as literal search text, since the structured `@<field>:<pattern>`
+    // form is the only attribute-filter syntax.
+    let bare = NormalModeDispatcher.candidateFinderSourceFilter("@notes inbox")
+    XCTAssertTrue(bare.attributeFilters.isEmpty)
+    XCTAssertEqual(bare.text, "@notes inbox")
 
     // Structured `@<field>:<pattern>` is parsed as an attribute filter
     // and removed from the search text.
@@ -1339,7 +1291,6 @@ final class SourceCandidateTests: XCTestCase {
       [
         NormalModeDispatcher.AttributeFilter(field: "source", pattern: "firefox")
       ])
-    XCTAssertEqual(structured.sourceFilters, [])
     XCTAssertEqual(structured.text, "foo")
 
     // Multiple attribute filters and mixed order with residual text.

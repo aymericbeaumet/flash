@@ -205,56 +205,34 @@ final class SourceRegistry {
   func queryCandidateSources(
     scope: CandidateScope,
     text: String,
-    sourceFilters: [String],
     firstDeadlineMs: Int? = nil,
     completion: @escaping (_ candidates: [Candidate], _ isFinal: Bool) -> Void
   ) {
     refreshRunningApplications()
     let env = environment
-    let request = CandidateQuery(scope: scope, text: text, sourceFilters: sourceFilters)
+    let request = CandidateQuery(scope: scope, text: text)
     let allSources = sources
     var sourceSnapshot: [FlashSource] = []
     var excluded: [String] = []
     for source in allSources {
       let isPlugin = source.identifier.hasPrefix("plugin:")
       let hasCap = source.capabilities.contains(.candidates)
-      let labelMatches: Bool
-      if sourceFilters.isEmpty {
-        labelMatches = true
-      } else {
-        let labels =
-          source.candidateSourceLabels.isEmpty
-          ? [source.displayName, source.identifier]
-          : source.candidateSourceLabels
-        labelMatches = sourceFilters.contains { filter in
-          labels.contains { label in
-            CandidateFinder.sourceLabelMatchesFilter(label, filter: filter)
-          }
-        }
-      }
       let isCore = source.identifier == "core.apps"
-      if !isCore, isPlugin, hasCap, labelMatches {
+      if !isCore, isPlugin, hasCap {
         sourceSnapshot.append(source)
       } else if !isCore {
-        // The core.apps source is handled separately so its exclusion isn't
-        // interesting; only log plugin filters that turned a candidate
-        // away. `gate` reports the first failing predicate so a stale
-        // capability bitmap or missing source label surfaces immediately.
         let gate: String
         if !isPlugin {
           gate = "not_plugin"
-        } else if !hasCap {
-          gate = "missing_cap[has=\(source.capabilities.traceDescription)]"
         } else {
-          gate =
-            "label_mismatch[filters=\(sourceFilters.joined(separator: ",")),labels=\(source.candidateSourceLabels.joined(separator: ","))]"
+          gate = "missing_cap[has=\(source.capabilities.traceDescription)]"
         }
         excluded.append("\(source.identifier)(\(gate))")
       }
     }
     if !excluded.isEmpty || sourceSnapshot.isEmpty {
       FlashLog.trace(
-        "[candidate_finder] query_plan text=\"\(text)\" filters=\(sourceFilters) "
+        "[candidate_finder] query_plan text=\"\(text)\" "
           + "passing=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))] "
           + "excluded=[\(excluded.joined(separator: ","))]")
     }

@@ -90,7 +90,6 @@ final class PluginFlashSource: FlashSource {
     plugin.queryCandidates(
       scope: request.scope,
       query: request.text,
-      sourceFilters: request.sourceFilters,
       environment: environment
     ) { [identifier = identifier] candidates in
       let elapsedMs = Int(

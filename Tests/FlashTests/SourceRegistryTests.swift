@@ -254,7 +254,6 @@ final class SourceRegistryTests: XCTestCase {
     registry.queryCandidateSources(
       scope: .all,
       text: "",
-      sourceFilters: [],
       firstDeadlineMs: 5
     ) { candidates, isFinal in
       if isFinal {

@@ -197,14 +197,16 @@ final class HotkeySyntaxTests: XCTestCase {
         argv: ["flash", "enter_command", "--input=flashlight ", "--restore-mode=1"]
       )?.command,
       .enterCommand(input: "flashlight ", restoreMode: true))
-    // Leading colons in the input are trimmed so `--input=:open` and
-    // `--input='::: open'` resolve to the same seed text.
+    // Leading colons in the input are trimmed and a single trailing space
+    // is auto-appended so `--input=:open` and `--input='::: open'` both
+    // resolve to `"open "` — the user can write `--input=emojis` instead
+    // of the awkward `--input='emojis '`.
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command", "--input=:open"])?.command,
-      .enterCommand(input: "open", restoreMode: false))
+      .enterCommand(input: "open ", restoreMode: false))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command", "--input=::: open"])?.command,
-      .enterCommand(input: " open", restoreMode: false))
+      .enterCommand(input: " open ", restoreMode: false))
     // `--input` is required.
     XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_command"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_command", "--input="]))

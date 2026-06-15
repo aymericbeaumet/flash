@@ -551,13 +551,9 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCommand(":%yan"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":plugins"), .plugins(.modal))
     XCTAssertEqual(
-      NormalModeDispatcher.commandLineCommand(":plugins list"), .plugins(.list))
-    XCTAssertEqual(
-      NormalModeDispatcher.commandLineCommand(":plugins ls"), .plugins(.list))
-    XCTAssertEqual(
       NormalModeDispatcher.commandLineCommand(":plugins reload"), .plugins(.reload))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins bogus"))
-    XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins list extra"))
+    XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins reload extra"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":mappings"), .mappings)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":map"), .mappings)
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("qa"))
@@ -888,7 +884,7 @@ final class NormalModeTests: XCTestCase {
         pluginSubcommands: [:]))
     XCTAssertEqual(context.prefix, ":plugins ")
     XCTAssertEqual(context.query, "")
-    XCTAssertEqual(Set(context.items.map(\.label)), ["list", "ls", "reload"])
+    XCTAssertEqual(Set(context.items.map(\.label)), ["reload"])
     XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginSubcommand })
   }
 
@@ -927,59 +923,11 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineEmojiQuery(":flashlight heart"))
   }
 
-  func testCandidateFinderSourceFilterParsesLeadingFlag() {
-    let withText = NormalModeDispatcher.candidateFinderSourceFilter("--notes inbox")
-    XCTAssertEqual(withText.sourceFilters, ["notes"])
-    XCTAssertEqual(withText.text, "inbox")
-
-    let bare = NormalModeDispatcher.candidateFinderSourceFilter("--notes")
-    XCTAssertEqual(bare.sourceFilters, ["notes"])
-    XCTAssertEqual(bare.text, "")
-
-    let none = NormalModeDispatcher.candidateFinderSourceFilter("inbox")
-    XCTAssertEqual(none.sourceFilters, [])
-    XCTAssertEqual(none.text, "inbox")
-
-    let upper = NormalModeDispatcher.candidateFinderSourceFilter("  --Firefox   gmail ")
-    XCTAssertEqual(upper.sourceFilters, ["firefox"])
-    XCTAssertEqual(upper.text, "gmail")
-
-    // `@<source>` is equivalent to `--<source>`.
-    let at = NormalModeDispatcher.candidateFinderSourceFilter("@notes inbox")
-    XCTAssertEqual(at.sourceFilters, ["notes"])
-    XCTAssertEqual(at.text, "inbox")
-
-    let atBare = NormalModeDispatcher.candidateFinderSourceFilter("  @Firefox ")
-    XCTAssertEqual(atBare.sourceFilters, ["firefox"])
-    XCTAssertEqual(atBare.text, "")
-  }
-
-  func testCandidateFinderSourceFilterSelectorsAnywhereAndMultiple() {
-    // Selectors may appear before or after the query, in any order, and
-    // several of them widen the pool. The two orderings must be identical.
-    let leading = NormalModeDispatcher.candidateFinderSourceFilter("@tmux @slack test")
-    XCTAssertEqual(leading.sourceFilters, ["tmux", "slack"])
-    XCTAssertEqual(leading.text, "test")
-
-    let trailing = NormalModeDispatcher.candidateFinderSourceFilter("test @slack @tmux")
-    XCTAssertEqual(trailing.sourceFilters, ["slack", "tmux"])
-    XCTAssertEqual(trailing.text, "test")
-
-    // Interleaved selectors and multi-word text.
-    let mixed = NormalModeDispatcher.candidateFinderSourceFilter("foo @notes bar --firefox baz")
-    XCTAssertEqual(mixed.sourceFilters, ["notes", "firefox"])
-    XCTAssertEqual(mixed.text, "foo bar baz")
-
-    // A bare `@` / `--` with no name is literal search text, not a selector.
-    let bareAt = NormalModeDispatcher.candidateFinderSourceFilter("@ -- hi")
-    XCTAssertEqual(bareAt.sourceFilters, [])
-    XCTAssertEqual(bareAt.text, "@ -- hi")
-  }
-
-  func testCandidateFinderSourceFilterParsesStructuredSelectorsWithLegacyFilters() {
+  func testCandidateFinderSourceFilterParsesStructuredSelectors() {
+    // `@<field>:<pattern>` is the only attribute-filter syntax. Bare
+    // tokens — `@notes`, `--notes` — are literal search text.
     let parsed = NormalModeDispatcher.candidateFinderSourceFilter(
-      "rust @source:firefox @url:*github* --tmux @kind:browser_tab repo")
-    XCTAssertEqual(parsed.sourceFilters, ["tmux"])
+      "rust @source:firefox @url:*github* @kind:browser_tab repo")
     XCTAssertEqual(
       parsed.attributeFilters,
       [
@@ -988,6 +936,14 @@ final class NormalModeTests: XCTestCase {
         NormalModeDispatcher.AttributeFilter(field: "kind", pattern: "browser_tab"),
       ])
     XCTAssertEqual(parsed.text, "rust repo")
+
+    let bareAt = NormalModeDispatcher.candidateFinderSourceFilter("@notes inbox")
+    XCTAssertEqual(bareAt.attributeFilters, [])
+    XCTAssertEqual(bareAt.text, "@notes inbox")
+
+    let bareDoubleDash = NormalModeDispatcher.candidateFinderSourceFilter("--notes inbox")
+    XCTAssertEqual(bareDoubleDash.attributeFilters, [])
+    XCTAssertEqual(bareDoubleDash.text, "--notes inbox")
   }
 
   func testFlashlightAliasExpansionRequiresWordBoundaryAndTrailingWhitespace() {
