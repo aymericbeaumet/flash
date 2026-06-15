@@ -20,14 +20,23 @@ enum WindowMover {
     guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
     let axApp = AXUIElementCreateApplication(frontApp.processIdentifier)
 
-    var windowRef: CFTypeRef?
-    let status = AXUIElementCopyAttributeValue(
-      axApp, kAXFocusedWindowAttribute as CFString, &windowRef)
-    guard status == .success, let cfWin = windowRef else {
-      FlashLog.warn("[window_move] no focused window for pid \(frontApp.processIdentifier)")
+    // `kAXFocusedWindowAttribute` is the right answer when the app is the
+    // key/focused process, but Flash's overlay panel often holds key
+    // focus during a hotkey press (normal-mode capture, command-line
+    // prompt). In that state AX returns nil for the underlying app's
+    // focused window; `kAXMainWindow` is the next-best signal — it
+    // tracks the app's frontmost window regardless of which process
+    // currently owns the keyboard.
+    let window: AXUIElement
+    if let focused = copyWindowAttribute(axApp, kAXFocusedWindowAttribute) {
+      window = focused
+    } else if let main = copyWindowAttribute(axApp, kAXMainWindowAttribute) {
+      window = main
+    } else {
+      FlashLog.warn(
+        "[window_move] no focused or main window for pid \(frontApp.processIdentifier)")
       return
     }
-    let window = cfWin as! AXUIElement
 
     guard let currentFrame = readWindowFrameInNSCoords(window: window) else {
       return
@@ -125,6 +134,20 @@ enum WindowMover {
       y: visibleFrame.minY,
       width: visibleFrame.width,
       height: max(0, maxY - visibleFrame.minY))
+  }
+
+  /// Wrapper around `AXUIElementCopyAttributeValue` that returns the
+  /// `AXUIElement` payload for window-shaped attributes (`kAXFocusedWindow`,
+  /// `kAXMainWindow`), or `nil` when the attribute is missing or the
+  /// query fails.
+  private static func copyWindowAttribute(
+    _ axApp: AXUIElement,
+    _ attribute: String
+  ) -> AXUIElement? {
+    var ref: CFTypeRef?
+    let status = AXUIElementCopyAttributeValue(axApp, attribute as CFString, &ref)
+    guard status == .success, let cf = ref else { return nil }
+    return (cf as! AXUIElement)
   }
 
   /// Read the AX position + size and convert to NSScreen coordinates
