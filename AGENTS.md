@@ -487,9 +487,9 @@ swift test
 After install, verify:
 
 - `pgrep -fl '/Applications/Flash.app/Contents/MacOS/flash'` shows one PID.
-- `open -g flash://hints_dismiss` triggers no visible side effect (overlay was already hidden).
-- `~/.local/bin/flash help_show` opens the in-app help topic index through `flash://help_show`.
-- `open -g flash://flash_quit` exits the process; relaunch with `open /Applications/Flash.app`.
+- `flash hints_dismiss` triggers no visible side effect (overlay was already hidden).
+- `flash help_show` opens the in-app help topic index.
+- `flash flash_quit` exits the process; relaunch with `open /Applications/Flash.app`.
 
 Karabiner-Elements mappings live in `~/.config/karabiner/karabiner.json` under `profiles[<active>].complex_modifications.rules`.
 

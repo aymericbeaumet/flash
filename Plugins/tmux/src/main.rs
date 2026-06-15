@@ -1348,7 +1348,7 @@ fn resolve_response(
 /// requested target and return the terminal pid hosting it so Flash can
 /// raise that window. The target argument is taken verbatim from the
 /// first command arg, so a mapping like
-/// `flash://plugin_command?command=tmux&subcommand=window&args=main:1`
+/// `["flash", "plugin_command", "command=tmux", "subcommand=window", "args=main:1"]`
 /// jumps straight to `main:1`.
 async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
     let tmux_path = plugin.tmux_path.as_deref();

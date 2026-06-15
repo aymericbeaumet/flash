@@ -4,8 +4,9 @@ use flash_plugin::run;
 // register the manifest mapping that overrides the built-in hard-refresh
 // binding (`R`) while Safari is focused. Safari's "Reload Page From Origin"
 // is ⌘⌥R, not the ⌘⇧R that Firefox/Chrome use, so the manifest rebinds `R`
-// to `flash://send_key?keys=cmd+option+r` at plugin priority (above the
-// config default). The process just idles so the host keeps the mapping live.
+// to `["flash", "send_key", "keys=cmd+option+r"]` at plugin priority (above
+// the config default). The process just idles so the host keeps the mapping
+// live.
 struct Safari;
 
 flash_plugin::plugin!(Safari);

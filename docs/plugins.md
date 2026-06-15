@@ -57,7 +57,7 @@ optional, symmetric conditions:
     "kind": "mappings",
     "modes": ["normal"],
     "mappings": [
-      { "key": "ctrl+k", "command": "flash://plugin_command?command=slack&subcommand=run" }
+      { "key": "ctrl+k", "command": ["flash", "plugin_command", "command=slack", "subcommand=run"] }
     ]
   },
   {
@@ -101,12 +101,13 @@ Shared, optional conditions on any entry:
   default) are always available.
 
 - **`mappings`** — `mappings[]` are key bindings, mode-scoped, app-conditional,
-  and priority-ordered. `command` is a `flash://` URL. Config/default mappings
-  sit at priority 0, so a plugin mapping (priority 25) wins a key collision; a
-  negative priority defers to the built-in default. A plugin may push an updated
-  set at runtime via a `mappings.updated` notification (sibling of
-  `commands.updated`); Flash re-applies it for the focused app without a
-  restart.
+  and priority-ordered. `command` is a string array matching the host's mapping
+  syntax: `["flash", "<verb>", "k=v", …]` for in-process verb dispatch, or any
+  other head for argv exec. Config/default mappings sit at priority 0, so a
+  plugin mapping (priority 25) wins a key collision; a negative priority defers
+  to the built-in default. A plugin may push an updated set at runtime via a
+  `mappings.updated` notification (sibling of `commands.updated`); Flash
+  re-applies it for the focused app without a restart.
 
 - **`shebang`** — `shebangs[]` are flashlight bangs. When a flashlight
   submission begins with `!<token>` (e.g. `!r cat`), Flash routes the remainder

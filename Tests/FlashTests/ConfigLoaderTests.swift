@@ -737,6 +737,36 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.warnings[0].contains("non-empty string array"))
   }
 
+  func testRejectsStringMappingValueAndProducesArrayDiagnostic() {
+    // Strings — quoted or bare — are NOT a valid mapping value. The array
+    // form is the only accepted shape (`["flash", "<verb>", "k=v"...]` for
+    // in-process verbs or `[<argv>...]` for external commands). The
+    // diagnostic must teach the user the array form so a port from the
+    // pre-removal `flash://` syntax surfaces a clear error.
+    let stringForm = ConfigLoader.parse(
+      """
+      [mode.all.mappings]
+      "cmd+ctrl+space" = "flash://emojis"
+      """)
+    XCTAssertEqual(stringForm.warnings.count, 1)
+    XCTAssertTrue(stringForm.warnings[0].contains("cmd+ctrl+space"))
+    XCTAssertTrue(stringForm.warnings[0].contains("non-empty string array"))
+    XCTAssertTrue(stringForm.mode.all.isEmpty)
+
+    let bareVerb = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "j" = "scroll_down"
+      """)
+    XCTAssertEqual(bareVerb.warnings.count, 1)
+    XCTAssertTrue(bareVerb.warnings[0].contains("\"j\""))
+    // The built-in default for `j` survives because the user's invalid
+    // override never installs.
+    XCTAssertEqual(
+      bareVerb.mode.normal.first(where: { $0.key == "j" })?.action.command,
+      .scroll(.down))
+  }
+
   func testParsesModeMappings() {
     let toml = """
       [mode.insert.mappings]
