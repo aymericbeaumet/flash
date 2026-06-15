@@ -832,7 +832,6 @@ extension AppDelegate {
       if self.candidateFinderUserHasTyped {
         self.candidateFinderDynamicCandidates = candidates
         self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(for: scope)
-        self.candidateFinderFilteredPoolCache = nil
         self.rerenderInitialCandidateSourceQuery(command: command)
         return
       }
@@ -840,7 +839,6 @@ extension AppDelegate {
         renderedFirstScreen = true
         self.candidateFinderDynamicCandidates = candidates
         self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(for: scope)
-        self.candidateFinderFilteredPoolCache = nil
         self.rerenderInitialCandidateSourceQuery(command: command)
       }
     }
@@ -1455,14 +1453,12 @@ extension AppDelegate {
     if candidateFinderUserHasTyped, !candidateFinderDeferredCandidates.isEmpty {
       candidateFinderDynamicCandidates = candidateFinderDeferredCandidates
       candidateFinderCandidates = visibleCandidateFinderCandidates(for: candidateFinderScope)
-      candidateFinderFilteredPoolCache = nil
     }
     let queryText = trimmed.trimmed
     guard !queryText.isEmpty else {
       candidateFinderSourceQueryKey = ""
       candidateFinderDynamicCandidates = []
       candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
-      candidateFinderFilteredPoolCache = nil
       return
     }
     let scopeKey: String
@@ -1483,7 +1479,6 @@ extension AppDelegate {
       candidateFinderDynamicCandidates = candidateFinderDeferredCandidates
     }
     candidateFinderCandidates = visibleCandidateFinderCandidates(for: candidateFinderScope)
-    candidateFinderFilteredPoolCache = nil
     registry.queryCandidateSources(
       scope: candidateFinderScope,
       text: queryText
@@ -1497,7 +1492,6 @@ extension AppDelegate {
       self.candidateFinderDynamicCandidates = candidates
       self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(
         for: self.candidateFinderScope)
-      self.candidateFinderFilteredPoolCache = nil
       self.updateCandidateMatches(query: query, requestCandidateRefresh: false)
       self.rerenderCandidateFinderSurface(query: query)
     }

@@ -68,9 +68,20 @@ watching_enabled = true
 #   #[align=centre]  — centred section between left and right
 #   #[align=right]   — right-aligned section
 #
-# Inline styling markers (#[fg=colour245], #[bold=true]) stay in whatever
-# region the parser is currently filling and pass through to the
-# renderer.
+# Inline styling markers stay in whatever region the parser is currently
+# filling and pass through to the renderer:
+#
+#   #[fg=colour245]       — foreground colour (numbered tmux palette)
+#   #[bg=colour0]         — background colour
+#   #[bold] / #[nobold]   — bold weight on/off
+#   #[italics] / #[noitalics]
+#   #[underscore] / #[nounderscore]
+#   #[dim] / #[nodim]
+#   #[reverse] / #[noreverse]
+#
+# `##` emits a literal `#`. Wrap a token in `#{=N:…}` (or `#{=-N:…}` for
+# trailing window) to cap its rendered length at N characters — useful
+# when an app name or plugin field could overflow the bar.
 #
 # Supported template variables (#{token}):
 #   #{mode}

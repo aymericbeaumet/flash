@@ -157,6 +157,87 @@ final class StatusBarTests: XCTestCase {
     XCTAssertTrue(model.modeText.isEmpty)
   }
 
+  func testDoubleHashEscapesLiteralPound() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]##count##: 42",
+      variables: [])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext())
+    XCTAssertEqual(model.modeText, "#count#: 42")
+  }
+
+  func testTokenTruncationHeadKeepsFirstNChars() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]#{=4:mode}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.mode",
+          token: "mode",
+          source: .sdk(.modeLabel))
+      ])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(modeLabel: "COMMAND"))
+    XCTAssertEqual(model.modeText, "COMM")
+  }
+
+  func testTokenTruncationTailKeepsLastNChars() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]#{=-4:mode}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.mode",
+          token: "mode",
+          source: .sdk(.modeLabel))
+      ])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(modeLabel: "COMMAND"))
+    XCTAssertEqual(model.modeText, "MAND")
+  }
+
+  func testTokenTruncationLeavesShortValueUntouched() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]#{=10:mode}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.mode",
+          token: "mode",
+          source: .sdk(.modeLabel))
+      ])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(modeLabel: "NORMAL"))
+    XCTAssertEqual(model.modeText, "NORMAL")
+  }
+
+  func testStyleSegmentParserHonoursItalicsUnderlineDimReverseBackground() {
+    let segments = FlashStatusBarRenderer.segments(
+      from: "#[fg=colour178,bg=colour0,bold,italics,underscore]Hi"
+        + "#[reverse]Lo#[noreverse,nounderscore,noitalics,nobold]Done")
+    XCTAssertEqual(segments.count, 3)
+    let hi = segments[0]
+    XCTAssertEqual(hi.text, "Hi")
+    XCTAssertEqual(hi.foreground, .colour178)
+    XCTAssertEqual(hi.background, .colour0)
+    XCTAssertTrue(hi.bold)
+    XCTAssertTrue(hi.italics)
+    XCTAssertTrue(hi.underline)
+    XCTAssertFalse(hi.reverse)
+
+    let lo = segments[1]
+    XCTAssertEqual(lo.text, "Lo")
+    XCTAssertTrue(lo.reverse)
+
+    let done = segments[2]
+    XCTAssertEqual(done.text, "Done")
+    XCTAssertFalse(done.bold)
+    XCTAssertFalse(done.italics)
+    XCTAssertFalse(done.underline)
+    XCTAssertFalse(done.reverse)
+  }
+
   func testInsertModeButtonPaletteUsesBlueBackground() {
     XCTAssertEqual(OverlayPanel.insertPalette.topCG, OverlayPanel.nordFrost2CG)
     XCTAssertEqual(OverlayPanel.insertPalette.bottomCG, OverlayPanel.nordFrost2CG)

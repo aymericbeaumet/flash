@@ -3,6 +3,7 @@ import Foundation
 
 enum FlashStatusTextColor: Equatable {
   case defaultForeground
+  case defaultBackground
   case colour0
   case colour178
   case colour245
@@ -13,12 +14,42 @@ enum FlashStatusTextColor: Equatable {
 struct FlashStatusTextSegment: Equatable {
   var text: String
   var foreground: FlashStatusTextColor
+  var background: FlashStatusTextColor
   var bold: Bool
+  var italics: Bool
+  var underline: Bool
+  var dim: Bool
+  var reverse: Bool
+
+  init(
+    text: String,
+    foreground: FlashStatusTextColor,
+    background: FlashStatusTextColor = .defaultBackground,
+    bold: Bool = false,
+    italics: Bool = false,
+    underline: Bool = false,
+    dim: Bool = false,
+    reverse: Bool = false
+  ) {
+    self.text = text
+    self.foreground = foreground
+    self.background = background
+    self.bold = bold
+    self.italics = italics
+    self.underline = underline
+    self.dim = dim
+    self.reverse = reverse
+  }
 }
 
 private struct FlashStatusTextStyle {
   var foreground: FlashStatusTextColor = .colour245
+  var background: FlashStatusTextColor = .defaultBackground
   var bold = false
+  var italics = false
+  var underline = false
+  var dim = false
+  var reverse = false
 }
 
 enum FlashStatusBarSDKValue: Equatable {
@@ -154,7 +185,15 @@ enum FlashStatusBarTemplateEngine {
   /// Parse `template` and split it into left/centre/right buckets driven
   /// by `#[align=…]` markers. Style markers (`#[fg=…]`, `#[bold=true]`)
   /// are kept verbatim in the bucket so the per-region renderer can apply
-  /// them; `#{token}` variables are resolved against `variableByToken`.
+  /// them. Template variables (`#{token}`) are resolved against
+  /// `variableByToken`. Tmux-flavoured extras supported here:
+  ///   `##`               → literal `#`
+  ///   `#{=N:token}`      → resolve `token`, then truncate to the first N
+  ///                        visible characters (no terminal escape
+  ///                        awareness — Flash's renderer drives the
+  ///                        styling separately).
+  ///   `#{=-N:token}`     → resolve `token`, then truncate to the last N
+  ///                        visible characters (trailing window).
   static func renderAligned(
     _ raw: String,
     variableByToken: [String: FlashStatusBarTemplateVariable],
@@ -180,6 +219,14 @@ enum FlashStatusBarTemplateEngine {
         let after = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
         after < raw.endIndex
       {
+        // `##` → literal `#`. Tmux's documented escape; the previous
+        // parser silently consumed the second `#` as a non-marker
+        // character which produced surprising output.
+        if raw[after] == "#" {
+          append("#")
+          index = raw.index(after: after)
+          continue
+        }
         if raw[after] == "[", let close = raw[after...].firstIndex(of: "]") {
           let bodyStart = raw.index(after: after)
           let marker = String(raw[bodyStart..<close])
@@ -193,9 +240,15 @@ enum FlashStatusBarTemplateEngine {
         }
         if raw[after] == "{", let close = raw[after...].firstIndex(of: "}") {
           let bodyStart = raw.index(after: after)
-          let token = String(raw[bodyStart..<close]).trimmed
+          let body = String(raw[bodyStart..<close]).trimmed
+          let (token, truncation) = parseTokenTruncation(body)
           if let variable = variableByToken[token] {
-            append(resolve(variable: variable, context: context, dynamicValues: dynamicValues))
+            var value = resolve(
+              variable: variable, context: context, dynamicValues: dynamicValues)
+            if let truncation {
+              value = applyTruncation(value, truncation: truncation)
+            }
+            append(value)
           }
           index = raw.index(after: close)
           continue
@@ -206,6 +259,39 @@ enum FlashStatusBarTemplateEngine {
     }
 
     return (left, centre, right)
+  }
+
+  enum Truncation: Equatable {
+    /// Keep the first `n` characters.
+    case head(Int)
+    /// Keep the last `n` characters.
+    case tail(Int)
+  }
+
+  /// Split `#{=N:mode}` into (`"mode"`, `.head(N)`), `#{=-N:mode}` into
+  /// (`"mode"`, `.tail(N)`), and plain `#{mode}` into (`"mode"`, nil).
+  /// Mirrors tmux's `=N:` / `=-N:` length-limit operators.
+  static func parseTokenTruncation(_ body: String) -> (token: String, truncation: Truncation?) {
+    guard body.hasPrefix("=") else { return (body, nil) }
+    let afterEquals = body.dropFirst()
+    guard let colon = afterEquals.firstIndex(of: ":") else { return (body, nil) }
+    let widthSlice = afterEquals[..<colon]
+    let token = String(afterEquals[afterEquals.index(after: colon)...]).trimmed
+    let isTail = widthSlice.first == "-"
+    let digits = isTail ? widthSlice.dropFirst() : widthSlice
+    guard let width = Int(digits), width > 0 else { return (body, nil) }
+    return (token, isTail ? .tail(width) : .head(width))
+  }
+
+  static func applyTruncation(_ value: String, truncation: Truncation) -> String {
+    switch truncation {
+    case .head(let n):
+      if value.count <= n { return value }
+      return String(value.prefix(n))
+    case .tail(let n):
+      if value.count <= n { return value }
+      return String(value.suffix(n))
+    }
   }
 
   /// Recognise an alignment marker body. Returns nil for style markers
@@ -335,11 +421,25 @@ enum FlashStatusBarRenderer {
         FlashStatusTextSegment(
           text: buffer,
           foreground: style.foreground,
-          bold: style.bold))
+          background: style.background,
+          bold: style.bold,
+          italics: style.italics,
+          underline: style.underline,
+          dim: style.dim,
+          reverse: style.reverse))
       buffer = ""
     }
 
     while index < raw.endIndex {
+      // `##` → literal `#`.
+      if raw[index] == "#",
+        let next = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
+        next < raw.endIndex, raw[next] == "#"
+      {
+        buffer.append("#")
+        index = raw.index(after: next)
+        continue
+      }
       if raw[index] == "#",
         let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
         open < raw.endIndex,
@@ -363,19 +463,50 @@ enum FlashStatusBarRenderer {
   static func attributedStatusString(from raw: String, font: NSFont) -> NSAttributedString {
     let attributed = NSMutableAttributedString()
     for segment in segments(from: raw) {
-      let segmentFont =
-        segment.bold
-        ? NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .bold)
-        : font
-      attributed.append(
-        NSAttributedString(
-          string: segment.text,
-          attributes: [
-            .font: segmentFont,
-            .foregroundColor: nsColor(for: segment.foreground),
-          ]))
+      attributed.append(attributedSegment(segment, font: font))
     }
     return attributed
+  }
+
+  static func attributedSegment(
+    _ segment: FlashStatusTextSegment,
+    font: NSFont
+  ) -> NSAttributedString {
+    // tmux's `reverse` swaps fg + bg; mirror that so `#[reverse]…#[noreverse]`
+    // matches what the user expects.
+    let foreground =
+      segment.reverse ? segment.background : segment.foreground
+    let background =
+      segment.reverse ? segment.foreground : segment.background
+    let fg = nsColor(for: foreground)
+    let bg = segment.background == .defaultBackground && !segment.reverse
+      ? nil : nsColor(for: background)
+    // Dim ~ tmux's reduced-intensity attribute; render at 60% alpha on the
+    // foreground colour. We can't dim a bg fill the same way, so leave bg
+    // alone for dim.
+    let dimmedFg = segment.dim ? fg.withAlphaComponent(0.6) : fg
+    let segmentFont: NSFont
+    if segment.bold && segment.italics {
+      segmentFont = nsFontFor(font, traits: [.boldFontMask, .italicFontMask])
+    } else if segment.bold {
+      segmentFont = NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .bold)
+    } else if segment.italics {
+      segmentFont = nsFontFor(font, traits: [.italicFontMask])
+    } else {
+      segmentFont = font
+    }
+    var attrs: [NSAttributedString.Key: Any] = [
+      .font: segmentFont,
+      .foregroundColor: dimmedFg,
+    ]
+    if let bg { attrs[.backgroundColor] = bg }
+    if segment.underline { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+    return NSAttributedString(string: segment.text, attributes: attrs)
+  }
+
+  private static func nsFontFor(_ font: NSFont, traits: NSFontTraitMask) -> NSFont {
+    let manager = NSFontManager.shared
+    return manager.convert(font, toHaveTrait: traits)
   }
 
   private static func applyTmuxMarker(_ marker: String, to style: inout FlashStatusTextStyle) {
@@ -384,12 +515,23 @@ enum FlashStatusBarRenderer {
     }
     for tokenSub in tokens {
       let token = String(tokenSub)
-      if token == "bold" {
-        style.bold = true
-      } else if token == "nobold" {
-        style.bold = false
-      } else if token.hasPrefix("fg=") {
-        style.foreground = tmuxColor(String(token.dropFirst(3)))
+      switch token {
+      case "bold": style.bold = true
+      case "nobold": style.bold = false
+      case "italics", "italic": style.italics = true
+      case "noitalics", "noitalic": style.italics = false
+      case "underscore", "underline": style.underline = true
+      case "nounderscore", "nounderline": style.underline = false
+      case "dim": style.dim = true
+      case "nodim": style.dim = false
+      case "reverse", "invert": style.reverse = true
+      case "noreverse", "noinvert": style.reverse = false
+      default:
+        if token.hasPrefix("fg=") {
+          style.foreground = tmuxColor(String(token.dropFirst(3)))
+        } else if token.hasPrefix("bg=") {
+          style.background = tmuxColor(String(token.dropFirst(3)))
+        }
       }
     }
   }
@@ -415,6 +557,8 @@ enum FlashStatusBarRenderer {
     switch color {
     case .defaultForeground:
       return OverlayPanel.tmuxGrey245
+    case .defaultBackground:
+      return OverlayPanel.nordPolarNight0
     case .colour0:
       return OverlayPanel.nordPolarNight0
     case .colour178:

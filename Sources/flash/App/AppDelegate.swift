@@ -120,7 +120,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// ``URLCommand/emojiPicker``.
   var commandLineRestoreModeTarget: FlashMode?
   var candidateFinderCandidates: [Candidate] = [] {
-    didSet { candidateFinderCandidatesEpoch &+= 1 }
+    didSet {
+      // The setter is called preemptively on every keystroke (the
+      // `scheduleCandidateSourceQueryIfNeeded` path recomputes
+      // `apps + dynamic` and assigns it back even when nothing
+      // actually changed). Unconditionally bumping the epoch
+      // destroyed both the filter cache and the incremental
+      // scoring cache, so every keystroke went back to scoring the
+      // full pool. Bump only when the assignment is observably
+      // different — same count and same `sourceID` at every index
+      // is "same pool".
+      if Self.candidatePoolsCarrySameSourceIDs(oldValue, candidateFinderCandidates) {
+        return
+      }
+      candidateFinderCandidatesEpoch &+= 1
+      candidateFinderFilteredPoolCache = nil
+      candidateFinderIncrementalCache = nil
+    }
+  }
+
+  /// Fast pool-equality probe: same count + same `sourceID` at every
+  /// index. `sourceID` is unique per (source, item) and stable across
+  /// `prepare`, so two pools that agree on it under index are
+  /// observably identical for the candidate finder's purposes.
+  /// Avoids the O(N) NSAttributedString-style comparison on every
+  /// keystroke.
+  static func candidatePoolsCarrySameSourceIDs(
+    _ lhs: [Candidate],
+    _ rhs: [Candidate]
+  ) -> Bool {
+    guard lhs.count == rhs.count else { return false }
+    for index in lhs.indices where lhs[index].sourceID != rhs[index].sourceID {
+      return false
+    }
+    return true
   }
   var candidateFinderDynamicCandidates: [Candidate] = []
   var candidateFinderDeferredCandidates: [Candidate] = []

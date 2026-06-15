@@ -604,6 +604,16 @@ enum ConfigLoader {
     var index = raw.startIndex
 
     while index < raw.endIndex {
+      // `##` is a literal `#` per tmux's escape convention — skip both so
+      // we don't trip on the second `#` looking like the start of a token.
+      if raw[index] == "#",
+        let next = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
+        next < raw.endIndex,
+        raw[next] == "#"
+      {
+        index = raw.index(after: next)
+        continue
+      }
       if raw[index] == "#",
         let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
         open < raw.endIndex,
@@ -616,8 +626,11 @@ enum ConfigLoader {
           return variables
         }
         let bodyStart = raw.index(after: open)
-        let token = String(raw[bodyStart..<close])
-          .trimmed
+        let body = String(raw[bodyStart..<close]).trimmed
+        // `#{=N:token}` / `#{=-N:token}` truncation operators carry the
+        // real token after the `:`. Resolve through the same helper the
+        // renderer uses so the two stay in sync.
+        let (token, _) = FlashStatusBarTemplateEngine.parseTokenTruncation(body)
         if let source = parseStatusBarTemplateSource(token, sourceURL: sourceURL) {
           variables.append(
             FlashStatusBarTemplateVariable(
@@ -626,7 +639,7 @@ enum ConfigLoader {
               source: source))
         } else {
           config.addDiagnostic(
-            "statusbar.\(path) template variable \"\(token)\" must be mode, active_app_name, active_bundle_identifier, date, plugin:<name>, script:<path>, or command:<shell>",
+            "statusbar.\(path) template variable \"\(body)\" must be mode, active_app_name, active_bundle_identifier, date, plugin:<name>, script:<path>, or command:<shell> (optionally wrapped in #{=N:…} for length-limit)",
             location: config.valueLocations["statusbar.\(path)"])
         }
         index = raw.index(after: close)
