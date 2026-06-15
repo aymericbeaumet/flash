@@ -70,8 +70,11 @@ struct FlashStatusBarTemplateVariable: Equatable {
 }
 
 struct FlashStatusBarTemplate: Equatable {
-  var left: String
-  var right: String
+  /// Unified template string. `#[align=left|centre|right]` markers split
+  /// the rendered output into three buckets (left / centre / right); style
+  /// markers (`#[fg=…]`) and template variables (`#{token}`) are passed
+  /// through to the per-region renderer unchanged.
+  var template: String
   var variables: [FlashStatusBarTemplateVariable]
 
   var commandSections: [FlashStatusBarTemplateVariable] {
@@ -121,6 +124,12 @@ struct FlashStatusBarModel: Equatable {
 }
 
 enum FlashStatusBarTemplateEngine {
+  enum Alignment: Equatable {
+    case left
+    case centre
+    case right
+  }
+
   static func render(
     template: FlashStatusBarTemplate,
     context: FlashStatusBarContext,
@@ -131,50 +140,86 @@ enum FlashStatusBarTemplateEngine {
       variableByToken[variable.token] = variable
     }
 
+    let split = renderAligned(
+      template.template,
+      variableByToken: variableByToken,
+      context: context,
+      dynamicValues: dynamicValues)
     return FlashStatusBarModel(
-      appText: "",
-      modeText: renderString(
-        template.left,
-        variableByToken: variableByToken,
-        context: context,
-        dynamicValues: dynamicValues),
-      rightText: renderString(
-        template.right,
-        variableByToken: variableByToken,
-        context: context,
-        dynamicValues: dynamicValues))
+      appText: split.centre,
+      modeText: split.left,
+      rightText: split.right)
   }
 
-  private static func renderString(
+  /// Parse `template` and split it into left/centre/right buckets driven
+  /// by `#[align=…]` markers. Style markers (`#[fg=…]`, `#[bold=true]`)
+  /// are kept verbatim in the bucket so the per-region renderer can apply
+  /// them; `#{token}` variables are resolved against `variableByToken`.
+  static func renderAligned(
     _ raw: String,
     variableByToken: [String: FlashStatusBarTemplateVariable],
     context: FlashStatusBarContext,
     dynamicValues: [String: String]
-  ) -> String {
-    var rendered = ""
-    var index = raw.startIndex
+  ) -> (left: String, centre: String, right: String) {
+    var left = ""
+    var centre = ""
+    var right = ""
+    var current: Alignment = .left
 
+    func append(_ text: String) {
+      switch current {
+      case .left: left += text
+      case .centre: centre += text
+      case .right: right += text
+      }
+    }
+
+    var index = raw.startIndex
     while index < raw.endIndex {
       if raw[index] == "#",
-        let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        open < raw.endIndex,
-        raw[open] == "{",
-        let close = raw[open...].firstIndex(of: "}")
+        let after = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
+        after < raw.endIndex
       {
-        let bodyStart = raw.index(after: open)
-        let token = String(raw[bodyStart..<close])
-          .trimmed
-        if let variable = variableByToken[token] {
-          rendered += resolve(variable: variable, context: context, dynamicValues: dynamicValues)
+        if raw[after] == "[", let close = raw[after...].firstIndex(of: "]") {
+          let bodyStart = raw.index(after: after)
+          let marker = String(raw[bodyStart..<close])
+          if let alignment = parseAlignmentMarker(marker) {
+            current = alignment
+          } else {
+            append("#[\(marker)]")
+          }
+          index = raw.index(after: close)
+          continue
         }
-        index = raw.index(after: close)
-        continue
+        if raw[after] == "{", let close = raw[after...].firstIndex(of: "}") {
+          let bodyStart = raw.index(after: after)
+          let token = String(raw[bodyStart..<close]).trimmed
+          if let variable = variableByToken[token] {
+            append(resolve(variable: variable, context: context, dynamicValues: dynamicValues))
+          }
+          index = raw.index(after: close)
+          continue
+        }
       }
-      rendered.append(raw[index])
+      append(String(raw[index]))
       index = raw.index(after: index)
     }
 
-    return rendered
+    return (left, centre, right)
+  }
+
+  /// Recognise an alignment marker body. Returns nil for style markers
+  /// (`fg=…`, `bold=true`, …) so they fall through to the per-region
+  /// renderer.
+  static func parseAlignmentMarker(_ marker: String) -> Alignment? {
+    let trimmed = marker.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasPrefix("align=") else { return nil }
+    switch trimmed.dropFirst("align=".count).lowercased() {
+    case "left": return .left
+    case "centre", "center": return .centre
+    case "right": return .right
+    default: return nil
+    }
   }
 
   private static func resolve(

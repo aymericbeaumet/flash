@@ -101,8 +101,7 @@ final class StatusBarTests: XCTestCase {
 
   func testStatusTemplateCanReadPluginState() {
     let template = FlashStatusBarTemplate(
-      left: "",
-      right: "#{plugin:ready_count}/#{plugin:error_count}",
+      template: "#[align=right]#{plugin:ready_count}/#{plugin:error_count}",
       variables: [
         FlashStatusBarTemplateVariable(
           id: "ready",
@@ -123,6 +122,39 @@ final class StatusBarTests: XCTestCase {
         ]))
 
     XCTAssertEqual(model.rightText, "1/1")
+  }
+
+  func testAlignMarkersRouteToLeftCentreRightBuckets() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]L#[align=centre]C#[align=right]R",
+      variables: [])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext())
+    XCTAssertEqual(model.modeText, "L")
+    XCTAssertEqual(model.appText, "C")
+    XCTAssertEqual(model.rightText, "R")
+  }
+
+  func testAmericanCenterAliasMatchesBritishCentre() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=center]C",
+      variables: [])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext())
+    XCTAssertEqual(model.appText, "C")
+  }
+
+  func testStyleMarkersFlowIntoCurrentAlignmentBucket() {
+    let template = FlashStatusBarTemplate(
+      template: "#[align=right]#[fg=colour245]styled",
+      variables: [])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext())
+    XCTAssertEqual(model.rightText, "#[fg=colour245]styled")
+    XCTAssertTrue(model.modeText.isEmpty)
   }
 
   func testInsertModeButtonPaletteUsesBlueBackground() {
@@ -361,8 +393,7 @@ final class StatusBarTests: XCTestCase {
     let config = ConfigLoader.parse(
       """
       [statusbar]
-      left = "#{mode}"
-      right = "#{script:~/bin/agent-status.sh}#[fg=colour245] · #{script:~/bin/battery-status.sh}#[fg=colour245] · #{date}"
+      template = "#[align=left]#{mode}#[align=right]#{script:~/bin/agent-status.sh}#[fg=colour245] · #{script:~/bin/battery-status.sh}#[fg=colour245] · #{date}"
       """)
 
     let text = FlashStatusBarTemplateEngine.render(

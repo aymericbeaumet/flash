@@ -8,6 +8,9 @@ import Foundation
 
 extension ConfigLoader {
   static func parseString(_ v: String) -> String? {
+    if v.hasPrefix("\"\"\""), v.hasSuffix("\"\"\""), v.count >= 6 {
+      return parseMultilineBasicString(v)
+    }
     guard v.hasPrefix("\""), v.hasSuffix("\""), v.count >= 2 else { return nil }
     var out = ""
     var escaping = false
@@ -37,6 +40,82 @@ extension ConfigLoader {
     }
     if escaping {
       out.append("\\")
+    }
+    return out
+  }
+
+  /// TOML basic multi-line string (`"""…"""`). The opening `"""` may be
+  /// followed immediately by a newline that is stripped; a backslash at
+  /// end of line trims that backslash, the trailing whitespace, the
+  /// newline, *and* any leading whitespace on the next line — matching
+  /// the line-continuation rule the user expects (write the prose on
+  /// several rows, render it as one). Standard `\n`, `\t`, `\"`, `\\`
+  /// escapes are honoured inline; everything else is a content character.
+  private static func parseMultilineBasicString(_ v: String) -> String? {
+    var body = String(v.dropFirst(3).dropLast(3))
+    // TOML strips an immediate newline after the opening `"""`.
+    if body.hasPrefix("\r\n") { body.removeFirst(2) }
+    if body.hasPrefix("\n") { body.removeFirst() }
+    var out = ""
+    var index = body.startIndex
+    while index < body.endIndex {
+      let ch = body[index]
+      if ch == "\\" {
+        let next = body.index(after: index)
+        if next == body.endIndex {
+          out.append("\\")
+          break
+        }
+        let following = body[next]
+        switch following {
+        case "\\":
+          out.append("\\")
+          index = body.index(after: next)
+        case "\"":
+          out.append("\"")
+          index = body.index(after: next)
+        case "n":
+          out.append("\n")
+          index = body.index(after: next)
+        case "r":
+          out.append("\r")
+          index = body.index(after: next)
+        case "t":
+          out.append("\t")
+          index = body.index(after: next)
+        case " ", "\t", "\n", "\r":
+          // Line continuation: backslash + trailing whitespace + newline +
+          // leading whitespace on the next non-blank-or-whitespace line
+          // are collapsed away.
+          var skip = next
+          while skip < body.endIndex,
+            body[skip].isWhitespace,
+            body[skip] != "\n"
+          {
+            skip = body.index(after: skip)
+          }
+          guard skip < body.endIndex, body[skip] == "\n" else {
+            // Backslash followed by whitespace but no newline — emit the
+            // backslash literally and let the next iteration consume the
+            // whitespace as content.
+            out.append("\\")
+            index = next
+            continue
+          }
+          var skip2 = body.index(after: skip)
+          while skip2 < body.endIndex, body[skip2].isWhitespace {
+            skip2 = body.index(after: skip2)
+          }
+          index = skip2
+        default:
+          out.append("\\")
+          out.append(following)
+          index = body.index(after: next)
+        }
+        continue
+      }
+      out.append(ch)
+      index = body.index(after: index)
     }
     return out
   }

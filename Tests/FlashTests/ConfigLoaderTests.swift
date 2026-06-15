@@ -83,9 +83,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.mode.insert.isEmpty)
     XCTAssertTrue(c.open.ignoredApps.isEmpty)
     XCTAssertTrue(c.plugins.thirdParty.isEmpty)
-    XCTAssertEqual(c.statusBar.left, "#{mode}")
-    XCTAssertEqual(c.statusBar.right, "#{date}")
-    XCTAssertFalse(c.statusBar.right.contains("ip-status"))
+    XCTAssertEqual(
+      c.statusBar.template.template,
+      "#[align=left]#{mode}#[align=right]#{date}")
     XCTAssertEqual(c.statusBar.template.variables.count, 2)
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
@@ -102,18 +102,15 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      left = "#{active_bundle_identifier} #{mode}"
-      right = "#{plugin:ready_count} | #{script:~/bin/right-status.sh} | #{command:date +%H:%M}"
+      template = "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]#{plugin:ready_count} | #{script:~/bin/right-status.sh} | #{command:date +%H:%M}"
       """)
 
-    XCTAssertEqual(c.statusBar.left, "#{active_bundle_identifier} #{mode}")
-    XCTAssertEqual(
-      c.statusBar.right,
-      "#{plugin:ready_count} | #{script:~/bin/right-status.sh} | "
-        + "#{command:date +%H:%M}")
     let template = c.statusBar.template
-    XCTAssertEqual(template.left, c.statusBar.left)
-    XCTAssertEqual(template.right, c.statusBar.right)
+    XCTAssertEqual(
+      template.template,
+      "#[align=left]#{active_bundle_identifier} #{mode}#[align=right]"
+        + "#{plugin:ready_count} | #{script:~/bin/right-status.sh} | "
+        + "#{command:date +%H:%M}")
     XCTAssertEqual(
       template.variables.map(\.token),
       [
@@ -136,21 +133,36 @@ final class ConfigLoaderTests: XCTestCase {
       .command(FlashStatusBarCommand(argv: ["/bin/sh", "-lc", "date +%H:%M"])))
   }
 
+  func testParsesStatusBarTemplateAsTripleQuotedMultiline() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = \"\"\"
+        #[align=left]#{mode}\\
+        #[align=right]#{plugin:ready_count} | #{date}
+        \"\"\"
+      """)
+
+    let t = c.statusBar.template
+    // The backslash at end of line collapses the newline + leading whitespace,
+    // so the parsed template is one continuous string.
+    XCTAssertEqual(
+      t.template.trimmingCharacters(in: .whitespacesAndNewlines),
+      "#[align=left]#{mode}#[align=right]#{plugin:ready_count} | #{date}")
+    XCTAssertEqual(t.variables.map(\.token), ["mode", "plugin:ready_count", "date"])
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
   func testInvalidStatusBarTemplateReportsDiagnostics() {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      left = "#{nope}"
-      right = "#{plugin:nope}"
+      template = "#{nope}#[align=right]#{plugin:nope}"
       """)
 
     XCTAssertTrue(
       c.loadingDiagnostics.contains {
-        $0.message.contains("statusbar.left template variable")
-      })
-    XCTAssertTrue(
-      c.loadingDiagnostics.contains {
-        $0.message.contains("statusbar.right template variable")
+        $0.message.contains("statusbar.template template variable")
       })
   }
 
@@ -524,8 +536,8 @@ final class ConfigLoaderTests: XCTestCase {
       ["sh", "~/.dotfiles/scripts/toggle-colors"])
     XCTAssertEqual(open["ignored_apps"] as? [String], [])
     XCTAssertEqual(plugins["third_party"] as? [String], [])
-    XCTAssertEqual(statusBar["left"] as? String, "#{mode}")
-    XCTAssertEqual(statusBar["right"] as? String, "#{date}")
+    XCTAssertEqual(
+      statusBar["template"] as? String, "#[align=left]#{mode}#[align=right]#{date}")
   }
 
   func testResolvedHintsKeysJSONIncludesDefaultAndResolvedAlphabet() throws {

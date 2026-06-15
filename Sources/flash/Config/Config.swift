@@ -247,16 +247,19 @@ struct Config {
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
   struct StatusBar {
-    static let defaultLeft = "#{mode}"
-    static let defaultRight = "#{date}"
-
-    var left: String = Self.defaultLeft
-    var right: String = Self.defaultRight
+    /// Single-string status-bar template using tmux-style format markers:
+    ///   #[align=left|centre|right]  — switches which alignment region
+    ///                                 subsequent text/variables accumulate
+    ///                                 into (default: `left`).
+    ///   #[fg=…,bold=true]          — inline text styling (passed through
+    ///                                 to the renderer).
+    ///   #{token}                    — template variable (mode, date,
+    ///                                 plugin:<name>, script:<path>,
+    ///                                 command:<shell>).
+    static let defaultTemplateString = "#[align=left]#{mode}#[align=right]#{date}"
     var template: FlashStatusBarTemplate = Self.defaultTemplate
-
     static let defaultTemplate = FlashStatusBarTemplate(
-      left: Self.defaultLeft,
-      right: Self.defaultRight,
+      template: Self.defaultTemplateString,
       variables: [
         FlashStatusBarTemplateVariable(
           id: "statusbar.template.mode",
@@ -604,8 +607,7 @@ struct Config {
         },
       ],
       "statusbar": [
-        "left": statusBar.left,
-        "right": statusBar.right,
+        "template": statusBar.template.template
       ],
       "warnings": warnings,
     ])

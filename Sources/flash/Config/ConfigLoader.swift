@@ -334,19 +334,14 @@ enum ConfigLoader {
           location: location)
       }
 
-    case ["statusbar", "left"]:
+    case ["statusbar", "template"]:
       if let parsed = parseString(value) {
-        config.statusBar.left = parsed
-        config.recordLocation(path: "statusbar.left", location: location)
+        config.statusBar.template.template = parsed
+        config.recordLocation(path: "statusbar.template", location: location)
       } else {
-        config.addDiagnostic("statusbar.left must be a quoted template string", location: location)
-      }
-    case ["statusbar", "right"]:
-      if let parsed = parseString(value) {
-        config.statusBar.right = parsed
-        config.recordLocation(path: "statusbar.right", location: location)
-      } else {
-        config.addDiagnostic("statusbar.right must be a quoted template string", location: location)
+        config.addDiagnostic(
+          "statusbar.template must be a quoted template string",
+          location: location)
       }
 
     case ["mode", "labels"]:
@@ -589,20 +584,13 @@ enum ConfigLoader {
   }
 
   private static func applyStatusBarTemplate(sourceURL: URL?, into config: inout Config) {
-    let variables =
-      parseStatusBarTemplateVariables(
-        config.statusBar.left,
-        path: "left",
-        sourceURL: sourceURL,
-        into: &config)
-      + parseStatusBarTemplateVariables(
-        config.statusBar.right,
-        path: "right",
-        sourceURL: sourceURL,
-        into: &config)
+    let variables = parseStatusBarTemplateVariables(
+      config.statusBar.template.template,
+      path: "template",
+      sourceURL: sourceURL,
+      into: &config)
     config.statusBar.template = FlashStatusBarTemplate(
-      left: config.statusBar.left,
-      right: config.statusBar.right,
+      template: config.statusBar.template.template,
       variables: variables)
   }
 

@@ -60,11 +60,19 @@ third_party = []
 watching_enabled = true
 
 [statusbar]
-# Sections rendered in the persistent top status bar when advanced mode is
-# enabled. `left` renders in the highlighted left cell; `right` renders on the
-# right side. Separators are literal text inside the template strings.
+# Single template string for the persistent top status bar (active when
+# advanced mode is enabled). Use tmux-style alignment markers to switch
+# which region subsequent content lands in:
 #
-# Supported template variables:
+#   #[align=left]    — highlighted left cell (default until a marker fires)
+#   #[align=centre]  — centred section between left and right
+#   #[align=right]   — right-aligned section
+#
+# Inline styling markers (#[fg=colour245], #[bold=true]) stay in whatever
+# region the parser is currently filling and pass through to the
+# renderer.
+#
+# Supported template variables (#{token}):
 #   #{mode}
 #   #{active_app_name}
 #   #{active_bundle_identifier}
@@ -74,10 +82,18 @@ watching_enabled = true
 #   #{plugin:error_count}
 #   #{script:<path>}
 #   #{command:<shell command>}
-left = "#{mode}"
-right = "#{date}"
-# Example command-backed section:
-# right = "#{script:~/bin/custom-status.sh}#[fg=colour245] · #{date}"
+#
+# A triple-quoted multi-line string with backslash–newline continuation
+# lets long templates breathe across rows without affecting the rendered
+# output (the `\` collapses the newline + the next row's leading
+# whitespace into nothing).
+template = "#[align=left]#{mode}#[align=right]#{date}"
+# Example with a custom right-side composition:
+# template = """
+#   #[align=left]#{mode}\
+#   #[align=right]#{script:~/bin/custom-status.sh}\
+#   #[fg=colour245] · #{date}
+#   """
 
 [flashlight]
 # Number of suggestion rows shown below the command bar.
