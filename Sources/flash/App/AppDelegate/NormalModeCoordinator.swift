@@ -1497,6 +1497,7 @@ extension AppDelegate {
     // job for in-flight typing while still firing the RPC the moment
     // the user pauses long enough to care about a freshly-refined
     // result set.
+    let userHasTyped = candidateFinderUserHasTyped
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(60)) { [weak self] in
       guard let self else { return }
       guard generation == self.candidateFinderSourceQueryGenerationCounter,
@@ -1516,6 +1517,15 @@ extension AppDelegate {
         self.candidateFinderDynamicCandidates = candidates
         self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(
           for: self.candidateFinderScope)
+        // Stability contract: once the user has typed, the displayed list
+        // does not move without further input. Plugin RPCs that land
+        // after a keystroke still refresh the in-memory pool (so the
+        // *next* keystroke scores against the fresh dynamic set), but
+        // we stop short of re-scoring and re-rendering — the user just
+        // sees their last typed-into result settle. The initial open
+        // (no typing yet) still paints from the plugin response so the
+        // first frame isn't empty.
+        if userHasTyped { return }
         self.updateCandidateMatches(query: query, requestCandidateRefresh: false)
         self.rerenderCandidateFinderSurface(query: query)
       }

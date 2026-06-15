@@ -683,7 +683,19 @@ enum ConfigLoader {
       default: return nil
       }
     case "script":
-      return .command(.script(resolveCommandArgument(body, sourceURL: sourceURL)))
+      // `#{script:path}` runs the script with no args; `#{script:path --foo
+      // --bar}` passes the trailing whitespace-separated tokens through as
+      // positional argv. Splitting on whitespace is intentionally crude —
+      // the templates only pass simple option flags and the user wrote the
+      // string by hand.
+      let parts = body.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+      guard let scriptPath = parts.first else { return nil }
+      let resolved = resolveCommandArgument(scriptPath, sourceURL: sourceURL)
+      let args = Array(parts.dropFirst())
+      if args.isEmpty {
+        return .command(.script(resolved))
+      }
+      return .command(.scriptWithArgs(resolved, args: args))
     case "command":
       return .command(.shell(body))
     default:

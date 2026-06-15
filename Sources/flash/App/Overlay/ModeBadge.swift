@@ -231,14 +231,14 @@ extension OverlayPanel {
     let textHeight = fontSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
     let contentX = Self.statusBarEdgePadding
-    let appText = statusAppText.trimmed
-    let measuredAppWidth =
-      appText.isEmpty
-      ? 0
-      : ceil((appText as NSString).size(withAttributes: [.font: rightFont]).width)
-    let maxAppWidth = max(
-      0,
-      min(Self.statusBarMaximumAppNameWidth, barFrame.width * 0.22))
+    // `statusAppText` is whatever the template's `#[align=centre]` region
+    // produced. It can carry tmux-style style markers, so build the
+    // attributed string up front; the rendered width drives the
+    // centring math below.
+    let centreDisplay = FlashStatusBarRenderer.stripClickRanges(from: statusAppText.trimmed)
+    let centreAttributed = FlashStatusBarRenderer.attributedStatusString(
+      from: centreDisplay, font: rightFont)
+    let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)
     let rightDisplayText = Self.statusRightDisplayText(statusRightText)
     let rightReservedWidth =
       rightDisplayText.isEmpty
@@ -274,30 +274,45 @@ extension OverlayPanel {
         .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
       ])
 
-    let appX = modeBadgeButtonLayer.frame.maxX + Self.statusBarMinimumGap
-    let appAvailableWidth = max(
-      0,
-      barFrame.width - appX - Self.statusBarEdgePadding
-        - (rightReservedWidth > 0 ? Self.statusBarMinimumGap + rightReservedWidth : 0))
-    let appWidth = min(measuredAppWidth, maxAppWidth, appAvailableWidth)
+    // Geometric centring for the `#[align=centre]` bucket. Position
+    // around `barFrame.width / 2`, clamped so the centre label never
+    // collides with the mode badge on its left or the reserved right
+    // section on its right. If the centre text doesn't fit between
+    // them, hide it rather than letting an overlap mangle the bar.
+    let modeMaxX = modeBadgeButtonLayer.frame.maxX
+    let rightSectionStart =
+      barFrame.width - Self.statusBarEdgePadding
+      - (rightReservedWidth > 0 ? rightReservedWidth + Self.statusBarMinimumGap : 0)
+    let centreAvailable = max(0, rightSectionStart - modeMaxX - Self.statusBarMinimumGap * 2)
+    let centreWidth = min(measuredCentreWidth, centreAvailable)
+    let centreIdealX = (barFrame.width - centreWidth) / 2
+    let centreMinX = modeMaxX + Self.statusBarMinimumGap
+    let centreMaxX = rightSectionStart - Self.statusBarMinimumGap - centreWidth
+    let centreX = max(centreMinX, min(centreIdealX, centreMaxX))
     statusAppLabel.frame = CGRect(
-      x: appX,
+      x: centreX,
       y: textY,
-      width: appWidth,
+      width: centreWidth,
       height: textHeight)
     statusAppLabel.font = rightFont
     statusAppLabel.fontSize = fontSize
     statusAppLabel.foregroundColor = Self.tmuxGrey245CG
     statusAppLabel.contentsScale = scale
-    statusAppLabel.isHidden = appText.isEmpty || appWidth <= 0
-    statusAppLabel.string = appText
+    statusAppLabel.alignmentMode = .center
+    statusAppLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
+    statusAppLabel.string = centreAttributed
 
-    let rightX =
-      (appWidth > 0 ? statusAppLabel.frame.maxX : modeBadgeButtonLayer.frame.maxX)
-      + Self.statusBarMinimumGap
+    // Right section is right-aligned: pin its `maxX` to the bar edge
+    // (minus padding) regardless of where the mode badge or the centre
+    // bucket end. This is what the user's "geometric centre" layout
+    // expects — the right text is anchored to the right margin, not
+    // pushed inward by the centre label's width.
     let rightWidth = max(
       0,
-      barFrame.width - rightX - Self.statusBarEdgePadding)
+      barFrame.width - modeBadgeButtonLayer.frame.maxX - Self.statusBarMinimumGap
+        - (centreWidth > 0 ? centreWidth + Self.statusBarMinimumGap * 2 : 0)
+        - Self.statusBarEdgePadding)
+    let rightX = barFrame.width - Self.statusBarEdgePadding - rightWidth
     statusRightLabel.frame = CGRect(
       x: rightX,
       y: textY,
@@ -307,6 +322,7 @@ extension OverlayPanel {
     statusRightLabel.fontSize = fontSize
     statusRightLabel.foregroundColor = Self.tmuxGrey245CG
     statusRightLabel.contentsScale = scale
+    statusRightLabel.alignmentMode = .right
     statusRightLabel.isHidden = rightDisplayText.isEmpty
     statusRightLabel.string = FlashStatusBarRenderer.attributedStatusString(
       from: rightDisplayText,
@@ -325,9 +341,7 @@ extension OverlayPanel {
       palette: palette,
       leftWidth: leftWidth,
       leftLabel: leftLabel,
-      appText: appText,
-      maxAppWidth: maxAppWidth,
-      measuredAppWidth: measuredAppWidth,
+      centreDisplay: centreDisplay,
       rightDisplayText: rightDisplayText)
   }
 
@@ -344,9 +358,7 @@ extension OverlayPanel {
     palette: ModeBadgePalette,
     leftWidth: CGFloat,
     leftLabel: String,
-    appText: String,
-    maxAppWidth: CGFloat,
-    measuredAppWidth: CGFloat,
+    centreDisplay: String,
     rightDisplayText: String
   ) {
     let snapshot = OverlayPanel.currentScreenSnapshot()
@@ -399,35 +411,46 @@ extension OverlayPanel {
           .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
         ])
 
+      let centreAttributed = FlashStatusBarRenderer.attributedStatusString(
+        from: centreDisplay, font: rightFont)
+      let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)
       let rightReservedWidth =
         rightDisplayText.isEmpty
         ? 0
         : min(
           max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
           barFrame.width * 0.52)
-      let appX = bar.modeButtonLayer.frame.maxX + Self.statusBarMinimumGap
-      let appAvailableWidth = max(
-        0,
-        barFrame.width - appX - Self.statusBarEdgePadding
-          - (rightReservedWidth > 0 ? Self.statusBarMinimumGap + rightReservedWidth : 0))
-      let appWidth = min(measuredAppWidth, maxAppWidth, appAvailableWidth)
-      bar.appLabel.frame = CGRect(x: appX, y: textY, width: appWidth, height: textHeight)
+      let modeMaxX = bar.modeButtonLayer.frame.maxX
+      let rightSectionStart =
+        barFrame.width - Self.statusBarEdgePadding
+        - (rightReservedWidth > 0 ? rightReservedWidth + Self.statusBarMinimumGap : 0)
+      let centreAvailable = max(0, rightSectionStart - modeMaxX - Self.statusBarMinimumGap * 2)
+      let centreWidth = min(measuredCentreWidth, centreAvailable)
+      let centreIdealX = (barFrame.width - centreWidth) / 2
+      let centreMinX = modeMaxX + Self.statusBarMinimumGap
+      let centreMaxX = rightSectionStart - Self.statusBarMinimumGap - centreWidth
+      let centreX = max(centreMinX, min(centreIdealX, centreMaxX))
+      bar.appLabel.frame = CGRect(x: centreX, y: textY, width: centreWidth, height: textHeight)
       bar.appLabel.font = rightFont
       bar.appLabel.fontSize = fontSize
       bar.appLabel.foregroundColor = Self.tmuxGrey245CG
       bar.appLabel.contentsScale = screen.scale
-      bar.appLabel.isHidden = appText.isEmpty || appWidth <= 0
-      bar.appLabel.string = appText
+      bar.appLabel.alignmentMode = .center
+      bar.appLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
+      bar.appLabel.string = centreAttributed
 
-      let rightX =
-        (appWidth > 0 ? bar.appLabel.frame.maxX : bar.modeButtonLayer.frame.maxX)
-        + Self.statusBarMinimumGap
-      let rightWidth = max(0, barFrame.width - rightX - Self.statusBarEdgePadding)
+      let rightWidth = max(
+        0,
+        barFrame.width - bar.modeButtonLayer.frame.maxX - Self.statusBarMinimumGap
+          - (centreWidth > 0 ? centreWidth + Self.statusBarMinimumGap * 2 : 0)
+          - Self.statusBarEdgePadding)
+      let rightX = barFrame.width - Self.statusBarEdgePadding - rightWidth
       bar.rightLabel.frame = CGRect(x: rightX, y: textY, width: rightWidth, height: textHeight)
       bar.rightLabel.font = rightFont
       bar.rightLabel.fontSize = fontSize
       bar.rightLabel.foregroundColor = Self.tmuxGrey245CG
       bar.rightLabel.contentsScale = screen.scale
+      bar.rightLabel.alignmentMode = .right
       bar.rightLabel.isHidden = rightDisplayText.isEmpty
       bar.rightLabel.string = FlashStatusBarRenderer.attributedStatusString(
         from: rightDisplayText,

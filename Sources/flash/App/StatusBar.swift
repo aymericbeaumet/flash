@@ -80,6 +80,22 @@ struct FlashStatusBarCommand: Equatable {
     FlashStatusBarCommand(argv: ["/bin/sh", path], timeoutSeconds: timeoutSeconds)
   }
 
+  /// `#{script:path --arg1 --arg2}` form. The trailing whitespace-
+  /// separated tokens are passed through as positional argv after the
+  /// script path. Quoting / escaping is intentionally absent — the
+  /// status-bar templates only ever pass simple option flags here
+  /// (`--claude`, `--codex`, …) and the entire string came from
+  /// trusted config the user authored.
+  static func scriptWithArgs(
+    _ path: String,
+    args: [String],
+    timeoutSeconds: TimeInterval = 6
+  ) -> FlashStatusBarCommand {
+    var argv: [String] = ["/bin/sh", path]
+    argv.append(contentsOf: args)
+    return FlashStatusBarCommand(argv: argv, timeoutSeconds: timeoutSeconds)
+  }
+
   static func shell(_ command: String, timeoutSeconds: TimeInterval = 6)
     -> FlashStatusBarCommand
   {
