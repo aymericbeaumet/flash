@@ -36,15 +36,22 @@ enum WindowMover {
     //                            list, ordered front-to-back by AX.
     //                            Works for Alacritty et al. that only
     //                            expose the list.
+    let focusedStatus = copyWindowAttributeStatus(axApp, kAXFocusedWindowAttribute)
+    let mainStatus = copyWindowAttributeStatus(axApp, kAXMainWindowAttribute)
+    let windowsStatus = copyWindowsStatus(axApp)
     let window: AXUIElement
-    if let focused = copyWindowAttribute(axApp, kAXFocusedWindowAttribute) {
+    if let focused = focusedStatus.window {
       window = focused
-    } else if let main = copyWindowAttribute(axApp, kAXMainWindowAttribute) {
+    } else if let main = mainStatus.window {
       window = main
-    } else if let first = copyFirstWindow(axApp) {
+    } else if let first = windowsStatus.first {
       window = first
     } else {
-      FlashLog.warn("[window_move] no AX window for pid \(targetPID)")
+      FlashLog.warn(
+        "[window_move] no AX window for pid \(targetPID) "
+          + "focused=\(focusedStatus.diagnostic) "
+          + "main=\(mainStatus.diagnostic) "
+          + "windows=\(windowsStatus.diagnostic)")
       return
     }
 
@@ -146,31 +153,34 @@ enum WindowMover {
       height: max(0, maxY - visibleFrame.minY))
   }
 
-  /// Wrapper around `AXUIElementCopyAttributeValue` that returns the
-  /// `AXUIElement` payload for window-shaped attributes (`kAXFocusedWindow`,
-  /// `kAXMainWindow`), or `nil` when the attribute is missing or the
-  /// query fails.
-  private static func copyWindowAttribute(
+  /// Diagnostic-wrapped read of a single window-shaped AX attribute.
+  /// Returns the AX element if the attribute exists; the `diagnostic`
+  /// string captures the raw `AXError.rawValue` (or "nil_payload"/"cast_fail")
+  /// so a failing call site can report exactly why no window was resolved.
+  private static func copyWindowAttributeStatus(
     _ axApp: AXUIElement,
     _ attribute: String
-  ) -> AXUIElement? {
+  ) -> (window: AXUIElement?, diagnostic: String) {
     var ref: CFTypeRef?
     let status = AXUIElementCopyAttributeValue(axApp, attribute as CFString, &ref)
-    guard status == .success, let cf = ref else { return nil }
-    return (cf as! AXUIElement)
+    guard status == .success else { return (nil, "err=\(status.rawValue)") }
+    guard let cf = ref else { return (nil, "nil_payload") }
+    return ((cf as! AXUIElement), "ok")
   }
 
-  /// First entry in the application's `kAXWindowsAttribute` list. AX
-  /// orders the list front-to-back, so `[0]` is the topmost window —
-  /// the right target when the focused/main attributes are nil (e.g.
-  /// Alacritty exposes the windows array but neither shortcut).
-  private static func copyFirstWindow(_ axApp: AXUIElement) -> AXUIElement? {
+  /// Diagnostic-wrapped read of the application's window array. Returns
+  /// the front-most window if present and the array decode succeeds.
+  private static func copyWindowsStatus(
+    _ axApp: AXUIElement
+  ) -> (first: AXUIElement?, diagnostic: String) {
     var ref: CFTypeRef?
     let status = AXUIElementCopyAttributeValue(
       axApp, kAXWindowsAttribute as CFString, &ref)
-    guard status == .success, let array = ref as? [AXUIElement], let first = array.first
-    else { return nil }
-    return first
+    guard status == .success else { return (nil, "err=\(status.rawValue)") }
+    guard let cf = ref else { return (nil, "nil_payload") }
+    guard let array = cf as? [AXUIElement] else { return (nil, "cast_fail") }
+    guard let first = array.first else { return (nil, "empty=0") }
+    return (first, "ok_count=\(array.count)")
   }
 
   /// Read the AX position + size and convert to NSScreen coordinates
