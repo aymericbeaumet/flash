@@ -370,7 +370,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         if let stdout { self?.overlay.displayBanner(stdout) }
       }
     case .moveWindow(let params):
-      WindowMover.move(params, statusBarReservesSpace: modeBadgeEnabled)
+      // Use the *non-Flash* frontmost app as the move target. Without
+      // this, normal-mode capture (which activates Flash to satisfy the
+      // Tahoe key-window rule) makes `frontmostApplication` resolve to
+      // Flash itself, and the verb cheerfully maximises the status-bar
+      // panel instead of the user's actual window.
+      if let target = currentNonFlashContext() {
+        WindowMover.move(
+          params, statusBarReservesSpace: modeBadgeEnabled, targetPID: target.processID)
+      } else {
+        FlashLog.warn("[window_move] no non-flash frontmost app")
+      }
     }
   }
 

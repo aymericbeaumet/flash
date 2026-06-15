@@ -7,9 +7,10 @@ set -euo pipefail
 #   --release  optimized universal build (x86_64 + arm64) for both the app
 #              and the bundled plugins, then zipped + checksummed. Always
 #              cleans first so every artifact is rebuilt from scratch.
-#   --dev      incremental optimized release build for the current arch only —
-#              no clean, no universal lipo. Plugins are symlinked from the
-#              live tree and the bundle is signed with the dev identity.
+#   --dev      unoptimized debug build for the current arch only — no
+#              clean, no universal lipo, no `-c release`. Plugins are
+#              symlinked from the live tree and the bundle is signed with
+#              the dev identity. Optimised for fast incremental rebuilds.
 
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 parse_mode "$@"
@@ -27,7 +28,18 @@ if [[ "$MODE" == "release" ]]; then
 fi
 
 echo "==> Building Rust plugins ($MODE)"
-"$PROJECT_DIR/Scripts/build-plugins.sh" "$MODE"
+if [[ "$MODE" == "dev" ]]; then
+  # Materialise the dev signing identity *before* the plugins build so
+  # build-plugins.sh can codesign each binary with the stable cert. This
+  # is what keeps Reminders / Notes / etc. TCC grants alive across
+  # rebuilds — ad-hoc-signed cargo output gets a fresh prompt every
+  # time.
+  ensure_signing_identity
+  DEV_PLUGIN_SIGN_IDENTITY="$DEV_SIGN_IDENTITY" \
+    "$PROJECT_DIR/Scripts/build-plugins.sh" "$MODE"
+else
+  "$PROJECT_DIR/Scripts/build-plugins.sh" "$MODE"
+fi
 
 if [[ "$MODE" == "release" ]]; then
   echo "==> Building flash (release, universal)"
@@ -35,9 +47,9 @@ if [[ "$MODE" == "release" ]]; then
   BIN_PATH="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
   SIGN_IDENTITY="${FLASH_SIGN_IDENTITY:--}"
 else
-  echo "==> Building flash (dev release, current arch)"
-  swift build -c release --product flash
-  BIN_PATH="$(swift build -c release --show-bin-path)"
+  echo "==> Building flash (dev debug, current arch)"
+  swift build --product flash
+  BIN_PATH="$(swift build --show-bin-path)"
   ensure_signing_identity
   SIGN_IDENTITY="$DEV_SIGN_IDENTITY"
 fi

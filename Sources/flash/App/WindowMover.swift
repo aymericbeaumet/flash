@@ -16,25 +16,27 @@ import ApplicationServices
 /// happens once at the call to `AXValueCreate`.
 enum WindowMover {
 
-  static func move(_ params: MoveWindowParams, statusBarReservesSpace: Bool) {
-    guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
-    let axApp = AXUIElementCreateApplication(frontApp.processIdentifier)
+  static func move(
+    _ params: MoveWindowParams,
+    statusBarReservesSpace: Bool,
+    targetPID: pid_t
+  ) {
+    let axApp = AXUIElementCreateApplication(targetPID)
 
     // `kAXFocusedWindowAttribute` is the right answer when the app is the
-    // key/focused process, but Flash's overlay panel often holds key
-    // focus during a hotkey press (normal-mode capture, command-line
-    // prompt). In that state AX returns nil for the underlying app's
-    // focused window; `kAXMainWindow` is the next-best signal — it
-    // tracks the app's frontmost window regardless of which process
-    // currently owns the keyboard.
+    // key/focused process, but Flash's overlay panel holds key focus
+    // during normal-mode capture, so the verb caller already excluded
+    // Flash from `targetPID`. With the focused-window query still likely
+    // to return nil for the resigned app, fall back to `kAXMainWindow`
+    // — which tracks the app's frontmost window regardless of which
+    // process currently owns the keyboard.
     let window: AXUIElement
     if let focused = copyWindowAttribute(axApp, kAXFocusedWindowAttribute) {
       window = focused
     } else if let main = copyWindowAttribute(axApp, kAXMainWindowAttribute) {
       window = main
     } else {
-      FlashLog.warn(
-        "[window_move] no focused or main window for pid \(frontApp.processIdentifier)")
+      FlashLog.warn("[window_move] no focused or main window for pid \(targetPID)")
       return
     }
 

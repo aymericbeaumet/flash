@@ -10,8 +10,9 @@ set -euo pipefail
 # `target/` storm) and lets the plugins share compiled dependencies.
 #
 # Usage: build-plugins.sh [dev|release]
-#   dev       — optimized release build for the current machine arch only.
-#               Incremental and no lipo; used by install.sh --dev.
+#   dev       — debug build for the current machine arch only. Incremental
+#               and no lipo; signed with the stable dev identity so TCC
+#               grants (Reminders, Notes, …) persist across rebuilds.
 #   release   — optimized universal binary (x86_64 + arm64) via lipo.
 
 MODE="${1:-release}"
@@ -52,11 +53,21 @@ for manifest in Plugins/*/Cargo.toml; do
       "$TARGET_DIR/aarch64-apple-darwin/release/$bin" \
       -output "$staged"
   else
-    # dev: optimized release, current arch, incremental — fast runtime
-    # without the universal lipo pass.
-    (cd "$dir" && cargo build --release)
-    cp "$TARGET_DIR/release/$bin" "$staged"
+    # dev: unoptimized debug build, current arch, incremental — the
+    # fastest cargo path for iterative work.
+    (cd "$dir" && cargo build)
+    cp "$TARGET_DIR/debug/$bin" "$staged"
   fi
   chmod +x "$staged"
   mv -f "$staged" "$dir/$bin"
+  # Plugin binaries that hit TCC-gated APIs (reminders, notes via
+  # AppleScript, …) get re-prompted on every cdhash change unless their
+  # designated-requirement clause matches a stable cert. Sign every dev
+  # plugin with the same identity the host bundle uses so the grant
+  # persists across rebuilds.
+  if [[ "$MODE" != "release" && -n "${DEV_PLUGIN_SIGN_IDENTITY:-}" ]]; then
+    codesign --force \
+      --sign "$DEV_PLUGIN_SIGN_IDENTITY" \
+      "$dir/$bin" >/dev/null
+  fi
 done
