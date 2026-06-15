@@ -373,15 +373,30 @@ extension OverlayPanel {
     refreshWindowLevelForCurrentContent()
     // macOS Tahoe (26) refuses to grant key-window status to a non-
     // activating panel while another app holds activation, even with
-    // `becomesKeyOnlyIfNeeded = false`. The pre-Tahoe behaviour was to
-    // honour the panel's claim; in Tahoe the panel silently stays
-    // non-key and the normal-mode recapture loop spins. Force an
-    // activation so the panel can be key. The action dispatch path
-    // (`currentNonFlashContext()`) still targets whatever app was
-    // frontmost before Flash activated, so verbs like `r` (`app_reload`)
-    // continue to land on the user's actual workflow app.
+    // `becomesKeyOnlyIfNeeded = false`. Force activation so the panel
+    // can become key. The action dispatch path (`currentNonFlashContext()`)
+    // still targets whatever app was frontmost before Flash activated,
+    // so verbs like `r` (`app_reload`) continue to land on the user's
+    // actual workflow app.
+    //
+    // Tahoe also dropped `activate(ignoringOtherApps:)`'s ability to
+    // override an active app. The new `activate()` (no args) is the only
+    // call the system honours; the old one is silently ignored.
+    // `yieldActivation(to: nil)` first releases any activation the OS
+    // would otherwise keep parked on the previous app, so the subsequent
+    // `activate()` actually lands instead of being shelved.
+    // Force activation through `NSRunningApplication.activate(options:)`
+    // — the only path that still works on macOS Tahoe (26) for an
+    // accessory app under another app's activation. The plain
+    // `NSApp.activate()` is asynchronous and waits for the frontmost
+    // app to yield (which Firefox/Alacritty/etc. never do); the
+    // deprecated `NSApp.activate(ignoringOtherApps:)` is silently
+    // ignored under cooperative-activation rules. The
+    // NSRunningApplication path threads through Launch Services and
+    // *does* land synchronously enough for the immediate `makeKey`
+    // calls below to take.
     if !NSApp.isActive {
-      NSApp.activate(ignoringOtherApps: true)
+      NSRunningApplication.current.activate(options: [.activateAllWindows])
     }
     orderFrontRegardless()
     makeKeyAndOrderFront(nil)

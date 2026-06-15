@@ -400,26 +400,39 @@ extension AppDelegate {
       guard let self, self.normalModeCaptureVerificationToken == token else { return }
       guard self.shouldCaptureNormalModeInput else { return }
       guard !self.overlay.keyboardCaptureIsActive else { return }
+      // On macOS Tahoe (26) the system can refuse to grant key window to
+      // an accessory app even after `NSApp.activate()` — Firefox holds
+      // activation and won't yield. The original code escalated to
+      // another `scheduleNormalModeRecapture`, which kicked off nine
+      // more retries, each landing back here when they failed and
+      // cascading into a tight loop that pegged the main runloop. The
+      // owning `scheduleNormalModeRecapture` already retries on a
+      // 0/10/30/60/120/250/500/900/1400 ms ramp; if every retry on that
+      // ramp lost the race we accept the loss and wait for the next
+      // explicit `enter_normal_mode` press. Stops the spin without
+      // hiding the diagnostic.
       FlashLog.debug(
         "[mode] capture_inactive reason=\(reason) key=\(self.overlay.isKeyWindow) "
           + "first_responder=\(String(describing: self.overlay.firstResponder))")
-      self.scheduleNormalModeRecapture()
     }
   }
 
   func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
-    // Hard contract: a click that takes focus away from Flash is the
-    // user telling us they want to interact with whatever they clicked.
-    // Re-grabbing key window here would yank focus back from the menu
-    // they just opened, the link they just clicked, or the text field
-    // they just tapped — and on Tahoe it would re-activate Flash on
-    // top, which fights the user's gesture continuously. Stay quiet;
-    // normal mode stays selected (the badge is still NORMAL), but the
-    // panel surrenders key focus until the user re-triggers the
-    // configured `enter_normal_mode` binding.
+    if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
+      // The user clicked the menu bar (system menu, app menu, or status
+      // item). Recapturing key window here races the menu's open: the
+      // 0ms recapture entry fires before the async pointer-monitor path
+      // can transition to insert, and steals key back so the menu closes
+      // the same instant it opened. Letting the menu interact freely is
+      // the right call — `overlayDidCancelByPointer` will still flip
+      // Flash into insert mode on the async path.
+      FlashLog.trace("[mode] pointer_recapture_skip target=menu_bar")
+      return
+    }
     FlashLog.trace(
-      "[mode] pointer_recapture_skip target=\(Self.pointerFocusLossTarget()) "
-        + "reason=preserve_click_passthrough")
+      "[mode] pointer_recapture_force target=\(Self.pointerFocusLossTarget()) "
+        + "reason=normal_mode_focus_contract")
+    scheduleNormalModeRecapture()
   }
 
   static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]
