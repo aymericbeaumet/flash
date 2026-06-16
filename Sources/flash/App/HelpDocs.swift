@@ -11,8 +11,14 @@ struct HelpTopic: Equatable {
 }
 
 enum HelpDocs {
-  static func render(topic rawTopic: String?, config: Config, showModes: Bool) -> String {
-    let topics = allTopics(config: config, showModes: showModes)
+  static func render(
+    topic rawTopic: String?,
+    config: Config,
+    showModes: Bool,
+    pluginTopics: [HelpTopic] = []
+  ) -> String {
+    let topics = allTopics(
+      config: config, showModes: showModes, pluginTopics: pluginTopics)
     guard let rawTopic,
       !rawTopic.trimmed.isEmpty
     else {
@@ -30,17 +36,30 @@ enum HelpDocs {
     return render(topic)
   }
 
-  static func allTopics(config: Config, showModes: Bool) -> [HelpTopic] {
-    [
+  static func allTopics(
+    config: Config,
+    showModes: Bool,
+    pluginTopics: [HelpTopic] = []
+  ) -> [HelpTopic] {
+    let builtIn: [HelpTopic] = [
       overviewTopic,
       mappingsTopic,
-      marksTopic,
       flashlightTopic,
       NormalModeDispatcher.helpTopic(config: config, showModes: showModes),
       URLEventHandler.helpTopic,
       Config.helpTopic,
       PluginManager.helpTopic,
-    ].sorted { $0.name < $1.name }
+    ]
+    // Host topics resolve first on name collisions: a plugin claiming
+    // `flashlight` (etc.) is shadowed by the built-in entry.
+    let builtInNames = Set(
+      builtIn.map { normalize($0.name) }
+        + builtIn.flatMap { $0.aliases.map(normalize) })
+    let extras = pluginTopics.filter { topic in
+      let names = [topic.name] + topic.aliases
+      return !names.contains(where: { builtInNames.contains(normalize($0)) })
+    }
+    return (builtIn + extras).sorted { $0.name < $1.name }
   }
 
   static let mappingsTopic = HelpTopic(
@@ -135,55 +154,10 @@ enum HelpDocs {
       ```
       """)
 
-  static let marksTopic = HelpTopic(
-    name: "marks",
-    title: "Marks",
-    summary: "Vim-style marks: `m<letter>` to set, `` `<letter> `` to jump.",
-    body: """
-      # Marks
-
-      Flash carries a Vim-style mark register. Each letter `a`-`z` holds
-      one mark; setting a mark records the focused app's pid and bundle
-      identifier so jumps survive process restarts (by falling back to
-      the bundle).
-
-      ## Setting a mark
-
-      In normal mode, press `m` followed by a lowercase letter:
-
-      ```text
-      ma   # set mark `a` to the currently focused window
-      mz   # set mark `z`
-      ```
-
-      ## Jumping to a mark
-
-      Backtick + letter recalls the saved app. If the original pid is
-      gone, Flash relaunches the app from its bundle identifier.
-
-      ```text
-      `a   # focus whatever was tagged `a`
-      `z   # focus `z`
-      ```
-
-      ## URL form
-
-      The same actions are reachable through the `flash` CLI so external
-      tools can drive them:
-
-      ```text
-      flash set_mark letter=a
-      flash jump_to_mark letter=a
-      ```
-
-      ## Notes
-
-      - 26 mark slots total — one per lowercase letter.
-      - Marks persist for the lifetime of the Flash process; they are
-        not written to disk yet.
-      - Uppercase letters are reserved for future global/buffer marks.
-      """,
-    aliases: ["mark"])
+  // The `marks` help topic now lives in the marks plugin's manifest; see
+  // `Plugins/marks/manifest.json`. HelpDocs.allTopics merges plugin-owned
+  // topics in via PluginManager.pluginHelpTopics, so `:help marks` still
+  // resolves the same way.
 
   static let flashlightTopic = HelpTopic(
     name: "flashlight",

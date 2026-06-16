@@ -19,9 +19,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_local, sleep, spawn_background, ActivateRequest, Candidate, CliResult, CommandRequest,
-    CommandResponse, Context, DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget,
-    NavigationRequest, ResolveResponse, SourceActionRequest, SourceActionResponse,
+    run, run_local, ActivateRequest, Candidate, CliResult, CommandRequest, CommandResponse,
+    Context, DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest,
+    ResolveResponse, SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1082,11 +1082,12 @@ async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
     refresh_candidate_snapshot_for_path(plugin.tmux_path.as_deref(), ctx).await;
 }
 
-fn start_candidate_poll(tmux_path: Option<String>, ctx: Context) {
-    spawn_background(async move {
-        loop {
-            sleep(Duration::from_secs(2)).await;
-            refresh_candidate_snapshot_for_path(tmux_path.as_deref(), &ctx).await;
+fn start_candidate_poll(tmux_path: Option<String>, ctx: &Context) {
+    let path = tmux_path;
+    ctx.interval("candidate-refresh", Duration::from_secs(2), move |ctx| {
+        let path = path.clone();
+        async move {
+            refresh_candidate_snapshot_for_path(path.as_deref(), &ctx).await;
         }
     });
 }
@@ -1907,7 +1908,7 @@ impl FlashPlugin for Tmux {
             ctx.log("warn", "[tmux] tmux binary not found");
         }
         refresh_candidate_snapshot(self, &ctx).await;
-        start_candidate_poll(self.tmux_path.clone(), ctx);
+        start_candidate_poll(self.tmux_path.clone(), &ctx);
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {

@@ -87,7 +87,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "[", chars: "a"), .appPrev)
     XCTAssertEqual(command(pending: "]", chars: "a"), .appNext)
     XCTAssertEqual(command(pending: "g", chars: "4"), .tabSelect(index: 4))
-    XCTAssertEqual(command(chars: "n"), .newWindow)
+    XCTAssertEqual(command(chars: "n"), .pluginVerb(name: "window_new", args: [:]))
     XCTAssertEqual(command(chars: "t"), .tabNew)
     XCTAssertEqual(command(chars: "e"), .archive)
   }
@@ -142,9 +142,14 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "m", chars: "f"), .mouseTarget(.move))
     XCTAssertEqual(
       command(pending: "m", chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.move))
-    // `m<letter>` now sets a vim-style mark instead of being unmapped.
-    XCTAssertEqual(command(pending: "m", chars: "x"), .setMark(letter: "x"))
-    XCTAssertEqual(command(pending: "`", chars: "x"), .jumpToMark(letter: "x"))
+    // `m<letter>` / `` `<letter> `` route to the marks plugin via the
+    // `set_mark` / `jump_to_mark` plugin verbs.
+    XCTAssertEqual(
+      command(pending: "m", chars: "x"),
+      .pluginVerb(name: "set_mark", args: ["letter": "x"]))
+    XCTAssertEqual(
+      command(pending: "`", chars: "x"),
+      .pluginVerb(name: "jump_to_mark", args: ["letter": "x"]))
   }
 
   func testFIsMouseTargetAndShiftFIsMouseGrid() {
@@ -234,11 +239,13 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "g", chars: "i"), .insertMode)
     XCTAssertEqual(command(pending: "[", chars: "i"), .insertMode)
     XCTAssertEqual(command(pending: "]", chars: "i"), .insertMode)
-    XCTAssertEqual(command(pending: "g", chars: "n"), .newWindow)
+    XCTAssertEqual(command(pending: "g", chars: "n"), .pluginVerb(name: "window_new", args: [:]))
     XCTAssertEqual(command(pending: "g", chars: "r"), .reload(force: false))
     // Valid sequence continuations still resolve to the mapped action.
     XCTAssertEqual(command(pending: "g", chars: "t"), .tabNext)
-    XCTAssertEqual(command(pending: "m", chars: "i"), .setMark(letter: "i"))
+    XCTAssertEqual(
+      command(pending: "m", chars: "i"),
+      .pluginVerb(name: "set_mark", args: ["letter": "i"]))
     // No mapping at any depth — the prefix is dropped and the fresh
     // key is also unmapped, so the result is a clean consume (no
     // command, no carried-over pending).
@@ -594,7 +601,19 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testHelpDocsRenderIndexAndTopic() {
-    let index = HelpDocs.render(topic: nil, config: .default, showModes: true)
+    // The marks help topic moved into the marks plugin's manifest, so the
+    // test surfaces it the way the host does at runtime: by feeding a
+    // simulated `pluginTopics` slice into the renderer. The plugin topic
+    // matches its `Plugins/marks/manifest.json`'s `help.topics[]` entry.
+    let marksTopic = HelpTopic(
+      name: "marks",
+      title: "Marks",
+      summary: "Vim-style marks: `m<letter>` to set, `` `<letter> `` to jump.",
+      body:
+        "# Marks\n\nFlash carries a Vim-style mark register. Each letter `a`-`z` holds one mark.\nSet a mark with `m<letter>` (e.g. `ma`); jump with `` `<letter> ``.\n",
+      aliases: ["mark"])
+    let index = HelpDocs.render(
+      topic: nil, config: .default, showModes: true, pluginTopics: [marksTopic])
     XCTAssertTrue(index.contains("`plugins`"))
     XCTAssertTrue(index.contains("`normal-mode`"))
     XCTAssertTrue(index.contains("`marks`"), "marks topic should appear in the index")
@@ -605,11 +624,13 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(plugins.contains("# Plugins"))
     XCTAssertTrue(plugins.contains("manifest.json"))
 
-    let marks = HelpDocs.render(topic: "marks", config: .default, showModes: true)
+    let marks = HelpDocs.render(
+      topic: "marks", config: .default, showModes: true, pluginTopics: [marksTopic])
     XCTAssertTrue(marks.contains("# Marks"))
     XCTAssertTrue(marks.contains("m<letter>") || marks.contains("`ma`") || marks.contains("ma "))
 
-    let mark = HelpDocs.render(topic: "mark", config: .default, showModes: true)
+    let mark = HelpDocs.render(
+      topic: "mark", config: .default, showModes: true, pluginTopics: [marksTopic])
     XCTAssertEqual(
       mark, marks,
       ":help mark must resolve to the same body as :help marks")
@@ -1077,9 +1098,7 @@ final class NormalModeTests: XCTestCase {
         sourceID: "firefox-tabs",
         source: "firefox",
         pid: 123,
-        title: BrowserTabSources.browserTabName(
-          title: "Gmail",
-          url: "https://mail.google.com/mail/u/0/#inbox"),
+        title: "Gmail",
         subtitle: "browser tab",
         bundleIdentifier: "org.mozilla.firefox",
         url: URL(string: "https://mail.google.com/mail/u/0/#inbox")))
@@ -1130,7 +1149,7 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "org.mozilla.firefox"))
     XCTAssertFalse(
       AppDelegate.normalModeCommandKeyShortcutIsUnsafeInTerminal(
-        .copy,
+        .tabNew,
         bundleIdentifier: "org.alacritty"))
   }
 

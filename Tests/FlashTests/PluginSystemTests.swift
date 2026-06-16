@@ -12,9 +12,9 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       ids,
       [
-        "aiproviders", "calculator", "clipboard", "contacts", "emojis", "firefox", "media",
-        "notes", "processes", "reminders", "safari", "searchengines", "slack", "spotify",
-        "system", "tmux", "www",
+        "aiproviders", "calculator", "chromium", "clipboard", "contacts", "default-keystrokes",
+        "emojis", "firefox", "marks", "media", "notes", "processes", "reminders", "safari",
+        "searchengines", "slack", "spotify", "system", "tmux", "www",
       ])
 
     let runCommandRequired: Set<String> = [
@@ -293,7 +293,7 @@ final class PluginSystemTests: XCTestCase {
     let root = try XCTUnwrap(
       try officialPluginRoots().first { $0.lastPathComponent == "safari" })
     let manifest = try PluginManifest.load(from: root)
-    XCTAssertEqual(manifest.bundleIDs, ["com.apple.Safari"])
+    XCTAssertEqual(manifest.bundleIDs, ["com.apple.Safari", "com.apple.SafariTechnologyPreview"])
     let mapping = try XCTUnwrap(manifest.mappings.first)
     XCTAssertEqual(manifest.mappings.count, 1)
     XCTAssertEqual(mapping.key, "R")
@@ -301,9 +301,10 @@ final class PluginSystemTests: XCTestCase {
     // Safari's "Reload Page From Origin" is ⌘⌥R, unlike the ⌘⇧R that the
     // built-in `R` → app_reload(force) default sends for Firefox/Chrome.
     XCTAssertEqual(mapping.command, ["flash", "send_key", "--keys=cmd+option+r"])
-    XCTAssertTrue(
-      mapping.bundleIDs.isEmpty,
-      "mapping inherits the manifest's com.apple.Safari scope")
+    // The mappings provider scopes itself to release Safari only (the
+    // technology preview reload shortcut is different on some builds),
+    // overriding the manifest-wide `bundle_ids` that include the preview.
+    XCTAssertEqual(mapping.bundleIDs, ["com.apple.Safari"])
   }
 
   func testManifestRejectsInvalidID() throws {

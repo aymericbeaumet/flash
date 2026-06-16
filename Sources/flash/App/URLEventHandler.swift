@@ -59,19 +59,9 @@ enum URLCommand: Hashable {
   case movementForward
   case appPrev
   case appNext
-  case setMark(letter: String)
-  case jumpToMark(letter: String)
   case quitApp(force: Bool)
-  case save
   case saveAndQuit(force: Bool)
-  case print
-  case openDocument
-  case newWindow
   case tabNew
-  case copy
-  case cut
-  case paste
-  case copyAll
   case showAlert(message: String)
   case dismissAlert
   case showUsage(topic: String?)
@@ -82,6 +72,12 @@ enum URLCommand: Hashable {
   case pluginCommand(command: String, subcommand: String, args: [String])
   case moveWindow(MoveWindowParams)
   case sendKey(keys: String, keyCode: CGKeyCode, flagsRawValue: UInt64)
+  /// A verb registered by a plugin via a `providers[].kind = "verbs"` entry.
+  /// The host doesn't know the verb's semantics — it just forwards the call
+  /// to ``PluginManager/invokeVerb(name:args:forBundleID:onResult:)`` (which
+  /// may shortcut into `input.send_key` for inline-keystrokes verbs, or fan
+  /// out to the owning plugin's `command.invoke`).
+  case pluginVerb(name: String, args: [String: String])
 }
 
 enum MouseCommand: Hashable {
@@ -147,7 +143,11 @@ final class URLEventHandler: NSObject {
       !verb.isEmpty
     else { return }
     let argsJSON = event.paramDescriptor(forKeyword: FlashCLI.argsKey)?.stringValue ?? "{}"
-    guard let cmd = Self.parse(verb: verb, args: Self.decodeArgs(json: argsJSON)) else {
+    // CLI / AppleEvent path uses `parseOrPluginVerb` so a `flash <verb>`
+    // call can reach plugin-registered verbs. Config-load goes through
+    // strict `parse` instead, so a stale verb in `[mode.*.mappings]`
+    // still surfaces as a config error rather than a silent runtime miss.
+    guard let cmd = Self.parseOrPluginVerb(verb: verb, args: Self.decodeArgs(json: argsJSON)) else {
       return
     }
     handler(cmd)
@@ -158,9 +158,46 @@ final class URLEventHandler: NSObject {
   /// whose required parameters are missing/invalid — callers (the AE
   /// handler, the mapping config loader) treat nil as "ignore" and emit a
   /// diagnostic where appropriate.
+  ///
+  /// Strict by design: plugin-registered verbs are NOT resolved here so the
+  /// mapping/CLI parsers reject stale verbs at config-load time. Runtime
+  /// dispatch entry points use ``parseOrPluginVerb(verb:args:)`` to fall
+  /// back to a ``URLCommand/pluginVerb(name:args:)`` when the built-in table
+  /// misses but the name looks like a plugin verb.
   static func parse(verb: String, args: [String: String]) -> URLCommand? {
     guard let parser = Self.commands[verb] else { return nil }
     return parser(VerbArgs(args: args))
+  }
+
+  /// Same as ``parse(verb:args:)`` but, on a built-in miss for an
+  /// identifier-shape verb, returns a ``URLCommand/pluginVerb(name:args:)``
+  /// so the dispatch path can hand the call to ``PluginManager``. Used by
+  /// the AppleEvent handler — config validation stays on `parse(verb:args:)`
+  /// so stale verbs surface a clear failure instead of silently turning
+  /// into no-op plugin calls.
+  static func parseOrPluginVerb(verb: String, args: [String: String]) -> URLCommand? {
+    if let cmd = Self.parse(verb: verb, args: args) {
+      return cmd
+    }
+    if Self.looksLikePluginVerb(verb) {
+      return .pluginVerb(name: verb, args: args)
+    }
+    return nil
+  }
+
+  /// Identifier-shape predicate for unknown verbs that should be routed to
+  /// plugins rather than rejected outright. Mirrors the lexical rule the
+  /// rest of the configuration uses (plugin ids, command names): one
+  /// lowercase letter or underscore followed by lowercase letters, digits,
+  /// and underscores. Anything else (uppercase, dashes, punctuation,
+  /// whitespace) is rejected so a config typo doesn't quietly become a
+  /// plugin call.
+  private static func looksLikePluginVerb(_ verb: String) -> Bool {
+    guard let first = verb.unicodeScalars.first else { return false }
+    let head = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz_")
+    let tail = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_")
+    guard head.contains(first) else { return false }
+    return verb.unicodeScalars.dropFirst().allSatisfy { tail.contains($0) }
   }
 
   /// JSON object → `[String: String]`. Non-string values are stringified so
@@ -242,25 +279,9 @@ final class URLEventHandler: NSObject {
     "movement_forward": { _ in .movementForward },
     "app_previous": { _ in .appPrev },
     "app_next": { _ in .appNext },
-    "set_mark": { a in
-      guard let letter = a.value("letter"), !letter.isEmpty else { return nil }
-      return .setMark(letter: letter)
-    },
-    "jump_to_mark": { a in
-      guard let letter = a.value("letter"), !letter.isEmpty else { return nil }
-      return .jumpToMark(letter: letter)
-    },
     "app_quit": { a in .quitApp(force: a.bool("force")) },
-    "app_save": { _ in .save },
     "app_save_and_quit": { a in .saveAndQuit(force: a.bool("force")) },
-    "app_print": { _ in .print },
-    "document_open": { _ in .openDocument },
-    "window_new": { _ in .newWindow },
     "tab_new": { _ in .tabNew },
-    "clipboard_copy": { _ in .copy },
-    "clipboard_cut": { _ in .cut },
-    "clipboard_paste": { _ in .paste },
-    "clipboard_copy_all": { _ in .copyAll },
     "alert_show": { a in
       guard let message = a.value("message"), !message.isEmpty else { return nil }
       return .showAlert(message: message)
@@ -329,16 +350,8 @@ final class URLEventHandler: NSObject {
     flash app_previous
     flash app_next
     flash app_quit [--force]
-    flash app_save
     flash app_save_and_quit [--force]
-    flash app_print
-    flash document_open
-    flash window_new
     flash tab_new
-    flash clipboard_copy
-    flash clipboard_cut
-    flash clipboard_paste
-    flash clipboard_copy_all
     flash alert_show --message=<text>
     flash alert_dismiss
     flash hints_dismiss

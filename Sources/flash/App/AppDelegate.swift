@@ -269,17 +269,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var appBackStack: [pid_t] = []
   var appForwardStack: [pid_t] = []
   var appNavigationTargetPID: pid_t?
-  /// Vim-style marks. `m<letter>` records the focused app at the
-  /// moment the user pressed it; `` `<letter> `` re-activates that
-  /// app. PIDs aren't stable across launches, so the bundle id is
-  /// used as the durable handle and pid is the fast-path lookup.
-  var marks: [Character: MarkState] = [:]
-
-  struct MarkState {
-    let bundleID: String
-    let pid: pid_t
-    let recordedAt: Date
-  }
   var workspaceTokens: [NSObjectProtocol] = []
   var resignKeyToken: NSObjectProtocol?
   var normalModeRecaptureToken: UInt64 = 0
@@ -343,6 +332,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       self.invalidateEffectiveMappings()
       self.refreshEffectiveMappings(
         for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    }
+    pluginManager.onNormalModeTargetRequested = { [weak self] in
+      guard let context = self?.normalModeContext() ?? self?.currentNonFlashContext() else {
+        return nil
+      }
+      return (pid: context.processID, bundleID: context.bundleIdentifier)
     }
     pluginManager.start(config: config)
     configureDebugServer(for: config)
@@ -419,9 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .tabMovePrev, .tabMoveNext, .tabReopen,
       .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,
-      .setMark, .jumpToMark,
-      .quitApp, .save, .saveAndQuit, .print,
-      .openDocument, .newWindow, .tabNew, .copy, .cut, .paste, .copyAll,
+      .quitApp, .saveAndQuit, .tabNew,
       .sendKey:
       performMappedCommand(cmd)
     case .showAlert(let message):
@@ -465,6 +458,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           params, statusBarReservesSpace: modeBadgeEnabled, targetPID: target.processID)
       } else {
         FlashLog.warn("[window_move] no non-flash frontmost app")
+      }
+    case .pluginVerb(let name, let args):
+      // `core:focus.changed` etc. carry the focused-app pid/bundle id, but
+      // verb dispatch is opportunistic and the verb may fire while normal
+      // mode has retained a target across a focus blip — prefer that
+      // target when present so e.g. `app_save` saves the file the user
+      // was last looking at, not the app Flash happens to overlay.
+      let target = normalModeContext() ?? currentNonFlashContext()
+      let dispatched = pluginManager.invokeVerb(
+        name: name,
+        args: args,
+        forBundleID: target?.bundleIdentifier,
+        focusedPID: target?.processID
+      ) { [weak self] ok, pid, stdout, navigationURL in
+        guard ok else { return }
+        self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
+        if let stdout { self?.overlay.displayBanner(stdout) }
+      }
+      if !dispatched {
+        FlashLog.debug("[plugin_verb] no plugin claims verb=\(name)")
       }
     }
   }

@@ -30,6 +30,37 @@ final class PluginManager {
     }
   }
 
+  /// A resolved plugin-verb target: the owning plugin, the command/subcommand
+  /// folded from the manifest, an optional per-bundle inline-keystrokes table
+  /// (which lets the host short-circuit into `input.send_key` when it matches
+  /// the focused bundle, skipping the plugin RPC), and an optional bundle
+  /// gate. Built by `rebuildVerbIndex` from every loaded plugin's `verbs`
+  /// provider entries.
+  private struct VerbTarget {
+    let plugin: PluginProcess
+    let command: String
+    let subcommand: String
+    let inlineKeystrokes: [String: String]
+    let bundleIDs: [String]
+
+    func matches(bundleID: String?) -> Bool {
+      if bundleIDs.isEmpty { return true }
+      guard let bundleID else { return false }
+      return bundleIDs.contains(bundleID)
+    }
+
+    /// Hotkey string to synthesize for `bundleID`, or `nil` when the verb has
+    /// no inline shortcut for it. The empty-key entry (`""`) acts as the
+    /// catch-all default, mirroring the manifest convention.
+    func inlineKeystroke(forBundleID bundleID: String?) -> String? {
+      if let bundleID, let exact = inlineKeystrokes[bundleID], !exact.isEmpty {
+        return exact
+      }
+      let fallback = inlineKeystrokes[""] ?? ""
+      return fallback.isEmpty ? nil : fallback
+    }
+  }
+
   /// A resolved flashlight bang target: the owning plugin, the command its
   /// `command.invoke` carries, and the gate/metadata folded from the manifest.
   /// Dispatched with the typed bang as the subcommand — so a `shebang` provider
@@ -86,6 +117,12 @@ final class PluginManager {
   /// claimed by an exact `shebangIndex` entry, so a plugin like `searchengines`
   /// can serve the whole DuckDuckGo bang table without enumerating it.
   private var wildcardShebangTarget: ShebangTarget?
+  /// Plugin-registered verbs (`flash <verb>`), keyed by lowercased verb name.
+  /// First plugin to claim a verb wins on collision; the host treats the
+  /// built-in `URLEventHandler.commands` table as authoritative for any name
+  /// it already owns, so plugin verbs only resolve for names the host doesn't
+  /// claim. Rebuilt by `rebuildVerbIndex` whenever the plugin set changes.
+  private var verbIndex: [String: VerbTarget] = [:]
   /// Resolved plugin mappings across all loaded plugins, rebuilt whenever the
   /// plugin set or any plugin's mappings change. `mappings(forBundleID:)`
   /// filters this for the focused app.
@@ -94,11 +131,35 @@ final class PluginManager {
   /// backs the `ax.*` host RPCs. Plugins never touch AX directly; they reach
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
+  /// Carbon hotkey manager dedicated to plugin-owned registrations. Lives
+  /// separately from `MappingsCoordinator`'s `HotKeyManager` because the
+  /// mappings coordinator rebuilds its table on every mode flip, while
+  /// plugin hotkeys are persistent across modes (a plugin asked for a chord
+  /// and the user accepted the capability — there's no scope to flip them
+  /// on).
+  private let pluginHotKeys = HotKeyManager()
+  /// `pluginID → (pluginHotkeyID → carbonID)` for unregistration and for
+  /// looking up the owning plugin when a Carbon fire callback arrives. The
+  /// plugin's `id` field is opaque to the host; reusing it on a second
+  /// register call replaces the previous registration so plugins can rebind
+  /// in place.
+  private var pluginHotkeysByPluginID: [String: [String: UInt32]] = [:]
+  /// `carbonID → (pluginID, plugin's hotkey id)` so the fire callback can
+  /// route the `core:hotkey.fired` notification to the right plugin process.
+  private var pluginHotkeyByCarbonID: [UInt32: (pluginID: String, hotkeyID: String)] = [:]
   var onStateChanged: (() -> Void)?
   /// Fired on the main thread after the mapping index is rebuilt because a
   /// plugin emitted `mappings.updated`. The app recomputes its effective
   /// per-app mapping tables in response.
   var onMappingsChanged: (() -> Void)?
+  /// Resolver for the `host.normal_mode_target` RPC: returns the focused
+  /// non-Flash app context (pid + bundle id) the host considers the
+  /// normal-mode target. Plugins (notably `marks`) call this to record or
+  /// reactivate the app the user was working on when they typed `m<letter>`
+  /// — `core:focus.changed` alone is insufficient because Flash itself is
+  /// the focused process while normal mode is active. Set by AppDelegate
+  /// during plugin setup.
+  var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String)?)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
     self.baseDataDir = baseDataDir
@@ -122,6 +183,7 @@ final class PluginManager {
       wildcardCommandIndex.removeAll()
       shebangIndex.removeAll()
       wildcardShebangTarget = nil
+      verbIndex.removeAll()
       mappingIndex.removeAll()
       sourceAdaptersByID.removeAll()
     }
@@ -337,6 +399,37 @@ final class PluginManager {
         return
       }
       sendPluginKey(params, reply: reply)
+    case "tcc.request":
+      guard pluginHasCapability(pluginID, .tccRequest) else {
+        reply(["ok": false, "error": "missing tcc.request capability"])
+        return
+      }
+      handleTccRequest(params, pluginID: pluginID, reply: reply)
+    case "hotkey.register":
+      guard pluginHasCapability(pluginID, .hotkey) else {
+        reply(["ok": false, "error": "missing hotkey capability"])
+        return
+      }
+      handleHotkeyRegister(params, pluginID: pluginID, reply: reply)
+    case "hotkey.unregister":
+      guard pluginHasCapability(pluginID, .hotkey) else {
+        reply(["ok": false, "error": "missing hotkey capability"])
+        return
+      }
+      handleHotkeyUnregister(params, pluginID: pluginID, reply: reply)
+    case "host.normal_mode_target":
+      DispatchQueue.main.async { [weak self] in
+        guard let target = self?.onNormalModeTargetRequested?() else {
+          reply(["ok": true, "present": false])
+          return
+        }
+        reply([
+          "ok": true,
+          "present": true,
+          "pid": Int(target.pid),
+          "bundle_id": target.bundleID,
+        ])
+      }
     case let method where method.hasPrefix("ax."):
       axBroker.handle(method: method, params: params, reply: reply)
     default:
@@ -369,6 +462,207 @@ final class PluginManager {
       flags: Self.cgEventFlags(carbon: parsed.modifiers),
       to: pid)
     reply(["ok": ok])
+  }
+
+  /// In-memory bookkeeping for TCC request rate-limiting. The TCC subsystem
+  /// itself caches grants, but a malicious or buggy plugin could still spam
+  /// `tcc.request` calls — when a kind+target was queried in the last 5
+  /// seconds, we return the cached grant decision instead of re-issuing the
+  /// underlying API call. Tracked per plugin id so one plugin's cooldown
+  /// doesn't affect another's.
+  private struct TccRecentRequest {
+    let pluginID: String
+    let key: String
+    let timestamp: Date
+    let result: [String: Any]
+  }
+  private var tccRecentRequests: [TccRecentRequest] = []
+  private let tccRequestCooldown: TimeInterval = 5.0
+
+  /// Dispatch a `tcc.request` RPC. `params` carries `kind` (currently only
+  /// `applescript` is supported — it triggers the AppleEvents prompt for the
+  /// `target` bundle id) and `target` (the bundle id to request access to).
+  /// Replies with `{ok, granted, denied, unknown}` describing the post-request
+  /// grant state; `unknown` is set when the prompt is shown for the first time
+  /// and the user has not yet decided.
+  private func handleTccRequest(
+    _ params: [String: Any],
+    pluginID: String,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let kind = params["kind"] as? String, !kind.isEmpty else {
+      reply(["ok": false, "error": "tcc.request requires kind"])
+      return
+    }
+    let target = (params["target"] as? String) ?? ""
+    let key = "\(kind)|\(target)"
+    let now = Date()
+    queue.async { [weak self] in
+      guard let self else {
+        DispatchQueue.main.async { reply(["ok": false, "error": "manager gone"]) }
+        return
+      }
+      self.tccRecentRequests.removeAll { now.timeIntervalSince($0.timestamp) > self.tccRequestCooldown }
+      if let cached = self.tccRecentRequests.first(where: { $0.pluginID == pluginID && $0.key == key }) {
+        DispatchQueue.main.async { reply(cached.result) }
+        return
+      }
+      let result: [String: Any]
+      switch kind {
+      case "applescript":
+        guard !target.isEmpty else {
+          let err: [String: Any] = ["ok": false, "error": "tcc.request applescript requires target"]
+          DispatchQueue.main.async { reply(err) }
+          return
+        }
+        result = Self.requestAppleEventsAccess(targetBundleID: target)
+      default:
+        let err: [String: Any] = ["ok": false, "error": "tcc.request unsupported kind: \(kind)"]
+        DispatchQueue.main.async { reply(err) }
+        return
+      }
+      self.tccRecentRequests.append(
+        TccRecentRequest(pluginID: pluginID, key: key, timestamp: now, result: result))
+      DispatchQueue.main.async { reply(result) }
+    }
+  }
+
+  /// Register a Carbon hotkey on behalf of `pluginID`. Replies with `ok=true`
+  /// once Carbon accepts the registration, or an error string when the spec
+  /// is invalid, Carbon refuses (another app already owns the chord), or the
+  /// chord clashes with one of the user's `[mode.*.mappings]` bindings.
+  /// Re-registering the same plugin-side `id` replaces the previous handle.
+  private func handleHotkeyRegister(
+    _ params: [String: Any],
+    pluginID: String,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let hotkeyID = params["id"] as? String, !hotkeyID.isEmpty,
+      let spec = params["spec"] as? String, !spec.isEmpty
+    else {
+      reply(["ok": false, "error": "hotkey.register requires id + spec"])
+      return
+    }
+    guard let parsed = HotkeySyntax.parse(hotkey: spec) else {
+      reply(["ok": false, "error": "hotkey.register: cannot parse spec \(spec)"])
+      return
+    }
+    queue.async { [weak self] in
+      guard let self else {
+        DispatchQueue.main.async { reply(["ok": false, "error": "manager gone"]) }
+        return
+      }
+      // Drop a previous registration under the same plugin+id so a plugin
+      // can rebind without first unregistering.
+      if let previousCarbonID = self.pluginHotkeysByPluginID[pluginID]?[hotkeyID] {
+        self.pluginHotkeyByCarbonID.removeValue(forKey: previousCarbonID)
+      }
+      DispatchQueue.main.async {
+        var assignedCarbonID: UInt32 = 0
+        let status = self.pluginHotKeys.register(
+          modifiers: parsed.modifiers,
+          virtualKey: parsed.virtualKey
+        ) { [weak self] in
+          guard let self else { return }
+          let target: (pluginID: String, hotkeyID: String)? = self.queue.sync {
+            self.pluginHotkeyByCarbonID[assignedCarbonID]
+          }
+          guard let target else { return }
+          self.fireHotkeyEvent(pluginID: target.pluginID, hotkeyID: target.hotkeyID)
+        }
+        if status != noErr {
+          let err: [String: Any] = [
+            "ok": false,
+            "error": "RegisterEventHotKey returned \(status)",
+          ]
+          reply(err)
+          return
+        }
+        assignedCarbonID = self.pluginHotKeys.lastAssignedID
+        self.queue.async {
+          self.pluginHotkeysByPluginID[pluginID, default: [:]][hotkeyID] = assignedCarbonID
+          self.pluginHotkeyByCarbonID[assignedCarbonID] = (pluginID, hotkeyID)
+          DispatchQueue.main.async { reply(["ok": true, "carbon_id": Int(assignedCarbonID)]) }
+        }
+      }
+    }
+  }
+
+  /// Drop a hotkey registration previously installed by
+  /// `handleHotkeyRegister`. No-op when the id is unknown.
+  private func handleHotkeyUnregister(
+    _ params: [String: Any],
+    pluginID: String,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let hotkeyID = params["id"] as? String, !hotkeyID.isEmpty else {
+      reply(["ok": false, "error": "hotkey.unregister requires id"])
+      return
+    }
+    queue.async { [weak self] in
+      guard let self else {
+        DispatchQueue.main.async { reply(["ok": false, "error": "manager gone"]) }
+        return
+      }
+      guard let carbonID = self.pluginHotkeysByPluginID[pluginID]?.removeValue(forKey: hotkeyID)
+      else {
+        DispatchQueue.main.async { reply(["ok": true, "removed": false]) }
+        return
+      }
+      self.pluginHotkeyByCarbonID.removeValue(forKey: carbonID)
+      DispatchQueue.main.async {
+        self.pluginHotKeys.unregister(id: carbonID)
+        reply(["ok": true, "removed": true])
+      }
+    }
+  }
+
+  /// Deliver a `core:hotkey.fired` notification to the plugin that owns the
+  /// fired registration. Routed through `PluginProcess.sendEvent`, so the
+  /// plugin must declare `core:hotkey.fired` in its `subscriptions` for the
+  /// event to land.
+  private func fireHotkeyEvent(pluginID: String, hotkeyID: String) {
+    queue.async { [weak self] in
+      guard let plugin = self?.pluginsByID[pluginID] else { return }
+      plugin.sendEvent(
+        PluginEvent(
+          name: "core:hotkey.fired",
+          payload: ["hotkey_id": hotkeyID],
+          bundleID: nil,
+          configPath: nil,
+          focused: nil))
+    }
+  }
+
+  /// Native TCC bridge for AppleEvents access to `targetBundleID`. Calls the
+  /// low-level `AEDeterminePermissionToAutomateTarget` so the system shows
+  /// the standard "Flash wants to control <App>" prompt the first time, then
+  /// caches the user's decision. Maps the OSStatus return into a `{granted,
+  /// denied, unknown}` triple so plugins can branch on first-prompt UX.
+  private static func requestAppleEventsAccess(targetBundleID: String) -> [String: Any] {
+    let addressDesc = NSAppleEventDescriptor(
+      descriptorType: typeApplicationBundleID,
+      data: Data(targetBundleID.utf8))
+    var status: OSStatus = -1
+    if let descriptor = addressDesc, let aeDesc = descriptor.aeDesc {
+      status = withUnsafePointer(to: aeDesc.pointee) { ptr in
+        AEDeterminePermissionToAutomateTarget(
+          ptr, typeWildCard, typeWildCard, true)
+      }
+    }
+    switch status {
+    case 0:  // noErr
+      return ["ok": true, "granted": true, "denied": false, "unknown": false]
+    case -1744:  // errAEEventNotPermitted
+      return ["ok": true, "granted": false, "denied": true, "unknown": false]
+    case -1743:  // errAEEventWouldRequireUserConsent / procNotFound — first prompt outcome unknown
+      return ["ok": true, "granted": false, "denied": false, "unknown": true]
+    default:
+      return [
+        "ok": false, "error": "AEDeterminePermissionToAutomateTarget returned \(status)",
+        "granted": false, "denied": false, "unknown": true,
+      ]
+    }
   }
 
   private static func cgEventFlags(carbon: UInt32) -> CGEventFlags {
@@ -459,6 +753,86 @@ final class PluginManager {
     wildcardShebangTarget = wildcard
   }
 
+  /// Rebuild the verb lookup index. Must be called from `queue` after
+  /// `pluginsByID` changes. The first plugin to claim a verb wins on
+  /// collision, matching the command/shebang index semantics. Plugin verbs
+  /// only resolve names the built-in `URLEventHandler.commands` table doesn't
+  /// already claim (the URL dispatch checks the built-in table first), so a
+  /// collision with a built-in is silently shadowed.
+  private func rebuildVerbIndex() {
+    var next: [String: VerbTarget] = [:]
+    for plugin in pluginsByID.values {
+      for registration in plugin.manifest.verbs {
+        let name = registration.name.lowercased()
+        guard !name.isEmpty else { continue }
+        let command = registration.command.isEmpty ? plugin.identifier : registration.command
+        let subcommand = registration.subcommand.isEmpty ? name : registration.subcommand
+        let target = VerbTarget(
+          plugin: plugin,
+          command: command,
+          subcommand: subcommand,
+          inlineKeystrokes: registration.inlineKeystrokes,
+          bundleIDs: registration.bundleIDs)
+        if next[name] == nil { next[name] = target }
+      }
+    }
+    verbIndex = next
+  }
+
+  /// Dispatch a plugin verb. Returns true when a plugin claims the verb (and
+  /// the dispatch was issued — either as a synthesized keystroke or as an
+  /// asynchronous plugin command). The `inline_keystrokes` shortcut path runs
+  /// synchronously and reports `(true, focusedPID, nil, nil)` via `onResult`;
+  /// the RPC path follows the `command.invoke` contract, with `args` flattened
+  /// into `key=value` positional tokens so plugins can parse them off
+  /// `CommandRequest.args` without a special map decoder.
+  @discardableResult
+  func invokeVerb(
+    name: String,
+    args: [String: String],
+    forBundleID bundleID: String? = nil,
+    focusedPID: pid_t? = nil,
+    onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
+  ) -> Bool {
+    let lcName = name.lowercased()
+    let target: VerbTarget? = queue.sync {
+      guard let target = verbIndex[lcName], target.matches(bundleID: bundleID) else { return nil }
+      return target
+    }
+    guard let target else { return false }
+    if let keystroke = target.inlineKeystroke(forBundleID: bundleID),
+      let pid = focusedPID,
+      let parsed = HotkeySyntax.parse(hotkey: keystroke)
+    {
+      let ok = NormalModeDispatcher.sendKey(
+        virtualKey: CGKeyCode(parsed.virtualKey),
+        flags: Self.cgEventFlags(carbon: parsed.modifiers),
+        to: pid)
+      FlashLog.debug(
+        "[plugin_verb] inline name=\(lcName) keys=\(keystroke) "
+          + "pid=\(pid) bundle=\(bundleID ?? "nil") ok=\(ok)")
+      onResult?(ok, pid, nil, nil)
+      return true
+    }
+    let positional = args.keys.sorted().map { key in "\(key)=\(args[key] ?? "")" }
+    let raw = positional.isEmpty ? name : "\(name) " + positional.joined(separator: " ")
+    target.plugin.invokeCommand(
+      command: target.command,
+      subcommand: target.subcommand,
+      args: positional,
+      raw: raw,
+      meta: [:]
+    ) { ok, pid, stdout, navigationURL in
+      FlashLog.debug(
+        "[plugin_verb] command name=\(lcName) plugin=\(target.plugin.identifier) "
+          + "subcommand=\(target.subcommand) ok=\(ok) "
+          + "target_pid=\(pid.map(String.init) ?? "nil") "
+          + "navigation_url=\(navigationURL?.absoluteString ?? "nil")")
+      onResult?(ok, pid, stdout, navigationURL)
+    }
+    return true
+  }
+
   /// Rebuild the resolved-mapping index. Must be called from `queue` after
   /// `pluginsByID` or any plugin's mappings change. Canonicalizes the key and
   /// parses the argv mapping command once here so the focus-change path only
@@ -512,6 +886,29 @@ final class PluginManager {
       guard let self else { return }
       self.rebuildMappingIndex()
       DispatchQueue.main.async { self.onMappingsChanged?() }
+    }
+  }
+
+  /// Help topics every loaded plugin contributes via `manifest.help.topics`,
+  /// flattened into the host's `HelpTopic` type so `:help` can render them
+  /// alongside built-ins. Topic names collide on a first-wins basis with the
+  /// host's topics (see `HelpDocs.allTopics`), so a plugin claiming `flashlight`
+  /// is shadowed by the host's own topic — pick a plugin-specific name to
+  /// avoid surprise.
+  func pluginHelpTopics() -> [HelpTopic] {
+    queue.sync {
+      pluginsByID.values
+        .sorted(by: { $0.identifier < $1.identifier })
+        .flatMap { plugin in
+          plugin.manifest.help.topics.map { topic in
+            HelpTopic(
+              name: topic.name,
+              title: topic.title.isEmpty ? topic.name : topic.title,
+              summary: topic.summary,
+              body: topic.body,
+              aliases: topic.aliases)
+          }
+        }
     }
   }
 
@@ -629,6 +1026,7 @@ final class PluginManager {
     rebuildCommandIndex()
     rebuildShebangIndex()
     rebuildMappingIndex()
+    rebuildVerbIndex()
     notifyStateChanged()
   }
 

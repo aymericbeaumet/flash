@@ -220,6 +220,37 @@ extension AppDelegate {
         bundleID: context.bundleIdentifier,
         configPath: nil,
         focused: true))
+    // The focused-window-changed and main-window-changed AX notifications are
+    // exactly the signal plugins want to react to when they care about *which*
+    // window inside an app is on top (e.g. an iTerm/Alacritty plugin watching
+    // tmux clients move between attached terminals). The generic
+    // `core:ax.changed` fires for any AX mutation, so it's too noisy for that
+    // use case; this dedicated event carries the focused window's frame and
+    // pid so subscribers can filter on it directly.
+    if notification == kAXFocusedWindowChangedNotification as String
+      || notification == kAXMainWindowChangedNotification as String
+    {
+      var payload: [String: Any] = [
+        "pid": Int(pid),
+        "bundle_id": context.bundleIdentifier,
+      ]
+      let frame = context.frontWindowFrame
+      payload["front_window_frame"] = [
+        "x": Double(frame.origin.x),
+        "y": Double(frame.origin.y),
+        "width": Double(frame.size.width),
+        "height": Double(frame.size.height),
+      ]
+      pluginManager.emit(
+        PluginEvent(
+          name: "core:window.focus.changed",
+          payload: payload,
+          bundleID: context.bundleIdentifier,
+          configPath: nil,
+          focused: true,
+          frontWindowFrame: context.frontWindowFrame,
+          pid: pid))
+    }
     beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
   }
 
@@ -562,49 +593,25 @@ extension AppDelegate {
       navigateAppMRU(direction: .back)
     case .appNext:
       navigateAppMRU(direction: .forward)
-    case .setMark(let letter):
-      setMark(letter: letter)
-    case .jumpToMark(let letter):
-      jumpToMark(letter: letter)
     case .quitApp(let force):
       quitNormalModeTargetApp(force: force)
-    case .save:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_S), flags: .maskCommand, repeatCount: repeatCount)
     case .saveAndQuit(let force):
       sendNormalModeKey(CGKeyCode(kVK_ANSI_S), flags: .maskCommand, repeatCount: repeatCount)
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
         self?.performMappedCommand(.quitApp(force: force))
       }
-    case .print:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_P), flags: .maskCommand, repeatCount: repeatCount)
-    case .openDocument:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_O), flags: .maskCommand, repeatCount: repeatCount)
-    case .newWindow:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_N), flags: .maskCommand, repeatCount: repeatCount)
     case .tabNew:
       tabNewInNormalMode(repeatCount: repeatCount)
       // `t` is the user's explicit "open something fresh and start typing"
       // intent: switching to insert lets them type into the new tab/window
       // without an extra `i`. Matches the unified contract on `/`.
       enterInsertMode(reason: .explicitCommand)
-    case .copy:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_C), flags: .maskCommand, repeatCount: repeatCount)
-    case .cut:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_X), flags: .maskCommand, repeatCount: repeatCount)
-    case .paste:
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand, repeatCount: repeatCount)
-    case .copyAll:
-      for _ in 0..<repeatCount {
-        sendNormalModeKeySequence([
-          (CGKeyCode(kVK_ANSI_A), .maskCommand),
-          (CGKeyCode(kVK_ANSI_C), .maskCommand),
-        ])
-      }
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showPlugins:
       showPlugins()
-    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow:
+    case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow,
+      .pluginVerb:
       handleURLCommand(command)
     }
   }
@@ -681,7 +688,11 @@ extension AppDelegate {
 
   func showHelp(topic: String? = nil) {
     presentModal(reason: "enter_help") { [self] in
-      HelpDocs.render(topic: topic, config: config, showModes: modeBadgeEnabled)
+      HelpDocs.render(
+        topic: topic,
+        config: config,
+        showModes: modeBadgeEnabled,
+        pluginTopics: pluginManager.pluginHelpTopics())
     }
   }
 
@@ -1174,7 +1185,10 @@ extension AppDelegate {
         subcommands[key]?.append(registration.subcommand)
       }
     }
-    let topics = HelpDocs.allTopics(config: config, showModes: true)
+    let topics = HelpDocs.allTopics(
+      config: config,
+      showModes: true,
+      pluginTopics: pluginManager.pluginHelpTopics())
       .flatMap { [$0.name] + $0.aliases }
     return NormalModeDispatcher.commandLineCompletions(
       command,
@@ -1758,15 +1772,15 @@ extension AppDelegate {
     case .quit(let force):
       performMappedCommand(.quitApp(force: force))
     case .save:
-      performMappedCommand(.save)
+      handleURLCommand(.pluginVerb(name: "app_save", args: [:]))
     case .saveAndQuit(let force):
       performMappedCommand(.saveAndQuit(force: force))
     case .print:
-      performMappedCommand(.print)
+      handleURLCommand(.pluginVerb(name: "app_print", args: [:]))
     case .open:
-      performMappedCommand(.openDocument)
+      handleURLCommand(.pluginVerb(name: "document_open", args: [:]))
     case .newWindow:
-      performMappedCommand(.newWindow)
+      handleURLCommand(.pluginVerb(name: "window_new", args: [:]))
     case .newTab:
       performMappedCommand(.tabNew)
     case .close:
@@ -1778,11 +1792,11 @@ extension AppDelegate {
     case .redo:
       performMappedCommand(.redo)
     case .copy:
-      performMappedCommand(.copy)
+      sendNormalModeKey(CGKeyCode(kVK_ANSI_C), flags: .maskCommand)
     case .cut:
-      performMappedCommand(.cut)
+      sendNormalModeKey(CGKeyCode(kVK_ANSI_X), flags: .maskCommand)
     case .paste:
-      performMappedCommand(.paste)
+      sendNormalModeKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
     case .plugins(let sub):
       runPluginsSubcommand(sub)
     case .mappings:

@@ -433,13 +433,19 @@ final class SourceCandidateTests: XCTestCase {
   }
 
   func testBrowserTabDisplayTitleIncludesSourceTitleAndURL() throws {
-    let candidate = try XCTUnwrap(
-      BrowserTabSources.browserTabItem(
-        sourceID: "safari-tabs",
-        source: "safari",
-        app: DummyRunningApplication.app,
-        title: "Inbox",
-        url: "https://mail.example.test/inbox"))
+    // The browser tab discovery now lives in `Plugins/{safari,firefox,
+    // chromium}` — this test still exercises the host's candidate-prep
+    // path (display title formatting, search-text normalisation) by
+    // building the same `Candidate` shape the plugins emit.
+    let candidate = Candidate(
+      kind: .plugin("browser_tab"),
+      sourceID: "safari-tabs",
+      source: "safari",
+      pid: DummyRunningApplication.app.processIdentifier,
+      title: "Inbox",
+      subtitle: "browser tab",
+      bundleIdentifier: DummyRunningApplication.app.bundleIdentifier ?? "",
+      url: URL(string: "https://mail.example.test/inbox"))
     let prepared = CandidateFinder.prepare(candidate)
 
     XCTAssertEqual(prepared.displayTitle, "[safari] Inbox · https://mail.example.test/inbox")

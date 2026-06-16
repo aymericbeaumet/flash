@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    run, sleep, spawn_background, Candidate, CommandRequest, CommandResponse, Context, Event,
+    run, spawn_background, Candidate, CommandRequest, CommandResponse, Context, Event,
     ResolveResponse,
 };
 
@@ -15,13 +15,11 @@ flash_plugin::plugin!(Processes);
 impl FlashPlugin for Processes {
     async fn on_start(&self, ctx: Context) {
         emit_candidates(&ctx).await;
-        let poll_ctx = ctx.clone();
-        spawn_background(async move {
-            loop {
-                sleep(Duration::from_secs(POLL_SECONDS)).await;
-                emit_candidates(&poll_ctx).await;
-            }
-        });
+        ctx.interval(
+            "refresh",
+            Duration::from_secs(POLL_SECONDS),
+            |ctx| async move { emit_candidates(&ctx).await },
+        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {

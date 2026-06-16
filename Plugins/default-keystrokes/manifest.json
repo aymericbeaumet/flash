@@ -1,0 +1,46 @@
+{
+  "manifest_version": 1,
+  "id": "default-keystrokes",
+  "name": "Default Keystrokes",
+  "version": "0.1.0",
+  "description": "Provides the canonical app keystroke verbs (app_save, app_print, document_open, window_new) as plugin verbs with inline-keystrokes shortcuts so they bypass the plugin RPC on the hot path.",
+  "install": "true",
+  "start": "exec ./flash-plugin-default-keystrokes",
+  "providers": [
+    {
+      "kind": "verbs",
+      "verbs": [
+        {
+          "name": "app_save",
+          "description": "Synthesize the focused app's save shortcut (defaults to ⌘S).",
+          "inline_keystrokes": { "": "cmd+s" }
+        },
+        {
+          "name": "app_print",
+          "description": "Synthesize the focused app's print shortcut (defaults to ⌘P).",
+          "inline_keystrokes": { "": "cmd+p" }
+        },
+        {
+          "name": "document_open",
+          "description": "Synthesize the focused app's open-document shortcut (defaults to ⌘O).",
+          "inline_keystrokes": { "": "cmd+o" }
+        },
+        {
+          "name": "window_new",
+          "description": "Synthesize the focused app's new-window shortcut (defaults to ⌘N).",
+          "inline_keystrokes": { "": "cmd+n" }
+        }
+      ]
+    }
+  ],
+  "help": {
+    "topics": [
+      {
+        "name": "default-keystrokes",
+        "title": "Default Keystrokes",
+        "summary": "Plugin verbs for the canonical app shortcuts (save, print, open, new).",
+        "body": "# Default Keystrokes\n\nThis bundled plugin owns the canonical app-shortcut verbs:\n\n- `flash app_save` — ⌘S\n- `flash app_print` — ⌘P\n- `flash document_open` — ⌘O\n- `flash window_new` — ⌘N\n\nEach verb uses the manifest's `inline_keystrokes` table, so the host translates them directly into `input.send_key` without round-tripping through the plugin process. A future user-provided override could remap any of these per app — e.g. an Adobe app whose Save is on a non-⌘S chord — by listing the verb in their own plugin manifest with a per-bundle table.\n"
+      }
+    ]
+  }
+}

@@ -6,11 +6,30 @@ use flash_plugin::{
 };
 use serde::{Deserialize, Serialize};
 
-const SOURCE_ID: &str = "plugin:safari";
-const SAFARI_BUNDLES: &[&str] = &["com.apple.Safari", "com.apple.SafariTechnologyPreview"];
+const SOURCE_ID: &str = "plugin:chromium";
+
+const CHROMIUM_BUNDLES: &[&str] = &[
+    "com.google.Chrome",
+    "com.google.Chrome.canary",
+    "com.google.Chrome.beta",
+    "com.google.Chrome.dev",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.brave.Browser.beta",
+    "com.brave.Browser.nightly",
+    "com.microsoft.edgemac",
+    "com.microsoft.edgemac.Beta",
+    "com.microsoft.edgemac.Dev",
+    "com.microsoft.edgemac.Canary",
+    "company.thebrowser.Browser",
+    "com.vivaldi.Vivaldi",
+    "com.operasoftware.Opera",
+    "com.operasoftware.OperaNext",
+    "com.operasoftware.OperaDeveloper",
+];
 
 /// Round-tripped through the host so resolve_candidate can re-match the tab
-/// even after a fresh snapshot has shifted indices.
+/// after an unrelated snapshot has run.
 #[derive(Serialize, Deserialize)]
 struct TabPayload {
     bundle_id: String,
@@ -18,18 +37,19 @@ struct TabPayload {
     url: String,
 }
 
-struct Safari;
+struct Chromium;
 
-flash_plugin::plugin!(Safari);
+flash_plugin::plugin!(Chromium);
 
-impl FlashPlugin for Safari {
+impl FlashPlugin for Chromium {
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
             "core:flash.started" | "core:apps.snapshot" => {
-                refresh_snapshot(&ctx, safari_apps(&event.running_applications)).await;
+                let apps = chromium_apps(&event.running_applications);
+                refresh_snapshot(&ctx, apps).await;
             }
             "core:apps.launched" | "core:apps.terminated" | "core:focus.changed" => {
-                let apps = safari_apps(&event.running_applications);
+                let apps = chromium_apps(&event.running_applications);
                 if !apps.is_empty() {
                     refresh_snapshot(&ctx, apps).await;
                 }
@@ -51,12 +71,46 @@ impl FlashPlugin for Safari {
     }
 }
 
-fn safari_apps(running: &[RunningApplication]) -> Vec<(String, String, i64)> {
+fn chromium_apps(running: &[RunningApplication]) -> Vec<(String, String, i64)> {
     running
         .iter()
-        .filter(|app| SAFARI_BUNDLES.contains(&app.bundle_id.as_str()))
+        .filter(|app| CHROMIUM_BUNDLES.contains(&app.bundle_id.as_str()))
         .map(|app| (app.bundle_id.clone(), app.localized_name.clone(), app.pid))
         .collect()
+}
+
+/// Source label convention: `<vendor>.tabs`. The plugin namespaces a few
+/// well-known bundles so `@chrome` / `@brave` etc. filter correctly; everything
+/// else falls back to the localized app name (lowercased, spaces → dashes).
+fn source_name(bundle_id: &str, app_name: &str) -> String {
+    match bundle_id {
+        "com.google.Chrome"
+        | "com.google.Chrome.canary"
+        | "com.google.Chrome.beta"
+        | "com.google.Chrome.dev" => "chrome.tabs".to_string(),
+        "org.chromium.Chromium" => "chromium.tabs".to_string(),
+        "com.brave.Browser" | "com.brave.Browser.beta" | "com.brave.Browser.nightly" => {
+            "brave.tabs".to_string()
+        }
+        "com.microsoft.edgemac"
+        | "com.microsoft.edgemac.Beta"
+        | "com.microsoft.edgemac.Dev"
+        | "com.microsoft.edgemac.Canary" => "edge.tabs".to_string(),
+        "company.thebrowser.Browser" => "arc.tabs".to_string(),
+        "com.vivaldi.Vivaldi" => "vivaldi.tabs".to_string(),
+        "com.operasoftware.Opera"
+        | "com.operasoftware.OperaNext"
+        | "com.operasoftware.OperaDeveloper" => "opera.tabs".to_string(),
+        _ => {
+            let mut out = app_name.to_lowercase();
+            out = out.replace(' ', "-");
+            if out.is_empty() {
+                out = "chromium".to_string();
+            }
+            out.push_str(".tabs");
+            out
+        }
+    }
 }
 
 fn list_script(app_name: &str) -> String {
@@ -67,7 +121,7 @@ tell application {app}
   repeat with w in windows
     repeat with t in tabs of w
       try
-        set out to out & (name of t as text) & tab & (URL of t as text) & linefeed
+        set out to out & (title of t as text) & tab & (URL of t as text) & linefeed
       end try
     end repeat
   end repeat
@@ -82,19 +136,20 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, String, i64)>) {
     let mut candidates = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (bundle_id, app_name, pid) in &apps {
-        let label = if app_name.is_empty() {
-            "Safari".to_string()
+        let app_label = if app_name.is_empty() {
+            "Browser".to_string()
         } else {
             app_name.clone()
         };
+        let source = source_name(bundle_id, &app_label);
         let result = ctx
-            .run_osascript(&list_script(&label), Duration::from_secs(10))
+            .run_osascript(&list_script(&app_label), Duration::from_secs(10))
             .await;
         if !result.ok {
             ctx.log(
                 "warn",
                 &format!(
-                    "[safari] list failed bundle={} stderr={}",
+                    "[chromium] list failed bundle={} stderr={}",
                     bundle_id, result.stderr
                 ),
             );
@@ -118,13 +173,13 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, String, i64)>) {
             };
             let payload = TabPayload {
                 bundle_id: bundle_id.clone(),
-                app_name: label.clone(),
+                app_name: app_label.clone(),
                 url: url.to_string(),
             };
             let mut candidate = Candidate::new(display)
                 .kind("browser_tab")
                 .source_id(SOURCE_ID)
-                .source("safari.tabs")
+                .source(&source)
                 .subtitle("browser tab")
                 .bundle_id(bundle_id)
                 .pid(*pid)
@@ -151,9 +206,9 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     let app_name = payload
         .as_ref()
         .map(|p| p.app_name.clone())
-        .unwrap_or_else(|| "Safari".to_string());
+        .unwrap_or_default();
     ctx.ax_activate(pid).await;
-    if url.is_empty() {
+    if url.is_empty() || app_name.is_empty() {
         return ResolveResponse::resolved(Some(pid));
     }
     let script = format!(
@@ -165,7 +220,7 @@ tell application {app}
     repeat with t in tabs of w
       try
         if (URL of t as text) is targetURL then
-          set current tab of w to t
+          set active tab index of w to (index of t)
           set index of w to 1
           return "ok"
         end if
@@ -190,20 +245,18 @@ async fn perform_source_action(
         return SourceActionResponse::unhandled();
     };
     let bundle = action.context.bundle_id.clone().unwrap_or_default();
-    if !SAFARI_BUNDLES.contains(&bundle.as_str()) {
+    if !CHROMIUM_BUNDLES.contains(&bundle.as_str()) {
         return SourceActionResponse::unhandled();
     }
-    let app_name = canonical_app_name(&bundle).to_string();
+    let app_name = match app_name_for_pid(&action.context.bundle_id, pid) {
+        Some(name) => name,
+        None => return SourceActionResponse::unhandled(),
+    };
     match action.name.as_str() {
         "tab_select" => {
             let Some(index) = action.index.filter(|n| *n > 0) else {
                 return SourceActionResponse::unhandled();
             };
-            // Safari's AppleScript uses `set current tab of w to tab N of w`
-            // rather than Chromium's `set active tab index`. The walk-windows
-            // pattern accumulates tabs across all windows so `tab_select 5`
-            // can land on the second window's first tab if window 1 only had
-            // four tabs.
             let script = format!(
                 r#"
 tell application {app}
@@ -211,7 +264,7 @@ tell application {app}
   set tabIndex to {idx}
   repeat with w in windows
     if (count of tabs of w) >= tabIndex then
-      set current tab of w to tab tabIndex of w
+      set active tab index of w to tabIndex
       set index of w to 1
       return "ok"
     end if
@@ -224,6 +277,9 @@ return "missing"
                 idx = index
             );
             let result = ctx.run_osascript(&script, Duration::from_secs(5)).await;
+            // Chromium-family bundle gates this claim either way: an OK script
+            // is `performed`, a non-OK is `failed` so the host doesn't fall
+            // back to a ⌘<digit> keystroke that switches the wrong tab.
             if result.ok && result.stdout.trim() == "ok" {
                 SourceActionResponse::performed(Some(pid))
             } else {
@@ -236,11 +292,9 @@ return "missing"
 tell application {app}
   activate
   if (count of windows) is 0 then
-    make new document
+    make new window
   else
-    tell front window
-      set current tab to (make new tab)
-    end tell
+    tell front window to make new tab
   end if
   return "ok"
 end tell
@@ -255,14 +309,13 @@ end tell
             }
         }
         "tab_close" => {
-            // Closing the last tab via `close current tab` collapses to closing
-            // the window — same as the user pressing ⌘W natively, which is what
-            // we want: the gesture stays "close this thing in this context".
+            // Closing the last tab collapses to closing the window — same as
+            // ⌘W natively. Gesture stays "close this thing in this context".
             let script = format!(
                 r#"
 tell application {app}
   if (count of windows) is 0 then return "missing"
-  tell front window to close current tab
+  tell front window to close active tab
   return "ok"
 end tell
 "#,
@@ -279,13 +332,38 @@ end tell
     }
 }
 
+/// Best-effort app-name lookup for AppleScript `tell application "<name>"`.
+/// The host passes bundle id in source-action context but not the localized
+/// name; we fall back to a canonical name per bundle so AppleScript can still
+/// reach the right app.
+fn app_name_for_pid(bundle_id: &Option<String>, _pid: i64) -> Option<String> {
+    let bundle = bundle_id.as_deref()?;
+    Some(canonical_app_name(bundle).to_string())
+}
+
 fn canonical_app_name(bundle_id: &str) -> &'static str {
     match bundle_id {
-        "com.apple.SafariTechnologyPreview" => "Safari Technology Preview",
-        _ => "Safari",
+        "com.google.Chrome" => "Google Chrome",
+        "com.google.Chrome.canary" => "Google Chrome Canary",
+        "com.google.Chrome.beta" => "Google Chrome Beta",
+        "com.google.Chrome.dev" => "Google Chrome Dev",
+        "org.chromium.Chromium" => "Chromium",
+        "com.brave.Browser" => "Brave Browser",
+        "com.brave.Browser.beta" => "Brave Browser Beta",
+        "com.brave.Browser.nightly" => "Brave Browser Nightly",
+        "com.microsoft.edgemac" => "Microsoft Edge",
+        "com.microsoft.edgemac.Beta" => "Microsoft Edge Beta",
+        "com.microsoft.edgemac.Dev" => "Microsoft Edge Dev",
+        "com.microsoft.edgemac.Canary" => "Microsoft Edge Canary",
+        "company.thebrowser.Browser" => "Arc",
+        "com.vivaldi.Vivaldi" => "Vivaldi",
+        "com.operasoftware.Opera" => "Opera",
+        "com.operasoftware.OperaNext" => "Opera Next",
+        "com.operasoftware.OperaDeveloper" => "Opera Developer",
+        _ => "Chromium",
     }
 }
 
 fn main() {
-    run(Safari);
+    run(Chromium);
 }

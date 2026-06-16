@@ -3,14 +3,28 @@
   "id": "safari",
   "name": "Safari",
   "version": "0.1.0",
-  "description": "Browser-specific key overrides for Safari (hard refresh is ⌘⌥R, not ⌘⇧R).",
+  "description": "Surface Safari tabs in the flashlight (AppleScript-backed), handle tab actions, and rebind ⌘⇧R → ⌘⌥R (Safari's hard-refresh shortcut).",
   "install": "true",
   "start": "exec ./flash-plugin-safari",
   "priority": 30,
-  "bundle_ids": ["com.apple.Safari"],
+  "bundle_ids": ["com.apple.Safari", "com.apple.SafariTechnologyPreview"],
+  "subscriptions": [
+    "core:flash.started",
+    "core:apps.snapshot",
+    { "match": "core:apps.launched" },
+    { "match": "core:apps.terminated" },
+    "core:focus.changed"
+  ],
   "providers": [
+    { "kind": "candidates", "sources": ["safari.tabs"] },
+    {
+      "kind": "source_actions",
+      "actions": ["tab_select", "tab_new", "tab_close"],
+      "bundle_ids": ["com.apple.Safari", "com.apple.SafariTechnologyPreview"]
+    },
     {
       "kind": "mappings",
+      "bundle_ids": ["com.apple.Safari"],
       "mappings": [
         { "key": "R", "mode": "normal", "command": ["flash", "send_key", "--keys=cmd+option+r"] }
       ]

@@ -1,11 +1,11 @@
 [package]
-name = "flash-plugin-safari"
+name = "flash-plugin-marks"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [[bin]]
-name = "flash-plugin-safari"
+name = "flash-plugin-marks"
 path = "src/main.rs"
 
 [dependencies]

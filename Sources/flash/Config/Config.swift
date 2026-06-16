@@ -402,7 +402,7 @@ struct Config {
         ("ctrl+r", .flashCommand(.redo)),
         ("e", .flashCommand(.archive)),
         ("x", .flashCommand(.close)),
-        ("n", .flashCommand(.newWindow)),
+        ("n", .flashCommand(.pluginVerb(name: "window_new", args: [:]))),
         ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
         ("<leader><space>", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
@@ -416,8 +416,16 @@ struct Config {
       // stay in sync if more letter ranges are added later.
       for letter in "abcdefghijklmnopqrstuvwxyz" {
         let l = String(letter)
-        raw.append(("m\(l)", .flashCommand(.setMark(letter: l))))
-        raw.append(("`\(l)", .flashCommand(.jumpToMark(letter: l))))
+        raw.append(
+          (
+            "m\(l)",
+            .flashCommand(.pluginVerb(name: "set_mark", args: ["letter": l]))
+          ))
+        raw.append(
+          (
+            "`\(l)",
+            .flashCommand(.pluginVerb(name: "jump_to_mark", args: ["letter": l]))
+          ))
       }
       return raw.map { (key, action) in
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
@@ -744,21 +752,11 @@ extension URLCommand {
     case .movementForward: return verb("movement_forward")
     case .appPrev: return verb("app_previous")
     case .appNext: return verb("app_next")
-    case .setMark(let letter): return verb("set_mark", [kv("letter", letter)])
-    case .jumpToMark(let letter): return verb("jump_to_mark", [kv("letter", letter)])
     case .quitApp(let force):
       return force ? verb("app_quit", [flag("force")]) : verb("app_quit")
-    case .save: return verb("app_save")
     case .saveAndQuit(let force):
       return force ? verb("app_save_and_quit", [flag("force")]) : verb("app_save_and_quit")
-    case .print: return verb("app_print")
-    case .openDocument: return verb("document_open")
-    case .newWindow: return verb("window_new")
     case .tabNew: return verb("tab_new")
-    case .copy: return verb("clipboard_copy")
-    case .cut: return verb("clipboard_cut")
-    case .paste: return verb("clipboard_paste")
-    case .copyAll: return verb("clipboard_copy_all")
     case .showAlert(let message): return verb("alert_show", [kv("message", message)])
     case .dismissAlert: return verb("alert_dismiss")
     case .showUsage(let topic):
@@ -783,6 +781,9 @@ extension URLCommand {
       return verb("window_move", parts)
     case .sendKey(let keys, _, _):
       return verb("send_key", [kv("keys", keys)])
+    case .pluginVerb(let name, let args):
+      let tokens = args.keys.sorted().map { key in kv(key, args[key] ?? "") }
+      return verb(name, tokens)
     }
   }
 }

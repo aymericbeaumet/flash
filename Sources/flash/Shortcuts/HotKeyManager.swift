@@ -26,6 +26,11 @@ final class HotKeyManager {
   private var registrations: [UInt32: Registration] = [:]
   private var nextID: UInt32 = 1
   private var eventHandlerRef: EventHandlerRef?
+  /// Carbon id assigned to the most recent successful `register` call.
+  /// Exposed so callers (notably `PluginManager.handleHotkeyRegister`) can
+  /// thread the id back into per-plugin bookkeeping without holding a Carbon
+  /// reference themselves.
+  private(set) var lastAssignedID: UInt32 = 0
   /// 'flHS' (Flash HotKey System) — distinguishes our registrations
   /// from any other Carbon hotkey client in the same process. Carbon
   /// requires per-app uniqueness on (signature, id) tuples.
@@ -58,6 +63,7 @@ final class HotKeyManager {
       return status == noErr ? OSStatus(paramErr) : status
     }
     registrations[id] = Registration(id: id, ref: ref, onFire: onFire)
+    lastAssignedID = id
     return noErr
   }
 
@@ -68,6 +74,14 @@ final class HotKeyManager {
       UnregisterEventHotKey(b.ref)
     }
     registrations.removeAll()
+  }
+
+  /// Drop a single registration identified by the Carbon id returned via
+  /// `lastAssignedID` after the matching `register` call. No-op when the id
+  /// isn't currently registered.
+  func unregister(id: UInt32) {
+    guard let registration = registrations.removeValue(forKey: id) else { return }
+    UnregisterEventHotKey(registration.ref)
   }
 
   fileprivate func fire(id: UInt32) {

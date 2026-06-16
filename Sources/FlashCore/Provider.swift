@@ -23,6 +23,13 @@ public enum ProviderKind: String, Codable, Sendable, CaseIterable {
   /// `schemes[]`; plugins can emit matching `navigation_url` values from
   /// candidates, commands, or source actions.
   case navigation
+  /// Top-level verbs the plugin owns. Each entry registers a `flash <verb>`
+  /// callable from CLI and from `[mode.*.mappings]`. The owning plugin handles
+  /// the dispatch via `command.invoke`; an entry may also declare an
+  /// `inline_keystrokes` per-bundle table that the host translates into an
+  /// `input.send_key` directly, avoiding the RPC round-trip on hot-path
+  /// keystroke verbs (`app_save`, `app_print`, …).
+  case verbs
 }
 
 /// Editor mode a provider can be gated to. The empty set (no `modes` declared)

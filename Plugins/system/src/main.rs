@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use flash_plugin::{run, sleep, spawn_background, CommandRequest, CommandResponse, Context};
+use flash_plugin::{run, CommandRequest, CommandResponse, Context};
 
 const CGSESSION: &str =
     "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession";
@@ -15,12 +15,8 @@ flash_plugin::plugin!(System);
 impl FlashPlugin for System {
     async fn on_start(&self, ctx: Context) {
         publish_battery_status(&ctx).await;
-        let poll_ctx = ctx.clone();
-        spawn_background(async move {
-            loop {
-                sleep(Duration::from_secs(30)).await;
-                publish_battery_status(&poll_ctx).await;
-            }
+        ctx.interval("battery", Duration::from_secs(30), |ctx| async move {
+            publish_battery_status(&ctx).await;
         });
     }
 

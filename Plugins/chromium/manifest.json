@@ -1,0 +1,70 @@
+{
+  "manifest_version": 1,
+  "id": "chromium",
+  "name": "Chromium",
+  "version": "0.1.0",
+  "description": "Surface tabs and tab actions for Chromium-family browsers (Chrome, Brave, Edge, Arc, Vivaldi, Opera) via AppleScript.",
+  "install": "true",
+  "start": "exec ./flash-plugin-chromium",
+  "priority": 30,
+  "bundle_ids": [
+    "com.google.Chrome",
+    "com.google.Chrome.canary",
+    "com.google.Chrome.beta",
+    "com.google.Chrome.dev",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.brave.Browser.beta",
+    "com.brave.Browser.nightly",
+    "com.microsoft.edgemac",
+    "com.microsoft.edgemac.Beta",
+    "com.microsoft.edgemac.Dev",
+    "com.microsoft.edgemac.Canary",
+    "company.thebrowser.Browser",
+    "com.vivaldi.Vivaldi",
+    "com.operasoftware.Opera",
+    "com.operasoftware.OperaNext",
+    "com.operasoftware.OperaDeveloper"
+  ],
+  "subscriptions": [
+    "core:flash.started",
+    "core:apps.snapshot",
+    { "match": "core:apps.launched" },
+    { "match": "core:apps.terminated" },
+    "core:focus.changed"
+  ],
+  "providers": [
+    { "kind": "candidates", "sources": [
+      "chrome.tabs",
+      "chromium.tabs",
+      "brave.tabs",
+      "edge.tabs",
+      "arc.tabs",
+      "vivaldi.tabs",
+      "opera.tabs"
+    ] },
+    {
+      "kind": "source_actions",
+      "actions": ["tab_select", "tab_new", "tab_close"],
+      "bundle_ids": [
+        "com.google.Chrome",
+        "com.google.Chrome.canary",
+        "com.google.Chrome.beta",
+        "com.google.Chrome.dev",
+        "org.chromium.Chromium",
+        "com.brave.Browser",
+        "com.brave.Browser.beta",
+        "com.brave.Browser.nightly",
+        "com.microsoft.edgemac",
+        "com.microsoft.edgemac.Beta",
+        "com.microsoft.edgemac.Dev",
+        "com.microsoft.edgemac.Canary",
+        "company.thebrowser.Browser",
+        "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera",
+        "com.operasoftware.OperaNext",
+        "com.operasoftware.OperaDeveloper"
+      ]
+    }
+  ]
+}

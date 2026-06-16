@@ -17,6 +17,17 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// keeps the CGEvent API surface; plugins only request declarative
   /// `keys=<hotkey>` actions through this capability.
   case input
+  /// Ask the host to trigger a TCC (privacy) permission prompt on the
+  /// plugin's behalf, e.g. AppleEvents access to a specific target bundle id.
+  /// Without this capability the `tcc.request` RPC is rejected so a malicious
+  /// plugin cannot spam permission dialogs at the user.
+  case tccRequest = "tcc.request"
+  /// Register / unregister a system-wide Carbon hotkey through
+  /// `hotkey.register` / `hotkey.unregister`. The host owns the Carbon table
+  /// and rejects collisions with user `[mode.*.mappings]` bindings; without
+  /// this capability the RPCs are refused so a plugin can't quietly claim
+  /// every chord on the user's keyboard.
+  case hotkey
 }
 
 extension PluginCapability {
@@ -277,6 +288,73 @@ struct PluginShebangRegistration: Codable, Hashable {
   }
 }
 
+/// One verb a plugin registers. `name` is the verb users type in mappings or
+/// pass to `flash <name> [k=v]...`. The host dispatches it to the owning plugin
+/// as `command.invoke` with the configured `subcommand` (defaulting to `name`)
+/// and the verb's args. When `inlineKeystrokes` is populated, the host short-
+/// circuits the round-trip and synthesizes the per-bundle keystroke directly —
+/// keeps `app_save`-class verbs latency-flat.
+struct PluginVerbRegistration: Codable, Equatable {
+  var name: String
+  var command: String
+  var subcommand: String
+  var description: String
+  /// Per-bundle keystroke table consumed before any RPC dispatch. Map entries
+  /// use bundle id → "cmd+s"-style hotkey. The empty string key (`""`) is the
+  /// default applied when no bundle-specific entry matches; missing entirely
+  /// means "no fallback, fall through to RPC". Empty map disables the
+  /// shortcut entirely.
+  var inlineKeystrokes: [String: String]
+  /// Apps this verb is gated to (empty = every app). Folded from the owning
+  /// `verbs` provider's `bundle_ids` if the entry doesn't override.
+  var bundleIDs: [String]
+
+  init(
+    name: String,
+    command: String = "",
+    subcommand: String = "",
+    description: String = "",
+    inlineKeystrokes: [String: String] = [:],
+    bundleIDs: [String] = []
+  ) {
+    self.name = name
+    self.command = command
+    self.subcommand = subcommand
+    self.description = description
+    self.inlineKeystrokes = inlineKeystrokes
+    self.bundleIDs = bundleIDs
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case name, command, subcommand, description
+    case inlineKeystrokes = "inline_keystrokes"
+    case bundleIDs = "bundle_ids"
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.name = try c.decode(String.self, forKey: .name)
+    self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
+    self.subcommand = try c.decodeIfPresent(String.self, forKey: .subcommand) ?? ""
+    self.description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+    self.inlineKeystrokes =
+      try c.decodeIfPresent([String: String].self, forKey: .inlineKeystrokes) ?? [:]
+    self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(name, forKey: .name)
+    if !command.isEmpty { try c.encode(command, forKey: .command) }
+    if !subcommand.isEmpty { try c.encode(subcommand, forKey: .subcommand) }
+    if !description.isEmpty { try c.encode(description, forKey: .description) }
+    if !inlineKeystrokes.isEmpty {
+      try c.encode(inlineKeystrokes, forKey: .inlineKeystrokes)
+    }
+    if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
+  }
+}
+
 /// One key mapping a plugin registers. Mirrors a `[mode.<scope>.mappings]`
 /// config entry but is app- and priority-scoped: the binding applies only
 /// while one of `bundleIDs` (defaulting to the plugin's manifest bundles) is
@@ -336,6 +414,71 @@ struct PluginMappingRegistration: Codable, Hashable {
   var scope: ModeScope { ModeScope(rawValue: mode) ?? .normal }
 }
 
+/// One help topic a plugin contributes to `:help`. Surfaces via
+/// ``PluginManifest/help`` and is aggregated by `HelpDocs.allTopics`
+/// alongside the host's own topics. The body is rendered as Markdown.
+struct PluginHelpTopic: Codable, Equatable {
+  var name: String
+  var title: String
+  var summary: String
+  var body: String
+  var aliases: [String]
+
+  init(name: String, title: String, summary: String, body: String, aliases: [String] = []) {
+    self.name = name
+    self.title = title
+    self.summary = summary
+    self.body = body
+    self.aliases = aliases
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case name, title, summary, body, aliases
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.name = try c.decode(String.self, forKey: .name)
+    self.title = try c.decodeIfPresent(String.self, forKey: .title) ?? name
+    self.summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+    self.body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
+    self.aliases = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(name, forKey: .name)
+    try c.encode(title, forKey: .title)
+    if !summary.isEmpty { try c.encode(summary, forKey: .summary) }
+    if !body.isEmpty { try c.encode(body, forKey: .body) }
+    if !aliases.isEmpty { try c.encode(aliases, forKey: .aliases) }
+  }
+}
+
+/// Plugin-declared help block. Each entry shows up in `:help` next to the
+/// host's built-in topics.
+struct PluginHelp: Codable, Equatable {
+  var topics: [PluginHelpTopic]
+
+  init(topics: [PluginHelpTopic] = []) {
+    self.topics = topics
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case topics
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.topics = try c.decodeIfPresent([PluginHelpTopic].self, forKey: .topics) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !topics.isEmpty { try c.encode(topics, forKey: .topics) }
+  }
+}
+
 /// One row in a plugin's unified `providers[]` table. Every surface a plugin
 /// drives — hints, candidates, commands, mappings, status segments, navigation routes — is one entry here, tagged
 /// by ``ProviderKind`` and gated by the same optional, symmetric conditions
@@ -371,6 +514,7 @@ struct PluginProvider: Codable, Equatable {
   var commands: [PluginCommandRegistration]
   var mappings: [PluginMappingRegistration]
   var shebangs: [PluginShebangRegistration]
+  var verbs: [PluginVerbRegistration]
 
   init(
     kind: ProviderKind,
@@ -384,7 +528,8 @@ struct PluginProvider: Codable, Equatable {
     segments: [String] = [],
     commands: [PluginCommandRegistration] = [],
     mappings: [PluginMappingRegistration] = [],
-    shebangs: [PluginShebangRegistration] = []
+    shebangs: [PluginShebangRegistration] = [],
+    verbs: [PluginVerbRegistration] = []
   ) {
     self.kind = kind
     self.bundleIDs = bundleIDs
@@ -398,12 +543,14 @@ struct PluginProvider: Codable, Equatable {
     self.commands = commands
     self.mappings = mappings
     self.shebangs = shebangs
+    self.verbs = verbs
   }
 
   enum CodingKeys: String, CodingKey {
     case kind
     case bundleIDs = "bundle_ids"
-    case modes, priority, command, sources, actions, schemes, segments, commands, mappings, shebangs
+    case modes, priority, command, sources, actions, schemes, segments
+    case commands, mappings, shebangs, verbs
   }
 
   init(from decoder: Decoder) throws {
@@ -423,6 +570,8 @@ struct PluginProvider: Codable, Equatable {
       try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .mappings) ?? []
     self.shebangs =
       try c.decodeIfPresent([PluginShebangRegistration].self, forKey: .shebangs) ?? []
+    self.verbs =
+      try c.decodeIfPresent([PluginVerbRegistration].self, forKey: .verbs) ?? []
   }
 
   func encode(to encoder: Encoder) throws {
@@ -439,6 +588,7 @@ struct PluginProvider: Codable, Equatable {
     if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
     if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
     if !shebangs.isEmpty { try c.encode(shebangs, forKey: .shebangs) }
+    if !verbs.isEmpty { try c.encode(verbs, forKey: .verbs) }
   }
 
   /// The shared activation gate this provider declares.
@@ -484,6 +634,11 @@ struct PluginManifest: Codable, Equatable {
   /// a capability here means the host filters out any event / RPC path gated
   /// by it. See ``PluginCapability``.
   var capabilities: Set<PluginCapability>
+  /// Help topics this plugin contributes to `:help`. Each entry appears as a
+  /// `:help <name>` topic alongside the host's built-in topics. Empty by
+  /// default; plugins authoritative for a domain (spotify, slack, …) typically
+  /// declare one topic, while a multi-surface plugin can ship several.
+  var help: PluginHelp
 
   /// Denormalized (command, subcommand) rows across every `commands` provider,
   /// with the provider's shared `bundle_ids` folded into each entry (the entry's
@@ -573,6 +728,21 @@ struct PluginManifest: Codable, Equatable {
     return out
   }
 
+  /// Verbs every loaded plugin registers, with the owning provider's
+  /// `bundle_ids` folded into each entry's gate when the entry doesn't override.
+  /// Used by URL dispatch to route `flash <verb>` to the right plugin.
+  var verbs: [PluginVerbRegistration] {
+    providers.filter { $0.kind == .verbs }.flatMap { provider in
+      provider.verbs.map { entry in
+        var entry = entry
+        if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.bundleIDs }
+        if entry.command.isEmpty { entry.command = provider.command }
+        if entry.subcommand.isEmpty { entry.subcommand = entry.name }
+        return entry
+      }
+    }
+  }
+
   var statusSegments: [String] {
     var seen = Set<String>()
     var out: [String] = []
@@ -612,7 +782,7 @@ struct PluginManifest: Codable, Equatable {
     case volatile
     case bundleIDs = "bundle_ids"
     case requestTimeoutMs = "request_timeout_ms"
-    case capabilities
+    case capabilities, help
   }
 
   init(
@@ -625,7 +795,8 @@ struct PluginManifest: Codable, Equatable {
     volatile: Bool = false,
     bundleIDs: [String] = [],
     requestTimeoutMs: Int? = nil,
-    capabilities: Set<PluginCapability> = []
+    capabilities: Set<PluginCapability> = [],
+    help: PluginHelp = PluginHelp()
   ) {
     self.manifestVersion = manifestVersion
     self.id = id
@@ -641,6 +812,7 @@ struct PluginManifest: Codable, Equatable {
     self.bundleIDs = bundleIDs
     self.requestTimeoutMs = requestTimeoutMs
     self.capabilities = capabilities
+    self.help = help
   }
 
   init(from decoder: Decoder) throws {
@@ -661,6 +833,7 @@ struct PluginManifest: Codable, Equatable {
     self.requestTimeoutMs = try c.decodeIfPresent(Int.self, forKey: .requestTimeoutMs)
     let caps = try c.decodeIfPresent([PluginCapability].self, forKey: .capabilities) ?? []
     self.capabilities = Set(caps)
+    self.help = try c.decodeIfPresent(PluginHelp.self, forKey: .help) ?? PluginHelp()
   }
 
   func encode(to encoder: Encoder) throws {
@@ -680,6 +853,9 @@ struct PluginManifest: Codable, Equatable {
     if let requestTimeoutMs { try c.encode(requestTimeoutMs, forKey: .requestTimeoutMs) }
     if !capabilities.isEmpty {
       try c.encode(capabilities.sorted(by: { $0.rawValue < $1.rawValue }), forKey: .capabilities)
+    }
+    if !help.topics.isEmpty {
+      try c.encode(help, forKey: .help)
     }
   }
 

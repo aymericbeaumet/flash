@@ -1,77 +1,14 @@
 import AppKit
 import FlashCore
 
-/// Vim-style marks: `m<letter>` records the focused app at the moment
-/// the user pressed it; `` `<letter> `` re-activates that app. PIDs
-/// aren't stable across launches, so the bundle ID is the durable
-/// handle and the pid is the fast-path lookup.
+// Vim-style marks live in `Plugins/marks/`. Activation routes through the
+// host's `activatePluginCommandTarget` after the plugin returns
+// `target_pid`, which is what scheduled the normal-mode recapture and
+// updated `normalModeTargetPID` for the in-process version that lived
+// here. The remaining helpers stay because app/movement navigation isn't
+// plugin-shaped (yet).
+
 extension AppDelegate {
-  // MARK: Vim-style marks
-
-  func setMark(letter: String) {
-    guard let key = Self.normalizedMarkKey(letter) else {
-      FlashLog.debug("[marks] reject set letter=\(letter) reason=invalid")
-      return
-    }
-    guard let context = normalModeContext() ?? currentNonFlashContext() else {
-      FlashLog.debug("[marks] set letter=\(key) reason=no_focused_app")
-      return
-    }
-    marks[key] = MarkState(
-      bundleID: context.bundleIdentifier,
-      pid: context.processID,
-      recordedAt: Date())
-    FlashLog.debug(
-      "[marks] set letter=\(key) bundle=\(context.bundleIdentifier) pid=\(context.processID)")
-    scheduleNormalModeRecapture()
-  }
-
-  func jumpToMark(letter: String) {
-    guard let key = Self.normalizedMarkKey(letter) else {
-      FlashLog.debug("[marks] reject jump letter=\(letter) reason=invalid")
-      return
-    }
-    guard let mark = marks[key] else {
-      FlashLog.debug("[marks] jump letter=\(key) reason=unset")
-      return
-    }
-    if let runningApp = NSRunningApplication(processIdentifier: mark.pid),
-      !runningApp.isTerminated
-    {
-      FlashLog.debug("[marks] jump letter=\(key) pid=\(mark.pid)")
-      RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
-      normalModeTargetPID = mark.pid
-      scheduleNormalModeRecapture()
-      return
-    }
-    // PID dead → fall back to the durable bundle identifier so a
-    // restarted app still answers the jump.
-    if let fallback =
-      NSWorkspace.shared.runningApplications.first(where: {
-        $0.bundleIdentifier == mark.bundleID && !$0.isTerminated
-      })
-    {
-      FlashLog.debug(
-        "[marks] jump_fallback letter=\(key) bundle=\(mark.bundleID) pid=\(fallback.processIdentifier)"
-      )
-      marks[key] = MarkState(
-        bundleID: mark.bundleID, pid: fallback.processIdentifier, recordedAt: mark.recordedAt)
-      RunningApplicationActivation.activate(fallback, options: [.activateAllWindows])
-      normalModeTargetPID = fallback.processIdentifier
-      scheduleNormalModeRecapture()
-      return
-    }
-    FlashLog.debug("[marks] jump letter=\(key) reason=app_not_running bundle=\(mark.bundleID)")
-  }
-
-  private static func normalizedMarkKey(_ raw: String) -> Character? {
-    let trimmed = raw.trimmed
-    guard let ch = trimmed.first, trimmed.count == 1, ch.isLetter || ch.isNumber else {
-      return nil
-    }
-    return Character(ch.lowercased())
-  }
-
   func navigateAppMRU(direction: NavigationDirection) {
     var source: [pid_t]
     var destination: [pid_t]

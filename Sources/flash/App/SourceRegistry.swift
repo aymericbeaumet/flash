@@ -49,24 +49,6 @@ final class SourceRegistry {
         SourceDescriptor(identifier: "accessibility", activationPolicy: .always) {
           AccessibilityProvider()
         },
-        SourceDescriptor(
-          identifier: "safari-tabs",
-          activationPolicy: .bundleIDs(BrowserTabSources.safariBundleIdentifiers)
-        ) {
-          SafariTabsSource()
-        },
-        SourceDescriptor(
-          identifier: "firefox-tabs",
-          activationPolicy: .bundleIDs(BrowserTabSources.firefoxBundleIdentifiers)
-        ) {
-          FirefoxTabsSource()
-        },
-        SourceDescriptor(
-          identifier: "chromium-tabs",
-          activationPolicy: .bundleIDs(BrowserTabSources.chromiumBundleIdentifiers)
-        ) {
-          ChromiumTabsSource()
-        },
       ]
     refreshRunningApplications(initialRunningApplications)
   }

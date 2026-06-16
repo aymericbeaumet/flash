@@ -51,7 +51,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "gN" }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "n" })?.action.command,
-      .newWindow)
+      .pluginVerb(name: "window_new", args: [:]))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "t" })?.action.command,
       .tabNew)

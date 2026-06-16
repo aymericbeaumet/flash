@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "id": "marks",
+  "name": "Marks",
+  "version": "0.1.0",
+  "description": "Vim-style marks: `m<letter>` records the current Flash-target app; `` `<letter> `` reactivates it. State persists to disk so marks survive restarts.",
+  "install": "true",
+  "start": "exec ./flash-plugin-marks",
+  "subscriptions": [
+    "core:flash.started",
+    "core:apps.snapshot",
+    "core:apps.launched",
+    "core:apps.terminated"
+  ],
+  "providers": [
+    {
+      "kind": "verbs",
+      "verbs": [
+        {
+          "name": "set_mark",
+          "description": "Save the focused non-Flash app under a one-letter slot (a-z)."
+        },
+        {
+          "name": "jump_to_mark",
+          "description": "Reactivate the app previously saved under the given letter."
+        }
+      ]
+    }
+  ],
+  "help": {
+    "topics": [
+      {
+        "name": "marks",
+        "title": "Marks",
+        "summary": "Vim-style marks: `m<letter>` to set, `` `<letter> `` to jump.",
+        "body": "# Marks\n\nFlash carries a Vim-style mark register. Each letter `a`-`z` holds one mark; setting a mark records the focused app's pid and bundle identifier so jumps survive process restarts (by falling back to the bundle).\n\n## Setting a mark\n\nIn normal mode, press `m` followed by a lowercase letter:\n\n```text\nma   # set mark `a` to the currently focused window\nmz   # set mark `z`\n```\n\n## Jumping to a mark\n\nBacktick + letter recalls the saved app. If the original pid is gone, Flash relaunches the app from its bundle identifier.\n\n```text\n`a   # focus whatever was tagged `a`\n`z   # focus `z`\n```\n\n## URL form\n\nThe same actions are reachable through the `flash` CLI so external tools can drive them:\n\n```text\nflash set_mark letter=a\nflash jump_to_mark letter=a\n```\n\n## Notes\n\n- 26 mark slots total — one per lowercase letter.\n- Marks persist to `Library/Application Support/Flash/Plugins/marks/share/marks.json`.\n- Uppercase letters are reserved for future global/buffer marks.\n",
+        "aliases": ["mark"]
+      }
+    ]
+  }
+}

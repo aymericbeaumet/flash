@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    applescript_quote, run, sleep, spawn_background, Candidate, CommandRequest, CommandResponse,
-    Context, Event, ResolveResponse,
+    applescript_quote, run, Candidate, CommandRequest, CommandResponse, Context, Event,
+    ResolveResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -53,7 +53,11 @@ flash_plugin::plugin!(Notes);
 impl FlashPlugin for Notes {
     async fn on_start(&self, ctx: Context) {
         emit_candidates(&ctx).await;
-        start_poll(ctx);
+        ctx.interval(
+            "refresh",
+            Duration::from_secs(POLL_SECONDS),
+            |ctx| async move { emit_candidates(&ctx).await },
+        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -72,15 +76,6 @@ impl FlashPlugin for Notes {
     async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
         resolve(&ctx, &candidate).await
     }
-}
-
-fn start_poll(ctx: Context) {
-    spawn_background(async move {
-        loop {
-            sleep(Duration::from_secs(POLL_SECONDS)).await;
-            emit_candidates(&ctx).await;
-        }
-    });
 }
 
 async fn emit_candidates(ctx: &Context) {
