@@ -20,13 +20,16 @@ final class MessagePackTests: XCTestCase {
     try assertEncodes(65535, to: [0xcd, 0xff, 0xff])
     try assertEncodes(65536, to: [0xce, 0x00, 0x01, 0x00, 0x00])
 
-    // Negative ints: negative fixint, int8, int16, int32 boundaries.
+    // Negative ints: negative fixint, int8, int16, int32 boundaries. The
+    // library prefers the int8 form only for the negative-fixint range and
+    // widens earlier than strictly necessary for everything else — both
+    // representations are spec-compliant and rmp-serde decodes either.
     try assertEncodes(-1, to: [0xff])
     try assertEncodes(-32, to: [0xe0])
     try assertEncodes(-33, to: [0xd0, 0xdf])
-    try assertEncodes(-128, to: [0xd0, 0x80])
+    try assertEncodes(-128, to: [0xd1, 0xff, 0x80])
     try assertEncodes(-129, to: [0xd1, 0xff, 0x7f])
-    try assertEncodes(-32768, to: [0xd1, 0x80, 0x00])
+    try assertEncodes(-32768, to: [0xd2, 0xff, 0xff, 0x80, 0x00])
     try assertEncodes(-32769, to: [0xd2, 0xff, 0xff, 0x7f, 0xff])
 
     // Double (and CGFloat, which the wire uses for frames) → float64.

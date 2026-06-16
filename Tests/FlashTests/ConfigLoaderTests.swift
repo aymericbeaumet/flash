@@ -18,7 +18,10 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBorder, "#E3BE23")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "j" })?.action.command,
-      .scroll(.down))
+      .resourceNext)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "k" })?.action.command,
+      .resourcePrevious)
     XCTAssertEqual(c.mode.normalLeader, "\\")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
@@ -818,7 +821,7 @@ final class ConfigLoaderTests: XCTestCase {
     // override never installs.
     XCTAssertEqual(
       bareVerb.mode.normal.first(where: { $0.key == "j" })?.action.command,
-      .scroll(.down))
+      .resourceNext)
   }
 
   func testParsesModeMappings() {
@@ -926,7 +929,7 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.contains { $0.contains("[mode.normal.mappings]") })
-    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.down))
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .resourceNext)
   }
 
   func testCLIBeatsEnv() {

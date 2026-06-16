@@ -158,8 +158,8 @@ extension AppDelegate {
   /// Plugins emit a state notification on every log line, heartbeat, and
   /// snapshot. Coalesce a burst into a single status/debug refresh. Candidate
   /// surfaces deliberately do not re-render from plugin-state churn; their
-  /// first-screen and typed-query update points are explicit so rows do not
-  /// reshuffle while the prompt is idle.
+  /// typed-query update points are explicit so rows do not reshuffle while
+  /// the prompt is idle.
   func pluginStateDidChange() {
     pluginStateRefreshWork?.cancel()
     let work = DispatchWorkItem { [weak self] in

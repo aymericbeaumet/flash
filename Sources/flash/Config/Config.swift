@@ -310,8 +310,8 @@ struct Config {
       // (`<leader>`, `<space>`) or for emphasis on a non-obvious key.
       var raw: [(String, MappingCommand)] = [
         ("h", .flashCommand(.scroll(.left))),
-        ("j", .flashCommand(.scroll(.down))),
-        ("k", .flashCommand(.scroll(.up))),
+        ("j", .flashCommand(.resourceNext)),
+        ("k", .flashCommand(.resourcePrevious)),
         ("l", .flashCommand(.scroll(.right))),
         ("ctrl+e", .flashCommand(.scroll(.down))),
         ("ctrl+y", .flashCommand(.scroll(.up))),
@@ -400,6 +400,7 @@ struct Config {
         ("mF", .flashCommand(.mouseGrid(.move))),
         ("u", .flashCommand(.undo)),
         ("ctrl+r", .flashCommand(.redo)),
+        ("e", .flashCommand(.archive)),
         ("x", .flashCommand(.close)),
         ("n", .flashCommand(.newWindow)),
         ("t", .flashCommand(.tabNew)),
@@ -714,6 +715,9 @@ extension URLCommand {
       return force ? verb("app_reload", [flag("force")]) : verb("app_reload")
     case .undo: return verb("app_undo")
     case .redo: return verb("app_redo")
+    case .archive: return verb("resource_archive")
+    case .resourceNext: return verb("resource_next")
+    case .resourcePrevious: return verb("resource_previous")
     case .close: return verb("window_close")
     case .tabClose: return verb("tab_close")
     case .find: return verb("app_find")

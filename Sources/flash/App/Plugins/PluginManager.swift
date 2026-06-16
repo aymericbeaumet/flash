@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Darwin
 import FlashCore
 import Foundation
@@ -39,6 +40,10 @@ final class PluginManager {
     let description: String
     let bundleIDs: [String]
     let meta: [String: String]
+    /// Candidate source label declared on the shebang entry. When set, the
+    /// flashlight pool swaps to candidates from that source while the bang is
+    /// confirmed (e.g. `!kill ` → `processes.processes`).
+    let candidateSource: String?
 
     func matches(bundleID: String?) -> Bool {
       if bundleIDs.isEmpty { return true }
@@ -139,9 +144,11 @@ final class PluginManager {
 
   /// Returns true when a plugin owns `(command, subcommand)` and the
   /// invocation was dispatched (synchronous ownership check). The plugin
-  /// runs asynchronously; `onResult` delivers its `(ok, targetPID, stdout)`
+  /// runs asynchronously; `onResult` delivers its `(ok, targetPID, stdout, navigationURL)`
   /// once it replies. `targetPID`, when present, is an app the command asked
   /// Flash to raise; `stdout`, when present, is text to surface as a toast
+  /// and `navigationURL`, when present, is the route recorded into movement
+  /// history for `ctrl-o` / `ctrl-i`
   /// (see `PluginProcess.invokeCommand`).
   @discardableResult
   func invoke(
@@ -150,7 +157,7 @@ final class PluginManager {
     args: [String],
     raw: String,
     forBundleID bundleID: String? = nil,
-    onResult: ((Bool, pid_t?, String?) -> Void)? = nil
+    onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) -> Bool {
     let lcCommand = command.lowercased()
     let key = CommandKey(command: lcCommand, subcommand: subcommand.lowercased())
@@ -172,11 +179,12 @@ final class PluginManager {
       command: command, subcommand: resolved.subcommand, args: resolved.args, raw: raw,
       meta: resolved.target.meta
     ) {
-      ok, pid, stdout in
+      ok, pid, stdout, navigationURL in
       FlashLog.debug(
         "[plugin_command] command=\(command) subcommand=\(resolved.subcommand) ok=\(ok) "
-          + "target_pid=\(pid.map(String.init) ?? "nil")")
-      onResult?(ok, pid, stdout)
+          + "target_pid=\(pid.map(String.init) ?? "nil") "
+          + "navigation_url=\(navigationURL?.absoluteString ?? "nil")")
+      onResult?(ok, pid, stdout, navigationURL)
     }
     return true
   }
@@ -191,7 +199,7 @@ final class PluginManager {
     token: String,
     query: String,
     forBundleID bundleID: String? = nil,
-    onResult: ((Bool, pid_t?, String?) -> Void)? = nil
+    onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) -> Bool {
     let lcToken = token.lowercased()
     let target: ShebangTarget? = queue.sync {
@@ -205,13 +213,33 @@ final class PluginManager {
     let args = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
     target.plugin.invokeCommand(
       command: target.command, subcommand: token, args: args, raw: query, meta: target.meta
-    ) { ok, pid, stdout in
+    ) { ok, pid, stdout, navigationURL in
       FlashLog.debug(
         "[plugin_shebang] token=\(token) command=\(target.command) ok=\(ok) "
-          + "target_pid=\(pid.map(String.init) ?? "nil")")
-      onResult?(ok, pid, stdout)
+          + "target_pid=\(pid.map(String.init) ?? "nil") "
+          + "navigation_url=\(navigationURL?.absoluteString ?? "nil")")
+      onResult?(ok, pid, stdout, navigationURL)
     }
     return true
+  }
+
+  /// The candidate source declared by the bang registration matching `token`.
+  /// Plugins that bind a bang to a source (e.g. `!kill` → `processes.processes`)
+  /// declare it on the shebang entry; the host swaps the candidate-finder pool
+  /// to that source once the bang is confirmed. `nil` when no registration
+  /// declared one.
+  func shebangCandidateSource(token: String, forBundleID bundleID: String? = nil) -> String? {
+    let lcToken = token.lowercased()
+    return queue.sync {
+      if let exact = shebangIndex[lcToken],
+        exact.matches(bundleID: bundleID),
+        let candidateSource = exact.candidateSource,
+        !candidateSource.isEmpty
+      {
+        return candidateSource
+      }
+      return nil
+    }
   }
 
   /// The display description for the bang `token` while `bundleID` is the
@@ -275,11 +303,8 @@ final class PluginManager {
               kind: CandidateFinder.bangKind,
               sourceID: "bang:\(plugin.identifier)",
               source: "bang",
-              pid: nil,
-              name: "!\(token)",
+              title: "!\(token)",
               subtitle: registration.description,
-              bundleIdentifier: "",
-              url: nil,
               sourcePayload: token))
         }
         for snapshot in plugin.candidates(scope: .all)
@@ -306,6 +331,12 @@ final class PluginManager {
     case "host.ping":
       // Round-trip validation of the bidirectional channel.
       reply(["ok": true, "echo": params])
+    case "input.send_key":
+      guard pluginHasCapability(pluginID, .input) else {
+        reply(["ok": false, "error": "missing input capability"])
+        return
+      }
+      sendPluginKey(params, reply: reply)
     case let method where method.hasPrefix("ax."):
       axBroker.handle(method: method, params: params, reply: reply)
     default:
@@ -314,6 +345,39 @@ final class PluginManager {
         fields: ["method": method, "plugin": pluginID])
       reply(["ok": false, "error": "unknown host method: \(method)"])
     }
+  }
+
+  private func pluginHasCapability(_ pluginID: String, _ capability: PluginCapability) -> Bool {
+    queue.sync {
+      pluginsByID[pluginID]?.manifest.capabilities.contains(capability) ?? false
+    }
+  }
+
+  private func sendPluginKey(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let pid = (params["pid"] as? Int).map(pid_t.init),
+      let keys = params["keys"] as? String,
+      let parsed = HotkeySyntax.parse(hotkey: keys)
+    else {
+      reply(["ok": false, "error": "invalid input.send_key params"])
+      return
+    }
+    let ok = NormalModeDispatcher.sendKey(
+      virtualKey: CGKeyCode(parsed.virtualKey),
+      flags: Self.cgEventFlags(carbon: parsed.modifiers),
+      to: pid)
+    reply(["ok": ok])
+  }
+
+  private static func cgEventFlags(carbon: UInt32) -> CGEventFlags {
+    var flags: CGEventFlags = []
+    if carbon & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
+    if carbon & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
+    if carbon & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
+    if carbon & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
+    return flags
   }
 
   /// Command registrations available for completion while `bundleID` is the
@@ -382,7 +446,8 @@ final class PluginManager {
         let target = ShebangTarget(
           plugin: plugin, command: registration.command,
           description: registration.description,
-          bundleIDs: registration.bundleIDs, meta: registration.meta)
+          bundleIDs: registration.bundleIDs, meta: registration.meta,
+          candidateSource: registration.candidateSource)
         if token == "*" {
           if wildcard == nil { wildcard = target }
           continue

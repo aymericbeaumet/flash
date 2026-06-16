@@ -10,8 +10,8 @@ import XCTest
 final class NormalModeTests: XCTestCase {
   func testDirectionalScrollKeys() {
     XCTAssertEqual(command(chars: "h"), .scroll(.left))
-    XCTAssertEqual(command(chars: "j"), .scroll(.down))
-    XCTAssertEqual(command(chars: "k"), .scroll(.up))
+    XCTAssertEqual(command(chars: "j"), .resourceNext)
+    XCTAssertEqual(command(chars: "k"), .resourcePrevious)
     XCTAssertEqual(command(chars: "l"), .scroll(.right))
     XCTAssertEqual(command(chars: "e", flags: [.control]), .scroll(.down))
     XCTAssertEqual(command(chars: "y", flags: [.control]), .scroll(.up))
@@ -89,6 +89,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "g", chars: "4"), .tabSelect(index: 4))
     XCTAssertEqual(command(chars: "n"), .newWindow)
     XCTAssertEqual(command(chars: "t"), .tabNew)
+    XCTAssertEqual(command(chars: "e"), .archive)
   }
 
   func testRepeatCountsApplyToSingleAndMultiKeyCommands() {
@@ -915,26 +916,19 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":flashlightgmail"))
   }
 
-  func testCandidateFinderSourceFilterParsesStructuredSelectors() {
-    // `@<field>:<pattern>` is the only attribute-filter syntax. Bare
-    // tokens — `@notes`, `--notes` — are literal search text.
-    let parsed = NormalModeDispatcher.candidateFinderSourceFilter(
-      "rust @source:firefox @url:*github* @kind:browser_tab repo")
-    XCTAssertEqual(
-      parsed.attributeFilters,
-      [
-        NormalModeDispatcher.AttributeFilter(field: "source", pattern: "firefox"),
-        NormalModeDispatcher.AttributeFilter(field: "url", pattern: "*github*"),
-        NormalModeDispatcher.AttributeFilter(field: "kind", pattern: "browser_tab"),
-      ])
-    XCTAssertEqual(parsed.text, "rust repo")
+  func testCandidateFinderSourceFilterParsesAtSourceNarrow() {
+    // `@<source>` is the only filter syntax — narrows the pool to one source
+    // and leaves the residual text as the actual fuzzy query.
+    let parsed = NormalModeDispatcher.candidateFinderSourceFilter("@firefox.tabs github repo")
+    XCTAssertEqual(parsed.sourceFilter, "firefox.tabs")
+    XCTAssertEqual(parsed.text, "github repo")
 
-    let bareAt = NormalModeDispatcher.candidateFinderSourceFilter("@notes inbox")
-    XCTAssertEqual(bareAt.attributeFilters, [])
-    XCTAssertEqual(bareAt.text, "@notes inbox")
+    let none = NormalModeDispatcher.candidateFinderSourceFilter("github repo")
+    XCTAssertNil(none.sourceFilter)
+    XCTAssertEqual(none.text, "github repo")
 
     let bareDoubleDash = NormalModeDispatcher.candidateFinderSourceFilter("--notes inbox")
-    XCTAssertEqual(bareDoubleDash.attributeFilters, [])
+    XCTAssertNil(bareDoubleDash.sourceFilter)
     XCTAssertEqual(bareDoubleDash.text, "--notes inbox")
   }
 
@@ -986,10 +980,9 @@ final class NormalModeTests: XCTestCase {
         sourceID: "slack",
         source: "slack",
         pid: 123,
-        name: "#schedule",
+        title: "#schedule",
         subtitle: "Slack channel",
-        bundleIdentifier: "com.tinyspeck.slackmacgap",
-        url: nil))
+        bundleIdentifier: "com.tinyspeck.slackmacgap"))
 
     XCTAssertEqual(candidate.normalizedSearchText, "slack #schedule slack channel")
     XCTAssertNotNil(
@@ -1084,7 +1077,7 @@ final class NormalModeTests: XCTestCase {
         sourceID: "firefox-tabs",
         source: "firefox",
         pid: 123,
-        name: BrowserTabSources.browserTabName(
+        title: BrowserTabSources.browserTabName(
           title: "Gmail",
           url: "https://mail.google.com/mail/u/0/#inbox"),
         subtitle: "browser tab",
@@ -1094,7 +1087,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       prepared.displayTitle, "[firefox] Gmail · https://mail.google.com/mail/u/0/#inbox")
     XCTAssertEqual(prepared.source, "firefox")
-    XCTAssertEqual(prepared.name, "Gmail")
+    XCTAssertEqual(prepared.title, "Gmail")
     XCTAssertEqual(prepared.url?.absoluteString, "https://mail.google.com/mail/u/0/#inbox")
     XCTAssertNotNil(
       NormalModeDispatcher.fuzzyScore(
@@ -1109,10 +1102,9 @@ final class NormalModeTests: XCTestCase {
         sourceID: "tmux",
         source: "tmux",
         pid: 123,
-        name: "beside-agentic",
+        title: "beside-agentic",
         subtitle: "beside:1 · claude · ~/workspace/beside",
-        bundleIdentifier: "",
-        url: nil))
+        bundleIdentifier: ""))
 
     XCTAssertEqual(
       prepared.displayTitle,
@@ -1193,10 +1185,10 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.tabTraversalFallbackShortcut(
         direction: .forward,
         bundleIdentifier: "com.apple.MobileSMS"))
-    XCTAssertEqual(messagesPrevious.key, CGKeyCode(kVK_Tab))
-    XCTAssertEqual(messagesPrevious.flags, [.maskControl, .maskShift])
-    XCTAssertEqual(messagesNext.key, CGKeyCode(kVK_Tab))
-    XCTAssertEqual(messagesNext.flags, .maskControl)
+    XCTAssertEqual(messagesPrevious.key, CGKeyCode(kVK_ANSI_LeftBracket))
+    XCTAssertEqual(messagesPrevious.flags, [.maskCommand, .maskShift])
+    XCTAssertEqual(messagesNext.key, CGKeyCode(kVK_ANSI_RightBracket))
+    XCTAssertEqual(messagesNext.flags, [.maskCommand, .maskShift])
     XCTAssertNil(
       AppDelegate.tabTraversalFallbackShortcut(
         direction: .back,
@@ -1207,22 +1199,27 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "com.example.TextEditor"))
   }
 
-  func testTabNewFallbackKeyUsesCmdNForMessagesAndAlacrittyAndCmdTOtherwise() {
-    XCTAssertEqual(
-      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "com.apple.MobileSMS"),
-      CGKeyCode(kVK_ANSI_N))
-    XCTAssertEqual(
-      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "org.alacritty"),
-      CGKeyCode(kVK_ANSI_N))
-    XCTAssertEqual(
-      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "io.alacritty"),
-      CGKeyCode(kVK_ANSI_N))
-    XCTAssertEqual(
-      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "com.apple.Terminal"),
-      CGKeyCode(kVK_ANSI_T))
-    XCTAssertEqual(
-      AppDelegate.tabNewFallbackKey(forBundleIdentifier: "com.google.Chrome"),
-      CGKeyCode(kVK_ANSI_T))
+  func testBrowserReloadFallbackIsBrowserOnlyAndUsesSafariHardRefreshChord() {
+    XCTAssertNil(
+      AppDelegate.browserReloadFallbackShortcut(
+        force: false,
+        bundleIdentifier: "com.apple.MobileSMS"))
+    XCTAssertNil(
+      AppDelegate.browserReloadFallbackShortcut(
+        force: false,
+        bundleIdentifier: "org.alacritty"))
+
+    let chrome = AppDelegate.browserReloadFallbackShortcut(
+      force: true,
+      bundleIdentifier: "com.google.Chrome")
+    XCTAssertEqual(chrome?.key, CGKeyCode(kVK_ANSI_R))
+    XCTAssertEqual(chrome?.flags, [.maskCommand, .maskShift])
+
+    let safari = AppDelegate.browserReloadFallbackShortcut(
+      force: true,
+      bundleIdentifier: "com.apple.Safari")
+    XCTAssertEqual(safari?.key, CGKeyCode(kVK_ANSI_R))
+    XCTAssertEqual(safari?.flags, [.maskCommand, .maskAlternate])
   }
 
   func testHelpTextListsNormalModeMappings() {
@@ -1230,7 +1227,7 @@ final class NormalModeTests: XCTestCase {
     for mapping in [
       "h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
       "gg", "G", "[h", "]h", "f", "sf", "df", "mf", "F", "sF", "dF", "mF", "u", "ctrl-r", "x", "n",
-      "/", "\\space", "r", "R", "t", "MAPPINGS",
+      "/", "\\space", "r", "R", "e", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a",
       "]a", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
@@ -1238,7 +1235,7 @@ final class NormalModeTests: XCTestCase {
       ":open <args>", ":flashlight <query>", "flash mouse_target",
       "flash enter_command_mode --input=flashlight ", "flash mouse_target --secondary",
       "flash mouse_target --double", "flash mouse_grid", "flash history_back",
-      "flash history_forward",
+      "flash history_forward", "flash resource_next", "flash resource_previous",
       "flash app_previous", "flash app_next",
       "flash app_reload --force", "flash tab_select --index=1", "flash tab_new", "?",
     ] {
@@ -1300,9 +1297,41 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(text.contains("all"))
     XCTAssertTrue(text.contains("normal"))
     XCTAssertTrue(text.contains("insert"))
-    XCTAssertTrue(text.contains("cmd+space"))
+    XCTAssertTrue(text.contains("cmd+<space>"))
     XCTAssertTrue(text.contains("\\c"))
     XCTAssertTrue(text.contains("[\"sh\", \"/tmp/toggle_caffeinate.sh\"]"))
+  }
+
+  func testMappingsTextDisplaysNamedKeySequencesAsAtoms() {
+    var config = Config.default
+    config.mode.normalLeader = "<space>"
+    config.mode.all = [
+      ModeMapping(
+        key: "cmd+space",
+        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false)))
+    ]
+    config.mode.normal = [
+      ModeMapping(key: "cmd+right", action: .flashCommand(.scroll(.down))),
+      ModeMapping(key: "spacem", action: .shellCommand(["sh", "/tmp/toggle_mute.sh"])),
+      ModeMapping(key: "spaces", action: .shellCommand(["sh", "/tmp/toggle_sleep.sh"])),
+      ModeMapping(key: "spacew", action: .shellCommand(["sh", "/tmp/toggle_wifi.sh"])),
+      ModeMapping(
+        key: "\\space",
+        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
+      ModeMapping(key: "tab", action: .flashCommand(.movementForward)),
+    ]
+    let text = NormalModeDispatcher.mappingsText(config: config)
+
+    XCTAssertTrue(text.contains("<space>m"))
+    XCTAssertTrue(text.contains("<space>s"))
+    XCTAssertTrue(text.contains("<space>w"))
+    XCTAssertTrue(text.contains("\\<space>"))
+    XCTAssertTrue(text.contains("cmd+<space>"))
+    XCTAssertTrue(text.contains("cmd+<right>"))
+    XCTAssertTrue(text.contains("<tab>"))
+    XCTAssertFalse(text.contains("spacem"))
+    XCTAssertFalse(text.contains("spaces"))
+    XCTAssertFalse(text.contains("spacew"))
   }
 
   func testConfiguredMappingsOverrideDefaults() {
@@ -1470,7 +1499,7 @@ final class NormalModeTests: XCTestCase {
       sourceID: "core.apps",
       source: "core.apps",
       pid: pid,
-      name: name,
+      title: name,
       subtitle: "app",
       bundleIdentifier: bundleIdentifier,
       url: URL(fileURLWithPath: path))

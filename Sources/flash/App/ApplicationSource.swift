@@ -58,7 +58,9 @@ final class ApplicationSource: FlashSource {
       }
     }
     var item = Self.appBundleItem(fromBundleURL: url)
-    item.pid = pid
+    if let pid {
+      item.metadata[CandidateMetadataKey.pid] = String(pid)
+    }
     guard !matcher.contains(item) else { return nil }
     return item
   }
@@ -134,7 +136,7 @@ final class ApplicationSource: FlashSource {
       return item
     }
     .sorted { lhs, rhs in
-      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+      lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
   }
 
@@ -146,7 +148,7 @@ final class ApplicationSource: FlashSource {
       sourceID: identifier,
       source: displayName,
       pid: app.processIdentifier,
-      name: name,
+      title: name,
       subtitle: "app",
       bundleIdentifier: app.bundleIdentifier ?? "",
       url: app.bundleURL)
@@ -233,7 +235,7 @@ final class ApplicationSource: FlashSource {
       }
     }
     return (Array(byIdentifier.values) + Array(byPath.values)).sorted { lhs, rhs in
-      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+      lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
   }
 
@@ -274,8 +276,7 @@ final class ApplicationSource: FlashSource {
       kind: .app,
       sourceID: "core.apps",
       source: "core.apps",
-      pid: nil,
-      name: name.isEmpty ? url.deletingPathExtension().lastPathComponent : name,
+      title: name.isEmpty ? url.deletingPathExtension().lastPathComponent : name,
       subtitle: "app",
       bundleIdentifier: bundle?.bundleIdentifier ?? "",
       url: url)
@@ -291,7 +292,7 @@ struct IgnoredAppMatcher: Equatable {
 
   func contains(_ candidate: Candidate) -> Bool {
     contains(
-      title: candidate.name,
+      title: candidate.title,
       bundleIdentifier: candidate.bundleIdentifier,
       url: candidate.url)
   }

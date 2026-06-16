@@ -42,7 +42,9 @@ extension NormalModeDispatcher {
         - `g1` ... `g9` select a numbered tab when the focused source supports it.
         - In browsers this maps to tab selection.
         - `n` opens a new window with Cmd-N.
-        - `t` opens a new tab and then enters insert mode.
+        - `t` opens a browser tab or tmux window when the focused source supports it.
+        - `r` reloads browsers or refreshes the focused tmux client.
+        - `e` archives the focused resource when a website source supports it.
 
         ## Mouse Targets
 
@@ -163,11 +165,88 @@ extension NormalModeDispatcher {
     mappings.map { mapping in
       MappingRow(
         scope: scope,
-        key: mapping.key,
+        key: displayMappingKey(mapping.key),
         action: mapping.action.diagnosticDescription
       )
     }
   }
+
+  private static func displayMappingKey(_ key: String) -> String {
+    if let chord = displayModifierChord(key) { return chord }
+    return displayAtoms(key).joined()
+  }
+
+  private static func displayModifierChord(_ key: String) -> String? {
+    let tokens = key.split(separator: "+", omittingEmptySubsequences: false)
+    if tokens.count >= 2,
+      tokens.dropLast().allSatisfy({ isModifierToken(String($0)) })
+    {
+      let modifiers = tokens.dropLast().map(String.init).joined(separator: "+")
+      let key = displaySingleAtom(String(tokens.last ?? ""))
+      return modifiers + "+" + key
+    }
+    if key.hasPrefix("ctrl-") {
+      let suffix = String(key.dropFirst("ctrl-".count))
+      return "ctrl-" + displaySingleAtom(suffix)
+    }
+    return nil
+  }
+
+  private static func isModifierToken(_ token: String) -> Bool {
+    ["cmd", "command", "ctrl", "control", "shift", "alt", "opt", "option"]
+      .contains(token.lowercased())
+  }
+
+  private static func displaySingleAtom(_ raw: String) -> String {
+    if displayNamedKeyTokens.contains(raw) {
+      return "<\(raw)>"
+    }
+    if raw.count == 1, let ch = raw.first,
+      let fullName = NormalModeInterpreter.fullName(forCharacter: ch),
+      ["+", "<", ">"].contains(ch)
+    {
+      return "<\(fullName)>"
+    }
+    return raw
+  }
+
+  private static func displayAtoms(_ key: String) -> [String] {
+    var atoms: [String] = []
+    var index = key.startIndex
+    while index < key.endIndex {
+      if let named = displayNamedKeyTokens.first(where: { token in
+          key[index...].hasPrefix(token)
+        }) {
+        atoms.append(displaySingleAtom(named))
+        index = key.index(index, offsetBy: named.count)
+        continue
+      }
+      atoms.append(displaySingleAtom(String(key[index])))
+      index = key.index(after: index)
+    }
+    return atoms
+  }
+
+  private static let displayNamedKeyTokens = [
+    "delete_forward",
+    "forward_delete",
+    "backspace",
+    "pagedown",
+    "pageup",
+    "delete",
+    "escape",
+    "return",
+    "enter",
+    "space",
+    "right",
+    "down",
+    "left",
+    "home",
+    "end",
+    "tab",
+    "esc",
+    "up",
+  ]
 
   private static func appendCommandLineHelp(to lines: inout [String], visible: Bool) {
     guard visible else { return }

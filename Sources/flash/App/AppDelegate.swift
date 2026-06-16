@@ -48,27 +48,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     enum Kind {
       case app
       case candidate
+      case route
     }
 
     var kind: Kind
     var key: String
     var pid: pid_t?
     var candidate: Candidate?
+    var navigationURL: URL?
 
     static func app(pid: pid_t) -> MovementEntry {
-      MovementEntry(kind: .app, key: "app:\(pid)", pid: pid, candidate: nil)
+      MovementEntry(kind: .app, key: "app:\(pid)", pid: pid, candidate: nil, navigationURL: nil)
     }
 
     static func candidate(_ candidate: Candidate) -> MovementEntry {
       let target =
-        candidate.url?.absoluteString
+        candidate.navigationURL?.absoluteString
+        ?? candidate.url?.absoluteString
         ?? candidate.sourcePayload
-        ?? candidate.name
+        ?? candidate.title
       return MovementEntry(
         kind: .candidate,
         key: "candidate:\(candidate.sourceID):\(candidate.pid ?? 0):\(target)",
         pid: candidate.pid,
-        candidate: candidate)
+        candidate: candidate,
+        navigationURL: candidate.navigationURL)
+    }
+
+    static func route(_ url: URL, pid: pid_t?) -> MovementEntry {
+      MovementEntry(
+        kind: .route,
+        key: "route:\(url.absoluteString)",
+        pid: pid,
+        candidate: nil,
+        navigationURL: url)
     }
   }
 
@@ -121,15 +134,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var commandLineRestoreModeTarget: FlashMode?
   var candidateFinderCandidates: [Candidate] = [] {
     didSet {
-      // The setter is called preemptively on every keystroke (the
-      // `scheduleCandidateSourceQueryIfNeeded` path recomputes
-      // `apps + dynamic` and assigns it back even when nothing
-      // actually changed). Unconditionally bumping the epoch
-      // destroyed both the filter cache and the incremental
-      // scoring cache, so every keystroke went back to scoring the
-      // full pool. Bump only when the assignment is observably
-      // different — same count and same `sourceID` at every index
-      // is "same pool".
+      // The setter is called on every candidate refresh. For typed
+      // queries this can recompute `apps + plugin snapshots` without
+      // changing the actual pool. Unconditionally bumping the epoch
+      // destroys both the filter cache and the incremental scoring cache,
+      // so every keystroke goes back to scoring the full pool. Bump only
+      // when the assignment is observably different — same count and same
+      // candidate identity at every index is "same pool".
       if Self.candidatePoolsCarrySameSourceIDs(oldValue, candidateFinderCandidates) {
         return
       }
@@ -139,26 +150,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
   }
 
-  /// Fast pool-equality probe: same count + same `sourceID` at every
-  /// index. `sourceID` is unique per (source, item) and stable across
-  /// `prepare`, so two pools that agree on it under index are
-  /// observably identical for the candidate finder's purposes.
-  /// Avoids the O(N) NSAttributedString-style comparison on every
-  /// keystroke.
+  /// Fast pool-equality probe for candidate-finder cache invalidation. It
+  /// checks stable scalar identity only, avoiding attributed-display work while
+  /// still noticing same-source tab/window rows whose titles or URLs changed.
   static func candidatePoolsCarrySameSourceIDs(
     _ lhs: [Candidate],
     _ rhs: [Candidate]
   ) -> Bool {
     guard lhs.count == rhs.count else { return false }
-    for index in lhs.indices where lhs[index].sourceID != rhs[index].sourceID {
-      return false
+    for index in lhs.indices {
+      let left = lhs[index]
+      let right = rhs[index]
+      if left.sourceID != right.sourceID
+        || left.source != right.source
+        || left.title != right.title
+        || left.url?.absoluteString != right.url?.absoluteString
+        || left.sourcePayload != right.sourcePayload
+      {
+        return false
+      }
     }
     return true
   }
   var candidateFinderDynamicCandidates: [Candidate] = []
-  var candidateFinderDeferredCandidates: [Candidate] = []
-  var candidateFinderSourceQueryGenerationCounter: UInt64 = 0
-  var candidateFinderSourceQueryKey: String = ""
   /// Monotonic counter bumped on every `candidateFinderCandidates`
   /// reassignment so the filtered-pool cache can detect a stale base
   /// without comparing 2k-entry arrays element-wise per keystroke.
@@ -207,18 +221,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Last time the user touched the flashlight query. Used by the
   /// live-refresh timer to skip a refresh that would swap the pool out
   /// from under an actively-typed keystroke. Performance: every refresh
-  /// pays a full `registry.candidates(scope:)` walk (AppleScript-backed
-  /// browser tabs are the heavy contributors); skipping mid-typing is
-  /// free CPU back to the user.
+  /// pays a core app-cache rebuild; skipping mid-typing keeps that work
+  /// off the user's keystroke path.
   var candidateFinderLastInputAt: Date?
-  /// `true` after the user types into the flashlight at least once. The
-  /// initial display is locked to the snapshot captured at open time so
-  /// the list doesn't visibly reflow when a slow `refreshCandidatesAsync`
-  /// finishes in the background — the user sees a static, instantly-
-  /// ready list and only sees it change in response to their keystrokes.
-  /// The async refresh is *not* cancelled (the pool stays warm for the
-  /// next session); only the visible re-render is suppressed.
-  var candidateFinderUserHasTyped: Bool = false
+  /// Bumped on every flashlight open and on every close. Every async fetch
+  /// captures the session at dispatch time; when the callback returns, results
+  /// land only if the session still matches. Treats "close" as the cancel
+  /// signal: an in-flight Safari AppleScript or tmux RPC that resolves after
+  /// the user dismissed the panel becomes a no-op instead of contaminating the
+  /// next session.
+  var candidateFinderSession: UInt64 = 0
+  /// Non-nil while we're holding the buffer the user opened with. The first
+  /// `refreshCommandLine` call whose text differs from this unlocks the
+  /// pending-dynamic display: that's the "user modified input" signal the
+  /// loading-sequence design uses to start showing tmux/browser/plugin rows.
+  /// `nil` once unlocked so a subsequent re-typed prefix doesn't re-lock.
+  var candidateFinderInitialCommand: String?
+  /// Async-source results accumulated since the current session opened. Stays
+  /// hidden from the visible pool until `candidateFinderDynamicDisplayUnlocked`
+  /// flips true on the first user input modification. Deduped per source on
+  /// every arrival so a re-fired query replaces earlier results from the same
+  /// source instead of stacking them.
+  var candidateFinderPendingDynamic: [Candidate] = []
+  /// Per-source registry of pending arrivals, keyed by source identifier, so
+  /// repeated refreshes from the same source overwrite the previous batch
+  /// rather than appending it.
+  var candidateFinderPendingDynamicBySource: [String: [Candidate]] = [:]
+  /// True once the user has modified the command line since the panel opened.
+  /// Gates whether async-source arrivals are pushed into the visible pool.
+  var candidateFinderDynamicDisplayUnlocked: Bool = false
   var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionItems: [NormalModeDispatcher.CommandLineCompletion] = []
@@ -287,7 +318,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
     monitor.focusedElementDidChange = { [weak self] pid in
-      self?.pluginManager.emit(
+      guard let self else { return }
+      self.pluginManager.emit(
         PluginEvent(
           name: "core:ax.changed",
           payload: ["pid": Int(pid)],
@@ -380,8 +412,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterInsertMode()
     case .commandMode:
       enterCommandLineMode()
-    case .scroll, .reload, .undo, .redo, .close, .tabClose, .find, .candidateFinder, .enterCommand,
-      .copyURL,
+    case .scroll, .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious,
+      .close, .tabClose, .find, .candidateFinder,
+      .enterCommand, .copyURL,
       .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect,
       .tabMovePrev, .tabMoveNext, .tabReopen,
       .historyBack, .historyForward,
@@ -416,9 +449,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         args: args,
         raw: cmd.diagnosticDescription,
         forBundleID: currentNonFlashContext()?.bundleIdentifier
-      ) { [weak self] ok, pid, stdout in
+      ) { [weak self] ok, pid, stdout, navigationURL in
         guard ok else { return }
-        self?.activatePluginCommandTarget(pid)
+        self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
         if let stdout { self?.overlay.displayBanner(stdout) }
       }
     case .moveWindow(let params):
@@ -461,6 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.statusBarController?.updateFocusedApplication(app)
         self.registry.refreshRunningApplications()
+        self.prewarmCandidateFinderCaches(reason: "focus_changed", sourceScope: self.candidateFinderScope)
         self.refreshEffectiveMappings(for: app.bundleIdentifier)
         self.pluginManager.emit(
           PluginEvent(

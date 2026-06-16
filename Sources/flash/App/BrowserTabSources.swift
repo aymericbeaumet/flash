@@ -37,6 +37,13 @@ enum BrowserTabSources {
   static let allBundleIdentifiers =
     safariBundleIdentifiers.union(firefoxBundleIdentifiers).union(chromiumBundleIdentifiers)
 
+  private struct AXBrowserTab {
+    let element: AXUIElement
+    let title: String
+    let url: String?
+    let windowTitle: String
+  }
+
   /// Source-label convention: `<plugin>.<subsource>`. Tabs from
   /// firefox-dev still share the firefox plugin namespace — the
   /// `-dev` distinction lives in the bundle ID, not the source
@@ -94,7 +101,7 @@ enum BrowserTabSources {
       sourceID: sourceID,
       source: source,
       pid: app.processIdentifier,
-      name: name,
+      title: name,
       subtitle: "browser tab",
       bundleIdentifier: app.bundleIdentifier ?? "",
       url: url.flatMap(URL.init(string:)),
@@ -197,6 +204,70 @@ enum BrowserTabSources {
     }
   }
 
+  static func resolveAXBackedTab(
+    _ item: Candidate,
+    in environment: FlashSourceEnvironment,
+    bundleIdentifiers: Set<String>,
+    completion: @escaping (CandidateResolution) -> Void
+  ) {
+    guard let pid = item.pid,
+      let app = runningApp(for: pid, in: environment, bundleIdentifiers: bundleIdentifiers)
+    else {
+      DispatchQueue.main.async { completion(.unresolved) }
+      return
+    }
+
+    RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+    let url = item.url?.absoluteString ?? item.sourcePayload?.trimmed ?? ""
+    let name = item.title
+    DispatchQueue.global(qos: .utility).async {
+      let tabs = axTabs(for: app)
+      let target =
+        tabs.first { tab in !url.isEmpty && tab.url == url }
+        ?? tabs.first { tab in tab.title == name }
+      if let target {
+        _ = pressAXTab(target.element)
+      }
+      DispatchQueue.main.async {
+        completion(.resolved(pid: pid))
+      }
+    }
+  }
+
+  static func performAXTabSelect(
+    index: Int,
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    bundleIdentifiers: Set<String>,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    guard index > 0,
+      let app = runningApp(
+        for: context.processID,
+        in: environment,
+        bundleIdentifiers: bundleIdentifiers)
+    else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+
+    RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+    DispatchQueue.global(qos: .utility).async {
+      let tabs = axTabs(for: app)
+      guard index <= tabs.count else {
+        DispatchQueue.main.async { completion(.unhandled) }
+        return
+      }
+      let didPress = pressAXTab(tabs[index - 1].element)
+      DispatchQueue.main.async {
+        completion(
+          didPress
+            ? .performed(pid: context.processID)
+            : SourceActionResult(targetPID: context.processID, disposition: .failed))
+      }
+    }
+  }
+
   static func axTabCandidates(
     sourceID: String,
     in environment: FlashSourceEnvironment,
@@ -207,31 +278,68 @@ enum BrowserTabSources {
     for app in runningBrowserApps(in: environment, bundleIdentifiers: bundleIdentifiers) {
       let appName = app.localizedName ?? "Browser"
       let sourceName = sourceName(bundleID: app.bundleIdentifier ?? "", appName: appName)
-      let axApp = AXUIElementCreateApplication(app.processIdentifier)
-      let windows = AXCandidateSourceHelpers.elementArrayAttribute(
-        axApp, kAXWindowsAttribute as String)
-      for window in windows {
-        let windowTitle =
-          AXCandidateSourceHelpers.stringAttribute(window, kAXTitleAttribute as String) ?? appName
-        for tab in axTabElements(in: window) {
-          guard let title = axTabTitle(tab, fallback: windowTitle) else { continue }
-          let url = axTabURL(tab)
-          let key = "\(app.processIdentifier)|\(windowTitle)|\(title)|\(url ?? "")"
-          guard seen.insert(key).inserted else { continue }
-          if let item = browserTabItem(
-            sourceID: sourceID,
-            source: sourceName,
-            app: app,
-            title: title,
-            url: url,
-            sourcePayload: url)
-          {
-            out.append(item)
-          }
+      for tab in axTabs(for: app) {
+        let key = "\(app.processIdentifier)|\(tab.windowTitle)|\(tab.title)|\(tab.url ?? "")"
+        guard seen.insert(key).inserted else { continue }
+        if let item = browserTabItem(
+          sourceID: sourceID,
+          source: sourceName,
+          app: app,
+          title: tab.title,
+          url: tab.url,
+          sourcePayload: tab.url)
+        {
+          out.append(item)
         }
       }
     }
     return out
+  }
+
+  private static func runningApp(
+    for pid: pid_t,
+    in environment: FlashSourceEnvironment,
+    bundleIdentifiers: Set<String>
+  ) -> NSRunningApplication? {
+    if let app = environment.runningApplications.first(where: { $0.processIdentifier == pid }),
+      bundleIdentifiers.contains(app.bundleIdentifier ?? "")
+    {
+      return app
+    }
+    guard let app = NSRunningApplication(processIdentifier: pid),
+      bundleIdentifiers.contains(app.bundleIdentifier ?? "")
+    else { return nil }
+    return app
+  }
+
+  private static func axTabs(for app: NSRunningApplication) -> [AXBrowserTab] {
+    let appName = app.localizedName ?? "Browser"
+    let axApp = AXUIElementCreateApplication(app.processIdentifier)
+    let windows = AXCandidateSourceHelpers.elementArrayAttribute(
+      axApp, kAXWindowsAttribute as String)
+    var out: [AXBrowserTab] = []
+    for window in windows {
+      let windowTitle =
+        AXCandidateSourceHelpers.stringAttribute(window, kAXTitleAttribute as String) ?? appName
+      for tab in axTabElements(in: window) {
+        guard let title = axTabTitle(tab, fallback: windowTitle) else { continue }
+        out.append(
+          AXBrowserTab(
+            element: tab,
+            title: title,
+            url: axTabURL(tab),
+            windowTitle: windowTitle))
+      }
+    }
+    return out
+  }
+
+  private static func pressAXTab(_ element: AXUIElement) -> Bool {
+    if AXUIElementPerformAction(element, kAXPressAction as CFString) == .success {
+      return true
+    }
+    return AXUIElementSetAttributeValue(element, "AXSelected" as CFString, kCFBooleanTrue)
+      == .success
   }
 
   static func axTabElements(in root: AXUIElement) -> [AXUIElement] {

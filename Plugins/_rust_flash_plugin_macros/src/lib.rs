@@ -96,6 +96,17 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 async { ::flash_plugin::SourceActionResponse::unhandled() }
             }
 
+            /// Restore a movement-history route whose URL scheme this plugin registered.
+            fn restore_navigation(
+                &self,
+                ctx: ::flash_plugin::Context,
+                request: ::flash_plugin::NavigationRequest,
+            ) -> impl ::core::future::Future<Output = ::flash_plugin::SourceActionResponse> + ::core::marker::Send
+            {
+                let _ = (ctx, request);
+                async { ::flash_plugin::SourceActionResponse::unhandled() }
+            }
+
             /// Act on a hint target the plugin emitted (a notification; no reply).
             fn activate_target(
                 &self,
@@ -169,6 +180,11 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                         ::flash_plugin::Request::SourceAction(request) => {
                             ::flash_plugin::Response::SourceAction(
                                 <Self as FlashPlugin>::source_action(self, ctx, request).await,
+                            )
+                        }
+                        ::flash_plugin::Request::RestoreNavigation(request) => {
+                            ::flash_plugin::Response::SourceAction(
+                                <Self as FlashPlugin>::restore_navigation(self, ctx, request).await,
                             )
                         }
                         ::flash_plugin::Request::ActivateTarget(request) => {

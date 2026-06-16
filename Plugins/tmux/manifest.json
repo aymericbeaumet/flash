@@ -28,6 +28,24 @@
   "providers": [
     { "kind": "hints" },
     { "kind": "candidates", "sources": ["tmux.windows"] },
+    { "kind": "navigation", "schemes": ["tmux"] },
+    {
+      "kind": "source_actions",
+      "actions": [
+        "tab_select",
+        "tab_next",
+        "tab_prev",
+        "tab_first",
+        "tab_last",
+        "tab_new",
+        "tab_close",
+        "tab_move_previous",
+        "tab_move_next",
+        "scroll_top",
+        "scroll_bottom",
+        "app_reload"
+      ]
+    },
     {
       "kind": "commands",
       "commands": [

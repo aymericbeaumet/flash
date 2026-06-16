@@ -56,6 +56,12 @@ final class SourceRegistry {
           SafariTabsSource()
         },
         SourceDescriptor(
+          identifier: "firefox-tabs",
+          activationPolicy: .bundleIDs(BrowserTabSources.firefoxBundleIdentifiers)
+        ) {
+          FirefoxTabsSource()
+        },
+        SourceDescriptor(
           identifier: "chromium-tabs",
           activationPolicy: .bundleIDs(BrowserTabSources.chromiumBundleIdentifiers)
         ) {
@@ -184,6 +190,20 @@ final class SourceRegistry {
     return CandidateFinder.prepare(source.candidates(in: env, scope: scope))
   }
 
+  /// Every source that contributes flashlight candidates *other than* the
+  /// core-apps source. These are queried asynchronously on flashlight open so
+  /// tmux windows, browser tabs, slack channels, and plugin snapshots all get
+  /// kicked off in parallel — their results land in the candidate-finder's
+  /// pending buffer and stay hidden until the user types/deletes a key.
+  func dynamicCandidateSources() -> [FlashSource] {
+    refreshRunningApplications()
+    return sources.filter {
+      $0.identifier != "core.apps" && $0.capabilities.contains(.candidates)
+    }
+  }
+
+  var snapshotEnvironment: FlashSourceEnvironment { environment }
+
   func registeredCandidateSourceLabels() -> [String] {
     refreshRunningApplications()
     var seen = Set<String>()
@@ -200,88 +220,6 @@ final class SourceRegistry {
     }
     labels.sort()
     return labels
-  }
-
-  func queryCandidateSources(
-    scope: CandidateScope,
-    text: String,
-    firstDeadlineMs: Int? = nil,
-    completion: @escaping (_ candidates: [Candidate], _ isFinal: Bool) -> Void
-  ) {
-    refreshRunningApplications()
-    let env = environment
-    let request = CandidateQuery(scope: scope, text: text)
-    let allSources = sources
-    var sourceSnapshot: [FlashSource] = []
-    var excluded: [String] = []
-    for source in allSources {
-      let isPlugin = source.identifier.hasPrefix("plugin:")
-      let hasCap = source.capabilities.contains(.candidates)
-      let isCore = source.identifier == "core.apps"
-      if !isCore, isPlugin, hasCap {
-        sourceSnapshot.append(source)
-      } else if !isCore {
-        let gate: String
-        if !isPlugin {
-          gate = "not_plugin"
-        } else {
-          gate = "missing_cap[has=\(source.capabilities.traceDescription)]"
-        }
-        excluded.append("\(source.identifier)(\(gate))")
-      }
-    }
-    if !excluded.isEmpty || sourceSnapshot.isEmpty {
-      FlashLog.trace(
-        "[candidate_finder] query_plan text=\"\(text)\" "
-          + "passing=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))] "
-          + "excluded=[\(excluded.joined(separator: ","))]")
-    }
-    guard !sourceSnapshot.isEmpty else {
-      DispatchQueue.main.async { completion([], true) }
-      return
-    }
-    let resultLock = NSLock()
-    var raw: [Candidate] = []
-    var remaining = sourceSnapshot.count
-    var sentFirst = false
-
-    func snapshotPrepared() -> [Candidate] {
-      resultLock.lock()
-      let items = raw
-      resultLock.unlock()
-      return CandidateFinder.prepare(items)
-    }
-
-    if let firstDeadlineMs {
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(firstDeadlineMs)) {
-        resultLock.lock()
-        let shouldSend = !sentFirst && remaining > 0
-        sentFirst = true
-        let items = raw
-        resultLock.unlock()
-        if shouldSend {
-          completion(CandidateFinder.prepare(items), false)
-        }
-      }
-    }
-
-    for source in sourceSnapshot {
-      source.queryCandidates(in: env, request: request) { items in
-        resultLock.lock()
-        raw.append(contentsOf: items)
-        remaining -= 1
-        let isDone = remaining == 0
-        if isDone {
-          sentFirst = true
-        }
-        resultLock.unlock()
-        FlashLog.trace(
-          "[candidate_finder] query_source=\(source.identifier) count=\(items.count)")
-        if isDone {
-          completion(snapshotPrepared(), true)
-        }
-      }
-    }
   }
 
   func candidate(
@@ -366,6 +304,56 @@ final class SourceRegistry {
     ) { source, env, done in
       source.performAction(action, in: context, environment: env, completion: done)
     }
+  }
+
+  func canRestoreNavigation(to url: URL) -> Bool {
+    guard let scheme = url.scheme?.lowercased(), !scheme.isEmpty else { return false }
+    refreshRunningApplications()
+    return sources.contains { source in
+      source.capabilities.contains(.navigationRoutes)
+        && source.navigationSchemes.contains(scheme)
+    }
+  }
+
+  func restoreNavigation(
+    to url: URL,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    guard let scheme = url.scheme?.lowercased(), !scheme.isEmpty else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    refreshRunningApplications()
+    let env = environment
+    let sourceSnapshot = sources.filter { source in
+      source.capabilities.contains(.navigationRoutes)
+        && source.navigationSchemes.contains(scheme)
+    }
+    guard !sourceSnapshot.isEmpty else {
+      FlashLog.debug("[navigation] no route handler scheme=\(scheme) url=\(url.absoluteString)")
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+
+    func attempt(_ index: Int) {
+      guard index < sourceSnapshot.count else {
+        DispatchQueue.main.async { completion(.unhandled) }
+        return
+      }
+      let source = sourceSnapshot[index]
+      source.restoreNavigation(to: url, environment: env) { result in
+        FlashLog.trace(
+          "[navigation] source=\(source.identifier) scheme=\(scheme) disposition=\(result.disposition)")
+        switch result.disposition {
+        case .performed, .failed:
+          completion(result)
+        case .unhandled:
+          attempt(index + 1)
+        }
+      }
+    }
+
+    attempt(0)
   }
 
   func source(identifier: String) -> FlashSource? {

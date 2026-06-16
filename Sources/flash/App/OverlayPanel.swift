@@ -83,6 +83,7 @@ final class OverlayPanel: NSPanel {
   let modalTextView = ModalTextView(frame: .zero)
   let candidateFinderResultsLayer = CAGradientLayer()
   let candidateFinderResultsLabel = CATextLayer()
+  var candidateFinderResultRowLayers: [CATextLayer] = []
   let activeWindowBorderLayer = CAShapeLayer()
   var modeBadgeVisible = false
   var statusAppText = ""
@@ -95,6 +96,8 @@ final class OverlayPanel: NSPanel {
   var candidateFinderResultsVisible = false
   var candidateFinderResultsMeasurementText = ""
   var candidateFinderResultsAttributedText: NSAttributedString?
+  var candidateFinderResultsItems: [CandidateDisplayItem] = []
+  var candidateFinderResultsShowsEmptyMessage = false
   var activeWindowBorderToken: UInt64 = 0
   var transientDisplayToken: UInt64 = 0
   var transientContentVisible = false
@@ -326,8 +329,9 @@ final class OverlayPanel: NSPanel {
     candidateFinderResultsLayer.actions = OverlayPanel.noActions
     candidateFinderResultsLabel.alignmentMode = .left
     candidateFinderResultsLabel.isWrapped = false
+    candidateFinderResultsLabel.isHidden = true
     candidateFinderResultsLabel.actions = OverlayPanel.noActions
-    candidateFinderResultsLayer.sublayers = [candidateFinderResultsLabel]
+    candidateFinderResultsLayer.sublayers = []
     activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
     activeWindowBorderLayer.strokeColor = Self.nordFrost2CG
     activeWindowBorderLayer.lineWidth = 2

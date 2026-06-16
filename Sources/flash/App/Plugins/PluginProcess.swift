@@ -395,8 +395,12 @@ final class PluginProcess {
     sendRequest(method: "resolveCandidate", params: params) { response in
       let didResolve = response?["did_resolve"] as? Bool ?? false
       let pid = response?["target_pid"] as? Int
+      let navigationURL = (response?["navigation_url"] as? String).flatMap(URL.init(string:))
       DispatchQueue.main.async {
-        completion(didResolve ? .resolved(pid: pid.map(pid_t.init)) : .unresolved)
+        completion(
+          didResolve
+            ? .resolved(pid: pid.map(pid_t.init), navigationURL: navigationURL)
+            : .unresolved)
       }
     }
   }
@@ -407,7 +411,7 @@ final class PluginProcess {
     args: [String],
     raw: String,
     meta: [String: String] = [:],
-    completion: ((Bool, pid_t?, String?) -> Void)? = nil
+    completion: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) {
     var params: [String: Any] = [
       "args": args,
@@ -430,11 +434,12 @@ final class PluginProcess {
       // session it just switched to, so a `:tmux window …` mapping brings
       // that window forward. Optional; most commands omit it.
       let pid = response?["target_pid"] as? Int
+      let navigationURL = (response?["navigation_url"] as? String).flatMap(URL.init(string:))
       // A command may also return `stdout` for Flash to surface as a toast
       // (e.g. the calculator returns "2 + 2 = 4"). Optional.
       let stdout = (response?["stdout"] as? String).flatMap { $0.isEmpty ? nil : $0 }
       DispatchQueue.main.async {
-        completion?(ok, pid.map(pid_t.init), stdout)
+        completion?(ok, pid.map(pid_t.init), stdout, navigationURL)
       }
     }
   }
@@ -454,10 +459,14 @@ final class PluginProcess {
         let didPerform = response["did_perform"] as? Bool ?? false
         let handled = response["handled"] as? Bool ?? false
         let pid = (response["target_pid"] as? Int).map(pid_t.init)
+        let navigationURL = (response["navigation_url"] as? String).flatMap(URL.init(string:))
         if didPerform {
-          result = .performed(pid: pid)
+          result = .performed(pid: pid, navigationURL: navigationURL)
         } else if handled {
-          result = .failed
+          result = SourceActionResult(
+            targetPID: pid,
+            disposition: .failed,
+            navigationURL: navigationURL)
         } else {
           result = .unhandled
         }
@@ -470,6 +479,42 @@ final class PluginProcess {
       }
       FlashLog.trace(
         "[plugin] source_action plugin=\(self?.manifest.id ?? "?") name=\(name) "
+          + "disposition=\(result.disposition) "
+          + "target_pid=\(result.targetPID.map(String.init) ?? "nil")",
+        source: "plugin:\(self?.manifest.id ?? "?")")
+      DispatchQueue.main.async {
+        completion(result)
+      }
+    }
+  }
+
+  func restoreNavigation(
+    to url: URL,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    sendRequest(method: "navigation.restore", params: ["url": url.absoluteString]) {
+      [weak self] response in
+      let result: SourceActionResult
+      if let response {
+        let didPerform = response["did_perform"] as? Bool ?? false
+        let handled = response["handled"] as? Bool ?? false
+        let pid = (response["target_pid"] as? Int).map(pid_t.init)
+        let navigationURL = (response["navigation_url"] as? String).flatMap(URL.init(string:))
+        if didPerform {
+          result = .performed(pid: pid, navigationURL: navigationURL)
+        } else if handled {
+          result = SourceActionResult(
+            targetPID: pid,
+            disposition: .failed,
+            navigationURL: navigationURL)
+        } else {
+          result = .unhandled
+        }
+      } else {
+        result = .failed
+      }
+      FlashLog.trace(
+        "[plugin] navigation_restore plugin=\(self?.manifest.id ?? "?") url=\(url.absoluteString) "
           + "disposition=\(result.disposition) "
           + "target_pid=\(result.targetPID.map(String.init) ?? "nil")",
         source: "plugin:\(self?.manifest.id ?? "?")")
@@ -1195,22 +1240,37 @@ final class PluginProcess {
     pluginName: String,
     sourceID: String
   ) -> Candidate? {
-    guard let name = raw["name"] as? String, !name.isEmpty else { return nil }
-    let source = raw["source"] as? String ?? pluginName
-    let kind = candidateKind(raw["kind"] as? String)
+    guard let title = raw["title"] as? String, !title.isEmpty else { return nil }
     let url = (raw["url"] as? String).flatMap(URL.init(string:))
-    return Candidate(
-      kind: kind,
-      sourceID: raw["source_id"] as? String ?? sourceID,
-      source: source,
-      pid: (raw["pid"] as? Int).map(pid_t.init),
-      name: name,
-      subtitle: raw["subtitle"] as? String ?? "",
-      bundleIdentifier: raw["bundle_id"] as? String ?? "",
-      url: url,
-      sourcePayload: raw["payload"].flatMap(Self.payloadString),
-      searchAliases: raw["search_aliases"] as? String ?? "",
-      finishesCommand: raw["finishes_command"] as? Bool ?? false)
+    var metadata: [String: String] = [:]
+    if let dict = raw["metadata"] as? [String: Any] {
+      for (key, value) in dict {
+        guard let stringValue = Self.metadataString(value) else { continue }
+        metadata[key] = stringValue
+      }
+    }
+    // Fill the host-side routing defaults the plugin may have omitted. These are
+    // host conventions, not part of FlashCore's schema — sources are free to
+    // override or skip them when they have no meaningful value.
+    if metadata[CandidateMetadataKey.source] == nil {
+      metadata[CandidateMetadataKey.source] = pluginName
+    }
+    if metadata[CandidateMetadataKey.sourceID] == nil {
+      metadata[CandidateMetadataKey.sourceID] = sourceID
+    }
+    if metadata[CandidateMetadataKey.kind] == nil {
+      metadata[CandidateMetadataKey.kind] = "plugin"
+    }
+    return Candidate(title: title, url: url, metadata: metadata)
+  }
+
+  private static func metadataString(_ value: Any) -> String? {
+    if let string = value as? String { return string }
+    if let bool = value as? Bool { return bool ? "1" : "0" }
+    if let int = value as? Int { return String(int) }
+    if let int64 = value as? Int64 { return String(int64) }
+    if let double = value as? Double { return String(double) }
+    return nil
   }
 
   private static func command(from raw: [String: Any]) -> PluginCommandRegistration? {
@@ -1243,38 +1303,15 @@ final class PluginProcess {
     return nil
   }
 
-  private static func payloadString(_ value: Any) -> String? {
-    if let string = value as? String { return string }
-    guard JSONSerialization.isValidJSONObject(value),
-      let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
-    else { return nil }
-    return String(data: data, encoding: .utf8)
-  }
-
-  private static func candidateKind(_ raw: String?) -> CandidateKind {
-    switch raw {
-    case "app":
-      return .app
-    case let value?:
-      return .plugin(value)
-    case nil:
-      return .plugin("plugin")
-    }
-  }
-
   private func candidateJSON(_ candidate: Candidate) -> [String: Any] {
-    [
-      "bundle_id": candidate.bundleIdentifier,
-      "kind": "\(candidate.kind)",
-      "name": candidate.name,
-      "payload": candidate.sourcePayload ?? NSNull(),
-      "finishes_command": candidate.finishesCommand,
-      "pid": candidate.pid.map { Int($0) } ?? NSNull(),
-      "source": candidate.source,
-      "source_id": candidate.sourceID,
-      "subtitle": candidate.subtitle,
-      "url": candidate.url?.absoluteString ?? NSNull(),
+    var dict: [String: Any] = [
+      "title": candidate.title,
+      "metadata": candidate.metadata,
     ]
+    if let url = candidate.url {
+      dict["url"] = url.absoluteString
+    }
+    return dict
   }
 
   private func contextJSON(_ context: AppContext) -> [String: Any] {

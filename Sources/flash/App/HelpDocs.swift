@@ -222,8 +222,9 @@ enum HelpDocs {
       inserts the selected bang token, and adding a space locks it for the
       remaining query.
 
-      App and tmux-window rows are final destinations: `<tab>` or `<cr>`
-      submits the selected row directly, the same as `<cmd-cr>`.
+      App, browser-tab, and tmux-window rows are final destinations:
+      `<tab>` or `<cr>` submits the selected row directly, the same as
+      `<cmd-cr>`.
 
       ## Ranking
 
@@ -241,8 +242,9 @@ enum HelpDocs {
 
       Plugins keep candidate snapshots warm through host events such as
       `core:apps.snapshot`, `core:focus.changed`, and `core:ax.changed`.
-      Flashlight asks them for a warm snapshot on open and only lets late
-      responses appear after you type.
+      Flashlight merges their current snapshots synchronously once the
+      prompt has a real query or a completed `@source:` selector, so the
+      visible rows do not reshuffle from late plugin responses.
       """)
 
   private static let overviewTopic = HelpTopic(

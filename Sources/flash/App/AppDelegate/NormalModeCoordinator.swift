@@ -252,9 +252,6 @@ extension AppDelegate {
     overlay.candidateFinderQuery = ""
     candidateFinderCandidates = []
     candidateFinderDynamicCandidates = []
-    candidateFinderDeferredCandidates = []
-    candidateFinderSourceQueryKey = ""
-    candidateFinderSourceQueryGenerationCounter &+= 1
     candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
@@ -487,8 +484,7 @@ extension AppDelegate {
     case .scroll(let kind):
       scrollNormalMode(kind, repeatCount: repeatCount)
     case .reload(let force):
-      let flags: CGEventFlags = force ? [.maskCommand, .maskShift] : .maskCommand
-      sendNormalModeKey(CGKeyCode(kVK_ANSI_R), flags: flags, repeatCount: repeatCount)
+      reloadInNormalMode(force: force, repeatCount: repeatCount)
     case .sendKey(_, let keyCode, let flagsRawValue):
       sendNormalModeKey(
         keyCode, flags: CGEventFlags(rawValue: flagsRawValue), repeatCount: repeatCount)
@@ -504,19 +500,26 @@ extension AppDelegate {
         flags: [.maskCommand, .maskShift],
         repeatCount: repeatCount,
         suppressInTerminalFor: command)
+    case .archive:
+      archiveInNormalMode(repeatCount: repeatCount)
+    case .resourceNext:
+      resourceNavigationInNormalMode(direction: .next, repeatCount: repeatCount)
+    case .resourcePrevious:
+      resourceNavigationInNormalMode(direction: .previous, repeatCount: repeatCount)
     case .close:
       windowCloseInNormalMode(repeatCount: repeatCount)
     case .tabClose:
       tabCloseInNormalMode(repeatCount: repeatCount)
     case .find:
-      // ⌘F only — the find bar opens, but Flash stays in normal so the
-      // user controls when they actually want to type into it. Per the
-      // explicit-only insert rule, `i` is the user's intent signal; an
-      // auto-flip here would be Flash inferring intent.
+      // ⌘F opens the find bar in the focused app, then Flash drops to insert
+      // so the user can start typing the query immediately. The `/` chord
+      // is the user's explicit intent signal, so this still satisfies the
+      // audit-rule requirement that mode flips trace to a user-action path.
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_F),
         flags: .maskCommand,
         repeatCount: repeatCount)
+      enterInsertMode(reason: .explicitCommand)
     case .candidateFinder(let all):
       enterCommandLineMode(initialText: "flashlight ", candidateFinderScope: all ? .all : .running)
     case .enterCommand(let input, let restoreMode):
@@ -580,6 +583,10 @@ extension AppDelegate {
       sendNormalModeKey(CGKeyCode(kVK_ANSI_N), flags: .maskCommand, repeatCount: repeatCount)
     case .tabNew:
       tabNewInNormalMode(repeatCount: repeatCount)
+      // `t` is the user's explicit "open something fresh and start typing"
+      // intent: switching to insert lets them type into the new tab/window
+      // without an extra `i`. Matches the unified contract on `/`.
+      enterInsertMode(reason: .explicitCommand)
     case .copy:
       sendNormalModeKey(CGKeyCode(kVK_ANSI_C), flags: .maskCommand, repeatCount: repeatCount)
     case .cut:
@@ -641,13 +648,9 @@ extension AppDelegate {
     closeModalStateForModeExit(reason: "enter_command_mode")
     clearTransientHintState(reason: "enter_command_mode")
     resetCommandLineState()
-    candidateFinderUserHasTyped = false
     if let candidateFinderScope {
       self.candidateFinderScope = candidateFinderScope
       candidateFinderDynamicCandidates = []
-      candidateFinderDeferredCandidates = []
-      candidateFinderSourceQueryKey = ""
-      candidateFinderSourceQueryGenerationCounter &+= 1
       candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
       candidateFinderSelectedIndex = 0
     } else {
@@ -655,24 +658,10 @@ extension AppDelegate {
       clearCandidateFinderState()
     }
     overlay.setActiveWindowBorder(around: nil)
-    prewarmCandidateFinderCaches(reason: "command_line_open")
+    prewarmCandidateFinderCaches(reason: "command_line_open", sourceScope: self.candidateFinderScope)
     let command = Self.commandLineBuffer(from: initialText)
-    if let candidateFinderScope,
-      NormalModeDispatcher.commandLineCandidateQuery(command) != nil
-    {
-      overlay.commandLineText = command
-      overlay.commandLineCursorIndex = command.count
-      overlay.displayCommandLine(
-        command,
-        suggestions: nil,
-        emptyText: "",
-        cursorIndex: command.count)
-      startInitialCandidateSourceQuery(
-        scope: candidateFinderScope,
-        command: command)
-    } else {
-      refreshCommandLine(text: command, cursorIndex: command.count)
-    }
+    openCandidateFinderSession(scope: self.candidateFinderScope, initialCommand: command)
+    refreshCommandLine(text: command, cursorIndex: command.count)
   }
 
   static func commandLineEntryIsAllowed(
@@ -760,7 +749,7 @@ extension AppDelegate {
     let dispatched = pluginManager.invoke(
       command: "clipboard", subcommand: "", args: [], raw: ":clipboard",
       forBundleID: currentNonFlashContext()?.bundleIdentifier
-    ) { [weak self] ok, _, stdout in
+    ) { [weak self] ok, _, stdout, _ in
       guard let self else { return }
       let entries = (ok ? stdout : nil).flatMap(Self.decodeClipboardModalEntries) ?? []
       self.clipboardModalEntries = entries
@@ -797,76 +786,133 @@ extension AppDelegate {
     overlay.commandLineCursorIndex = 0
     candidateFinderScope = scope
     candidateFinderDynamicCandidates = []
-    candidateFinderDeferredCandidates = []
-    candidateFinderSourceQueryKey = ""
-    candidateFinderSourceQueryGenerationCounter &+= 1
     candidateFinderCandidates = candidateFinderCandidates(for: scope)
     candidateFinderSelectedIndex = 0
     overlay.setActiveWindowBorder(around: nil)
-    prewarmCandidateFinderCaches(reason: "candidate_finder_open")
+    prewarmCandidateFinderCaches(reason: "candidate_finder_open", sourceScope: scope)
+    openCandidateFinderSession(scope: scope, initialCommand: "")
     overlay.displayCandidateFinder(query: "", items: [])
-    startInitialCandidateSourceQuery(scope: scope, command: nil)
   }
 
-  private static let initialCandidateSourceDeadlineMs = 80
-
-  private func startInitialCandidateSourceQuery(scope: CandidateScope, command: String?) {
-    candidateFinderSourceQueryGenerationCounter &+= 1
-    let generation = candidateFinderSourceQueryGenerationCounter
-    let key = "initial:\(generation)"
-    candidateFinderSourceQueryKey = key
-    var renderedFirstScreen = false
-    registry.queryCandidateSources(
-      scope: scope,
-      text: "",
-      firstDeadlineMs: Self.initialCandidateSourceDeadlineMs
-    ) { [weak self] candidates, isFinal in
-      guard let self else { return }
-      guard generation == self.candidateFinderSourceQueryGenerationCounter,
-        key == self.candidateFinderSourceQueryKey,
-        self.candidateFinderSurfaceActive
-      else { return }
-      if isFinal {
-        self.candidateFinderDeferredCandidates = candidates
-      }
-      if self.candidateFinderUserHasTyped {
-        self.candidateFinderDynamicCandidates = candidates
-        self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(for: scope)
-        self.rerenderInitialCandidateSourceQuery(command: command)
-        return
-      }
-      if !isFinal || !renderedFirstScreen {
-        renderedFirstScreen = true
-        self.candidateFinderDynamicCandidates = candidates
-        self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(for: scope)
-        self.rerenderInitialCandidateSourceQuery(command: command)
-      }
-    }
-  }
-
-  private func rerenderInitialCandidateSourceQuery(command: String?) {
-    switch overlay.inputMode {
-    case .commandLine:
-      let commandText = command ?? overlay.commandLineText
-      guard let query = NormalModeDispatcher.commandLineCandidateQuery(commandText) else { return }
-      updateCandidateMatches(query: query, requestCandidateRefresh: false)
-      overlay.displayCommandLine(
-        commandText,
-        suggestions: candidateFinderDisplayItems(),
-        cursorIndex: overlay.commandLineCursorIndex)
-    case .candidateFinder:
-      updateCandidateMatches(query: overlay.candidateFinderQuery, requestCandidateRefresh: false)
-      overlay.displayCandidateFinder(
-        query: overlay.candidateFinderQuery,
-        items: candidateFinderDisplayItems())
-    case .hints, .normal, .modal:
-      return
-    }
-  }
-
-  func prewarmCandidateFinderCaches(reason: String) {
+  func prewarmCandidateFinderCaches(reason: String, sourceScope: CandidateScope? = nil) {
     refreshCandidatesAsync(scope: .running, reason: reason)
     refreshCandidatesAsync(scope: .all, reason: reason)
+  }
+
+  /// Open a flashlight session: bump the cancellation token, reset the
+  /// pending-dynamic buffer, and kick off async queries on every non-app
+  /// source in parallel. Results land in `candidateFinderPendingDynamic` and
+  /// stay hidden until the user modifies the input. `initialCommand` is the
+  /// command-line buffer the panel opens with — the first refreshCommandLine
+  /// call whose text differs from this flips the display unlock.
+  func openCandidateFinderSession(scope: CandidateScope, initialCommand: String) {
+    candidateFinderSession &+= 1
+    let token = candidateFinderSession
+    candidateFinderInitialCommand = initialCommand
+    candidateFinderDynamicDisplayUnlocked = false
+    candidateFinderPendingDynamic = []
+    candidateFinderPendingDynamicBySource = [:]
+    candidateFinderDynamicCandidates = []
+    refreshAllDynamicSourcesAsync(session: token, scope: scope, reason: "flashlight_open")
+  }
+
+  /// Close the current flashlight session: bump the token so any in-flight
+  /// async fetches that resolve later become no-ops, and clear the pending
+  /// buffer. Idempotent — calling it on an already-closed session just bumps
+  /// the token harmlessly.
+  func closeCandidateFinderSession(reason: String) {
+    if candidateFinderSession != 0 {
+      FlashLog.trace("[candidate_finder] session_close reason=\(reason)")
+    }
+    candidateFinderSession &+= 1
+    candidateFinderInitialCommand = nil
+    candidateFinderDynamicDisplayUnlocked = false
+    candidateFinderPendingDynamic = []
+    candidateFinderPendingDynamicBySource = [:]
+  }
+
+  /// Fan out a `candidateQuery` to every dynamic source in parallel. Each
+  /// source's `queryCandidates` runs off the main queue (plugins via RPC,
+  /// native sources via the default utility-queue wrapper around their sync
+  /// `candidates` accessor), so the slowest source — typically a
+  /// Safari/Chromium AppleScript round-trip — sets the upper bound but doesn't
+  /// block the panel's first paint. Callbacks land on main and route through
+  /// `ingestDynamicCandidates`, which drops them silently if the session has
+  /// since been closed.
+  private func refreshAllDynamicSourcesAsync(
+    session: UInt64,
+    scope: CandidateScope,
+    reason: String
+  ) {
+    let env = registry.snapshotEnvironment
+    let sources = registry.dynamicCandidateSources()
+    FlashLog.trace(
+      "[candidate_finder] dynamic_fetch start sources=\(sources.count) reason=\(reason)")
+    let request = CandidateQuery(scope: scope, text: "")
+    for source in sources {
+      let sourceID = source.identifier
+      source.queryCandidates(in: env, request: request) { [weak self] candidates in
+        DispatchQueue.main.async {
+          self?.ingestDynamicCandidates(candidates, session: session, sourceID: sourceID)
+        }
+      }
+    }
+  }
+
+  /// Merge a source's freshly-arrived candidates into the pending buffer,
+  /// replacing any earlier batch from the same source. If the display has been
+  /// unlocked (user typed at least one key), also push the merged buffer into
+  /// the visible pool and trigger a re-render. Discards results from a stale
+  /// session — that's how cancellation works.
+  private func ingestDynamicCandidates(
+    _ candidates: [Candidate],
+    session: UInt64,
+    sourceID: String
+  ) {
+    guard candidateFinderSession == session else {
+      FlashLog.trace(
+        "[candidate_finder] dynamic_drop_stale session=\(session) source=\(sourceID)")
+      return
+    }
+    let prepared = CandidateFinder.prepare(candidates)
+    candidateFinderPendingDynamicBySource[sourceID] = prepared
+    candidateFinderPendingDynamic = candidateFinderPendingDynamicBySource.values.flatMap { $0 }
+    FlashLog.trace(
+      "[candidate_finder] dynamic_arrived source=\(sourceID) count=\(prepared.count) "
+        + "pending_total=\(candidateFinderPendingDynamic.count) "
+        + "unlocked=\(candidateFinderDynamicDisplayUnlocked)")
+    guard candidateFinderDynamicDisplayUnlocked else { return }
+    flushPendingDynamicToVisible()
+  }
+
+  /// Push the pending-dynamic buffer into the visible pool and re-render
+  /// without switching panel modes. The panel may be in `.commandLine` (the
+  /// `:flashlight` path) or `.candidateFinder` (the bare picker) — both must
+  /// stay in their original mode so the inverted arrow handling and the
+  /// command-prompt rendering don't flip between rerenders.
+  private func flushPendingDynamicToVisible() {
+    candidateFinderDynamicCandidates = candidateFinderPendingDynamic
+    candidateFinderCandidates =
+      candidateFinderCandidates(for: candidateFinderScope) + candidateFinderDynamicCandidates
+    switch overlay.inputMode {
+    case .commandLine:
+      refreshCommandLine(text: overlay.commandLineText, cursorIndex: overlay.commandLineCursorIndex)
+    case .candidateFinder:
+      refreshCandidateFinder(query: candidateFinderCurrentQuery)
+    case .hints, .normal, .modal:
+      // Panel was dismissed between session open and this flush — drop the
+      // results. The session token already invalidates further ingest, so this
+      // is belt-and-braces.
+      break
+    }
+  }
+
+  /// Live-tick variant: re-issue queryCandidates to every dynamic source
+  /// against the *current* session. Identical handler path as the open path,
+  /// just guarded by the live cadence's quiet-typing check upstream.
+  private func refreshAllDynamicSourcesOnTick(session: UInt64) {
+    refreshAllDynamicSourcesAsync(
+      session: session, scope: candidateFinderScope, reason: "live_tick")
   }
 
   /// True only while the command-line or candidate-finder surface is on
@@ -913,40 +959,18 @@ extension AppDelegate {
       {
         return
       }
-      self.prewarmCandidateFinderCaches(reason: "live")
+      // Live tick: refresh apps (cheap) and re-fan-out queries to every
+      // dynamic source against the current session so freshly arrived results
+      // ingest through the same pending buffer / display gate. If the user
+      // hasn't typed yet, results stay buffered.
+      self.prewarmCandidateFinderCaches(reason: "live", sourceScope: self.candidateFinderScope)
+      let session = self.candidateFinderSession
+      if session != 0 {
+        self.refreshAllDynamicSourcesOnTick(session: session)
+      }
     }
     timer.resume()
     candidateFinderLiveRefreshTimer = timer
-  }
-
-  private func refreshVisibleCandidateFinderResultsFromCache() {
-    guard overlay != nil else { return }
-    // Initial snapshot is locked until the user types — see
-    // `candidateFinderUserHasTyped`. The async refresh still runs and
-    // writes into the cache so the NEXT flashlight session opens with
-    // the fresher snapshot; we just don't re-render mid-display.
-    // Exception: if the visible pool is empty (cold start), let the
-    // refresh promote candidates as soon as they land so the user
-    // isn't staring at a blank list.
-    if !candidateFinderUserHasTyped, !candidateFinderCandidates.isEmpty {
-      FlashLog.trace(
-        "[candidate_finder] refresh_skip reason=locked_until_first_keystroke "
-          + "visible=\(candidateFinderCandidates.count)")
-      return
-    }
-    switch overlay.inputMode {
-    case .commandLine:
-      guard NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil else {
-        return
-      }
-      candidateFinderCandidates = visibleCandidateFinderCandidates(for: candidateFinderScope)
-      refreshCommandLine(text: overlay.commandLineText, cursorIndex: overlay.commandLineCursorIndex)
-    case .candidateFinder:
-      candidateFinderCandidates = visibleCandidateFinderCandidates(for: candidateFinderScope)
-      refreshCandidateFinder(query: overlay.candidateFinderQuery)
-    case .hints, .normal, .modal:
-      return
-    }
   }
 
   private func refreshCandidatesAsync(scope: CandidateScope, reason: String) {
@@ -964,47 +988,68 @@ extension AppDelegate {
       guard let self else { return }
       let candidates = self.registry.coreAppCandidates(scope: scope)
       DispatchQueue.main.async {
+        let poolChanged: Bool
         switch scope {
         case .running:
+          poolChanged = !Self.candidatePoolsCarrySameSourceIDs(
+            self.candidateFinderRunningAppsCache, candidates)
           self.candidateFinderRunningAppsCache = candidates
           self.candidateFinderRunningAppsCacheReady = true
           self.candidateFinderRunningAppsRefreshInFlight = false
         case .all:
+          poolChanged = !Self.candidatePoolsCarrySameSourceIDs(
+            self.candidateFinderAllAppsCache, candidates)
           self.candidateFinderAllAppsCache = candidates
           self.candidateFinderAllAppsCacheReady = true
           self.candidateFinderAllAppsRefreshInFlight = false
         }
+        if poolChanged {
+        }
         FlashLog.trace(
           "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) reason=\(reason)"
         )
-        self.refreshVisibleCandidateFinderResultsFromCache()
       }
     }
+  }
+
+  private func refreshCandidatesSynchronously(scope: CandidateScope, reason: String) -> [Candidate]
+  {
+    let candidates = registry.coreAppCandidates(scope: scope)
+    switch scope {
+    case .running:
+      candidateFinderRunningAppsCache = candidates
+      candidateFinderRunningAppsCacheReady = true
+      candidateFinderRunningAppsRefreshInFlight = false
+    case .all:
+      candidateFinderAllAppsCache = candidates
+      candidateFinderAllAppsCacheReady = true
+      candidateFinderAllAppsRefreshInFlight = false
+    }
+    FlashLog.trace(
+      "[candidate_finder] refresh_sync scope=\(scope) count=\(candidates.count) reason=\(reason)")
+    return candidates
   }
 
   private func candidateFinderCandidates(for scope: CandidateScope) -> [Candidate] {
     // Bangs are NOT in the default pool — they only surface when the
     // user types `!` (see `updateCandidateMatches`'s bang branch). The
-    // default flashlight opens from the resident core-app cache only.
-    // Non-app sources are queried on demand once the user types a query
+    // default flashlight opens from the resident core-app cache. If the
+    // cache is cold when the surface is active, fill it synchronously so
+    // rows do not visibly arrive from a background completion. Non-app
+    // sources are merged from warm snapshots once the user types a query
     // or locks in an `@source` filter.
     switch scope {
     case .running:
       if !candidateFinderRunningAppsCacheReady {
-        refreshCandidatesAsync(scope: .running, reason: "cache_miss")
+        return refreshCandidatesSynchronously(scope: .running, reason: "cache_miss")
       }
       return candidateFinderRunningAppsCache
     case .all:
       if !candidateFinderAllAppsCacheReady {
-        refreshCandidatesAsync(scope: .all, reason: "cache_miss")
+        return refreshCandidatesSynchronously(scope: .all, reason: "cache_miss")
       }
-      return candidateFinderAllAppsCacheReady
-        ? candidateFinderAllAppsCache : candidateFinderRunningAppsCache
+      return candidateFinderAllAppsCache
     }
-  }
-
-  private func visibleCandidateFinderCandidates(for scope: CandidateScope) -> [Candidate] {
-    candidateFinderCandidates(for: scope) + candidateFinderDynamicCandidates
   }
 
   func refreshCandidateFinder(query: String) {
@@ -1040,6 +1085,21 @@ extension AppDelegate {
     let command = Self.commandLineBuffer(from: text)
     overlay.commandLineText = command
     overlay.commandLineCursorIndex = cursorIndex ?? command.count
+    // User-modified-input detection: if the panel opened with `initial` text
+    // and the buffer now differs, flip the dynamic-display unlock and flush
+    // any results that arrived while we were holding them.
+    if let initial = candidateFinderInitialCommand, command != initial {
+      candidateFinderInitialCommand = nil
+      if !candidateFinderDynamicDisplayUnlocked {
+        candidateFinderDynamicDisplayUnlocked = true
+        FlashLog.trace(
+          "[candidate_finder] dynamic_unlock pending=\(candidateFinderPendingDynamic.count)")
+        candidateFinderDynamicCandidates = candidateFinderPendingDynamic
+        candidateFinderFilteredPoolCache = nil
+        candidateFinderIncrementalCache = nil
+        candidateFinderCandidatesEpoch &+= 1
+      }
+    }
     if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
       clearCommandLineCompletionState()
       if candidateFinderCandidates.isEmpty {
@@ -1238,32 +1298,39 @@ extension AppDelegate {
 
   private func updateCandidateMatches(query: String, requestCandidateRefresh: Bool = true) {
     let t0 = CFAbsoluteTimeGetCurrent()
-    // `@<field>:<pattern>` selectors (e.g. `:flashlight @source:tmux test`)
-    // attach attribute filters to the pool; the residual text is the actual
-    // search query.
+    // `@<source>` narrows the pool to a single source; the residual text after
+    // the `@source ` token is the actual fuzzy query.
     let sourceCompletion = CandidateFinder.sourceCompletionState(query: query)
     let bangCompletion = CandidateFinder.bangCompletionState(query: query)
     let parsed =
       sourceCompletion == nil
       ? NormalModeDispatcher.candidateFinderSourceFilter(query)
-      : NormalModeDispatcher.CandidateFinderQuery(attributeFilters: [], text: query)
-    let attributeFilters = parsed.attributeFilters.map { raw in
-      CandidateFinder.CompiledAttributeFilter.parse(field: raw.field, pattern: raw.pattern)
-    }
+      : NormalModeDispatcher.CandidateFinderQuery(sourceFilter: nil, text: query)
     let trimmed = parsed.text
     candidateFinderCurrentQuery = sourceCompletion?.token ?? trimmed
 
-    if requestCandidateRefresh {
-      scheduleCandidateSourceQueryIfNeeded(
-        query: query,
-        trimmed: trimmed,
-        sourceCompletionActive: sourceCompletion != nil,
-        bangCompletionActive: bangCompletion != nil)
+    // Pool composition is owned by `openCandidateFinderSession` / the dynamic
+    // unlock path now. The visible pool reflects whatever has been ingested so
+    // far: apps-only until the user modifies input, then apps + every dynamic
+    // arrival so far. `requestCandidateRefresh` is preserved for callers
+    // that still want to recompose the pool from caches (e.g. mid-typing
+    // mode-overlay rebuilds); on a confirmed source filter we still want the
+    // dynamic pool merged in so the filter has something to narrow.
+    if requestCandidateRefresh, candidateFinderDynamicDisplayUnlocked {
+      candidateFinderDynamicCandidates = candidateFinderPendingDynamic
+      candidateFinderCandidates =
+        candidateFinderCandidates(for: candidateFinderScope) + candidateFinderDynamicCandidates
+    } else if requestCandidateRefresh, parsed.sourceFilter != nil {
+      // Explicit `@<source>` filter implies user intent — merge the dynamic
+      // pool even if we haven't seen a keystroke (e.g. seeded `--input`).
+      candidateFinderDynamicCandidates = candidateFinderPendingDynamic
+      candidateFinderCandidates =
+        candidateFinderCandidates(for: candidateFinderScope) + candidateFinderDynamicCandidates
     }
 
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,
-      attributeFilters: attributeFilters)
+      sourceFilter: parsed.sourceFilter)
     let tFiltered = CFAbsoluteTimeGetCurrent()
 
     // Bump the generation so any scoring job that completes AFTER
@@ -1320,7 +1387,7 @@ extension AppDelegate {
     let tScoringStart = CFAbsoluteTimeGetCurrent()
     let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
     let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
-    let signature = poolFilterSignature(attributeFilters: attributeFilters)
+    let signature = parsed.sourceFilter ?? ""
     // Incremental narrowing: if the new query extends the previous one
     // and neither the pool nor the attribute filters have changed since
     // the previous keystroke, no candidate that failed the shorter
@@ -1384,7 +1451,7 @@ extension AppDelegate {
     if !trimmed.isEmpty {
       let tRendered = CFAbsoluteTimeGetCurrent()
       let top = sorted.prefix(5).map { match in
-        "\(match.candidate.source):\(match.candidate.name)=\(match.score)"
+        "\(match.candidate.source):\(match.candidate.title)=\(match.score)"
       }.joined(separator: "|")
       let dFilter = Int((tFiltered - t0) * 1000)
       let dScore = Int((tScored - tScoringStart) * 1000)
@@ -1411,32 +1478,6 @@ extension AppDelegate {
       aliveBonus: config.flashlight.precedenceAliveBonus)
   }
 
-  /// Re-render the active candidate-finder surface (command-line
-  /// flashlight prompt OR the dedicated `.candidateFinder` modal) with
-  /// the current `candidateFinderMatches`. Called from the async
-  /// scoring callback so a late-arriving result replaces the stale
-  /// suggestion list without a full `refreshCommandLine` re-parse.
-  private func rerenderCandidateFinderSurface(query: String) {
-    switch overlay.inputMode {
-    case .commandLine:
-      // Skip when the user has already left the flashlight surface
-      // (mode jumped to normal / hints / modal). The async result is
-      // for a surface that no longer exists.
-      guard
-        NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil
-      else { return }
-      overlay.displayCommandLine(
-        overlay.commandLineText,
-        suggestions: candidateFinderDisplayItems(),
-        cursorIndex: overlay.commandLineCursorIndex)
-    case .candidateFinder:
-      overlay.displayCandidateFinder(
-        query: query, items: candidateFinderDisplayItems())
-    case .hints, .normal, .modal:
-      return
-    }
-  }
-
   /// Set `candidateFinderMatches` and clamp the selected index.
   /// Centralised so the SearchService completion and the disabled-
   /// mode fallback can't drift on the selection-bounds rules.
@@ -1450,97 +1491,36 @@ extension AppDelegate {
     }
   }
 
-  private func scheduleCandidateSourceQueryIfNeeded(
-    query: String,
-    trimmed: String,
-    sourceCompletionActive: Bool,
-    bangCompletionActive: Bool
-  ) {
-    guard !sourceCompletionActive else { return }
-    guard !bangCompletionActive, CandidateFinder.parseBang(trimmed) == nil else { return }
-    if candidateFinderUserHasTyped, !candidateFinderDeferredCandidates.isEmpty {
-      candidateFinderDynamicCandidates = candidateFinderDeferredCandidates
-      candidateFinderCandidates = visibleCandidateFinderCandidates(for: candidateFinderScope)
-    }
-    let queryText = trimmed.trimmed
-    guard !queryText.isEmpty else {
-      candidateFinderSourceQueryKey = ""
-      candidateFinderDynamicCandidates = []
-      candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
-      return
-    }
-    let scopeKey: String
-    switch candidateFinderScope {
-    case .running:
-      scopeKey = "running"
-    case .all:
-      scopeKey = "all"
-    }
-    let key = [scopeKey, queryText].joined(separator: "\u{1f}")
-    guard key != candidateFinderSourceQueryKey else { return }
-    candidateFinderSourceQueryKey = key
-    candidateFinderSourceQueryGenerationCounter &+= 1
-    let generation = candidateFinderSourceQueryGenerationCounter
-    if candidateFinderDeferredCandidates.isEmpty {
-      candidateFinderDynamicCandidates = []
-    } else {
-      candidateFinderDynamicCandidates = candidateFinderDeferredCandidates
-    }
-    candidateFinderCandidates = visibleCandidateFinderCandidates(for: candidateFinderScope)
-    // Plugin source queries are debounced. Without the debounce, a
-    // rapidly-typing user fires a new plugin RPC per keystroke; each
-    // callback lands tens of ms later and reassigns the pool, which
-    // bumps the candidate epoch (didSet detects the new dynamic set as
-    // "different") and invalidates the incremental scoring cache —
-    // alternating fast/slow keystrokes that the user perceives as
-    // jitter. A 60 ms debounce window lets the incremental cache do its
-    // job for in-flight typing while still firing the RPC the moment
-    // the user pauses long enough to care about a freshly-refined
-    // result set.
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(60)) { [weak self] in
-      guard let self else { return }
-      guard generation == self.candidateFinderSourceQueryGenerationCounter,
-        key == self.candidateFinderSourceQueryKey,
-        self.candidateFinderSurfaceActive
-      else { return }
-      self.registry.queryCandidateSources(
-        scope: self.candidateFinderScope,
-        text: queryText
-      ) { [weak self] candidates, isFinal in
-        guard isFinal else { return }
-        guard let self else { return }
-        guard generation == self.candidateFinderSourceQueryGenerationCounter,
-          key == self.candidateFinderSourceQueryKey,
-          self.candidateFinderSurfaceActive
-        else { return }
-        self.candidateFinderDynamicCandidates = candidates
-        self.candidateFinderCandidates = self.visibleCandidateFinderCandidates(
-          for: self.candidateFinderScope)
-        // Re-score as soon as plugin rows for the current query arrive.
-        // Previously this only updated the hidden pool after the user had
-        // typed, so a tmux window query could show stale core app rows
-        // until one more keypress happened.
-        self.updateCandidateMatches(query: query, requestCandidateRefresh: false)
-        self.rerenderCandidateFinderSurface(query: query)
-      }
-    }
-  }
-
-  /// Pick the candidate pool and the text we score against. Two cases:
+  /// Pick the candidate pool and the text we score against. Three cases:
   ///
-  ///   * Default mode — the regular pool (apps, tmux, browser tabs, …)
-  ///     filtered by any `@<field>:<pattern>` attribute selectors and
-  ///     scored on the full query. Synthetic bang / source-completion
-  ///     rows are always excluded; emoji rows are excluded unless the
-  ///     user opted in with an explicit `@source:<pattern>` filter.
-  ///   * Bang mode (query starts with `!`) — the pool is **only** the
-  ///     registered plugin bangs, scored on the token typed after `!`.
-  ///     Nothing else competes for the list so the user can browse the
-  ///     bang registry without app rows piling up.
+  ///   * Bang mode (query starts with `!`) — the pool is the bang registry, or
+  ///     the candidate source declared by the bang once it's confirmed (e.g.
+  ///     `!kill ` shows the processes plugin's process list).
+  ///   * `@<source>` mode — the pool is narrowed to that one source. With an
+  ///     empty residual the user sees every candidate from that source (e.g.
+  ///     `@emojis.glyphs ` lists every emoji).
+  ///   * Default — the regular pool (apps, tmux, browser tabs, …) scored on
+  ///     the full query. Synthetic bang / source-completion rows are always
+  ///     excluded; emoji rows are excluded unless the user opted in via the
+  ///     `@<source>` narrow above.
   private func buildCandidateFinderPool(
     trimmed: String,
-    attributeFilters: [CandidateFinder.CompiledAttributeFilter]
+    sourceFilter: String?
   ) -> (pool: [Candidate], scoringText: String) {
+    if let bang = CandidateFinder.parseBangState(trimmed),
+      bang.confirmed,
+      let candidateSource = pluginManager.shebangCandidateSource(
+        token: bang.token,
+        forBundleID: currentNonFlashContext()?.bundleIdentifier)
+    {
+      // Confirmed bang bound to a candidate source: swap the pool to that
+      // source's live candidates. Selection routes back through the bang.
+      let scoped = candidateFinderCandidates.filter { candidate in
+        guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
+        return CandidateFinder.candidateMatchesSourceFilter(candidate, filter: candidateSource)
+      }
+      return (scoped, bang.remainder)
+    }
     if let bang = CandidateFinder.parseBang(trimmed) {
       let bangs = CandidateFinder.prepare(
         pluginManager.shebangCandidates(
@@ -1563,51 +1543,47 @@ extension AppDelegate {
         knownSourceCompletionCandidates())
       return (pool, completion.token)
     }
-    // Cache the kind+attributeFilter pass — while the user types into
+    // Cache the kind+source-narrow pass — while the user types into
     // flashlight the signature is stable, so the same ~2k-entry filter
     // ran ~2k times on every keystroke. Keyed by the base-pool epoch +
     // filter signature; one-slot cache because consecutive keystrokes
     // always share the same key.
-    let signature = poolFilterSignature(attributeFilters: attributeFilters)
+    let signature = sourceFilter ?? ""
     if let cached = candidateFinderFilteredPoolCache,
       cached.epoch == candidateFinderCandidatesEpoch,
       cached.signature == signature
     {
       return (cached.pool, trimmed)
     }
-    // `@source:<pattern>` is the user opting in to whatever source they
-    // name — including the otherwise-noisy emoji pool. Without an
-    // explicit source filter, emoji rows would clutter every search.
-    let userOptedIntoSource = attributeFilters.contains { $0.field == .source }
+    // `@<source>` opts in to whatever source the user names — including the
+    // otherwise-noisy emoji pool. Without an explicit source filter, emoji
+    // rows would clutter every search.
+    let userOptedIntoSource = sourceFilter != nil
     let pool = candidateFinderCandidates.filter { candidate in
       guard candidate.kind != CandidateFinder.bangKind,
         candidate.kind != CandidateFinder.sourceKind
       else { return false }
+      guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
       if !userOptedIntoSource, candidate.kind == CandidateFinder.emojiKind {
+        return false
+      }
+      if let sourceFilter,
+        !CandidateFinder.candidateMatchesSourceFilter(candidate, filter: sourceFilter)
+      {
         return false
       }
       return true
     }
-    let attributeFiltered = CandidateFinder.applyAttributeFilters(
-      pool, filters: attributeFilters)
     candidateFinderFilteredPoolCache = (
       epoch: candidateFinderCandidatesEpoch,
       signature: signature,
-      pool: attributeFiltered
+      pool: pool
     )
-    return (attributeFiltered, trimmed)
+    return (pool, trimmed)
   }
 
-  /// Stable cache key for the current pool-filter inputs. The
-  /// attribute filters compare field+kind+needle. Joining them into a
-  /// short string is cheap enough that the cache key is faster to
-  /// build than even one short filter pass.
-  private func poolFilterSignature(
-    attributeFilters: [CandidateFinder.CompiledAttributeFilter]
-  ) -> String {
-    attributeFilters
-      .map { "a:\($0.field):\($0.kind):\($0.needle)" }
-      .joined(separator: "|")
+  static func candidateCanRenderInCommandBar(_ candidate: Candidate) -> Bool {
+    CandidateEmojiSupport.candidateCanRenderInCommandBar(candidate)
   }
 
   /// Build one `@<source>` completion row per registered candidate source.
@@ -1637,9 +1613,9 @@ extension AppDelegate {
       token: token,
       query: remainder,
       forBundleID: currentNonFlashContext()?.bundleIdentifier
-    ) { [weak self] ok, pid, stdout in
+    ) { [weak self] ok, pid, stdout, navigationURL in
       guard ok, let self else { return }
-      self.activatePluginCommandTarget(pid)
+      self.activatePluginCommandTarget(pid, navigationURL: navigationURL)
       guard let stdout, !stdout.isEmpty else { return }
       self.overlay.displayBanner(stdout)
     }
@@ -1739,9 +1715,9 @@ extension AppDelegate {
         args: plugin.args,
         raw: plugin.raw,
         forBundleID: currentNonFlashContext()?.bundleIdentifier,
-        onResult: { [weak self] ok, pid, stdout in
+        onResult: { [weak self] ok, pid, stdout, navigationURL in
           guard ok else { return }
-          self?.activatePluginCommandTarget(pid)
+          self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
           guard let stdout, !stdout.isEmpty else { return }
           if captureOutput {
             NormalModeDispatcher.copy(stdout)
@@ -1859,9 +1835,9 @@ extension AppDelegate {
   /// `<cr>` and `<tab>` call with `submit=false` (insert-first).
   /// Return passes `allowFinisher=true`, so source-owned finishers and
   /// exact primary-title matches can open. Tab passes `allowFinisher=false`
-  /// but `submitFinalDestinations=true`, so app and tmux-window rows behave
-  /// like an explicit Command-Return while partial/source rows still rewrite
-  /// the buffer. `<cmd+cr>` calls with
+  /// but `submitFinalDestinations=true`, so app, browser-tab, and
+  /// tmux-window rows behave like an explicit Command-Return while
+  /// partial/source rows still rewrite the buffer. `<cmd+cr>` calls with
   /// `submit=true`, the explicit force-submit path for real candidates.
   /// Synthetic source-filter rows are always insert-only.
   func actOnSelectedCandidateFinderCandidate(
@@ -1977,9 +1953,9 @@ extension AppDelegate {
       token: typed.token,
       query: typed.remainder,
       forBundleID: currentNonFlashContext()?.bundleIdentifier
-    ) { [weak self] ok, pid, stdout in
+    ) { [weak self] ok, pid, stdout, navigationURL in
       guard ok, let self else { return }
-      self.activatePluginCommandTarget(pid)
+      self.activatePluginCommandTarget(pid, navigationURL: navigationURL)
       guard let stdout, !stdout.isEmpty else { return }
       self.overlay.displayBanner(stdout)
     }
@@ -2015,13 +1991,11 @@ extension AppDelegate {
     overlay.candidateFinderQuery = ""
     candidateFinderCandidates = []
     candidateFinderDynamicCandidates = []
-    candidateFinderDeferredCandidates = []
-    candidateFinderSourceQueryKey = ""
-    candidateFinderSourceQueryGenerationCounter &+= 1
     candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
     candidateFinderIncrementalCache = nil
+    closeCandidateFinderSession(reason: "clear_state")
   }
 
   private func quitNormalModeTargetApp(force: Bool = false) {
@@ -2179,7 +2153,10 @@ extension AppDelegate {
   /// just switched to). Activation fires `didActivateApplication`, which
   /// records the jump into the movement history — so `ctrl-o`/`ctrl-i`
   /// replay tmux jumps the same as any other Flash navigation.
-  func activatePluginCommandTarget(_ pid: pid_t?) {
+  func activatePluginCommandTarget(_ pid: pid_t?, navigationURL: URL? = nil) {
+    if let navigationURL {
+      recordMovement(.route(navigationURL, pid: pid), source: "plugin_command")
+    }
     guard let pid,
       let app = NSRunningApplication(processIdentifier: pid),
       !app.isTerminated

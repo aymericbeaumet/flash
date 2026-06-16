@@ -3,7 +3,7 @@
   "id": "slack",
   "name": "Slack",
   "version": "0.1.0",
-  "description": "Slack CLI actions and a channel finder backed by the AX broker.",
+  "description": "Slack CLI actions and a channel finder backed by local Slack app state plus AX fallback.",
   "install": "true",
   "start": "exec ./flash-plugin-slack",
   "bundle_ids": ["com.tinyspeck.slackmacgap", "com.tinyspeck.slackmacgap.direct"],

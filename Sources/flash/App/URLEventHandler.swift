@@ -28,6 +28,9 @@ enum URLCommand: Hashable {
   case reload(force: Bool)
   case undo
   case redo
+  case archive
+  case resourceNext
+  case resourcePrevious
   case close
   case tabClose
   case find
@@ -196,17 +199,14 @@ final class URLEventHandler: NSObject {
         return a.args.isEmpty ? .commandMode : nil
       }
       guard !raw.isEmpty else { return nil }
-      // Trim every leading colon so `--input=:flashlight` and `--input='flashlight '`
-      // resolve to the same command-line state — the colon is just the
-      // visual prefix the panel shows, the buffer underneath has none.
-      var normalized = String(raw.drop(while: { $0 == ":" }))
-      // Auto-append a single trailing space so users can write
-      // `--input=:flashlight` instead of the awkward `--input='flashlight '`.
-      // The command-line keyword parsers expect "verb<space><query>", so
-      // the space is required for the seeded buffer to actually enter
-      // that mode rather than reading as raw text.
-      while normalized.last == " " { normalized.removeLast() }
-      if !normalized.isEmpty { normalized.append(" ") }
+      // Strip every leading `:` and feed the rest through verbatim. A single
+      // `:` is later prepended by `commandLineBuffer(from:)`. Trailing spaces
+      // are meaningful and must NOT be trimmed: `--input=:flashlight ` opens
+      // the flashlight verb with an empty query (all candidates) while
+      // `--input=:flashlight` instead surfaces completions for commands that
+      // start with `flashlight`. The user gets full control over which
+      // behaviour they want.
+      let normalized = String(raw.drop(while: { $0 == ":" }))
       return .enterCommand(input: normalized, restoreMode: a.bool("restore_mode"))
     },
     "scroll_left": { _ in .scroll(.left) },
@@ -220,6 +220,9 @@ final class URLEventHandler: NSObject {
     "app_reload": { a in .reload(force: a.bool("force")) },
     "app_undo": { _ in .undo },
     "app_redo": { _ in .redo },
+    "resource_archive": { _ in .archive },
+    "resource_next": { _ in .resourceNext },
+    "resource_previous": { _ in .resourcePrevious },
     "window_close": { _ in .close },
     "tab_close": { _ in .tabClose },
     "app_find": { _ in .find },
@@ -302,6 +305,9 @@ final class URLEventHandler: NSObject {
     flash app_reload [--force]
     flash app_undo
     flash app_redo
+    flash resource_archive
+    flash resource_next
+    flash resource_previous
     flash window_close
     flash tab_close
     flash app_find

@@ -12,7 +12,7 @@
 //!   - pane chips: 3-cell-wide rect at pane centre.
 //!   - link chips: per-regex match in `capture-pane -p` output.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::os::unix::fs::FileTypeExt;
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
@@ -21,12 +21,13 @@ use std::time::Duration;
 use flash_plugin::{
     run, run_local, sleep, spawn_background, ActivateRequest, Candidate, CliResult, CommandRequest,
     CommandResponse, Context, DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget,
-    ResolveResponse, SourceActionRequest, SourceActionResponse,
+    NavigationRequest, ResolveResponse, SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 const SOURCE_ID: &str = "plugin:tmux";
+const NAV_SCHEME: &str = "tmux";
 
 const TMUX_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/usr"];
 const ENV_PATH: &str = "/usr/bin/env";
@@ -221,6 +222,80 @@ async fn run_tmux_default(tmux_path: Option<&str>, args: &[&str]) -> Option<Stri
     run_tmux(tmux_path, args, Duration::from_secs(2)).await
 }
 
+/// Run an enumeration command (`list-windows -a`, `list-clients`, …) against
+/// the default socket *and* every other tmux socket discovered under
+/// `/private/tmp/tmux-*` and `/tmp/tmux-*`, then return the union of stdout
+/// lines.
+///
+/// Multiple tmux servers — one per socket — are common (e.g. `tmux -L work`
+/// vs the default socket, or one per shell user). Without this, the plugin
+/// would only ever see windows belonging to whichever socket happened to
+/// answer first, so the flashlight finder silently dropped every session on
+/// every other socket.
+///
+/// Identical lines are deduplicated so an alias between the default
+/// invocation and an explicit `-S <path>` for the same socket doesn't
+/// double-count rows. Empty output is returned as `None` so the caller can
+/// preserve the previous snapshot on a transient failure.
+async fn run_tmux_aggregate(
+    tmux_path: Option<&str>,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<String> {
+    let path = tmux_path?;
+    let mut outputs: Vec<String> = Vec::new();
+
+    // Default-socket invocation. Without `-S`, tmux resolves to whichever
+    // socket the user's $TMUX_TMPDIR / process environment points at — on
+    // most setups this is also covered by `tmux_socket_paths()` below, but
+    // we run it first so a non-standard $TMUX_TMPDIR (e.g. a server
+    // outside the standard discovery roots) still contributes.
+    let default = run_local(&tmux_argv(path, args), timeout).await;
+    if default.ok {
+        outputs.push(default.stdout);
+    }
+
+    for socket_path in tmux_socket_paths() {
+        let result = run_local(&tmux_socket_argv(path, &socket_path, args), timeout).await;
+        if result.ok {
+            outputs.push(result.stdout);
+        }
+    }
+
+    let merged = merge_socket_outputs(outputs.iter().map(String::as_str));
+    if merged.is_empty() {
+        return None;
+    }
+    Some(merged)
+}
+
+/// Concatenate the stdout of multiple tmux invocations (one per socket)
+/// into a single newline-separated blob, dropping empty lines and
+/// deduplicating identical rows so the default socket and an explicit
+/// `-S <path>` pointing at the same server don't double-count records.
+fn merge_socket_outputs<'a, I>(outputs: I) -> String
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut merged: Vec<String> = Vec::new();
+    for stdout in outputs {
+        for line in stdout.split('\n') {
+            if line.is_empty() {
+                continue;
+            }
+            if seen.insert(line.to_string()) {
+                merged.push(line.to_string());
+            }
+        }
+    }
+    merged.join("\n")
+}
+
+async fn run_tmux_aggregate_default(tmux_path: Option<&str>, args: &[&str]) -> Option<String> {
+    run_tmux_aggregate(tmux_path, args, Duration::from_secs(2)).await
+}
+
 fn trimmed(value: Option<String>) -> Option<String> {
     let stripped = value?.trim().to_string();
     if stripped.is_empty() {
@@ -343,7 +418,12 @@ async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
     let format = format!(
         "#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
-    let raw = run_tmux_default(tmux_path, &["list-clients", "-F", &format]).await;
+    // Aggregated across every discovered tmux socket — `list-clients`
+    // only reports clients attached to the socket it was called on, so
+    // a single-socket invocation silently drops every client (and
+    // therefore every window-resolution route) attached to other tmux
+    // servers running on the host.
+    let raw = run_tmux_aggregate_default(tmux_path, &["list-clients", "-F", &format]).await;
     let Some(raw) = raw else {
         return Vec::new();
     };
@@ -783,6 +863,57 @@ struct TmuxPayload {
     terminal_pid: Option<i64>,
 }
 
+fn tmux_navigation_url(kind: &str, target: &str) -> String {
+    format!("{NAV_SCHEME}://{kind}/{}", percent_encode(target))
+}
+
+fn parse_tmux_navigation_url(raw: &str) -> Option<(String, String)> {
+    let rest = raw.strip_prefix(&format!("{NAV_SCHEME}://"))?;
+    let (kind, encoded_target) = rest.split_once('/')?;
+    if kind != "window" && kind != "session" {
+        return None;
+    }
+    let target = percent_decode(encoded_target)?;
+    if target.trim().is_empty() {
+        return None;
+    }
+    Some((kind.to_string(), target))
+}
+
+fn percent_encode(raw: &str) -> String {
+    let mut out = String::new();
+    for byte in raw.bytes() {
+        let ch = byte as char;
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~' | ':') {
+            out.push(ch);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn percent_decode(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return None;
+            }
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+            let value = u8::from_str_radix(hex, 16).ok()?;
+            out.push(value);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 fn client_by_session(clients: &[TmuxClient]) -> HashMap<String, TmuxClient> {
     let mut out = HashMap::new();
     for client in clients {
@@ -843,6 +974,7 @@ fn build_candidates_from_window_list(
             secondary_parts.join(" · ")
         };
 
+        let navigation_url = tmux_navigation_url("window", &target);
         let payload = TmuxPayload {
             tmux_target: target,
             tmux_client_tty: client.map(|c| c.tty.clone()).unwrap_or_default(),
@@ -854,6 +986,7 @@ fn build_candidates_from_window_list(
             .source_id(SOURCE_ID)
             .source("tmux.windows")
             .subtitle(subtitle)
+            .navigation_url(navigation_url)
             .payload_json(&payload);
         if let Some(tp) = terminal_pid {
             candidate = candidate.pid(tp);
@@ -899,7 +1032,13 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
     let format = format!(
         "#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}"
     );
-    let raw = run_tmux_default(tmux_path, &["list-windows", "-a", "-F", &format]).await?;
+    // Aggregated across every tmux socket: `list-windows -a` is "all
+    // windows on this server", not "all windows on this host". Without
+    // the per-socket fan-out, sessions running on a second tmux server
+    // (e.g. a `tmux -L work` socket) are invisible to the flashlight
+    // finder — the user sees only the first responding server's
+    // windows.
+    let raw = run_tmux_aggregate_default(tmux_path, &["list-windows", "-a", "-F", &format]).await?;
 
     let home = std::env::var("HOME").unwrap_or_default();
     let raw_line_count = raw.split('\n').filter(|line| !line.is_empty()).count();
@@ -1177,6 +1316,12 @@ async fn scroll_extreme(tmux_path: Option<&str>, client: &TmuxClient, end: &str)
     }
 }
 
+async fn reload_client(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
+    run_tmux_default(tmux_path, &["refresh-client", "-t", &client.tty])
+        .await
+        .is_some()
+}
+
 async fn perform_source_action(
     plugin: &Tmux,
     ctx: &Context,
@@ -1215,6 +1360,7 @@ async fn perform_source_action(
         "tab_move_previous" => tab_move(tmux_path, &client, "previous").await,
         "scroll_top" => scroll_extreme(tmux_path, &client, "top").await,
         "scroll_bottom" => scroll_extreme(tmux_path, &client, "bottom").await,
+        "app_reload" => reload_client(tmux_path, &client).await,
         _ => return SourceActionResponse::unhandled(),
     };
     ctx.log(
@@ -1338,7 +1484,7 @@ fn resolve_response(
             );
         }
     }
-    ResolveResponse::resolved(terminal_pid)
+    ResolveResponse::resolved(terminal_pid).navigation_url(tmux_navigation_url("window", target))
 }
 
 // ---- Commands (`:tmux …` jump-to mappings) ----------------------------------
@@ -1418,10 +1564,80 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> C
         }
     };
 
+    let route_kind = if cmd.subcommand == "session" {
+        "session"
+    } else {
+        "window"
+    };
+    let response = CommandResponse::ok().navigation_url(tmux_navigation_url(route_kind, target));
     match terminal_pid {
-        Some(tp) => CommandResponse::ok().target_pid(tp),
-        None => CommandResponse::ok(),
+        Some(tp) => response.target_pid(tp),
+        None => response,
     }
+}
+
+async fn restore_navigation(
+    plugin: &Tmux,
+    ctx: &Context,
+    request: &NavigationRequest,
+) -> SourceActionResponse {
+    let Some((kind, target)) = parse_tmux_navigation_url(&request.url) else {
+        return SourceActionResponse::unhandled();
+    };
+    let tmux_path = plugin.tmux_path.as_deref();
+    let session = target.split(':').next().unwrap_or(&target);
+    let chosen = select_client_for_target(tmux_path, &target).await;
+    let tty = chosen.as_ref().map(|c| c.tty.clone()).unwrap_or_default();
+
+    let mut args: Vec<&str> = vec!["switch-client"];
+    if !tty.is_empty() {
+        args.push("-c");
+        args.push(&tty);
+    }
+    args.push("-t");
+    args.push(&target);
+    let switched = run_tmux_default(tmux_path, &args).await.is_some()
+        || run_tmux_default(tmux_path, &["switch-client", "-t", &target])
+            .await
+            .is_some();
+    if !switched {
+        ctx.log(
+            "warn",
+            &format!("[tmux] navigation restore failed target={target}"),
+        );
+        return SourceActionResponse::failed(None).navigation_url(request.url.clone());
+    }
+
+    let terminal_pid = match chosen {
+        Some(ref c) => {
+            let pmap = parent_pid_map().await;
+            find_top_level_ancestor(c.client_pid, &pmap)
+        }
+        None => {
+            let clients = list_clients(tmux_path).await;
+            let fallback = clients
+                .iter()
+                .find(|c| c.session == session)
+                .or_else(|| clients.first());
+            match fallback {
+                Some(c) => {
+                    let pmap = parent_pid_map().await;
+                    find_top_level_ancestor(c.client_pid, &pmap)
+                }
+                None => None,
+            }
+        }
+    };
+    ctx.log(
+        "debug",
+        &format!(
+            "[tmux] navigation restored kind={kind} target={target} pid={}",
+            terminal_pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "nil".to_string())
+        ),
+    );
+    SourceActionResponse::performed(terminal_pid).navigation_url(request.url.clone())
 }
 
 // ---- Activation -------------------------------------------------------------
@@ -1559,6 +1775,22 @@ mod tests {
     }
 
     #[test]
+    fn tmux_navigation_urls_round_trip_targets() {
+        let url = tmux_navigation_url("window", "scratch:2");
+        assert_eq!(url, "tmux://window/scratch:2");
+        assert_eq!(
+            parse_tmux_navigation_url(&url),
+            Some(("window".to_string(), "scratch:2".to_string()))
+        );
+
+        let encoded = tmux_navigation_url("session", "work/project one");
+        assert_eq!(
+            parse_tmux_navigation_url(&encoded),
+            Some(("session".to_string(), "work/project one".to_string()))
+        );
+    }
+
+    #[test]
     fn window_candidate_builder_emits_windows_from_all_sessions() {
         let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
         let terminal_pid_by_session = HashMap::from([("scratch".to_string(), Some(1356))]);
@@ -1568,20 +1800,95 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
         let candidates =
             build_candidates_from_window_list(raw, &clients, &terminal_pid_by_session, "/Users/ab");
 
+        use flash_plugin::candidate_metadata as meta;
         assert_eq!(candidates.len(), 2);
-        assert_eq!(candidates[0].name, "beside-agentic");
+        assert_eq!(candidates[0].title, "beside-agentic");
         assert_eq!(
-            candidates[0].subtitle.as_deref(),
+            candidates[0].meta(meta::SUBTITLE),
             Some("beside:1 · claude · ~/workspace/beside")
         );
-        assert_eq!(candidates[1].name, "flash");
+        assert_eq!(candidates[1].title, "flash");
         assert_eq!(
-            candidates[1].subtitle.as_deref(),
+            candidates[1].meta(meta::SUBTITLE),
             Some("scratch:2 · zsh · ~/workspace/aymericbeaumet/flash")
         );
-        assert_eq!(candidates[1].source_id.as_deref(), Some(SOURCE_ID));
-        assert_eq!(candidates[1].source.as_deref(), Some("tmux.windows"));
-        assert_eq!(candidates[1].pid, Some(1356));
+        assert_eq!(candidates[1].meta(meta::SOURCE_ID), Some(SOURCE_ID));
+        assert_eq!(candidates[1].meta(meta::SOURCE), Some("tmux.windows"));
+        assert_eq!(
+            candidates[1].meta(meta::NAVIGATION_URL),
+            Some("tmux://window/scratch:2")
+        );
+        assert_eq!(candidates[1].pid_value(), Some(1356));
+    }
+
+    /// Regression test: when multiple tmux servers (e.g. one per
+    /// `/tmp/tmux-*/default` socket) are running, the candidate builder
+    /// must surface windows from *every* server. Before the multi-socket
+    /// aggregation fix, only the first responding socket's windows made
+    /// it into the snapshot — `list-windows -a` enumerates all windows on
+    /// one server, not every server on the host. We simulate that fan-out
+    /// by feeding `build_candidates_from_window_list` the merged output
+    /// `run_tmux_aggregate` would have produced across two sockets.
+    #[test]
+    fn window_candidate_builder_emits_windows_from_every_socket() {
+        let clients = vec![
+            client("/dev/ttys000", "work", 1443, 30),
+            client("/dev/ttys001", "play", 1500, 10),
+        ];
+        let terminal_pid_by_session = HashMap::from([
+            ("work".to_string(), Some(1356)),
+            ("play".to_string(), Some(1444)),
+        ]);
+
+        // Socket A reports its sessions; socket B reports its own. Each
+        // socket's `list-windows -a` only sees its own server.
+        let socket_a_out = "work\t1\teditor\tnvim\t/Users/ab/work";
+        let socket_b_out = "play\t1\tshell\tzsh\t/Users/ab/play";
+
+        // Merging is what `run_tmux_aggregate` does before handing the
+        // blob off to the candidate builder. Dedup is exercised by
+        // feeding the same socket twice — the default-socket invocation
+        // and an explicit `-S` against the same server are aliases.
+        let merged = merge_socket_outputs([socket_a_out, socket_b_out, socket_a_out]);
+
+        let candidates = build_candidates_from_window_list(
+            &merged,
+            &clients,
+            &terminal_pid_by_session,
+            "/Users/ab",
+        );
+
+        use flash_plugin::candidate_metadata as meta;
+        // One row per session — duplicates dropped, both sockets'
+        // windows present.
+        assert_eq!(candidates.len(), 2);
+        let sessions: Vec<&str> = candidates
+            .iter()
+            .map(|c| c.meta(meta::NAVIGATION_URL).unwrap_or(""))
+            .collect();
+        assert!(sessions.contains(&"tmux://window/work:1"));
+        assert!(sessions.contains(&"tmux://window/play:1"));
+        // The `play` session lives on the second socket — it would
+        // have been entirely missing before the fix.
+        let play = candidates
+            .iter()
+            .find(|c| c.meta(meta::NAVIGATION_URL) == Some("tmux://window/play:1"))
+            .expect("play session candidate present");
+        assert_eq!(play.pid_value(), Some(1444));
+    }
+
+    #[test]
+    fn merge_socket_outputs_dedups_aliased_default_invocation() {
+        let socket_a = "work\t1\teditor\tnvim\t/Users/ab/work\nwork\t2\tlogs\ttail\t/Users/ab/work";
+        let socket_b = "play\t1\tshell\tzsh\t/Users/ab/play";
+
+        let merged = merge_socket_outputs([socket_a, socket_a, socket_b, ""]);
+
+        let lines: Vec<&str> = merged.split('\n').collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines.contains(&"work\t1\teditor\tnvim\t/Users/ab/work"));
+        assert!(lines.contains(&"work\t2\tlogs\ttail\t/Users/ab/work"));
+        assert!(lines.contains(&"play\t1\tshell\tzsh\t/Users/ab/play"));
     }
 }
 
@@ -1612,6 +1919,27 @@ impl FlashPlugin for Tmux {
         }
     }
 
+    /// Host's `candidateQuery` RPC — refresh actively so the snapshot the host
+    /// receives reflects the *current* tmux window set, not whatever the last
+    /// `core:focus.changed` event seeded. Flashlight opens send this on every
+    /// session, so the cost is bounded by the user pressing the keybind.
+    async fn candidate_query(
+        &self,
+        ctx: Context,
+        request: flash_plugin::CandidateQueryRequest,
+    ) -> flash_plugin::CandidateQueryResponse {
+        let _ = request;
+        let Some(build) = build_candidates(self.tmux_path.as_deref()).await else {
+            ctx.log(
+                "debug",
+                "[tmux] candidate_query: tmux unavailable, falling back to snapshot",
+            );
+            return flash_plugin::CandidateQueryResponse::snapshot();
+        };
+        ctx.emit_snapshot(SOURCE_ID, build.candidates.clone());
+        flash_plugin::CandidateQueryResponse::candidates(build.candidates).source_id(SOURCE_ID)
+    }
+
     async fn discover_targets(&self, ctx: Context, request: DiscoverRequest) -> DiscoverResponse {
         let _ = ctx;
         discover_targets_for_context(self, &request).await
@@ -1631,6 +1959,14 @@ impl FlashPlugin for Tmux {
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
         invoke_command(self, &ctx, &command).await
+    }
+
+    async fn restore_navigation(
+        &self,
+        ctx: Context,
+        request: NavigationRequest,
+    ) -> SourceActionResponse {
+        restore_navigation(self, &ctx, &request).await
     }
 
     async fn activate_target(&self, ctx: Context, request: ActivateRequest) {

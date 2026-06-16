@@ -93,78 +93,41 @@ extension NormalModeDispatcher {
     commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true)
   }
 
-  /// One `@<field>:<pattern>` attribute filter, post-parse. `field` is the
-  /// candidate attribute the user wants to match against (lowercased,
-  /// canonical); `pattern` is the raw match string and supports a `*`
-  /// wildcard:
-  ///
-  ///   - `firefox`       — exact case-insensitive equality
-  ///   - `fire*`         — starts-with
-  ///   - `*fox`          — ends-with
-  ///   - `*goog*`        — contains
-  ///   - `*`             — catchall (matches every candidate)
-  ///
-  /// Multiple filters on the same field OR within the field; filters across
-  /// different fields AND together — `@source:firefox @source:safari
-  /// @url:*google*` means `(source=firefox OR source=safari) AND url
-  /// contains "google"`.
-  struct AttributeFilter: Equatable {
-    var field: String
-    var pattern: String
-  }
-
   struct CandidateFinderQuery: Equatable {
-    /// `@<field>:<pattern>` selectors — the structured, multi-field
-    /// filter form. The host turns each one into an `AttributeFilter`
-    /// against the matching candidate field at filter time.
-    var attributeFilters: [AttributeFilter]
+    /// `@<source>` narrows the pool to candidates whose `source` matches the
+    /// token (exact or prefix; see `candidateMatchesSourceFilter`). `nil` when
+    /// the user didn't type one.
+    var sourceFilter: String?
     /// The residual search text (every non-selector token, space-joined).
     var text: String
   }
 
-  /// Splits a candidate-finder query into its selectors and the residual
-  /// search text. Selectors are `@<field>:<pattern>` only — the structured
-  /// attribute filter. Supported fields: `source`, `kind`, `name`, `url`,
-  /// `bundle`, `subtitle`. Pattern uses `*` as the wildcard (see
-  /// `AttributeFilter`).
-  ///
-  /// Anything else — including the old bare-`@<source>` shorthand — is
-  /// treated as literal search text.
+  /// Parse `@<source>` narrowing from the live query. At most one
+  /// `@<source>` token is honoured — the first one. Every other token is
+  /// kept as literal search text.
   ///
   /// Examples:
-  ///   "@source:firefox foo"        → attrs=[source:firefox], text="foo"
-  ///   "@url:*google* rust"         → attrs=[url:*google*],   text="rust"
-  ///   "@kind:browser_tab"          → attrs=[kind:browser_tab], text=""
-  ///   "test"                       → attrs=[],            text="test"
-  ///   "@notes inbox"               → attrs=[],            text="@notes inbox"
+  ///   "@firefox.tabs gmail"        → source="firefox.tabs", text="gmail"
+  ///   "@emojis.glyphs "            → source="emojis.glyphs", text=""
+  ///   "gmail"                      → source=nil,            text="gmail"
+  ///   "@"                          → source=nil,            text="@"
   static func candidateFinderSourceFilter(_ query: String) -> CandidateFinderQuery {
-    var attributeFilters: [AttributeFilter] = []
+    var sourceFilter: String?
     var words: [Substring] = []
     for token in query.split(whereSeparator: { $0.isWhitespace }) {
-      guard token.hasPrefix("@") else {
+      guard token.hasPrefix("@"), sourceFilter == nil else {
         words.append(token)
         continue
       }
       let body = token.dropFirst(1)
-      guard let colon = body.firstIndex(of: ":") else {
-        // No colon → not an attribute filter. Treat as literal text so a
-        // user typing `@notes inbox` sees that exact string as their
-        // query rather than a silently-eaten source filter.
+      if body.isEmpty {
         words.append(token)
         continue
       }
-      let field = String(body[..<colon]).lowercased()
-      let pattern = String(body[body.index(after: colon)...])
-      // `@:foo` (empty field) or `@field:` (empty pattern) is ambiguous
-      // — fall back to literal text so a typo isn't silently swallowed.
-      if field.isEmpty || pattern.isEmpty {
-        words.append(token)
-        continue
-      }
-      attributeFilters.append(AttributeFilter(field: field, pattern: pattern))
+      sourceFilter = String(body)
     }
     return CandidateFinderQuery(
-      attributeFilters: attributeFilters,
+      sourceFilter: sourceFilter,
       text: words.joined(separator: " "))
   }
 

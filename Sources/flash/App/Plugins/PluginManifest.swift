@@ -13,6 +13,10 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// text. Most plugins do not need this; password managers, paste history,
   /// and clipboard transformers do.
   case clipboard
+  /// Ask the host to synthesize a parsed hotkey to a target process. The host
+  /// keeps the CGEvent API surface; plugins only request declarative
+  /// `keys=<hotkey>` actions through this capability.
+  case input
 }
 
 extension PluginCapability {
@@ -202,6 +206,11 @@ struct PluginShebangRegistration: Codable, Hashable {
   /// Apps this bang is gated to (empty = every app). Folded from the owning
   /// provider's `bundle_ids` by ``PluginManifest/shebangs``.
   var bundleIDs: [String]
+  /// Candidate source label this bang draws its selectable rows from. When the
+  /// user confirms `!<token> `, the flashlight pool swaps to this source's
+  /// candidates; Return on a row dispatches the bang. Empty means the bang has
+  /// no candidate list — typing the bang submits the typed remainder.
+  var candidateSource: String?
   /// Arbitrary `_`-prefixed manifest fields forwarded verbatim on invoke, so a
   /// plugin can keep per-bang data (e.g. a URL template) in the manifest.
   var meta: [String: String]
@@ -211,12 +220,14 @@ struct PluginShebangRegistration: Codable, Hashable {
     command: String = "",
     description: String = "",
     bundleIDs: [String] = [],
+    candidateSource: String? = nil,
     meta: [String: String] = [:]
   ) {
     self.token = token
     self.command = command
     self.description = description
     self.bundleIDs = bundleIDs
+    self.candidateSource = candidateSource
     self.meta = meta
   }
 
@@ -237,6 +248,7 @@ struct PluginShebangRegistration: Codable, Hashable {
     self.description = string("description") ?? ""
     self.bundleIDs =
       (try? c.decode([String].self, forKey: DynamicKey(stringValue: "bundle_ids"))) ?? []
+    self.candidateSource = string("candidate_source")
     var meta: [String: String] = [:]
     for key in c.allKeys where key.stringValue.hasPrefix("_") {
       if let value = try? c.decode(String.self, forKey: key) {
@@ -255,6 +267,9 @@ struct PluginShebangRegistration: Codable, Hashable {
     }
     if !bundleIDs.isEmpty {
       try c.encode(bundleIDs, forKey: DynamicKey(stringValue: "bundle_ids"))
+    }
+    if let candidateSource, !candidateSource.isEmpty {
+      try c.encode(candidateSource, forKey: DynamicKey(stringValue: "candidate_source"))
     }
     for (key, value) in meta.sorted(by: { $0.key < $1.key }) {
       try c.encode(value, forKey: DynamicKey(stringValue: key))
@@ -322,12 +337,14 @@ struct PluginMappingRegistration: Codable, Hashable {
 }
 
 /// One row in a plugin's unified `providers[]` table. Every surface a plugin
-/// drives — hints, candidates, commands, mappings, status segments — is one entry here, tagged
+/// drives — hints, candidates, commands, mappings, status segments, navigation routes — is one entry here, tagged
 /// by ``ProviderKind`` and gated by the same optional, symmetric conditions
 /// (`bundle_ids`/`modes`/`priority`). Kind-specific payloads ride alongside: a
 /// `commands` provider carries `commands[]`, a `mappings` provider carries
-/// `mappings[]`; a `candidates` provider declares `sources[]` so the host can
-/// offer `@<source>` completions without first forcing a snapshot; a `status`
+/// `mappings[]`; a `source_actions` provider carries `actions[]`; a
+/// `navigation` provider carries `schemes[]`; a
+/// `candidates` provider declares `sources[]` so the host can offer
+/// `@<source>` completions without first forcing a snapshot; a `status`
 /// provider declares `segments[]` exposed as `#{plugin:<id>.<segment>}`.
 /// Runtime result data still travels over plugin RPC.
 struct PluginProvider: Codable, Equatable {
@@ -346,6 +363,9 @@ struct PluginProvider: Codable, Equatable {
   /// Candidate source labels owned by a `candidates` provider, e.g.
   /// `firefox.tabs` or `tmux.windows`.
   var sources: [String]
+  var actions: [String]
+  /// URL schemes this provider can restore for movement history, e.g. `tmux`.
+  var schemes: [String]
   /// Status-bar segment names owned by a `status` provider, e.g. `battery`.
   var segments: [String]
   var commands: [PluginCommandRegistration]
@@ -359,6 +379,8 @@ struct PluginProvider: Codable, Equatable {
     priority: Int? = nil,
     command: String = "",
     sources: [String] = [],
+    actions: [String] = [],
+    schemes: [String] = [],
     segments: [String] = [],
     commands: [PluginCommandRegistration] = [],
     mappings: [PluginMappingRegistration] = [],
@@ -370,6 +392,8 @@ struct PluginProvider: Codable, Equatable {
     self.priority = priority
     self.command = command
     self.sources = sources
+    self.actions = actions
+    self.schemes = schemes
     self.segments = segments
     self.commands = commands
     self.mappings = mappings
@@ -379,7 +403,7 @@ struct PluginProvider: Codable, Equatable {
   enum CodingKeys: String, CodingKey {
     case kind
     case bundleIDs = "bundle_ids"
-    case modes, priority, command, sources, segments, commands, mappings, shebangs
+    case modes, priority, command, sources, actions, schemes, segments, commands, mappings, shebangs
   }
 
   init(from decoder: Decoder) throws {
@@ -390,6 +414,8 @@ struct PluginProvider: Codable, Equatable {
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
     self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
     self.sources = try c.decodeIfPresent([String].self, forKey: .sources) ?? []
+    self.actions = try c.decodeIfPresent([String].self, forKey: .actions) ?? []
+    self.schemes = try c.decodeIfPresent([String].self, forKey: .schemes) ?? []
     self.segments = try c.decodeIfPresent([String].self, forKey: .segments) ?? []
     self.commands =
       try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
@@ -407,6 +433,8 @@ struct PluginProvider: Codable, Equatable {
     if let priority { try c.encode(priority, forKey: .priority) }
     if !command.isEmpty { try c.encode(command, forKey: .command) }
     if !sources.isEmpty { try c.encode(sources, forKey: .sources) }
+    if !actions.isEmpty { try c.encode(actions, forKey: .actions) }
+    if !schemes.isEmpty { try c.encode(schemes, forKey: .schemes) }
     if !segments.isEmpty { try c.encode(segments, forKey: .segments) }
     if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
     if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
@@ -501,6 +529,34 @@ struct PluginManifest: Codable, Equatable {
         return entry
       }
     }
+  }
+
+  var sourceActions: [String] {
+    var seen = Set<String>()
+    var out: [String] = []
+    for provider in providers where provider.kind == .sourceActions {
+      for action in provider.actions {
+        let trimmed = action.trimmed
+        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+        seen.insert(trimmed)
+        out.append(trimmed)
+      }
+    }
+    return out
+  }
+
+  var navigationSchemes: [String] {
+    var seen = Set<String>()
+    var out: [String] = []
+    for provider in providers where provider.kind == .navigation {
+      for scheme in provider.schemes {
+        let trimmed = scheme.trimmed.lowercased()
+        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+        seen.insert(trimmed)
+        out.append(trimmed)
+      }
+    }
+    return out
   }
 
   var candidateSources: [String] {

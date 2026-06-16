@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "id": "www",
+  "name": "www",
+  "version": "0.1.0",
+  "description": "Website-specific source actions keyed by the focused browser URL.",
+  "install": "true",
+  "start": "exec ./flash-plugin-www",
+  "request_timeout_ms": 6500,
+  "priority": 60,
+  "capabilities": ["input"],
+  "bundle_ids": [
+    "com.apple.Safari",
+    "com.apple.SafariTechnologyPreview",
+    "org.mozilla.firefox",
+    "org.mozilla.firefoxdeveloperedition",
+    "com.google.Chrome",
+    "com.google.Chrome.canary",
+    "com.google.Chrome.beta",
+    "com.google.Chrome.dev",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.brave.Browser.beta",
+    "com.brave.Browser.nightly",
+    "com.microsoft.edgemac",
+    "com.microsoft.edgemac.Beta",
+    "com.microsoft.edgemac.Dev",
+    "com.microsoft.edgemac.Canary",
+    "company.thebrowser.Browser",
+    "com.vivaldi.Vivaldi",
+    "com.operasoftware.Opera",
+    "com.operasoftware.OperaNext",
+    "com.operasoftware.OperaDeveloper"
+  ],
+  "providers": [
+    {
+      "kind": "source_actions",
+      "actions": ["resource_archive", "resource_next", "resource_previous"]
+    }
+  ]
+}

@@ -49,6 +49,21 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// claim this via their ⌘⇧T fallback; tmux returns `.unhandled` (no
   /// equivalent gesture).
   public static let tabReopen = FlashSourceCapabilities(rawValue: 1 << 10)
+  /// Source handles `r` / `R` (`app_reload`). Browsers usually fall back to
+  /// their native refresh chords; terminal-backed sources can opt in when
+  /// they have a real refresh primitive.
+  public static let reload = FlashSourceCapabilities(rawValue: 1 << 11)
+  /// Source handles `e` (`resource_archive`) for the currently focused
+  /// resource. Web-app integrations use this for app-specific archive
+  /// gestures such as Gmail's `e` shortcut.
+  public static let resourceArchiving = FlashSourceCapabilities(rawValue: 1 << 12)
+  /// Source can restore movement-history entries addressed by URL-like
+  /// schemes it registered, e.g. `tmux://window/<target>`.
+  public static let navigationRoutes = FlashSourceCapabilities(rawValue: 1 << 13)
+  /// Source handles resource-local next/previous navigation. Web-app
+  /// integrations use this for app-specific motions such as Gmail's
+  /// newer/older conversation buttons.
+  public static let resourceNavigation = FlashSourceCapabilities(rawValue: 1 << 14)
 
   /// Human-readable list of the flags this set carries, for trace logs.
   /// Order is stable so log lines diff cleanly between runs.
@@ -65,6 +80,10 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
     if contains(.scrollExtremes) { names.append("scrollExtremes") }
     if contains(.tabReorder) { names.append("tabReorder") }
     if contains(.tabReopen) { names.append("tabReopen") }
+    if contains(.reload) { names.append("reload") }
+    if contains(.resourceArchiving) { names.append("resourceArchiving") }
+    if contains(.navigationRoutes) { names.append("navigationRoutes") }
+    if contains(.resourceNavigation) { names.append("resourceNavigation") }
     return names.isEmpty ? "none" : names.joined(separator: "|")
   }
 }
@@ -93,81 +112,33 @@ public enum CandidateKind: Sendable, Equatable {
   case plugin(String)
 }
 
-// @unchecked Sendable: All stored fields are value types or `URL` (which is
-// `Sendable`). `Candidate` is built once on the source's queue and read from
-// CandidateFinder's ranking queue; consumers treat it as immutable for the
-// lifetime of a flashlight query, so no synchronization is needed.
+// @unchecked Sendable: All stored fields are value types or `URL` (Sendable).
+// `Candidate` is built once on the source's queue and read from
+// `CandidateFinder`'s ranking queue; consumers treat it as immutable for the
+// lifetime of a flashlight query.
+//
+// Schema is intentionally minimal: a primary `title` (the highest-precedence
+// ranking field), an openable `url`, and a free-form `metadata` map. FlashCore
+// makes no decisions on what's inside `metadata` — sources are free to stash
+// whatever they want; the host or other plugins may read those keys, and the
+// matcher indexes them at a low tier for fuzzy search.
 public struct Candidate: @unchecked Sendable {
-  public var kind: CandidateKind
-  /// Stable source id used for routing resolution back to the source.
-  public var sourceID: String
-  /// Short user-facing source name, such as "app", "tmux", or "firefox".
-  public var source: String
-  public var pid: pid_t?
-  /// Primary searchable name. Candidate presentation and matching are built
-  /// around the source/name/url contract.
-  public var name: String
-  public var subtitle: String
-  public var bundleIdentifier: String
-  /// Openable destination whenever one exists. App candidates must use an
-  /// absolute file URL to the .app bundle; browser tabs and other external
-  /// resources should use their canonical URL.
+  public var title: String
   public var url: URL?
-  public var sourcePayload: String?
-  /// Extra space-separated tokens folded into the host's search index
-  /// for this candidate (e.g. emoji Slack-style shortcodes like
-  /// `pray prayer thanks`). Empty when the plugin didn't attach any.
-  public var searchAliases: String
-  /// Source-owned hint that selecting this row from the command bar is
-  /// already specific enough to perform immediately on Return. Plain
-  /// candidates default to insert-first; users can still force with
-  /// Command-Return.
-  public var finishesCommand: Bool
+  public var metadata: [String: String]
+  // Derived ranking caches populated by `CandidateFinder.prepare`; not part of
+  // the public per-candidate contract.
   public var displayTitle: String
   public var normalizedSearchText: String
-  /// Per-field normalized forms cached during preparation so the
-  /// hot per-keystroke ranking path skips re-normalizing the same
-  /// strings hundreds of times. Populated by
-  /// `CandidateFinder.prepare`. Empty arrays read as "not yet
-  /// prepared" — `score` falls back to on-the-fly normalization.
   public var normalizedScoringFields: NormalizedScoringFields
-  /// Stable, lowercased tie-break key precomputed during `prepare`.
-  /// `sortedMatches` compares this with a plain `<` instead of
-  /// `localizedCaseInsensitiveCompare`, which is locale-aware and far
-  /// too slow when an empty query leaves a large pool (e.g. ~2k emojis)
-  /// fully tied on score.
   public var sortKey: String
-  /// a–z0–9 presence bitmask OR'd across every field the live ranker
-  /// scores (the normalized scoring fields + searchText). Populated by
-  /// `CandidateFinder.prepare`. Used as a cheap, *sound* prefilter: a
-  /// candidate whose mask is missing more distinct query characters
-  /// than the fuzzy matcher's edit budget allows can never score, so
-  /// the hot path skips the full scorer. Stays consistent with the
-  /// normalized fields because both are computed together in `prepare`.
   public var scoringMask: UInt64
-  /// a–z0–9 presence bitmask of the *first character* of every token in
-  /// the candidate's searchable fields (title, aliases, source title,
-  /// secondary, display). Populated by `CandidateFinder.prepare`. The
-  /// Algolia-style typeahead gate: when the query is one or two
-  /// characters long, a candidate whose `wordStartMask` doesn't carry
-  /// the query's first character is skipped entirely — there's no way
-  /// for it to be a useful match while the user is still establishing
-  /// intent. Long queries fall through to the existing fuzzy ladder so
-  /// substring-only matches (e.g. `fox` → `Firefox`) still surface.
   public var wordStartMask: UInt64
 
   public init(
-    kind: CandidateKind,
-    sourceID: String,
-    source: String,
-    pid: pid_t?,
-    name: String,
-    subtitle: String,
-    bundleIdentifier: String,
-    url: URL?,
-    sourcePayload: String? = nil,
-    searchAliases: String = "",
-    finishesCommand: Bool = false,
+    title: String,
+    url: URL? = nil,
+    metadata: [String: String] = [:],
     displayTitle: String = "",
     normalizedSearchText: String = "",
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
@@ -175,17 +146,9 @@ public struct Candidate: @unchecked Sendable {
     scoringMask: UInt64 = 0,
     wordStartMask: UInt64 = 0
   ) {
-    self.kind = kind
-    self.sourceID = sourceID
-    self.source = source
-    self.pid = pid
-    self.name = name
-    self.subtitle = subtitle
-    self.bundleIdentifier = bundleIdentifier
+    self.title = title
     self.url = url
-    self.sourcePayload = sourcePayload
-    self.searchAliases = searchAliases
-    self.finishesCommand = finishesCommand
+    self.metadata = metadata
     self.displayTitle = displayTitle
     self.normalizedSearchText = normalizedSearchText
     self.normalizedScoringFields = normalizedScoringFields
@@ -254,15 +217,17 @@ public struct CandidateQuery: Sendable {
 public struct CandidateResolution: Sendable {
   public let targetPID: pid_t?
   public let didResolve: Bool
+  public let navigationURL: URL?
 
-  public init(targetPID: pid_t?, didResolve: Bool) {
+  public init(targetPID: pid_t?, didResolve: Bool, navigationURL: URL? = nil) {
     self.targetPID = targetPID
     self.didResolve = didResolve
+    self.navigationURL = navigationURL
   }
 
   public static let unresolved = CandidateResolution(targetPID: nil, didResolve: false)
-  public static func resolved(pid: pid_t?) -> CandidateResolution {
-    CandidateResolution(targetPID: pid, didResolve: true)
+  public static func resolved(pid: pid_t?, navigationURL: URL? = nil) -> CandidateResolution {
+    CandidateResolution(targetPID: pid, didResolve: true, navigationURL: navigationURL)
   }
 }
 
@@ -282,6 +247,10 @@ public enum SourceAction: Sendable, Equatable {
   case tabMovePrev
   case tabMoveNext
   case tabReopen
+  case reload(force: Bool)
+  case archive
+  case resourceNext
+  case resourcePrevious
   case scrollTop
   case scrollBottom
 
@@ -294,6 +263,9 @@ public enum SourceAction: Sendable, Equatable {
     case .tabClose: return .tabClosing
     case .tabMovePrev, .tabMoveNext: return .tabReorder
     case .tabReopen: return .tabReopen
+    case .reload: return .reload
+    case .archive: return .resourceArchiving
+    case .resourceNext, .resourcePrevious: return .resourceNavigation
     case .scrollTop, .scrollBottom: return .scrollExtremes
     }
   }
@@ -311,6 +283,10 @@ public enum SourceAction: Sendable, Equatable {
     case .tabMovePrev: return "tab_move_previous"
     case .tabMoveNext: return "tab_move_next"
     case .tabReopen: return "tab_reopen"
+    case .reload: return "app_reload"
+    case .archive: return "resource_archive"
+    case .resourceNext: return "resource_next"
+    case .resourcePrevious: return "resource_previous"
     case .scrollTop: return "scroll_top"
     case .scrollBottom: return "scroll_bottom"
     }
@@ -321,6 +297,7 @@ public enum SourceAction: Sendable, Equatable {
   public var wireExtras: [String: Any] {
     switch self {
     case .tabSelect(let index): return ["index": index]
+    case .reload(let force): return force ? ["force": true] : [:]
     default: return [:]
     }
   }
@@ -343,18 +320,20 @@ public struct SourceActionResult: Sendable {
 
   public let targetPID: pid_t?
   public let disposition: Disposition
+  public let navigationURL: URL?
 
-  public init(targetPID: pid_t?, disposition: Disposition) {
+  public init(targetPID: pid_t?, disposition: Disposition, navigationURL: URL? = nil) {
     self.targetPID = targetPID
     self.disposition = disposition
+    self.navigationURL = navigationURL
   }
 
   public var didPerform: Bool { disposition == .performed }
 
   public static let unhandled = SourceActionResult(targetPID: nil, disposition: .unhandled)
   public static let failed = SourceActionResult(targetPID: nil, disposition: .failed)
-  public static func performed(pid: pid_t?) -> SourceActionResult {
-    SourceActionResult(targetPID: pid, disposition: .performed)
+  public static func performed(pid: pid_t?, navigationURL: URL? = nil) -> SourceActionResult {
+    SourceActionResult(targetPID: pid, disposition: .performed, navigationURL: navigationURL)
   }
 }
 
@@ -388,6 +367,9 @@ public protocol FlashSource: AnyObject {
   /// source names such as `firefox.tabs` or `tmux.windows`; short prefixes are
   /// inferred by the host filter matcher.
   var candidateSourceLabels: [String] { get }
+  /// URL schemes this source can restore for movement history. Schemes are
+  /// case-insensitive and should be short stable identifiers such as `tmux`.
+  var navigationSchemes: Set<String> { get }
   func supports(_ context: AppContext) -> Bool
   /// Return a complete deterministic target set for the current UI state.
   /// Providers must not deadline-truncate results; a slow complete walk is
@@ -434,6 +416,12 @@ public protocol FlashSource: AnyObject {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   )
+  /// Restore a movement-history route whose scheme this source registered.
+  func restoreNavigation(
+    to url: URL,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  )
 }
 
 extension FlashSource {
@@ -443,6 +431,7 @@ extension FlashSource {
   public var readinessPolicy: FlashSourceReadinessPolicy { .activationOnly }
   public var resultsAreVolatile: Bool { readinessPolicy == .volatile }
   public var candidateSourceLabels: [String] { [] }
+  public var navigationSchemes: Set<String> { [] }
   public func candidates(
     in environment: FlashSourceEnvironment,
     scope: CandidateScope
@@ -478,6 +467,13 @@ extension FlashSource {
   public func performAction(
     _ action: SourceAction,
     in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    DispatchQueue.main.async { completion(.unhandled) }
+  }
+  public func restoreNavigation(
+    to url: URL,
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {

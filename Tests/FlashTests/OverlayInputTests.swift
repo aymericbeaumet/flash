@@ -387,24 +387,24 @@ final class OverlayInputTests: XCTestCase {
 
   func testCandidateFinderResultsHeightHugsLineCount() {
     let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-    let fontLineHeight = ceil(font.ascender - font.descender + font.leading)
+    let rowHeight = OverlayPanel.candidateFinderResultRowHeight(font: font)
     let lineSpacing: CGFloat = 2
 
     let single = OverlayPanel.candidateFinderResultsHeight(
       lineCount: 1, font: font, lineSpacing: lineSpacing)
-    XCTAssertEqual(single, fontLineHeight)
+    XCTAssertEqual(single, rowHeight)
 
     let ten = OverlayPanel.candidateFinderResultsHeight(
       lineCount: 10, font: font, lineSpacing: lineSpacing)
     // 10 line heights + 9 inter-line gaps (no trailing gap).
-    XCTAssertEqual(ten, fontLineHeight * 10 + lineSpacing * 9)
+    XCTAssertEqual(ten, rowHeight * 10 + lineSpacing * 9)
 
     // No silent inflation: the value never exceeds the exact-fit
     // formula, which is what fixes the empty band below the last row.
     XCTAssertEqual(
       OverlayPanel.candidateFinderResultsHeight(
         lineCount: 0, font: font, lineSpacing: lineSpacing),
-      fontLineHeight)
+      rowHeight)
   }
 
 }

@@ -177,12 +177,14 @@ sequence_timeout_ms = 1000
 # "alt+n" = ["flash", "window_move", "--screen=+1"]
 # "alt+shift+c" = ["sh", "~/bin/toggle-colors"]
 # The `enter_command_mode` verb opens the command-line panel pre-seeded with
-# `--input='<text>'`; leading colons are trimmed and a trailing space is
-# auto-appended. `--restore-mode` restores whichever mode was active when
-# the mapping fired once the panel exits (submit or cancel). Use it for
-# an emoji picker that you can trigger from INSERT and resume typing
-# afterward:
-# "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @source:emojis.glyphs", "--restore-mode"]
+# `--input='<text>'`. Leading colons are stripped and exactly one `:` is
+# prepended for the visible prefix; the rest is passed through verbatim,
+# so trailing spaces are meaningful — `--input=:flashlight ` opens the
+# verb with an empty query while `--input=:flashlight` lists completions
+# for verbs starting with `flashlight`. `--restore-mode` restores whichever
+# mode was active when the mapping fired. An emoji picker you can trigger
+# from INSERT and resume typing afterward:
+# "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @emojis.glyphs ", "--restore-mode"]
 
 [mode.normal]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
@@ -194,8 +196,8 @@ leader = "\\"
 # Example:
 # "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
 "h" = ["flash", "scroll_left"]
-"j" = ["flash", "scroll_down"]
-"k" = ["flash", "scroll_up"]
+"j" = ["flash", "resource_next"]
+"k" = ["flash", "resource_previous"]
 "l" = ["flash", "scroll_right"]
 "ctrl-e" = ["flash", "scroll_down"]
 "ctrl-y" = ["flash", "scroll_up"]
@@ -245,17 +247,18 @@ leader = "\\"
 "mF" = ["flash", "mouse_grid", "--move"]
 "u" = ["flash", "app_undo"]
 "ctrl-r" = ["flash", "app_redo"]
+"e" = ["flash", "resource_archive"]
 # tmux-aware close: kills the current tmux window in the current session
 # when an attached tmux client is focused, otherwise falls back to ⌘W.
 "x" = ["flash", "tab_close"]
 "n" = ["flash", "window_new"]
-# Context-aware new: opens a new tmux window when a tmux client is focused,
-# a new browser tab in browsers, otherwise falls back to ⌘T (⌘N for window-
-# only terminal bundles like Alacritty without tmux). Stays in normal mode —
-# press `i` afterwards if you want to type.
+# Context-aware new: opens a new tmux window when a tmux client is focused
+# or a new browser tab in browsers. Other apps do nothing.
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
-"<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight"]
+"<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight "]
+# Context-aware reload: browsers reload the current page; tmux refreshes
+# the focused client. Other apps do nothing.
 "r" = ["flash", "app_reload"]
 "R" = ["flash", "app_reload", "--force"]
 "?" = ["flash", "help_show"]

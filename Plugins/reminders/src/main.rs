@@ -139,6 +139,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     ResolveResponse {
         did_resolve: result.ok,
         target_pid: None,
+        navigation_url: None,
     }
 }
 

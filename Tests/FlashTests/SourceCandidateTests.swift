@@ -121,7 +121,7 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(candidate: alive, score: 0),
     ])
 
-    XCTAssertEqual(sorted.map(\.candidate.name), ["Zulu", "Alpha"])
+    XCTAssertEqual(sorted.map(\.candidate.title), ["Zulu", "Alpha"])
   }
 
   func testStrongerMatchWinsOverWeakerMatchAcrossSources() throws {
@@ -156,7 +156,7 @@ final class SourceCandidateTests: XCTestCase {
 
     // Whichever candidate scores higher comes first.
     let expectedFirst = deadScore >= aliveScore ? "Finder Pro" : "Finder notes"
-    XCTAssertEqual(sorted.first?.candidate.name, expectedFirst)
+    XCTAssertEqual(sorted.first?.candidate.title, expectedFirst)
   }
 
   func testStrongerScoredAppOutranksWeakerBrowserTab() throws {
@@ -190,7 +190,7 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(candidate: browserTab, score: tabScore),
       CandidateMatch(candidate: messagesApp, score: appScore),
     ])
-    XCTAssertEqual(sorted.map(\.candidate.name), ["Messages", "Important message inbox"])
+    XCTAssertEqual(sorted.map(\.candidate.title), ["Messages", "Important message inbox"])
   }
 
   func testWordPrefixOutranksContainsAcrossWordBoundary() throws {
@@ -296,7 +296,7 @@ final class SourceCandidateTests: XCTestCase {
     ])
 
     XCTAssertEqual(
-      sorted.map(\.candidate.name),
+      sorted.map(\.candidate.title),
       ["z-bang", "z-tmux", "z-tab", "z-active", "z-inactive", "z-note"])
   }
 
@@ -326,7 +326,7 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(candidate: deadExact, score: 11_000),
     ])
 
-    XCTAssertEqual(sorted.map(\.candidate.name), ["System Settings", "Messages"])
+    XCTAssertEqual(sorted.map(\.candidate.title), ["System Settings", "Messages"])
   }
 
   func testBangCandidatesAlwaysWinEvenAgainstStrongerNonBangScores() {
@@ -347,7 +347,7 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(candidate: bang, score: 100),
     ])
 
-    XCTAssertEqual(sorted.map(\.candidate.name), ["!yt", "YouTube"])
+    XCTAssertEqual(sorted.map(\.candidate.title), ["!yt", "YouTube"])
   }
 
   func testOpenCandidateScoringMatchesURL() throws {
@@ -408,7 +408,7 @@ final class SourceCandidateTests: XCTestCase {
         matching: "Finder",
         in: FlashSourceEnvironment(runningApplications: [])))
 
-    XCTAssertEqual(finder.name, "Finder")
+    XCTAssertEqual(finder.title, "Finder")
     XCTAssertEqual(finder.bundleIdentifier, "com.apple.finder")
     XCTAssertEqual(finder.url?.isFileURL, true)
     XCTAssertTrue(finder.url?.path.hasPrefix("/") ?? false)
@@ -425,7 +425,7 @@ final class SourceCandidateTests: XCTestCase {
         matching: "System Settings",
         in: FlashSourceEnvironment(runningApplications: [])))
 
-    XCTAssertEqual(settings.name, "System Settings")
+    XCTAssertEqual(settings.title, "System Settings")
     XCTAssertEqual(settings.bundleIdentifier, "com.apple.systempreferences")
     XCTAssertEqual(settings.url?.isFileURL, true)
     XCTAssertEqual(settings.url?.standardizedFileURL.path, expectedURL.standardizedFileURL.path)
@@ -493,7 +493,7 @@ final class SourceCandidateTests: XCTestCase {
         else { continue }
         XCTAssertTrue(
           CandidateFinder.passesPrefilter(prefilter, candidateMask: entry.scoringMask),
-          "prefilter wrongly rejected '\(entry.name)' for query '\(query)'")
+          "prefilter wrongly rejected '\(entry.title)' for query '\(query)'")
       }
     }
   }
@@ -907,7 +907,27 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(candidate: prayerBeads, score: beadsScore),
       CandidateMatch(candidate: foldedHands, score: foldedScore),
     ])
-    XCTAssertEqual(sorted.map(\.candidate.name), ["🙏 folded hands", "📿 prayer beads"])
+    XCTAssertEqual(sorted.map(\.candidate.title), ["🙏 folded hands", "📿 prayer beads"])
+  }
+
+  func testEmojiCandidatesWithoutLocalColorGlyphAreHiddenFromCommandBar() {
+    let supported = Candidate(
+      kind: CandidateFinder.emojiKind,
+      sourceID: "plugin:emojis",
+      source: "emojis.glyphs",
+      title: "🙏 person with folded hands",
+      subtitle: "emoji",
+      sourcePayload: "🙏")
+    let unsupported = Candidate(
+      kind: CandidateFinder.emojiKind,
+      sourceID: "plugin:emojis",
+      source: "emojis.glyphs",
+      title: "🕲 no piracy",
+      subtitle: "emoji",
+      sourcePayload: "🕲")
+
+    XCTAssertTrue(AppDelegate.candidateCanRenderInCommandBar(supported))
+    XCTAssertFalse(AppDelegate.candidateCanRenderInCommandBar(unsupported))
   }
 
   func testEmojiAliasPreparationTokenizesNormalizedAliases() throws {
@@ -1000,14 +1020,22 @@ final class SourceCandidateTests: XCTestCase {
       name: "scratch:1 flash",
       subtitle: "scratch:1 · zsh · ~/workspace/flash",
       bundleIdentifier: "")
+    let browserTab = candidate(
+      kind: CandidateFinder.browserTabKind,
+      source: "firefox.tabs",
+      name: "Gmail",
+      subtitle: "browser tab",
+      bundleIdentifier: "org.mozilla.firefox")
 
     XCTAssertTrue(CandidateFinder.isFinalDestination(app))
     XCTAssertTrue(CandidateFinder.selectionFinishes(app, query: "mes"))
     XCTAssertTrue(CandidateFinder.selectionFinishes(app, query: "@apps Messages "))
+    XCTAssertTrue(CandidateFinder.isFinalDestination(browserTab))
+    XCTAssertTrue(CandidateFinder.selectionFinishes(browserTab, query: "gmail"))
     XCTAssertTrue(CandidateFinder.isFinalDestination(tmux))
     XCTAssertTrue(CandidateFinder.selectionFinishes(tmux, query: "scr"))
     var source = CandidateFinder.sourceCompletionCandidate("tmux.windows")
-    source.finishesCommand = true
+    source.metadata[CandidateMetadataKey.finishesCommand] = "1"
     XCTAssertFalse(CandidateFinder.isFinalDestination(source))
     XCTAssertFalse(CandidateFinder.selectionFinishes(source, query: "@tmux"))
     XCTAssertFalse(CandidateFinder.selectionFinishes(source, query: "@tmux.windows "))
@@ -1033,7 +1061,7 @@ final class SourceCandidateTests: XCTestCase {
         query: "grin"))
   }
 
-  func testTabSelectionSubmitsOnlyFinalDestinationRows() {
+  func testTabSelectionSubmitsOnlyFinalDestinationRowsIncludingBrowserTabs() {
     let app = candidate(
       kind: .app,
       source: "core.apps",
@@ -1053,7 +1081,7 @@ final class SourceCandidateTests: XCTestCase {
       subtitle: "browser tab",
       bundleIdentifier: "org.mozilla.firefox")
     var source = CandidateFinder.sourceCompletionCandidate("tmux.windows")
-    source.finishesCommand = true
+    source.metadata[CandidateMetadataKey.finishesCommand] = "1"
 
     XCTAssertTrue(
       CandidateFinder.selectionSubmits(
@@ -1069,7 +1097,7 @@ final class SourceCandidateTests: XCTestCase {
         submit: false,
         allowFinisher: false,
         submitFinalDestinations: true))
-    XCTAssertFalse(
+    XCTAssertTrue(
       CandidateFinder.selectionSubmits(
         browserTab,
         query: "system",
@@ -1165,8 +1193,8 @@ final class SourceCandidateTests: XCTestCase {
         full.prefix(limit).map(\.candidate.sourceID),
         "bounded sort diverged from full sorted prefix at limit \(limit)")
       XCTAssertEqual(
-        bounded.map(\.candidate.name),
-        full.prefix(limit).map(\.candidate.name),
+        bounded.map(\.candidate.title),
+        full.prefix(limit).map(\.candidate.title),
         "bounded sort returned a different candidate order at limit \(limit)")
     }
     XCTAssertTrue(CandidateFinder.sortedMatches(pool, limit: 0).isEmpty)
@@ -1197,8 +1225,8 @@ final class SourceCandidateTests: XCTestCase {
         fuzzyScore: fuzzy,
         allowParallel: false)
       XCTAssertEqual(
-        sequential.map(\.candidate.name),
-        parallel.map(\.candidate.name),
+        sequential.map(\.candidate.title),
+        parallel.map(\.candidate.title),
         "sequential and parallel candidate streams diverged for \(query)")
       XCTAssertEqual(
         sequential.map(\.score),
@@ -1207,224 +1235,42 @@ final class SourceCandidateTests: XCTestCase {
     }
   }
 
-  func testAttributeFilterFieldAliasesMatchCanonicalFields() {
-    let candidates = [
-      candidate(
-        kind: .plugin("browser_tab"), source: "firefox",
-        name: "Inbox", subtitle: "browser tab",
-        bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.example.test/")),
-      candidate(
-        kind: .app, source: "core.apps",
-        name: "Messages", subtitle: "chat app",
-        bundleIdentifier: "com.apple.MobileSMS"),
-    ]
+  // MARK: - @<source> narrow
 
-    let title = CandidateFinder.CompiledAttributeFilter.parse(field: "title", pattern: "Inbox")
-    XCTAssertEqual(
-      CandidateFinder.applyAttributeFilters(candidates, filters: [title]).map(\.name),
-      ["Inbox"])
+  func testSourceFilterParsesAtSourceAndPreservesResidualText() {
+    let none = NormalModeDispatcher.candidateFinderSourceFilter("inbox")
+    XCTAssertNil(none.sourceFilter)
+    XCTAssertEqual(none.text, "inbox")
 
-    let bundle = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "bundle_id", pattern: "com.apple.MobileSMS")
-    XCTAssertEqual(
-      CandidateFinder.applyAttributeFilters(candidates, filters: [bundle]).map(\.name),
-      ["Messages"])
+    let bare = NormalModeDispatcher.candidateFinderSourceFilter("@firefox.tabs gmail")
+    XCTAssertEqual(bare.sourceFilter, "firefox.tabs")
+    XCTAssertEqual(bare.text, "gmail")
 
-    let description = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "description", pattern: "*app")
-    XCTAssertEqual(
-      CandidateFinder.applyAttributeFilters(candidates, filters: [description]).map(\.name),
-      ["Messages"])
+    // Just a confirmed source with no residual — lists every candidate from
+    // that source.
+    let empty = NormalModeDispatcher.candidateFinderSourceFilter("@emojis.glyphs ")
+    XCTAssertEqual(empty.sourceFilter, "emojis.glyphs")
+    XCTAssertEqual(empty.text, "")
+
+    // Bare `@` (no token) is not a source filter.
+    let dangling = NormalModeDispatcher.candidateFinderSourceFilter("@")
+    XCTAssertNil(dangling.sourceFilter)
+    XCTAssertEqual(dangling.text, "@")
   }
 
-  // MARK: - @field:pattern attribute filter
+  func testCandidateMatchesSourceFilterAcceptsExactAndPrefix() {
+    let firefoxTabs = candidate(
+      kind: .plugin("browser_tab"), source: "firefox.tabs",
+      name: "Inbox", subtitle: "browser tab",
+      bundleIdentifier: "org.mozilla.firefox",
+      url: URL(string: "https://mail.example.test/"))
 
-  func testAttributeFilterParsesStructuredForms() {
-    // Bare `@<source>` is no longer a source shorthand — it falls through
-    // as literal search text, since the structured `@<field>:<pattern>`
-    // form is the only attribute-filter syntax.
-    let bare = NormalModeDispatcher.candidateFinderSourceFilter("@notes inbox")
-    XCTAssertTrue(bare.attributeFilters.isEmpty)
-    XCTAssertEqual(bare.text, "@notes inbox")
-
-    // Structured `@<field>:<pattern>` is parsed as an attribute filter
-    // and removed from the search text.
-    let structured = NormalModeDispatcher.candidateFinderSourceFilter("@source:firefox foo")
-    XCTAssertEqual(
-      structured.attributeFilters,
-      [
-        NormalModeDispatcher.AttributeFilter(field: "source", pattern: "firefox")
-      ])
-    XCTAssertEqual(structured.text, "foo")
-
-    // Multiple attribute filters and mixed order with residual text.
-    let mixed = NormalModeDispatcher.candidateFinderSourceFilter(
-      "rust @source:firefox @url:*google*")
-    XCTAssertEqual(mixed.attributeFilters.map(\.field), ["source", "url"])
-    XCTAssertEqual(mixed.attributeFilters.map(\.pattern), ["firefox", "*google*"])
-    XCTAssertEqual(mixed.text, "rust")
-
-    // Pathological syntax falls back to literal text, so a typo doesn't
-    // silently swallow the user's query.
-    let empty = NormalModeDispatcher.candidateFinderSourceFilter("@:foo @bar:")
-    XCTAssertEqual(empty.attributeFilters, [])
-    XCTAssertEqual(empty.text, "@:foo @bar:")
-  }
-
-  func testAttributeFilterCompiledWildcardSemantics() {
-    let candidates = [
-      candidate(
-        kind: .plugin("browser_tab"), source: "firefox",
-        name: "Gmail", subtitle: "browser tab",
-        bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/")),
-      candidate(
-        kind: .plugin("browser_tab"), source: "safari",
-        name: "Gmail Safari", subtitle: "browser tab",
-        bundleIdentifier: "com.apple.safari",
-        url: URL(string: "https://mail.google.com/")),
-      candidate(
-        kind: .plugin("browser_tab"), source: "firefox",
-        name: "Hacker News", subtitle: "browser tab",
-        bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://news.ycombinator.com/")),
-      candidate(
-        kind: .app, source: "core.apps", name: "Calculator", subtitle: "app",
-        bundleIdentifier: "com.apple.Calculator"),
-    ]
-
-    let exact = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "source", pattern: "firefox")
-    XCTAssertEqual(exact.kind, .exact)
-    XCTAssertEqual(CandidateFinder.applyAttributeFilters(candidates, filters: [exact]).count, 2)
-
-    let prefix = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "source", pattern: "fire*")
-    XCTAssertEqual(prefix.kind, .prefix)
-    XCTAssertEqual(CandidateFinder.applyAttributeFilters(candidates, filters: [prefix]).count, 2)
-
-    let suffix = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "source", pattern: "*fox")
-    XCTAssertEqual(suffix.kind, .suffix)
-    XCTAssertEqual(CandidateFinder.applyAttributeFilters(candidates, filters: [suffix]).count, 2)
-
-    let contains = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "url", pattern: "*google*")
-    XCTAssertEqual(contains.kind, .contains)
-    XCTAssertEqual(
-      CandidateFinder.applyAttributeFilters(candidates, filters: [contains]).map(\.name).sorted(),
-      ["Gmail", "Gmail Safari"])
-
-    let catchall = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "source", pattern: "*")
-    XCTAssertEqual(catchall.kind, .any)
-    XCTAssertEqual(
-      CandidateFinder.applyAttributeFilters(candidates, filters: [catchall]).count,
-      candidates.count)
-
-    // Unknown field → match nothing rather than silently passing
-    // (helps surface typos like `@srouce:firefox`).
-    let unknown = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "srouce", pattern: "firefox")
-    XCTAssertEqual(unknown.field, .unknown)
-    XCTAssertEqual(
-      CandidateFinder.applyAttributeFilters(candidates, filters: [unknown]).count, 0)
-  }
-
-  func testAttributeFilterOrsWithinFieldAndAndsAcrossFields() {
-    let candidates = [
-      candidate(
-        kind: .plugin("browser_tab"), source: "firefox",
-        name: "Gmail Firefox", subtitle: "browser tab",
-        bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/")),
-      candidate(
-        kind: .plugin("browser_tab"), source: "safari",
-        name: "Gmail Safari", subtitle: "browser tab",
-        bundleIdentifier: "com.apple.safari",
-        url: URL(string: "https://mail.google.com/")),
-      candidate(
-        kind: .plugin("browser_tab"), source: "chromium",
-        name: "Hacker News", subtitle: "browser tab",
-        bundleIdentifier: "com.google.Chrome",
-        url: URL(string: "https://news.ycombinator.com/")),
-    ]
-
-    // `(source=firefox OR source=safari) AND url contains "google"`:
-    // both Gmail rows pass; HN fails the URL test.
-    let firefoxFilter = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "source", pattern: "firefox")
-    let safariFilter = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "source", pattern: "safari")
-    let urlFilter = CandidateFinder.CompiledAttributeFilter.parse(
-      field: "url", pattern: "*google*")
-    let names = CandidateFinder.applyAttributeFilters(
-      candidates,
-      filters: [firefoxFilter, safariFilter, urlFilter]
-    ).map(\.name).sorted()
-    XCTAssertEqual(names, ["Gmail Firefox", "Gmail Safari"])
-  }
-
-  func testAttributeFilterSurvivesAcrossPoolBuildPath() {
-    // End-to-end: parsing → compile → apply, mirroring the host's
-    // candidate-finder pipeline. Ensures the `@source:` selector
-    // produces the same effective filter as the parser/applier
-    // composition tested above.
-    let parsed = NormalModeDispatcher.candidateFinderSourceFilter("@source:firefox @url:*goog*")
-    XCTAssertEqual(parsed.text, "")
-    let compiled = parsed.attributeFilters.map {
-      CandidateFinder.CompiledAttributeFilter.parse(field: $0.field, pattern: $0.pattern)
-    }
-    let pool = [
-      candidate(
-        kind: .plugin("browser_tab"), source: "firefox",
-        name: "Gmail", subtitle: "browser tab",
-        bundleIdentifier: "org.mozilla.firefox",
-        url: URL(string: "https://mail.google.com/")),
-      candidate(
-        kind: .plugin("browser_tab"), source: "safari",
-        name: "Gmail Safari", subtitle: "browser tab",
-        bundleIdentifier: "com.apple.safari",
-        url: URL(string: "https://mail.google.com/")),
-    ]
-    XCTAssertEqual(
-      CandidateFinder.applyAttributeFilters(pool, filters: compiled).map(\.name),
-      ["Gmail"])
-  }
-
-  func testAttributeFilterFastOnLargePools() {
-    // Performance gate: 5 000 mixed candidates × 3 filters (source OR
-    // OR + url contains) should resolve in ≪10 ms on the test runner.
-    // The filter pipeline runs once per keystroke and the compile step
-    // is pre-amortised, so this matches the hot path.
-    var pool: [Candidate] = []
-    pool.reserveCapacity(5_000)
-    let sources = ["firefox", "safari", "chromium", "tmux", "app"]
-    for i in 0..<5_000 {
-      let source = sources[i % sources.count]
-      pool.append(
-        candidate(
-          kind: .plugin("browser_tab"),
-          source: source,
-          name: "Item \(i)",
-          subtitle: "perf",
-          bundleIdentifier: "test.\(source)",
-          url: URL(
-            string: "https://example.test/\(i)/\(i % 3 == 0 ? "google" : "other")")))
-    }
-    let filters = [
-      CandidateFinder.CompiledAttributeFilter.parse(field: "source", pattern: "firefox"),
-      CandidateFinder.CompiledAttributeFilter.parse(field: "source", pattern: "safari"),
-      CandidateFinder.CompiledAttributeFilter.parse(field: "url", pattern: "*google*"),
-    ]
-    let started = Date()
-    let result = CandidateFinder.applyAttributeFilters(pool, filters: filters)
-    let elapsedMs = Date().timeIntervalSince(started) * 1_000
-    XCTAssertFalse(result.isEmpty)
-    XCTAssertLessThan(
-      elapsedMs, 50,
-      "attribute filter took \(elapsedMs)ms for 5k candidates × 3 filters (budget 50ms)")
+    XCTAssertTrue(
+      CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "firefox.tabs"))
+    XCTAssertTrue(
+      CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "firefox"))
+    XCTAssertFalse(
+      CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "safari"))
   }
 
   private func candidate(
@@ -1444,7 +1290,7 @@ final class SourceCandidateTests: XCTestCase {
       sourceID: source,
       source: source,
       pid: pid,
-      name: name,
+      title: name,
       subtitle: subtitle,
       bundleIdentifier: bundleIdentifier,
       url: url,

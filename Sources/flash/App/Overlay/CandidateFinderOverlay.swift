@@ -4,8 +4,9 @@ import QuartzCore
 
 /// Candidate finder results panel: the list of `:open` /
 /// `:flashlight` matches that appears below the centered command-line prompt.
-/// Renders as a single multi-line `CATextLayer` so highlighting comes
-/// for free via `NSAttributedString`.
+/// Renders one `CATextLayer` per visible row. A single multi-line layer was
+/// cheaper for plain text but expensive for emoji searches because CoreText
+/// had to resolve fallback fonts across the whole list on every keystroke.
 extension OverlayPanel {
   func displayCandidateFinder(query: String, items: [CandidateDisplayItem]) {
     FlashLog.trace("[overlay] display_candidate_finder query=\(query) items=\(items.count)")
@@ -34,23 +35,23 @@ extension OverlayPanel {
     candidateFinderResultsVisible = false
     candidateFinderResultsMeasurementText = ""
     candidateFinderResultsAttributedText = nil
+    candidateFinderResultsItems = []
+    candidateFinderResultsShowsEmptyMessage = false
+    for layer in candidateFinderResultRowLayers {
+      layer.isHidden = true
+      layer.string = nil
+    }
   }
 
   func setCandidateFinderResults(items: [CandidateDisplayItem], emptyText: String) {
     let shownItems = items
-    let fontSize = Self.candidateFinderFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize))
-    let paragraph = Self.candidateFinderParagraphStyle()
     if shownItems.isEmpty {
+      candidateFinderResultsItems = [
+        CandidateDisplayItem(title: emptyText, highlightedRanges: [], isSelected: false)
+      ]
+      candidateFinderResultsShowsEmptyMessage = true
       candidateFinderResultsMeasurementText = emptyText
-      candidateFinderResultsAttributedText = NSAttributedString(
-        string: emptyText,
-        attributes: [
-          .font: NSFont.monospacedSystemFont(
-            ofSize: fontSize,
-            weight: .medium),
-          .foregroundColor: Self.nordSnowStorm0,
-          .paragraphStyle: paragraph,
-        ])
+      candidateFinderResultsAttributedText = nil
       candidateFinderResultsVisible = true
       return
     }
@@ -58,62 +59,18 @@ extension OverlayPanel {
     // Text draws top-to-bottom; the highest-ranked row should appear
     // first, closest to the prompt.
     let visualItems = shownItems
-    let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
-    let selectedFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
-    let highlightFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
-    let baseColor = Self.nordSnowStorm1
-    let selectedColor = Self.nordSnowStorm2
-    let highlightColor = Self.nordAuroraYellow
-    let markerColor = Self.nordAuroraPurple
-    let attributed = NSMutableAttributedString()
     var plainLines: [String] = []
 
     for item in visualItems {
-      if attributed.length > 0 {
-        attributed.append(
-          NSAttributedString(
-            string: "\n",
-            attributes: [.font: baseFont, .paragraphStyle: paragraph]))
-      }
       let marker = item.isSelected ? "> " : "  "
       let line = marker + item.title
       plainLines.append(line)
-      let lineAttributed = NSMutableAttributedString(
-        string: line,
-        attributes: [
-          .font: item.isSelected ? selectedFont : baseFont,
-          .foregroundColor: item.isSelected ? selectedColor : baseColor,
-          .paragraphStyle: paragraph,
-        ])
-      if item.isSelected {
-        lineAttributed.addAttribute(
-          .foregroundColor,
-          value: markerColor,
-          range: NSRange(location: 0, length: min(1, lineAttributed.length)))
-      }
-      for range in item.highlightedRanges {
-        guard range.lowerBound >= 0, range.upperBound <= item.title.count else { continue }
-        let titleStart = line.index(line.startIndex, offsetBy: marker.count)
-        guard
-          let lower = line.index(
-            titleStart,
-            offsetBy: range.lowerBound,
-            limitedBy: line.endIndex),
-          let upper = line.index(
-            titleStart,
-            offsetBy: range.upperBound,
-            limitedBy: line.endIndex)
-        else { continue }
-        let nsRange = NSRange(lower..<upper, in: line)
-        lineAttributed.addAttributes(
-          [.foregroundColor: highlightColor, .font: highlightFont],
-          range: nsRange)
-      }
-      attributed.append(lineAttributed)
     }
 
+    candidateFinderResultsItems = visualItems
+    candidateFinderResultsShowsEmptyMessage = false
     candidateFinderResultsMeasurementText = plainLines.joined(separator: "\n")
-    candidateFinderResultsAttributedText = attributed
+    candidateFinderResultsAttributedText = nil
     candidateFinderResultsVisible = true
   }
 
@@ -124,10 +81,12 @@ extension OverlayPanel {
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let visible = snapshot.mainVisibleFrame
     let scale = snapshot.mainScale
-    let lines = candidateFinderResultsMeasurementText.split(
+    let rowItems = candidateFinderResultsItems
+    let rowCount = max(1, rowItems.count)
+    let measurementLines = candidateFinderResultsMeasurementText.split(
       separator: "\n",
       omittingEmptySubsequences: false)
-    let longest = lines.map(\.count).max() ?? candidateFinderResultsMeasurementText.count
+    let longest = measurementLines.map(\.count).max() ?? candidateFinderResultsMeasurementText.count
     let x = commandPromptLayer.frame.minX
     let maxWidth = max(180, visible.maxX - panelFrame.minX - x - 10)
     let width = Self.candidateFinderResultsWidth(
@@ -135,20 +94,13 @@ extension OverlayPanel {
       longestLineCharacterCount: longest,
       fontSize: fontSize,
       maximumWidth: maxWidth)
-    let attributedText =
-      candidateFinderResultsAttributedText
-      ?? NSAttributedString(
-        string: candidateFinderResultsMeasurementText,
-        attributes: [.font: labelFont, .paragraphStyle: Self.candidateFinderParagraphStyle()])
     let labelWidth = max(1, width - Self.candidateFinderHorizontalPadding * 2)
-    // Compute height from the actual rendered line count rather than
-    // `boundingRect` — the latter over-allocates ~1–2 line heights of
-    // slack because of how `NSAttributedString` rounds line fragments
-    // with `usesLineFragmentOrigin`, which left a visibly empty band
-    // below the last candidate.
-    let lineCount = max(1, lines.count)
+    // Compute height from the exact visible row count. The row layers below
+    // fill this height directly, so there is no trailing multi-line text
+    // fragment slack after the final candidate.
+    let rowHeight = Self.candidateFinderResultRowHeight(font: labelFont)
     let labelHeight = Self.candidateFinderResultsHeight(
-      lineCount: lineCount,
+      lineCount: rowCount,
       font: labelFont,
       lineSpacing: Self.candidateFinderLineSpacing)
     let height = labelHeight + Self.candidateFinderVerticalPadding * 2
@@ -166,18 +118,52 @@ extension OverlayPanel {
     candidateFinderResultsLayer.colors = [palette.bottomCG, palette.topCG]
     candidateFinderResultsLayer.borderColor = palette.borderCG
 
-    candidateFinderResultsLabel.frame = CGRect(
-      x: Self.candidateFinderHorizontalPadding,
-      y: Self.candidateFinderVerticalPadding,
-      width: labelWidth,
-      height: labelHeight)
-    candidateFinderResultsLabel.font = labelFont
-    candidateFinderResultsLabel.fontSize = fontSize
-    candidateFinderResultsLabel.foregroundColor = Self.nordSnowStorm1CG
-    candidateFinderResultsLabel.contentsScale = scale
-    candidateFinderResultsLabel.alignmentMode = .left
-    candidateFinderResultsLabel.isWrapped = false
-    candidateFinderResultsLabel.string = attributedText
+    ensureCandidateFinderResultRowLayerCount(rowCount)
+    candidateFinderResultsLayer.sublayers = Array(candidateFinderResultRowLayers.prefix(rowCount))
+    for (index, layer) in candidateFinderResultRowLayers.enumerated() {
+      guard index < rowCount else {
+        layer.isHidden = true
+        layer.string = nil
+        continue
+      }
+      let item = rowItems[index]
+      let marker: String
+      if candidateFinderResultsShowsEmptyMessage {
+        marker = ""
+      } else {
+        marker = item.isSelected ? "> " : "  "
+      }
+      let topIndex = rowCount - 1 - index
+      layer.frame = CGRect(
+        x: Self.candidateFinderHorizontalPadding,
+        y: Self.candidateFinderVerticalPadding
+          + CGFloat(topIndex) * (rowHeight + Self.candidateFinderLineSpacing),
+        width: labelWidth,
+        height: rowHeight)
+      layer.font = labelFont
+      layer.fontSize = fontSize
+      layer.foregroundColor = Self.nordSnowStorm1CG
+      layer.contentsScale = scale
+      layer.alignmentMode = .left
+      layer.isWrapped = false
+      layer.isHidden = false
+      layer.string = Self.candidateFinderResultAttributedLine(
+        item: item,
+        marker: marker,
+        fontSize: fontSize,
+        emptyMessage: candidateFinderResultsShowsEmptyMessage)
+    }
+  }
+
+  private func ensureCandidateFinderResultRowLayerCount(_ count: Int) {
+    while candidateFinderResultRowLayers.count < count {
+      let layer = CATextLayer()
+      layer.alignmentMode = .left
+      layer.isWrapped = false
+      layer.truncationMode = .end
+      layer.actions = OverlayPanel.noActions
+      candidateFinderResultRowLayers.append(layer)
+    }
   }
 
   /// Exact-fit height for `lineCount` rows of `font`, with `lineSpacing`
@@ -189,10 +175,18 @@ extension OverlayPanel {
     font: NSFont,
     lineSpacing: CGFloat
   ) -> CGFloat {
-    let fontLineHeight = ceil(font.ascender - font.descender + font.leading)
+    let fontLineHeight = candidateFinderResultRowHeight(font: font)
     guard lineCount > 0 else { return fontLineHeight }
     let gaps = CGFloat(max(0, lineCount - 1)) * lineSpacing
     return CGFloat(lineCount) * fontLineHeight + gaps
+  }
+
+  static func candidateFinderResultRowHeight(font: NSFont) -> CGFloat {
+    var height = ceil(font.ascender - font.descender + font.leading)
+    if let emojiFont = CandidateEmojiSupport.emojiFont(forCandidateFontSize: font.pointSize) {
+      height = max(height, ceil(emojiFont.ascender - emojiFont.descender + emojiFont.leading))
+    }
+    return height
   }
 
   static func candidateFinderFontSize(overlayFontSize: CGFloat) -> CGFloat {
@@ -203,6 +197,54 @@ extension OverlayPanel {
     let paragraph = NSMutableParagraphStyle()
     paragraph.lineSpacing = candidateFinderLineSpacing
     return paragraph
+  }
+
+  static func candidateFinderResultAttributedLine(
+    item: CandidateDisplayItem,
+    marker: String,
+    fontSize: CGFloat,
+    emptyMessage: Bool = false
+  ) -> NSAttributedString {
+    let line = marker + item.title
+    let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
+    let selectedFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let highlightFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
+    let baseColor = emptyMessage ? Self.nordSnowStorm0 : Self.nordSnowStorm1
+    let selectedColor = Self.nordSnowStorm2
+    let highlightColor = Self.nordAuroraYellow
+    let markerColor = Self.nordAuroraPurple
+    let attributed = NSMutableAttributedString(
+      string: line,
+      attributes: [
+        .font: item.isSelected ? selectedFont : baseFont,
+        .foregroundColor: item.isSelected ? selectedColor : baseColor,
+      ])
+    if item.isSelected, !marker.isEmpty {
+      attributed.addAttribute(
+        .foregroundColor,
+        value: markerColor,
+        range: NSRange(location: 0, length: min(1, attributed.length)))
+    }
+    for range in item.highlightedRanges {
+      guard range.lowerBound >= 0, range.upperBound <= item.title.count else { continue }
+      let titleStart = line.index(line.startIndex, offsetBy: marker.count)
+      guard
+        let lower = line.index(
+          titleStart,
+          offsetBy: range.lowerBound,
+          limitedBy: line.endIndex),
+        let upper = line.index(
+          titleStart,
+          offsetBy: range.upperBound,
+          limitedBy: line.endIndex)
+      else { continue }
+      let nsRange = NSRange(lower..<upper, in: line)
+      attributed.addAttributes(
+        [.foregroundColor: highlightColor, .font: highlightFont],
+        range: nsRange)
+    }
+    CandidateEmojiSupport.applyEmojiFont(to: attributed, line: line, fontSize: fontSize)
+    return attributed
   }
 
   static func candidateFinderResultsWidth(

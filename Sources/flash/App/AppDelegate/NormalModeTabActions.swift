@@ -203,8 +203,64 @@ extension AppDelegate {
         registry.perform(.tabNew, in: context, completion: completion)
       },
       fallback: { [weak self] context, count in
-        let key = AppDelegate.tabNewFallbackKey(forBundleIdentifier: context.bundleIdentifier)
-        self?.sendNormalModeKey(key, flags: .maskCommand, repeatCount: count)
+        guard BrowserTabSources.allBundleIdentifiers.contains(context.bundleIdentifier) else {
+          FlashLog.debug(
+            "[normal_mode] tab_new unsupported bundle=\(context.bundleIdentifier)")
+          self?.applyModeOverlay()
+          return
+        }
+        self?.sendNormalModeKey(CGKeyCode(kVK_ANSI_T), flags: .maskCommand, repeatCount: count)
+      })
+  }
+
+  func reloadInNormalMode(force: Bool, repeatCount: Int) {
+    performTabSourceAction(
+      name: force ? "app_reload_force" : "app_reload",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.perform(.reload(force: force), in: context, completion: completion)
+      },
+      fallback: { [weak self] context, count in
+        guard
+          let shortcut = Self.browserReloadFallbackShortcut(
+            force: force,
+            bundleIdentifier: context.bundleIdentifier)
+        else {
+          FlashLog.debug(
+            "[normal_mode] app_reload unsupported bundle=\(context.bundleIdentifier)")
+          self?.applyModeOverlay()
+          return
+        }
+        self?.sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: count)
+      })
+  }
+
+  func archiveInNormalMode(repeatCount: Int) {
+    performTabSourceAction(
+      name: "resource_archive",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.perform(.archive, in: context, completion: completion)
+      },
+      fallback: { [weak self] context, _ in
+        FlashLog.debug(
+          "[normal_mode] resource_archive unsupported bundle=\(context.bundleIdentifier)")
+        self?.applyModeOverlay()
+      })
+  }
+
+  func resourceNavigationInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
+    let actionName = direction == .next ? "resource_next" : "resource_previous"
+    let action: SourceAction = direction == .next ? .resourceNext : .resourcePrevious
+    let fallbackScroll: NormalModeDispatcher.ScrollKind = direction == .next ? .down : .up
+    performTabSourceAction(
+      name: actionName,
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.perform(action, in: context, completion: completion)
+      },
+      fallback: { [weak self] _, count in
+        self?.scrollNormalMode(fallbackScroll, repeatCount: count)
       })
   }
 
@@ -238,28 +294,24 @@ extension AppDelegate {
       })
   }
 
-  /// Apps whose "new tab/chat/workspace" action is ⌘N rather than
-  /// ⌘T. Tmux is handled by the tmux plugin's `tab_new` source action
-  /// one level up — when an attached tmux client is present,
-  /// `new-window` runs and this fallback never fires.
-  static let tabNewCommandNBundleIdentifiers: Set<String> = [
-    "com.apple.MobileSMS",
-    "com.apple.Messages",
-    "org.alacritty",
-    "io.alacritty",
-  ]
-
-  static func tabNewFallbackKey(forBundleIdentifier bundleIdentifier: String) -> CGKeyCode {
-    if tabNewCommandNBundleIdentifiers.contains(bundleIdentifier) {
-      return CGKeyCode(kVK_ANSI_N)
-    }
-    return CGKeyCode(kVK_ANSI_T)
-  }
-
   static let messagesBundleIdentifiers: Set<String> = [
     "com.apple.MobileSMS",
     "com.apple.Messages",
   ]
+
+  static func browserReloadFallbackShortcut(
+    force: Bool,
+    bundleIdentifier: String
+  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
+    guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) else { return nil }
+    if force, BrowserTabSources.safariBundleIdentifiers.contains(bundleIdentifier) {
+      return (CGKeyCode(kVK_ANSI_R), [.maskCommand, .maskAlternate])
+    }
+    return (
+      CGKeyCode(kVK_ANSI_R),
+      force ? [.maskCommand, .maskShift] : .maskCommand
+    )
+  }
 
   func performTabSourceAction(
     name: String,
@@ -318,11 +370,15 @@ extension AppDelegate {
     bundleIdentifier: String
   ) -> (key: CGKeyCode, flags: CGEventFlags)? {
     if messagesBundleIdentifiers.contains(bundleIdentifier) {
-      var flags: CGEventFlags = .maskControl
-      if direction == .back {
-        flags.insert(.maskShift)
-      }
-      return (CGKeyCode(kVK_Tab), flags)
+      // macOS Sequoia+ rebound conversation traversal in Messages to
+      // ⌘⇧]/⌘⇧[, matching the Safari/Notes convention. The earlier
+      // Ctrl+Tab pair is no longer registered, which is why `[t`/`]t`
+      // stopped switching discussions.
+      let key: CGKeyCode =
+        direction == .forward
+        ? CGKeyCode(kVK_ANSI_RightBracket)
+        : CGKeyCode(kVK_ANSI_LeftBracket)
+      return (key, [.maskCommand, .maskShift])
     }
     if BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier) {
       let key: CGKeyCode =

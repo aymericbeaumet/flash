@@ -44,7 +44,7 @@ enum CandidateFinder {
     if candidate.kind == emojiKind, let glyph = candidate.sourcePayload, !glyph.isEmpty {
       return glyph
     }
-    let name = candidate.name.trimmed
+    let name = candidate.title.trimmed
     let source =
       candidate.kind == .app
       ? "apps"
@@ -69,7 +69,7 @@ enum CandidateFinder {
     let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
     let normalizedQuery = normalize(parsed.text.trimmed)
     guard !normalizedQuery.isEmpty else { return false }
-    return normalizedQuery == normalize(candidate.name)
+    return normalizedQuery == normalize(candidate.title)
   }
 
   static func selectionSubmits(
@@ -89,7 +89,7 @@ enum CandidateFinder {
     case .app:
       return true
     case .plugin(let kind):
-      return kind == "tmux_window"
+      return kind == "browser_tab" || kind == "tmux_window"
     }
   }
 
@@ -98,7 +98,7 @@ enum CandidateFinder {
       return bangDisplayTitle(candidate)
     }
     if candidate.kind == sourceKind {
-      return displayTitle(source: candidate.source, name: candidate.name)
+      return displayTitle(source: candidate.source, name: candidate.title)
     }
     if candidate.kind == browserTabKind {
       return browserTabDisplayTitle(candidate)
@@ -106,7 +106,7 @@ enum CandidateFinder {
     if candidate.kind == .plugin("tmux_window") {
       return tmuxWindowDisplayTitle(candidate)
     }
-    return displayTitle(source: candidate.source, name: candidate.name)
+    return displayTitle(source: candidate.source, name: candidate.title)
   }
 
   /// `[bang] !token (description)` — the description rides in `subtitle`
@@ -114,7 +114,7 @@ enum CandidateFinder {
   /// `sourcePayload`.
   private static func bangDisplayTitle(_ candidate: Candidate) -> String {
     let description = candidate.subtitle.trimmed
-    let name = description.isEmpty ? candidate.name : "\(candidate.name) (\(description))"
+    let name = description.isEmpty ? candidate.title : "\(candidate.title) (\(description))"
     return displayTitle(source: candidate.source, name: name)
   }
 
@@ -253,6 +253,19 @@ enum CandidateFinder {
     return typed.token.localizedCaseInsensitiveCompare(selectedToken) == .orderedSame
   }
 
+  /// Decide whether `candidate.source` satisfies a `@<source>` narrow. Exact
+  /// match wins; otherwise the typed token is treated as a prefix on dotted
+  /// source labels (`firefox` matches `firefox.tabs`), so a user can narrow
+  /// by short name without having to type the full canonical label.
+  static func candidateMatchesSourceFilter(_ candidate: Candidate, filter: String) -> Bool {
+    let needle = filter.lowercased()
+    guard !needle.isEmpty else { return true }
+    let source = candidate.source.lowercased()
+    if source == needle { return true }
+    if source.hasPrefix(needle + ".") { return true }
+    return false
+  }
+
   /// Build a synthetic completion candidate for a `@<source>` token.
   /// Mirrors the shape of the bang completion rows so the same render
   /// path (`displayTitle`, `bangDisplayTitle`-style label) shows
@@ -262,11 +275,7 @@ enum CandidateFinder {
       kind: sourceKind,
       sourceID: "source:\(source)",
       source: "source",
-      pid: nil,
-      name: "@\(source)",
-      subtitle: "",
-      bundleIdentifier: "",
-      url: nil,
+      title: "@\(source)",
       sourcePayload: source)
   }
 
@@ -323,12 +332,12 @@ enum CandidateFinder {
     prepared.displayTitle = display
     let normalizedSearchText = normalize(searchText(candidate))
     prepared.normalizedSearchText = normalizedSearchText
-    let normalizedTitle = normalize(candidate.name)
+    let normalizedTitle = normalize(candidate.title)
     let titleTokens: [String] =
       normalizedTitle.isEmpty
       ? []
       : normalizedTitle.split(separator: " ").map(String.init)
-    let normalizedSourceTitle = normalize("\(candidate.source) \(candidate.name)")
+    let normalizedSourceTitle = normalize("\(candidate.source) \(candidate.title)")
     let normalizedURL = normalize(urlSearchText(candidate))
     let normalizedSecondary = normalize(secondarySearchText(candidate))
     let normalizedDisplay = normalize(display)
@@ -627,133 +636,6 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     candidate.pid != nil
   }
 
-  /// One pre-compiled attribute pattern. The wildcard parse runs once at
-  /// query time so the hot per-candidate match is a single `String`
-  /// equality / prefix / suffix / contains check — every attribute
-  /// filter pays parsing cost exactly once regardless of pool size.
-  struct CompiledAttributeFilter {
-    let field: Field
-    let needle: String  // lowercased
-    let kind: Kind
-
-    enum Field: Equatable {
-      case source
-      case kind
-      case name
-      case url
-      case bundle
-      case subtitle
-      case unknown  // Field name the user typed that we don't expose; never matches.
-    }
-
-    enum Kind: Equatable {
-      case any  // `*`
-      case exact  // `firefox`
-      case prefix  // `fire*`
-      case suffix  // `*fox`
-      case contains  // `*goog*`
-    }
-
-    static func parse(field: String, pattern: String) -> CompiledAttributeFilter {
-      let normalizedField: Field
-      switch field {
-      case "source": normalizedField = .source
-      case "kind": normalizedField = .kind
-      case "name", "title": normalizedField = .name
-      case "url": normalizedField = .url
-      case "bundle", "bundle_id", "bundleidentifier", "bundleid":
-        normalizedField = .bundle
-      case "subtitle", "description":
-        normalizedField = .subtitle
-      default: normalizedField = .unknown
-      }
-      let raw = pattern.lowercased()
-      let kind: Kind
-      let needle: String
-      let leading = raw.hasPrefix("*")
-      let trailing = raw.hasSuffix("*")
-      let stripped = String(raw.dropFirst(leading ? 1 : 0).dropLast(trailing ? 1 : 0))
-      switch (leading, trailing) {
-      case (true, true) where stripped.isEmpty:
-        kind = .any
-        needle = ""
-      case (true, true):
-        kind = .contains
-        needle = stripped
-      case (true, false):
-        kind = .suffix
-        needle = stripped
-      case (false, true):
-        kind = .prefix
-        needle = stripped
-      case (false, false):
-        kind = .exact
-        needle = raw
-      }
-      return CompiledAttributeFilter(field: normalizedField, needle: needle, kind: kind)
-    }
-
-    /// Match against `candidate`. Returns `false` for `.unknown` fields
-    /// so a typo (`@srouce:firefox`) yields no results rather than the
-    /// full pool — explicit failure is the safer default.
-    func matches(_ candidate: Candidate) -> Bool {
-      guard field != .unknown else { return false }
-      let value = value(of: candidate).lowercased()
-      switch kind {
-      case .any:
-        return true
-      case .exact:
-        return value == needle
-      case .prefix:
-        return value.hasPrefix(needle)
-      case .suffix:
-        return value.hasSuffix(needle)
-      case .contains:
-        return value.contains(needle)
-      }
-    }
-
-    private func value(of candidate: Candidate) -> String {
-      switch field {
-      case .source: return candidate.source
-      case .kind: return candidateKindString(candidate.kind)
-      case .name: return candidate.name
-      case .url: return candidate.url?.absoluteString ?? ""
-      case .bundle: return candidate.bundleIdentifier
-      case .subtitle: return candidate.subtitle
-      case .unknown: return ""
-      }
-    }
-  }
-
-  /// Stringify `CandidateKind` so attribute filters can match on it
-  /// without leaking the enum case syntax.
-  static func candidateKindString(_ kind: CandidateKind) -> String {
-    switch kind {
-    case .app: return "app"
-    case .plugin(let tag): return tag
-    }
-  }
-
-  /// Apply a compiled filter set: group by field, OR within each
-  /// field, AND across fields. Empty input passes everything through.
-  static func applyAttributeFilters(
-    _ candidates: [Candidate],
-    filters: [CompiledAttributeFilter]
-  ) -> [Candidate] {
-    guard !filters.isEmpty else { return candidates }
-    var byField: [CompiledAttributeFilter.Field: [CompiledAttributeFilter]] = [:]
-    for filter in filters {
-      byField[filter.field, default: []].append(filter)
-    }
-    return candidates.filter { candidate in
-      for group in byField.values {
-        guard group.contains(where: { $0.matches(candidate) }) else { return false }
-      }
-      return true
-    }
-  }
-
   /// Decorated record so each candidate's tier / alive / key fields are
   /// computed once, not on every comparator call. With ~2k tied emojis
   /// the comparator fires ~20k times; recomputing `source.lowercased()`
@@ -854,7 +736,7 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
       candidate.displayTitle.isEmpty
       ? displayTitle(candidate) : candidate.displayTitle
     return [
-      candidate.name.lowercased(),
+      candidate.title.lowercased(),
       candidate.source.lowercased(),
       display.lowercased(),
       candidate.sourceID.lowercased(),
@@ -925,7 +807,7 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
   }
 
   private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {
-    let candidateTitle = candidate.name.trimmed
+    let candidateTitle = candidate.title.trimmed
     let url = browserTabURLString(candidate) ?? ""
     let title: String
     if candidateTitle.isEmpty || candidateTitle == url {
@@ -942,7 +824,7 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
   }
 
   private static func tmuxWindowDisplayTitle(_ candidate: Candidate) -> String {
-    let title = candidate.name.trimmed
+    let title = candidate.title.trimmed
     let secondary = candidate.subtitle.trimmed
     let display: String
     if title.isEmpty {
@@ -965,7 +847,7 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
   }
 
   private static func searchText(_ candidate: Candidate) -> String {
-    "\(candidate.source) \(candidate.name) \(secondarySearchText(candidate)) \(candidate.searchAliases)"
+    "\(candidate.source) \(candidate.title) \(secondarySearchText(candidate)) \(candidate.searchAliases)"
   }
 
   private static func secondarySearchText(_ candidate: Candidate) -> String {
@@ -996,7 +878,7 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     let parts = host.split(separator: ".")
     guard let suffix = parts.last, suffix.count >= 2 else { return "" }
     let separators = CharacterSet.alphanumerics.inverted
-    let tokens = candidate.name
+    let tokens = candidate.title
       .components(separatedBy: separators)
       .map { $0.trimmed }
       .filter { !$0.isEmpty }
@@ -1102,7 +984,7 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     }
 
     return (Array(byIdentifier.values) + Array(byPath.values)).sorted { lhs, rhs in
-      lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+      lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
     }
   }
 }

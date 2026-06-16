@@ -11,6 +11,7 @@ members = [
   "firefox",
   "media",
   "notes",
+  "processes",
   "reminders",
   "safari",
   "searchengines",
@@ -18,6 +19,7 @@ members = [
   "spotify",
   "system",
   "tmux",
+  "www",
 ]
 
 # Shared dependency versions. Each plugin opts in via

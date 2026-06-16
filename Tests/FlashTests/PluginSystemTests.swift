@@ -13,7 +13,8 @@ final class PluginSystemTests: XCTestCase {
       ids,
       [
         "aiproviders", "calculator", "clipboard", "contacts", "emojis", "firefox", "media",
-        "notes", "reminders", "safari", "searchengines", "slack", "spotify", "system", "tmux",
+        "notes", "processes", "reminders", "safari", "searchengines", "slack", "spotify",
+        "system", "tmux", "www",
       ])
 
     let runCommandRequired: Set<String> = [
@@ -37,6 +38,13 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertTrue(tmux.volatile)
     XCTAssertEqual(tmux.priority, 20)
     XCTAssertTrue(tmux.bundleIDs.contains("org.alacritty"))
+    XCTAssertTrue(tmux.sourceActions.contains("tab_new"))
+    XCTAssertTrue(tmux.sourceActions.contains("app_reload"))
+    XCTAssertEqual(tmux.navigationSchemes, ["tmux"])
+    let www = try XCTUnwrap(manifests.first { $0.id == "www" })
+    XCTAssertEqual(www.priority, 60)
+    XCTAssertEqual(www.capabilities, [.input])
+    XCTAssertEqual(www.sourceActions, ["resource_archive", "resource_next", "resource_previous"])
 
     XCTAssertTrue(
       commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
@@ -334,6 +342,8 @@ final class PluginSystemTests: XCTestCase {
           "providers": [
             { "kind": "hints", "bundle_ids": ["com.example.app"] },
             { "kind": "candidates", "sources": ["multi.items"] },
+            { "kind": "navigation", "schemes": ["multi"] },
+            { "kind": "source_actions", "actions": ["resource_archive", "resource_next"] },
             { "kind": "status", "segments": ["battery"] },
             {
               "kind": "commands",
@@ -353,10 +363,12 @@ final class PluginSystemTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
 
     let manifest = try PluginManifest.load(from: root)
-    XCTAssertEqual(manifest.providers.count, 5)
+    XCTAssertEqual(manifest.providers.count, 7)
     XCTAssertTrue(manifest.providesHints)
     XCTAssertTrue(manifest.providesCandidates)
     XCTAssertEqual(manifest.candidateSources, ["multi.items"])
+    XCTAssertEqual(manifest.navigationSchemes, ["multi"])
+    XCTAssertEqual(manifest.sourceActions, ["resource_archive", "resource_next"])
     XCTAssertEqual(manifest.statusSegments, ["battery"])
     XCTAssertEqual(manifest.commands.map(\.subcommand), ["go"])
     XCTAssertEqual(manifest.mappings.map(\.key), ["q"])
@@ -510,6 +522,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(json["modes"], "empty modes is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
     XCTAssertNil(json["sources"], "empty sources is not encoded")
+    XCTAssertNil(json["actions"], "empty actions is not encoded")
+    XCTAssertNil(json["schemes"], "empty schemes is not encoded")
     XCTAssertNil(json["segments"], "empty segments is not encoded")
     XCTAssertNil(json["commands"], "empty commands is not encoded")
     XCTAssertNil(json["mappings"], "empty mappings is not encoded")
@@ -521,6 +535,22 @@ final class PluginSystemTests: XCTestCase {
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     XCTAssertEqual(json["kind"] as? String, "candidates")
     XCTAssertEqual(json["sources"] as? [String], ["firefox.tabs"])
+  }
+
+  func testProviderEncodesSourceActionsWhenSet() throws {
+    let provider = PluginProvider(kind: .sourceActions, actions: ["resource_archive"])
+    let data = try JSONEncoder().encode(provider)
+    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual(json["kind"] as? String, "source_actions")
+    XCTAssertEqual(json["actions"] as? [String], ["resource_archive"])
+  }
+
+  func testProviderEncodesNavigationSchemesWhenSet() throws {
+    let provider = PluginProvider(kind: .navigation, schemes: ["tmux"])
+    let data = try JSONEncoder().encode(provider)
+    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertEqual(json["kind"] as? String, "navigation")
+    XCTAssertEqual(json["schemes"] as? [String], ["tmux"])
   }
 
   func testProviderEncodesStatusSegmentsWhenSet() throws {

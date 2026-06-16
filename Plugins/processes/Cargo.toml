@@ -1,14 +1,12 @@
 [package]
-name = "flash-plugin-slack"
+name = "flash-plugin-processes"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [[bin]]
-name = "flash-plugin-slack"
+name = "flash-plugin-processes"
 path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_rust_flash_plugin" }
-serde = { workspace = true }
-serde_json = { workspace = true }

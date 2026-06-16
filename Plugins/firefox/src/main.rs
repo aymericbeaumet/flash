@@ -204,12 +204,12 @@ fn candidate(tab: &Tab, source: &str, pid: i64) -> Candidate {
 /// pid supersedes it), so re-snapshot and match by url, then title, before
 /// pressing. Falls back to `AXSelected = true` when `AXPress` is unsupported.
 async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
-    let Some(pid) = candidate.pid else {
+    let Some(pid) = candidate.pid_value() else {
         return ResolveResponse::unresolved();
     };
     ctx.ax_activate(pid).await;
-    let url = candidate.url.as_deref().unwrap_or("");
-    let name = candidate.name.as_str();
+    let url = candidate.url_value().unwrap_or("");
+    let name = candidate.title.as_str();
     let tabs = collect_tabs(ctx, pid).await;
     let target = tabs
         .iter()

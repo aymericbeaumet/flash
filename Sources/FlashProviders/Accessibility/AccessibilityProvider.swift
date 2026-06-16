@@ -572,6 +572,14 @@ public final class AccessibilityProvider: FlashSource {
         capturedRole == "AXTab"
         || (subrole == "AXTabButton"
           && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
+      // Slack/Discord/Electron rows fall through `activate` to
+      // `AXClick.clickAtPoint`, which often hits an inner descendant whose
+      // AXPress only updates focus/aria-state — the React `onClick` never
+      // fires, so the first hint commit visually selects the row without
+      // navigating. `preferHostClick` skips both the AX activate path and
+      // the hit-test ancestor walk so the dispatcher synthesises a real
+      // `CGEvent` click at the row centre, which is what natively works.
+      let preferHostClick = bypassAXPressOnActivate
       let candidate = JumpTarget(
         id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
         frame: frame,
@@ -581,6 +589,7 @@ public final class AccessibilityProvider: FlashSource {
         pid: pid,
         activate: activate,
         entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
+        preferHostClick: preferHostClick,
         important: isTabAnchor,
         providerID: identifier
       )

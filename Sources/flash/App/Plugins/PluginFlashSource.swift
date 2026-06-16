@@ -18,27 +18,17 @@ final class PluginFlashSource: FlashSource {
     // plugin only advertises what it declares. `.jumpTargets` follows `hints`
     // because hint selection is exclusive (highest-priority provider wins, no
     // fallback) — an empty-returning plugin must not displace the core AX walk.
-    // The candidate/app-activation/tab caps follow `candidates` so a
-    // commands-only plugin isn't consulted on every flashlight query.
+    // Discrete source actions are intentionally not inferred from candidates:
+    // a generic candidate plugin should not be asked whether it owns `tab_new`
+    // or `app_reload`.
     var caps: FlashSourceCapabilities = []
     if plugin.manifest.providesHints { caps.insert(.jumpTargets) }
     if plugin.manifest.providesCandidates {
-      caps.formUnion([
-        .candidates, .appActivation, .tabSelection, .tabCreation, .tabNavigation, .tabClosing,
-      ])
+      caps.formUnion([.candidates, .appActivation])
     }
-    // Scroll extremes / tab reorder piggy-back on hint provision: the
-    // plugins that need them (terminal sources like tmux) are exactly
-    // the ones that claim hint discovery for their app. Returning
-    // `.unhandled` is cheap for plugins that don't implement the
-    // matching source actions.
-    if plugin.manifest.providesHints {
-      caps.formUnion([.scrollExtremes, .tabReorder])
-    }
-    // `tabReopen` follows candidate provision: browser plugins want it
-    // (they're the ones with a closed-tabs history); tmux does not.
-    if plugin.manifest.providesCandidates {
-      caps.insert(.tabReopen)
+    caps.formUnion(Self.sourceActionCapabilities(plugin.manifest.sourceActions))
+    if !plugin.manifest.navigationSchemes.isEmpty {
+      caps.insert(.navigationRoutes)
     }
     return caps
   }
@@ -51,6 +41,7 @@ final class PluginFlashSource: FlashSource {
   }
   var resultsAreVolatile: Bool { plugin.manifest.volatile }
   var candidateSourceLabels: [String] { plugin.manifest.candidateSources }
+  var navigationSchemes: Set<String> { Set(plugin.manifest.navigationSchemes) }
 
   func supports(_ context: AppContext) -> Bool {
     let manifestBundles = plugin.manifest.bundleIDs
@@ -133,7 +124,7 @@ final class PluginFlashSource: FlashSource {
 
   func candidate(matching target: String, in environment: FlashSourceEnvironment) -> Candidate? {
     candidates(in: environment, scope: .all).first {
-      $0.name.localizedCaseInsensitiveContains(target)
+      $0.title.localizedCaseInsensitiveContains(target)
         || $0.displayTitle.localizedCaseInsensitiveContains(target)
     }
   }
@@ -153,5 +144,44 @@ final class PluginFlashSource: FlashSource {
       context: context,
       extra: action.wireExtras,
       completion: completion)
+  }
+
+  func restoreNavigation(
+    to url: URL,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    plugin.restoreNavigation(to: url, completion: completion)
+  }
+
+  private static func sourceActionCapabilities(_ actions: [String]) -> FlashSourceCapabilities {
+    var caps: FlashSourceCapabilities = []
+    for action in actions {
+      switch action {
+      case "tab_select":
+        caps.insert(.tabSelection)
+      case "tab_next", "tab_prev", "tab_previous", "tab_first", "tab_last":
+        caps.insert(.tabNavigation)
+      case "tab_new":
+        caps.insert(.tabCreation)
+      case "tab_close":
+        caps.insert(.tabClosing)
+      case "tab_move_previous", "tab_move_next":
+        caps.insert(.tabReorder)
+      case "tab_reopen":
+        caps.insert(.tabReopen)
+      case "scroll_top", "scroll_bottom":
+        caps.insert(.scrollExtremes)
+      case "app_reload":
+        caps.insert(.reload)
+      case "resource_archive":
+        caps.insert(.resourceArchiving)
+      case "resource_next", "resource_previous":
+        caps.insert(.resourceNavigation)
+      default:
+        break
+      }
+    }
+    return caps
   }
 }

@@ -15,6 +15,14 @@ public enum ProviderKind: String, Codable, Sendable, CaseIterable {
   /// with `!<token>` routes its remainder to the owning plugin instead of
   /// resolving a candidate.
   case shebang
+  /// Discrete source actions such as `tab_new`, `app_reload`, or
+  /// `resource_archive`. These are declared separately from candidates so a
+  /// generic candidate plugin is not consulted for browser/tmux key actions.
+  case sourceActions = "source_actions"
+  /// Movement-history route restoration. A provider declares URL schemes in
+  /// `schemes[]`; plugins can emit matching `navigation_url` values from
+  /// candidates, commands, or source actions.
+  case navigation
 }
 
 /// Editor mode a provider can be gated to. The empty set (no `modes` declared)

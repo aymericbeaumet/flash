@@ -414,7 +414,6 @@ extension AppDelegate {
       return
     }
     candidateFinderLastInputAt = Date()
-    candidateFinderUserHasTyped = true
     if resetSelection {
       candidateFinderSelectedIndex = 0
     }
@@ -463,7 +462,7 @@ extension AppDelegate {
   ///     `value` into the buffer without sending — the user can keep
   ///     typing args, or hit `<cr>` to send.
   ///   * Candidate *finder* (`:flashlight` / `:open` / `:emojis`):
-  ///     `<tab>` submits final app/tmux-window destinations, otherwise
+  ///     `<tab>` submits final app/browser-tab/tmux-window destinations, otherwise
   ///     inserts the selected candidate's canonical command text.
   ///     Cycling moves to arrow keys and `<shift-tab>`.
   func overlayDidInsertCommandLineSelection() -> Bool {
@@ -483,7 +482,7 @@ extension AppDelegate {
   /// candidates). Synthetic source-filter completion rows still only
   /// insert `@source `. The `<cr>` path is insert-first unless a
   /// source marks the row as a finisher or the typed primary title is
-  /// exact; `<tab>` submits final app/tmux-window destinations and
+  /// exact; `<tab>` submits final app/browser-tab/tmux-window destinations and
   /// otherwise inserts.
   func overlayDidForceSubmitCommandLineSelection() {
     if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) == nil {
@@ -508,7 +507,6 @@ extension AppDelegate {
   func overlayDidUpdateCandidateFinderQuery(_ query: String) {
     candidateFinderSelectedIndex = 0
     candidateFinderLastInputAt = Date()
-    candidateFinderUserHasTyped = true
     refreshCandidateFinder(query: query)
   }
 
@@ -595,8 +593,14 @@ extension AppDelegate {
         // log line is the only breadcrumb the user can correlate with
         // the plugin's own log inside `~/Library/Logs/Flash/flash.log`.
         FlashLog.warn(
-          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) name=\(candidate.name) display=\(candidate.displayTitle)"
+          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) name=\(candidate.title) display=\(candidate.displayTitle)"
         )
+      }
+      if shouldRecordMovement, let navigationURL = result.navigationURL {
+        self.movementCurrent = .route(
+          navigationURL,
+          pid: result.targetPID ?? candidate.pid)
+        self.pruneMovementStacks()
       }
       self.refreshCurrentModeSideEffects(reason: "source_resolved")
       self.scheduleNormalModeRecapture()

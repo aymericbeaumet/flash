@@ -60,7 +60,7 @@ final class SourceRegistryTests: XCTestCase {
                 sourceID: "active",
                 source: "active",
                 pid: nil,
-                name: "\(scope)",
+                title: "\(scope)",
                 subtitle: "source",
                 bundleIdentifier: "",
                 url: nil)
@@ -104,7 +104,7 @@ final class SourceRegistryTests: XCTestCase {
                 sourceID: "dynamic",
                 source: "dynamic",
                 pid: app.processIdentifier,
-                name: "Dynamic",
+                title: "Dynamic",
                 subtitle: "source",
                 bundleIdentifier: bundleID,
                 url: nil)
@@ -135,7 +135,7 @@ final class SourceRegistryTests: XCTestCase {
             return [
               Candidate(
                 kind: .app, sourceID: "core.apps", source: "core.apps",
-                pid: nil, name: "Finder", subtitle: "app",
+                pid: nil, title: "Finder", subtitle: "app",
                 bundleIdentifier: "com.apple.finder", url: nil)
             ]
           }
@@ -150,7 +150,7 @@ final class SourceRegistryTests: XCTestCase {
             return [
               Candidate(
                 kind: .plugin("browser_tab"), sourceID: "plugin:tabs",
-                source: "tabs", pid: nil, name: "Tab", subtitle: "tab",
+                source: "tabs", pid: nil, title: "Tab", subtitle: "tab",
                 bundleIdentifier: "", url: nil)
             ]
           }
@@ -162,6 +162,28 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(items.map(\.sourceID), ["core.apps"])
     XCTAssertEqual(appCalls, 1)
     XCTAssertEqual(pluginCalls, 0)
+  }
+
+  func testDynamicCandidateSourcesSkipCoreAppsAndIncludeNativeAndPlugins() {
+    let registry = SourceRegistry(
+      descriptors: [
+        SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
+          StubSource(identifier: "core.apps", capabilities: [.candidates])
+        },
+        SourceDescriptor(identifier: "native.tabs", activationPolicy: .always) {
+          StubSource(identifier: "native.tabs", capabilities: [.candidates])
+        },
+      ],
+      terminalBundleIDs: [],
+      runningApplications: [],
+      pluginSourcesProvider: {
+        [
+          StubSource(identifier: "plugin:emojis", capabilities: [.candidates])
+        ]
+      })
+
+    let ids = registry.dynamicCandidateSources().map(\.identifier).sorted()
+    XCTAssertEqual(ids, ["native.tabs", "plugin:emojis"])
   }
 
   func testRegisteredCandidateSourceLabelsUseDeclarations() {
@@ -199,76 +221,50 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertTrue(registry.source(identifier: "plugin:slack.channels") === plugin)
   }
 
-  func testQueryCandidateSourcesReturnsDeadlineAndFinalSnapshots() {
-    let first = expectation(description: "first deadline")
-    let final = expectation(description: "final")
-    var firstNames: [String] = []
-    var finalNames: [String] = []
-    var nonPluginQueried = false
-
+  func testRestoreNavigationRoutesByRegisteredSchemeInPriorityOrder() {
+    let url = URL(string: "tmux://window/scratch:2")!
+    let expectation = expectation(description: "restore")
+    var lowCalls = 0
+    var highCalls = 0
     let registry = SourceRegistry(
       descriptors: [
-        SourceDescriptor(identifier: "custom.tabs", activationPolicy: .always) {
+        SourceDescriptor(identifier: "low", activationPolicy: .always) {
           StubSource(
-            identifier: "custom.tabs",
-            capabilities: [.candidates],
-            queryHandler: { _, done in
-              nonPluginQueried = true
-              done([])
+            identifier: "low",
+            priority: 10,
+            capabilities: [.navigationRoutes],
+            navigationSchemes: ["tmux"],
+            restoreHandler: { _ in
+              lowCalls += 1
+              return .performed(pid: 12)
             })
-        }
+        },
+        SourceDescriptor(identifier: "high", activationPolicy: .always) {
+          StubSource(
+            identifier: "high",
+            priority: 20,
+            capabilities: [.navigationRoutes],
+            navigationSchemes: ["tmux"],
+            restoreHandler: { restoredURL in
+              highCalls += 1
+              XCTAssertEqual(restoredURL, url)
+              return .unhandled
+            })
+        },
       ],
       terminalBundleIDs: [],
-      runningApplications: [],
-      pluginSourcesProvider: {
-        [
-          StubSource(
-            identifier: "plugin:fast",
-            capabilities: [.candidates],
-            candidateSourceLabels: ["fast.items"],
-            queryHandler: { _, done in
-              done([
-                Candidate(
-                  kind: .plugin("item"), sourceID: "plugin:fast",
-                  source: "fast.items", pid: nil, name: "Fast",
-                  subtitle: "", bundleIdentifier: "", url: nil)
-              ])
-            }),
-          StubSource(
-            identifier: "plugin:slow",
-            capabilities: [.candidates],
-            candidateSourceLabels: ["slow.items"],
-            queryHandler: { _, done in
-              DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40)) {
-                done([
-                  Candidate(
-                    kind: .plugin("item"), sourceID: "plugin:slow",
-                    source: "slow.items", pid: nil, name: "Slow",
-                    subtitle: "", bundleIdentifier: "", url: nil)
-                ])
-              }
-            }),
-        ]
-      })
+      runningApplications: [])
 
-    registry.queryCandidateSources(
-      scope: .all,
-      text: "",
-      firstDeadlineMs: 5
-    ) { candidates, isFinal in
-      if isFinal {
-        finalNames = candidates.map(\.name).sorted()
-        final.fulfill()
-      } else {
-        firstNames = candidates.map(\.name)
-        first.fulfill()
-      }
+    XCTAssertTrue(registry.canRestoreNavigation(to: url))
+    registry.restoreNavigation(to: url) { result in
+      XCTAssertEqual(result.disposition, .performed)
+      XCTAssertEqual(result.targetPID, 12)
+      expectation.fulfill()
     }
 
-    wait(for: [first, final], timeout: 1.0)
-    XCTAssertEqual(firstNames, ["Fast"])
-    XCTAssertEqual(finalNames, ["Fast", "Slow"])
-    XCTAssertFalse(nonPluginQueried)
+    wait(for: [expectation], timeout: 1)
+    XCTAssertEqual(highCalls, 1)
+    XCTAssertEqual(lowCalls, 1)
   }
 
   // Regression: app_open?name=<app> used to type a text-insertion candidate
@@ -278,12 +274,12 @@ final class SourceRegistryTests: XCTestCase {
   func testCandidateMatchingPrefersAppSourceOverHigherPriorityInsertTextShadow() {
     let slackApp = Candidate(
       kind: .app, sourceID: "core.apps", source: "core.apps", pid: nil,
-      name: "Slack", subtitle: "app",
+      title: "Slack", subtitle: "app",
       bundleIdentifier: "com.tinyspeck.slackmacgap", url: nil)
     let emojiShadow = Candidate(
       kind: CandidateFinder.emojiKind, sourceID: "plugin:emojis",
       source: "emoji", pid: nil,
-      name: "slack key cap",
+      title: "slack key cap",
       subtitle: "emoji", bundleIdentifier: "", url: nil)
 
     let registry = SourceRegistry(
@@ -299,7 +295,7 @@ final class SourceRegistryTests: XCTestCase {
           StubSource(
             identifier: "plugin:emojis", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
-              emojiShadow.name.localizedCaseInsensitiveContains(target) ? emojiShadow : nil
+              emojiShadow.title.localizedCaseInsensitiveContains(target) ? emojiShadow : nil
             })
         },
       ],
@@ -320,10 +316,10 @@ final class SourceRegistryTests: XCTestCase {
   func testCandidateMatchingSkipsInsertTextAndFallsBackToActivatablePlugin() {
     let tmuxWindow = Candidate(
       kind: .plugin("tmux"), sourceID: "plugin:tmux", source: "tmux", pid: 42,
-      name: "editor", subtitle: "tmux", bundleIdentifier: "", url: nil)
+      title: "editor", subtitle: "tmux", bundleIdentifier: "", url: nil)
     let emojiEntry = Candidate(
       kind: CandidateFinder.emojiKind, sourceID: "plugin:emojis",
-      source: "emoji", pid: nil, name: "editor pencil", subtitle: "emoji",
+      source: "emoji", pid: nil, title: "editor pencil", subtitle: "emoji",
       bundleIdentifier: "", url: nil)
 
     func makeRegistry(includeActivatablePlugin: Bool) -> SourceRegistry {
@@ -335,7 +331,7 @@ final class SourceRegistryTests: XCTestCase {
           StubSource(
             identifier: "plugin:emojis", priority: 100, capabilities: [.appActivation],
             matchHandler: { target in
-              emojiEntry.name.localizedCaseInsensitiveContains(target) ? emojiEntry : nil
+              emojiEntry.title.localizedCaseInsensitiveContains(target) ? emojiEntry : nil
             })
         },
       ]
@@ -345,7 +341,7 @@ final class SourceRegistryTests: XCTestCase {
             StubSource(
               identifier: "plugin:tmux", priority: 50, capabilities: [.appActivation],
               matchHandler: { target in
-                tmuxWindow.name.localizedCaseInsensitiveContains(target) ? tmuxWindow : nil
+                tmuxWindow.title.localizedCaseInsensitiveContains(target) ? tmuxWindow : nil
               })
           })
       }
@@ -370,6 +366,8 @@ private final class StubSource: FlashSource {
   private let candidatesHandler: (CandidateScope) -> [Candidate]
   private let queryHandler: (CandidateQuery, @escaping ([Candidate]) -> Void) -> Void
   private let matchHandler: (String) -> Candidate?
+  let navigationSchemes: Set<String>
+  private let restoreHandler: (URL) -> SourceActionResult
   let candidateSourceLabels: [String]
 
   init(
@@ -377,20 +375,24 @@ private final class StubSource: FlashSource {
     priority: Int = 0,
     capabilities: FlashSourceCapabilities = [],
     candidateSourceLabels: [String] = [],
+    navigationSchemes: Set<String> = [],
     candidatesHandler: @escaping (CandidateScope) -> [Candidate] = { _ in [] },
     queryHandler: ((CandidateQuery, @escaping ([Candidate]) -> Void) -> Void)? = nil,
-    matchHandler: @escaping (String) -> Candidate? = { _ in nil }
+    matchHandler: @escaping (String) -> Candidate? = { _ in nil },
+    restoreHandler: @escaping (URL) -> SourceActionResult = { _ in .unhandled }
   ) {
     self.identifier = identifier
     self.priority = priority
     self.capabilities = capabilities
     self.candidateSourceLabels = candidateSourceLabels
+    self.navigationSchemes = navigationSchemes
     self.candidatesHandler = candidatesHandler
     self.queryHandler =
       queryHandler ?? { request, done in
         done(candidatesHandler(request.scope))
       }
     self.matchHandler = matchHandler
+    self.restoreHandler = restoreHandler
   }
 
   func supports(_ context: AppContext) -> Bool { false }
@@ -419,5 +421,13 @@ private final class StubSource: FlashSource {
     in environment: FlashSourceEnvironment
   ) -> Candidate? {
     matchHandler(target)
+  }
+
+  func restoreNavigation(
+    to url: URL,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    completion(restoreHandler(url))
   }
 }

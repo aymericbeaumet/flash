@@ -197,18 +197,20 @@ final class HotkeySyntaxTests: XCTestCase {
         argv: ["flash", "enter_command_mode", "--input=flashlight ", "--restore-mode=1"]
       )?.command,
       .enterCommand(input: "flashlight ", restoreMode: true))
-    // Leading colons in the input are trimmed and a single trailing space
-    // is auto-appended so `--input=:open` and `--input='::: open'` both
-    // resolve to `"open "` — the user can write `--input=emojis` instead
-    // of the awkward `--input='emojis '`.
+    // Leading colons are stripped (one `:` is later prepended for display);
+    // everything after the last leading `:` is passed through verbatim. Trailing
+    // whitespace is meaningful and never trimmed — the user controls whether
+    // they want command-completion (`--input=:open`) or an empty-query opening
+    // of the verb (`--input=:open `).
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode", "--input=:open"])?.command,
-      .enterCommand(input: "open ", restoreMode: false))
+      .enterCommand(input: "open", restoreMode: false))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode", "--input=::: open"])?.command,
-      .enterCommand(input: " open ", restoreMode: false))
+      .enterCommand(input: " open", restoreMode: false))
     // `--input` is optional only for the plain command-mode switch.
-    XCTAssertEqual(parseMappingCommand(argv: ["flash", "enter_command_mode"])?.command, .commandMode)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "enter_command_mode"])?.command, .commandMode)
     XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_command_mode", "--input="]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "enter_command_mode", "--restore-mode"]))
     // The old command-line verb is gone.
@@ -344,6 +346,11 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "app_reload", "--force"])?.command,
       .reload(force: true))
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "resource_archive"])?.command, .archive)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "resource_next"])?.command, .resourceNext)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "resource_previous"])?.command, .resourcePrevious)
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "enter_command_mode", "--input=flashlight "])?.command,
       .enterCommand(input: "flashlight ", restoreMode: false))

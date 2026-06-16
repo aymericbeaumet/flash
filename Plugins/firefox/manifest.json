@@ -3,17 +3,12 @@
   "id": "firefox",
   "name": "firefox",
   "version": "0.1.0",
-  "description": "Surfaces Firefox tabs as flashlight candidates via the core AX broker.",
+  "description": "Provides Firefox source-action fallbacks via the core AX broker.",
   "install": "true",
   "start": "exec ./flash-plugin-firefox",
   "priority": 30,
   "bundle_ids": ["org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition"],
-  "subscriptions": [
-    { "match": "core:focus.changed" },
-    { "match": "core:ax.changed" },
-    "core:apps.snapshot"
-  ],
   "providers": [
-    { "kind": "candidates", "sources": ["firefox.tabs"] }
+    { "kind": "source_actions", "actions": ["tab_select"] }
   ]
 }

@@ -229,7 +229,51 @@ extension AppDelegate {
         applyModeOverlay()
         return
       }
-      openSourceItem(candidate, recordMovement: false)
+      if let navigationURL = candidate.navigationURL,
+        registry.canRestoreNavigation(to: navigationURL)
+      {
+        restoreNavigation(navigationURL, fallback: candidate, pid: candidate.pid)
+      } else {
+        openSourceItem(candidate, recordMovement: false)
+      }
+    case .route:
+      guard let navigationURL = entry.navigationURL else {
+        applyModeOverlay()
+        return
+      }
+      restoreNavigation(navigationURL, fallback: nil, pid: entry.pid)
+    }
+  }
+
+  private func restoreNavigation(_ url: URL, fallback: Candidate?, pid: pid_t?) {
+    registry.restoreNavigation(to: url) { [weak self] result in
+      guard let self else { return }
+      switch result.disposition {
+      case .performed:
+        let targetPID = result.targetPID ?? pid
+        if let targetPID,
+          let app = NSRunningApplication(processIdentifier: targetPID),
+          !app.isTerminated
+        {
+          RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+          self.normalModeTargetPID = targetPID
+          self.suppressEditableFocus(for: targetPID)
+        }
+        if let route = result.navigationURL {
+          self.movementCurrent = .route(route, pid: targetPID)
+        }
+        self.scheduleNormalModeRecapture()
+      case .failed:
+        FlashLog.warn("[movement] route restore failed url=\(url.absoluteString)")
+        self.scheduleNormalModeRecapture()
+      case .unhandled:
+        if let fallback {
+          self.openSourceItem(fallback, recordMovement: false)
+        } else {
+          FlashLog.debug("[movement] route restore unhandled url=\(url.absoluteString)")
+          self.applyModeOverlay()
+        }
+      }
     }
   }
 
@@ -249,7 +293,7 @@ extension AppDelegate {
     _ current: MovementEntry,
     _ next: MovementEntry
   ) -> Bool {
-    current.kind == .candidate
+    current.kind != .app
       && next.kind == .app
       && current.pid != nil
       && current.pid == next.pid
@@ -264,6 +308,11 @@ extension AppDelegate {
       return Self.appMovementIdentity(candidate)
     case .candidate:
       guard let candidate = entry.candidate else { return nil }
+      if let navigationURL = candidate.navigationURL,
+        registry.canRestoreNavigation(to: navigationURL)
+      {
+        return MovementIdentity(key: Self.navigationMovementKey(navigationURL))
+      }
       if candidate.kind == .app {
         return Self.appMovementIdentity(candidate)
       }
@@ -272,7 +321,16 @@ extension AppDelegate {
       }
       guard registry.source(identifier: candidate.sourceID) != nil else { return nil }
       return MovementIdentity(key: entry.key)
+    case .route:
+      guard let navigationURL = entry.navigationURL,
+        registry.canRestoreNavigation(to: navigationURL)
+      else { return nil }
+      return MovementIdentity(key: Self.navigationMovementKey(navigationURL))
     }
+  }
+
+  private static func navigationMovementKey(_ url: URL) -> String {
+    "route:\(url.absoluteString)"
   }
 
   private static func appMovementIdentity(_ candidate: Candidate) -> MovementIdentity? {
@@ -307,7 +365,7 @@ extension AppDelegate {
     }
   }
 
-  private func pruneMovementStacks() {
+  func pruneMovementStacks() {
     movementBackStack.removeAll { !movementEntryIsRestorable($0) }
     movementForwardStack.removeAll { !movementEntryIsRestorable($0) }
   }

@@ -407,10 +407,13 @@ extension OverlayPanel {
     if modifiers.contains(.control) {
       switch ignoredChar {
       case "n":
-        coordinator.overlayDidMoveCandidateFinderSelection(-1)
+        // Best match is at the TOP of the panel and ranks descend downward.
+        // Ctrl-N (emacs "next") moves visually downward → next-worse match →
+        // higher index → delta +1. Same logic for the arrows below.
+        coordinator.overlayDidMoveCandidateFinderSelection(1)
         return true
       case "p":
-        coordinator.overlayDidMoveCandidateFinderSelection(1)
+        coordinator.overlayDidMoveCandidateFinderSelection(-1)
         return true
       default:
         return true
@@ -428,10 +431,10 @@ extension OverlayPanel {
       }
       return true
     case 125:  // down
-      coordinator.overlayDidMoveCandidateFinderSelection(-1)
+      coordinator.overlayDidMoveCandidateFinderSelection(1)
       return true
     case 126:  // up
-      coordinator.overlayDidMoveCandidateFinderSelection(1)
+      coordinator.overlayDidMoveCandidateFinderSelection(-1)
       return true
     default:
       break

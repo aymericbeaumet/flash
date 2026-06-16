@@ -128,7 +128,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
         .payload_as::<ContactPayload>()
         .map(|p| p.contact)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| candidate.name.clone());
+        .unwrap_or_else(|| candidate.title.clone());
     if name.is_empty() {
         return ResolveResponse::unresolved();
     }
@@ -138,6 +138,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     ResolveResponse {
         did_resolve: result.ok,
         target_pid: None,
+        navigation_url: None,
     }
 }
 

@@ -533,6 +533,66 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(panel.candidateFinderResultsMeasurementText.split(separator: "\n").count, 10)
   }
 
+  func testCandidateFinderResultsHeightHasNoTrailingRowGap() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let rowHeight = OverlayPanel.candidateFinderResultRowHeight(font: font)
+
+    XCTAssertEqual(
+      OverlayPanel.candidateFinderResultsHeight(
+        lineCount: 3,
+        font: font,
+        lineSpacing: OverlayPanel.candidateFinderLineSpacing),
+      rowHeight * 3 + OverlayPanel.candidateFinderLineSpacing * 2)
+  }
+
+  func testCandidateFinderResultRowHeightFitsAppleEmojiFont() throws {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let emojiFont = try XCTUnwrap(CandidateEmojiSupport.emojiFont(forCandidateFontSize: 13))
+    XCTAssertLessThan(emojiFont.pointSize, font.pointSize)
+
+    let emojiHeight = ceil(emojiFont.ascender - emojiFont.descender + emojiFont.leading)
+
+    XCTAssertGreaterThanOrEqual(OverlayPanel.candidateFinderResultRowHeight(font: font), emojiHeight)
+  }
+
+  func testCandidateFinderResultRowHeightStaysCompactForSmallerEmojiFont() throws {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let monoHeight = ceil(font.ascender - font.descender + font.leading)
+    _ = try XCTUnwrap(CandidateEmojiSupport.emojiFont(forCandidateFontSize: 13))
+
+    XCTAssertEqual(OverlayPanel.candidateFinderResultRowHeight(font: font), monoHeight)
+  }
+
+  func testCandidateFinderResultRowsUseAppleEmojiFontForRenderableGlyphs() {
+    let line = OverlayPanel.candidateFinderResultAttributedLine(
+      item: CandidateDisplayItem(
+        title: "[emojis.glyphs] 🙏 person with folded hands",
+        highlightedRanges: [18..<22],
+        isSelected: true),
+      marker: "> ",
+      fontSize: 13)
+    let ns = line.string as NSString
+    let range = ns.range(of: "🙏")
+    let font = try? XCTUnwrap(line.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+
+    XCTAssertEqual(font?.familyName, "Apple Color Emoji")
+  }
+
+  func testCandidateFinderResultRowsDoNotUseEmojiFontForUnsupportedSymbols() {
+    let line = OverlayPanel.candidateFinderResultAttributedLine(
+      item: CandidateDisplayItem(
+        title: "[emojis.glyphs] 🕲 no piracy",
+        highlightedRanges: [],
+        isSelected: false),
+      marker: "  ",
+      fontSize: 13)
+    let ns = line.string as NSString
+    let range = ns.range(of: "🕲")
+    let font = try? XCTUnwrap(line.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+
+    XCTAssertNotEqual(font?.familyName, "Apple Color Emoji")
+  }
+
   func testRightStatusComposesTmuxStatusRightOrder() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!

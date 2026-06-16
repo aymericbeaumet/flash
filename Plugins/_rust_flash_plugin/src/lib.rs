@@ -165,75 +165,76 @@ impl JumpTarget {
 }
 
 /// A flashlight candidate. Outbound (emitted via [`Context::emit_snapshot`])
-/// only `name` is required; inbound (on [`Request::ResolveCandidate`]) the host
-/// echoes back the fields it stored, including the [`payload`](Candidate::payload).
+/// only `title` is required. Inbound (on [`Request::ResolveCandidate`]) the
+/// host echoes back the candidate with the same shape — read structured
+/// payload via [`payload_str`](Candidate::payload_str) /
+/// [`payload_as`](Candidate::payload_as).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Candidate {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub source_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub subtitle: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub bundle_id: Option<String>,
+    /// Primary searchable string the host scores against and shows in the
+    /// candidate bar — also the highest-precedence ranking field.
+    pub title: String,
+    /// Openable destination when one exists. Apps use the bundle file URL;
+    /// browser tabs and other resources use their canonical URL.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub pid: Option<i64>,
-    /// Extra tokens folded into the host's search index for this candidate
-    /// (Slack-style shortcodes, keywords, etc.). Scored as a high-tier
-    /// field so a literal alias match outranks UCD/name prefixes — set
-    /// with [`aliases`](Candidate::aliases).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub search_aliases: Option<String>,
-    /// Whether Return on this command-bar candidate should perform it
-    /// immediately instead of first inserting candidate text for
-    /// disambiguation. Command-Return always forces submission.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub finishes_command: Option<bool>,
-    /// Opaque per-candidate state round-tripped through the host. Set a raw
-    /// string with [`payload`](Candidate::payload) or a structured value with
-    /// [`payload_json`](Candidate::payload_json); read it back with
-    /// [`payload_str`](Candidate::payload_str) / [`payload_as`](Candidate::payload_as).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub payload: Option<String>,
+    /// Free-form per-source key/value metadata. FlashCore makes no decisions on
+    /// what's inside — plugins may stash arbitrary routing/state, other plugins
+    /// can read it, and the matcher indexes the values at a low tier for fuzzy
+    /// search.
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+/// Conventional metadata keys used by Flash's bundled host. Plugins can stash
+/// arbitrary keys in `metadata`; these constants exist so plugins can speak the
+/// same vocabulary as the host without re-typing the string literals. The
+/// canonical `url` is a typed field on `Candidate` — not in this map.
+pub mod candidate_metadata {
+    pub const SOURCE: &str = "source";
+    pub const SOURCE_ID: &str = "source_id";
+    pub const KIND: &str = "kind";
+    pub const PID: &str = "pid";
+    pub const NAVIGATION_URL: &str = "navigation_url";
+    pub const BUNDLE_ID: &str = "bundle_id";
+    pub const SUBTITLE: &str = "subtitle";
+    pub const PAYLOAD: &str = "payload";
+    pub const ALIASES: &str = "aliases";
+    pub const FINISHES_COMMAND: &str = "finishes_command";
 }
 
 impl Candidate {
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(title: impl Into<String>) -> Self {
         Self {
-            name: name.into(),
-            ..Self::default()
+            title: title.into(),
+            url: None,
+            metadata: HashMap::new(),
         }
     }
 
-    pub fn kind(mut self, kind: impl Into<String>) -> Self {
-        self.kind = Some(kind.into());
+    fn set(mut self, key: &str, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.to_string(), value.into());
         self
     }
 
-    pub fn source(mut self, source: impl Into<String>) -> Self {
-        self.source = Some(source.into());
-        self
+    pub fn kind(self, kind: impl Into<String>) -> Self {
+        self.set(candidate_metadata::KIND, kind)
     }
 
-    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
-        self.source_id = Some(source_id.into());
-        self
+    pub fn source(self, source: impl Into<String>) -> Self {
+        self.set(candidate_metadata::SOURCE, source)
     }
 
-    pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
-        self.subtitle = Some(subtitle.into());
-        self
+    pub fn source_id(self, source_id: impl Into<String>) -> Self {
+        self.set(candidate_metadata::SOURCE_ID, source_id)
     }
 
-    pub fn bundle_id(mut self, bundle_id: impl Into<String>) -> Self {
-        self.bundle_id = Some(bundle_id.into());
-        self
+    pub fn subtitle(self, subtitle: impl Into<String>) -> Self {
+        self.set(candidate_metadata::SUBTITLE, subtitle)
+    }
+
+    pub fn bundle_id(self, bundle_id: impl Into<String>) -> Self {
+        self.set(candidate_metadata::BUNDLE_ID, bundle_id)
     }
 
     pub fn url(mut self, url: impl Into<String>) -> Self {
@@ -241,15 +242,18 @@ impl Candidate {
         self
     }
 
-    pub fn pid(mut self, pid: i64) -> Self {
-        self.pid = Some(pid);
-        self
+    pub fn navigation_url(self, url: impl Into<String>) -> Self {
+        self.set(candidate_metadata::NAVIGATION_URL, url)
+    }
+
+    pub fn pid(self, pid: i64) -> Self {
+        self.set(candidate_metadata::PID, pid.to_string())
     }
 
     /// Attach search aliases — extra tokens the host's ranker treats as
     /// high-priority synonyms (e.g. emoji shortcodes: `🙏` → `["pray",
     /// "thanks"]`). Tokens are joined with spaces; empty input clears
-    /// the field.
+    /// the entry.
     pub fn aliases<I, S>(mut self, aliases: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -261,82 +265,115 @@ impl Candidate {
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
-        self.search_aliases = if joined.is_empty() {
-            None
+        if joined.is_empty() {
+            self.metadata.remove(candidate_metadata::ALIASES);
         } else {
-            Some(joined)
-        };
+            self.metadata
+                .insert(candidate_metadata::ALIASES.to_string(), joined);
+        }
         self
     }
 
     /// Mark this candidate as specific enough for Return to perform
     /// immediately from the command bar. Leave unset for insert-first
     /// behavior.
-    pub fn finishes_command(mut self, value: bool) -> Self {
-        self.finishes_command = Some(value);
-        self
+    pub fn finishes_command(self, value: bool) -> Self {
+        if value {
+            self.set(candidate_metadata::FINISHES_COMMAND, "1")
+        } else {
+            let mut me = self;
+            me.metadata.remove(candidate_metadata::FINISHES_COMMAND);
+            me
+        }
     }
 
     /// Attach a raw string payload.
-    pub fn payload(mut self, payload: impl Into<String>) -> Self {
-        self.payload = Some(payload.into());
-        self
+    pub fn payload(self, payload: impl Into<String>) -> Self {
+        self.set(candidate_metadata::PAYLOAD, payload)
     }
 
     /// Attach a structured payload, serialized to a JSON string. Read it back
     /// on resolution with [`payload_as`](Candidate::payload_as).
     pub fn payload_json<T: Serialize>(mut self, value: &T) -> Self {
         if let Ok(raw) = serde_json::to_string(value) {
-            self.payload = Some(raw);
+            self.metadata
+                .insert(candidate_metadata::PAYLOAD.to_string(), raw);
         }
+        self
+    }
+
+    /// Attach an arbitrary metadata entry. Useful for source-specific routing
+    /// keys outside the canonical set.
+    pub fn metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
         self
     }
 
     /// The raw string payload, if present.
     pub fn payload_str(&self) -> Option<&str> {
-        self.payload.as_deref()
+        self.metadata
+            .get(candidate_metadata::PAYLOAD)
+            .map(String::as_str)
     }
 
     /// Decode the payload as `T` (set earlier with
     /// [`payload_json`](Candidate::payload_json)). `None` if absent or malformed.
     pub fn payload_as<T: DeserializeOwned>(&self) -> Option<T> {
-        serde_json::from_str(self.payload.as_deref()?).ok()
+        serde_json::from_str(self.payload_str()?).ok()
     }
 
-    /// The candidate's display name.
+    /// Read a typed metadata value. Returns `None` when the key is absent.
+    /// Plugins use this in resolve handlers to read back values they set with
+    /// the builders (e.g. `meta(candidate_metadata::URL)`).
+    pub fn meta(&self, key: &str) -> Option<&str> {
+        self.metadata.get(key).map(String::as_str)
+    }
+
+    /// Parsed `pid` metadata value, if present and well-formed.
+    pub fn pid_value(&self) -> Option<i64> {
+        self.meta(candidate_metadata::PID)
+            .and_then(|s| s.parse().ok())
+    }
+
+    /// The candidate's openable URL string, if present.
+    pub fn url_value(&self) -> Option<&str> {
+        self.url.as_deref()
+    }
+
+    /// The candidate's title (primary searchable string).
     pub fn as_str(&self) -> &str {
-        &self.name
+        &self.title
     }
 }
 
 impl From<&str> for Candidate {
-    fn from(name: &str) -> Self {
-        Candidate::new(name)
+    fn from(title: &str) -> Self {
+        Candidate::new(title)
     }
 }
 
 impl From<String> for Candidate {
-    fn from(name: String) -> Self {
-        Candidate::new(name)
+    fn from(title: String) -> Self {
+        Candidate::new(title)
     }
 }
 
 impl AsRef<str> for Candidate {
     fn as_ref(&self) -> &str {
-        &self.name
+        &self.title
     }
 }
 
 impl std::ops::Deref for Candidate {
     type Target = str;
     fn deref(&self) -> &str {
-        &self.name
+        &self.title
     }
 }
 
 impl std::fmt::Display for Candidate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.name)
+        f.write_str(&self.title)
     }
 }
 
@@ -358,6 +395,7 @@ impl CliResult {
         CommandResponse {
             ok: self.ok,
             target_pid: None,
+            navigation_url: None,
             stdout,
             error,
         }
@@ -577,6 +615,14 @@ pub struct SourceActionRequest {
     pub index: Option<i64>,
 }
 
+/// A `navigation.restore` request. `url` is the route the host is trying to
+/// restore from movement history.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct NavigationRequest {
+    #[serde(default)]
+    pub url: String,
+}
+
 /// A `candidateQuery` request from the flashlight. `query` is the current
 /// residual search text after source filters have been stripped. Empty
 /// `source_filters` means the user has not pinned a source; plugins may return
@@ -611,6 +657,7 @@ pub enum Request {
     CandidateQuery(CandidateQueryRequest),
     ResolveCandidate(Candidate),
     SourceAction(SourceActionRequest),
+    RestoreNavigation(NavigationRequest),
     ActivateTarget(ActivateRequest),
     /// Any other method name the host sent. Return a
     /// [`CommandResponse::error`] for these.
@@ -631,6 +678,9 @@ pub struct CommandResponse {
     /// switched-to tmux session).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_pid: Option<i64>,
+    /// Durable route to record into Flash movement history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub navigation_url: Option<String>,
     /// Text for Flash to surface as a toast.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stdout: Option<String>,
@@ -666,6 +716,11 @@ impl CommandResponse {
 
     pub fn target_pid(mut self, pid: i64) -> Self {
         self.target_pid = Some(pid);
+        self
+    }
+
+    pub fn navigation_url(mut self, url: impl Into<String>) -> Self {
+        self.navigation_url = Some(url.into());
         self
     }
 }
@@ -709,6 +764,8 @@ pub struct ResolveResponse {
     pub did_resolve: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_pid: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub navigation_url: Option<String>,
 }
 
 impl ResolveResponse {
@@ -720,7 +777,13 @@ impl ResolveResponse {
         Self {
             did_resolve: true,
             target_pid,
+            navigation_url: None,
         }
+    }
+
+    pub fn navigation_url(mut self, url: impl Into<String>) -> Self {
+        self.navigation_url = Some(url.into());
+        self
     }
 }
 
@@ -735,6 +798,8 @@ pub struct SourceActionResponse {
     pub handled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_pid: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub navigation_url: Option<String>,
 }
 
 impl SourceActionResponse {
@@ -747,6 +812,7 @@ impl SourceActionResponse {
             did_perform: true,
             handled: true,
             target_pid,
+            navigation_url: None,
         }
     }
 
@@ -755,7 +821,13 @@ impl SourceActionResponse {
             did_perform: false,
             handled: true,
             target_pid,
+            navigation_url: None,
         }
+    }
+
+    pub fn navigation_url(mut self, url: impl Into<String>) -> Self {
+        self.navigation_url = Some(url.into());
+        self
     }
 }
 
@@ -1051,6 +1123,17 @@ impl Context {
     /// Bring an application's windows to the front.
     pub async fn ax_activate(&self, pid: i64) -> bool {
         host_ok(self.call_host("ax.activate", json!({ "pid": pid })).await)
+    }
+
+    /// Ask the host to synthesize one parsed hotkey to `pid`. `keys` uses the
+    /// same syntax as Flash config mappings (`e`, `cmd+r`, `shift+tab`, ...).
+    /// The host owns the native CGEvent posting API; plugins only describe the
+    /// key they want sent.
+    pub async fn send_key(&self, pid: i64, keys: &str) -> bool {
+        host_ok(
+            self.call_host("input.send_key", json!({ "pid": pid, "keys": keys }))
+                .await,
+        )
     }
 
     /// Run an AppleScript snippet via `osascript -e` (through the sandboxed
@@ -1447,6 +1530,7 @@ async fn serve<P: Plugin>(plugin: P) {
                             .unwrap_or_else(|| json!({})),
                     )),
                     "sourceAction" => Request::SourceAction(decode(params)),
+                    "navigation.restore" => Request::RestoreNavigation(decode(params)),
                     _ => Request::Unknown {
                         method: other.to_string(),
                     },
