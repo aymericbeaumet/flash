@@ -915,7 +915,7 @@ final class PluginManager {
   func statusText() -> String {
     let snapshots = statusSnapshots()
     guard !snapshots.isEmpty else {
-      return "PLUGINS\n\nNo plugins loaded."
+      return "# Plugins\n\nNo plugins loaded."
     }
     let headers = ["ID", "STATE", "PID", "HEARTBEAT", "SNAPSHOT", "COMMANDS", "ORIGIN"]
     let rows = snapshots.map { snapshot in
@@ -935,18 +935,24 @@ final class PluginManager {
     func padded(_ value: String, _ idx: Int) -> String {
       value + String(repeating: " ", count: max(0, widths[idx] - value.count))
     }
-    var lines = ["PLUGINS", ""]
+    // Wrap the column-aligned table in a fenced code block so the
+    // markdown renderer keeps it in the monospace font — without the
+    // fence it would render as proportional paragraphs and the
+    // column alignment would collapse.
+    var lines = ["# Plugins", "", "```text"]
     lines.append(headers.indices.map { padded(headers[$0], $0) }.joined(separator: "  "))
     for row in rows {
       lines.append(row.indices.map { padded(row[$0], $0) }.joined(separator: "  "))
     }
+    lines.append("```")
     let errors = snapshots.compactMap { snapshot -> String? in
       guard let error = snapshot.lastError, !error.isEmpty else { return nil }
-      return "\(snapshot.id): \(error)"
+      return "- `\(snapshot.id)`: \(error)"
     }
     if !errors.isEmpty {
       lines.append("")
-      lines.append("LAST ERRORS")
+      lines.append("## Last errors")
+      lines.append("")
       lines.append(contentsOf: errors)
     }
     return lines.joined(separator: "\n")

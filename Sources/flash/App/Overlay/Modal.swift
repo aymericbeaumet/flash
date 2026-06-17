@@ -33,11 +33,22 @@ extension OverlayPanel {
   /// Unified entry point. Variant-specific state is set up here so the
   /// pre-existing `displayModal` / `displaySelectableModal` aliases stay
   /// as thin call-site sugar (kept for diff readability).
+  ///
+  /// Text modals (`:help`, `:mappings`, `:plugins`, plugin toasts) are
+  /// always interpreted as **markdown**: `FlashMarkdownRenderer` walks
+  /// the cmark-gfm AST and produces a styled `NSAttributedString`.
+  /// Source strings that don't use any markdown syntax (e.g. a one-line
+  /// toast) still render correctly — the renderer treats them as a
+  /// single paragraph. `renderModal` consumes the plain-text projection
+  /// only to size the modal chrome; the rendered attributed string is
+  /// what the user actually sees.
   func present(_ kind: ModalKind) {
     switch kind {
     case .text(let body):
       modalSelectable = false
-      renderModal(text: body, attributed: nil)
+      let attributed = FlashMarkdownRenderer.render(body)
+      let plain = FlashMarkdownRenderer.plainText(body)
+      renderModal(text: plain.isEmpty ? body : plain, attributed: attributed)
     case .selectableList(let lines):
       modalSelectable = true
       selectableModalLines = lines

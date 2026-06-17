@@ -723,7 +723,7 @@ extension AppDelegate {
         summary = "Reloading: \(ids.joined(separator: ", "))"
       }
       FlashLog.info("[plugins] reload command ids=\(ids.joined(separator: ","))")
-      presentModal(reason: "plugins_reload") { "PLUGINS RELOAD\n\n\(summary)" }
+      presentModal(reason: "plugins_reload") { "# Plugins reload\n\n\(summary)" }
     }
   }
 
@@ -773,14 +773,14 @@ extension AppDelegate {
       let entries = (ok ? stdout : nil).flatMap(Self.decodeClipboardModalEntries) ?? []
       self.clipboardModalEntries = entries
       guard !entries.isEmpty else {
-        self.presentModal(reason: "clipboard_empty") { "CLIPBOARD\n\nNo history yet." }
+        self.presentModal(reason: "clipboard_empty") { "# Clipboard\n\nNo history yet." }
         return
       }
       self.presentSelectableModal(reason: "clipboard", lines: entries.map(\.preview))
     }
     if !dispatched {
       clipboardModalEntries = []
-      presentModal(reason: "clipboard_unavailable") { "CLIPBOARD\n\nPlugin unavailable." }
+      presentModal(reason: "clipboard_unavailable") { "# Clipboard\n\nPlugin unavailable." }
     }
   }
 
