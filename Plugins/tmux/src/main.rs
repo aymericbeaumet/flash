@@ -369,6 +369,18 @@ async fn run_tmux_aggregate_default(tmux_path: Option<&str>, args: &[&str]) -> O
     run_tmux_aggregate(tmux_path, args, Duration::from_secs(2)).await
 }
 
+/// Same as [`run_tmux_aggregate_default`] with a longer per-socket
+/// budget. Used for the initial snapshot build only — a cold tmux
+/// server (just started, or paged out) can take well over the 2 s
+/// budget on its first list-windows call, which used to leave the
+/// flashlight with a partial snapshot until the next 1 s poll caught
+/// the missed sockets. 6 s is generous enough that even a cold
+/// `tmux -L work` socket inside a sleeping shell completes on the
+/// first try.
+async fn run_tmux_aggregate_warm(tmux_path: Option<&str>, args: &[&str]) -> Option<String> {
+    run_tmux_aggregate(tmux_path, args, Duration::from_secs(6)).await
+}
+
 fn trimmed(value: Option<String>) -> Option<String> {
     let stripped = value?.trim().to_string();
     if stripped.is_empty() {
@@ -1079,6 +1091,32 @@ struct CandidateBuild {
 }
 
 async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
+    build_candidates_inner(tmux_path, BuildBudget::Steady).await
+}
+
+/// Same as [`build_candidates`] but gives every per-socket tmux call a
+/// longer timeout. Used by `on_start` to give cold sockets a real shot
+/// at the *first* snapshot — otherwise the user opens flashlight right
+/// after Flash starts, sees only the windows from the fast-responding
+/// socket, and has to wait for the next steady-state poll for the
+/// slower socket to fold in.
+async fn build_candidates_warm(tmux_path: Option<&str>) -> Option<CandidateBuild> {
+    build_candidates_inner(tmux_path, BuildBudget::Warm).await
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BuildBudget {
+    /// Background poll cadence — per-socket calls cap at 2 s.
+    Steady,
+    /// Warm-up budget — per-socket calls cap at 6 s. Used only at
+    /// plugin start.
+    Warm,
+}
+
+async fn build_candidates_inner(
+    tmux_path: Option<&str>,
+    budget: BuildBudget,
+) -> Option<CandidateBuild> {
     if tmux_path.is_none() {
         return Some(CandidateBuild {
             candidates: Vec::new(),
@@ -1111,7 +1149,14 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
     // (e.g. a `tmux -L work` socket) are invisible to the flashlight
     // finder — the user sees only the first responding server's
     // windows.
-    let raw = run_tmux_aggregate_default(tmux_path, &["list-windows", "-a", "-F", &format]).await?;
+    let raw = match budget {
+        BuildBudget::Steady => {
+            run_tmux_aggregate_default(tmux_path, &["list-windows", "-a", "-F", &format]).await?
+        }
+        BuildBudget::Warm => {
+            run_tmux_aggregate_warm(tmux_path, &["list-windows", "-a", "-F", &format]).await?
+        }
+    };
 
     let home = std::env::var("HOME").unwrap_or_default();
     let raw_line_count = raw.split('\n').filter(|line| !line.is_empty()).count();
@@ -1178,7 +1223,30 @@ async fn refresh_candidate_snapshot_for_path(
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
 ) {
-    let Some(build) = build_candidates(tmux_path).await else {
+    refresh_candidate_snapshot_for_path_inner(tmux_path, ctx, last_hash, BuildBudget::Steady).await;
+}
+
+/// Warm-budget variant used at plugin start; see [`build_candidates_warm`]
+/// for why we hand cold sockets a generous timeout on the first build.
+async fn refresh_candidate_snapshot_for_path_warm(
+    tmux_path: Option<&str>,
+    ctx: &Context,
+    last_hash: &Mutex<Option<u64>>,
+) {
+    refresh_candidate_snapshot_for_path_inner(tmux_path, ctx, last_hash, BuildBudget::Warm).await;
+}
+
+async fn refresh_candidate_snapshot_for_path_inner(
+    tmux_path: Option<&str>,
+    ctx: &Context,
+    last_hash: &Mutex<Option<u64>>,
+    budget: BuildBudget,
+) {
+    let build_result = match budget {
+        BuildBudget::Steady => build_candidates(tmux_path).await,
+        BuildBudget::Warm => build_candidates_warm(tmux_path).await,
+    };
+    let Some(build) = build_result else {
         ctx.log(
             "debug",
             "[tmux] candidate refresh skipped — tmux transient failure",
@@ -1213,6 +1281,15 @@ async fn refresh_candidate_snapshot_for_path(
 
 async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
     refresh_candidate_snapshot_for_path(
+        plugin.tmux_path.as_deref(),
+        ctx,
+        plugin.last_snapshot_hash(),
+    )
+    .await;
+}
+
+async fn refresh_candidate_snapshot_warm(plugin: &Tmux, ctx: &Context) {
+    refresh_candidate_snapshot_for_path_warm(
         plugin.tmux_path.as_deref(),
         ctx,
         plugin.last_snapshot_hash(),
@@ -2182,6 +2259,19 @@ impl FlashPlugin for Tmux {
         if self.tmux_path.is_none() {
             ctx.log("warn", "[tmux] tmux binary not found");
         }
+        // First build uses the *warm* budget so cold sockets (a tmux
+        // server the user hasn't talked to since boot, or one that
+        // page-faulted in) get a real chance to respond before we
+        // hand the snapshot off as "stable". Otherwise the user would
+        // open flashlight a beat after Flash starts, see only the
+        // fast socket's windows, and have to wait for the next 1 s
+        // poll to fold in the rest.
+        refresh_candidate_snapshot_warm(self, &ctx).await;
+        // Immediate second build with the steady budget. Any sockets
+        // that woke up during the warm build are now hot, so this run
+        // either re-emits a delta (more windows) or no-ops via the
+        // hash dedup. Net effect: the cache is provably stable when
+        // we hand off to the poll.
         refresh_candidate_snapshot(self, &ctx).await;
         start_candidate_poll(self, &ctx);
     }
@@ -2195,7 +2285,10 @@ impl FlashPlugin for Tmux {
     async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
             event.name.as_str(),
-            "core:focus.changed" | "core:flash.started" | "core:apps.terminated"
+            "core:focus.changed"
+                | "core:flash.started"
+                | "core:apps.terminated"
+                | "core:flashlight.opened"
         ) {
             refresh_candidate_snapshot(self, &ctx).await;
         }

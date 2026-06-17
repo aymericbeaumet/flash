@@ -23,6 +23,7 @@
   "subscriptions": [
     { "match": "core:focus.changed" },
     { "match": "core:apps.terminated" },
+    { "match": "core:flashlight.opened" },
     "core:flash.started"
   ],
   "providers": [

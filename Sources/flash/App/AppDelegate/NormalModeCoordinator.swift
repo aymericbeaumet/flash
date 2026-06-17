@@ -674,6 +674,19 @@ extension AppDelegate {
     }
     overlay.setActiveWindowBorder(around: nil)
     prewarmCandidateFinderCaches(reason: "command_line_open", sourceScope: self.candidateFinderScope)
+    // Let plugins know flashlight is about to be live so they can
+    // refresh their snapshots before the user starts typing. The tmux
+    // plugin uses this to fold in any windows it missed during the
+    // last steady-state poll — a tmux server that was paged out at
+    // poll time would otherwise leave the flashlight half-populated
+    // until the next 1 s tick.
+    pluginManager.emit(
+      PluginEvent(
+        name: "core:flashlight.opened",
+        payload: ["scope": self.candidateFinderScope == .running ? "running" : "all"],
+        bundleID: nil,
+        configPath: nil,
+        focused: nil))
     let command = Self.commandLineBuffer(from: initialText)
     openCandidateFinderSession(scope: self.candidateFinderScope, initialCommand: command)
     refreshCommandLine(text: command, cursorIndex: command.count)
