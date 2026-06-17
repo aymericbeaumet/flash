@@ -694,6 +694,17 @@ enum CandidateFinder {
     return sorted.map { matches[$0.index] }
   }
 
+  static func displayAndIncrementalMatches(
+    _ matches: [CandidateMatch],
+    precedence: PrecedenceTable = .default,
+    limit: Int
+  ) -> (display: [CandidateMatch], incremental: [CandidateMatch]) {
+    (
+      display: sortedMatches(matches, precedence: precedence, limit: limit),
+      incremental: matches
+    )
+  }
+
   private static func topRecords(_ records: [SortRecord], limit: Int) -> [SortRecord] {
     var best: [SortRecord] = []
     best.reserveCapacity(limit)

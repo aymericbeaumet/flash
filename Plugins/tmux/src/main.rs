@@ -27,6 +27,10 @@
 //!      `candidate_query` run `build_candidates` was the previous bug —
 //!      the user either waited on tmux I/O or saw a stale cache become
 //!      correct only after a later refresh.
+//!   5. The eager refresh also retains its `list-clients` + process tree
+//!      sample. Hint discovery and source actions consult that snapshot
+//!      first, so `[t` / `]t` do not rediscover every tmux socket before
+//!      running the single tmux command that actually changes windows.
 //!
 //! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) is
 //! parallelised via `tokio::spawn` so a single hung socket can't stall
@@ -498,7 +502,7 @@ fn is_ancestor(ancestor_pid: i64, descendant_pid: i64, parent_map: &HashMap<i64,
 }
 
 fn client_hosted_by_from_map(
-    clients: Vec<TmuxClient>,
+    clients: &[TmuxClient],
     focused_pid: i64,
     parent_map: &HashMap<i64, i64>,
 ) -> Option<TmuxClient> {
@@ -514,7 +518,7 @@ fn client_hosted_by_from_map(
         if process_sample_can_evaluate_clients {
             return None;
         }
-        let mut fallback = clients;
+        let mut fallback = clients.to_vec();
         fallback.sort_by_key(|c| std::cmp::Reverse(c.activity));
         return fallback.into_iter().next();
     }
@@ -542,6 +546,21 @@ struct TmuxClient {
     session: String,
     client_pid: i64,
     activity: i64,
+}
+
+#[derive(Clone, Default)]
+struct ClientSnapshot {
+    clients: Vec<TmuxClient>,
+    parent_map: HashMap<i64, i64>,
+}
+
+impl ClientSnapshot {
+    fn hosted_by(&self, focused_pid: i64) -> Option<TmuxClient> {
+        if self.clients.is_empty() {
+            return None;
+        }
+        client_hosted_by_from_map(&self.clients, focused_pid, &self.parent_map)
+    }
 }
 
 async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
@@ -580,16 +599,41 @@ async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
     out
 }
 
-/// Pick the tmux client whose terminal app instance hosts `focused_pid`.
-/// Tie-break by `client_activity` so we pick the one the user is actively
-/// typing in (single-process terminals share `focused_pid` across windows).
-async fn client_hosted_by(tmux_path: Option<&str>, focused_pid: i64) -> Option<TmuxClient> {
+async fn load_client_snapshot(tmux_path: Option<&str>) -> Option<ClientSnapshot> {
     let clients = list_clients(tmux_path).await;
     if clients.is_empty() {
         return None;
     }
-    let pmap = parent_pid_map().await;
-    client_hosted_by_from_map(clients, focused_pid, &pmap)
+    let parent_map = parent_pid_map().await;
+    Some(ClientSnapshot {
+        clients,
+        parent_map,
+    })
+}
+
+fn cached_client_hosted_by(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient> {
+    plugin
+        .client_snapshot()
+        .lock()
+        .ok()
+        .and_then(|snapshot| snapshot.hosted_by(focused_pid))
+}
+
+async fn refresh_cached_client_snapshot(plugin: &Tmux) -> Option<ClientSnapshot> {
+    let snapshot = load_client_snapshot(plugin.tmux_path.as_deref()).await?;
+    if let Ok(mut guard) = plugin.client_snapshot().lock() {
+        *guard = snapshot.clone();
+    }
+    Some(snapshot)
+}
+
+async fn client_hosted_by_cached(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient> {
+    if let Some(client) = cached_client_hosted_by(plugin, focused_pid) {
+        return Some(client);
+    }
+    refresh_cached_client_snapshot(plugin)
+        .await?
+        .hosted_by(focused_pid)
 }
 
 fn parse_two_ints(line: &str) -> Option<(i64, i64)> {
@@ -776,7 +820,7 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
         return DiscoverResponse::targets(vec![]).context_pid(pid);
     }
 
-    let Some(client) = client_hosted_by(tmux_path, pid).await else {
+    let Some(client) = client_hosted_by_cached(plugin, pid).await else {
         return DiscoverResponse::targets(vec![]).context_pid(pid);
     };
 
@@ -1130,6 +1174,7 @@ fn build_candidates_from_window_list(
 /// `Some(vec)` (possibly empty) is the authoritative current window list.
 struct CandidateBuild {
     candidates: Vec<Candidate>,
+    client_snapshot: ClientSnapshot,
     client_count: usize,
     raw_line_count: usize,
     first_raw_line: String,
@@ -1165,6 +1210,7 @@ async fn build_candidates_inner(
     if tmux_path.is_none() {
         return Some(CandidateBuild {
             candidates: Vec::new(),
+            client_snapshot: ClientSnapshot::default(),
             client_count: 0,
             raw_line_count: 0,
             first_raw_line: String::new(),
@@ -1184,6 +1230,10 @@ async fn build_candidates_inner(
             find_top_level_ancestor(client.client_pid, &pmap),
         );
     }
+    let client_snapshot = ClientSnapshot {
+        clients: clients.clone(),
+        parent_map: pmap.clone(),
+    };
 
     let format = format!(
         "#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}"
@@ -1216,6 +1266,7 @@ async fn build_candidates_inner(
         build_candidates_from_window_list(&raw, &clients, &terminal_pid_by_session, &home);
     Some(CandidateBuild {
         candidates,
+        client_snapshot,
         client_count: clients.len(),
         raw_line_count,
         first_raw_line,
@@ -1265,8 +1316,16 @@ async fn refresh_candidate_snapshot_for_path(
     tmux_path: Option<&str>,
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
+    client_snapshot: &Mutex<ClientSnapshot>,
 ) {
-    refresh_candidate_snapshot_for_path_inner(tmux_path, ctx, last_hash, BuildBudget::Steady).await;
+    refresh_candidate_snapshot_for_path_inner(
+        tmux_path,
+        ctx,
+        last_hash,
+        client_snapshot,
+        BuildBudget::Steady,
+    )
+    .await;
 }
 
 /// Warm-budget variant used at plugin start; see [`build_candidates_warm`]
@@ -1275,14 +1334,23 @@ async fn refresh_candidate_snapshot_for_path_warm(
     tmux_path: Option<&str>,
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
+    client_snapshot: &Mutex<ClientSnapshot>,
 ) {
-    refresh_candidate_snapshot_for_path_inner(tmux_path, ctx, last_hash, BuildBudget::Warm).await;
+    refresh_candidate_snapshot_for_path_inner(
+        tmux_path,
+        ctx,
+        last_hash,
+        client_snapshot,
+        BuildBudget::Warm,
+    )
+    .await;
 }
 
 async fn refresh_candidate_snapshot_for_path_inner(
     tmux_path: Option<&str>,
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
+    client_snapshot: &Mutex<ClientSnapshot>,
     budget: BuildBudget,
 ) {
     let build_result = match budget {
@@ -1296,6 +1364,9 @@ async fn refresh_candidate_snapshot_for_path_inner(
         );
         return;
     };
+    if let Ok(mut guard) = client_snapshot.lock() {
+        *guard = build.client_snapshot.clone();
+    }
     let new_hash = hash_candidates(&build.candidates);
     let unchanged = matches!(last_hash.lock(), Ok(guard) if *guard == Some(new_hash));
     if unchanged {
@@ -1327,6 +1398,7 @@ async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
         plugin.tmux_path.as_deref(),
         ctx,
         plugin.last_snapshot_hash(),
+        plugin.client_snapshot(),
     )
     .await;
 }
@@ -1336,6 +1408,7 @@ async fn refresh_candidate_snapshot_warm(plugin: &Tmux, ctx: &Context) {
         plugin.tmux_path.as_deref(),
         ctx,
         plugin.last_snapshot_hash(),
+        plugin.client_snapshot(),
     )
     .await;
 }
@@ -1352,11 +1425,18 @@ const POLL_INTERVAL_SECS: u64 = 1;
 fn start_candidate_poll(plugin: &Tmux, ctx: &Context) {
     let path = plugin.tmux_path.clone();
     let last_hash = std::sync::Arc::clone(&plugin.last_snapshot_hash_arc);
+    let client_snapshot = std::sync::Arc::clone(&plugin.client_snapshot_arc);
     let ctx = ctx.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
-            refresh_candidate_snapshot_for_path(path.as_deref(), &ctx, &last_hash).await;
+            refresh_candidate_snapshot_for_path(
+                path.as_deref(),
+                &ctx,
+                &last_hash,
+                &client_snapshot,
+            )
+            .await;
         }
     });
 }
@@ -1608,7 +1688,7 @@ async fn perform_source_action(
         );
         return SourceActionResponse::unhandled();
     };
-    let Some(client) = client_hosted_by(tmux_path, pid).await else {
+    let Some(client) = client_hosted_by_cached(plugin, pid).await else {
         ctx.log(
             "debug",
             &format!(
@@ -2008,7 +2088,7 @@ mod tests {
         ];
         let parent_map = HashMap::from([(1443, 1356), (1356, 1), (2000, 1999), (1999, 1)]);
 
-        let picked = client_hosted_by_from_map(clients, 1356, &parent_map).unwrap();
+        let picked = client_hosted_by_from_map(&clients, 1356, &parent_map).unwrap();
 
         assert_eq!(picked.session, "scratch");
         assert_eq!(picked.tty, "/dev/ttys000");
@@ -2022,7 +2102,7 @@ mod tests {
         ];
         let parent_map = HashMap::new();
 
-        let picked = client_hosted_by_from_map(clients, 1356, &parent_map).unwrap();
+        let picked = client_hosted_by_from_map(&clients, 1356, &parent_map).unwrap();
 
         assert_eq!(picked.session, "work");
     }
@@ -2032,7 +2112,7 @@ mod tests {
         let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
         let parent_map = HashMap::from([(1443, 2222), (2222, 1)]);
 
-        let picked = client_hosted_by_from_map(clients, 1356, &parent_map);
+        let picked = client_hosted_by_from_map(&clients, 1356, &parent_map);
 
         assert!(picked.is_none());
     }
@@ -2265,6 +2345,11 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
 struct Tmux {
     tmux_path: Option<String>,
     target_actions: Mutex<HashMap<String, TargetAction>>,
+    /// Latest eager `list-clients` + process-tree sample. Source actions
+    /// need the focused tmux client, but they should not fan out across
+    /// every tmux socket on the hot key path when the poller already did
+    /// that work.
+    client_snapshot_arc: std::sync::Arc<Mutex<ClientSnapshot>>,
     /// Hash of the last snapshot we emitted to the host. Wrapped in an
     /// `Arc` so the background poll task can hold it alongside the
     /// plugin instance — both reach for the same Mutex, and the dedup
@@ -2278,6 +2363,10 @@ impl Tmux {
     /// outlives the plugin trait method's borrow.
     fn last_snapshot_hash(&self) -> &Mutex<Option<u64>> {
         &self.last_snapshot_hash_arc
+    }
+
+    fn client_snapshot(&self) -> &Mutex<ClientSnapshot> {
+        &self.client_snapshot_arc
     }
 }
 
@@ -2371,6 +2460,7 @@ fn main() {
     let plugin = Tmux {
         tmux_path: find_tmux(),
         target_actions: Mutex::new(HashMap::new()),
+        client_snapshot_arc: std::sync::Arc::new(Mutex::new(ClientSnapshot::default())),
         last_snapshot_hash_arc: std::sync::Arc::new(Mutex::new(None)),
     };
     run(plugin);

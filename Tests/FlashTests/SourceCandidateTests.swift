@@ -1258,6 +1258,53 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(sorted.dropFirst(tmuxRows.count).allSatisfy { $0.candidate.source != "tmux.windows" })
   }
 
+  func testIncrementalCacheKeepsRowsOutsideDisplayLimitForLongerSourceQuery() {
+    let tmuxRows = [
+      ".dotfiles", "flash", "moria", "beside-agentic",
+    ].map { title in
+      CandidateFinder.prepare(
+        candidate(
+          kind: .plugin("tmux_window"),
+          source: "tmux.windows",
+          name: title,
+          subtitle: "scratch:1 · zsh · ~/workspace/\(title)",
+          bundleIdentifier: "",
+          pid: 4242))
+    }
+    let topNoise = (0..<40).map { index in
+      CandidateMatch(
+        candidate: CandidateFinder.prepare(
+          candidate(
+            kind: .app,
+            source: "core.apps",
+            name: "TextEdit Agent \(index)",
+            subtitle: "app",
+            bundleIdentifier: "com.apple.TextEdit.\(index)",
+            pid: pid_t(index + 1000))),
+        score: 20_000 - index)
+    }
+    let firstKeystrokeMatches =
+      topNoise
+      + tmuxRows.map { CandidateMatch(candidate: $0, score: 1_000) }
+
+    let ranked = CandidateFinder.displayAndIncrementalMatches(
+      firstKeystrokeMatches,
+      limit: 10)
+
+    XCTAssertFalse(ranked.display.contains { $0.candidate.source == "tmux.windows" })
+    XCTAssertEqual(ranked.incremental.count, firstKeystrokeMatches.count)
+
+    let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    let narrowed = CandidateFinder.scoreMatches(
+      pool: ranked.incremental.map(\.candidate),
+      normalizedQuery: NormalModeDispatcher.normalizedSearchText("tmux"),
+      fuzzyScore: fuzzy,
+      allowParallel: false)
+    let sorted = CandidateFinder.sortedMatches(narrowed, limit: 10)
+
+    XCTAssertEqual(sorted.prefix(tmuxRows.count).map(\.candidate.source), tmuxRows.map(\.source))
+  }
+
   func testTmuxWindowDisplayShowsPrimaryTitleBeforeSecondaryMetadata() {
     let tmux = CandidateFinder.prepare(
       candidate(

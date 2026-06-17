@@ -1473,19 +1473,20 @@ extension AppDelegate {
     // Top-K bounded sort. The display window is `commandBarSuggestionCount`
     // (default 10), with arrow-key scrolling allowed inside the bounded
     // set, so a 3x buffer keeps the result list scroll-friendly without
-    // paying for a full O(N log N) sort of every match. `sortedMatches`
-    // already partial-sorts via `topRecords` when `limit` < count, so
-    // wiring the cap here is the entire change.
+    // paying for a full O(N log N) sort of every match. Keep the
+    // incremental cache unbounded, though: a row that misses the display
+    // top-K for "t" can become the best match for "tmux".
     let sortLimit = max(commandBarSuggestionCount * 3, 30)
-    let sorted = CandidateFinder.sortedMatches(
+    let ranked = CandidateFinder.displayAndIncrementalMatches(
       scored, precedence: precedenceTable(), limit: sortLimit)
+    let sorted = ranked.display
     let tSorted = CFAbsoluteTimeGetCurrent()
     // Re-check the generation — a re-entrant call (e.g. caches landing
     // mid-update) could have already superseded us.
     guard generation == self.candidateFinderIndexGenerationCounter else { return }
     candidateFinderIncrementalCache = (
       normalizedQuery: normalizedQuery,
-      matches: sorted,
+      matches: ranked.incremental,
       epoch: candidateFinderCandidatesEpoch,
       signature: signature
     )
