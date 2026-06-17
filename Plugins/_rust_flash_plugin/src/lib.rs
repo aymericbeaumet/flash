@@ -1514,6 +1514,18 @@ impl Context {
 
     /// Emit a `snapshot.updated` notification carrying `candidates` (and no
     /// jump targets) for `source_id`.
+    ///
+    /// **Dedup before calling.** The host treats this as an
+    /// authoritative cache replacement: every call swaps the snapshot
+    /// pointer even when the candidate vector is byte-identical to the
+    /// previous one. The flashlight's 5 s live-tick re-runs
+    /// `candidateQuery` against that cache, so a plugin that re-emits
+    /// unchanged data on every poll forces the user-visible candidate
+    /// list to repaint mid-session for no reason. Hash the candidate
+    /// vector (e.g. `(title, subtitle, navigation_url, pid)`) and skip
+    /// this call when the hash matches the last emit — see AGENTS.md
+    /// "Plugin snapshot freshness contract" and
+    /// `Plugins/tmux/src/main.rs` for the canonical pattern.
     pub fn emit_snapshot(&self, source_id: &str, candidates: Vec<Candidate>) {
         let candidates: Vec<Value> = candidates
             .iter()

@@ -73,8 +73,26 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 async { ::flash_plugin::DiscoverResponse::default() }
             }
 
-            /// Return flashlight candidates for the current query, or keep the
-            /// host-side snapshot when no refresh is needed.
+            /// Default: tell the host to serve from its warm cache. Most
+            /// plugins should leave this method alone.
+            ///
+            /// The flashlight binds this RPC to the user pressing `f`.
+            /// Anything that runs here adds latency the user feels.
+            /// Overriding `candidate_query` to run subprocesses,
+            /// AppleScript, or other I/O is the canonical anti-pattern
+            /// — when the I/O exceeds `manifest.request_timeout_ms`,
+            /// the host falls back to the stale cache and the 5 s
+            /// live-tick later returns the fresh result, surfacing as
+            /// "outdated candidates that refresh themselves a few
+            /// seconds after typing."
+            ///
+            /// Keep the snapshot warm in the background instead
+            /// (`on_start` + `on_event` push refreshes + `ctx.interval`
+            /// poll) and dedup before emitting (see AGENTS.md "Plugin
+            /// snapshot freshness contract"). Only override this method
+            /// when the plugin owns a stricter timing the host can't
+            /// know about (e.g. completion that depends on the live
+            /// query string).
             fn candidate_query(
                 &self,
                 ctx: ::flash_plugin::Context,

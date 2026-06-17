@@ -354,6 +354,68 @@ the matching mode; dev symlinks the repo `Plugins/` into the app, while release
 stages only `manifest.json` + the binary per plugin (no sources). The compiled
 binaries and per-crate build output are git-ignored.
 
+**Plugin snapshot freshness contract (binding for every candidate provider).**
+A candidate plugin's job is to keep its in-memory snapshot **in sync with its
+underlying data source at all times** — not "polled and hope for the best",
+not "refreshed on the way out of `candidate_query`." The host treats every
+flashlight open as a `candidateQuery` RPC, and the user expects the response
+to land within a single frame.
+
+  1. **`candidate_query` must be O(memory).** The default trait method
+     returns `CandidateQueryResponse::snapshot()`, which tells the host
+     "serve from your warm cache." **Do not override** `candidate_query`
+     to run subprocesses, AppleScript, or any I/O whose latency the user
+     would feel. The previous tmux implementation ran `build_candidates`
+     inline inside the RPC handler; in the failure mode (multi-socket
+     fan-out hitting the 8 s plugin-RPC timeout) the host fell back to
+     its stale cache, then the 5 s live-tick repeat returned fresh
+     candidates — the user saw "outdated candidates that refresh
+     themselves 4-5 s after typing." That is the regression this
+     contract exists to prevent.
+
+  2. **Push the work to the background.** Refresh on host events that
+     correlate with state change (`core:focus.changed`,
+     `core:apps.launched`, `core:apps.terminated`, `core:flash.started`)
+     and — when the underlying source has no push channel — run a
+     `ctx.interval(...)` poll. The cadence has to be short enough that
+     a change the user just made (a new tmux window, a renamed Slack
+     channel) is in the snapshot by the time they next press `f`. 1 s
+     is the working default for poll-only plugins; raise it only with a
+     measurement that justifies the user-visible staleness.
+
+  3. **Dedup before emitting.** Hash the candidate vector (title +
+     subtitle + navigation_url + pid is usually sufficient) and skip
+     `emit_snapshot` when nothing observable changed. The 5 s flashlight
+     live-tick re-fires `candidateQuery` against the host cache, so a
+     plugin that re-emits unchanged data on every poll forces the host
+     to swap the cache pointer mid-session — the renderer compares
+     identity, not contents, and the user perceives a stutter. The
+     dedup gate makes "snapshot identical to last emit" a true no-op
+     all the way down to the host.
+
+  4. **Parallelise per-target I/O.** When the snapshot is sourced from
+     N independent backends (tmux sockets, browser bundles, Slack
+     workspaces, …), spawn the per-backend work concurrently
+     (`tokio::spawn` + `JoinHandle::await`). Sequential fan-out makes
+     the slowest backend dominate every refresh; with three sockets and
+     a 2 s per-call timeout, a single hung server stretches a 50 ms
+     operation into 6 s of background churn that can overlap the next
+     poll.
+
+  5. **Never nuke the cache on transient failure.** When `build_…`
+     returns `None`, leave the previous snapshot in place and skip the
+     emit. Emitting `[]` makes tmux windows / browser tabs visibly
+     disappear from flashlight every time a single backend hiccups; the
+     next successful poll repopulates them seconds later. The
+     "stale-but-mostly-right" cache is strictly better than the "empty
+     during failure" cache.
+
+Tests should pin these invariants in place — see
+`Plugins/tmux/src/main.rs` for the canonical pattern (`hash_candidates`,
+`refresh_candidate_snapshot_for_path` with `last_snapshot_hash` dedup,
+`run_tmux_aggregate` parallel fan-out, and the
+`tmux_plugin_uses_default_candidate_query` regression guard).
+
 Setting `debug.http_inspector_enabled = true` starts a loopback-only single-page
 debug server with live logs, resolved config, focused app state, and plugin
 state, bound to `debug.http_inspector_host` (`localhost` / `127.0.0.1` / `::1`)

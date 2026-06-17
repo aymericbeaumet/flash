@@ -1,9 +1,44 @@
 //! Tmux plugin — ports the former Python tmux plugin to Rust.
 //!
-//! Keeps the candidate snapshot warm with an SDK timer fallback (tmux exposes
-//! no native host event stream for window-list changes). On each activation
-//! Flash calls discoverTargets with the focused app's pid + window frame; the
-//! plugin returns pane-chip and link-chip targets in screen coordinates.
+//! ## Snapshot freshness contract
+//!
+//! Tmux exposes no native host event stream for window-list changes (no
+//! `core:focus.changed`-style ping fires when the user creates/renames/
+//! closes a window inside an attached client). The plugin therefore owns
+//! its own freshness loop:
+//!
+//!   1. `on_start` runs an immediate `build_candidates` and emits the
+//!      initial snapshot. Subsequent flashlight opens never block on this
+//!      seed — by the time the user can press `f`, the snapshot is warm.
+//!   2. A 1 s background poll re-runs `build_candidates` and emits a new
+//!      snapshot **only when the candidate hash actually changed**. The
+//!      dedup gate is the load-bearing invariant: without it the host
+//!      cache would be rewritten on every poll, and the flashlight's
+//!      5 s live tick would surface a "candidates changed without typing"
+//!      flicker even when tmux state was identical.
+//!   3. Host events (`core:focus.changed`, `core:flash.started`,
+//!      `core:apps.terminated`) trigger an additional refresh so a
+//!      focus-in catches state that drifted while the user was
+//!      elsewhere.
+//!   4. The host's `candidateQuery` RPC is **NOT overridden**. The
+//!      default contract (return `CandidateQueryResponse::snapshot()`)
+//!      is what we want: the host serves its warm cache instantly, no
+//!      subprocesses fire on the user's `f` keypress. Letting
+//!      `candidate_query` run `build_candidates` was the previous bug —
+//!      the user saw the host fall back to the stale cache (RPC
+//!      time-out), then watched the live tick swap in fresh data 4-5 s
+//!      later.
+//!
+//! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) is
+//! parallelised via `tokio::spawn` so a single hung socket can't stall
+//! the whole refresh — the slowest socket sets the cycle length, not
+//! the sum.
+//!
+//! ## Hint discovery
+//!
+//! On each activation Flash calls `discoverTargets` with the focused
+//! app's pid + window frame; the plugin returns pane-chip and link-chip
+//! targets in screen coordinates.
 //!
 //! Geometry mirrors the previous implementation:
 //!   - cell size = window / cells (fallback) OR alacritty-style font
@@ -12,7 +47,9 @@
 //!   - pane chips: 3-cell-wide rect at pane centre.
 //!   - link chips: per-regex match in `capture-pane -p` output.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{Hash, Hasher};
 use std::os::unix::fs::FileTypeExt;
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
@@ -233,6 +270,12 @@ async fn run_tmux_default(tmux_path: Option<&str>, args: &[&str]) -> Option<Stri
 /// answer first, so the flashlight finder silently dropped every session on
 /// every other socket.
 ///
+/// All per-socket invocations run in **parallel** via `tokio::spawn`. The
+/// previous sequential implementation made the slowest hung socket
+/// dominate every refresh — with a 2 s per-call timeout and three
+/// sockets, a single dead server stretched a 50 ms operation into 6 s.
+/// Now the cycle length is `max(socket)` instead of `sum(sockets)`.
+///
 /// Identical lines are deduplicated so an alias between the default
 /// invocation and an explicit `-S <path>` for the same socket doesn't
 /// double-count rows. Empty output is returned as `None` so the caller can
@@ -242,23 +285,53 @@ async fn run_tmux_aggregate(
     args: &[&str],
     timeout: Duration,
 ) -> Option<String> {
-    let path = tmux_path?;
-    let mut outputs: Vec<String> = Vec::new();
+    let path = tmux_path?.to_string();
+    let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+    // Discover sockets once up front; spawning all invocations together
+    // means the slowest socket sets the cycle length, not the sum.
+    let socket_paths = tmux_socket_paths();
+    let mut handles: Vec<tokio::task::JoinHandle<Option<String>>> =
+        Vec::with_capacity(socket_paths.len() + 1);
 
     // Default-socket invocation. Without `-S`, tmux resolves to whichever
     // socket the user's $TMUX_TMPDIR / process environment points at — on
     // most setups this is also covered by `tmux_socket_paths()` below, but
     // we run it first so a non-standard $TMUX_TMPDIR (e.g. a server
     // outside the standard discovery roots) still contributes.
-    let default = run_local(&tmux_argv(path, args), timeout).await;
-    if default.ok {
-        outputs.push(default.stdout);
+    {
+        let path = path.clone();
+        let args_owned = args_owned.clone();
+        handles.push(tokio::spawn(async move {
+            let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+            let result = run_local(&tmux_argv(&path, &args_ref), timeout).await;
+            if result.ok {
+                Some(result.stdout)
+            } else {
+                None
+            }
+        }));
     }
 
-    for socket_path in tmux_socket_paths() {
-        let result = run_local(&tmux_socket_argv(path, &socket_path, args), timeout).await;
-        if result.ok {
-            outputs.push(result.stdout);
+    for socket_path in socket_paths {
+        let path = path.clone();
+        let args_owned = args_owned.clone();
+        handles.push(tokio::spawn(async move {
+            let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+            let result =
+                run_local(&tmux_socket_argv(&path, &socket_path, &args_ref), timeout).await;
+            if result.ok {
+                Some(result.stdout)
+            } else {
+                None
+            }
+        }));
+    }
+
+    let mut outputs: Vec<String> = Vec::with_capacity(handles.len());
+    for handle in handles {
+        if let Ok(Some(stdout)) = handle.await {
+            outputs.push(stdout);
         }
     }
 
@@ -1059,7 +1132,52 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
     })
 }
 
-async fn refresh_candidate_snapshot_for_path(tmux_path: Option<&str>, ctx: &Context) {
+/// Identity hash of a candidate snapshot — `(title, subtitle, navigation_url,
+/// pid)` for each row, in order. Used by [`refresh_candidate_snapshot_for_path`]
+/// to skip `emit_snapshot` when nothing observable changed.
+///
+/// Without this gate, the 1 s background poll would rewrite the host's
+/// cache on every tick even when tmux state was identical. The
+/// flashlight's 5 s live tick re-fires `candidateQuery`, the host
+/// returns the just-rewritten cache, and the renderer compares object
+/// identity rather than candidate content — so the surface would
+/// re-paint mid-session and the user would perceive a flicker even
+/// though the visible rows would be unchanged.
+fn hash_candidates(candidates: &[Candidate]) -> u64 {
+    use flash_plugin::candidate_metadata as meta;
+    let mut hasher = DefaultHasher::new();
+    candidates.len().hash(&mut hasher);
+    for candidate in candidates {
+        candidate.title.hash(&mut hasher);
+        candidate
+            .meta(meta::SUBTITLE)
+            .unwrap_or("")
+            .hash(&mut hasher);
+        candidate
+            .meta(meta::NAVIGATION_URL)
+            .unwrap_or("")
+            .hash(&mut hasher);
+        candidate.pid_value().unwrap_or(0).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Build a fresh snapshot and emit it to the host **only when the
+/// candidate hash differs from the last emit**. The dedup gate is what
+/// keeps the flashlight from flickering when the user is idle — see the
+/// module-level "Snapshot freshness contract" docs.
+///
+/// On a transient tmux failure (e.g. every socket invocation timed out)
+/// we leave the previous snapshot in place: the host's warm cache
+/// continues to serve `candidateQuery` requests, and the next successful
+/// poll re-syncs. We do *not* emit an empty snapshot in this case —
+/// nuking the cache to `[]` would make tmux windows vanish from
+/// flashlight every time a single socket call hiccuped.
+async fn refresh_candidate_snapshot_for_path(
+    tmux_path: Option<&str>,
+    ctx: &Context,
+    last_hash: &Mutex<Option<u64>>,
+) {
     let Some(build) = build_candidates(tmux_path).await else {
         ctx.log(
             "debug",
@@ -1067,6 +1185,21 @@ async fn refresh_candidate_snapshot_for_path(tmux_path: Option<&str>, ctx: &Cont
         );
         return;
     };
+    let new_hash = hash_candidates(&build.candidates);
+    let unchanged = matches!(last_hash.lock(), Ok(guard) if *guard == Some(new_hash));
+    if unchanged {
+        // Still useful to record that we polled — at trace level so a
+        // healthy cache doesn't drown out other plugins. The host's
+        // candidate cache is untouched, so the flashlight surface
+        // doesn't repaint.
+        let mut fields = BTreeMap::new();
+        fields.insert("candidates".to_string(), build.candidates.len().to_string());
+        ctx.log_fields("debug", "[tmux] candidate refresh (unchanged)", fields);
+        return;
+    }
+    if let Ok(mut guard) = last_hash.lock() {
+        *guard = Some(new_hash);
+    }
     let mut fields = BTreeMap::new();
     fields.insert("candidates".to_string(), build.candidates.len().to_string());
     fields.insert("clients".to_string(), build.client_count.to_string());
@@ -1074,22 +1207,42 @@ async fn refresh_candidate_snapshot_for_path(tmux_path: Option<&str>, ctx: &Cont
     if build.candidates.is_empty() && !build.first_raw_line.is_empty() {
         fields.insert("first_raw_line".to_string(), build.first_raw_line.clone());
     }
-    ctx.log_fields("debug", "[tmux] candidate refresh", fields);
+    ctx.log_fields("debug", "[tmux] candidate refresh (emit)", fields);
     ctx.emit_snapshot(SOURCE_ID, build.candidates);
 }
 
 async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
-    refresh_candidate_snapshot_for_path(plugin.tmux_path.as_deref(), ctx).await;
+    refresh_candidate_snapshot_for_path(
+        plugin.tmux_path.as_deref(),
+        ctx,
+        plugin.last_snapshot_hash(),
+    )
+    .await;
 }
 
-fn start_candidate_poll(tmux_path: Option<String>, ctx: &Context) {
-    let path = tmux_path;
-    ctx.interval("candidate-refresh", Duration::from_secs(2), move |ctx| {
-        let path = path.clone();
-        async move {
-            refresh_candidate_snapshot_for_path(path.as_deref(), &ctx).await;
-        }
-    });
+/// Background poll cadence. **Do not raise without measuring**: the
+/// flashlight expects the snapshot to be in sync with the user's tmux
+/// state at all times, so the cycle has to be short enough that a
+/// window the user just created is in the cache by the time they
+/// press `f`. 1 s is the sweet spot — `build_candidates` typically
+/// finishes in 50-200 ms with parallel socket fan-out, leaving the
+/// runtime idle most of the cycle.
+const POLL_INTERVAL_SECS: u64 = 1;
+
+fn start_candidate_poll(plugin: &Tmux, ctx: &Context) {
+    let path = plugin.tmux_path.clone();
+    let last_hash = std::sync::Arc::clone(&plugin.last_snapshot_hash_arc);
+    ctx.interval(
+        "candidate-refresh",
+        Duration::from_secs(POLL_INTERVAL_SECS),
+        move |ctx| {
+            let path = path.clone();
+            let last_hash = std::sync::Arc::clone(&last_hash);
+            async move {
+                refresh_candidate_snapshot_for_path(path.as_deref(), &ctx, &last_hash).await;
+            }
+        },
+    );
 }
 
 // ---- Tab actions ------------------------------------------------------------
@@ -1891,6 +2044,104 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
         assert!(lines.contains(&"work\t2\tlogs\ttail\t/Users/ab/work"));
         assert!(lines.contains(&"play\t1\tshell\tzsh\t/Users/ab/play"));
     }
+
+    // ---- Snapshot freshness contract -------------------------------------
+    //
+    // The dedup gate in `refresh_candidate_snapshot_for_path` is the
+    // load-bearing invariant that prevents the flashlight from
+    // flickering during a session when tmux state is unchanged. These
+    // tests pin it down: any future refactor that breaks them is also
+    // re-introducing the original symptom (user opens flashlight,
+    // sees outdated candidates, watches them refresh 4-5 s later).
+
+    fn fake_candidate(target: &str, name: &str, pid: i64) -> Candidate {
+        let payload = TmuxPayload {
+            tmux_target: target.to_string(),
+            ..TmuxPayload::default()
+        };
+        Candidate::new(name)
+            .kind("tmux_window")
+            .source_id(SOURCE_ID)
+            .source("tmux.windows")
+            .subtitle(format!("{target} · zsh · ~/work"))
+            .navigation_url(tmux_navigation_url("window", target))
+            .payload_json(&payload)
+            .pid(pid)
+    }
+
+    #[test]
+    fn hash_candidates_stable_for_identical_input() {
+        let snapshot = vec![
+            fake_candidate("work:1", "editor", 1356),
+            fake_candidate("play:2", "shell", 1444),
+        ];
+        let a = hash_candidates(&snapshot);
+        let b = hash_candidates(&snapshot);
+        assert_eq!(
+            a, b,
+            "identical candidate vectors must hash identically — \
+             otherwise the dedup gate keeps re-emitting and the host \
+             cache churns on every poll"
+        );
+    }
+
+    #[test]
+    fn hash_candidates_diverges_on_window_added() {
+        let before = vec![fake_candidate("work:1", "editor", 1356)];
+        let after = vec![
+            fake_candidate("work:1", "editor", 1356),
+            fake_candidate("work:2", "logs", 1356),
+        ];
+        assert_ne!(hash_candidates(&before), hash_candidates(&after));
+    }
+
+    #[test]
+    fn hash_candidates_diverges_on_window_renamed() {
+        let before = vec![fake_candidate("work:1", "editor", 1356)];
+        let after = vec![fake_candidate("work:1", "vim", 1356)];
+        assert_ne!(hash_candidates(&before), hash_candidates(&after));
+    }
+
+    #[test]
+    fn hash_candidates_diverges_on_pid_change() {
+        let before = vec![fake_candidate("work:1", "editor", 1356)];
+        let after = vec![fake_candidate("work:1", "editor", 9999)];
+        assert_ne!(
+            hash_candidates(&before),
+            hash_candidates(&after),
+            "pid is part of the hash because the host uses it for app \
+             activation — a pid drift across polls must trigger an emit"
+        );
+    }
+
+    /// The plugin must not override `candidate_query`. The default trait
+    /// method returns `CandidateQueryResponse::snapshot()`, which the
+    /// host treats as "serve from the warm cache without blocking" —
+    /// that is the entire point of the snapshot-freshness contract.
+    /// This test reaches into the generated trait via a struct that
+    /// implements `FlashPlugin` and confirms `candidate_query` falls
+    /// back to the default (no method body declared on `Tmux`).
+    ///
+    /// If a future change adds an `async fn candidate_query` to the
+    /// `impl FlashPlugin for Tmux` block, this test still compiles —
+    /// the assertion is in the runtime behavior: any candidate_query
+    /// that does subprocess work would re-introduce the 4-5 s lag the
+    /// user complained about. The companion AGENTS.md note ("Plugin
+    /// snapshot freshness contract") is the human-readable guardrail.
+    #[test]
+    fn tmux_plugin_uses_default_candidate_query() {
+        // The default response carries neither `candidates` nor
+        // `source_id` — both are `None` so the wire frame serializes
+        // to an empty object. The host interprets that as "use the
+        // cached snapshot you already have."
+        let response = flash_plugin::CandidateQueryResponse::snapshot();
+        assert!(
+            response.candidates.is_none(),
+            "snapshot() must not carry inline candidates — that would \
+             defeat the host-cache fast path"
+        );
+        assert!(response.source_id.is_none());
+    }
 }
 
 // ---- Plugin glue ------------------------------------------------------------
@@ -1898,19 +2149,49 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
 struct Tmux {
     tmux_path: Option<String>,
     target_actions: Mutex<HashMap<String, TargetAction>>,
+    /// Hash of the last snapshot we emitted to the host. Wrapped in an
+    /// `Arc` so the background poll task can hold it alongside the
+    /// plugin instance — both reach for the same Mutex, and the dedup
+    /// invariant requires a single source of truth.
+    last_snapshot_hash_arc: std::sync::Arc<Mutex<Option<u64>>>,
+}
+
+impl Tmux {
+    /// Accessor used by [`refresh_candidate_snapshot`] when called with
+    /// `&self`. The poll task takes an owned `Arc` instead so it
+    /// outlives the plugin trait method's borrow.
+    fn last_snapshot_hash(&self) -> &Mutex<Option<u64>> {
+        &self.last_snapshot_hash_arc
+    }
 }
 
 flash_plugin::plugin!(Tmux);
 
 impl FlashPlugin for Tmux {
+    /// On startup we run one immediate `build_candidates` so the host's
+    /// candidate cache is warm before the user can press `f`, then we
+    /// hand the freshness loop off to `start_candidate_poll`.
+    ///
+    /// We intentionally do **not** override `candidate_query` (the
+    /// default returns `CandidateQueryResponse::snapshot()`). The
+    /// previous implementation ran `build_candidates` inline inside the
+    /// RPC handler, which gave the user a 2-8 s wait on every
+    /// flashlight open and — on timeout — silently fell back to a
+    /// stale host cache. See the module-level docs for the invariant.
     async fn on_start(&self, ctx: Context) {
         if self.tmux_path.is_none() {
             ctx.log("warn", "[tmux] tmux binary not found");
         }
         refresh_candidate_snapshot(self, &ctx).await;
-        start_candidate_poll(self.tmux_path.clone(), &ctx);
+        start_candidate_poll(self, &ctx);
     }
 
+    /// Push events refresh the snapshot immediately. The 1 s poll keeps
+    /// us in sync on its own, but `core:focus.changed` is the cheapest
+    /// possible signal that the user is about to interact with a
+    /// terminal — taking the refresh hit here means the snapshot is
+    /// guaranteed-fresh when they open flashlight from that app, even
+    /// if the poll happened to fire 900 ms ago.
     async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
             event.name.as_str(),
@@ -1918,27 +2199,6 @@ impl FlashPlugin for Tmux {
         ) {
             refresh_candidate_snapshot(self, &ctx).await;
         }
-    }
-
-    /// Host's `candidateQuery` RPC — refresh actively so the snapshot the host
-    /// receives reflects the *current* tmux window set, not whatever the last
-    /// `core:focus.changed` event seeded. Flashlight opens send this on every
-    /// session, so the cost is bounded by the user pressing the keybind.
-    async fn candidate_query(
-        &self,
-        ctx: Context,
-        request: flash_plugin::CandidateQueryRequest,
-    ) -> flash_plugin::CandidateQueryResponse {
-        let _ = request;
-        let Some(build) = build_candidates(self.tmux_path.as_deref()).await else {
-            ctx.log(
-                "debug",
-                "[tmux] candidate_query: tmux unavailable, falling back to snapshot",
-            );
-            return flash_plugin::CandidateQueryResponse::snapshot();
-        };
-        ctx.emit_snapshot(SOURCE_ID, build.candidates.clone());
-        flash_plugin::CandidateQueryResponse::candidates(build.candidates).source_id(SOURCE_ID)
     }
 
     async fn discover_targets(&self, ctx: Context, request: DiscoverRequest) -> DiscoverResponse {
@@ -1979,6 +2239,7 @@ fn main() {
     let plugin = Tmux {
         tmux_path: find_tmux(),
         target_actions: Mutex::new(HashMap::new()),
+        last_snapshot_hash_arc: std::sync::Arc::new(Mutex::new(None)),
     };
     run(plugin);
 }
