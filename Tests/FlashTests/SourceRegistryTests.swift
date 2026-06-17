@@ -261,6 +261,39 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(registry.registeredCandidateSourceLabels(), ["apps", "firefox.tabs"])
   }
 
+  func testRegisteredCandidateSourceDescriptorsUseDeclarations() {
+    let registry = SourceRegistry(
+      descriptors: [
+        SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
+          StubSource(
+            identifier: "core.apps",
+            capabilities: [.candidates],
+            candidateSourceDescriptors: [
+              CandidateSourceDescriptor(name: "core.apps", kind: .apps)
+            ])
+        }
+      ],
+      terminalBundleIDs: [],
+      runningApplications: [],
+      pluginSourcesProvider: {
+        [
+          StubSource(
+            identifier: "plugin:tmux",
+            capabilities: [.candidates],
+            candidateSourceDescriptors: [
+              CandidateSourceDescriptor(name: "tmux.windows", kind: .tmuxTabs)
+            ])
+        ]
+      })
+
+    XCTAssertEqual(
+      registry.registeredCandidateSourceDescriptors(),
+      [
+        CandidateSourceDescriptor(name: "core.apps", kind: .apps),
+        CandidateSourceDescriptor(name: "tmux.windows", kind: .tmuxTabs),
+      ])
+  }
+
   func testPluginSubsourceIdentifierRoutesToOwningPluginSource() {
     let plugin = StubSource(identifier: "plugin:slack", capabilities: [.candidates])
     let registry = SourceRegistry(
@@ -420,12 +453,14 @@ private final class StubSource: FlashSource {
   let navigationSchemes: Set<String>
   private let restoreHandler: (URL) -> SourceActionResult
   let candidateSourceLabels: [String]
+  let candidateSourceDescriptors: [CandidateSourceDescriptor]
 
   init(
     identifier: String,
     priority: Int = 0,
     capabilities: FlashSourceCapabilities = [],
     candidateSourceLabels: [String] = [],
+    candidateSourceDescriptors: [CandidateSourceDescriptor] = [],
     navigationSchemes: Set<String> = [],
     candidatesHandler: @escaping (CandidateScope) -> [Candidate] = { _ in [] },
     queryHandler: ((CandidateQuery, @escaping ([Candidate]) -> Void) -> Void)? = nil,
@@ -436,6 +471,10 @@ private final class StubSource: FlashSource {
     self.priority = priority
     self.capabilities = capabilities
     self.candidateSourceLabels = candidateSourceLabels
+    self.candidateSourceDescriptors =
+      candidateSourceDescriptors.isEmpty
+      ? candidateSourceLabels.map { CandidateSourceDescriptor(name: $0) }
+      : candidateSourceDescriptors
     self.navigationSchemes = navigationSchemes
     self.candidatesHandler = candidatesHandler
     self.queryHandler =

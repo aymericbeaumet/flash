@@ -46,7 +46,10 @@
     "core:flash.started"
   ],
   "sources": [
-    "tmux.windows"
+    {
+      "name": "tmux.windows",
+      "kind": "tmux_tabs"
+    }
   ],
   "source_actions": [
     "tab_select",

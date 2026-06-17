@@ -46,6 +46,9 @@ final class PluginFlashSource: FlashSource {
   }
   var resultsAreVolatile: Bool { plugin.manifest.volatile }
   var candidateSourceLabels: [String] { plugin.manifest.candidateSources }
+  var candidateSourceDescriptors: [CandidateSourceDescriptor] {
+    plugin.manifest.candidateSourceDescriptors
+  }
   var navigationSchemes: Set<String> { Set(plugin.manifest.navigationSchemes) }
 
   func supports(_ context: AppContext) -> Bool {

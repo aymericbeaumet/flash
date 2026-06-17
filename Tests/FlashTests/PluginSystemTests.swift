@@ -41,6 +41,16 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertTrue(tmux.sourceActions.contains("tab_new"))
     XCTAssertTrue(tmux.sourceActions.contains("app_reload"))
     XCTAssertEqual(tmux.navigationSchemes, ["tmux"])
+    XCTAssertEqual(
+      tmux.candidateSourceDescriptors,
+      [CandidateSourceDescriptor(name: "tmux.windows", kind: .tmuxTabs)])
+    for id in ["chromium", "firefox", "safari"] {
+      let manifest = try XCTUnwrap(manifests.first { $0.id == id })
+      XCTAssertFalse(manifest.candidateSourceDescriptors.isEmpty)
+      XCTAssertTrue(
+        manifest.candidateSourceDescriptors.allSatisfy { $0.kind == .browserTabs },
+        "\(id) must classify tab sources as browser_tabs")
+    }
     let www = try XCTUnwrap(manifests.first { $0.id == "www" })
     XCTAssertEqual(www.priority, 60)
     XCTAssertEqual(www.capabilities, [.accessibility])
@@ -212,7 +222,7 @@ final class PluginSystemTests: XCTestCase {
       case "bundle_ids":
         value = #"["com.example.app"]"#
       case "candidates":
-        value = #"{"sources": ["example.items"]}"#
+        value = #"{"sources": [{"name": "example.items"}]}"#
       default:
         value = "null"
       }
@@ -347,7 +357,9 @@ final class PluginSystemTests: XCTestCase {
           "install": "true",
           "start": "true",
           "only_bundle_ids": ["com.example.app"],
-          "sources": ["multi.items"],
+          "sources": [
+            { "name": "multi.items" }
+          ],
           "navigation": { "schemes": ["multi"] },
           "source_actions": ["resource_archive", "resource_next"],
           "status": { "segments": ["battery"] },

@@ -891,8 +891,10 @@ struct PluginManifest: Codable, Equatable {
   /// Global active-window selector for this plugin. Entry-level selectors in
   /// commands, shebangs, mappings, and verbs are compounded with it.
   var selector: PluginSelector
-  /// Candidate source labels this plugin contributes to `:flashlight`.
-  var sources: [String]
+  /// Candidate source descriptors this plugin contributes to `:flashlight`.
+  /// `name` is the label candidates emit in metadata; `kind` is the semantic
+  /// source class used for default ranking.
+  var sources: [CandidateSourceDescriptor]
   /// Source-owned normal-mode commands this plugin can handle.
   var sourceActions: [String]
   /// Per-request RPC timeout in milliseconds. Plugins that fan out to the
@@ -964,6 +966,10 @@ struct PluginManifest: Codable, Equatable {
   }
 
   var candidateSources: [String] {
+    sources.map(\.name)
+  }
+
+  var candidateSourceDescriptors: [CandidateSourceDescriptor] {
     sources
   }
 
@@ -1057,7 +1063,7 @@ struct PluginManifest: Codable, Equatable {
     priority: Int = 25,
     volatile: Bool = false,
     selector: PluginSelector = PluginSelector(),
-    sources: [String] = [],
+    sources: [CandidateSourceDescriptor] = [],
     sourceActions: [String] = [],
     requestTimeoutMs: Int? = nil,
     capabilities: Set<PluginCapability> = [],
@@ -1080,7 +1086,7 @@ struct PluginManifest: Codable, Equatable {
     self.priority = priority
     self.volatile = volatile
     self.selector = selector
-    self.sources = Self.uniqueTrimmed(sources)
+    self.sources = Self.uniqueSourceDescriptors(sources)
     self.sourceActions = Self.uniqueTrimmed(sourceActions)
     self.requestTimeoutMs = requestTimeoutMs
     self.capabilities = capabilities
@@ -1110,7 +1116,8 @@ struct PluginManifest: Codable, Equatable {
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
       onlyURLs: try c.decodeIfPresent([String].self, forKey: .onlyURLs) ?? [])
     self.sources =
-      Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .sources) ?? [])
+      Self.uniqueSourceDescriptors(
+        try c.decodeIfPresent([CandidateSourceDescriptor].self, forKey: .sources) ?? [])
     self.sourceActions =
       Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .sourceActions) ?? [])
     self.requestTimeoutMs = try c.decodeIfPresent(Int.self, forKey: .requestTimeoutMs)
@@ -1159,6 +1166,21 @@ struct PluginManifest: Codable, Equatable {
       let trimmed = value.trimmed
       guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
       out.append(trimmed)
+    }
+    return out
+  }
+
+  private static func uniqueSourceDescriptors(
+    _ values: [CandidateSourceDescriptor]
+  ) -> [CandidateSourceDescriptor] {
+    var seen = Set<String>()
+    var out: [CandidateSourceDescriptor] = []
+    for value in values {
+      var descriptor = value
+      descriptor.name = descriptor.name.trimmed
+      let key = descriptor.name.lowercased()
+      guard !descriptor.name.isEmpty, seen.insert(key).inserted else { continue }
+      out.append(descriptor)
     }
     return out
   }

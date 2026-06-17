@@ -112,6 +112,46 @@ public enum CandidateKind: Sendable, Equatable {
   case plugin(String)
 }
 
+public enum CandidateSourceKind: String, Codable, Sendable, Equatable, Hashable {
+  /// Ordinary candidate source. Ranked after focused structural sources and
+  /// app candidates unless the user overrides its source label in config.
+  case standard = "default"
+  /// Installed/running macOS app candidates.
+  case apps
+  /// Browser tab candidates, independent of browser brand.
+  case browserTabs = "browser_tabs"
+  /// Tmux window/tab candidates surfaced from terminal-backed plugins.
+  case tmuxTabs = "tmux_tabs"
+}
+
+public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
+  public var name: String
+  public var kind: CandidateSourceKind
+
+  public init(name: String, kind: CandidateSourceKind = .standard) {
+    self.name = name
+    self.kind = kind
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case name, kind
+  }
+
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.name = try c.decode(String.self, forKey: .name)
+    self.kind = try c.decodeIfPresent(CandidateSourceKind.self, forKey: .kind) ?? .standard
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(name, forKey: .name)
+    if kind != .standard {
+      try c.encode(kind, forKey: .kind)
+    }
+  }
+}
+
 // @unchecked Sendable: All stored fields are value types or `URL` (Sendable).
 // `Candidate` is built once on the source's queue and read from
 // `CandidateFinder`'s ranking queue; consumers treat it as immutable for the
@@ -376,6 +416,11 @@ public protocol FlashSource: AnyObject {
   /// source names such as `firefox.tabs` or `tmux.windows`; short prefixes are
   /// inferred by the host filter matcher.
   var candidateSourceLabels: [String] { get }
+  /// Source descriptors this provider owns for ranking and other source-level
+  /// policy. Labels are matched against `Candidate.source`; `kind` carries the
+  /// semantic category so the host can rank source classes without hardcoding
+  /// plugin ids or browser names.
+  var candidateSourceDescriptors: [CandidateSourceDescriptor] { get }
   /// URL schemes this source can restore for movement history. Schemes are
   /// case-insensitive and should be short stable identifiers such as `tmux`.
   var navigationSchemes: Set<String> { get }
@@ -445,6 +490,9 @@ extension FlashSource {
   public var readinessPolicy: FlashSourceReadinessPolicy { .activationOnly }
   public var resultsAreVolatile: Bool { readinessPolicy == .volatile }
   public var candidateSourceLabels: [String] { [] }
+  public var candidateSourceDescriptors: [CandidateSourceDescriptor] {
+    candidateSourceLabels.map { CandidateSourceDescriptor(name: $0) }
+  }
   public var navigationSchemes: Set<String> { [] }
   public func candidates(
     in environment: FlashSourceEnvironment,

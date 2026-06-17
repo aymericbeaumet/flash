@@ -185,16 +185,47 @@ final class SourceRegistry {
     var labels: [String] = []
     for source in sources where source.capabilities.contains(.candidates) {
       let sourceLabels = source.candidateSourceLabels
-      let candidates = sourceLabels.isEmpty ? [source.displayName] : sourceLabels
+      let sourceDescriptors = source.candidateSourceDescriptors
+      let candidates =
+        sourceLabels.isEmpty
+        ? (sourceDescriptors.isEmpty ? [source.displayName] : sourceDescriptors.map(\.name))
+        : sourceLabels
       for raw in candidates {
         let label = raw.trimmed
-        guard !label.isEmpty, !seen.contains(label) else { continue }
-        seen.insert(label)
+        let key = label.lowercased()
+        guard !label.isEmpty, seen.insert(key).inserted else { continue }
         labels.append(label)
       }
     }
     labels.sort()
     return labels
+  }
+
+  func registeredCandidateSourceDescriptors() -> [CandidateSourceDescriptor] {
+    refreshRunningApplications()
+    var seen = Set<String>()
+    var descriptors: [CandidateSourceDescriptor] = []
+    for source in sources where source.capabilities.contains(.candidates) {
+      let declared = source.candidateSourceDescriptors
+      let candidates =
+        declared.isEmpty
+        ? [CandidateSourceDescriptor(name: source.displayName)]
+        : declared
+      for raw in candidates {
+        var descriptor = raw
+        descriptor.name = descriptor.name.trimmed
+        let key = descriptor.name.lowercased()
+        guard !descriptor.name.isEmpty, seen.insert(key).inserted else { continue }
+        descriptors.append(descriptor)
+      }
+    }
+    descriptors.sort { lhs, rhs in
+      let left = lhs.name.lowercased()
+      let right = rhs.name.lowercased()
+      if left != right { return left < right }
+      return lhs.name < rhs.name
+    }
+    return descriptors
   }
 
   func candidate(

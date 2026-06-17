@@ -9,7 +9,7 @@ declares sensitive host surfaces: `"clipboard"` gates
 (`ax.snapshot`, `ax.perform`, `ax.set`).
 
 Flash loads manifests eagerly. On plugin reload it compiles commands, mappings,
-bangs, verbs, source labels, actions, schemes, event listeners, and active-window
+bangs, verbs, source descriptors, actions, schemes, event listeners, and active-window
 selectors into indexes. Runtime dispatch should be dictionary lookup plus
 selector matching against the current window context, not raw manifest walking.
 Keep new protocol or SDK work aligned with that boundary: manifests declare the
@@ -43,7 +43,9 @@ subcommands, never during install or start.
   "listen": ["core:flash.started", "core:apps.*"],
   "only_bundle_ids": ["org.mozilla.firefox"],
   "only_urls": ["https://mail.google.com/*"],
-  "sources": ["example.items"],
+  "sources": [
+    { "name": "example.items" }
+  ],
   "source_actions": ["resource_archive"],
   "hints": {},
   "commands": {
@@ -101,8 +103,11 @@ mappings sit at priority `0`.
 - **`hints`** — opts the plugin in as a hints provider. Hint selection is
   exclusive: the highest-priority provider supporting the focused context owns
   `f` for that context.
-- **`sources`** — root array of source labels the plugin owns for
-  `@<source>` completion and source-scoped flashlight queries.
+- **`sources`** — root array of source descriptors the plugin owns for
+  `@<source>` completion, source-scoped flashlight queries, and default source
+  ranking. Each item is `{ "name": "<source.label>", "kind": "<kind>" }`.
+  `kind` is optional and defaults to `"default"`; supported kinds are
+  `"default"`, `"apps"`, `"browser_tabs"`, and `"tmux_tabs"`.
 - **`commands`** — `items[]` are command-line `:` registrations. The host
   indexes them by `(command, subcommand)` on load; wildcard subcommand `"*"`
   consumes the remainder as args.

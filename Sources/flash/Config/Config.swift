@@ -165,42 +165,25 @@ struct Config {
     /// "@ft" = "@firefox.tabs"
     /// ```
     var aliases: [String: String] = [:]
-    /// Source precedence weights applied as the tiebreaker once
-    /// match score ties. Keys are source labels (or parent prefixes
-    /// — `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …).
-    /// Higher weight wins. The default table mirrors the previous
-    /// hardcoded order: `tmux > browser tabs > apps > everything
-    /// else`. Override individual rows via `[flashlight.precedence]`
-    /// in flash.toml — entries you don't list fall back to weight 0.
+    /// Source precedence override weights applied as the tiebreaker once
+    /// match score ties. Keys are source labels (or parent prefixes —
+    /// `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …). Higher
+    /// weight wins. Entries not listed use the source descriptor kind declared
+    /// by the native source or plugin manifest: tmux tabs > browser tabs >
+    /// apps > default.
     ///
     /// Example:
     /// ```toml
     /// [flashlight.precedence]
-    /// tmux            = 200
-    /// "firefox.tabs"  = 80
-    /// "core.apps"     = 40
+    /// tmux           = 200
+    /// "firefox.tabs" = 120
     /// ```
-    var precedence: [String: Int] = Self.defaultPrecedence
+    var precedence: [String: Int] = [:]
     /// Bonus added to any candidate whose `pid != nil` so running
     /// processes outrank installed-but-not-running rows under the
-    /// same source. With the default `40` weight on `core.apps`
-    /// this gives active apps an effective rank of 50 vs. inactive
-    /// 40, matching the previous explicit running/installed split.
+    /// same source. With the `apps` source kind this gives active apps an
+    /// effective rank of 50 vs. inactive 40.
     var precedenceAliveBonus: Int = 10
-
-    static let defaultPrecedence: [String: Int] = [
-      "tmux": 100,
-      "firefox": 80,
-      "safari": 80,
-      "chrome": 80,
-      "chromium": 80,
-      "brave": 80,
-      "edge": 80,
-      "arc": 80,
-      "vivaldi": 80,
-      "opera": 80,
-      "core.apps": 40,
-    ]
   }
   struct Debug {
     /// When true, every detected target is outlined alongside its hint chip.

@@ -98,6 +98,44 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertGreaterThan(finderScore, tabScore)
   }
 
+  func testSourceFamilyMatchOutranksUnrelatedExactTitleMatches() throws {
+    let tmuxWindow = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("tmux_window"),
+        source: "tmux.windows",
+        name: ".dotfiles",
+        subtitle: "scratch:1 · zsh · ~/.dotfiles",
+        bundleIdentifier: "",
+        pid: 4242))
+    let processA = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("process"),
+        source: "processes.processes",
+        name: "tmux",
+        subtitle: "process",
+        bundleIdentifier: "",
+        pid: 101))
+    let processB = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("process"),
+        source: "processes.processes",
+        name: "tmux",
+        subtitle: "process",
+        bundleIdentifier: "",
+        pid: 102))
+
+    let tmuxScore = try XCTUnwrap(CandidateFinder.score(query: "tmux", candidate: tmuxWindow))
+    let processScore = try XCTUnwrap(CandidateFinder.score(query: "tmux", candidate: processA))
+    XCTAssertGreaterThan(tmuxScore, processScore)
+
+    let sorted = CandidateFinder.sortedMatches([
+      CandidateMatch(candidate: processA, score: processScore),
+      CandidateMatch(candidate: processB, score: processScore),
+      CandidateMatch(candidate: tmuxWindow, score: tmuxScore),
+    ])
+    XCTAssertEqual(sorted.first?.candidate.source, "tmux.windows")
+  }
+
   func testAliveCandidatesSortBeforeDeadCandidatesForOpenResults() {
     let dead = CandidateFinder.prepare(
       candidate(
@@ -786,11 +824,10 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(urlOnly.displayTitle, "[firefox] https://mail.google.com/")
   }
 
-  func testPrecedenceTableDefaultsMirrorPreviousOrder() {
-    // Defaults preserve the prior hard-coded ladder so users who
-    // never touch `[flashlight.precedence]` see the same flashlight
-    // ordering: bangs > tmux > browser tabs > active apps > inactive
-    // apps > everything else.
+  func testPrecedenceTableDefaultsUseCandidateKinds() {
+    // Fallbacks use semantic candidate kinds, so code paths that score
+    // without the live registry still keep the same visible order:
+    // bangs > tmux > browser tabs > active apps > inactive apps > rest.
     let bang = candidate(
       kind: .plugin("bang"), source: "bang", name: "!g",
       subtitle: "", bundleIdentifier: "")
@@ -823,7 +860,8 @@ final class SourceCandidateTests: XCTestCase {
     // A user can pin a sub-source above its parent: `firefox.bookmarks`
     // > `firefox`. Longer pattern wins regardless of dict ordering.
     let table = CandidateFinder.PrecedenceTable(
-      weights: ["firefox": 80, "firefox.bookmarks": 120],
+      sources: [CandidateSourceDescriptor(name: "firefox", kind: .browserTabs)],
+      overrides: ["firefox.bookmarks": 120],
       aliveBonus: 0)
     let tab = candidate(
       kind: .plugin("browser_tab"), source: "firefox.tabs", name: "Gmail",
@@ -833,6 +871,25 @@ final class SourceCandidateTests: XCTestCase {
       subtitle: "bookmark", bundleIdentifier: "")
     XCTAssertEqual(table.weight(for: tab), 80)
     XCTAssertEqual(table.weight(for: bookmark), 120)
+  }
+
+  func testPrecedenceTableUsesSourceDescriptors() {
+    let table = CandidateFinder.PrecedenceTable(
+      sources: [
+        CandidateSourceDescriptor(name: "terminal.windows", kind: .tmuxTabs),
+        CandidateSourceDescriptor(name: "web.pages", kind: .browserTabs),
+      ],
+      overrides: [:],
+      aliveBonus: 0)
+    let terminal = candidate(
+      kind: .plugin("window"), source: "terminal.windows", name: "scratch:1",
+      subtitle: "window", bundleIdentifier: "")
+    let web = candidate(
+      kind: .plugin("page"), source: "web.pages", name: "Inbox",
+      subtitle: "page", bundleIdentifier: "")
+
+    XCTAssertEqual(table.weight(for: terminal), 100)
+    XCTAssertEqual(table.weight(for: web), 80)
   }
 
   func testInsertsTextOnlyForEmojiKind() {
@@ -1318,11 +1375,17 @@ final class SourceCandidateTests: XCTestCase {
       name: "Inbox", subtitle: "browser tab",
       bundleIdentifier: "org.mozilla.firefox",
       url: URL(string: "https://mail.example.test/"))
+    let app = candidate(
+      kind: .app, source: "core.apps",
+      name: "Safari", subtitle: "app",
+      bundleIdentifier: "com.apple.Safari")
 
     XCTAssertTrue(
       CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "firefox.tabs"))
     XCTAssertTrue(
       CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "firefox"))
+    XCTAssertTrue(
+      CandidateFinder.candidateMatchesSourceFilter(app, filter: "apps"))
     XCTAssertFalse(
       CandidateFinder.candidateMatchesSourceFilter(firefoxTabs, filter: "safari"))
   }

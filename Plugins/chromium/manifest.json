@@ -33,13 +33,34 @@
     "core:focus.changed"
   ],
   "sources": [
-    "chrome.tabs",
-    "chromium.tabs",
-    "brave.tabs",
-    "edge.tabs",
-    "arc.tabs",
-    "vivaldi.tabs",
-    "opera.tabs"
+    {
+      "name": "chrome.tabs",
+      "kind": "browser_tabs"
+    },
+    {
+      "name": "chromium.tabs",
+      "kind": "browser_tabs"
+    },
+    {
+      "name": "brave.tabs",
+      "kind": "browser_tabs"
+    },
+    {
+      "name": "edge.tabs",
+      "kind": "browser_tabs"
+    },
+    {
+      "name": "arc.tabs",
+      "kind": "browser_tabs"
+    },
+    {
+      "name": "vivaldi.tabs",
+      "kind": "browser_tabs"
+    },
+    {
+      "name": "opera.tabs",
+      "kind": "browser_tabs"
+    }
   ],
   "source_actions": [
     "tab_select",

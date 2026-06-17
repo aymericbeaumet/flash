@@ -9,6 +9,8 @@
     "core:flash.started"
   ],
   "sources": [
-    "emojis.glyphs"
+    {
+      "name": "emojis.glyphs"
+    }
   ]
 }

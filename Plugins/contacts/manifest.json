@@ -26,6 +26,8 @@
     "core:apps.*"
   ],
   "sources": [
-    "contacts.cards"
+    {
+      "name": "contacts.cards"
+    }
   ]
 }

@@ -20,7 +20,10 @@
     "core:ax.changed"
   ],
   "sources": [
-    "firefox.tabs"
+    {
+      "name": "firefox.tabs",
+      "kind": "browser_tabs"
+    }
   ],
   "source_actions": [
     "tab_select"

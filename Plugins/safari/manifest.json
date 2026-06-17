@@ -34,7 +34,10 @@
     "core:focus.changed"
   ],
   "sources": [
-    "safari.tabs"
+    {
+      "name": "safari.tabs",
+      "kind": "browser_tabs"
+    }
   ],
   "source_actions": [
     "tab_select",

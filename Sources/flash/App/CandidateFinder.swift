@@ -263,6 +263,7 @@ enum CandidateFinder {
     let source = candidate.source.lowercased()
     if source == needle { return true }
     if source.hasPrefix(needle + ".") { return true }
+    if candidate.kind == .app, needle == "apps" { return true }
     return false
   }
 
@@ -465,7 +466,7 @@ enum CandidateFinder {
     return wordStartMask & bit != 0
   }
 
-static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
+  static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     var mask: UInt64 = 0
     var compactCount = 0
     for scalar in normalizedQuery.unicodeScalars {
@@ -564,8 +565,10 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     {
       best = max(best ?? sourceTitleScore, sourceTitleScore)
     }
-    if let sourceScore = fieldScoreNormalized(
-      query: normalizedQuery, normalized: fields.source, base: 8_000, fuzzyScore: fuzzyScore)
+    if let sourceScore = sourceScoreNormalized(
+      query: normalizedQuery,
+      normalizedSource: fields.source,
+      fuzzyScore: fuzzyScore)
     {
       best = max(best ?? sourceScore, sourceScore)
     }
@@ -726,8 +729,8 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     //    precedence weight is the tiebreaker once scores cluster —
     //    enough to bump the order in the intuitive direction (tmux
     //    > browser tabs > active apps > …) without overriding the
-    //    matcher. Configured via `[flashlight.precedence]` so users
-    //    can re-weight the table without touching the code.
+    //    matcher. Defaults come from source descriptors/candidate
+    //    kinds; `[flashlight.precedence]` can override specific labels.
     let lhsIsBang = lhs.weight == PrecedenceTable.bangWeight
     let rhsIsBang = rhs.weight == PrecedenceTable.bangWeight
     if lhsIsBang != rhsIsBang { return lhsIsBang }
@@ -755,23 +758,32 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     ].joined(separator: "\u{1f}")
   }
 
-  /// Source-precedence weight table built from
-  /// `Config.Flashlight.precedence`. Lookup is a single linear scan
-  /// over the entries (sorted longest-pattern first so the most
-  /// specific match wins). Used by `sortedMatches` as the tiebreaker
-  /// when match scores cluster. Higher weight = ranks earlier.
+  /// Source-precedence weight table built from registered source descriptors
+  /// plus optional config overrides. Lookup is a single linear scan over the
+  /// entries (sorted longest-pattern first so the most specific match wins).
+  /// Used by `sortedMatches` as the tiebreaker when match scores cluster.
+  /// Higher weight = ranks earlier.
   struct PrecedenceTable: Sendable {
     private let entries: [(pattern: String, weight: Int)]
     public let aliveBonus: Int
 
-    public init(weights: [String: Int], aliveBonus: Int) {
-      self.entries =
-        weights
-        .map { ($0.key.lowercased(), $0.value) }
-        .sorted { lhs, rhs in
-          if lhs.0.count != rhs.0.count { return lhs.0.count > rhs.0.count }
-          return lhs.0 < rhs.0  // deterministic tie-break for equal-length patterns
-        }
+    public init(
+      sources: [CandidateSourceDescriptor],
+      overrides: [String: Int],
+      aliveBonus: Int
+    ) {
+      var weights: [String: Int] = [:]
+      for source in sources {
+        let pattern = source.name.trimmed.lowercased()
+        guard !pattern.isEmpty else { continue }
+        weights[pattern] = Self.defaultWeight(for: source.kind)
+      }
+      for (pattern, weight) in overrides {
+        let pattern = pattern.trimmed.lowercased()
+        guard !pattern.isEmpty else { continue }
+        weights[pattern] = weight
+      }
+      self.entries = Self.sortedEntries(weights)
       self.aliveBonus = aliveBonus
     }
 
@@ -781,15 +793,16 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     public func weight(for candidate: Candidate) -> Int {
       if candidate.kind == bangKind { return Self.bangWeight }
       let lowered = candidate.source.lowercased()
-      var base = 0
+      var base: Int?
       for entry in entries {
         if lowered == entry.pattern || lowered.hasPrefix(entry.pattern + ".") {
           base = entry.weight
           break
         }
       }
+      let resolvedBase = base ?? Self.defaultWeight(for: Self.fallbackSourceKind(for: candidate))
       let bonus = candidate.pid != nil ? aliveBonus : 0
-      return base + bonus
+      return resolvedBase + bonus
     }
 
     /// Sentinel ceiling reserved for bang rows so the comparator
@@ -797,25 +810,52 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     /// reasonable user-configured weight.
     public static let bangWeight = Int.max
 
-    /// Hard-coded fallback used by tests and any code path that
-    /// scores candidates without going through the live config.
+    /// Fallback used by tests and any code path that scores candidates without
+    /// going through the live registry. This still derives from semantic
+    /// candidate kinds, not source-name tables.
     public static let `default` = PrecedenceTable(
-      weights: Self.defaultWeights,
+      sources: [],
+      overrides: [:],
       aliveBonus: 10)
 
-    public static let defaultWeights: [String: Int] = [
-      "tmux": 100,
-      "firefox": 80,
-      "safari": 80,
-      "chrome": 80,
-      "chromium": 80,
-      "brave": 80,
-      "edge": 80,
-      "arc": 80,
-      "vivaldi": 80,
-      "opera": 80,
-      "core.apps": 40,
-    ]
+    private static func sortedEntries(_ weights: [String: Int]) -> [(pattern: String, weight: Int)]
+    {
+      weights
+        .map { ($0.key, $0.value) }
+        .sorted { lhs, rhs in
+          if lhs.0.count != rhs.0.count { return lhs.0.count > rhs.0.count }
+          return lhs.0 < rhs.0  // deterministic tie-break for equal-length patterns
+        }
+    }
+
+    private static func defaultWeight(for kind: CandidateSourceKind) -> Int {
+      switch kind {
+      case .tmuxTabs:
+        return 100
+      case .browserTabs:
+        return 80
+      case .apps:
+        return 40
+      case .standard:
+        return 0
+      }
+    }
+
+    private static func fallbackSourceKind(for candidate: Candidate) -> CandidateSourceKind {
+      switch candidate.kind {
+      case .app:
+        return .apps
+      case .plugin(let kind):
+        switch kind {
+        case "tmux_window":
+          return .tmuxTabs
+        case "browser_tab":
+          return .browserTabs
+        default:
+          return .standard
+        }
+      }
+    }
   }
 
   private static func browserTabDisplayTitle(_ candidate: Candidate) -> String {
@@ -944,6 +984,32 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
     }
     guard let fuzzy = fuzzyScore(query, normalized) else { return nil }
     return base + min(500, fuzzy)
+  }
+
+  /// Direct source-label matches are more intentional than generic title
+  /// matches from unrelated sources. This is especially important for dotted
+  /// source families such as `tmux.windows`: typing `tmux` should surface rows
+  /// from that source even when another source has an exact title `tmux`.
+  ///
+  /// Plain exact source labels stay just below exact title matches so an app
+  /// named `Finder` can still beat a hypothetical source literally named
+  /// `finder`.
+  private static func sourceScoreNormalized(
+    query: String,
+    normalizedSource: String,
+    fuzzyScore: (String, String) -> Int?
+  ) -> Int? {
+    guard !normalizedSource.isEmpty else { return nil }
+    if normalizedSource == query { return 14_900 }
+    let firstComponent = normalizedSource.split(separator: " ").first.map(String.init) ?? ""
+    if firstComponent == query, normalizedSource.contains(" ") {
+      return 16_000 - min(300, normalizedSource.count - query.count)
+    }
+    return fieldScoreNormalized(
+      query: query,
+      normalized: normalizedSource,
+      base: 8_000,
+      fuzzyScore: fuzzyScore)
   }
 
   /// True when `query` starts at the head of some word inside

@@ -92,9 +92,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.statusBar.template.variables.count, 2)
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
-    XCTAssertEqual(c.flashlight.precedence["tmux"], 100)
-    XCTAssertEqual(c.flashlight.precedence["firefox"], 80)
-    XCTAssertEqual(c.flashlight.precedence["core.apps"], 40)
+    XCTAssertTrue(c.flashlight.precedence.isEmpty)
     XCTAssertEqual(c.flashlight.precedenceAliveBonus, 10)
     XCTAssertFalse(c.debug.httpInspectorEnabled)
     XCTAssertEqual(c.debug.httpInspectorHost, "localhost")
@@ -380,7 +378,7 @@ final class ConfigLoaderTests: XCTestCase {
 
     XCTAssertTrue(c.flashlight.aliases.isEmpty)
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
-    XCTAssertEqual(c.flashlight.precedence["firefox"], 80)
+    XCTAssertNil(c.flashlight.precedence["firefox"])
     XCTAssertEqual(c.flashlight.precedenceAliveBonus, 10)
     XCTAssertTrue(
       c.loadingDiagnostics.contains {

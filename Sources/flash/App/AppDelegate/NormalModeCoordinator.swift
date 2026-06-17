@@ -1057,6 +1057,7 @@ extension AppDelegate {
   /// session-time `queryCandidates` RPCs. Later plugin snapshot updates can warm
   /// the next session, but they must not mutate this one.
   func openCandidateFinderSession(scope: CandidateScope) {
+    candidateFinderPrecedenceTable = buildCandidateFinderPrecedenceTable()
     candidateFinderCandidates = candidateFinderCandidates(for: scope)
     candidateFinderSelectedIndex = 0
     FlashLog.trace(
@@ -1159,6 +1160,7 @@ extension AppDelegate {
     if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
       clearCommandLineCompletionState()
       if candidateFinderCandidates.isEmpty {
+        candidateFinderPrecedenceTable = buildCandidateFinderPrecedenceTable()
         candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
         candidateFinderSelectedIndex = 0
       }
@@ -1508,14 +1510,18 @@ extension AppDelegate {
     }
   }
 
-  /// Build a `PrecedenceTable` from the live config. Called once per
-  /// keystroke (the table is cheap to materialise — `[String: Int]`
-  /// of ~a dozen entries) so config edits take effect on the next
-  /// search without needing a process-level cache.
-  private func precedenceTable() -> CandidateFinder.PrecedenceTable {
+  /// Build a `PrecedenceTable` from the live source descriptors and config
+  /// overrides. Frozen once with the candidate snapshot so query-time sorting
+  /// uses a prepared table.
+  private func buildCandidateFinderPrecedenceTable() -> CandidateFinder.PrecedenceTable {
     CandidateFinder.PrecedenceTable(
-      weights: config.flashlight.precedence,
+      sources: registry.registeredCandidateSourceDescriptors(),
+      overrides: config.flashlight.precedence,
       aliveBonus: config.flashlight.precedenceAliveBonus)
+  }
+
+  private func precedenceTable() -> CandidateFinder.PrecedenceTable {
+    candidateFinderPrecedenceTable
   }
 
   /// Set `candidateFinderMatches` and clamp the selected index.
@@ -2033,6 +2039,7 @@ extension AppDelegate {
     candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
+    candidateFinderPrecedenceTable = .default
     candidateFinderIncrementalCache = nil
   }
 

@@ -129,9 +129,10 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 # Number of suggestion rows shown below the command bar.
 suggestion_count = 10
 # Bonus added to candidates backed by a running process, used as a
-# source-order tiebreaker after match quality ties. With the default
-# core.apps precedence below, running apps rank just ahead of installed
-# but inactive apps from the same source.
+# source-order tiebreaker after match quality ties. Source kinds declared by
+# native sources and plugin manifests rank tmux tabs > browser tabs > apps >
+# default, so this makes running apps rank just ahead of installed but inactive
+# apps from the same source.
 precedence_alive_bonus = 10
 
 [flashlight.aliases]
@@ -141,19 +142,13 @@ precedence_alive_bonus = 10
 # "@ft" = "@firefox.tabs"
 
 [flashlight.precedence]
-# Source-order tiebreaker applied after match quality ties. Keys are
-# source labels or parent prefixes; entries not listed have weight 0.
-tmux = 100
-firefox = 80
-safari = 80
-chrome = 80
-chromium = 80
-brave = 80
-edge = 80
-arc = 80
-vivaldi = 80
-opera = 80
-"core.apps" = 40
+# Optional source-order overrides applied after match quality ties. Keys are
+# source labels or parent prefixes. Entries not listed use the source kind
+# declared by the native source or plugin manifest:
+#   tmux_tabs > browser_tabs > apps > default
+# Example:
+# tmux = 200
+# "firefox.tabs" = 120
 
 [mode]
 # Mode labels shown after the active app name in the persistent status bar

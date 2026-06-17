@@ -39,6 +39,8 @@
     "core:config.*"
   ],
   "sources": [
-    "slack.channels"
+    {
+      "name": "slack.channels"
+    }
   ]
 }

@@ -201,6 +201,7 @@ public protocol FlashSource: AnyObject {
     var activationPolicy: FlashSourceActivationPolicy { get }
     var readinessPolicy: FlashSourceReadinessPolicy { get }
     var candidateSourceLabels: [String] { get }
+    var candidateSourceDescriptors: [CandidateSourceDescriptor] { get }
     func supports(_ context: AppContext) -> Bool
     func discover(in context: AppContext) throws -> [JumpTarget]
     func candidates(in environment: FlashSourceEnvironment, scope: CandidateScope) -> [Candidate]
@@ -255,7 +256,7 @@ Keys:
 | `flashlight.suggestion_count`      | int            | `10`                 |
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |
-| `[flashlight.precedence]` entries  | int            | built-in source order |
+| `[flashlight.precedence]` entries  | int            | source-kind override |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
 | `mode.sequence_timeout_ms`         | int (ms)       | `1000`               |
 | `[mode.all.mappings]` entries      | argv array mapping (`["flash", "<verb>"...]` or `[<argv>...]`) | none             |
@@ -345,7 +346,7 @@ need safely). `Scripts/build-plugins.sh [dev|release]` compiles every
 kept out of the watched plugin trees) and copies each `flash-plugin-<id>` binary
 next to its `manifest.json`. `dev` is an optimized current-arch release build
 (fast, incremental); `release` is an optimized universal binary (x86_64 + arm64)
-joined with `lipo`. Candidate providers declare `providers[].sources`, keep
+joined with `lipo`. Candidate providers declare manifest root `sources` descriptors, keep
 candidate snapshots warm in memory, refresh from light host events such as
 `core:apps.snapshot`, `core:focus.changed`, and `core:ax.changed` when possible,
 and poll only when the underlying source cannot be watched. The command-bar
@@ -464,7 +465,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]
 
 **Candidate schema.** Every candidate is `{ title: String, url: URL?, metadata: [String: String] }`. `title` is the primary searchable string and the highest-precedence ranking field. `url` is the typed openable destination — apps point to their `.app` bundle file URL; browser tabs point to the page URL; sources without an openable destination omit it. `metadata` is fully opaque to FlashCore; sources stash whatever they want there, other plugins may read each other's keys by convention, and the matcher indexes the values at a low tier for fuzzy search. The bundled host uses these conventional keys for routing (defined in `Sources/flash/App/CandidateMetadata.swift` and mirrored as `candidate_metadata::*` constants in `Plugins/_rust_flash_plugin/src/lib.rs`): `source`, `source_id`, `kind`, `pid`, `navigation_url`, `bundle_id`, `subtitle`, `payload`, `aliases`, `finishes_command`. The wire format between plugin and host carries `{ title, url, metadata }`.
 
-**Flashlight source ordering.** `CandidateFinder.sortedMatches` ranks results in two bands. Registered `!<bang>` candidates form a strict top band — a typed bang always wins, because a bang signals explicit dispatch intent. All other candidates are ordered by match quality (the field-aware exact/prefix/word-prefix/substring/fuzzy ladder in `fieldScoreNormalized`); source tier is only consulted as a tiebreaker when scores match (`sourcePrecedenceTierIndex`: tmux > browser tabs > active apps (pid set) > inactive apps > rest). The earlier strict-tier sort hid strong prefix matches on app names under weak fuzzy hits on browser tabs (`:flashlight safari` would surface random Firefox pages but not Safari.app) — match quality must lead.
+**Flashlight source ordering.** `CandidateFinder.sortedMatches` ranks results in two bands. Registered `!<bang>` candidates form a strict top band — a typed bang always wins, because a bang signals explicit dispatch intent. All other candidates are ordered by match quality (the field-aware exact/prefix/word-prefix/substring/fuzzy ladder in `fieldScoreNormalized`); source tier is only consulted as a tiebreaker when scores match. Defaults come from native source descriptors and plugin manifest `sources[].kind` values (`tmux_tabs > browser_tabs > apps > default`), with `precedence_alive_bonus` nudging pid-backed candidates above inactive rows from the same source. `[flashlight.precedence]` is an override layer for specific source labels or parent prefixes. The earlier strict-tier sort hid strong prefix matches on app names under weak fuzzy hits on browser tabs (`:flashlight safari` would surface random Firefox pages but not Safari.app) — match quality must lead.
 
 **Flashlight bangs.** Registered plugin bangs are exclusively in scope when the user types `!`. With no `!` typed the candidate pool excludes bang candidates entirely; the moment the query starts with `!`, the pool is replaced with the bang registry alone (no app/tab/tmux noise), fuzzy-matched against the token text after `!`. Submitting a bang routes the remainder through `PluginManager.invokeShebang`; the catch-all `"*"` registration is reached through the same path when no exact token matches what the user typed. A bang manifest entry can declare a `candidate_source` — once the user confirms `!<token> ` (trailing space), the flashlight pool swaps to that source's live candidates so the user picks the target directly (e.g. `!kill ` → processes plugin's process list; selection routes through that source's `resolve_candidate`).
 

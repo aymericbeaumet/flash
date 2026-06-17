@@ -30,6 +30,8 @@
     "core:apps.terminated"
   ],
   "sources": [
-    "processes.processes"
+    {
+      "name": "processes.processes"
+    }
   ]
 }

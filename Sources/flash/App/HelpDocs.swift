@@ -208,9 +208,9 @@ enum HelpDocs {
       2. Prefix match.
       3. Secondary metadata match (URL, tmux session/path, source labels).
       4. Fuzzy subsequence score.
-      5. Source-precedence bonus — tmux windows rank above browser tabs,
-         which rank above active apps, then inactive apps, then the rest
-         (slack / notes / reminders / contacts).
+      5. Source-precedence bonus from source descriptors — `tmux_tabs`
+         ranks above `browser_tabs`, then `apps`, then `default`; the
+         alive bonus puts running apps above inactive apps.
 
       ## Plugin candidates
 
