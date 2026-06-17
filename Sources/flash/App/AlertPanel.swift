@@ -1,166 +1,115 @@
 import AppKit
 import QuartzCore
 
-/// Hammerspoon-style transient centered alert for the `alert_show` verb.
-///
-/// Mirrors `hs.alert.defaultStyle`: black 75% fill, white stroke/text,
-/// 27pt system font, radius 27, 2s display, 0.15s fade out. Only one
-/// alert is visible at a time; a new alert immediately replaces the old one.
-final class AlertPanel: NSPanel {
-  struct Style {
+extension OverlayPanel {
+  struct AlertStyle {
     let fillColor: NSColor
     let strokeColor: NSColor
     let textColor: NSColor
 
-    static let standard = Style(
+    static let standard = AlertStyle(
       fillColor: NSColor.black.withAlphaComponent(0.75),
       strokeColor: .white,
       textColor: .white)
-    static let error = Style(
+    static let error = AlertStyle(
       fillColor: NSColor.systemRed.withAlphaComponent(0.92),
       strokeColor: NSColor.white.withAlphaComponent(0.95),
       textColor: .white)
   }
 
-  private let boxView = NSView(frame: .zero)
-  private let label = NSTextField(labelWithString: "")
-  private var hideTimer: Timer?
-  private var token: UInt64 = 0
+  private static let alertTextSize: CGFloat = 27
+  private static let alertRadius: CGFloat = 27
+  private static let alertStrokeWidth: CGFloat = 2
+  private static let alertDisplayDuration: TimeInterval = 2.0
+  private static let alertTextGutter: CGFloat = 10
 
-  private static let textSize: CGFloat = 27
-  private static let radius: CGFloat = 27
-  private static let strokeWidth: CGFloat = 2
-  private static let displayDuration: TimeInterval = 2.0
-  private static let fadeOutDuration: TimeInterval = 0.15
-  private static let textGutter: CGFloat = 10
+  /// Hammerspoon-style transient centered alert for the `alert_show` verb.
+  /// Drawn in the existing overlay window so normal-mode capture cannot hide
+  /// a separate panel behind the resident overlay.
+  func displayAlert(
+    _ message: String,
+    duration: TimeInterval? = nil,
+    style: AlertStyle = .standard
+  ) {
+    let duration = duration ?? Self.alertDisplayDuration
+    transientDisplayToken &+= 1
+    let myToken = transientDisplayToken
 
-  init() {
-    super.init(
-      contentRect: .zero,
-      styleMask: [.borderless, .nonactivatingPanel],
-      backing: .buffered,
-      defer: false
-    )
-    level = .screenSaver
-    collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-    isOpaque = false
-    backgroundColor = .clear
-    hasShadow = false
-    ignoresMouseEvents = true
-    hidesOnDeactivate = false
-    isReleasedWhenClosed = false
-    alphaValue = 0
-
-    let content = NSView(frame: .zero)
-    content.wantsLayer = true
-    content.layer?.backgroundColor = NSColor.clear.cgColor
-    content.addSubview(boxView)
-    contentView = content
-
-    boxView.wantsLayer = true
-    boxView.layer?.backgroundColor = Style.standard.fillColor.cgColor
-    boxView.layer?.borderColor = Style.standard.strokeColor.cgColor
-    boxView.layer?.borderWidth = Self.strokeWidth
-    boxView.layer?.cornerRadius = Self.radius
-    boxView.layer?.masksToBounds = true
-    boxView.layer?.actions = Self.noActions
-    boxView.addSubview(label)
-
-    label.font = NSFont.systemFont(ofSize: Self.textSize)
-    label.textColor = Style.standard.textColor
-    label.alignment = .center
-    label.backgroundColor = .clear
-    label.lineBreakMode = .byWordWrapping
-    label.usesSingleLineMode = false
-    label.isSelectable = false
-    label.isEditable = false
-  }
-
-  override var canBecomeKey: Bool { false }
-  override var canBecomeMain: Bool { false }
-
-  func show(_ message: String, duration: TimeInterval? = nil, style: Style = .standard) {
-    let duration = duration ?? Self.displayDuration
-    token &+= 1
-    let myToken = token
-    hideTimer?.invalidate()
-    hideTimer = nil
-
-    let screen = Self.alertScreen()
-    let padding = Self.textSize / 2
-    let maxTextWidth = max(120, screen.frame.width * 0.8 - padding * 2 - Self.strokeWidth)
-    let textSize = Self.textSize(for: message, maxWidth: maxTextWidth)
-    let boxSize = CGSize(
-      width: ceil(textSize.width + padding * 2 + Self.strokeWidth + Self.textGutter),
-      height: ceil(textSize.height + padding * 2 + Self.strokeWidth)
-    )
-    let boxFrame = CGRect(origin: .zero, size: boxSize)
-    let panelFrame = CGRect(
-      x: screen.frame.midX - boxSize.width / 2,
-      y: screen.frame.midY - boxSize.height / 2,
-      width: boxSize.width,
-      height: boxSize.height
-    )
-
-    setFrame(panelFrame, display: false)
-    contentView?.frame = boxFrame
-    boxView.frame = boxFrame
-    boxView.layer?.backgroundColor = style.fillColor.cgColor
-    boxView.layer?.borderColor = style.strokeColor.cgColor
-    label.stringValue = message
-    label.textColor = style.textColor
-    label.frame = CGRect(
-      x: padding + Self.strokeWidth / 2,
-      y: (boxSize.height - textSize.height) / 2,
-      width: textSize.width + Self.textGutter,
-      height: textSize.height
-    )
-
-    // Replacements must be instant: no fade-in, no order-out/order-in cycle.
-    alphaValue = 1
-    if !isVisible {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer {
+      CATransaction.commit()
+      refreshWindowLevelForCurrentContent()
       orderFrontRegardless()
     }
 
-    hideTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) {
-      [weak self] _ in
-      guard let self, self.token == myToken else { return }
-      self.hide(animated: true)
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let frame = snapshot.unionFrame
+    let screenFrame = snapshot.mainFrame ?? frame
+    applyPanelFrame(frame)
+    recycleAll()
+
+    let padding = Self.alertTextSize / 2
+    let maxTextWidth = max(
+      120,
+      screenFrame.width * 0.8 - padding * 2 - Self.alertStrokeWidth)
+    let textSize = Self.alertTextSize(for: message, maxWidth: maxTextWidth)
+    let boxSize = CGSize(
+      width: ceil(textSize.width + padding * 2 + Self.alertStrokeWidth + Self.alertTextGutter),
+      height: ceil(textSize.height + padding * 2 + Self.alertStrokeWidth))
+    let boxFrame = CGRect(
+      x: screenFrame.midX - frame.minX - boxSize.width / 2,
+      y: screenFrame.midY - frame.minY - boxSize.height / 2,
+      width: boxSize.width,
+      height: boxSize.height)
+
+    let label = dequeueLabelLayer()
+    label.string = message
+    label.font = NSFont.systemFont(ofSize: Self.alertTextSize)
+    label.fontSize = Self.alertTextSize
+    label.foregroundColor = style.textColor.cgColor
+    label.alignmentMode = .center
+    label.isWrapped = true
+    label.contentsScale = snapshot.mainScale
+    label.frame = CGRect(
+      x: padding + Self.alertStrokeWidth / 2,
+      y: (boxSize.height - textSize.height) / 2,
+      width: textSize.width + Self.alertTextGutter,
+      height: textSize.height)
+
+    let box = dequeueHintLayer()
+    box.frame = boxFrame
+    box.colors = nil
+    box.backgroundColor = style.fillColor.cgColor
+    box.borderColor = style.strokeColor.cgColor
+    box.borderWidth = Self.alertStrokeWidth
+    box.cornerRadius = Self.alertRadius
+    box.masksToBounds = true
+    box.contentsScale = snapshot.mainScale
+    box.sublayers = [label]
+
+    var sublayers: [CALayer] = [box]
+    appendModeBadgeLayerIfNeeded(to: &sublayers, panelFrame: frame)
+    contentLayer.sublayers = sublayers
+    transientContentVisible = true
+    hintLayers.append(box)
+    labelLayers.append(label)
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+      guard let self, self.transientDisplayToken == myToken else { return }
+      self.hide()
     }
   }
 
-  func dismiss() {
-    token &+= 1
-    hide(animated: false)
+  func dismissAlert() {
+    transientDisplayToken &+= 1
+    hide()
   }
 
-  private func hide(animated: Bool) {
-    hideTimer?.invalidate()
-    hideTimer = nil
-    guard isVisible else {
-      alphaValue = 0
-      return
-    }
-    if !animated {
-      orderOut(nil)
-      alphaValue = 0
-      return
-    }
-
-    let myToken = token
-    NSAnimationContext.runAnimationGroup { context in
-      context.duration = Self.fadeOutDuration
-      animator().alphaValue = 0
-    } completionHandler: { [weak self] in
-      guard let self, self.token == myToken else { return }
-      self.orderOut(nil)
-    }
-  }
-
-  private static func textSize(for message: String, maxWidth: CGFloat) -> CGSize {
+  private static func alertTextSize(for message: String, maxWidth: CGFloat) -> CGSize {
     let text = message as NSString
     let attrs: [NSAttributedString.Key: Any] = [
-      .font: NSFont.systemFont(ofSize: Self.textSize)
+      .font: NSFont.systemFont(ofSize: Self.alertTextSize)
     ]
     let size = text.boundingRect(
       with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
@@ -168,16 +117,4 @@ final class AlertPanel: NSPanel {
       attributes: attrs)
     return CGSize(width: ceil(size.width), height: ceil(size.height))
   }
-
-  private static func alertScreen() -> NSScreen {
-    if let main = NSScreen.main { return main }
-    if let screen = NSScreen.screens.first { return screen }
-    fatalError("Flash alert requested with no NSScreen available")
-  }
-
-  private static let noActions: [String: CAAction] = [
-    "position": NSNull(), "bounds": NSNull(), "frame": NSNull(), "hidden": NSNull(),
-    "backgroundColor": NSNull(), "cornerRadius": NSNull(), "borderWidth": NSNull(),
-    "borderColor": NSNull(),
-  ]
 }

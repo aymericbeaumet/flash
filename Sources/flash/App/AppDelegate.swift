@@ -106,7 +106,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var debugServer: DebugServer?
   var overlay: OverlayPanel!
   var statusBarController: FlashStatusBarController?
-  var alertPanel: AlertPanel!
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
   let mappings = MappingsCoordinator()
@@ -360,7 +359,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self?.pluginManager.statusSnapshots() ?? []
       })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
-    alertPanel = AlertPanel()
 
     let dispatch: (URLCommand) -> Void = { [weak self] cmd in
       self?.handleURLCommand(cmd)
@@ -420,11 +418,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .showAlert(let message):
       configErrorAlertVisible = false
       lastConfigErrorAlertMessage = nil
-      alertPanel.show(message)
+      overlay.displayAlert(message)
     case .dismissAlert:
       configErrorAlertVisible = false
       lastConfigErrorAlertMessage = nil
-      alertPanel.dismiss()
+      overlay.dismissAlert()
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showPlugins:

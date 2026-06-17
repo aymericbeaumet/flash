@@ -270,14 +270,14 @@ extension AppDelegate {
       lastConfigErrorAlertMessage = nil
       if configErrorAlertVisible {
         configErrorAlertVisible = false
-        alertPanel.dismiss()
+        overlay.dismissAlert()
       }
       return
     }
     guard message != lastConfigErrorAlertMessage else { return }
     lastConfigErrorAlertMessage = message
     configErrorAlertVisible = true
-    alertPanel.show(message, duration: 8, style: .error)
+    overlay.displayAlert(message, duration: 8, style: .error)
   }
 
   func logPermissionState() {
