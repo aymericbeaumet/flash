@@ -397,7 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         subcommand: subcommand,
         args: args,
         raw: cmd.diagnosticDescription,
-        forBundleID: currentNonFlashContext()?.bundleIdentifier
+        in: pluginSelectorContext()
       ) { [weak self] ok, pid, stdout, navigationURL in
         guard ok else { return }
         self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
@@ -425,7 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       let dispatched = pluginManager.invokeVerb(
         name: name,
         args: args,
-        forBundleID: target?.bundleIdentifier,
+        in: pluginSelectorContext(for: target),
         focusedPID: target?.processID
       ) { [weak self] ok, pid, stdout, navigationURL in
         guard ok else { return }

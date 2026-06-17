@@ -290,9 +290,12 @@ Logs are newline-delimited JSON written to stderr and
 Official bundled plugins under `Contents/Resources/Plugins` are always enabled
 in this version and are not configurable. In the checkout they live under root
 `Plugins/` so `Scripts/install.sh --dev` can symlink them into the installed app. Every plugin root must contain
-`manifest.json` with `manifest_version`, `id`, `name`, `version`, `description`, `install`, `start`,
-event subscriptions, and provider registrations. Command providers expose one or more subcommands; status providers expose named segments through `segments`.
-`manifest_version` is a required integer; the host loader rejects any manifest that omits it or that targets a future schema version. `install` and `start` are
+`manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`,
+optional `listen` event patterns, root selectors such as `only_bundle_ids` /
+`only_urls`, and provider registrations. Command providers expose one or more
+subcommands; status providers expose named segments through `segments`.
+There is no `manifest_version` field on master. The host rejects unknown
+top-level manifest keys instead of accepting legacy aliases. `install` and `start` are
 shell strings run from the plugin root; Flash passes
 `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`, and `FLASH_PLUGIN_DATA_DIR`.
 Plugins speak length-prefixed MessagePack over stdin/stdout: a 4-byte

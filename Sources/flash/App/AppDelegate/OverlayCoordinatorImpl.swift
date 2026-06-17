@@ -51,9 +51,15 @@ extension AppDelegate {
     // and double-click in NORMAL all hand the keyboard back to the
     // underlying app the user just clicked into.
     let wasCommandLine = overlay.inputMode == .commandLine
+    let shouldCheckEditableClick: Bool
+    if case .click(let click) = intent, click.action != .rightClick {
+      shouldCheckEditableClick = !wasCommandLine && flashMode != .insert
+    } else {
+      shouldCheckEditableClick = false
+    }
     cancelOverlay()
-    if !wasCommandLine, flashMode != .insert {
-      enterInsertMode(reason: .pointerClick)
+    if shouldCheckEditableClick {
+      enterInsertModeIfClickedOnTextInput(pid: nil, reason: .pointerClick)
     }
   }
 
@@ -172,10 +178,7 @@ extension AppDelegate {
     }
 
     let action = pendingAction
-    let shouldEnterInsertAfterCommit =
-      flashMode == .normal
-      && Self.mouseTargetCommitShouldEnterInsertMode(target: hint.target)
-    let shouldRestoreNormalMode = flashMode == .normal && !shouldEnterInsertAfterCommit
+    let wasNormalMode = flashMode == .normal
     // The target carries its owning pid (always the focused app at
     // walk time). Fall back to the activation-time focused pid if the
     // provider didn't set one.
@@ -205,7 +208,7 @@ extension AppDelegate {
         + "alt:\(clickModifiers.contains(.option)) "
         + "enters_insert=\(hint.target.entersInsertMode)")
 
-    if shouldRestoreNormalMode {
+    if wasNormalMode {
       applyModeOverlay(captureOverride: false)
     }
     overlay.hide()
@@ -227,16 +230,19 @@ extension AppDelegate {
     mouseGridRegion = nil
     mouseGridDepth = 0
     pendingHintCommitBehavior = .click
-    if shouldEnterInsertAfterCommit {
-      enterInsertMode(reason: .hintCommit)
-    }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
       _ = ActionDispatcher.perform(
         action, on: hint.target, pid: pid, clickPoint: clickPoint, modifiers: clickModifiers)
       guard let self else { return }
       self.activationInFlight = false
-      if shouldRestoreNormalMode {
+      if wasNormalMode, action == .rightClick {
         self.restoreNormalModeAfterCommit(action: action)
+      } else if wasNormalMode {
+        self.enterInsertModeIfClickedOnTextInput(pid: pid, reason: .hintCommit) {
+          [weak self] didEnter in
+          guard let self, !didEnter, self.flashMode == .normal else { return }
+          self.restoreNormalModeAfterCommit(action: action)
+        }
       }
     }
   }
@@ -315,24 +321,36 @@ extension AppDelegate {
   /// clicked).
   private func enterInsertModeIfClickedOnTextInput(
     pid: pid_t?,
-    reason: InsertModeTransitionReason
+    reason: InsertModeTransitionReason,
+    completion: ((Bool) -> Void)? = nil
   ) {
-    guard let pid, flashMode == .normal else { return }
+    guard flashMode == .normal else {
+      completion?(false)
+      return
+    }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
-      guard let self, self.flashMode == .normal else { return }
-      self.monitor.focusedElementIsEditable(pid: pid) { [weak self] editable in
-        guard let self, editable, self.flashMode == .normal else { return }
-        self.enterInsertMode(reason: reason)
+      guard let self, self.flashMode == .normal else {
+        completion?(false)
+        return
+      }
+      let targetPID = pid ?? self.currentNonFlashContext()?.processID
+      guard let targetPID else {
+        completion?(false)
+        return
+      }
+      self.monitor.focusedElementIsEditable(pid: targetPID) { [weak self] editable in
+        guard let self, self.flashMode == .normal else {
+          completion?(false)
+          return
+        }
+        if editable {
+          self.enterInsertMode(reason: reason)
+          completion?(true)
+        } else {
+          completion?(false)
+        }
       }
     }
-  }
-
-  static func mouseTargetCommitShouldEnterInsertMode(target: JumpTarget) -> Bool {
-    // `f`/`sf`/`df` commit a precise click on a known element. Enter insert
-    // only when that element is a typing surface (the owning provider sets
-    // `entersInsertMode`); clicking a link or button stays in normal mode
-    // so keyboard navigation chains keep going.
-    target.entersInsertMode
   }
 
   // `mouseGridCommitShouldEnterInsertMode` removed: `F`/`sF`/`dF` no

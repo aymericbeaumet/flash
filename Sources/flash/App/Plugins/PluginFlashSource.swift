@@ -5,14 +5,19 @@ import Foundation
 
 final class PluginFlashSource: FlashSource {
   private let plugin: PluginProcess
+  private let selector: PluginSelectorStack
 
   init(plugin: PluginProcess) {
     self.plugin = plugin
+    self.selector = PluginSelectorStack([plugin.manifest.selector])
   }
 
   var identifier: String { "plugin:\(plugin.identifier)" }
   var displayName: String { plugin.manifest.name }
   var priority: Int { plugin.manifest.priority }
+  func priority(in context: AppContext) -> Int {
+    priority + (selector.specificity(in: selectorContext(for: context)) ?? 0)
+  }
   var capabilities: FlashSourceCapabilities {
     // Each capability group is gated on the matching provider opt-in so a
     // plugin only advertises what it declares. `.jumpTargets` follows `hints`
@@ -33,7 +38,7 @@ final class PluginFlashSource: FlashSource {
     return caps
   }
   var activationPolicy: FlashSourceActivationPolicy {
-    let manifestBundles = Set(plugin.manifest.bundleIDs)
+    let manifestBundles = Set(plugin.manifest.onlyBundleIDs)
     return manifestBundles.isEmpty ? .always : .bundleIDs(manifestBundles)
   }
   var readinessPolicy: FlashSourceReadinessPolicy {
@@ -44,20 +49,11 @@ final class PluginFlashSource: FlashSource {
   var navigationSchemes: Set<String> { Set(plugin.manifest.navigationSchemes) }
 
   func supports(_ context: AppContext) -> Bool {
-    let manifestBundles = plugin.manifest.bundleIDs
-    if !manifestBundles.isEmpty {
-      return manifestBundles.contains(context.bundleIdentifier)
-    }
-    if plugin.manifest.providerSupports(bundleID: context.bundleIdentifier) {
-      return true
-    }
-    let event = PluginEvent(
-      name: "core:focus.changed",
-      payload: [:],
-      bundleID: context.bundleIdentifier,
-      configPath: nil,
-      focused: true)
-    return plugin.manifest.subscriptions.contains { $0.matches(event) }
+    guard selector.matches(selectorContext(for: context)) else { return false }
+    return plugin.manifest.providesHints
+      || plugin.manifest.providesCandidates
+      || !plugin.manifest.sourceActions.isEmpty
+      || !plugin.manifest.navigationSchemes.isEmpty
   }
 
   func discover(in context: AppContext) throws -> [JumpTarget] {
@@ -140,7 +136,9 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    guard plugin.manifest.supportsSourceAction(action.wireName, bundleID: context.bundleIdentifier)
+    guard plugin.manifest.supportsSourceAction(
+      action.wireName,
+      context: selectorContext(for: context))
     else {
       DispatchQueue.main.async { completion(.unhandled) }
       return
@@ -162,6 +160,12 @@ final class PluginFlashSource: FlashSource {
     completion: @escaping (SourceActionResult) -> Void
   ) {
     plugin.restoreNavigation(to: url, completion: completion)
+  }
+
+  private func selectorContext(for context: AppContext) -> PluginSelectorContext {
+    PluginSelectorContext(
+      bundleID: context.bundleIdentifier,
+      url: selector.usesURL ? NormalModeDispatcher.documentURL(pid: context.processID) : nil)
   }
 
   private static func sourceActionCapabilities(_ actions: [String]) -> FlashSourceCapabilities {

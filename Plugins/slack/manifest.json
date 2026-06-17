@@ -1,39 +1,13 @@
 {
-  "manifest_version": 2,
   "id": "slack",
   "name": "Slack",
   "version": "0.1.0",
   "description": "Slack CLI actions and a channel finder backed by local Slack app state plus AX fallback.",
   "install": "true",
   "start": "exec ./flash-plugin-slack",
-  "bundle_ids": [
-    "com.tinyspeck.slackmacgap",
-    "com.tinyspeck.slackmacgap.direct"
-  ],
-  "subscriptions": [
-    {
-      "match": "core:apps.*",
-      "bundle_ids": [
-        "com.tinyspeck.slackmacgap"
-      ]
-    },
-    {
-      "match": "core:focus.changed"
-    },
-    {
-      "match": "core:ax.changed"
-    },
-    "core:apps.snapshot",
-    "core:config.*"
-  ],
   "capabilities": [
     "accessibility"
   ],
-  "candidates": {
-    "sources": [
-      "slack.channels"
-    ]
-  },
   "commands": {
     "items": [
       {
@@ -52,5 +26,19 @@
         "description": "Run slack with raw arguments"
       }
     ]
-  }
+  },
+  "only_bundle_ids": [
+    "com.tinyspeck.slackmacgap",
+    "com.tinyspeck.slackmacgap.direct"
+  ],
+  "listen": [
+    "core:apps.*",
+    "core:focus.changed",
+    "core:ax.changed",
+    "core:apps.snapshot",
+    "core:config.*"
+  ],
+  "sources": [
+    "slack.channels"
+  ]
 }

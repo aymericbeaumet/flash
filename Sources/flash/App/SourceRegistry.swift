@@ -111,7 +111,9 @@ final class SourceRegistry {
       sources
       .filter { $0.capabilities.contains(.jumpTargets) && $0.supports(context) }
       .sorted { lhs, rhs in
-        if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
+        let lhsPriority = lhs.priority(in: context)
+        let rhsPriority = rhs.priority(in: context)
+        if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
         return lhs.identifier < rhs.identifier
       }
   }
@@ -379,6 +381,13 @@ final class SourceRegistry {
         excluded.append("\(source.identifier)(\(reason))")
       }
     }
+    sourceSnapshot.sort { lhs, rhs in
+      let lhsPriority = lhs.priority(in: context)
+      let rhsPriority = rhs.priority(in: context)
+      if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
+      return lhs.identifier < rhs.identifier
+    }
+    passingChain = sourceSnapshot.map(\.identifier)
     if !excluded.isEmpty {
       FlashLog.trace(
         "[source_action] action=\(capability.traceDescription) "

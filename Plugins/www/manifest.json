@@ -1,5 +1,4 @@
 {
-  "manifest_version": 2,
   "id": "www",
   "name": "www",
   "version": "0.1.0",
@@ -7,7 +6,11 @@
   "install": "true",
   "start": "exec ./flash-plugin-www",
   "priority": 60,
-  "bundle_ids": [
+  "capabilities": [
+    "accessibility"
+  ],
+  "request_timeout_ms": 6500,
+  "only_bundle_ids": [
     "com.apple.Safari",
     "com.apple.SafariTechnologyPreview",
     "org.mozilla.firefox",
@@ -30,15 +33,12 @@
     "com.operasoftware.OperaNext",
     "com.operasoftware.OperaDeveloper"
   ],
-  "capabilities": [
-    "accessibility"
+  "source_actions": [
+    "resource_archive",
+    "resource_next",
+    "resource_previous"
   ],
-  "request_timeout_ms": 6500,
-  "source_actions": {
-    "actions": [
-      "resource_archive",
-      "resource_next",
-      "resource_previous"
-    ]
-  }
+  "only_urls": [
+    "https://mail.google.com/*"
+  ]
 }

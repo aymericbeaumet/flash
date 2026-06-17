@@ -12,41 +12,41 @@ final class PluginManager {
 
   /// A resolved command target: the owning plugin plus the matched manifest
   /// entry's `_`-prefixed metadata, forwarded to the plugin on invoke.
-  /// `bundleIDs` carries the command's app gate (empty ⇒ every app), applied at
-  /// lookup against the focused app — the same predicate `ResolvedPluginMapping`
-  /// uses.
+  /// `selector` carries the command's active-window gate, applied at lookup
+  /// against the focused app/window URL — the same predicate
+  /// `ResolvedPluginMapping` uses.
   private struct CommandTarget {
     let plugin: PluginProcess
-    let bundleIDs: [String]
+    let selector: PluginSelectorStack
     let meta: [String: String]
 
-    /// Whether this command is available while `bundleID` is the focused app.
-    /// An app-scoped command (non-empty `bundleIDs`) needs a known focused app
-    /// that matches; an unconditional command is always available.
-    func matches(bundleID: String?) -> Bool {
-      if bundleIDs.isEmpty { return true }
-      guard let bundleID else { return false }
-      return bundleIDs.contains(bundleID)
+    func specificity(in context: PluginSelectorContext) -> Int? {
+      selector.specificity(in: context)
     }
+  }
+
+  /// A completion-row registration prepared at plugin reload time. Runtime
+  /// completion only filters these rows by selector specificity.
+  private struct CommandRegistrationTarget {
+    let selector: PluginSelectorStack
+    let order: Int
+    let registration: PluginCommandRegistration
   }
 
   /// A resolved plugin-verb target: the owning plugin, the command/subcommand
   /// folded from the manifest, an optional per-bundle inline-keystrokes table
   /// (which lets the host synthesize the key directly when it matches the
-  /// focused bundle, skipping the plugin RPC), and an optional bundle
-  /// gate. Built by `rebuildVerbIndex` from every loaded plugin's `verbs`
-  /// provider entries.
+  /// focused bundle, skipping the plugin RPC), and the compiled selector.
+  /// Built by `rebuildVerbIndex` from every loaded plugin's `verbs` entries.
   private struct VerbTarget {
     let plugin: PluginProcess
     let command: String
     let subcommand: String
     let inlineKeystrokes: [String: String]
-    let bundleIDs: [String]
+    let selector: PluginSelectorStack
 
-    func matches(bundleID: String?) -> Bool {
-      if bundleIDs.isEmpty { return true }
-      guard let bundleID else { return false }
-      return bundleIDs.contains(bundleID)
+    func specificity(in context: PluginSelectorContext) -> Int? {
+      selector.specificity(in: context)
     }
 
     /// Hotkey string to synthesize for `bundleID`, or `nil` when the verb has
@@ -69,26 +69,30 @@ final class PluginManager {
     let plugin: PluginProcess
     let command: String
     let description: String
-    let bundleIDs: [String]
+    let selector: PluginSelectorStack
     let meta: [String: String]
     /// Candidate source label declared on the shebang entry. When set, the
     /// flashlight pool swaps to candidates from that source while the bang is
     /// confirmed (e.g. `!kill ` → `processes.processes`).
     let candidateSource: String?
 
-    func matches(bundleID: String?) -> Bool {
-      if bundleIDs.isEmpty { return true }
-      guard let bundleID else { return false }
-      return bundleIDs.contains(bundleID)
+    func specificity(in context: PluginSelectorContext) -> Int? {
+      selector.specificity(in: context)
     }
+  }
+
+  /// Static bang candidate prepared from manifest shebangs. Dynamic bang
+  /// candidates still come from plugin snapshots.
+  private struct ShebangCandidateTarget {
+    let selector: PluginSelectorStack
+    let candidate: Candidate
   }
 
   /// A plugin mapping with its `key`/`command` already canonicalized and
   /// parsed (the work done once at index-rebuild time, not per focus-change).
-  /// `bundleIDs` empty ⇒ applies to every app the plugin is otherwise scoped
-  /// to; non-empty ⇒ only those apps.
+  /// `selector` applies the plugin root selector plus any entry-level selector.
   private struct ResolvedPluginMapping {
-    let bundleIDs: [String]
+    let selector: PluginSelectorStack
     let priority: Int
     let scope: ModeScope
     let mapping: ModeMapping
@@ -99,34 +103,50 @@ final class PluginManager {
   private var pluginsByID: [String: PluginProcess] = [:]
   private var sourceAdaptersByID: [String: PluginFlashSource] = [:]
   /// Pre-computed command lookup index: `(command, subcommand)` →
-  /// `PluginProcess`. Built from `pluginsByID` whenever the plugin set
+  /// candidate targets. Built from `pluginsByID` whenever the plugin set
   /// changes; per-invoke lookup is then O(1) instead of walking every
   /// plugin × every command × `localizedCaseInsensitiveCompare`.
   /// Keys are lowercased; lookups use the same normalisation.
-  private var commandIndex: [CommandKey: CommandTarget] = [:]
+  private var commandIndex: [CommandKey: [CommandTarget]] = [:]
+  /// Flat command completion rows, pre-built with selector stacks and stable
+  /// ordering so opening `:` does not walk manifests.
+  private var commandRegistrationIndex: [CommandRegistrationTarget] = []
   /// Commands that register the wildcard subcommand `"*"`: the verb takes
   /// no fixed subcommand and consumes the whole remainder as args (e.g.
   /// `:calc 2 + 2`). Keyed by lowercased command; consulted only when the
   /// exact `(command, subcommand)` lookup misses.
-  private var wildcardCommandIndex: [String: CommandTarget] = [:]
+  private var wildcardCommandIndex: [String: [CommandTarget]] = [:]
   /// Flashlight bang lookup: lowercased `token` → owning plugin/command.
   /// Built alongside the command index; consulted at flashlight submit when
   /// the query starts with `!<token>`.
-  private var shebangIndex: [String: ShebangTarget] = [:]
+  private var shebangIndex: [String: [ShebangTarget]] = [:]
+  /// Static manifest bang rows for the flashlight `!` pool. Runtime filters
+  /// this table by selector instead of rebuilding candidates from manifests.
+  private var shebangCandidateIndex: [ShebangCandidateTarget] = []
   /// Catch-all bang provider (`token == "*"`): handles any `!<token>` not
   /// claimed by an exact `shebangIndex` entry, so a plugin like `searchengines`
   /// can serve the whole DuckDuckGo bang table without enumerating it.
-  private var wildcardShebangTarget: ShebangTarget?
+  private var wildcardShebangTargets: [ShebangTarget] = []
   /// Plugin-registered verbs (`flash <verb>`), keyed by lowercased verb name.
-  /// First plugin to claim a verb wins on collision; the host treats the
-  /// built-in `URLEventHandler.commands` table as authoritative for any name
-  /// it already owns, so plugin verbs only resolve for names the host doesn't
-  /// claim. Rebuilt by `rebuildVerbIndex` whenever the plugin set changes.
-  private var verbIndex: [String: VerbTarget] = [:]
+  /// Multiple plugins may claim the same verb; dispatch chooses the matching
+  /// target with highest selector specificity. The host treats the built-in
+  /// `URLEventHandler.commands` table as authoritative for any name it already
+  /// owns, so plugin verbs only resolve for names the host doesn't claim.
+  /// Rebuilt by `rebuildVerbIndex` whenever the plugin set changes.
+  private var verbIndex: [String: [VerbTarget]] = [:]
   /// Resolved plugin mappings across all loaded plugins, rebuilt whenever the
-  /// plugin set or any plugin's mappings change. `mappings(forBundleID:)`
-  /// filters this for the focused app.
+  /// plugin set or any plugin's mappings change. `mappings(in:)` filters this
+  /// for the focused app/window URL.
   private var mappingIndex: [ResolvedPluginMapping] = []
+  /// Root `only_bundle_ids` across loaded plugins. Used by focus/flashlight
+  /// refresh paths without scanning manifests at runtime.
+  private var claimedBundleIDsIndex: Set<String> = []
+  /// Plugins whose in-memory snapshots may contain dynamic bang rows.
+  private var snapshotBangPlugins: [PluginProcess] = []
+  /// True when any loaded manifest or compiled registration references
+  /// `only_urls`. Lets hot paths skip AX URL lookup when the loaded plugin set
+  /// cannot use it.
+  private var selectorContextNeedsURL = false
   /// Owns the single AX (Accessibility) grant and the handle registry that
   /// backs the `ax.*` host RPCs. Plugins never touch AX directly; they reach
   /// it through this broker via `handleHostRequest`.
@@ -145,6 +165,28 @@ final class PluginManager {
     self.baseDataDir = baseDataDir
   }
 
+  private static func selectorStack(
+    manifest: PluginManifest,
+    entry selector: PluginSelector = PluginSelector()
+  ) -> PluginSelectorStack {
+    PluginSelectorStack([manifest.selector, selector])
+  }
+
+  private static func bestTarget<T>(
+    _ targets: [T],
+    in context: PluginSelectorContext,
+    specificity: (T, PluginSelectorContext) -> Int?
+  ) -> T? {
+    var best: (target: T, score: Int)?
+    for target in targets {
+      guard let score = specificity(target, context) else { continue }
+      if best == nil || score > best!.score {
+        best = (target, score)
+      }
+    }
+    return best?.target
+  }
+
   var sources: [FlashSource] {
     queue.sync { Array(sourceAdaptersByID.values) }
   }
@@ -160,13 +202,22 @@ final class PluginManager {
       }
       pluginsByID.removeAll()
       commandIndex.removeAll()
+      commandRegistrationIndex.removeAll()
       wildcardCommandIndex.removeAll()
       shebangIndex.removeAll()
-      wildcardShebangTarget = nil
+      shebangCandidateIndex.removeAll()
+      wildcardShebangTargets.removeAll()
       verbIndex.removeAll()
       mappingIndex.removeAll()
+      claimedBundleIDsIndex.removeAll()
+      snapshotBangPlugins.removeAll()
+      selectorContextNeedsURL = false
       sourceAdaptersByID.removeAll()
     }
+  }
+
+  func needsURLSelectorContext() -> Bool {
+    queue.sync { selectorContextNeedsURL }
   }
 
   func updateConfig(_ config: Config) {
@@ -198,7 +249,7 @@ final class PluginManager {
     subcommand: String,
     args: [String],
     raw: String,
-    forBundleID bundleID: String? = nil,
+    in context: PluginSelectorContext = PluginSelectorContext(),
     onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) -> Bool {
     let lcCommand = command.lowercased()
@@ -208,10 +259,18 @@ final class PluginManager {
     // is really the first arg, e.g. `:calc 2 + 2`). An app-scoped command is
     // only owned here when its gate matches the focused app.
     let resolved: (target: CommandTarget, subcommand: String, args: [String])? = queue.sync {
-      if let target = commandIndex[key], target.matches(bundleID: bundleID) {
+      if let target = Self.bestTarget(
+        commandIndex[key] ?? [],
+        in: context,
+        specificity: { $0.specificity(in: $1) })
+      {
         return (target, subcommand, args)
       }
-      if let target = wildcardCommandIndex[lcCommand], target.matches(bundleID: bundleID) {
+      if let target = Self.bestTarget(
+        wildcardCommandIndex[lcCommand] ?? [],
+        in: context,
+        specificity: { $0.specificity(in: $1) })
+      {
         return (target, "", [subcommand] + args)
       }
       return nil
@@ -240,16 +299,19 @@ final class PluginManager {
   func invokeShebang(
     token: String,
     query: String,
-    forBundleID bundleID: String? = nil,
+    in context: PluginSelectorContext = PluginSelectorContext(),
     onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) -> Bool {
     let lcToken = token.lowercased()
     let target: ShebangTarget? = queue.sync {
-      if let exact = shebangIndex[lcToken], exact.matches(bundleID: bundleID) { return exact }
-      if let wildcard = wildcardShebangTarget, wildcard.matches(bundleID: bundleID) {
-        return wildcard
-      }
-      return nil
+      Self.bestTarget(
+        shebangIndex[lcToken] ?? [],
+        in: context,
+        specificity: { $0.specificity(in: $1) })
+        ?? Self.bestTarget(
+          wildcardShebangTargets,
+          in: context,
+          specificity: { $0.specificity(in: $1) })
     }
     guard let target else { return false }
     let args = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
@@ -270,11 +332,16 @@ final class PluginManager {
   /// declare it on the shebang entry; the host swaps the candidate-finder pool
   /// to that source once the bang is confirmed. `nil` when no registration
   /// declared one.
-  func shebangCandidateSource(token: String, forBundleID bundleID: String? = nil) -> String? {
+  func shebangCandidateSource(
+    token: String,
+    in context: PluginSelectorContext = PluginSelectorContext()
+  ) -> String? {
     let lcToken = token.lowercased()
     return queue.sync {
-      if let exact = shebangIndex[lcToken],
-        exact.matches(bundleID: bundleID),
+      if let exact = Self.bestTarget(
+        shebangIndex[lcToken] ?? [],
+        in: context,
+        specificity: { $0.specificity(in: $1) }),
         let candidateSource = exact.candidateSource,
         !candidateSource.isEmpty
       {
@@ -284,18 +351,29 @@ final class PluginManager {
     }
   }
 
-  /// The display description for the bang `token` while `bundleID` is the
-  /// focused app: the exact registration's if present, else the `"*"`
+  /// The display description for the bang `token` in the focused window
+  /// context: the exact registration's if present, else the `"*"`
   /// catch-all's. `nil` when no plugin would claim the token — mirroring
-  /// ``invokeShebang(token:query:forBundleID:onResult:)`` exactly, so a
+  /// ``invokeShebang(token:query:in:onResult:)`` exactly, so a
   /// surfaced bang row can never fail to dispatch.
-  func shebangDescription(token: String, forBundleID bundleID: String? = nil) -> String? {
+  func shebangDescription(
+    token: String,
+    in context: PluginSelectorContext = PluginSelectorContext()
+  ) -> String? {
     let lcToken = token.lowercased()
     return queue.sync {
-      if let exact = shebangIndex[lcToken], exact.matches(bundleID: bundleID) {
+      if let exact = Self.bestTarget(
+        shebangIndex[lcToken] ?? [],
+        in: context,
+        specificity: { $0.specificity(in: $1) })
+      {
         return exact.description
       }
-      if let wildcard = wildcardShebangTarget, wildcard.matches(bundleID: bundleID) {
+      if let wildcard = Self.bestTarget(
+        wildcardShebangTargets,
+        in: context,
+        specificity: { $0.specificity(in: $1) })
+      {
         return wildcard.description
       }
       return nil
@@ -314,41 +392,23 @@ final class PluginManager {
   ///     ~100 DDG bangs generated from `bangs.tsv` at build time).
   /// Plugins should not duplicate a token across both surfaces; if they
   /// do, both rows will appear.
-  /// Union of every `bundle_ids` entry declared by any loaded plugin.
+  /// Union of every root `only_bundle_ids` entry declared by any loaded plugin.
   /// Lets the flashlight refresh path emit synthetic
   /// `core:focus.changed` events for every running app whose AX walk
   /// a plugin owns — even when that app isn't currently focused —
   /// so the plugin can republish its candidate snapshot before the
   /// next keystroke lands.
   func claimedBundleIDs() -> Set<String> {
-    queue.sync {
-      var out = Set<String>()
-      for plugin in pluginsByID.values {
-        for bundleID in plugin.manifest.bundleIDs { out.insert(bundleID) }
-      }
-      return out
-    }
+    queue.sync { claimedBundleIDsIndex }
   }
 
-  func shebangCandidates(forBundleID bundleID: String? = nil) -> [Candidate] {
+  func shebangCandidates(in context: PluginSelectorContext = PluginSelectorContext()) -> [Candidate] {
     queue.sync {
       var out: [Candidate] = []
-      for plugin in pluginsByID.values {
-        for registration in plugin.shebangs {
-          let token = registration.token
-          guard token != "*", !token.isEmpty, !registration.command.isEmpty else { continue }
-          if !registration.bundleIDs.isEmpty {
-            guard let bundleID, registration.bundleIDs.contains(bundleID) else { continue }
-          }
-          out.append(
-            Candidate(
-              kind: CandidateFinder.bangKind,
-              sourceID: "bang:\(plugin.identifier)",
-              source: "bang",
-              title: "!\(token)",
-              subtitle: registration.description,
-              sourcePayload: token))
-        }
+      for item in shebangCandidateIndex where item.selector.matches(context) {
+        out.append(item.candidate)
+      }
+      for plugin in snapshotBangPlugins {
         for snapshot in plugin.candidates(scope: .all)
         where snapshot.kind == CandidateFinder.bangKind {
           out.append(snapshot)
@@ -435,94 +495,148 @@ final class PluginManager {
     return flags
   }
 
-  /// Command registrations available for completion while `bundleID` is the
-  /// focused app. `nil` keeps only unconditional commands (no app context to
-  /// satisfy an app gate). App-scoped commands appear only for their apps.
-  func commandRegistrations(forBundleID bundleID: String? = nil)
+  /// Command registrations available for completion in the active-window
+  /// context. More specific registrations are listed first.
+  func commandRegistrations(in context: PluginSelectorContext = PluginSelectorContext())
     -> [PluginCommandRegistration]
   {
     queue.sync {
-      pluginsByID.values.flatMap { $0.commands }.filter { registration in
-        if registration.bundleIDs.isEmpty { return true }
-        guard let bundleID else { return false }
-        return registration.bundleIDs.contains(bundleID)
+      var out: [(score: Int, order: Int, registration: PluginCommandRegistration)] = []
+      for item in commandRegistrationIndex {
+        guard let score = item.selector.specificity(in: context) else { continue }
+        out.append((score, item.order, item.registration))
       }
+      return out
+        .sorted {
+          if $0.score != $1.score { return $0.score > $1.score }
+          return $0.order < $1.order
+        }
+        .map(\.registration)
     }
   }
 
-  func hasCommand(command: String, subcommand: String, forBundleID bundleID: String? = nil) -> Bool
+  func hasCommand(
+    command: String,
+    subcommand: String,
+    in context: PluginSelectorContext = PluginSelectorContext()
+  ) -> Bool
   {
     let lcCommand = command.lowercased()
     let key = CommandKey(command: lcCommand, subcommand: subcommand.lowercased())
     return queue.sync {
-      if let target = commandIndex[key], target.matches(bundleID: bundleID) { return true }
-      if let target = wildcardCommandIndex[lcCommand], target.matches(bundleID: bundleID) {
+      if Self.bestTarget(
+        commandIndex[key] ?? [],
+        in: context,
+        specificity: { $0.specificity(in: $1) }) != nil
+      {
         return true
       }
-      return false
+      return Self.bestTarget(
+        wildcardCommandIndex[lcCommand] ?? [],
+        in: context,
+        specificity: { $0.specificity(in: $1) }) != nil
     }
   }
 
   /// Rebuild the command lookup index. Must be called from `queue` after
   /// `pluginsByID` changes.
   private func rebuildCommandIndex() {
-    var next: [CommandKey: CommandTarget] = [:]
-    var wildcard: [String: CommandTarget] = [:]
-    for plugin in pluginsByID.values {
+    var next: [CommandKey: [CommandTarget]] = [:]
+    var wildcard: [String: [CommandTarget]] = [:]
+    var registrationRows: [CommandRegistrationTarget] = []
+    var order = 0
+    for plugin in pluginsByID.values.sorted(by: { $0.identifier < $1.identifier }) {
       for registration in plugin.commands {
         let command = registration.command.lowercased()
         let subcommand = registration.subcommand.lowercased()
+        let selector = Self.selectorStack(manifest: plugin.manifest, entry: registration.selector)
         let target = CommandTarget(
-          plugin: plugin, bundleIDs: registration.bundleIDs, meta: registration.meta)
+          plugin: plugin,
+          selector: selector,
+          meta: registration.meta)
+        registrationRows.append(
+          CommandRegistrationTarget(
+            selector: selector,
+            order: order,
+            registration: registration))
+        order += 1
         if subcommand == "*" {
-          if wildcard[command] == nil { wildcard[command] = target }
+          wildcard[command, default: []].append(target)
           continue
         }
         let key = CommandKey(command: command, subcommand: subcommand)
-        // First plugin to register a command wins on collision, matching
-        // the previous walk's first-match semantics.
-        if next[key] == nil { next[key] = target }
+        next[key, default: []].append(target)
       }
     }
     commandIndex = next
+    commandRegistrationIndex = registrationRows
     wildcardCommandIndex = wildcard
   }
 
-  /// Rebuild the flashlight bang index. Must be called from `queue` after
-  /// `pluginsByID` changes. First plugin to claim a token (or the `"*"`
-  /// catch-all) wins, matching the command index's collision semantics.
-  private func rebuildShebangIndex() {
-    var next: [String: ShebangTarget] = [:]
-    var wildcard: ShebangTarget?
+  /// Rebuild manifest-level indexes shared by several runtime paths.
+  /// Must be called from `queue` after `pluginsByID` changes.
+  private func rebuildManifestIndex() {
+    var claimed = Set<String>()
+    var needsURL = false
     for plugin in pluginsByID.values {
+      if plugin.manifest.usesURLSelector { needsURL = true }
+      for bundleID in plugin.manifest.onlyBundleIDs {
+        claimed.insert(bundleID)
+      }
+    }
+    claimedBundleIDsIndex = claimed
+    snapshotBangPlugins = pluginsByID.values.sorted(by: { $0.identifier < $1.identifier })
+    selectorContextNeedsURL = needsURL
+  }
+
+  /// Rebuild the flashlight bang index. Must be called from `queue` after
+  /// `pluginsByID` changes. Multiple plugins may claim a token; dispatch
+  /// chooses the matching target with highest selector specificity.
+  private func rebuildShebangIndex() {
+    var next: [String: [ShebangTarget]] = [:]
+    var wildcard: [ShebangTarget] = []
+    var candidates: [ShebangCandidateTarget] = []
+    for plugin in pluginsByID.values.sorted(by: { $0.identifier < $1.identifier }) {
       for registration in plugin.shebangs {
         let token = registration.token.lowercased()
         guard !token.isEmpty, !registration.command.isEmpty else { continue }
+        let selector = Self.selectorStack(manifest: plugin.manifest, entry: registration.selector)
         let target = ShebangTarget(
           plugin: plugin, command: registration.command,
           description: registration.description,
-          bundleIDs: registration.bundleIDs, meta: registration.meta,
+          selector: selector,
+          meta: registration.meta,
           candidateSource: registration.candidateSource)
         if token == "*" {
-          if wildcard == nil { wildcard = target }
+          wildcard.append(target)
           continue
         }
-        if next[token] == nil { next[token] = target }
+        candidates.append(
+          ShebangCandidateTarget(
+            selector: selector,
+            candidate: Candidate(
+              kind: CandidateFinder.bangKind,
+              sourceID: "bang:\(plugin.identifier)",
+              source: "bang",
+              title: "!\(registration.token)",
+              subtitle: registration.description,
+              sourcePayload: registration.token)))
+        next[token, default: []].append(target)
       }
     }
     shebangIndex = next
-    wildcardShebangTarget = wildcard
+    shebangCandidateIndex = candidates
+    wildcardShebangTargets = wildcard
   }
 
   /// Rebuild the verb lookup index. Must be called from `queue` after
-  /// `pluginsByID` changes. The first plugin to claim a verb wins on
-  /// collision, matching the command/shebang index semantics. Plugin verbs
-  /// only resolve names the built-in `URLEventHandler.commands` table doesn't
-  /// already claim (the URL dispatch checks the built-in table first), so a
-  /// collision with a built-in is silently shadowed.
+  /// `pluginsByID` changes. Plugin verbs only resolve names the built-in
+  /// `URLEventHandler.commands` table doesn't already claim (the URL dispatch
+  /// checks the built-in table first), so a collision with a built-in is
+  /// silently shadowed.
   private func rebuildVerbIndex() {
-    var next: [String: VerbTarget] = [:]
-    for plugin in pluginsByID.values {
+    var next: [String: [VerbTarget]] = [:]
+    for plugin in pluginsByID.values.sorted(by: { $0.identifier < $1.identifier }) {
       for registration in plugin.manifest.verbs {
         let name = registration.name.lowercased()
         guard !name.isEmpty else { continue }
@@ -533,8 +647,8 @@ final class PluginManager {
           command: command,
           subcommand: subcommand,
           inlineKeystrokes: registration.inlineKeystrokes,
-          bundleIDs: registration.bundleIDs)
-        if next[name] == nil { next[name] = target }
+          selector: Self.selectorStack(manifest: plugin.manifest, entry: registration.selector))
+        next[name, default: []].append(target)
       }
     }
     verbIndex = next
@@ -551,17 +665,19 @@ final class PluginManager {
   func invokeVerb(
     name: String,
     args: [String: String],
-    forBundleID bundleID: String? = nil,
+    in context: PluginSelectorContext = PluginSelectorContext(),
     focusedPID: pid_t? = nil,
     onResult: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) -> Bool {
     let lcName = name.lowercased()
     let target: VerbTarget? = queue.sync {
-      guard let target = verbIndex[lcName], target.matches(bundleID: bundleID) else { return nil }
-      return target
+      Self.bestTarget(
+        verbIndex[lcName] ?? [],
+        in: context,
+        specificity: { $0.specificity(in: $1) })
     }
     guard let target else { return false }
-    if let keystroke = target.inlineKeystroke(forBundleID: bundleID),
+    if let keystroke = target.inlineKeystroke(forBundleID: context.bundleID),
       let pid = focusedPID,
       let parsed = HotkeySyntax.parse(hotkey: keystroke)
     {
@@ -571,7 +687,7 @@ final class PluginManager {
         to: pid)
       FlashLog.debug(
         "[plugin_verb] inline name=\(lcName) keys=\(keystroke) "
-          + "pid=\(pid) bundle=\(bundleID ?? "nil") ok=\(ok)")
+          + "pid=\(pid) bundle=\(context.bundleID ?? "nil") ok=\(ok)")
       onResult?(ok, pid, nil, nil)
       return true
     }
@@ -615,10 +731,9 @@ final class PluginManager {
               + "is not a valid argv array (`flash <verb> [k=v]...` or an external command)")
           continue
         }
-        let bundleIDs = registration.bundleIDs.isEmpty ? manifest.bundleIDs : registration.bundleIDs
         next.append(
           ResolvedPluginMapping(
-            bundleIDs: bundleIDs,
+            selector: Self.selectorStack(manifest: manifest, entry: registration.selector),
             priority: registration.priority ?? manifest.priority,
             scope: registration.scope,
             mapping: ModeMapping(key: canonical, action: action)))
@@ -627,16 +742,17 @@ final class PluginManager {
     mappingIndex = next
   }
 
-  /// Plugin mappings applicable to `bundleID`, as
+  /// Plugin mappings applicable to `context`, as
   /// `(priority, scope, mapping)` tuples for `EffectiveMappings.merge`.
-  /// A mapping with no bundle scope applies to every app.
   func mappings(
-    forBundleID bundleID: String
+    in context: PluginSelectorContext
   ) -> [(priority: Int, scope: ModeScope, mapping: ModeMapping)] {
     queue.sync {
       mappingIndex
-        .filter { $0.bundleIDs.isEmpty || $0.bundleIDs.contains(bundleID) }
-        .map { ($0.priority, $0.scope, $0.mapping) }
+        .compactMap { item in
+          guard let specificity = item.selector.specificity(in: context) else { return nil }
+          return (item.priority + specificity, item.scope, item.mapping)
+        }
     }
   }
 
@@ -783,6 +899,7 @@ final class PluginManager {
     rebuildShebangIndex()
     rebuildMappingIndex()
     rebuildVerbIndex()
+    rebuildManifestIndex()
     notifyStateChanged()
   }
 
@@ -986,8 +1103,8 @@ extension PluginManager {
       strings, similar to npm scripts.
 
       Official bundled plugins are always enabled. Third-party plugins are
-      listed in `[plugins] third_party` as `github:user/project` or
-      `file:<path>`.
+      listed in `[plugins] third_party` as `github:user/project@<commit-sha>`
+      or `file:<path>`.
 
       Flash starts plugins with:
 
@@ -1000,13 +1117,14 @@ extension PluginManager {
       plugin errors go to stderr. Plugins can log through the protocol and
       Flash records those messages with `source = "plugin:<id>"`.
 
-      Plugins can subscribe to events such as `core:apps.*`, `core:config.*`,
-      and focused AX changes. They can also register commands and status-bar
-      segments. Each plugin registers one or more **commands** (the verb after
-      `:`, e.g. `spotify`), and each command has one or more **subcommands**
-      (e.g. `pause`), which users run as `:spotify pause`. A `status` provider
-      declares `segments` in `manifest.json`; runtime values are published with
-      `status.updated` and are available to `[statusbar].template` as
+      Plugins declare event patterns through manifest `listen`, e.g.
+      `core:apps.*`, `core:config.*`, and focused AX changes. They can also
+      register commands and status-bar segments. Each plugin registers one or
+      more **commands** (the verb after `:`, e.g. `spotify`), and each command
+      has one or more **subcommands** (e.g. `pause`), which users run as
+      `:spotify pause`. A `status` provider declares `segments` in
+      `manifest.json`; runtime values are published with `status.updated` and
+      are available to `[statusbar].template` as
       `#{plugin:<id>.<segment>}`.
 
       Official bundled plugins are installed under `FLASH_PLUGIN_DATA_DIR`;

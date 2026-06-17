@@ -1,5 +1,4 @@
 {
-  "manifest_version": 2,
   "id": "tmux",
   "name": "tmux",
   "version": "0.1.0",
@@ -8,36 +7,8 @@
   "start": "exec ./flash-plugin-tmux",
   "priority": 20,
   "volatile": true,
-  "bundle_ids": [
-    "org.alacritty",
-    "io.alacritty",
-    "com.apple.Terminal",
-    "com.googlecode.iterm2",
-    "net.kovidgoyal.kitty",
-    "com.github.wez.wezterm",
-    "dev.warp.Warp-Stable",
-    "co.zeit.hyperterm",
-    "co.zeit.hyper"
-  ],
-  "subscriptions": [
-    {
-      "match": "core:focus.changed"
-    },
-    {
-      "match": "core:apps.terminated"
-    },
-    {
-      "match": "core:flashlight.opened"
-    },
-    "core:flash.started"
-  ],
   "request_timeout_ms": 8000,
   "hints": {},
-  "candidates": {
-    "sources": [
-      "tmux.windows"
-    ]
-  },
   "commands": {
     "items": [
       {
@@ -52,25 +23,43 @@
       }
     ]
   },
-  "source_actions": {
-    "actions": [
-      "tab_select",
-      "tab_next",
-      "tab_prev",
-      "tab_first",
-      "tab_last",
-      "tab_new",
-      "tab_close",
-      "tab_move_previous",
-      "tab_move_next",
-      "scroll_top",
-      "scroll_bottom",
-      "app_reload"
-    ]
-  },
   "navigation": {
     "schemes": [
       "tmux"
     ]
-  }
+  },
+  "only_bundle_ids": [
+    "org.alacritty",
+    "io.alacritty",
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "dev.warp.Warp-Stable",
+    "co.zeit.hyperterm",
+    "co.zeit.hyper"
+  ],
+  "listen": [
+    "core:focus.changed",
+    "core:apps.terminated",
+    "core:flashlight.opened",
+    "core:flash.started"
+  ],
+  "sources": [
+    "tmux.windows"
+  ],
+  "source_actions": [
+    "tab_select",
+    "tab_next",
+    "tab_prev",
+    "tab_first",
+    "tab_last",
+    "tab_new",
+    "tab_close",
+    "tab_move_previous",
+    "tab_move_next",
+    "scroll_top",
+    "scroll_bottom",
+    "app_reload"
+  ]
 }

@@ -1,21 +1,10 @@
 {
-  "manifest_version": 2,
   "id": "processes",
   "name": "Processes",
   "version": "0.1.0",
   "description": "List running processes in flashlight; SIGTERM them with !kill <pid|name>.",
   "install": "true",
   "start": "exec ./flash-plugin-processes",
-  "subscriptions": [
-    "core:flash.started",
-    "core:apps.launched",
-    "core:apps.terminated"
-  ],
-  "candidates": {
-    "sources": [
-      "processes.processes"
-    ]
-  },
   "commands": {
     "items": [
       {
@@ -34,5 +23,13 @@
         "candidate_source": "processes.processes"
       }
     ]
-  }
+  },
+  "listen": [
+    "core:flash.started",
+    "core:apps.launched",
+    "core:apps.terminated"
+  ],
+  "sources": [
+    "processes.processes"
+  ]
 }

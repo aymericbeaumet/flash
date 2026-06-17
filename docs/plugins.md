@@ -1,133 +1,127 @@
 # Plugins
 
-Plugins are managed child processes owned by Flash. Each plugin has a required
-`manifest.json` with `manifest_version` (required integer, currently `2`), `id`,
-`name`, `version`, `description`, `install`, and `start` strings. Optional
-`request_timeout_ms` (default `2000`) raises the per-request RPC deadline for
-plugins that fan out to the network. Optional `capabilities` lists sensitive
-host surfaces the plugin opts into: today `"clipboard"` gates delivery of
-`core:clipboard.changed`, and `"accessibility"` gates the host Accessibility
-broker (`ax.snapshot`, `ax.perform`, `ax.set`). The host filters gated events
-and RPC paths out for any plugin that hasn't declared the capability.
+Plugins are Flash-owned child processes. Each plugin has a required
+`manifest.json` with `id`, `name`, `version`, `description`, `install`, and
+`start` strings. Optional `request_timeout_ms` raises the per-request RPC
+deadline for plugins that fan out to slower systems. Optional `capabilities`
+declares sensitive host surfaces: `"clipboard"` gates
+`core:clipboard.changed`, and `"accessibility"` gates the host AX broker
+(`ax.snapshot`, `ax.perform`, `ax.set`).
 
-Official bundled plugins are always enabled. Third-party plugins are listed in
-`[plugins] third_party` as `github:user/project@<commit-sha>` or
-`file:<path>`. GitHub references must pin a full 40-character commit SHA —
-moving branches and tags are rejected because a third-party plugin's
-`install` / `start` strings run as the user and a moving upstream ref would
-let arbitrary code land on every config reload.
+Flash loads manifests eagerly. On plugin reload it compiles commands, mappings,
+bangs, verbs, source labels, actions, schemes, event listeners, and active-window
+selectors into indexes. Runtime dispatch should be dictionary lookup plus
+selector matching against the current window context, not raw manifest walking.
+Keep new protocol or SDK work aligned with that boundary: manifests declare the
+static surface; plugins send runtime data over MessagePack only for dynamic
+state such as candidates, targets, status values, and command results.
 
-Plugins communicate with Flash through length-prefixed MessagePack on
-stdin/stdout — a 4-byte big-endian payload length followed by a MessagePack
-value. stderr is reserved for unexpected plugin errors. Plugin log messages
-recorded by Flash use `source = "plugin:<id>"`.
+Third-party plugins are listed in `[plugins] third_party` as
+`github:user/project@<commit-sha>` or `file:<path>`. GitHub references must pin
+a full 40-character commit SHA because `install` and `start` run as the user.
+
+Plugins communicate over length-prefixed MessagePack on stdin/stdout: a 4-byte
+big-endian payload length followed by a MessagePack value. stderr is reserved
+for unexpected plugin errors. Plugin log messages recorded by Flash use
+`source = "plugin:<id>"`.
 
 Official plugins install their CLI tools under `FLASH_PLUGIN_DATA_DIR`, not into
-global shell paths. Current bundled commands:
+global shell paths. Current bundled commands include `:spotify`, `:slack`,
+`:media`, and `:clipboard`; authentication is explicit through command
+subcommands, never during install or start.
 
-- `:spotify login|status|pause|play|toggle|next|previous|search|run`
-- `:slack login|version|run`
-- `:media play|pause|toggle|next|previous|volumeup|volumedown|mute|get|status|run`
-- `:clipboard` — open the clipboard history in a navigable modal (`j`/`k`
-  or arrows to move, Return pastes the selected entry into the focused app)
-
-The bundled `searchengines` plugin exports no commands; instead it serves
-DuckDuckGo-style bangs in the flashlight (see the `shebang` provider below):
-type `!<bang> <query>`, e.g. `!r cat` opens a Reddit search in the default
-browser.
-
-Authentication is explicit. Install and start do not run login flows.
-
-## Provider Sections
-
-Every surface a plugin drives is declared in its own top-level provider
-section. Manifests are static: commands, mappings, source labels, actions,
-navigation schemes, status segments, and verbs are not pushed dynamically over
-the runtime channel.
+## Manifest Shape
 
 ```json
 {
-  "hints": { "bundle_ids": ["org.mozilla.firefox"] },
-  "candidates": { "sources": ["firefox.tabs"] },
+  "id": "example",
+  "name": "Example",
+  "version": "0.1.0",
+  "description": "Example plugin",
+  "install": "true",
+  "start": "exec ./flash-plugin-example",
+  "listen": ["core:flash.started", "core:apps.*"],
+  "only_bundle_ids": ["org.mozilla.firefox"],
+  "only_urls": ["https://mail.google.com/*"],
+  "sources": ["example.items"],
+  "source_actions": ["resource_archive"],
+  "hints": {},
   "commands": {
     "items": [
-      { "command": "slack", "subcommand": "run", "description": "Run slack" }
+      { "command": "example", "subcommand": "run", "description": "Run example" }
     ]
   },
   "mappings": {
-    "modes": ["normal"],
     "items": [
-      { "key": "ctrl+k", "command": ["flash", "plugin_command", "--command=slack", "--subcommand=run"] }
+      {
+        "key": "R",
+        "command": ["flash", "send_key", "--keys=cmd+option+r"],
+        "only_bundle_ids": ["com.apple.Safari"]
+      }
     ]
   },
   "shebangs": {
-    "command": "search",
+    "command": "example",
     "items": [
-      { "token": "r", "description": "Reddit" },
+      { "token": "ex", "description": "Search example" },
       { "token": "*" }
+    ]
+  },
+  "navigation": { "schemes": ["example"] },
+  "status": { "segments": ["state"] },
+  "verbs": {
+    "items": [
+      { "name": "example_save", "inline_keystrokes": { "": "cmd+s" } }
     ]
   }
 }
 ```
 
-Shared, optional conditions on provider sections:
+## Selectors
 
-- **`bundle_ids`** — apps the provider applies to (empty = every app). For
-  `commands`/`mappings` the gate folds into each entry, and the entry's own
-  `bundle_ids` wins.
-- **`modes`** — `normal` / `insert` the provider applies to (empty = every
-  mode). Folds into a `mappings` entry's `mode` when the entry doesn't set one.
-- **`priority`** — precedence override; defaults to the manifest `priority`
-  (25).
+`only_bundle_ids` and `only_urls` are active-window selectors. They may appear at
+the manifest root and on command, mapping, shebang, and verb entries. Root and
+entry selectors are compounded. A selector matches only when every populated
+axis matches; `only_urls` supports `*` wildcards.
 
-### Sections
+Specificity is CSS-like: a scoped entry outranks an unscoped entry at the same
+declared priority, and a bundle+URL selector outranks a bundle-only selector.
+The host compiles selectors on plugin load. It only reads the focused document
+URL at runtime when some loaded selector declares `only_urls`.
 
-- **`hints`** — opts the plugin in as a *hints provider* for the apps it
-  matches. Hint selection is exclusive: when `f` fires, only the single
-  highest-priority hints provider supporting the focused app runs, so an
-  opted-in plugin (priority 25 > the core AX walk's 10) fully owns `f` for that
-  app and must return its own targets, with no fallback. To position geometry,
-  request `ax.snapshot` with `geometry: true`; each node then carries a
-  `frame: [x, y, w, h]` in NSScreen space, ready to drop into a target.
+`priority` defaults to `25`. For mappings and sources, selector specificity is
+added to the declared priority before collision resolution. Built-in/default
+mappings sit at priority `0`.
 
-- **`candidates`** — opts the plugin into the flashlight surface. `sources`
-  declares the source labels the plugin owns. Candidates are
-  global and additive across plugins; a plugin self-limits its snapshot via the
-  focus events it subscribes to, so this kind is a capability toggle rather than
-  an app/mode gate.
+## Sections
 
-- **`commands`** — `items[]` are the `:`-verbs the plugin registers. A
-  `bundle_ids` gate scopes them to the focused app; unconditional commands (the
-  default) are always available.
-
-- **`mappings`** — `items[]` are key bindings, mode-scoped, app-conditional,
-  and priority-ordered. `command` is a string array matching the host's mapping
-  syntax: `["flash", "<verb>", "k=v", …]` for in-process verb dispatch, or any
-  other head for argv exec. Config/default mappings sit at priority 0, so a
-  plugin mapping (priority 25) wins a key collision; a negative priority defers
-  to the built-in default.
-
-- **`shebangs`** — `items[]` are flashlight bangs. When a flashlight
-  submission begins with `!<token>` (e.g. `!r cat`), Flash routes the remainder
-  to the provider's `command` (folded into each entry; an entry may override it)
-  instead of resolving a candidate, dispatched as `command.invoke` with the
-  bang `token` as the subcommand — so a `shebang` provider needs no matching
-  `commands` entry. A `token` of `"*"` is a catch-all that claims every
-  otherwise-unclaimed bang, letting one plugin serve a large bang table (e.g.
-  the full DuckDuckGo set) without enumerating it in the manifest. The first
-  plugin to claim a token (or the catch-all) wins.
-
-- **`source_actions`** — `actions[]` are source-owned normal-mode actions such
-  as `tab_new`, `app_reload`, or `resource_archive`. The manifest declares
-  which action names the plugin owns; the plugin decides at runtime whether a
-  specific focused context is handled.
-
+- **`listen`** — string array of event-name patterns. `*` is the wildcard.
+  Event payload filtering belongs to the core capability gate, not per-listener
+  manifest objects.
+- **`hints`** — opts the plugin in as a hints provider. Hint selection is
+  exclusive: the highest-priority provider supporting the focused context owns
+  `f` for that context.
+- **`sources`** — root array of source labels the plugin owns for
+  `@<source>` completion and source-scoped flashlight queries.
+- **`commands`** — `items[]` are command-line `:` registrations. The host
+  indexes them by `(command, subcommand)` on load; wildcard subcommand `"*"`
+  consumes the remainder as args.
+- **`mappings`** — `items[]` are normal/insert key bindings. `command` is an
+  argv array using the same syntax as config mappings.
+- **`shebangs`** — `items[]` are flashlight bangs. `command` folds into entries;
+  an entry may override it. `token = "*"` is the catch-all provider.
+- **`source_actions`** — root string array of source-owned normal-mode actions
+  such as `tab_new`, `app_reload`, or `resource_archive`.
 - **`navigation`** — `schemes[]` declares durable route URL schemes the plugin
   can restore through movement history.
-
 - **`status`** — `segments[]` declares status-bar segment names. Runtime values
   arrive via `status.updated` and render as `#{plugin:<id>.<segment>}`.
+- **`verbs`** — `items[]` registers CLI/mapping verbs. `inline_keystrokes`
+  lets the host handle fixed keystroke verbs without a plugin RPC.
 
-- **`verbs`** — `items[]` registers CLI/mapping verbs such as `app_save`.
-  Entries may use `inline_keystrokes` so the host handles fixed keystroke verbs
-  without starting or round-tripping through the plugin process.
+## Runtime Data
+
+Candidates and targets are dynamic and travel over MessagePack. The flashlight
+opens from a synchronous snapshot; do not fetch live candidates in
+`candidate_query` unless the result truly depends on the query string. Keep
+snapshots warm from `on_start`, `on_event`, or plugin-owned polling.

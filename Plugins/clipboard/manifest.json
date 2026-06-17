@@ -1,16 +1,10 @@
 {
-  "manifest_version": 2,
   "id": "clipboard",
   "name": "Clipboard",
   "version": "0.1.0",
   "description": "Clipboard history behind :clipboard; pick an entry to paste it. Plus top-level :copy and :paste.",
   "install": "true",
   "start": "exec ./flash-plugin-clipboard",
-  "subscriptions": [
-    {
-      "match": "core:clipboard.changed"
-    }
-  ],
   "capabilities": [
     "clipboard"
   ],
@@ -32,5 +26,8 @@
         "description": "Paste (⌘V)"
       }
     ]
-  }
+  },
+  "listen": [
+    "core:clipboard.changed"
+  ]
 }

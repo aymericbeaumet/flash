@@ -777,12 +777,13 @@ final class FlashStatusBarController {
   private let commandQueue = DispatchQueue(label: "flash.status_bar.commands", qos: .utility)
   private var template: FlashStatusBarTemplate
   private let pluginSnapshotsProvider: () -> [PluginStatusSnapshot]
-  private var commandTimer: DispatchSourceTimer?
-  private var clockTimer: DispatchSourceTimer?
+  private var refreshTimer: DispatchSourceTimer?
   private var effectsTimer: DispatchSourceTimer?
   private var started = false
   private var commandRefreshGeneration: UInt64 = 0
   private var commandRefreshInFlight = false
+  private var nextCommandRefreshAt: Date?
+  private var nextClockRefreshAt: Date?
   private let refreshIntervalSeconds: TimeInterval
   private var dynamicValues: [String: String] = [:]
   private var activeAppName = ""
@@ -817,10 +818,10 @@ final class FlashStatusBarController {
   func stop() {
     queue.async { [weak self] in
       guard let self else { return }
-      self.commandTimer?.cancel()
-      self.commandTimer = nil
-      self.clockTimer?.cancel()
-      self.clockTimer = nil
+      self.refreshTimer?.cancel()
+      self.refreshTimer = nil
+      self.nextCommandRefreshAt = nil
+      self.nextClockRefreshAt = nil
       self.effectsTimer?.cancel()
       self.effectsTimer = nil
       self.commandRefreshGeneration &+= 1
@@ -893,10 +894,10 @@ final class FlashStatusBarController {
   }
 
   private func refreshSourcesForCurrentTemplate() {
-    commandTimer?.cancel()
-    commandTimer = nil
-    clockTimer?.cancel()
-    clockTimer = nil
+    refreshTimer?.cancel()
+    refreshTimer = nil
+    nextCommandRefreshAt = nil
+    nextClockRefreshAt = nil
     commandRefreshGeneration &+= 1
     commandRefreshInFlight = false
 
@@ -905,43 +906,63 @@ final class FlashStatusBarController {
     } else {
       publishCurrentModel()
       refreshCommandSections()
-      scheduleCommandRefresh()
+      scheduleNextCommandRefresh(from: Date())
     }
-    scheduleClockRefresh()
+    scheduleNextClockRefresh(from: Date())
+    armRefreshTimer()
   }
 
-  private func scheduleCommandRefresh() {
-    guard !template.commandSections.isEmpty else { return }
-    let timer = DispatchSource.makeTimerSource(queue: queue)
+  private func scheduleNextCommandRefresh(from now: Date) {
+    guard !template.commandSections.isEmpty else {
+      nextCommandRefreshAt = nil
+      return
+    }
     let intervalMs = max(250, Int(refreshIntervalSeconds * 1_000))
-    timer.schedule(
-      deadline: .now() + .milliseconds(intervalMs),
-      repeating: .milliseconds(intervalMs),
-      leeway: .milliseconds(250))
-    timer.setEventHandler { [weak self] in
-      self?.refreshCommandSections()
-    }
-    commandTimer = timer
-    timer.resume()
+    nextCommandRefreshAt = now.addingTimeInterval(TimeInterval(intervalMs) / 1_000)
   }
 
-  private func scheduleClockRefresh() {
-    guard template.needsClockRefresh else { return }
+  private func scheduleNextClockRefresh(from now: Date) {
+    guard template.needsClockRefresh else {
+      nextClockRefreshAt = nil
+      return
+    }
+    nextClockRefreshAt = now.addingTimeInterval(TimeInterval(nextClockRefreshDelayMilliseconds(from: now)) / 1_000)
+  }
+
+  private func armRefreshTimer() {
+    refreshTimer?.cancel()
+    refreshTimer = nil
+    let dates = [nextCommandRefreshAt, nextClockRefreshAt].compactMap { $0 }
+    guard let next = dates.min() else { return }
+    let delayMs = max(1, Int(next.timeIntervalSinceNow * 1_000))
     let timer = DispatchSource.makeTimerSource(queue: queue)
     timer.schedule(
-      deadline: .now() + .milliseconds(nextClockRefreshDelayMilliseconds()),
+      deadline: .now() + .milliseconds(delayMs),
       leeway: .milliseconds(100))
     timer.setEventHandler { [weak self] in
-      guard let self else { return }
-      self.publishCurrentModel()
-      self.scheduleClockRefresh()
+      self?.handleRefreshTimerFired()
     }
-    clockTimer = timer
+    refreshTimer = timer
     timer.resume()
   }
 
-  private func nextClockRefreshDelayMilliseconds() -> Int {
-    let now = Date().timeIntervalSince1970
+  private func handleRefreshTimerFired() {
+    refreshTimer?.cancel()
+    refreshTimer = nil
+    let now = Date()
+    if let due = nextCommandRefreshAt, due <= now {
+      refreshCommandSections()
+      scheduleNextCommandRefresh(from: now)
+    }
+    if let due = nextClockRefreshAt, due <= now {
+      publishCurrentModel()
+      scheduleNextClockRefresh(from: now)
+    }
+    armRefreshTimer()
+  }
+
+  private func nextClockRefreshDelayMilliseconds(from date: Date = Date()) -> Int {
+    let now = date.timeIntervalSince1970
     let nextMinute = (floor(now / 60) + 1) * 60
     return max(250, Int((nextMinute - now) * 1_000))
   }

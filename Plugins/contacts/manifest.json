@@ -1,5 +1,4 @@
 {
-  "manifest_version": 2,
   "id": "contacts",
   "name": "Contacts",
   "version": "0.1.0",
@@ -7,21 +6,6 @@
   "install": "true",
   "start": "exec ./flash-plugin-contacts",
   "priority": 12,
-  "subscriptions": [
-    "core:flash.started",
-    "core:config.*",
-    {
-      "match": "core:apps.*",
-      "bundle_ids": [
-        "com.apple.AddressBook"
-      ]
-    }
-  ],
-  "candidates": {
-    "sources": [
-      "contacts.cards"
-    ]
-  },
   "commands": {
     "items": [
       {
@@ -35,5 +19,13 @@
         "description": "Refresh the cached contacts list"
       }
     ]
-  }
+  },
+  "listen": [
+    "core:flash.started",
+    "core:config.*",
+    "core:apps.*"
+  ],
+  "sources": [
+    "contacts.cards"
+  ]
 }

@@ -37,13 +37,14 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(tmux.start, "exec ./flash-plugin-tmux")
     XCTAssertTrue(tmux.volatile)
     XCTAssertEqual(tmux.priority, 20)
-    XCTAssertTrue(tmux.bundleIDs.contains("org.alacritty"))
+    XCTAssertTrue(tmux.onlyBundleIDs.contains("org.alacritty"))
     XCTAssertTrue(tmux.sourceActions.contains("tab_new"))
     XCTAssertTrue(tmux.sourceActions.contains("app_reload"))
     XCTAssertEqual(tmux.navigationSchemes, ["tmux"])
     let www = try XCTUnwrap(manifests.first { $0.id == "www" })
     XCTAssertEqual(www.priority, 60)
     XCTAssertEqual(www.capabilities, [.accessibility])
+    XCTAssertEqual(www.onlyURLs, ["https://mail.google.com/*"])
     XCTAssertEqual(www.sourceActions, ["resource_archive", "resource_next", "resource_previous"])
 
     XCTAssertTrue(
@@ -138,14 +139,12 @@ final class PluginSystemTests: XCTestCase {
     try FileManager.default.createDirectory(at: pluginRoot, withIntermediateDirectories: true)
     try """
     {
-      "manifest_version": 2,
       "id": "sample",
       "name": "Sample",
       "version": "0.1.0",
       "description": "Sample plugin",
       "install": "./install.sh",
-      "start": "./start.sh",
-      "subscriptions": []
+      "start": "./start.sh"
     }
     """.write(
       to: pluginRoot.appendingPathComponent("manifest.json"),
@@ -169,17 +168,18 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 2,
           "id": "spotify",
           "name": "Spotify",
           "version": "0.1.0",
           "description": "Spotify controls",
           "install": "npm install",
           "start": "npm start",
-          "subscriptions": [
-            { "match": "core:apps.*", "bundle_ids": ["com.spotify.client"] },
+          "listen": [
+            "core:apps.*",
             "core:config.*"
           ],
+          "only_bundle_ids": ["com.spotify.client"],
+          "only_urls": ["https://open.spotify.com/*"],
           "commands": {
             "items": [
               { "command": "spotify", "subcommand": "pause", "description": "Pause playback" }
@@ -193,34 +193,47 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.id, "spotify")
     XCTAssertEqual(manifest.install, "npm install")
     XCTAssertEqual(manifest.start, "npm start")
-    XCTAssertEqual(manifest.subscriptions.count, 2)
+    XCTAssertEqual(manifest.listen, ["core:apps.*", "core:config.*"])
+    XCTAssertEqual(manifest.onlyBundleIDs, ["com.spotify.client"])
+    XCTAssertEqual(manifest.onlyURLs, ["https://open.spotify.com/*"])
     XCTAssertEqual(manifest.commands.first?.command, "spotify")
     XCTAssertEqual(manifest.commands.first?.subcommand, "pause")
     XCTAssertTrue(manifest.mappings.isEmpty, "absent mappings key defaults to []")
   }
 
-  func testManifestRejectsUnknownEventsKey() throws {
-    let root = try temporaryPluginRoot(
-      manifest:
-        """
-        {
-          "manifest_version": 2,
-          "id": "spotify",
-          "name": "Spotify",
-          "version": "0.1.0",
-          "description": "Spotify controls",
-          "install": "true",
-          "start": "true",
-          "events": [
-            { "match": "core:apps.*", "bundle_ids": ["com.spotify.client"] },
-            "core:config.*"
-          ]
-        }
-        """)
-    defer { try? FileManager.default.removeItem(at: root) }
+  func testManifestRejectsLegacyTopLevelKeys() throws {
+    for key in ["manifest_version", "subscriptions", "bundle_ids", "candidates"] {
+      let value: String
+      switch key {
+      case "manifest_version":
+        value = "2"
+      case "subscriptions":
+        value = #"["core:config.*"]"#
+      case "bundle_ids":
+        value = #"["com.example.app"]"#
+      case "candidates":
+        value = #"{"sources": ["example.items"]}"#
+      default:
+        value = "null"
+      }
+      let root = try temporaryPluginRoot(
+        manifest:
+          """
+          {
+            "id": "legacy",
+            "name": "Legacy",
+            "version": "0.1.0",
+            "description": "Legacy key",
+            "install": "true",
+            "start": "true",
+            "\(key)": \(value)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
 
-    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
-      XCTAssertTrue(String(describing: error).contains("manifest.json unknown field events"))
+      XCTAssertThrowsError(try PluginManifest.load(from: root), key) { error in
+        XCTAssertTrue(String(describing: error).contains("manifest.json unknown field \(key)"))
+      }
     }
   }
 
@@ -229,7 +242,6 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 2,
           "id": "slack",
           "name": "Slack",
           "version": "0.1.0",
@@ -243,7 +255,8 @@ final class PluginSystemTests: XCTestCase {
                 "key": "ctrl+k",
                 "mode": "insert",
                 "command": ["flash", "hints_dismiss"],
-                "bundle_ids": ["com.tinyspeck.slackmacgap"],
+                "only_bundle_ids": ["com.tinyspeck.slackmacgap"],
+                "only_urls": ["slack://*"],
                 "priority": 40
               }
             ]
@@ -259,13 +272,14 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(first.key, "q")
     XCTAssertEqual(first.mode, "normal", "mode defaults to normal")
     XCTAssertEqual(first.scope, .normal)
-    XCTAssertTrue(first.bundleIDs.isEmpty, "bundle_ids defaults to []")
+    XCTAssertTrue(first.selector.onlyBundleIDs.isEmpty, "only_bundle_ids defaults to []")
     XCTAssertNil(first.priority, "priority is optional")
 
     let second = manifest.mappings[1]
     XCTAssertEqual(second.mode, "insert")
     XCTAssertEqual(second.scope, .insert)
-    XCTAssertEqual(second.bundleIDs, ["com.tinyspeck.slackmacgap"])
+    XCTAssertEqual(second.selector.onlyBundleIDs, ["com.tinyspeck.slackmacgap"])
+    XCTAssertEqual(second.selector.onlyURLs, ["slack://*"])
     XCTAssertEqual(second.priority, 40)
   }
 
@@ -278,7 +292,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(json["key"] as? String, "q")
     XCTAssertEqual(json["command"] as? [String], ["flash", "hints_dismiss"])
     XCTAssertNil(json["mode"], "default \"normal\" mode is not encoded")
-    XCTAssertNil(json["bundle_ids"], "empty bundle_ids is not encoded")
+    XCTAssertNil(json["only_bundle_ids"], "empty only_bundle_ids is not encoded")
+    XCTAssertNil(json["only_urls"], "empty only_urls is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
   }
 
@@ -286,7 +301,9 @@ final class PluginSystemTests: XCTestCase {
     let root = try XCTUnwrap(
       try officialPluginRoots().first { $0.lastPathComponent == "safari" })
     let manifest = try PluginManifest.load(from: root)
-    XCTAssertEqual(manifest.bundleIDs, ["com.apple.Safari", "com.apple.SafariTechnologyPreview"])
+    XCTAssertEqual(
+      manifest.onlyBundleIDs,
+      ["com.apple.Safari", "com.apple.SafariTechnologyPreview"])
     let mapping = try XCTUnwrap(manifest.mappings.first)
     XCTAssertEqual(manifest.mappings.count, 1)
     XCTAssertEqual(mapping.key, "R")
@@ -296,8 +313,8 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(mapping.command, ["flash", "send_key", "--keys=cmd+option+r"])
     // The mappings provider scopes itself to release Safari only (the
     // technology preview reload shortcut is different on some builds),
-    // overriding the manifest-wide `bundle_ids` that include the preview.
-    XCTAssertEqual(mapping.bundleIDs, ["com.apple.Safari"])
+    // while the manifest-wide `only_bundle_ids` include the preview.
+    XCTAssertEqual(mapping.selector.onlyBundleIDs, ["com.apple.Safari"])
   }
 
   func testManifestRejectsInvalidID() throws {
@@ -305,14 +322,12 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 2,
           "id": "Spotify",
           "name": "Spotify",
           "version": "0.1.0",
           "description": "Spotify controls",
           "install": "true",
-          "start": "true",
-          "subscriptions": []
+          "start": "true"
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -325,18 +340,18 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 2,
           "id": "multi",
           "name": "Multi",
           "version": "0.1.0",
           "description": "Every surface in split provider sections",
           "install": "true",
           "start": "true",
-          "hints": { "bundle_ids": ["com.example.app"] },
-          "candidates": { "sources": ["multi.items"] },
+          "only_bundle_ids": ["com.example.app"],
+          "sources": ["multi.items"],
           "navigation": { "schemes": ["multi"] },
-          "source_actions": { "actions": ["resource_archive", "resource_next"] },
+          "source_actions": ["resource_archive", "resource_next"],
           "status": { "segments": ["battery"] },
+          "hints": {},
           "commands": {
             "items": [
               { "command": "multi", "subcommand": "go", "description": "Go" }
@@ -367,7 +382,6 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 2,
           "id": "cmdsonly",
           "name": "Commands Only",
           "version": "0.1.0",
@@ -388,27 +402,27 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertFalse(manifest.providesCandidates)
   }
 
-  func testCommandsProviderBundleIDsFoldIntoEntries() throws {
+  func testCommandEntriesOwnSelectors() throws {
     let root = try temporaryPluginRoot(
       manifest:
         """
         {
-          "manifest_version": 2,
           "id": "scoped",
           "name": "Scoped",
           "version": "0.1.0",
           "description": "App-scoped commands",
           "install": "true",
           "start": "true",
+          "only_bundle_ids": ["com.example.app"],
           "commands": {
-            "bundle_ids": ["com.example.app"],
             "items": [
-              { "command": "scoped", "subcommand": "here", "description": "Inherits scope" },
+              { "command": "scoped", "subcommand": "here", "description": "Uses root scope" },
               {
                 "command": "scoped",
                 "subcommand": "elsewhere",
                 "description": "Overrides scope",
-                "bundle_ids": ["com.other.app"]
+                "only_bundle_ids": ["com.other.app"],
+                "only_urls": ["https://example.com/*"]
               }
             ]
           }
@@ -418,9 +432,10 @@ final class PluginSystemTests: XCTestCase {
 
     let manifest = try PluginManifest.load(from: root)
     let here = try XCTUnwrap(manifest.commands.first { $0.subcommand == "here" })
-    XCTAssertEqual(here.bundleIDs, ["com.example.app"], "entry inherits the provider's gate")
+    XCTAssertTrue(here.selector.onlyBundleIDs.isEmpty, "root selector is not copied into entries")
     let elsewhere = try XCTUnwrap(manifest.commands.first { $0.subcommand == "elsewhere" })
-    XCTAssertEqual(elsewhere.bundleIDs, ["com.other.app"], "entry's own bundle_ids win")
+    XCTAssertEqual(elsewhere.selector.onlyBundleIDs, ["com.other.app"])
+    XCTAssertEqual(elsewhere.selector.onlyURLs, ["https://example.com/*"])
   }
 
   func testMappingsProviderModeFoldsIntoEntries() throws {
@@ -428,7 +443,6 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 2,
           "id": "moded",
           "name": "Moded",
           "version": "0.1.0",
@@ -456,20 +470,19 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 2,
           "id": "banger",
           "name": "Banger",
           "version": "0.1.0",
           "description": "Flashlight bangs",
           "install": "true",
           "start": "true",
+          "only_bundle_ids": ["com.example.app"],
           "shebangs": {
             "command": "search",
-            "bundle_ids": ["com.example.app"],
             "items": [
               { "token": "r", "description": "Reddit" },
               { "token": "*", "_note": "catch-all" },
-              { "token": "gh", "command": "github", "bundle_ids": ["com.other.app"] }
+              { "token": "gh", "command": "github", "only_bundle_ids": ["com.other.app"] }
             ]
           }
         }
@@ -480,37 +493,21 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(Set(manifest.shebangs.map(\.token)), ["r", "*", "gh"])
     let reddit = try XCTUnwrap(manifest.shebangs.first { $0.token == "r" })
     XCTAssertEqual(reddit.command, "search", "entry inherits the provider's command")
-    XCTAssertEqual(reddit.bundleIDs, ["com.example.app"], "entry inherits the provider's gate")
+    XCTAssertTrue(reddit.selector.onlyBundleIDs.isEmpty)
     let catchAll = try XCTUnwrap(manifest.shebangs.first { $0.token == "*" })
     XCTAssertEqual(catchAll.command, "search")
     XCTAssertEqual(catchAll.meta["_note"], "catch-all", "_-prefixed fields are retained as meta")
     let github = try XCTUnwrap(manifest.shebangs.first { $0.token == "gh" })
     XCTAssertEqual(github.command, "github", "entry's own command wins")
-    XCTAssertEqual(github.bundleIDs, ["com.other.app"], "entry's own bundle_ids win")
+    XCTAssertEqual(github.selector.onlyBundleIDs, ["com.other.app"])
   }
 
   func testProviderSectionEncodeOmitsEmptyFields() throws {
-    let provider = PluginCandidatesProvider()
+    let provider = PluginProviderGate()
     let data = try JSONEncoder().encode(provider)
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertNil(json["bundle_ids"], "empty bundle_ids is not encoded")
     XCTAssertNil(json["modes"], "empty modes is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
-    XCTAssertNil(json["sources"], "empty sources is not encoded")
-  }
-
-  func testCandidateProviderEncodesSourcesWhenSet() throws {
-    let provider = PluginCandidatesProvider(sources: ["firefox.tabs"])
-    let data = try JSONEncoder().encode(provider)
-    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["sources"] as? [String], ["firefox.tabs"])
-  }
-
-  func testSourceActionsProviderEncodesActionsWhenSet() throws {
-    let provider = PluginSourceActionsProvider(actions: ["resource_archive"])
-    let data = try JSONEncoder().encode(provider)
-    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["actions"] as? [String], ["resource_archive"])
   }
 
   func testNavigationProviderEncodesSchemesWhenSet() throws {
@@ -527,58 +524,43 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(json["segments"] as? [String], ["battery"])
   }
 
-  func testCommandRegistrationEncodesBundleIDsWhenSet() throws {
+  func testCommandRegistrationEncodesSelectorWhenSet() throws {
     let registration = PluginCommandRegistration(
-      command: "scoped", subcommand: "here", description: "X", bundleIDs: ["com.example.app"])
+      command: "scoped",
+      subcommand: "here",
+      description: "X",
+      selector: PluginSelector(
+        onlyBundleIDs: ["com.example.app"],
+        onlyURLs: ["https://example.com/*"]))
     let data = try JSONEncoder().encode(registration)
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["bundle_ids"] as? [String], ["com.example.app"])
+    XCTAssertEqual(json["only_bundle_ids"] as? [String], ["com.example.app"])
+    XCTAssertEqual(json["only_urls"] as? [String], ["https://example.com/*"])
 
     let bare = PluginCommandRegistration(command: "x", subcommand: "", description: "X")
     let bareData = try JSONEncoder().encode(bare)
     let bareJSON = try XCTUnwrap(
       try JSONSerialization.jsonObject(with: bareData) as? [String: Any])
-    XCTAssertNil(bareJSON["bundle_ids"], "empty bundle_ids is not encoded")
+    XCTAssertNil(bareJSON["only_bundle_ids"], "empty only_bundle_ids is not encoded")
+    XCTAssertNil(bareJSON["only_urls"], "empty only_urls is not encoded")
   }
 
-  func testEventSubscriptionFiltering() {
-    let apps = PluginEventSubscription(
-      match: "core:apps.*",
-      bundleIDs: ["com.spotify.client"])
-    XCTAssertTrue(
-      apps.matches(
-        PluginEvent(
-          name: "core:apps.launched",
-          payload: [:],
-          bundleID: "com.spotify.client",
-          configPath: nil,
-          focused: false)))
-    XCTAssertFalse(
-      apps.matches(
-        PluginEvent(
-          name: "core:apps.launched",
-          payload: [:],
-          bundleID: "com.apple.Safari",
-          configPath: nil,
-          focused: false)))
+  func testSelectorPatternMatchingAndSpecificity() {
+    let bundleOnly = PluginSelector(onlyBundleIDs: ["com.example.app"])
+    let bundleAndURL = PluginSelector(
+      onlyBundleIDs: ["com.example.app"],
+      onlyURLs: ["https://example.com/work/*"])
+    let context = PluginSelectorContext(
+      bundleID: "com.example.app",
+      url: "https://example.com/work/42")
 
-    let config = PluginEventSubscription(match: "core:config.*", paths: ["plugins.*"])
-    XCTAssertTrue(
-      config.matches(
-        PluginEvent(
-          name: "core:config.changed",
-          payload: [:],
-          bundleID: nil,
-          configPath: "plugins.third_party",
-          focused: nil)))
-    XCTAssertFalse(
-      config.matches(
-        PluginEvent(
-          name: "core:config.changed",
-          payload: [:],
-          bundleID: nil,
-          configPath: "debug.log_level",
-          focused: nil)))
+    XCTAssertTrue(PluginPattern("core:apps.*").matches("core:apps.launched"))
+    XCTAssertFalse(PluginPattern("core:apps.*").matches("core:config.changed"))
+    XCTAssertTrue(bundleAndURL.matches(context))
+    XCTAssertFalse(bundleAndURL.matches(PluginSelectorContext(bundleID: "com.example.app")))
+    XCTAssertGreaterThan(
+      try XCTUnwrap(bundleAndURL.specificity(in: context)),
+      try XCTUnwrap(bundleOnly.specificity(in: context)))
   }
 
   func testFlashLogIncludesSource() {

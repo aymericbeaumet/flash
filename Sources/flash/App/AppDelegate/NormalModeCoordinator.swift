@@ -1002,7 +1002,7 @@ extension AppDelegate {
   func openClipboardModal() {
     let dispatched = pluginManager.invoke(
       command: "clipboard", subcommand: "", args: [], raw: ":clipboard",
-      forBundleID: currentNonFlashContext()?.bundleIdentifier
+      in: pluginSelectorContext()
     ) { [weak self] ok, _, stdout, _ in
       guard let self else { return }
       let entries = (ok ? stdout : nil).flatMap(Self.decodeClipboardModalEntries) ?? []
@@ -1211,7 +1211,7 @@ extension AppDelegate {
     -> NormalModeDispatcher.CommandLineCompletionContext?
   {
     let registrations = pluginManager.commandRegistrations(
-      forBundleID: currentNonFlashContext()?.bundleIdentifier)
+      in: pluginSelectorContext())
     var subcommands: [String: [String]] = [:]
     var commandsOrdered: [String] = []
     for registration in registrations {
@@ -1551,7 +1551,7 @@ extension AppDelegate {
       bang.confirmed,
       let candidateSource = pluginManager.shebangCandidateSource(
         token: bang.token,
-        forBundleID: currentNonFlashContext()?.bundleIdentifier)
+        in: pluginSelectorContext())
     {
       // Confirmed bang bound to a candidate source: swap the pool to that
       // source's live candidates. Selection routes back through the bang.
@@ -1564,13 +1564,13 @@ extension AppDelegate {
     if let bang = CandidateFinder.parseBang(trimmed) {
       let bangs = CandidateFinder.prepare(
         pluginManager.shebangCandidates(
-          forBundleID: currentNonFlashContext()?.bundleIdentifier))
+          in: pluginSelectorContext()))
       return (bangs, bang.token)
     }
     if let bang = CandidateFinder.bangCompletionState(query: trimmed) {
       let bangs = CandidateFinder.prepare(
         pluginManager.shebangCandidates(
-          forBundleID: currentNonFlashContext()?.bundleIdentifier))
+          in: pluginSelectorContext()))
       return (bangs, bang.token)
     }
     // `@<partial>` completion: when the user is in the middle of
@@ -1652,7 +1652,7 @@ extension AppDelegate {
     return pluginManager.invokeShebang(
       token: token,
       query: remainder,
-      forBundleID: currentNonFlashContext()?.bundleIdentifier
+      in: pluginSelectorContext()
     ) { [weak self] ok, pid, stdout, navigationURL in
       guard ok, let self else { return }
       self.activatePluginCommandTarget(pid, navigationURL: navigationURL)
@@ -1754,7 +1754,7 @@ extension AppDelegate {
         subcommand: plugin.subcommand,
         args: plugin.args,
         raw: plugin.raw,
-        forBundleID: currentNonFlashContext()?.bundleIdentifier,
+        in: pluginSelectorContext(),
         onResult: { [weak self] ok, pid, stdout, navigationURL in
           guard ok else { return }
           self?.activatePluginCommandTarget(pid, navigationURL: navigationURL)
@@ -1992,7 +1992,7 @@ extension AppDelegate {
     let dispatched = pluginManager.invokeShebang(
       token: typed.token,
       query: typed.remainder,
-      forBundleID: currentNonFlashContext()?.bundleIdentifier
+      in: pluginSelectorContext()
     ) { [weak self] ok, pid, stdout, navigationURL in
       guard ok, let self else { return }
       self.activatePluginCommandTarget(pid, navigationURL: navigationURL)

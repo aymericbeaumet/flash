@@ -1,20 +1,10 @@
 {
-  "manifest_version": 2,
   "id": "spotify",
   "name": "Spotify",
   "version": "0.1.0",
   "description": "Spotify playback controls backed by spotify_player.",
   "install": "true",
   "start": "exec ./flash-plugin-spotify",
-  "subscriptions": [
-    {
-      "match": "core:apps.*",
-      "bundle_ids": [
-        "com.spotify.client"
-      ]
-    },
-    "core:config.*"
-  ],
   "commands": {
     "items": [
       {
@@ -63,5 +53,9 @@
         "description": "Run spotify_player with raw arguments"
       }
     ]
-  }
+  },
+  "listen": [
+    "core:apps.*",
+    "core:config.*"
+  ]
 }

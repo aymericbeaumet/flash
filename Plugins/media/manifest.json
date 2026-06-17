@@ -1,14 +1,10 @@
 {
-  "manifest_version": 2,
   "id": "media",
   "name": "Media",
   "version": "0.1.0",
   "description": "System media controls (play/pause, next/previous, volume) and now-playing info.",
   "install": "true",
   "start": "exec ./flash-plugin-media",
-  "subscriptions": [
-    "core:config.*"
-  ],
   "commands": {
     "items": [
       {
@@ -67,5 +63,8 @@
         "description": "Run osascript with raw arguments"
       }
     ]
-  }
+  },
+  "listen": [
+    "core:config.*"
+  ]
 }

@@ -179,25 +179,11 @@ final class NormalModeTests: XCTestCase {
       .mouseGrid(.click(.doubleClick)))
   }
 
-  func testMouseTargetCommitEntersInsertOnlyForTypingSurfaces() {
-    let textField = JumpTarget(
-      id: "t", frame: .zero, role: "AXTextField",
-      entersInsertMode: true, providerID: "ax")
-    let link = JumpTarget(
-      id: "l", frame: .zero, role: "AXLink",
-      entersInsertMode: false, providerID: "ax")
-    XCTAssertTrue(
-      AppDelegate.mouseTargetCommitShouldEnterInsertMode(target: textField))
-    XCTAssertFalse(
-      AppDelegate.mouseTargetCommitShouldEnterInsertMode(target: link))
-  }
-
-  // `mouseGridCommitShouldEnterInsertMode` deleted: F clicks no longer
-  // auto-enter insert. The post-click AX-input check
-  // (`enterInsertModeIfClickedOnTextInput`) is the only path into
-  // insert from a geometric click, and it's tested via behavior in
-  // the manual-verification flow (clicking a search field → insert;
-  // clicking a button → stays normal).
+  // `f` and `F` clicks no longer auto-enter insert from provider metadata.
+  // The post-click AX-input check (`enterInsertModeIfClickedOnTextInput`)
+  // is the only path into insert from a virtual or physical click, and it is
+  // tested via behavior in the manual-verification flow (clicking a search
+  // field -> insert; clicking a button -> stays normal).
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
     XCTAssertEqual(command(chars: "i"), .insertMode)

@@ -7,6 +7,7 @@ final class PluginProcess {
   let root: URL
   let manifest: PluginManifest
   let origin: PluginOrigin
+  private let listenPatterns: [PluginPattern]
 
   private let queue: DispatchQueue
   private let dataDir: URL
@@ -67,6 +68,7 @@ final class PluginProcess {
     self.root = root
     self.manifest = manifest
     self.origin = origin
+    self.listenPatterns = manifest.listen.map(PluginPattern.init)
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.watchFiles = watchFiles
@@ -114,7 +116,7 @@ final class PluginProcess {
   }
 
   func sendEvent(_ event: PluginEvent) {
-    guard manifest.subscriptions.contains(where: { $0.matches(event) }) else { return }
+    guard listenPatterns.contains(where: { $0.matches(event.name) }) else { return }
     // Default-deny capability gate. Events that carry sensitive data
     // (clipboard text, etc.) reach a plugin only when its manifest
     // explicitly opts in via `capabilities`. A plugin that drops or
@@ -547,7 +549,8 @@ final class PluginProcess {
       lastLog: lastLog,
       cpuPercent: usage?.cpuPercent ?? nil,
       memoryBytes: usage?.memoryBytes ?? nil,
-      bundleIDs: manifest.bundleIDs,
+      onlyBundleIDs: manifest.onlyBundleIDs,
+      onlyURLs: manifest.onlyURLs,
       volatile: manifest.volatile,
       priority: manifest.priority,
       commands: commands,

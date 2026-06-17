@@ -1,5 +1,4 @@
 {
-  "manifest_version": 2,
   "id": "reminders",
   "name": "Reminders",
   "version": "0.1.0",
@@ -7,21 +6,6 @@
   "install": "true",
   "start": "exec ./flash-plugin-reminders",
   "priority": 12,
-  "subscriptions": [
-    "core:flash.started",
-    "core:config.*",
-    {
-      "match": "core:apps.*",
-      "bundle_ids": [
-        "com.apple.reminders"
-      ]
-    }
-  ],
-  "candidates": {
-    "sources": [
-      "reminders.tasks"
-    ]
-  },
   "commands": {
     "items": [
       {
@@ -35,5 +19,13 @@
         "description": "Refresh the cached reminders list"
       }
     ]
-  }
+  },
+  "listen": [
+    "core:flash.started",
+    "core:config.*",
+    "core:apps.*"
+  ],
+  "sources": [
+    "reminders.tasks"
+  ]
 }

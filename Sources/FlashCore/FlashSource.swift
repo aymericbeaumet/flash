@@ -347,6 +347,9 @@ public protocol FlashSource: AnyObject {
   var identifier: String { get }
   var displayName: String { get }
   var priority: Int { get }
+  /// Contextual priority for focused-window chains. Defaults to ``priority``;
+  /// sources with active-window selectors can add selector specificity here.
+  func priority(in context: AppContext) -> Int
   /// Capabilities this source contributes. A source can expose hints,
   /// `:open` items, document URL resolution, app activation, or any
   /// combination of those without separate registration paths.
@@ -436,6 +439,7 @@ public protocol FlashSource: AnyObject {
 
 extension FlashSource {
   public var displayName: String { identifier }
+  public func priority(in context: AppContext) -> Int { priority }
   public var capabilities: FlashSourceCapabilities { [.jumpTargets] }
   public var activationPolicy: FlashSourceActivationPolicy { .always }
   public var readinessPolicy: FlashSourceReadinessPolicy { .activationOnly }
