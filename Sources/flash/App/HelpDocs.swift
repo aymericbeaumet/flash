@@ -202,15 +202,17 @@ enum HelpDocs {
 
       ## Ranking
 
-      Scoring layers, in order of weight:
+      The default result pool is navigation-only and source-family ordered:
+      tmux windows/tabs, browser tabs, apps, then Slack channels. Other
+      sources are hidden unless you type an explicit `@source` filter.
+
+      Inside the same family, scoring layers are:
 
       1. Exact primary-name match.
       2. Prefix match.
       3. Secondary metadata match (URL, tmux session/path, source labels).
       4. Fuzzy subsequence score.
-      5. Source-precedence bonus from source descriptors — `tmux_tabs`
-         ranks above `browser_tabs`, then `apps`, then `default`; the
-         alive bonus puts running apps above inactive apps.
+      5. Source-precedence and alive bonuses as tie-breakers.
 
       ## Plugin candidates
 

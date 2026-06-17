@@ -1122,11 +1122,13 @@ extension AppDelegate {
   private func candidateFinderCandidates(for scope: CandidateScope) -> [Candidate] {
     // Bangs are NOT in the default pool — they only surface when the
     // user types `!` (see `updateCandidateMatches`'s bang branch). The
-    // default flashlight pool is an immutable session snapshot over every
-    // current source: apps from the warmed `ApplicationSource` cache, and
-    // plugin/browser/tmux rows from each source's in-memory candidates
-    // snapshot. Do not call `queryCandidates` here — any RPC or live refresh
-    // would either delay first paint or mutate the list after it is visible.
+    // base snapshot is still over every current source: apps from the warmed
+    // `ApplicationSource` cache, and plugin/browser/tmux rows from each
+    // source's in-memory candidates snapshot. Query-time filtering narrows the
+    // default flashlight to the navigation families, or to whichever
+    // `@source` the user explicitly names. Do not call `queryCandidates`
+    // here — any RPC or live refresh would either delay first paint or mutate
+    // the list after it is visible.
     let candidates = registry.candidates(scope: scope)
     FlashLog.trace(
       "[candidate_finder] snapshot_sync scope=\(scope) count=\(candidates.count)")
@@ -1556,10 +1558,10 @@ extension AppDelegate {
   ///   * `@<source>` mode — the pool is narrowed to that one source. With an
   ///     empty residual the user sees every candidate from that source (e.g.
   ///     `@emojis.glyphs ` lists every emoji).
-  ///   * Default — the regular pool (apps, tmux, browser tabs, …) scored on
-  ///     the full query. Synthetic bang / source-completion rows are always
-  ///     excluded; emoji rows are excluded unless the user opted in via the
-  ///     `@<source>` narrow above.
+  ///   * Default — the regular pool scored on the full query, restricted to
+  ///     tmux windows/tabs, browser tabs, apps, and Slack channels. Synthetic
+  ///     bang / source-completion rows are always excluded; all other source
+  ///     families are excluded unless the user opts in via `@<source>`.
   private func buildCandidateFinderPool(
     trimmed: String,
     sourceFilter: String?
@@ -1612,16 +1614,19 @@ extension AppDelegate {
     {
       return (cached.pool, trimmed)
     }
-    // `@<source>` opts in to whatever source the user names — including the
-    // otherwise-noisy emoji pool. Without an explicit source filter, emoji
-    // rows would clutter every search.
+    // `@<source>` opts in to whatever source the user names. Without an
+    // explicit source filter, keep the default flashlight focused on navigation
+    // destinations only: tmux windows/tabs, browser tabs, apps, and Slack
+    // channels.
     let userOptedIntoSource = sourceFilter != nil
     let pool = candidateFinderCandidates.filter { candidate in
       guard candidate.kind != CandidateFinder.bangKind,
         candidate.kind != CandidateFinder.sourceKind
       else { return false }
       guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
-      if !userOptedIntoSource, candidate.kind == CandidateFinder.emojiKind {
+      if !userOptedIntoSource,
+        !CandidateFinder.isDefaultFlashlightCandidate(candidate, precedence: precedenceTable())
+      {
         return false
       }
       if let sourceFilter,

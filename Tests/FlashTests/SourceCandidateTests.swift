@@ -162,10 +162,9 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(sorted.map(\.candidate.title), ["Zulu", "Alpha"])
   }
 
-  func testStrongerMatchWinsOverWeakerMatchAcrossSources() throws {
-    // Score is the primary ordering: a stronger fuzzy match on an app
-    // beats a weaker match on a browser tab even though the tab's tier
-    // is technically higher. Tier is consulted only when scores agree.
+  func testStrongerMatchWinsWithinSameDefaultSourceBand() throws {
+    // The strict default source bands (tmux > browser > apps > Slack)
+    // settle cross-family order. Inside a band, match quality still leads.
     let deadPrefix = CandidateFinder.prepare(
       candidate(
         kind: .app,
@@ -176,13 +175,12 @@ final class SourceCandidateTests: XCTestCase {
         pid: nil))
     let alivePrefix = CandidateFinder.prepare(
       candidate(
-        kind: .plugin("browser_tab"),
-        source: "firefox",
+        kind: .app,
+        source: "core.apps",
         name: "Finder notes",
-        subtitle: "browser tab",
-        bundleIdentifier: "org.mozilla.firefox",
-        pid: 123,
-        url: URL(string: "https://docs.example.test/finder")))
+        subtitle: "app",
+        bundleIdentifier: "com.example.findernotes",
+        pid: 123))
 
     let deadScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: deadPrefix))
     let aliveScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: alivePrefix))
@@ -197,12 +195,10 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(sorted.first?.candidate.title, expectedFirst)
   }
 
-  func testStrongerScoredAppOutranksWeakerBrowserTab() throws {
-    // The motivating regression: typing `mes` must surface the
-    // `Messages` app (full-string prefix on the app name) above a
-    // browser tab whose title merely contains `mes`. The earlier
-    // strict-tier sort buried the app under any tab; match quality
-    // must lead.
+  func testDefaultFlashlightSourceBandOutranksCrossFamilyMatchQuality() throws {
+    // The default flashlight is source-first: tmux > browser tabs > apps >
+    // Slack channels. A browser tab with a weaker match still stays above an
+    // app with a stronger match because the user asked for strict family order.
     let messagesApp = CandidateFinder.prepare(
       candidate(
         kind: .app,
@@ -228,7 +224,7 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(candidate: browserTab, score: tabScore),
       CandidateMatch(candidate: messagesApp, score: appScore),
     ])
-    XCTAssertEqual(sorted.map(\.candidate.title), ["Messages", "Important message inbox"])
+    XCTAssertEqual(sorted.map(\.candidate.title), ["Important message inbox", "Messages"])
   }
 
   func testWordPrefixOutranksContainsAcrossWordBoundary() throws {
@@ -285,20 +281,20 @@ final class SourceCandidateTests: XCTestCase {
     ])
     XCTAssertEqual(sorted.map(\.candidate.source), ["tmux", "firefox"])
 
-    // But when scores differ, the higher score wins regardless of tier:
-    // the matcher's view of relevance is authoritative.
+    // The family band is strict: even a higher browser-tab score stays below
+    // a tmux row in default flashlight ordering.
     let scoreDrivenOrder = CandidateFinder.sortedMatches([
       CandidateMatch(candidate: browserTab, score: 14_000),
       CandidateMatch(candidate: tmuxWindow, score: 10_120),
     ])
-    XCTAssertEqual(scoreDrivenOrder.map(\.candidate.source), ["firefox", "tmux"])
+    XCTAssertEqual(scoreDrivenOrder.map(\.candidate.source), ["tmux", "firefox"])
   }
 
-  func testFlashlightTieBreakOrderBangTmuxBrowserActiveAppInactiveAppThenRest() {
-    // At equal scores the tier order settles the tie. Bangs are the
-    // only STRICT band: they always come above non-bangs, score
-    // independent. Other tiers (tmux > browser > active app > inactive
-    // app > rest) only matter on score ties.
+  func testFlashlightSourceBandOrderBangTmuxBrowserAppsSlackThenRest() {
+    // Bangs remain the top command surface. Default navigation families are
+    // strict after that: tmux > browser tabs > apps > Slack channels. Hidden
+    // sources sort after those families and are filtered from the live default
+    // pool unless the user types `@source`.
     let bang = CandidateFinder.prepare(
       candidate(
         kind: .plugin("bang"), source: "bang", name: "z-bang",
@@ -319,6 +315,10 @@ final class SourceCandidateTests: XCTestCase {
       candidate(
         kind: .app, source: "core.apps", name: "z-inactive",
         subtitle: "app", bundleIdentifier: "com.example.inactive", pid: nil))
+    let slack = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("slack_channel"), source: "slack.channels", name: "z-slack",
+        subtitle: "slack channel", bundleIdentifier: "", pid: nil))
     let note = CandidateFinder.prepare(
       candidate(
         kind: .plugin("note"), source: "notes", name: "z-note",
@@ -330,12 +330,43 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(candidate: activeApp, score: 0),
       CandidateMatch(candidate: tab, score: 0),
       CandidateMatch(candidate: tmux, score: 0),
+      CandidateMatch(candidate: slack, score: 0),
       CandidateMatch(candidate: bang, score: 0),
     ])
 
     XCTAssertEqual(
       sorted.map(\.candidate.title),
-      ["z-bang", "z-tmux", "z-tab", "z-active", "z-inactive", "z-note"])
+      ["z-bang", "z-tmux", "z-tab", "z-active", "z-inactive", "z-slack", "z-note"])
+  }
+
+  func testDefaultFlashlightVisibilityOnlyIncludesNavigationFamilies() {
+    let tmux = candidate(
+      kind: .plugin("tmux_window"), source: "tmux.windows", name: "flash",
+      subtitle: "tmux window", bundleIdentifier: "")
+    let tab = candidate(
+      kind: .plugin("browser_tab"), source: "firefox.tabs", name: "Gmail",
+      subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox")
+    let app = candidate(
+      kind: .app, source: "core.apps", name: "Safari",
+      subtitle: "app", bundleIdentifier: "com.apple.Safari")
+    let slack = candidate(
+      kind: .plugin("slack_channel"), source: "slack.channels", name: "#general",
+      subtitle: "slack channel", bundleIdentifier: "")
+    let note = candidate(
+      kind: .plugin("note"), source: "notes.notes", name: "shopping",
+      subtitle: "note", bundleIdentifier: "")
+    let emoji = candidate(
+      kind: CandidateFinder.emojiKind, source: "emojis.glyphs", name: "🔥 fire",
+      subtitle: "emoji", bundleIdentifier: "")
+    let source = CandidateFinder.sourceCompletionCandidate("notes.notes")
+
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(tmux))
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(tab))
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(app))
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(slack))
+    XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(note))
+    XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(emoji))
+    XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(source))
   }
 
   func testHigherScoreWinsEvenOverActiveAppTier() {
@@ -890,6 +921,36 @@ final class SourceCandidateTests: XCTestCase {
 
     XCTAssertEqual(table.weight(for: terminal), 100)
     XCTAssertEqual(table.weight(for: web), 80)
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(terminal, precedence: table))
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(web, precedence: table))
+  }
+
+  func testDefaultFlashlightVisibilityUsesDescriptorsWithoutTreatingOverridesAsOptIn() {
+    let table = CandidateFinder.PrecedenceTable(
+      sources: [
+        CandidateSourceDescriptor(name: "terminal.windows", kind: .tmuxTabs),
+        CandidateSourceDescriptor(name: "notes.notes", kind: .standard),
+      ],
+      overrides: [
+        "terminal.windows": 5,
+        "bookmarks": 500,
+      ],
+      aliveBonus: 0)
+    let terminal = candidate(
+      kind: .plugin("window"), source: "terminal.windows", name: "scratch:1",
+      subtitle: "window", bundleIdentifier: "")
+    let note = candidate(
+      kind: .plugin("note"), source: "notes.notes", name: "shopping",
+      subtitle: "note", bundleIdentifier: "")
+    let bookmark = candidate(
+      kind: .plugin("bookmark"), source: "bookmarks", name: "Inbox",
+      subtitle: "bookmark", bundleIdentifier: "")
+
+    XCTAssertEqual(table.weight(for: terminal), 5)
+    XCTAssertEqual(table.weight(for: bookmark), 500)
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(terminal, precedence: table))
+    XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(note, precedence: table))
+    XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(bookmark, precedence: table))
   }
 
   func testInsertsTextOnlyForEmojiKind() {
@@ -1255,7 +1316,8 @@ final class SourceCandidateTests: XCTestCase {
     let sorted = CandidateFinder.sortedMatches(matches, limit: 10)
 
     XCTAssertEqual(sorted.prefix(tmuxRows.count).map(\.candidate.source), tmuxRows.map(\.source))
-    XCTAssertTrue(sorted.dropFirst(tmuxRows.count).allSatisfy { $0.candidate.source != "tmux.windows" })
+    XCTAssertTrue(
+      sorted.dropFirst(tmuxRows.count).allSatisfy { $0.candidate.source != "tmux.windows" })
   }
 
   func testIncrementalCacheKeepsRowsOutsideDisplayLimitForLongerSourceQuery() {
@@ -1275,11 +1337,11 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(
         candidate: CandidateFinder.prepare(
           candidate(
-            kind: .app,
-            source: "core.apps",
-            name: "TextEdit Agent \(index)",
-            subtitle: "app",
-            bundleIdentifier: "com.apple.TextEdit.\(index)",
+            kind: .plugin("tmux_window"),
+            source: "tmux.windows",
+            name: "temporary noise \(index)",
+            subtitle: "scratch:\(index) · zsh · /tmp/noise",
+            bundleIdentifier: "",
             pid: pid_t(index + 1000))),
         score: 20_000 - index)
     }
@@ -1291,18 +1353,21 @@ final class SourceCandidateTests: XCTestCase {
       firstKeystrokeMatches,
       limit: 10)
 
-    XCTAssertFalse(ranked.display.contains { $0.candidate.source == "tmux.windows" })
+    XCTAssertFalse(
+      ranked.display.contains { match in
+        tmuxRows.contains { $0.title == match.candidate.title }
+      })
     XCTAssertEqual(ranked.incremental.count, firstKeystrokeMatches.count)
 
     let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
     let narrowed = CandidateFinder.scoreMatches(
       pool: ranked.incremental.map(\.candidate),
-      normalizedQuery: NormalModeDispatcher.normalizedSearchText("tmux"),
+      normalizedQuery: NormalModeDispatcher.normalizedSearchText("moria"),
       fuzzyScore: fuzzy,
       allowParallel: false)
     let sorted = CandidateFinder.sortedMatches(narrowed, limit: 10)
 
-    XCTAssertEqual(sorted.prefix(tmuxRows.count).map(\.candidate.source), tmuxRows.map(\.source))
+    XCTAssertEqual(sorted.first?.candidate.title, "moria")
   }
 
   func testTmuxWindowDisplayShowsPrimaryTitleBeforeSecondaryMetadata() {

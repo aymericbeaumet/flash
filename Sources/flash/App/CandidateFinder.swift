@@ -93,6 +93,17 @@ enum CandidateFinder {
     }
   }
 
+  static func defaultFlashlightSourceRank(_ candidate: Candidate) -> Int? {
+    PrecedenceTable.default.defaultFlashlightSourceRank(for: candidate)
+  }
+
+  static func isDefaultFlashlightCandidate(
+    _ candidate: Candidate,
+    precedence: PrecedenceTable = .default
+  ) -> Bool {
+    precedence.defaultFlashlightSourceRank(for: candidate) != nil
+  }
+
   static func displayTitle(_ candidate: Candidate) -> String {
     if candidate.kind == bangKind {
       return bangDisplayTitle(candidate)
@@ -658,6 +669,7 @@ enum CandidateFinder {
   private struct SortRecord {
     var index: Int
     var score: Int
+    var defaultFlashlightSourceRank: Int?
     /// Precedence weight from `PrecedenceTable`. Higher is better.
     /// Bangs carry the sentinel `bangWeight` so the comparator can
     /// fast-path the strict top band without a separate flag.
@@ -680,6 +692,7 @@ enum CandidateFinder {
       return SortRecord(
         index: offset,
         score: match.score,
+        defaultFlashlightSourceRank: precedence.defaultFlashlightSourceRank(for: match.candidate),
         weight: precedence.weight(for: match.candidate),
         alive: isAlive(match.candidate),
         key: key,
@@ -736,15 +749,29 @@ enum CandidateFinder {
     //    intent; we surface it above anything else regardless of
     //    how the fuzzy match would score.
     //
-    // 2. Everything else is ranked by match quality first. The
-    //    precedence weight is the tiebreaker once scores cluster —
-    //    enough to bump the order in the intuitive direction (tmux
-    //    > browser tabs > active apps > …) without overriding the
-    //    matcher. Defaults come from source descriptors/candidate
-    //    kinds; `[flashlight.precedence]` can override specific labels.
+    // 2. The default flashlight source families are a strict band:
+    //    tmux windows/tabs > browser tabs > apps > Slack channels.
+    //    Match quality is authoritative only inside the same band. Other
+    //    sources are normally hidden from the default pool, but when
+    //    sorted explicitly (for example through `@source`) they stay below
+    //    default families unless the compared rows are all outside the band.
+    //
+    // 3. Everything inside the same band is ranked by match quality first.
+    //    The precedence weight is the tiebreaker once scores cluster.
     let lhsIsBang = lhs.weight == PrecedenceTable.bangWeight
     let rhsIsBang = rhs.weight == PrecedenceTable.bangWeight
     if lhsIsBang != rhsIsBang { return lhsIsBang }
+
+    switch (lhs.defaultFlashlightSourceRank, rhs.defaultFlashlightSourceRank) {
+    case (let l?, let r?) where l != r:
+      return l > r
+    case (_?, nil):
+      return true
+    case (nil, _?):
+      return false
+    default:
+      break
+    }
 
     if lhs.score != rhs.score { return lhs.score > rhs.score }
 
@@ -775,7 +802,16 @@ enum CandidateFinder {
   /// Used by `sortedMatches` as the tiebreaker when match scores cluster.
   /// Higher weight = ranks earlier.
   struct PrecedenceTable: Sendable {
-    private let entries: [(pattern: String, weight: Int)]
+    private struct Entry: Sendable {
+      var pattern: String
+      var weight: Int
+      /// Non-nil only for registry-declared sources. Override-only entries
+      /// can change ranking weight, but cannot opt hidden sources into default
+      /// flashlight visibility.
+      var kind: CandidateSourceKind?
+    }
+
+    private let entries: [Entry]
     public let aliveBonus: Int
 
     public init(
@@ -783,18 +819,22 @@ enum CandidateFinder {
       overrides: [String: Int],
       aliveBonus: Int
     ) {
-      var weights: [String: Int] = [:]
+      var records: [String: (weight: Int, kind: CandidateSourceKind?)] = [:]
       for source in sources {
         let pattern = source.name.trimmed.lowercased()
         guard !pattern.isEmpty else { continue }
-        weights[pattern] = Self.defaultWeight(for: source.kind)
+        records[pattern] = (Self.defaultWeight(for: source.kind), source.kind)
       }
       for (pattern, weight) in overrides {
         let pattern = pattern.trimmed.lowercased()
         guard !pattern.isEmpty else { continue }
-        weights[pattern] = weight
+        if let existing = records[pattern] {
+          records[pattern] = (weight, existing.kind)
+        } else {
+          records[pattern] = (weight, nil)
+        }
       }
-      self.entries = Self.sortedEntries(weights)
+      self.entries = Self.sortedEntries(records)
       self.aliveBonus = aliveBonus
     }
 
@@ -816,6 +856,21 @@ enum CandidateFinder {
       return resolvedBase + bonus
     }
 
+    /// Strict default flashlight family rank. Live source descriptors are the
+    /// primary signal; semantic candidate kinds cover offline tests and sources
+    /// that have not registered descriptors.
+    public func defaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
+      let lowered = candidate.source.lowercased()
+      for entry in entries {
+        guard lowered == entry.pattern || lowered.hasPrefix(entry.pattern + ".") else {
+          continue
+        }
+        guard let kind = entry.kind else { continue }
+        return Self.defaultFlashlightSourceRank(for: kind)
+      }
+      return Self.fallbackDefaultFlashlightSourceRank(for: candidate)
+    }
+
     /// Sentinel ceiling reserved for bang rows so the comparator
     /// can detect them without a separate boolean. Far above any
     /// reasonable user-configured weight.
@@ -829,13 +884,16 @@ enum CandidateFinder {
       overrides: [:],
       aliveBonus: 10)
 
-    private static func sortedEntries(_ weights: [String: Int]) -> [(pattern: String, weight: Int)]
-    {
-      weights
-        .map { ($0.key, $0.value) }
+    private static func sortedEntries(
+      _ records: [String: (weight: Int, kind: CandidateSourceKind?)]
+    ) -> [Entry] {
+      records
+        .map { Entry(pattern: $0.key, weight: $0.value.weight, kind: $0.value.kind) }
         .sorted { lhs, rhs in
-          if lhs.0.count != rhs.0.count { return lhs.0.count > rhs.0.count }
-          return lhs.0 < rhs.0  // deterministic tie-break for equal-length patterns
+          if lhs.pattern.count != rhs.pattern.count {
+            return lhs.pattern.count > rhs.pattern.count
+          }
+          return lhs.pattern < rhs.pattern  // deterministic tie-break for equal-length patterns
         }
     }
 
@@ -849,6 +907,19 @@ enum CandidateFinder {
         return 40
       case .standard:
         return 0
+      }
+    }
+
+    private static func defaultFlashlightSourceRank(for kind: CandidateSourceKind) -> Int? {
+      switch kind {
+      case .tmuxTabs:
+        return 4
+      case .browserTabs:
+        return 3
+      case .apps:
+        return 2
+      case .standard:
+        return nil
       }
     }
 
@@ -866,6 +937,29 @@ enum CandidateFinder {
           return .standard
         }
       }
+    }
+
+    private static func fallbackDefaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
+      switch candidate.kind {
+      case .app:
+        return 2
+      case .plugin(let kind):
+        switch kind {
+        case "tmux_window":
+          return 4
+        case "browser_tab":
+          return 3
+        case "slack_channel":
+          return 1
+        default:
+          break
+        }
+      }
+      let source = candidate.source.lowercased()
+      if source == "slack.channels" || source.hasPrefix("slack.channels.") {
+        return 1
+      }
+      return nil
     }
   }
 
