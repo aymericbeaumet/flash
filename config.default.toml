@@ -81,8 +81,8 @@ watching_enabled = true
 #   #[blink] / #[noblink]            — pulse the wrapped text once a
 #                                     second (tmux's blink attribute).
 #   #[breathing] / #[nobreathing]    — Flash extension. Subtle opacity
-#                                     sinusoid on an 8-second cycle
-#                                     (80 → 100 % alpha) — slower than a
+#                                     sinusoid on a 10-second cycle
+#                                     (80 → 100 % alpha) — well below a
 #                                     baseline meditation breath so the
 #                                     chip never signals, just sits alive.
 #                                     Used by the system plugin to mark
