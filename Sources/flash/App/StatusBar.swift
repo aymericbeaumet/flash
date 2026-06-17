@@ -660,18 +660,16 @@ enum FlashStatusBarRenderer {
     // pause between inhale and exhale.
     var alpha: CGFloat = 1.0
     if segment.breathing {
-      let period: TimeInterval = 6.0
+      // 8 s cycle — slower than a baseline meditation breath (~6 s)
+      // so the chip never feels like it's *signalling*, just sitting
+      // there alive. Alpha rides [0.80, 1.0] — 20 % swing, ~13 %
+      // luminance drop on the dark Nord chip, the smallest band that
+      // still registers as motion in the user's periphery without
+      // pulling attention. Knobs tunable here in one place.
+      let period: TimeInterval = 8.0
       let phase = (currentTime.truncatingRemainder(dividingBy: period)) / period
       let sine = sin(phase * 2 * .pi)
-      // [0.75, 1.0] over 6 s. An earlier [0.88, 1.0] curve technically
-      // shifted the foreground alpha by 12 % but turned out to sit
-      // below the perceptual threshold on the dark Nord background:
-      // the yellow chip's luminance only moved ~7 %, which the eye
-      // reads as static against a status bar that isn't otherwise
-      // moving. 25 % alpha → ~16 % luminance drop is the smallest
-      // swing that still registers as a heartbeat without ever
-      // pulling the eye toward the chip. Tunable here in one place.
-      let low: CGFloat = 0.75
+      let low: CGFloat = 0.80
       let high: CGFloat = 1.0
       let mid = (low + high) / 2
       let halfRange = (high - low) / 2
