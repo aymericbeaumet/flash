@@ -651,6 +651,88 @@ final class StatusBarTests: XCTestCase {
       ])
   }
 
+  func testTmuxStatusSegmentsLatchBreathingAndBlinkBetweenMarkers() {
+    let segments = FlashStatusBarRenderer.segments(
+      from: "#[fg=colour178]Cdx #[breathing]80%#[nobreathing] "
+        + "#[blink]LOW#[noblink] tail")
+
+    XCTAssertEqual(
+      segments,
+      [
+        FlashStatusTextSegment(text: "Cdx ", foreground: .colour178),
+        FlashStatusTextSegment(text: "80%", foreground: .colour178, breathing: true),
+        FlashStatusTextSegment(text: " ", foreground: .colour178),
+        FlashStatusTextSegment(text: "LOW", foreground: .colour178, blink: true),
+        FlashStatusTextSegment(text: " tail", foreground: .colour178),
+      ])
+  }
+
+  func testBreathingEffectAlphaRidesSinusoidBetween35And100Percent() {
+    let breathing = FlashStatusTextSegment(text: "82%", foreground: .colour178, breathing: true)
+    // 0.0 s — sine starts at 0, alpha lands at the midpoint of the
+    // [0.35, 1.0] band.
+    XCTAssertEqual(
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 0.0),
+      0.675,
+      accuracy: 0.001)
+    // 1.0 s — quarter cycle in (period 4 s), sine peaks at 1, alpha at 1.0.
+    XCTAssertEqual(
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 1.0),
+      1.0,
+      accuracy: 0.001)
+    // 3.0 s — three-quarter cycle, sine bottoms at -1, alpha at 0.35.
+    XCTAssertEqual(
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 3.0),
+      0.35,
+      accuracy: 0.001)
+  }
+
+  func testBlinkEffectFlipsBetweenSolidAndDim() {
+    let blink = FlashStatusTextSegment(text: "!", foreground: .colour196, blink: true)
+    // 0.0 s — within the on-half of the 1 s square wave.
+    XCTAssertEqual(
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: blink, currentTime: 0.0),
+      1.0,
+      accuracy: 0.001)
+    // 0.6 s — in the off-half; alpha dips to 0.15.
+    XCTAssertEqual(
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: blink, currentTime: 0.6),
+      0.15,
+      accuracy: 0.001)
+  }
+
+  func testStaticSegmentsReportAlphaUnchanged() {
+    let plain = FlashStatusTextSegment(text: "·", foreground: .colour245)
+    XCTAssertEqual(
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: plain, currentTime: 0.0),
+      1.0,
+      accuracy: 0.001)
+    XCTAssertEqual(
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: plain, currentTime: 12_345.6),
+      1.0,
+      accuracy: 0.001)
+  }
+
+  func testModelNeedsEffectsTickDetectsBreathingOrBlinkInAnyRegion() {
+    XCTAssertFalse(
+      FlashStatusBarController.modelNeedsEffectsTick(
+        FlashStatusBarModel(appText: "Cdx 80%", modeText: "INSERT", rightText: "14:32")))
+
+    XCTAssertTrue(
+      FlashStatusBarController.modelNeedsEffectsTick(
+        FlashStatusBarModel(
+          appText: "",
+          modeText: "INSERT",
+          rightText: "#[breathing]82%#[nobreathing]")))
+
+    XCTAssertTrue(
+      FlashStatusBarController.modelNeedsEffectsTick(
+        FlashStatusBarModel(
+          appText: "#[blink]LOW#[noblink]",
+          modeText: "INSERT",
+          rightText: "")))
+  }
+
   private func pluginSnapshot(
     id: String,
     state: String,

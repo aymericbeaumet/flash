@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import QuartzCore
 
 enum FlashStatusTextColor: Equatable {
   case defaultForeground
@@ -21,6 +22,10 @@ struct FlashStatusTextSegment: Equatable {
   var underline: Bool
   var dim: Bool
   var reverse: Bool
+  var blink: Bool
+  var breathing: Bool
+
+  var hasAnimatedEffect: Bool { blink || breathing }
 
   init(
     text: String,
@@ -30,7 +35,9 @@ struct FlashStatusTextSegment: Equatable {
     italics: Bool = false,
     underline: Bool = false,
     dim: Bool = false,
-    reverse: Bool = false
+    reverse: Bool = false,
+    blink: Bool = false,
+    breathing: Bool = false
   ) {
     self.text = text
     self.foreground = foreground
@@ -40,6 +47,8 @@ struct FlashStatusTextSegment: Equatable {
     self.underline = underline
     self.dim = dim
     self.reverse = reverse
+    self.blink = blink
+    self.breathing = breathing
   }
 }
 
@@ -51,6 +60,8 @@ private struct FlashStatusTextStyle {
   var underline = false
   var dim = false
   var reverse = false
+  var blink = false
+  var breathing = false
 }
 
 enum FlashStatusBarSDKValue: Equatable {
@@ -543,7 +554,9 @@ enum FlashStatusBarRenderer {
           italics: style.italics,
           underline: style.underline,
           dim: style.dim,
-          reverse: style.reverse))
+          reverse: style.reverse,
+          blink: style.blink,
+          breathing: style.breathing))
       buffer = ""
     }
 
@@ -577,17 +590,22 @@ enum FlashStatusBarRenderer {
     return segments
   }
 
-  static func attributedStatusString(from raw: String, font: NSFont) -> NSAttributedString {
+  static func attributedStatusString(
+    from raw: String,
+    font: NSFont,
+    currentTime: TimeInterval = CACurrentMediaTime()
+  ) -> NSAttributedString {
     let attributed = NSMutableAttributedString()
     for segment in segments(from: raw) {
-      attributed.append(attributedSegment(segment, font: font))
+      attributed.append(attributedSegment(segment, font: font, currentTime: currentTime))
     }
     return attributed
   }
 
   static func attributedSegment(
     _ segment: FlashStatusTextSegment,
-    font: NSFont
+    font: NSFont,
+    currentTime: TimeInterval = 0
   ) -> NSAttributedString {
     // tmux's `reverse` swaps fg + bg; mirror that so `#[reverse]…#[noreverse]`
     // matches what the user expects.
@@ -601,7 +619,10 @@ enum FlashStatusBarRenderer {
     // Dim ~ tmux's reduced-intensity attribute; render at 60% alpha on the
     // foreground colour. We can't dim a bg fill the same way, so leave bg
     // alone for dim.
-    let dimmedFg = segment.dim ? fg.withAlphaComponent(0.6) : fg
+    let baseDim: CGFloat = segment.dim ? 0.6 : 1.0
+    let effectAlpha = effectAlphaMultiplier(segment: segment, currentTime: currentTime)
+    let finalAlpha = baseDim * effectAlpha
+    let dimmedFg = finalAlpha < 0.999 ? fg.withAlphaComponent(finalAlpha) : fg
     let segmentFont: NSFont
     if segment.bold && segment.italics {
       segmentFont = nsFontFor(font, traits: [.boldFontMask, .italicFontMask])
@@ -619,6 +640,41 @@ enum FlashStatusBarRenderer {
     if let bg { attrs[.backgroundColor] = bg }
     if segment.underline { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
     return NSAttributedString(string: segment.text, attributes: attrs)
+  }
+
+  /// Pure function so tests can pin a specific time and verify the
+  /// curve. Pass `currentTime = 0` (the default for `attributedSegment`)
+  /// to disable animation entirely — handy for static snapshot tests
+  /// that don't want flapping alpha values.
+  static func effectAlphaMultiplier(
+    segment: FlashStatusTextSegment,
+    currentTime: TimeInterval
+  ) -> CGFloat {
+    // Period of ~4 s, oscillating between 0.35 and 1.0. The sinusoid's
+    // value range is [-1, 1], so we shift+scale to land in
+    // [low, 1.0]. The low bound is high enough that the digits stay
+    // readable through the breathing dim — anything below ~30% gets
+    // hard to scan at the status-bar font size.
+    var alpha: CGFloat = 1.0
+    if segment.breathing {
+      let period: TimeInterval = 4.0
+      let phase = (currentTime.truncatingRemainder(dividingBy: period)) / period
+      let sine = sin(phase * 2 * .pi)
+      let low: CGFloat = 0.35
+      let high: CGFloat = 1.0
+      let mid = (low + high) / 2
+      let halfRange = (high - low) / 2
+      alpha *= mid + halfRange * CGFloat(sine)
+    }
+    if segment.blink {
+      // Square wave, 1 s period (0.5 s on / 0.5 s off). Tmux's blink
+      // attribute is approximately this cadence on terminals that honor
+      // it, so the muscle memory carries over.
+      let period: TimeInterval = 1.0
+      let phase = currentTime.truncatingRemainder(dividingBy: period) / period
+      alpha *= phase < 0.5 ? 1.0 : 0.15
+    }
+    return alpha
   }
 
   private static func nsFontFor(_ font: NSFont, traits: NSFontTraitMask) -> NSFont {
@@ -643,6 +699,17 @@ enum FlashStatusBarRenderer {
       case "nodim": style.dim = false
       case "reverse", "invert": style.reverse = true
       case "noreverse", "noinvert": style.reverse = false
+      // tmux's `blink` attribute — alternates the text at a steady
+      // half-second period. Useful for "this needs your attention"
+      // signals (low battery, retry timer, …).
+      case "blink": style.blink = true
+      case "noblink": style.blink = false
+      // Flash extension. `breathing` rides a slow opacity sinusoid
+      // calibrated to feel like a calm exhale (~4-second cycle, never
+      // dimmer than 35%). The battery plugin wraps its percent in
+      // `#[breathing]…#[nobreathing]` while charging.
+      case "breathing", "breathe": style.breathing = true
+      case "nobreathing", "nobreathe": style.breathing = false
       default:
         if token.hasPrefix("fg=") {
           style.foreground = tmuxColor(String(token.dropFirst(3)))
@@ -689,6 +756,13 @@ enum FlashStatusBarRenderer {
 }
 
 final class FlashStatusBarController {
+  /// ~20 fps. Slow enough that the breathing dim feels organic (4-second
+  /// period × 80 samples per cycle), fast enough to not introduce a
+  /// noticeable stutter when blink toggles. The status-bar re-render is
+  /// just an `NSAttributedString` rebuild + a CATextLayer reassignment,
+  /// so the per-tick cost is well under a millisecond.
+  static let effectsTickMilliseconds = 50
+
   private weak var overlay: OverlayPanel?
   private let queue = DispatchQueue(label: "flash.status_bar", qos: .utility)
   private let commandQueue = DispatchQueue(label: "flash.status_bar.commands", qos: .utility)
@@ -696,6 +770,7 @@ final class FlashStatusBarController {
   private let pluginSnapshotsProvider: () -> [PluginStatusSnapshot]
   private var commandTimer: DispatchSourceTimer?
   private var clockTimer: DispatchSourceTimer?
+  private var effectsTimer: DispatchSourceTimer?
   private var started = false
   private var commandRefreshGeneration: UInt64 = 0
   private var commandRefreshInFlight = false
@@ -737,6 +812,8 @@ final class FlashStatusBarController {
       self.commandTimer = nil
       self.clockTimer?.cancel()
       self.clockTimer = nil
+      self.effectsTimer?.cancel()
+      self.effectsTimer = nil
       self.commandRefreshGeneration &+= 1
       self.commandRefreshInFlight = false
       self.started = false
@@ -870,11 +947,77 @@ final class FlashStatusBarController {
       template: template,
       context: context,
       dynamicValues: dynamicValues)
-    guard model != lastPublishedModel else { return }
-    lastPublishedModel = model
+    let modelChanged = model != lastPublishedModel
+    if modelChanged {
+      lastPublishedModel = model
+      DispatchQueue.main.async { [weak overlay] in
+        overlay?.setStatusBarModel(model)
+      }
+    }
+    // Always re-evaluate the effects timer — the same model can flip
+    // between "needs animation" and "doesn't" as plugins emit / clear
+    // `#[breathing]` markers (the system battery plugin wraps its
+    // percent only while charging).
+    refreshEffectsTimer(for: model)
+  }
+
+  /// Re-publishes the *current* model to the overlay, bypassing the
+  /// "skip if unchanged" guard. The renderer reads `CACurrentMediaTime`
+  /// when it builds attributed strings, so the per-segment alpha for
+  /// `#[breathing]` / `#[blink]` segments advances on each re-publish
+  /// even though the underlying text hasn't moved.
+  private func tickEffects() {
+    guard let model = lastPublishedModel else { return }
     DispatchQueue.main.async { [weak overlay] in
       overlay?.setStatusBarModel(model)
     }
+  }
+
+  private func refreshEffectsTimer(for model: FlashStatusBarModel) {
+    let needsTick = Self.modelNeedsEffectsTick(model)
+    if needsTick {
+      startEffectsTimer()
+    } else {
+      stopEffectsTimer()
+    }
+  }
+
+  private func startEffectsTimer() {
+    guard effectsTimer == nil else { return }
+    let timer = DispatchSource.makeTimerSource(queue: queue)
+    let intervalMs = Self.effectsTickMilliseconds
+    timer.schedule(
+      deadline: .now() + .milliseconds(intervalMs),
+      repeating: .milliseconds(intervalMs),
+      leeway: .milliseconds(10))
+    timer.setEventHandler { [weak self] in
+      self?.tickEffects()
+    }
+    effectsTimer = timer
+    timer.resume()
+  }
+
+  private func stopEffectsTimer() {
+    effectsTimer?.cancel()
+    effectsTimer = nil
+  }
+
+  /// Cheap substring check on the rendered model. The actual marker
+  /// strings (`#[breathing]`, `#[blink]`) are kept verbatim in the
+  /// per-region buckets until `FlashStatusBarRenderer.segments` parses
+  /// them at attribute-string-build time — so a plain `contains` here
+  /// is enough and saves the cost of running the marker parser on every
+  /// publish just to discover "no, nothing to animate".
+  static func modelNeedsEffectsTick(_ model: FlashStatusBarModel) -> Bool {
+    return regionNeedsEffectsTick(model.appText)
+      || regionNeedsEffectsTick(model.modeText)
+      || regionNeedsEffectsTick(model.rightText)
+  }
+
+  private static func regionNeedsEffectsTick(_ raw: String) -> Bool {
+    return raw.contains("#[breathing")
+      || raw.contains("#[breathe")
+      || raw.contains("#[blink")
   }
 
   private func runCommand(_ command: FlashStatusBarCommand) -> String? {

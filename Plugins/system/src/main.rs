@@ -59,35 +59,100 @@ async fn publish_battery_status(ctx: &Context) {
         "-g".to_string(),
         "batt".to_string(),
     ];
-    let result = ctx.run_cli_quiet(&argv, Duration::from_secs(2)).await;
-    let segment = if result.ok {
-        battery_segment(&result.stdout)
-    } else {
-        missing_battery_segment()
-    };
+    // Bumped from 2s → 5s: under thermal pressure or right after wake
+    // pmset has been observed to take up to ~3s, which used to trip the
+    // 2s ceiling and surface "??" until the next 30s poll.
+    let result = ctx.run_cli(&argv, Duration::from_secs(5)).await;
+    // Parse stdout regardless of exit status. pmset writes the full
+    // battery line before any error so a non-zero exit (or even a
+    // timeout-induced SIGTERM) can still carry useful data; only fall
+    // back to "??" when there's genuinely no percent to display.
+    let segment = battery_segment(&result.stdout);
     ctx.emit_status_segments([("battery", segment)]);
 }
 
+/// Reasoning for status markers below:
+/// - `range=user|bat-prefs` is the click range tmux uses for our battery
+///   chip (Energy preferences pane on click).
+/// - `#[breathing]` slowly cycles opacity to signal active charging —
+///   matches the "calm meditation" pacing the user asked for. The
+///   status-bar renderer drops the marker when it doesn't recognise it,
+///   so this is forward-compatible with older Flash builds.
 fn battery_segment(pmset_output: &str) -> String {
     let Some(percent) = battery_percent(pmset_output) else {
         return missing_battery_segment();
     };
-    let on_ac = pmset_output.contains("AC Power")
-        || pmset_output.contains("; charging")
-        || pmset_output.contains("; charged")
-        || pmset_output.contains("; finishing charge");
-    let color = if on_ac || percent > 25 {
+    let state = battery_state(pmset_output);
+    let color = if state.on_ac() || percent > 25 {
         "colour178"
     } else {
         "red"
     };
-    format!("#[range=user|bat-prefs fg={color}]{percent}%#[norange]")
+    let breathing_open = if state == BatteryState::Charging {
+        "#[breathing]"
+    } else {
+        ""
+    };
+    let breathing_close = if state == BatteryState::Charging {
+        "#[nobreathing]"
+    } else {
+        ""
+    };
+    format!(
+        "#[range=user|bat-prefs fg={color}]{breathing_open}{percent}%{breathing_close}#[norange]"
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatteryState {
+    Charging,
+    Charged,
+    Discharging,
+    Unknown,
+}
+
+impl BatteryState {
+    fn on_ac(self) -> bool {
+        matches!(self, BatteryState::Charging | BatteryState::Charged)
+    }
+}
+
+fn battery_state(pmset_output: &str) -> BatteryState {
+    // Look at the per-battery status line, not just the header — `Now
+    // drawing from 'AC Power'` only tells us the source, not whether the
+    // battery is actively replenishing (a fully-charged laptop also
+    // draws from AC). Prefer the explicit ` charging` token so the
+    // breathing animation only fires while the cell is gaining charge.
+    if pmset_output.contains("; charging") || pmset_output.contains("; finishing charge") {
+        BatteryState::Charging
+    } else if pmset_output.contains("; charged") {
+        BatteryState::Charged
+    } else if pmset_output.contains("; discharging") {
+        BatteryState::Discharging
+    } else if pmset_output.contains("AC Power") {
+        BatteryState::Charged
+    } else {
+        BatteryState::Unknown
+    }
 }
 
 fn battery_percent(pmset_output: &str) -> Option<u8> {
-    pmset_output
-        .split(|ch: char| !(ch.is_ascii_digit() || ch == '%'))
-        .find_map(|token| token.strip_suffix('%')?.parse::<u8>().ok())
+    // pmset reports the cell percentage as `NN%` followed by a `;`.
+    // Anchor on the `%` and look at the up-to-three preceding digits
+    // so we don't accidentally lock on to the `id=<digits>` token or
+    // the time-to-full minutes column. `u8` caps at 255 which is well
+    // outside any plausible battery percent.
+    let percent_idx = pmset_output.find('%')?;
+    let prefix = &pmset_output[..percent_idx];
+    let digits: String = prefix
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    digits.parse::<u8>().ok()
 }
 
 fn missing_battery_segment() -> String {
@@ -141,5 +206,37 @@ mod tests {
             battery_segment("No batteries are currently installed."),
             "#[range=user|bat-prefs fg=red]??#[norange]"
         );
+    }
+
+    #[test]
+    fn formats_charging_battery_with_breathing_marker() {
+        assert_eq!(
+            battery_segment(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35127395) 73%; charging; 1:24 remaining present: true"
+            ),
+            "#[range=user|bat-prefs fg=colour178]#[breathing]73%#[nobreathing]#[norange]"
+        );
+    }
+
+    #[test]
+    fn parses_percent_when_id_has_many_digits() {
+        // The old token-scan picked the first `<digits>%` token regardless
+        // of context. The new anchor-on-% scan must still resolve to the
+        // battery percent even when `id=` is a long number that would
+        // otherwise dominate a left-to-right token walk.
+        assert_eq!(
+            battery_percent(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35127395)\t100%; charged; 0:00 remaining present: true"
+            ),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn parses_percent_when_pmset_output_has_trailing_garbage() {
+        // pmset writes the battery line before any error; a SIGTERM
+        // mid-flush should still surface the percent rather than the
+        // "??" fallback.
+        assert_eq!(battery_percent(" 42%; charging;"), Some(42));
     }
 }

@@ -308,7 +308,15 @@ extension AppDelegate {
   }
 
   static func normalModeMayEnterInsert(reason: InsertModeTransitionReason) -> Bool {
-    reason == .hintCommit || reason == .normalModeInput || reason == .pointerClick
+    // `.explicitCommand` joins the user-driven set because mapped-key
+    // actions like `/` (app_find) and `t` (tab_new) follow a sendKey →
+    // enterInsertMode pattern: the user just pressed a normal-mode key
+    // and the intent is "open something and start typing". Holding the
+    // gate against `.explicitCommand` left those mappings stuck in
+    // NORMAL after the side-effect fired, so typing went to the empty
+    // search bar / new tab via the system, then nothing.
+    reason == .hintCommit || reason == .normalModeInput
+      || reason == .pointerClick || reason == .explicitCommand
   }
 
   /// Scroll wheel events in idle normal mode are passive: the overlay

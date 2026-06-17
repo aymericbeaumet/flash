@@ -359,17 +359,33 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabNext])
   }
 
-  func testActiveWindowBorderLocalRectTouchesWindowExteriorEdge() {
+  func testActiveWindowBorderLocalRectKeepsStrokeInsideWindow() {
     let local = OverlayPanel.activeWindowBorderLocalRect(
       targetFrame: CGRect(x: 100, y: 80, width: 500, height: 300),
       panelFrame: CGRect(x: 40, y: 20, width: 800, height: 600),
       lineWidth: 2)
 
-    XCTAssertEqual(local, CGRect(x: 61, y: 61, width: 498, height: 298))
-    XCTAssertEqual(local.minX - 1, 60)
-    XCTAssertEqual(local.minY - 1, 60)
-    XCTAssertEqual(local.maxX + 1, 560)
-    XCTAssertEqual(local.maxY + 1, 360)
+    // Path inset by `lineWidth` (=2) so the stroke band (centered on the
+    // path, lineWidth/2 outside + lineWidth/2 inside) sits one full
+    // line-width inside the target frame. Target's left edge in
+    // panel-local is 100-40 = 60; the stroke's outer pixel lands at 61,
+    // never at 60, so a window flush against a screen boundary can't
+    // leak the border onto an adjacent display.
+    XCTAssertEqual(local, CGRect(x: 62, y: 62, width: 496, height: 296))
+    XCTAssertEqual(local.minX - 1, 61)
+    XCTAssertEqual(local.minY - 1, 61)
+    XCTAssertEqual(local.maxX + 1, 559)
+    XCTAssertEqual(local.maxY + 1, 359)
+  }
+
+  func testActiveWindowBorderLocalRectClampsToZeroForTinyWindows() {
+    let local = OverlayPanel.activeWindowBorderLocalRect(
+      targetFrame: CGRect(x: 0, y: 0, width: 1, height: 1),
+      panelFrame: CGRect(x: 0, y: 0, width: 100, height: 100),
+      lineWidth: 2)
+
+    XCTAssertEqual(local.width, 0)
+    XCTAssertEqual(local.height, 0)
   }
 
   func testModeBadgeWidthUsesLongestConfiguredLabel() {

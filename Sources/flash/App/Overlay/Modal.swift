@@ -261,9 +261,27 @@ extension OverlayPanel {
 
   func scrollModal(_ kind: ModalScrollKind) {
     guard !modalScrollView.isHidden else { return }
+    // Force a layout pass before reading the textView's bounds. Without
+    // this, the *first* scroll on a freshly-displayed modal saw a stale
+    // `modalTextView.bounds.height` (the explicit frame we set in
+    // `configureModalTextView` hadn't yet been replaced by NSTextView's
+    // intrinsic content size for the long string), `maxY` came out as
+    // 0, and j/k/Ctrl-D silently no-op'd until something else triggered
+    // a re-layout. Calling `layoutSubtreeIfNeeded` here is cheap and
+    // guarantees that `bounds.height` reflects the actual rendered
+    // content.
+    modalScrollView.layoutSubtreeIfNeeded()
+    modalTextView.layoutManager?.ensureLayout(for: modalTextView.textContainer!)
+
     let lineHeight = max(modalTextView.font?.boundingRectForFont.height ?? 16, 12)
     let viewportHeight = modalScrollView.contentView.bounds.height
-    let docHeight = modalTextView.bounds.height
+    // Prefer the document-visible bounds when available — that's the
+    // size the scroll view actually uses for hit-testing — and only
+    // fall back to the explicit frame for the rare path where the
+    // layout pass above wasn't enough.
+    let docHeight = max(
+      modalTextView.bounds.height,
+      modalTextView.layoutManager?.usedRect(for: modalTextView.textContainer!).height ?? 0)
     let maxY = max(0, docHeight - viewportHeight)
 
     var origin = modalScrollView.contentView.bounds.origin

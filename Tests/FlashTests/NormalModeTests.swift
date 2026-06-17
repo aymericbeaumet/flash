@@ -254,11 +254,17 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(unmappable.pending, "")
   }
 
-  func testNormalModeMayOnlyEnterInsertFromHintCommit() {
+  func testNormalModeMayEnterInsertOnAnyUserDrivenTrigger() {
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .hintCommit))
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .normalModeInput))
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .pointerClick))
-    XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .explicitCommand))
+    // `.explicitCommand` is the reason `/` (app_find) and `t` (tab_new)
+    // pass when they want the side-effect followed by a switch to
+    // INSERT. They're user-driven, so the gate must let them through.
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .explicitCommand))
+    // `.advancedModeDisabled` stays out of the user-driven set — config
+    // reload uses `force: true` to bypass the gate when it needs to
+    // leave NORMAL because the user removed the normal-mode binding.
     XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .advancedModeDisabled))
   }
 

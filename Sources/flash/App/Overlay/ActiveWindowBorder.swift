@@ -48,16 +48,24 @@ extension OverlayPanel {
     }
   }
 
+  /// Position the stroke fully *inside* the target window so the border
+  /// reads as painted ON the window rather than wrapped AROUND it. The
+  /// stroke is centered on the path, so we need to inset the path by
+  /// `lineWidth/2` for the outer edge of the stroke to land *at* the
+  /// window edge, plus another `lineWidth/2` so the entire stroke band
+  /// sits one full width inside the chrome — this is what stops the
+  /// border from spilling onto an adjacent display when the window is
+  /// flush against a screen boundary.
   static func activeWindowBorderLocalRect(
     targetFrame: CGRect,
     panelFrame: CGRect,
     lineWidth: CGFloat
   ) -> CGRect {
-    let inset = lineWidth / 2
+    let inset = lineWidth
     return CGRect(
       x: targetFrame.minX - panelFrame.minX + inset,
       y: targetFrame.minY - panelFrame.minY + inset,
-      width: targetFrame.width - inset * 2,
-      height: targetFrame.height - inset * 2)
+      width: max(0, targetFrame.width - inset * 2),
+      height: max(0, targetFrame.height - inset * 2))
   }
 }

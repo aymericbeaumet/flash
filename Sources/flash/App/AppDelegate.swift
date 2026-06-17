@@ -605,6 +605,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       queue: .main
     ) { [weak self] _ in
       guard let self else { return }
+      // Belt-and-suspenders refresh for the status-bar app name. The
+      // workspace's `didActivateApplicationNotification` is the primary
+      // signal, but on Tahoe (26) the system occasionally skips that
+      // notification when focus snaps back from the Flash panel to
+      // another app — most reproducibly when normal-mode capture loses
+      // key and the user clicks straight into a different window. The
+      // status bar then froze on whatever app was frontmost the last
+      // time the notification fired. Re-pulling the workspace's
+      // `frontmostApplication` whenever our panel resigns key catches
+      // that drop without us having to chase the missing notification.
+      if let front = NSWorkspace.shared.frontmostApplication,
+        front.bundleIdentifier != Bundle.main.bundleIdentifier
+      {
+        self.statusBarController?.updateFocusedApplication(front)
+      }
       if !self.currentHints.isEmpty {
         self.cancelOverlay()
         return
