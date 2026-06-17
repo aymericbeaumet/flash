@@ -157,6 +157,9 @@ final class SourceRegistry {
     let env = environment
     var raw: [Candidate] = []
     for source in sourceSnapshot {
+      // Candidate-finder sessions freeze this synchronous snapshot. Do not call
+      // `queryCandidates` here; plugins are expected to keep candidates warm in
+      // memory and late updates are for the next session.
       let sourceCandidates = source.candidates(in: env, scope: scope)
       FlashLog.trace(
         "[candidate_finder] source=\(source.identifier) count=\(sourceCandidates.count)")
@@ -170,18 +173,6 @@ final class SourceRegistry {
     let env = environment
     guard let source = source(identifier: "core.apps") else { return [] }
     return CandidateFinder.prepare(source.candidates(in: env, scope: scope))
-  }
-
-  /// Every source that contributes flashlight candidates *other than* the
-  /// core-apps source. These are queried asynchronously on flashlight open so
-  /// tmux windows, browser tabs, slack channels, and plugin snapshots all get
-  /// kicked off in parallel — their results land in the candidate-finder's
-  /// pending buffer and stay hidden until the user types/deletes a key.
-  func dynamicCandidateSources() -> [FlashSource] {
-    refreshRunningApplications()
-    return sources.filter {
-      $0.identifier != "core.apps" && $0.capabilities.contains(.candidates)
-    }
   }
 
   var snapshotEnvironment: FlashSourceEnvironment { environment }

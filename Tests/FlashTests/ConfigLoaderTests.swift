@@ -24,31 +24,31 @@ final class ConfigLoaderTests: XCTestCase {
       .resourcePrevious)
     XCTAssertEqual(c.mode.normalLeader, "\\")
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("\\<space>") })?.action.command,
       .enterCommand(input: "flashlight ", restoreMode: false))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "sf" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("sf") })?.action.command,
       .mouseTarget(.click(.rightClick)))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "df" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("df") })?.action.command,
       .mouseTarget(.click(.doubleClick)))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "mf" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
       .mouseTarget(.move))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "F" })?.action.command,
       .mouseGrid(.click(.leftClick)))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "mF" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("mF") })?.action.command,
       .mouseGrid(.move))
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == "yy" }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("yy") }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "o" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "O" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "g4" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("g4") })?.action.command,
       .tabSelect(index: 4))
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == "gN" }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("gN") }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "n" })?.action.command,
       .pluginVerb(name: "window_new", args: [:]))
@@ -62,22 +62,22 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
       .appNext)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "[h" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("[h") })?.action.command,
       .historyBack)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "]h" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("]h") })?.action.command,
       .historyForward)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "[t" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("[t") })?.action.command,
       .tabPrev)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "]t" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("]t") })?.action.command,
       .tabNext)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "[a" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("[a") })?.action.command,
       .appPrev)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "]a" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("]a") })?.action.command,
       .appNext)
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
     XCTAssertEqual(c.mode.labels.insert, "INSERT")
@@ -777,7 +777,7 @@ final class ConfigLoaderTests: XCTestCase {
       leader = "<space>"
       """
     let c = ConfigLoader.parse(toml, sourceURL: sourceURL)
-    let mapping = c.mode.normal.first { $0.key == "spacec" }
+    let mapping = c.mode.normal.first { $0.key == key("<space>c") }
     XCTAssertEqual(
       mapping?.action,
       .shellCommand(["/tmp/dotfiles/scripts/toggle_caffeinate.sh"]))
@@ -883,14 +883,14 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normalLeader, "<space>")
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "spacec" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("<space>c") })?.action.command,
       .reload(force: false))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "spacespace" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("<space><space>") })?.action.command,
       .enterCommand(input: "flashlight ", restoreMode: false))
     XCTAssertNil(
       c.mode.normal.first(where: {
-        $0.key == "\\space"
+        $0.key == key("\\<space>")
           && $0.action.command == .enterCommand(input: "flashlight ", restoreMode: false)
       }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "<leader>c" }))
@@ -907,7 +907,7 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normalLeader, "<backslash>")
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "\\space" })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("\\<space>") })?.action.command,
       .enterCommand(input: "flashlight ", restoreMode: false))
     XCTAssertTrue(c.warnings.isEmpty)
   }
@@ -1077,6 +1077,10 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.loadingDiagnostics.first?.location, ConfigLocation(line: 2, column: 14))
     XCTAssertTrue(
       c.loadingErrorAlertMessage?.contains("hints.min_length must be an integer") == true)
+  }
+
+  private func key(_ raw: String) -> String {
+    NormalModeInterpreter.canonicalizeMappingKey(raw)!
   }
 
   private static func parseJSONObject(_ json: String) throws -> [String: Any]? {

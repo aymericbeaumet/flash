@@ -62,11 +62,27 @@ extension NormalModeInterpreter {
     return atoms
   }
 
-  /// Canonicalize a mapping-key string into the interpreter's flat
-  /// internal form (sequence of atoms joined back into a string the
-  /// interpreter prefix-matches against).
+  static let keyAtomSeparator: Character = "\u{1F}"
+
+  static func encodeKeyAtoms(_ atoms: [String]) -> String {
+    atoms.joined(separator: String(keyAtomSeparator))
+  }
+
+  static func keyAtoms(from sequence: String) -> [String] {
+    sequence.split(separator: keyAtomSeparator, omittingEmptySubsequences: false)
+      .map(String.init)
+  }
+
+  static func appendKeyAtom(_ prefix: String, _ atom: String) -> String {
+    prefix.isEmpty ? atom : prefix + String(keyAtomSeparator) + atom
+  }
+
+  /// Canonicalize a mapping-key string into the interpreter's internal
+  /// form. Multi-key sequences are separated by an untypeable atom
+  /// delimiter so named keys like `<space>` do not contribute character
+  /// prefixes (`<space>s` must not be a prefix of `<space><space>`).
   static func canonicalizeMappingKey(_ raw: String) -> String? {
-    parseKeySequence(raw)?.joined()
+    parseKeySequence(raw).map(encodeKeyAtoms)
   }
 
   /// Translate the configured leader value into the interpreter's
@@ -200,6 +216,9 @@ extension NormalModeInterpreter {
       else { return nil }
       key = translated
       probe = local
+    } else if let named = readNamedKeyAlias(s, from: probe) {
+      key = named.key
+      probe = named.end
     } else if isBareKeyChar(s[probe]) {
       key = String(s[probe])
       probe = s.index(after: probe)
@@ -208,10 +227,34 @@ extension NormalModeInterpreter {
     }
     idx = probe
     let usesCmdOrAlt = collected.contains("cmd") || collected.contains("alt")
-    if !usesCmdOrAlt, collected.count == 1, collected[0] == "ctrl" {
+    if !usesCmdOrAlt, collected.count == 1, collected[0] == "ctrl",
+      key.count == 1,
+      let ch = key.first,
+      ch.isASCII,
+      ch.isLetter || ch.isNumber
+    {
       return "ctrl-\(key)"
     }
     return (collected + [key]).joined(separator: "+")
+  }
+
+  private static func readNamedKeyAlias(
+    _ s: String,
+    from idx: String.Index
+  ) -> (key: String, end: String.Index)? {
+    let tail = s[idx...].lowercased()
+    for alias in namedKeyAliases.sorted(by: { $0.count > $1.count }) where tail.hasPrefix(alias) {
+      let end = s.index(idx, offsetBy: alias.count)
+      return (translateNamedKey(alias) ?? alias, end)
+    }
+    for fullname in punctuationFullNames.values.sorted(by: { $0.count > $1.count })
+      where tail.hasPrefix(fullname)
+    {
+      let end = s.index(idx, offsetBy: fullname.count)
+      guard let translated = translateNamedKey(fullname) else { continue }
+      return (translated, end)
+    }
+    return nil
   }
 
   private static func readAngleBracketed(_ s: String, from idx: inout String.Index) -> String? {

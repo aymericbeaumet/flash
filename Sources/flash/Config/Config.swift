@@ -757,7 +757,7 @@ extension URLCommand {
     case .saveAndQuit(let force):
       return force ? verb("app_save_and_quit", [flag("force")]) : verb("app_save_and_quit")
     case .tabNew: return verb("tab_new")
-    case .showAlert(let message): return verb("alert_show", [kv("message", message)])
+    case .showAlert(let alert): return verb("alert_show", alert.argTokens)
     case .dismissAlert: return verb("alert_dismiss")
     case .showUsage(let topic):
       if let topic, !topic.isEmpty { return verb("help_show", [kv("topic", topic)]) }

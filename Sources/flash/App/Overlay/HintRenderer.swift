@@ -600,13 +600,17 @@ extension OverlayPanel {
   }
 
   func dequeueHintLayer() -> CAGradientLayer {
-    if let last = hintLayerPool.popLast() { return last }
-    return makeChipLayer()
+    let layer = hintLayerPool.popLast() ?? makeChipLayer()
+    layer.isHidden = false
+    layer.opacity = 1
+    return layer
   }
 
   func dequeueLabelLayer() -> CATextLayer {
-    if let last = labelLayerPool.popLast() { return last }
-    return makeLabelLayer()
+    let layer = labelLayerPool.popLast() ?? makeLabelLayer()
+    layer.isHidden = false
+    layer.opacity = 1
+    return layer
   }
 
   /// Chip's bounding rect in global NSScreen coordinates, for a target

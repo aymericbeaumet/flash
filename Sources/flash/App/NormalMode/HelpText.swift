@@ -172,6 +172,9 @@ extension NormalModeDispatcher {
   }
 
   private static func displayMappingKey(_ key: String) -> String {
+    if key.contains(NormalModeInterpreter.keyAtomSeparator) {
+      return displayAtoms(key).joined()
+    }
     if let chord = displayModifierChord(key) { return chord }
     return displayAtoms(key).joined()
   }
@@ -211,6 +214,9 @@ extension NormalModeDispatcher {
   }
 
   private static func displayAtoms(_ key: String) -> [String] {
+    if key.contains(NormalModeInterpreter.keyAtomSeparator) {
+      return NormalModeInterpreter.keyAtoms(from: key).map(displaySingleAtom)
+    }
     var atoms: [String] = []
     var index = key.startIndex
     while index < key.endIndex {
@@ -270,7 +276,7 @@ extension NormalModeDispatcher {
   private static func groupedKeys(_ mappings: [ModeMapping]) -> [MappingCommand: [String]] {
     var grouped: [MappingCommand: [String]] = [:]
     for mapping in mappings {
-      grouped[mapping.action, default: []].append(mapping.key)
+      grouped[mapping.action, default: []].append(displayMappingKey(mapping.key))
     }
     return grouped
   }

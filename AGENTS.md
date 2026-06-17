@@ -345,33 +345,33 @@ next to its `manifest.json`. `dev` is an optimized current-arch release build
 joined with `lipo`. Candidate providers declare `providers[].sources`, keep
 candidate snapshots warm in memory, refresh from light host events such as
 `core:apps.snapshot`, `core:focus.changed`, and `core:ax.changed` when possible,
-and poll only when the underlying source cannot be watched. `candidateQuery`
-returns the warm snapshot by default and may refresh only when the plugin owns
-that timing. The manifest's `start` is `exec ./flash-plugin-<id>` and
-`install` is a no-op `true` — there is no cargo, Python, or interpreter at
-runtime. `Scripts/build.sh` / `Scripts/install.sh` invoke `build-plugins.sh` with
-the matching mode; dev symlinks the repo `Plugins/` into the app, while release
-stages only `manifest.json` + the binary per plugin (no sources). The compiled
-binaries and per-crate build output are git-ignored.
+and poll only when the underlying source cannot be watched. The command-bar
+path reads `candidates(...)` snapshots synchronously; `candidateQuery` is not
+used to populate a visible flashlight list and should stay O(memory) unless a
+separate host workflow explicitly needs it. The manifest's `start` is
+`exec ./flash-plugin-<id>` and `install` is a no-op `true` — there is no cargo,
+Python, or interpreter at runtime. `Scripts/build.sh` / `Scripts/install.sh`
+invoke `build-plugins.sh` with the matching mode; dev symlinks the repo
+`Plugins/` into the app, while release stages only `manifest.json` + the binary
+per plugin (no sources). The compiled binaries and per-crate build output are
+git-ignored.
 
 **Plugin snapshot freshness contract (binding for every candidate provider).**
 A candidate plugin's job is to keep its in-memory snapshot **in sync with its
 underlying data source at all times** — not "polled and hope for the best",
-not "refreshed on the way out of `candidate_query`." The host treats every
-flashlight open as a `candidateQuery` RPC, and the user expects the response
-to land within a single frame.
+not "refreshed on the way out of `candidate_query`." The host freezes one
+already-warm snapshot when the flashlight surface opens, and the user expects
+that visible list to be available within a single frame and stay immutable until
+the surface closes.
 
-  1. **`candidate_query` must be O(memory).** The default trait method
-     returns `CandidateQueryResponse::snapshot()`, which tells the host
-     "serve from your warm cache." **Do not override** `candidate_query`
-     to run subprocesses, AppleScript, or any I/O whose latency the user
-     would feel. The previous tmux implementation ran `build_candidates`
-     inline inside the RPC handler; in the failure mode (multi-socket
-     fan-out hitting the 8 s plugin-RPC timeout) the host fell back to
-     its stale cache, then the 5 s live-tick repeat returned fresh
-     candidates — the user saw "outdated candidates that refresh
-     themselves 4-5 s after typing." That is the regression this
-     contract exists to prevent.
+  1. **Visible candidate reads must be O(memory).** The flashlight open/search
+     path calls `SourceRegistry.candidates(scope:)`, which reads each source's
+     current `candidates(...)` snapshot synchronously. It must not call
+     `queryCandidates`, wait for plugin RPC, run subprocesses, run AppleScript,
+     or do any I/O whose latency the user would feel. The default plugin
+     `candidate_query` trait method returns `CandidateQueryResponse::snapshot()`;
+     keep that default unless a non-visible host workflow explicitly needs a
+     dynamic query.
 
   2. **Push the work to the background.** Refresh on host events that
      correlate with state change (`core:focus.changed`,
@@ -385,13 +385,11 @@ to land within a single frame.
 
   3. **Dedup before emitting.** Hash the candidate vector (title +
      subtitle + navigation_url + pid is usually sufficient) and skip
-     `emit_snapshot` when nothing observable changed. The 5 s flashlight
-     live-tick re-fires `candidateQuery` against the host cache, so a
-     plugin that re-emits unchanged data on every poll forces the host
-     to swap the cache pointer mid-session — the renderer compares
-     identity, not contents, and the user perceives a stutter. The
-     dedup gate makes "snapshot identical to last emit" a true no-op
-     all the way down to the host.
+     `emit_snapshot` when nothing observable changed. Late snapshot updates do
+     not mutate the currently visible flashlight list, but they do warm the
+     next session and can still trigger host bookkeeping. The dedup gate makes
+     "snapshot identical to last emit" a true no-op all the way down to the
+     host.
 
   4. **Parallelise per-target I/O.** When the snapshot is sourced from
      N independent backends (tmux sockets, browser bundles, Slack
@@ -459,7 +457,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]
 
 `:open <query>` and `:flashlight <query>` results render below the centered command line, ordered top-to-bottom with the best match closest to the prompt. App bundles are warmed and cached by `ApplicationSource`. Result titles include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin candidates should provide their own `source` / `title` labels.
 
-**Flashlight loading sequence.** On panel open the host paints the running + installed apps synchronously (cheap, from a warm `ApplicationSource` cache) — that's the only thing the user sees until they touch the keyboard. In parallel, `NormalModeCoordinator.openCandidateFinderSession` fans out a `candidateQuery` to every non-app source (browser tabs, tmux windows, slack channels, plugin snapshots) and writes results into a pending buffer keyed by source identifier. The buffer stays hidden until the user modifies the input — the first `refreshCommandLine` call whose text differs from the seed flips `candidateFinderDynamicDisplayUnlocked = true` and flushes the buffer into the visible pool. Subsequent arrivals merge live. The session is identified by `candidateFinderSession: UInt64`, bumped on open and on every close; in-flight async callbacks that return after a close find the session changed and silently drop their results — that's how cancellation works without a dedicated cancel API on each source. The live-refresh timer (5 s) re-fires the same fan-out against the current session so a long-lived panel keeps absorbing fresh tmux/browser/slack data without ever re-running queries that would race with input. Sources that have nothing to contribute return `[]`; their slot just stays empty.
+**Flashlight loading sequence.** On panel open the host freezes exactly one synchronous candidate snapshot through `SourceRegistry.candidates(scope:)`. That snapshot includes apps from the warm `ApplicationSource` cache and plugin/browser/tmux rows from each source's in-memory `candidates(...)` snapshot. The visible candidate pool is immutable for the lifetime of the command-line / candidate-finder surface: typing, selection movement, plugin `snapshot.updated` notifications, `core:flashlight.opened` responses, app-cache prewarm completions, and background timers must not add, remove, reorder, or re-score against newly arrived rows. Do not call `queryCandidates` from the flashlight open/search/render path, do not reintroduce a pending dynamic buffer, and do not run a live refresh while the surface is open. Plugins are responsible for keeping their snapshots warm before the panel opens; updates that arrive after the snapshot can affect the next session only. This immutability is a UX contract, not an optimization detail.
 
 **Candidate schema.** Every candidate is `{ title: String, url: URL?, metadata: [String: String] }`. `title` is the primary searchable string and the highest-precedence ranking field. `url` is the typed openable destination — apps point to their `.app` bundle file URL; browser tabs point to the page URL; sources without an openable destination omit it. `metadata` is fully opaque to FlashCore; sources stash whatever they want there, other plugins may read each other's keys by convention, and the matcher indexes the values at a low tier for fuzzy search. The bundled host uses these conventional keys for routing (defined in `Sources/flash/App/CandidateMetadata.swift` and mirrored as `candidate_metadata::*` constants in `Plugins/_rust_flash_plugin/src/lib.rs`): `source`, `source_id`, `kind`, `pid`, `navigation_url`, `bundle_id`, `subtitle`, `payload`, `aliases`, `finishes_command`. The wire format between plugin and host carries `{ title, url, metadata }`.
 
@@ -471,7 +469,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]
 
 **Flashlight source narrowing.** `:flashlight @<source> <query>` restricts the pool to one source — `@<source>` is the only structured filter, no `@<field>:<pattern>` form. `NormalModeDispatcher.candidateFinderSourceFilter` parses the first `@<token>` in the query; `CandidateFinder.candidateMatchesSourceFilter` matches it against `candidate.source` by exact name or prefix on dotted labels (`@firefox` matches `firefox.tabs`). A confirmed `@<source> ` with no residual text lists every candidate from that source — `:flashlight @emojis.glyphs ` enumerates the whole emoji set, otherwise excluded from the default pool. The flag is ignored in `:emojis` mode.
 
-App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, `alert_show message=...`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, and `quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
+App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, `alert_show message=... [duration=seconds style=standard|error]`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, and `quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
 
 **Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` run `switch-client` against the most-recently-active client and return the terminal pid hosting the target session. Bind them to a key with `["flash", "plugin_command", "--command=tmux", "--subcommand=window", "--args=main:1"]` (the `args` value is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
 
@@ -494,11 +492,16 @@ Three normal-mode keys carry a single semantic meaning regardless of focused-app
 Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The **complete** set of valid insert transitions is:
 
 - A normal-mode `i` keypress (or its verb twin `enter_insert_mode` invoked by the user).
+- A user-driven normal-mode command that intentionally opens a typing surface, currently `/` (`app_find`) and `t` (`tab_new`).
 - A physical pointer click while idle normal mode is capturing input; Flash enters insert mode and replays the click so it reaches the underlying app.
 - A committed `f` (mouse_target) click on a target whose owning provider set `JumpTarget.entersInsertMode = true`. Only true text-input surfaces qualify: `AccessibilityProvider` sets it on `AXTextField` / `AXSearchField` / `AXTextArea` / `AXComboBox`. Terminal-like targets (e.g. tmux panes) are NOT inputs in this sense and stay normal; the user types `i` after focusing one if they want to type.
 - A committed `F` (mouse_grid) click — **only** when a post-click AX query (`AppMonitor.focusedElementIsEditable`) reports the focused element under that click is a text-input role. Geometric clicks have no AX target up front, so the role check after the click is the only honest signal that the user landed on something typable. `mF` (cursor move) never enters insert.
 
-Nothing else may auto-enter insert. Specifically: `tab_new`, `app_find` (⌘F), focused-element changes, app activation, and configured key sequences must leave the mode alone. Do not reintroduce passive focused-element observers that switch to insert merely because macOS reports an editable focus. While advanced normal mode is active, Flash must aggressively recapture the overlay after app activation, app launch, Space changes, and panel key-focus loss; this intentionally prioritizes keeping normal-mode keyboard capture over preserving native menus or popovers.
+Nothing else may auto-enter insert. Specifically: focused-element changes, app activation, and unrelated configured key sequences must leave the mode alone. Do not reintroduce passive focused-element observers that switch to insert merely because macOS reports an editable focus. While advanced normal mode is active, Flash must aggressively recapture the overlay after app activation, app launch, Space changes, and panel key-focus loss; this intentionally prioritizes keeping normal-mode keyboard capture over preserving native menus or popovers.
+
+Insert mode is allowed to leave automatically when input focus is lost. Track the pid that owned INSERT entry; if the focused app changes away from that pid, transition back to normal mode even if generic editable focus-loss exit was never armed. For focus changes inside the same app, require arming first: on INSERT entry, run a short delayed `AppMonitor.focusedElementIsEditable` probe for the active app; if it is false, leave generic focus-loss exit unarmed so non-input contexts can stay in INSERT pass-through. Once armed, a focused-element or focused-window change for the active app should query `AppMonitor.focusedElementIsEditable`, and if it is false, transition back to normal mode. If a mouse button is currently pressed, defer that transition until release and re-check editability; otherwise click-drag text selection gets interrupted by the normal-mode overlay recapturing mid-drag. Do not run that exit probe for `kAXValueChangedNotification`, or typing in an editable element will pay an AX query per keystroke.
+
+Browser `t` (`tab_new`) is a special insert exit: after opening a browser tab, Flash may poll the focused document URL on the AX queue and return to normal once it changes from the pre-tab baseline/internal new-tab URL to a committed `http` / `https` URL. This covers address-bar Return, where browsers often keep the location field as the focused editable AX element after navigation, so generic focus-loss detection never fires.
 
 One structural exception: when a config reload removes the last `["flash", "enter_normal_mode"]` binding (advanced mode no longer wired), Flash forces `.insert` because there is no normal mode without that binding. Reason `.advancedModeDisabled`, `force: true`.
 

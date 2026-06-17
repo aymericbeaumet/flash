@@ -62,7 +62,7 @@ enum URLCommand: Hashable {
   case quitApp(force: Bool)
   case saveAndQuit(force: Bool)
   case tabNew
-  case showAlert(message: String)
+  case showAlert(AlertCommand)
   case dismissAlert
   case showUsage(topic: String?)
   case showPlugins
@@ -78,6 +78,28 @@ enum URLCommand: Hashable {
   /// may shortcut into `input.send_key` for inline-keystrokes verbs, or fan
   /// out to the owning plugin's `command.invoke`).
   case pluginVerb(name: String, args: [String: String])
+}
+
+struct AlertCommand: Hashable {
+  enum Style: String, Hashable {
+    case standard
+    case error
+  }
+
+  let message: String
+  let duration: TimeInterval?
+  let style: Style
+
+  var argTokens: [String] {
+    var tokens = ["--message=\(message)"]
+    if let duration {
+      tokens.append("--duration=\(duration)")
+    }
+    if style != .standard {
+      tokens.append("--style=\(style.rawValue)")
+    }
+    return tokens
+  }
 }
 
 enum MouseCommand: Hashable {
@@ -282,10 +304,7 @@ final class URLEventHandler: NSObject {
     "app_quit": { a in .quitApp(force: a.bool("force")) },
     "app_save_and_quit": { a in .saveAndQuit(force: a.bool("force")) },
     "tab_new": { _ in .tabNew },
-    "alert_show": { a in
-      guard let message = a.value("message"), !message.isEmpty else { return nil }
-      return .showAlert(message: message)
-    },
+    "alert_show": { alertCommand($0) },
     "alert_dismiss": { _ in .dismissAlert },
     "help_show": { a in .showUsage(topic: a.value("topic")) },
     "plugins": { _ in .showPlugins },
@@ -352,7 +371,7 @@ final class URLEventHandler: NSObject {
     flash app_quit [--force]
     flash app_save_and_quit [--force]
     flash tab_new
-    flash alert_show --message=<text>
+    flash alert_show --message=<text> [--duration=<seconds>] [--style=standard|error]
     flash alert_dismiss
     flash hints_dismiss
     flash app_open --name=<app>
@@ -403,6 +422,28 @@ struct VerbArgs {
   func int(_ name: String) -> Int? {
     args[name].flatMap(Int.init)
   }
+}
+
+private func alertCommand(_ a: VerbArgs) -> URLCommand? {
+  guard let message = a.value("message"), !message.isEmpty else { return nil }
+
+  let duration: TimeInterval?
+  if let rawDuration = a.value("duration") {
+    guard
+      let parsed = TimeInterval(rawDuration),
+      parsed.isFinite,
+      parsed > 0
+    else {
+      return nil
+    }
+    duration = parsed
+  } else {
+    duration = nil
+  }
+
+  let styleRaw = a.value("style") ?? AlertCommand.Style.standard.rawValue
+  guard let style = AlertCommand.Style(rawValue: styleRaw) else { return nil }
+  return .showAlert(AlertCommand(message: message, duration: duration, style: style))
 }
 
 private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {

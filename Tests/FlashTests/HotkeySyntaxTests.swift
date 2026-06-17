@@ -255,10 +255,24 @@ final class HotkeySyntaxTests: XCTestCase {
 
   func testParseFlashShowAlert() {
     let action = parseMappingCommand(argv: ["flash", "alert_show", "--message=Wi-Fi OFF"])
-    guard case .flashCommand(.showAlert(let message)) = action else {
+    guard case .flashCommand(.showAlert(let alert)) = action else {
       return XCTFail("expected .showAlert")
     }
-    XCTAssertEqual(message, "Wi-Fi OFF")
+    XCTAssertEqual(alert.message, "Wi-Fi OFF")
+    XCTAssertNil(alert.duration)
+    XCTAssertEqual(alert.style, .standard)
+  }
+
+  func testParseFlashShowAlertOptions() {
+    let action = parseMappingCommand(argv: [
+      "flash", "alert_show", "--message=Sleep toggling", "--duration=0.75", "--style=error",
+    ])
+    guard case .flashCommand(.showAlert(let alert)) = action else {
+      return XCTFail("expected .showAlert")
+    }
+    XCTAssertEqual(alert.message, "Sleep toggling")
+    XCTAssertEqual(alert.duration, 0.75)
+    XCTAssertEqual(alert.style, .error)
   }
 
   func testParseFlashDismissAlert() {
@@ -389,6 +403,10 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingCommand(argv: ["flash", "unknown_command"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "app_open"]))  // no name
     XCTAssertNil(parseMappingCommand(argv: ["flash", "alert_show"]))  // no message
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "alert_show", "--message=x", "--duration=soon"]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "alert_show", "--message=x", "--style=warning"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "show_alert"]))  // alias removed
     // no subcommand
     XCTAssertNil(parseMappingCommand(argv: ["flash", "plugin_command", "--command=spotify"]))

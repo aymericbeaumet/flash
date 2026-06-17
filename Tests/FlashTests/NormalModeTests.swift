@@ -268,6 +268,84 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .advancedModeDisabled))
   }
 
+  func testInsertModeExitsWhenFocusedElementStopsBeingEditable() {
+    XCTAssertTrue(shouldExitAfterFocusedElementChange(focusedElementIsEditable: false))
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(focusedElementIsEditable: true))
+  }
+
+  func testInsertModeFocusLossExitRequiresArmedEditablePID() {
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: nil))
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: pid_t(43)))
+  }
+
+  func testInsertModeExitsWhenOwningAppLosesFocus() {
+    XCTAssertTrue(shouldExitAfterFocusedAppChange(focusedPID: pid_t(43)))
+    XCTAssertFalse(shouldExitAfterFocusedAppChange(focusedPID: pid_t(42)))
+    XCTAssertFalse(shouldExitAfterFocusedAppChange(insertFocusOwnerPID: nil, focusedPID: pid_t(43)))
+    XCTAssertFalse(shouldExitAfterFocusedAppChange(focusedPID: nil))
+  }
+
+  func testInsertModeFocusLossExitRespectsModeGuards() {
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(mode: .normal))
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(modeBadgeEnabled: false))
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(overlayInputMode: .commandLine))
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(hasHints: true))
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(activationInFlight: true))
+    XCTAssertFalse(shouldExitAfterFocusedElementChange(focusedPID: pid_t(43)))
+
+    XCTAssertFalse(shouldExitAfterFocusedAppChange(mode: .normal, focusedPID: pid_t(43)))
+    XCTAssertFalse(shouldExitAfterFocusedAppChange(modeBadgeEnabled: false, focusedPID: pid_t(43)))
+    XCTAssertFalse(
+      shouldExitAfterFocusedAppChange(overlayInputMode: .commandLine, focusedPID: pid_t(43)))
+    XCTAssertFalse(shouldExitAfterFocusedAppChange(hasHints: true, focusedPID: pid_t(43)))
+    XCTAssertFalse(shouldExitAfterFocusedAppChange(activationInFlight: true, focusedPID: pid_t(43)))
+  }
+
+  func testInsertFocusExitWaitsForPointerRelease() {
+    XCTAssertFalse(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 0))
+    XCTAssertTrue(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 1))
+    XCTAssertTrue(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 2))
+  }
+
+  func testInsertFocusExitOnlyProbesFocusChangingAXNotifications() {
+    XCTAssertTrue(
+      AppMonitor.notificationMayChangeFocusedElement(
+        kAXFocusedUIElementChangedNotification as String))
+    XCTAssertTrue(
+      AppMonitor.notificationMayChangeFocusedElement(
+        kAXFocusedWindowChangedNotification as String))
+    XCTAssertFalse(
+      AppMonitor.notificationMayChangeFocusedElement(
+        kAXValueChangedNotification as String))
+  }
+
+  func testBrowserTabNavigationExitRecognizesCommittedWebURLsOnly() {
+    XCTAssertTrue(
+      AppDelegate.insertNavigationExitShouldExit(
+        currentURL: "https://example.com/path",
+        initialURL: "about:blank"))
+    XCTAssertTrue(
+      AppDelegate.insertNavigationExitShouldExit(
+        currentURL: "http://localhost:3000",
+        initialURL: "chrome://newtab/"))
+    XCTAssertFalse(
+      AppDelegate.insertNavigationExitShouldExit(
+        currentURL: "https://example.com/path",
+        initialURL: "https://example.com/path"))
+    XCTAssertFalse(
+      AppDelegate.insertNavigationExitShouldExit(
+        currentURL: "chrome://newtab/",
+        initialURL: "https://previous.example"))
+    XCTAssertFalse(
+      AppDelegate.insertNavigationExitShouldExit(
+        currentURL: "about:blank",
+        initialURL: nil))
+    XCTAssertFalse(
+      AppDelegate.insertNavigationExitShouldExit(
+        currentURL: nil,
+        initialURL: nil))
+  }
+
   func testPointerScrollIsSuppressedInIdleNormalMode() {
     // Wheel ticks in normal mode always pass through to the focused app
     // (the overlay panel `ignoresMouseEvents`) and must never flip
@@ -1252,7 +1330,7 @@ final class NormalModeTests: XCTestCase {
     for mapping in [
       "h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
       "gg", "G", "[h", "]h", "f", "sf", "df", "mf", "F", "sF", "dF", "mF", "u", "ctrl-r", "x", "n",
-      "/", "\\space", "r", "R", "e", "t", "MAPPINGS",
+      "/", "\\<space>", "r", "R", "e", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a",
       "]a", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
@@ -1337,11 +1415,11 @@ final class NormalModeTests: XCTestCase {
     ]
     config.mode.normal = [
       ModeMapping(key: "cmd+right", action: .flashCommand(.scroll(.down))),
-      ModeMapping(key: "spacem", action: .shellCommand(["sh", "/tmp/toggle_mute.sh"])),
-      ModeMapping(key: "spaces", action: .shellCommand(["sh", "/tmp/toggle_sleep.sh"])),
-      ModeMapping(key: "spacew", action: .shellCommand(["sh", "/tmp/toggle_wifi.sh"])),
+      ModeMapping(key: key("<space>m"), action: .shellCommand(["sh", "/tmp/toggle_mute.sh"])),
+      ModeMapping(key: key("<space>s"), action: .shellCommand(["sh", "/tmp/toggle_sleep.sh"])),
+      ModeMapping(key: key("<space>w"), action: .shellCommand(["sh", "/tmp/toggle_wifi.sh"])),
       ModeMapping(
-        key: "\\space",
+        key: key("\\<space>"),
         action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
       ModeMapping(key: "tab", action: .flashCommand(.movementForward)),
     ]
@@ -1362,7 +1440,7 @@ final class NormalModeTests: XCTestCase {
   func testConfiguredMappingsOverrideDefaults() {
     let mappings = [
       ModeMapping(key: "j", action: .flashCommand(.scroll(.up))),
-      ModeMapping(key: "zz", action: .flashCommand(.reload(force: false))),
+      ModeMapping(key: key("zz"), action: .flashCommand(.reload(force: false))),
       ModeMapping(key: "tab", action: .flashCommand(.movementForward)),
       ModeMapping(key: "delete_forward", action: .flashCommand(.scroll(.halfPageDown))),
     ]
@@ -1403,7 +1481,7 @@ final class NormalModeTests: XCTestCase {
   func testConfiguredShellMappingsProduceActions() {
     let action = MappingCommand.shellCommand(["sh", "~/bin/toggle-colors"])
     let mappings = [
-      ModeMapping(key: "zz", action: action)
+      ModeMapping(key: key("zz"), action: action)
     ]
     let first = transition(chars: "z", mappings: mappings)
     XCTAssertEqual(first.pending, "z")
@@ -1414,7 +1492,7 @@ final class NormalModeTests: XCTestCase {
 
   func testSpaceTokenCanBeUsedInNormalModeSequences() {
     let mappings = [
-      ModeMapping(key: "spacec", action: .flashCommand(.reload(force: false)))
+      ModeMapping(key: key("<space>c"), action: .flashCommand(.reload(force: false)))
     ]
     let first = transition(keyCode: kVK_Space, chars: " ", mappings: mappings)
     XCTAssertEqual(first.pending, "space")
@@ -1423,12 +1501,28 @@ final class NormalModeTests: XCTestCase {
       .reload(force: false))
   }
 
+  func testSpaceLeaderShellMappingDoesNotWaitOnSpaceLeaderSpaceMapping() {
+    let action = MappingCommand.shellCommand(["sh", "/tmp/toggle_sleep.sh"])
+    let mappings = [
+      ModeMapping(key: key("<space>s"), action: action),
+      ModeMapping(
+        key: key("<space><space>"),
+        action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
+    ]
+
+    let first = transition(keyCode: kVK_Space, chars: " ", mappings: mappings)
+    XCTAssertEqual(first.pending, "space")
+    let second = transition(pending: first.pending, chars: "s", mappings: mappings)
+    XCTAssertEqual(second.action, action)
+    XCTAssertEqual(second.pending, "")
+  }
+
   func testBackslashLeaderShellMappingProducesAction() {
     let action = MappingCommand.shellCommand(["sh", "/tmp/toggle"])
     let mappings = [
-      ModeMapping(key: "\\c", action: action),
+      ModeMapping(key: key("\\c"), action: action),
       ModeMapping(
-        key: "\\space",
+        key: key("\\<space>"),
         action: .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
     ]
     let first = transition(chars: "\\", mappings: mappings)
@@ -1511,6 +1605,52 @@ final class NormalModeTests: XCTestCase {
       characters: chars,
       charactersIgnoringModifiers: ignoring ?? chars.lowercased(),
       mappings: CompiledMappings(mappings))
+  }
+
+  private func key(_ raw: String) -> String {
+    NormalModeInterpreter.canonicalizeMappingKey(raw)!
+  }
+
+  private func shouldExitAfterFocusedElementChange(
+    mode: FlashMode = .insert,
+    modeBadgeEnabled: Bool = true,
+    overlayInputMode: OverlayInputMode = .hints,
+    hasHints: Bool = false,
+    activationInFlight: Bool = false,
+    focusedPID: pid_t? = pid_t(42),
+    eventPID: pid_t = pid_t(42),
+    editableFocusExitPID: pid_t? = pid_t(42),
+    focusedElementIsEditable: Bool = false
+  ) -> Bool {
+    AppDelegate.insertModeShouldExitAfterFocusedElementChange(
+      mode: mode,
+      modeBadgeEnabled: modeBadgeEnabled,
+      overlayInputMode: overlayInputMode,
+      hasHints: hasHints,
+      activationInFlight: activationInFlight,
+      focusedPID: focusedPID,
+      eventPID: eventPID,
+      editableFocusExitPID: editableFocusExitPID,
+      focusedElementIsEditable: focusedElementIsEditable)
+  }
+
+  private func shouldExitAfterFocusedAppChange(
+    mode: FlashMode = .insert,
+    modeBadgeEnabled: Bool = true,
+    overlayInputMode: OverlayInputMode = .hints,
+    hasHints: Bool = false,
+    activationInFlight: Bool = false,
+    insertFocusOwnerPID: pid_t? = pid_t(42),
+    focusedPID: pid_t? = pid_t(42)
+  ) -> Bool {
+    AppDelegate.insertModeShouldExitAfterFocusedAppChange(
+      mode: mode,
+      modeBadgeEnabled: modeBadgeEnabled,
+      overlayInputMode: overlayInputMode,
+      hasHints: hasHints,
+      activationInFlight: activationInFlight,
+      insertFocusOwnerPID: insertFocusOwnerPID,
+      focusedPID: focusedPID)
   }
 
   private func candidateFinderCandidate(

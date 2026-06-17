@@ -164,26 +164,77 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(pluginCalls, 0)
   }
 
-  func testDynamicCandidateSourcesSkipCoreAppsAndIncludeNativeAndPlugins() {
+  func testCandidatesGatherAllSourceSnapshotsWithoutQuerying() {
+    var queryCalls = 0
     let registry = SourceRegistry(
       descriptors: [
         SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
-          StubSource(identifier: "core.apps", capabilities: [.candidates])
+          StubSource(
+            identifier: "core.apps",
+            capabilities: [.candidates],
+            candidatesHandler: { _ in
+              [
+                Candidate(
+                  kind: .app, sourceID: "core.apps", source: "core.apps",
+                  pid: nil, title: "Finder", subtitle: "app",
+                  bundleIdentifier: "com.apple.finder", url: nil)
+              ]
+            },
+            queryHandler: { _, done in
+              queryCalls += 1
+              done([])
+            })
         },
         SourceDescriptor(identifier: "native.tabs", activationPolicy: .always) {
-          StubSource(identifier: "native.tabs", capabilities: [.candidates])
+          StubSource(
+            identifier: "native.tabs",
+            capabilities: [.candidates],
+            candidatesHandler: { _ in
+              [
+                Candidate(
+                  kind: CandidateFinder.browserTabKind,
+                  sourceID: "native.tabs",
+                  source: "tabs",
+                  pid: nil, title: "Native Tab", subtitle: "tab",
+                  bundleIdentifier: "", url: nil)
+              ]
+            },
+            queryHandler: { _, done in
+              queryCalls += 1
+              done([])
+            })
         },
       ],
       terminalBundleIDs: [],
       runningApplications: [],
       pluginSourcesProvider: {
         [
-          StubSource(identifier: "plugin:emojis", capabilities: [.candidates])
+          StubSource(
+            identifier: "plugin:emojis",
+            capabilities: [.candidates],
+            candidatesHandler: { _ in
+              [
+                Candidate(
+                  kind: CandidateFinder.emojiKind,
+                  sourceID: "plugin:emojis",
+                  source: "emoji",
+                  pid: nil,
+                  title: "sparkles",
+                  subtitle: "emoji",
+                  bundleIdentifier: "",
+                  url: nil)
+              ]
+            },
+            queryHandler: { _, done in
+              queryCalls += 1
+              done([])
+            })
         ]
       })
 
-    let ids = registry.dynamicCandidateSources().map(\.identifier).sorted()
-    XCTAssertEqual(ids, ["native.tabs", "plugin:emojis"])
+    let ids = registry.candidates(scope: .all).map(\.sourceID).sorted()
+    XCTAssertEqual(ids, ["core.apps", "native.tabs", "plugin:emojis"])
+    XCTAssertEqual(queryCalls, 0)
   }
 
   func testRegisteredCandidateSourceLabelsUseDeclarations() {

@@ -58,6 +58,10 @@ extension AppDelegate {
 
   private func transitionMode(to nextMode: FlashMode, reason: String) {
     let previousMode = flashMode
+    insertFocusExitProbeToken &+= 1
+    insertFocusOwnerPID = nil
+    insertEditableFocusExitPID = nil
+    insertNavigationExitToken &+= 1
     normalModePendingCommandToken &+= 1
     resetModeInputState()
     closeModalStateForModeExit(reason: "enter_\(nextMode)_\(reason)")
@@ -144,6 +148,7 @@ extension AppDelegate {
   private func modeDidEnterInsert(reason: String) {
     let insertTarget = currentNonFlashContext()
     let panelKeyAtEntry = overlay.isKeyWindow
+    insertFocusOwnerPID = insertTarget?.processID
     normalModeRecaptureToken &+= 1
     normalModePendingCommandToken &+= 1
     resetModeInputState()
@@ -169,6 +174,7 @@ extension AppDelegate {
     }
     traceInsertKeyHandoff(
       target: insertTarget, panelKeyAtEntry: panelKeyAtEntry, reason: reason)
+    armEditableFocusExitIfNeeded(target: insertTarget, reason: reason)
   }
 
   /// Diagnostic trace for the INSERT key-window handoff (#1: Messages drops
@@ -282,7 +288,6 @@ extension AppDelegate {
     overlay.commandLineCursorIndex = 0
     overlay.candidateFinderQuery = ""
     candidateFinderCandidates = []
-    candidateFinderDynamicCandidates = []
     candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
@@ -317,6 +322,230 @@ extension AppDelegate {
     // search bar / new tab via the system, then nothing.
     reason == .hintCommit || reason == .normalModeInput
       || reason == .pointerClick || reason == .explicitCommand
+  }
+
+  func focusedInputMayHaveChanged(pid: pid_t) {
+    guard modeBadgeEnabled, flashMode == .insert else { return }
+    let focusedPID = currentNonFlashContext()?.processID
+    if Self.insertModeShouldExitAfterFocusedAppChange(
+      mode: flashMode,
+      modeBadgeEnabled: modeBadgeEnabled,
+      overlayInputMode: overlay.inputMode,
+      hasHints: !currentHints.isEmpty,
+      activationInFlight: activationInFlight,
+      insertFocusOwnerPID: insertFocusOwnerPID,
+      focusedPID: focusedPID)
+    {
+      FlashLog.debug(
+        "[mode] insert_app_unfocused owner=\(insertFocusOwnerPID.map { String($0) } ?? "nil") "
+          + "focused=\(focusedPID.map { String($0) } ?? "nil") event=\(pid)")
+      enterNormalMode()
+      return
+    }
+    guard
+      Self.insertModeShouldExitAfterFocusedElementChange(
+        mode: flashMode,
+        modeBadgeEnabled: modeBadgeEnabled,
+        overlayInputMode: overlay.inputMode,
+        hasHints: !currentHints.isEmpty,
+        activationInFlight: activationInFlight,
+        focusedPID: focusedPID,
+        eventPID: pid,
+        editableFocusExitPID: insertEditableFocusExitPID,
+        focusedElementIsEditable: false)
+    else { return }
+
+    insertFocusExitProbeToken &+= 1
+    let token = insertFocusExitProbeToken
+    monitor.focusedElementIsEditable(pid: pid) { [weak self] editable in
+      guard let self, self.insertFocusExitProbeToken == token else { return }
+      self.completeFocusedInputExitIfNeeded(pid: pid, token: token, editable: editable)
+    }
+  }
+
+  private func completeFocusedInputExitIfNeeded(
+    pid: pid_t,
+    token: UInt64,
+    editable: Bool
+  ) {
+    let focusedPID = currentNonFlashContext()?.processID
+    guard
+      Self.insertModeShouldExitAfterFocusedElementChange(
+        mode: flashMode,
+        modeBadgeEnabled: modeBadgeEnabled,
+        overlayInputMode: overlay.inputMode,
+        hasHints: !currentHints.isEmpty,
+        activationInFlight: activationInFlight,
+        focusedPID: focusedPID,
+        eventPID: pid,
+        editableFocusExitPID: insertEditableFocusExitPID,
+        focusedElementIsEditable: editable)
+    else { return }
+
+    if Self.insertFocusExitShouldWaitForPointerRelease() {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
+        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token)
+      }
+      return
+    }
+
+    FlashLog.debug("[mode] insert_focus_lost pid=\(pid) editable=false")
+    enterNormalMode()
+  }
+
+  private func completeFocusedInputExitAfterPointerRelease(pid: pid_t, token: UInt64) {
+    guard insertFocusExitProbeToken == token, flashMode == .insert else { return }
+    if Self.insertFocusExitShouldWaitForPointerRelease() {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
+        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token)
+      }
+      return
+    }
+    monitor.focusedElementIsEditable(pid: pid) { [weak self] editable in
+      guard let self, self.insertFocusExitProbeToken == token else { return }
+      self.completeFocusedInputExitIfNeeded(pid: pid, token: token, editable: editable)
+    }
+  }
+
+  static func insertModeShouldExitAfterFocusedAppChange(
+    mode: FlashMode,
+    modeBadgeEnabled: Bool,
+    overlayInputMode: OverlayInputMode,
+    hasHints: Bool,
+    activationInFlight: Bool,
+    insertFocusOwnerPID: pid_t?,
+    focusedPID: pid_t?
+  ) -> Bool {
+    guard let insertFocusOwnerPID, let focusedPID else { return false }
+    return mode == .insert
+      && modeBadgeEnabled
+      && overlayInputMode == .hints
+      && !hasHints
+      && !activationInFlight
+      && focusedPID != insertFocusOwnerPID
+  }
+
+  static func insertModeShouldExitAfterFocusedElementChange(
+    mode: FlashMode,
+    modeBadgeEnabled: Bool,
+    overlayInputMode: OverlayInputMode,
+    hasHints: Bool,
+    activationInFlight: Bool,
+    focusedPID: pid_t?,
+    eventPID: pid_t,
+    editableFocusExitPID: pid_t?,
+    focusedElementIsEditable: Bool
+  ) -> Bool {
+    mode == .insert
+      && modeBadgeEnabled
+      && overlayInputMode == .hints
+      && !hasHints
+      && !activationInFlight
+      && focusedPID == eventPID
+      && focusedPID == editableFocusExitPID
+      && !focusedElementIsEditable
+  }
+
+  private func armEditableFocusExitIfNeeded(target: AppContext?, reason: String) {
+    guard modeBadgeEnabled, let target else { return }
+    insertFocusExitProbeToken &+= 1
+    let token = insertFocusExitProbeToken
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(Self.insertEditableFocusArmDelayMs)
+    ) { [weak self] in
+      guard let self, self.insertFocusExitProbeToken == token, self.flashMode == .insert else {
+        return
+      }
+      guard self.currentNonFlashContext()?.processID == target.processID else { return }
+      self.monitor.focusedElementIsEditable(pid: target.processID) { [weak self] editable in
+        guard let self, self.insertFocusExitProbeToken == token, self.flashMode == .insert else {
+          return
+        }
+        guard editable else {
+          FlashLog.trace(
+            "[mode] editable_focus_exit_unarmed pid=\(target.processID) reason=\(reason)")
+          return
+        }
+        self.insertEditableFocusExitPID = target.processID
+        FlashLog.trace(
+          "[mode] editable_focus_exit_armed pid=\(target.processID) reason=\(reason)")
+      }
+    }
+  }
+
+  static let insertEditableFocusArmDelayMs = 120
+
+  static func insertFocusExitShouldWaitForPointerRelease(
+    pressedMouseButtons: Int = NSEvent.pressedMouseButtons
+  ) -> Bool {
+    pressedMouseButtons != 0
+  }
+
+  func armBrowserTabNavigationExit(
+    pid: pid_t,
+    bundleIdentifier: String,
+    initialURL: String?
+  ) {
+    guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier), pid > 0 else {
+      return
+    }
+    insertNavigationExitToken &+= 1
+    let token = insertNavigationExitToken
+    FlashLog.trace(
+      "[mode] arm_navigation_exit pid=\(pid) bundle=\(bundleIdentifier) "
+        + "initial=\(initialURL ?? "nil")")
+    pollBrowserTabNavigationExit(
+      pid: pid,
+      token: token,
+      initialURL: initialURL,
+      remainingAttempts: Self.insertNavigationExitPollAttempts)
+  }
+
+  private func pollBrowserTabNavigationExit(
+    pid: pid_t,
+    token: UInt64,
+    initialURL: String?,
+    remainingAttempts: Int
+  ) {
+    guard insertNavigationExitToken == token, flashMode == .insert, remainingAttempts > 0 else {
+      return
+    }
+    monitor.focusedDocumentURL(pid: pid) { [weak self] url in
+      guard let self, self.insertNavigationExitToken == token, self.flashMode == .insert else {
+        return
+      }
+      if Self.insertNavigationExitShouldExit(currentURL: url, initialURL: initialURL) {
+        FlashLog.debug("[mode] insert_navigation_committed pid=\(pid) url=\(url ?? "nil")")
+        self.enterNormalMode()
+        return
+      }
+      DispatchQueue.main.asyncAfter(
+        deadline: .now() + .milliseconds(Self.insertNavigationExitPollIntervalMs)
+      ) { [weak self] in
+        self?.pollBrowserTabNavigationExit(
+          pid: pid,
+          token: token,
+          initialURL: initialURL,
+          remainingAttempts: remainingAttempts - 1)
+      }
+    }
+  }
+
+  static let insertNavigationExitPollIntervalMs = 150
+  static let insertNavigationExitPollAttempts = 200
+
+  static func insertNavigationExitShouldExit(
+    currentURL: String?,
+    initialURL: String?
+  ) -> Bool {
+    guard let current = currentURL?.trimmed, !current.isEmpty else { return false }
+    if let initial = initialURL?.trimmed, !initial.isEmpty, current == initial {
+      return false
+    }
+    guard let url = URL(string: current), let scheme = url.scheme?.lowercased() else {
+      return false
+    }
+    return scheme == "http" || scheme == "https"
   }
 
   /// Scroll wheel events in idle normal mode are passive: the overlay
@@ -609,11 +838,19 @@ extension AppDelegate {
         self?.performMappedCommand(.quitApp(force: force))
       }
     case .tabNew:
+      let tabNewContext = normalModeContext()
+      let initialURL = tabNewContext.flatMap { registry.documentURL(in: $0) }
       tabNewInNormalMode(repeatCount: repeatCount)
       // `t` is the user's explicit "open something fresh and start typing"
       // intent: switching to insert lets them type into the new tab/window
       // without an extra `i`. Matches the unified contract on `/`.
       enterInsertMode(reason: .explicitCommand)
+      if let tabNewContext {
+        armBrowserTabNavigationExit(
+          pid: tabNewContext.processID,
+          bundleIdentifier: tabNewContext.bundleIdentifier,
+          initialURL: initialURL)
+      }
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showPlugins:
@@ -665,30 +902,15 @@ extension AppDelegate {
     resetCommandLineState()
     if let candidateFinderScope {
       self.candidateFinderScope = candidateFinderScope
-      candidateFinderDynamicCandidates = []
-      candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
-      candidateFinderSelectedIndex = 0
+      openCandidateFinderSession(scope: candidateFinderScope)
     } else {
       self.candidateFinderScope = .all
       clearCandidateFinderState()
     }
     overlay.setActiveWindowBorder(around: nil)
-    prewarmCandidateFinderCaches(reason: "command_line_open", sourceScope: self.candidateFinderScope)
-    // Let plugins know flashlight is about to be live so they can
-    // refresh their snapshots before the user starts typing. The tmux
-    // plugin uses this to fold in any windows it missed during the
-    // last steady-state poll — a tmux server that was paged out at
-    // poll time would otherwise leave the flashlight half-populated
-    // until the next 1 s tick.
-    pluginManager.emit(
-      PluginEvent(
-        name: "core:flashlight.opened",
-        payload: ["scope": self.candidateFinderScope == .running ? "running" : "all"],
-        bundleID: nil,
-        configPath: nil,
-        focused: nil))
     let command = Self.commandLineBuffer(from: initialText)
-    openCandidateFinderSession(scope: self.candidateFinderScope, initialCommand: command)
+    notifyPluginsAfterCandidateFinderSnapshot(scope: self.candidateFinderScope)
+    prewarmCandidateFinderCaches(reason: "command_line_open")
     refreshCommandLine(text: command, cursorIndex: command.count)
   }
 
@@ -817,147 +1039,38 @@ extension AppDelegate {
     overlay.candidateFinderQuery = ""
     overlay.commandLineCursorIndex = 0
     candidateFinderScope = scope
-    candidateFinderDynamicCandidates = []
-    candidateFinderCandidates = candidateFinderCandidates(for: scope)
-    candidateFinderSelectedIndex = 0
+    openCandidateFinderSession(scope: scope)
     overlay.setActiveWindowBorder(around: nil)
-    prewarmCandidateFinderCaches(reason: "candidate_finder_open", sourceScope: scope)
-    openCandidateFinderSession(scope: scope, initialCommand: "")
+    notifyPluginsAfterCandidateFinderSnapshot(scope: scope)
+    prewarmCandidateFinderCaches(reason: "candidate_finder_open")
     overlay.displayCandidateFinder(query: "", items: [])
   }
 
-  func prewarmCandidateFinderCaches(reason: String, sourceScope: CandidateScope? = nil) {
+  func prewarmCandidateFinderCaches(reason: String) {
     refreshCandidatesAsync(scope: .running, reason: reason)
     refreshCandidatesAsync(scope: .all, reason: reason)
   }
 
-  /// Open a flashlight session: bump the cancellation token, reset the
-  /// pending-dynamic buffer, and kick off async queries on every non-app
-  /// source in parallel. Results land in `candidateFinderPendingDynamic` and
-  /// stay hidden until the user modifies the input. `initialCommand` is the
-  /// command-line buffer the panel opens with — the first refreshCommandLine
-  /// call whose text differs from this flips the display unlock.
-  func openCandidateFinderSession(scope: CandidateScope, initialCommand: String) {
-    candidateFinderSession &+= 1
-    let token = candidateFinderSession
-    candidateFinderInitialCommand = initialCommand
-    candidateFinderDynamicDisplayUnlocked = false
-    candidateFinderPendingDynamic = []
-    candidateFinderPendingDynamicBySource = [:]
-    candidateFinderDynamicCandidates = []
-    refreshAllDynamicSourcesAsync(session: token, scope: scope, reason: "flashlight_open")
-  }
-
-  /// Close the current flashlight session: bump the token so any in-flight
-  /// async fetches that resolve later become no-ops, and clear the pending
-  /// buffer. Idempotent — calling it on an already-closed session just bumps
-  /// the token harmlessly.
-  func closeCandidateFinderSession(reason: String) {
-    if candidateFinderSession != 0 {
-      FlashLog.trace("[candidate_finder] session_close reason=\(reason)")
-    }
-    candidateFinderSession &+= 1
-    candidateFinderInitialCommand = nil
-    candidateFinderDynamicDisplayUnlocked = false
-    candidateFinderPendingDynamic = []
-    candidateFinderPendingDynamicBySource = [:]
-  }
-
-  /// Fan out a `candidateQuery` to every dynamic source in parallel. Each
-  /// source's `queryCandidates` runs off the main queue (plugins via RPC,
-  /// native sources via the default utility-queue wrapper around their sync
-  /// `candidates` accessor), so the slowest source — typically a
-  /// Safari/Chromium AppleScript round-trip — sets the upper bound but doesn't
-  /// block the panel's first paint. Callbacks land on main and route through
-  /// `ingestDynamicCandidates`, which drops them silently if the session has
-  /// since been closed.
-  private func refreshAllDynamicSourcesAsync(
-    session: UInt64,
-    scope: CandidateScope,
-    reason: String
-  ) {
-    let env = registry.snapshotEnvironment
-    let sources = registry.dynamicCandidateSources()
+  /// Open a flashlight session by freezing one candidate snapshot. This is the
+  /// only time the visible pool is composed for the session: plugin/browser/tmux
+  /// rows must come from already-warm in-memory `candidates(...)` snapshots, not
+  /// session-time `queryCandidates` RPCs. Later plugin snapshot updates can warm
+  /// the next session, but they must not mutate this one.
+  func openCandidateFinderSession(scope: CandidateScope) {
+    candidateFinderCandidates = candidateFinderCandidates(for: scope)
+    candidateFinderSelectedIndex = 0
     FlashLog.trace(
-      "[candidate_finder] dynamic_fetch start sources=\(sources.count) reason=\(reason)")
-    let request = CandidateQuery(scope: scope, text: "")
-    for source in sources {
-      let sourceID = source.identifier
-      source.queryCandidates(in: env, request: request) { [weak self] candidates in
-        DispatchQueue.main.async {
-          self?.ingestDynamicCandidates(candidates, session: session, sourceID: sourceID)
-        }
-      }
-    }
+      "[candidate_finder] session_snapshot scope=\(scope) count=\(candidateFinderCandidates.count)")
   }
 
-  /// Merge a source's freshly-arrived candidates into the pending buffer,
-  /// replacing any earlier batch from the same source. If the display has been
-  /// unlocked (user typed at least one key), also push the merged buffer into
-  /// the visible pool and trigger a re-render. Discards results from a stale
-  /// session — that's how cancellation works.
-  private func ingestDynamicCandidates(
-    _ candidates: [Candidate],
-    session: UInt64,
-    sourceID: String
-  ) {
-    guard candidateFinderSession == session else {
-      FlashLog.trace(
-        "[candidate_finder] dynamic_drop_stale session=\(session) source=\(sourceID)")
-      return
-    }
-    let prepared = CandidateFinder.prepare(candidates)
-    candidateFinderPendingDynamicBySource[sourceID] = prepared
-    candidateFinderPendingDynamic = candidateFinderPendingDynamicBySource.values.flatMap { $0 }
-    FlashLog.trace(
-      "[candidate_finder] dynamic_arrived source=\(sourceID) count=\(prepared.count) "
-        + "pending_total=\(candidateFinderPendingDynamic.count) "
-        + "unlocked=\(candidateFinderDynamicDisplayUnlocked)")
-    guard candidateFinderDynamicDisplayUnlocked else { return }
-    flushPendingDynamicToVisible()
-  }
-
-  /// Push the pending-dynamic buffer into the visible pool and re-render
-  /// without switching panel modes. The panel may be in `.commandLine` (the
-  /// `:flashlight` path) or `.candidateFinder` (the bare picker) — both must
-  /// stay in their original mode so the inverted arrow handling and the
-  /// command-prompt rendering don't flip between rerenders.
-  private func flushPendingDynamicToVisible() {
-    candidateFinderDynamicCandidates = candidateFinderPendingDynamic
-    candidateFinderCandidates =
-      candidateFinderCandidates(for: candidateFinderScope) + candidateFinderDynamicCandidates
-    switch overlay.inputMode {
-    case .commandLine:
-      refreshCommandLine(text: overlay.commandLineText, cursorIndex: overlay.commandLineCursorIndex)
-    case .candidateFinder:
-      refreshCandidateFinder(query: candidateFinderCurrentQuery)
-    case .hints, .normal, .modal:
-      // Panel was dismissed between session open and this flush — drop the
-      // results. The session token already invalidates further ingest, so this
-      // is belt-and-braces.
-      break
-    }
-  }
-
-  /// Live-tick variant: re-issue queryCandidates to every dynamic source
-  /// against the *current* session. Identical handler path as the open path,
-  /// just guarded by the live cadence's quiet-typing check upstream.
-  private func refreshAllDynamicSourcesOnTick(session: UInt64) {
-    refreshAllDynamicSourcesAsync(
-      session: session, scope: candidateFinderScope, reason: "live_tick")
-  }
-
-  /// True only while the command-line or candidate-finder surface is on
-  /// screen. Used to skip background source queries (live refresh,
-  /// plugin-state churn) while nothing is consuming candidates.
-  var candidateFinderSurfaceActive: Bool {
-    guard overlay != nil else { return false }
-    switch overlay.inputMode {
-    case .commandLine, .candidateFinder:
-      return true
-    case .hints, .normal, .modal:
-      return false
-    }
+  private func notifyPluginsAfterCandidateFinderSnapshot(scope: CandidateScope) {
+    pluginManager.emit(
+      PluginEvent(
+        name: "core:flashlight.opened",
+        payload: ["scope": scope == .running ? "running" : "all"],
+        bundleID: nil,
+        configPath: nil,
+        focused: nil))
   }
 
   func invalidateCandidateFinderCaches(reason: String, refreshApps: Bool) {
@@ -966,43 +1079,6 @@ extension AppDelegate {
       registry.refreshRunningApplications()
     }
     prewarmCandidateFinderCaches(reason: reason)
-  }
-
-  func startCandidateFinderLiveRefresh() {
-    candidateFinderLiveRefreshTimer?.cancel()
-    let timer = DispatchSource.makeTimerSource(queue: .main)
-    // 5-second cadence (was 2s) — flashlight tab/window inventories
-    // don't change second-to-second in normal use, and each refresh
-    // pays a SafariTabsSource + ChromiumTabsSource AppleScript round-
-    // trip. The leeway gives Dispatch room to coalesce with other
-    // main-queue work instead of preempting it.
-    timer.schedule(
-      deadline: .now() + .seconds(5),
-      repeating: .seconds(5),
-      leeway: .seconds(1))
-    timer.setEventHandler { [weak self] in
-      guard let self, self.candidateFinderSurfaceActive else { return }
-      // Skip the refresh if the user is actively typing — swapping
-      // the candidate pool under their fingers makes the results
-      // strobe between the old and new snapshot, which reads as a
-      // stutter. They'll get the fresh pool on the next quiet tick.
-      if let last = self.candidateFinderLastInputAt,
-        Date().timeIntervalSince(last) < 0.4
-      {
-        return
-      }
-      // Live tick: refresh apps (cheap) and re-fan-out queries to every
-      // dynamic source against the current session so freshly arrived results
-      // ingest through the same pending buffer / display gate. If the user
-      // hasn't typed yet, results stay buffered.
-      self.prewarmCandidateFinderCaches(reason: "live", sourceScope: self.candidateFinderScope)
-      let session = self.candidateFinderSession
-      if session != 0 {
-        self.refreshAllDynamicSourcesOnTick(session: session)
-      }
-    }
-    timer.resume()
-    candidateFinderLiveRefreshTimer = timer
   }
 
   private func refreshCandidatesAsync(scope: CandidateScope, reason: String) {
@@ -1020,22 +1096,11 @@ extension AppDelegate {
       guard let self else { return }
       let candidates = self.registry.coreAppCandidates(scope: scope)
       DispatchQueue.main.async {
-        let poolChanged: Bool
         switch scope {
         case .running:
-          poolChanged = !Self.candidatePoolsCarrySameSourceIDs(
-            self.candidateFinderRunningAppsCache, candidates)
-          self.candidateFinderRunningAppsCache = candidates
-          self.candidateFinderRunningAppsCacheReady = true
           self.candidateFinderRunningAppsRefreshInFlight = false
         case .all:
-          poolChanged = !Self.candidatePoolsCarrySameSourceIDs(
-            self.candidateFinderAllAppsCache, candidates)
-          self.candidateFinderAllAppsCache = candidates
-          self.candidateFinderAllAppsCacheReady = true
           self.candidateFinderAllAppsRefreshInFlight = false
-        }
-        if poolChanged {
         }
         FlashLog.trace(
           "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) reason=\(reason)"
@@ -1044,44 +1109,18 @@ extension AppDelegate {
     }
   }
 
-  private func refreshCandidatesSynchronously(scope: CandidateScope, reason: String) -> [Candidate]
-  {
-    let candidates = registry.coreAppCandidates(scope: scope)
-    switch scope {
-    case .running:
-      candidateFinderRunningAppsCache = candidates
-      candidateFinderRunningAppsCacheReady = true
-      candidateFinderRunningAppsRefreshInFlight = false
-    case .all:
-      candidateFinderAllAppsCache = candidates
-      candidateFinderAllAppsCacheReady = true
-      candidateFinderAllAppsRefreshInFlight = false
-    }
-    FlashLog.trace(
-      "[candidate_finder] refresh_sync scope=\(scope) count=\(candidates.count) reason=\(reason)")
-    return candidates
-  }
-
   private func candidateFinderCandidates(for scope: CandidateScope) -> [Candidate] {
     // Bangs are NOT in the default pool — they only surface when the
     // user types `!` (see `updateCandidateMatches`'s bang branch). The
-    // default flashlight opens from the resident core-app cache. If the
-    // cache is cold when the surface is active, fill it synchronously so
-    // rows do not visibly arrive from a background completion. Non-app
-    // sources are merged from warm snapshots once the user types a query
-    // or locks in an `@source` filter.
-    switch scope {
-    case .running:
-      if !candidateFinderRunningAppsCacheReady {
-        return refreshCandidatesSynchronously(scope: .running, reason: "cache_miss")
-      }
-      return candidateFinderRunningAppsCache
-    case .all:
-      if !candidateFinderAllAppsCacheReady {
-        return refreshCandidatesSynchronously(scope: .all, reason: "cache_miss")
-      }
-      return candidateFinderAllAppsCache
-    }
+    // default flashlight pool is an immutable session snapshot over every
+    // current source: apps from the warmed `ApplicationSource` cache, and
+    // plugin/browser/tmux rows from each source's in-memory candidates
+    // snapshot. Do not call `queryCandidates` here — any RPC or live refresh
+    // would either delay first paint or mutate the list after it is visible.
+    let candidates = registry.candidates(scope: scope)
+    FlashLog.trace(
+      "[candidate_finder] snapshot_sync scope=\(scope) count=\(candidates.count)")
+    return candidates
   }
 
   func refreshCandidateFinder(query: String) {
@@ -1117,21 +1156,6 @@ extension AppDelegate {
     let command = Self.commandLineBuffer(from: text)
     overlay.commandLineText = command
     overlay.commandLineCursorIndex = cursorIndex ?? command.count
-    // User-modified-input detection: if the panel opened with `initial` text
-    // and the buffer now differs, flip the dynamic-display unlock and flush
-    // any results that arrived while we were holding them.
-    if let initial = candidateFinderInitialCommand, command != initial {
-      candidateFinderInitialCommand = nil
-      if !candidateFinderDynamicDisplayUnlocked {
-        candidateFinderDynamicDisplayUnlocked = true
-        FlashLog.trace(
-          "[candidate_finder] dynamic_unlock pending=\(candidateFinderPendingDynamic.count)")
-        candidateFinderDynamicCandidates = candidateFinderPendingDynamic
-        candidateFinderFilteredPoolCache = nil
-        candidateFinderIncrementalCache = nil
-        candidateFinderCandidatesEpoch &+= 1
-      }
-    }
     if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
       clearCommandLineCompletionState()
       if candidateFinderCandidates.isEmpty {
@@ -1331,7 +1355,7 @@ extension AppDelegate {
     raw.hasPrefix(":") ? raw : ":\(raw)"
   }
 
-  private func updateCandidateMatches(query: String, requestCandidateRefresh: Bool = true) {
+  private func updateCandidateMatches(query: String) {
     let t0 = CFAbsoluteTimeGetCurrent()
     // `@<source>` narrows the pool to a single source; the residual text after
     // the `@source ` token is the actual fuzzy query.
@@ -1343,25 +1367,6 @@ extension AppDelegate {
       : NormalModeDispatcher.CandidateFinderQuery(sourceFilter: nil, text: query)
     let trimmed = parsed.text
     candidateFinderCurrentQuery = sourceCompletion?.token ?? trimmed
-
-    // Pool composition is owned by `openCandidateFinderSession` / the dynamic
-    // unlock path now. The visible pool reflects whatever has been ingested so
-    // far: apps-only until the user modifies input, then apps + every dynamic
-    // arrival so far. `requestCandidateRefresh` is preserved for callers
-    // that still want to recompose the pool from caches (e.g. mid-typing
-    // mode-overlay rebuilds); on a confirmed source filter we still want the
-    // dynamic pool merged in so the filter has something to narrow.
-    if requestCandidateRefresh, candidateFinderDynamicDisplayUnlocked {
-      candidateFinderDynamicCandidates = candidateFinderPendingDynamic
-      candidateFinderCandidates =
-        candidateFinderCandidates(for: candidateFinderScope) + candidateFinderDynamicCandidates
-    } else if requestCandidateRefresh, parsed.sourceFilter != nil {
-      // Explicit `@<source>` filter implies user intent — merge the dynamic
-      // pool even if we haven't seen a keystroke (e.g. seeded `--input`).
-      candidateFinderDynamicCandidates = candidateFinderPendingDynamic
-      candidateFinderCandidates =
-        candidateFinderCandidates(for: candidateFinderScope) + candidateFinderDynamicCandidates
-    }
 
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,
@@ -2025,12 +2030,10 @@ extension AppDelegate {
   func clearCandidateFinderState() {
     overlay.candidateFinderQuery = ""
     candidateFinderCandidates = []
-    candidateFinderDynamicCandidates = []
     candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
     candidateFinderCurrentQuery = ""
     candidateFinderIncrementalCache = nil
-    closeCandidateFinderSession(reason: "clear_state")
   }
 
   private func quitNormalModeTargetApp(force: Bool = false) {

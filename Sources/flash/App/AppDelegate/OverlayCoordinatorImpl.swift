@@ -413,7 +413,6 @@ extension AppDelegate {
       overlayDidCancelCommandLine()
       return
     }
-    candidateFinderLastInputAt = Date()
     if resetSelection {
       candidateFinderSelectedIndex = 0
     }
@@ -433,8 +432,7 @@ extension AppDelegate {
         candidateFinderMatches.count - 1)
       // Re-render the suggestion list with the new highlighted row only;
       // skip `refreshCommandLine` so we don't re-run the candidate search
-      // for an unchanged query. Re-running it would reshuffle results as
-      // late async DB hits land while the user is just paging through.
+      // for an unchanged query.
       overlay.displayCommandLine(
         overlay.commandLineText,
         suggestions: candidateFinderDisplayItems(),
@@ -506,7 +504,6 @@ extension AppDelegate {
 
   func overlayDidUpdateCandidateFinderQuery(_ query: String) {
     candidateFinderSelectedIndex = 0
-    candidateFinderLastInputAt = Date()
     refreshCandidateFinder(query: query)
   }
 
@@ -518,9 +515,8 @@ extension AppDelegate {
     candidateFinderSelectedIndex = min(
       max(candidateFinderSelectedIndex + delta, 0),
       candidateFinderMatches.count - 1)
-    // Just rerender with the new selection — re-scoring against the
-    // same query would reshuffle results when a late async DB hit
-    // lands mid-navigation.
+    // Just rerender with the new selection; re-scoring an unchanged query is
+    // unnecessary work.
     overlay.displayCandidateFinder(
       query: overlay.candidateFinderQuery,
       items: candidateFinderDisplayItems())

@@ -133,13 +133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var commandLineRestoreModeTarget: FlashMode?
   var candidateFinderCandidates: [Candidate] = [] {
     didSet {
-      // The setter is called on every candidate refresh. For typed
-      // queries this can recompute `apps + plugin snapshots` without
-      // changing the actual pool. Unconditionally bumping the epoch
-      // destroys both the filter cache and the incremental scoring cache,
-      // so every keystroke goes back to scoring the full pool. Bump only
-      // when the assignment is observably different — same count and same
-      // candidate identity at every index is "same pool".
+      // Each flashlight session freezes one source snapshot. Bump the
+      // epoch only when that snapshot's observable candidate identity
+      // changes; selection movement and repeated renders should keep the
+      // filter and incremental scoring caches intact.
       if Self.candidatePoolsCarrySameSourceIDs(oldValue, candidateFinderCandidates) {
         return
       }
@@ -171,7 +168,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     return true
   }
-  var candidateFinderDynamicCandidates: [Candidate] = []
   /// Monotonic counter bumped on every `candidateFinderCandidates`
   /// reassignment so the filtered-pool cache can detect a stale base
   /// without comparing 2k-entry arrays element-wise per keystroke.
@@ -210,45 +206,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// exits early.
   let candidateFinderScoringQueue = DispatchQueue(
     label: "flash.candidate_finder.scoring", qos: .userInteractive)
-  var candidateFinderRunningAppsCache: [Candidate] = []
-  var candidateFinderRunningAppsCacheReady = false
   var candidateFinderRunningAppsRefreshInFlight = false
-  var candidateFinderAllAppsCache: [Candidate] = []
-  var candidateFinderAllAppsCacheReady = false
   var candidateFinderAllAppsRefreshInFlight = false
-  var candidateFinderLiveRefreshTimer: DispatchSourceTimer?
-  /// Last time the user touched the flashlight query. Used by the
-  /// live-refresh timer to skip a refresh that would swap the pool out
-  /// from under an actively-typed keystroke. Performance: every refresh
-  /// pays a core app-cache rebuild; skipping mid-typing keeps that work
-  /// off the user's keystroke path.
-  var candidateFinderLastInputAt: Date?
-  /// Bumped on every flashlight open and on every close. Every async fetch
-  /// captures the session at dispatch time; when the callback returns, results
-  /// land only if the session still matches. Treats "close" as the cancel
-  /// signal: an in-flight Safari AppleScript or tmux RPC that resolves after
-  /// the user dismissed the panel becomes a no-op instead of contaminating the
-  /// next session.
-  var candidateFinderSession: UInt64 = 0
-  /// Non-nil while we're holding the buffer the user opened with. The first
-  /// `refreshCommandLine` call whose text differs from this unlocks the
-  /// pending-dynamic display: that's the "user modified input" signal the
-  /// loading-sequence design uses to start showing tmux/browser/plugin rows.
-  /// `nil` once unlocked so a subsequent re-typed prefix doesn't re-lock.
-  var candidateFinderInitialCommand: String?
-  /// Async-source results accumulated since the current session opened. Stays
-  /// hidden from the visible pool until `candidateFinderDynamicDisplayUnlocked`
-  /// flips true on the first user input modification. Deduped per source on
-  /// every arrival so a re-fired query replaces earlier results from the same
-  /// source instead of stacking them.
-  var candidateFinderPendingDynamic: [Candidate] = []
-  /// Per-source registry of pending arrivals, keyed by source identifier, so
-  /// repeated refreshes from the same source overwrite the previous batch
-  /// rather than appending it.
-  var candidateFinderPendingDynamicBySource: [String: [Candidate]] = [:]
-  /// True once the user has modified the command line since the panel opened.
-  /// Gates whether async-source arrivals are pushed into the visible pool.
-  var candidateFinderDynamicDisplayUnlocked: Bool = false
   var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionItems: [NormalModeDispatcher.CommandLineCompletion] = []
@@ -273,6 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeRecaptureToken: UInt64 = 0
   var normalModeCaptureVerificationToken: UInt64 = 0
   var normalModePendingCommandToken: UInt64 = 0
+  var insertFocusExitProbeToken: UInt64 = 0
+  var insertFocusOwnerPID: pid_t?
+  var insertEditableFocusExitPID: pid_t?
+  var insertNavigationExitToken: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var windowGeometryChangeToken: UInt64 = 0
   var windowGeometryChangeInProgress = false
@@ -314,6 +277,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
           configPath: nil,
           focused: true))
+    }
+    monitor.focusedElementMayHaveChanged = { [weak self] pid in
+      self?.focusedInputMayHaveChanged(pid: pid)
     }
     monitor.focusedWindowGeometryDidChange = { [weak self] pid, notification in
       self?.focusedWindowGeometryDidChange(pid: pid, notification: notification)
@@ -357,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       template: config.statusBar.template,
       pluginSnapshotsProvider: { [weak self] in
         self?.pluginManager.statusSnapshots() ?? []
-      })
+    })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
 
     let dispatch: (URLCommand) -> Void = { [weak self] cmd in
@@ -382,7 +348,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     logPermissionState()
     installDismissObservers()
     prewarmCandidateFinderCaches(reason: "launch")
-    startCandidateFinderLiveRefresh()
     startClipboardMonitor()
     pluginManager.emit(
       PluginEvent(
@@ -415,10 +380,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .quitApp, .saveAndQuit, .tabNew,
       .sendKey:
       performMappedCommand(cmd)
-    case .showAlert(let message):
+    case .showAlert(let alert):
       configErrorAlertVisible = false
       lastConfigErrorAlertMessage = nil
-      overlay.displayAlert(message)
+      overlay.displayAlert(
+        alert.message,
+        duration: alert.duration,
+        style: .from(alert.style))
     case .dismissAlert:
       configErrorAlertVisible = false
       lastConfigErrorAlertMessage = nil
@@ -505,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.statusBarController?.updateFocusedApplication(app)
         self.registry.refreshRunningApplications()
-        self.prewarmCandidateFinderCaches(reason: "focus_changed", sourceScope: self.candidateFinderScope)
+        self.prewarmCandidateFinderCaches(reason: "focus_changed")
         self.refreshEffectiveMappings(for: app.bundleIdentifier)
         self.pluginManager.emit(
           PluginEvent(
@@ -668,8 +636,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
-    candidateFinderLiveRefreshTimer?.cancel()
-    candidateFinderLiveRefreshTimer = nil
     pluginStateRefreshWork?.cancel()
     pluginStateRefreshWork = nil
     clipboardMonitor?.stop()

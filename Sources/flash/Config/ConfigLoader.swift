@@ -301,6 +301,7 @@ enum ConfigLoader {
 
   private struct PendingModeMapping {
     var scope: ModeScope
+    var rawKey: String
     var key: String
     var action: MappingCommand
     var location: ConfigLocation
@@ -676,6 +677,7 @@ enum ConfigLoader {
         pendingModeMappings.append(
           PendingModeMapping(
             scope: scope,
+            rawKey: key,
             key: canonical,
             action: action,
             location: location ?? ConfigLocation(line: 1, column: 1)))
@@ -837,13 +839,13 @@ enum ConfigLoader {
     for mapping in mappings {
       if mapping.key.contains("<leader>"), mapping.scope != .normal {
         config.addDiagnostic(
-          "mapping \"\(mapping.key)\" uses <leader> outside [mode.normal.mappings]",
+          "mapping \"\(mapping.rawKey)\" uses <leader> outside [mode.normal.mappings]",
           location: mapping.location)
         continue
       }
       guard let key = resolvedMappingKey(mapping.key, scope: mapping.scope, config: config) else {
         config.addDiagnostic(
-          "mapping \"\(mapping.key)\" uses <leader> but mode.normal.leader is not set",
+          "mapping \"\(mapping.rawKey)\" uses <leader> but mode.normal.leader is not set",
           location: mapping.location)
         continue
       }

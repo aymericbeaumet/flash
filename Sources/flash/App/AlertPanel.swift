@@ -15,6 +15,13 @@ extension OverlayPanel {
       fillColor: NSColor.systemRed.withAlphaComponent(0.92),
       strokeColor: NSColor.white.withAlphaComponent(0.95),
       textColor: .white)
+
+    static func from(_ style: AlertCommand.Style) -> AlertStyle {
+      switch style {
+      case .standard: return .standard
+      case .error: return .error
+      }
+    }
   }
 
   private static let alertTextSize: CGFloat = 27

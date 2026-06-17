@@ -337,6 +337,7 @@ enum CandidateFinder {
       normalizedTitle.isEmpty
       ? []
       : normalizedTitle.split(separator: " ").map(String.init)
+    let normalizedSource = normalize(candidate.source)
     let normalizedSourceTitle = normalize("\(candidate.source) \(candidate.title)")
     let normalizedURL = normalize(urlSearchText(candidate))
     let normalizedSecondary = normalize(secondarySearchText(candidate))
@@ -350,6 +351,7 @@ enum CandidateFinder {
       title: normalizedTitle,
       titleTokens: titleTokens,
       secondary: normalizedSecondary,
+      source: normalizedSource,
       sourceTitle: normalizedSourceTitle,
       url: normalizedURL,
       displayTitle: normalizedDisplay,
@@ -360,6 +362,7 @@ enum CandidateFinder {
     prepared.scoringMask =
       presenceMask(normalizedTitle)
       | presenceMask(normalizedSourceTitle)
+      | presenceMask(normalizedSource)
       | presenceMask(normalizedURL)
       | presenceMask(normalizedSecondary)
       | presenceMask(normalizedDisplay)
@@ -375,6 +378,7 @@ enum CandidateFinder {
     var wordStarts: UInt64 = 0
     for token in titleTokens { wordStarts |= firstCharBit(token) }
     for token in aliasTokens { wordStarts |= firstCharBit(token) }
+    wordStarts |= firstCharBit(normalizedSource)
     wordStarts |= firstCharBit(normalizedSourceTitle)
     wordStarts |= firstCharBit(normalizedSecondary)
     wordStarts |= firstCharBit(normalizedDisplay)
@@ -382,6 +386,9 @@ enum CandidateFinder {
     // starts too — the source title is "core.apps", but matching on
     // "apps" should still gate-pass.
     for token in normalizedSourceTitle.split(separator: " ") {
+      wordStarts |= firstCharBit(String(token))
+    }
+    for token in normalizedSource.split(separator: " ") {
       wordStarts |= firstCharBit(String(token))
     }
     for token in normalizedSecondary.split(separator: " ") {
@@ -556,6 +563,11 @@ static func queryPrefilter(normalizedQuery: String) -> QueryPrefilter {
       query: normalizedQuery, normalized: fields.sourceTitle, base: 3_000, fuzzyScore: fuzzyScore)
     {
       best = max(best ?? sourceTitleScore, sourceTitleScore)
+    }
+    if let sourceScore = fieldScoreNormalized(
+      query: normalizedQuery, normalized: fields.source, base: 8_000, fuzzyScore: fuzzyScore)
+    {
+      best = max(best ?? sourceScore, sourceScore)
     }
     if let secondaryScore = fieldScoreNormalized(
       query: normalizedQuery, normalized: fields.secondary, base: 4_000, fuzzyScore: fuzzyScore)

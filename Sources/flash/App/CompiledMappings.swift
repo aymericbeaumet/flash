@@ -6,9 +6,10 @@ import Foundation
 ///
 /// - `byKey` for exact-match dispatch.
 /// - `nonAtomicPrefixes` answers "does some longer mapping start with
-///   this sequence?" without scanning the whole list. Atomic-key
-///   mappings (`tab`, `space`, ...) are excluded — typing `t` shouldn't
-///   stall waiting for a `tab`-named mapping.
+///   this sequence?" without scanning the whole list. Prefixes are
+///   generated from canonical key atoms, so typing `t` never stalls
+///   waiting for a `tab`-named mapping, and `<space>s` does not stall
+///   because `<space><space>` exists.
 /// - `modifiedByChord` resolves modified-key chords (`cmd+f`) without
 ///   re-parsing on every event.
 /// - `ordered` preserves the source order for help/mapping listings.
@@ -36,7 +37,9 @@ struct CompiledMappings: Equatable {
       if byKey[mapping.key] == nil {
         byKey[mapping.key] = mapping
       }
-      if mapping.key.contains("+"),
+      let atoms = NormalModeInterpreter.keyAtoms(from: mapping.key)
+      if atoms.count == 1,
+        mapping.key.contains("+"),
         let parsed = HotkeySyntax.parse(hotkey: mapping.key)
       {
         let chord = Chord(modifiers: parsed.modifiers, virtualKey: parsed.virtualKey)
@@ -44,15 +47,10 @@ struct CompiledMappings: Equatable {
           byChord[chord] = mapping
         }
       }
-      // Only non-atomic, multi-char mapping keys contribute strict
-      // prefixes — a `tab` mapping must not stall a typed `t`.
-      if !NormalModeInterpreter.atomicKeyNames.contains(mapping.key),
-        mapping.key.count > 1
-      {
-        var prefix = ""
-        for ch in mapping.key.dropLast() {
-          prefix.append(ch)
-          prefixes.insert(prefix)
+      // Only multi-atom mapping keys contribute strict prefixes.
+      if atoms.count > 1 {
+        for end in 1..<atoms.count {
+          prefixes.insert(NormalModeInterpreter.encodeKeyAtoms(Array(atoms.prefix(end))))
         }
       }
     }

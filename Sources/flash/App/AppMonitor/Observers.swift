@@ -68,6 +68,7 @@ extension AppMonitor {
       installObserver(for: pid)
     }
     scheduleModelRefresh(for: pid, reason: "focus")
+    focusedElementMayHaveChanged?(pid)
   }
 
   private func onAppTerminated(pid: pid_t) {
@@ -83,6 +84,9 @@ extension AppMonitor {
     scheduleModelRefresh(for: pid, reason: "ax:\(notification)")
     if Self.windowGeometryNotificationRequiresBorderSuspension(notification) {
       focusedWindowGeometryDidChange?(pid, notification)
+    }
+    if Self.notificationMayChangeFocusedElement(notification) {
+      focusedElementMayHaveChanged?(pid)
     }
     focusedElementDidChange?(pid)
   }
@@ -102,6 +106,15 @@ extension AppMonitor {
       let editable = NormalModeDispatcher.isEditableFocusedElement(pid: pid)
       DispatchQueue.main.async {
         completion(editable)
+      }
+    }
+  }
+
+  func focusedDocumentURL(pid: pid_t, completion: @escaping (String?) -> Void) {
+    axQueue.async {
+      let url = NormalModeDispatcher.documentURL(pid: pid)
+      DispatchQueue.main.async {
+        completion(url)
       }
     }
   }

@@ -167,6 +167,10 @@ public struct NormalizedScoringFields: Sendable {
   /// Secondary searchable text such as browser URLs or source-provided
   /// subtitles. Ranked below the primary title.
   public var secondary: String
+  /// Canonical source label only, e.g. `tmux.windows` or `firefox.tabs`.
+  /// Ranked above secondary/url fields so a source-name query surfaces
+  /// that source's rows before unrelated fuzzy hits.
+  public var source: String
   public var sourceTitle: String
   public var url: String
   public var displayTitle: String
@@ -181,6 +185,7 @@ public struct NormalizedScoringFields: Sendable {
     title: String = "",
     titleTokens: [String] = [],
     secondary: String = "",
+    source: String = "",
     sourceTitle: String = "",
     url: String = "",
     displayTitle: String = "",
@@ -189,6 +194,7 @@ public struct NormalizedScoringFields: Sendable {
     self.title = title
     self.titleTokens = titleTokens
     self.secondary = secondary
+    self.source = source
     self.sourceTitle = sourceTitle
     self.url = url
     self.displayTitle = displayTitle
@@ -376,14 +382,18 @@ public protocol FlashSource: AnyObject {
   /// preferable to serving a partial, activation-dependent hint set.
   func discover(in context: AppContext) throws -> [JumpTarget]
   /// Return complete, deterministic open/search items for this source's
-  /// current enabled environment.
+  /// current enabled environment. The command bar freezes this synchronous
+  /// snapshot when `:open` / `:flashlight` opens; keep it warm in memory and
+  /// never rely on a visible session to fetch candidates later.
   func candidates(
     in environment: FlashSourceEnvironment,
     scope: CandidateScope
   ) -> [Candidate]
-  /// Query this source on demand for flashlight candidates. The default uses
-  /// the source's synchronous snapshot on a utility queue; plugins can override
-  /// to refresh or return a cached snapshot over their own RPC.
+  /// Query this source on demand outside the visible command-bar path. The
+  /// command bar must not call this while opening or rendering `:open` /
+  /// `:flashlight`, because async arrivals would either delay first paint or
+  /// mutate a displayed list. Plugin-backed sources should keep
+  /// ``candidates(in:scope:)`` warm instead.
   func queryCandidates(
     in environment: FlashSourceEnvironment,
     request: CandidateQuery,

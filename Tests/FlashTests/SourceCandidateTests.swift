@@ -1153,6 +1153,54 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertGreaterThan(primaryScore, secondaryScore)
   }
 
+  func testSourceNameQueryRanksAllTmuxWindowsBeforeUnrelatedFuzzyHits() {
+    let tmuxRows = [
+      ("btop", "headquarter:1 · btop · ~/workspace/aymericbeaumet/flash"),
+      ("nvtop", "headquarter:2 · nvtop · ~/workspace/aymericbeaumet/flash"),
+      ("lazydocker", "headquarter:3 · zsh · ~/workspace/aymericbeaumet/flash"),
+      (".dotfiles", "scratch:1 · ssh · ~/.dotfiles"),
+      ("flash", "scratch:2 · node · ~/workspace/aymericbeaumet/flash"),
+      ("moria", "scratch:3 · claude.exe · ~/workspace/aymericbeaumet/moria"),
+      ("beside-agentic", "beside:1 · codex-aarch64-a · ~/workspace/beside/beside-agentic"),
+    ].map { title, subtitle in
+      CandidateFinder.prepare(
+        candidate(
+          kind: .plugin("tmux_window"),
+          source: "tmux.windows",
+          name: title,
+          subtitle: subtitle,
+          bundleIdentifier: "",
+          pid: 4242))
+    }
+    let noise = [
+      CandidateFinder.prepare(
+        candidate(
+          kind: CandidateFinder.browserTabKind,
+          source: "safari.tabs",
+          name: "Numbers | CallRail",
+          subtitle: "browser tab",
+          bundleIdentifier: "com.apple.Safari",
+          url: URL(string: "https://app.callrail.com/settings/a/215502720/routing/calls"))),
+      CandidateFinder.prepare(
+        candidate(
+          kind: .app,
+          source: "core.apps",
+          name: "TextInputMenuAgent",
+          subtitle: "app",
+          bundleIdentifier: "com.apple.TextInputMenuAgent")),
+    ]
+    let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
+    let matches = CandidateFinder.scoreMatches(
+      pool: tmuxRows + noise,
+      normalizedQuery: NormalModeDispatcher.normalizedSearchText("tmux"),
+      fuzzyScore: fuzzy,
+      allowParallel: false)
+    let sorted = CandidateFinder.sortedMatches(matches, limit: 10)
+
+    XCTAssertEqual(sorted.prefix(tmuxRows.count).map(\.candidate.source), tmuxRows.map(\.source))
+    XCTAssertTrue(sorted.dropFirst(tmuxRows.count).allSatisfy { $0.candidate.source != "tmux.windows" })
+  }
+
   func testTmuxWindowDisplayShowsPrimaryTitleBeforeSecondaryMetadata() {
     let tmux = CandidateFinder.prepare(
       candidate(

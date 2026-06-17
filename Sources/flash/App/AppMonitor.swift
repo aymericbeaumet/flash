@@ -38,6 +38,7 @@ final class AppMonitor {
 
   let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
   var focusedElementDidChange: ((pid_t) -> Void)?
+  var focusedElementMayHaveChanged: ((pid_t) -> Void)?
   var focusedWindowGeometryDidChange: ((pid_t, String) -> Void)?
 
   // MARK: Config (shared between main + axQueue)
@@ -182,6 +183,13 @@ final class AppMonitor {
       || notification == kAXWindowResizedNotification
       || notification == kAXFocusedWindowChangedNotification
       || notification == kAXMainWindowChangedNotification
+  }
+
+  static func notificationMayChangeFocusedElement(_ notification: String) -> Bool {
+    notification == kAXFocusedUIElementChangedNotification as String
+      || notification == kAXFocusedWindowChangedNotification as String
+      || notification == kAXMainWindowChangedNotification as String
+      || notification == kAXUIElementDestroyedNotification as String
   }
 
   // MARK: Lifecycle

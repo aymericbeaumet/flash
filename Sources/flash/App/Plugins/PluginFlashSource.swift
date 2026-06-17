@@ -69,6 +69,9 @@ final class PluginFlashSource: FlashSource {
     in environment: FlashSourceEnvironment,
     scope: CandidateScope
   ) -> [Candidate] {
+    // Flashlight reads this lock-backed snapshot synchronously when the panel
+    // opens. Do not replace this with `queryCandidates`; visible command-bar
+    // rows must not depend on a session-time plugin RPC.
     plugin.candidates(scope: scope)
   }
 

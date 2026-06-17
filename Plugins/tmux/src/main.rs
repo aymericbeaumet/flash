@@ -13,9 +13,9 @@
 //!   2. A 1 s background poll re-runs `build_candidates` and emits a new
 //!      snapshot **only when the candidate hash actually changed**. The
 //!      dedup gate is the load-bearing invariant: without it the host
-//!      cache would be rewritten on every poll, and the flashlight's
-//!      5 s live tick would surface a "candidates changed without typing"
-//!      flicker even when tmux state was identical.
+//!      cache would be rewritten on every poll even when tmux state was
+//!      identical. Flashlight freezes a host snapshot when it opens, so
+//!      unchanged plugin polls must be true no-ops.
 //!   3. Host events (`core:focus.changed`, `core:flash.started`,
 //!      `core:apps.terminated`) trigger an additional refresh so a
 //!      focus-in catches state that drifted while the user was
@@ -25,9 +25,8 @@
 //!      is what we want: the host serves its warm cache instantly, no
 //!      subprocesses fire on the user's `f` keypress. Letting
 //!      `candidate_query` run `build_candidates` was the previous bug —
-//!      the user saw the host fall back to the stale cache (RPC
-//!      time-out), then watched the live tick swap in fresh data 4-5 s
-//!      later.
+//!      the user either waited on tmux I/O or saw a stale cache become
+//!      correct only after a later refresh.
 //!
 //! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) is
 //! parallelised via `tokio::spawn` so a single hung socket can't stall
@@ -1182,12 +1181,10 @@ async fn build_candidates_inner(
 /// to skip `emit_snapshot` when nothing observable changed.
 ///
 /// Without this gate, the 1 s background poll would rewrite the host's
-/// cache on every tick even when tmux state was identical. The
-/// flashlight's 5 s live tick re-fires `candidateQuery`, the host
-/// returns the just-rewritten cache, and the renderer compares object
-/// identity rather than candidate content — so the surface would
-/// re-paint mid-session and the user would perceive a flicker even
-/// though the visible rows would be unchanged.
+/// cache on every tick even when tmux state was identical. The visible
+/// flashlight surface freezes one host snapshot at open time, so unchanged
+/// tmux polls should not churn host snapshot state or future-session
+/// bookkeeping.
 fn hash_candidates(candidates: &[Candidate]) -> u64 {
     use flash_plugin::candidate_metadata as meta;
     let mut hasher = DefaultHasher::new();
@@ -1209,13 +1206,13 @@ fn hash_candidates(candidates: &[Candidate]) -> u64 {
 
 /// Build a fresh snapshot and emit it to the host **only when the
 /// candidate hash differs from the last emit**. The dedup gate is what
-/// keeps the flashlight from flickering when the user is idle — see the
-/// module-level "Snapshot freshness contract" docs.
+/// keeps unchanged polls as no-ops — see the module-level "Snapshot
+/// freshness contract" docs.
 ///
 /// On a transient tmux failure (e.g. every socket invocation timed out)
 /// we leave the previous snapshot in place: the host's warm cache
-/// continues to serve `candidateQuery` requests, and the next successful
-/// poll re-syncs. We do *not* emit an empty snapshot in this case —
+/// continues to serve synchronous `candidates(...)` reads, and the next
+/// successful poll re-syncs. We do *not* emit an empty snapshot in this case —
 /// nuking the cache to `[]` would make tmux windows vanish from
 /// flashlight every time a single socket call hiccuped.
 async fn refresh_candidate_snapshot_for_path(
@@ -2125,11 +2122,11 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
     // ---- Snapshot freshness contract -------------------------------------
     //
     // The dedup gate in `refresh_candidate_snapshot_for_path` is the
-    // load-bearing invariant that prevents the flashlight from
-    // flickering during a session when tmux state is unchanged. These
-    // tests pin it down: any future refactor that breaks them is also
-    // re-introducing the original symptom (user opens flashlight,
-    // sees outdated candidates, watches them refresh 4-5 s later).
+    // load-bearing invariant that prevents unchanged tmux polls from
+    // rewriting the host cache. These tests pin it down: any future
+    // refactor that breaks them is also re-introducing the original
+    // symptom (user opens flashlight and sees stale or incomplete tmux
+    // candidates until a later refresh catches up).
 
     fn fake_candidate(target: &str, name: &str, pid: i64) -> Candidate {
         let payload = TmuxPayload {
@@ -2202,7 +2199,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
     /// If a future change adds an `async fn candidate_query` to the
     /// `impl FlashPlugin for Tmux` block, this test still compiles —
     /// the assertion is in the runtime behavior: any candidate_query
-    /// that does subprocess work would re-introduce the 4-5 s lag the
+    /// that does subprocess work would re-introduce the session-time lag the
     /// user complained about. The companion AGENTS.md note ("Plugin
     /// snapshot freshness contract") is the human-readable guardrail.
     #[test]

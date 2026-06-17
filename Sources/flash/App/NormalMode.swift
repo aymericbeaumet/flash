@@ -112,7 +112,7 @@ enum NormalModeInterpreter {
       return .consume
     }
     for key in keys {
-      let sequence = state.prefix + key
+      let sequence = appendKeyAtom(state.prefix, key)
       let exact = mappings.mapping(for: sequence)
       let hasLonger = mappings.hasStrictPrefix(sequence)
       if let mapping = exact, !hasLonger {
@@ -143,14 +143,6 @@ enum NormalModeInterpreter {
     }
     return .consume
   }
-
-  /// Mapping keys that name a single named keystroke (Tab, Space, the
-  /// forward-delete key) rather than a sequence of characters the user
-  /// types one at a time. Excluded from the sequence-continuation
-  /// search so a `t` keystroke doesn't get stuck waiting for `ab`.
-  static let atomicKeyNames: Set<String> = [
-    "tab", "space", "delete_forward", "forward_delete",
-  ]
 
   static func firstCharacter(_ value: String?) -> Character? {
     guard let value, let first = value.first else { return nil }
