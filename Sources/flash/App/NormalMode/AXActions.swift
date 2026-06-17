@@ -93,6 +93,51 @@ extension NormalModeDispatcher {
     return isEditable(element)
   }
 
+  static func focusedInputSnapshot(pid: pid_t) -> InputFocusSnapshot? {
+    let app = AXUIElementCreateApplication(pid)
+    let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
+    let windowRole = window.flatMap { role(of: $0) }
+    let windowSubrole = window.flatMap { stringAttribute($0, kAXSubroleAttribute as String) }
+    let windowDocumentURL =
+      window.flatMap { urlAttribute($0, kAXDocumentAttribute as String) }
+      ?? window.flatMap { urlAttribute($0, kAXURLAttribute as String) }
+    guard let element = elementAttribute(app, kAXFocusedUIElementAttribute as String) else {
+      let surface = InputFocusSnapshot.classifySurface(
+        isEditable: false,
+        role: nil,
+        expanded: false,
+        ancestorRoles: [],
+        windowSubrole: windowSubrole,
+        documentURL: windowDocumentURL)
+      return InputFocusSnapshot(
+        pid: pid,
+        surface: surface == .stableNonEditable ? .unavailable : surface,
+        role: nil,
+        windowRole: windowRole,
+        windowSubrole: windowSubrole,
+        documentURL: windowDocumentURL)
+    }
+    let focusedRole = role(of: element)
+    let expanded = boolAttribute(element, "AXExpanded") ?? false
+    let documentURL =
+      documentURLNear(element)
+      ?? windowDocumentURL
+    let surface = InputFocusSnapshot.classifySurface(
+      isEditable: isEditable(element),
+      role: focusedRole,
+      expanded: expanded,
+      ancestorRoles: ancestorRoles(of: element),
+      windowSubrole: windowSubrole,
+      documentURL: documentURL)
+    return InputFocusSnapshot(
+      pid: pid,
+      surface: surface,
+      role: focusedRole,
+      windowRole: windowRole,
+      windowSubrole: windowSubrole,
+      documentURL: documentURL)
+  }
+
   static func focusedElementFrame(pid: pid_t) -> CGRect? {
     let app = AXUIElementCreateApplication(pid)
     let screenH = primaryScreenHeight()
@@ -129,6 +174,21 @@ extension NormalModeDispatcher {
       current = parent
     }
     return false
+  }
+
+  private static func ancestorRoles(of element: AXUIElement) -> [String] {
+    var roles: [String] = []
+    var current = element
+    for _ in 0..<8 {
+      guard let parent = elementAttribute(current, kAXParentAttribute as String) else {
+        return roles
+      }
+      if let role = role(of: parent) {
+        roles.append(role)
+      }
+      current = parent
+    }
+    return roles
   }
 
   private static func documentURLNear(_ element: AXUIElement) -> String? {

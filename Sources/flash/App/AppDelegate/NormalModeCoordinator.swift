@@ -62,6 +62,8 @@ extension AppDelegate {
     insertFocusOwnerPID = nil
     insertEditableFocusExitPID = nil
     insertNavigationExitToken &+= 1
+    normalModePointerHandoffToken &+= 1
+    normalModePointerHandoffActive = false
     normalModePendingCommandToken &+= 1
     resetModeInputState()
     closeModalStateForModeExit(reason: "enter_\(nextMode)_\(reason)")
@@ -357,40 +359,45 @@ extension AppDelegate {
 
     insertFocusExitProbeToken &+= 1
     let token = insertFocusExitProbeToken
-    monitor.focusedElementIsEditable(pid: pid) { [weak self] editable in
-      guard let self, self.insertFocusExitProbeToken == token else { return }
-      self.completeFocusedInputExitIfNeeded(pid: pid, token: token, editable: editable)
+    monitor.focusedInputSnapshot(pid: pid) { [weak self] snapshot in
+      guard let self, self.insertFocusExitProbeToken == token, let snapshot else { return }
+      self.completeFocusedInputExitIfNeeded(pid: pid, token: token, snapshot: snapshot)
     }
   }
 
   private func completeFocusedInputExitIfNeeded(
     pid: pid_t,
     token: UInt64,
-    editable: Bool
+    snapshot: InputFocusSnapshot
   ) {
     let focusedPID = currentNonFlashContext()?.processID
-    guard
-      Self.insertModeShouldExitAfterFocusedElementChange(
-        mode: flashMode,
-        modeBadgeEnabled: modeBadgeEnabled,
-        overlayInputMode: overlay.inputMode,
-        hasHints: !currentHints.isEmpty,
-        activationInFlight: activationInFlight,
-        focusedPID: focusedPID,
-        eventPID: pid,
-        editableFocusExitPID: insertEditableFocusExitPID,
-        focusedElementIsEditable: editable)
-    else { return }
-
-    if Self.insertFocusExitShouldWaitForPointerRelease() {
+    let decision = InsertModeFocusMachine.insertFocusChangeDecision(
+      focusedPID: focusedPID,
+      eventPID: pid,
+      armedEditablePID: insertEditableFocusExitPID,
+      snapshot: snapshot,
+      pointerPressed: Self.insertFocusExitShouldWaitForPointerRelease())
+    switch decision {
+    case .stay:
+      return
+    case .waitForPointerRelease:
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
         self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token)
       }
       return
+    case .resampleAfter(let milliseconds):
+      FlashLog.trace(
+        "[mode] insert_focus_transient pid=\(pid) role=\(snapshot.role ?? "nil") "
+          + "surface=\(snapshot.surface)")
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(milliseconds)) { [weak self] in
+        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token)
+      }
+    case .exitToNormal:
+      FlashLog.debug(
+        "[mode] insert_focus_lost pid=\(pid) role=\(snapshot.role ?? "nil") "
+          + "surface=\(snapshot.surface)")
+      enterNormalMode()
     }
-
-    FlashLog.debug("[mode] insert_focus_lost pid=\(pid) editable=false")
-    enterNormalMode()
   }
 
   private func completeFocusedInputExitAfterPointerRelease(pid: pid_t, token: UInt64) {
@@ -401,9 +408,9 @@ extension AppDelegate {
       }
       return
     }
-    monitor.focusedElementIsEditable(pid: pid) { [weak self] editable in
-      guard let self, self.insertFocusExitProbeToken == token else { return }
-      self.completeFocusedInputExitIfNeeded(pid: pid, token: token, editable: editable)
+    monitor.focusedInputSnapshot(pid: pid) { [weak self] snapshot in
+      guard let self, self.insertFocusExitProbeToken == token, let snapshot else { return }
+      self.completeFocusedInputExitIfNeeded(pid: pid, token: token, snapshot: snapshot)
     }
   }
 
@@ -457,11 +464,11 @@ extension AppDelegate {
         return
       }
       guard self.currentNonFlashContext()?.processID == target.processID else { return }
-      self.monitor.focusedElementIsEditable(pid: target.processID) { [weak self] editable in
+      self.monitor.focusedInputSnapshot(pid: target.processID) { [weak self] snapshot in
         guard let self, self.insertFocusExitProbeToken == token, self.flashMode == .insert else {
           return
         }
-        guard editable else {
+        guard let snapshot, InsertModeFocusMachine.shouldArmGenericExit(snapshot: snapshot) else {
           FlashLog.trace(
             "[mode] editable_focus_exit_unarmed pid=\(target.processID) reason=\(reason)")
           return
@@ -725,7 +732,9 @@ extension AppDelegate {
   }
 
   var shouldCaptureNormalModeInput: Bool {
-    guard flashMode == .normal, currentHints.isEmpty, !activationInFlight else { return false }
+    guard flashMode == .normal, currentHints.isEmpty, !activationInFlight,
+      !normalModePointerHandoffActive
+    else { return false }
     switch overlay.inputMode {
     case .commandLine, .modal, .candidateFinder:
       return false
@@ -1235,8 +1244,9 @@ extension AppDelegate {
     let topics = HelpDocs.allTopics(
       config: config,
       showModes: true,
-      pluginTopics: pluginManager.pluginHelpTopics())
-      .flatMap { [$0.name] + $0.aliases }
+      pluginTopics: pluginManager.pluginHelpTopics()
+    )
+    .flatMap { [$0.name] + $0.aliases }
     return NormalModeDispatcher.commandLineCompletions(
       command,
       pluginCommands: commandsOrdered,

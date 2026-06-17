@@ -57,9 +57,22 @@ extension AppDelegate {
     } else {
       shouldCheckEditableClick = false
     }
+    if shouldCheckEditableClick {
+      normalModePointerHandoffToken &+= 1
+      normalModePointerHandoffActive = true
+    }
     cancelOverlay()
     if shouldCheckEditableClick {
-      enterInsertModeIfClickedOnTextInput(pid: nil, reason: .pointerClick)
+      resolveNormalPointerHandoff(token: normalModePointerHandoffToken)
+    }
+  }
+
+  private func resolveNormalPointerHandoff(token: UInt64) {
+    enterInsertModeIfClickedOnTextInput(pid: nil, reason: .pointerClick) { [weak self] didEnter in
+      guard let self, self.normalModePointerHandoffToken == token else { return }
+      self.normalModePointerHandoffActive = false
+      guard !didEnter, self.flashMode == .normal else { return }
+      self.scheduleNormalModeRecapture()
     }
   }
 
@@ -338,16 +351,25 @@ extension AppDelegate {
         completion?(false)
         return
       }
-      self.monitor.focusedElementIsEditable(pid: targetPID) { [weak self] editable in
+      self.monitor.focusedInputSnapshot(pid: targetPID) { [weak self] snapshot in
         guard let self, self.flashMode == .normal else {
           completion?(false)
           return
         }
-        if editable {
+        switch InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: snapshot) {
+        case .enterInsert:
           self.enterInsertMode(reason: reason)
           completion?(true)
-        } else {
+        case .recaptureNormal:
           completion?(false)
+        case .resampleAfter(let milliseconds):
+          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(milliseconds)) {
+            [weak self] in
+            self?.enterInsertModeIfClickedOnTextInput(
+              pid: targetPID,
+              reason: reason,
+              completion: completion)
+          }
         }
       }
     }

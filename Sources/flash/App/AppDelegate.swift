@@ -236,6 +236,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var resignKeyToken: NSObjectProtocol?
   var normalModeRecaptureToken: UInt64 = 0
   var normalModeCaptureVerificationToken: UInt64 = 0
+  var normalModePointerHandoffToken: UInt64 = 0
+  var normalModePointerHandoffActive = false
   var normalModePendingCommandToken: UInt64 = 0
   var insertFocusExitProbeToken: UInt64 = 0
   var insertFocusOwnerPID: pid_t?
@@ -318,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       template: config.statusBar.template,
       pluginSnapshotsProvider: { [weak self] in
         self?.pluginManager.statusSnapshots() ?? []
-    })
+      })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
 
     let dispatch: (URLCommand) -> Void = { [weak self] cmd in
