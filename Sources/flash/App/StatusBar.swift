@@ -663,7 +663,15 @@ enum FlashStatusBarRenderer {
       let period: TimeInterval = 6.0
       let phase = (currentTime.truncatingRemainder(dividingBy: period)) / period
       let sine = sin(phase * 2 * .pi)
-      let low: CGFloat = 0.88
+      // [0.75, 1.0] over 6 s. An earlier [0.88, 1.0] curve technically
+      // shifted the foreground alpha by 12 % but turned out to sit
+      // below the perceptual threshold on the dark Nord background:
+      // the yellow chip's luminance only moved ~7 %, which the eye
+      // reads as static against a status bar that isn't otherwise
+      // moving. 25 % alpha → ~16 % luminance drop is the smallest
+      // swing that still registers as a heartbeat without ever
+      // pulling the eye toward the chip. Tunable here in one place.
+      let low: CGFloat = 0.75
       let high: CGFloat = 1.0
       let mid = (low + high) / 2
       let halfRange = (high - low) / 2
@@ -1001,6 +1009,7 @@ final class FlashStatusBarController {
   }
 
   private func stopEffectsTimer() {
+    guard effectsTimer != nil else { return }
     effectsTimer?.cancel()
     effectsTimer = nil
   }

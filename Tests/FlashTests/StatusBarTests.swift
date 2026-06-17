@@ -667,13 +667,13 @@ final class StatusBarTests: XCTestCase {
       ])
   }
 
-  func testBreathingEffectAlphaRidesSubtleSinusoidBetween88And100Percent() {
+  func testBreathingEffectAlphaRidesSubtleSinusoidBetween75And100Percent() {
     let breathing = FlashStatusTextSegment(text: "82%", foreground: .colour178, breathing: true)
     // 0.0 s — sine starts at 0, alpha lands at the midpoint of the
-    // [0.88, 1.0] band: (0.88 + 1.0) / 2 = 0.94.
+    // [0.75, 1.0] band: (0.75 + 1.0) / 2 = 0.875.
     XCTAssertEqual(
       FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 0.0),
-      0.94,
+      0.875,
       accuracy: 0.001)
     // 1.5 s — quarter cycle in (period 6 s), sine peaks at 1, alpha
     // at 1.0 (full opacity, like the end of an inhale).
@@ -682,17 +682,17 @@ final class StatusBarTests: XCTestCase {
       1.0,
       accuracy: 0.001)
     // 4.5 s — three-quarter cycle, sine bottoms at -1, alpha at the
-    // subtle dim trough (0.88).
+    // dim trough (0.75).
     XCTAssertEqual(
       FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 4.5),
-      0.88,
+      0.75,
       accuracy: 0.001)
     // Two full cycles in (12 s) — phase wraps back to 0, alpha back to
     // the midpoint. Confirms the modulo-period math keeps the curve
     // stationary over time.
     XCTAssertEqual(
       FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 12.0),
-      0.94,
+      0.875,
       accuracy: 0.001)
   }
 
@@ -705,7 +705,7 @@ final class StatusBarTests: XCTestCase {
     while sample < 6.0 {
       let alpha = FlashStatusBarRenderer.effectAlphaMultiplier(
         segment: breathing, currentTime: sample)
-      XCTAssertGreaterThanOrEqual(alpha, 0.88 - 0.0001)
+      XCTAssertGreaterThanOrEqual(alpha, 0.75 - 0.0001)
       XCTAssertLessThanOrEqual(alpha, 1.0 + 0.0001)
       sample += 1.0 / 60.0
     }

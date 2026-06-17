@@ -100,7 +100,9 @@ extension OverlayPanel {
       modeBadgeText = model.modeText
     }
     statusRightText = model.rightText
-    guard modeBadgeVisible || commandPromptVisible || candidateFinderResultsVisible else { return }
+    guard modeBadgeVisible || commandPromptVisible || candidateFinderResultsVisible else {
+      return
+    }
     let frame = ensurePanelFrame()
     configureModeBadge(panelFrame: frame)
     if commandPromptVisible {
@@ -301,6 +303,7 @@ extension OverlayPanel {
     statusAppLabel.alignmentMode = .center
     statusAppLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
     statusAppLabel.string = centreAttributed
+    statusAppLabel.setNeedsDisplay()
 
     // Right section is right-aligned: pin its `maxX` to the bar edge
     // (minus padding) regardless of where the mode badge or the centre
@@ -327,6 +330,13 @@ extension OverlayPanel {
     statusRightLabel.string = FlashStatusBarRenderer.attributedStatusString(
       from: rightDisplayText,
       font: rightFont)
+    // CATextLayer normally auto-redraws on string change, but a per-tick
+    // re-publish that only changes per-glyph alpha occasionally lands on
+    // the same backing-store identity check and the layer skips
+    // compositing. An explicit `setNeedsDisplay` forces the bitmap to
+    // refresh every tick — cheap (short string) and the only knob that
+    // reliably renders the breathing effect on the screen.
+    statusRightLabel.setNeedsDisplay()
 
     // Same bar on every other screen, sized to that screen's own native
     // top-band height so a 14"-MBP-with-notch + a square external monitor
@@ -438,6 +448,7 @@ extension OverlayPanel {
       bar.appLabel.alignmentMode = .center
       bar.appLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
       bar.appLabel.string = centreAttributed
+      bar.appLabel.setNeedsDisplay()
 
       let rightWidth = max(
         0,
@@ -455,6 +466,7 @@ extension OverlayPanel {
       bar.rightLabel.string = FlashStatusBarRenderer.attributedStatusString(
         from: rightDisplayText,
         font: rightFont)
+      bar.rightLabel.setNeedsDisplay()
     }
   }
 
