@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "processes",
   "name": "Processes",
   "version": "0.1.0",
@@ -11,24 +11,28 @@
     "core:apps.launched",
     "core:apps.terminated"
   ],
-  "providers": [
-    { "kind": "candidates", "sources": ["processes.processes"] },
-    {
-      "kind": "commands",
-      "commands": [
-        { "command": "processes", "subcommand": "refresh", "description": "Refresh the process list" }
-      ]
-    },
-    {
-      "kind": "shebang",
-      "command": "processes",
-      "shebangs": [
-        {
-          "token": "kill",
-          "description": "Kill a process: !kill <pid|name>",
-          "candidate_source": "processes.processes"
-        }
-      ]
-    }
-  ]
+  "candidates": {
+    "sources": [
+      "processes.processes"
+    ]
+  },
+  "commands": {
+    "items": [
+      {
+        "command": "processes",
+        "subcommand": "refresh",
+        "description": "Refresh the process list"
+      }
+    ]
+  },
+  "shebangs": {
+    "command": "processes",
+    "items": [
+      {
+        "token": "kill",
+        "description": "Kill a process: !kill <pid|name>",
+        "candidate_source": "processes.processes"
+      }
+    ]
+  }
 }

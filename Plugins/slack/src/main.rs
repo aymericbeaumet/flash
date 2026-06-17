@@ -1,13 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use flash_plugin::{
-    run, AxNode, Candidate, CommandRequest, CommandResponse, Context, Event, ResolveResponse,
+    run, Candidate, CommandRequest, CommandResponse, Context, Event, ResolveResponse,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 const CHANNEL_SOURCE_ID: &str = "plugin:slack.channels";
 const CHANNEL_SOURCE_LABEL: &str = "slack.channels";
@@ -193,7 +195,7 @@ impl Slack {
                 return CommandResponse::error(format!("unknown subcommand: {other}"));
             }
         };
-        ctx.run_cli(&argv, Duration::from_secs(timeout))
+        run_command(ctx, &argv, Duration::from_secs(timeout))
             .await
             .into_command()
     }
@@ -213,9 +215,7 @@ impl Slack {
 ///   3. The window title (`<channel> (Channel) - <Workspace> - Slack`)
 ///      as a last resort.
 async fn collect_ax_channels(ctx: &Context, pid: i64) -> Vec<Channel> {
-    let nodes = ctx
-        .ax_snapshot(pid, "windows", &[], CHANNEL_COLLECT, MAX_NODES, false)
-        .await;
+    let nodes = ax_snapshot(ctx, pid, "windows", &[], CHANNEL_COLLECT, MAX_NODES, false).await;
 
     let mut out: HashMap<String, Channel> = HashMap::new();
     let mut window_team_name: Option<String> = None;
@@ -687,14 +687,13 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     };
 
     if let Some(pid) = candidate.pid_value() {
-        ctx.ax_activate(pid).await;
+        activate_app(ctx, pid).await;
     }
 
     if let Some(url) = slack_channel_url(payload.team_id.as_deref(), payload.channel_id.as_deref())
     {
-        let result = ctx
-            .run_cli_quiet(&["/usr/bin/open".into(), url], Duration::from_secs(10))
-            .await;
+        let result =
+            run_command(ctx, &["/usr/bin/open".into(), url], Duration::from_secs(10)).await;
         if result.ok {
             return ResolveResponse::resolved(candidate.pid_value());
         }
@@ -713,8 +712,8 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
         .find(|c| c.name.eq_ignore_ascii_case(&target_name))
     {
         if let Some(handle) = target.handle {
-            if !ctx.ax_perform(handle, "AXPress").await {
-                ctx.ax_set(handle, "AXSelected", true).await;
+            if !ax_perform(ctx, handle, "AXPress").await {
+                ax_set(ctx, handle, "AXSelected", true).await;
             }
         }
     }
@@ -726,6 +725,194 @@ fn prepend(program: &str, args: &[String]) -> Vec<String> {
     argv.push(program.to_string());
     argv.extend_from_slice(args);
     argv
+}
+
+#[derive(Clone, Debug, Default)]
+struct AxNode {
+    handle: u64,
+    _root: usize,
+    attrs: BTreeMap<String, String>,
+    _frame: Option<[f64; 4]>,
+}
+
+impl AxNode {
+    fn from_value(value: &Value) -> Option<Self> {
+        let handle = value.get("handle")?.as_u64()?;
+        let root = value.get("root").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let attrs = value
+            .get("attrs")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(key, value)| {
+                        value
+                            .as_str()
+                            .map(|string| (key.clone(), string.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let frame = value
+            .get("frame")
+            .and_then(Value::as_array)
+            .and_then(|values| {
+                if values.len() != 4 {
+                    return None;
+                }
+                Some([
+                    values[0].as_f64()?,
+                    values[1].as_f64()?,
+                    values[2].as_f64()?,
+                    values[3].as_f64()?,
+                ])
+            });
+        Some(Self {
+            handle,
+            _root: root,
+            attrs,
+            _frame: frame,
+        })
+    }
+
+    fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.get(name).map(String::as_str)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct CommandOutput {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+    _status: i32,
+}
+
+impl CommandOutput {
+    fn into_command(self) -> CommandResponse {
+        CommandResponse {
+            ok: self.ok,
+            stdout: (!self.stdout.trim().is_empty()).then(|| shorten(&self.stdout)),
+            error: (!self.ok && !self.stderr.trim().is_empty()).then(|| shorten(&self.stderr)),
+            ..Default::default()
+        }
+    }
+}
+
+async fn activate_app(ctx: &Context, pid: i64) -> bool {
+    ctx.call_host("app.activate", json!({ "pid": pid }))
+        .await
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn ax_snapshot(
+    ctx: &Context,
+    pid: i64,
+    roots: &str,
+    follow: &[&str],
+    collect: &[&str],
+    max_nodes: u64,
+    geometry: bool,
+) -> Vec<AxNode> {
+    let result = ctx
+        .call_host(
+            "ax.snapshot",
+            json!({
+                "pid": pid,
+                "roots": roots,
+                "follow": follow,
+                "collect": collect,
+                "max_nodes": max_nodes,
+                "geometry": geometry,
+            }),
+        )
+        .await;
+    result
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| nodes.iter().filter_map(AxNode::from_value).collect())
+        .unwrap_or_default()
+}
+
+async fn ax_perform(ctx: &Context, handle: u64, action: &str) -> bool {
+    ctx.call_host("ax.perform", json!({ "handle": handle, "action": action }))
+        .await
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn ax_set(ctx: &Context, handle: u64, attribute: &str, value: bool) -> bool {
+    ctx.call_host(
+        "ax.set",
+        json!({ "handle": handle, "attribute": attribute, "value": value }),
+    )
+    .await
+    .get("ok")
+    .and_then(Value::as_bool)
+    .unwrap_or(false)
+}
+
+async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CommandOutput {
+    let Some((program, args)) = argv.split_first() else {
+        return CommandOutput {
+            ok: false,
+            stderr: "empty argv".to_string(),
+            _status: -1,
+            ..Default::default()
+        };
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(&ctx.data_dir)
+        .env("HOME", ctx.home_dir())
+        .env("XDG_CONFIG_HOME", ctx.config_dir())
+        .env("XDG_CACHE_HOME", ctx.cache_dir())
+        .env("XDG_DATA_HOME", ctx.share_dir())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                ctx.bin_dir().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => CommandOutput {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            _status: output.status.code().unwrap_or(-1),
+        },
+        Ok(Err(err)) => CommandOutput {
+            ok: false,
+            stderr: err.to_string(),
+            _status: -1,
+            ..Default::default()
+        },
+        Err(_) => CommandOutput {
+            ok: false,
+            stderr: format!("timed out after {}ms", timeout.as_millis()),
+            _status: 124,
+            ..Default::default()
+        },
+    }
+}
+
+fn shorten(value: &str) -> String {
+    const LIMIT: usize = 2000;
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(LIMIT - 3).collect();
+    format!("{head}...")
 }
 
 fn main() {
@@ -745,9 +932,9 @@ mod tests {
         }
         AxNode {
             handle: 1,
-            root: 0,
+            _root: 0,
             attrs: map,
-            frame: None,
+            _frame: None,
         }
     }
 

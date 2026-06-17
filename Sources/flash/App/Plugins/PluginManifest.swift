@@ -13,21 +13,10 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// text. Most plugins do not need this; password managers, paste history,
   /// and clipboard transformers do.
   case clipboard
-  /// Ask the host to synthesize a parsed hotkey to a target process. The host
-  /// keeps the CGEvent API surface; plugins only request declarative
-  /// `keys=<hotkey>` actions through this capability.
-  case input
-  /// Ask the host to trigger a TCC (privacy) permission prompt on the
-  /// plugin's behalf, e.g. AppleEvents access to a specific target bundle id.
-  /// Without this capability the `tcc.request` RPC is rejected so a malicious
-  /// plugin cannot spam permission dialogs at the user.
-  case tccRequest = "tcc.request"
-  /// Register / unregister a system-wide Carbon hotkey through
-  /// `hotkey.register` / `hotkey.unregister`. The host owns the Carbon table
-  /// and rejects collisions with user `[mode.*.mappings]` bindings; without
-  /// this capability the RPCs are refused so a plugin can't quietly claim
-  /// every chord on the user's keyboard.
-  case hotkey
+  /// Call the host's Accessibility broker (`ax.snapshot`, `ax.perform`,
+  /// `ax.set`). The core owns the single AX permission grant and handle
+  /// registry; plugins own app-specific interpretation of the returned nodes.
+  case accessibility
 }
 
 extension PluginCapability {
@@ -479,121 +468,368 @@ struct PluginHelp: Codable, Equatable {
   }
 }
 
-/// One row in a plugin's unified `providers[]` table. Every surface a plugin
-/// drives — hints, candidates, commands, mappings, status segments, navigation routes — is one entry here, tagged
-/// by ``ProviderKind`` and gated by the same optional, symmetric conditions
-/// (`bundle_ids`/`modes`/`priority`). Kind-specific payloads ride alongside: a
-/// `commands` provider carries `commands[]`, a `mappings` provider carries
-/// `mappings[]`; a `source_actions` provider carries `actions[]`; a
-/// `navigation` provider carries `schemes[]`; a
-/// `candidates` provider declares `sources[]` so the host can offer
-/// `@<source>` completions without first forcing a snapshot; a `status`
-/// provider declares `segments[]` exposed as `#{plugin:<id>.<segment>}`.
-/// Runtime result data still travels over plugin RPC.
-struct PluginProvider: Codable, Equatable {
-  var kind: ProviderKind
-  /// Apps this provider is gated to (empty = every app). Folded into each
-  /// `mappings` entry's own `bundle_ids` (the entry wins) and consumed directly
-  /// for hints/candidates/commands gating.
+/// Shared optional gates for a top-level manifest provider section.
+struct PluginProviderGate: Codable, Equatable {
+  /// Apps this provider section is gated to (empty = every app).
   var bundleIDs: [String]
-  /// Editor modes this provider is gated to (empty = every mode).
+  /// Editor modes this provider section is gated to (empty = every mode).
   var modes: [ProviderMode]
   /// Scheduling priority override; `nil` inherits the manifest priority.
   var priority: Int?
-  /// Plugin command shared by every bang in a `shebang` provider's `shebangs`
-  /// (an entry may still override it). Ignored by the other kinds.
-  var command: String
-  /// Candidate source labels owned by a `candidates` provider, e.g.
-  /// `firefox.tabs` or `tmux.windows`.
-  var sources: [String]
-  var actions: [String]
-  /// URL schemes this provider can restore for movement history, e.g. `tmux`.
-  var schemes: [String]
-  /// Status-bar segment names owned by a `status` provider, e.g. `battery`.
-  var segments: [String]
-  var commands: [PluginCommandRegistration]
-  var mappings: [PluginMappingRegistration]
-  var shebangs: [PluginShebangRegistration]
-  var verbs: [PluginVerbRegistration]
 
-  init(
-    kind: ProviderKind,
-    bundleIDs: [String] = [],
-    modes: [ProviderMode] = [],
-    priority: Int? = nil,
-    command: String = "",
-    sources: [String] = [],
-    actions: [String] = [],
-    schemes: [String] = [],
-    segments: [String] = [],
-    commands: [PluginCommandRegistration] = [],
-    mappings: [PluginMappingRegistration] = [],
-    shebangs: [PluginShebangRegistration] = [],
-    verbs: [PluginVerbRegistration] = []
-  ) {
-    self.kind = kind
+  init(bundleIDs: [String] = [], modes: [ProviderMode] = [], priority: Int? = nil) {
     self.bundleIDs = bundleIDs
     self.modes = modes
     self.priority = priority
-    self.command = command
-    self.sources = sources
-    self.actions = actions
-    self.schemes = schemes
-    self.segments = segments
-    self.commands = commands
-    self.mappings = mappings
-    self.shebangs = shebangs
-    self.verbs = verbs
   }
 
   enum CodingKeys: String, CodingKey {
-    case kind
     case bundleIDs = "bundle_ids"
-    case modes, priority, command, sources, actions, schemes, segments
-    case commands, mappings, shebangs, verbs
+    case modes, priority
   }
 
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
-    self.kind = try c.decode(ProviderKind.self, forKey: .kind)
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
     self.modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
-    self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
-    self.sources = try c.decodeIfPresent([String].self, forKey: .sources) ?? []
-    self.actions = try c.decodeIfPresent([String].self, forKey: .actions) ?? []
-    self.schemes = try c.decodeIfPresent([String].self, forKey: .schemes) ?? []
-    self.segments = try c.decodeIfPresent([String].self, forKey: .segments) ?? []
-    self.commands =
-      try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .commands) ?? []
-    self.mappings =
-      try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .mappings) ?? []
-    self.shebangs =
-      try c.decodeIfPresent([PluginShebangRegistration].self, forKey: .shebangs) ?? []
-    self.verbs =
-      try c.decodeIfPresent([PluginVerbRegistration].self, forKey: .verbs) ?? []
   }
 
   func encode(to encoder: Encoder) throws {
     var c = encoder.container(keyedBy: CodingKeys.self)
-    try c.encode(kind, forKey: .kind)
     if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
     if !modes.isEmpty { try c.encode(modes, forKey: .modes) }
     if let priority { try c.encode(priority, forKey: .priority) }
-    if !command.isEmpty { try c.encode(command, forKey: .command) }
-    if !sources.isEmpty { try c.encode(sources, forKey: .sources) }
-    if !actions.isEmpty { try c.encode(actions, forKey: .actions) }
-    if !schemes.isEmpty { try c.encode(schemes, forKey: .schemes) }
-    if !segments.isEmpty { try c.encode(segments, forKey: .segments) }
-    if !commands.isEmpty { try c.encode(commands, forKey: .commands) }
-    if !mappings.isEmpty { try c.encode(mappings, forKey: .mappings) }
-    if !shebangs.isEmpty { try c.encode(shebangs, forKey: .shebangs) }
-    if !verbs.isEmpty { try c.encode(verbs, forKey: .verbs) }
   }
 
-  /// The shared activation gate this provider declares.
   var conditions: ProviderConditions {
     ProviderConditions(bundleIDs: Set(bundleIDs), modes: Set(modes))
+  }
+
+  func matches(bundleID: String?, mode: ProviderMode? = nil) -> Bool {
+    conditions.matches(bundleID: bundleID, mode: mode)
+  }
+}
+
+struct PluginHintsProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+
+  init(bundleIDs: [String] = [], modes: [ProviderMode] = [], priority: Int? = nil) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+  }
+
+  init(from decoder: Decoder) throws {
+    self.gate = try PluginProviderGate(from: decoder)
+  }
+
+  func encode(to encoder: Encoder) throws {
+    try gate.encode(to: encoder)
+  }
+}
+
+struct PluginCandidatesProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+  var sources: [String]
+
+  init(
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    sources: [String] = []
+  ) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.sources = sources
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case bundleIDs = "bundle_ids"
+    case modes, priority, sources
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    let modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    let priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.sources = try c.decodeIfPresent([String].self, forKey: .sources) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !gate.bundleIDs.isEmpty { try c.encode(gate.bundleIDs, forKey: .bundleIDs) }
+    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
+    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
+    if !sources.isEmpty { try c.encode(sources, forKey: .sources) }
+  }
+}
+
+struct PluginCommandsProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+  var items: [PluginCommandRegistration]
+
+  init(
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    items: [PluginCommandRegistration] = []
+  ) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.items = items
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case bundleIDs = "bundle_ids"
+    case modes, priority, items
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    let modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    let priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.items = try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .items) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !gate.bundleIDs.isEmpty { try c.encode(gate.bundleIDs, forKey: .bundleIDs) }
+    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
+    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
+    if !items.isEmpty { try c.encode(items, forKey: .items) }
+  }
+}
+
+struct PluginMappingsProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+  var items: [PluginMappingRegistration]
+
+  init(
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    items: [PluginMappingRegistration] = []
+  ) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.items = items
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case bundleIDs = "bundle_ids"
+    case modes, priority, items
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    let modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    let priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.items = try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .items) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !gate.bundleIDs.isEmpty { try c.encode(gate.bundleIDs, forKey: .bundleIDs) }
+    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
+    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
+    if !items.isEmpty { try c.encode(items, forKey: .items) }
+  }
+}
+
+struct PluginShebangProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+  var command: String
+  var items: [PluginShebangRegistration]
+
+  init(
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    command: String = "",
+    items: [PluginShebangRegistration] = []
+  ) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.command = command
+    self.items = items
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case bundleIDs = "bundle_ids"
+    case modes, priority, command, items
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    let modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    let priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
+    self.items = try c.decodeIfPresent([PluginShebangRegistration].self, forKey: .items) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !gate.bundleIDs.isEmpty { try c.encode(gate.bundleIDs, forKey: .bundleIDs) }
+    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
+    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
+    if !command.isEmpty { try c.encode(command, forKey: .command) }
+    if !items.isEmpty { try c.encode(items, forKey: .items) }
+  }
+}
+
+struct PluginSourceActionsProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+  var actions: [String]
+
+  init(
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    actions: [String] = []
+  ) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.actions = actions
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case bundleIDs = "bundle_ids"
+    case modes, priority, actions
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    let modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    let priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.actions = try c.decodeIfPresent([String].self, forKey: .actions) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !gate.bundleIDs.isEmpty { try c.encode(gate.bundleIDs, forKey: .bundleIDs) }
+    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
+    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
+    if !actions.isEmpty { try c.encode(actions, forKey: .actions) }
+  }
+}
+
+struct PluginNavigationProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+  var schemes: [String]
+
+  init(
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    schemes: [String] = []
+  ) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.schemes = schemes
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case bundleIDs = "bundle_ids"
+    case modes, priority, schemes
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    let modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    let priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.schemes = try c.decodeIfPresent([String].self, forKey: .schemes) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !gate.bundleIDs.isEmpty { try c.encode(gate.bundleIDs, forKey: .bundleIDs) }
+    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
+    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
+    if !schemes.isEmpty { try c.encode(schemes, forKey: .schemes) }
+  }
+}
+
+struct PluginStatusProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+  var segments: [String]
+
+  init(
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    segments: [String] = []
+  ) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.segments = segments
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case bundleIDs = "bundle_ids"
+    case modes, priority, segments
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    let modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    let priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.segments = try c.decodeIfPresent([String].self, forKey: .segments) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !gate.bundleIDs.isEmpty { try c.encode(gate.bundleIDs, forKey: .bundleIDs) }
+    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
+    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
+    if !segments.isEmpty { try c.encode(segments, forKey: .segments) }
+  }
+}
+
+struct PluginVerbsProvider: Codable, Equatable {
+  var gate: PluginProviderGate
+  var command: String
+  var items: [PluginVerbRegistration]
+
+  init(
+    bundleIDs: [String] = [],
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    command: String = "",
+    items: [PluginVerbRegistration] = []
+  ) {
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.command = command
+    self.items = items
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case bundleIDs = "bundle_ids"
+    case modes, priority, command, items
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+    let modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
+    let priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.gate = PluginProviderGate(bundleIDs: bundleIDs, modes: modes, priority: priority)
+    self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
+    self.items = try c.decodeIfPresent([PluginVerbRegistration].self, forKey: .items) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !gate.bundleIDs.isEmpty { try c.encode(gate.bundleIDs, forKey: .bundleIDs) }
+    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
+    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
+    if !command.isEmpty { try c.encode(command, forKey: .command) }
+    if !items.isEmpty { try c.encode(items, forKey: .items) }
   }
 }
 
@@ -603,7 +839,7 @@ struct PluginManifest: Codable, Equatable {
   /// doesn't carry this field or carries a future version, so an
   /// out-of-date plugin / corrupted manifest surfaces a clear diagnostic
   /// instead of silently dropping commands or events.
-  static let currentSchemaVersion: Int = 1
+  static let currentSchemaVersion: Int = 2
 
   var manifestVersion: Int
   var id: String
@@ -612,13 +848,17 @@ struct PluginManifest: Codable, Equatable {
   var description: String
   var install: String
   var start: String
-  /// Host events this plugin subscribes to. Empty means "every event".
+  /// Host events this plugin subscribes to. Empty means no events.
   var subscriptions: [PluginEventSubscription]
-  /// Every surface the plugin drives, as one unified table — see
-  /// ``PluginProvider``. The per-kind views below (`commands`, `mappings`,
-  /// `providesHints`) are derived from this so the rest of the host keeps
-  /// reading flat lists.
-  var providers: [PluginProvider]
+  var hintsProvider: PluginHintsProvider?
+  var candidatesProvider: PluginCandidatesProvider?
+  var commandProvider: PluginCommandsProvider?
+  var mappingProvider: PluginMappingsProvider?
+  var statusProvider: PluginStatusProvider?
+  var shebangProvider: PluginShebangProvider?
+  var sourceActionsProvider: PluginSourceActionsProvider?
+  var navigationProvider: PluginNavigationProvider?
+  var verbsProvider: PluginVerbsProvider?
   var priority: Int
   var volatile: Bool
   /// Bundle identifiers the source applies to. When non-empty, restricts
@@ -645,12 +885,11 @@ struct PluginManifest: Codable, Equatable {
   /// own value wins) so command-index gating sees a flat, app-scoped list — the
   /// same shape `mappings` exposes.
   var commands: [PluginCommandRegistration] {
-    providers.filter { $0.kind == .commands }.flatMap { provider in
-      provider.commands.map { entry in
-        var entry = entry
-        if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.bundleIDs }
-        return entry
-      }
+    guard let provider = commandProvider else { return [] }
+    return provider.items.map { entry in
+      var entry = entry
+      if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.gate.bundleIDs }
+      return entry
     }
   }
 
@@ -658,16 +897,15 @@ struct PluginManifest: Codable, Equatable {
   /// provider's shared `bundle_ids`/`modes`/`priority` folded into each entry
   /// (the entry's own value wins) so downstream resolution sees a flat list.
   var mappings: [PluginMappingRegistration] {
-    providers.filter { $0.kind == .mappings }.flatMap { provider in
-      provider.mappings.map { entry in
-        var entry = entry
-        if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.bundleIDs }
-        if entry.priority == nil { entry.priority = provider.priority }
-        if entry.mode == "normal", provider.modes.count == 1 {
-          entry.mode = provider.modes[0].rawValue
-        }
-        return entry
+    guard let provider = mappingProvider else { return [] }
+    return provider.items.map { entry in
+      var entry = entry
+      if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.gate.bundleIDs }
+      if entry.priority == nil { entry.priority = provider.gate.priority }
+      if entry.mode == "normal", provider.gate.modes.count == 1 {
+        entry.mode = provider.gate.modes[0].rawValue
       }
+      return entry
     }
   }
 
@@ -676,40 +914,42 @@ struct PluginManifest: Codable, Equatable {
   /// dispatch index sees a flat, app-scoped list. The token `"*"` marks a
   /// catch-all that claims every otherwise-unclaimed bang.
   var shebangs: [PluginShebangRegistration] {
-    providers.filter { $0.kind == .shebang }.flatMap { provider in
-      provider.shebangs.map { entry in
-        var entry = entry
-        if entry.command.isEmpty { entry.command = provider.command }
-        if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.bundleIDs }
-        return entry
-      }
+    guard let provider = shebangProvider else { return [] }
+    return provider.items.map { entry in
+      var entry = entry
+      if entry.command.isEmpty { entry.command = provider.command }
+      if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.gate.bundleIDs }
+      return entry
     }
   }
 
   var sourceActions: [String] {
     var seen = Set<String>()
     var out: [String] = []
-    for provider in providers where provider.kind == .sourceActions {
-      for action in provider.actions {
-        let trimmed = action.trimmed
-        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
-        seen.insert(trimmed)
-        out.append(trimmed)
-      }
+    for action in sourceActionsProvider?.actions ?? [] {
+      let trimmed = action.trimmed
+      guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+      seen.insert(trimmed)
+      out.append(trimmed)
     }
     return out
+  }
+
+  func supportsSourceAction(_ action: String, bundleID: String?) -> Bool {
+    guard let provider = sourceActionsProvider else { return false }
+    let requested = action.trimmed
+    guard !requested.isEmpty, sourceActions.contains(requested) else { return false }
+    return provider.gate.matches(bundleID: bundleID)
   }
 
   var navigationSchemes: [String] {
     var seen = Set<String>()
     var out: [String] = []
-    for provider in providers where provider.kind == .navigation {
-      for scheme in provider.schemes {
-        let trimmed = scheme.trimmed.lowercased()
-        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
-        seen.insert(trimmed)
-        out.append(trimmed)
-      }
+    for scheme in navigationProvider?.schemes ?? [] {
+      let trimmed = scheme.trimmed.lowercased()
+      guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+      seen.insert(trimmed)
+      out.append(trimmed)
     }
     return out
   }
@@ -717,13 +957,11 @@ struct PluginManifest: Codable, Equatable {
   var candidateSources: [String] {
     var seen = Set<String>()
     var out: [String] = []
-    for provider in providers where provider.kind == .candidates {
-      for source in provider.sources {
-        let trimmed = source.trimmed
-        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
-        seen.insert(trimmed)
-        out.append(trimmed)
-      }
+    for source in candidatesProvider?.sources ?? [] {
+      let trimmed = source.trimmed
+      guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+      seen.insert(trimmed)
+      out.append(trimmed)
     }
     return out
   }
@@ -732,27 +970,24 @@ struct PluginManifest: Codable, Equatable {
   /// `bundle_ids` folded into each entry's gate when the entry doesn't override.
   /// Used by URL dispatch to route `flash <verb>` to the right plugin.
   var verbs: [PluginVerbRegistration] {
-    providers.filter { $0.kind == .verbs }.flatMap { provider in
-      provider.verbs.map { entry in
-        var entry = entry
-        if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.bundleIDs }
-        if entry.command.isEmpty { entry.command = provider.command }
-        if entry.subcommand.isEmpty { entry.subcommand = entry.name }
-        return entry
-      }
+    guard let provider = verbsProvider else { return [] }
+    return provider.items.map { entry in
+      var entry = entry
+      if entry.bundleIDs.isEmpty { entry.bundleIDs = provider.gate.bundleIDs }
+      if entry.command.isEmpty { entry.command = provider.command }
+      if entry.subcommand.isEmpty { entry.subcommand = entry.name }
+      return entry
     }
   }
 
   var statusSegments: [String] {
     var seen = Set<String>()
     var out: [String] = []
-    for provider in providers where provider.kind == .status {
-      for segment in provider.segments {
-        let trimmed = segment.trimmed
-        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
-        seen.insert(trimmed)
-        out.append(trimmed)
-      }
+    for segment in statusProvider?.segments ?? [] {
+      let trimmed = segment.trimmed
+      guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+      seen.insert(trimmed)
+      out.append(trimmed)
     }
     return out
   }
@@ -762,7 +997,7 @@ struct PluginManifest: Codable, Equatable {
   /// app wins, no fallback), so a plugin only advertises `.jumpTargets` when it
   /// declares a `hints` provider.
   var providesHints: Bool {
-    providers.contains { $0.kind == .hints }
+    hintsProvider != nil
   }
 
   /// True when any provider opts the plugin into the candidate/flashlight
@@ -773,16 +1008,32 @@ struct PluginManifest: Codable, Equatable {
   /// snapshot via focus events — so this is a capability toggle, not an
   /// app/mode gate.
   var providesCandidates: Bool {
-    providers.contains { $0.kind == .candidates }
+    candidatesProvider != nil
+  }
+
+  func providerSupports(bundleID: String?) -> Bool {
+    if let hintsProvider, hintsProvider.gate.matches(bundleID: bundleID) { return true }
+    if let sourceActionsProvider, sourceActionsProvider.gate.matches(bundleID: bundleID) {
+      return true
+    }
+    if let navigationProvider, navigationProvider.gate.matches(bundleID: bundleID) {
+      return true
+    }
+    if let candidatesProvider, candidatesProvider.gate.matches(bundleID: bundleID) {
+      return true
+    }
+    return false
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
     case manifestVersion = "manifest_version"
-    case id, name, version, description, install, start, subscriptions, providers, priority
+    case id, name, version, description, install, start, subscriptions, priority
     case volatile
     case bundleIDs = "bundle_ids"
     case requestTimeoutMs = "request_timeout_ms"
     case capabilities, help
+    case hints, candidates, commands, mappings, status, shebangs, sourceActions = "source_actions"
+    case navigation, verbs
   }
 
   init(
@@ -790,7 +1041,15 @@ struct PluginManifest: Codable, Equatable {
     install: String, start: String,
     manifestVersion: Int = currentSchemaVersion,
     subscriptions: [PluginEventSubscription] = [],
-    providers: [PluginProvider] = [],
+    hintsProvider: PluginHintsProvider? = nil,
+    candidatesProvider: PluginCandidatesProvider? = nil,
+    commandProvider: PluginCommandsProvider? = nil,
+    mappingProvider: PluginMappingsProvider? = nil,
+    statusProvider: PluginStatusProvider? = nil,
+    shebangProvider: PluginShebangProvider? = nil,
+    sourceActionsProvider: PluginSourceActionsProvider? = nil,
+    navigationProvider: PluginNavigationProvider? = nil,
+    verbsProvider: PluginVerbsProvider? = nil,
     priority: Int = 25,
     volatile: Bool = false,
     bundleIDs: [String] = [],
@@ -806,7 +1065,15 @@ struct PluginManifest: Codable, Equatable {
     self.install = install
     self.start = start
     self.subscriptions = subscriptions
-    self.providers = providers
+    self.hintsProvider = hintsProvider
+    self.candidatesProvider = candidatesProvider
+    self.commandProvider = commandProvider
+    self.mappingProvider = mappingProvider
+    self.statusProvider = statusProvider
+    self.shebangProvider = shebangProvider
+    self.sourceActionsProvider = sourceActionsProvider
+    self.navigationProvider = navigationProvider
+    self.verbsProvider = verbsProvider
     self.priority = priority
     self.volatile = volatile
     self.bundleIDs = bundleIDs
@@ -826,7 +1093,18 @@ struct PluginManifest: Codable, Equatable {
     self.start = try c.decode(String.self, forKey: .start)
     self.subscriptions =
       try c.decodeIfPresent([PluginEventSubscription].self, forKey: .subscriptions) ?? []
-    self.providers = try c.decodeIfPresent([PluginProvider].self, forKey: .providers) ?? []
+    self.hintsProvider = try c.decodeIfPresent(PluginHintsProvider.self, forKey: .hints)
+    self.candidatesProvider =
+      try c.decodeIfPresent(PluginCandidatesProvider.self, forKey: .candidates)
+    self.commandProvider = try c.decodeIfPresent(PluginCommandsProvider.self, forKey: .commands)
+    self.mappingProvider = try c.decodeIfPresent(PluginMappingsProvider.self, forKey: .mappings)
+    self.statusProvider = try c.decodeIfPresent(PluginStatusProvider.self, forKey: .status)
+    self.shebangProvider = try c.decodeIfPresent(PluginShebangProvider.self, forKey: .shebangs)
+    self.sourceActionsProvider =
+      try c.decodeIfPresent(PluginSourceActionsProvider.self, forKey: .sourceActions)
+    self.navigationProvider =
+      try c.decodeIfPresent(PluginNavigationProvider.self, forKey: .navigation)
+    self.verbsProvider = try c.decodeIfPresent(PluginVerbsProvider.self, forKey: .verbs)
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority) ?? 25
     self.volatile = try c.decodeIfPresent(Bool.self, forKey: .volatile) ?? false
     self.bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
@@ -846,7 +1124,15 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(install, forKey: .install)
     try c.encode(start, forKey: .start)
     if !subscriptions.isEmpty { try c.encode(subscriptions, forKey: .subscriptions) }
-    if !providers.isEmpty { try c.encode(providers, forKey: .providers) }
+    if let hintsProvider { try c.encode(hintsProvider, forKey: .hints) }
+    if let candidatesProvider { try c.encode(candidatesProvider, forKey: .candidates) }
+    if let commandProvider { try c.encode(commandProvider, forKey: .commands) }
+    if let mappingProvider { try c.encode(mappingProvider, forKey: .mappings) }
+    if let statusProvider { try c.encode(statusProvider, forKey: .status) }
+    if let shebangProvider { try c.encode(shebangProvider, forKey: .shebangs) }
+    if let sourceActionsProvider { try c.encode(sourceActionsProvider, forKey: .sourceActions) }
+    if let navigationProvider { try c.encode(navigationProvider, forKey: .navigation) }
+    if let verbsProvider { try c.encode(verbsProvider, forKey: .verbs) }
     try c.encode(priority, forKey: .priority)
     if volatile { try c.encode(volatile, forKey: .volatile) }
     if !bundleIDs.isEmpty { try c.encode(bundleIDs, forKey: .bundleIDs) }
@@ -882,10 +1168,10 @@ struct PluginManifest: Codable, Equatable {
     // Schema-version guard. A manifest from a future Flash build cannot be
     // safely loaded by an older host: new required fields would land as
     // empty defaults, silently muting commands or subscriptions.
-    if manifestVersion < 1 || manifestVersion > Self.currentSchemaVersion {
+    if manifestVersion != Self.currentSchemaVersion {
       throw PluginError.invalidManifest(
         "manifest.json manifest_version=\(manifestVersion) is unsupported "
-          + "(host expects 1...\(Self.currentSchemaVersion))")
+          + "(host expects \(Self.currentSchemaVersion))")
     }
     let required = [
       ("id", id),

@@ -288,16 +288,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.onStateChanged = { [weak self] in
       self?.pluginStateDidChange()
     }
-    // A plugin edited its registered mappings: drop the cached effective
-    // modes and re-apply for the frontmost app so the new bindings take
-    // effect without waiting for the next focus change. Fired on main after
-    // the manager has already rebuilt its mapping index.
-    pluginManager.onMappingsChanged = { [weak self] in
-      guard let self else { return }
-      self.invalidateEffectiveMappings()
-      self.refreshEffectiveMappings(
-        for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-    }
     pluginManager.onNormalModeTargetRequested = { [weak self] in
       guard let context = self?.normalModeContext() ?? self?.currentNonFlashContext() else {
         return nil

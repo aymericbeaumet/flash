@@ -1,10 +1,12 @@
+use std::process::Stdio;
 use std::time::Duration;
 
 use flash_plugin::{
-    applescript_quote, run, Candidate, Context, Event, ResolveResponse, RunningApplication,
-    SourceActionRequest, SourceActionResponse,
+    run, Candidate, Context, Event, ResolveResponse, RunningApplication, SourceActionRequest,
+    SourceActionResponse,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 const SOURCE_ID: &str = "plugin:chromium";
 
@@ -142,9 +144,7 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, String, i64)>) {
             app_name.clone()
         };
         let source = source_name(bundle_id, &app_label);
-        let result = ctx
-            .run_osascript(&list_script(&app_label), Duration::from_secs(10))
-            .await;
+        let result = run_osascript(ctx, &list_script(&app_label), Duration::from_secs(10)).await;
         if !result.ok {
             ctx.log(
                 "warn",
@@ -207,7 +207,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
         .as_ref()
         .map(|p| p.app_name.clone())
         .unwrap_or_default();
-    ctx.ax_activate(pid).await;
+    activate_app(ctx, pid).await;
     if url.is_empty() || app_name.is_empty() {
         return ResolveResponse::resolved(Some(pid));
     }
@@ -233,7 +233,7 @@ return "missing"
         app = applescript_quote(&app_name),
         target = applescript_quote(&url)
     );
-    let _ = ctx.run_osascript(&script, Duration::from_secs(10)).await;
+    let _ = run_osascript(ctx, &script, Duration::from_secs(10)).await;
     ResolveResponse::resolved(Some(pid))
 }
 
@@ -276,7 +276,7 @@ return "missing"
                 app = applescript_quote(&app_name),
                 idx = index
             );
-            let result = ctx.run_osascript(&script, Duration::from_secs(5)).await;
+            let result = run_osascript(ctx, &script, Duration::from_secs(5)).await;
             // Chromium-family bundle gates this claim either way: an OK script
             // is `performed`, a non-OK is `failed` so the host doesn't fall
             // back to a ⌘<digit> keystroke that switches the wrong tab.
@@ -301,7 +301,7 @@ end tell
 "#,
                 app = applescript_quote(&app_name)
             );
-            let result = ctx.run_osascript(&script, Duration::from_secs(5)).await;
+            let result = run_osascript(ctx, &script, Duration::from_secs(5)).await;
             if result.ok && result.stdout.trim() == "ok" {
                 SourceActionResponse::performed(Some(pid))
             } else {
@@ -321,7 +321,7 @@ end tell
 "#,
                 app = applescript_quote(&app_name)
             );
-            let result = ctx.run_osascript(&script, Duration::from_secs(5)).await;
+            let result = run_osascript(ctx, &script, Duration::from_secs(5)).await;
             if result.ok && result.stdout.trim() == "ok" {
                 SourceActionResponse::performed(Some(pid))
             } else {
@@ -362,6 +362,91 @@ fn canonical_app_name(bundle_id: &str) -> &'static str {
         "com.operasoftware.OperaDeveloper" => "Opera Developer",
         _ => "Chromium",
     }
+}
+
+#[derive(Default)]
+struct CommandOutput {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+    _status: i32,
+}
+
+async fn activate_app(ctx: &Context, pid: i64) -> bool {
+    ctx.call_host("app.activate", json!({ "pid": pid }))
+        .await
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> CommandOutput {
+    run_command(
+        ctx,
+        &[
+            "/usr/bin/osascript".to_string(),
+            "-e".to_string(),
+            script.to_string(),
+        ],
+        timeout,
+    )
+    .await
+}
+
+async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CommandOutput {
+    let Some((program, args)) = argv.split_first() else {
+        return CommandOutput {
+            ok: false,
+            stderr: "empty argv".to_string(),
+            _status: -1,
+            ..Default::default()
+        };
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(&ctx.data_dir)
+        .env("HOME", ctx.home_dir())
+        .env("XDG_CONFIG_HOME", ctx.config_dir())
+        .env("XDG_CACHE_HOME", ctx.cache_dir())
+        .env("XDG_DATA_HOME", ctx.share_dir())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                ctx.bin_dir().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => CommandOutput {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            _status: output.status.code().unwrap_or(-1),
+        },
+        Ok(Err(err)) => CommandOutput {
+            ok: false,
+            stderr: err.to_string(),
+            _status: -1,
+            ..Default::default()
+        },
+        Err(_) => CommandOutput {
+            ok: false,
+            stderr: format!("timed out after {}ms", timeout.as_millis()),
+            _status: 124,
+            ..Default::default()
+        },
+    }
+}
+
+fn applescript_quote(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 fn main() {

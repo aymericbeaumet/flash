@@ -11,3 +11,4 @@ path = "src/main.rs"
 [dependencies]
 flash_plugin = { path = "../_rust_flash_plugin" }
 serde = { workspace = true }
+tokio = { workspace = true }

@@ -32,8 +32,8 @@ final class PluginManager {
 
   /// A resolved plugin-verb target: the owning plugin, the command/subcommand
   /// folded from the manifest, an optional per-bundle inline-keystrokes table
-  /// (which lets the host short-circuit into `input.send_key` when it matches
-  /// the focused bundle, skipping the plugin RPC), and an optional bundle
+  /// (which lets the host synthesize the key directly when it matches the
+  /// focused bundle, skipping the plugin RPC), and an optional bundle
   /// gate. Built by `rebuildVerbIndex` from every loaded plugin's `verbs`
   /// provider entries.
   private struct VerbTarget {
@@ -131,27 +131,7 @@ final class PluginManager {
   /// backs the `ax.*` host RPCs. Plugins never touch AX directly; they reach
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
-  /// Carbon hotkey manager dedicated to plugin-owned registrations. Lives
-  /// separately from `MappingsCoordinator`'s `HotKeyManager` because the
-  /// mappings coordinator rebuilds its table on every mode flip, while
-  /// plugin hotkeys are persistent across modes (a plugin asked for a chord
-  /// and the user accepted the capability — there's no scope to flip them
-  /// on).
-  private let pluginHotKeys = HotKeyManager()
-  /// `pluginID → (pluginHotkeyID → carbonID)` for unregistration and for
-  /// looking up the owning plugin when a Carbon fire callback arrives. The
-  /// plugin's `id` field is opaque to the host; reusing it on a second
-  /// register call replaces the previous registration so plugins can rebind
-  /// in place.
-  private var pluginHotkeysByPluginID: [String: [String: UInt32]] = [:]
-  /// `carbonID → (pluginID, plugin's hotkey id)` so the fire callback can
-  /// route the `core:hotkey.fired` notification to the right plugin process.
-  private var pluginHotkeyByCarbonID: [UInt32: (pluginID: String, hotkeyID: String)] = [:]
   var onStateChanged: (() -> Void)?
-  /// Fired on the main thread after the mapping index is rebuilt because a
-  /// plugin emitted `mappings.updated`. The app recomputes its effective
-  /// per-app mapping tables in response.
-  var onMappingsChanged: (() -> Void)?
   /// Resolver for the `host.normal_mode_target` RPC: returns the focused
   /// non-Flash app context (pid + bundle id) the host considers the
   /// normal-mode target. Plugins (notably `marks`) call this to record or
@@ -393,30 +373,6 @@ final class PluginManager {
     case "host.ping":
       // Round-trip validation of the bidirectional channel.
       reply(["ok": true, "echo": params])
-    case "input.send_key":
-      guard pluginHasCapability(pluginID, .input) else {
-        reply(["ok": false, "error": "missing input capability"])
-        return
-      }
-      sendPluginKey(params, reply: reply)
-    case "tcc.request":
-      guard pluginHasCapability(pluginID, .tccRequest) else {
-        reply(["ok": false, "error": "missing tcc.request capability"])
-        return
-      }
-      handleTccRequest(params, pluginID: pluginID, reply: reply)
-    case "hotkey.register":
-      guard pluginHasCapability(pluginID, .hotkey) else {
-        reply(["ok": false, "error": "missing hotkey capability"])
-        return
-      }
-      handleHotkeyRegister(params, pluginID: pluginID, reply: reply)
-    case "hotkey.unregister":
-      guard pluginHasCapability(pluginID, .hotkey) else {
-        reply(["ok": false, "error": "missing hotkey capability"])
-        return
-      }
-      handleHotkeyUnregister(params, pluginID: pluginID, reply: reply)
     case "host.normal_mode_target":
       DispatchQueue.main.async { [weak self] in
         guard let target = self?.onNormalModeTargetRequested?() else {
@@ -430,7 +386,13 @@ final class PluginManager {
           "bundle_id": target.bundleID,
         ])
       }
+    case "app.activate":
+      activatePluginApp(params, reply: reply)
     case let method where method.hasPrefix("ax."):
+      guard pluginHasCapability(pluginID, .accessibility) else {
+        reply(["ok": false, "error": "missing accessibility capability"])
+        return
+      }
       axBroker.handle(method: method, params: params, reply: reply)
     default:
       FlashLog.warn(
@@ -446,222 +408,21 @@ final class PluginManager {
     }
   }
 
-  private func sendPluginKey(
+  private func activatePluginApp(
     _ params: [String: Any],
     reply: @escaping ([String: Any]) -> Void
   ) {
-    guard let pid = (params["pid"] as? Int).map(pid_t.init),
-      let keys = params["keys"] as? String,
-      let parsed = HotkeySyntax.parse(hotkey: keys)
-    else {
-      reply(["ok": false, "error": "invalid input.send_key params"])
+    guard let pid = (params["pid"] as? Int).map(pid_t.init) else {
+      reply(["ok": false, "error": "app.activate requires pid"])
       return
     }
-    let ok = NormalModeDispatcher.sendKey(
-      virtualKey: CGKeyCode(parsed.virtualKey),
-      flags: Self.cgEventFlags(carbon: parsed.modifiers),
-      to: pid)
-    reply(["ok": ok])
-  }
-
-  /// In-memory bookkeeping for TCC request rate-limiting. The TCC subsystem
-  /// itself caches grants, but a malicious or buggy plugin could still spam
-  /// `tcc.request` calls — when a kind+target was queried in the last 5
-  /// seconds, we return the cached grant decision instead of re-issuing the
-  /// underlying API call. Tracked per plugin id so one plugin's cooldown
-  /// doesn't affect another's.
-  private struct TccRecentRequest {
-    let pluginID: String
-    let key: String
-    let timestamp: Date
-    let result: [String: Any]
-  }
-  private var tccRecentRequests: [TccRecentRequest] = []
-  private let tccRequestCooldown: TimeInterval = 5.0
-
-  /// Dispatch a `tcc.request` RPC. `params` carries `kind` (currently only
-  /// `applescript` is supported — it triggers the AppleEvents prompt for the
-  /// `target` bundle id) and `target` (the bundle id to request access to).
-  /// Replies with `{ok, granted, denied, unknown}` describing the post-request
-  /// grant state; `unknown` is set when the prompt is shown for the first time
-  /// and the user has not yet decided.
-  private func handleTccRequest(
-    _ params: [String: Any],
-    pluginID: String,
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let kind = params["kind"] as? String, !kind.isEmpty else {
-      reply(["ok": false, "error": "tcc.request requires kind"])
-      return
-    }
-    let target = (params["target"] as? String) ?? ""
-    let key = "\(kind)|\(target)"
-    let now = Date()
-    queue.async { [weak self] in
-      guard let self else {
-        DispatchQueue.main.async { reply(["ok": false, "error": "manager gone"]) }
+    DispatchQueue.main.async {
+      guard let app = NSRunningApplication(processIdentifier: pid) else {
+        reply(["ok": false, "error": "no running app for pid"])
         return
       }
-      self.tccRecentRequests.removeAll { now.timeIntervalSince($0.timestamp) > self.tccRequestCooldown }
-      if let cached = self.tccRecentRequests.first(where: { $0.pluginID == pluginID && $0.key == key }) {
-        DispatchQueue.main.async { reply(cached.result) }
-        return
-      }
-      let result: [String: Any]
-      switch kind {
-      case "applescript":
-        guard !target.isEmpty else {
-          let err: [String: Any] = ["ok": false, "error": "tcc.request applescript requires target"]
-          DispatchQueue.main.async { reply(err) }
-          return
-        }
-        result = Self.requestAppleEventsAccess(targetBundleID: target)
-      default:
-        let err: [String: Any] = ["ok": false, "error": "tcc.request unsupported kind: \(kind)"]
-        DispatchQueue.main.async { reply(err) }
-        return
-      }
-      self.tccRecentRequests.append(
-        TccRecentRequest(pluginID: pluginID, key: key, timestamp: now, result: result))
-      DispatchQueue.main.async { reply(result) }
-    }
-  }
-
-  /// Register a Carbon hotkey on behalf of `pluginID`. Replies with `ok=true`
-  /// once Carbon accepts the registration, or an error string when the spec
-  /// is invalid, Carbon refuses (another app already owns the chord), or the
-  /// chord clashes with one of the user's `[mode.*.mappings]` bindings.
-  /// Re-registering the same plugin-side `id` replaces the previous handle.
-  private func handleHotkeyRegister(
-    _ params: [String: Any],
-    pluginID: String,
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let hotkeyID = params["id"] as? String, !hotkeyID.isEmpty,
-      let spec = params["spec"] as? String, !spec.isEmpty
-    else {
-      reply(["ok": false, "error": "hotkey.register requires id + spec"])
-      return
-    }
-    guard let parsed = HotkeySyntax.parse(hotkey: spec) else {
-      reply(["ok": false, "error": "hotkey.register: cannot parse spec \(spec)"])
-      return
-    }
-    queue.async { [weak self] in
-      guard let self else {
-        DispatchQueue.main.async { reply(["ok": false, "error": "manager gone"]) }
-        return
-      }
-      // Drop a previous registration under the same plugin+id so a plugin
-      // can rebind without first unregistering.
-      if let previousCarbonID = self.pluginHotkeysByPluginID[pluginID]?[hotkeyID] {
-        self.pluginHotkeyByCarbonID.removeValue(forKey: previousCarbonID)
-      }
-      DispatchQueue.main.async {
-        var assignedCarbonID: UInt32 = 0
-        let status = self.pluginHotKeys.register(
-          modifiers: parsed.modifiers,
-          virtualKey: parsed.virtualKey
-        ) { [weak self] in
-          guard let self else { return }
-          let target: (pluginID: String, hotkeyID: String)? = self.queue.sync {
-            self.pluginHotkeyByCarbonID[assignedCarbonID]
-          }
-          guard let target else { return }
-          self.fireHotkeyEvent(pluginID: target.pluginID, hotkeyID: target.hotkeyID)
-        }
-        if status != noErr {
-          let err: [String: Any] = [
-            "ok": false,
-            "error": "RegisterEventHotKey returned \(status)",
-          ]
-          reply(err)
-          return
-        }
-        assignedCarbonID = self.pluginHotKeys.lastAssignedID
-        self.queue.async {
-          self.pluginHotkeysByPluginID[pluginID, default: [:]][hotkeyID] = assignedCarbonID
-          self.pluginHotkeyByCarbonID[assignedCarbonID] = (pluginID, hotkeyID)
-          DispatchQueue.main.async { reply(["ok": true, "carbon_id": Int(assignedCarbonID)]) }
-        }
-      }
-    }
-  }
-
-  /// Drop a hotkey registration previously installed by
-  /// `handleHotkeyRegister`. No-op when the id is unknown.
-  private func handleHotkeyUnregister(
-    _ params: [String: Any],
-    pluginID: String,
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let hotkeyID = params["id"] as? String, !hotkeyID.isEmpty else {
-      reply(["ok": false, "error": "hotkey.unregister requires id"])
-      return
-    }
-    queue.async { [weak self] in
-      guard let self else {
-        DispatchQueue.main.async { reply(["ok": false, "error": "manager gone"]) }
-        return
-      }
-      guard let carbonID = self.pluginHotkeysByPluginID[pluginID]?.removeValue(forKey: hotkeyID)
-      else {
-        DispatchQueue.main.async { reply(["ok": true, "removed": false]) }
-        return
-      }
-      self.pluginHotkeyByCarbonID.removeValue(forKey: carbonID)
-      DispatchQueue.main.async {
-        self.pluginHotKeys.unregister(id: carbonID)
-        reply(["ok": true, "removed": true])
-      }
-    }
-  }
-
-  /// Deliver a `core:hotkey.fired` notification to the plugin that owns the
-  /// fired registration. Routed through `PluginProcess.sendEvent`, so the
-  /// plugin must declare `core:hotkey.fired` in its `subscriptions` for the
-  /// event to land.
-  private func fireHotkeyEvent(pluginID: String, hotkeyID: String) {
-    queue.async { [weak self] in
-      guard let plugin = self?.pluginsByID[pluginID] else { return }
-      plugin.sendEvent(
-        PluginEvent(
-          name: "core:hotkey.fired",
-          payload: ["hotkey_id": hotkeyID],
-          bundleID: nil,
-          configPath: nil,
-          focused: nil))
-    }
-  }
-
-  /// Native TCC bridge for AppleEvents access to `targetBundleID`. Calls the
-  /// low-level `AEDeterminePermissionToAutomateTarget` so the system shows
-  /// the standard "Flash wants to control <App>" prompt the first time, then
-  /// caches the user's decision. Maps the OSStatus return into a `{granted,
-  /// denied, unknown}` triple so plugins can branch on first-prompt UX.
-  private static func requestAppleEventsAccess(targetBundleID: String) -> [String: Any] {
-    let addressDesc = NSAppleEventDescriptor(
-      descriptorType: typeApplicationBundleID,
-      data: Data(targetBundleID.utf8))
-    var status: OSStatus = -1
-    if let descriptor = addressDesc, let aeDesc = descriptor.aeDesc {
-      status = withUnsafePointer(to: aeDesc.pointee) { ptr in
-        AEDeterminePermissionToAutomateTarget(
-          ptr, typeWildCard, typeWildCard, true)
-      }
-    }
-    switch status {
-    case 0:  // noErr
-      return ["ok": true, "granted": true, "denied": false, "unknown": false]
-    case -1744:  // errAEEventNotPermitted
-      return ["ok": true, "granted": false, "denied": true, "unknown": false]
-    case -1743:  // errAEEventWouldRequireUserConsent / procNotFound — first prompt outcome unknown
-      return ["ok": true, "granted": false, "denied": false, "unknown": true]
-    default:
-      return [
-        "ok": false, "error": "AEDeterminePermissionToAutomateTarget returned \(status)",
-        "granted": false, "denied": false, "unknown": true,
-      ]
+      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+      reply(["ok": true])
     }
   }
 
@@ -879,16 +640,6 @@ final class PluginManager {
     }
   }
 
-  /// A plugin's mappings changed at runtime: rebuild the index on `queue`,
-  /// then notify the app to recompute effective tables on the main thread.
-  private func handleMappingsChanged() {
-    queue.async { [weak self] in
-      guard let self else { return }
-      self.rebuildMappingIndex()
-      DispatchQueue.main.async { self.onMappingsChanged?() }
-    }
-  }
-
   /// Help topics every loaded plugin contributes via `manifest.help.topics`,
   /// flattened into the host's `HelpTopic` type so `:help` can render them
   /// alongside built-ins. Topic names collide on a first-wins basis with the
@@ -1005,7 +756,6 @@ final class PluginManager {
           watchFiles: config.plugins.watchingEnabled,
           settings: settings)
         plugin.onStatusChanged = { [weak self] in self?.notifyStateChanged() }
-        plugin.onMappingsChanged = { [weak self] in self?.handleMappingsChanged() }
         plugin.onHostRequest = { [weak self] method, params, pluginID, reply in
           self?.handleHostRequest(
             method: method, params: params, pluginID: pluginID, reply: reply)

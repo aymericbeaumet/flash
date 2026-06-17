@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "emojis",
   "name": "emoji",
   "version": "0.1.0",
@@ -9,7 +9,9 @@
   "subscriptions": [
     "core:flash.started"
   ],
-  "providers": [
-    { "kind": "candidates", "sources": ["emojis.glyphs"] }
-  ]
+  "candidates": {
+    "sources": [
+      "emojis.glyphs"
+    ]
+  }
 }

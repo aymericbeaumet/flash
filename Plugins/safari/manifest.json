@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "safari",
   "name": "Safari",
   "version": "0.1.0",
@@ -7,27 +7,51 @@
   "install": "true",
   "start": "exec ./flash-plugin-safari",
   "priority": 30,
-  "bundle_ids": ["com.apple.Safari", "com.apple.SafariTechnologyPreview"],
+  "bundle_ids": [
+    "com.apple.Safari",
+    "com.apple.SafariTechnologyPreview"
+  ],
   "subscriptions": [
     "core:flash.started",
     "core:apps.snapshot",
-    { "match": "core:apps.launched" },
-    { "match": "core:apps.terminated" },
-    "core:focus.changed"
-  ],
-  "providers": [
-    { "kind": "candidates", "sources": ["safari.tabs"] },
     {
-      "kind": "source_actions",
-      "actions": ["tab_select", "tab_new", "tab_close"],
-      "bundle_ids": ["com.apple.Safari", "com.apple.SafariTechnologyPreview"]
+      "match": "core:apps.launched"
     },
     {
-      "kind": "mappings",
-      "bundle_ids": ["com.apple.Safari"],
-      "mappings": [
-        { "key": "R", "mode": "normal", "command": ["flash", "send_key", "--keys=cmd+option+r"] }
-      ]
-    }
-  ]
+      "match": "core:apps.terminated"
+    },
+    "core:focus.changed"
+  ],
+  "candidates": {
+    "sources": [
+      "safari.tabs"
+    ]
+  },
+  "mappings": {
+    "bundle_ids": [
+      "com.apple.Safari"
+    ],
+    "items": [
+      {
+        "key": "R",
+        "mode": "normal",
+        "command": [
+          "flash",
+          "send_key",
+          "--keys=cmd+option+r"
+        ]
+      }
+    ]
+  },
+  "source_actions": {
+    "bundle_ids": [
+      "com.apple.Safari",
+      "com.apple.SafariTechnologyPreview"
+    ],
+    "actions": [
+      "tab_select",
+      "tab_new",
+      "tab_close"
+    ]
+  }
 }

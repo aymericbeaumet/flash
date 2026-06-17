@@ -43,7 +43,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(tmux.navigationSchemes, ["tmux"])
     let www = try XCTUnwrap(manifests.first { $0.id == "www" })
     XCTAssertEqual(www.priority, 60)
-    XCTAssertEqual(www.capabilities, [.input])
+    XCTAssertEqual(www.capabilities, [.accessibility])
     XCTAssertEqual(www.sourceActions, ["resource_archive", "resource_next", "resource_previous"])
 
     XCTAssertTrue(
@@ -138,15 +138,14 @@ final class PluginSystemTests: XCTestCase {
     try FileManager.default.createDirectory(at: pluginRoot, withIntermediateDirectories: true)
     try """
     {
-      "manifest_version": 1,
+      "manifest_version": 2,
       "id": "sample",
       "name": "Sample",
       "version": "0.1.0",
       "description": "Sample plugin",
       "install": "./install.sh",
       "start": "./start.sh",
-      "subscriptions": [],
-      "providers": []
+      "subscriptions": []
     }
     """.write(
       to: pluginRoot.appendingPathComponent("manifest.json"),
@@ -170,7 +169,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "spotify",
           "name": "Spotify",
           "version": "0.1.0",
@@ -181,14 +180,11 @@ final class PluginSystemTests: XCTestCase {
             { "match": "core:apps.*", "bundle_ids": ["com.spotify.client"] },
             "core:config.*"
           ],
-          "providers": [
-            {
-              "kind": "commands",
-              "commands": [
-                { "command": "spotify", "subcommand": "pause", "description": "Pause playback" }
-              ]
-            }
-          ]
+          "commands": {
+            "items": [
+              { "command": "spotify", "subcommand": "pause", "description": "Pause playback" }
+            ]
+          }
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -208,7 +204,7 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "spotify",
           "name": "Spotify",
           "version": "0.1.0",
@@ -233,28 +229,25 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "slack",
           "name": "Slack",
           "version": "0.1.0",
           "description": "Slack",
           "install": "true",
           "start": "true",
-          "providers": [
-            {
-              "kind": "mappings",
-              "mappings": [
-                { "key": "q", "command": ["flash", "plugin_command", "--command=slack", "--subcommand=run"] },
-                {
-                  "key": "ctrl+k",
-                  "mode": "insert",
-                  "command": ["flash", "hints_dismiss"],
-                  "bundle_ids": ["com.tinyspeck.slackmacgap"],
-                  "priority": 40
-                }
-              ]
-            }
-          ]
+          "mappings": {
+            "items": [
+              { "key": "q", "command": ["flash", "plugin_command", "--command=slack", "--subcommand=run"] },
+              {
+                "key": "ctrl+k",
+                "mode": "insert",
+                "command": ["flash", "hints_dismiss"],
+                "bundle_ids": ["com.tinyspeck.slackmacgap"],
+                "priority": 40
+              }
+            ]
+          }
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -312,15 +305,14 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "Spotify",
           "name": "Spotify",
           "version": "0.1.0",
           "description": "Spotify controls",
           "install": "true",
           "start": "true",
-          "subscriptions": [],
-          "providers": []
+          "subscriptions": []
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -328,43 +320,38 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root))
   }
 
-  func testManifestProvidersDecodeAcrossKinds() throws {
+  func testManifestDecodesProviderSectionsAcrossKinds() throws {
     let root = try temporaryPluginRoot(
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "multi",
           "name": "Multi",
           "version": "0.1.0",
-          "description": "Every surface in one providers table",
+          "description": "Every surface in split provider sections",
           "install": "true",
           "start": "true",
-          "providers": [
-            { "kind": "hints", "bundle_ids": ["com.example.app"] },
-            { "kind": "candidates", "sources": ["multi.items"] },
-            { "kind": "navigation", "schemes": ["multi"] },
-            { "kind": "source_actions", "actions": ["resource_archive", "resource_next"] },
-            { "kind": "status", "segments": ["battery"] },
-            {
-              "kind": "commands",
-              "commands": [
-                { "command": "multi", "subcommand": "go", "description": "Go" }
-              ]
-            },
-            {
-              "kind": "mappings",
-              "mappings": [
-                { "key": "q", "command": ["flash", "hints_dismiss"] }
-              ]
-            }
-          ]
+          "hints": { "bundle_ids": ["com.example.app"] },
+          "candidates": { "sources": ["multi.items"] },
+          "navigation": { "schemes": ["multi"] },
+          "source_actions": { "actions": ["resource_archive", "resource_next"] },
+          "status": { "segments": ["battery"] },
+          "commands": {
+            "items": [
+              { "command": "multi", "subcommand": "go", "description": "Go" }
+            ]
+          },
+          "mappings": {
+            "items": [
+              { "key": "q", "command": ["flash", "hints_dismiss"] }
+            ]
+          }
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
 
     let manifest = try PluginManifest.load(from: root)
-    XCTAssertEqual(manifest.providers.count, 7)
     XCTAssertTrue(manifest.providesHints)
     XCTAssertTrue(manifest.providesCandidates)
     XCTAssertEqual(manifest.candidateSources, ["multi.items"])
@@ -380,21 +367,18 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "cmdsonly",
           "name": "Commands Only",
           "version": "0.1.0",
           "description": "No hints, no candidates",
           "install": "true",
           "start": "true",
-          "providers": [
-            {
-              "kind": "commands",
-              "commands": [
-                { "command": "x", "subcommand": "", "description": "X" }
-              ]
-            }
-          ]
+          "commands": {
+            "items": [
+              { "command": "x", "subcommand": "", "description": "X" }
+            ]
+          }
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -409,28 +393,25 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "scoped",
           "name": "Scoped",
           "version": "0.1.0",
           "description": "App-scoped commands",
           "install": "true",
           "start": "true",
-          "providers": [
-            {
-              "kind": "commands",
-              "bundle_ids": ["com.example.app"],
-              "commands": [
-                { "command": "scoped", "subcommand": "here", "description": "Inherits scope" },
-                {
-                  "command": "scoped",
-                  "subcommand": "elsewhere",
-                  "description": "Overrides scope",
-                  "bundle_ids": ["com.other.app"]
-                }
-              ]
-            }
-          ]
+          "commands": {
+            "bundle_ids": ["com.example.app"],
+            "items": [
+              { "command": "scoped", "subcommand": "here", "description": "Inherits scope" },
+              {
+                "command": "scoped",
+                "subcommand": "elsewhere",
+                "description": "Overrides scope",
+                "bundle_ids": ["com.other.app"]
+              }
+            ]
+          }
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -447,22 +428,19 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "moded",
           "name": "Moded",
           "version": "0.1.0",
           "description": "Provider-level mode gate",
           "install": "true",
           "start": "true",
-          "providers": [
-            {
-              "kind": "mappings",
-              "modes": ["insert"],
-              "mappings": [
-                { "key": "j", "command": ["flash", "hints_dismiss"] }
-              ]
-            }
-          ]
+          "mappings": {
+            "modes": ["insert"],
+            "items": [
+              { "key": "j", "command": ["flash", "hints_dismiss"] }
+            ]
+          }
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -478,25 +456,22 @@ final class PluginSystemTests: XCTestCase {
       manifest:
         """
         {
-          "manifest_version": 1,
+          "manifest_version": 2,
           "id": "banger",
           "name": "Banger",
           "version": "0.1.0",
           "description": "Flashlight bangs",
           "install": "true",
           "start": "true",
-          "providers": [
-            {
-              "kind": "shebang",
-              "command": "search",
-              "bundle_ids": ["com.example.app"],
-              "shebangs": [
-                { "token": "r", "description": "Reddit" },
-                { "token": "*", "_note": "catch-all" },
-                { "token": "gh", "command": "github", "bundle_ids": ["com.other.app"] }
-              ]
-            }
-          ]
+          "shebangs": {
+            "command": "search",
+            "bundle_ids": ["com.example.app"],
+            "items": [
+              { "token": "r", "description": "Reddit" },
+              { "token": "*", "_note": "catch-all" },
+              { "token": "gh", "command": "github", "bundle_ids": ["com.other.app"] }
+            ]
+          }
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -514,51 +489,41 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(github.bundleIDs, ["com.other.app"], "entry's own bundle_ids win")
   }
 
-  func testProviderEncodeOmitsEmptyFields() throws {
-    let provider = PluginProvider(kind: .candidates)
+  func testProviderSectionEncodeOmitsEmptyFields() throws {
+    let provider = PluginCandidatesProvider()
     let data = try JSONEncoder().encode(provider)
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["kind"] as? String, "candidates")
     XCTAssertNil(json["bundle_ids"], "empty bundle_ids is not encoded")
     XCTAssertNil(json["modes"], "empty modes is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
     XCTAssertNil(json["sources"], "empty sources is not encoded")
-    XCTAssertNil(json["actions"], "empty actions is not encoded")
-    XCTAssertNil(json["schemes"], "empty schemes is not encoded")
-    XCTAssertNil(json["segments"], "empty segments is not encoded")
-    XCTAssertNil(json["commands"], "empty commands is not encoded")
-    XCTAssertNil(json["mappings"], "empty mappings is not encoded")
   }
 
-  func testProviderEncodesCandidateSourcesWhenSet() throws {
-    let provider = PluginProvider(kind: .candidates, sources: ["firefox.tabs"])
+  func testCandidateProviderEncodesSourcesWhenSet() throws {
+    let provider = PluginCandidatesProvider(sources: ["firefox.tabs"])
     let data = try JSONEncoder().encode(provider)
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["kind"] as? String, "candidates")
     XCTAssertEqual(json["sources"] as? [String], ["firefox.tabs"])
   }
 
-  func testProviderEncodesSourceActionsWhenSet() throws {
-    let provider = PluginProvider(kind: .sourceActions, actions: ["resource_archive"])
+  func testSourceActionsProviderEncodesActionsWhenSet() throws {
+    let provider = PluginSourceActionsProvider(actions: ["resource_archive"])
     let data = try JSONEncoder().encode(provider)
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["kind"] as? String, "source_actions")
     XCTAssertEqual(json["actions"] as? [String], ["resource_archive"])
   }
 
-  func testProviderEncodesNavigationSchemesWhenSet() throws {
-    let provider = PluginProvider(kind: .navigation, schemes: ["tmux"])
+  func testNavigationProviderEncodesSchemesWhenSet() throws {
+    let provider = PluginNavigationProvider(schemes: ["tmux"])
     let data = try JSONEncoder().encode(provider)
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["kind"] as? String, "navigation")
     XCTAssertEqual(json["schemes"] as? [String], ["tmux"])
   }
 
-  func testProviderEncodesStatusSegmentsWhenSet() throws {
-    let provider = PluginProvider(kind: .status, segments: ["battery"])
+  func testStatusProviderEncodesSegmentsWhenSet() throws {
+    let provider = PluginStatusProvider(segments: ["battery"])
     let data = try JSONEncoder().encode(provider)
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["kind"] as? String, "status")
     XCTAssertEqual(json["segments"] as? [String], ["battery"])
   }
 
@@ -708,12 +673,9 @@ final class PluginSystemTests: XCTestCase {
     process.terminationHandler = { _ in finished.signal() }
     try process.run()
 
-    // The plugin no longer spawns child processes itself: `run_cli` delegates
-    // to a `cli.run` host RPC. This harness plays the host — it reads the
-    // plugin's stdout, executes any `cli.run` request against the mocked
-    // binary (mirroring the core's sandboxed executor), and feeds the result
-    // back. Only after the `command.invoke` (id 2) response arrives do we send
-    // `shutdown`, so the in-flight CLI call always completes first.
+    // The smoke test exercises only the managed MessagePack protocol. The
+    // plugin owns subprocess execution now, so the host harness just waits for
+    // the command response before sending shutdown.
     let collector = MessagePackFrameCollector()
     let writeLock = NSLock()
     func send(_ object: [String: Any]) {
@@ -735,18 +697,9 @@ final class PluginSystemTests: XCTestCase {
       let data = handle.availableData
       guard !data.isEmpty else { return }
       for message in collector.ingest(data) {
-        // A plugin→host request carries both `id` and `method`; a response to
-        // our scripted requests carries `id` but no `method`.
-        if let method = message["method"] as? String,
-          let requestID = (message["id"] as? NSNumber)?.intValue
-        {
-          if method == "cli.run" {
-            let params = message["params"] as? [String: Any] ?? [:]
-            send([
-              "id": requestID, "jsonrpc": "2.0",
-              "result": Self.runMockedCLI(params: params, binDir: binDir),
-            ])
-          }
+        // A plugin→host request carries both `id` and `method`; the tested
+        // command should complete without host-side subprocess RPCs.
+        if message["method"] is String {
           continue
         }
         if (message["id"] as? NSNumber)?.intValue == 2 {
@@ -796,40 +749,6 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(responseOK(id: 1, messages: messages), true, collector.raw())
     XCTAssertEqual(responseOK(id: -1, messages: messages), true, collector.raw())
     XCTAssertEqual(responseOK(id: 2, messages: messages), true, collector.raw())
-  }
-
-  /// Mirrors the core's `cli.run` executor for the smoke test: runs the
-  /// requested argv (resolved against the plugin's mocked `bin/` dir) and
-  /// returns the `ok`/`stdout`/`stderr`/`status` shape the SDK expects.
-  private static func runMockedCLI(params: [String: Any], binDir: URL) -> [String: Any] {
-    let argv = (params["argv"] as? [String]) ?? []
-    guard !argv.isEmpty else {
-      return ["ok": false, "status": -1, "stdout": "", "stderr": "empty argv"]
-    }
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = argv
-    var env = ProcessInfo.processInfo.environment
-    env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
-    process.environment = env
-    let out = Pipe()
-    let err = Pipe()
-    process.standardOutput = out
-    process.standardError = err
-    do {
-      try process.run()
-      let stdout = out.fileHandleForReading.readDataToEndOfFile()
-      let stderr = err.fileHandleForReading.readDataToEndOfFile()
-      process.waitUntilExit()
-      return [
-        "ok": process.terminationStatus == 0,
-        "status": Int(process.terminationStatus),
-        "stdout": String(data: stdout, encoding: .utf8) ?? "",
-        "stderr": String(data: stderr, encoding: .utf8) ?? "",
-      ]
-    } catch {
-      return ["ok": false, "status": 127, "stdout": "", "stderr": "\(error)"]
-    }
   }
 
   private func responseOK(id: Int, messages: [[String: Any]]) -> Bool? {

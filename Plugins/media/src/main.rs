@@ -1,6 +1,7 @@
+use std::process::Stdio;
 use std::time::Duration;
 
-use flash_plugin::{run, CliResult, CommandRequest, CommandResponse, Context};
+use flash_plugin::{run, CommandRequest, CommandResponse, Context};
 
 // NSSystemDefined media key codes (IOKit IOHIDUsageTables.h, NX_KEYTYPE_*).
 // Posting these as system-defined events lets macOS route the command to
@@ -80,7 +81,7 @@ impl FlashPlugin for Media {
             "run" => {
                 let mut argv = vec!["/usr/bin/osascript".to_string()];
                 argv.extend_from_slice(&command.args);
-                ctx.run_cli(&argv, Duration::from_secs(120)).await
+                run_command(&ctx, &argv, Duration::from_secs(120)).await
             }
             other => {
                 return CommandResponse::error(format!("unknown subcommand: {other}"));
@@ -96,7 +97,87 @@ async fn osascript(ctx: &Context, source: &str) -> CliResult {
         "-e".to_string(),
         source.to_string(),
     ];
-    ctx.run_cli(&argv, Duration::from_secs(10)).await
+    run_command(ctx, &argv, Duration::from_secs(10)).await
+}
+
+#[derive(Clone, Debug, Default)]
+struct CliResult {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+    _status: i32,
+}
+
+impl CliResult {
+    fn into_command(self) -> CommandResponse {
+        CommandResponse {
+            ok: self.ok,
+            stdout: (!self.stdout.trim().is_empty()).then(|| shorten(&self.stdout)),
+            error: (!self.ok && !self.stderr.trim().is_empty()).then(|| shorten(&self.stderr)),
+            ..Default::default()
+        }
+    }
+}
+
+async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CliResult {
+    let Some((program, args)) = argv.split_first() else {
+        return CliResult {
+            ok: false,
+            stderr: "empty argv".to_string(),
+            _status: -1,
+            ..Default::default()
+        };
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(&ctx.data_dir)
+        .env("HOME", ctx.home_dir())
+        .env("XDG_CONFIG_HOME", ctx.config_dir())
+        .env("XDG_CACHE_HOME", ctx.cache_dir())
+        .env("XDG_DATA_HOME", ctx.share_dir())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                ctx.bin_dir().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => CliResult {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            _status: output.status.code().unwrap_or(-1),
+        },
+        Ok(Err(err)) => CliResult {
+            ok: false,
+            stderr: err.to_string(),
+            _status: -1,
+            ..Default::default()
+        },
+        Err(_) => CliResult {
+            ok: false,
+            stderr: format!("timed out after {}ms", timeout.as_millis()),
+            _status: 124,
+            ..Default::default()
+        },
+    }
+}
+
+fn shorten(value: &str) -> String {
+    const LIMIT: usize = 2000;
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(LIMIT - 3).collect();
+    format!("{head}...")
 }
 
 async fn app_running(ctx: &Context, app: &str) -> bool {
@@ -151,7 +232,7 @@ async fn applescript_command(ctx: &Context, command: &str) -> CliResult {
             ok: false,
             stdout: String::new(),
             stderr: "no supported media app is running".into(),
-            status: 1,
+            _status: 1,
         };
     };
     let mut result = osascript(
@@ -171,7 +252,7 @@ async fn media_action(ctx: &Context, key_code: i32, fallback: &str) -> CliResult
             ok: true,
             stdout: String::new(),
             stderr: String::new(),
-            status: 0,
+            _status: 0,
         };
     }
     applescript_command(ctx, fallback).await

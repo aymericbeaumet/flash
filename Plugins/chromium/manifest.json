@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "chromium",
   "name": "Chromium",
   "version": "0.1.0",
@@ -29,12 +29,16 @@
   "subscriptions": [
     "core:flash.started",
     "core:apps.snapshot",
-    { "match": "core:apps.launched" },
-    { "match": "core:apps.terminated" },
+    {
+      "match": "core:apps.launched"
+    },
+    {
+      "match": "core:apps.terminated"
+    },
     "core:focus.changed"
   ],
-  "providers": [
-    { "kind": "candidates", "sources": [
+  "candidates": {
+    "sources": [
       "chrome.tabs",
       "chromium.tabs",
       "brave.tabs",
@@ -42,29 +46,32 @@
       "arc.tabs",
       "vivaldi.tabs",
       "opera.tabs"
-    ] },
-    {
-      "kind": "source_actions",
-      "actions": ["tab_select", "tab_new", "tab_close"],
-      "bundle_ids": [
-        "com.google.Chrome",
-        "com.google.Chrome.canary",
-        "com.google.Chrome.beta",
-        "com.google.Chrome.dev",
-        "org.chromium.Chromium",
-        "com.brave.Browser",
-        "com.brave.Browser.beta",
-        "com.brave.Browser.nightly",
-        "com.microsoft.edgemac",
-        "com.microsoft.edgemac.Beta",
-        "com.microsoft.edgemac.Dev",
-        "com.microsoft.edgemac.Canary",
-        "company.thebrowser.Browser",
-        "com.vivaldi.Vivaldi",
-        "com.operasoftware.Opera",
-        "com.operasoftware.OperaNext",
-        "com.operasoftware.OperaDeveloper"
-      ]
-    }
-  ]
+    ]
+  },
+  "source_actions": {
+    "bundle_ids": [
+      "com.google.Chrome",
+      "com.google.Chrome.canary",
+      "com.google.Chrome.beta",
+      "com.google.Chrome.dev",
+      "org.chromium.Chromium",
+      "com.brave.Browser",
+      "com.brave.Browser.beta",
+      "com.brave.Browser.nightly",
+      "com.microsoft.edgemac",
+      "com.microsoft.edgemac.Beta",
+      "com.microsoft.edgemac.Dev",
+      "com.microsoft.edgemac.Canary",
+      "company.thebrowser.Browser",
+      "com.vivaldi.Vivaldi",
+      "com.operasoftware.Opera",
+      "com.operasoftware.OperaNext",
+      "com.operasoftware.OperaDeveloper"
+    ],
+    "actions": [
+      "tab_select",
+      "tab_new",
+      "tab_close"
+    ]
+  }
 }

@@ -1,8 +1,8 @@
+use std::process::Stdio;
 use std::time::Duration;
 
 use flash_plugin::{
-    run, spawn_background, Candidate, CommandRequest, CommandResponse, Context, Event,
-    ResolveResponse,
+    run, Candidate, CommandRequest, CommandResponse, Context, Event, ResolveResponse,
 };
 
 const SOURCE_ID: &str = "plugin:processes";
@@ -15,11 +15,13 @@ flash_plugin::plugin!(Processes);
 impl FlashPlugin for Processes {
     async fn on_start(&self, ctx: Context) {
         emit_candidates(&ctx).await;
-        ctx.interval(
-            "refresh",
-            Duration::from_secs(POLL_SECONDS),
-            |ctx| async move { emit_candidates(&ctx).await },
-        );
+        let poll_ctx = ctx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(POLL_SECONDS)).await;
+                emit_candidates(&poll_ctx).await;
+            }
+        });
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -50,7 +52,7 @@ impl FlashPlugin for Processes {
         if result.ok {
             // Best effort: refresh so the row disappears immediately.
             let refresh_ctx = ctx.clone();
-            spawn_background(async move {
+            tokio::spawn(async move {
                 emit_candidates(&refresh_ctx).await;
             });
             ResolveResponse::resolved(None)
@@ -97,7 +99,7 @@ async fn list_processes(ctx: &Context) -> Vec<ProcessRow> {
         "-axo".to_string(),
         "pid=,pcpu=,pmem=,comm=".to_string(),
     ];
-    let result = ctx.run_cli_quiet(&argv, Duration::from_secs(5)).await;
+    let result = run_command(ctx, &argv, Duration::from_secs(5)).await;
     if !result.ok {
         ctx.log("warn", &format!("[processes] ps failed: {}", result.stderr));
         return Vec::new();
@@ -173,8 +175,9 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
     }
 }
 
-async fn send_term(ctx: &Context, pid: i32) -> flash_plugin::CliResult {
-    ctx.run_cli(
+async fn send_term(ctx: &Context, pid: i32) -> CommandOutput {
+    run_command(
+        ctx,
         &[
             "/bin/kill".to_string(),
             "-TERM".to_string(),
@@ -183,6 +186,65 @@ async fn send_term(ctx: &Context, pid: i32) -> flash_plugin::CliResult {
         Duration::from_secs(5),
     )
     .await
+}
+
+#[derive(Clone, Debug, Default)]
+struct CommandOutput {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+    _status: i32,
+}
+
+async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CommandOutput {
+    let Some((program, args)) = argv.split_first() else {
+        return CommandOutput {
+            ok: false,
+            stderr: "empty argv".to_string(),
+            _status: -1,
+            ..Default::default()
+        };
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(&ctx.data_dir)
+        .env("HOME", ctx.home_dir())
+        .env("XDG_CONFIG_HOME", ctx.config_dir())
+        .env("XDG_CACHE_HOME", ctx.cache_dir())
+        .env("XDG_DATA_HOME", ctx.share_dir())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                ctx.bin_dir().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => CommandOutput {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            _status: output.status.code().unwrap_or(-1),
+        },
+        Ok(Err(err)) => CommandOutput {
+            ok: false,
+            stderr: err.to_string(),
+            _status: -1,
+            ..Default::default()
+        },
+        Err(_) => CommandOutput {
+            ok: false,
+            stderr: format!("timed out after {}ms", timeout.as_millis()),
+            _status: 124,
+            ..Default::default()
+        },
+    }
 }
 
 fn main() {

@@ -35,8 +35,6 @@ final class PluginProcess {
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
   private var fileWatcherFDs: [Int32] = []
   private var reloadWork: DispatchWorkItem?
-  private var dynamicCommands: [PluginCommandRegistration] = []
-  private var dynamicMappings: [PluginMappingRegistration] = []
   private var lastError: String?
   private var lastLog: String?
   /// Previous CPU sample (cumulative user+system nanoseconds and the wall
@@ -52,10 +50,6 @@ final class PluginProcess {
   /// tell whether this plugin's settings changed.
   let settings: [String: PluginConfigValue]
   var onStatusChanged: (() -> Void)?
-  /// Fired when the plugin's mappings change at runtime (`mappings.updated`).
-  /// Distinct from `onStatusChanged` so the host only rebuilds its mapping
-  /// index on real mapping edits, not on every log line / heartbeat.
-  var onMappingsChanged: (() -> Void)?
   /// Handles a plugin→host RPC request (`call_host` on the plugin side):
   /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
   /// installs this; `reply` is invoked with the JSON result, possibly async
@@ -75,8 +69,6 @@ final class PluginProcess {
     self.origin = origin
     self.dataDir = baseDataDir.appendingPathComponent(manifest.id)
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
-    self.dynamicCommands = manifest.commands
-    self.dynamicMappings = manifest.mappings
     self.watchFiles = watchFiles
     self.settings = settings
   }
@@ -84,15 +76,11 @@ final class PluginProcess {
   var identifier: String { manifest.id }
 
   var commands: [PluginCommandRegistration] {
-    lock.lock()
-    defer { lock.unlock() }
-    return dynamicCommands
+    manifest.commands
   }
 
   var mappings: [PluginMappingRegistration] {
-    lock.lock()
-    defer { lock.unlock() }
-    return dynamicMappings
+    manifest.mappings
   }
 
   /// Flashlight bang registrations. Static from the manifest (no runtime
@@ -534,7 +522,7 @@ final class PluginProcess {
     let restartCount = self.restartCount
     let lastError = self.lastError
     let lastLog = self.lastLog
-    let commands = dynamicCommands
+    let commands = manifest.commands
     let now = Date()
     let usage = pid.map { sampleResourceUsageLocked(pid: $0, now: now) }
     lock.unlock()
@@ -808,16 +796,6 @@ final class PluginProcess {
   }
 
   private func routeHostRequest(id: Int, method: String, params: [String: Any]) {
-    // `cli.run` is served here, by the very process that owns this plugin's
-    // sandbox — the core executes the subprocess so the plugin never touches
-    // the process API. Everything else routes up to the host RPC router
-    // (AX broker, app activation, …) installed by PluginManager.
-    if method == "cli.run" {
-      runHostCLI(params) { [weak self] result in
-        self?.sendResponse(id: id, result: result)
-      }
-      return
-    }
     guard let onHostRequest else {
       sendResponse(id: id, result: ["ok": false, "error": "host requests unsupported"])
       return
@@ -825,125 +803,6 @@ final class PluginProcess {
     onHostRequest(method, params, manifest.id) { [weak self] result in
       self?.sendResponse(id: id, result: result)
     }
-  }
-
-  /// Executes `cli.run`: spawns `argv` inside this plugin's sandbox (HOME and
-  /// the XDG base dirs redirected under `dataDir`, `dataDir/bin` prepended to
-  /// PATH), bounded by `timeout_ms`. Mirrors the old in-plugin runner so the
-  /// `Context::run_cli` contract is unchanged for plugins. Runs off the plugin
-  /// IPC queue so a slow command never stalls protocol I/O; `reply` lands on a
-  /// background queue and `sendResponse` re-hops to `queue` to write.
-  private func runHostCLI(
-    _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    let argv = params["argv"] as? [String] ?? []
-    guard let program = argv.first, !program.isEmpty else {
-      reply(["ok": false, "stdout": "", "stderr": "missing command", "status": -1])
-      return
-    }
-    let timeoutMs = (params["timeout_ms"] as? Int) ?? 5000
-    let quiet = params["quiet"] as? Bool ?? false
-    let dataDir = self.dataDir
-    let pluginID = manifest.id
-    DispatchQueue.global(qos: .utility).async { [weak self] in
-      let started = Date()
-      let result = Self.runSandboxedCLI(
-        argv: argv, dataDir: dataDir, timeoutMs: timeoutMs)
-      if !quiet {
-        let durationMs = Int(Date().timeIntervalSince(started) * 1000)
-        let programName = (program as NSString).lastPathComponent
-        let ok = result["ok"] as? Bool ?? false
-        let status = result["status"] as? Int ?? -1
-        let fields: [String: String] = [
-          "program": programName,
-          "command": Self.shorten(argv.joined(separator: " ")),
-          "argc": String(argv.count - 1),
-          "status": String(status),
-          "duration_ms": String(durationMs),
-          "ok": String(ok),
-          "stdout": (result["stdout"] as? String) ?? "",
-          "stderr": (result["stderr"] as? String) ?? "",
-        ]
-        let outcome = ok ? "ok" : "failed (status \(status))"
-        FlashLog.plugin(
-          ok ? .debug : .warn,
-          pluginID: pluginID,
-          message: "ran \(programName): \(outcome) in \(durationMs)ms",
-          fields: fields)
-        self?.lock.lock()
-        self?.lastLog = "ran \(programName): \(outcome)"
-        self?.lock.unlock()
-        self?.notifyStatus()
-      }
-      reply(result)
-    }
-  }
-
-  /// Runs `argv` with the plugin sandbox env and a hard timeout, returning the
-  /// `{ok, stdout, stderr, status}` wire shape. `124` on timeout, `127` when
-  /// the program is not found — matching the prior in-plugin semantics.
-  private static func runSandboxedCLI(
-    argv: [String], dataDir: URL, timeoutMs: Int
-  ) -> [String: Any] {
-    let process = Process()
-    // Run through `env` so a bare program name resolves against the sandbox
-    // PATH (and absolute paths still work), matching the old runner.
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = argv
-    process.currentDirectoryURL = dataDir
-    var env = ProcessInfo.processInfo.environment
-    if (env["PATH"] ?? "").isEmpty {
-      env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    }
-    let bin = dataDir.appendingPathComponent("bin").path
-    env["PATH"] = bin + ":" + (env["PATH"] ?? "")
-    env["HOME"] = dataDir.appendingPathComponent("home").path
-    env["XDG_CONFIG_HOME"] = dataDir.appendingPathComponent("config").path
-    env["XDG_CACHE_HOME"] = dataDir.appendingPathComponent("cache").path
-    env["XDG_DATA_HOME"] = dataDir.appendingPathComponent("share").path
-    process.environment = env
-    let out = Pipe()
-    let err = Pipe()
-    process.standardOutput = out
-    process.standardError = err
-    process.standardInput = FileHandle.nullDevice
-    do {
-      try process.run()
-    } catch let error as NSError where error.code == NSFileNoSuchFileError {
-      return ["ok": false, "stdout": "", "stderr": "command not found: \(argv[0])", "status": 127]
-    } catch {
-      return ["ok": false, "stdout": "", "stderr": "\(error)", "status": -1]
-    }
-    let timeout = DispatchTime.now() + .milliseconds(max(1, timeoutMs))
-    let killer = DispatchWorkItem {
-      if process.isRunning { process.terminate() }
-    }
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: timeout, execute: killer)
-    let outData = out.fileHandleForReading.readDataToEndOfFile()
-    let errData = err.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    let timedOut = killer.isCancelled == false && process.terminationReason == .uncaughtSignal
-    killer.cancel()
-    let stdout = Self.shorten(String(data: outData, encoding: .utf8) ?? "")
-    let stderr = Self.shorten(String(data: errData, encoding: .utf8) ?? "")
-    if timedOut {
-      return [
-        "ok": false, "stdout": stdout,
-        "stderr": "command timed out after \(timeoutMs)ms", "status": 124,
-      ]
-    }
-    let status = Int(process.terminationStatus)
-    return ["ok": status == 0, "stdout": stdout, "stderr": stderr, "status": status]
-  }
-
-  /// Truncate to a fixed character budget so a chatty command can't push a
-  /// giant frame back over IPC. Mirrors the SDK's `shorten`.
-  private static func shorten(_ value: String) -> String {
-    let limit = 2000
-    let trimmed = value.trimmed
-    if trimmed.count <= limit { return trimmed }
-    return String(trimmed.prefix(limit - 3)) + "..."
   }
 
   private func sendResponse(id: Int, result: [String: Any]) {
@@ -965,6 +824,12 @@ final class PluginProcess {
       // A non-encodable message is a runtime bug that would otherwise vanish
       // silently and only show up as a timed-out RPC; surface it.
       recordError("[plugin] dropped non-encodable IPC message (method=\(label)): \(error)")
+      return
+    }
+    guard payload.count <= Self.maxFrameBytes else {
+      recordError(
+        "[plugin] dropped oversized IPC message (method=\(label), bytes=\(payload.count), "
+          + "max=\(Self.maxFrameBytes))")
       return
     }
     // Length-prefixed MessagePack: a 4-byte big-endian payload length, then
@@ -1107,28 +972,6 @@ final class PluginProcess {
       notifyStatus()
     case "status.updated":
       applyStatusSegments(params)
-    case "plugin.status":
-      if let message = params["message"] as? String {
-        lastLog = message
-      }
-      notifyStatus()
-    case "commands.updated":
-      if let raw = params["commands"] as? [[String: Any]] {
-        let commands = raw.compactMap(Self.command(from:))
-        lock.lock()
-        dynamicCommands = commands
-        lock.unlock()
-        notifyStatus()
-      }
-    case "mappings.updated":
-      if let raw = params["mappings"] as? [[String: Any]] {
-        let mappings = raw.compactMap(Self.mapping(from:))
-        lock.lock()
-        dynamicMappings = mappings
-        lock.unlock()
-        onMappingsChanged?()
-        notifyStatus()
-      }
     default:
       break
     }
@@ -1271,29 +1114,6 @@ final class PluginProcess {
     if let int64 = value as? Int64 { return String(int64) }
     if let double = value as? Double { return String(double) }
     return nil
-  }
-
-  private static func command(from raw: [String: Any]) -> PluginCommandRegistration? {
-    guard let command = raw["command"] as? String,
-      let subcommand = raw["subcommand"] as? String
-    else { return nil }
-    return PluginCommandRegistration(
-      command: command,
-      subcommand: subcommand,
-      description: raw["description"] as? String ?? "",
-      bundleIDs: raw["bundle_ids"] as? [String] ?? [])
-  }
-
-  private static func mapping(from raw: [String: Any]) -> PluginMappingRegistration? {
-    guard let key = raw["key"] as? String, !key.isEmpty,
-      let command = raw["command"] as? [String], !command.isEmpty
-    else { return nil }
-    return PluginMappingRegistration(
-      key: key,
-      mode: raw["mode"] as? String ?? "normal",
-      command: command,
-      bundleIDs: raw["bundle_ids"] as? [String] ?? [],
-      priority: raw["priority"] as? Int)
   }
 
   private static func number(_ value: Any?) -> Double? {

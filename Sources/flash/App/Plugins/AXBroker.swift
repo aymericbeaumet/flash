@@ -1,6 +1,5 @@
 import AppKit
 import ApplicationServices
-import FlashCore
 import Foundation
 
 /// Host-side Accessibility broker. The core holds the single TCC grant, so it
@@ -24,8 +23,7 @@ final class AXBroker {
 
   /// Serial queue guarding the handle registry and serializing AX reads. AX
   /// attribute calls are thread-safe and the previous in-core sources walked
-  /// trees off the main thread, so the walk stays off-main; only app
-  /// activation (`ax.activate`) hops to the main thread.
+  /// trees off the main thread, so the walk stays off-main.
   private let queue = DispatchQueue(label: "flash.ax.broker")
   private var entries: [UInt64: Entry] = [:]
   private var nextHandle: UInt64 = 0
@@ -50,8 +48,6 @@ final class AXBroker {
       perform(params, reply: reply)
     case "ax.set":
       setAttribute(params, reply: reply)
-    case "ax.activate":
-      activate(params, reply: reply)
     default:
       reply(["ok": false, "error": "unknown ax method: \(method)"])
     }
@@ -151,21 +147,6 @@ final class AXBroker {
       }
       let status = AXUIElementSetAttributeValue(entry.element, attribute as CFString, cfValue)
       reply(["ok": status == .success])
-    }
-  }
-
-  private func activate(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
-    guard let pid = pidParam(params, key: "pid") else {
-      reply(["ok": false, "error": "ax.activate requires pid"])
-      return
-    }
-    DispatchQueue.main.async {
-      guard let app = NSRunningApplication(processIdentifier: pid) else {
-        reply(["ok": false, "error": "no running app for pid"])
-        return
-      }
-      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
-      reply(["ok": true])
     }
   }
 

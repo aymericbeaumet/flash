@@ -18,3 +18,4 @@ objc2-app-kit = { workspace = true, features = [
   "objc2-core-graphics",
 ] }
 objc2-core-graphics = { workspace = true, features = ["CGEvent", "CGEventTypes"] }
+tokio = { workspace = true }

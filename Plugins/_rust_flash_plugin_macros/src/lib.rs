@@ -3,14 +3,13 @@
 //! adapter that routes every wire request to the matching trait method.
 //!
 //! `manifest.json` is the single source of truth. The macro inspects the
-//! declared `providers[]` to decide which handler methods are *required* (a
-//! `commands` or `shebang` provider makes `on_command` mandatory — omit it and
-//! the crate fails to compile). Every other handler is a defaulted trait method
-//! the plugin overrides only when it serves that surface. A typed `Config` is
-//! generated from `config_schema` when one is declared.
+//! declared `commands` / `shebangs` sections to decide which handler methods
+//! are *required* (either section makes `on_command` mandatory — omit it and the
+//! crate fails to compile). Every other handler is a defaulted trait method the
+//! plugin overrides only when it serves that surface.
 
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
+use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::quote;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -23,8 +22,6 @@ pub fn plugin(input: TokenStream) -> TokenStream {
     let manifest = load_manifest();
 
     let on_command_decl = on_command_decl(manifest_has_command(&manifest));
-    let config = generate_config(&config_fields(&manifest));
-
     let expanded = quote! {
         /// The plugin contract for this crate, specialized to its `manifest.json`.
         /// Implement the required methods (a `commands`/`shebang` provider makes
@@ -87,9 +84,9 @@ pub fn plugin(input: TokenStream) -> TokenStream {
             /// seconds after typing."
             ///
             /// Keep the snapshot warm in the background instead
-            /// (`on_start` + `on_event` push refreshes + `ctx.interval`
-            /// poll) and dedup before emitting (see AGENTS.md "Plugin
-            /// snapshot freshness contract"). Only override this method
+            /// (`on_start` + `on_event` push refreshes, plus plugin-owned
+            /// polling when needed) and dedup before emitting (see AGENTS.md
+            /// "Plugin snapshot freshness contract"). Only override this method
             /// when the plugin owns a stricter timing the host can't
             /// know about (e.g. completion that depends on the live
             /// query string).
@@ -219,8 +216,6 @@ pub fn plugin(input: TokenStream) -> TokenStream {
             }
         }
 
-        #config
-
         const _: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/manifest.json"));
     };
 
@@ -261,20 +256,18 @@ fn load_manifest() -> Value {
     })
 }
 
-/// Whether the manifest declares a `commands` or `shebang` provider — either
-/// makes `on_command` a required trait method.
+/// Whether the manifest declares a command or shebang surface — either makes
+/// `on_command` a required trait method.
 fn manifest_has_command(manifest: &Value) -> bool {
+    section_has_items(manifest, "commands") || section_has_items(manifest, "shebangs")
+}
+
+fn section_has_items(manifest: &Value, section: &str) -> bool {
     manifest
-        .get("providers")
+        .get(section)
+        .and_then(|value| value.get("items"))
         .and_then(Value::as_array)
-        .map(|providers| {
-            providers.iter().any(|provider| {
-                matches!(
-                    provider.get("kind").and_then(Value::as_str),
-                    Some("commands") | Some("shebang")
-                )
-            })
-        })
+        .map(|items| !items.is_empty())
         .unwrap_or(false)
 }
 
@@ -296,92 +289,6 @@ fn on_command_decl(required: bool) -> TokenStream2 {
             #signature {
                 let _ = (ctx, command);
                 async { ::flash_plugin::CommandResponse::error("plugin declares no commands") }
-            }
-        }
-    }
-}
-
-enum ConfigTy {
-    Str,
-    Bool,
-    Int,
-    Num,
-}
-
-struct ConfigField {
-    name: String,
-    ty: ConfigTy,
-}
-
-/// Read `config_schema.properties` into typed fields. JSON-Schema `type` maps to
-/// the obvious Rust type; anything unrecognized falls back to a string.
-fn config_fields(manifest: &Value) -> Vec<ConfigField> {
-    let Some(props) = manifest
-        .get("config_schema")
-        .and_then(|schema| schema.get("properties"))
-        .and_then(Value::as_object)
-    else {
-        return Vec::new();
-    };
-    props
-        .iter()
-        .map(|(name, spec)| {
-            let ty = match spec.get("type").and_then(Value::as_str) {
-                Some("boolean") => ConfigTy::Bool,
-                Some("integer") => ConfigTy::Int,
-                Some("number") => ConfigTy::Num,
-                _ => ConfigTy::Str,
-            };
-            ConfigField {
-                name: name.clone(),
-                ty,
-            }
-        })
-        .collect()
-}
-
-/// Generate a typed `Config` + `Config::load(&ctx)` from the schema fields, or
-/// nothing when the manifest declares no `config_schema`.
-fn generate_config(fields: &[ConfigField]) -> TokenStream2 {
-    if fields.is_empty() {
-        return TokenStream2::new();
-    }
-    let decls = fields.iter().map(|field| {
-        let ident = Ident::new(&field.name, Span::call_site());
-        let ty = match field.ty {
-            ConfigTy::Str => quote!(::std::string::String),
-            ConfigTy::Bool => quote!(bool),
-            ConfigTy::Int => quote!(i64),
-            ConfigTy::Num => quote!(f64),
-        };
-        quote! { pub #ident: #ty, }
-    });
-    let loads = fields.iter().map(|field| {
-        let ident = Ident::new(&field.name, Span::call_site());
-        let key = &field.name;
-        let expr = match field.ty {
-            ConfigTy::Str => quote!(ctx.config_str(#key)),
-            ConfigTy::Bool => quote!(ctx.config_json::<bool>(#key).unwrap_or_default()),
-            ConfigTy::Int => quote!(ctx.config_json::<i64>(#key).unwrap_or_default()),
-            ConfigTy::Num => quote!(ctx.config_json::<f64>(#key).unwrap_or_default()),
-        };
-        quote! { #ident: #expr, }
-    });
-    quote! {
-        /// Typed view of this plugin's `[plugin.<id>]` settings, generated from
-        /// the manifest `config_schema`.
-        #[allow(dead_code)]
-        pub struct Config {
-            #(#decls)*
-        }
-
-        #[allow(dead_code)]
-        impl Config {
-            /// Load every declared setting from the plugin context.
-            pub fn load(ctx: &::flash_plugin::Context) -> Self {
-                Self {
-                    #(#loads)*
-                }
             }
         }
     }

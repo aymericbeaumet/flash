@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
 use flash_plugin::{
-    run, AxNode, Candidate, Context, Event, ResolveResponse, SourceActionRequest,
-    SourceActionResponse,
+    run, Candidate, Context, Event, ResolveResponse, SourceActionRequest, SourceActionResponse,
 };
+use serde_json::{json, Value};
 
 const SOURCE_ID: &str = "plugin:firefox";
 const MAX_NODES: u64 = 3_000;
@@ -97,9 +99,7 @@ fn source_name(_bundle: &str) -> String {
 /// a node is a tab when it is a radio button / button / tab whose subrole or
 /// role-description marks it as a tab strip entry (or any `AXTab`).
 async fn collect_tabs(ctx: &Context, pid: i64) -> Vec<Tab> {
-    let nodes = ctx
-        .ax_snapshot(pid, "windows", &[], COLLECT, MAX_NODES, false)
-        .await;
+    let nodes = ax_snapshot(ctx, pid, "windows", &[], COLLECT, MAX_NODES, false).await;
     let window_titles = window_titles(&nodes);
     let mut tabs = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -207,7 +207,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     let Some(pid) = candidate.pid_value() else {
         return ResolveResponse::unresolved();
     };
-    ctx.ax_activate(pid).await;
+    activate_app(ctx, pid).await;
     let url = candidate.url_value().unwrap_or("");
     let name = candidate.title.as_str();
     let tabs = collect_tabs(ctx, pid).await;
@@ -237,7 +237,7 @@ async fn perform_source_action(
     let (Some(pid), true) = (action.context.pid, index > 0) else {
         return SourceActionResponse::unhandled();
     };
-    ctx.ax_activate(pid).await;
+    activate_app(ctx, pid).await;
     let tabs = collect_tabs(ctx, pid).await;
     let Some(target) = tabs.get((index - 1) as usize) else {
         return SourceActionResponse::unhandled();
@@ -256,10 +256,98 @@ async fn perform_source_action(
 /// Press a tab handle, falling back to selecting it when the element exposes no
 /// press action.
 async fn press(ctx: &Context, handle: u64) -> bool {
-    if ctx.ax_perform(handle, "AXPress").await {
+    if ax_perform(ctx, handle, "AXPress").await {
         return true;
     }
-    ctx.ax_set(handle, "AXSelected", true).await
+    ax_set(ctx, handle, "AXSelected", true).await
+}
+
+#[derive(Clone, Debug)]
+struct AxNode {
+    handle: u64,
+    root: usize,
+    attrs: BTreeMap<String, String>,
+}
+
+impl AxNode {
+    fn from_value(value: &Value) -> Option<Self> {
+        let handle = value.get("handle")?.as_u64()?;
+        let root = value.get("root").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let attrs = value
+            .get("attrs")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Self {
+            handle,
+            root,
+            attrs,
+        })
+    }
+
+    fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.get(name).map(String::as_str)
+    }
+}
+
+async fn activate_app(ctx: &Context, pid: i64) -> bool {
+    ctx.call_host("app.activate", json!({ "pid": pid }))
+        .await
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn ax_snapshot(
+    ctx: &Context,
+    pid: i64,
+    roots: &str,
+    follow: &[&str],
+    collect: &[&str],
+    max_nodes: u64,
+    geometry: bool,
+) -> Vec<AxNode> {
+    let result = ctx
+        .call_host(
+            "ax.snapshot",
+            json!({
+                "pid": pid,
+                "roots": roots,
+                "follow": follow,
+                "collect": collect,
+                "max_nodes": max_nodes,
+                "geometry": geometry,
+            }),
+        )
+        .await;
+    result
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| nodes.iter().filter_map(AxNode::from_value).collect())
+        .unwrap_or_default()
+}
+
+async fn ax_perform(ctx: &Context, handle: u64, action: &str) -> bool {
+    ctx.call_host("ax.perform", json!({ "handle": handle, "action": action }))
+        .await
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn ax_set(ctx: &Context, handle: u64, attribute: &str, value: bool) -> bool {
+    ctx.call_host(
+        "ax.set",
+        json!({ "handle": handle, "attribute": attribute, "value": value }),
+    )
+    .await
+    .get("ok")
+    .and_then(Value::as_bool)
+    .unwrap_or(false)
 }
 
 fn main() {

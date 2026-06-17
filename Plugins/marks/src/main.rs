@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use flash_plugin::{run, CommandRequest, CommandResponse, Context, Event};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 const STATE_FILE: &str = "marks.json";
 
@@ -33,7 +34,7 @@ flash_plugin::plugin!(Marks);
 
 impl FlashPlugin for Marks {
     async fn on_start(&self, ctx: Context) {
-        if let Some(loaded) = ctx.read_state::<MarksState>(STATE_FILE) {
+        if let Some(loaded) = read_state::<MarksState>(&ctx, STATE_FILE) {
             if let Ok(mut state) = self.state.lock() {
                 *state = loaded;
             }
@@ -108,7 +109,7 @@ async fn set_mark_command(
         state.entries.insert(letter.clone(), entry);
         state.clone()
     };
-    ctx.write_state(STATE_FILE, &snapshot);
+    write_state(ctx, STATE_FILE, &snapshot);
     ctx.log(
         "debug",
         &format!(
@@ -135,11 +136,11 @@ async fn jump_to_mark_command(
     let Some(mark) = mark else {
         return CommandResponse::error(format!("no mark for letter={letter}"));
     };
-    // Pid is the fast path: if the original process is still alive, the AX
-    // broker's `activate` call brings its windows to the front in one round
-    // trip. If the pid is dead, fall back to the durable bundle id via the
-    // running-apps mirror updated from `core:apps.*` events.
-    if ctx.ax_activate(mark.pid).await {
+    // Pid is the fast path: if the original process is still alive, app
+    // activation brings its windows to the front. If the pid is dead, fall
+    // back to the durable bundle id via the running-apps mirror updated from
+    // `core:apps.*` events.
+    if activate_app(ctx, mark.pid).await {
         return CommandResponse::ok().target_pid(mark.pid);
     }
     let fallback_pid = plugin
@@ -148,7 +149,7 @@ async fn jump_to_mark_command(
         .ok()
         .and_then(|apps| apps.get(&mark.bundle_id).copied());
     if let Some(pid) = fallback_pid {
-        if ctx.ax_activate(pid).await {
+        if activate_app(ctx, pid).await {
             let snapshot = {
                 let Ok(mut state) = plugin.state.lock() else {
                     return CommandResponse::ok().target_pid(pid);
@@ -158,7 +159,7 @@ async fn jump_to_mark_command(
                 }
                 state.clone()
             };
-            ctx.write_state(STATE_FILE, &snapshot);
+            write_state(ctx, STATE_FILE, &snapshot);
             return CommandResponse::ok().target_pid(pid);
         }
     }
@@ -166,6 +167,26 @@ async fn jump_to_mark_command(
         "mark letter={letter} bundle={} unreachable",
         mark.bundle_id
     ))
+}
+
+async fn activate_app(ctx: &Context, pid: i64) -> bool {
+    ctx.call_host("app.activate", json!({ "pid": pid }))
+        .await
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn read_state<T: serde::de::DeserializeOwned>(ctx: &Context, name: &str) -> Option<T> {
+    let raw = std::fs::read_to_string(ctx.share_dir().join(name)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_state<T: serde::Serialize>(ctx: &Context, name: &str, value: &T) -> bool {
+    match serde_json::to_string(value) {
+        Ok(raw) => std::fs::write(ctx.share_dir().join(name), raw).is_ok(),
+        Err(_) => false,
+    }
 }
 
 fn main() {

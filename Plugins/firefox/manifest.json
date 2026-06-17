@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "firefox",
   "name": "firefox",
   "version": "0.1.0",
@@ -7,15 +7,27 @@
   "install": "true",
   "start": "exec ./flash-plugin-firefox",
   "priority": 30,
-  "bundle_ids": ["org.mozilla.firefox", "org.mozilla.firefoxdeveloperedition"],
+  "bundle_ids": [
+    "org.mozilla.firefox",
+    "org.mozilla.firefoxdeveloperedition"
+  ],
   "subscriptions": [
     "core:flash.started",
     "core:apps.snapshot",
     "core:focus.changed",
     "core:ax.changed"
   ],
-  "providers": [
-    { "kind": "candidates", "sources": ["firefox.tabs"] },
-    { "kind": "source_actions", "actions": ["tab_select"] }
-  ]
+  "capabilities": [
+    "accessibility"
+  ],
+  "candidates": {
+    "sources": [
+      "firefox.tabs"
+    ]
+  },
+  "source_actions": {
+    "actions": [
+      "tab_select"
+    ]
+  }
 }

@@ -48,14 +48,16 @@ final class PluginFlashSource: FlashSource {
     if !manifestBundles.isEmpty {
       return manifestBundles.contains(context.bundleIdentifier)
     }
+    if plugin.manifest.providerSupports(bundleID: context.bundleIdentifier) {
+      return true
+    }
     let event = PluginEvent(
       name: "core:focus.changed",
       payload: [:],
       bundleID: context.bundleIdentifier,
       configPath: nil,
       focused: true)
-    return plugin.manifest.subscriptions.isEmpty
-      || plugin.manifest.subscriptions.contains { $0.matches(event) }
+    return plugin.manifest.subscriptions.contains { $0.matches(event) }
   }
 
   func discover(in context: AppContext) throws -> [JumpTarget] {
@@ -138,6 +140,11 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
+    guard plugin.manifest.supportsSourceAction(action.wireName, bundleID: context.bundleIdentifier)
+    else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
     // The wire format (`SourceActionRequest { name, index }`) is already a
     // single shape on the plugin side, so this method translates the host's
     // typed `SourceAction` into the matching wire fields and posts one

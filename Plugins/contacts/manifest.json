@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "contacts",
   "name": "Contacts",
   "version": "0.1.0",
@@ -10,16 +10,30 @@
   "subscriptions": [
     "core:flash.started",
     "core:config.*",
-    { "match": "core:apps.*", "bundle_ids": ["com.apple.AddressBook"] }
-  ],
-  "providers": [
-    { "kind": "candidates", "sources": ["contacts.cards"] },
     {
-      "kind": "commands",
-      "commands": [
-        { "command": "contacts", "subcommand": "open", "description": "Open Contacts.app" },
-        { "command": "contacts", "subcommand": "refresh", "description": "Refresh the cached contacts list" }
+      "match": "core:apps.*",
+      "bundle_ids": [
+        "com.apple.AddressBook"
       ]
     }
-  ]
+  ],
+  "candidates": {
+    "sources": [
+      "contacts.cards"
+    ]
+  },
+  "commands": {
+    "items": [
+      {
+        "command": "contacts",
+        "subcommand": "open",
+        "description": "Open Contacts.app"
+      },
+      {
+        "command": "contacts",
+        "subcommand": "refresh",
+        "description": "Refresh the cached contacts list"
+      }
+    ]
+  }
 }

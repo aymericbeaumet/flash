@@ -3,17 +3,13 @@
 //! This crate speaks the length-prefixed MessagePack wire protocol over
 //! stdin/stdout — a 4-byte big-endian payload length followed by a
 //! MessagePack-encoded value — plus request/response correlation, the
-//! `initialize`/`heartbeat`/`shutdown` lifecycle, structured logging, and a
-//! sandboxed `run_cli`. Everything a plugin touches is a typed value: a plugin
-//! receives a [`Request`] / [`Event`] and returns a [`Response`]; it never
-//! constructs raw JSON. `serde_json` is an implementation detail of the wire
-//! codec and is intentionally *not* re-exported — plugins that need a custom
-//! candidate payload derive `serde` on their own struct.
+//! `initialize`/`heartbeat`/`shutdown` lifecycle, and structured logging.
+//! Everything a plugin touches is a typed value: a plugin receives a
+//! [`Request`] / [`Event`] and returns a [`Response`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,7 +19,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
 
 /// Generate the typed plugin surface from `manifest.json` at compile time. See
 /// the `flash_plugin_macros` crate. Invoke as `flash_plugin::plugin!(MyPlugin);`
@@ -34,6 +29,8 @@ pub use flash_plugin_macros::plugin;
 /// plugin assigned. The serve loop fulfils each entry when the matching host
 /// response arrives. Cloned into [`Context`] so any handler can call the host.
 type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
+
+const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Core value types
@@ -59,7 +56,7 @@ impl Frame {
         }
     }
 
-    /// Build a `Frame` from an [`AxNode::frame`] `[x, y, w, h]` rect.
+    /// Build a `Frame` from a `[x, y, w, h]` rect.
     pub fn from_ax(rect: [f64; 4]) -> Self {
         Self::new(rect[0], rect[1], rect[2], rect[3])
     }
@@ -175,13 +172,6 @@ pub struct Candidate {
     /// Primary searchable string the host scores against and shows in the
     /// candidate bar — also the highest-precedence ranking field.
     pub title: String,
-    /// Stable identity for streaming-update reconciliation. When a plugin
-    /// emits the same `id` in a later [`emit_candidate_delta`](Context::emit_candidate_delta)
-    /// `upsert`, the host replaces the previous entry; the same `id` in
-    /// `remove` evicts it. The host falls back to `title` for identity when
-    /// `id` is absent, matching the existing snapshot-replacement semantics.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub id: Option<String>,
     /// Openable destination when one exists. Apps use the bundle file URL;
     /// browser tabs and other resources use their canonical URL.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -215,18 +205,9 @@ impl Candidate {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
-            id: None,
             url: None,
             metadata: HashMap::new(),
         }
-    }
-
-    /// Set the stable identity this candidate carries across snapshot deltas.
-    /// Unset by default; recommended for any plugin that uses
-    /// [`emit_candidate_delta`](Context::emit_candidate_delta).
-    pub fn id(mut self, id: impl Into<String>) -> Self {
-        self.id = Some(id.into());
-        self
     }
 
     fn set(mut self, key: &str, value: impl Into<String>) -> Self {
@@ -404,191 +385,6 @@ pub struct NormalModeTarget {
     pub bundle_id: String,
 }
 
-/// TCC (privacy) permission categories a plugin can request via
-/// [`Context::tcc_request`]. Only AppleEvents is wired through the host
-/// today; future kinds (Contacts, Reminders, Calendar) will land alongside
-/// host-side bridges for the matching frameworks.
-#[derive(Clone, Debug)]
-pub enum TccKind {
-    AppleEvents { target_bundle_id: String },
-}
-
-/// Result of [`Context::tcc_request`]. `granted` means the user has already
-/// approved (no prompt was needed, or one was approved before); `denied` means
-/// the user has explicitly declined; `unknown` means the prompt fired and
-/// the system is waiting for the user's decision. `ok` is false only when the
-/// underlying TCC call failed for a reason other than the user's choice — in
-/// that case `error` carries the diagnostic.
-#[derive(Clone, Debug, Default)]
-pub struct TccGrant {
-    pub ok: bool,
-    pub granted: bool,
-    pub denied: bool,
-    pub unknown: bool,
-    pub error: Option<String>,
-}
-
-/// Parsing strategy for [`Context::applescript`] stdout. Use `Raw` when the
-/// script returns no structured output; `TabSep` for the common "list of rows
-/// separated by newlines, columns separated by tabs" idiom; `Json` when the
-/// script returns a JSON document.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum AppleScriptParse {
-    Raw,
-    TabSep,
-    Json,
-}
-
-/// Result of [`Context::applescript`]. `rows` is populated when `parse =
-/// TabSep`; `json` is populated when `parse = Json` and stdout parses
-/// successfully. `stdout` is always available so plugins can fall back to
-/// custom parsing.
-#[derive(Clone, Debug, Default)]
-pub struct AppleScriptResult {
-    pub ok: bool,
-    pub stdout: String,
-    pub stderr: String,
-    pub status: i32,
-    pub rows: Vec<Vec<String>>,
-    pub json: Option<Value>,
-}
-
-/// Result of a [`Context::run_cli`] / [`Context::run_local`] invocation.
-#[derive(Clone, Debug, Default)]
-pub struct CliResult {
-    pub ok: bool,
-    pub stdout: String,
-    pub stderr: String,
-    pub status: i32,
-}
-
-impl CliResult {
-    /// Map into a [`CommandResponse`]: success carries non-empty stdout as a
-    /// toast; failure carries stderr as the error.
-    pub fn into_command(self) -> CommandResponse {
-        let stdout = (!self.stdout.is_empty()).then_some(self.stdout);
-        let error = (!self.ok && !self.stderr.is_empty()).then_some(self.stderr);
-        CommandResponse {
-            ok: self.ok,
-            target_pid: None,
-            navigation_url: None,
-            stdout,
-            error,
-        }
-    }
-}
-
-/// One node from an [`ax_snapshot`](Context::ax_snapshot) walk. `handle` is an
-/// opaque id the broker uses to find the real `AXUIElement` for follow-up
-/// actions; `root` is the index of the root (e.g. window) this node descends
-/// from; `attrs` holds the requested attributes that were present; `frame` is
-/// the node's NSScreen-space `[x, y, w, h]`, present only when the snapshot was
-/// taken with `geometry = true`.
-#[derive(Clone, Debug)]
-pub struct AxNode {
-    pub handle: u64,
-    pub root: usize,
-    pub attrs: BTreeMap<String, String>,
-    pub frame: Option<[f64; 4]>,
-}
-
-impl AxNode {
-    fn from_value(value: &Value) -> Option<Self> {
-        let handle = value.get("handle")?.as_u64()?;
-        let root = value.get("root").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let attrs = value
-            .get("attrs")
-            .and_then(Value::as_object)
-            .map(|map| {
-                map.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let frame = value.get("frame").and_then(Value::as_array).and_then(|a| {
-            let v: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
-            <[f64; 4]>::try_from(v).ok()
-        });
-        Some(Self {
-            handle,
-            root,
-            attrs,
-            frame,
-        })
-    }
-
-    /// The collected attribute `name`, if it was present on this node.
-    pub fn attr(&self, name: &str) -> Option<&str> {
-        self.attrs.get(name).map(String::as_str)
-    }
-}
-
-/// A browser tab extracted from an AX snapshot by
-/// [`Context::ax_browser_tabs`]. `handle` is the AX broker handle for the
-/// underlying tab element; `root` is the window index (so callers can map
-/// back to `window_title`); `title`/`url` are best-effort extractions from the
-/// usual tab attributes; `window_title` is the surrounding `AXWindow` title,
-/// used as a fallback when a tab exposes no title of its own.
-#[derive(Clone, Debug)]
-pub struct BrowserTab {
-    pub handle: u64,
-    pub root: usize,
-    pub title: String,
-    pub url: String,
-    pub window_title: String,
-}
-
-/// Whether an AX node looks like a browser tab. Same heuristic the firefox
-/// plugin used inline before this helper landed: `AXTab` always counts; an
-/// `AXRadioButton` / `AXButton` only when its `AXSubrole` is `AXTabButton` or
-/// its `AXRoleDescription` matches "tab"/"... tab button".
-fn is_browser_tab(node: &AxNode) -> bool {
-    let role = node.attr("AXRole").unwrap_or("");
-    if role == "AXTab" {
-        return true;
-    }
-    let subrole = node.attr("AXSubrole").unwrap_or("");
-    let role_desc = node.attr("AXRoleDescription").unwrap_or("").to_lowercase();
-    let is_tab_button =
-        subrole == "AXTabButton" || role_desc == "tab" || role_desc.contains("tab button");
-    matches!(role, "AXRadioButton" | "AXButton") && is_tab_button
-}
-
-/// A value to write to an AX attribute via [`Context::ax_set`]. Construct from
-/// a `bool` or a string with `.into()`.
-#[derive(Clone, Debug)]
-pub enum AxValue {
-    Bool(bool),
-    Str(String),
-}
-
-impl From<bool> for AxValue {
-    fn from(value: bool) -> Self {
-        AxValue::Bool(value)
-    }
-}
-
-impl From<&str> for AxValue {
-    fn from(value: &str) -> Self {
-        AxValue::Str(value.to_string())
-    }
-}
-
-impl From<String> for AxValue {
-    fn from(value: String) -> Self {
-        AxValue::Str(value)
-    }
-}
-
-impl AxValue {
-    fn to_value(&self) -> Value {
-        match self {
-            AxValue::Bool(b) => json!(b),
-            AxValue::Str(s) => json!(s),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Inbound requests / events
 // ---------------------------------------------------------------------------
@@ -731,17 +527,14 @@ pub struct NavigationRequest {
 }
 
 /// A `candidateQuery` request from the flashlight. `query` is the current
-/// residual search text after source filters have been stripped. Empty
-/// `source_filters` means the user has not pinned a source; plugins may return
-/// any candidate source they declared.
+/// search text for plugins that intentionally serve live query-dependent
+/// results.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct CandidateQueryRequest {
     #[serde(default)]
     pub scope: String,
     #[serde(default)]
     pub query: String,
-    #[serde(default)]
-    pub source_filters: Vec<String>,
     #[serde(default)]
     pub running_applications: Vec<RunningApplication>,
 }
@@ -968,8 +761,8 @@ impl CandidateQueryResponse {
 }
 
 /// What [`Plugin::handle`] returns. Build one from the matching response type
-/// (or a [`CliResult`]) with `.into()`; return [`Response::None`] for
-/// [`Request::ActivateTarget`], which expects no reply.
+/// with `.into()`; return [`Response::None`] for [`Request::ActivateTarget`],
+/// which expects no reply.
 #[derive(Clone, Debug)]
 pub enum Response {
     Command(CommandResponse),
@@ -1023,12 +816,6 @@ impl From<SourceActionResponse> for Response {
     }
 }
 
-impl From<CliResult> for Response {
-    fn from(value: CliResult) -> Self {
-        Response::Command(value.into_command())
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Emitter / Context
 // ---------------------------------------------------------------------------
@@ -1043,6 +830,9 @@ struct Emitter {
 impl Emitter {
     fn send(&self, value: Value) {
         if let Ok(payload) = rmp_serde::to_vec(&value) {
+            if payload.len() > MAX_FRAME_BYTES {
+                return;
+            }
             let _ = self.tx.send(payload);
         }
     }
@@ -1079,10 +869,6 @@ pub struct Context {
     config: Value,
     host_pending: HostPending,
     host_counter: Arc<AtomicU64>,
-    /// Named recurring tasks owned by this plugin's runtime (see
-    /// [`Context::interval`]). Re-registering the same name aborts the
-    /// previous handle so plugins can adjust a schedule by re-registering it.
-    intervals: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
 }
 
 impl Context {
@@ -1117,36 +903,15 @@ impl Context {
         serde_json::from_value(self.config.get(key)?.clone()).ok()
     }
 
-    /// Read typed JSON state previously written with
-    /// [`write_state`](Context::write_state) under `share_dir/<name>`.
-    pub fn read_state<T: DeserializeOwned>(&self, name: &str) -> Option<T> {
-        let raw = std::fs::read_to_string(self.share_dir().join(name)).ok()?;
-        serde_json::from_str(&raw).ok()
-    }
-
-    /// Persist `value` as JSON to `share_dir/<name>`. Returns whether it wrote.
-    pub fn write_state<T: Serialize>(&self, name: &str, value: &T) -> bool {
-        match serde_json::to_string(value) {
-            Ok(raw) => std::fs::write(self.share_dir().join(name), raw).is_ok(),
-            Err(_) => false,
-        }
-    }
-
     /// Call a host RPC method and await its JSON result. This is the channel
-    /// plugins use to reach native capabilities the core owns — most notably
-    /// the Accessibility (AX) broker, which holds the single TCC grant. Returns
-    /// a JSON error object if the host doesn't answer in time.
-    pub(crate) async fn call_host(&self, method: &str, params: Value) -> Value {
+    /// plugins use to reach native capabilities the core explicitly exposes.
+    /// Returns a JSON error object if the host doesn't answer in time.
+    pub async fn call_host(&self, method: &str, params: Value) -> Value {
         self.call_host_timeout(method, params, Duration::from_secs(5))
             .await
     }
 
-    pub(crate) async fn call_host_timeout(
-        &self,
-        method: &str,
-        params: Value,
-        timeout: Duration,
-    ) -> Value {
+    pub async fn call_host_timeout(&self, method: &str, params: Value, timeout: Duration) -> Value {
         let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         if let Ok(mut pending) = self.host_pending.lock() {
@@ -1196,322 +961,6 @@ impl Context {
         Some(NormalModeTarget { pid, bundle_id })
     }
 
-    /// Walk a subtree of an app's Accessibility tree via the core's AX broker
-    /// and return a flat list of [`AxNode`]s.
-    ///
-    /// - `pid`: target application.
-    /// - `roots`: `"windows"` to start from the app's windows (the usual case),
-    ///   or `"app"` to start from the application element itself.
-    /// - `follow`: child attribute names to descend through; pass an empty
-    ///   slice to use the broker's default (children + navigation order).
-    /// - `collect`: attribute names to read for every visited node.
-    /// - `max_nodes`: visit budget — the walk stops once this many nodes are
-    ///   collected.
-    /// - `geometry`: when true, each node also carries [`AxNode::frame`].
-    pub async fn ax_snapshot(
-        &self,
-        pid: i64,
-        roots: &str,
-        follow: &[&str],
-        collect: &[&str],
-        max_nodes: u64,
-        geometry: bool,
-    ) -> Vec<AxNode> {
-        let result = self
-            .call_host(
-                "ax.snapshot",
-                json!({
-                    "pid": pid,
-                    "roots": roots,
-                    "follow": follow,
-                    "collect": collect,
-                    "max_nodes": max_nodes,
-                    "geometry": geometry,
-                }),
-            )
-            .await;
-        result
-            .get("nodes")
-            .and_then(Value::as_array)
-            .map(|nodes| nodes.iter().filter_map(AxNode::from_value).collect())
-            .unwrap_or_default()
-    }
-
-    /// Perform an AX action (e.g. `AXPress`) on a snapshot handle. A stale
-    /// handle (snapshot superseded) reports `false`.
-    pub async fn ax_perform(&self, handle: u64, action: &str) -> bool {
-        host_ok(
-            self.call_host("ax.perform", json!({ "handle": handle, "action": action }))
-                .await,
-        )
-    }
-
-    /// Set an AX attribute (e.g. `AXSelected = true`) on a snapshot handle.
-    pub async fn ax_set(&self, handle: u64, attribute: &str, value: impl Into<AxValue>) -> bool {
-        let value = value.into();
-        host_ok(
-            self.call_host(
-                "ax.set",
-                json!({ "handle": handle, "attribute": attribute, "value": value.to_value() }),
-            )
-            .await,
-        )
-    }
-
-    /// Bring an application's windows to the front.
-    pub async fn ax_activate(&self, pid: i64) -> bool {
-        host_ok(self.call_host("ax.activate", json!({ "pid": pid })).await)
-    }
-
-    /// Walk `pid`'s windows and return up to `max` AX nodes whose `AXRole`
-    /// matches `role` exactly. Built on top of [`ax_snapshot`](Context::ax_snapshot);
-    /// the snapshot collects only `AXRole`, so callers needing more attributes
-    /// should use `ax_snapshot` directly.
-    pub async fn ax_find_by_role(&self, pid: i64, role: &str, max: u64) -> Vec<AxNode> {
-        self.ax_snapshot(pid, "windows", &[], &["AXRole"], max, false)
-            .await
-            .into_iter()
-            .filter(|n| n.attr("AXRole") == Some(role))
-            .collect()
-    }
-
-    /// Walk `pid`'s windows and return up to `max` AX nodes whose `AXTitle`,
-    /// `AXDescription`, or `AXValue` contains `needle` (case-insensitive
-    /// substring).
-    pub async fn ax_find_by_text(&self, pid: i64, needle: &str, max: u64) -> Vec<AxNode> {
-        let lower = needle.to_lowercase();
-        self.ax_snapshot(
-            pid,
-            "windows",
-            &[],
-            &["AXRole", "AXTitle", "AXDescription", "AXValue"],
-            max,
-            false,
-        )
-        .await
-        .into_iter()
-        .filter(|n| {
-            for attr in ["AXTitle", "AXDescription", "AXValue"] {
-                if let Some(v) = n.attr(attr) {
-                    if v.to_lowercase().contains(&lower) {
-                        return true;
-                    }
-                }
-            }
-            false
-        })
-        .collect()
-    }
-
-    /// Walk `pid`'s windows and return its browser tabs, sourced from the
-    /// AXTab-shaped nodes the host emits. Ports the heuristics the firefox
-    /// plugin uses (`AXTab`, plus `AXRadioButton`/`AXButton` with an `AXTabButton`
-    /// subrole or "tab" role description). Each tab carries the handle the
-    /// plugin can pass to [`ax_perform`](Context::ax_perform) or
-    /// [`ax_set`](Context::ax_set), plus extracted title/url and the owning
-    /// window title.
-    pub async fn ax_browser_tabs(&self, pid: i64) -> Vec<BrowserTab> {
-        const COLLECT: &[&str] = &[
-            "AXRole",
-            "AXSubrole",
-            "AXRoleDescription",
-            "AXTitle",
-            "AXDescription",
-            "AXValue",
-            "AXURL",
-            "AXDocument",
-        ];
-        let nodes = self
-            .ax_snapshot(pid, "windows", &[], COLLECT, 3_000, false)
-            .await;
-        let mut window_titles: Vec<String> = Vec::new();
-        for node in &nodes {
-            if node.attr("AXRole") == Some("AXWindow") {
-                if node.root >= window_titles.len() {
-                    window_titles.resize(node.root + 1, String::new());
-                }
-                window_titles[node.root] = node.attr("AXTitle").unwrap_or("").to_string();
-            }
-        }
-        let mut out: Vec<BrowserTab> = Vec::new();
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for node in nodes {
-            if !is_browser_tab(&node) {
-                continue;
-            }
-            let window_title = window_titles
-                .get(node.root)
-                .map(String::as_str)
-                .unwrap_or("");
-            let raw_title = node
-                .attr("AXTitle")
-                .or_else(|| node.attr("AXDescription"))
-                .or_else(|| node.attr("AXValue"))
-                .unwrap_or(window_title);
-            let title = raw_title.trim().to_string();
-            if title.is_empty() {
-                continue;
-            }
-            let url = node
-                .attr("AXURL")
-                .or_else(|| node.attr("AXDocument"))
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let key = format!("{}|{title}|{url}", node.root);
-            if !seen.insert(key) {
-                continue;
-            }
-            out.push(BrowserTab {
-                handle: node.handle,
-                root: node.root,
-                title,
-                url,
-                window_title: window_title.to_string(),
-            });
-        }
-        out
-    }
-
-    /// Ask the host to trigger a TCC (privacy) permission prompt on this
-    /// plugin's behalf. The only `kind` supported today is
-    /// [`TccKind::AppleEvents`] for AppleEvents access to a specific target
-    /// bundle id. Plugins that drive other apps via `osascript` should call
-    /// this once at startup so the prompt fires up-front instead of mid-
-    /// operation. Requires the `tcc.request` capability in the manifest.
-    pub async fn tcc_request(&self, kind: TccKind) -> TccGrant {
-        let params = match &kind {
-            TccKind::AppleEvents { target_bundle_id } => json!({
-                "kind": "applescript",
-                "target": target_bundle_id,
-            }),
-        };
-        let result = self.call_host("tcc.request", params).await;
-        TccGrant {
-            ok: result.get("ok").and_then(Value::as_bool).unwrap_or(false),
-            granted: result
-                .get("granted")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            denied: result
-                .get("denied")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            unknown: result
-                .get("unknown")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            error: result
-                .get("error")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        }
-    }
-
-    /// Ask the host to synthesize one parsed hotkey to `pid`. `keys` uses the
-    /// same syntax as Flash config mappings (`e`, `cmd+r`, `shift+tab`, ...).
-    /// The host owns the native CGEvent posting API; plugins only describe the
-    /// key they want sent.
-    pub async fn send_key(&self, pid: i64, keys: &str) -> bool {
-        host_ok(
-            self.call_host("input.send_key", json!({ "pid": pid, "keys": keys }))
-                .await,
-        )
-    }
-
-    /// Register a system-wide Carbon hotkey, identified by the plugin-chosen
-    /// `id`. Re-registering the same `id` replaces the previous binding so
-    /// callers can swap chords without first calling
-    /// [`hotkey_unregister`](Context::hotkey_unregister). When the hotkey
-    /// fires, the host emits a `core:hotkey.fired` event whose payload
-    /// carries `hotkey_id` matching `id` — the plugin must declare both the
-    /// `hotkey` capability and a subscription to `core:hotkey.fired` for the
-    /// chord to actually reach `on_event`. Returns `false` when the spec
-    /// fails to parse, Carbon refuses the chord (typically because another
-    /// process already owns it), or the plugin lacks the capability.
-    pub async fn hotkey_register(&self, id: &str, spec: &str) -> bool {
-        host_ok(
-            self.call_host("hotkey.register", json!({ "id": id, "spec": spec }))
-                .await,
-        )
-    }
-
-    /// Drop the registration previously installed by
-    /// [`hotkey_register`](Context::hotkey_register) under `id`. No-op when
-    /// `id` is unknown.
-    pub async fn hotkey_unregister(&self, id: &str) -> bool {
-        host_ok(
-            self.call_host("hotkey.unregister", json!({ "id": id }))
-                .await,
-        )
-    }
-
-    /// Run an AppleScript snippet via `osascript -e` (through the sandboxed
-    /// [`run_cli`](Context::run_cli)).
-    pub async fn run_osascript(&self, script: &str, timeout: Duration) -> CliResult {
-        self.run_cli(
-            &[
-                "/usr/bin/osascript".to_string(),
-                "-e".to_string(),
-                script.to_string(),
-            ],
-            timeout,
-        )
-        .await
-    }
-
-    /// Higher-level AppleScript wrapper. Substitutes `${name}` markers in
-    /// `script` with [`applescript_quote`]-quoted values from `bindings`, runs
-    /// the resulting script via [`run_osascript`](Context::run_osascript), then
-    /// parses stdout per `parse`:
-    ///
-    /// - [`AppleScriptParse::Raw`] returns stdout verbatim.
-    /// - [`AppleScriptParse::TabSep`] splits stdout into one row per line and
-    ///   tab-separated columns (trimmed). Empty rows are dropped.
-    /// - [`AppleScriptParse::Json`] tries to parse stdout as JSON.
-    ///
-    /// Callers that need a raw, unquoted numeral or token in the script (where
-    /// quoting would break AppleScript) should `format!` it into the script
-    /// before passing, and leave it out of `bindings`.
-    pub async fn applescript(
-        &self,
-        script: &str,
-        bindings: &[(&str, &str)],
-        parse: AppleScriptParse,
-        timeout: Duration,
-    ) -> AppleScriptResult {
-        let mut rendered = script.to_string();
-        for (name, value) in bindings {
-            let needle = format!("${{{name}}}");
-            rendered = rendered.replace(&needle, &applescript_quote(value));
-        }
-        let cli = self.run_osascript(&rendered, timeout).await;
-        let mut result = AppleScriptResult {
-            ok: cli.ok,
-            stdout: cli.stdout,
-            stderr: cli.stderr,
-            status: cli.status,
-            rows: Vec::new(),
-            json: None,
-        };
-        match parse {
-            AppleScriptParse::Raw => {}
-            AppleScriptParse::TabSep => {
-                for line in result.stdout.lines() {
-                    let cols: Vec<String> =
-                        line.split('\t').map(|c| c.trim().to_string()).collect();
-                    if cols.iter().any(|c| !c.is_empty()) {
-                        result.rows.push(cols);
-                    }
-                }
-            }
-            AppleScriptParse::Json => {
-                result.json = serde_json::from_str(result.stdout.trim()).ok();
-            }
-        }
-        result
-    }
-
     /// Emit a `snapshot.updated` notification carrying `candidates` (and no
     /// jump targets) for `source_id`.
     ///
@@ -1537,39 +986,8 @@ impl Context {
         );
     }
 
-    /// Apply an incremental change to a candidate source. `upsert` replaces or
-    /// inserts candidates keyed by `Candidate.id` (falling back to `title`
-    /// when `id` is absent); `remove` evicts candidates matching the listed
-    /// ids. Use this instead of [`emit_snapshot`](Context::emit_snapshot)
-    /// when the plugin owns a long-lived list whose authoring cost dominates
-    /// republishing it on every change — `media`/`spotify`/`processes` are
-    /// the canonical cases. Sending an empty `upsert` and `remove` is a
-    /// no-op the host drops without churn.
-    pub fn emit_candidate_delta(
-        &self,
-        source_id: &str,
-        upsert: Vec<Candidate>,
-        remove: Vec<String>,
-    ) {
-        if upsert.is_empty() && remove.is_empty() {
-            return;
-        }
-        let upsert_values: Vec<Value> = upsert
-            .iter()
-            .filter_map(|c| serde_json::to_value(c).ok())
-            .collect();
-        self.emit.notify(
-            "snapshot.delta",
-            json!({
-                "source_id": source_id,
-                "upsert": upsert_values,
-                "remove": remove,
-            }),
-        );
-    }
-
     /// Publish status-bar segment values declared by this plugin's
-    /// `providers[]` `status` entry. The host exposes each value as
+    /// `status` manifest section. The host exposes each value as
     /// `#{plugin:<plugin-id>.<segment>}` in `[statusbar].template`.
     pub fn emit_status_segments<I, K, V>(&self, segments: I)
     where
@@ -1593,43 +1011,6 @@ impl Context {
         self.emit.log(level, message, BTreeMap::new());
     }
 
-    /// Run `handler` every `period`, sleeping for `period` between iterations.
-    /// Re-registering with the same `name` aborts the previous handle so
-    /// callers can swap schedules without leaking tasks. The schedule is owned
-    /// by this plugin's tokio runtime and runs until the process exits or
-    /// [`cancel_interval`](Context::cancel_interval) is called. Sleep-first
-    /// semantics: the handler is invoked after the first `period` has elapsed,
-    /// so plugins that also want an immediate refresh should call the work
-    /// directly in `on_start` before registering the interval.
-    pub fn interval<F, Fut>(&self, name: &str, period: Duration, handler: F)
-    where
-        F: Fn(Context) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let ctx = self.clone();
-        let handle = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(period).await;
-                handler(ctx.clone()).await;
-            }
-        });
-        if let Ok(mut intervals) = self.intervals.lock() {
-            if let Some(previous) = intervals.insert(name.to_string(), handle) {
-                previous.abort();
-            }
-        }
-    }
-
-    /// Cancel the interval previously registered under `name`. No-op when the
-    /// name is unknown.
-    pub fn cancel_interval(&self, name: &str) {
-        if let Ok(mut intervals) = self.intervals.lock() {
-            if let Some(handle) = intervals.remove(name) {
-                handle.abort();
-            }
-        }
-    }
-
     pub fn log_fields(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
         self.emit.log(level, message, fields);
     }
@@ -1645,130 +1026,6 @@ impl Context {
             let _ = std::fs::create_dir_all(dir);
         }
     }
-
-    /// Run an external command through the core's `cli.run` capability. The
-    /// core — not the plugin — spawns the process inside this plugin's sandbox
-    /// (`HOME` and the XDG base dirs redirected under its data dir, `bin/`
-    /// prepended to `PATH`), bounds it by `timeout` (status 124 on overrun),
-    /// and emits one structured log line per call.
-    pub async fn run_cli(&self, argv: &[String], timeout: Duration) -> CliResult {
-        self.run_cli_inner(argv, timeout, false).await
-    }
-
-    /// Same as [`run_cli`](Context::run_cli) but asks the core to skip the
-    /// per-call log line.
-    pub async fn run_cli_quiet(&self, argv: &[String], timeout: Duration) -> CliResult {
-        self.run_cli_inner(argv, timeout, true).await
-    }
-
-    async fn run_cli_inner(&self, argv: &[String], timeout: Duration, quiet: bool) -> CliResult {
-        let result = self
-            .call_host_timeout(
-                "cli.run",
-                json!({
-                    "argv": argv,
-                    "timeout_ms": timeout.as_millis() as u64,
-                    "quiet": quiet,
-                }),
-                timeout + Duration::from_secs(2),
-            )
-            .await;
-        CliResult {
-            ok: result.get("ok").and_then(Value::as_bool).unwrap_or(false),
-            stdout: result
-                .get("stdout")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-            stderr: result
-                .get("stderr")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| result.get("error").and_then(Value::as_str).unwrap_or(""))
-                .to_string(),
-            status: result.get("status").and_then(Value::as_i64).unwrap_or(-1) as i32,
-        }
-    }
-}
-
-/// Read the `ok` flag from a host RPC response, defaulting to `false`.
-fn host_ok(response: Value) -> bool {
-    response.get("ok").and_then(Value::as_bool).unwrap_or(false)
-}
-
-/// Quote a string as an AppleScript literal, escaping backslashes and double
-/// quotes. Use for any value interpolated into an `osascript` snippet.
-pub fn applescript_quote(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
-}
-
-/// Truncate a string to a fixed character budget, appending an ellipsis when
-/// it overflows. Used to keep logged/forwarded output bounded.
-pub fn shorten(value: &str) -> String {
-    const LIMIT: usize = 2000;
-    let trimmed = value.trim();
-    if trimmed.chars().count() <= LIMIT {
-        return trimmed.to_string();
-    }
-    let head: String = trimmed.chars().take(LIMIT - 3).collect();
-    format!("{head}...")
-}
-
-/// Run a command in the plugin's *own* process environment (NOT the sandbox),
-/// bounded by `timeout`. Use this only when a plugin genuinely needs the user's
-/// real environment — e.g. the tmux CLI talking to the user's server socket.
-/// Prefer [`Context::run_cli`] otherwise.
-pub async fn run_local(argv: &[String], timeout: Duration) -> CliResult {
-    let Some((program, args)) = argv.split_first() else {
-        return CliResult {
-            ok: false,
-            stderr: "empty argv".to_string(),
-            status: -1,
-            ..CliResult::default()
-        };
-    };
-    let mut command = tokio::process::Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    match tokio::time::timeout(timeout, command.output()).await {
-        Ok(Ok(output)) => CliResult {
-            ok: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            status: output.status.code().unwrap_or(-1),
-        },
-        Ok(Err(err)) => CliResult {
-            ok: false,
-            stderr: err.to_string(),
-            status: -1,
-            ..CliResult::default()
-        },
-        Err(_) => CliResult {
-            ok: false,
-            stderr: "timed out".to_string(),
-            status: 124,
-            ..CliResult::default()
-        },
-    }
-}
-
-/// Run a background task on the plugin runtime. Prefer this SDK helper over a
-/// direct tokio dependency in plugins; it keeps runtime ownership centralized
-/// in `flash_plugin`.
-pub fn spawn_background<F>(future: F)
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    tokio::spawn(future);
-}
-
-/// Sleep on the plugin runtime timer. Used by polling fallbacks when a source
-/// has no lighter host event stream.
-pub async fn sleep(duration: Duration) {
-    tokio::time::sleep(duration).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1832,7 +1089,6 @@ fn context_from_env(
         config,
         host_pending,
         host_counter,
-        intervals: Arc::new(Mutex::new(HashMap::new())),
     }
 }
 
@@ -1862,6 +1118,9 @@ async fn serve<P: Plugin>(plugin: P) {
         // syscall per frame; we flush every frame to keep latency low.
         let mut out = BufWriter::with_capacity(64 * 1024, tokio::io::stdout());
         while let Some(payload) = rx.recv().await {
+            if payload.len() > MAX_FRAME_BYTES {
+                continue;
+            }
             let len = (payload.len() as u32).to_be_bytes();
             if out.write_all(&len).await.is_err() {
                 break;
@@ -1879,14 +1138,9 @@ async fn serve<P: Plugin>(plugin: P) {
     ctx.prepare_dirs();
     ctx.log("info", "[plugin] process ready");
 
-    {
-        let plugin = plugin.clone();
-        let ctx = ctx.clone();
-        tokio::spawn(async move { plugin.on_start(ctx).await });
-    }
-
     let mut stdin = tokio::io::stdin();
     let mut len_buf = [0u8; 4];
+    let mut started = false;
     loop {
         // Read the 4-byte big-endian length prefix. A clean EOF here means the
         // host closed our stdin; anything mid-frame is an unexpected EOF — both
@@ -1897,6 +1151,9 @@ async fn serve<P: Plugin>(plugin: P) {
         let len = u32::from_be_bytes(len_buf) as usize;
         if len == 0 {
             continue;
+        }
+        if len > MAX_FRAME_BYTES {
+            break;
         }
         let mut payload = vec![0u8; len];
         if stdin.read_exact(&mut payload).await.is_err() {
@@ -1934,7 +1191,16 @@ async fn serve<P: Plugin>(plugin: P) {
         }
 
         match method.as_str() {
-            "initialize" | "heartbeat" => ctx.emit.respond(id, json!({ "ok": true })),
+            "initialize" => {
+                ctx.emit.respond(id, json!({ "ok": true }));
+                if !started {
+                    started = true;
+                    let plugin = plugin.clone();
+                    let ctx = ctx.clone();
+                    tokio::spawn(async move { plugin.on_start(ctx).await });
+                }
+            }
+            "heartbeat" => ctx.emit.respond(id, json!({ "ok": true })),
             "shutdown" => {
                 let reason = params
                     .get("reason")

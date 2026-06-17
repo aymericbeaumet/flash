@@ -19,12 +19,15 @@ public enum MessagePackError: Error, CustomStringConvertible {
   case nonStringKey
   /// The library failed to decode the supplied bytes.
   case decodingFailed(String)
+  /// The payload contained a valid value followed by extra bytes.
+  case trailingBytes(Int)
 
   public var description: String {
     switch self {
     case .unsupportedType(let name): return "messagepack: unsupported type \(name)"
     case .nonStringKey: return "messagepack: non-string map key"
     case .decodingFailed(let message): return "messagepack: \(message)"
+    case .trailingBytes(let count): return "messagepack: trailing bytes (\(count))"
     }
   }
 }
@@ -41,8 +44,11 @@ public enum MessagePack {
   /// they fit so call sites that pattern-match on `Int` keep working.
   public static func decode(_ data: Data) throws -> Any {
     do {
-      let (value, _) = try unpack(data)
-      return fromMessagePackValue(value)
+      let (value, remainder) = try unpack(data)
+      guard remainder.isEmpty else {
+        throw MessagePackError.trailingBytes(remainder.count)
+      }
+      return try fromMessagePackValue(value)
     } catch let error as MessagePackError {
       throw error
     } catch {
@@ -87,7 +93,7 @@ public enum MessagePack {
     }
   }
 
-  private static func fromMessagePackValue(_ value: MessagePackValue) -> Any {
+  private static func fromMessagePackValue(_ value: MessagePackValue) throws -> Any {
     switch value {
     case .nil:
       return NSNull()
@@ -109,13 +115,13 @@ public enum MessagePack {
     case .binary(let data):
       return data
     case .array(let array):
-      return array.map { fromMessagePackValue($0) }
+      return try array.map { try fromMessagePackValue($0) }
     case .map(let dict):
       var out: [String: Any] = [:]
       out.reserveCapacity(dict.count)
       for (key, child) in dict {
-        guard case .string(let stringKey) = key else { continue }
-        out[stringKey] = fromMessagePackValue(child)
+        guard case .string(let stringKey) = key else { throw MessagePackError.nonStringKey }
+        out[stringKey] = try fromMessagePackValue(child)
       }
       return out
     case .extended(_, let data):

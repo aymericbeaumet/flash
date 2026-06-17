@@ -72,10 +72,10 @@ enum URLCommand: Hashable {
   case pluginCommand(command: String, subcommand: String, args: [String])
   case moveWindow(MoveWindowParams)
   case sendKey(keys: String, keyCode: CGKeyCode, flagsRawValue: UInt64)
-  /// A verb registered by a plugin via a `providers[].kind = "verbs"` entry.
+  /// A verb registered by a plugin via the manifest's `verbs.items` section.
   /// The host doesn't know the verb's semantics — it just forwards the call
   /// to ``PluginManager/invokeVerb(name:args:forBundleID:onResult:)`` (which
-  /// may shortcut into `input.send_key` for inline-keystrokes verbs, or fan
+  /// may shortcut directly for inline-keystrokes verbs, or fan
   /// out to the owning plugin's `command.invoke`).
   case pluginVerb(name: String, args: [String: String])
 }

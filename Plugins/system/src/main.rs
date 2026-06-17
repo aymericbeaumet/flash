@@ -1,3 +1,4 @@
+use std::process::Stdio;
 use std::time::Duration;
 
 use flash_plugin::{run, CommandRequest, CommandResponse, Context};
@@ -15,8 +16,12 @@ flash_plugin::plugin!(System);
 impl FlashPlugin for System {
     async fn on_start(&self, ctx: Context) {
         publish_battery_status(&ctx).await;
-        ctx.interval("battery", Duration::from_secs(30), |ctx| async move {
-            publish_battery_status(&ctx).await;
+        let poll_ctx = ctx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                publish_battery_status(&poll_ctx).await;
+            }
         });
     }
 
@@ -25,15 +30,14 @@ impl FlashPlugin for System {
             "lock" => sh(&ctx, &[CGSESSION, "-suspend"], 10).await,
             "sleep" => sh(&ctx, &["/usr/bin/pmset", "sleepnow"], 10).await,
             "displaysleep" => sh(&ctx, &["/usr/bin/pmset", "displaysleepnow"], 10).await,
-            "trash" => ctx
-                .run_osascript(
-                    "tell application \"Finder\" to empty trash",
-                    Duration::from_secs(30),
-                )
-                .await
-                .into_command(),
-            "dark" => ctx
-                .run_osascript(DARK_TOGGLE, Duration::from_secs(10))
+            "trash" => run_osascript(
+                &ctx,
+                "tell application \"Finder\" to empty trash",
+                Duration::from_secs(30),
+            )
+            .await
+            .into_command(),
+            "dark" => run_osascript(&ctx, DARK_TOGGLE, Duration::from_secs(10))
                 .await
                 .into_command(),
             "screensaver" => sh(&ctx, &["/usr/bin/open", "-a", "ScreenSaverEngine"], 10).await,
@@ -62,7 +66,7 @@ async fn publish_battery_status(ctx: &Context) {
     // Bumped from 2s → 5s: under thermal pressure or right after wake
     // pmset has been observed to take up to ~3s, which used to trip the
     // 2s ceiling and surface "??" until the next 30s poll.
-    let result = ctx.run_cli(&argv, Duration::from_secs(5)).await;
+    let result = run_command(ctx, &argv, Duration::from_secs(5)).await;
     // Parse stdout regardless of exit status. pmset writes the full
     // battery line before any error so a non-zero exit (or even a
     // timeout-induced SIGTERM) can still carry useful data; only fall
@@ -161,9 +165,102 @@ fn missing_battery_segment() -> String {
 
 async fn sh(ctx: &Context, argv: &[&str], timeout: u64) -> CommandResponse {
     let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-    ctx.run_cli(&owned, Duration::from_secs(timeout))
+    run_command(ctx, &owned, Duration::from_secs(timeout))
         .await
         .into_command()
+}
+
+#[derive(Clone, Debug, Default)]
+struct CommandOutput {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+    _status: i32,
+}
+
+impl CommandOutput {
+    fn into_command(self) -> CommandResponse {
+        CommandResponse {
+            ok: self.ok,
+            stdout: (!self.stdout.trim().is_empty()).then(|| shorten(&self.stdout)),
+            error: (!self.ok && !self.stderr.trim().is_empty()).then(|| shorten(&self.stderr)),
+            ..Default::default()
+        }
+    }
+}
+
+async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> CommandOutput {
+    run_command(
+        ctx,
+        &[
+            "/usr/bin/osascript".to_string(),
+            "-e".to_string(),
+            script.to_string(),
+        ],
+        timeout,
+    )
+    .await
+}
+
+async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CommandOutput {
+    let Some((program, args)) = argv.split_first() else {
+        return CommandOutput {
+            ok: false,
+            stderr: "empty argv".to_string(),
+            _status: -1,
+            ..Default::default()
+        };
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(&ctx.data_dir)
+        .env("HOME", ctx.home_dir())
+        .env("XDG_CONFIG_HOME", ctx.config_dir())
+        .env("XDG_CACHE_HOME", ctx.cache_dir())
+        .env("XDG_DATA_HOME", ctx.share_dir())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                ctx.bin_dir().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => CommandOutput {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            _status: output.status.code().unwrap_or(-1),
+        },
+        Ok(Err(err)) => CommandOutput {
+            ok: false,
+            stderr: err.to_string(),
+            _status: -1,
+            ..Default::default()
+        },
+        Err(_) => CommandOutput {
+            ok: false,
+            stderr: format!("timed out after {}ms", timeout.as_millis()),
+            _status: 124,
+            ..Default::default()
+        },
+    }
+}
+
+fn shorten(value: &str) -> String {
+    const LIMIT: usize = 2000;
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(LIMIT - 3).collect();
+    format!("{head}...")
 }
 
 fn main() {

@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "reminders",
   "name": "Reminders",
   "version": "0.1.0",
@@ -10,16 +10,30 @@
   "subscriptions": [
     "core:flash.started",
     "core:config.*",
-    { "match": "core:apps.*", "bundle_ids": ["com.apple.reminders"] }
-  ],
-  "providers": [
-    { "kind": "candidates", "sources": ["reminders.tasks"] },
     {
-      "kind": "commands",
-      "commands": [
-        { "command": "reminders", "subcommand": "open", "description": "Open Reminders.app" },
-        { "command": "reminders", "subcommand": "refresh", "description": "Refresh the cached reminders list" }
+      "match": "core:apps.*",
+      "bundle_ids": [
+        "com.apple.reminders"
       ]
     }
-  ]
+  ],
+  "candidates": {
+    "sources": [
+      "reminders.tasks"
+    ]
+  },
+  "commands": {
+    "items": [
+      {
+        "command": "reminders",
+        "subcommand": "open",
+        "description": "Open Reminders.app"
+      },
+      {
+        "command": "reminders",
+        "subcommand": "refresh",
+        "description": "Refresh the cached reminders list"
+      }
+    ]
+  }
 }

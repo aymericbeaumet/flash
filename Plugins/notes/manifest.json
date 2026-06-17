@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "notes",
   "name": "Notes",
   "version": "0.1.0",
@@ -10,16 +10,30 @@
   "subscriptions": [
     "core:flash.started",
     "core:config.*",
-    { "match": "core:apps.*", "bundle_ids": ["com.apple.Notes"] }
-  ],
-  "providers": [
-    { "kind": "candidates", "sources": ["notes.notes"] },
     {
-      "kind": "commands",
-      "commands": [
-        { "command": "notes", "subcommand": "open", "description": "Open Notes.app" },
-        { "command": "notes", "subcommand": "refresh", "description": "Refresh the cached notes list" }
+      "match": "core:apps.*",
+      "bundle_ids": [
+        "com.apple.Notes"
       ]
     }
-  ]
+  ],
+  "candidates": {
+    "sources": [
+      "notes.notes"
+    ]
+  },
+  "commands": {
+    "items": [
+      {
+        "command": "notes",
+        "subcommand": "open",
+        "description": "Open Notes.app"
+      },
+      {
+        "command": "notes",
+        "subcommand": "refresh",
+        "description": "Refresh the cached notes list"
+      }
+    ]
+  }
 }

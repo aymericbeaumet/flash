@@ -1,24 +1,27 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "calculator",
   "name": "Calculator",
   "version": "0.1.0",
   "description": "Evaluate an arithmetic expression: :calc 2 + 2 or !calc 2 + 2 in the flashlight. Result is copied to the clipboard.",
   "install": "true",
   "start": "exec ./flash-plugin-calculator",
-  "providers": [
-    {
-      "kind": "commands",
-      "commands": [
-        { "command": "calc", "subcommand": "*", "description": "Evaluate an arithmetic expression, e.g. :calc 2 + 2" }
-      ]
-    },
-    {
-      "kind": "shebang",
-      "command": "calc",
-      "shebangs": [
-        { "token": "calc", "description": "Evaluate an arithmetic expression (e.g. !calc 2+2)" }
-      ]
-    }
-  ]
+  "commands": {
+    "items": [
+      {
+        "command": "calc",
+        "subcommand": "*",
+        "description": "Evaluate an arithmetic expression, e.g. :calc 2 + 2"
+      }
+    ]
+  },
+  "shebangs": {
+    "command": "calc",
+    "items": [
+      {
+        "token": "calc",
+        "description": "Evaluate an arithmetic expression (e.g. !calc 2+2)"
+      }
+    ]
+  }
 }

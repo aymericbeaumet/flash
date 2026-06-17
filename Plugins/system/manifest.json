@@ -1,28 +1,58 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "system",
   "name": "System",
   "version": "0.1.0",
   "description": "macOS system commands and status segments: lock, sleep, battery, empty trash, toggle dark mode, screensaver, caffeinate.",
   "install": "true",
   "start": "exec ./flash-plugin-system",
-  "providers": [
-    {
-      "kind": "status",
-      "segments": ["battery"]
-    },
-    {
-      "kind": "commands",
-      "commands": [
-        { "command": "system", "subcommand": "lock", "description": "Lock the screen" },
-        { "command": "system", "subcommand": "sleep", "description": "Put the machine to sleep" },
-        { "command": "system", "subcommand": "displaysleep", "description": "Turn the display off" },
-        { "command": "system", "subcommand": "trash", "description": "Empty the Trash" },
-        { "command": "system", "subcommand": "dark", "description": "Toggle dark mode" },
-        { "command": "system", "subcommand": "screensaver", "description": "Start the screen saver" },
-        { "command": "system", "subcommand": "caffeinate", "description": "Prevent the machine from sleeping" },
-        { "command": "system", "subcommand": "decaffeinate", "description": "Allow the machine to sleep again" }
-      ]
-    }
-  ]
+  "commands": {
+    "items": [
+      {
+        "command": "system",
+        "subcommand": "lock",
+        "description": "Lock the screen"
+      },
+      {
+        "command": "system",
+        "subcommand": "sleep",
+        "description": "Put the machine to sleep"
+      },
+      {
+        "command": "system",
+        "subcommand": "displaysleep",
+        "description": "Turn the display off"
+      },
+      {
+        "command": "system",
+        "subcommand": "trash",
+        "description": "Empty the Trash"
+      },
+      {
+        "command": "system",
+        "subcommand": "dark",
+        "description": "Toggle dark mode"
+      },
+      {
+        "command": "system",
+        "subcommand": "screensaver",
+        "description": "Start the screen saver"
+      },
+      {
+        "command": "system",
+        "subcommand": "caffeinate",
+        "description": "Prevent the machine from sleeping"
+      },
+      {
+        "command": "system",
+        "subcommand": "decaffeinate",
+        "description": "Allow the machine to sleep again"
+      }
+    ]
+  },
+  "status": {
+    "segments": [
+      "battery"
+    ]
+  }
 }

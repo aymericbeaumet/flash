@@ -1,14 +1,12 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "www",
   "name": "www",
   "version": "0.1.0",
   "description": "Website-specific source actions keyed by the focused browser URL.",
   "install": "true",
   "start": "exec ./flash-plugin-www",
-  "request_timeout_ms": 6500,
   "priority": 60,
-  "capabilities": ["input"],
   "bundle_ids": [
     "com.apple.Safari",
     "com.apple.SafariTechnologyPreview",
@@ -32,10 +30,15 @@
     "com.operasoftware.OperaNext",
     "com.operasoftware.OperaDeveloper"
   ],
-  "providers": [
-    {
-      "kind": "source_actions",
-      "actions": ["resource_archive", "resource_next", "resource_previous"]
-    }
-  ]
+  "capabilities": [
+    "accessibility"
+  ],
+  "request_timeout_ms": 6500,
+  "source_actions": {
+    "actions": [
+      "resource_archive",
+      "resource_next",
+      "resource_previous"
+    ]
+  }
 }

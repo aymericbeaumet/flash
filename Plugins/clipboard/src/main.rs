@@ -19,7 +19,7 @@ flash_plugin::plugin!(Clipboard);
 impl FlashPlugin for Clipboard {
     async fn on_start(&self, ctx: Context) {
         let mut hist = self.history.lock().unwrap();
-        *hist = ctx.read_state(HISTORY_FILE).unwrap_or_default();
+        *hist = read_state(&ctx, HISTORY_FILE).unwrap_or_default();
     }
 
     // The core owns the pasteboard watch (it reads NSPasteboard's changeCount
@@ -47,7 +47,7 @@ impl FlashPlugin for Clipboard {
             }
         };
         if let Some(snapshot) = snapshot {
-            ctx.write_state(HISTORY_FILE, &snapshot);
+            write_state(&ctx, HISTORY_FILE, &snapshot);
         }
     }
 
@@ -107,6 +107,18 @@ fn preview(text: &str) -> String {
     }
     let head: String = collapsed.chars().take(PREVIEW_CHARS - 1).collect();
     format!("{head}…")
+}
+
+fn read_state<T: serde::de::DeserializeOwned>(ctx: &Context, name: &str) -> Option<T> {
+    let raw = std::fs::read_to_string(ctx.share_dir().join(name)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_state<T: serde::Serialize>(ctx: &Context, name: &str, value: &T) -> bool {
+    match serde_json::to_string(value) {
+        Ok(raw) => std::fs::write(ctx.share_dir().join(name), raw).is_ok(),
+        Err(_) => false,
+    }
 }
 
 fn main() {

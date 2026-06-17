@@ -1,7 +1,7 @@
 use flash_plugin::run;
 
 // The whole point of `default-keystrokes` is the manifest's `inline_keystrokes`
-// table: the host translates each declared verb into `input.send_key` directly,
+// table: the host translates each declared verb into a core keystroke action,
 // without ever calling into this process. The plugin is loaded so the manifest
 // declarations stay live, but no handler runs — every trait method keeps its
 // default. Future verbs that need conditional logic (a per-bundle override

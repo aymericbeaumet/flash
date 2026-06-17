@@ -1,28 +1,56 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "slack",
   "name": "Slack",
   "version": "0.1.0",
   "description": "Slack CLI actions and a channel finder backed by local Slack app state plus AX fallback.",
   "install": "true",
   "start": "exec ./flash-plugin-slack",
-  "bundle_ids": ["com.tinyspeck.slackmacgap", "com.tinyspeck.slackmacgap.direct"],
+  "bundle_ids": [
+    "com.tinyspeck.slackmacgap",
+    "com.tinyspeck.slackmacgap.direct"
+  ],
   "subscriptions": [
-    { "match": "core:apps.*", "bundle_ids": ["com.tinyspeck.slackmacgap"] },
-    { "match": "core:focus.changed" },
-    { "match": "core:ax.changed" },
+    {
+      "match": "core:apps.*",
+      "bundle_ids": [
+        "com.tinyspeck.slackmacgap"
+      ]
+    },
+    {
+      "match": "core:focus.changed"
+    },
+    {
+      "match": "core:ax.changed"
+    },
     "core:apps.snapshot",
     "core:config.*"
   ],
-  "providers": [
-    { "kind": "candidates", "sources": ["slack.channels"] },
-    {
-      "kind": "commands",
-      "commands": [
-        { "command": "slack", "subcommand": "login", "description": "Authenticate the Slack CLI" },
-        { "command": "slack", "subcommand": "version", "description": "Show Slack CLI version" },
-        { "command": "slack", "subcommand": "run", "description": "Run slack with raw arguments" }
-      ]
-    }
-  ]
+  "capabilities": [
+    "accessibility"
+  ],
+  "candidates": {
+    "sources": [
+      "slack.channels"
+    ]
+  },
+  "commands": {
+    "items": [
+      {
+        "command": "slack",
+        "subcommand": "login",
+        "description": "Authenticate the Slack CLI"
+      },
+      {
+        "command": "slack",
+        "subcommand": "version",
+        "description": "Show Slack CLI version"
+      },
+      {
+        "command": "slack",
+        "subcommand": "run",
+        "description": "Run slack with raw arguments"
+      }
+    ]
+  }
 }

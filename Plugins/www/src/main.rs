@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use flash_plugin::{run, AxNode, Context, SourceActionRequest, SourceActionResponse};
+use flash_plugin::{run, Context, SourceActionRequest, SourceActionResponse};
+use serde_json::{json, Value};
 
 const URL_MAX_NODES: u64 = 400;
 const BUTTON_MAX_NODES: u64 = 1_200;
@@ -84,11 +86,11 @@ async fn perform_gmail_button_action(
         );
         return SourceActionResponse::failed(Some(pid));
     };
-    if !ctx.ax_activate(pid).await {
+    if !activate_app(ctx, pid).await {
         return SourceActionResponse::failed(Some(pid));
     }
     tokio::time::sleep(Duration::from_millis(25)).await;
-    if ctx.ax_perform(handle, "AXPress").await {
+    if ax_perform(ctx, handle, "AXPress").await {
         SourceActionResponse::performed(Some(pid))
     } else {
         ctx.log(
@@ -105,14 +107,22 @@ async fn perform_gmail_button_action(
 }
 
 async fn focused_gmail_thread_url(ctx: &Context, pid: i64) -> Option<String> {
-    let nodes = ctx
-        .ax_snapshot(pid, "windows", FOLLOW, URL_COLLECT, URL_MAX_NODES, false)
-        .await;
+    let nodes = ax_snapshot(
+        ctx,
+        pid,
+        "windows",
+        FOLLOW,
+        URL_COLLECT,
+        URL_MAX_NODES,
+        false,
+    )
+    .await;
     gmail_thread_url(&nodes).map(str::to_string)
 }
 
 async fn focused_button_snapshot(ctx: &Context, pid: i64) -> Vec<AxNode> {
-    ctx.ax_snapshot(
+    ax_snapshot(
+        ctx,
         pid,
         "windows",
         FOLLOW,
@@ -306,6 +316,103 @@ fn shorten_url(raw: &str) -> String {
     raw.chars().take(LIMIT).collect::<String>() + "..."
 }
 
+#[derive(Clone, Debug, Default)]
+struct AxNode {
+    handle: u64,
+    _root: usize,
+    attrs: BTreeMap<String, String>,
+    _frame: Option<[f64; 4]>,
+}
+
+impl AxNode {
+    fn from_value(value: &Value) -> Option<Self> {
+        let handle = value.get("handle")?.as_u64()?;
+        let root = value.get("root").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let attrs = value
+            .get("attrs")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(key, value)| {
+                        value
+                            .as_str()
+                            .map(|string| (key.clone(), string.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let frame = value
+            .get("frame")
+            .and_then(Value::as_array)
+            .and_then(|values| {
+                if values.len() != 4 {
+                    return None;
+                }
+                Some([
+                    values[0].as_f64()?,
+                    values[1].as_f64()?,
+                    values[2].as_f64()?,
+                    values[3].as_f64()?,
+                ])
+            });
+        Some(Self {
+            handle,
+            _root: root,
+            attrs,
+            _frame: frame,
+        })
+    }
+
+    fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.get(name).map(String::as_str)
+    }
+}
+
+async fn activate_app(ctx: &Context, pid: i64) -> bool {
+    ctx.call_host("app.activate", json!({ "pid": pid }))
+        .await
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn ax_snapshot(
+    ctx: &Context,
+    pid: i64,
+    roots: &str,
+    follow: &[&str],
+    collect: &[&str],
+    max_nodes: u64,
+    geometry: bool,
+) -> Vec<AxNode> {
+    let result = ctx
+        .call_host(
+            "ax.snapshot",
+            json!({
+                "pid": pid,
+                "roots": roots,
+                "follow": follow,
+                "collect": collect,
+                "max_nodes": max_nodes,
+                "geometry": geometry,
+            }),
+        )
+        .await;
+    result
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(|nodes| nodes.iter().filter_map(AxNode::from_value).collect())
+        .unwrap_or_default()
+}
+
+async fn ax_perform(ctx: &Context, handle: u64, action: &str) -> bool {
+    ctx.call_host("ax.perform", json!({ "handle": handle, "action": action }))
+        .await
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 fn main() {
     run(Www);
 }
@@ -315,9 +422,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        gmail_button_handle, gmail_button_score, is_gmail_open_thread_url, GmailButtonAction,
+        gmail_button_handle, gmail_button_score, is_gmail_open_thread_url, AxNode,
+        GmailButtonAction,
     };
-    use flash_plugin::AxNode;
 
     #[test]
     fn gmail_thread_urls_are_archiveable() {
@@ -411,12 +518,12 @@ mod tests {
     fn node(handle: u64, attrs: &[(&str, &str)]) -> AxNode {
         AxNode {
             handle,
-            root: 0,
+            _root: 0,
             attrs: attrs
                 .iter()
                 .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
                 .collect::<BTreeMap<_, _>>(),
-            frame: None,
+            _frame: None,
         }
     }
 }

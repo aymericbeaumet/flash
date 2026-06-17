@@ -55,9 +55,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_local, ActivateRequest, Candidate, CliResult, CommandRequest, CommandResponse,
-    Context, DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest,
-    ResolveResponse, SourceActionRequest, SourceActionResponse,
+    run, ActivateRequest, Candidate, CommandRequest, CommandResponse, Context, DiscoverRequest,
+    DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, ResolveResponse,
+    SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -143,6 +143,52 @@ async fn run_cmd(program: &str, args: &[&str], timeout: Duration) -> Option<Stri
         return None;
     }
     Some(result.stdout)
+}
+
+#[derive(Clone, Debug, Default)]
+struct CliResult {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+    status: i32,
+}
+
+async fn run_local(argv: &[String], timeout: Duration) -> CliResult {
+    let Some((program, args)) = argv.split_first() else {
+        return CliResult {
+            ok: false,
+            stderr: "empty argv".to_string(),
+            status: -1,
+            ..Default::default()
+        };
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => CliResult {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            status: output.status.code().unwrap_or(-1),
+        },
+        Ok(Err(err)) => CliResult {
+            ok: false,
+            stderr: err.to_string(),
+            status: -1,
+            ..Default::default()
+        },
+        Err(_) => CliResult {
+            ok: false,
+            stderr: format!("timed out after {}ms", timeout.as_millis()),
+            status: 124,
+            ..Default::default()
+        },
+    }
 }
 
 fn tmux_argv(tmux_path: &str, args: &[&str]) -> Vec<String> {
@@ -1306,17 +1352,13 @@ const POLL_INTERVAL_SECS: u64 = 1;
 fn start_candidate_poll(plugin: &Tmux, ctx: &Context) {
     let path = plugin.tmux_path.clone();
     let last_hash = std::sync::Arc::clone(&plugin.last_snapshot_hash_arc);
-    ctx.interval(
-        "candidate-refresh",
-        Duration::from_secs(POLL_INTERVAL_SECS),
-        move |ctx| {
-            let path = path.clone();
-            let last_hash = std::sync::Arc::clone(&last_hash);
-            async move {
-                refresh_candidate_snapshot_for_path(path.as_deref(), &ctx, &last_hash).await;
-            }
-        },
-    );
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+            refresh_candidate_snapshot_for_path(path.as_deref(), &ctx, &last_hash).await;
+        }
+    });
 }
 
 // ---- Tab actions ------------------------------------------------------------

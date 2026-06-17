@@ -137,6 +137,17 @@ final class MessagePackTests: XCTestCase {
     XCTAssertThrowsError(try MessagePack.decode(Data([0xd9, 0x05, 0x61, 0x62])))
   }
 
+  func testTrailingBytesThrow() {
+    // A valid "a" string followed by an extra nil is not one complete frame.
+    XCTAssertThrowsError(try MessagePack.decode(Data([0xa1, 0x61, 0xc0])))
+  }
+
+  func testNonStringMapKeyThrows() {
+    // Flash protocol objects are JSON-shaped dictionaries; accepting an int
+    // key would silently drop data when bridging to [String: Any].
+    XCTAssertThrowsError(try MessagePack.decode(Data([0x81, 0x01, 0xa1, 0x78])))
+  }
+
   func testUnknownFormatByteThrows() {
     XCTAssertThrowsError(try MessagePack.decode(Data([0xc1])))
   }

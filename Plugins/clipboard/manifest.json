@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "id": "clipboard",
   "name": "Clipboard",
   "version": "0.1.0",
@@ -7,17 +7,30 @@
   "install": "true",
   "start": "exec ./flash-plugin-clipboard",
   "subscriptions": [
-    { "match": "core:clipboard.changed" }
-  ],
-  "capabilities": ["clipboard"],
-  "providers": [
     {
-      "kind": "commands",
-      "commands": [
-        { "command": "clipboard", "subcommand": "", "description": "Browse clipboard history" },
-        { "command": "copy", "subcommand": "", "description": "Copy the selection (⌘C)" },
-        { "command": "paste", "subcommand": "", "description": "Paste (⌘V)" }
-      ]
+      "match": "core:clipboard.changed"
     }
-  ]
+  ],
+  "capabilities": [
+    "clipboard"
+  ],
+  "commands": {
+    "items": [
+      {
+        "command": "clipboard",
+        "subcommand": "",
+        "description": "Browse clipboard history"
+      },
+      {
+        "command": "copy",
+        "subcommand": "",
+        "description": "Copy the selection (⌘C)"
+      },
+      {
+        "command": "paste",
+        "subcommand": "",
+        "description": "Paste (⌘V)"
+      }
+    ]
+  }
 }
