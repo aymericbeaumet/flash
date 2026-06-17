@@ -813,10 +813,11 @@ extension Config {
       - `[mode.insert.mappings]`
       - `[debug]`
 
-      Mapping values are argv arrays. `["flash", "<verb>", "k=v", …]`
-      dispatches the verb in-process; any other head is executed as argv
-      with `~`/env expansion. Relative argv paths containing `/` resolve
-      from the config file location.
+      Mapping values are argv arrays. `["flash", "<verb>", "k=v", …]`,
+      or the same form with a Flash executable path as the head, dispatches
+      the verb in-process; any other head is executed as argv with `~`/env
+      expansion. Relative argv paths containing `/` resolve from the config
+      file location.
 
       `config.default.toml` is the canonical reference for all accepted keys.
       """)

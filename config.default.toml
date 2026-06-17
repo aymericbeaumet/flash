@@ -164,9 +164,10 @@ sequence_timeout_ms = 1000
 
 [mode.all.mappings]
 # Mappings available in insert and normal modes.
-# Every value is an argv array. Arrays starting with "flash" dispatch the
-# verb in-process; any other head is launched as argv (no shell wrap) with
-# `~` and env expansion on each element. Bare strings and URLs are rejected.
+# Every value is an argv array. Arrays starting with "flash" or a path whose
+# basename is "flash" dispatch the verb in-process; any other head is launched
+# as argv (no shell wrap) with `~` and env expansion on each element. Bare
+# strings and URLs are rejected.
 # Relative argv paths containing "/" are resolved from this config file.
 #
 # Native modified-key mappings are registered with Carbon only when the key

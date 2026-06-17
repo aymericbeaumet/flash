@@ -9,6 +9,7 @@ enum CommandMappingRunner {
   static func launchPlan(for argv: [String]) -> CommandMappingLaunchPlan? {
     let expanded = argv.map(expandLeadingTilde)
     guard let executable = expanded.first, !executable.isEmpty else { return nil }
+    guard !mappingCommandHeadNamesFlash(executable) else { return nil }
     let rest = Array(expanded.dropFirst())
     if executable.contains("/") {
       return CommandMappingLaunchPlan(

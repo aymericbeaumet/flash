@@ -306,7 +306,7 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testNonFlashArgvIsTreatedAsShellCommand() {
-    // Any array whose head isn't "flash" is a shell command (argv exec).
+    // Any array whose head doesn't name Flash is a shell command (argv exec).
     // The empty array is the only rejection: nothing to run.
     XCTAssertNil(parseMappingCommand(argv: []))
     let safariCmd = parseMappingCommand(argv: ["open", "-a", "Safari"])
@@ -315,6 +315,22 @@ final class HotkeySyntaxTests: XCTestCase {
     } else {
       XCTFail("expected .shellCommand for non-flash head")
     }
+  }
+
+  func testFlashExecutablePathArgvIsInProcessCommand() {
+    XCTAssertEqual(
+      parseMappingCommand(
+        argv: ["/Applications/Flash.app/Contents/MacOS/flash", "tab_next"]
+      )?.command,
+      .tabNext)
+    XCTAssertEqual(
+      parseMappingCommand(
+        argv: ["~/.local/bin/flash", "enter_command_mode", "--input=flashlight "]
+      )?.command,
+      .enterCommand(input: "flashlight ", restoreMode: false))
+    XCTAssertNil(
+      parseMappingCommand(
+        argv: ["/Applications/Flash.app/Contents/MacOS/flash", "unknown_command"]))
   }
 
   func testShellCommandActionDiagnosticUsesArraySyntax() {
@@ -342,6 +358,14 @@ final class HotkeySyntaxTests: XCTestCase {
       FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("bin/toggle-colors").path)
     XCTAssertEqual(plan.arguments, ["--quiet"])
+  }
+
+  func testCommandMappingRunnerRefusesFlashExecutable() {
+    XCTAssertNil(CommandMappingRunner.launchPlan(for: ["flash", "tab_next"]))
+    XCTAssertNil(
+      CommandMappingRunner.launchPlan(
+        for: ["/Applications/Flash.app/Contents/MacOS/flash", "tab_next"]))
+    XCTAssertNil(CommandMappingRunner.launchPlan(for: ["~/.local/bin/flash", "tab_next"]))
   }
 
   func testParseFlashModeActions() {

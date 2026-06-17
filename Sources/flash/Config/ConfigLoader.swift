@@ -1028,14 +1028,15 @@ enum ConfigLoader {
       let head = argv.first,
       !head.isEmpty
     else { return nil }
-    // External argv: resolve each element (tilde expansion + path search
-    // relative to the config file) before handing to the runner. The
-    // in-process branch routes through the verb parser instead.
-    if head != "flash" {
-      let resolved = argv.map { resolveCommandArgument($0, sourceURL: sourceURL) }
-      return .shellCommand(resolved)
+    // Resolve only the executable head before Flash-command classification.
+    // Flash verb args may legitimately contain slashes (`--input=...`,
+    // `--name=/Applications/...`) and must not be path-resolved.
+    let resolvedHead = resolveCommandArgument(head, sourceURL: sourceURL)
+    if mappingCommandHeadNamesFlash(head) || mappingCommandHeadNamesFlash(resolvedHead) {
+      return parseMappingCommand(argv: [resolvedHead] + argv.dropFirst())
     }
-    return parseMappingCommand(argv: argv)
+    let resolved = argv.map { resolveCommandArgument($0, sourceURL: sourceURL) }
+    return parseMappingCommand(argv: resolved)
   }
 
   private static func resolveCommandArgument(_ value: String, sourceURL: URL?) -> String {

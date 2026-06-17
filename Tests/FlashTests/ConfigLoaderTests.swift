@@ -781,6 +781,24 @@ final class ConfigLoaderTests: XCTestCase {
       .shellCommand(["/tmp/dotfiles/scripts/toggle_caffeinate.sh"]))
   }
 
+  func testFlashExecutablePathMappingsResolveInProcess() {
+    let sourceURL = URL(fileURLWithPath: "/tmp/flash/config/flash.toml")
+    let toml = """
+      [mode.normal.mappings]
+      "]t" = ["../../bin/flash", "tab_next"]
+      "r" = ["~/.local/bin/flash", "app_reload", "--force"]
+      "o" = ["/Applications/Flash.app/Contents/MacOS/flash", "app_open", "--name=/Applications/Safari.app"]
+      """
+    let c = ConfigLoader.parse(toml, sourceURL: sourceURL)
+    XCTAssertEqual(c.mode.normal.first(where: { $0.key == key("]t") })?.action.command, .tabNext)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "r" })?.action.command,
+      .reload(force: true))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "o" })?.action.command,
+      .openApp(name: "/Applications/Safari.app"))
+  }
+
   func testRejectsEmptyModeCommandArrayMapping() {
     let toml = """
       [mode.all.mappings]

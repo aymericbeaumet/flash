@@ -17,8 +17,9 @@ struct ModeMapping: Equatable {
 /// What a mapping fires. Resolved at config load so Carbon callbacks
 /// and overlay key handling never re-parse on the hot path.
 ///
-/// The TOML form is *always* an array of strings. If `argv[0] == "flash"`,
-/// the remainder is parsed against the resident verb table
+/// The TOML form is *always* an array of strings. If `argv[0]` names Flash
+/// (`"flash"` or a path whose basename is `flash`), the remainder is parsed
+/// against the resident verb table
 /// (``URLEventHandler/parse(verb:args:)``) and dispatched in-process.
 /// Otherwise the array is executed as argv (no shell wrap, just env / `~`
 /// expansion on each element).
@@ -39,7 +40,7 @@ enum MappingCommand: Hashable {
 /// verb args are missing.
 func parseMappingCommand(argv: [String]) -> MappingCommand? {
   guard let first = argv.first else { return nil }
-  if first == "flash" {
+  if mappingCommandHeadNamesFlash(first) {
     let tail = Array(argv.dropFirst())
     guard let verb = tail.first, !verb.isEmpty else { return nil }
     let args = parseVerbArgs(tail.dropFirst())
@@ -47,6 +48,11 @@ func parseMappingCommand(argv: [String]) -> MappingCommand? {
     return .flashCommand(cmd)
   }
   return .shellCommand(argv)
+}
+
+func mappingCommandHeadNamesFlash(_ value: String) -> Bool {
+  let expanded = CommandMappingRunner.expandLeadingTilde(value)
+  return URL(fileURLWithPath: expanded).lastPathComponent == "flash"
 }
 
 /// Parse `["--k1=v1", "--k2", "--k3=v with spaces"]` into a dict. Standard
