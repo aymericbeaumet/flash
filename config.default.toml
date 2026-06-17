@@ -80,11 +80,15 @@ watching_enabled = true
 #   #[reverse] / #[noreverse]
 #   #[blink] / #[noblink]            — pulse the wrapped text once a
 #                                     second (tmux's blink attribute).
-#   #[breathing] / #[nobreathing]    — Flash extension. Slow opacity
-#                                     sinusoid (~4-second cycle, 35 → 100
-#                                     % alpha). Use sparingly — best for
-#                                     "this is happening" signals like a
-#                                     charging battery.
+#   #[breathing] / #[nobreathing]    — Flash extension. *Very subtle*
+#                                     opacity sinusoid on a 6-second
+#                                     cycle (88 → 100 % alpha) calibrated
+#                                     to feel like a calm meditation
+#                                     breath: noticeable enough that the
+#                                     chip reads as "alive", quiet enough
+#                                     that it never distracts. Used by
+#                                     the system plugin to mark a battery
+#                                     that's plugged in.
 #
 # `##` emits a literal `#`. Wrap a token in `#{=N:…}` (or `#{=-N:…}` for
 # trailing window) to cap its rendered length at N characters — useful

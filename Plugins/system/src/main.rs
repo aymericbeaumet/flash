@@ -74,10 +74,14 @@ async fn publish_battery_status(ctx: &Context) {
 /// Reasoning for status markers below:
 /// - `range=user|bat-prefs` is the click range tmux uses for our battery
 ///   chip (Energy preferences pane on click).
-/// - `#[breathing]` slowly cycles opacity to signal active charging —
-///   matches the "calm meditation" pacing the user asked for. The
-///   status-bar renderer drops the marker when it doesn't recognise it,
-///   so this is forward-compatible with older Flash builds.
+/// - `#[breathing]` rides a subtle opacity sinusoid whenever the battery
+///   is on AC power — "plugged" as the user puts it, regardless of
+///   whether the cell is actively gaining charge or already topped up.
+///   The Flash renderer enforces the "very subtle" curve (88 → 100 %
+///   alpha, 6 s cycle); from the plugin's point of view we just have
+///   to drop the marker pair around the percent text. Older Flash
+///   builds that don't know the marker strip it and fall back to the
+///   plain colour, so the segment stays forward-compatible.
 fn battery_segment(pmset_output: &str) -> String {
     let Some(percent) = battery_percent(pmset_output) else {
         return missing_battery_segment();
@@ -88,15 +92,10 @@ fn battery_segment(pmset_output: &str) -> String {
     } else {
         "red"
     };
-    let breathing_open = if state == BatteryState::Charging {
-        "#[breathing]"
+    let (breathing_open, breathing_close) = if state.on_ac() {
+        ("#[breathing]", "#[nobreathing]")
     } else {
-        ""
-    };
-    let breathing_close = if state == BatteryState::Charging {
-        "#[nobreathing]"
-    } else {
-        ""
+        ("", "")
     };
     format!(
         "#[range=user|bat-prefs fg={color}]{breathing_open}{percent}%{breathing_close}#[norange]"
@@ -119,10 +118,11 @@ impl BatteryState {
 
 fn battery_state(pmset_output: &str) -> BatteryState {
     // Look at the per-battery status line, not just the header — `Now
-    // drawing from 'AC Power'` only tells us the source, not whether the
-    // battery is actively replenishing (a fully-charged laptop also
-    // draws from AC). Prefer the explicit ` charging` token so the
-    // breathing animation only fires while the cell is gaining charge.
+    // drawing from 'AC Power'` only tells us the source, not whether
+    // the battery is actively replenishing. We keep the three-state
+    // distinction so future styling decisions (e.g. a slightly slower
+    // breathe when the cell is `charged` vs `charging`) stay possible
+    // without re-parsing pmset.
     if pmset_output.contains("; charging") || pmset_output.contains("; finishing charge") {
         BatteryState::Charging
     } else if pmset_output.contains("; charged") {
@@ -175,13 +175,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn formats_ac_or_healthy_battery_yellow() {
+    fn formats_charged_battery_yellow_with_breathing() {
+        // On AC: the cell is "plugged" so we wrap the percent in the
+        // breathing markers regardless of whether it's actively gaining
+        // charge (`charging`) or already topped up (`charged`).
         assert_eq!(
             battery_segment(
                 "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 82%; charged;"
             ),
-            "#[range=user|bat-prefs fg=colour178]82%#[norange]"
+            "#[range=user|bat-prefs fg=colour178]#[breathing]82%#[nobreathing]#[norange]"
         );
+    }
+
+    #[test]
+    fn formats_healthy_discharging_battery_yellow_without_breathing() {
+        // On battery power: no breathing — the chip stays still so the
+        // user can tell at a glance whether the laptop is plugged in.
         assert_eq!(
             battery_segment(
                 "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1) 26%; discharging;"
@@ -215,6 +224,18 @@ mod tests {
                 "Now drawing from 'AC Power'\n -InternalBattery-0 (id=35127395) 73%; charging; 1:24 remaining present: true"
             ),
             "#[range=user|bat-prefs fg=colour178]#[breathing]73%#[nobreathing]#[norange]"
+        );
+    }
+
+    #[test]
+    fn formats_finishing_charge_with_breathing_marker() {
+        // pmset's `finishing charge` variant — on AC, last few % to top
+        // up. Same "plugged in" semantics as `charging`, same breathing.
+        assert_eq!(
+            battery_segment(
+                "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1) 99%; finishing charge; 0:01 remaining present: true"
+            ),
+            "#[range=user|bat-prefs fg=colour178]#[breathing]99%#[nobreathing]#[norange]"
         );
     }
 

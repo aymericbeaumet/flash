@@ -667,24 +667,48 @@ final class StatusBarTests: XCTestCase {
       ])
   }
 
-  func testBreathingEffectAlphaRidesSinusoidBetween35And100Percent() {
+  func testBreathingEffectAlphaRidesSubtleSinusoidBetween88And100Percent() {
     let breathing = FlashStatusTextSegment(text: "82%", foreground: .colour178, breathing: true)
     // 0.0 s — sine starts at 0, alpha lands at the midpoint of the
-    // [0.35, 1.0] band.
+    // [0.88, 1.0] band: (0.88 + 1.0) / 2 = 0.94.
     XCTAssertEqual(
       FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 0.0),
-      0.675,
+      0.94,
       accuracy: 0.001)
-    // 1.0 s — quarter cycle in (period 4 s), sine peaks at 1, alpha at 1.0.
+    // 1.5 s — quarter cycle in (period 6 s), sine peaks at 1, alpha
+    // at 1.0 (full opacity, like the end of an inhale).
     XCTAssertEqual(
-      FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 1.0),
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 1.5),
       1.0,
       accuracy: 0.001)
-    // 3.0 s — three-quarter cycle, sine bottoms at -1, alpha at 0.35.
+    // 4.5 s — three-quarter cycle, sine bottoms at -1, alpha at the
+    // subtle dim trough (0.88).
     XCTAssertEqual(
-      FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 3.0),
-      0.35,
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 4.5),
+      0.88,
       accuracy: 0.001)
+    // Two full cycles in (12 s) — phase wraps back to 0, alpha back to
+    // the midpoint. Confirms the modulo-period math keeps the curve
+    // stationary over time.
+    XCTAssertEqual(
+      FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 12.0),
+      0.94,
+      accuracy: 0.001)
+  }
+
+  func testBreathingAlphaStaysWithinSubtleBandForEveryPhase() {
+    let breathing = FlashStatusTextSegment(text: "82%", foreground: .colour178, breathing: true)
+    // Sweep an entire period at 1/60 s granularity and assert every
+    // sample stays inside the documented band — guards against future
+    // changes to the curve that would widen the swing past "subtle".
+    var sample: TimeInterval = 0
+    while sample < 6.0 {
+      let alpha = FlashStatusBarRenderer.effectAlphaMultiplier(
+        segment: breathing, currentTime: sample)
+      XCTAssertGreaterThanOrEqual(alpha, 0.88 - 0.0001)
+      XCTAssertLessThanOrEqual(alpha, 1.0 + 0.0001)
+      sample += 1.0 / 60.0
+    }
   }
 
   func testBlinkEffectFlipsBetweenSolidAndDim() {

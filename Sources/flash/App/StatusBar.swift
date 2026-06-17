@@ -650,17 +650,20 @@ enum FlashStatusBarRenderer {
     segment: FlashStatusTextSegment,
     currentTime: TimeInterval
   ) -> CGFloat {
-    // Period of ~4 s, oscillating between 0.35 and 1.0. The sinusoid's
-    // value range is [-1, 1], so we shift+scale to land in
-    // [low, 1.0]. The low bound is high enough that the digits stay
-    // readable through the breathing dim — anything below ~30% gets
-    // hard to scan at the status-bar font size.
+    // Sinusoidal breathing on a 6 s period — roughly the cadence of a
+    // calm meditation breath (~10 breaths/min). The alpha rides a
+    // **very subtle** [0.88, 1.0] band: a 12 % dim at the trough,
+    // imperceptible enough that the chip never reads as "broken" or
+    // "loading", yet alive enough that the user can spot at a glance
+    // that the battery is plugged. The slowest motion happens at the
+    // peak and trough (sine has zero derivative there), matching the
+    // pause between inhale and exhale.
     var alpha: CGFloat = 1.0
     if segment.breathing {
-      let period: TimeInterval = 4.0
+      let period: TimeInterval = 6.0
       let phase = (currentTime.truncatingRemainder(dividingBy: period)) / period
       let sine = sin(phase * 2 * .pi)
-      let low: CGFloat = 0.35
+      let low: CGFloat = 0.88
       let high: CGFloat = 1.0
       let mid = (low + high) / 2
       let halfRange = (high - low) / 2
