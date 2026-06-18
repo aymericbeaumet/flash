@@ -21,8 +21,16 @@ enum FlashMarkdownRenderer {
     var bodyColor: NSColor
     var dimColor: NSColor
     var codeFont: NSFont
+    /// Inline `` `code` `` — a small warm accent pill inside prose.
     var codeForeground: NSColor
     var codeBackground: NSColor
+    /// Fenced ``` code blocks ``` — neutral, unbackgrounded text. Kept
+    /// distinct from inline code so a whole block (e.g. the `:mappings`
+    /// table) reads as a calm monospace surface rather than a wall of
+    /// accent-colored text. No background: a per-glyph fill stripes
+    /// across multi-line blocks, and the modal panel is already the
+    /// surface.
+    var codeBlockForeground: NSColor
     var linkColor: NSColor
     var blockquoteColor: NSColor
     var ruleColor: NSColor
@@ -40,7 +48,8 @@ enum FlashMarkdownRenderer {
       dimColor: OverlayPanel.nordSnowStorm1,
       codeFont: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium),
       codeForeground: OverlayPanel.nordAuroraYellow,
-      codeBackground: NSColor.black.withAlphaComponent(0.30),
+      codeBackground: OverlayPanel.nordPolarNight1.withAlphaComponent(0.55),
+      codeBlockForeground: OverlayPanel.nordSnowStorm1,
       linkColor: OverlayPanel.nordFrost2,
       blockquoteColor: OverlayPanel.nordSnowStorm1,
       ruleColor: OverlayPanel.nordSnowStorm1.withAlphaComponent(0.35),
@@ -182,15 +191,20 @@ enum FlashMarkdownRenderer {
     into out: NSMutableAttributedString,
     context: inout RenderContext
   ) {
+    // No per-glyph background here on purpose. NSLayoutManager paints
+    // `.backgroundColor` per line fragment, so the inter-line leading
+    // stays unpainted and a multi-line block reads as ugly zebra
+    // stripes. The modal is already a dark panel, so the block just
+    // needs a calm, distinct monospace foreground — it sits cleanly on
+    // the modal's own gradient.
     let para = paragraphStyle(
       lineSpacing: context.style.lineSpacing,
       paragraphSpacing: context.style.paragraphSpacing,
-      firstLineHeadIndent: context.style.codeBlockPadding,
-      headIndent: context.style.codeBlockPadding)
+      firstLineHeadIndent: 0,
+      headIndent: 0)
     let attrs: [NSAttributedString.Key: Any] = [
       .font: context.style.codeFont,
-      .foregroundColor: context.style.codeForeground,
-      .backgroundColor: context.style.codeBackground,
+      .foregroundColor: context.style.codeBlockForeground,
       .paragraphStyle: para,
     ]
     let text = code.code.trimmingCharacters(in: .newlines)
