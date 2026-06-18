@@ -31,6 +31,20 @@ final class MappingsCoordinator {
   private var lastAppliedFlashMode: FlashMode = .insert
   private var lastFireDiagnostic: String?
   private var lastFireAt: Date = .distantPast
+  /// Chords Flash just synthesized into the focused app (e.g. the `⌘⇧]`
+  /// Messages tab-traversal fallback). `postToPid` is *supposed* to bypass
+  /// the session-level Carbon dispatcher, but the OS sometimes routes the
+  /// synthetic event back through it, where it re-triggers the scope-bound
+  /// hotkey for the SAME chord: `tab_next` → synthesize `⌘⇧]` → `tab_next`
+  /// … a self-feeding loop. `fire`'s 80 ms same-action debounce masks it
+  /// only when the round-trip beats 80 ms; Messages' conversation-switch
+  /// latency regularly loses that race, so the loop runs away. Each
+  /// synthesize notes one expected echo keyed by chord; the next matching
+  /// hotkey fire inside the window consumes it instead of dispatching,
+  /// breaking the loop. Genuine user presses beyond the noted count still
+  /// dispatch normally.
+  private var syntheticEchoes: [UInt64: (count: Int, at: Date)] = [:]
+  private static let syntheticEchoWindow: TimeInterval = 0.3
 
   func start(dispatch: @escaping (MappingCommand) -> Void, currentMode: @escaping () -> FlashMode) {
     mappingDispatch = dispatch
@@ -117,6 +131,10 @@ final class MappingsCoordinator {
     guard mappingApplies(scope: scope, parsed: parsed) else { return }
     let diagnostic = mapping.action.diagnosticDescription
     let now = Date()
+    if consumeSyntheticEcho(virtualKey: parsed.virtualKey, modifiers: parsed.modifiers, now: now) {
+      FlashLog.debug("[mappings] suppressed self-synthesized echo \(diagnostic)")
+      return
+    }
     if lastFireDiagnostic == diagnostic, now.timeIntervalSince(lastFireAt) < 0.08 {
       return
     }
@@ -152,6 +170,50 @@ final class MappingsCoordinator {
     if independent.contains(.shift) { out |= UInt32(shiftKey) }
     if independent.contains(.control) { out |= UInt32(controlKey) }
     if independent.contains(.option) { out |= UInt32(optionKey) }
+    return out
+  }
+
+  /// Record that Flash just synthesized `virtualKey`+`flags` into the
+  /// focused app. Called by the normal-mode key senders immediately before
+  /// the `postToPid`. See `syntheticEchoes` for why this exists.
+  func noteSyntheticKey(virtualKey: UInt32, flags: CGEventFlags) {
+    let key = Self.echoKey(virtualKey: virtualKey, modifiers: Self.carbonModifiers(fromCG: flags))
+    let now = Date()
+    let priorCount =
+      syntheticEchoes[key].map { now.timeIntervalSince($0.at) < Self.syntheticEchoWindow ? $0.count : 0 }
+      ?? 0
+    syntheticEchoes[key] = (count: priorCount + 1, at: now)
+  }
+
+  /// Consume one expected echo for this chord, if a fresh one is pending.
+  /// Returns true when the fire should be suppressed as a self-echo.
+  private func consumeSyntheticEcho(virtualKey: UInt32, modifiers: UInt32, now: Date) -> Bool {
+    let key = Self.echoKey(virtualKey: virtualKey, modifiers: modifiers)
+    guard let pending = syntheticEchoes[key],
+      now.timeIntervalSince(pending.at) < Self.syntheticEchoWindow,
+      pending.count > 0
+    else {
+      syntheticEchoes.removeValue(forKey: key)
+      return false
+    }
+    if pending.count <= 1 {
+      syntheticEchoes.removeValue(forKey: key)
+    } else {
+      syntheticEchoes[key] = (count: pending.count - 1, at: pending.at)
+    }
+    return true
+  }
+
+  private static func echoKey(virtualKey: UInt32, modifiers: UInt32) -> UInt64 {
+    (UInt64(modifiers) << 32) | UInt64(virtualKey)
+  }
+
+  static func carbonModifiers(fromCG flags: CGEventFlags) -> UInt32 {
+    var out: UInt32 = 0
+    if flags.contains(.maskCommand) { out |= UInt32(cmdKey) }
+    if flags.contains(.maskShift) { out |= UInt32(shiftKey) }
+    if flags.contains(.maskControl) { out |= UInt32(controlKey) }
+    if flags.contains(.maskAlternate) { out |= UInt32(optionKey) }
     return out
   }
 

@@ -662,6 +662,18 @@ enum CandidateFinder {
     candidate.pid != nil
   }
 
+  /// True when `normalizedQuery` is a non-empty exact match or full-string
+  /// prefix of the candidate's own (already-normalized) name. Drives the
+  /// cross-band promotion in `recordPrecedes`. Both name fields are
+  /// normalized at `prepare` time with the same pipeline as the query, so
+  /// this is a like-for-like prefix test.
+  static func titleMatchesPrefix(_ candidate: Candidate, normalizedQuery: String) -> Bool {
+    guard !normalizedQuery.isEmpty else { return false }
+    let fields = candidate.normalizedScoringFields
+    return (!fields.title.isEmpty && fields.title.hasPrefix(normalizedQuery))
+      || (!fields.displayTitle.isEmpty && fields.displayTitle.hasPrefix(normalizedQuery))
+  }
+
   /// Decorated record so each candidate's tier / alive / key fields are
   /// computed once, not on every comparator call. With ~2k tied emojis
   /// the comparator fires ~20k times; recomputing `source.lowercased()`
@@ -669,6 +681,11 @@ enum CandidateFinder {
   private struct SortRecord {
     var index: Int
     var score: Int
+    /// The query exactly matches / is a full-string prefix of this
+    /// candidate's own name. Lifts the row above the source-family band in
+    /// `recordPrecedes` so a deliberate name hit (e.g. `safa` → Safari.app)
+    /// isn't buried under that family's rows (Safari's tabs).
+    var titlePrefixMatch: Bool
     var defaultFlashlightSourceRank: Int?
     /// Precedence weight from `PrecedenceTable`. Higher is better.
     /// Bangs carry the sentinel `bangWeight` so the comparator can
@@ -682,7 +699,8 @@ enum CandidateFinder {
   static func sortedMatches(
     _ matches: [CandidateMatch],
     precedence: PrecedenceTable = .default,
-    limit: Int? = nil
+    limit: Int? = nil,
+    normalizedQuery: String = ""
   ) -> [CandidateMatch] {
     if let limit, limit <= 0 { return [] }
     let records = matches.enumerated().map { offset, match -> SortRecord in
@@ -692,6 +710,7 @@ enum CandidateFinder {
       return SortRecord(
         index: offset,
         score: match.score,
+        titlePrefixMatch: titleMatchesPrefix(match.candidate, normalizedQuery: normalizedQuery),
         defaultFlashlightSourceRank: precedence.defaultFlashlightSourceRank(for: match.candidate),
         weight: precedence.weight(for: match.candidate),
         alive: isAlive(match.candidate),
@@ -710,10 +729,12 @@ enum CandidateFinder {
   static func displayAndIncrementalMatches(
     _ matches: [CandidateMatch],
     precedence: PrecedenceTable = .default,
-    limit: Int
+    limit: Int,
+    normalizedQuery: String = ""
   ) -> (display: [CandidateMatch], incremental: [CandidateMatch]) {
     (
-      display: sortedMatches(matches, precedence: precedence, limit: limit),
+      display: sortedMatches(
+        matches, precedence: precedence, limit: limit, normalizedQuery: normalizedQuery),
       incremental: matches
     )
   }
@@ -761,6 +782,15 @@ enum CandidateFinder {
     let lhsIsBang = lhs.weight == PrecedenceTable.bangWeight
     let rhsIsBang = rhs.weight == PrecedenceTable.bangWeight
     if lhsIsBang != rhsIsBang { return lhsIsBang }
+
+    // A query that exactly matches / is a full-string prefix of a
+    // candidate's own name is a deliberate hit on THAT item, so it crosses
+    // the source-family band below: `safa` surfaces Safari.app above
+    // Safari's open tabs, `mes` surfaces Messages.app above a tab that
+    // merely contains "mes". This restores the ranking `fieldScoreNormalized`
+    // documents — without it the band ordering (tabs > apps) buries the app
+    // no matter how strong its name match is.
+    if lhs.titlePrefixMatch != rhs.titlePrefixMatch { return lhs.titlePrefixMatch }
 
     switch (lhs.defaultFlashlightSourceRank, rhs.defaultFlashlightSourceRank) {
     case (let l?, let r?) where l != r:

@@ -463,6 +463,55 @@ final class NormalModeTests: XCTestCase {
       InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: nil), .recaptureNormal)
   }
 
+  func testTransientResampleBudgetCommitsAfterExhaustion() {
+    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
+    // Firefox web content: focused AXStaticText nested under an AXList. This
+    // classifies as transient but is persistent — pre-budget it spun the
+    // resamplers forever and welded the user into NORMAL.
+    let persistentTransient = focusSnapshot(
+      .transientInteraction(reason: "ancestor:AXList"), role: "AXStaticText")
+
+    // Pointer handoff: resample while within budget, then enter INSERT — a
+    // deliberate click on persistent content must hand the keyboard over.
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: persistentTransient, attempt: maxAttempts - 1),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: persistentTransient, attempt: maxAttempts),
+      .enterInsert)
+
+    // Insert-mode exit probe: resample while within budget, then STAY — never
+    // kick the user out of a persistent surface they are typing into.
+    func insertDecision(attempt: Int) -> InputFocusExitDecision {
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: persistentTransient,
+        pointerPressed: false,
+        attempt: attempt)
+    }
+    XCTAssertEqual(
+      insertDecision(attempt: maxAttempts - 1),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(insertDecision(attempt: maxAttempts), .stay)
+
+    // The budget governs only the transient branch: a genuinely stable
+    // non-editable surface still exits to NORMAL immediately, no matter how
+    // many attempts have elapsed.
+    XCTAssertEqual(
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: focusSnapshot(.stableNonEditable, role: "AXButton"),
+        pointerPressed: false,
+        attempt: maxAttempts + 10),
+      .exitToNormal)
+  }
+
   func testInsertModeFocusLossExitRequiresArmedEditablePID() {
     XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: nil))
     XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: pid_t(43)))

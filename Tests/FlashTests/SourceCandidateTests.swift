@@ -339,6 +339,39 @@ final class SourceCandidateTests: XCTestCase {
       ["z-bang", "z-tmux", "z-tab", "z-active", "z-inactive", "z-slack", "z-note"])
   }
 
+  func testNamePrefixMatchCrossesSourceBand() {
+    let safariApp = CandidateFinder.prepare(
+      candidate(
+        kind: .app, source: "core.apps", name: "Safari",
+        subtitle: "app", bundleIdentifier: "com.apple.Safari", pid: 4242))
+    // A browser tab whose own name does NOT start with the query — it would
+    // only match `safa` via an unrelated field (here it doesn't match at all;
+    // the score is supplied directly to isolate the band/tier ordering).
+    let firefoxTab = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("browser_tab"), source: "firefox", name: "Apple Newsroom",
+        subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox", pid: 4242,
+        url: URL(string: "https://example.test/safari")))
+
+    // No query: the strict family band keeps the browser tab above the app
+    // even with a much lower app score (unchanged behaviour).
+    let banded = CandidateFinder.sortedMatches([
+      CandidateMatch(candidate: safariApp, score: 12_000),
+      CandidateMatch(candidate: firefoxTab, score: 14_000),
+    ])
+    XCTAssertEqual(banded.map(\.candidate.source), ["firefox", "core.apps"])
+
+    // Typing `safa` — a full-string prefix of the app's own name — lifts
+    // Safari.app above the tab despite the tab's higher score and band.
+    let prefixed = CandidateFinder.sortedMatches(
+      [
+        CandidateMatch(candidate: safariApp, score: 12_000),
+        CandidateMatch(candidate: firefoxTab, score: 14_000),
+      ],
+      normalizedQuery: "safa")
+    XCTAssertEqual(prefixed.map(\.candidate.source), ["core.apps", "firefox"])
+  }
+
   func testDefaultFlashlightVisibilityOnlyIncludesNavigationFamilies() {
     let tmux = candidate(
       kind: .plugin("tmux_window"), source: "tmux.windows", name: "flash",

@@ -47,10 +47,26 @@ extension AppDelegate {
     // restores the prior mode (the one that was active when the command
     // line was entered), so forcing `enterInsertMode` here would clobber
     // that restoration. Only flip to insert when the pointer click is
-    // dismissing the normal-mode capture surface itself — primary, right,
-    // and double-click in NORMAL all hand the keyboard back to the
-    // underlying app the user just clicked into.
+    // dismissing the normal-mode capture surface itself — primary and
+    // double-click in NORMAL hand the keyboard back to the underlying app
+    // the user just clicked into (via the editable-click probe below);
+    // right-click is handled separately just under this.
     let wasCommandLine = overlay.inputMode == .commandLine
+    let isRightClick: Bool
+    if case .click(let click) = intent, click.action == .rightClick {
+      isRightClick = true
+    } else {
+      isRightClick = false
+    }
+    // A right-click summons a context menu, which must become key to stay
+    // open and accept arrow-key navigation. In NORMAL the overlay panel
+    // still holds keyboard capture, so the recapture that follows
+    // `cancelOverlay` steals key straight back and the menu is dismissed
+    // the instant it appears. Drop to INSERT instead: that releases capture
+    // (see `applyModeOverlay`), so the menu survives and its keys reach the
+    // focused app. `.pointerClick` is in the user-driven set, so the gate
+    // allows the flip.
+    let shouldEnterInsertForRightClick = isRightClick && !wasCommandLine && flashMode == .normal
     let shouldCheckEditableClick: Bool
     if case .click(let click) = intent, click.action != .rightClick {
       shouldCheckEditableClick = !wasCommandLine && flashMode != .insert
@@ -62,6 +78,9 @@ extension AppDelegate {
       normalModePointerHandoffActive = true
     }
     cancelOverlay()
+    if shouldEnterInsertForRightClick {
+      enterInsertMode(reason: .pointerClick)
+    }
     if shouldCheckEditableClick {
       resolveNormalPointerHandoff(token: normalModePointerHandoffToken)
     }
@@ -356,6 +375,7 @@ extension AppDelegate {
   private func enterInsertModeIfClickedOnTextInput(
     pid: pid_t?,
     reason: InsertModeTransitionReason,
+    attempt: Int = 0,
     completion: ((Bool) -> Void)? = nil
   ) {
     guard flashMode == .normal else {
@@ -392,7 +412,9 @@ extension AppDelegate {
           completion?(false)
           return
         }
-        switch InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: snapshot) {
+        switch InsertModeFocusMachine.normalPointerHandoffDecision(
+          snapshot: snapshot, attempt: attempt)
+        {
         case .enterInsert:
           self.enterInsertMode(reason: reason)
           completion?(true)
@@ -404,6 +426,7 @@ extension AppDelegate {
             self?.enterInsertModeIfClickedOnTextInput(
               pid: targetPID,
               reason: reason,
+              attempt: attempt + 1,
               completion: completion)
           }
         }

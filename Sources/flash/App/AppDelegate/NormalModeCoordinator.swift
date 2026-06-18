@@ -368,7 +368,8 @@ extension AppDelegate {
   private func completeFocusedInputExitIfNeeded(
     pid: pid_t,
     token: UInt64,
-    snapshot: InputFocusSnapshot
+    snapshot: InputFocusSnapshot,
+    attempt: Int = 0
   ) {
     let focusedPID = currentNonFlashContext()?.processID
     let decision = InsertModeFocusMachine.insertFocusChangeDecision(
@@ -376,21 +377,25 @@ extension AppDelegate {
       eventPID: pid,
       armedEditablePID: insertEditableFocusExitPID,
       snapshot: snapshot,
-      pointerPressed: Self.insertFocusExitShouldWaitForPointerRelease())
+      pointerPressed: Self.insertFocusExitShouldWaitForPointerRelease(),
+      attempt: attempt)
     switch decision {
     case .stay:
       return
     case .waitForPointerRelease:
+      // Waiting for the mouse button to come up is a distinct loop from the
+      // transient-resample budget, so it does not consume an attempt.
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
-        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token)
+        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token, attempt: attempt)
       }
       return
     case .resampleAfter(let milliseconds):
       FlashLog.trace(
         "[mode] insert_focus_transient pid=\(pid) role=\(snapshot.role ?? "nil") "
-          + "surface=\(snapshot.surface)")
+          + "surface=\(snapshot.surface) attempt=\(attempt)")
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(milliseconds)) { [weak self] in
-        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token)
+        self?.completeFocusedInputExitAfterPointerRelease(
+          pid: pid, token: token, attempt: attempt + 1)
       }
     case .exitToNormal:
       FlashLog.debug(
@@ -400,17 +405,22 @@ extension AppDelegate {
     }
   }
 
-  private func completeFocusedInputExitAfterPointerRelease(pid: pid_t, token: UInt64) {
+  private func completeFocusedInputExitAfterPointerRelease(
+    pid: pid_t,
+    token: UInt64,
+    attempt: Int = 0
+  ) {
     guard insertFocusExitProbeToken == token, flashMode == .insert else { return }
     if Self.insertFocusExitShouldWaitForPointerRelease() {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
-        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token)
+        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token, attempt: attempt)
       }
       return
     }
     monitor.focusedInputSnapshot(pid: pid) { [weak self] snapshot in
       guard let self, self.insertFocusExitProbeToken == token, let snapshot else { return }
-      self.completeFocusedInputExitIfNeeded(pid: pid, token: token, snapshot: snapshot)
+      self.completeFocusedInputExitIfNeeded(
+        pid: pid, token: token, snapshot: snapshot, attempt: attempt)
     }
   }
 
@@ -1401,7 +1411,8 @@ extension AppDelegate {
         normalizedQuery: normalizedQuery,
         fuzzyScore: fuzzy,
         allowParallel: false)
-      let sorted = CandidateFinder.sortedMatches(scored, precedence: precedenceTable())
+      let sorted = CandidateFinder.sortedMatches(
+        scored, precedence: precedenceTable(), normalizedQuery: normalizedQuery)
       // Bang / source-completion pools are disjoint from the main flashlight
       // pool, so a saved incremental cache from a previous keystroke must
       // not survive into the next plain-query keystroke.
@@ -1495,7 +1506,7 @@ extension AppDelegate {
     // top-K for "t" can become the best match for "tmux".
     let sortLimit = max(commandBarSuggestionCount * 3, 30)
     let ranked = CandidateFinder.displayAndIncrementalMatches(
-      scored, precedence: precedenceTable(), limit: sortLimit)
+      scored, precedence: precedenceTable(), limit: sortLimit, normalizedQuery: normalizedQuery)
     let sorted = ranked.display
     let tSorted = CFAbsoluteTimeGetCurrent()
     // Re-check the generation — a re-entrant call (e.g. caches landing
@@ -2110,7 +2121,11 @@ extension AppDelegate {
     let count = normalizedRepeatCount(repeatCount)
     for index in 0..<count {
       let delay = DispatchTimeInterval.milliseconds(index * 35)
-      DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        // Note the synthesized chord so a `postToPid` event that loops back
+        // through the Carbon dispatcher can't re-trigger our own hotkey for
+        // the same combo (e.g. the `⌘⇧]` Messages tab-traversal fallback).
+        self?.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
         NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: context.processID)
       }
     }
@@ -2158,6 +2173,7 @@ extension AppDelegate {
       return
     }
     for (key, flags) in keys {
+      mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
       NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: context.processID)
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
