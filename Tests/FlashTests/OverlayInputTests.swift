@@ -159,6 +159,105 @@ final class OverlayInputTests: XCTestCase {
       .cancel)
   }
 
+  func testArrowKeysCancel() {
+    for keyCode: UInt16 in [123, 124, 125, 126] {
+      XCTAssertEqual(
+        OverlayInputInterpreter.action(
+          keyCode: keyCode,
+          modifierFlags: [],
+          charactersIgnoringModifiers: nil),
+        .cancel,
+        "arrow \(keyCode) must cancel")
+    }
+  }
+
+  func testPlainSpaceRequestsCenterCommit() {
+    // `<space>` no longer hard-cancels at the interpreter — it becomes the
+    // fixed centre-of-grid key. The coordinator decides whether that's a
+    // center commit (mouse-grid mode) or a cancel (plain hints).
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 49,
+        modifierFlags: [],
+        charactersIgnoringModifiers: " "),
+      .commitCenter([]))
+  }
+
+  func testShiftSpaceRidesShiftIntoCenterClick() {
+    // Same shift-pass-through invariant as the hint-commit path: shift
+    // always rides the synthesized click, so `shift+<space>` is a
+    // shift+click on the centre.
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 49,
+        modifierFlags: [.shift],
+        charactersIgnoringModifiers: " "),
+      .commitCenter([.shift]))
+  }
+
+  func testCommandSpaceCancelsWhenCommandNotMagic() {
+    // The magic-modifier cancel gate still guards `<space>`: an unlisted
+    // strict modifier cancels rather than slipping through as a center
+    // commit.
+    XCTAssertEqual(
+      OverlayInputInterpreter.action(
+        keyCode: 49,
+        modifierFlags: [.command],
+        charactersIgnoringModifiers: " ",
+        magicModifiers: []),
+      .cancel)
+  }
+
+  func testSpaceInHintsCommitsCenterWhenCoordinatorHandlesIt() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    coordinator.commitCenterHandled = true  // mouse-grid mode active
+    panel.coordinator = coordinator
+    panel.inputMode = .hints
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: " ",
+        charactersIgnoringModifiers: " ",
+        isARepeat: false,
+        keyCode: 49))
+
+    panel.keyDown(with: event)
+
+    XCTAssertEqual(coordinator.commitCenterModifiers, [[]])
+    XCTAssertEqual(coordinator.cancelCount, 0)
+  }
+
+  func testSpaceInHintsCancelsWhenCoordinatorDeclinesCenter() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    coordinator.commitCenterHandled = false  // plain hints, not mouse grid
+    panel.coordinator = coordinator
+    panel.inputMode = .hints
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: " ",
+        charactersIgnoringModifiers: " ",
+        isARepeat: false,
+        keyCode: 49))
+
+    panel.keyDown(with: event)
+
+    XCTAssertEqual(coordinator.commitCenterModifiers.count, 1)
+    XCTAssertEqual(coordinator.cancelCount, 1)
+  }
+
   func testCommandLineUsesNativeTextFieldResponder() {
     XCTAssertTrue(CommandLineTextField(frame: .zero).acceptsFirstResponder)
   }
@@ -453,10 +552,20 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var submittedCommands: [String] = []
   var mappingEventsToHandle = 0
   var normalModeActions: [(MappingCommand?, Int)] = []
+  var cancelCount = 0
+  var commitCenterModifiers: [ClickModifiers] = []
+  /// What `overlayDidCommitCenter` reports back — `true` mimics being in
+  /// mouse-grid mode (center handled), `false` mimics plain hints (the
+  /// panel then cancels).
+  var commitCenterHandled = false
 
-  func overlayDidCancel() {}
+  func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {}
+  func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
+    commitCenterModifiers.append(clickModifiers)
+    return commitCenterHandled
+  }
   func overlayDidUpdatePrefix(_ prefix: String) {}
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int) {
     if action != nil {

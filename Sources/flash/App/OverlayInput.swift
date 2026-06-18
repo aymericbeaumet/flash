@@ -4,6 +4,10 @@ enum OverlayKeyAction: Equatable {
   case cancel
   case backspace
   case commit(String, ClickModifiers)
+  /// `<space>` — commit the mouse grid's centre cell (the coordinator
+  /// resolves this to a center commit in mouse-grid mode and to a cancel
+  /// otherwise).
+  case commitCenter(ClickModifiers)
   case ignore
 }
 
@@ -23,8 +27,7 @@ enum OverlayInputInterpreter {
     magicModifiers: ClickModifiers = .defaultMagic
   ) -> OverlayKeyAction {
     switch keyCode {
-    case 49,  // space
-      53,  // escape
+    case 53,  // escape
       123, 124, 125, 126:  // arrow_left/right/down/up
       return .cancel
     default:
@@ -47,9 +50,6 @@ enum OverlayInputInterpreter {
       return .backspace
     }
 
-    guard let chars = charactersIgnoringModifiers, !chars.isEmpty else {
-      return .ignore
-    }
     // Click-pass-through: always allow shift to ride the click, even when
     // it has been stripped from `magicModifiers` for input-disambiguation
     // reasons (the auto-strip in `Config.removeAmbiguousShiftMagicModifier`
@@ -63,6 +63,22 @@ enum OverlayInputInterpreter {
     // truth for unknown chords.
     let clickAllowed = magicModifiers.union(.shift)
     let clickModifiers = ClickModifiers(eventFlags: independentModifiers, allowed: clickAllowed)
+
+    // `<space>` is the fixed "centre of the grid" key. In mouse-grid mode
+    // the coordinator commits the middle cell (always present — the grid
+    // is an odd-N square) so the region centre is one keystroke away
+    // whatever letter the layout assigned there; outside mouse-grid mode
+    // it falls back to a cancel, preserving the universal
+    // arrows/space/escape "abort the overlay" gesture. Routed through the
+    // same magic-modifier gate above so a stray `cmd+space` can't slip
+    // past as a center commit.
+    if keyCode == 49 {  // space
+      return .commitCenter(clickModifiers)
+    }
+
+    guard let chars = charactersIgnoringModifiers, !chars.isEmpty else {
+      return .ignore
+    }
     return .commit(chars, clickModifiers)
   }
 }
@@ -170,10 +186,14 @@ extension OverlayPanel {
     }
 
     // Hardcoded dismissal keys. Not configurable on purpose: arrows /
-    // space / escape are common "abort what I was about to do" signals
-    // in every macOS app, and matching that intuition keeps the
-    // overlay out of the user's way. Scrolling is handled separately
-    // by a global event monitor (see OverlayPanel.installScrollMonitor).
+    // escape are common "abort what I was about to do" signals in every
+    // macOS app, and matching that intuition keeps the overlay out of
+    // the user's way. `<space>` joins them as a cancel *except* in
+    // mouse-grid mode, where it commits the grid's centre cell — the
+    // coordinator makes that call (see `overlayDidCommitCenter`) since
+    // only it knows the active commit behaviour. Scrolling is handled
+    // separately by a global event monitor (see
+    // OverlayPanel.installScrollMonitor).
     switch OverlayInputInterpreter.action(
       keyCode: event.keyCode,
       modifierFlags: event.modifierFlags,
@@ -188,6 +208,11 @@ extension OverlayPanel {
       return true
     case .commit(let chars, let clickModifiers):
       coordinator.overlayDidCommit(prefix: chars, clickModifiers: clickModifiers)
+      return true
+    case .commitCenter(let clickModifiers):
+      if !coordinator.overlayDidCommitCenter(clickModifiers: clickModifiers) {
+        coordinator.overlayDidCancel()
+      }
       return true
     case .ignore:
       return swallowIgnored

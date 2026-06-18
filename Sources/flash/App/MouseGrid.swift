@@ -7,6 +7,13 @@ enum MouseGrid {
     var rows: Int
 
     var cellCount: Int { columns * rows }
+
+    /// Row-major index of the grid's centre cell. For the odd-N square
+    /// grids this enum produces it's the exact middle cell; `<space>` in
+    /// mouse-grid mode commits it so the centre of the current region is
+    /// always one fixed keystroke away, whatever letter the layout
+    /// happened to assign there.
+    var centerCellIndex: Int { (rows / 2) * columns + (columns / 2) }
   }
 
   struct Region: Equatable {

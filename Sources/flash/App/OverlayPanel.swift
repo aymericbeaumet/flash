@@ -462,6 +462,10 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidCancel()
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent)
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)
+  /// `<space>` in the hints surface. Commits the mouse grid's centre cell
+  /// and returns `true` when mouse-grid mode is active; returns `false`
+  /// otherwise so the panel falls back to cancelling the overlay.
+  func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool

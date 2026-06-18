@@ -142,6 +142,27 @@ extension AppDelegate {
     }
   }
 
+  /// `<space>` in mouse-grid mode commits the grid's centre cell — the
+  /// exact middle of the current region, reachable with one fixed key
+  /// regardless of which letter the layout assigned there. It recurses
+  /// like any cell commit (centre-of-centre stays centred), so repeated
+  /// `<space>` homes in on the dead centre and then clicks. Returns
+  /// `false` when not in mouse-grid mode so the caller falls back to the
+  /// universal "space cancels the overlay" gesture.
+  func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
+    guard
+      pendingHintCommitBehavior == .mouseGridClick
+        || pendingHintCommitBehavior == .mouseGridMove,
+      let grid = mouseGridRegion?.grid
+    else {
+      return false
+    }
+    let centerIndex = grid.centerCellIndex
+    guard currentHints.indices.contains(centerIndex) else { return false }
+    commit(hint: currentHints[centerIndex], clickModifiers: clickModifiers)
+    return true
+  }
+
   func overlayDidUpdatePrefix(_ prefix: String) {
     if prefix == "__BACKSPACE__" {
       if !currentPrefix.isEmpty {

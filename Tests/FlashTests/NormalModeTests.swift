@@ -943,6 +943,24 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(region.grid, MouseGrid.Grid(columns: 5, rows: 5))
   }
 
+  func testMouseGridCenterCellIsTheRegionMiddle() throws {
+    // `<space>` commits `grid.centerCellIndex`; for the odd-N square grids
+    // the enum produces that hint must sit dead-centre on the region so
+    // repeated `<space>` converges on the exact middle.
+    XCTAssertEqual(MouseGrid.Grid(columns: 3, rows: 3).centerCellIndex, 4)
+    XCTAssertEqual(MouseGrid.Grid(columns: 5, rows: 5).centerCellIndex, 12)
+
+    let alphabet = Array("abcdefghijklmnopqrstuvwxy")  // 25 letters → 5x5
+    let region = MouseGrid.preparedRegion(
+      MouseGrid.Region(frame: CGRect(x: 0, y: 0, width: 1000, height: 600)),
+      alphabet: alphabet)
+    let grid = try XCTUnwrap(region.grid)
+    let hints = MouseGrid.hints(in: region, depth: 0, alphabet: alphabet)
+    let center = hints[grid.centerCellIndex]
+    XCTAssertEqual(center.target.frame.midX, region.frame.midX, accuracy: 0.01)
+    XCTAssertEqual(center.target.frame.midY, region.frame.midY, accuracy: 0.01)
+  }
+
   func testMouseGridFinalStepRendersCompactClusterCenteredOnPastRect() {
     // 9-cell alphabet → 3x3. Past rectangle is small enough that tile
     // cells would be smaller than the chip — exactly the case the
