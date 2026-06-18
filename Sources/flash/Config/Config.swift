@@ -347,6 +347,44 @@ struct Config {
         // switcher works as usual.
         ("cmd+tab", .flashCommand(.appNext)),
         ("cmd+shift+tab", .flashCommand(.appPrev)),
+        // Native macOS / browser navigation chords, shadowed in normal
+        // mode so the keys muscle-memory already knows keep working
+        // without leaving the normal-mode loop. Like `cmd+tab` above
+        // these are scope-bound Carbon registrations: insert mode releases
+        // them so the focused app sees the native chord again. Each maps
+        // to the same Flash command as its vim-style sibling, so the
+        // behaviour is identical whichever binding the user reaches for.
+        // ⌘1–⌘9 → select tab N (mirror of `g1`–`g9`).
+        ("cmd+1", .flashCommand(.tabSelect(index: 1))),
+        ("cmd+2", .flashCommand(.tabSelect(index: 2))),
+        ("cmd+3", .flashCommand(.tabSelect(index: 3))),
+        ("cmd+4", .flashCommand(.tabSelect(index: 4))),
+        ("cmd+5", .flashCommand(.tabSelect(index: 5))),
+        ("cmd+6", .flashCommand(.tabSelect(index: 6))),
+        ("cmd+7", .flashCommand(.tabSelect(index: 7))),
+        ("cmd+8", .flashCommand(.tabSelect(index: 8))),
+        ("cmd+9", .flashCommand(.tabSelect(index: 9))),
+        // ⌘R / ⌘⇧R → reload / hard reload (mirror of `r` / `R`).
+        ("cmd+r", .flashCommand(.reload(force: false))),
+        ("cmd+shift+r", .flashCommand(.reload(force: true))),
+        // ⌘[ / ⌘] → history back / forward (mirror of `[h` / `]h`).
+        ("cmd+<lbracket>", .flashCommand(.historyBack)),
+        ("cmd+<rbracket>", .flashCommand(.historyForward)),
+        // ⌘⇧[ / ⌘⇧] → previous / next tab (mirror of `[t` / `]t`, `gT` / `gt`).
+        ("cmd+shift+<lbracket>", .flashCommand(.tabPrev)),
+        ("cmd+shift+<rbracket>", .flashCommand(.tabNext)),
+        // ⌘T / ⌘⇧T → new tab / reopen closed tab (mirror of `t` / `T`).
+        ("cmd+t", .flashCommand(.tabNew)),
+        ("cmd+shift+t", .flashCommand(.tabReopen)),
+        // ⌘W → close tab, ⌘N → new window (mirror of `x` / `n`).
+        ("cmd+w", .flashCommand(.tabClose)),
+        ("cmd+n", .flashCommand(.pluginVerb(name: "window_new", args: [:]))),
+        // ⌘F → find (mirror of `/`).
+        ("cmd+f", .flashCommand(.find)),
+        // ⌃Tab / ⌃⇧Tab → next / previous tab — the browser-native
+        // alternative to ⌘⇧] / ⌘⇧[.
+        ("ctrl+tab", .flashCommand(.tabNext)),
+        ("ctrl+shift+tab", .flashCommand(.tabPrev)),
         // First / last tab. Vim-style `g^` / `g$` borrowed from
         // line-extreme motions: `^` is the first non-blank, `$` is the
         // end of line. Browsers translate to ⌘1 / ⌘9 (the cross-vendor

@@ -99,6 +99,42 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.debug.httpInspectorPort, 4242)
   }
 
+  func testDefaultNativeMacOSNavigationChordsInNormalMode() {
+    // ⌘1–⌘9 / ⌘R / ⌘⇧R / ⌘[ / ⌘] / ⌘⇧[ / ⌘⇧] / ⌘T / ⌘⇧T are shadowed in
+    // normal mode and map to the same commands as their vim-style siblings.
+    let c = ConfigLoader.parse("")
+    func command(_ raw: String) -> URLCommand? {
+      c.mode.normal.first(where: { $0.key == key(raw) })?.action.command
+    }
+    XCTAssertEqual(command("cmd+1"), .tabSelect(index: 1))
+    XCTAssertEqual(command("cmd+9"), .tabSelect(index: 9))
+    XCTAssertEqual(command("cmd+r"), .reload(force: false))
+    XCTAssertEqual(command("cmd+shift+r"), .reload(force: true))
+    XCTAssertEqual(command("cmd+<lbracket>"), .historyBack)
+    XCTAssertEqual(command("cmd+<rbracket>"), .historyForward)
+    XCTAssertEqual(command("cmd+shift+<lbracket>"), .tabPrev)
+    XCTAssertEqual(command("cmd+shift+<rbracket>"), .tabNext)
+    XCTAssertEqual(command("cmd+t"), .tabNew)
+    XCTAssertEqual(command("cmd+shift+t"), .tabReopen)
+    XCTAssertEqual(command("cmd+w"), .tabClose)
+    XCTAssertEqual(command("cmd+n"), .pluginVerb(name: "window_new", args: [:]))
+    XCTAssertEqual(command("cmd+f"), .find)
+    XCTAssertEqual(command("ctrl+tab"), .tabNext)
+    XCTAssertEqual(command("ctrl+shift+tab"), .tabPrev)
+
+    // Each chord must parse for the scope-bound Carbon registration, else
+    // the hotkey silently never fires. ⌘[ and ⌘⇧[ share a physical key and
+    // are told apart only by the shift modifier.
+    let back = HotkeySyntax.parse(hotkey: key("cmd+<lbracket>"))
+    let prevTab = HotkeySyntax.parse(hotkey: key("cmd+shift+<lbracket>"))
+    XCTAssertNotNil(back)
+    XCTAssertNotNil(prevTab)
+    XCTAssertEqual(back?.virtualKey, prevTab?.virtualKey)
+    XCTAssertNotEqual(back?.modifiers, prevTab?.modifiers)
+    XCTAssertNotNil(HotkeySyntax.parse(hotkey: key("cmd+1")))
+    XCTAssertNotNil(HotkeySyntax.parse(hotkey: key("cmd+shift+r")))
+  }
+
   func testParsesStatusBarTemplate() {
     let c = ConfigLoader.parse(
       """
