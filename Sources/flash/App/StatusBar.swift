@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import FlashCore
 import Foundation
 import QuartzCore
 
@@ -1057,6 +1058,7 @@ final class FlashStatusBarController {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: expandHome(executable))
     process.arguments = command.argv.dropFirst().map(expandHome)
+    FlashProcessEnvironment.shared.apply(to: process)
     let stdout = Pipe()
     process.standardOutput = stdout
     process.standardError = Pipe()

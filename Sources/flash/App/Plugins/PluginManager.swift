@@ -988,6 +988,7 @@ final class PluginManager {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["git"] + arguments
     process.currentDirectoryURL = root
+    FlashProcessEnvironment.shared.apply(to: process)
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     do {
@@ -1019,6 +1020,7 @@ final class PluginManager {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = ["git"] + arguments
     process.currentDirectoryURL = root
+    FlashProcessEnvironment.shared.apply(to: process)
     let out = Pipe()
     process.standardOutput = out
     process.standardError = FileHandle.nullDevice

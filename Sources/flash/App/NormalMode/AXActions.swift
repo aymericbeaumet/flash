@@ -54,6 +54,7 @@ extension NormalModeDispatcher {
     let proc = Process()
     proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     proc.arguments = args
+    FlashProcessEnvironment.shared.apply(to: proc)
     try? proc.run()
   }
 

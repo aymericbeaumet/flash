@@ -824,21 +824,27 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
         return DiscoverResponse::targets(vec![]).context_pid(pid);
     };
 
+    // Pack client geometry and status onto one line separated by the literal
+    // `|||` field marker rather than a `\n`. An embedded newline in a
+    // `display-message -p` format is NOT reliably rendered as a line break —
+    // depending on tmux server state it can collapse, in which case the client
+    // dimensions and the status fields arrive on a single line and
+    // `parse_two_ints` chokes on `"<height> <status>"`. The discover then bails
+    // and `f` silently produces zero hints over a live tmux window. `|||` is
+    // literal text the server always emits verbatim (the same separator
+    // `list-clients`/`list-windows` rely on), so the split is deterministic.
+    let combined_format = format!(
+        "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}}"
+    );
     let combined = run_tmux_default(
         tmux_path,
-        &[
-            "display-message",
-            "-c",
-            &client.tty,
-            "-p",
-            "#{client_width} #{client_height}\n#{status} #{status-position}",
-        ],
+        &["display-message", "-c", &client.tty, "-p", &combined_format],
     )
     .await;
     let Some(combined) = combined else {
         return DiscoverResponse::targets(vec![]).context_pid(pid);
     };
-    let combined_lines: Vec<&str> = combined.split('\n').collect();
+    let combined_lines: Vec<&str> = combined.split(TMUX_FIELD_SEP).collect();
     if combined_lines.len() < 2 {
         return DiscoverResponse::targets(vec![]).context_pid(pid);
     }

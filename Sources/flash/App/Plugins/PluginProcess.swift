@@ -751,16 +751,16 @@ final class PluginProcess {
   }
 
   private func pluginEnvironment() -> [String: String] {
-    var env = ProcessInfo.processInfo.environment
-    if env["PATH", default: ""].isEmpty {
-      env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    }
-    env["FLASH_PLUGIN_ID"] = manifest.id
-    env["FLASH_PLUGIN_VERSION"] = manifest.version
-    env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
-    env["FLASH_PLUGIN_CONFIG"] = settingsJSON
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    return env
+    // Plugin-specific vars are overrides on the shared login-shell cache so
+    // they never leak into the global environment used by other child
+    // processes (status bar, command mappings, …).
+    FlashProcessEnvironment.shared.environment(withOverrides: [
+      "FLASH_PLUGIN_ID": manifest.id,
+      "FLASH_PLUGIN_VERSION": manifest.version,
+      "FLASH_PLUGIN_DATA_DIR": dataDir.path,
+      "FLASH_PLUGIN_CONFIG": settingsJSON,
+      "PYTHONDONTWRITEBYTECODE": "1",
+    ])
   }
 
   private func sendRequest(

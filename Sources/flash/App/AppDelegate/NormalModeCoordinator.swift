@@ -1439,7 +1439,12 @@ extension AppDelegate {
     // The heaviest pools (full installed-app + plugin candidate
     // counts) stay below ~5k so the synchronous path stays cheap.
     let tScoringStart = CFAbsoluteTimeGetCurrent()
-    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
+    // Rewrite standalone emoticons (`:)`, `:-(`, `;)`, …) to the emoji
+    // shortcodes the `emojis` plugin indexes before normalization strips
+    // their punctuation — otherwise `@emojis.glyphs :)` collapses to an
+    // empty query and lists every glyph unranked.
+    let normalizedQuery = NormalModeDispatcher.normalizedSearchText(
+      NormalModeDispatcher.expandEmoticons(scoringText))
     let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
     let signature = parsed.sourceFilter ?? ""
     // Incremental narrowing: if the new query extends the previous one

@@ -341,6 +341,21 @@ extension AppDelegate {
       completion?(false)
       return
     }
+    // A terminal emulator is a single giant text surface: a click, hint
+    // commit (`f`), or grid commit (`F`) that lands in one should hand the
+    // keyboard straight to whatever runs inside (shell / tmux / editor), so
+    // we drop into insert mode unconditionally. AX can't tell us this —
+    // alacritty / iTerm / kitty expose the grid as an opaque element with no
+    // AXTextArea, so the generic post-click role check below always reads
+    // "not editable" and the user is stranded in normal mode. Key off the
+    // focused app's bundle id instead, and skip the AX settle delay.
+    if let terminalPID = pid ?? currentNonFlashContext()?.processID,
+      isTerminalApp(pid: terminalPID)
+    {
+      enterInsertMode(reason: reason)
+      completion?(true)
+      return
+    }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
       guard let self, self.flashMode == .normal else {
         completion?(false)
@@ -375,12 +390,22 @@ extension AppDelegate {
     }
   }
 
-  // `mouseGridCommitShouldEnterInsertMode` removed: `F`/`sF`/`dF` no
-  // longer auto-enter insert. The geometric click can land anywhere —
-  // a button, a tab, a text field, blank canvas — so the only correct
-  // signal is the post-click AX role, queried by
-  // `enterInsertModeIfClickedOnTextInput`. Move (`mF`) was already a
-  // no-op for insert.
+  /// True when `pid` belongs to a known terminal-emulator bundle. Terminals
+  /// are treated as one editable surface for the click / hint / grid → insert
+  /// handoff (see `enterInsertModeIfClickedOnTextInput`).
+  private func isTerminalApp(pid: pid_t) -> Bool {
+    guard let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    else { return false }
+    return TerminalBundles.identifiers.contains(bundleID)
+  }
+
+  // `mouseGridCommitShouldEnterInsertMode` removed: outside terminals,
+  // `F`/`sF`/`dF` no longer auto-enter insert. The geometric click can land
+  // anywhere — a button, a tab, a text field, blank canvas — so the only
+  // correct signal is the post-click AX role, queried by
+  // `enterInsertModeIfClickedOnTextInput` (which first short-circuits to
+  // insert for terminal-bundle apps). Move (`mF`) was already a no-op for
+  // insert.
 
   func usesTmuxProvider(_ context: AppContext?) -> Bool {
     guard let context else { return false }

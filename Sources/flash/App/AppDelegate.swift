@@ -268,6 +268,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var lastPermissionPromptAt: Date?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    // Resolve the login-shell environment once, off the main thread, so every
+    // `script:`/`command:` task, mapping, and plugin inherits the same PATH
+    // and tooling the user has in their terminal. A GUI launch from Finder/
+    // launchd would otherwise hand children a bare environment. Until this
+    // lands the seeded cache (process env + PATH fallback) keeps commands
+    // usable, so the spawn need not block startup.
+    DispatchQueue.global(qos: .userInitiated).async {
+      FlashProcessEnvironment.shared.refresh()
+    }
     config = ConfigLoader.load()
     frecencyStore = FrecencyStore()
     let manager = pluginManager

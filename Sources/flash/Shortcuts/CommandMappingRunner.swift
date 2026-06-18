@@ -1,3 +1,4 @@
+import FlashCore
 import Foundation
 
 struct CommandMappingLaunchPlan: Equatable {
@@ -30,7 +31,7 @@ enum CommandMappingRunner {
     let process = Process()
     process.executableURL = plan.executableURL
     process.arguments = plan.arguments
-    process.environment = commandEnvironment()
+    FlashProcessEnvironment.shared.apply(to: process)
     if let null = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null")) {
       process.standardOutput = null
       process.standardError = null
@@ -48,14 +49,6 @@ enum CommandMappingRunner {
   static func expandLeadingTilde(_ value: String) -> String {
     guard value == "~" || value.hasPrefix("~/") else { return value }
     return (value as NSString).expandingTildeInPath
-  }
-
-  private static func commandEnvironment() -> [String: String] {
-    var environment = ProcessInfo.processInfo.environment
-    if environment["PATH", default: ""].isEmpty {
-      environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-    }
-    return environment
   }
 
   private static func argvDiagnostic(_ argv: [String]) -> String {
