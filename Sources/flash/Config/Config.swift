@@ -230,6 +230,11 @@ struct Config {
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
   struct StatusBar {
+    /// Whether the persistent top status bar is shown. This is the *sole*
+    /// condition for the bar's visibility — it is deliberately independent
+    /// of advanced mode (the `enter_normal_mode` binding). Off by default;
+    /// set `[statusbar] enabled = true` to opt in.
+    var enabled: Bool = false
     /// Single-string status-bar template using tmux-style format markers:
     ///   #[align=left|centre|right]  — switches which alignment region
     ///                                 subsequent text/variables accumulate
@@ -639,7 +644,8 @@ struct Config {
         },
       ],
       "statusbar": [
-        "template": statusBar.template.template
+        "enabled": statusBar.enabled,
+        "template": statusBar.template.template,
       ],
       "warnings": warnings,
     ])

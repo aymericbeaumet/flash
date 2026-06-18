@@ -124,7 +124,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var pendingAction: JumpAction = .leftClick
   var pendingHintCommitBehavior: HintCommitBehavior = .click
   var flashMode: FlashMode = .insert
+  /// Advanced mode: the normal-mode/INSERT mode system is active (driven by
+  /// an `enter_normal_mode` binding). Gates capture, the active-window
+  /// border, and the focus-exit machinery — NOT the status bar's visibility.
   var modeBadgeEnabled = false
+  /// Whether the persistent top status bar is shown. Mirrors
+  /// `config.statusBar.enabled` and is the sole condition for the bar — set
+  /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
+  var statusBarVisible = false
   var normalModeTargetPID: pid_t?
   /// Mode to restore on `finishCommandLineInteraction` when the verb that
   /// opened the modal asked for it (`restore_mode=1`). nil means "exit to
@@ -427,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // panel instead of the user's actual window.
       if let target = currentNonFlashContext() {
         WindowMover.move(
-          params, statusBarReservesSpace: modeBadgeEnabled, targetPID: target.processID)
+          params, statusBarReservesSpace: statusBarVisible, targetPID: target.processID)
       } else {
         FlashLog.warn("[window_move] no non-flash frontmost app")
       }

@@ -605,14 +605,14 @@ extension AppDelegate {
     let snapshot = Self.modeOverlaySnapshot(
       mode: flashMode,
       labels: config.mode.labels,
-      visible: modeBadgeEnabled,
+      visible: statusBarVisible,
       hasHints: !currentHints.isEmpty,
       activationInFlight: activationInFlight,
       captureOverride: captureOverride)
     FlashLog.trace(
       "[mode] overlay mode=\(flashMode) capture=\(snapshot.captureInput) "
         + "override=\(String(describing: captureOverride)) "
-        + "visible=\(modeBadgeEnabled) hints=\(currentHints.count) in_flight=\(activationInFlight)")
+        + "visible=\(statusBarVisible) hints=\(currentHints.count) in_flight=\(activationInFlight)")
     statusBarController?.updateModeLabel(snapshot.text)
     overlay.inputMode = snapshot.inputMode
     if snapshot.refreshActiveWindowBorder {

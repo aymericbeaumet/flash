@@ -139,8 +139,12 @@ extension AppDelegate {
     invalidateCandidateFinderCaches(reason: "config_reload", refreshApps: true)
     monitor.updateConfig(cfg)
     modeBadgeEnabled = hasNormalModeBinding(cfg)
-    applySystemStatusBarSpaceReservation(enabled: modeBadgeEnabled)
-    if modeBadgeEnabled {
+    // The status bar's visibility is an explicit, standalone config switch —
+    // it is NOT derived from advanced mode. `[statusbar] enabled` alone
+    // decides whether the bar (and its reserved screen space) appears.
+    statusBarVisible = cfg.statusBar.enabled
+    applySystemStatusBarSpaceReservation(enabled: statusBarVisible)
+    if statusBarVisible {
       statusBarController?.start()
     } else {
       statusBarController?.stop()

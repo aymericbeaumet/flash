@@ -433,6 +433,9 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
+    applyBool(table["enabled"], path: ["statusbar", "enabled"], message: "statusbar.enabled must be true or false", locations: locations, into: &config) { value, config in
+      config.statusBar.enabled = value
+    }
     applyString(table["template"], path: ["statusbar", "template"], message: "statusbar.template must be a quoted template string", locations: locations, into: &config) { value, config in
       config.statusBar.template.template = value
     }

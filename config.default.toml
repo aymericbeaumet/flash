@@ -60,9 +60,12 @@ third_party = []
 watching_enabled = true
 
 [statusbar]
-# Single template string for the persistent top status bar (active when
-# advanced mode is enabled). Use tmux-style alignment markers to switch
-# which region subsequent content lands in:
+# Show the persistent top status bar. This switch alone controls the bar's
+# visibility — it is independent of advanced mode (the enter_normal_mode
+# binding). Defaults to false.
+enabled = false
+# Single template string for the status bar. Use tmux-style alignment
+# markers to switch which region subsequent content lands in:
 #
 #   #[align=left]    — highlighted left cell (default until a marker fires)
 #   #[align=centre]  — centred section between left and right

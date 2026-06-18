@@ -175,6 +175,37 @@ final class ConfigLoaderTests: XCTestCase {
       .command(FlashStatusBarCommand(argv: ["/bin/sh", "-lc", "date +%H:%M"])))
   }
 
+  func testStatusBarEnabledIsTheSoleVisibilitySwitch() {
+    // Off by default, and a template alone does NOT imply visibility —
+    // `enabled` is the only condition for the bar to appear.
+    XCTAssertFalse(ConfigLoader.parse("").statusBar.enabled)
+    XCTAssertFalse(
+      ConfigLoader.parse(
+        """
+        [statusbar]
+        template = "#{mode}"
+        """
+      ).statusBar.enabled)
+
+    let on = ConfigLoader.parse(
+      """
+      [statusbar]
+      enabled = true
+      """)
+    XCTAssertTrue(on.statusBar.enabled)
+    XCTAssertTrue(on.loadingDiagnostics.isEmpty)
+
+    // Non-boolean values are rejected with a diagnostic and leave the
+    // default (off) in place.
+    let bad = ConfigLoader.parse(
+      """
+      [statusbar]
+      enabled = "yes"
+      """)
+    XCTAssertFalse(bad.statusBar.enabled)
+    XCTAssertFalse(bad.loadingDiagnostics.isEmpty)
+  }
+
   func testParsesStatusBarTemplateAsTripleQuotedMultiline() {
     let c = ConfigLoader.parse(
       """
