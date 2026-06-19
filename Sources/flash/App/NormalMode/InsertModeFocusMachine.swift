@@ -29,6 +29,23 @@ struct InputFocusSnapshot: Equatable {
       }
       return true
     }
+
+    var suspendsNormalCaptureAfterPointerHandoffBudget: Bool {
+      switch self {
+      case .role(let role):
+        return normalPointerHandoffSuspendingRoles.contains(role)
+      case .expandedRole(let role):
+        return expandableTransientRoles.contains(role)
+      case .ancestorRole(let role):
+        // A focused AXStaticText nested under AXList is common persistent
+        // browser content, so an AXList ancestor alone must not pin normal
+        // capture open. Option/list-item/menu ancestors are actual popup
+        // interaction surfaces and should keep native focus.
+        return normalPointerHandoffSuspendingAncestorRoles.contains(role)
+      case .windowSubrole, .extensionDocument:
+        return true
+      }
+    }
   }
 
   enum Surface: Equatable, CustomStringConvertible {
@@ -153,6 +170,7 @@ enum InputFocusExitDecision: Equatable {
 enum NormalPointerHandoffDecision: Equatable {
   case enterInsert
   case recaptureNormal
+  case suspendNativeSurface
   case resampleAfter(milliseconds: Int)
 }
 
@@ -205,18 +223,59 @@ enum InsertModeFocusMachine {
   {
     guard let snapshot else { return .recaptureNormal }
     if snapshot.isEditable { return .enterInsert }
-    if case .transientInteraction = snapshot.surface {
+    if case .transientInteraction(let reason) = snapshot.surface {
       // Budget exhausted: if the surface never resolves to a true editable,
-      // keep NORMAL. Password-manager popovers, context menus, native popovers,
-      // and persistent browser widgets can all look transient while settling,
-      // but none of them should own keyboard input unless AX eventually reports
-      // an editable focused element. Terminals bypass this machine at the call
-      // site because their text surface is opaque to AX.
+      // keep NORMAL. Popovers, extension panels, menus, and select/dropdown
+      // options must keep native focus so Flash does not immediately close
+      // them by re-keying the overlay. Persistent browser widgets that only
+      // match by a broad AXList ancestor recapture instead.
       if attempt >= transientResampleMaxAttempts {
-        return .recaptureNormal
+        return reason.suspendsNormalCaptureAfterPointerHandoffBudget
+          ? .suspendNativeSurface
+          : .recaptureNormal
       }
       return .resampleAfter(milliseconds: transientResampleMs)
     }
     return .recaptureNormal
   }
+
+  static func normalPointerHandoffDecision(
+    clickedSnapshot: InputFocusSnapshot?,
+    focusedSnapshot: InputFocusSnapshot?,
+    attempt: Int = 0
+  ) -> NormalPointerHandoffDecision {
+    let clickedDecision = normalPointerHandoffDecision(snapshot: clickedSnapshot, attempt: attempt)
+    switch clickedDecision {
+    case .enterInsert, .resampleAfter, .suspendNativeSurface:
+      return clickedDecision
+    case .recaptureNormal:
+      break
+    }
+
+    let focusedDecision = normalPointerHandoffDecision(snapshot: focusedSnapshot, attempt: attempt)
+    switch focusedDecision {
+    case .resampleAfter, .suspendNativeSurface:
+      return focusedDecision
+    case .enterInsert, .recaptureNormal:
+      // Do not let stale focus on a previous text input turn a toolbar/button
+      // click into INSERT. Point hit-testing owns the editable decision.
+      return clickedDecision
+    }
+  }
 }
+
+private let normalPointerHandoffSuspendingRoles: Set<String> = [
+  "AXComboBox",
+  "AXList", "AXListItem",
+  "AXMenu", "AXMenuItem", "AXMenuButton",
+  "AXOption",
+  "AXPopover",
+]
+
+private let normalPointerHandoffSuspendingAncestorRoles: Set<String> = [
+  "AXComboBox",
+  "AXListItem",
+  "AXMenu", "AXMenuItem", "AXMenuButton",
+  "AXOption",
+  "AXPopover",
+]

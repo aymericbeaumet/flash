@@ -472,6 +472,55 @@ final class NormalModeTests: XCTestCase {
       InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: nil), .recaptureNormal)
   }
 
+  func testSelectOptionPointerHandoffSuspendsNativeSurfaceWithoutInsert() {
+    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
+    let expandedSelect = focusSnapshot(
+      .transientInteraction(reason: .expandedRole("AXPopUpButton")),
+      role: "AXPopUpButton")
+    let selectList = focusSnapshot(
+      .transientInteraction(reason: .role("AXList")),
+      role: "AXList")
+    let option = focusSnapshot(
+      .transientInteraction(reason: .role("AXOption")),
+      role: "AXOption")
+
+    for snapshot in [expandedSelect, selectList, option] {
+      XCTAssertEqual(
+        InsertModeFocusMachine.normalPointerHandoffDecision(
+          snapshot: snapshot,
+          attempt: maxAttempts - 1),
+        .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+      XCTAssertEqual(
+        InsertModeFocusMachine.normalPointerHandoffDecision(
+          snapshot: snapshot,
+          attempt: maxAttempts),
+        .suspendNativeSurface)
+    }
+  }
+
+  func testToolbarPopoverHandoffUsesFocusedTransientSurfaceWithoutStaleEditableFocus() {
+    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
+    let clickedShieldButton = focusSnapshot(.stableNonEditable, role: "AXButton")
+    let focusedPopover = focusSnapshot(
+      .transientInteraction(reason: .windowSubrole("AXPopover")),
+      role: "AXGroup",
+      windowSubrole: "AXPopover")
+    let staleFocusedTextInput = focusSnapshot(.editable, role: "AXTextField")
+
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        clickedSnapshot: clickedShieldButton,
+        focusedSnapshot: focusedPopover,
+        attempt: maxAttempts),
+      .suspendNativeSurface)
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        clickedSnapshot: clickedShieldButton,
+        focusedSnapshot: staleFocusedTextInput,
+        attempt: 0),
+      .recaptureNormal)
+  }
+
   func testTransientResampleBudgetRecapturesAfterExhaustion() {
     let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
     // Firefox web content: focused AXStaticText nested under an AXList. This
@@ -521,7 +570,7 @@ final class NormalModeTests: XCTestCase {
       .exitToNormal)
   }
 
-  func testExtensionPopupTransientBudgetRecapturesOrExitsAfterExhaustion() {
+  func testExtensionPopupTransientBudgetSuspendsOrExitsAfterExhaustion() {
     let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
     let extensionPopup = focusSnapshot(
       .transientInteraction(reason: .extensionDocument(scheme: "chrome-extension")),
@@ -537,7 +586,7 @@ final class NormalModeTests: XCTestCase {
       InsertModeFocusMachine.normalPointerHandoffDecision(
         snapshot: extensionPopup,
         attempt: maxAttempts),
-      .recaptureNormal)
+      .suspendNativeSurface)
 
     XCTAssertEqual(
       InsertModeFocusMachine.insertFocusChangeDecision(
@@ -1036,6 +1085,37 @@ final class NormalModeTests: XCTestCase {
         mode: .normal,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
+        now: now))
+  }
+
+  func testPointerInsertHandoffTokenRejectsStaleAndExpiredProbes() {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let activeSuppression = now.addingTimeInterval(0.5)
+    let expiredSuppression = now.addingTimeInterval(-0.1)
+
+    XCTAssertTrue(
+      AppDelegate.pointerInsertHandoffIsCurrent(
+        token: 7,
+        currentToken: 7,
+        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.pointerInsertHandoffIsCurrent(
+        token: 6,
+        currentToken: 7,
+        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.pointerInsertHandoffIsCurrent(
+        token: 7,
+        currentToken: 7,
+        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
+        now: now))
+    XCTAssertTrue(
+      AppDelegate.pointerInsertHandoffIsCurrent(
+        token: nil,
+        currentToken: 7,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
         now: now))
   }
 
@@ -2093,6 +2173,7 @@ final class NormalModeTests: XCTestCase {
   private func focusSnapshot(
     _ surface: InputFocusSnapshot.Surface,
     role: String? = nil,
+    windowSubrole: String? = nil,
     documentURL: String? = nil
   ) -> InputFocusSnapshot {
     InputFocusSnapshot(
@@ -2100,7 +2181,7 @@ final class NormalModeTests: XCTestCase {
       surface: surface,
       role: role,
       windowRole: "AXWindow",
-      windowSubrole: nil,
+      windowSubrole: windowSubrole,
       documentURL: documentURL)
   }
 

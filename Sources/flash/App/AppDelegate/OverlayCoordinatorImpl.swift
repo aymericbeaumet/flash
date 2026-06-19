@@ -2,6 +2,12 @@ import AppKit
 import FlashCore
 import FlashProviders
 
+private enum PointerInsertHandoffOutcome {
+  case enteredInsert
+  case recaptureNormal
+  case suspendedNativeSurface
+}
+
 /// `OverlayCoordinator` protocol conformance: the callback surface the
 /// `OverlayPanel` uses to report user input + state transitions back to
 /// AppDelegate.
@@ -13,6 +19,7 @@ extension AppDelegate {
   }
 
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {
+    cancelPointerInsertHandoff(reason: "new_pointer_interaction")
     let pointIsInMenuBar: Bool
     let pointerClick: OverlayPointerClick?
     if case .click(let click) = intent {
@@ -75,8 +82,11 @@ extension AppDelegate {
       suspendNormalCaptureForNativeSurface(reason: "physical_native_surface")
       return
     }
+    let handoffToken: UInt64?
     if decision.probeForInsert {
-      notePointerInsertHandoff(reason: "physical_pointer_click")
+      handoffToken = notePointerInsertHandoff(reason: "physical_pointer_click")
+    } else {
+      handoffToken = nil
     }
     if decision.releaseCapture {
       releaseNormalCaptureForPointerHandoff(reason: "physical_pointer_click")
@@ -87,14 +97,26 @@ extension AppDelegate {
       enterInsertModeIfClickedOnTextInput(
         pid: targetPID,
         clickPoint: click?.location,
-        reason: .pointerClick
+        reason: .pointerClick,
+        handoffToken: handoffToken
       ) {
-        [weak self] didEnter in
+        [weak self] outcome in
         guard let self else { return }
-        self.clearPointerInsertHandoff(
-          reason: didEnter ? "physical_pointer_entered_insert" : "physical_pointer_probe_done")
-        guard !didEnter, self.flashMode == .normal else { return }
-        self.scheduleNormalModeRecapture()
+        switch outcome {
+        case .enteredInsert:
+          self.clearPointerInsertHandoff(
+            reason: "physical_pointer_entered_insert",
+            token: handoffToken)
+        case .recaptureNormal:
+          self.clearPointerInsertHandoff(reason: "physical_pointer_probe_done", token: handoffToken)
+          guard self.flashMode == .normal else { return }
+          self.scheduleNormalModeRecapture()
+        case .suspendedNativeSurface:
+          self.clearPointerInsertHandoff(
+            reason: "physical_pointer_native_surface",
+            token: handoffToken)
+          self.suspendNormalCaptureForNativeSurface(reason: "physical_pointer_native_surface")
+        }
       }
     }
   }
@@ -266,8 +288,11 @@ extension AppDelegate {
         + "alt:\(clickModifiers.contains(.option)) "
         + "enters_insert=\(hint.target.entersInsertMode)")
 
+    let handoffToken: UInt64?
     if wasNormalMode, actionMayEnterInsert {
-      notePointerInsertHandoff(reason: "hint_commit")
+      handoffToken = notePointerInsertHandoff(reason: "hint_commit")
+    } else {
+      handoffToken = nil
     }
     if wasNormalMode {
       applyModeOverlay(captureOverride: false)
@@ -306,14 +331,26 @@ extension AppDelegate {
         self.enterInsertModeIfClickedOnTextInput(
           pid: pid,
           clickPoint: clickPoint,
-          reason: .hintCommit
+          reason: .hintCommit,
+          handoffToken: handoffToken
         ) {
-          [weak self] didEnter in
+          [weak self] outcome in
           guard let self else { return }
-          self.clearPointerInsertHandoff(
-            reason: didEnter ? "hint_commit_entered_insert" : "hint_commit_probe_done")
-          guard !didEnter, self.flashMode == .normal else { return }
-          self.restoreNormalModeAfterCommit(action: action)
+          switch outcome {
+          case .enteredInsert:
+            self.clearPointerInsertHandoff(
+              reason: "hint_commit_entered_insert",
+              token: handoffToken)
+          case .recaptureNormal:
+            self.clearPointerInsertHandoff(reason: "hint_commit_probe_done", token: handoffToken)
+            guard self.flashMode == .normal else { return }
+            self.restoreNormalModeAfterCommit(action: action)
+          case .suspendedNativeSurface:
+            self.clearPointerInsertHandoff(
+              reason: "hint_commit_native_surface",
+              token: handoffToken)
+            self.suspendNormalCaptureForNativeSurface(reason: "hint_commit_native_surface")
+          }
         }
       } else if wasNormalMode {
         self.restoreNormalModeAfterCommit(action: action)
@@ -409,8 +446,11 @@ extension AppDelegate {
       return
     }
     let clickAction = pendingAction
+    let handoffToken: UInt64?
     if clickAction != .rightClick {
-      notePointerInsertHandoff(reason: "mouse_grid_commit")
+      handoffToken = notePointerInsertHandoff(reason: "mouse_grid_commit")
+    } else {
+      handoffToken = nil
     }
     _ = ActionDispatcher.synthesizeClick(
       at: point,
@@ -426,14 +466,24 @@ extension AppDelegate {
       enterInsertModeIfClickedOnTextInput(
         pid: priorPID,
         clickPoint: point,
-        reason: .hintCommit
+        reason: .hintCommit,
+        handoffToken: handoffToken
       ) {
-        [weak self] didEnter in
+        [weak self] outcome in
         guard let self else { return }
-        self.clearPointerInsertHandoff(
-          reason: didEnter ? "mouse_grid_entered_insert" : "mouse_grid_probe_done")
-        guard !didEnter, self.flashMode == .normal else { return }
-        self.scheduleNormalModeRecapture()
+        switch outcome {
+        case .enteredInsert:
+          self.clearPointerInsertHandoff(
+            reason: "mouse_grid_entered_insert",
+            token: handoffToken)
+        case .recaptureNormal:
+          self.clearPointerInsertHandoff(reason: "mouse_grid_probe_done", token: handoffToken)
+          guard self.flashMode == .normal else { return }
+          self.scheduleNormalModeRecapture()
+        case .suspendedNativeSurface:
+          self.clearPointerInsertHandoff(reason: "mouse_grid_native_surface", token: handoffToken)
+          self.suspendNormalCaptureForNativeSurface(reason: "mouse_grid_native_surface")
+        }
       }
     }
   }
@@ -449,10 +499,12 @@ extension AppDelegate {
     clickPoint: CGPoint? = nil,
     reason: InsertModeTransitionReason,
     attempt: Int = 0,
-    completion: ((Bool) -> Void)? = nil
+    handoffToken: UInt64? = nil,
+    completion: ((PointerInsertHandoffOutcome) -> Void)? = nil
   ) {
+    guard pointerInsertHandoffIsCurrent(handoffToken) else { return }
     guard flashMode == .normal else {
-      completion?(false)
+      completion?(.recaptureNormal)
       return
     }
     // A terminal emulator is a single giant text surface: a click, hint
@@ -467,48 +519,68 @@ extension AppDelegate {
       isTerminalApp(pid: terminalPID)
     {
       enterInsertMode(reason: reason)
-      completion?(true)
+      completion?(.enteredInsert)
       return
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
-      guard let self, self.flashMode == .normal else {
-        completion?(false)
+      guard let self else { return }
+      guard self.pointerInsertHandoffIsCurrent(handoffToken) else { return }
+      guard self.flashMode == .normal else {
+        completion?(.recaptureNormal)
         return
       }
       let targetPID = pid ?? self.currentNonFlashContext()?.processID
       guard let targetPID else {
-        completion?(false)
+        completion?(.recaptureNormal)
         return
       }
-      let handleSnapshot: (InputFocusSnapshot?) -> Void = { [weak self] snapshot in
-        guard let self, self.flashMode == .normal else {
-          completion?(false)
+      let handleDecision: (NormalPointerHandoffDecision) -> Void = { [weak self] decision in
+        guard let self else { return }
+        guard self.pointerInsertHandoffIsCurrent(handoffToken) else { return }
+        guard self.flashMode == .normal else {
+          completion?(.recaptureNormal)
           return
         }
-        switch InsertModeFocusMachine.normalPointerHandoffDecision(
-          snapshot: snapshot, attempt: attempt)
-        {
+        switch decision {
         case .enterInsert:
           self.enterInsertMode(reason: reason)
-          completion?(true)
+          completion?(.enteredInsert)
         case .recaptureNormal:
-          completion?(false)
+          completion?(.recaptureNormal)
+        case .suspendNativeSurface:
+          completion?(.suspendedNativeSurface)
         case .resampleAfter(let milliseconds):
           DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(milliseconds)) {
             [weak self] in
-            self?.enterInsertModeIfClickedOnTextInput(
+            guard let self, self.pointerInsertHandoffIsCurrent(handoffToken) else { return }
+            self.enterInsertModeIfClickedOnTextInput(
               pid: targetPID,
               clickPoint: clickPoint,
               reason: reason,
               attempt: attempt + 1,
+              handoffToken: handoffToken,
               completion: completion)
           }
         }
       }
       if let clickPoint {
-        self.monitor.inputSnapshot(pid: targetPID, at: clickPoint, completion: handleSnapshot)
+        self.monitor.inputSnapshot(pid: targetPID, at: clickPoint) { [weak self] clickedSnapshot in
+          guard let self, self.pointerInsertHandoffIsCurrent(handoffToken) else { return }
+          self.monitor.focusedInputSnapshot(pid: targetPID) { focusedSnapshot in
+            handleDecision(
+              InsertModeFocusMachine.normalPointerHandoffDecision(
+                clickedSnapshot: clickedSnapshot,
+                focusedSnapshot: focusedSnapshot,
+                attempt: attempt))
+          }
+        }
       } else {
-        self.monitor.focusedInputSnapshot(pid: targetPID, completion: handleSnapshot)
+        self.monitor.focusedInputSnapshot(pid: targetPID) { snapshot in
+          handleDecision(
+            InsertModeFocusMachine.normalPointerHandoffDecision(
+              snapshot: snapshot,
+              attempt: attempt))
+        }
       }
     }
   }

@@ -253,6 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var menuBarInteractionRecaptureSuppressedUntil: Date?
   var contextMenuInteractionRecaptureSuppressedUntil: Date?
   var pointerInsertHandoffRecaptureSuppressedUntil: Date?
+  var pointerInsertHandoffToken: UInt64 = 0
   var normalModePendingCommandToken: UInt64 = 0
   var insertModeLockedUntilExplicitNormal = false
   var insertFocusExitProbeToken: UInt64 = 0

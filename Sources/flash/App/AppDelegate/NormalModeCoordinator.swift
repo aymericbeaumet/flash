@@ -69,7 +69,7 @@ extension AppDelegate {
     normalModePendingCommandToken &+= 1
     insertModeLockedUntilExplicitNormal = nextMode == .insert && lockInsert
     contextMenuInteractionRecaptureSuppressedUntil = nil
-    pointerInsertHandoffRecaptureSuppressedUntil = nil
+    cancelPointerInsertHandoff(reason: "mode_transition_\(nextMode)_\(reason)")
     resetModeInputState()
     closeModalStateForModeExit(reason: "enter_\(nextMode)_\(reason)")
     if previousMode != nextMode {
@@ -721,18 +721,62 @@ extension AppDelegate {
     FlashLog.trace("[mode] context_menu_interaction reason=\(reason) recapture_suppressed=true")
   }
 
-  func notePointerInsertHandoff(reason: String, now: Date = Date()) {
+  @discardableResult
+  func notePointerInsertHandoff(reason: String, now: Date = Date()) -> UInt64 {
+    pointerInsertHandoffToken &+= 1
     pointerInsertHandoffRecaptureSuppressedUntil = now.addingTimeInterval(
       Double(Self.pointerInsertHandoffRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
-    FlashLog.trace("[mode] pointer_insert_handoff reason=\(reason) recapture_suppressed=true")
+    FlashLog.trace(
+      "[mode] pointer_insert_handoff reason=\(reason) token=\(pointerInsertHandoffToken) "
+        + "recapture_suppressed=true")
+    return pointerInsertHandoffToken
   }
 
-  func clearPointerInsertHandoff(reason: String) {
+  func clearPointerInsertHandoff(reason: String, token: UInt64? = nil) {
+    if let token, token != pointerInsertHandoffToken {
+      FlashLog.trace(
+        "[mode] pointer_insert_handoff_clear_skip reason=\(reason) token=\(token) "
+          + "current=\(pointerInsertHandoffToken)")
+      return
+    }
     if pointerInsertHandoffRecaptureSuppressedUntil != nil {
       FlashLog.trace("[mode] pointer_insert_handoff_clear reason=\(reason)")
     }
     pointerInsertHandoffRecaptureSuppressedUntil = nil
+    pointerInsertHandoffToken &+= 1
+  }
+
+  func cancelPointerInsertHandoff(reason: String) {
+    let hadSuppression = pointerInsertHandoffRecaptureSuppressedUntil != nil
+    pointerInsertHandoffRecaptureSuppressedUntil = nil
+    pointerInsertHandoffToken &+= 1
+    if hadSuppression {
+      normalModeRecaptureToken &+= 1
+      FlashLog.trace("[mode] pointer_insert_handoff_cancel reason=\(reason)")
+    }
+  }
+
+  func pointerInsertHandoffIsCurrent(_ token: UInt64?, now: Date = Date()) -> Bool {
+    Self.pointerInsertHandoffIsCurrent(
+      token: token,
+      currentToken: pointerInsertHandoffToken,
+      pointerInsertHandoffRecaptureSuppressedUntil:
+        pointerInsertHandoffRecaptureSuppressedUntil,
+      now: now)
+  }
+
+  static func pointerInsertHandoffIsCurrent(
+    token: UInt64?,
+    currentToken: UInt64,
+    pointerInsertHandoffRecaptureSuppressedUntil: Date?,
+    now: Date
+  ) -> Bool {
+    guard let token else { return true }
+    guard token == currentToken else { return false }
+    return pointerInsertHandoffRecaptureSuppressionIsActive(
+      until: pointerInsertHandoffRecaptureSuppressedUntil,
+      now: now)
   }
 
   func shouldScheduleNormalModeRecaptureAfterWorkspaceActivation(now: Date = Date()) -> Bool {
