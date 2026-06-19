@@ -13,18 +13,23 @@ private func hasArgument(_ name: String) -> Bool {
   CommandLine.arguments.contains(name)
 }
 
-final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSTableViewDataSource,
-  NSTableViewDelegate
+final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
+  NSPopoverDelegate, NSTableViewDataSource, NSTableViewDelegate
 {
   private let stateURL: URL?
   private let opensMenuOnLaunch: Bool
   private var window: NSWindow?
+  private var statusItem: NSStatusItem?
+  private var statusPopover: NSPopover?
   private let rows = ["Row Alpha", "Row Beta", "Row Gamma"]
   private var state: [String: Int] = [
+    "context_menu": 0,
     "duplicate": 0,
     "icon": 0,
     "primary": 0,
     "radio": 0,
+    "status_popover_closed": 0,
+    "status_popover": 0,
     "toggle": 0,
   ]
 
@@ -191,9 +196,17 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSTableViewD
     openMenuButton.setAccessibilityIdentifier("flash-native-open-menu")
     content.addSubview(openMenuButton)
 
+    let contextTarget = NSButton(title: "Context Target", target: self, action: nil)
+    contextTarget.frame = NSRect(x: 540, y: 206, width: 150, height: 34)
+    contextTarget.bezelStyle = .rounded
+    contextTarget.setAccessibilityIdentifier("flash-native-context-target")
+    contextTarget.menu = makeContextMenu()
+    content.addSubview(contextTarget)
+
     window.center()
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+    installStatusItem()
 
     if opensMenuOnLaunch {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(600)) { [weak self] in
@@ -259,6 +272,79 @@ final class NativeFixtureDelegate: NSObject, NSApplicationDelegate, NSTableViewD
     menu.addItem(withTitle: "Menu Item Beta", action: nil, keyEquivalent: "")
     menu.popUp(
       positioning: nil, at: NSPoint(x: sender.bounds.minX, y: sender.bounds.minY), in: sender)
+  }
+
+  private func makeContextMenu() -> NSMenu {
+    let menu = NSMenu(title: "Fixture Context Menu")
+    menu.delegate = self
+    let alpha = NSMenuItem(
+      title: "Context Item Alpha",
+      action: #selector(contextMenuItemPressed),
+      keyEquivalent: "")
+    alpha.target = self
+    menu.addItem(alpha)
+    let beta = NSMenuItem(
+      title: "Context Item Beta",
+      action: #selector(contextMenuItemPressed),
+      keyEquivalent: "")
+    beta.target = self
+    menu.addItem(beta)
+    return menu
+  }
+
+  func menuWillOpen(_ menu: NSMenu) {
+    if menu.title == "Fixture Context Menu" {
+      state["context_menu", default: 0] += 1
+      writeState()
+    }
+  }
+
+  @objc private func contextMenuItemPressed() {
+    writeState()
+  }
+
+  private func installStatusItem() {
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    statusItem = item
+    guard let button = item.button else { return }
+    button.title = "FlashNativeStatus"
+    button.target = self
+    button.action = #selector(toggleStatusPopover)
+    button.setAccessibilityLabel("FlashNativeStatus")
+    button.setAccessibilityIdentifier("flash-native-status-item")
+  }
+
+  @objc private func toggleStatusPopover(_ sender: NSStatusBarButton) {
+    if statusPopover?.isShown == true {
+      statusPopover?.performClose(sender)
+      return
+    }
+    state["status_popover", default: 0] += 1
+    writeState()
+    let popover = NSPopover()
+    popover.behavior = .transient
+    popover.delegate = self
+    popover.contentSize = NSSize(width: 260, height: 120)
+    let controller = NSViewController()
+    let view = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 120))
+    let title = NSTextField(labelWithString: "Fixture Status Popover")
+    title.frame = NSRect(x: 16, y: 78, width: 220, height: 22)
+    title.setAccessibilityIdentifier("flash-native-status-popover-title")
+    view.addSubview(title)
+    let field = NSTextField(frame: NSRect(x: 16, y: 36, width: 220, height: 28))
+    field.placeholderString = "Status Popover Input"
+    field.setAccessibilityLabel("Status Popover Input")
+    field.setAccessibilityIdentifier("flash-native-status-popover-input")
+    view.addSubview(field)
+    controller.view = view
+    popover.contentViewController = controller
+    statusPopover = popover
+    popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+  }
+
+  func popoverDidClose(_ notification: Notification) {
+    state["status_popover_closed", default: 0] += 1
+    writeState()
   }
 
   private func writeState() {

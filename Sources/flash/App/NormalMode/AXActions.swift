@@ -96,13 +96,44 @@ extension NormalModeDispatcher {
 
   static func focusedInputSnapshot(pid: pid_t) -> InputFocusSnapshot? {
     let app = AXUIElementCreateApplication(pid)
+    let element = elementAttribute(app, kAXFocusedUIElementAttribute as String)
     let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
+    return inputSnapshot(pid: pid, app: app, element: element, window: window)
+  }
+
+  static func inputSnapshot(pid: pid_t, at nsScreenPoint: CGPoint) -> InputFocusSnapshot? {
+    let app = AXUIElementCreateApplication(pid)
+    let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
+    let screenH = primaryScreenHeight()
+    let axX = Float(nsScreenPoint.x)
+    let axY = Float(screenH - nsScreenPoint.y)
+    var hit: AXUIElement?
+    if AXUIElementCopyElementAtPosition(app, axX, axY, &hit) == .success,
+      let hit
+    {
+      return inputSnapshot(pid: pid, app: app, element: hit, window: window)
+    }
+    if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
+      let frame = frame(of: focused, primaryScreenHeight: screenH),
+      frame.insetBy(dx: -3, dy: -3).contains(nsScreenPoint)
+    {
+      return inputSnapshot(pid: pid, app: app, element: focused, window: window)
+    }
+    return inputSnapshot(pid: pid, app: app, element: nil, window: window)
+  }
+
+  private static func inputSnapshot(
+    pid: pid_t,
+    app _: AXUIElement,
+    element: AXUIElement?,
+    window: AXUIElement?
+  ) -> InputFocusSnapshot {
     let windowRole = window.flatMap { role(of: $0) }
     let windowSubrole = window.flatMap { stringAttribute($0, kAXSubroleAttribute as String) }
     let windowDocumentURL =
       window.flatMap { urlAttribute($0, kAXDocumentAttribute as String) }
       ?? window.flatMap { urlAttribute($0, kAXURLAttribute as String) }
-    guard let element = elementAttribute(app, kAXFocusedUIElementAttribute as String) else {
+    guard let element else {
       let surface = InputFocusSnapshot.classifySurface(
         isEditable: false,
         role: nil,

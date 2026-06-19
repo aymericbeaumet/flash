@@ -13,98 +13,82 @@ extension AppDelegate {
   }
 
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {
-    if case .scroll = intent,
-      Self.pointerScrollShouldBeSuppressed(
-        mode: flashMode,
-        hasHints: !currentHints.isEmpty)
-    {
+    let pointIsInMenuBar: Bool
+    let pointerClick: OverlayPointerClick?
+    if case .click(let click) = intent {
+      pointIsInMenuBar = Self.pointIsInMenuBar(click.location)
+      pointerClick = click
+    } else {
+      pointIsInMenuBar = false
+      pointerClick = nil
+    }
+    let decision = NormalModePointerPolicy.pointerDecision(
+      mode: flashMode,
+      overlayInputMode: overlay.inputMode,
+      hasHints: !currentHints.isEmpty,
+      activationInFlight: activationInFlight,
+      intent: intent,
+      pointIsInMenuBar: pointIsInMenuBar)
+
+    switch decision {
+    case .suppressScrollAndRecapture:
       FlashLog.trace("[mode] suppress_pointer_scroll reason=idle_normal_mode")
       applyModeOverlay()
       scheduleNormalModeRecapture()
       return
-    }
-    // Menu-bar clicks need to land on the menu service. Both `cancelOverlay`
-    // and `enterInsertMode` `orderOut` / re-apply the overlay panel, and
-    // that re-order trips the menu's modal tracking session before the
-    // menu has even rendered — so the first click "fails" (menu opens
-    // and immediately closes) and the user has to click again. Bail
-    // before any of that: dismiss only transient hints, keep the mode
-    // as-is, and let macOS deliver the click to SystemUIServer.
-    if case .click(let click) = intent,
-      Self.pointIsInMenuBar(click.location),
-      !activationInFlight
-    {
-      let preservedTargetPID = normalModeTargetPID
+    case .menuBar(let menuDecision):
       noteMenuBarInteraction(reason: "pointer_click")
-      let shouldReleaseCapture = Self.menuBarPointerShouldReleaseNormalCapture(
-        mode: flashMode,
-        action: click.action)
       FlashLog.trace(
-        "[mode] pointer_in_menu_bar mode=\(flashMode) release_capture=\(shouldReleaseCapture)")
-      if !currentHints.isEmpty {
-        overlay.hide()
-        currentHints = []
-        currentPrefix = ""
-        invalidateActivation(reason: "menu_bar_click")
+        "[mode] pointer_in_menu_bar mode=\(flashMode) suspend_native="
+          + "\(menuDecision.suspendForNativeSurface)")
+      if menuDecision.dismissTransientHintsWithoutRekey {
+        dismissTransientPointerStateWithoutRekey(reason: "menu_bar_click")
       }
-      if shouldReleaseCapture {
-        enterInsertMode(reason: .pointerClick)
-        if let preservedTargetPID {
-          insertFocusOwnerPID = preservedTargetPID
-          updateInsertModeActiveWindowBorder(reason: "menu_bar_context_menu")
-        }
+      if menuDecision.suspendForNativeSurface {
+        suspendNormalCaptureForNativeSurface(reason: "menu_bar_pointer")
       }
       return
+    case .app(let appDecision):
+      handleAppPointerDecision(appDecision, click: pointerClick)
+      return
+    case .cancelOverlay:
+      cancelOverlay()
+      return
     }
+  }
+
+  private func handleAppPointerDecision(
+    _ decision: NormalModePointerPolicy.AppClickDecision,
+    click: OverlayPointerClick?
+  ) {
     // `finishCommandLineInteraction` (called via `cancelOverlay`) already
     // restores the prior mode (the one that was active when the command
     // line was entered), so forcing `enterInsertMode` there would clobber
     // that restoration. Plain app clicks while NORMAL is capturing are
     // different: the user deliberately chose the app with the pointer, so
     // Flash releases keyboard capture and hands input to that app.
-    let wasCommandLine = overlay.inputMode == .commandLine
-    let appClick: OverlayPointerClick?
-    if case .click(let click) = intent {
-      appClick = click
-    } else {
-      appClick = nil
-    }
-    let shouldReleaseCaptureForAppClick: Bool
-    let shouldProbeInsertForAppClick: Bool
-    let shouldSuspendForContextMenu: Bool
-    if let appClick {
-      shouldReleaseCaptureForAppClick = Self.appPointerShouldReleaseNormalCapture(
-        mode: flashMode,
-        wasCommandLine: wasCommandLine,
-        action: appClick.action)
-      shouldProbeInsertForAppClick = Self.appPointerShouldProbeForInsert(
-        mode: flashMode,
-        wasCommandLine: wasCommandLine,
-        action: appClick.action)
-      shouldSuspendForContextMenu = Self.appPointerShouldSuspendForContextMenu(
-        mode: flashMode,
-        wasCommandLine: wasCommandLine,
-        action: appClick.action)
-    } else {
-      shouldReleaseCaptureForAppClick = false
-      shouldProbeInsertForAppClick = false
-      shouldSuspendForContextMenu = false
-    }
     let targetPID = currentNonFlashContext()?.processID ?? normalModeTargetPID
-    if shouldSuspendForContextMenu {
-      suspendNormalCaptureForContextMenu(reason: "physical_right_click")
+    if decision.dismissTransientHintsWithoutRekey {
+      dismissTransientPointerStateWithoutRekey(reason: "physical_native_surface")
+    }
+    if decision.suspendForNativeSurface {
+      suspendNormalCaptureForNativeSurface(reason: "physical_native_surface")
       return
     }
-    if shouldProbeInsertForAppClick {
+    if decision.probeForInsert {
       notePointerInsertHandoff(reason: "physical_pointer_click")
     }
-    if shouldReleaseCaptureForAppClick {
+    if decision.releaseCapture {
       releaseNormalCaptureForPointerHandoff(reason: "physical_pointer_click")
     } else {
       cancelOverlay()
     }
-    if shouldProbeInsertForAppClick {
-      enterInsertModeIfClickedOnTextInput(pid: targetPID, reason: .pointerClick) {
+    if decision.probeForInsert {
+      enterInsertModeIfClickedOnTextInput(
+        pid: targetPID,
+        clickPoint: click?.location,
+        reason: .pointerClick
+      ) {
         [weak self] didEnter in
         guard let self else { return }
         self.clearPointerInsertHandoff(
@@ -319,7 +303,11 @@ extension AppDelegate {
           self.enterInsertMode(reason: .hintCommit)
           return
         }
-        self.enterInsertModeIfClickedOnTextInput(pid: pid, reason: .hintCommit) {
+        self.enterInsertModeIfClickedOnTextInput(
+          pid: pid,
+          clickPoint: clickPoint,
+          reason: .hintCommit
+        ) {
           [weak self] didEnter in
           guard let self else { return }
           self.clearPointerInsertHandoff(
@@ -345,16 +333,32 @@ extension AppDelegate {
   private func restoreNormalModeAfterCommit(action: JumpAction) {
     clearPointerInsertHandoff(reason: "restore_normal_after_commit")
     if action == .rightClick {
-      suspendNormalCaptureForContextMenu(reason: "hint_right_click")
+      suspendNormalCaptureForNativeSurface(reason: "hint_right_click")
       return
     }
     scheduleNormalModeRecapture()
   }
 
-  private func suspendNormalCaptureForContextMenu(reason: String) {
+  private func suspendNormalCaptureForNativeSurface(reason: String) {
     noteContextMenuInteraction(reason: reason)
     overlay.inputMode = .normal
     overlay.modeBadgeCapturesInput = false
+  }
+
+  private func dismissTransientPointerStateWithoutRekey(reason: String) {
+    let hadActivation = activationInFlight || activationInFlightGeneration != nil
+    guard !currentHints.isEmpty || hadActivation else { return }
+    overlay.hide()
+    currentHints = []
+    currentPrefix = ""
+    sourceAppPID = nil
+    mouseGridRegion = nil
+    mouseGridDepth = 0
+    pendingAction = .leftClick
+    pendingHintCommitBehavior = .click
+    if hadActivation {
+      invalidateActivation(reason: reason)
+    }
   }
 
   private func releaseNormalCaptureForPointerHandoff(reason: String) {
@@ -416,10 +420,14 @@ extension AppDelegate {
       // Right-click opened a context menu — same rule as `commit()`:
       // do not render or re-key the panel, or the menu loses its modal
       // session the same instant it appears.
-      suspendNormalCaptureForContextMenu(reason: "mouse_grid_right_click")
+      suspendNormalCaptureForNativeSurface(reason: "mouse_grid_right_click")
     } else {
       applyModeOverlay(captureOverride: false)
-      enterInsertModeIfClickedOnTextInput(pid: priorPID, reason: .hintCommit) {
+      enterInsertModeIfClickedOnTextInput(
+        pid: priorPID,
+        clickPoint: point,
+        reason: .hintCommit
+      ) {
         [weak self] didEnter in
         guard let self else { return }
         self.clearPointerInsertHandoff(
@@ -438,6 +446,7 @@ extension AppDelegate {
   /// from NORMAL use the same probe after releasing capture.
   private func enterInsertModeIfClickedOnTextInput(
     pid: pid_t?,
+    clickPoint: CGPoint? = nil,
     reason: InsertModeTransitionReason,
     attempt: Int = 0,
     completion: ((Bool) -> Void)? = nil
@@ -471,7 +480,7 @@ extension AppDelegate {
         completion?(false)
         return
       }
-      self.monitor.focusedInputSnapshot(pid: targetPID) { [weak self] snapshot in
+      let handleSnapshot: (InputFocusSnapshot?) -> Void = { [weak self] snapshot in
         guard let self, self.flashMode == .normal else {
           completion?(false)
           return
@@ -489,11 +498,17 @@ extension AppDelegate {
             [weak self] in
             self?.enterInsertModeIfClickedOnTextInput(
               pid: targetPID,
+              clickPoint: clickPoint,
               reason: reason,
               attempt: attempt + 1,
               completion: completion)
           }
         }
+      }
+      if let clickPoint {
+        self.monitor.inputSnapshot(pid: targetPID, at: clickPoint, completion: handleSnapshot)
+      } else {
+        self.monitor.focusedInputSnapshot(pid: targetPID, completion: handleSnapshot)
       }
     }
   }

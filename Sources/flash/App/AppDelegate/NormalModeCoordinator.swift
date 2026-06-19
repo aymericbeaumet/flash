@@ -594,7 +594,7 @@ extension AppDelegate {
     mode: FlashMode,
     hasHints: Bool
   ) -> Bool {
-    mode == .normal && !hasHints
+    NormalModePointerPolicy.pointerScrollShouldBeSuppressed(mode: mode, hasHints: hasHints)
   }
 
   static func modeOverlaySnapshot(
@@ -816,7 +816,7 @@ extension AppDelegate {
     mode: FlashMode,
     action: JumpAction
   ) -> Bool {
-    mode == .normal && action == .rightClick
+    false
   }
 
   static func appPointerShouldReleaseNormalCapture(
@@ -824,13 +824,12 @@ extension AppDelegate {
     wasCommandLine: Bool,
     action: JumpAction
   ) -> Bool {
-    guard mode == .normal, !wasCommandLine else { return false }
-    switch action {
-    case .leftClick, .doubleClick:
-      return true
-    case .rightClick:
-      return false
-    }
+    NormalModePointerPolicy.appClickDecision(
+      mode: mode,
+      wasCommandLine: wasCommandLine,
+      hasHints: false,
+      action: action
+    ).releaseCapture
   }
 
   static func appPointerShouldSuspendForContextMenu(
@@ -838,13 +837,12 @@ extension AppDelegate {
     wasCommandLine: Bool,
     action: JumpAction
   ) -> Bool {
-    guard mode == .normal, !wasCommandLine else { return false }
-    switch action {
-    case .rightClick:
-      return true
-    case .leftClick, .doubleClick:
-      return false
-    }
+    NormalModePointerPolicy.appClickDecision(
+      mode: mode,
+      wasCommandLine: wasCommandLine,
+      hasHints: false,
+      action: action
+    ).suspendForNativeSurface
   }
 
   static func appPointerShouldProbeForInsert(
@@ -852,17 +850,16 @@ extension AppDelegate {
     wasCommandLine: Bool,
     action: JumpAction
   ) -> Bool {
-    guard mode == .normal, !wasCommandLine else { return false }
-    return pointerActionMayEnterInsert(action)
+    NormalModePointerPolicy.appClickDecision(
+      mode: mode,
+      wasCommandLine: wasCommandLine,
+      hasHints: false,
+      action: action
+    ).probeForInsert
   }
 
   static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
-    switch action {
-    case .leftClick, .doubleClick:
-      return true
-    case .rightClick:
-      return false
-    }
+    NormalModePointerPolicy.pointerActionMayEnterInsert(action)
   }
 
   private func verifyNormalModeCapture(reason: String) {

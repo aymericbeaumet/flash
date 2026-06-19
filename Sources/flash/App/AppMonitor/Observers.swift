@@ -119,6 +119,19 @@ extension AppMonitor {
     }
   }
 
+  func inputSnapshot(
+    pid: pid_t,
+    at nsScreenPoint: CGPoint,
+    completion: @escaping (InputFocusSnapshot?) -> Void
+  ) {
+    axQueue.async {
+      let snapshot = NormalModeDispatcher.inputSnapshot(pid: pid, at: nsScreenPoint)
+      DispatchQueue.main.async {
+        completion(snapshot)
+      }
+    }
+  }
+
   func focusedDocumentURL(pid: pid_t, completion: @escaping (String?) -> Void) {
     axQueue.async {
       let url = NormalModeDispatcher.documentURL(pid: pid)

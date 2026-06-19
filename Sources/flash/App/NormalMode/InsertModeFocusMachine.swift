@@ -205,11 +205,15 @@ enum InsertModeFocusMachine {
   {
     guard let snapshot else { return .recaptureNormal }
     if snapshot.isEditable { return .enterInsert }
-    if case .transientInteraction(let reason) = snapshot.surface {
-      // Budget exhausted: keep the existing persistent-list behavior, but do
-      // not turn durable extension popup chrome into INSERT mode ownership.
+    if case .transientInteraction = snapshot.surface {
+      // Budget exhausted: if the surface never resolves to a true editable,
+      // keep NORMAL. Password-manager popovers, context menus, native popovers,
+      // and persistent browser widgets can all look transient while settling,
+      // but none of them should own keyboard input unless AX eventually reports
+      // an editable focused element. Terminals bypass this machine at the call
+      // site because their text surface is opaque to AX.
       if attempt >= transientResampleMaxAttempts {
-        return reason.remainsInteractiveAfterSettleBudget ? .enterInsert : .recaptureNormal
+        return .recaptureNormal
       }
       return .resampleAfter(milliseconds: transientResampleMs)
     }

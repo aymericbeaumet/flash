@@ -472,16 +472,16 @@ final class NormalModeTests: XCTestCase {
       InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: nil), .recaptureNormal)
   }
 
-  func testTransientResampleBudgetCommitsAfterExhaustion() {
+  func testTransientResampleBudgetRecapturesAfterExhaustion() {
     let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
     // Firefox web content: focused AXStaticText nested under an AXList. This
     // classifies as transient but is persistent — pre-budget it spun the
-    // resamplers forever and welded the user into NORMAL.
+    // resamplers forever. It must not become INSERT unless it resolves to a
+    // genuinely editable focus target.
     let persistentTransient = focusSnapshot(
       .transientInteraction(reason: .ancestorRole("AXList")), role: "AXStaticText")
 
-    // Pointer handoff: resample while within budget, then enter INSERT — a
-    // deliberate click on persistent content must hand the keyboard over.
+    // Pointer handoff: resample while within budget, then recapture NORMAL.
     XCTAssertEqual(
       InsertModeFocusMachine.normalPointerHandoffDecision(
         snapshot: persistentTransient, attempt: maxAttempts - 1),
@@ -489,7 +489,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       InsertModeFocusMachine.normalPointerHandoffDecision(
         snapshot: persistentTransient, attempt: maxAttempts),
-      .enterInsert)
+      .recaptureNormal)
 
     // Insert-mode exit probe: resample while within budget, then STAY — never
     // kick the user out of a persistent surface they are typing into.
@@ -910,86 +910,114 @@ final class NormalModeTests: XCTestCase {
         now: now))
   }
 
-  func testMenuBarRightClickReleasesNormalModeCaptureForContextMenus() {
-    XCTAssertTrue(
-      AppDelegate.menuBarPointerShouldReleaseNormalCapture(
+  func testMenuBarPointerClicksSuspendNativeSurfacesWithoutInsert() {
+    for action in [JumpAction.leftClick, .rightClick, .doubleClick] {
+      let decision = NormalModePointerPolicy.pointerDecision(
         mode: .normal,
-        action: .rightClick))
-    XCTAssertFalse(
-      AppDelegate.menuBarPointerShouldReleaseNormalCapture(
-        mode: .normal,
-        action: .leftClick))
-    XCTAssertFalse(
-      AppDelegate.menuBarPointerShouldReleaseNormalCapture(
-        mode: .normal,
-        action: .doubleClick))
-    XCTAssertFalse(
-      AppDelegate.menuBarPointerShouldReleaseNormalCapture(
-        mode: .insert,
-        action: .rightClick))
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        intent: .click(
+          OverlayPointerClick(
+            action: action,
+            location: CGPoint(x: 10, y: 10),
+            modifiers: [])),
+        pointIsInMenuBar: true)
+      XCTAssertEqual(
+        decision,
+        .menuBar(
+          NormalModePointerPolicy.MenuBarClickDecision(
+            suppressRecapture: true,
+            suspendForNativeSurface: true,
+            dismissTransientHintsWithoutRekey: false)))
+    }
   }
 
-  func testAppPointerClicksReleaseCaptureProbeInsertOrSuspendForContextMenus() {
-    XCTAssertTrue(
-      AppDelegate.appPointerShouldReleaseNormalCapture(
+  func testNormalModePointerPolicyMatrixForAppClicks() {
+    XCTAssertEqual(
+      NormalModePointerPolicy.appClickDecision(
         mode: .normal,
         wasCommandLine: false,
-        action: .leftClick))
-    XCTAssertFalse(
-      AppDelegate.appPointerShouldReleaseNormalCapture(
+        hasHints: false,
+        action: .leftClick),
+      NormalModePointerPolicy.AppClickDecision(
+        releaseCapture: true,
+        probeForInsert: true,
+        suspendForNativeSurface: false,
+        dismissTransientHintsWithoutRekey: false))
+    XCTAssertEqual(
+      NormalModePointerPolicy.appClickDecision(
         mode: .normal,
         wasCommandLine: false,
-        action: .rightClick))
-    XCTAssertTrue(
-      AppDelegate.appPointerShouldReleaseNormalCapture(
+        hasHints: false,
+        action: .doubleClick),
+      NormalModePointerPolicy.AppClickDecision(
+        releaseCapture: true,
+        probeForInsert: true,
+        suspendForNativeSurface: false,
+        dismissTransientHintsWithoutRekey: false))
+    XCTAssertEqual(
+      NormalModePointerPolicy.appClickDecision(
         mode: .normal,
         wasCommandLine: false,
-        action: .doubleClick))
-    XCTAssertFalse(
-      AppDelegate.appPointerShouldReleaseNormalCapture(
+        hasHints: true,
+        action: .rightClick),
+      NormalModePointerPolicy.AppClickDecision(
+        releaseCapture: false,
+        probeForInsert: false,
+        suspendForNativeSurface: true,
+        dismissTransientHintsWithoutRekey: true))
+    XCTAssertEqual(
+      NormalModePointerPolicy.appClickDecision(
         mode: .insert,
         wasCommandLine: false,
-        action: .leftClick))
-    XCTAssertFalse(
-      AppDelegate.appPointerShouldReleaseNormalCapture(
+        hasHints: false,
+        action: .leftClick),
+      NormalModePointerPolicy.AppClickDecision(
+        releaseCapture: false,
+        probeForInsert: false,
+        suspendForNativeSurface: false,
+        dismissTransientHintsWithoutRekey: false))
+    XCTAssertEqual(
+      NormalModePointerPolicy.appClickDecision(
         mode: .normal,
         wasCommandLine: true,
-        action: .leftClick))
-    XCTAssertTrue(
-      AppDelegate.appPointerShouldProbeForInsert(
+        hasHints: false,
+        action: .leftClick),
+      NormalModePointerPolicy.AppClickDecision(
+        releaseCapture: false,
+        probeForInsert: false,
+        suspendForNativeSurface: false,
+        dismissTransientHintsWithoutRekey: false))
+  }
+
+  func testNormalModePointerPolicyTopLevelDecisions() {
+    XCTAssertEqual(
+      NormalModePointerPolicy.pointerDecision(
         mode: .normal,
-        wasCommandLine: false,
-        action: .leftClick))
-    XCTAssertTrue(
-      AppDelegate.appPointerShouldProbeForInsert(
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        intent: .scroll,
+        pointIsInMenuBar: false),
+      .suppressScrollAndRecapture)
+    XCTAssertEqual(
+      NormalModePointerPolicy.pointerDecision(
         mode: .normal,
-        wasCommandLine: false,
-        action: .doubleClick))
-    XCTAssertFalse(
-      AppDelegate.appPointerShouldProbeForInsert(
-        mode: .normal,
-        wasCommandLine: false,
-        action: .rightClick))
-    XCTAssertFalse(
-      AppDelegate.appPointerShouldProbeForInsert(
-        mode: .normal,
-        wasCommandLine: true,
-        action: .leftClick))
-    XCTAssertTrue(
-      AppDelegate.appPointerShouldSuspendForContextMenu(
-        mode: .normal,
-        wasCommandLine: false,
-        action: .rightClick))
-    XCTAssertFalse(
-      AppDelegate.appPointerShouldSuspendForContextMenu(
-        mode: .normal,
-        wasCommandLine: false,
-        action: .leftClick))
-    XCTAssertFalse(
-      AppDelegate.appPointerShouldSuspendForContextMenu(
-        mode: .normal,
-        wasCommandLine: true,
-        action: .rightClick))
+        overlayInputMode: .normal,
+        hasHints: true,
+        activationInFlight: false,
+        intent: .click(
+          OverlayPointerClick(
+            action: .rightClick,
+            location: CGPoint(x: 20, y: 20),
+            modifiers: [])),
+        pointIsInMenuBar: true),
+      .menuBar(
+        NormalModePointerPolicy.MenuBarClickDecision(
+          suppressRecapture: true,
+          suspendForNativeSurface: true,
+          dismissTransientHintsWithoutRekey: true)))
   }
 
   func testWorkspaceActivationRecaptureSkipsPointerInsertHandoff() {
