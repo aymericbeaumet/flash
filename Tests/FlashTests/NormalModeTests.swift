@@ -608,6 +608,64 @@ final class NormalModeTests: XCTestCase {
       .exitToNormal)
   }
 
+  func testEditableFocusRepairRequiresOneStrongVisibleTextInput() {
+    let window = CGRect(x: 0, y: 0, width: 800, height: 600)
+    let compose = editableRepairCandidate(
+      role: "AXTextArea",
+      frame: CGRect(x: 200, y: 520, width: 560, height: 44))
+
+    XCTAssertEqual(
+      NormalModeDispatcher.strongEditableFocusCandidates([compose], windowFrame: window),
+      [compose])
+
+    XCTAssertTrue(
+      NormalModeDispatcher.strongEditableFocusCandidates(
+        [
+          editableRepairCandidate(role: "AXSearchField"),
+          editableRepairCandidate(role: "AXTextField", subrole: "AXSearchField"),
+          editableRepairCandidate(role: "AXComboBox"),
+          editableRepairCandidate(role: "AXTextField", enabled: false),
+          editableRepairCandidate(role: "AXTextField", hidden: true),
+          editableRepairCandidate(
+            role: "AXTextField",
+            frame: CGRect(x: 900, y: 20, width: 120, height: 24)),
+        ],
+        windowFrame: window
+      ).isEmpty)
+  }
+
+  func testEditableFocusRepairTreatsMultipleStrongInputsAsAmbiguous() {
+    let window = CGRect(x: 0, y: 0, width: 800, height: 600)
+    let first = editableRepairCandidate(
+      role: "AXTextField",
+      frame: CGRect(x: 80, y: 120, width: 240, height: 28))
+    let second = editableRepairCandidate(
+      role: "AXTextArea",
+      frame: CGRect(x: 80, y: 500, width: 640, height: 52))
+
+    XCTAssertEqual(
+      NormalModeDispatcher.strongEditableFocusCandidates(
+        [first, second],
+        windowFrame: window),
+      [first, second])
+  }
+
+  func testEditableFocusRepairDedupesDuplicateAXNodesForSameControl() {
+    let window = CGRect(x: 0, y: 0, width: 800, height: 600)
+    let outer = editableRepairCandidate(
+      role: "AXTextArea",
+      frame: CGRect(x: 200, y: 520, width: 560, height: 44))
+    let innerDuplicate = editableRepairCandidate(
+      role: "AXTextArea",
+      frame: CGRect(x: 202, y: 522, width: 556, height: 40))
+
+    XCTAssertEqual(
+      NormalModeDispatcher.strongEditableFocusCandidates(
+        [outer, innerDuplicate],
+        windowFrame: window),
+      [outer])
+  }
+
   func testInsertModeFocusLossExitRequiresArmedEditablePID() {
     XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: nil))
     XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: pid_t(43)))
@@ -2183,6 +2241,23 @@ final class NormalModeTests: XCTestCase {
       windowRole: "AXWindow",
       windowSubrole: windowSubrole,
       documentURL: documentURL)
+  }
+
+  private func editableRepairCandidate(
+    role: String?,
+    subrole: String? = nil,
+    frame: CGRect = CGRect(x: 20, y: 20, width: 180, height: 28),
+    enabled: Bool = true,
+    hidden: Bool = false,
+    isEditable: Bool = true
+  ) -> NormalModeDispatcher.EditableFocusRepairCandidate {
+    NormalModeDispatcher.EditableFocusRepairCandidate(
+      role: role,
+      subrole: subrole,
+      frame: frame,
+      enabled: enabled,
+      hidden: hidden,
+      isEditable: isEditable)
   }
 
   private func shouldExitAfterFocusedElementChange(

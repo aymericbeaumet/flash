@@ -12,6 +12,45 @@ import FlashProviders
 /// Split out of NormalMode.swift; same public surface, no behaviour
 /// change.
 extension NormalModeDispatcher {
+  struct EditableFocusRepairCandidate: Equatable {
+    var role: String?
+    var subrole: String?
+    var frame: CGRect?
+    var enabled: Bool
+    var hidden: Bool
+    var isEditable: Bool
+  }
+
+  enum EditableFocusRepairResult: Equatable, CustomStringConvertible {
+    case alreadyEditable
+    case repaired(role: String?, frame: CGRect)
+    case noFocusedWindow
+    case noCandidate
+    case ambiguous(Int)
+    case focusFailed(role: String?, frame: CGRect)
+
+    var description: String {
+      switch self {
+      case .alreadyEditable:
+        return "already_editable"
+      case .repaired(let role, let frame):
+        return "repaired role=\(role ?? "nil") frame=\(Self.frameDescription(frame))"
+      case .noFocusedWindow:
+        return "no_focused_window"
+      case .noCandidate:
+        return "no_candidate"
+      case .ambiguous(let count):
+        return "ambiguous count=\(count)"
+      case .focusFailed(let role, let frame):
+        return "focus_failed role=\(role ?? "nil") frame=\(Self.frameDescription(frame))"
+      }
+    }
+
+    private static func frameDescription(_ frame: CGRect) -> String {
+      "\(Int(frame.origin.x)),\(Int(frame.origin.y)),\(Int(frame.width)),\(Int(frame.height))"
+    }
+  }
+
   @discardableResult
   static func sendKey(
     virtualKey: CGKeyCode,
@@ -92,6 +131,39 @@ extension NormalModeDispatcher {
       return false
     }
     return isEditable(element)
+  }
+
+  static func repairSingleStrongEditableFocus(pid: pid_t) -> EditableFocusRepairResult {
+    let app = AXUIElementCreateApplication(pid)
+    if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
+      isEditable(focused)
+    {
+      return .alreadyEditable
+    }
+
+    guard let window = elementAttribute(app, kAXFocusedWindowAttribute as String) else {
+      return .noFocusedWindow
+    }
+    let screenH = primaryScreenHeight()
+    let windowFrame = frame(of: window, primaryScreenHeight: screenH)
+    let records = editableFocusRepairRecords(in: window, screenH: screenH, maxNodes: 2_000)
+    let candidates = records.map(\.candidate)
+    let strong = strongEditableFocusCandidates(candidates, windowFrame: windowFrame)
+    guard strong.count == 1, let selected = strong.first else {
+      return strong.isEmpty ? .noCandidate : .ambiguous(strong.count)
+    }
+    guard
+      let record = records.first(where: {
+        editableFocusCandidatesRepresentSameElement($0.candidate, selected)
+      }),
+      let selectedFrame = selected.frame
+    else {
+      return .noCandidate
+    }
+    if AXClick.setFocus(record.element) {
+      return .repaired(role: selected.role, frame: selectedFrame)
+    }
+    return .focusFailed(role: selected.role, frame: selectedFrame)
   }
 
   static func focusedInputSnapshot(pid: pid_t) -> InputFocusSnapshot? {
@@ -186,6 +258,20 @@ extension NormalModeDispatcher {
     return nil
   }
 
+  static func strongEditableFocusCandidates(
+    _ candidates: [EditableFocusRepairCandidate],
+    windowFrame: CGRect?
+  ) -> [EditableFocusRepairCandidate] {
+    var strong: [EditableFocusRepairCandidate] = []
+    for candidate in candidates
+    where editableFocusCandidateIsStrong(candidate, windowFrame: windowFrame) {
+      if !strong.contains(where: { editableFocusCandidatesRepresentSameElement($0, candidate) }) {
+        strong.append(candidate)
+      }
+    }
+    return strong
+  }
+
   private static func isEditable(_ element: AXUIElement) -> Bool {
     var current = element
     for _ in 0..<8 {
@@ -206,6 +292,67 @@ extension NormalModeDispatcher {
       current = parent
     }
     return false
+  }
+
+  private struct EditableFocusRepairRecord {
+    var candidate: EditableFocusRepairCandidate
+    var element: AXUIElement
+  }
+
+  private static func editableFocusRepairRecords(
+    in root: AXUIElement,
+    screenH: CGFloat,
+    maxNodes: Int
+  ) -> [EditableFocusRepairRecord] {
+    var records: [EditableFocusRepairRecord] = []
+    var queue = [root]
+    var index = 0
+    while index < queue.count, index < maxNodes {
+      let element = queue[index]
+      index += 1
+      let candidate = EditableFocusRepairCandidate(
+        role: role(of: element),
+        subrole: stringAttribute(element, kAXSubroleAttribute as String),
+        frame: frame(of: element, primaryScreenHeight: screenH),
+        enabled: boolAttribute(element, kAXEnabledAttribute as String) ?? true,
+        hidden: boolAttribute(element, kAXHiddenAttribute as String) ?? false,
+        isEditable: isEditable(element))
+      records.append(EditableFocusRepairRecord(candidate: candidate, element: element))
+      queue.append(contentsOf: children(of: element))
+    }
+    return records
+  }
+
+  private static func editableFocusCandidateIsStrong(
+    _ candidate: EditableFocusRepairCandidate,
+    windowFrame: CGRect?
+  ) -> Bool {
+    guard candidate.isEditable, candidate.enabled, !candidate.hidden else { return false }
+    guard let role = candidate.role, editableFocusRepairRoles.contains(role) else { return false }
+    guard candidate.subrole != "AXSearchField" else { return false }
+    guard let frame = candidate.frame, frame.width >= 20, frame.height >= 12 else {
+      return false
+    }
+    guard let windowFrame else { return true }
+    let intersection = frame.intersection(windowFrame)
+    guard !intersection.isNull, !intersection.isEmpty else { return false }
+    return area(intersection) / area(frame) >= 0.5
+  }
+
+  private static func editableFocusCandidatesRepresentSameElement(
+    _ lhs: EditableFocusRepairCandidate,
+    _ rhs: EditableFocusRepairCandidate
+  ) -> Bool {
+    guard lhs.role == rhs.role, let left = lhs.frame, let right = rhs.frame else {
+      return false
+    }
+    let intersection = left.intersection(right)
+    guard !intersection.isNull, !intersection.isEmpty else { return false }
+    return area(intersection) / min(area(left), area(right)) >= 0.9
+  }
+
+  private static func area(_ rect: CGRect) -> CGFloat {
+    max(0, rect.width) * max(0, rect.height)
   }
 
   private static func ancestorRoles(of element: AXUIElement) -> [String] {
@@ -264,4 +411,8 @@ extension NormalModeDispatcher {
     }
     return nil
   }
+
+  private static let editableFocusRepairRoles: Set<String> = [
+    "AXTextField", "AXTextArea",
+  ]
 }

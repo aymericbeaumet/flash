@@ -45,7 +45,20 @@ kill_all_flash() {
   "$CLI_LINK_PATH" flash_quit >/dev/null 2>&1 ||
     /Applications/$APP_NAME.app/Contents/MacOS/flash flash_quit >/dev/null 2>&1 ||
     true
-  osascript -e 'tell application "Flash" to quit' >/dev/null 2>&1 || true
+  osascript -e 'tell application "Flash" to quit' >/dev/null 2>&1 &
+  local quit_pid=$!
+  for _ in {1..20}; do
+    if ! kill -0 "$quit_pid" 2>/dev/null; then
+      wait "$quit_pid" 2>/dev/null || true
+      quit_pid=""
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -n "$quit_pid" ]] && kill -0 "$quit_pid" 2>/dev/null; then
+    kill "$quit_pid" 2>/dev/null || true
+    wait "$quit_pid" 2>/dev/null || true
+  fi
   pkill -f "/Applications/$APP_NAME.app/Contents/MacOS/flash" 2>/dev/null || true
   pkill -f "$STAGING_PATH/Contents/MacOS/flash" 2>/dev/null || true
   killall "$APP_NAME" 2>/dev/null || true

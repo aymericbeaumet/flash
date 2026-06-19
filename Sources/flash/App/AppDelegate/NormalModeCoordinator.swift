@@ -63,6 +63,7 @@ extension AppDelegate {
   ) {
     let previousMode = flashMode
     insertFocusExitProbeToken &+= 1
+    insertEditableFocusRepairToken &+= 1
     insertFocusOwnerPID = nil
     insertEditableFocusExitPID = nil
     insertNavigationExitToken &+= 1
@@ -182,6 +183,7 @@ extension AppDelegate {
     traceInsertKeyHandoff(
       target: insertTarget, panelKeyAtEntry: panelKeyAtEntry, reason: reason)
     if !insertModeLockedUntilExplicitNormal {
+      repairSingleStrongEditableFocusIfNeeded(target: insertTarget, reason: reason)
       armEditableFocusExitIfNeeded(target: insertTarget, reason: reason)
     }
   }
@@ -506,6 +508,67 @@ extension AppDelegate {
   }
 
   static let insertEditableFocusArmDelayMs = 120
+  static let insertEditableFocusRepairDelaysMs = [40, 120, 250]
+
+  private func repairSingleStrongEditableFocusIfNeeded(
+    target: AppContext?,
+    reason: String,
+    attempt: Int = 0,
+    token: UInt64? = nil
+  ) {
+    guard modeBadgeEnabled, let target, !insertModeLockedUntilExplicitNormal else { return }
+    let repairToken: UInt64
+    if let token {
+      repairToken = token
+    } else {
+      insertEditableFocusRepairToken &+= 1
+      repairToken = insertEditableFocusRepairToken
+    }
+    guard Self.insertEditableFocusRepairDelaysMs.indices.contains(attempt) else { return }
+    let delay = Self.insertEditableFocusRepairDelaysMs[attempt]
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) { [weak self] in
+      guard let self else { return }
+      guard self.insertEditableFocusRepairToken == repairToken else { return }
+      guard self.flashMode == .insert, self.modeBadgeEnabled else { return }
+      guard !self.insertModeLockedUntilExplicitNormal else { return }
+      guard self.overlay.inputMode == .hints, self.currentHints.isEmpty, !self.activationInFlight
+      else { return }
+      guard self.currentNonFlashContext()?.processID == target.processID else { return }
+      self.monitor.repairSingleStrongEditableFocus(pid: target.processID) { [weak self] result in
+        guard let self else { return }
+        guard self.insertEditableFocusRepairToken == repairToken else { return }
+        guard self.flashMode == .insert, self.currentNonFlashContext()?.processID == target.processID
+        else { return }
+        switch result {
+        case .alreadyEditable:
+          FlashLog.trace(
+            "[mode] editable_focus_repair_skip reason=already_editable pid=\(target.processID)")
+        case .repaired:
+          FlashLog.debug(
+            "[mode] editable_focus_repaired pid=\(target.processID) result=\(result)")
+          self.armEditableFocusExitIfNeeded(target: target, reason: "focus_repair_\(reason)")
+        case .ambiguous:
+          FlashLog.trace(
+            "[mode] editable_focus_repair_skip pid=\(target.processID) result=\(result)")
+        case .noFocusedWindow, .noCandidate, .focusFailed:
+          let nextAttempt = attempt + 1
+          if Self.insertEditableFocusRepairDelaysMs.indices.contains(nextAttempt) {
+            FlashLog.trace(
+              "[mode] editable_focus_repair_retry pid=\(target.processID) attempt=\(attempt) "
+                + "result=\(result)")
+            self.repairSingleStrongEditableFocusIfNeeded(
+              target: target,
+              reason: reason,
+              attempt: nextAttempt,
+              token: repairToken)
+          } else {
+            FlashLog.trace(
+              "[mode] editable_focus_repair_skip pid=\(target.processID) result=\(result)")
+          }
+        }
+      }
+    }
+  }
 
   static func insertFocusExitShouldWaitForPointerRelease(
     pressedMouseButtons: Int = NSEvent.pressedMouseButtons

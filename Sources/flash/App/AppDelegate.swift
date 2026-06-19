@@ -257,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModePendingCommandToken: UInt64 = 0
   var insertModeLockedUntilExplicitNormal = false
   var insertFocusExitProbeToken: UInt64 = 0
+  var insertEditableFocusRepairToken: UInt64 = 0
   var insertFocusOwnerPID: pid_t?
   var insertEditableFocusExitPID: pid_t?
   var insertNavigationExitToken: UInt64 = 0

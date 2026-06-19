@@ -119,6 +119,18 @@ extension AppMonitor {
     }
   }
 
+  func repairSingleStrongEditableFocus(
+    pid: pid_t,
+    completion: @escaping (NormalModeDispatcher.EditableFocusRepairResult) -> Void
+  ) {
+    axQueue.async {
+      let result = NormalModeDispatcher.repairSingleStrongEditableFocus(pid: pid)
+      DispatchQueue.main.async {
+        completion(result)
+      }
+    }
+  }
+
   func inputSnapshot(
     pid: pid_t,
     at nsScreenPoint: CGPoint,
