@@ -11,7 +11,7 @@ import FlashCore
 
 extension AppDelegate {
   func updateInsertModeActiveWindowBorder(reason: String) {
-    let context = currentNonFlashContext()
+    let context = activeWindowBorderContext()
     guard
       Self.activeWindowBorderShouldBeVisible(
         mode: flashMode,
@@ -69,7 +69,7 @@ extension AppDelegate {
       return
     }
 
-    let frame = currentNonFlashContext()?.frontWindowFrame
+    let frame = activeWindowBorderContext()?.frontWindowFrame
     guard
       !Self.activeWindowBorderFramesApproximatelyEqual(
         activeWindowBorderTrackedFrame,
@@ -135,6 +135,14 @@ extension AppDelegate {
     default:
       return false
     }
+  }
+
+  private func activeWindowBorderContext() -> AppContext? {
+    if let ownerPID = insertFocusOwnerPID {
+      return monitor.appWindowContext(for: ownerPID)
+    }
+    guard let focused = currentNonFlashContext() else { return nil }
+    return monitor.appWindowContext(for: focused.processID)
   }
 
 }

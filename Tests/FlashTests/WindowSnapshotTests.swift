@@ -54,6 +54,9 @@ final class WindowSnapshotTests: XCTestCase {
 
     XCTAssertEqual(snapshot.activeWindowFrame, popup.nsBounds)
     XCTAssertEqual(snapshot.visibleRegions[42], [popup.nsBounds])
+    XCTAssertEqual(
+      WindowSnapshot.topApplicationWindowFrame(entries: [popup, main], focusedPid: 42),
+      main.nsBounds)
   }
 
   func testOtherPidHighLayerWindowOnlyOccludesFocusedSurface() {

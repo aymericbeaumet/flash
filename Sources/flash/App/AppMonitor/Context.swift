@@ -29,6 +29,15 @@ extension AppMonitor {
     return clip(context, to: topWindowFrame(for: pid) ?? context.frontWindowFrame)
   }
 
+  func appWindowContext(for pid: pid_t) -> AppContext? {
+    guard pid > 0,
+      let app = NSRunningApplication(processIdentifier: pid)
+    else { return nil }
+    guard let context = makeContext(for: app) else { return nil }
+    guard let frame = topApplicationWindowFrame(for: pid) else { return nil }
+    return clip(context, to: frame)
+  }
+
   func clip(_ context: AppContext, to frame: CGRect) -> AppContext {
     AppContext(
       bundleIdentifier: context.bundleIdentifier,
@@ -98,6 +107,15 @@ extension AppMonitor {
           && $0.pid != getpid()
       }?
       .nsBounds
+  }
+
+  private func topApplicationWindowFrame(for pid: pid_t) -> CGRect? {
+    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    else { return nil }
+    return WindowSnapshot.topApplicationWindowFrame(
+      entries: WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()),
+      focusedPid: pid)
   }
 
   private func topVisibleWindowContext(

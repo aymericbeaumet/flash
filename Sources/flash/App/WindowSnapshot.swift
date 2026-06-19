@@ -133,6 +133,10 @@ struct WindowSnapshot {
       activeWindowFrame: activeWindowFrame)
   }
 
+  static func topApplicationWindowFrame(entries: [Entry], focusedPid: pid_t) -> CGRect? {
+    entries.first { $0.pid == focusedPid && $0.layer == 0 }?.nsBounds
+  }
+
   static func isInteractionSurfaceLayer(_ layer: Int) -> Bool {
     if layer == 0 { return true }
     let allowedLevels = [

@@ -34,65 +34,47 @@ extension AppDelegate {
       Self.pointIsInMenuBar(click.location),
       !activationInFlight
     {
+      let preservedTargetPID = normalModeTargetPID
       noteMenuBarInteraction(reason: "pointer_click")
-      FlashLog.trace("[mode] pointer_in_menu_bar mode=\(flashMode) keep_mode=true")
+      let shouldReleaseCapture = Self.menuBarPointerShouldReleaseNormalCapture(
+        mode: flashMode,
+        action: click.action)
+      FlashLog.trace(
+        "[mode] pointer_in_menu_bar mode=\(flashMode) release_capture=\(shouldReleaseCapture)")
       if !currentHints.isEmpty {
         overlay.hide()
         currentHints = []
         currentPrefix = ""
         invalidateActivation(reason: "menu_bar_click")
       }
+      if shouldReleaseCapture {
+        enterInsertMode(reason: .pointerClick)
+        if let preservedTargetPID {
+          insertFocusOwnerPID = preservedTargetPID
+          updateInsertModeActiveWindowBorder(reason: "menu_bar_context_menu")
+        }
+      }
       return
     }
     // `finishCommandLineInteraction` (called via `cancelOverlay`) already
     // restores the prior mode (the one that was active when the command
-    // line was entered), so forcing `enterInsertMode` here would clobber
-    // that restoration. Only flip to insert when the pointer click is
-    // dismissing the normal-mode capture surface itself — primary and
-    // double-click in NORMAL hand the keyboard back to the underlying app
-    // the user just clicked into (via the editable-click probe below);
-    // right-click is handled separately just under this.
+    // line was entered), so forcing `enterInsertMode` there would clobber
+    // that restoration. Plain app clicks while NORMAL is capturing are
+    // different: the user deliberately chose the app with the pointer, so
+    // Flash releases keyboard capture and hands input to that app.
     let wasCommandLine = overlay.inputMode == .commandLine
-    let isRightClick: Bool
-    if case .click(let click) = intent, click.action == .rightClick {
-      isRightClick = true
+    let shouldEnterInsertForAppClick: Bool
+    if case .click(let click) = intent {
+      shouldEnterInsertForAppClick = Self.appPointerShouldEnterInsert(
+        mode: flashMode,
+        wasCommandLine: wasCommandLine,
+        action: click.action)
     } else {
-      isRightClick = false
-    }
-    // A right-click summons a context menu, which must become key to stay
-    // open and accept arrow-key navigation. In NORMAL the overlay panel
-    // still holds keyboard capture, so the recapture that follows
-    // `cancelOverlay` steals key straight back and the menu is dismissed
-    // the instant it appears. Drop to INSERT instead: that releases capture
-    // (see `applyModeOverlay`), so the menu survives and its keys reach the
-    // focused app. `.pointerClick` is in the user-driven set, so the gate
-    // allows the flip.
-    let shouldEnterInsertForRightClick = isRightClick && !wasCommandLine && flashMode == .normal
-    let shouldCheckEditableClick: Bool
-    if case .click(let click) = intent, click.action != .rightClick {
-      shouldCheckEditableClick = !wasCommandLine && flashMode != .insert
-    } else {
-      shouldCheckEditableClick = false
-    }
-    if shouldCheckEditableClick {
-      normalModePointerHandoffToken &+= 1
-      normalModePointerHandoffActive = true
+      shouldEnterInsertForAppClick = false
     }
     cancelOverlay()
-    if shouldEnterInsertForRightClick {
+    if shouldEnterInsertForAppClick {
       enterInsertMode(reason: .pointerClick)
-    }
-    if shouldCheckEditableClick {
-      resolveNormalPointerHandoff(token: normalModePointerHandoffToken)
-    }
-  }
-
-  private func resolveNormalPointerHandoff(token: UInt64) {
-    enterInsertModeIfClickedOnTextInput(pid: nil, reason: .pointerClick) { [weak self] didEnter in
-      guard let self, self.normalModePointerHandoffToken == token else { return }
-      self.normalModePointerHandoffActive = false
-      guard !didEnter, self.flashMode == .normal else { return }
-      self.scheduleNormalModeRecapture()
     }
   }
 
@@ -365,14 +347,12 @@ extension AppDelegate {
     }
   }
 
-  /// Geometric clicks (`F`/`sF`/`dF` mouse-grid commits, `pointerClick`
-  /// replays) don't know what element they're hitting until the click
-  /// has landed and the focused app has updated AX. After a short
-  /// settle delay, query the focused element's role and only enter
-  /// insert mode if it is a true text-input surface. Otherwise the
-  /// user stays in normal mode (per the explicit-only insert rule —
-  /// they press `i` if they want to type into whatever they just
-  /// clicked).
+  /// Virtual/geometric clicks (`f` hint commits and `F`/`sF`/`dF` mouse-grid
+  /// commits) don't know what element they're hitting until the click has
+  /// landed and the focused app has updated AX. After a short settle delay,
+  /// query the focused element's role and only enter insert mode if it is a
+  /// true text-input surface or terminal-like target. Physical app clicks from
+  /// NORMAL bypass this probe and release capture immediately.
   private func enterInsertModeIfClickedOnTextInput(
     pid: pid_t?,
     reason: InsertModeTransitionReason,

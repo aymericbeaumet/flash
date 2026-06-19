@@ -180,10 +180,8 @@ final class NormalModeTests: XCTestCase {
   }
 
   // `f` and `F` clicks no longer auto-enter insert from provider metadata.
-  // The post-click AX-input check (`enterInsertModeIfClickedOnTextInput`)
-  // is the only path into insert from a virtual or physical click, and it is
-  // tested via behavior in the manual-verification flow (clicking a search
-  // field -> insert; clicking a button -> stays normal).
+  // Virtual clicks still use the post-click AX-input check; physical app
+  // clicks from NORMAL release capture immediately.
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
     XCTAssertEqual(command(chars: "i"), .insertMode)
@@ -899,6 +897,53 @@ final class NormalModeTests: XCTestCase {
         mode: .insert,
         menuBarInteractionRecaptureSuppressedUntil: nil,
         now: now))
+  }
+
+  func testMenuBarRightClickReleasesNormalModeCaptureForContextMenus() {
+    XCTAssertTrue(
+      AppDelegate.menuBarPointerShouldReleaseNormalCapture(
+        mode: .normal,
+        action: .rightClick))
+    XCTAssertFalse(
+      AppDelegate.menuBarPointerShouldReleaseNormalCapture(
+        mode: .normal,
+        action: .leftClick))
+    XCTAssertFalse(
+      AppDelegate.menuBarPointerShouldReleaseNormalCapture(
+        mode: .normal,
+        action: .doubleClick))
+    XCTAssertFalse(
+      AppDelegate.menuBarPointerShouldReleaseNormalCapture(
+        mode: .insert,
+        action: .rightClick))
+  }
+
+  func testAppPointerClicksEnterInsertFromNormalMode() {
+    XCTAssertTrue(
+      AppDelegate.appPointerShouldEnterInsert(
+        mode: .normal,
+        wasCommandLine: false,
+        action: .leftClick))
+    XCTAssertTrue(
+      AppDelegate.appPointerShouldEnterInsert(
+        mode: .normal,
+        wasCommandLine: false,
+        action: .rightClick))
+    XCTAssertTrue(
+      AppDelegate.appPointerShouldEnterInsert(
+        mode: .normal,
+        wasCommandLine: false,
+        action: .doubleClick))
+    XCTAssertFalse(
+      AppDelegate.appPointerShouldEnterInsert(
+        mode: .insert,
+        wasCommandLine: false,
+        action: .leftClick))
+    XCTAssertFalse(
+      AppDelegate.appPointerShouldEnterInsert(
+        mode: .normal,
+        wasCommandLine: true,
+        action: .leftClick))
   }
 
   func testCommandLineBufferIncludesPrompt() {

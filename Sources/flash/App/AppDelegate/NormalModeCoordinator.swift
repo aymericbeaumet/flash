@@ -62,8 +62,6 @@ extension AppDelegate {
     insertFocusOwnerPID = nil
     insertEditableFocusExitPID = nil
     insertNavigationExitToken &+= 1
-    normalModePointerHandoffToken &+= 1
-    normalModePointerHandoffActive = false
     normalModePendingCommandToken &+= 1
     resetModeInputState()
     closeModalStateForModeExit(reason: "enter_\(nextMode)_\(reason)")
@@ -719,6 +717,25 @@ extension AppDelegate {
     return now < until
   }
 
+  static func menuBarPointerShouldReleaseNormalCapture(
+    mode: FlashMode,
+    action: JumpAction
+  ) -> Bool {
+    mode == .normal && action == .rightClick
+  }
+
+  static func appPointerShouldEnterInsert(
+    mode: FlashMode,
+    wasCommandLine: Bool,
+    action: JumpAction
+  ) -> Bool {
+    guard mode == .normal, !wasCommandLine else { return false }
+    switch action {
+    case .leftClick, .rightClick, .doubleClick:
+      return true
+    }
+  }
+
   private func verifyNormalModeCapture(reason: String) {
     normalModeCaptureVerificationToken &+= 1
     let token = normalModeCaptureVerificationToken
@@ -784,9 +801,7 @@ extension AppDelegate {
   }
 
   var shouldCaptureNormalModeInput: Bool {
-    guard flashMode == .normal, currentHints.isEmpty, !activationInFlight,
-      !normalModePointerHandoffActive
-    else { return false }
+    guard flashMode == .normal, currentHints.isEmpty, !activationInFlight else { return false }
     switch overlay.inputMode {
     case .commandLine, .modal, .candidateFinder:
       return false
