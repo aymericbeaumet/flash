@@ -179,12 +179,13 @@ final class NormalModeTests: XCTestCase {
       .mouseGrid(.click(.doubleClick)))
   }
 
-  // `f` and `F` clicks no longer auto-enter insert from provider metadata.
-  // Virtual clicks still use the post-click AX-input check; physical app
-  // clicks from NORMAL release capture immediately.
+  // `f` and `F` clicks no longer auto-enter insert from generic provider
+  // metadata. Virtual and physical primary clicks use the same post-click
+  // terminal/input handoff check.
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
     XCTAssertEqual(command(chars: "i"), .insertMode)
+    XCTAssertEqual(command(chars: "I", ignoring: "i", flags: [.shift]), .lockedInsertMode)
     XCTAssertEqual(command(chars: "?"), .showUsage(topic: nil))
     XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage(topic: nil))
     XCTAssertNil(
@@ -241,6 +242,7 @@ final class NormalModeTests: XCTestCase {
   func testNormalModeMayEnterInsertOnAnyUserDrivenTrigger() {
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .hintCommit))
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .normalModeInput))
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .lockedNormalModeInput))
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .pointerClick))
     // `.explicitCommand` is the reason `/` (app_find) and `t` (tab_new)
     // pass when they want the side-effect followed by a switch to
@@ -255,6 +257,15 @@ final class NormalModeTests: XCTestCase {
   func testInsertModeExitsWhenFocusedElementStopsBeingEditable() {
     XCTAssertTrue(shouldExitAfterFocusedElementChange(focusedElementIsEditable: false))
     XCTAssertFalse(shouldExitAfterFocusedElementChange(focusedElementIsEditable: true))
+    XCTAssertFalse(
+      shouldExitAfterFocusedElementChange(
+        focusedElementIsEditable: false,
+        insertModeLocked: true))
+  }
+
+  func testInsertModeDoesNotExitWhenFocusedAppChangesWhileLocked() {
+    XCTAssertTrue(shouldExitAfterFocusedAppChange(focusedPID: pid_t(7)))
+    XCTAssertFalse(shouldExitAfterFocusedAppChange(focusedPID: pid_t(7), insertModeLocked: true))
   }
 
   func testInsertFocusMachineCoversTextEntryStableControlsAndTransientSurfaces() {
@@ -918,32 +929,105 @@ final class NormalModeTests: XCTestCase {
         action: .rightClick))
   }
 
-  func testAppPointerClicksEnterInsertFromNormalMode() {
+  func testAppPointerClicksReleaseCaptureProbeInsertOrSuspendForContextMenus() {
     XCTAssertTrue(
-      AppDelegate.appPointerShouldEnterInsert(
+      AppDelegate.appPointerShouldReleaseNormalCapture(
         mode: .normal,
         wasCommandLine: false,
         action: .leftClick))
-    XCTAssertTrue(
-      AppDelegate.appPointerShouldEnterInsert(
+    XCTAssertFalse(
+      AppDelegate.appPointerShouldReleaseNormalCapture(
         mode: .normal,
         wasCommandLine: false,
         action: .rightClick))
     XCTAssertTrue(
-      AppDelegate.appPointerShouldEnterInsert(
+      AppDelegate.appPointerShouldReleaseNormalCapture(
         mode: .normal,
         wasCommandLine: false,
         action: .doubleClick))
     XCTAssertFalse(
-      AppDelegate.appPointerShouldEnterInsert(
+      AppDelegate.appPointerShouldReleaseNormalCapture(
         mode: .insert,
         wasCommandLine: false,
         action: .leftClick))
     XCTAssertFalse(
-      AppDelegate.appPointerShouldEnterInsert(
+      AppDelegate.appPointerShouldReleaseNormalCapture(
         mode: .normal,
         wasCommandLine: true,
         action: .leftClick))
+    XCTAssertTrue(
+      AppDelegate.appPointerShouldProbeForInsert(
+        mode: .normal,
+        wasCommandLine: false,
+        action: .leftClick))
+    XCTAssertTrue(
+      AppDelegate.appPointerShouldProbeForInsert(
+        mode: .normal,
+        wasCommandLine: false,
+        action: .doubleClick))
+    XCTAssertFalse(
+      AppDelegate.appPointerShouldProbeForInsert(
+        mode: .normal,
+        wasCommandLine: false,
+        action: .rightClick))
+    XCTAssertFalse(
+      AppDelegate.appPointerShouldProbeForInsert(
+        mode: .normal,
+        wasCommandLine: true,
+        action: .leftClick))
+    XCTAssertTrue(
+      AppDelegate.appPointerShouldSuspendForContextMenu(
+        mode: .normal,
+        wasCommandLine: false,
+        action: .rightClick))
+    XCTAssertFalse(
+      AppDelegate.appPointerShouldSuspendForContextMenu(
+        mode: .normal,
+        wasCommandLine: false,
+        action: .leftClick))
+    XCTAssertFalse(
+      AppDelegate.appPointerShouldSuspendForContextMenu(
+        mode: .normal,
+        wasCommandLine: true,
+        action: .rightClick))
+  }
+
+  func testWorkspaceActivationRecaptureSkipsPointerInsertHandoff() {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let activeSuppression = now.addingTimeInterval(0.5)
+    let expiredSuppression = now.addingTimeInterval(-0.1)
+
+    XCTAssertFalse(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
+        now: now))
+    XCTAssertTrue(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
+        now: now))
+  }
+
+  func testWorkspaceActivationRecaptureSkipsContextMenuInteraction() {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let activeSuppression = now.addingTimeInterval(0.5)
+    let expiredSuppression = now.addingTimeInterval(-0.1)
+
+    XCTAssertFalse(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: activeSuppression,
+        now: now))
+    XCTAssertTrue(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: expiredSuppression,
+        now: now))
   }
 
   func testCommandLineBufferIncludesPrompt() {
@@ -2001,7 +2085,8 @@ final class NormalModeTests: XCTestCase {
     focusedPID: pid_t? = pid_t(42),
     eventPID: pid_t = pid_t(42),
     editableFocusExitPID: pid_t? = pid_t(42),
-    focusedElementIsEditable: Bool = false
+    focusedElementIsEditable: Bool = false,
+    insertModeLocked: Bool = false
   ) -> Bool {
     AppDelegate.insertModeShouldExitAfterFocusedElementChange(
       mode: mode,
@@ -2012,7 +2097,8 @@ final class NormalModeTests: XCTestCase {
       focusedPID: focusedPID,
       eventPID: eventPID,
       editableFocusExitPID: editableFocusExitPID,
-      focusedElementIsEditable: focusedElementIsEditable)
+      focusedElementIsEditable: focusedElementIsEditable,
+      insertModeLocked: insertModeLocked)
   }
 
   private func shouldExitAfterFocusedAppChange(
@@ -2022,7 +2108,8 @@ final class NormalModeTests: XCTestCase {
     hasHints: Bool = false,
     activationInFlight: Bool = false,
     insertFocusOwnerPID: pid_t? = pid_t(42),
-    focusedPID: pid_t? = pid_t(42)
+    focusedPID: pid_t? = pid_t(42),
+    insertModeLocked: Bool = false
   ) -> Bool {
     AppDelegate.insertModeShouldExitAfterFocusedAppChange(
       mode: mode,
@@ -2031,7 +2118,8 @@ final class NormalModeTests: XCTestCase {
       hasHints: hasHints,
       activationInFlight: activationInFlight,
       insertFocusOwnerPID: insertFocusOwnerPID,
-      focusedPID: focusedPID)
+      focusedPID: focusedPID,
+      insertModeLocked: insertModeLocked)
   }
 
   private func candidateFinderCandidate(

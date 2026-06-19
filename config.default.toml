@@ -271,6 +271,7 @@ leader = "\\"
 "ctrl-o" = ["flash", "movement_back"]
 "ctrl-i" = ["flash", "movement_forward"]
 "i" = ["flash", "enter_insert_mode"]
+"I" = ["flash", "enter_locked_insert_mode"]
 "f" = ["flash", "mouse_target"]
 "sf" = ["flash", "mouse_target", "--secondary"]
 "df" = ["flash", "mouse_target", "--double"]

@@ -411,6 +411,7 @@ struct Config {
         ("gt", .flashCommand(.tabNext)),
         ("gT", .flashCommand(.tabPrev)),
         ("i", .flashCommand(.insertMode)),
+        ("I", .flashCommand(.lockedInsertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick)))),
         // `s` for "secondary click" (right-click). `r` was the old
         // prefix but it collided with the `r`→`R` reload pair: typing
@@ -734,6 +735,7 @@ extension URLCommand {
       return verb("mouse_grid", command.argTokens)
     case .normalMode: return verb("enter_normal_mode")
     case .insertMode: return verb("enter_insert_mode")
+    case .lockedInsertMode: return verb("enter_locked_insert_mode")
     case .commandMode: return verb("enter_command_mode")
     case .scroll(let kind):
       switch kind {

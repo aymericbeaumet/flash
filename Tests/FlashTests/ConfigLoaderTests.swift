@@ -953,6 +953,9 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(toml)
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "i" })?.action.command, .insertMode)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "I" })?.action.command,
+      .lockedInsertMode)
     XCTAssertEqual(c.mode.normal.filter { $0.key == "j" }.count, 1)
   }
 

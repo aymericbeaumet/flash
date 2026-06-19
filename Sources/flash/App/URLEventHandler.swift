@@ -23,6 +23,7 @@ enum URLCommand: Hashable {
   case mouseGrid(MouseCommand)
   case normalMode
   case insertMode
+  case lockedInsertMode
   case commandMode
   case scroll(NormalModeDispatcher.ScrollKind)
   case reload(force: Bool)
@@ -253,6 +254,7 @@ final class URLEventHandler: NSObject {
     "mouse_click": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
     "enter_normal_mode": { _ in .normalMode },
     "enter_insert_mode": { _ in .insertMode },
+    "enter_locked_insert_mode": { _ in .lockedInsertMode },
     "enter_command_mode": { a in
       guard let raw = a.value("input") else {
         return a.args.isEmpty ? .commandMode : nil
@@ -333,6 +335,7 @@ final class URLEventHandler: NSObject {
     flash mouse_grid [--secondary|--double|--move]
     flash enter_normal_mode
     flash enter_insert_mode
+    flash enter_locked_insert_mode
     flash enter_command_mode
     flash scroll_left
     flash scroll_right

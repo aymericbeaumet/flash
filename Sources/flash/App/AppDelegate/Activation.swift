@@ -204,7 +204,11 @@ extension AppDelegate {
     // normal mode can immediately recapture keyboard input.
     if currentHints.isEmpty && !activationInFlight {
       overlay.hide()
-      applyModeOverlay()
+      let captureOverride =
+        Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+          until: pointerInsertHandoffRecaptureSuppressedUntil)
+        ? false : nil
+      applyModeOverlay(captureOverride: captureOverride)
       return
     }
     overlay.hide()

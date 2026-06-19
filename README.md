@@ -29,6 +29,7 @@ flash mouse_target
 flash mouse_target --secondary
 flash mouse_grid
 flash enter_normal_mode
+flash enter_locked_insert_mode
 flash help_show
 flash help_show --topic=plugins
 flash quit
@@ -112,6 +113,8 @@ leader = "\\"
 "g7" = ["flash", "tab_select", "--index=7"]
 "g8" = ["flash", "tab_select", "--index=8"]
 "g9" = ["flash", "tab_select", "--index=9"]
+"i" = ["flash", "enter_insert_mode"]
+"I" = ["flash", "enter_locked_insert_mode"]
 "f" = ["flash", "mouse_target"]
 "sf" = ["flash", "mouse_target", "--secondary"]
 "df" = ["flash", "mouse_target", "--double"]
@@ -160,7 +163,7 @@ Normal mode supports counts such as `10u` and `2[t`, `gg` / `G` for instant top/
 
 Setting `[debug] http_inspector_enabled = true` starts a loopback-only single-page debug view with live logs, resolved config, focused app state, and plugin state. The host (`http_inspector_host`) is restricted to `localhost` / `127.0.0.1` / `::1`; the default port is `4242`. Every log line carries a `source` field such as `core:AppDelegate.swift.activate(...)` or `plugin:spotify`.
 
-Flash stays in normal mode until the user presses `i`, uses a mapped command that intentionally opens a typing surface such as `t` (`tab_new`) or `/` (`app_find`), or clicks an editable target physically or through an `f` / `F` mouse hint. Hint clicks may include configured modifier passthrough, right-clicks, or double-clicks; they are treated as explicit mouse interactions by the user. Physical clicks are replayed so they reach the underlying app. A physical or hinted click enters insert mode only after the post-click Accessibility check confirms the focused element is editable. Passive focus changes, app focus requests, menu-bar clicks, and status-bar popups do not switch to insert mode while advanced normal mode is active. Once Flash is in insert mode, switching away from the app that owned INSERT returns to normal mode. For focus changes inside the same app, a short post-entry Accessibility check arms generic focus-loss exit only when the app has an editable focused element; after that, a focused-element or focused-window change returns to normal mode when Accessibility no longer reports an editable focused element. If a mouse button is held, Flash waits until release and re-checks so text selection is not interrupted. Browser `t` opens a new tab, enters insert for the location field, then returns to normal after the document URL changes to a committed `http` / `https` page. Value changes while typing do not trigger the generic focus-loss probe.
+Flash stays in normal mode until the user presses `i`, presses `I` for locked insert mode, uses a mapped command that intentionally opens a typing surface such as `t` (`tab_new`) or `/` (`app_find`), or clicks an editable/terminal target physically or through an `f` / `F` mouse hint. Hint clicks may include configured modifier passthrough, right-clicks, or double-clicks; they are treated as explicit mouse interactions by the user. Physical clicks are replayed so they reach the underlying app. A physical or hinted primary click enters insert mode only for terminal apps or after the post-click Accessibility check confirms the focused element is editable; right-clicks release capture for context menus without using that insert-entry probe. Passive focus changes, app focus requests, menu-bar clicks, and status-bar popups do not switch to insert mode while advanced normal mode is active. Once Flash is in insert mode, switching away from the app that owned INSERT returns to normal mode. For focus changes inside the same app, a short post-entry Accessibility check arms generic focus-loss exit only when the app has an editable focused element; after that, a focused-element or focused-window change returns to normal mode when Accessibility no longer reports an editable focused element. If a mouse button is held, Flash waits until release and re-checks so text selection is not interrupted. Browser `t` opens a new tab, enters insert for the location field, then returns to normal after the document URL changes to a committed `http` / `https` page. Locked insert mode skips those automatic focus and navigation exits; it stays in insert mode until `enter_normal_mode` is invoked, usually through the user's Escape mapping. Value changes while typing do not trigger the generic focus-loss probe.
 
 ## External Tools
 

@@ -53,16 +53,23 @@ extension AppDelegate {
     FlashLog.trace(
       "[mode] enter_insert reason=\(reason.logValue) from=\(flashMode) hints=\(currentHints.count) "
         + "in_flight=\(activationInFlight)")
-    transitionMode(to: .insert, reason: reason.logValue)
+    transitionMode(to: .insert, reason: reason.logValue, lockInsert: reason.locksInsertMode)
   }
 
-  private func transitionMode(to nextMode: FlashMode, reason: String) {
+  private func transitionMode(
+    to nextMode: FlashMode,
+    reason: String,
+    lockInsert: Bool = false
+  ) {
     let previousMode = flashMode
     insertFocusExitProbeToken &+= 1
     insertFocusOwnerPID = nil
     insertEditableFocusExitPID = nil
     insertNavigationExitToken &+= 1
     normalModePendingCommandToken &+= 1
+    insertModeLockedUntilExplicitNormal = nextMode == .insert && lockInsert
+    contextMenuInteractionRecaptureSuppressedUntil = nil
+    pointerInsertHandoffRecaptureSuppressedUntil = nil
     resetModeInputState()
     closeModalStateForModeExit(reason: "enter_\(nextMode)_\(reason)")
     if previousMode != nextMode {
@@ -174,7 +181,9 @@ extension AppDelegate {
     }
     traceInsertKeyHandoff(
       target: insertTarget, panelKeyAtEntry: panelKeyAtEntry, reason: reason)
-    armEditableFocusExitIfNeeded(target: insertTarget, reason: reason)
+    if !insertModeLockedUntilExplicitNormal {
+      armEditableFocusExitIfNeeded(target: insertTarget, reason: reason)
+    }
   }
 
   /// Diagnostic trace for the INSERT key-window handoff (#1: Messages drops
@@ -320,12 +329,14 @@ extension AppDelegate {
     // gate against `.explicitCommand` left those mappings stuck in
     // NORMAL after the side-effect fired, so typing went to the empty
     // search bar / new tab via the system, then nothing.
-    reason == .hintCommit || reason == .normalModeInput
+    reason == .hintCommit || reason == .normalModeInput || reason == .lockedNormalModeInput
       || reason == .pointerClick || reason == .explicitCommand
   }
 
   func focusedInputMayHaveChanged(pid: pid_t) {
-    guard modeBadgeEnabled, flashMode == .insert else { return }
+    guard modeBadgeEnabled, flashMode == .insert, !insertModeLockedUntilExplicitNormal else {
+      return
+    }
     let focusedPID = currentNonFlashContext()?.processID
     if Self.insertModeShouldExitAfterFocusedAppChange(
       mode: flashMode,
@@ -334,7 +345,8 @@ extension AppDelegate {
       hasHints: !currentHints.isEmpty,
       activationInFlight: activationInFlight,
       insertFocusOwnerPID: insertFocusOwnerPID,
-      focusedPID: focusedPID)
+      focusedPID: focusedPID,
+      insertModeLocked: insertModeLockedUntilExplicitNormal)
     {
       FlashLog.debug(
         "[mode] insert_app_unfocused owner=\(insertFocusOwnerPID.map { String($0) } ?? "nil") "
@@ -352,7 +364,8 @@ extension AppDelegate {
         focusedPID: focusedPID,
         eventPID: pid,
         editableFocusExitPID: insertEditableFocusExitPID,
-        focusedElementIsEditable: false)
+        focusedElementIsEditable: false,
+        insertModeLocked: insertModeLockedUntilExplicitNormal)
     else { return }
 
     insertFocusExitProbeToken &+= 1
@@ -429,8 +442,10 @@ extension AppDelegate {
     hasHints: Bool,
     activationInFlight: Bool,
     insertFocusOwnerPID: pid_t?,
-    focusedPID: pid_t?
+    focusedPID: pid_t?,
+    insertModeLocked: Bool = false
   ) -> Bool {
+    guard !insertModeLocked else { return false }
     guard let insertFocusOwnerPID, let focusedPID else { return false }
     return mode == .insert
       && modeBadgeEnabled
@@ -449,9 +464,11 @@ extension AppDelegate {
     focusedPID: pid_t?,
     eventPID: pid_t,
     editableFocusExitPID: pid_t?,
-    focusedElementIsEditable: Bool
+    focusedElementIsEditable: Bool,
+    insertModeLocked: Bool = false
   ) -> Bool {
-    mode == .insert
+    !insertModeLocked
+      && mode == .insert
       && modeBadgeEnabled
       && overlayInputMode == .hints
       && !hasHints
@@ -501,6 +518,7 @@ extension AppDelegate {
     bundleIdentifier: String,
     initialURL: String?
   ) {
+    guard !insertModeLockedUntilExplicitNormal else { return }
     guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier), pid > 0 else {
       return
     }
@@ -522,11 +540,15 @@ extension AppDelegate {
     initialURL: String?,
     remainingAttempts: Int
   ) {
-    guard insertNavigationExitToken == token, flashMode == .insert, remainingAttempts > 0 else {
+    guard insertNavigationExitToken == token, flashMode == .insert,
+      !insertModeLockedUntilExplicitNormal, remainingAttempts > 0
+    else {
       return
     }
     monitor.focusedDocumentURL(pid: pid) { [weak self] url in
-      guard let self, self.insertNavigationExitToken == token, self.flashMode == .insert else {
+      guard let self, self.insertNavigationExitToken == token, self.flashMode == .insert,
+        !self.insertModeLockedUntilExplicitNormal
+      else {
         return
       }
       if Self.insertNavigationExitShouldExit(currentURL: url, initialURL: initialURL) {
@@ -632,6 +654,18 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecapture() {
+    if Self.contextMenuInteractionRecaptureSuppressionIsActive(
+      until: contextMenuInteractionRecaptureSuppressedUntil)
+    {
+      FlashLog.trace("[mode] recapture_skip reason=context_menu_interaction")
+      return
+    }
+    if Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+      until: pointerInsertHandoffRecaptureSuppressedUntil)
+    {
+      FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
+      return
+    }
     // Flip `overlay.inputMode` to `.normal` synchronously before
     // scheduling the retries. The 0 ms entry below is still a
     // `DispatchQueue.main.asyncAfter` — it doesn't run until the next
@@ -680,10 +714,35 @@ extension AppDelegate {
     FlashLog.trace("[mode] menu_bar_interaction reason=\(reason) recapture_suppressed=true")
   }
 
+  func noteContextMenuInteraction(reason: String, now: Date = Date()) {
+    contextMenuInteractionRecaptureSuppressedUntil = now.addingTimeInterval(
+      Double(Self.contextMenuInteractionRecaptureSuppressionMs) / 1_000.0)
+    normalModeRecaptureToken &+= 1
+    FlashLog.trace("[mode] context_menu_interaction reason=\(reason) recapture_suppressed=true")
+  }
+
+  func notePointerInsertHandoff(reason: String, now: Date = Date()) {
+    pointerInsertHandoffRecaptureSuppressedUntil = now.addingTimeInterval(
+      Double(Self.pointerInsertHandoffRecaptureSuppressionMs) / 1_000.0)
+    normalModeRecaptureToken &+= 1
+    FlashLog.trace("[mode] pointer_insert_handoff reason=\(reason) recapture_suppressed=true")
+  }
+
+  func clearPointerInsertHandoff(reason: String) {
+    if pointerInsertHandoffRecaptureSuppressedUntil != nil {
+      FlashLog.trace("[mode] pointer_insert_handoff_clear reason=\(reason)")
+    }
+    pointerInsertHandoffRecaptureSuppressedUntil = nil
+  }
+
   func shouldScheduleNormalModeRecaptureAfterWorkspaceActivation(now: Date = Date()) -> Bool {
     let shouldRecapture = Self.workspaceActivationShouldScheduleNormalModeRecapture(
       mode: flashMode,
       menuBarInteractionRecaptureSuppressedUntil: menuBarInteractionRecaptureSuppressedUntil,
+      contextMenuInteractionRecaptureSuppressedUntil:
+        contextMenuInteractionRecaptureSuppressedUntil,
+      pointerInsertHandoffRecaptureSuppressedUntil:
+        pointerInsertHandoffRecaptureSuppressedUntil,
       now: now)
     if !shouldRecapture,
       Self.menuBarInteractionRecaptureSuppressionIsActive(
@@ -692,8 +751,28 @@ extension AppDelegate {
     {
       FlashLog.trace("[mode] recapture_skip reason=recent_menu_bar_interaction")
     }
+    if !shouldRecapture,
+      Self.contextMenuInteractionRecaptureSuppressionIsActive(
+        until: contextMenuInteractionRecaptureSuppressedUntil,
+        now: now)
+    {
+      FlashLog.trace("[mode] recapture_skip reason=context_menu_interaction")
+    }
+    if !shouldRecapture,
+      Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+        until: pointerInsertHandoffRecaptureSuppressedUntil,
+        now: now)
+    {
+      FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
+    }
     if menuBarInteractionRecaptureSuppressedUntil.map({ $0 <= now }) == true {
       menuBarInteractionRecaptureSuppressedUntil = nil
+    }
+    if contextMenuInteractionRecaptureSuppressedUntil.map({ $0 <= now }) == true {
+      contextMenuInteractionRecaptureSuppressedUntil = nil
+    }
+    if pointerInsertHandoffRecaptureSuppressedUntil.map({ $0 <= now }) == true {
+      pointerInsertHandoffRecaptureSuppressedUntil = nil
     }
     return shouldRecapture
   }
@@ -701,17 +780,33 @@ extension AppDelegate {
   static func workspaceActivationShouldScheduleNormalModeRecapture(
     mode: FlashMode,
     menuBarInteractionRecaptureSuppressedUntil: Date?,
+    contextMenuInteractionRecaptureSuppressedUntil: Date? = nil,
+    pointerInsertHandoffRecaptureSuppressedUntil: Date? = nil,
     now: Date
   ) -> Bool {
     mode == .normal
       && !menuBarInteractionRecaptureSuppressionIsActive(
         until: menuBarInteractionRecaptureSuppressedUntil,
         now: now)
+      && !contextMenuInteractionRecaptureSuppressionIsActive(
+        until: contextMenuInteractionRecaptureSuppressedUntil,
+        now: now)
+      && !pointerInsertHandoffRecaptureSuppressionIsActive(
+        until: pointerInsertHandoffRecaptureSuppressedUntil,
+        now: now)
   }
 
   static func menuBarInteractionRecaptureSuppressionIsActive(
     until: Date?,
     now: Date
+  ) -> Bool {
+    guard let until else { return false }
+    return now < until
+  }
+
+  static func contextMenuInteractionRecaptureSuppressionIsActive(
+    until: Date?,
+    now: Date = Date()
   ) -> Bool {
     guard let until else { return false }
     return now < until
@@ -724,15 +819,49 @@ extension AppDelegate {
     mode == .normal && action == .rightClick
   }
 
-  static func appPointerShouldEnterInsert(
+  static func appPointerShouldReleaseNormalCapture(
     mode: FlashMode,
     wasCommandLine: Bool,
     action: JumpAction
   ) -> Bool {
     guard mode == .normal, !wasCommandLine else { return false }
     switch action {
-    case .leftClick, .rightClick, .doubleClick:
+    case .leftClick, .doubleClick:
       return true
+    case .rightClick:
+      return false
+    }
+  }
+
+  static func appPointerShouldSuspendForContextMenu(
+    mode: FlashMode,
+    wasCommandLine: Bool,
+    action: JumpAction
+  ) -> Bool {
+    guard mode == .normal, !wasCommandLine else { return false }
+    switch action {
+    case .rightClick:
+      return true
+    case .leftClick, .doubleClick:
+      return false
+    }
+  }
+
+  static func appPointerShouldProbeForInsert(
+    mode: FlashMode,
+    wasCommandLine: Bool,
+    action: JumpAction
+  ) -> Bool {
+    guard mode == .normal, !wasCommandLine else { return false }
+    return pointerActionMayEnterInsert(action)
+  }
+
+  static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
+    switch action {
+    case .leftClick, .doubleClick:
+      return true
+    case .rightClick:
+      return false
     }
   }
 
@@ -761,6 +890,18 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
+    if Self.contextMenuInteractionRecaptureSuppressionIsActive(
+      until: contextMenuInteractionRecaptureSuppressedUntil)
+    {
+      FlashLog.trace("[mode] pointer_recapture_skip reason=context_menu_interaction")
+      return
+    }
+    if Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+      until: pointerInsertHandoffRecaptureSuppressedUntil)
+    {
+      FlashLog.trace("[mode] pointer_recapture_skip reason=pointer_insert_handoff_pending")
+      return
+    }
     if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
       // The user clicked the menu bar (system menu, app menu, or status
       // item). Recapturing key window here races the menu/status popup's
@@ -777,6 +918,8 @@ extension AppDelegate {
 
   static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
+  static let contextMenuInteractionRecaptureSuppressionMs = 1_500
+  static let pointerInsertHandoffRecaptureSuppressionMs = 1_500
   static let windowGeometryQuietMs = 160
   static let activeWindowBorderTrackingIntervalMs = 50
   static let activeWindowBorderTrackingLeewayMs = 10
@@ -800,6 +943,14 @@ extension AppDelegate {
     return false
   }
 
+  static func pointerInsertHandoffRecaptureSuppressionIsActive(
+    until: Date?,
+    now: Date = Date()
+  ) -> Bool {
+    guard let until else { return false }
+    return now < until
+  }
+
   var shouldCaptureNormalModeInput: Bool {
     guard flashMode == .normal, currentHints.isEmpty, !activationInFlight else { return false }
     switch overlay.inputMode {
@@ -821,6 +972,8 @@ extension AppDelegate {
     switch command {
     case .insertMode:
       enterInsertMode(reason: .normalModeInput)
+    case .lockedInsertMode:
+      enterInsertMode(reason: .lockedNormalModeInput)
     case .normalMode:
       enterNormalMode()
     case .commandMode:
