@@ -13,10 +13,10 @@ import Foundation
 /// chopped by it too.
 ///
 /// Higher-layer windows (the Dock, the menu bar, status items, the
-/// notification centre) are kept as occluders but excluded from the
-/// per-pid region map — they're not user-clickable surfaces Flash should
-/// hint, but they DO cover stuff behind them, so they need to chop the
-/// regions of the apps they overlay.
+/// notification centre) are kept as occluders. For other applications,
+/// same-pid interaction layers may become the active surface when they sit
+/// above the main window — this is how NSPopover/status-item/password-manager
+/// popups are scoped without hinting sibling windows behind them.
 struct WindowSnapshot {
   struct Entry {
     let pid: pid_t
@@ -33,10 +33,10 @@ struct WindowSnapshot {
   /// window). Empty for pids that are fully occluded.
   let visibleRegions: [pid_t: [CGRect]]
 
-  /// Front-most layer-0 window for the focused pid, before occlusion
-  /// subtraction. Providers that need full-window geometry (tmux cell
-  /// math) use this frame; AppMonitor filters returned targets against
-  /// `visibleRegions` afterward.
+  /// Front-most interaction surface for the focused pid, before occlusion
+  /// subtraction. Providers that need full-surface geometry (tmux cell
+  /// math, popovers, modal panels) use this frame; AppMonitor filters
+  /// returned targets against `visibleRegions` afterward.
   let activeWindowFrame: CGRect?
 
   static func build(
@@ -81,14 +81,17 @@ struct WindowSnapshot {
   }
 
   static func build(entries: [Entry], focusedPid: pid_t) -> WindowSnapshot {
-    // The "active window" is the front-most layer-0 window owned by the
-    // focused pid. CGWindowList returns windows in z-order, so the
-    // first hit is the right one. Every other window — including other
-    // windows of the same app on another monitor — is treated purely
-    // as an occluder, never as a hintable surface. This is what keeps
-    // hints scoped to the single active window.
+    // The "active window" is the front-most interaction surface owned by the
+    // focused pid. CGWindowList returns windows in z-order, so the first hit
+    // is the right one. Every other window — including other windows of the
+    // same app on another monitor — is treated purely as an occluder, never
+    // as a hintable surface. This keeps hints scoped to one current surface
+    // while still allowing same-pid popovers/dialogs/floating windows above a
+    // main layer-0 window.
     var activeWindowIndex: Int? = nil
-    for (idx, e) in entries.enumerated() where e.layer == 0 && e.pid == focusedPid {
+    for (idx, e) in entries.enumerated()
+      where e.pid == focusedPid && isInteractionSurfaceLayer(e.layer)
+    {
       activeWindowIndex = idx
       break
     }
@@ -128,6 +131,18 @@ struct WindowSnapshot {
       entries: entries,
       visibleRegions: byPid,
       activeWindowFrame: activeWindowFrame)
+  }
+
+  static func isInteractionSurfaceLayer(_ layer: Int) -> Bool {
+    if layer == 0 { return true }
+    let allowedLevels = [
+      CGWindowLevelForKey(.floatingWindow),
+      CGWindowLevelForKey(.modalPanelWindow),
+      CGWindowLevelForKey(.utilityWindow),
+      CGWindowLevelForKey(.popUpMenuWindow),
+      CGWindowLevelForKey(.statusWindow),
+    ]
+    return allowedLevels.contains(Int32(layer))
   }
 
   /// Rectangle subtraction in NSScreen-coord (Y-up) space. Returns up to

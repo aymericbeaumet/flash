@@ -1,11 +1,54 @@
 import Foundation
 
 struct InputFocusSnapshot: Equatable {
-  enum Surface: Equatable {
+  enum TransientInteractionReason: Equatable, CustomStringConvertible {
+    case role(String)
+    case expandedRole(String)
+    case ancestorRole(String)
+    case windowSubrole(String)
+    case extensionDocument(scheme: String)
+
+    var description: String {
+      switch self {
+      case .role(let role):
+        return "role:\(role)"
+      case .expandedRole(let role):
+        return "expanded:\(role)"
+      case .ancestorRole(let role):
+        return "ancestor:\(role)"
+      case .windowSubrole(let subrole):
+        return "window:\(subrole)"
+      case .extensionDocument(let scheme):
+        return "url:\(scheme)"
+      }
+    }
+
+    var remainsInteractiveAfterSettleBudget: Bool {
+      if case .extensionDocument = self {
+        return false
+      }
+      return true
+    }
+  }
+
+  enum Surface: Equatable, CustomStringConvertible {
     case unavailable
     case editable
-    case transientInteraction(reason: String)
+    case transientInteraction(reason: TransientInteractionReason)
     case stableNonEditable
+
+    var description: String {
+      switch self {
+      case .unavailable:
+        return "unavailable"
+      case .editable:
+        return "editable"
+      case .transientInteraction(let reason):
+        return "transient:\(reason)"
+      case .stableNonEditable:
+        return "stable_noneditable"
+      }
+    }
   }
 
   var pid: pid_t
@@ -54,23 +97,27 @@ struct InputFocusSnapshot: Equatable {
     ancestorRoles: [String],
     windowSubrole: String?,
     documentURL: String?
-  ) -> String? {
-    if let role, transientInteractionRoles.contains(role) {
-      return "role:\(role)"
-    }
-    if let role, expanded, expandableTransientRoles.contains(role) {
-      return "expanded:\(role)"
-    }
-    if let role = ancestorRoles.first(where: { transientInteractionRoles.contains($0) }) {
-      return "ancestor:\(role)"
-    }
-    if let windowSubrole, transientWindowSubroles.contains(windowSubrole) {
-      return "window:\(windowSubrole)"
-    }
+  ) -> TransientInteractionReason? {
+    // Browser-extension popups are durable mini-documents, not autocomplete
+    // menus. They still get the short settle window because password-manager
+    // popovers reshuffle AX focus while opening, but after that budget they
+    // must behave like ordinary non-editable web content.
     if let scheme = documentURL.flatMap(URL.init(string:))?.scheme?.lowercased(),
       transientDocumentSchemes.contains(scheme)
     {
-      return "url:\(scheme)"
+      return .extensionDocument(scheme: scheme)
+    }
+    if let role, transientInteractionRoles.contains(role) {
+      return .role(role)
+    }
+    if let role, expanded, expandableTransientRoles.contains(role) {
+      return .expandedRole(role)
+    }
+    if let role = ancestorRoles.first(where: { transientInteractionRoles.contains($0) }) {
+      return .ancestorRole(role)
+    }
+    if let windowSubrole, transientWindowSubroles.contains(windowSubrole) {
+      return .windowSubrole(windowSubrole)
     }
     return nil
   }
@@ -139,11 +186,15 @@ enum InsertModeFocusMachine {
     guard focusedPID == eventPID, focusedPID == armedEditablePID else { return .stay }
     if snapshot.isEditable { return .stay }
     if pointerPressed { return .waitForPointerRelease }
-    if snapshot.isTransientInteraction {
-      // Budget exhausted: the surface is persistent, not a vanishing popup.
-      // Keep the user in INSERT rather than resampling indefinitely — only a
-      // genuinely *stable* non-editable surface (the branch below) exits.
-      if attempt >= transientResampleMaxAttempts { return .stay }
+    if case .transientInteraction(let reason) = snapshot.surface {
+      // Budget exhausted: most role/window transient surfaces are persistent
+      // interaction targets rather than vanishing popups. Extension document
+      // popovers are different: after their opening settle budget, a
+      // non-editable target should leave INSERT just like any other stable web
+      // control.
+      if attempt >= transientResampleMaxAttempts {
+        return reason.remainsInteractiveAfterSettleBudget ? .stay : .exitToNormal
+      }
       return .resampleAfter(milliseconds: transientResampleMs)
     }
     return .exitToNormal
@@ -154,11 +205,12 @@ enum InsertModeFocusMachine {
   {
     guard let snapshot else { return .recaptureNormal }
     if snapshot.isEditable { return .enterInsert }
-    if snapshot.isTransientInteraction {
-      // Budget exhausted: the user deliberately clicked this element and it
-      // hasn't dissolved like a real popup would, so treat it as a genuine
-      // interaction target and hand the keyboard over instead of spinning.
-      if attempt >= transientResampleMaxAttempts { return .enterInsert }
+    if case .transientInteraction(let reason) = snapshot.surface {
+      // Budget exhausted: keep the existing persistent-list behavior, but do
+      // not turn durable extension popup chrome into INSERT mode ownership.
+      if attempt >= transientResampleMaxAttempts {
+        return reason.remainsInteractiveAfterSettleBudget ? .enterInsert : .recaptureNormal
+      }
       return .resampleAfter(milliseconds: transientResampleMs)
     }
     return .recaptureNormal

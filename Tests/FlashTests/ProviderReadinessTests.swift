@@ -25,6 +25,20 @@ final class ProviderReadinessTests: XCTestCase {
     XCTAssertFalse(AccessibilityProvider.webClickableRoles.contains("AXSlider"))
   }
 
+  func testExtensionPopupRolesStayScopedToExtensionDocuments() {
+    XCTAssertFalse(AccessibilityProvider.webClickableRoles.contains("AXGroup"))
+    XCTAssertFalse(AccessibilityProvider.webClickableRoles.contains("AXOption"))
+    XCTAssertTrue(AccessibilityProvider.webExtensionPopupPressRoles.contains("AXGroup"))
+    XCTAssertTrue(AccessibilityProvider.webExtensionPopupPressRoles.contains("AXOption"))
+    XCTAssertTrue(
+      AccessibilityProvider.isExtensionDocumentURL("chrome-extension://abc/popup.html"))
+    XCTAssertTrue(
+      AccessibilityProvider.isExtensionDocumentURL("moz-extension://abc/popup.html"))
+    XCTAssertTrue(
+      AccessibilityProvider.isExtensionDocumentURL("safari-web-extension://abc/popup.html"))
+    XCTAssertFalse(AccessibilityProvider.isExtensionDocumentURL("https://example.com"))
+  }
+
 }
 
 private final class StubProvider: FlashSource {

@@ -40,6 +40,42 @@ final class WindowSnapshotTests: XCTestCase {
     XCTAssertEqual(snapshot.visibleRegions[42], [front.nsBounds])
   }
 
+  func testFocusedHighLayerPopupBecomesActiveSurface() {
+    let popup = WindowSnapshot.Entry(
+      pid: 42,
+      layer: Int(CGWindowLevelForKey(.floatingWindow)),
+      nsBounds: CGRect(x: 20, y: 20, width: 40, height: 40))
+    let main = WindowSnapshot.Entry(
+      pid: 42,
+      layer: 0,
+      nsBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+
+    let snapshot = WindowSnapshot.build(entries: [popup, main], focusedPid: 42)
+
+    XCTAssertEqual(snapshot.activeWindowFrame, popup.nsBounds)
+    XCTAssertEqual(snapshot.visibleRegions[42], [popup.nsBounds])
+  }
+
+  func testOtherPidHighLayerWindowOnlyOccludesFocusedSurface() {
+    let statusPopover = WindowSnapshot.Entry(
+      pid: 7,
+      layer: Int(CGWindowLevelForKey(.statusWindow)),
+      nsBounds: CGRect(x: 25, y: 25, width: 50, height: 50))
+    let focused = WindowSnapshot.Entry(
+      pid: 42,
+      layer: 0,
+      nsBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+
+    let snapshot = WindowSnapshot.build(entries: [statusPopover, focused], focusedPid: 42)
+
+    XCTAssertEqual(snapshot.activeWindowFrame, focused.nsBounds)
+    XCTAssertNil(snapshot.visibleRegions[7])
+    let visibleArea = (snapshot.visibleRegions[42] ?? []).reduce(CGFloat(0)) {
+      $0 + $1.width * $1.height
+    }
+    XCTAssertEqual(visibleArea, 7_500)
+  }
+
   func testCGWindowInfoEntriesConvertToNSScreenCoordinates() {
     let info: [[String: Any]] = [
       [

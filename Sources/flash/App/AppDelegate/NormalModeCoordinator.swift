@@ -675,6 +675,50 @@ extension AppDelegate {
     }
   }
 
+  func noteMenuBarInteraction(reason: String, now: Date = Date()) {
+    menuBarInteractionRecaptureSuppressedUntil = now.addingTimeInterval(
+      Double(Self.menuBarInteractionRecaptureSuppressionMs) / 1_000.0)
+    normalModeRecaptureToken &+= 1
+    FlashLog.trace("[mode] menu_bar_interaction reason=\(reason) recapture_suppressed=true")
+  }
+
+  func shouldScheduleNormalModeRecaptureAfterWorkspaceActivation(now: Date = Date()) -> Bool {
+    let shouldRecapture = Self.workspaceActivationShouldScheduleNormalModeRecapture(
+      mode: flashMode,
+      menuBarInteractionRecaptureSuppressedUntil: menuBarInteractionRecaptureSuppressedUntil,
+      now: now)
+    if !shouldRecapture,
+      Self.menuBarInteractionRecaptureSuppressionIsActive(
+        until: menuBarInteractionRecaptureSuppressedUntil,
+        now: now)
+    {
+      FlashLog.trace("[mode] recapture_skip reason=recent_menu_bar_interaction")
+    }
+    if menuBarInteractionRecaptureSuppressedUntil.map({ $0 <= now }) == true {
+      menuBarInteractionRecaptureSuppressedUntil = nil
+    }
+    return shouldRecapture
+  }
+
+  static func workspaceActivationShouldScheduleNormalModeRecapture(
+    mode: FlashMode,
+    menuBarInteractionRecaptureSuppressedUntil: Date?,
+    now: Date
+  ) -> Bool {
+    mode == .normal
+      && !menuBarInteractionRecaptureSuppressionIsActive(
+        until: menuBarInteractionRecaptureSuppressedUntil,
+        now: now)
+  }
+
+  static func menuBarInteractionRecaptureSuppressionIsActive(
+    until: Date?,
+    now: Date
+  ) -> Bool {
+    guard let until else { return false }
+    return now < until
+  }
+
   private func verifyNormalModeCapture(reason: String) {
     normalModeCaptureVerificationToken &+= 1
     let token = normalModeCaptureVerificationToken
@@ -702,12 +746,9 @@ extension AppDelegate {
   func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
     if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
       // The user clicked the menu bar (system menu, app menu, or status
-      // item). Recapturing key window here races the menu's open: the
-      // 0ms recapture entry fires before the async pointer-monitor path
-      // can transition to insert, and steals key back so the menu closes
-      // the same instant it opened. Letting the menu interact freely is
-      // the right call — `overlayDidCancelByPointer` will still flip
-      // Flash into insert mode on the async path.
+      // item). Recapturing key window here races the menu/status popup's
+      // open and can close it immediately.
+      noteMenuBarInteraction(reason: "pointer_focus_loss")
       FlashLog.trace("[mode] pointer_recapture_skip target=menu_bar")
       return
     }
@@ -718,6 +759,7 @@ extension AppDelegate {
   }
 
   static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]
+  static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let windowGeometryQuietMs = 160
   static let activeWindowBorderTrackingIntervalMs = 50
   static let activeWindowBorderTrackingLeewayMs = 10

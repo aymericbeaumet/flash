@@ -80,6 +80,17 @@ public final class AccessibilityProvider: FlashSource {
     "AXMenuItem",
   ]
 
+  /// Extra web roles accepted only inside browser-extension documents, and
+  /// only after an `AXPress` action check. Password-manager popups expose
+  /// vault rows/options this way; ordinary web pages still use the stricter
+  /// Vimium-style semantic allowlist above.
+  public static let webExtensionPopupPressRoles: Set<String> = [
+    "AXGroup",
+    "AXList",
+    "AXListItem",
+    "AXOption",
+  ]
+
   /// Roles whose descendant AXImage is considered decorative (already
   /// covered by the ancestor's hint). Hits the common Firefox case of
   /// `<a><img/>text</a>` exposing both AXLink and AXImage on the same
@@ -318,6 +329,7 @@ public final class AccessibilityProvider: FlashSource {
       //      subrole lets the walk paint those as
       //      `important` (tab-strip anchors) in
       //      one IPC round-trip.
+      kAXDocumentAttribute,  // 11
     ] as CFArray
 
   /// Per-worker mutable state. `WalkState` is per-thread under concurrent
@@ -385,7 +397,7 @@ public final class AccessibilityProvider: FlashSource {
     let clip = context.frontWindowFrame
     guard !clip.isNull else { return [] }
 
-    // Active-window only. One IPC up front to resolve
+    // Active-surface only. One IPC up front to resolve
     // kAXFocusedWindowAttribute and walk that subtree exclusively. This
     // is the *correct* way to scope to a single window — relying on a
     // geometric region filter alone leaves edge cases where AX-reported
@@ -394,11 +406,10 @@ public final class AccessibilityProvider: FlashSource {
     // screen popovers, AX coordinate quirks) and bleed through as
     // stray hints.
     //
-    // If `kAXFocusedWindow` is missing (rare — happens momentarily
-    // during app launches and in some automated Firefox sessions), fall
-    // back to the first reported app window. This keeps the walk scoped
-    // to one foreground-app window without broadening to app/menu-bar
-    // children.
+    // If `kAXFocusedWindow` is missing (rare — happens momentarily during
+    // app launches and in some automated Firefox sessions), fall back to the
+    // first reported app surface. This keeps the walk scoped to one
+    // foreground-app surface without broadening to app/menu-bar children.
     guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
 
     var state = WalkState()
@@ -414,6 +425,7 @@ public final class AccessibilityProvider: FlashSource {
       pid: context.processID,
       insideClickable: false,
       insideWebArea: false,
+      insideExtensionDocument: false,
       parentRole: nil,
       idPrefix: "r",
       fanoutBudget: Self.maxFanoutLevels,
@@ -435,7 +447,7 @@ public final class AccessibilityProvider: FlashSource {
   private static func focusedOrFirstWindow(in app: AXUIElement) -> AXUIElement? {
     for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
       if let window = elementAttribute(app, attribute as String),
-        role(of: window) == "AXWindow"
+        isTopLevelInteractionSurface(window)
       {
         return window
       }
@@ -445,10 +457,33 @@ public final class AccessibilityProvider: FlashSource {
       == .success,
       let windows = windowsRaw as? [AXUIElement]
     {
-      return windows.first { role(of: $0) == "AXWindow" }
+      return windows.first { isTopLevelInteractionSurface($0) }
     }
     return nil
   }
+
+  private static func isTopLevelInteractionSurface(_ element: AXUIElement) -> Bool {
+    if let role = role(of: element), topLevelInteractionSurfaceRoles.contains(role) {
+      return true
+    }
+    guard let subrole = stringAttribute(element, kAXSubroleAttribute as String) else {
+      return false
+    }
+    return topLevelInteractionSurfaceSubroles.contains(subrole)
+  }
+
+  private static let topLevelInteractionSurfaceRoles: Set<String> = [
+    "AXWindow",
+    "AXPopover",
+  ]
+
+  private static let topLevelInteractionSurfaceSubroles: Set<String> = [
+    "AXDialog",
+    "AXFloatingWindow",
+    "AXPopover",
+    "AXSheet",
+    "AXSystemDialog",
+  ]
 
   private func walk(
     _ element: AXUIElement,
@@ -458,6 +493,7 @@ public final class AccessibilityProvider: FlashSource {
     pid: pid_t,
     insideClickable: Bool,
     insideWebArea: Bool,
+    insideExtensionDocument: Bool,
     parentRole: String?,
     idPrefix: String,
     fanoutBudget: Int,
@@ -473,7 +509,7 @@ public final class AccessibilityProvider: FlashSource {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 11 else { return }
+    guard err == .success, let vals = valuesRef as? [Any], vals.count == 12 else { return }
 
     let role = vals[0] as? String
     let posValue = Self.axValue(vals[1])
@@ -482,9 +518,11 @@ public final class AccessibilityProvider: FlashSource {
     let allChildren = vals[4] as? [AXUIElement]
     let label =
       Self.stringValue(vals[5]) ?? Self.stringValue(vals[6]) ?? Self.stringValue(vals[7])
-    let url = Self.urlValue(vals[8])
+    let url = Self.urlValue(vals[8]) ?? Self.urlValue(vals[11])
     let hidden = (vals[9] as? Bool) ?? false
     let subrole = vals[10] as? String
+    let currentOrAncestorInsideExtensionDocument =
+      insideExtensionDocument || Self.isExtensionDocumentURL(url)
 
     // Role allowlist: web pages use the narrower Vimium-equivalent set
     // (true semantic controls only); native apps use the broader set
@@ -500,10 +538,15 @@ public final class AccessibilityProvider: FlashSource {
     // are filtered out while genuine click targets like Slack channels
     // come through.
     let isRowOrCellRole = role == "AXRow" || role == "AXCell"
+    let isExtensionPopupPressRole =
+      insideWebArea
+      && currentOrAncestorInsideExtensionDocument
+      && (role.map { Self.webExtensionPopupPressRoles.contains($0) } ?? false)
     let baseAllowlist = insideWebArea ? Self.webClickableRoles : Self.roles
     var roleAllowed =
       role.map { baseAllowlist.contains($0) } ?? false
       || (insideWebArea && isRowOrCellRole)
+      || isExtensionPopupPressRole
     if roleAllowed, role == "AXImage", insideClickable {
       roleAllowed = false
     }
@@ -600,7 +643,7 @@ public final class AccessibilityProvider: FlashSource {
         // HTML <tr>/<td> stays filtered while Slack/Discord/Electron
         // channel rows (which expose AXPress) come through; everything
         // else is confirmed.
-        if role == "AXImage" || (insideWebArea && isRowOrCell) {
+        if role == "AXImage" || (insideWebArea && isRowOrCell) || isExtensionPopupPressRole {
           state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
         } else {
           state.confirmedTargets.append(candidate)
@@ -642,6 +685,7 @@ public final class AccessibilityProvider: FlashSource {
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
     let nowInsideWebArea = insideWebArea || role == "AXWebArea"
+    let nowInsideExtensionDocument = currentOrAncestorInsideExtensionDocument
 
     // Concurrent fan-out fires at the first multi-child node on each
     // walk path, up to `maxFanoutLevels` times per path. The original
@@ -663,6 +707,7 @@ public final class AccessibilityProvider: FlashSource {
       let capturePid = pid
       let captureInsideClickable = nowInsideClickable
       let captureInsideWebArea = nowInsideWebArea
+      let captureInsideExtensionDocument = nowInsideExtensionDocument
       let captureParentRole = role
       let captureDepth = depth
       let captureIdPrefix = idPrefix
@@ -682,6 +727,7 @@ public final class AccessibilityProvider: FlashSource {
           pid: capturePid,
           insideClickable: captureInsideClickable,
           insideWebArea: captureInsideWebArea,
+          insideExtensionDocument: captureInsideExtensionDocument,
           parentRole: captureParentRole,
           idPrefix: childPrefix,
           fanoutBudget: captureNewBudget,
@@ -705,6 +751,7 @@ public final class AccessibilityProvider: FlashSource {
         pid: pid,
         insideClickable: nowInsideClickable,
         insideWebArea: nowInsideWebArea,
+        insideExtensionDocument: nowInsideExtensionDocument,
         parentRole: role,
         idPrefix: idPrefix,
         fanoutBudget: fanoutBudget,
@@ -750,6 +797,19 @@ public final class AccessibilityProvider: FlashSource {
     }
     return NSScreen.main?.frame.height ?? 1080
   }
+
+  public static func isExtensionDocumentURL(_ value: String?) -> Bool {
+    guard let value,
+      let scheme = URL(string: value)?.scheme?.lowercased()
+    else { return false }
+    return extensionDocumentSchemes.contains(scheme)
+  }
+
+  private static let extensionDocumentSchemes: Set<String> = [
+    "chrome-extension",
+    "moz-extension",
+    "safari-web-extension",
+  ]
 
   private static func childrenIncludingVisibleRows(
     for element: AXUIElement,

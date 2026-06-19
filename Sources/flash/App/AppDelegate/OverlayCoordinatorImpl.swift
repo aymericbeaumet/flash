@@ -34,6 +34,7 @@ extension AppDelegate {
       Self.pointIsInMenuBar(click.location),
       !activationInFlight
     {
+      noteMenuBarInteraction(reason: "pointer_click")
       FlashLog.trace("[mode] pointer_in_menu_bar mode=\(flashMode) keep_mode=true")
       if !currentHints.isEmpty {
         overlay.hide()

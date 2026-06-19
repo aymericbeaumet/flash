@@ -245,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeCaptureVerificationToken: UInt64 = 0
   var normalModePointerHandoffToken: UInt64 = 0
   var normalModePointerHandoffActive = false
+  var menuBarInteractionRecaptureSuppressedUntil: Date?
   var normalModePendingCommandToken: UInt64 = 0
   var insertFocusExitProbeToken: UInt64 = 0
   var insertFocusOwnerPID: pid_t?
@@ -506,11 +507,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
           self.suppressEditableFocus(for: app.processIdentifier)
         }
         self.cancelOverlay()
-        self.scheduleNormalModeRecapture()
+        if self.shouldScheduleNormalModeRecaptureAfterWorkspaceActivation() {
+          self.scheduleNormalModeRecapture()
+        }
       } else {
         self.statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
         self.cancelOverlay()
-        self.scheduleNormalModeRecapture()
+        if self.shouldScheduleNormalModeRecaptureAfterWorkspaceActivation() {
+          self.scheduleNormalModeRecapture()
+        }
       }
     }
     let activeSpace = nc.addObserver(

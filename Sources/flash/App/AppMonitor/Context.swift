@@ -92,7 +92,11 @@ extension AppMonitor {
     guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
     else { return nil }
     return WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
-      .first { $0.layer == 0 && $0.pid == pid && $0.pid != getpid() }?
+      .first {
+        WindowSnapshot.isInteractionSurfaceLayer($0.layer)
+          && $0.pid == pid
+          && $0.pid != getpid()
+      }?
       .nsBounds
   }
 
@@ -104,13 +108,23 @@ extension AppMonitor {
     else { return nil }
 
     for entry in WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()) {
-      guard entry.layer == 0, entry.pid > 0, entry.pid != getpid(),
+      guard WindowSnapshot.isInteractionSurfaceLayer(entry.layer),
+        entry.pid > 0,
+        entry.pid != getpid(),
         let app = NSRunningApplication(processIdentifier: entry.pid),
         !app.isTerminated,
-        app.bundleIdentifier != ignoredBundleIdentifier
+        app.bundleIdentifier != ignoredBundleIdentifier,
+        !Self.systemChromeBundleIdentifiers.contains(app.bundleIdentifier ?? "")
       else { continue }
       return makeContext(for: app, frontWindowFrame: entry.nsBounds)
     }
     return nil
   }
+
+  private static let systemChromeBundleIdentifiers: Set<String> = [
+    "com.apple.controlcenter",
+    "com.apple.dock",
+    "com.apple.notificationcenterui",
+    "com.apple.systemuiserver",
+  ]
 }

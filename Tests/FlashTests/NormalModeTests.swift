@@ -295,12 +295,12 @@ final class NormalModeTests: XCTestCase {
       Scenario(
         name: "custom dropdown option waits for popup settle",
         snapshot: focusSnapshot(
-          .transientInteraction(reason: "role:AXListItem"), role: "AXListItem"),
+          .transientInteraction(reason: .role("AXListItem")), role: "AXListItem"),
         expected: .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs)),
       Scenario(
         name: "Bitwarden/extension popup waits for popup settle",
         snapshot: focusSnapshot(
-          .transientInteraction(reason: "url:moz-extension"),
+          .transientInteraction(reason: .extensionDocument(scheme: "moz-extension")),
           role: "AXWebArea",
           documentURL: "moz-extension://vault/popup.html"),
         expected: .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs)),
@@ -369,21 +369,21 @@ final class NormalModeTests: XCTestCase {
       Scenario(
         name: "browser listbox option is transient",
         role: "AXOption",
-        expected: .transientInteraction(reason: "role:AXOption")),
+        expected: .transientInteraction(reason: .role("AXOption"))),
       Scenario(
         name: "native menu item is transient",
         role: "AXMenuItem",
-        expected: .transientInteraction(reason: "role:AXMenuItem")),
+        expected: .transientInteraction(reason: .role("AXMenuItem"))),
       Scenario(
         name: "row under a listbox ancestor is transient",
         role: "AXStaticText",
         ancestorRoles: ["AXList"],
-        expected: .transientInteraction(reason: "ancestor:AXList")),
+        expected: .transientInteraction(reason: .ancestorRole("AXList"))),
       Scenario(
         name: "expanded popup button is transient",
         role: "AXPopUpButton",
         expanded: true,
-        expected: .transientInteraction(reason: "expanded:AXPopUpButton")),
+        expected: .transientInteraction(reason: .expandedRole("AXPopUpButton"))),
       Scenario(
         name: "closed popup button is stable non-editable",
         role: "AXPopUpButton",
@@ -393,17 +393,17 @@ final class NormalModeTests: XCTestCase {
         name: "browser extension popup is transient",
         role: "AXWebArea",
         documentURL: "moz-extension://abc/popup.html",
-        expected: .transientInteraction(reason: "url:moz-extension")),
+        expected: .transientInteraction(reason: .extensionDocument(scheme: "moz-extension"))),
       Scenario(
         name: "chromium extension popup is transient",
         role: "AXWebArea",
         documentURL: "chrome-extension://abc/popup.html",
-        expected: .transientInteraction(reason: "url:chrome-extension")),
+        expected: .transientInteraction(reason: .extensionDocument(scheme: "chrome-extension"))),
       Scenario(
         name: "native floating popup window is transient",
         role: "AXGroup",
         windowSubrole: "AXFloatingWindow",
-        expected: .transientInteraction(reason: "window:AXFloatingWindow")),
+        expected: .transientInteraction(reason: .windowSubrole("AXFloatingWindow"))),
     ]
 
     for scenario in scenarios {
@@ -457,7 +457,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       InsertModeFocusMachine.normalPointerHandoffDecision(
         snapshot: focusSnapshot(
-          .transientInteraction(reason: "role:AXMenuItem"), role: "AXMenuItem")),
+          .transientInteraction(reason: .role("AXMenuItem")), role: "AXMenuItem")),
       .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
     XCTAssertEqual(
       InsertModeFocusMachine.normalPointerHandoffDecision(snapshot: nil), .recaptureNormal)
@@ -469,7 +469,7 @@ final class NormalModeTests: XCTestCase {
     // classifies as transient but is persistent — pre-budget it spun the
     // resamplers forever and welded the user into NORMAL.
     let persistentTransient = focusSnapshot(
-      .transientInteraction(reason: "ancestor:AXList"), role: "AXStaticText")
+      .transientInteraction(reason: .ancestorRole("AXList")), role: "AXStaticText")
 
     // Pointer handoff: resample while within budget, then enter INSERT — a
     // deliberate click on persistent content must hand the keyboard over.
@@ -509,6 +509,44 @@ final class NormalModeTests: XCTestCase {
         snapshot: focusSnapshot(.stableNonEditable, role: "AXButton"),
         pointerPressed: false,
         attempt: maxAttempts + 10),
+      .exitToNormal)
+  }
+
+  func testExtensionPopupTransientBudgetRecapturesOrExitsAfterExhaustion() {
+    let maxAttempts = InsertModeFocusMachine.transientResampleMaxAttempts
+    let extensionPopup = focusSnapshot(
+      .transientInteraction(reason: .extensionDocument(scheme: "chrome-extension")),
+      role: "AXListItem",
+      documentURL: "chrome-extension://vault/popup.html")
+
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: extensionPopup,
+        attempt: maxAttempts - 1),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(
+      InsertModeFocusMachine.normalPointerHandoffDecision(
+        snapshot: extensionPopup,
+        attempt: maxAttempts),
+      .recaptureNormal)
+
+    XCTAssertEqual(
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: extensionPopup,
+        pointerPressed: false,
+        attempt: maxAttempts - 1),
+      .resampleAfter(milliseconds: InsertModeFocusMachine.transientResampleMs))
+    XCTAssertEqual(
+      InsertModeFocusMachine.insertFocusChangeDecision(
+        focusedPID: pid_t(42),
+        eventPID: pid_t(42),
+        armedEditablePID: pid_t(42),
+        snapshot: extensionPopup,
+        pointerPressed: false,
+        attempt: maxAttempts),
       .exitToNormal)
   }
 
@@ -834,6 +872,33 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.first, 0)
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.prefix(4), [0, 10, 30, 60])
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.last, 1_400)
+  }
+
+  func testWorkspaceActivationRecaptureSkipsRecentMenuBarInteractions() {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let activeSuppression = now.addingTimeInterval(0.5)
+    let expiredSuppression = now.addingTimeInterval(-0.1)
+
+    XCTAssertFalse(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: activeSuppression,
+        now: now))
+    XCTAssertTrue(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: expiredSuppression,
+        now: now))
+    XCTAssertTrue(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .insert,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        now: now))
   }
 
   func testCommandLineBufferIncludesPrompt() {
