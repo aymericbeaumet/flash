@@ -1343,12 +1343,25 @@ extension AppDelegate {
   }
 
   var shouldCaptureNormalModeInput: Bool {
-    guard flashMode == .normal, currentHints.isEmpty, !activationInFlight else { return false }
-    switch overlay.inputMode {
-    case .commandLine, .modal, .candidateFinder:
-      return false
+    Self.normalModeShouldRecaptureAfterActionDispatch(
+      mode: flashMode,
+      overlayInputMode: overlay.inputMode,
+      hasHints: !currentHints.isEmpty,
+      activationInFlight: activationInFlight)
+  }
+
+  static func normalModeShouldRecaptureAfterActionDispatch(
+    mode: FlashMode,
+    overlayInputMode: OverlayInputMode,
+    hasHints: Bool,
+    activationInFlight: Bool
+  ) -> Bool {
+    guard mode == .normal, !hasHints, !activationInFlight else { return false }
+    switch overlayInputMode {
     case .hints, .normal:
       return true
+    case .commandLine, .modal, .candidateFinder:
+      return false
     }
   }
 

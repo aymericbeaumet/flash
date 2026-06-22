@@ -2514,6 +2514,64 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(second.command)
   }
 
+  func testQuoteAppChordsCanBeChainedAsFreshNormalModeSequences() {
+    let mappings = [
+      ModeMapping(key: key("'a"), action: .flashCommand(.openApp(name: "Alacritty"))),
+      ModeMapping(key: key("'s"), action: .flashCommand(.openApp(name: "Slack"))),
+    ]
+
+    let firstPrefix = transition(chars: "'", mappings: mappings)
+    XCTAssertEqual(firstPrefix.pending, "'")
+    let firstAction = transition(pending: firstPrefix.pending, chars: "a", mappings: mappings)
+    XCTAssertEqual(firstAction.command, .openApp(name: "Alacritty"))
+    XCTAssertEqual(firstAction.pending, "")
+
+    let secondPrefix = transition(pending: firstAction.pending, chars: "'", mappings: mappings)
+    XCTAssertEqual(secondPrefix.pending, "'")
+    let secondAction = transition(pending: secondPrefix.pending, chars: "s", mappings: mappings)
+    XCTAssertEqual(secondAction.command, .openApp(name: "Slack"))
+    XCTAssertEqual(secondAction.pending, "")
+  }
+
+  func testNormalModeActionDispatchRecapturesOnlyForIdleNormalSurfaces() {
+    XCTAssertTrue(
+      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false))
+    XCTAssertTrue(
+      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+        mode: .normal,
+        overlayInputMode: .hints,
+        hasHints: false,
+        activationInFlight: false))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+        mode: .insert,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+        mode: .normal,
+        overlayInputMode: .commandLine,
+        hasHints: false,
+        activationInFlight: false))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: true,
+        activationInFlight: false))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldRecaptureAfterActionDispatch(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: true))
+  }
+
   func testSpaceTokenCanBeUsedInNormalModeSequences() {
     let mappings = [
       ModeMapping(key: key("<space>c"), action: .flashCommand(.reload(force: false)))

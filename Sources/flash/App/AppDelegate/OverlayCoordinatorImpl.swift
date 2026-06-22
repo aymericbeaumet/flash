@@ -136,7 +136,7 @@ extension AppDelegate {
       schedulePendingNormalModeCommandIfNeeded()
       return
     }
-    performMappingCommand(action, repeatCount: repeatCount)
+    dispatchNormalModeAction(action, repeatCount: repeatCount, reason: "key_match")
   }
 
   private func schedulePendingNormalModeCommandIfNeeded() {
@@ -155,7 +155,33 @@ extension AppDelegate {
       guard self.flashMode == .normal, self.overlay.normalModePending == pendingText else { return }
       self.overlay.normalModePending = ""
       self.normalModePendingCommandToken &+= 1
-      self.performMappingCommand(pending.action, repeatCount: pending.repeatCount)
+      self.dispatchNormalModeAction(
+        pending.action,
+        repeatCount: pending.repeatCount,
+        reason: "pending_timeout")
+    }
+  }
+
+  private func dispatchNormalModeAction(
+    _ action: MappingCommand,
+    repeatCount: Int,
+    reason: String
+  ) {
+    // The accepted mapping owns the whole pending sequence. Clear it before
+    // any side effect can activate another app, so a fast follow-up chord
+    // starts from a fresh stack instead of leaking into the newly focused
+    // window while Flash is recapturing normal mode.
+    overlay.normalModePending = ""
+    FlashLog.trace(
+      "[input] normal dispatch reason=\(reason) action=\(action.diagnosticDescription)")
+    performMappingCommand(action, repeatCount: repeatCount)
+    if Self.normalModeShouldRecaptureAfterActionDispatch(
+      mode: flashMode,
+      overlayInputMode: overlay.inputMode,
+      hasHints: !currentHints.isEmpty,
+      activationInFlight: activationInFlight)
+    {
+      scheduleNormalModeRecapture()
     }
   }
 
