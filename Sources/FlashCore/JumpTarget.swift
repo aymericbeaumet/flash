@@ -19,6 +19,13 @@ public struct JumpTarget: @unchecked Sendable {
   /// commit path can re-activate by pid without re-querying NSWorkspace.
   public let pid: pid_t?
   public let activate: ((JumpAction) -> Bool)?
+  /// Resolves a point — in NSScreen bottom-left coords — that is guaranteed to
+  /// sit on the target, computed lazily at commit so it costs nothing during
+  /// the hint walk. Providers set this for surfaces whose `frame` is a union
+  /// bounding box that may have empty interior (a multi-line web link whose
+  /// box centre falls in the gap between lines). nil means "use the frame
+  /// centre". Returning nil from the closure also means "use the centre".
+  public let resolveClickPoint: (() -> CGPoint?)?
   public let providerID: String
   /// Whether committing a click on this target should switch Flash into
   /// insert mode. The owning provider decides: a typing surface (text
@@ -52,6 +59,7 @@ public struct JumpTarget: @unchecked Sendable {
     url: String? = nil,
     pid: pid_t? = nil,
     activate: ((JumpAction) -> Bool)? = nil,
+    resolveClickPoint: (() -> CGPoint?)? = nil,
     entersInsertMode: Bool = false,
     preferHostClick: Bool = false,
     important: Bool = false,
@@ -64,6 +72,7 @@ public struct JumpTarget: @unchecked Sendable {
     self.url = url
     self.pid = pid
     self.activate = activate
+    self.resolveClickPoint = resolveClickPoint
     self.entersInsertMode = entersInsertMode
     self.preferHostClick = preferHostClick
     self.important = important

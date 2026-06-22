@@ -645,6 +645,23 @@ public final class AccessibilityProvider: FlashSource {
         capturedRole == "AXTab"
         || (subrole == "AXTabButton"
           && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
+      // Multi-line web links report a union bounding box whose centre can fall
+      // in the empty gap between wrapped lines, so a synthesized click there
+      // misses. Resolve the first character's box centre instead — guaranteed
+      // on the element — lazily at commit (no hint-walk cost) and only when the
+      // target is clearly multi-line; single-line targets keep the proven
+      // frame centre.
+      let resolveClickPoint: (() -> CGPoint?)? =
+        insideWebArea
+        ? {
+          guard
+            let charRect = AXAttribute.boundsForRange(
+              captured, location: 0, length: 1, screenH: screenH),
+            frame.height > charRect.height * 1.5
+          else { return nil }
+          return CGPoint(x: charRect.midX, y: charRect.midY)
+        }
+        : nil
       let candidate = JumpTarget(
         id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
         frame: frame,
@@ -653,6 +670,7 @@ public final class AccessibilityProvider: FlashSource {
         url: url,
         pid: pid,
         activate: activate,
+        resolveClickPoint: resolveClickPoint,
         entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
         preferHostClick: preferHostClick,
         important: isTabAnchor,

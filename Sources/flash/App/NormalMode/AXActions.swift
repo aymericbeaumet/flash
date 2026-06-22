@@ -51,6 +51,11 @@ extension NormalModeDispatcher {
     }
   }
 
+  /// Stamped on every Flash-synthesized keyboard event (via `.eventSourceUserData`)
+  /// so the normal-mode key tap never swallows our own output — `/`→⌘F, undo,
+  /// tab chords, ⌘V paste, etc. Mirrors `ActionDispatcher.syntheticMouseEventTag`.
+  static let syntheticKeyEventTag: Int64 = 0x46_4C_53_4B  // "FLSK"
+
   @discardableResult
   static func sendKey(
     virtualKey: CGKeyCode,
@@ -64,6 +69,8 @@ extension NormalModeDispatcher {
     else { return false }
     down.flags = flags
     up.flags = flags
+    down.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+    up.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
     down.postToPid(pid)
     up.postToPid(pid)
     return true

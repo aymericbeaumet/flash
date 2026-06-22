@@ -130,21 +130,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var currentPrefix: String = ""
   var pendingAction: JumpAction = .leftClick
   var pendingHintCommitBehavior: HintCommitBehavior = .click
-  var flashMode: FlashMode = .insert
-  /// Advanced mode: the normal-mode/INSERT mode system is active (driven by
-  /// an `enter_normal_mode` binding). Gates capture, the active-window
-  /// border, and the focus-exit machinery — NOT the status bar's visibility.
-  var modeBadgeEnabled = false
+  /// The single source of truth for the app's mode. Every UI-facing fact
+  /// (overlay input routing, status bar, badge, capture, mapping scope) is a
+  /// projection of `modeStore.mode`; transitions go through `dispatchMode`.
+  let modeStore = ModeStore()
+  /// The coarse insert/normal axis, projected from the unified mode.
+  var flashMode: FlashMode { modeStore.mode.flashMode }
+  /// Advanced mode (the normal/insert system) is configured — true unless the
+  /// mode is `.disabled`, i.e. the user has an `enter_normal_mode` binding.
+  /// Gates capture and the active-window border, NOT the status bar's
+  /// visibility.
+  var modeBadgeEnabled: Bool { modeStore.mode != .disabled }
+  /// Session keyboard tap that makes idle-NORMAL plain-key capture independent
+  /// of the key window (see `NormalModeKeyTap`). nil if it couldn't be created;
+  /// the panel-based recapture path remains the fallback.
+  var normalModeKeyTap: NormalModeKeyTap?
   /// Whether the persistent top status bar is shown. Mirrors
   /// `config.statusBar.enabled` and is the sole condition for the bar — set
   /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
   var statusBarVisible = false
   var normalModeTargetPID: pid_t?
-  /// Mode to restore on `finishCommandLineInteraction` when the verb that
-  /// opened the modal asked for it (`restore_mode=1`). nil means "exit to
-  /// the default — normal mode". See ``URLCommand/flashlight`` /
-  /// ``URLCommand/emojiPicker``.
-  var commandLineRestoreModeTarget: FlashMode?
   var candidateFinderCandidates: [Candidate] = [] {
     didSet {
       // Each flashlight session freezes one source snapshot. Bump the
@@ -252,18 +257,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeCaptureVerificationToken: UInt64 = 0
   var normalModeCaptureRecoveryToken: UInt64 = 0
   var normalModeCaptureRecoveryRecaptureToken: UInt64?
-  var pendingInsertModeTargetPID: pid_t?
   var menuBarInteractionRecaptureSuppressedUntil: Date?
   var contextMenuInteractionRecaptureSuppressedUntil: Date?
   var pointerInsertHandoffRecaptureSuppressedUntil: Date?
   var pointerInsertHandoffToken: UInt64 = 0
   var normalModePendingCommandToken: UInt64 = 0
-  var insertModeLockedUntilExplicitNormal = false
-  var insertFocusExitProbeToken: UInt64 = 0
-  var insertEditableFocusRepairToken: UInt64 = 0
-  var insertFocusOwnerPID: pid_t?
-  var insertEditableFocusExitPID: pid_t?
-  var insertNavigationExitToken: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var windowGeometryChangeToken: UInt64 = 0
   var windowGeometryChangeInProgress = false
@@ -362,6 +360,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self?.performMappingCommand(action)
       },
       currentMode: { [weak self] in self?.flashMode ?? .insert })
+    modeStore.perform = { [weak self] effects, previous, next in
+      self?.applyModeEffects(effects, previous: previous, next: next)
+    }
+    // Robust idle-NORMAL capture regardless of key window. Falls back to the
+    // panel-based recapture path if the tap can't be created.
+    normalModeKeyTap = NormalModeKeyTap(
+      shouldCapture: { [weak self] in self?.shouldCaptureNormalModeInput ?? false },
+      handleKeyDown: { [weak self] event in self?.overlay.processNormalModeKey(event) })
+    normalModeKeyTap?.start()
     refreshEffectiveMappings(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
     if let app = NSWorkspace.shared.frontmostApplication,

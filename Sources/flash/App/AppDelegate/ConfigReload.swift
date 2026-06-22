@@ -138,7 +138,6 @@ extension AppDelegate {
     configureDebugServer(for: cfg)
     invalidateCandidateFinderCaches(reason: "config_reload", refreshApps: true)
     monitor.updateConfig(cfg)
-    modeBadgeEnabled = hasNormalModeBinding(cfg)
     // The status bar's visibility is an explicit, standalone config switch —
     // it is NOT derived from advanced mode. `[statusbar] enabled` alone
     // decides whether the bar (and its reserved screen space) appears.
@@ -150,11 +149,9 @@ extension AppDelegate {
       statusBarController?.stop()
       overlay.setStatusRightText("")
     }
-    if !modeBadgeEnabled, flashMode == .normal {
-      enterInsertMode(
-        reason: .advancedModeDisabled,
-        force: true)
-    }
+    // Advanced mode is on iff an `enter_normal_mode` binding exists. Turning it
+    // off drops to a non-capturing insert; the reducer re-renders either way.
+    dispatchMode(.advancedModeChanged(enabled: hasNormalModeBinding(cfg)))
     applyModeOverlay()
     // Recompute the effective mappings (config defaults + plugin mappings)
     // for the frontmost app and push them to both the overlay and the Carbon
@@ -245,11 +242,7 @@ extension AppDelegate {
   func selectInitialModeIfNeeded() {
     guard !selectedInitialMode else { return }
     selectedInitialMode = true
-    if modeBadgeEnabled {
-      enterNormalMode()
-    } else {
-      applyModeOverlay()
-    }
+    dispatchMode(.startup(advancedEnabled: hasNormalModeBinding(config)))
   }
 
   func applySystemStatusBarSpaceReservation(enabled: Bool) {

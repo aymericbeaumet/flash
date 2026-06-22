@@ -70,25 +70,6 @@ enum NormalModeInterpreter {
     let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
     if keyCode == 53 { return .consume }
 
-    if let mapping = modifiedMapping(
-      keyCode: keyCode,
-      modifierFlags: independent,
-      mappings: mappings)
-    {
-      return .action(mapping.action)
-    }
-
-    if independent.contains(.command) || independent.contains(.option) {
-      // Hermetic normal mode: any Cmd/Opt-prefixed chord without an
-      // explicit mapping is swallowed. If the user wants Cmd+W to
-      // close a tab, Cmd+L to focus the URL bar, etc., they bind it
-      // in `[mode.normal.mappings]`. The previous "forward Cmd+letter
-      // to the focused app" path leaked OS shortcuts (Cmd+Tab,
-      // Cmd+Shift+T, Cmd+L) through normal mode and silently
-      // dropped capture into the underlying window.
-      return .consume
-    }
-
     let hasControl = independent.contains(.control)
     let ignoredChar = firstCharacter(charactersIgnoringModifiers)?.lowercased().first
     let actualChar = firstCharacter(characters)
@@ -104,6 +85,7 @@ enum NormalModeInterpreter {
 
     let keys = mappingKeys(
       keyCode: keyCode,
+      modifierFlags: independent,
       hasControl: hasControl,
       hasShift: independent.contains(.shift),
       ignoredChar: ignoredChar,
@@ -141,6 +123,13 @@ enum NormalModeInterpreter {
         charactersIgnoringModifiers: charactersIgnoringModifiers,
         mappings: mappings)
     }
+    // Hermetic normal mode: any Cmd/Opt-prefixed chord without an
+    // explicit mapping is swallowed. If the user wants Cmd+W to
+    // close a tab, Cmd+L to focus the URL bar, etc., they bind it
+    // in `[mode.normal.mappings]`. The previous "forward Cmd+letter
+    // to the focused app" path leaked OS shortcuts (Cmd+Tab,
+    // Cmd+Shift+T, Cmd+L) through normal mode and silently
+    // dropped capture into the underlying window.
     return .consume
   }
 
@@ -187,33 +176,24 @@ enum NormalModeInterpreter {
     return value
   }
 
-  private static func modifiedMapping(
-    keyCode: UInt16,
-    modifierFlags: NSEvent.ModifierFlags,
-    mappings: CompiledMappings
-  ) -> ModeMapping? {
-    let carbonModifiers = Self.carbonModifiers(from: modifierFlags)
-    guard carbonModifiers != 0 else { return nil }
-    return mappings.chordMapping(modifiers: carbonModifiers, virtualKey: UInt32(keyCode))
-  }
-
-  private static func carbonModifiers(from flags: NSEvent.ModifierFlags) -> UInt32 {
-    let independent = flags.intersection(.deviceIndependentFlagsMask)
-    var out: UInt32 = 0
-    if independent.contains(.command) { out |= UInt32(cmdKey) }
-    if independent.contains(.shift) { out |= UInt32(shiftKey) }
-    if independent.contains(.control) { out |= UInt32(controlKey) }
-    if independent.contains(.option) { out |= UInt32(optionKey) }
-    return out
-  }
-
   private static func mappingKeys(
     keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
     hasControl: Bool,
     hasShift: Bool,
     ignoredChar: Character?,
     actualChar: Character?
   ) -> [String] {
+    let modified = modifiedKeyAtom(
+      keyCode: keyCode,
+      modifierFlags: modifierFlags,
+      ignoredChar: ignoredChar)
+    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if let modified,
+      independent.contains(.command) || independent.contains(.option) || independent.contains(.control)
+    {
+      return [modified]
+    }
     if hasControl {
       // Prefer `charactersIgnoringModifiers` when it gives a real
       // letter/digit, since it's keyboard-layout-aware. Fall back to
@@ -252,7 +232,46 @@ enum NormalModeInterpreter {
     default:
       break
     }
+    if let modified, !keys.contains(modified) {
+      keys.append(modified)
+    }
     return keys
+  }
+
+  private static func modifiedKeyAtom(
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    ignoredChar: Character?
+  ) -> String? {
+    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    var modifiers: [String] = []
+    if independent.contains(.command) { modifiers.append("cmd") }
+    if independent.contains(.control) { modifiers.append("ctrl") }
+    if independent.contains(.option) { modifiers.append("alt") }
+    if independent.contains(.shift) { modifiers.append("shift") }
+    guard !modifiers.isEmpty else { return nil }
+
+    // Keep the historical layout-aware spelling for plain Ctrl+letter/digit
+    // (`ctrl-i`, not `ctrl+i`). Other modified chords are Carbon-style
+    // physical-key chords and use HotkeySyntax's ANSI key names.
+    if modifiers == ["ctrl"] {
+      if let ignoredChar, ignoredChar.isASCII,
+        ignoredChar.isLetter || ignoredChar.isNumber
+      {
+        return NormalModeInterpreter.canonicalModifiedKeyAtom(
+          modifiers: modifiers,
+          key: String(ignoredChar))
+      }
+      if let letter = keyCodeLetter(keyCode) {
+        return NormalModeInterpreter.canonicalModifiedKeyAtom(
+          modifiers: modifiers,
+          key: String(letter))
+      }
+    }
+    guard let key = HotkeySyntax.canonicalKeyName(virtualKey: UInt32(keyCode)) else {
+      return nil
+    }
+    return NormalModeInterpreter.canonicalModifiedKeyAtom(modifiers: modifiers, key: key)
   }
 
   /// Map a hardware keyCode to the lowercase ASCII letter/digit it

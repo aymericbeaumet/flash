@@ -24,74 +24,89 @@ extension AppDelegate {
     FlashLog.trace(
       "[mode] enter_normal from=\(flashMode) hints=\(currentHints.count) "
         + "in_flight=\(activationInFlight)")
-    transitionMode(to: .normal, reason: "explicit_normal")
+    dispatchMode(.enterNormal(targetPID: nil))
   }
 
   func enterInsertMode(
     reason: InsertModeTransitionReason = .explicitCommand,
-    force: Bool = false,
     targetPID: pid_t? = nil
   ) {
-    if flashMode == .normal, modeBadgeEnabled, !force,
-      !Self.normalModeMayEnterInsert(reason: reason)
-    {
-      FlashLog.debug(
-        "[mode] enter_insert_denied reason=\(reason.logValue) "
-          + "rule=normal_requires_user_mouse_or_input")
-      normalModePendingCommandToken &+= 1
-      clearTransientHintState(reason: "enter_insert_denied_\(reason.logValue)")
-      resetModeInputState()
-      if overlay.inputMode == .commandLine || overlay.inputMode == .candidateFinder
-        || overlay.inputMode == .modal
-      {
-        overlay.hide()
-      }
-      applyModeOverlay()
-      scheduleNormalModeRecapture()
-      return
-    }
-    pendingInsertModeTargetPID = Self.insertEntryTargetPID(
+    let pid = Self.insertEntryTargetPID(
       explicitTargetPID: targetPID,
       currentMode: flashMode,
       normalModeTargetPID: normalModeTargetPID)
-    FlashLog.debug("[mode] insert reason=\(reason.logValue)")
     FlashLog.trace(
       "[mode] enter_insert reason=\(reason.logValue) from=\(flashMode) hints=\(currentHints.count) "
         + "in_flight=\(activationInFlight)")
-    transitionMode(
-      to: .insert,
-      reason: reason.logValue,
-      lockInsert: reason.locksInsertMode,
-      insertReason: reason)
+    dispatchMode(.enterInsert(reason: reason, targetPID: pid))
   }
 
-  private func transitionMode(
-    to nextMode: FlashMode,
-    reason: String,
-    lockInsert: Bool = false,
-    insertReason: InsertModeTransitionReason? = nil
-  ) {
-    let previousMode = flashMode
-    insertFocusExitProbeToken &+= 1
-    insertEditableFocusRepairToken &+= 1
-    insertFocusOwnerPID = nil
-    insertEditableFocusExitPID = nil
-    insertNavigationExitToken &+= 1
-    normalModePendingCommandToken &+= 1
-    insertModeLockedUntilExplicitNormal = nextMode == .insert && lockInsert
-    if nextMode != .insert {
-      pendingInsertModeTargetPID = nil
+  /// The single mutation entry point for the mode: feed the event through the
+  /// pure reducer, then perform the effects it returns.
+  func dispatchMode(_ event: ModeEvent) {
+    modeStore.dispatch(event)
+  }
+
+  /// Performs the effects the reducer emitted. The reducer DECIDES the
+  /// transition and what to sync; this just does the AppKit work, reusing the
+  /// existing routines. No decisions live here.
+  func applyModeEffects(_ effects: [ModeEffect], previous _: Mode, next: Mode) {
+    for effect in effects {
+      switch effect {
+      case .setMappingScope(let scope):
+        mappings.applyForFlashMode(scope)
+      case .clearTransientHintState:
+        // Reads the still-current overlay surface to tear down a command /
+        // modal we are leaving, then clears hint + input state.
+        closeModalStateForModeExit(reason: "mode_enter")
+        resetModeInputState()
+        clearTransientHintState(reason: "mode_enter")
+      case .renderSurface:
+        applyEnterBookkeeping(next)
+        applyModeOverlay()
+      case .scheduleRecapture:
+        scheduleNormalModeRecapture()
+      case .activateFocusedApp(let pid):
+        activateInsertTargetApp(pid)
+      case .hideOverlayIfIdle:
+        if currentHints.isEmpty { overlay.hide() }
+      }
     }
-    contextMenuInteractionRecaptureSuppressedUntil = nil
-    cancelPointerInsertHandoff(reason: "mode_transition_\(nextMode)_\(reason)")
-    resetModeInputState()
-    closeModalStateForModeExit(reason: "enter_\(nextMode)_\(reason)")
-    if previousMode != nextMode {
-      modeWillLeave(previousMode, to: nextMode, reason: reason)
-      flashMode = nextMode
+  }
+
+  /// Per-base-mode bookkeeping that must run before the surface is rendered.
+  private func applyEnterBookkeeping(_ next: Mode) {
+    switch next {
+    case .normal:
+      if let context = normalModeContext() {
+        normalModeTargetPID = context.processID
+        suppressEditableFocus(for: context.processID)
+      }
+    case .insert, .disabled:
+      normalModeTargetPID = nil
+    case .command, .modal:
+      break
     }
-    clearTransientHintState(reason: "enter_\(nextMode)_\(reason)")
-    modeDidEnter(nextMode, from: previousMode, reason: reason, insertReason: insertReason)
+  }
+
+  /// Re-activate the focused app on INSERT entry so its window reclaims key
+  /// status from the panel (the Messages "first keystroke dropped" fix).
+  private func activateInsertTargetApp(_ pid: pid_t?) {
+    let target = pid.flatMap { monitor.context(for: $0) } ?? currentNonFlashContext()
+    guard let target,
+      let app = NSRunningApplication(processIdentifier: target.processID),
+      !app.isTerminated
+    else { return }
+    RunningApplicationActivation.activate(app, options: [])
+  }
+
+  /// Map a projected mode label to the user-configured string.
+  func modeLabelText(_ label: ModeLabel) -> String {
+    switch label {
+    case .insert: return config.mode.labels.insert
+    case .normal: return config.mode.labels.normal
+    case .command: return config.mode.labels.command
+    }
   }
 
   func invalidateActivation(reason: String) {
@@ -128,127 +143,6 @@ extension AppDelegate {
     }
   }
 
-  private func modeWillLeave(_ mode: FlashMode, to nextMode: FlashMode, reason: String) {
-    FlashLog.trace("[mode] leave mode=\(mode) next=\(nextMode) reason=\(reason)")
-    switch mode {
-    case .insert:
-      windowGeometryChangeInProgress = false
-      windowGeometryChangeToken &+= 1
-      stopActiveWindowBorderTracking(reason: "leave_insert_\(reason)")
-      overlay.setActiveWindowBorder(around: nil)
-    case .normal:
-      normalModeRecaptureToken &+= 1
-      cancelNormalModeCaptureRecovery(reason: "leave_normal_\(reason)")
-      closeModalStateForModeExit(reason: "leave_normal_\(reason)")
-    }
-  }
-
-  private func modeDidEnter(
-    _ mode: FlashMode,
-    from previousMode: FlashMode,
-    reason: String,
-    insertReason: InsertModeTransitionReason?
-  ) {
-    FlashLog.trace("[mode] did_enter mode=\(mode) from=\(previousMode) reason=\(reason)")
-    // Re-register scope-bound Carbon hotkeys. `.normal`-scope shortcuts
-    // (e.g. cmd+tab) need to be unregistered on insert entry so the
-    // system handler can see the key combo again.
-    mappings.applyForFlashMode(mode)
-    switch mode {
-    case .normal:
-      modeDidEnterNormal(reason: reason)
-    case .insert:
-      modeDidEnterInsert(reason: reason, insertReason: insertReason)
-    }
-  }
-
-  private func modeDidEnterNormal(reason _: String) {
-    resetModeInputState()
-    if let context = normalModeContext() {
-      normalModeTargetPID = context.processID
-      suppressEditableFocus(for: context.processID)
-    }
-    applyModeOverlay()
-    scheduleNormalModeRecapture()
-  }
-
-  private func modeDidEnterInsert(reason: String, insertReason: InsertModeTransitionReason?) {
-    let insertTargetPID = pendingInsertModeTargetPID
-    pendingInsertModeTargetPID = nil
-    let insertTarget = insertTargetPID.flatMap { monitor.context(for: $0) } ?? currentNonFlashContext()
-    let panelKeyAtEntry = overlay.isKeyWindow
-    insertFocusOwnerPID = insertTarget?.processID
-    normalModeRecaptureToken &+= 1
-    normalModePendingCommandToken &+= 1
-    resetModeInputState()
-    normalModeTargetPID = nil
-    editableFocusSuppressedPID = nil
-    if currentHints.isEmpty {
-      overlay.hide()
-    }
-    applyModeOverlay()
-    // Stuck-input safeguard: explicitly re-activate the focused app so
-    // its main window reclaims key status from the overlay panel.
-    // Without this, apps like Messages can end up in a state where the
-    // text field shows focus (caret blinks) but the first few keystrokes
-    // land on the resigned panel instead of the field — the
-    // `[mode] insert_handoff_settled` trace previously captured this as
-    // `panel_key=true` 120ms after entry. Re-activating is idempotent
-    // when key already moved cleanly, defensive when it didn't.
-    if let target = insertTarget,
-      let app = NSRunningApplication(processIdentifier: target.processID),
-      !app.isTerminated
-    {
-      RunningApplicationActivation.activate(app, options: [])
-    }
-    traceInsertKeyHandoff(
-      target: insertTarget, panelKeyAtEntry: panelKeyAtEntry, reason: reason)
-    if Self.insertModeMayRepairEditableFocus(
-      reason: insertReason,
-      bundleIdentifier: insertTarget?.bundleIdentifier,
-      insertModeLocked: insertModeLockedUntilExplicitNormal)
-    {
-      repairSingleStrongEditableFocusIfNeeded(target: insertTarget, reason: reason)
-    }
-    if Self.insertModeMayArmEditableFocusExit(
-      bundleIdentifier: insertTarget?.bundleIdentifier,
-      insertModeLocked: insertModeLockedUntilExplicitNormal)
-    {
-      armEditableFocusExitIfNeeded(target: insertTarget, reason: reason)
-    }
-  }
-
-  /// Diagnostic trace for the INSERT key-window handoff (#1: Messages drops
-  /// the first keystroke). The overlay is a `.nonactivatingPanel`, so the
-  /// focused app stays the *active application* while the panel merely holds
-  /// the *key window*; on INSERT entry the panel resigns key via `orderOut`
-  /// and macOS is meant to hand key back to the app's window. Sample the
-  /// panel key state at entry and again after a short settle delay — if the
-  /// panel still holds key when the user would start typing, the first
-  /// keystroke lands on the resigned panel instead of the app.
-  private func traceInsertKeyHandoff(
-    target: AppContext?,
-    panelKeyAtEntry: Bool,
-    reason: String
-  ) {
-    let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
-    FlashLog.trace(
-      "[mode] insert_handoff reason=\(reason) "
-        + "target=\(target?.bundleIdentifier ?? "nil") "
-        + "pid=\(target.map { String($0.processID) } ?? "nil") "
-        + "panel_key_entry=\(panelKeyAtEntry) panel_key_now=\(overlay.isKeyWindow) "
-        + "frontmost=\(frontmost)")
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
-      guard let self else { return }
-      let frontmostLater =
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
-      FlashLog.trace(
-        "[mode] insert_handoff_settled reason=\(reason) "
-          + "panel_key=\(self.overlay.isKeyWindow) frontmost=\(frontmostLater) "
-          + "mode=\(self.flashMode)")
-    }
-  }
-
   func refreshCurrentModeSideEffects(reason: String) {
     switch flashMode {
     case .insert:
@@ -274,9 +168,10 @@ extension AppDelegate {
     // `core:ax.changed` fires for any AX mutation, so it's too noisy for that
     // use case; this dedicated event carries the focused window's frame and
     // pid so subscribers can filter on it directly.
-    if notification == kAXFocusedWindowChangedNotification as String
+    let isFocusChange =
+      notification == kAXFocusedWindowChangedNotification as String
       || notification == kAXMainWindowChangedNotification as String
-    {
+    if isFocusChange {
       var payload: [String: Any] = [
         "pid": Int(pid),
         "bundle_id": context.bundleIdentifier,
@@ -298,7 +193,16 @@ extension AppDelegate {
           frontWindowFrame: context.frontWindowFrame,
           pid: pid))
     }
-    beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
+    if isFocusChange {
+      // A window FOCUS change (switching windows/apps) is not a move — redraw
+      // the insert border at the newly-focused window in place. Routing focus
+      // changes through the move/resize "hide during change" path is what made
+      // the border flicker off (appear-then-vanish) on every app switch and on
+      // insert entry.
+      updateInsertModeActiveWindowBorder(reason: notification)
+    } else {
+      beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
+    }
   }
 
   func modeWillBeginWindowGeometryChange(reason: String) {
@@ -365,106 +269,11 @@ extension AppDelegate {
       || reason == .pointerClick || reason == .explicitCommand
   }
 
-  func focusedInputMayHaveChanged(pid: pid_t) {
-    guard modeBadgeEnabled, flashMode == .insert, !insertModeLockedUntilExplicitNormal else {
-      return
-    }
-    let focusedPID = currentNonFlashContext()?.processID
-    if Self.insertModeShouldExitAfterFocusedAppChange(
-      mode: flashMode,
-      modeBadgeEnabled: modeBadgeEnabled,
-      overlayInputMode: overlay.inputMode,
-      hasHints: !currentHints.isEmpty,
-      activationInFlight: activationInFlight,
-      insertFocusOwnerPID: insertFocusOwnerPID,
-      focusedPID: focusedPID,
-      insertModeLocked: insertModeLockedUntilExplicitNormal)
-    {
-      FlashLog.debug(
-        "[mode] insert_app_unfocused owner=\(insertFocusOwnerPID.map { String($0) } ?? "nil") "
-          + "focused=\(focusedPID.map { String($0) } ?? "nil") event=\(pid)")
-      enterNormalMode()
-      return
-    }
-    guard
-      Self.insertModeShouldExitAfterFocusedElementChange(
-        mode: flashMode,
-        modeBadgeEnabled: modeBadgeEnabled,
-        overlayInputMode: overlay.inputMode,
-        hasHints: !currentHints.isEmpty,
-        activationInFlight: activationInFlight,
-        focusedPID: focusedPID,
-        eventPID: pid,
-        editableFocusExitPID: insertEditableFocusExitPID,
-        focusedElementIsEditable: false,
-        insertModeLocked: insertModeLockedUntilExplicitNormal)
-    else { return }
-
-    insertFocusExitProbeToken &+= 1
-    let token = insertFocusExitProbeToken
-    monitor.focusedInputSnapshot(pid: pid) { [weak self] snapshot in
-      guard let self, self.insertFocusExitProbeToken == token, let snapshot else { return }
-      self.completeFocusedInputExitIfNeeded(pid: pid, token: token, snapshot: snapshot)
-    }
-  }
-
-  private func completeFocusedInputExitIfNeeded(
-    pid: pid_t,
-    token: UInt64,
-    snapshot: InputFocusSnapshot,
-    attempt: Int = 0
-  ) {
-    let focusedPID = currentNonFlashContext()?.processID
-    let decision = InsertModeFocusMachine.insertFocusChangeDecision(
-      focusedPID: focusedPID,
-      eventPID: pid,
-      armedEditablePID: insertEditableFocusExitPID,
-      snapshot: snapshot,
-      pointerPressed: Self.insertFocusExitShouldWaitForPointerRelease(),
-      attempt: attempt)
-    switch decision {
-    case .stay:
-      return
-    case .waitForPointerRelease:
-      // Waiting for the mouse button to come up is a distinct loop from the
-      // transient-resample budget, so it does not consume an attempt.
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
-        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token, attempt: attempt)
-      }
-      return
-    case .resampleAfter(let milliseconds):
-      FlashLog.trace(
-        "[mode] insert_focus_transient pid=\(pid) role=\(snapshot.role ?? "nil") "
-          + "surface=\(snapshot.surface) attempt=\(attempt)")
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(milliseconds)) { [weak self] in
-        self?.completeFocusedInputExitAfterPointerRelease(
-          pid: pid, token: token, attempt: attempt + 1)
-      }
-    case .exitToNormal:
-      FlashLog.debug(
-        "[mode] insert_focus_lost pid=\(pid) role=\(snapshot.role ?? "nil") "
-          + "surface=\(snapshot.surface)")
-      enterNormalMode()
-    }
-  }
-
-  private func completeFocusedInputExitAfterPointerRelease(
-    pid: pid_t,
-    token: UInt64,
-    attempt: Int = 0
-  ) {
-    guard insertFocusExitProbeToken == token, flashMode == .insert else { return }
-    if Self.insertFocusExitShouldWaitForPointerRelease() {
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
-        self?.completeFocusedInputExitAfterPointerRelease(pid: pid, token: token, attempt: attempt)
-      }
-      return
-    }
-    monitor.focusedInputSnapshot(pid: pid) { [weak self] snapshot in
-      guard let self, self.insertFocusExitProbeToken == token, let snapshot else { return }
-      self.completeFocusedInputExitIfNeeded(
-        pid: pid, token: token, snapshot: snapshot, attempt: attempt)
-    }
+  func focusedInputMayHaveChanged(pid _: pid_t) {
+    // Intentionally a no-op. Mode is no longer driven by focus changes — the
+    // only way to leave INSERT is an explicit keyboard request
+    // (`enterNormalMode`). Focus-following auto-exit was the main source of
+    // non-deterministic transitions and has been removed.
   }
 
   static func insertModeShouldExitAfterFocusedAppChange(
@@ -510,41 +319,6 @@ extension AppDelegate {
       && !focusedElementIsEditable
   }
 
-  private func armEditableFocusExitIfNeeded(target: AppContext?, reason: String) {
-    guard modeBadgeEnabled, let target else { return }
-    insertFocusExitProbeToken &+= 1
-    let token = insertFocusExitProbeToken
-    DispatchQueue.main.asyncAfter(
-      deadline: .now() + .milliseconds(Self.insertEditableFocusArmDelayMs)
-    ) { [weak self] in
-      guard let self, self.insertFocusExitProbeToken == token, self.flashMode == .insert else {
-        return
-      }
-      guard self.currentNonFlashContext()?.processID == target.processID else { return }
-      self.monitor.focusedInputSnapshot(pid: target.processID) { [weak self] snapshot in
-        guard let self, self.insertFocusExitProbeToken == token, self.flashMode == .insert else {
-          return
-        }
-        guard let snapshot, InsertModeFocusMachine.shouldArmGenericExit(snapshot: snapshot) else {
-          FlashLog.trace(
-            "[mode] editable_focus_exit_unarmed pid=\(target.processID) reason=\(reason)")
-          return
-        }
-        self.insertEditableFocusExitPID = target.processID
-        FlashLog.trace(
-          "[mode] editable_focus_exit_armed pid=\(target.processID) reason=\(reason)")
-      }
-    }
-  }
-
-  // Browsers often bounce AX focus through wrapper/web-area nodes after a
-  // click lands in an input. Arm the "leave INSERT when editable focus is
-  // lost" watcher only after that settle window, otherwise INSERT can be
-  // entered and immediately exited by the click that was supposed to focus
-  // the input.
-  static let insertEditableFocusArmDelayMs = 300
-  static let insertEditableFocusRepairDelaysMs = [40, 120, 250]
-
   static func insertModeMayArmEditableFocusExit(
     bundleIdentifier: String?,
     insertModeLocked: Bool
@@ -574,125 +348,10 @@ extension AppDelegate {
     explicitTargetPID ?? (currentMode == .normal ? normalModeTargetPID : nil)
   }
 
-  private func repairSingleStrongEditableFocusIfNeeded(
-    target: AppContext?,
-    reason: String,
-    attempt: Int = 0,
-    token: UInt64? = nil
-  ) {
-    guard modeBadgeEnabled, let target, !insertModeLockedUntilExplicitNormal else { return }
-    let repairToken: UInt64
-    if let token {
-      repairToken = token
-    } else {
-      insertEditableFocusRepairToken &+= 1
-      repairToken = insertEditableFocusRepairToken
-    }
-    guard Self.insertEditableFocusRepairDelaysMs.indices.contains(attempt) else { return }
-    let delay = Self.insertEditableFocusRepairDelaysMs[attempt]
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) { [weak self] in
-      guard let self else { return }
-      guard self.insertEditableFocusRepairToken == repairToken else { return }
-      guard self.flashMode == .insert, self.modeBadgeEnabled else { return }
-      guard !self.insertModeLockedUntilExplicitNormal else { return }
-      guard self.overlay.inputMode == .hints, self.currentHints.isEmpty, !self.activationInFlight
-      else { return }
-      guard self.currentNonFlashContext()?.processID == target.processID else { return }
-      self.monitor.repairSingleStrongEditableFocus(pid: target.processID) { [weak self] result in
-        guard let self else { return }
-        guard self.insertEditableFocusRepairToken == repairToken else { return }
-        guard self.flashMode == .insert, self.currentNonFlashContext()?.processID == target.processID
-        else { return }
-        switch result {
-        case .alreadyEditable:
-          FlashLog.trace(
-            "[mode] editable_focus_repair_skip reason=already_editable pid=\(target.processID)")
-        case .repaired:
-          FlashLog.debug(
-            "[mode] editable_focus_repaired pid=\(target.processID) result=\(result)")
-          self.armEditableFocusExitIfNeeded(target: target, reason: "focus_repair_\(reason)")
-        case .ambiguous:
-          FlashLog.trace(
-            "[mode] editable_focus_repair_skip pid=\(target.processID) result=\(result)")
-        case .noFocusedWindow, .noCandidate, .focusFailed:
-          let nextAttempt = attempt + 1
-          if Self.insertEditableFocusRepairDelaysMs.indices.contains(nextAttempt) {
-            FlashLog.trace(
-              "[mode] editable_focus_repair_retry pid=\(target.processID) attempt=\(attempt) "
-                + "result=\(result)")
-            self.repairSingleStrongEditableFocusIfNeeded(
-              target: target,
-              reason: reason,
-              attempt: nextAttempt,
-              token: repairToken)
-          } else {
-            FlashLog.trace(
-              "[mode] editable_focus_repair_skip pid=\(target.processID) result=\(result)")
-          }
-        }
-      }
-    }
-  }
-
   static func insertFocusExitShouldWaitForPointerRelease(
     pressedMouseButtons: Int = NSEvent.pressedMouseButtons
   ) -> Bool {
     pressedMouseButtons != 0
-  }
-
-  func armBrowserTabNavigationExit(
-    pid: pid_t,
-    bundleIdentifier: String,
-    initialURL: String?
-  ) {
-    guard !insertModeLockedUntilExplicitNormal else { return }
-    guard BrowserTabSources.allBundleIdentifiers.contains(bundleIdentifier), pid > 0 else {
-      return
-    }
-    insertNavigationExitToken &+= 1
-    let token = insertNavigationExitToken
-    FlashLog.trace(
-      "[mode] arm_navigation_exit pid=\(pid) bundle=\(bundleIdentifier) "
-        + "initial=\(initialURL ?? "nil")")
-    pollBrowserTabNavigationExit(
-      pid: pid,
-      token: token,
-      initialURL: initialURL,
-      remainingAttempts: Self.insertNavigationExitPollAttempts)
-  }
-
-  private func pollBrowserTabNavigationExit(
-    pid: pid_t,
-    token: UInt64,
-    initialURL: String?,
-    remainingAttempts: Int
-  ) {
-    guard insertNavigationExitToken == token, flashMode == .insert,
-      !insertModeLockedUntilExplicitNormal, remainingAttempts > 0
-    else {
-      return
-    }
-    monitor.focusedDocumentURL(pid: pid) { [weak self] url in
-      guard let self, self.insertNavigationExitToken == token, self.flashMode == .insert,
-        !self.insertModeLockedUntilExplicitNormal
-      else {
-        return
-      }
-      if Self.insertNavigationExitShouldExit(currentURL: url, initialURL: initialURL) {
-        FlashLog.debug("[mode] insert_navigation_committed pid=\(pid) url=\(url ?? "nil")")
-        self.enterNormalMode()
-        return
-      }
-      DispatchQueue.main.asyncAfter(
-        deadline: .now() + .milliseconds(Self.insertNavigationExitPollIntervalMs)
-      ) { [weak self] in
-        self?.pollBrowserTabNavigationExit(
-          pid: pid,
-          token: token,
-          initialURL: initialURL,
-          remainingAttempts: remainingAttempts - 1)
-      }
-    }
   }
 
   static let insertNavigationExitPollIntervalMs = 150
@@ -749,30 +408,32 @@ extension AppDelegate {
   }
 
   func applyModeOverlay(captureOverride: Bool? = nil) {
-    let snapshot = Self.modeOverlaySnapshot(
-      mode: flashMode,
-      labels: config.mode.labels,
-      visible: statusBarVisible,
-      hasHints: !currentHints.isEmpty,
-      activationInFlight: activationInFlight,
-      captureOverride: captureOverride)
+    let mode = modeStore.mode
+    let hasHints = !currentHints.isEmpty
+    let inFlight = activationInFlight
+    let inputMode = mode.overlayInputMode(hasHints: hasHints, activationInFlight: inFlight)
+    var capture =
+      captureOverride ?? mode.ownsKeyboard(hasHints: hasHints, activationInFlight: inFlight)
+    // With the session key tap capturing idle-NORMAL input, the panel doesn't
+    // need the key window there — leaving the focused app's window key avoids
+    // flickering its traffic-light controls on every transition/recapture.
+    // Command line / modal still grab key (their input mode isn't `.normal`).
+    if inputMode == .normal, normalModeKeyTap?.isActive == true {
+      capture = false
+    }
+    let text = modeLabelText(mode.label)
     FlashLog.trace(
-      "[mode] overlay mode=\(flashMode) capture=\(snapshot.captureInput) "
+      "[mode] overlay mode=\(mode) input=\(inputMode) capture=\(capture) "
         + "override=\(String(describing: captureOverride)) "
-        + "visible=\(statusBarVisible) hints=\(currentHints.count) in_flight=\(activationInFlight)")
-    statusBarController?.updateModeLabel(snapshot.text)
-    overlay.inputMode = snapshot.inputMode
-    if snapshot.refreshActiveWindowBorder {
-      updateInsertModeActiveWindowBorder(reason: "apply_mode_overlay")
-    }
+        + "visible=\(statusBarVisible) hints=\(currentHints.count) in_flight=\(inFlight)")
+    statusBarController?.updateModeLabel(text)
+    overlay.inputMode = inputMode
+    updateInsertModeActiveWindowBorder(reason: "apply_mode_overlay")
     overlay.setModeBadge(
-      text: snapshot.text,
-      visible: snapshot.visible,
-      captureInput: snapshot.captureInput,
-      mode: flashMode)
-    if snapshot.captureInput {
-      verifyNormalModeCapture(reason: "apply_mode_overlay")
-    }
+      text: text,
+      visible: mode.badgeVisibleIntrinsic && statusBarVisible,
+      captureInput: capture,
+      style: mode.badgeStyle)
   }
 
   func publishCommandSurfaceModeLabel(reason: String) {
@@ -790,6 +451,13 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecapture() {
+    // The session key tap captures idle-NORMAL input without the panel owning
+    // the key window, so there is nothing to recapture — just refresh the badge
+    // and leave the focused app's window key (no traffic-light flicker).
+    if normalModeKeyTap?.isActive == true, shouldCaptureNormalModeInput {
+      applyModeOverlay()
+      return
+    }
     if Self.contextMenuInteractionRecaptureSuppressionIsActive(
       until: contextMenuInteractionRecaptureSuppressedUntil)
     {
@@ -1252,7 +920,11 @@ extension AppDelegate {
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
   static let pointerInsertHandoffRecaptureSuppressionMs = 1_500
-  static let pointerFocusLossRecaptureDeferralMs = 1_500
+  // Brief: just long enough for the pointer monitor to turn a click into INSERT
+  // before we reclaim key. Any longer and an app that spontaneously steals
+  // focus would sit on it while the badge still reads NORMAL — the exact
+  // "shown but not capturing" inconsistency we want to make impossible.
+  static let pointerFocusLossRecaptureDeferralMs = 120
   static let windowGeometryQuietMs = 160
   static let activeWindowBorderTrackingIntervalMs = 50
   static let activeWindowBorderTrackingLeewayMs = 10
@@ -1343,14 +1015,46 @@ extension AppDelegate {
   }
 
   var shouldCaptureNormalModeInput: Bool {
-    Self.normalModeShouldRecaptureAfterActionDispatch(
+    Self.normalModeShouldOwnKeyboardInput(
       mode: flashMode,
       overlayInputMode: overlay.inputMode,
       hasHints: !currentHints.isEmpty,
       activationInFlight: activationInFlight)
   }
 
+  @discardableResult
+  func guardNormalModeInputAfterActionDispatch() -> Bool {
+    guard shouldCaptureNormalModeInput else { return false }
+    // The session tap keeps capturing without the key window; nothing to
+    // recapture, and not grabbing key keeps the focused app's controls steady.
+    if normalModeKeyTap?.isActive == true { return false }
+    // If the panel already owns the key window AND is routing as normal, the
+    // command didn't disturb focus (the common case for scroll/tab/vim
+    // sequences and back-to-back chords). Capture is already intact, so skip
+    // the re-render + recapture ramp: re-asserting on every keystroke runs an
+    // `orderOut`+re-key cycle that can momentarily drop a rapid follow-up key
+    // to the focused app ("fires late / lands in the wrong window"). Only
+    // re-assert when key was actually lost (e.g. the command activated another
+    // app) or the input routing is stale.
+    if overlay.isKeyWindow, overlay.inputMode == .normal { return false }
+    applyModeOverlay(captureOverride: true)
+    return true
+  }
+
   static func normalModeShouldRecaptureAfterActionDispatch(
+    mode: FlashMode,
+    overlayInputMode: OverlayInputMode,
+    hasHints: Bool,
+    activationInFlight: Bool
+  ) -> Bool {
+    normalModeShouldOwnKeyboardInput(
+      mode: mode,
+      overlayInputMode: overlayInputMode,
+      hasHints: hasHints,
+      activationInFlight: activationInFlight)
+  }
+
+  static func normalModeShouldOwnKeyboardInput(
     mode: FlashMode,
     overlayInputMode: OverlayInputMode,
     hasHints: Bool,
@@ -1471,19 +1175,10 @@ extension AppDelegate {
         self?.performMappedCommand(.quitApp(force: force))
       }
     case .tabNew:
-      let tabNewContext = normalModeContext()
-      let initialURL = tabNewContext.flatMap { registry.documentURL(in: $0) }
       tabNewInNormalMode(repeatCount: repeatCount)
       // `t` is the user's explicit "open something fresh and start typing"
-      // intent: switching to insert lets them type into the new tab/window
-      // without an extra `i`. Matches the unified contract on `/`.
+      // intent: switch to insert so they can type into the new tab/window.
       enterInsertMode(reason: .explicitCommand)
-      if let tabNewContext {
-        armBrowserTabNavigationExit(
-          pid: tabNewContext.processID,
-          bundleIdentifier: tabNewContext.bundleIdentifier,
-          initialURL: initialURL)
-      }
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showPlugins:
@@ -1527,7 +1222,6 @@ extension AppDelegate {
     // below so `finishCommandLineInteraction` can put the user back where
     // they were. Verbs that don't ask for this clear the slot so a stale
     // value from a prior open doesn't leak.
-    commandLineRestoreModeTarget = restoreMode ? flashMode : nil
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
     closeModalStateForModeExit(reason: "enter_command_mode")
@@ -1544,7 +1238,9 @@ extension AppDelegate {
     let command = Self.commandLineBuffer(from: initialText)
     notifyPluginsAfterCandidateFinderSnapshot(scope: self.candidateFinderScope)
     prewarmCandidateFinderCaches(reason: "command_line_open")
-    publishCommandSurfaceModeLabel(reason: "command_line_open")
+    let scope: CommandScope =
+      candidateFinderScope.map { .finder(all: $0 == .all) } ?? .commandLine
+    dispatchMode(.openCommand(scope: scope, restoreMode: restoreMode))
     refreshCommandLine(text: command, cursorIndex: command.count)
   }
 
@@ -1612,6 +1308,7 @@ extension AppDelegate {
   ) {
     prepareModalPresentation(reason: reason)
     overlay.displayModal(body())
+    dispatchMode(.presentModal)
   }
 
   /// Shared pre-modal cleanup: mode-pending token bump, hint /
@@ -1660,6 +1357,7 @@ extension AppDelegate {
   private func presentSelectableModal(reason: String, lines: [String]) {
     prepareModalPresentation(reason: reason)
     overlay.displaySelectableModal(lines: lines)
+    dispatchMode(.presentModal)
   }
 
   static func decodeClipboardModalEntries(_ json: String) -> [ClipboardModalEntry]? {
@@ -2661,16 +2359,9 @@ extension AppDelegate {
   }
 
   func finishCommandLineInteraction(reason: String) {
-    overlay.hide()
-    resetCommandLineState()
-    // Restore the snapshot the entry verb armed (`restore_mode=1`) if any;
-    // otherwise fall through to the default exit target. Clear the slot in
-    // either case so the next open starts fresh.
-    let target =
-      commandLineRestoreModeTarget
-      ?? Self.commandLineExitMode(currentMode: flashMode)
-    commandLineRestoreModeTarget = nil
-    transitionMode(to: target, reason: reason)
+    // The reducer pops the surface's recorded `restoreTo`; the resulting
+    // base-mode entry effects tear down the command-line overlay.
+    dispatchMode(.closeCommand(reason: reason))
   }
 
   func resetCommandLineState() {

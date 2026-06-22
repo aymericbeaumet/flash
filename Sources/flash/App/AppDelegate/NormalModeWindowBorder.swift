@@ -82,7 +82,16 @@ extension AppDelegate {
         tolerance: Self.activeWindowBorderFrameTolerance)
     else { return }
 
-    beginTrackedWindowGeometryChange(reason: "frame_poll", frame: frame)
+    if activeWindowBorderTrackedFrame == nil {
+      // The border is appearing — the frame became available after a nil sample
+      // (e.g. the window wasn't reported yet at insert entry). Draw it in place
+      // rather than running the hide-during-change dance, which would blank the
+      // border for ~160ms exactly as it should first show.
+      activeWindowBorderTrackedFrame = frame
+      overlay.setActiveWindowBorder(around: frame)
+    } else {
+      beginTrackedWindowGeometryChange(reason: "frame_poll", frame: frame)
+    }
   }
 
   static func activeWindowBorderPollShouldUpdate(
@@ -156,9 +165,8 @@ extension AppDelegate {
   }
 
   private func activeWindowBorderContext() -> AppContext? {
-    if let ownerPID = insertFocusOwnerPID {
-      return monitor.appWindowContext(for: ownerPID)
-    }
+    // Mode is global/sticky, so the typing target is simply the currently
+    // focused non-Flash app (the old per-insert "owner pid" is gone).
     guard let focused = currentNonFlashContext() else { return nil }
     return monitor.appWindowContext(for: focused.processID)
   }

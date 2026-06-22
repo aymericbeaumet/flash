@@ -68,28 +68,21 @@ enum NormalModePointerPolicy {
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false)
     }
-    switch action {
-    case .leftClick, .doubleClick:
-      return AppClickDecision(
-        releaseCapture: true,
-        probeForInsert: true,
-        suspendForNativeSurface: false,
-        dismissTransientHintsWithoutRekey: false)
-    case .rightClick:
-      return AppClickDecision(
-        releaseCapture: false,
-        probeForInsert: false,
-        suspendForNativeSurface: true,
-        dismissTransientHintsWithoutRekey: hasHints)
-    }
+    // Any click in NORMAL — left, right, or double — hands the keyboard to the
+    // app and enters INSERT. Right-click opens a native context menu that does
+    // its own modal key tracking, so releasing capture there is correct too,
+    // and it keeps NORMAL free of "shown but not capturing" states.
+    return AppClickDecision(
+      releaseCapture: true,
+      probeForInsert: true,
+      suspendForNativeSurface: false,
+      dismissTransientHintsWithoutRekey: false)
   }
 
   static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
     switch action {
-    case .leftClick, .doubleClick:
+    case .leftClick, .doubleClick, .rightClick:
       return true
-    case .rightClick:
-      return false
     }
   }
 

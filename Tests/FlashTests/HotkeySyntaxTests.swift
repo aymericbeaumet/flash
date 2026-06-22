@@ -78,6 +78,15 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(r?.virtualKey, UInt32(kVK_ANSI_RightBracket))
   }
 
+  func testNormalModeModifierSyntaxCanonicalizesModifierOrder() {
+    XCTAssertEqual(
+      NormalModeInterpreter.canonicalizeMappingKey("shift+cmd+]"),
+      NormalModeInterpreter.canonicalizeMappingKey("cmd+shift+]"))
+    XCTAssertEqual(
+      NormalModeInterpreter.canonicalizeMappingKey("option+command+space"),
+      "cmd+alt+space")
+  }
+
   func testInvalidKeyReturnsNil() {
     XCTAssertNil(HotkeySyntax.parse(hotkey: "cmd+nothing"))
     XCTAssertNil(HotkeySyntax.parse(hotkey: ""))

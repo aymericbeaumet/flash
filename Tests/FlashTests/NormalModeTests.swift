@@ -826,9 +826,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 2))
   }
 
-  func testInsertFocusExitArmsAfterBrowserClickSettleWindow() {
-    XCTAssertGreaterThanOrEqual(AppDelegate.insertEditableFocusArmDelayMs, 300)
-  }
 
   func testInsertFocusExitOnlyProbesFocusChangingAXNotifications() {
     XCTAssertTrue(
@@ -1408,6 +1405,8 @@ final class NormalModeTests: XCTestCase {
         probeForInsert: true,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
+    // Any click in NORMAL — including right-click — releases capture and
+    // enters insert; the native context menu does its own key tracking.
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
         mode: .normal,
@@ -1415,10 +1414,10 @@ final class NormalModeTests: XCTestCase {
         hasHints: true,
         action: .rightClick),
       NormalModePointerPolicy.AppClickDecision(
-        releaseCapture: false,
-        probeForInsert: false,
-        suspendForNativeSurface: true,
-        dismissTransientHintsWithoutRekey: true))
+        releaseCapture: true,
+        probeForInsert: true,
+        suspendForNativeSurface: false,
+        dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
         mode: .insert,
@@ -1547,8 +1546,13 @@ final class NormalModeTests: XCTestCase {
         now: now))
   }
 
-  func testPointerFocusLossDeferralMatchesNativeInteractionWindow() {
-    XCTAssertEqual(
+  func testPointerFocusLossDeferralIsBriefSoNormalModeReclaimsFocus() {
+    // The deferral only needs to outlast the pointer monitor turning a click
+    // into INSERT; it must be far shorter than the suppression windows so an
+    // app that spontaneously steals focus in NORMAL is reclaimed almost
+    // immediately instead of sitting there while the badge still reads NORMAL.
+    XCTAssertEqual(AppDelegate.pointerFocusLossRecaptureDeferralMs, 120)
+    XCTAssertLessThan(
       AppDelegate.pointerFocusLossRecaptureDeferralMs,
       AppDelegate.pointerInsertHandoffRecaptureSuppressionMs)
   }
@@ -2500,6 +2504,53 @@ final class NormalModeTests: XCTestCase {
         mappings: mappings
       ).command,
       .movementForward)
+  }
+
+  func testModifiedMappingsParticipateInNormalModeSequences() {
+    let action = MappingCommand.shellCommand(["sh", "/tmp/chord-prefix"])
+    let mappings = [
+      ModeMapping(key: key("cmd+kx"), action: action),
+      ModeMapping(key: key("cmd+shift+]"), action: .flashCommand(.tabNext)),
+      ModeMapping(key: key("ctrl+<space>"), action: .flashCommand(.commandMode)),
+    ]
+
+    let prefix = transition(
+      keyCode: kVK_ANSI_K,
+      chars: "k",
+      flags: [.command],
+      mappings: mappings)
+    XCTAssertEqual(prefix.pending, "cmd+k")
+    XCTAssertNil(prefix.action)
+
+    let resolved = transition(
+      pending: prefix.pending,
+      keyCode: kVK_ANSI_X,
+      chars: "x",
+      mappings: mappings)
+    XCTAssertEqual(resolved.action, action)
+    XCTAssertEqual(resolved.pending, "")
+
+    XCTAssertEqual(
+      transition(
+        keyCode: kVK_ANSI_RightBracket,
+        chars: "}",
+        flags: [.command, .shift],
+        mappings: mappings
+      ).command,
+      .tabNext)
+    XCTAssertEqual(
+      transition(
+        keyCode: kVK_Space,
+        chars: " ",
+        flags: [.control],
+        mappings: mappings
+      ).command,
+      .commandMode)
+  }
+
+  func testShiftOnlyStillPrefersTypedCharacters() {
+    XCTAssertEqual(command(chars: "G", ignoring: "g", flags: [.shift]), .scroll(.bottom))
+    XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage(topic: nil))
   }
 
   func testConfiguredShellMappingsProduceActions() {

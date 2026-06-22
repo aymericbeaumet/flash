@@ -175,12 +175,7 @@ extension AppDelegate {
     FlashLog.trace(
       "[input] normal dispatch reason=\(reason) action=\(action.diagnosticDescription)")
     performMappingCommand(action, repeatCount: repeatCount)
-    if Self.normalModeShouldRecaptureAfterActionDispatch(
-      mode: flashMode,
-      overlayInputMode: overlay.inputMode,
-      hasHints: !currentHints.isEmpty,
-      activationInFlight: activationInFlight)
-    {
+    if guardNormalModeInputAfterActionDispatch() {
       scheduleNormalModeRecapture()
     }
   }
@@ -311,7 +306,12 @@ extension AppDelegate {
     // own AXPress fallback already uses the target's geometric centre
     // for the same reason, so this keeps the two paths consistent.
     let targetFrame = hint.target.frame
-    let clickPoint = CGPoint(x: targetFrame.midX, y: targetFrame.midY)
+    // Prefer a provider-resolved point guaranteed on the element (e.g. a
+    // multi-line web link's first character), falling back to the geometric
+    // centre. This keeps clicks off the empty inter-line gap of a wrapped
+    // link's union bounding box.
+    let clickPoint =
+      hint.target.resolveClickPoint?() ?? CGPoint(x: targetFrame.midX, y: targetFrame.midY)
     FlashLog.trace(
       "[commit] action=\(action) role=\(hint.target.role ?? "?") "
         + "provider=\(hint.target.providerID) "
@@ -356,18 +356,16 @@ extension AppDelegate {
         action, on: hint.target, pid: pid, clickPoint: clickPoint, modifiers: clickModifiers)
       guard let self else { return }
       self.activationInFlight = false
-      if wasNormalMode, action == .rightClick {
-        self.restoreNormalModeAfterCommit(action: action)
-      } else if wasNormalMode, actionMayEnterInsert {
-        if hint.target.entersInsertMode {
-          self.enterInsertMode(reason: .hintCommit, targetPID: pid)
-          return
-        }
+      if wasNormalMode, actionMayEnterInsert {
+        // Any pointer commit — including right-click — hands the keyboard to
+        // the app and enters insert (the context menu does its own key
+        // tracking, so releasing capture is correct there too).
         self.enterInsertModeIfClickedOnTextInput(
           pid: pid,
           clickPoint: clickPoint,
           reason: .hintCommit,
-          handoffToken: handoffToken
+          handoffToken: handoffToken,
+          hintTargetEntersInsert: hint.target.entersInsertMode
         ) {
           [weak self] outcome in
           guard let self else { return }
@@ -566,12 +564,19 @@ extension AppDelegate {
   /// query the focused element's role and only enter insert mode if it is a
   /// true text-input surface or terminal-like target. Physical primary clicks
   /// from NORMAL use the same probe after releasing capture.
+  /// Any pointer commit — a real mouse click OR an `f`/`F` hint commit — hands
+  /// the keyboard to the focused app and enters INSERT, unconditionally. We no
+  /// longer probe the AX role: per product direction, any mouse interaction
+  /// enters insert. This is simpler to reason about and keeps NORMAL free of
+  /// "focused-but-not-capturing" states. The `clickPoint` / `attempt` /
+  /// `hintTargetEntersInsert` parameters are retained for call-site stability.
   private func enterInsertModeIfClickedOnTextInput(
     pid: pid_t?,
-    clickPoint: CGPoint? = nil,
+    clickPoint _: CGPoint? = nil,
     reason: InsertModeTransitionReason,
-    attempt: Int = 0,
+    attempt _: Int = 0,
     handoffToken: UInt64? = nil,
+    hintTargetEntersInsert _: Bool? = nil,
     completion: ((PointerInsertHandoffOutcome) -> Void)? = nil
   ) {
     guard pointerInsertHandoffIsCurrent(handoffToken) else { return }
@@ -579,82 +584,9 @@ extension AppDelegate {
       completion?(.recaptureNormal)
       return
     }
-    // A terminal emulator is a single giant text surface: a click, hint
-    // commit (`f`), or grid commit (`F`) that lands in one should hand the
-    // keyboard straight to whatever runs inside (shell / tmux / editor), so
-    // we drop into insert mode unconditionally. AX can't tell us this —
-    // alacritty / iTerm / kitty expose the grid as an opaque element with no
-    // AXTextArea, so the generic post-click role check below always reads
-    // "not editable" and the user is stranded in normal mode. Key off the
-    // focused app's bundle id instead, and skip the AX settle delay.
-    if let terminalPID = pid ?? currentNonFlashContext()?.processID,
-      isTerminalApp(pid: terminalPID)
-    {
-      enterInsertMode(reason: reason, targetPID: terminalPID)
-      completion?(.enteredInsert)
-      return
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(120)) { [weak self] in
-      guard let self else { return }
-      guard self.pointerInsertHandoffIsCurrent(handoffToken) else { return }
-      guard self.flashMode == .normal else {
-        completion?(.recaptureNormal)
-        return
-      }
-      let targetPID = pid ?? self.currentNonFlashContext()?.processID
-      guard let targetPID else {
-        completion?(.recaptureNormal)
-        return
-      }
-      let handleDecision: (NormalPointerHandoffDecision) -> Void = { [weak self] decision in
-        guard let self else { return }
-        guard self.pointerInsertHandoffIsCurrent(handoffToken) else { return }
-        guard self.flashMode == .normal else {
-          completion?(.recaptureNormal)
-          return
-        }
-        switch decision {
-        case .enterInsert:
-          self.enterInsertMode(reason: reason, targetPID: targetPID)
-          completion?(.enteredInsert)
-        case .recaptureNormal:
-          completion?(.recaptureNormal)
-        case .suspendNativeSurface:
-          completion?(.suspendedNativeSurface)
-        case .resampleAfter(let milliseconds):
-          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(milliseconds)) {
-            [weak self] in
-            guard let self, self.pointerInsertHandoffIsCurrent(handoffToken) else { return }
-            self.enterInsertModeIfClickedOnTextInput(
-              pid: targetPID,
-              clickPoint: clickPoint,
-              reason: reason,
-              attempt: attempt + 1,
-              handoffToken: handoffToken,
-              completion: completion)
-          }
-        }
-      }
-      if let clickPoint {
-        self.monitor.inputSnapshot(pid: targetPID, at: clickPoint) { [weak self] clickedSnapshot in
-          guard let self, self.pointerInsertHandoffIsCurrent(handoffToken) else { return }
-          self.monitor.focusedInputSnapshot(pid: targetPID) { focusedSnapshot in
-            handleDecision(
-              InsertModeFocusMachine.normalPointerHandoffDecision(
-                clickedSnapshot: clickedSnapshot,
-                focusedSnapshot: focusedSnapshot,
-                attempt: attempt))
-          }
-        }
-      } else {
-        self.monitor.focusedInputSnapshot(pid: targetPID) { snapshot in
-          handleDecision(
-            InsertModeFocusMachine.normalPointerHandoffDecision(
-              snapshot: snapshot,
-              attempt: attempt))
-        }
-      }
-    }
+    let targetPID = pid ?? currentNonFlashContext()?.processID
+    enterInsertMode(reason: reason, targetPID: targetPID)
+    completion?(.enteredInsert)
   }
 
   /// True when `pid` belongs to a known terminal-emulator bundle. Terminals
@@ -687,8 +619,9 @@ extension AppDelegate {
     clipboardModalEntries = []
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
-    overlay.hide()
-    applyModeOverlay()
+    // The reducer pops the modal's `restoreTo`; the base-mode entry effects
+    // hide the modal overlay and restore capture.
+    dispatchMode(.dismissModal)
   }
 
   /// Paste the highlighted `:clipboard` entry. The panel owns the selected

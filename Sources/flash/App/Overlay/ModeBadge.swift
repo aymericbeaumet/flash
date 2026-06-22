@@ -12,11 +12,10 @@ extension OverlayPanel {
   static let statusBarMaximumAppNameWidth: CGFloat = 220
   static let statusBarMinimumRightTextWidth: CGFloat = 240
 
-  func setModeBadge(text: String, visible: Bool, captureInput: Bool, mode: FlashMode) {
+  func setModeBadge(text: String, visible: Bool, captureInput: Bool, style: OverlayModeBadgeStyle) {
     FlashLog.trace(
       "[overlay] set_mode_badge text=\(text) visible=\(visible) capture=\(captureInput) "
-        + "mode=\(mode) input=\(inputMode)")
-    let style: OverlayModeBadgeStyle = mode == .normal ? .normal : .insert
+        + "style=\(style) input=\(inputMode)")
     updateModeBadge(text: text, visible: visible, captureInput: captureInput, style: style)
   }
 

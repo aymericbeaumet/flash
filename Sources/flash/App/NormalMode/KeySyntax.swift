@@ -179,6 +179,8 @@ extension NormalModeInterpreter {
     "pageup", "pagedown",
   ]
 
+  private static let modifierOrder = ["cmd", "ctrl", "alt", "shift"]
+
   private static let modifierAliases: [(token: String, canonical: String)] = [
     ("command", "cmd"),
     ("control", "ctrl"),
@@ -226,8 +228,9 @@ extension NormalModeInterpreter {
       return nil
     }
     idx = probe
-    let usesCmdOrAlt = collected.contains("cmd") || collected.contains("alt")
-    if !usesCmdOrAlt, collected.count == 1, collected[0] == "ctrl",
+    let modifiers = canonicalModifiers(collected)
+    let usesCmdOrAlt = modifiers.contains("cmd") || modifiers.contains("alt")
+    if !usesCmdOrAlt, modifiers.count == 1, modifiers[0] == "ctrl",
       key.count == 1,
       let ch = key.first,
       ch.isASCII,
@@ -235,7 +238,26 @@ extension NormalModeInterpreter {
     {
       return "ctrl-\(key)"
     }
-    return (collected + [key]).joined(separator: "+")
+    return (modifiers + [key]).joined(separator: "+")
+  }
+
+  static func canonicalModifiedKeyAtom(modifiers: [String], key: String) -> String? {
+    let ordered = canonicalModifiers(modifiers)
+    guard !ordered.isEmpty, !key.isEmpty else { return nil }
+    if ordered == ["ctrl"],
+      key.count == 1,
+      let ch = key.first,
+      ch.isASCII,
+      ch.isLetter || ch.isNumber
+    {
+      return "ctrl-\(key)"
+    }
+    return (ordered + [key]).joined(separator: "+")
+  }
+
+  private static func canonicalModifiers(_ modifiers: [String]) -> [String] {
+    let present = Set(modifiers)
+    return modifierOrder.filter { present.contains($0) }
   }
 
   private static func readNamedKeyAlias(

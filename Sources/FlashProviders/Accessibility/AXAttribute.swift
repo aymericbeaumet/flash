@@ -99,4 +99,36 @@ public enum AXAttribute {
     guard AXValueGetValue(axValue, .cgSize, &size) else { return nil }
     return size
   }
+
+  /// Screen rect of a character range within a text-bearing element, via the
+  /// parameterized `kAXBoundsForRangeParameterizedAttribute`. Returned in
+  /// NSScreen bottom-left coordinates (flipped by `screenH`, matching
+  /// `frameFromAX`). nil if the element doesn't support it or the range is
+  /// empty. Used to find a point guaranteed to sit on a multi-line link/text
+  /// element (e.g. its first character) so a synthesized click never lands in
+  /// the empty inter-line gap of the element's union bounding box.
+  public static func boundsForRange(
+    _ element: AXUIElement, location: Int, length: Int, screenH: CGFloat
+  ) -> CGRect? {
+    var range = CFRange(location: location, length: length)
+    guard let rangeValue = AXValueCreate(.cfRange, &range) else { return nil }
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyParameterizedAttributeValue(
+        element,
+        kAXBoundsForRangeParameterizedAttribute as CFString,
+        rangeValue,
+        &raw) == .success,
+      let value = raw,
+      CFGetTypeID(value) == AXValueGetTypeID()
+    else { return nil }
+    let axValue = value as! AXValue
+    guard AXValueGetType(axValue) == .cgRect else { return nil }
+    var rect = CGRect.zero
+    guard AXValueGetValue(axValue, .cgRect, &rect), rect.width > 0, rect.height > 0
+    else { return nil }
+    return CGRect(
+      x: rect.minX, y: screenH - rect.minY - rect.height,
+      width: rect.width, height: rect.height)
+  }
 }
