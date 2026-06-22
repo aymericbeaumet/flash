@@ -412,7 +412,6 @@ final class OverlayInputTests: XCTestCase {
         keyCode: UInt16(kVK_ANSI_LeftBracket)))
 
     XCTAssertTrue(panel.performKeyEquivalent(with: normalModeHotkey))
-    XCTAssertNil(panel.normalModeChordLockoutUntil)
 
     panel.processNormalModeKey(
       try keyEvent(keyCode: kVK_ANSI_LeftBracket, characters: "["))
@@ -446,7 +445,6 @@ final class OverlayInputTests: XCTestCase {
         keyCode: UInt16(kVK_ANSI_LeftBracket)))
 
     XCTAssertTrue(panel.performKeyEquivalent(with: normalModeHotkey))
-    XCTAssertNil(panel.normalModeChordLockoutUntil)
 
     panel.processNormalModeKey(
       try keyEvent(keyCode: kVK_ANSI_RightBracket, characters: "]"))
@@ -456,6 +454,85 @@ final class OverlayInputTests: XCTestCase {
       try keyEvent(keyCode: kVK_ANSI_T, characters: "t"))
     XCTAssertEqual(panel.normalModePending, "")
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabNext])
+  }
+
+  func testUnmappedCommandChordIsConsumedInNormalMode() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [.command],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: "'",
+        charactersIgnoringModifiers: "'",
+        isARepeat: false,
+        keyCode: UInt16(kVK_ANSI_Quote)))
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
+    XCTAssertEqual(panel.normalModePending, "")
+    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
+  }
+
+  func testUnmappedOptionDeadKeyDoesNotPassThroughNextPlainKey() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let deadKey = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [.option],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: "",
+        charactersIgnoringModifiers: "",
+        isARepeat: false,
+        keyCode: UInt16(kVK_ANSI_E)))
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: deadKey))
+    XCTAssertEqual(panel.normalModePending, "")
+    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
+
+    let next = try keyEvent(keyCode: kVK_ANSI_S, characters: "s")
+    XCTAssertTrue(panel.performKeyEquivalent(with: next))
+    XCTAssertEqual(panel.normalModePending, "s")
+  }
+
+  func testNormalModeConsumesDeadKeyEventWithoutCharacters() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let deadKey = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: "",
+        charactersIgnoringModifiers: "",
+        isARepeat: false,
+        keyCode: UInt16(kVK_ANSI_Quote)))
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: deadKey))
+    XCTAssertEqual(panel.normalModePending, "")
+    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
   }
 
   func testActiveWindowBorderLocalRectKeepsStrokeInsideWindow() {

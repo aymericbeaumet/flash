@@ -220,43 +220,11 @@ extension OverlayPanel {
   }
 
   private func handleNormalModeKeyEvent(_ event: NSEvent) -> Bool {
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    if modifiers.contains(.command) || modifiers.contains(.control)
-      || modifiers.contains(.option)
-    {
-      // Carbon handles explicit `[mode.*]` modified-key mappings before
-      // unclaimed chords reach this overlay. The same key event can still be
-      // offered to the now-key panel after a mode transition, so ask the
-      // coordinator first; a configured mapping must be consumed here rather
-      // than arming the pass-through lockout for the next plain key.
-      if coordinator?.overlayDidHandleMapping(event) == true {
-        return true
-      }
-      // Let the unclaimed chord pass through to the focused app and briefly
-      // lock normal-mode interpretation so a prefix-style chord such as tmux
-      // ctrl-q + key cannot accidentally resolve a standalone Flash mapping.
-      normalModeChordLockoutUntil = Date().addingTimeInterval(
-        TimeInterval(normalModeSequenceTimeoutMs) / 1_000)
-      if !normalModePending.isEmpty {
-        FlashLog.trace(
-          "[input] normal chord_lockout_clears_pending pending=\(normalModePending)")
-        normalModePending = ""
-      }
-      FlashLog.trace(
-        "[input] normal chord_lockout_arm key=\(event.keyCode) "
-          + "until=\(normalModeChordLockoutUntil.map { String(format: "%.3f", $0.timeIntervalSinceReferenceDate) } ?? "nil")"
-      )
-      return false
-    }
-    if let lockoutUntil = normalModeChordLockoutUntil,
-      Date() < lockoutUntil
-    {
-      normalModeChordLockoutUntil = nil
-      FlashLog.trace(
-        "[input] normal chord_lockout_passthrough key=\(event.keyCode) "
-          + "chars=\(event.charactersIgnoringModifiers ?? "nil")")
-      return false
-    }
+    // Normal mode is hermetic once this panel owns the key event. Carbon
+    // receives explicit modified-key mappings first; anything unclaimed
+    // here is interpreted or swallowed by `NormalModeInterpreter`, never
+    // forwarded to the focused app. That keeps mode state deterministic
+    // across keyboard layouts that surface dead keys as modified chords.
     processNormalModeKey(event)
     return true
   }

@@ -127,14 +127,6 @@ final class OverlayPanel: NSPanel {
     }
   }
   var normalModePendingUpdatedAt: Date?
-  /// Set when a modified chord with no Flash mapping passes through to
-  /// the focused app (e.g. `ctrl+q` as a tmux prefix). For the duration
-  /// of `normalModeSequenceTimeoutMs` after that pass-through, any
-  /// unmodified keystroke is swallowed without resolving a mapping —
-  /// otherwise a tmux prefix followed by `t` would silently fire
-  /// `tab_new` instead of staying as part of the user's terminal
-  /// sequence. `<esc>` clears the lockout immediately.
-  var normalModeChordLockoutUntil: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
   var commandLineText: String = "" {
