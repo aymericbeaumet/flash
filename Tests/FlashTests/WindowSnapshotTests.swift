@@ -79,6 +79,33 @@ final class WindowSnapshotTests: XCTestCase {
     XCTAssertEqual(visibleArea, 7_500)
   }
 
+  func testTopInteractionEntryAtPointUsesZOrderAndIgnoresFlashPID() {
+    let frontFlashOverlay = WindowSnapshot.Entry(
+      pid: 99,
+      layer: Int(CGWindowLevelForKey(.statusWindow)),
+      nsBounds: CGRect(x: 0, y: 0, width: 200, height: 200))
+    let clickedTerminal = WindowSnapshot.Entry(
+      pid: 42,
+      layer: 0,
+      nsBounds: CGRect(x: 10, y: 10, width: 100, height: 100))
+    let oldFrontmostBrowser = WindowSnapshot.Entry(
+      pid: 7,
+      layer: 0,
+      nsBounds: CGRect(x: 150, y: 10, width: 100, height: 100))
+
+    XCTAssertEqual(
+      WindowSnapshot.topInteractionEntry(
+        at: CGPoint(x: 25, y: 25),
+        entries: [frontFlashOverlay, clickedTerminal, oldFrontmostBrowser],
+        ignoringPids: [99])?.pid,
+      42)
+    XCTAssertNil(
+      WindowSnapshot.topInteractionEntry(
+        at: CGPoint(x: 300, y: 25),
+        entries: [frontFlashOverlay, clickedTerminal, oldFrontmostBrowser],
+        ignoringPids: [99]))
+  }
+
   func testCGWindowInfoEntriesConvertToNSScreenCoordinates() {
     let info: [[String: Any]] = [
       [

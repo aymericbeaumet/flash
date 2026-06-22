@@ -379,24 +379,13 @@ extension OverlayPanel {
     // so verbs like `r` (`app_reload`) continue to land on the user's
     // actual workflow app.
     //
-    // Tahoe also dropped `activate(ignoringOtherApps:)`'s ability to
-    // override an active app. The new `activate()` (no args) is the only
-    // call the system honours; the old one is silently ignored.
-    // `yieldActivation(to: nil)` first releases any activation the OS
-    // would otherwise keep parked on the previous app, so the subsequent
-    // `activate()` actually lands instead of being shelved.
-    // Force activation through `NSRunningApplication.activate(options:)`
-    // — the only path that still works on macOS Tahoe (26) for an
-    // accessory app under another app's activation. The plain
-    // `NSApp.activate()` is asynchronous and waits for the frontmost
-    // app to yield (which Firefox/Alacritty/etc. never do); the
-    // deprecated `NSApp.activate(ignoringOtherApps:)` is silently
-    // ignored under cooperative-activation rules. The
-    // NSRunningApplication path threads through Launch Services and
-    // *does* land synchronously enough for the immediate `makeKey`
-    // calls below to take.
+    // Activation requests are advisory on modern macOS. Try both the
+    // modern AppKit activation entry point and the RunningApplication
+    // request; the normal-mode coordinator verifies the result and runs
+    // bounded recovery if WindowServer does not hand us key ownership
+    // immediately.
     if !NSApp.isActive {
-      NSRunningApplication.current.activate(options: [.activateAllWindows])
+      requestApplicationActivationForKeyboardCapture()
     }
     orderFrontRegardless()
     makeKeyAndOrderFront(nil)
@@ -427,6 +416,36 @@ extension OverlayPanel {
     FlashLog.trace(
       "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
         + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode)")
+  }
+
+  @discardableResult
+  private func requestApplicationActivationForKeyboardCapture() -> Bool {
+    let current = NSRunningApplication.current
+    let front = NSWorkspace.shared.frontmostApplication
+    let frontDescription: String
+    if let front {
+      frontDescription = "\(front.bundleIdentifier ?? "nil"):\(front.processIdentifier)"
+    } else {
+      frontDescription = "nil"
+    }
+
+    var acceptedFrom = false
+    if #available(macOS 14.0, *),
+      let front,
+      front.processIdentifier != current.processIdentifier
+    {
+      NSApp.activate()
+      acceptedFrom = current.activate(from: front, options: [.activateAllWindows])
+    } else if #available(macOS 14.0, *) {
+      NSApp.activate()
+    }
+    let acceptedDirect = current.activate(options: [.activateAllWindows])
+    let activeAfterRequest = NSApp.isActive
+    FlashLog.trace(
+      "[overlay] capture_activation front=\(frontDescription) "
+        + "accepted_from=\(acceptedFrom) accepted_direct=\(acceptedDirect) "
+        + "active=\(activeAfterRequest)")
+    return activeAfterRequest || acceptedFrom || acceptedDirect
   }
 
   func ensurePanelFrame() -> CGRect {

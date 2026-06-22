@@ -24,6 +24,7 @@ struct OverlayPointerClick: Equatable {
   var action: JumpAction
   var location: CGPoint
   var modifiers: ClickModifiers
+  var flashWasActive: Bool = false
 }
 
 final class CommandLineTextField: NSTextField {

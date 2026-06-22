@@ -71,6 +71,11 @@ extension AppDelegate {
 
     let frame = activeWindowBorderContext()?.frontWindowFrame
     guard
+      Self.activeWindowBorderPollShouldUpdate(
+        trackedFrame: activeWindowBorderTrackedFrame,
+        currentFrame: frame)
+    else { return }
+    guard
       !Self.activeWindowBorderFramesApproximatelyEqual(
         activeWindowBorderTrackedFrame,
         frame,
@@ -78,6 +83,19 @@ extension AppDelegate {
     else { return }
 
     beginTrackedWindowGeometryChange(reason: "frame_poll", frame: frame)
+  }
+
+  static func activeWindowBorderPollShouldUpdate(
+    trackedFrame: CGRect?,
+    currentFrame: CGRect?
+  ) -> Bool {
+    // WindowServer can transiently fail to report an app window while a
+    // terminal or browser is repainting. Treat a missing sample as "no
+    // update" when we already have a frame, otherwise insert-mode typing can
+    // make the active border disappear and reappear even though the mode never
+    // changed. Real moves/resizes still arrive via AX or a later non-nil poll.
+    if trackedFrame != nil, currentFrame == nil { return false }
+    return true
   }
 
   func beginTrackedWindowGeometryChange(reason: String, frame: CGRect?) {

@@ -137,6 +137,19 @@ struct WindowSnapshot {
     entries.first { $0.pid == focusedPid && $0.layer == 0 }?.nsBounds
   }
 
+  static func topInteractionEntry(
+    at point: CGPoint,
+    entries: [Entry],
+    ignoringPids: Set<pid_t> = []
+  ) -> Entry? {
+    entries.first {
+      isInteractionSurfaceLayer($0.layer)
+        && $0.pid > 0
+        && !ignoringPids.contains($0.pid)
+        && $0.nsBounds.contains(point)
+    }
+  }
+
   static func isInteractionSurfaceLayer(_ layer: Int) -> Bool {
     if layer == 0 { return true }
     let allowedLevels = [

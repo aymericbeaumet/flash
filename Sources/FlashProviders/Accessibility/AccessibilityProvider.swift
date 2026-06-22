@@ -80,6 +80,21 @@ public final class AccessibilityProvider: FlashSource {
     "AXMenuItem",
   ]
 
+  /// Web controls that should receive a real host mouse click instead
+  /// of an AXPress/AXOpen action. Browser AX layers can report
+  /// AXPress success for these roles while the page's DOM click handler
+  /// never runs (Gmail message-body links are one concrete example).
+  /// Editable web controls are deliberately excluded so they keep the
+  /// direct AX focus path and enter insert mode predictably.
+  public static let webHostClickRoles: Set<String> = [
+    "AXLink", "AXButton",
+    "AXCheckBox", "AXRadioButton",
+    "AXPopUpButton",
+    "AXTab",
+    "AXMenuItem",
+    "AXRow", "AXCell",
+  ]
+
   /// Extra web roles accepted only inside browser-extension documents, and
   /// only after an `AXPress` action check. Password-manager popups expose
   /// vault rows/options this way; ordinary web pages still use the stricter
@@ -127,6 +142,22 @@ public final class AccessibilityProvider: FlashSource {
   public init() {}
 
   public func supports(_ context: AppContext) -> Bool { true }
+
+  public static func prefersHostClick(
+    insideWebArea: Bool,
+    role: String?,
+    isExtensionPopupPressRole: Bool = false
+  ) -> Bool {
+    guard insideWebArea else { return false }
+    if let role, JumpTarget.textInputRoles.contains(role) {
+      return false
+    }
+    if isExtensionPopupPressRole {
+      return true
+    }
+    guard let role else { return false }
+    return webHostClickRoles.contains(role)
+  }
 
   public func performAction(
     _ action: SourceAction,
@@ -578,18 +609,17 @@ public final class AccessibilityProvider: FlashSource {
       state.idCounter += 1
       let captured = element
       let capturedRole = role ?? "AXUnknown"
-      // Slack/Discord/Electron expose their channel-list rows as
-      // AXRow inside an AXWebArea, and those rows often advertise
-      // AXPress (so they pass the deferred press check) but the
-      // press is wired only for assistive tech — the real
-      // navigation is JavaScript-driven from a synthesised mouse
-      // event. Bypass the AX activate path for those targets so the
-      // dispatcher falls through to `AXClick.clickAtPoint` (hit-test
-      // at the row's centre) and then a real `CGEvent` click; either
-      // one actually navigates the channel.
-      let bypassAXPressOnActivate = insideWebArea && isRowOrCellRole
+      // Web content frequently exposes AXPress on semantic controls even
+      // when the page's real click handler only observes trusted mouse
+      // events. Use the host-click path for non-editable web controls;
+      // text inputs keep the AX focus path below so insert-mode entry
+      // stays deterministic.
+      let preferHostClick = Self.prefersHostClick(
+        insideWebArea: insideWebArea,
+        role: capturedRole,
+        isExtensionPopupPressRole: isExtensionPopupPressRole)
       let activate: ((JumpAction) -> Bool) = { action in
-        if bypassAXPressOnActivate {
+        if preferHostClick {
           return false
         }
         switch action {
@@ -615,14 +645,6 @@ public final class AccessibilityProvider: FlashSource {
         capturedRole == "AXTab"
         || (subrole == "AXTabButton"
           && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
-      // Slack/Discord/Electron rows fall through `activate` to
-      // `AXClick.clickAtPoint`, which often hits an inner descendant whose
-      // AXPress only updates focus/aria-state — the React `onClick` never
-      // fires, so the first hint commit visually selects the row without
-      // navigating. `preferHostClick` skips both the AX activate path and
-      // the hit-test ancestor walk so the dispatcher synthesises a real
-      // `CGEvent` click at the row centre, which is what natively works.
-      let preferHostClick = bypassAXPressOnActivate
       let candidate = JumpTarget(
         id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
         frame: frame,

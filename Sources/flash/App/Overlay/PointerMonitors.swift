@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import FlashCore
 
 extension OverlayPanel {
@@ -94,10 +95,14 @@ extension OverlayPanel {
     let modifiers = ClickModifiers(
       eventFlags: event?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? [],
       allowed: .all)
+    let flashWasActive =
+      NSApp.isActive
+      || NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid()
     return OverlayPointerClick(
       action: action,
       location: NSEvent.mouseLocation,
-      modifiers: modifiers)
+      modifiers: modifiers,
+      flashWasActive: flashWasActive)
   }
 
   func removePointerMonitors() {

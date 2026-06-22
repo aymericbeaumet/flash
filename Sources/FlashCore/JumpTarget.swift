@@ -25,14 +25,15 @@ public struct JumpTarget: @unchecked Sendable {
   /// field, a tmux pane) sets this true so the user lands ready to type;
   /// a link or button leaves it false so keyboard navigation continues.
   public let entersInsertMode: Bool
-  /// When true, `ActionDispatcher.perform` skips the AX hit-test
-  /// fallback (`AXClick.clickAtPoint`) and goes straight to a synthesized
+  /// When true, `ActionDispatcher.perform` skips provider AX activation
+  /// and AX hit-test fallback, then goes straight to a synthesized
   /// `CGEvent` click. Set by providers whose targets sit on top of a
   /// surface that exposes an AX press action which does *not* mean
   /// "click here" — e.g. a tmux pane chip over an alacritty terminal,
-  /// whose enclosing AX element accepts AXPress but doesn't focus the
-  /// pane. Without this flag the dispatcher would treat the spurious
-  /// AXPress as a successful click and never deliver the real one.
+  /// or a browser web link whose AXPress reports success while the DOM
+  /// click handler never runs. Without this flag the dispatcher would
+  /// treat the spurious AXPress as a successful click and never deliver
+  /// the real one.
   public let preferHostClick: Bool
   /// Mark a target as structurally important inside its source so the
   /// renderer can give it a stronger visual treatment than the rest.

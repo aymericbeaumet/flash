@@ -666,6 +666,132 @@ final class NormalModeTests: XCTestCase {
       [outer])
   }
 
+  func testInsertEntryMayArmEditableFocusExitSkipsTerminalsAndLockedInsert() {
+    XCTAssertFalse(
+      AppDelegate.insertModeMayArmEditableFocusExit(
+        bundleIdentifier: "org.alacritty",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayArmEditableFocusExit(
+        bundleIdentifier: "com.apple.Terminal",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayArmEditableFocusExit(
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: true))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayArmEditableFocusExit(
+        bundleIdentifier: nil,
+        insertModeLocked: false))
+    XCTAssertTrue(
+      AppDelegate.insertModeMayArmEditableFocusExit(
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: false))
+  }
+
+  func testInsertEntryOnlyRepairsEditableFocusAfterPointerOrHintEditableHandoff() {
+    XCTAssertTrue(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .pointerClick,
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: false))
+    XCTAssertTrue(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .hintCommit,
+        bundleIdentifier: "org.mozilla.firefox",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .normalModeInput,
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .explicitCommand,
+        bundleIdentifier: "org.mozilla.firefox",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .lockedNormalModeInput,
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: true))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: .pointerClick,
+        bundleIdentifier: "org.alacritty",
+        insertModeLocked: false))
+    XCTAssertFalse(
+      AppDelegate.insertModeMayRepairEditableFocus(
+        reason: nil,
+        bundleIdentifier: "com.apple.MobileSMS",
+        insertModeLocked: false))
+  }
+
+  func testInsertEntryCarriesNormalModeTargetUnlessExplicitTargetIsProvided() {
+    XCTAssertEqual(
+      AppDelegate.insertEntryTargetPID(
+        explicitTargetPID: nil,
+        currentMode: .normal,
+        normalModeTargetPID: pid_t(42)),
+      pid_t(42))
+    XCTAssertEqual(
+      AppDelegate.insertEntryTargetPID(
+        explicitTargetPID: pid_t(7),
+        currentMode: .normal,
+        normalModeTargetPID: pid_t(42)),
+      pid_t(7))
+    XCTAssertNil(
+      AppDelegate.insertEntryTargetPID(
+        explicitTargetPID: nil,
+        currentMode: .insert,
+        normalModeTargetPID: pid_t(42)))
+  }
+
+  func testNormalModeContextPrefersCapturedTargetOnlyDuringIdleNormalCapture() {
+    XCTAssertTrue(
+      AppDelegate.normalModeShouldPreferCapturedContext(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        normalModeTargetPID: pid_t(42)))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldPreferCapturedContext(
+        mode: .insert,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        normalModeTargetPID: pid_t(42)))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldPreferCapturedContext(
+        mode: .normal,
+        overlayInputMode: .hints,
+        hasHints: false,
+        activationInFlight: false,
+        normalModeTargetPID: pid_t(42)))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldPreferCapturedContext(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: true,
+        activationInFlight: false,
+        normalModeTargetPID: pid_t(42)))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldPreferCapturedContext(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: true,
+        normalModeTargetPID: pid_t(42)))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldPreferCapturedContext(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        normalModeTargetPID: nil))
+  }
+
   func testInsertModeFocusLossExitRequiresArmedEditablePID() {
     XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: nil))
     XCTAssertFalse(shouldExitAfterFocusedElementChange(editableFocusExitPID: pid_t(43)))
@@ -698,6 +824,10 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 0))
     XCTAssertTrue(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 1))
     XCTAssertTrue(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 2))
+  }
+
+  func testInsertFocusExitArmsAfterBrowserClickSettleWindow() {
+    XCTAssertGreaterThanOrEqual(AppDelegate.insertEditableFocusArmDelayMs, 300)
   }
 
   func testInsertFocusExitOnlyProbesFocusChangingAXNotifications() {
@@ -739,23 +869,78 @@ final class NormalModeTests: XCTestCase {
         initialURL: nil))
   }
 
-  func testPointerScrollIsSuppressedInIdleNormalMode() {
+  func testPointerScrollPassesThroughInIdleNormalMode() {
     // Wheel ticks in normal mode always pass through to the focused app
     // (the overlay panel `ignoresMouseEvents`) and must never flip
-    // Flash into insert. Hints visible is the one exception — there
-    // the scroll dismisses the picker.
+    // Flash into insert or re-key normal capture. Hints visible is the
+    // one exception — there the scroll dismisses the picker.
     XCTAssertTrue(
-      AppDelegate.pointerScrollShouldBeSuppressed(
+      AppDelegate.pointerScrollShouldPassThrough(
         mode: .normal,
         hasHints: false))
     XCTAssertFalse(
-      AppDelegate.pointerScrollShouldBeSuppressed(
+      AppDelegate.pointerScrollShouldPassThrough(
         mode: .normal,
         hasHints: true))
     XCTAssertFalse(
-      AppDelegate.pointerScrollShouldBeSuppressed(
+      AppDelegate.pointerScrollShouldPassThrough(
         mode: .insert,
         hasHints: false))
+  }
+
+  func testPointerFocusLossClickClassifiesPressedMouseButtons() {
+    XCTAssertEqual(
+      AppDelegate.pointerFocusLossClick(
+        pressedMouseButtons: 1,
+        location: CGPoint(x: 20, y: 30)),
+      OverlayPointerClick(
+        action: .leftClick,
+        location: CGPoint(x: 20, y: 30),
+        modifiers: .all))
+    XCTAssertEqual(
+      AppDelegate.pointerFocusLossClick(
+        pressedMouseButtons: 2,
+        location: CGPoint(x: 20, y: 30))?.action,
+      .rightClick)
+    XCTAssertEqual(
+      AppDelegate.pointerFocusLossClick(
+        pressedMouseButtons: 0,
+        currentEventType: .rightMouseDown,
+        location: CGPoint(x: 20, y: 30))?.action,
+      .rightClick)
+    XCTAssertEqual(
+      AppDelegate.pointerFocusLossClick(
+        pressedMouseButtons: 0,
+        currentEventType: .leftMouseDown,
+        location: CGPoint(x: 20, y: 30))?.action,
+      .leftClick)
+    XCTAssertNil(
+      AppDelegate.pointerFocusLossClick(
+        pressedMouseButtons: 0,
+        location: CGPoint(x: 20, y: 30)))
+  }
+
+  func testPointerFocusLossDefersRecaptureWhilePointerMonitorCanClassifyClick() {
+    XCTAssertTrue(
+      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
+        inputMode: .normal,
+        modeBadgeVisible: true,
+        modeBadgeCapturesInput: true))
+    XCTAssertTrue(
+      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
+        inputMode: .commandLine,
+        modeBadgeVisible: false,
+        modeBadgeCapturesInput: false))
+    XCTAssertFalse(
+      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
+        inputMode: .normal,
+        modeBadgeVisible: true,
+        modeBadgeCapturesInput: false))
+    XCTAssertFalse(
+      AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
+        inputMode: .hints,
+        modeBadgeVisible: false,
+        modeBadgeCapturesInput: true))
   }
 
   func testCommandLineEntryIsAllowedFromInsertAndNormalModeEvenWithTransientHints() {
@@ -969,6 +1154,27 @@ final class NormalModeTests: XCTestCase {
         tolerance: 1))
   }
 
+  func testActiveWindowBorderPollIgnoresTransientMissingWindowSamples() {
+    let tracked = CGRect(x: 10, y: 20, width: 300, height: 200)
+    XCTAssertFalse(
+      AppDelegate.activeWindowBorderPollShouldUpdate(
+        trackedFrame: tracked,
+        currentFrame: nil))
+    XCTAssertTrue(
+      AppDelegate.activeWindowBorderPollShouldUpdate(
+        trackedFrame: nil,
+        currentFrame: nil))
+    XCTAssertTrue(
+      AppDelegate.activeWindowBorderPollShouldUpdate(
+        trackedFrame: tracked,
+        currentFrame: CGRect(x: 12, y: 20, width: 300, height: 200)))
+  }
+
+  func testCommandSurfacesPublishCommandStatusLabel() {
+    let labels = Config.Mode.Labels(normal: "N", insert: "I", command: "C")
+    XCTAssertEqual(AppDelegate.commandSurfaceModeLabel(labels: labels), "C")
+  }
+
   func testWindowGeometryNotificationsSuspendInsertBorder() {
     XCTAssertTrue(
       AppMonitor.windowGeometryNotificationRequiresBorderSuspension(kAXWindowMovedNotification))
@@ -988,6 +1194,145 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.first, 0)
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.prefix(4), [0, 10, 30, 60])
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.last, 1_400)
+  }
+
+  func testNormalModeCaptureRecoveryScheduleIsBoundedAndStartsAfterFastRamp() {
+    XCTAssertEqual(AppDelegate.normalModeCaptureRecoveryDelaysMs, [250, 750, 1_500, 3_000])
+    XCTAssertGreaterThan(AppDelegate.normalModeCaptureRecoveryDelaysMs.first ?? 0, 0)
+    XCTAssertEqual(AppDelegate.normalModeCaptureRecoveryDelaysMs.count, 4)
+  }
+
+  func testNormalModeCaptureRecoveryRetriesOnlyWhenNormalCaptureIsStillMissing() {
+    let now = Date(timeIntervalSince1970: 1_000)
+
+    XCTAssertTrue(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertTrue(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .hints,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .insert,
+        overlayInputMode: .hints,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .commandLine,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: true,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: true,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: true,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+  }
+
+  func testNormalModeCaptureRecoveryRespectsNativeSurfaceSuppressions() {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let activeSuppression = now.addingTimeInterval(0.5)
+    let expiredSuppression = now.addingTimeInterval(-0.1)
+
+    XCTAssertFalse(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: activeSuppression,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: activeSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        contextMenuInteractionRecaptureSuppressedUntil: nil,
+        pointerInsertHandoffRecaptureSuppressedUntil: activeSuppression,
+        now: now))
+    XCTAssertTrue(
+      AppDelegate.normalModeCaptureRecoveryShouldRetry(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        keyboardCaptureIsActive: false,
+        menuBarInteractionRecaptureSuppressedUntil: expiredSuppression,
+        contextMenuInteractionRecaptureSuppressedUntil: expiredSuppression,
+        pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
+        now: now))
   }
 
   func testWorkspaceActivationRecaptureSkipsRecentMenuBarInteractions() {
@@ -1098,6 +1443,44 @@ final class NormalModeTests: XCTestCase {
         dismissTransientHintsWithoutRekey: false))
   }
 
+  func testPhysicalPointerClickForwardingOnlyCoversActivationOnlyPrimaryClicks() {
+    let released = NormalModePointerPolicy.AppClickDecision(
+      releaseCapture: true,
+      probeForInsert: true,
+      suspendForNativeSurface: false,
+      dismissTransientHintsWithoutRekey: false)
+    let notReleased = NormalModePointerPolicy.AppClickDecision(
+      releaseCapture: false,
+      probeForInsert: false,
+      suspendForNativeSurface: false,
+      dismissTransientHintsWithoutRekey: false)
+
+    XCTAssertTrue(
+      AppDelegate.physicalPointerClickShouldBeForwarded(
+        decision: released,
+        click: pointerClick(.leftClick, flashWasActive: true)))
+    XCTAssertTrue(
+      AppDelegate.physicalPointerClickShouldBeForwarded(
+        decision: released,
+        click: pointerClick(.doubleClick, flashWasActive: true)))
+    XCTAssertFalse(
+      AppDelegate.physicalPointerClickShouldBeForwarded(
+        decision: released,
+        click: pointerClick(.leftClick, flashWasActive: false)))
+    XCTAssertFalse(
+      AppDelegate.physicalPointerClickShouldBeForwarded(
+        decision: released,
+        click: pointerClick(.rightClick, flashWasActive: true)))
+    XCTAssertFalse(
+      AppDelegate.physicalPointerClickShouldBeForwarded(
+        decision: notReleased,
+        click: pointerClick(.leftClick, flashWasActive: true)))
+    XCTAssertFalse(
+      AppDelegate.physicalPointerClickShouldBeForwarded(
+        decision: released,
+        click: nil))
+  }
+
   func testNormalModePointerPolicyTopLevelDecisions() {
     XCTAssertEqual(
       NormalModePointerPolicy.pointerDecision(
@@ -1107,7 +1490,25 @@ final class NormalModeTests: XCTestCase {
         activationInFlight: false,
         intent: .scroll,
         pointIsInMenuBar: false),
-      .suppressScrollAndRecapture)
+      .passThrough)
+    XCTAssertEqual(
+      NormalModePointerPolicy.pointerDecision(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: true,
+        activationInFlight: false,
+        intent: .scroll,
+        pointIsInMenuBar: false),
+      .cancelOverlay)
+    XCTAssertEqual(
+      NormalModePointerPolicy.pointerDecision(
+        mode: .normal,
+        overlayInputMode: .commandLine,
+        hasHints: false,
+        activationInFlight: false,
+        intent: .scroll,
+        pointIsInMenuBar: false),
+      .cancelOverlay)
     XCTAssertEqual(
       NormalModePointerPolicy.pointerDecision(
         mode: .normal,
@@ -1144,6 +1545,12 @@ final class NormalModeTests: XCTestCase {
         menuBarInteractionRecaptureSuppressedUntil: nil,
         pointerInsertHandoffRecaptureSuppressedUntil: expiredSuppression,
         now: now))
+  }
+
+  func testPointerFocusLossDeferralMatchesNativeInteractionWindow() {
+    XCTAssertEqual(
+      AppDelegate.pointerFocusLossRecaptureDeferralMs,
+      AppDelegate.pointerInsertHandoffRecaptureSuppressionMs)
   }
 
   func testPointerInsertHandoffTokenRejectsStaleAndExpiredProbes() {
@@ -2258,6 +2665,17 @@ final class NormalModeTests: XCTestCase {
       enabled: enabled,
       hidden: hidden,
       isEditable: isEditable)
+  }
+
+  private func pointerClick(
+    _ action: JumpAction,
+    flashWasActive: Bool
+  ) -> OverlayPointerClick {
+    OverlayPointerClick(
+      action: action,
+      location: CGPoint(x: 100, y: 100),
+      modifiers: [],
+      flashWasActive: flashWasActive)
   }
 
   private func shouldExitAfterFocusedElementChange(

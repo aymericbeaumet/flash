@@ -29,7 +29,8 @@ extension AppDelegate {
 
   func enterInsertMode(
     reason: InsertModeTransitionReason = .explicitCommand,
-    force: Bool = false
+    force: Bool = false,
+    targetPID: pid_t? = nil
   ) {
     if flashMode == .normal, modeBadgeEnabled, !force,
       !Self.normalModeMayEnterInsert(reason: reason)
@@ -49,17 +50,26 @@ extension AppDelegate {
       scheduleNormalModeRecapture()
       return
     }
+    pendingInsertModeTargetPID = Self.insertEntryTargetPID(
+      explicitTargetPID: targetPID,
+      currentMode: flashMode,
+      normalModeTargetPID: normalModeTargetPID)
     FlashLog.debug("[mode] insert reason=\(reason.logValue)")
     FlashLog.trace(
       "[mode] enter_insert reason=\(reason.logValue) from=\(flashMode) hints=\(currentHints.count) "
         + "in_flight=\(activationInFlight)")
-    transitionMode(to: .insert, reason: reason.logValue, lockInsert: reason.locksInsertMode)
+    transitionMode(
+      to: .insert,
+      reason: reason.logValue,
+      lockInsert: reason.locksInsertMode,
+      insertReason: reason)
   }
 
   private func transitionMode(
     to nextMode: FlashMode,
     reason: String,
-    lockInsert: Bool = false
+    lockInsert: Bool = false,
+    insertReason: InsertModeTransitionReason? = nil
   ) {
     let previousMode = flashMode
     insertFocusExitProbeToken &+= 1
@@ -69,6 +79,9 @@ extension AppDelegate {
     insertNavigationExitToken &+= 1
     normalModePendingCommandToken &+= 1
     insertModeLockedUntilExplicitNormal = nextMode == .insert && lockInsert
+    if nextMode != .insert {
+      pendingInsertModeTargetPID = nil
+    }
     contextMenuInteractionRecaptureSuppressedUntil = nil
     cancelPointerInsertHandoff(reason: "mode_transition_\(nextMode)_\(reason)")
     resetModeInputState()
@@ -78,7 +91,7 @@ extension AppDelegate {
       flashMode = nextMode
     }
     clearTransientHintState(reason: "enter_\(nextMode)_\(reason)")
-    modeDidEnter(nextMode, from: previousMode, reason: reason)
+    modeDidEnter(nextMode, from: previousMode, reason: reason, insertReason: insertReason)
   }
 
   func invalidateActivation(reason: String) {
@@ -125,11 +138,17 @@ extension AppDelegate {
       overlay.setActiveWindowBorder(around: nil)
     case .normal:
       normalModeRecaptureToken &+= 1
+      cancelNormalModeCaptureRecovery(reason: "leave_normal_\(reason)")
       closeModalStateForModeExit(reason: "leave_normal_\(reason)")
     }
   }
 
-  private func modeDidEnter(_ mode: FlashMode, from previousMode: FlashMode, reason: String) {
+  private func modeDidEnter(
+    _ mode: FlashMode,
+    from previousMode: FlashMode,
+    reason: String,
+    insertReason: InsertModeTransitionReason?
+  ) {
     FlashLog.trace("[mode] did_enter mode=\(mode) from=\(previousMode) reason=\(reason)")
     // Re-register scope-bound Carbon hotkeys. `.normal`-scope shortcuts
     // (e.g. cmd+tab) need to be unregistered on insert entry so the
@@ -139,13 +158,13 @@ extension AppDelegate {
     case .normal:
       modeDidEnterNormal(reason: reason)
     case .insert:
-      modeDidEnterInsert(reason: reason)
+      modeDidEnterInsert(reason: reason, insertReason: insertReason)
     }
   }
 
   private func modeDidEnterNormal(reason _: String) {
     resetModeInputState()
-    if let context = currentNonFlashContext() ?? normalModeContext() {
+    if let context = normalModeContext() {
       normalModeTargetPID = context.processID
       suppressEditableFocus(for: context.processID)
     }
@@ -153,8 +172,10 @@ extension AppDelegate {
     scheduleNormalModeRecapture()
   }
 
-  private func modeDidEnterInsert(reason: String) {
-    let insertTarget = currentNonFlashContext()
+  private func modeDidEnterInsert(reason: String, insertReason: InsertModeTransitionReason?) {
+    let insertTargetPID = pendingInsertModeTargetPID
+    pendingInsertModeTargetPID = nil
+    let insertTarget = insertTargetPID.flatMap { monitor.context(for: $0) } ?? currentNonFlashContext()
     let panelKeyAtEntry = overlay.isKeyWindow
     insertFocusOwnerPID = insertTarget?.processID
     normalModeRecaptureToken &+= 1
@@ -182,8 +203,17 @@ extension AppDelegate {
     }
     traceInsertKeyHandoff(
       target: insertTarget, panelKeyAtEntry: panelKeyAtEntry, reason: reason)
-    if !insertModeLockedUntilExplicitNormal {
+    if Self.insertModeMayRepairEditableFocus(
+      reason: insertReason,
+      bundleIdentifier: insertTarget?.bundleIdentifier,
+      insertModeLocked: insertModeLockedUntilExplicitNormal)
+    {
       repairSingleStrongEditableFocusIfNeeded(target: insertTarget, reason: reason)
+    }
+    if Self.insertModeMayArmEditableFocusExit(
+      bundleIdentifier: insertTarget?.bundleIdentifier,
+      insertModeLocked: insertModeLockedUntilExplicitNormal)
+    {
       armEditableFocusExitIfNeeded(target: insertTarget, reason: reason)
     }
   }
@@ -507,8 +537,42 @@ extension AppDelegate {
     }
   }
 
-  static let insertEditableFocusArmDelayMs = 120
+  // Browsers often bounce AX focus through wrapper/web-area nodes after a
+  // click lands in an input. Arm the "leave INSERT when editable focus is
+  // lost" watcher only after that settle window, otherwise INSERT can be
+  // entered and immediately exited by the click that was supposed to focus
+  // the input.
+  static let insertEditableFocusArmDelayMs = 300
   static let insertEditableFocusRepairDelaysMs = [40, 120, 250]
+
+  static func insertModeMayArmEditableFocusExit(
+    bundleIdentifier: String?,
+    insertModeLocked: Bool
+  ) -> Bool {
+    guard !insertModeLocked, let bundleIdentifier else { return false }
+    return !TerminalBundles.identifiers.contains(bundleIdentifier)
+  }
+
+  static func insertModeMayRepairEditableFocus(
+    reason: InsertModeTransitionReason?,
+    bundleIdentifier: String?,
+    insertModeLocked: Bool
+  ) -> Bool {
+    guard
+      insertModeMayArmEditableFocusExit(
+        bundleIdentifier: bundleIdentifier,
+        insertModeLocked: insertModeLocked)
+    else { return false }
+    return reason == .hintCommit || reason == .pointerClick
+  }
+
+  static func insertEntryTargetPID(
+    explicitTargetPID: pid_t?,
+    currentMode: FlashMode,
+    normalModeTargetPID: pid_t?
+  ) -> pid_t? {
+    explicitTargetPID ?? (currentMode == .normal ? normalModeTargetPID : nil)
+  }
 
   private func repairSingleStrongEditableFocusIfNeeded(
     target: AppContext?,
@@ -651,13 +715,13 @@ extension AppDelegate {
   /// Scroll wheel events in idle normal mode are passive: the overlay
   /// panel has `ignoresMouseEvents=true` so the scroll already reaches the
   /// focused app, and we never want a wheel tick to silently flip Flash
-  /// into insert mode. (Hints visible → still cancel: the user is
-  /// scrolling away from the picker.)
-  static func pointerScrollShouldBeSuppressed(
+  /// into insert mode or re-key normal capture. (Hints visible → still
+  /// cancel: the user is scrolling away from the picker.)
+  static func pointerScrollShouldPassThrough(
     mode: FlashMode,
     hasHints: Bool
   ) -> Bool {
-    NormalModePointerPolicy.pointerScrollShouldBeSuppressed(mode: mode, hasHints: hasHints)
+    NormalModePointerPolicy.pointerScrollShouldPassThrough(mode: mode, hasHints: hasHints)
   }
 
   static func modeOverlaySnapshot(
@@ -711,6 +775,15 @@ extension AppDelegate {
     }
   }
 
+  func publishCommandSurfaceModeLabel(reason: String) {
+    FlashLog.trace("[mode] status_label command reason=\(reason)")
+    statusBarController?.updateModeLabel(Self.commandSurfaceModeLabel(labels: config.mode.labels))
+  }
+
+  static func commandSurfaceModeLabel(labels: Config.Mode.Labels) -> String {
+    labels.command
+  }
+
   func suppressEditableFocus(for pid: pid_t) {
     guard pid > 0 else { return }
     editableFocusSuppressedPID = pid
@@ -747,6 +820,7 @@ extension AppDelegate {
     }
     normalModeRecaptureToken &+= 1
     let token = normalModeRecaptureToken
+    cancelNormalModeCaptureRecovery(reason: "new_recapture")
     FlashLog.trace(
       "[mode] schedule_recapture token=\(token) delays="
         + Self.normalModeRecaptureDelaysMs.map(String.init).joined(separator: ","))
@@ -774,6 +848,7 @@ extension AppDelegate {
     menuBarInteractionRecaptureSuppressedUntil = now.addingTimeInterval(
       Double(Self.menuBarInteractionRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
+    cancelNormalModeCaptureRecovery(reason: "menu_bar_interaction")
     FlashLog.trace("[mode] menu_bar_interaction reason=\(reason) recapture_suppressed=true")
   }
 
@@ -781,6 +856,7 @@ extension AppDelegate {
     contextMenuInteractionRecaptureSuppressedUntil = now.addingTimeInterval(
       Double(Self.contextMenuInteractionRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
+    cancelNormalModeCaptureRecovery(reason: "context_menu_interaction")
     FlashLog.trace("[mode] context_menu_interaction reason=\(reason) recapture_suppressed=true")
   }
 
@@ -790,6 +866,7 @@ extension AppDelegate {
     pointerInsertHandoffRecaptureSuppressedUntil = now.addingTimeInterval(
       Double(Self.pointerInsertHandoffRecaptureSuppressionMs) / 1_000.0)
     normalModeRecaptureToken &+= 1
+    cancelNormalModeCaptureRecovery(reason: "pointer_insert_handoff")
     FlashLog.trace(
       "[mode] pointer_insert_handoff reason=\(reason) token=\(pointerInsertHandoffToken) "
         + "recapture_suppressed=true")
@@ -972,10 +1049,23 @@ extension AppDelegate {
   private func verifyNormalModeCapture(reason: String) {
     normalModeCaptureVerificationToken &+= 1
     let token = normalModeCaptureVerificationToken
+    let recaptureToken = normalModeRecaptureToken
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
       guard let self, self.normalModeCaptureVerificationToken == token else { return }
-      guard self.shouldCaptureNormalModeInput else { return }
-      guard !self.overlay.keyboardCaptureIsActive else { return }
+      guard
+        Self.normalModeCaptureRecoveryShouldRetry(
+          mode: self.flashMode,
+          overlayInputMode: self.overlay.inputMode,
+          hasHints: !self.currentHints.isEmpty,
+          activationInFlight: self.activationInFlight,
+          keyboardCaptureIsActive: self.overlay.keyboardCaptureIsActive,
+          menuBarInteractionRecaptureSuppressedUntil:
+            self.menuBarInteractionRecaptureSuppressedUntil,
+          contextMenuInteractionRecaptureSuppressedUntil:
+            self.contextMenuInteractionRecaptureSuppressedUntil,
+          pointerInsertHandoffRecaptureSuppressedUntil:
+            self.pointerInsertHandoffRecaptureSuppressedUntil)
+      else { return }
       // On macOS Tahoe (26) the system can refuse to grant key window to
       // an accessory app even after `NSApp.activate()` — Firefox holds
       // activation and won't yield. The original code escalated to
@@ -983,14 +1073,79 @@ extension AppDelegate {
       // more retries, each landing back here when they failed and
       // cascading into a tight loop that pegged the main runloop. The
       // owning `scheduleNormalModeRecapture` already retries on a
-      // 0/10/30/60/120/250/500/900/1400 ms ramp; if every retry on that
-      // ramp lost the race we accept the loss and wait for the next
-      // explicit `enter_normal_mode` press. Stops the spin without
-      // hiding the diagnostic.
+      // 0/10/30/60/120/250/500/900/1400 ms ramp. If that ramp still
+      // loses the activation race, schedule one bounded late-recovery
+      // series. That avoids the old recursive spin while recovering
+      // from transient front-app activation refusal.
       FlashLog.debug(
         "[mode] capture_inactive reason=\(reason) key=\(self.overlay.isKeyWindow) "
           + "first_responder=\(String(describing: self.overlay.firstResponder))")
+      self.scheduleNormalModeCaptureRecovery(reason: reason, recaptureToken: recaptureToken)
     }
+  }
+
+  private func scheduleNormalModeCaptureRecovery(reason: String, recaptureToken: UInt64) {
+    guard normalModeCaptureRecoveryRecaptureToken != recaptureToken else { return }
+    guard normalModeRecaptureToken == recaptureToken else { return }
+    normalModeCaptureRecoveryToken &+= 1
+    let recoveryToken = normalModeCaptureRecoveryToken
+    normalModeCaptureRecoveryRecaptureToken = recaptureToken
+    FlashLog.trace(
+      "[mode] capture_recovery_schedule reason=\(reason) token=\(recaptureToken) delays="
+        + Self.normalModeCaptureRecoveryDelaysMs.map(String.init).joined(separator: ","))
+    for (index, delayMs) in Self.normalModeCaptureRecoveryDelaysMs.enumerated() {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+        guard let self else { return }
+        guard self.normalModeCaptureRecoveryToken == recoveryToken else {
+          FlashLog.trace(
+            "[mode] capture_recovery_skip token=\(recaptureToken) delay=\(delayMs) "
+              + "reason=stale_recovery")
+          return
+        }
+        guard self.normalModeRecaptureToken == recaptureToken else {
+          FlashLog.trace(
+            "[mode] capture_recovery_skip token=\(recaptureToken) delay=\(delayMs) "
+              + "reason=stale_recapture current=\(self.normalModeRecaptureToken)")
+          return
+        }
+        guard
+          Self.normalModeCaptureRecoveryShouldRetry(
+            mode: self.flashMode,
+            overlayInputMode: self.overlay.inputMode,
+            hasHints: !self.currentHints.isEmpty,
+            activationInFlight: self.activationInFlight,
+            keyboardCaptureIsActive: self.overlay.keyboardCaptureIsActive,
+            menuBarInteractionRecaptureSuppressedUntil:
+              self.menuBarInteractionRecaptureSuppressedUntil,
+            contextMenuInteractionRecaptureSuppressedUntil:
+              self.contextMenuInteractionRecaptureSuppressedUntil,
+            pointerInsertHandoffRecaptureSuppressedUntil:
+              self.pointerInsertHandoffRecaptureSuppressedUntil)
+        else {
+          FlashLog.trace(
+            "[mode] capture_recovery_skip token=\(recaptureToken) delay=\(delayMs) "
+              + "reason=state")
+          return
+        }
+        FlashLog.trace(
+          "[mode] capture_recovery_apply token=\(recaptureToken) delay=\(delayMs)")
+        self.applyModeOverlay(captureOverride: true)
+        if self.overlay.keyboardCaptureIsActive {
+          self.normalModeCaptureRecoveryToken &+= 1
+          self.normalModeCaptureRecoveryRecaptureToken = nil
+          FlashLog.trace("[mode] capture_recovery_done token=\(recaptureToken)")
+        } else if index == Self.normalModeCaptureRecoveryDelaysMs.indices.last {
+          FlashLog.debug("[mode] capture_recovery_exhausted token=\(recaptureToken)")
+        }
+      }
+    }
+  }
+
+  private func cancelNormalModeCaptureRecovery(reason: String) {
+    guard normalModeCaptureRecoveryRecaptureToken != nil else { return }
+    normalModeCaptureRecoveryToken &+= 1
+    normalModeCaptureRecoveryRecaptureToken = nil
+    FlashLog.trace("[mode] capture_recovery_cancel reason=\(reason)")
   }
 
   func scheduleNormalModeRecaptureAfterPointerFocusLoss() {
@@ -1014,16 +1169,90 @@ extension AppDelegate {
       FlashLog.trace("[mode] pointer_recapture_skip target=menu_bar")
       return
     }
+    if let click = Self.pointerFocusLossClick(
+      pressedMouseButtons: NSEvent.pressedMouseButtons,
+      currentEventType: NSApp.currentEvent?.type,
+      location: NSEvent.mouseLocation)
+    {
+      cancelPointerInsertHandoff(reason: "pointer_focus_loss")
+      FlashLog.trace(
+        "[mode] pointer_focus_loss_handoff action=\(click.action) "
+          + "buttons=\(NSEvent.pressedMouseButtons)")
+      let decision = NormalModePointerPolicy.appClickDecision(
+        mode: flashMode,
+        wasCommandLine: overlay.inputMode == .commandLine,
+        hasHints: false,
+        action: click.action)
+      handleAppPointerDecision(decision, click: click)
+      return
+    }
+    if Self.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
+      inputMode: overlay.inputMode,
+      modeBadgeVisible: overlay.modeBadgeVisible,
+      modeBadgeCapturesInput: overlay.modeBadgeCapturesInput)
+    {
+      deferNormalModeRecaptureAfterPointerFocusLoss(reason: "await_pointer_monitor")
+      return
+    }
     FlashLog.trace(
       "[mode] pointer_recapture_force target=\(Self.pointerFocusLossTarget()) "
         + "reason=normal_mode_focus_contract")
     scheduleNormalModeRecapture()
   }
 
+  private func deferNormalModeRecaptureAfterPointerFocusLoss(reason: String) {
+    normalModeRecaptureToken &+= 1
+    let token = normalModeRecaptureToken
+    FlashLog.trace(
+      "[mode] pointer_recapture_defer target=\(Self.pointerFocusLossTarget()) "
+        + "reason=\(reason) token=\(token)")
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(Self.pointerFocusLossRecaptureDeferralMs)
+    ) { [weak self] in
+      guard let self else { return }
+      guard self.normalModeRecaptureToken == token else {
+        FlashLog.trace("[mode] pointer_recapture_defer_skip token=\(token) reason=stale")
+        return
+      }
+      guard self.flashMode == .normal else {
+        FlashLog.trace(
+          "[mode] pointer_recapture_defer_skip token=\(token) reason=mode "
+            + "mode=\(self.flashMode)")
+        return
+      }
+      guard !Self.contextMenuInteractionRecaptureSuppressionIsActive(
+        until: self.contextMenuInteractionRecaptureSuppressedUntil)
+      else {
+        FlashLog.trace(
+          "[mode] pointer_recapture_defer_skip token=\(token) reason=context_menu_interaction")
+        return
+      }
+      guard !Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+        until: self.pointerInsertHandoffRecaptureSuppressedUntil)
+      else {
+        FlashLog.trace(
+          "[mode] pointer_recapture_defer_skip token=\(token) "
+            + "reason=pointer_insert_handoff_pending")
+        return
+      }
+      if Self.pointIsInMenuBar(NSEvent.mouseLocation) {
+        self.noteMenuBarInteraction(reason: "pointer_focus_loss_deferred")
+        FlashLog.trace("[mode] pointer_recapture_defer_skip token=\(token) target=menu_bar")
+        return
+      }
+      FlashLog.trace(
+        "[mode] pointer_recapture_force target=\(Self.pointerFocusLossTarget()) "
+          + "reason=normal_mode_focus_contract_deferred")
+      self.scheduleNormalModeRecapture()
+    }
+  }
+
   static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]
+  static let normalModeCaptureRecoveryDelaysMs = [250, 750, 1_500, 3_000]
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
   static let pointerInsertHandoffRecaptureSuppressionMs = 1_500
+  static let pointerFocusLossRecaptureDeferralMs = 1_500
   static let windowGeometryQuietMs = 160
   static let activeWindowBorderTrackingIntervalMs = 50
   static let activeWindowBorderTrackingLeewayMs = 10
@@ -1031,6 +1260,33 @@ extension AppDelegate {
 
   private static func pointerFocusLossTarget() -> String {
     pointIsInMenuBar(NSEvent.mouseLocation) ? "menu_bar" : "window_or_popup"
+  }
+
+  static func pointerFocusLossClick(
+    pressedMouseButtons: Int,
+    currentEventType: NSEvent.EventType? = nil,
+    location: CGPoint
+  ) -> OverlayPointerClick? {
+    if currentEventType == .rightMouseDown {
+      return OverlayPointerClick(action: .rightClick, location: location, modifiers: .all)
+    }
+    if currentEventType == .leftMouseDown || currentEventType == .otherMouseDown {
+      return OverlayPointerClick(action: .leftClick, location: location, modifiers: .all)
+    }
+    guard pressedMouseButtons != 0 else { return nil }
+    let action: JumpAction = (pressedMouseButtons & (1 << 1)) != 0 ? .rightClick : .leftClick
+    return OverlayPointerClick(action: action, location: location, modifiers: .all)
+  }
+
+  static func pointerFocusLossShouldDeferRecaptureForPointerMonitor(
+    inputMode: OverlayInputMode,
+    modeBadgeVisible: Bool,
+    modeBadgeCapturesInput: Bool
+  ) -> Bool {
+    OverlayPanel.pointerIntentMonitorShouldRun(
+      inputMode: inputMode,
+      modeBadgeVisible: modeBadgeVisible,
+      modeBadgeCapturesInput: modeBadgeCapturesInput)
   }
 
   static func pointIsInMenuBar(_ point: CGPoint) -> Bool {
@@ -1053,6 +1309,37 @@ extension AppDelegate {
   ) -> Bool {
     guard let until else { return false }
     return now < until
+  }
+
+  static func normalModeCaptureRecoveryShouldRetry(
+    mode: FlashMode,
+    overlayInputMode: OverlayInputMode,
+    hasHints: Bool,
+    activationInFlight: Bool,
+    keyboardCaptureIsActive: Bool,
+    menuBarInteractionRecaptureSuppressedUntil: Date?,
+    contextMenuInteractionRecaptureSuppressedUntil: Date?,
+    pointerInsertHandoffRecaptureSuppressedUntil: Date?,
+    now: Date = Date()
+  ) -> Bool {
+    guard mode == .normal, !hasHints, !activationInFlight, !keyboardCaptureIsActive else {
+      return false
+    }
+    switch overlayInputMode {
+    case .commandLine, .modal, .candidateFinder:
+      return false
+    case .hints, .normal:
+      break
+    }
+    return !menuBarInteractionRecaptureSuppressionIsActive(
+      until: menuBarInteractionRecaptureSuppressedUntil,
+      now: now)
+      && !contextMenuInteractionRecaptureSuppressionIsActive(
+        until: contextMenuInteractionRecaptureSuppressedUntil,
+        now: now)
+      && !pointerInsertHandoffRecaptureSuppressionIsActive(
+        until: pointerInsertHandoffRecaptureSuppressedUntil,
+        now: now)
   }
 
   var shouldCaptureNormalModeInput: Bool {
@@ -1244,6 +1531,7 @@ extension AppDelegate {
     let command = Self.commandLineBuffer(from: initialText)
     notifyPluginsAfterCandidateFinderSnapshot(scope: self.candidateFinderScope)
     prewarmCandidateFinderCaches(reason: "command_line_open")
+    publishCommandSurfaceModeLabel(reason: "command_line_open")
     refreshCommandLine(text: command, cursorIndex: command.count)
   }
 
@@ -1325,6 +1613,7 @@ extension AppDelegate {
     clearCandidateFinderState()
     overlay.hide()
     overlay.setActiveWindowBorder(around: nil)
+    publishCommandSurfaceModeLabel(reason: reason)
   }
 
   /// `:clipboard` — fetch the full history from the clipboard plugin and open
@@ -1376,6 +1665,7 @@ extension AppDelegate {
     overlay.setActiveWindowBorder(around: nil)
     notifyPluginsAfterCandidateFinderSnapshot(scope: scope)
     prewarmCandidateFinderCaches(reason: "candidate_finder_open")
+    publishCommandSurfaceModeLabel(reason: "candidate_finder_open")
     overlay.displayCandidateFinder(query: "", items: [])
   }
 
@@ -2522,7 +2812,18 @@ extension AppDelegate {
   }
 
   func normalModeContext() -> AppContext? {
-    if let context = currentNonFlashContext() {
+    if Self.normalModeShouldPreferCapturedContext(
+      mode: flashMode,
+      overlayInputMode: overlay.inputMode,
+      hasHints: !currentHints.isEmpty,
+      activationInFlight: activationInFlight,
+      normalModeTargetPID: normalModeTargetPID),
+      let pid = normalModeTargetPID,
+      let context = monitor.context(for: pid)
+    {
+      return context
+    }
+    if let context = currentDirectNonFlashContext() {
       normalModeTargetPID = context.processID
       return context
     }
@@ -2531,7 +2832,25 @@ extension AppDelegate {
     {
       return context
     }
+    if let context = currentNonFlashContext() {
+      normalModeTargetPID = context.processID
+      return context
+    }
     return nil
+  }
+
+  static func normalModeShouldPreferCapturedContext(
+    mode: FlashMode,
+    overlayInputMode: OverlayInputMode,
+    hasHints: Bool,
+    activationInFlight: Bool,
+    normalModeTargetPID: pid_t?
+  ) -> Bool {
+    mode == .normal
+      && overlayInputMode == .normal
+      && !hasHints
+      && !activationInFlight
+      && normalModeTargetPID != nil
   }
 
   enum NavigationDirection {

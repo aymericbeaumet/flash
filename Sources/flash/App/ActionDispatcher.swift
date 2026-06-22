@@ -4,6 +4,11 @@ import FlashCore
 import FlashProviders
 
 enum ActionDispatcher {
+  enum DispatchRoute: Equatable {
+    case accessibilityThenHostClick
+    case hostClick
+  }
+
   /// Click pipeline. Every f/F variant visibly moves the cursor to the
   /// target first — matching the `mf`/`mF` move-only behaviour — and
   /// then performs the action. The cursor is left at the click site so
@@ -14,6 +19,9 @@ enum ActionDispatcher {
   ///      can't carry a shift/cmd modifier, and most modifier-clicks
   ///      (shift+click selection, opt+click in code editors, …) only
   ///      mean anything when a real mouse event reaches the app.
+  ///      Targets marked `preferHostClick` take the same path: those
+  ///      surfaces expose AX actions that report success without
+  ///      delivering the click the host app expects.
   ///   2. `target.activate(action)` — provider-owned best-known path.
   ///      AccessibilityProvider tries focus-set (text inputs) +
   ///      AXPress/AXOpen/AXConfirm. The cursor is already at the
@@ -21,10 +29,6 @@ enum ActionDispatcher {
   ///   3. AX hit-test at the click point (`AXClick.clickAtPoint`) —
   ///      recovers inert-wrapper cases where the chip's element
   ///      exposes no AX action but the node under the point does.
-  ///      Skipped when `target.preferHostClick` is set: providers like
-  ///      tmux sit over terminal surfaces whose enclosing AX element
-  ///      reports AXPress success without actually delivering a click,
-  ///      so falling through here would silently strand the user.
   ///   4. Synthesized `CGEvent` mouse click (`synthesizeClick`) — last
   ///      resort.
   ///
@@ -39,7 +43,7 @@ enum ActionDispatcher {
     modifiers: ClickModifiers = []
   ) -> Bool {
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
-    if !modifiers.isEmpty {
+    if dispatchRoute(for: target, modifiers: modifiers) == .hostClick {
       // synthesizeClick handles its own visible warp; calling moveCursor
       // here too would post a redundant mouseMoved.
       return synthesizeClick(at: point, action: action, modifiers: modifiers)
@@ -53,13 +57,19 @@ enum ActionDispatcher {
     if let activate = target.activate, activate(action) {
       return true
     }
-    if !target.preferHostClick,
-      let pid = target.pid,
+    if let pid = target.pid,
       AXClick.clickAtPoint(pid: pid, nsScreenPoint: point, action: action)
     {
       return true
     }
     return synthesizeClick(at: point, action: action)
+  }
+
+  static func dispatchRoute(for target: JumpTarget, modifiers: ClickModifiers) -> DispatchRoute {
+    if !modifiers.isEmpty || target.preferHostClick {
+      return .hostClick
+    }
+    return .accessibilityThenHostClick
   }
 
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left

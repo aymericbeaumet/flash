@@ -13,12 +13,21 @@ extension AppMonitor {
   }
 
   func frontmostContext(excludingBundleIdentifier ignoredBundleIdentifier: String) -> AppContext? {
-    if let context = currentContext(),
-      context.bundleIdentifier != ignoredBundleIdentifier
+    if let context = frontmostApplicationContext(
+      excludingBundleIdentifier: ignoredBundleIdentifier)
     {
-      return clip(context, to: topWindowFrame(for: context.processID) ?? context.frontWindowFrame)
+      return context
     }
     return topVisibleWindowContext(excludingBundleIdentifier: ignoredBundleIdentifier)
+  }
+
+  func frontmostApplicationContext(
+    excludingBundleIdentifier ignoredBundleIdentifier: String
+  ) -> AppContext? {
+    guard let context = currentContext(),
+      context.bundleIdentifier != ignoredBundleIdentifier
+    else { return nil }
+    return clip(context, to: topWindowFrame(for: context.processID) ?? context.frontWindowFrame)
   }
 
   func context(for pid: pid_t) -> AppContext? {
@@ -36,6 +45,27 @@ extension AppMonitor {
     guard let context = makeContext(for: app) else { return nil }
     guard let frame = topApplicationWindowFrame(for: pid) else { return nil }
     return clip(context, to: frame)
+  }
+
+  func context(
+    at point: CGPoint,
+    excludingBundleIdentifier ignoredBundleIdentifier: String
+  ) -> AppContext? {
+    let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
+    else { return nil }
+    guard
+      let entry = WindowSnapshot.topInteractionEntry(
+        at: point,
+        entries: WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight()),
+        ignoringPids: [getpid()])
+    else { return nil }
+    guard let app = NSRunningApplication(processIdentifier: entry.pid),
+      !app.isTerminated,
+      app.bundleIdentifier != ignoredBundleIdentifier,
+      !Self.systemChromeBundleIdentifiers.contains(app.bundleIdentifier ?? "")
+    else { return nil }
+    return makeContext(for: app, frontWindowFrame: entry.nsBounds)
   }
 
   func clip(_ context: AppContext, to frame: CGRect) -> AppContext {

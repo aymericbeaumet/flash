@@ -38,10 +38,8 @@ extension AppDelegate {
       pointIsInMenuBar: pointIsInMenuBar)
 
     switch decision {
-    case .suppressScrollAndRecapture:
-      FlashLog.trace("[mode] suppress_pointer_scroll reason=idle_normal_mode")
-      applyModeOverlay()
-      scheduleNormalModeRecapture()
+    case .passThrough:
+      FlashLog.trace("[mode] pointer_pass_through reason=idle_scroll")
       return
     case .menuBar(let menuDecision):
       noteMenuBarInteraction(reason: "pointer_click")
@@ -64,7 +62,7 @@ extension AppDelegate {
     }
   }
 
-  private func handleAppPointerDecision(
+  func handleAppPointerDecision(
     _ decision: NormalModePointerPolicy.AppClickDecision,
     click: OverlayPointerClick?
   ) {
@@ -74,7 +72,13 @@ extension AppDelegate {
     // that restoration. Plain app clicks while NORMAL is capturing are
     // different: the user deliberately chose the app with the pointer, so
     // Flash releases keyboard capture and hands input to that app.
-    let targetPID = currentNonFlashContext()?.processID ?? normalModeTargetPID
+    let clickedContext = click.flatMap { currentNonFlashContext(at: $0.location) }
+    let targetPID = clickedContext?.processID ?? currentDirectNonFlashContext()?.processID
+      ?? normalModeTargetPID
+    if let clickedContext, flashMode == .normal {
+      normalModeTargetPID = clickedContext.processID
+      suppressEditableFocus(for: clickedContext.processID)
+    }
     if decision.dismissTransientHintsWithoutRekey {
       dismissTransientPointerStateWithoutRekey(reason: "physical_native_surface")
     }
@@ -109,6 +113,10 @@ extension AppDelegate {
             token: handoffToken)
         case .recaptureNormal:
           self.clearPointerInsertHandoff(reason: "physical_pointer_probe_done", token: handoffToken)
+          self.forwardPhysicalPointerClickIfNeeded(
+            decision: decision,
+            click: click,
+            targetPID: targetPID)
           guard self.flashMode == .normal else { return }
           self.scheduleNormalModeRecapture()
         case .suspendedNativeSurface:
@@ -282,6 +290,7 @@ extension AppDelegate {
       "[commit] action=\(action) role=\(hint.target.role ?? "?") "
         + "provider=\(hint.target.providerID) "
         + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y))) "
+        + "prefer_host_click=\(hint.target.preferHostClick) "
         + "modifiers=cmd:\(clickModifiers.contains(.command)) "
         + "shift:\(clickModifiers.contains(.shift)) "
         + "ctrl:\(clickModifiers.contains(.control)) "
@@ -325,7 +334,7 @@ extension AppDelegate {
         self.restoreNormalModeAfterCommit(action: action)
       } else if wasNormalMode, actionMayEnterInsert {
         if hint.target.entersInsertMode {
-          self.enterInsertMode(reason: .hintCommit)
+          self.enterInsertMode(reason: .hintCommit, targetPID: pid)
           return
         }
         self.enterInsertModeIfClickedOnTextInput(
@@ -414,6 +423,43 @@ extension AppDelegate {
     }
     applyModeOverlay(captureOverride: false)
     overlay.inputMode = .normal
+  }
+
+  private func forwardPhysicalPointerClickIfNeeded(
+    decision: NormalModePointerPolicy.AppClickDecision,
+    click: OverlayPointerClick?,
+    targetPID: pid_t?
+  ) {
+    guard Self.physicalPointerClickShouldBeForwarded(decision: decision, click: click),
+      let click
+    else { return }
+    if let targetPID, let app = NSRunningApplication(processIdentifier: targetPID) {
+      RunningApplicationActivation.activate(app, options: [])
+    }
+    FlashLog.trace(
+      "[mode] pointer_forward_host_click action=\(click.action) "
+        + "point=(\(Int(click.location.x)),\(Int(click.location.y))) "
+        + "modifiers=cmd:\(click.modifiers.contains(.command)) "
+        + "shift:\(click.modifiers.contains(.shift)) "
+        + "ctrl:\(click.modifiers.contains(.control)) "
+        + "alt:\(click.modifiers.contains(.option))")
+    _ = ActionDispatcher.synthesizeClick(
+      at: click.location,
+      action: click.action,
+      modifiers: click.modifiers)
+  }
+
+  static func physicalPointerClickShouldBeForwarded(
+    decision: NormalModePointerPolicy.AppClickDecision,
+    click: OverlayPointerClick?
+  ) -> Bool {
+    guard decision.releaseCapture, let click, click.flashWasActive else { return false }
+    switch click.action {
+    case .leftClick, .doubleClick:
+      return true
+    case .rightClick:
+      return false
+    }
   }
 
   private func commitMouseGridCell(hint: AssignedHint, clickModifiers: ClickModifiers) {
@@ -518,7 +564,7 @@ extension AppDelegate {
     if let terminalPID = pid ?? currentNonFlashContext()?.processID,
       isTerminalApp(pid: terminalPID)
     {
-      enterInsertMode(reason: reason)
+      enterInsertMode(reason: reason, targetPID: terminalPID)
       completion?(.enteredInsert)
       return
     }
@@ -543,7 +589,7 @@ extension AppDelegate {
         }
         switch decision {
         case .enterInsert:
-          self.enterInsertMode(reason: reason)
+          self.enterInsertMode(reason: reason, targetPID: targetPID)
           completion?(.enteredInsert)
         case .recaptureNormal:
           completion?(.recaptureNormal)

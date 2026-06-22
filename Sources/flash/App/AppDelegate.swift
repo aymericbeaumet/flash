@@ -250,6 +250,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var resignKeyToken: NSObjectProtocol?
   var normalModeRecaptureToken: UInt64 = 0
   var normalModeCaptureVerificationToken: UInt64 = 0
+  var normalModeCaptureRecoveryToken: UInt64 = 0
+  var normalModeCaptureRecoveryRecaptureToken: UInt64?
+  var pendingInsertModeTargetPID: pid_t?
   var menuBarInteractionRecaptureSuppressedUntil: Date?
   var contextMenuInteractionRecaptureSuppressedUntil: Date?
   var pointerInsertHandoffRecaptureSuppressedUntil: Date?

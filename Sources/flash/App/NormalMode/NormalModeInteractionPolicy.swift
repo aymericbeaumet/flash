@@ -15,7 +15,7 @@ enum NormalModePointerPolicy {
   }
 
   enum PointerDecision: Equatable {
-    case suppressScrollAndRecapture
+    case passThrough
     case menuBar(MenuBarClickDecision)
     case app(AppClickDecision)
     case cancelOverlay
@@ -30,9 +30,10 @@ enum NormalModePointerPolicy {
     pointIsInMenuBar: Bool
   ) -> PointerDecision {
     if case .scroll = intent {
-      return pointerScrollShouldBeSuppressed(mode: mode, hasHints: hasHints)
-        ? .suppressScrollAndRecapture
-        : .cancelOverlay
+      if overlayInputMode == .commandLine || overlayInputMode == .candidateFinder || hasHints {
+        return .cancelOverlay
+      }
+      return .passThrough
     }
 
     guard case .click(let click) = intent else { return .cancelOverlay }
@@ -92,7 +93,7 @@ enum NormalModePointerPolicy {
     }
   }
 
-  static func pointerScrollShouldBeSuppressed(
+  static func pointerScrollShouldPassThrough(
     mode: FlashMode,
     hasHints: Bool
   ) -> Bool {

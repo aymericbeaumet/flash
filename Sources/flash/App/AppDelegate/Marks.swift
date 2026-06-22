@@ -311,4 +311,14 @@ extension AppDelegate {
     let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
     return monitor.frontmostContext(excludingBundleIdentifier: flashBundleIdentifier)
   }
+
+  func currentDirectNonFlashContext() -> AppContext? {
+    let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
+    return monitor.frontmostApplicationContext(excludingBundleIdentifier: flashBundleIdentifier)
+  }
+
+  func currentNonFlashContext(at point: CGPoint) -> AppContext? {
+    let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
+    return monitor.context(at: point, excludingBundleIdentifier: flashBundleIdentifier)
+  }
 }
