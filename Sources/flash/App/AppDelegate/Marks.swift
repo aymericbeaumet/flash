@@ -91,6 +91,33 @@ extension AppDelegate {
         + "forward=\(movementForwardStack.count)")
   }
 
+  func scheduleAmbientLocationRecord(pid: pid_t, reason: String) {
+    ambientLocationRecordToken &+= 1
+    let token = ambientLocationRecordToken
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
+      guard let self, self.ambientLocationRecordToken == token else { return }
+      guard let context = self.currentNonFlashContext(), context.processID == pid else { return }
+      let recordedPreciseLocation = self.recordCurrentLocation(in: context, source: reason)
+      guard !recordedPreciseLocation else { return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(750)) { [weak self] in
+        guard let self, self.ambientLocationRecordToken == token else { return }
+        guard let context = self.currentNonFlashContext(), context.processID == pid else { return }
+        _ = self.recordCurrentLocation(in: context, source: "\(reason)_retry")
+      }
+    }
+  }
+
+  @discardableResult
+  func recordCurrentLocation(in context: AppContext, source: String) -> Bool {
+    if let location = registry.currentLocation(in: context) {
+      recordMovement(.candidate(location), source: source)
+      return location.kind != .app
+    } else {
+      recordMovement(.app(pid: context.processID), source: source)
+      return false
+    }
+  }
+
   func navigateMovementHistory(direction: NavigationDirection) {
     let current = currentMovementEntry()
     if let current { movementCurrent = current }
@@ -135,13 +162,10 @@ extension AppDelegate {
   }
 
   private func currentMovementEntry() -> MovementEntry? {
-    if let current = movementCurrent,
-      let context = currentNonFlashContext(),
-      current.pid == context.processID
-    {
-      return current
-    }
     if let context = currentNonFlashContext() {
+      if let location = registry.currentLocation(in: context) {
+        return .candidate(location)
+      }
       return .app(pid: context.processID)
     }
     if let current = movementCurrent {
@@ -253,10 +277,16 @@ extension AppDelegate {
       if candidate.kind == .app {
         return Self.appMovementIdentity(candidate)
       }
+      guard registry.source(identifier: candidate.sourceID) != nil else { return nil }
+      if candidate.isLocation {
+        if let url = candidate.url {
+          return MovementIdentity(key: Self.locationMovementKey(url))
+        }
+        return MovementIdentity(key: entry.key)
+      }
       if let pid = candidate.pid, NSRunningApplication(processIdentifier: pid) == nil {
         return nil
       }
-      guard registry.source(identifier: candidate.sourceID) != nil else { return nil }
       return MovementIdentity(key: entry.key)
     case .route:
       guard let navigationURL = entry.navigationURL,
@@ -268,6 +298,10 @@ extension AppDelegate {
 
   private static func navigationMovementKey(_ url: URL) -> String {
     "route:\(url.absoluteString)"
+  }
+
+  private static func locationMovementKey(_ url: URL) -> String {
+    "location:\(url.absoluteString)"
   }
 
   private static func appMovementIdentity(_ candidate: Candidate) -> MovementIdentity? {

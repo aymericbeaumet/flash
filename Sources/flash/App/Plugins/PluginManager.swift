@@ -141,6 +141,10 @@ final class PluginManager {
   /// Root `only_bundle_ids` across loaded plugins. Used by focus/flashlight
   /// refresh paths without scanning manifests at runtime.
   private var claimedBundleIDsIndex: Set<String> = []
+  /// Process IDs that already received the post-ready running-app snapshot.
+  /// Keyed by plugin id so file-watch restarts (new pid, same manifest) replay
+  /// the snapshot exactly once for the new child.
+  private var readyAppsSnapshotReplayPIDs: [String: Int] = [:]
   /// Plugins whose in-memory snapshots may contain dynamic bang rows.
   private var snapshotBangPlugins: [PluginProcess] = []
   /// True when any loaded manifest or compiled registration references
@@ -152,6 +156,7 @@ final class PluginManager {
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
   var onStateChanged: (() -> Void)?
+  var onSnapshotChanged: ((String) -> Void)?
   /// Resolver for the `host.normal_mode_target` RPC: returns the focused
   /// non-Flash app context (pid + bundle id) the host considers the
   /// normal-mode target. Plugins (notably `marks`) call this to record or
@@ -210,6 +215,7 @@ final class PluginManager {
       verbIndex.removeAll()
       mappingIndex.removeAll()
       claimedBundleIDsIndex.removeAll()
+      readyAppsSnapshotReplayPIDs.removeAll()
       snapshotBangPlugins.removeAll()
       selectorContextNeedsURL = false
       sourceAdaptersByID.removeAll()
@@ -402,7 +408,8 @@ final class PluginManager {
     queue.sync { claimedBundleIDsIndex }
   }
 
-  func shebangCandidates(in context: PluginSelectorContext = PluginSelectorContext()) -> [Candidate] {
+  func shebangCandidates(in context: PluginSelectorContext = PluginSelectorContext()) -> [Candidate]
+  {
     queue.sync {
       var out: [Candidate] = []
       for item in shebangCandidateIndex where item.selector.matches(context) {
@@ -506,7 +513,8 @@ final class PluginManager {
         guard let score = item.selector.specificity(in: context) else { continue }
         out.append((score, item.order, item.registration))
       }
-      return out
+      return
+        out
         .sorted {
           if $0.score != $1.score { return $0.score > $1.score }
           return $0.order < $1.order
@@ -519,8 +527,7 @@ final class PluginManager {
     command: String,
     subcommand: String,
     in context: PluginSelectorContext = PluginSelectorContext()
-  ) -> Bool
-  {
+  ) -> Bool {
     let lcCommand = command.lowercased()
     let key = CommandKey(command: lcCommand, subcommand: subcommand.lowercased())
     return queue.sync {
@@ -831,6 +838,16 @@ final class PluginManager {
     }
   }
 
+  func snapshotAffectsDefaultFlashlight(pluginID: String) -> Bool {
+    queue.sync {
+      guard let manifest = pluginsByID[pluginID]?.manifest else { return true }
+      guard manifest.providesCandidates else { return false }
+      let descriptors = manifest.candidateSourceDescriptors
+      if descriptors.isEmpty { return true }
+      return descriptors.contains { $0.kind == .locations }
+    }
+  }
+
   func stateJSON() -> [[String: Any]] {
     statusSnapshots().map(\.jsonObject)
   }
@@ -849,6 +866,12 @@ final class PluginManager {
     for item in desired {
       do {
         let manifest = try PluginManifest.load(from: item.root)
+        if config.plugins.disabled.contains(manifest.id) {
+          FlashLog.info(
+            "[plugins] disabled plugin \(manifest.id) skipped",
+            fields: ["id": manifest.id, "root": item.root.path])
+          continue
+        }
         if nextIDs.contains(manifest.id) {
           FlashLog.warn(
             "[plugins] duplicate plugin id \(manifest.id) ignored",
@@ -871,7 +894,16 @@ final class PluginManager {
           baseDataDir: baseDataDir,
           watchFiles: config.plugins.watchingEnabled,
           settings: settings)
-        plugin.onStatusChanged = { [weak self] in self?.notifyStateChanged() }
+        plugin.onStatusChanged = { [weak self, weak plugin] in
+          guard let self else { return }
+          if let plugin {
+            self.replayRunningApplicationsSnapshotIfReady(for: plugin)
+          }
+          self.notifyStateChanged()
+        }
+        plugin.onSnapshotChanged = { [weak self, id = manifest.id] in
+          self?.notifySnapshotChanged(pluginID: id)
+        }
         plugin.onHostRequest = { [weak self] method, params, pluginID, reply in
           self?.handleHostRequest(
             method: method, params: params, pluginID: pluginID, reply: reply)
@@ -894,6 +926,7 @@ final class PluginManager {
       pluginsByID[id]?.stop()
       pluginsByID.removeValue(forKey: id)
       sourceAdaptersByID.removeValue(forKey: id)
+      readyAppsSnapshotReplayPIDs.removeValue(forKey: id)
     }
     rebuildCommandIndex()
     rebuildShebangIndex()
@@ -1085,6 +1118,42 @@ final class PluginManager {
     }
   }
 
+  private func notifySnapshotChanged(pluginID: String) {
+    DispatchQueue.main.async { [weak self] in
+      self?.onSnapshotChanged?(pluginID)
+    }
+  }
+
+  private func replayRunningApplicationsSnapshotIfReady(for plugin: PluginProcess) {
+    let snapshot = plugin.statusSnapshot()
+    guard snapshot.state == PluginRuntimeState.ready.rawValue, let pid = snapshot.pid else {
+      return
+    }
+    let applications = NSWorkspace.shared.runningApplications.compactMap { app -> [String: Any]? in
+      guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
+      return [
+        "bundle_id": bundleID,
+        "localized_name": app.localizedName ?? "",
+        "pid": Int(app.processIdentifier),
+      ]
+    }
+    queue.async { [weak self, weak plugin] in
+      guard let self, let plugin else { return }
+      if self.readyAppsSnapshotReplayPIDs[plugin.identifier] == pid { return }
+      self.readyAppsSnapshotReplayPIDs[plugin.identifier] = pid
+      plugin.sendEvent(
+        PluginEvent(
+          name: "core:apps.snapshot",
+          payload: [
+            "reason": "plugin_ready",
+            "running_applications": applications,
+          ],
+          bundleID: nil,
+          configPath: nil,
+          focused: nil))
+    }
+  }
+
   static func defaultDataDir() -> URL {
     FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Application Support/Flash/Plugins")
@@ -1104,9 +1173,10 @@ extension PluginManager {
       `install`, and `start` strings. `install` and `start` are shell command
       strings, similar to npm scripts.
 
-      Official bundled plugins are always enabled. Third-party plugins are
-      listed in `[plugins] third_party` as `github:user/project@<commit-sha>`
-      or `file:<path>`.
+      Official bundled plugins are enabled unless their id appears in
+      `[plugins] disabled`. Third-party plugins are listed in
+      `[plugins] third_party` as `github:user/project@<commit-sha>` or
+      `file:<path>`.
 
       Flash starts plugins with:
 

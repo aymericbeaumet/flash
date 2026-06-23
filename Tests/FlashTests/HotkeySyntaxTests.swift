@@ -262,6 +262,19 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(name, "Postico 2")
   }
 
+  func testParseFlashSendKeys() {
+    let action = parseMappingCommand(argv: ["flash", "send_keys", "--keys=g,i"])
+    guard case .flashCommand(.sendKeys(let keys, let keyCodes, let flagsRawValues)) = action else {
+      return XCTFail("expected .sendKeys")
+    }
+    XCTAssertEqual(keys, "g,i")
+    XCTAssertEqual(keyCodes, [CGKeyCode(kVK_ANSI_G), CGKeyCode(kVK_ANSI_I)])
+    XCTAssertEqual(flagsRawValues, [0, 0])
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "send_keys"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "send_keys", "--keys=g,,i"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "send_keys", "--keys=nope"]))
+  }
+
   func testParseFlashShowAlert() {
     let action = parseMappingCommand(argv: ["flash", "alert_show", "--message=Wi-Fi OFF"])
     guard case .flashCommand(.showAlert(let alert)) = action else {

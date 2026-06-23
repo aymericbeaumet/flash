@@ -139,6 +139,7 @@ final class SourceRegistry {
   }
 
   func candidates(scope: CandidateScope) -> [Candidate] {
+    let startedNs = DispatchTime.now().uptimeNanoseconds
     refreshRunningApplications()
     let allSources = sources
     var sourceSnapshot: [FlashSource] = []
@@ -162,12 +163,22 @@ final class SourceRegistry {
       // Candidate-finder sessions freeze this synchronous snapshot. Do not call
       // `queryCandidates` here; plugins are expected to keep candidates warm in
       // memory and late updates are for the next session.
+      let sourceStartedNs = DispatchTime.now().uptimeNanoseconds
       let sourceCandidates = source.candidates(in: env, scope: scope)
+      let sourceMs = Int((DispatchTime.now().uptimeNanoseconds &- sourceStartedNs) / 1_000_000)
       FlashLog.trace(
-        "[candidate_finder] source=\(source.identifier) count=\(sourceCandidates.count)")
+        "[candidate_finder] source=\(source.identifier) count=\(sourceCandidates.count) "
+          + "ms=\(sourceMs)")
       raw.append(contentsOf: sourceCandidates)
     }
-    return CandidateFinder.prepare(raw)
+    let prepareStartedNs = DispatchTime.now().uptimeNanoseconds
+    let prepared = CandidateFinder.prepare(raw)
+    let prepareMs = Int((DispatchTime.now().uptimeNanoseconds &- prepareStartedNs) / 1_000_000)
+    let totalMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
+    FlashLog.trace(
+      "[candidate_finder] prepare scope=\(scope) raw=\(raw.count) prepared=\(prepared.count) "
+        + "prepare_ms=\(prepareMs) total_ms=\(totalMs)")
+    return prepared
   }
 
   func coreAppCandidates(scope: CandidateScope) -> [Candidate] {
@@ -236,7 +247,7 @@ final class SourceRegistry {
     let env = environment
     let sourceSnapshot = sources.filter { source in
       source.capabilities.contains(.appActivation)
-        && (sourceID == nil || source.identifier == sourceID)
+        && (sourceID == nil || Self.source(source, owns: sourceID!))
     }
     // `app_open?name=` means "activate application X". The app source resolves
     // names precisely (bundle id / exact running name / `<name>.app` lookup),
@@ -267,6 +278,28 @@ final class SourceRegistry {
       }
     }
     return nil
+  }
+
+  func currentLocation(in context: AppContext) -> Candidate? {
+    let locationCandidates =
+      candidates(scope: .all)
+      .filter { $0.isLocation && $0.kind != CandidateFinder.sourceKind }
+    let samePID = locationCandidates.filter { $0.pid == context.processID }
+    if let current = samePID.first(where: \.isCurrentLocation) {
+      return current
+    }
+    if let documentURL = documentURL(in: context),
+      let current = location(in: samePID, matchingURLString: documentURL)
+    {
+      return current
+    }
+    if samePID.count == 1 {
+      return samePID[0]
+    }
+    if let app = samePID.first(where: { $0.kind == .app }) {
+      return app
+    }
+    return candidate(forProcessID: context.processID)
   }
 
   func resolveCandidate(
@@ -349,7 +382,8 @@ final class SourceRegistry {
       let source = sourceSnapshot[index]
       source.restoreNavigation(to: url, environment: env) { result in
         FlashLog.trace(
-          "[navigation] source=\(source.identifier) scheme=\(scheme) disposition=\(result.disposition)")
+          "[navigation] source=\(source.identifier) scheme=\(scheme) disposition=\(result.disposition)"
+        )
         switch result.disposition {
         case .performed, .failed:
           completion(result)
@@ -373,9 +407,43 @@ final class SourceRegistry {
     if let exact = pluginSources.first(where: { $0.identifier == identifier }) {
       return exact
     }
-    return pluginSources.first { source in
-      identifier.hasPrefix(source.identifier + ".")
+    return pluginSources.first { source in Self.source(source, owns: identifier) }
+  }
+
+  private static func source(_ source: FlashSource, owns identifier: String) -> Bool {
+    source.identifier == identifier || identifier.hasPrefix(source.identifier + ".")
+  }
+
+  private func location(in candidates: [Candidate], matchingURLString raw: String) -> Candidate? {
+    let normalized = Self.normalizedLocationURL(raw)
+    guard !normalized.isEmpty else { return nil }
+    return candidates.first { candidate in
+      if let url = candidate.url, Self.normalizedLocationURL(url.absoluteString) == normalized {
+        return true
+      }
+      if let navigationURL = candidate.navigationURL,
+        Self.normalizedLocationURL(navigationURL.absoluteString) == normalized
+      {
+        return true
+      }
+      return false
     }
+  }
+
+  private static func normalizedLocationURL(_ raw: String) -> String {
+    let trimmed = raw.trimmed
+    guard !trimmed.isEmpty else { return "" }
+    if let components = URLComponents(string: trimmed) {
+      var normalized = components
+      normalized.scheme = components.scheme?.lowercased()
+      normalized.host = components.host?.lowercased()
+      let rendered = normalized.string ?? trimmed
+      if rendered.count > 1, rendered.hasSuffix("/") {
+        return String(rendered.dropLast()).lowercased()
+      }
+      return rendered.lowercased()
+    }
+    return trimmed.lowercased()
   }
 
   private func performSourceAction(

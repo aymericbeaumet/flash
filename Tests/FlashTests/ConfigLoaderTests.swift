@@ -57,10 +57,10 @@ final class ConfigLoaderTests: XCTestCase {
       .tabNew)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-o" })?.action.command,
-      .appPrev)
+      .movementBack)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
-      .appNext)
+      .movementForward)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("[h") })?.action.command,
       .historyBack)
@@ -358,10 +358,12 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [plugins]
+      disabled = ["defaults", "GMAIL"]
       third_party = ["github:user/project@\(sha)", "file:../plugins/spotify"]
       """,
       sourceURL: source)
 
+    XCTAssertEqual(c.plugins.disabled, Set(["defaults", "gmail"]))
     XCTAssertEqual(c.plugins.thirdParty.count, 2)
     XCTAssertEqual(c.plugins.thirdParty[0].raw, "github:user/project@\(sha)")
     if case .github(let owner, let repository, let commit) = c.plugins.thirdParty[0].kind {
@@ -645,6 +647,7 @@ final class ConfigLoaderTests: XCTestCase {
       allMappings.first?["action"] as? [String],
       ["sh", "~/.dotfiles/scripts/toggle-colors"])
     XCTAssertEqual(open["ignored_apps"] as? [String], [])
+    XCTAssertEqual(plugins["disabled"] as? [String], [])
     XCTAssertEqual(plugins["third_party"] as? [String], [])
     XCTAssertEqual(
       statusBar["template"] as? String, "#[align=left]#{mode}#[align=right]#{date}")

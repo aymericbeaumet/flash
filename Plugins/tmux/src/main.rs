@@ -1115,7 +1115,7 @@ fn build_candidates_from_window_list(
         if line.is_empty() {
             continue;
         }
-        let parts = split_tmux_fields(line, 5);
+        let parts = split_tmux_fields(line, 6);
         if parts.len() < 3 {
             continue;
         }
@@ -1127,6 +1127,7 @@ fn build_candidates_from_window_list(
             .get(4)
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
+        let active = parts.get(5).map(|s| s.trim() == "1").unwrap_or(false);
         if !home.is_empty() && cwd.starts_with(home) {
             cwd = format!("~{}", &cwd[home.len()..]);
         }
@@ -1163,10 +1164,12 @@ fn build_candidates_from_window_list(
         };
         let mut candidate = Candidate::new(primary)
             .kind("tmux_window")
+            .location()
             .source_id(SOURCE_ID)
             .source("tmux.windows")
             .subtitle(subtitle)
             .navigation_url(navigation_url)
+            .current_location(active)
             .payload_json(&payload);
         if let Some(tp) = terminal_pid {
             candidate = candidate.pid(tp);
@@ -1242,7 +1245,7 @@ async fn build_candidates_inner(
     };
 
     let format = format!(
-        "#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}"
+        "#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}"
     );
     // Aggregated across every tmux socket: `list-windows -a` is "all
     // windows on this server", not "all windows on this host". Without
@@ -2263,6 +2266,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
         };
         Candidate::new(name)
             .kind("tmux_window")
+            .location()
             .source_id(SOURCE_ID)
             .source("tmux.windows")
             .subtitle(format!("{target} · zsh · ~/work"))

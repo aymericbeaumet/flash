@@ -73,6 +73,7 @@ enum URLCommand: Hashable {
   case pluginCommand(command: String, subcommand: String, args: [String])
   case moveWindow(MoveWindowParams)
   case sendKey(keys: String, keyCode: CGKeyCode, flagsRawValue: UInt64)
+  case sendKeys(keys: String, keyCodes: [CGKeyCode], flagsRawValues: [UInt64])
   /// A verb registered by a plugin via the manifest's `verbs.items` section.
   /// The host doesn't know the verb's semantics — it just forwards the call
   /// to ``PluginManager/invokeVerb(name:args:in:onResult:)`` (which
@@ -328,6 +329,7 @@ final class URLEventHandler: NSObject {
     },
     "window_move": windowMoveCommand,
     "send_key": sendKeyCommand,
+    "send_keys": sendKeysCommand,
   ]
 
   static let usageText = """
@@ -379,6 +381,8 @@ final class URLEventHandler: NSObject {
     flash hints_dismiss
     flash app_open --name=<app>
     flash window_move --position=<slot> --screen=<n>
+    flash send_key --keys=<hotkey>
+    flash send_keys --keys=<hotkey,hotkey,...>
     flash quit
     flash help_show [--topic=<topic>]
     flash plugins
@@ -474,6 +478,26 @@ private func sendKeyCommand(_ a: VerbArgs) -> URLCommand? {
     keys: keys,
     keyCode: CGKeyCode(parsed.virtualKey),
     flagsRawValue: cgEventFlags(carbon: parsed.modifiers).rawValue)
+}
+
+/// `flash send_keys keys=<hotkey,hotkey,...>` synthesizes a short key sequence
+/// to the focused app. It is primarily for app-local multi-stroke shortcuts
+/// such as Gmail's `g` then `i` navigation commands.
+private func sendKeysCommand(_ a: VerbArgs) -> URLCommand? {
+  guard let keys = a.value("keys") else { return nil }
+  var keyCodes: [CGKeyCode] = []
+  var flagsRawValues: [UInt64] = []
+  let parts = keys.split(separator: ",", omittingEmptySubsequences: false)
+  guard !parts.isEmpty else { return nil }
+  for raw in parts {
+    let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !token.isEmpty, let parsed = HotkeySyntax.parse(hotkey: token) else {
+      return nil
+    }
+    keyCodes.append(CGKeyCode(parsed.virtualKey))
+    flagsRawValues.append(cgEventFlags(carbon: parsed.modifiers).rawValue)
+  }
+  return .sendKeys(keys: keys, keyCodes: keyCodes, flagsRawValues: flagsRawValues)
 }
 
 /// Translate Carbon modifier flags (as `HotkeySyntax` emits) into the

@@ -166,9 +166,10 @@ enum HelpDocs {
     body: """
       # Flashlight
 
-      Flashlight is the unified candidate finder. It surfaces apps,
-      tmux windows, browser tabs, Slack channels, and plugin-provided
-      candidates (contacts, notes, reminders, …) in one ranked list.
+      Flashlight is the unified candidate finder. Its default pool surfaces
+      location rows such as apps, tabs, tmux windows, Slack channels, and
+      plugin-provided destinations; explicit source filters can show other
+      plugin candidate sets such as contacts, notes, and reminders.
 
       ## Entry points
 
@@ -196,17 +197,20 @@ enum HelpDocs {
       inserts the selected bang token, and adding a space locks it for the
       remaining query.
 
-      App, browser-tab, and tmux-window rows are final destinations:
-      `<tab>` or `<cr>` submits the selected row directly, the same as
-      `<cmd-cr>`.
+      Location rows are final destinations: `<tab>` or `<cr>` submits the
+      selected row directly, the same as `<cmd-cr>`.
+
+      App switches and focused-window changes feed Flash's movement history
+      with the current location when a source can identify it, so `ctrl-o` /
+      `ctrl-i` can walk locations reached through ordinary desktop switching.
 
       ## Ranking
 
-      The default result pool is navigation-only and source-family ordered:
-      tmux windows/tabs, browser tabs, apps, then Slack channels. Other
-      sources are hidden unless you type an explicit `@source` filter.
+      The default result pool is location-only: apps, tabs, tmux windows,
+      Slack channels, and plugin-provided locations. Other sources are hidden
+      unless you type an explicit `@source` filter.
 
-      Inside the same family, scoring layers are:
+      Inside the location band, scoring layers are:
 
       1. Exact primary-name match.
       2. Prefix match.

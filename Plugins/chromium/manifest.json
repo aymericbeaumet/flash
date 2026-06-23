@@ -35,31 +35,31 @@
   "sources": [
     {
       "name": "chrome.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     },
     {
       "name": "chromium.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     },
     {
       "name": "brave.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     },
     {
       "name": "edge.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     },
     {
       "name": "arc.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     },
     {
       "name": "vivaldi.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     },
     {
       "name": "opera.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     }
   ],
   "source_actions": [

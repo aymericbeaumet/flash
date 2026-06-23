@@ -113,15 +113,13 @@ public enum CandidateKind: Sendable, Equatable {
 }
 
 public enum CandidateSourceKind: String, Codable, Sendable, Equatable, Hashable {
-  /// Ordinary candidate source. Ranked after focused structural sources and
-  /// app candidates unless the user overrides its source label in config.
+  /// Ordinary candidate source. Hidden from the default flashlight pool unless
+  /// the user names the source explicitly or config gives it custom behavior.
   case standard = "default"
-  /// Installed/running macOS app candidates.
-  case apps
-  /// Browser tab candidates, independent of browser brand.
-  case browserTabs = "browser_tabs"
-  /// Tmux window/tab candidates surfaced from terminal-backed plugins.
-  case tmuxTabs = "tmux_tabs"
+  /// Navigable locations surfaced in the default flashlight pool and suitable
+  /// for movement-history traversal. Apps, tabs, tmux windows, Slack channels,
+  /// and third-party plugin destinations all use this shared source kind.
+  case locations
 }
 
 public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {

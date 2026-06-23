@@ -73,7 +73,8 @@ extension AppDelegate {
     // different: the user deliberately chose the app with the pointer, so
     // Flash releases keyboard capture and hands input to that app.
     let clickedContext = click.flatMap { currentNonFlashContext(at: $0.location) }
-    let targetPID = clickedContext?.processID ?? currentDirectNonFlashContext()?.processID
+    let targetPID =
+      clickedContext?.processID ?? currentDirectNonFlashContext()?.processID
       ?? normalModeTargetPID
     if let clickedContext, flashMode == .normal {
       normalModeTargetPID = clickedContext.processID
@@ -725,8 +726,8 @@ extension AppDelegate {
   ///     `value` into the buffer without sending — the user can keep
   ///     typing args, or hit `<cr>` to send.
   ///   * Candidate *finder* (`:flashlight` / `:open` / `:emojis`):
-  ///     `<tab>` submits final app/browser-tab/tmux-window destinations, otherwise
-  ///     inserts the selected candidate's canonical command text.
+  ///     `<tab>` submits final location rows, otherwise inserts the selected
+  ///     candidate's canonical command text.
   ///     Cycling moves to arrow keys and `<shift-tab>`.
   func overlayDidInsertCommandLineSelection() -> Bool {
     if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil {
@@ -745,8 +746,7 @@ extension AppDelegate {
   /// candidates). Synthetic source-filter completion rows still only
   /// insert `@source `. The `<cr>` path is insert-first unless a
   /// source marks the row as a finisher or the typed primary title is
-  /// exact; `<tab>` submits final app/browser-tab/tmux-window destinations and
-  /// otherwise inserts.
+  /// exact; `<tab>` submits final location rows and otherwise inserts.
   func overlayDidForceSubmitCommandLineSelection() {
     if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) == nil {
       // No flashlight active; mirror plain `<cr>` for a regular command
@@ -832,10 +832,12 @@ extension AppDelegate {
     }
     overlay.hide()
     resetCommandLineState()
+    suppressNormalModeCaptureForSourceResolution()
     applyModeOverlay(captureOverride: true)
 
     registry.resolveCandidate(candidate) { [weak self] result in
       guard let self else { return }
+      self.clearNormalModeCaptureSuppression(reason: "source_resolved")
       if let pid = result.targetPID {
         // Plugin candidates (e.g. a tmux window) run their side effect
         // inside the plugin process and hand back a `target_pid` for the

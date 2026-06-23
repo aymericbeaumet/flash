@@ -200,8 +200,8 @@ enum FlashMarkdownRenderer {
     let para = paragraphStyle(
       lineSpacing: context.style.lineSpacing,
       paragraphSpacing: context.style.paragraphSpacing,
-      firstLineHeadIndent: 0,
-      headIndent: 0)
+      firstLineHeadIndent: context.style.codeBlockPadding,
+      headIndent: context.style.codeBlockPadding)
     let attrs: [NSAttributedString.Key: Any] = [
       .font: context.style.codeFont,
       .foregroundColor: context.style.codeBlockForeground,

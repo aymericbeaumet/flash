@@ -69,7 +69,11 @@ tell application {app}
   repeat with w in windows
     repeat with t in tabs of w
       try
-        set out to out & (name of t as text) & tab & (URL of t as text) & linefeed
+        set isCurrent to "0"
+        try
+          if ((index of w as integer) is 1) and (t is current tab of w) then set isCurrent to "1"
+        end try
+        set out to out & (name of t as text) & tab & (URL of t as text) & tab & isCurrent & linefeed
       end try
     end repeat
   end repeat
@@ -101,9 +105,13 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, String, i64)>) {
             continue;
         }
         for line in result.stdout.lines() {
-            let mut parts = line.splitn(2, '\t');
+            let mut parts = line.splitn(3, '\t');
             let title = parts.next().unwrap_or("").trim();
             let url = parts.next().unwrap_or("").trim();
+            let current = parts
+                .next()
+                .map(|value| value.trim() == "1")
+                .unwrap_or(false);
             if title.is_empty() && url.is_empty() {
                 continue;
             }
@@ -123,12 +131,14 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, String, i64)>) {
             };
             let mut candidate = Candidate::new(display)
                 .kind("browser_tab")
+                .location()
                 .source_id(SOURCE_ID)
                 .source("safari.tabs")
                 .subtitle("browser tab")
                 .bundle_id(bundle_id)
                 .pid(*pid)
-                .payload_json(&payload);
+                .payload_json(&payload)
+                .current_location(current);
             if !url.is_empty() {
                 candidate = candidate.url(url);
             }

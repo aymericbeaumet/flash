@@ -178,6 +178,43 @@ extension AppDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100), execute: work)
   }
 
+  func pluginSnapshotsDidChange(pluginID: String) {
+    let affectsDefault = pluginManager.snapshotAffectsDefaultFlashlight(pluginID: pluginID)
+    let targetWork = affectsDefault ? candidateFinderPrewarmWork : candidateFinderStandardPrewarmWork
+    targetWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      let now = Date()
+      let hasCache =
+        self.candidateFinderPreparedRunningCache != nil
+        || self.candidateFinderPreparedAllCache != nil
+      if affectsDefault {
+        if hasCache, let last = self.candidateFinderLastPluginSnapshotPrewarmAt,
+          now.timeIntervalSince(last) < 1.0
+        {
+          return
+        }
+        self.candidateFinderLastPluginSnapshotPrewarmAt = now
+      } else {
+        if hasCache, let last = self.candidateFinderLastStandardPluginSnapshotPrewarmAt,
+          now.timeIntervalSince(last) < 15.0
+        {
+          FlashLog.trace(
+            "[candidate_finder] snapshot_prewarm_deferred plugin=\(pluginID)")
+          return
+        }
+        self.candidateFinderLastStandardPluginSnapshotPrewarmAt = now
+      }
+      self.prewarmCandidateFinderCaches(reason: "plugin_snapshot:\(pluginID)", force: true)
+    }
+    if affectsDefault {
+      candidateFinderPrewarmWork = work
+    } else {
+      candidateFinderStandardPrewarmWork = work
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
+  }
+
   func configureDebugServer(for cfg: Config) {
     guard cfg.debug.httpInspectorEnabled else {
       debugServer?.stop()

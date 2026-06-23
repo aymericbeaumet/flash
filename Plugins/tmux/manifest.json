@@ -48,7 +48,7 @@
   "sources": [
     {
       "name": "tmux.windows",
-      "kind": "tmux_tabs"
+      "kind": "locations"
     }
   ],
   "source_actions": [

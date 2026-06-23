@@ -17,11 +17,11 @@ const BUTTON_COLLECT: &[&str] = &[
     "AXValue",
 ];
 
-struct Www;
+struct Gmail;
 
-flash_plugin::plugin!(Www);
+flash_plugin::plugin!(Gmail);
 
-impl FlashPlugin for Www {
+impl FlashPlugin for Gmail {
     async fn source_action(
         &self,
         ctx: Context,
@@ -68,7 +68,7 @@ async fn perform_gmail_button_action(
     ctx.log(
         "debug",
         &format!(
-            "[www] {} matched gmail url={}",
+            "[gmail] {} matched gmail url={}",
             action.wire_name(),
             shorten_url(&url)
         ),
@@ -78,7 +78,7 @@ async fn perform_gmail_button_action(
         ctx.log(
             "warn",
             &format!(
-                "[www] {} found gmail thread but no {} button nodes={}",
+                "[gmail] {} found gmail thread but no {} button nodes={}",
                 action.wire_name(),
                 action.label(),
                 nodes.len()
@@ -96,7 +96,7 @@ async fn perform_gmail_button_action(
         ctx.log(
             "warn",
             &format!(
-                "[www] {} failed to press {} button handle={}",
+                "[gmail] {} failed to press {} button handle={}",
                 action.wire_name(),
                 action.label(),
                 handle
@@ -414,7 +414,7 @@ async fn ax_perform(ctx: &Context, handle: u64, action: &str) -> bool {
 }
 
 fn main() {
-    run(Www);
+    run(Gmail);
 }
 
 #[cfg(test)]

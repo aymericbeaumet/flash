@@ -84,8 +84,9 @@ enum OverlayInputInterpreter {
 }
 
 /// Hint typing lives in a custom NSPanel subclass so character input is
-/// strictly scoped to the overlay window; native modified-key mappings
-/// are handled separately by the explicit `[mode.*]` Carbon registry.
+/// strictly scoped to the overlay window. Normal-mode mappings are interpreted
+/// through `processNormalModeKey`; configured modified mappings are handled by
+/// the Carbon registry outside the panel.
 extension OverlayPanel {
   override func keyDown(with event: NSEvent) {
     if inputMode == .commandLine {
@@ -127,9 +128,7 @@ extension OverlayPanel {
   }
 
   /// Runs one key through the normal-mode interpreter and dispatches the
-  /// resulting action. Normal-mode typing is scoped to this non-activating
-  /// overlay panel; explicit modified-key mappings are handled separately by
-  /// the Carbon `[mode.*]` registry.
+  /// resulting action while the overlay panel owns keyboard input.
   func processNormalModeKey(_ event: NSEvent) {
     guard let coordinator = coordinator else { return }
     let now = Date()

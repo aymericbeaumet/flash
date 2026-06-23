@@ -169,8 +169,7 @@ struct Config {
     /// match score ties. Keys are source labels (or parent prefixes —
     /// `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …). Higher
     /// weight wins. Entries not listed use the source descriptor kind declared
-    /// by the native source or plugin manifest: tmux tabs > browser tabs >
-    /// apps > default.
+    /// by the native source or plugin manifest: location sources > default.
     ///
     /// Example:
     /// ```toml
@@ -181,8 +180,8 @@ struct Config {
     var precedence: [String: Int] = [:]
     /// Bonus added to any candidate whose `pid != nil` so running
     /// processes outrank installed-but-not-running rows under the
-    /// same source. With the `apps` source kind this gives active apps an
-    /// effective rank of 50 vs. inactive 40.
+    /// same source. With the `locations` source kind this gives active
+    /// locations an effective rank of 60 vs. inactive 50.
     var precedenceAliveBonus: Int = 10
   }
   struct Debug {
@@ -216,9 +215,11 @@ struct Config {
   }
   struct Plugins {
     /// Third-party plugins explicitly requested by the user. Official
-    /// bundled plugins are always enabled in v1 and are discovered from
-    /// the app bundle, not this list.
+    /// bundled plugins are discovered from the app bundle, not this list.
     var thirdParty: [PluginReference] = []
+    /// Plugin ids to keep unloaded. This applies to bundled and third-party
+    /// plugins so users can opt out of the default plugin layer entirely.
+    var disabled: Set<String> = []
     /// When true (the default), each plugin's directory tree is watched
     /// and any file change triggers a plugin reload. Set to false to
     /// disable hot-reload — useful if a plugin keeps a noisy log
@@ -335,10 +336,9 @@ struct Config {
         ("[a", .flashCommand(.appPrev)),
         ("]a", .flashCommand(.appNext)),
         // `[w`/`]w` — Vim's `:wprev`/`:wnext` window-navigation analogue
-        // mapped onto Flash's app MRU (a single app commonly fronts
-        // multiple windows, but those are accessed with the OS native
-        // `Cmd+\`` chord which Flash leaves alone — bouncing across
-        // apps is the actually-useful desktop motion).
+        // mapped onto Flash's app MRU. Native `Cmd+\`` window switches
+        // remain owned by macOS, but their AX focused-window event feeds
+        // Flash's generalized location history.
         ("[w", .flashCommand(.appPrev)),
         ("]w", .flashCommand(.appNext)),
         // Reopen the most recently closed tab. ⌘⇧T is the cross-browser
@@ -406,8 +406,8 @@ struct Config {
         ("g7", .flashCommand(.tabSelect(index: 7))),
         ("g8", .flashCommand(.tabSelect(index: 8))),
         ("g9", .flashCommand(.tabSelect(index: 9))),
-        ("ctrl+o", .flashCommand(.appPrev)),
-        ("ctrl+i", .flashCommand(.appNext)),
+        ("ctrl+o", .flashCommand(.movementBack)),
+        ("ctrl+i", .flashCommand(.movementForward)),
         ("gt", .flashCommand(.tabNext)),
         ("gT", .flashCommand(.tabPrev)),
         ("i", .flashCommand(.insertMode)),
@@ -638,6 +638,7 @@ struct Config {
         "hint_fg": overlay.hintFG,
       ],
       "plugins": [
+        "disabled": plugins.disabled.sorted(),
         "third_party": plugins.thirdParty.map(\.raw),
         "watching_enabled": plugins.watchingEnabled,
         "settings": plugins.settings.mapValues { table in
@@ -810,6 +811,8 @@ extension URLCommand {
       return verb("window_move", parts)
     case .sendKey(let keys, _, _):
       return verb("send_key", [kv("keys", keys)])
+    case .sendKeys(let keys, _, _):
+      return verb("send_keys", [kv("keys", keys)])
     case .pluginVerb(let name, let args):
       let tokens = args.keys.sorted().map { key in kv(key, args[key] ?? "") }
       return verb(name, tokens)

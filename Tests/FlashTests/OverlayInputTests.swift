@@ -367,7 +367,9 @@ final class OverlayInputTests: XCTestCase {
         inputMode: .normal,
         modeBadgeVisible: false,
         modeBadgeCapturesInput: true))
-    XCTAssertFalse(
+    // Idle NORMAL runs the monitor even when keyboard capture is temporarily
+    // suppressed, so a click on the focused app can still enter insert.
+    XCTAssertTrue(
       OverlayPanel.pointerIntentMonitorShouldRun(
         inputMode: .normal,
         modeBadgeVisible: true,

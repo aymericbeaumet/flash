@@ -141,15 +141,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Gates capture and the active-window border, NOT the status bar's
   /// visibility.
   var modeBadgeEnabled: Bool { modeStore.mode != .disabled }
-  /// Session keyboard tap that makes idle-NORMAL plain-key capture independent
-  /// of the key window (see `NormalModeKeyTap`). nil if it couldn't be created;
-  /// the panel-based recapture path remains the fallback.
-  var normalModeKeyTap: NormalModeKeyTap?
   /// Whether the persistent top status bar is shown. Mirrors
   /// `config.statusBar.enabled` and is the sole condition for the bar — set
   /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
   var statusBarVisible = false
   var normalModeTargetPID: pid_t?
+  var normalModeSourceResolutionCaptureSuppressedUntil: Date?
+  var normalModeSourceResolutionCaptureSuppressionToken: UInt64 = 0
   var candidateFinderCandidates: [Candidate] = [] {
     didSet {
       // Each flashlight session freezes one source snapshot. Bump the
@@ -202,6 +200,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// do that lookup once per session instead of rebuilding the table on every
   /// keystroke.
   var candidateFinderPrecedenceTable: CandidateFinder.PrecedenceTable = .default
+  var candidateFinderPreparedRunningCache: (candidates: [Candidate], computedAt: Date)?
+  var candidateFinderPreparedAllCache: (candidates: [Candidate], computedAt: Date)?
   /// Incremental-narrowing cache for fuzzy scoring. When the next query
   /// extends the previous one (`mo` → `mor` → `moria`), no candidate
   /// that failed `mo` can pass `mor`, so we only need to re-score the
@@ -232,6 +232,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     label: "flash.candidate_finder.scoring", qos: .userInteractive)
   var candidateFinderRunningAppsRefreshInFlight = false
   var candidateFinderAllAppsRefreshInFlight = false
+  var candidateFinderFocusPrewarmWork: DispatchWorkItem?
+  var candidateFinderPrewarmWork: DispatchWorkItem?
+  var candidateFinderStandardPrewarmWork: DispatchWorkItem?
+  var candidateFinderLastPluginSnapshotPrewarmAt: Date?
+  var candidateFinderLastStandardPluginSnapshotPrewarmAt: Date?
   var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionItems: [NormalModeDispatcher.CommandLineCompletion] = []
@@ -247,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var movementBackStack: [MovementEntry] = []
   var movementForwardStack: [MovementEntry] = []
   var movementNavigationTargetKey: String?
+  var ambientLocationRecordToken: UInt64 = 0
   var appCurrent: pid_t?
   var appBackStack: [pid_t] = []
   var appForwardStack: [pid_t] = []
@@ -323,6 +329,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.onStateChanged = { [weak self] in
       self?.pluginStateDidChange()
     }
+    pluginManager.onSnapshotChanged = { [weak self] pluginID in
+      self?.pluginSnapshotsDidChange(pluginID: pluginID)
+    }
     pluginManager.onNormalModeTargetRequested = { [weak self] in
       guard let context = self?.normalModeContext() ?? self?.currentNonFlashContext() else {
         return nil
@@ -363,12 +372,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     modeStore.perform = { [weak self] effects, previous, next in
       self?.applyModeEffects(effects, previous: previous, next: next)
     }
-    // Robust idle-NORMAL capture regardless of key window. Falls back to the
-    // panel-based recapture path if the tap can't be created.
-    normalModeKeyTap = NormalModeKeyTap(
-      shouldCapture: { [weak self] in self?.shouldCaptureNormalModeInput ?? false },
-      handleKeyDown: { [weak self] event in self?.overlay.processNormalModeKey(event) })
-    normalModeKeyTap?.start()
     refreshEffectiveMappings(for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
 
     if let app = NSWorkspace.shared.frontmostApplication,
@@ -414,7 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       .historyBack, .historyForward,
       .movementBack, .movementForward, .appPrev, .appNext,
       .quitApp, .saveAndQuit, .tabNew,
-      .sendKey:
+      .sendKey, .sendKeys:
       performMappedCommand(cmd)
     case .showAlert(let alert):
       configErrorAlertVisible = false
@@ -509,8 +512,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.statusBarController?.updateFocusedApplication(app)
         self.registry.refreshRunningApplications()
-        self.prewarmCandidateFinderCaches(reason: "focus_changed")
-        self.refreshEffectiveMappings(for: app.bundleIdentifier)
+        self.scheduleCandidateFinderPrewarm(reason: "focus_changed", delayMs: 350)
+        self.refreshEffectiveMappings(for: app.bundleIdentifier, includeURL: false)
+        if self.pluginManager.needsURLSelectorContext() {
+          let pid = app.processIdentifier
+          let bundleID = app.bundleIdentifier
+          DispatchQueue.main.async { [weak self] in
+            guard let self,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+            else { return }
+            self.refreshEffectiveMappings(for: bundleID, includeURL: true)
+          }
+        }
         self.pluginManager.emit(
           PluginEvent(
             name: "core:focus.changed",
@@ -676,6 +689,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
+    candidateFinderPrewarmWork?.cancel()
+    candidateFinderPrewarmWork = nil
+    candidateFinderFocusPrewarmWork?.cancel()
+    candidateFinderFocusPrewarmWork = nil
+    candidateFinderStandardPrewarmWork?.cancel()
+    candidateFinderStandardPrewarmWork = nil
     pluginStateRefreshWork?.cancel()
     pluginStateRefreshWork = nil
     clipboardMonitor?.stop()

@@ -9,12 +9,12 @@ enum ActionDispatcher {
     case hostClick
   }
 
-  /// Click pipeline. Every f/F variant visibly moves the cursor to the
-  /// target first — matching the `mf`/`mF` move-only behaviour — and
-  /// then performs the action. The cursor is left at the click site so
-  /// the user can see (and continue from) where the action landed.
+  /// Click pipeline. Click actions do not intentionally move the visible
+  /// cursor; `mf`/`mF` are the explicit move-only commands. When the last
+  /// resort needs a real mouse event, `synthesizeClick` preserves the cursor
+  /// by hiding, warping, clicking, and restoring.
   ///
-  /// Pipeline (after the visible move):
+  /// Pipeline:
   ///   1. Modified click → straight to `synthesizeClick`. AX activate
   ///      can't carry a shift/cmd modifier, and most modifier-clicks
   ///      (shift+click selection, opt+click in code editors, …) only
@@ -24,8 +24,7 @@ enum ActionDispatcher {
   ///      delivering the click the host app expects.
   ///   2. `target.activate(action)` — provider-owned best-known path.
   ///      AccessibilityProvider tries focus-set (text inputs) +
-  ///      AXPress/AXOpen/AXConfirm. The cursor is already at the
-  ///      target so the visual cue still applies.
+  ///      AXPress/AXOpen/AXConfirm.
   ///   3. AX hit-test at the click point (`AXClick.clickAtPoint`) —
   ///      recovers inert-wrapper cases where the chip's element
   ///      exposes no AX action but the node under the point does.
@@ -44,16 +43,8 @@ enum ActionDispatcher {
   ) -> Bool {
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
     if dispatchRoute(for: target, modifiers: modifiers) == .hostClick {
-      // synthesizeClick handles its own visible warp; calling moveCursor
-      // here too would post a redundant mouseMoved.
       return synthesizeClick(at: point, action: action, modifiers: modifiers)
     }
-    // AX press / hit-test paths don't move the cursor themselves, so
-    // pre-move it here for the visible-move-then-act contract. A
-    // following `synthesizeClick` re-warps to the same point — that's
-    // a no-op cursor-wise but keeps the synthetic mouseMoved consistent
-    // with the modified-click path.
-    _ = moveCursor(to: point)
     if let activate = target.activate, activate(action) {
       return true
     }
@@ -73,13 +64,14 @@ enum ActionDispatcher {
   }
 
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left
-  /// origin of primary screen). The cursor visibly travels to the click
-  /// point first (`moveCursor` pattern) and stays there — matching the
-  /// `mf`/`mF` move-only behaviour so every f/F variant has the same
-  /// "move, then maybe act" UX.
+  /// origin of primary screen). By default the cursor is hidden, warped to the
+  /// click point, clicked, then restored so fallback clicks are transparent.
   @discardableResult
   static func synthesizeClick(
-    at screenPoint: CGPoint, action: JumpAction, modifiers: ClickModifiers = []
+    at screenPoint: CGPoint,
+    action: JumpAction,
+    modifiers: ClickModifiers = [],
+    preserveCursor: Bool = true
   ) -> Bool {
     let screenH =
       NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
@@ -121,25 +113,33 @@ enum ActionDispatcher {
       pairs.append(ClickPair(down: down, up: up))
     }
 
-    // Visibly move the cursor to the click site (no hide). The warp is
-    // accompanied by a synthetic `mouseMoved` with the actual delta so
-    // the window server hit-tests it like a real hover-in, driving
-    // tracking areas, hover highlights, and any "hover then click"
-    // app-side state machines.
-    CGWarpMouseCursorPosition(cgPoint)
-    CGAssociateMouseAndMouseCursorPosition(1)
-    if let move = CGEvent(
-      mouseEventSource: source,
-      mouseType: .mouseMoved,
-      mouseCursorPosition: cgPoint,
-      mouseButton: .left)
-    {
-      move.setIntegerValueField(
-        .mouseEventDeltaX, value: Int64((cgPoint.x - originalCursor.x).rounded()))
-      move.setIntegerValueField(
-        .mouseEventDeltaY, value: Int64((cgPoint.y - originalCursor.y).rounded()))
-      move.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
-      move.post(tap: .cghidEventTap)
+    let postMove = {
+      if let move = CGEvent(
+        mouseEventSource: source,
+        mouseType: .mouseMoved,
+        mouseCursorPosition: cgPoint,
+        mouseButton: .left)
+      {
+        move.setIntegerValueField(
+          .mouseEventDeltaX, value: Int64((cgPoint.x - originalCursor.x).rounded()))
+        move.setIntegerValueField(
+          .mouseEventDeltaY, value: Int64((cgPoint.y - originalCursor.y).rounded()))
+        move.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
+        move.post(tap: .cghidEventTap)
+      }
+    }
+
+    if preserveCursor {
+      CGDisplayHideCursor(CGMainDisplayID())
+      CGWarpMouseCursorPosition(cgPoint)
+      postMove()
+    } else {
+      // Visibly move the cursor to the click site. The warp is accompanied by a
+      // synthetic `mouseMoved` with the actual delta so the window server
+      // hit-tests it like a real hover-in.
+      CGWarpMouseCursorPosition(cgPoint)
+      CGAssociateMouseAndMouseCursorPosition(1)
+      postMove()
     }
     // Brief settle pause: gives the user a frame to register the move
     // before the click lands, and lets the receiving app's hover
@@ -158,6 +158,10 @@ enum ActionDispatcher {
       pair.down.post(tap: .cghidEventTap)
       usleep(mouseDownHoldUs)
       pair.up.post(tap: .cghidEventTap)
+    }
+    if preserveCursor {
+      CGWarpMouseCursorPosition(originalCursor)
+      CGDisplayShowCursor(CGMainDisplayID())
     }
     let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
     FlashLog.trace(

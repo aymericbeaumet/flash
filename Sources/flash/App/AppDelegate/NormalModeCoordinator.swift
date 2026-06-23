@@ -199,6 +199,7 @@ extension AppDelegate {
       // changes through the move/resize "hide during change" path is what made
       // the border flicker off (appear-then-vanish) on every app switch and on
       // insert entry.
+      scheduleAmbientLocationRecord(pid: pid, reason: "window_focus")
       updateInsertModeActiveWindowBorder(reason: notification)
     } else {
       beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
@@ -411,14 +412,11 @@ extension AppDelegate {
     let mode = modeStore.mode
     let hasHints = !currentHints.isEmpty
     let inFlight = activationInFlight
+    let sourceResolutionSuppressed = sourceResolutionCaptureSuppressionIsActive()
     let inputMode = mode.overlayInputMode(hasHints: hasHints, activationInFlight: inFlight)
     var capture =
       captureOverride ?? mode.ownsKeyboard(hasHints: hasHints, activationInFlight: inFlight)
-    // With the session key tap capturing idle-NORMAL input, the panel doesn't
-    // need the key window there — leaving the focused app's window key avoids
-    // flickering its traffic-light controls on every transition/recapture.
-    // Command line / modal still grab key (their input mode isn't `.normal`).
-    if inputMode == .normal, normalModeKeyTap?.isActive == true {
+    if sourceResolutionSuppressed {
       capture = false
     }
     let text = modeLabelText(mode.label)
@@ -451,13 +449,6 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecapture() {
-    // The session key tap captures idle-NORMAL input without the panel owning
-    // the key window, so there is nothing to recapture — just refresh the badge
-    // and leave the focused app's window key (no traffic-light flicker).
-    if normalModeKeyTap?.isActive == true, shouldCaptureNormalModeInput {
-      applyModeOverlay()
-      return
-    }
     if Self.contextMenuInteractionRecaptureSuppressionIsActive(
       until: contextMenuInteractionRecaptureSuppressedUntil)
     {
@@ -473,16 +464,9 @@ extension AppDelegate {
     // Flip `overlay.inputMode` to `.normal` synchronously before
     // scheduling the retries. The 0 ms entry below is still a
     // `DispatchQueue.main.asyncAfter` — it doesn't run until the next
-    // runloop turn — so a key event reaching the session tap between
-    // the caller dropping `activationInFlight = false` and that entry
-    // executing would see the stale `inputMode == .hints` left over
-    // from `commit()`'s pre-dispatch `applyModeOverlay(captureOverride:
-    // false)` and route through the hint-typing path. Plain mappings
-    // (`i`, `n`, `t`, `:`, …) get treated as stray hint commits against
-    // an empty hint list and silently cancel instead of firing their
-    // normal-mode action. The scheduled retries still run — they
-    // exist for the panel-didn't-become-key-window case, which is a
-    // separate concern from the inputMode-cache-is-stale race.
+    // runloop turn — so set the routing mode before any later recapture
+    // attempt can see stale `.hints` state left over from `commit()`'s
+    // pre-dispatch `applyModeOverlay(captureOverride: false)`.
     if shouldCaptureNormalModeInput {
       applyModeOverlay(captureOverride: true)
     }
@@ -510,6 +494,45 @@ extension AppDelegate {
         self.applyModeOverlay(captureOverride: true)
       }
     }
+  }
+
+  func suppressNormalModeCaptureForSourceResolution(durationMs: Int = 6_000) {
+    let duration = max(1, durationMs)
+    normalModeSourceResolutionCaptureSuppressionToken &+= 1
+    let token = normalModeSourceResolutionCaptureSuppressionToken
+    normalModeSourceResolutionCaptureSuppressedUntil = Date().addingTimeInterval(
+      Double(duration) / 1_000.0)
+    normalModeRecaptureToken &+= 1
+    cancelNormalModeCaptureRecovery(reason: "source_resolution")
+    FlashLog.trace("[mode] source_resolution_capture_suppressed token=\(token) ms=\(duration)")
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(duration)) { [weak self] in
+      guard let self, self.normalModeSourceResolutionCaptureSuppressionToken == token else {
+        return
+      }
+      guard self.normalModeSourceResolutionCaptureSuppressedUntil != nil else { return }
+      self.clearNormalModeCaptureSuppression(reason: "source_resolution_timeout")
+      self.scheduleNormalModeRecapture()
+    }
+  }
+
+  func clearNormalModeCaptureSuppression(reason: String) {
+    guard normalModeSourceResolutionCaptureSuppressedUntil != nil else { return }
+    normalModeSourceResolutionCaptureSuppressionToken &+= 1
+    normalModeSourceResolutionCaptureSuppressedUntil = nil
+    FlashLog.trace("[mode] source_resolution_capture_resumed reason=\(reason)")
+  }
+
+  func sourceResolutionCaptureSuppressionIsActive(now: Date = Date()) -> Bool {
+    if Self.sourceResolutionCaptureSuppressionIsActive(
+      until: normalModeSourceResolutionCaptureSuppressedUntil,
+      now: now)
+    {
+      return true
+    }
+    if normalModeSourceResolutionCaptureSuppressedUntil != nil {
+      normalModeSourceResolutionCaptureSuppressedUntil = nil
+    }
+    return false
   }
 
   func noteMenuBarInteraction(reason: String, now: Date = Date()) {
@@ -595,6 +618,8 @@ extension AppDelegate {
         contextMenuInteractionRecaptureSuppressedUntil,
       pointerInsertHandoffRecaptureSuppressedUntil:
         pointerInsertHandoffRecaptureSuppressedUntil,
+      sourceResolutionCaptureSuppressedUntil:
+        normalModeSourceResolutionCaptureSuppressedUntil,
       now: now)
     if !shouldRecapture,
       Self.menuBarInteractionRecaptureSuppressionIsActive(
@@ -617,6 +642,13 @@ extension AppDelegate {
     {
       FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
     }
+    if !shouldRecapture,
+      Self.sourceResolutionCaptureSuppressionIsActive(
+        until: normalModeSourceResolutionCaptureSuppressedUntil,
+        now: now)
+    {
+      FlashLog.trace("[mode] recapture_skip reason=source_resolution")
+    }
     if menuBarInteractionRecaptureSuppressedUntil.map({ $0 <= now }) == true {
       menuBarInteractionRecaptureSuppressedUntil = nil
     }
@@ -626,6 +658,9 @@ extension AppDelegate {
     if pointerInsertHandoffRecaptureSuppressedUntil.map({ $0 <= now }) == true {
       pointerInsertHandoffRecaptureSuppressedUntil = nil
     }
+    if normalModeSourceResolutionCaptureSuppressedUntil.map({ $0 <= now }) == true {
+      normalModeSourceResolutionCaptureSuppressedUntil = nil
+    }
     return shouldRecapture
   }
 
@@ -634,6 +669,7 @@ extension AppDelegate {
     menuBarInteractionRecaptureSuppressedUntil: Date?,
     contextMenuInteractionRecaptureSuppressedUntil: Date? = nil,
     pointerInsertHandoffRecaptureSuppressedUntil: Date? = nil,
+    sourceResolutionCaptureSuppressedUntil: Date? = nil,
     now: Date
   ) -> Bool {
     mode == .normal
@@ -646,6 +682,9 @@ extension AppDelegate {
       && !pointerInsertHandoffRecaptureSuppressionIsActive(
         until: pointerInsertHandoffRecaptureSuppressedUntil,
         now: now)
+      && !sourceResolutionCaptureSuppressionIsActive(
+        until: sourceResolutionCaptureSuppressedUntil,
+        now: now)
   }
 
   static func menuBarInteractionRecaptureSuppressionIsActive(
@@ -657,6 +696,14 @@ extension AppDelegate {
   }
 
   static func contextMenuInteractionRecaptureSuppressionIsActive(
+    until: Date?,
+    now: Date = Date()
+  ) -> Bool {
+    guard let until else { return false }
+    return now < until
+  }
+
+  static func sourceResolutionCaptureSuppressionIsActive(
     until: Date?,
     now: Date = Date()
   ) -> Bool {
@@ -888,15 +935,17 @@ extension AppDelegate {
             + "mode=\(self.flashMode)")
         return
       }
-      guard !Self.contextMenuInteractionRecaptureSuppressionIsActive(
-        until: self.contextMenuInteractionRecaptureSuppressedUntil)
+      guard
+        !Self.contextMenuInteractionRecaptureSuppressionIsActive(
+          until: self.contextMenuInteractionRecaptureSuppressedUntil)
       else {
         FlashLog.trace(
           "[mode] pointer_recapture_defer_skip token=\(token) reason=context_menu_interaction")
         return
       }
-      guard !Self.pointerInsertHandoffRecaptureSuppressionIsActive(
-        until: self.pointerInsertHandoffRecaptureSuppressedUntil)
+      guard
+        !Self.pointerInsertHandoffRecaptureSuppressionIsActive(
+          until: self.pointerInsertHandoffRecaptureSuppressedUntil)
       else {
         FlashLog.trace(
           "[mode] pointer_recapture_defer_skip token=\(token) "
@@ -1015,19 +1064,18 @@ extension AppDelegate {
   }
 
   var shouldCaptureNormalModeInput: Bool {
-    Self.normalModeShouldOwnKeyboardInput(
+    let sourceResolutionSuppressed = sourceResolutionCaptureSuppressionIsActive()
+    return Self.normalModeShouldOwnKeyboardInput(
       mode: flashMode,
       overlayInputMode: overlay.inputMode,
       hasHints: !currentHints.isEmpty,
-      activationInFlight: activationInFlight)
+      activationInFlight: activationInFlight,
+      sourceResolutionCaptureSuppressed: sourceResolutionSuppressed)
   }
 
   @discardableResult
   func guardNormalModeInputAfterActionDispatch() -> Bool {
     guard shouldCaptureNormalModeInput else { return false }
-    // The session tap keeps capturing without the key window; nothing to
-    // recapture, and not grabbing key keeps the focused app's controls steady.
-    if normalModeKeyTap?.isActive == true { return false }
     // If the panel already owns the key window AND is routing as normal, the
     // command didn't disturb focus (the common case for scroll/tab/vim
     // sequences and back-to-back chords). Capture is already intact, so skip
@@ -1058,9 +1106,12 @@ extension AppDelegate {
     mode: FlashMode,
     overlayInputMode: OverlayInputMode,
     hasHints: Bool,
-    activationInFlight: Bool
+    activationInFlight: Bool,
+    sourceResolutionCaptureSuppressed: Bool = false
   ) -> Bool {
-    guard mode == .normal, !hasHints, !activationInFlight else { return false }
+    guard mode == .normal, !hasHints, !activationInFlight,
+      !sourceResolutionCaptureSuppressed
+    else { return false }
     switch overlayInputMode {
     case .hints, .normal:
       return true
@@ -1093,6 +1144,11 @@ extension AppDelegate {
     case .sendKey(_, let keyCode, let flagsRawValue):
       sendNormalModeKey(
         keyCode, flags: CGEventFlags(rawValue: flagsRawValue), repeatCount: repeatCount)
+    case .sendKeys(_, let keyCodes, let flagsRawValues):
+      let sequence = zip(keyCodes, flagsRawValues).map {
+        (key: $0.0, flags: CGEventFlags(rawValue: $0.1))
+      }
+      sendNormalModeKeySequence(sequence, repeatCount: repeatCount)
     case .undo:
       sendNormalModeKey(
         CGKeyCode(kVK_ANSI_Z),
@@ -1380,9 +1436,18 @@ extension AppDelegate {
     overlay.displayCandidateFinder(query: "", items: [])
   }
 
-  func prewarmCandidateFinderCaches(reason: String) {
-    refreshCandidatesAsync(scope: .running, reason: reason)
-    refreshCandidatesAsync(scope: .all, reason: reason)
+  func prewarmCandidateFinderCaches(reason: String, force: Bool = false) {
+    refreshCandidatesAsync(scope: .running, reason: reason, force: force)
+    refreshCandidatesAsync(scope: .all, reason: reason, force: force)
+  }
+
+  func scheduleCandidateFinderPrewarm(reason: String, delayMs: Int, force: Bool = false) {
+    candidateFinderFocusPrewarmWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      self?.prewarmCandidateFinderCaches(reason: reason, force: force)
+    }
+    candidateFinderFocusPrewarmWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: work)
   }
 
   /// Open a flashlight session by freezing one candidate snapshot. This is the
@@ -1391,11 +1456,19 @@ extension AppDelegate {
   /// session-time `queryCandidates` RPCs. Later plugin snapshot updates can warm
   /// the next session, but they must not mutate this one.
   func openCandidateFinderSession(scope: CandidateScope) {
+    let startedNs = DispatchTime.now().uptimeNanoseconds
     candidateFinderPrecedenceTable = buildCandidateFinderPrecedenceTable()
-    candidateFinderCandidates = candidateFinderCandidates(for: scope)
+    let cached = preparedCandidateCache(scope: scope)
+    if let cached {
+      candidateFinderCandidates = cached.candidates
+    } else {
+      candidateFinderCandidates = candidateFinderCandidates(for: scope)
+    }
     candidateFinderSelectedIndex = 0
+    let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
     FlashLog.trace(
-      "[candidate_finder] session_snapshot scope=\(scope) count=\(candidateFinderCandidates.count)")
+      "[candidate_finder] session_snapshot scope=\(scope) count=\(candidateFinderCandidates.count) "
+        + "cache_hit=\(cached != nil) ms=\(elapsedMs)")
   }
 
   private func notifyPluginsAfterCandidateFinderSnapshot(scope: CandidateScope) {
@@ -1410,26 +1483,28 @@ extension AppDelegate {
 
   func invalidateCandidateFinderCaches(reason: String, refreshApps: Bool) {
     FlashLog.trace("[candidate_finder] refresh_cache reason=\(reason) refresh_apps=\(refreshApps)")
+    clearPreparedCandidateCaches()
     if refreshApps {
       registry.refreshRunningApplications()
     }
     prewarmCandidateFinderCaches(reason: reason)
   }
 
-  private func refreshCandidatesAsync(scope: CandidateScope, reason: String) {
+  private func refreshCandidatesAsync(scope: CandidateScope, reason: String, force: Bool = false) {
     switch scope {
     case .running:
-      guard !candidateFinderRunningAppsRefreshInFlight else { return }
+      guard force || !candidateFinderRunningAppsRefreshInFlight else { return }
       candidateFinderRunningAppsRefreshInFlight = true
     case .all:
-      guard !candidateFinderAllAppsRefreshInFlight else { return }
+      guard force || !candidateFinderAllAppsRefreshInFlight else { return }
       candidateFinderAllAppsRefreshInFlight = true
     }
 
     FlashLog.trace("[candidate_finder] refresh_start scope=\(scope) reason=\(reason)")
     candidateFinderCacheQueue.async { [weak self] in
       guard let self else { return }
-      let candidates = self.registry.coreAppCandidates(scope: scope)
+      let startedNs = DispatchTime.now().uptimeNanoseconds
+      let candidates = self.registry.candidates(scope: scope)
       DispatchQueue.main.async {
         switch scope {
         case .running:
@@ -1437,8 +1512,11 @@ extension AppDelegate {
         case .all:
           self.candidateFinderAllAppsRefreshInFlight = false
         }
+        self.setPreparedCandidateCache(candidates, scope: scope)
+        let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
         FlashLog.trace(
-          "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) reason=\(reason)"
+          "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) "
+            + "ms=\(elapsedMs) reason=\(reason)"
         )
       }
     }
@@ -1448,9 +1526,9 @@ extension AppDelegate {
     // Bangs are NOT in the default pool — they only surface when the
     // user types `!` (see `updateCandidateMatches`'s bang branch). The
     // base snapshot is still over every current source: apps from the warmed
-    // `ApplicationSource` cache, and plugin/browser/tmux rows from each
-    // source's in-memory candidates snapshot. Query-time filtering narrows the
-    // default flashlight to the navigation families, or to whichever
+    // `ApplicationSource` cache, and plugin location rows from each source's
+    // in-memory candidates snapshot. Query-time filtering narrows the
+    // default flashlight to location entities, or to whichever
     // `@source` the user explicitly names. Do not call `queryCandidates`
     // here — any RPC or live refresh would either delay first paint or mutate
     // the list after it is visible.
@@ -1458,6 +1536,36 @@ extension AppDelegate {
     FlashLog.trace(
       "[candidate_finder] snapshot_sync scope=\(scope) count=\(candidates.count)")
     return candidates
+  }
+
+  private func preparedCandidateCache(scope: CandidateScope)
+    -> (candidates: [Candidate], computedAt: Date)?
+  {
+    switch scope {
+    case .running:
+      return candidateFinderPreparedRunningCache
+    case .all:
+      return candidateFinderPreparedAllCache
+    }
+  }
+
+  private func setPreparedCandidateCache(_ candidates: [Candidate], scope: CandidateScope) {
+    let snapshot = (candidates: candidates, computedAt: Date())
+    switch scope {
+    case .running:
+      candidateFinderPreparedRunningCache = snapshot
+    case .all:
+      candidateFinderPreparedAllCache = snapshot
+    }
+  }
+
+  func clearPreparedCandidateCaches() {
+    candidateFinderFocusPrewarmWork?.cancel()
+    candidateFinderFocusPrewarmWork = nil
+    candidateFinderPreparedRunningCache = nil
+    candidateFinderPreparedAllCache = nil
+    candidateFinderLastPluginSnapshotPrewarmAt = nil
+    candidateFinderLastStandardPluginSnapshotPrewarmAt = nil
   }
 
   func refreshCandidateFinder(query: String) {
@@ -1890,9 +1998,9 @@ extension AppDelegate {
   ///     empty residual the user sees every candidate from that source (e.g.
   ///     `@emojis.glyphs ` lists every emoji).
   ///   * Default — the regular pool scored on the full query, restricted to
-  ///     tmux windows/tabs, browser tabs, apps, and Slack channels. Synthetic
-  ///     bang / source-completion rows are always excluded; all other source
-  ///     families are excluded unless the user opts in via `@<source>`.
+  ///     location entities. Synthetic
+  ///     bang / source-completion rows are always excluded; all other sources
+  ///     are excluded unless the user opts in via `@<source>`.
   private func buildCandidateFinderPool(
     trimmed: String,
     sourceFilter: String?
@@ -1939,40 +2047,112 @@ extension AppDelegate {
     // filter signature; one-slot cache because consecutive keystrokes
     // always share the same key.
     let signature = sourceFilter ?? ""
+    let basePool: [Candidate]
     if let cached = candidateFinderFilteredPoolCache,
       cached.epoch == candidateFinderCandidatesEpoch,
       cached.signature == signature
     {
-      return (cached.pool, trimmed)
-    }
-    // `@<source>` opts in to whatever source the user names. Without an
-    // explicit source filter, keep the default flashlight focused on navigation
-    // destinations only: tmux windows/tabs, browser tabs, apps, and Slack
-    // channels.
-    let userOptedIntoSource = sourceFilter != nil
-    let pool = candidateFinderCandidates.filter { candidate in
-      guard candidate.kind != CandidateFinder.bangKind,
-        candidate.kind != CandidateFinder.sourceKind
-      else { return false }
-      guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
-      if !userOptedIntoSource,
-        !CandidateFinder.isDefaultFlashlightCandidate(candidate, precedence: precedenceTable())
-      {
-        return false
+      basePool = cached.pool
+    } else {
+      // `@<source>` opts in to whatever source the user names. Without an
+      // explicit source filter, keep the default flashlight focused on locations.
+      let userOptedIntoSource = sourceFilter != nil
+      let pool = candidateFinderCandidates.filter { candidate in
+        guard candidate.kind != CandidateFinder.bangKind,
+          candidate.kind != CandidateFinder.sourceKind
+        else { return false }
+        guard Self.candidateCanRenderInCommandBar(candidate) else { return false }
+        if !userOptedIntoSource,
+          !CandidateFinder.isDefaultFlashlightCandidate(candidate, precedence: precedenceTable())
+        {
+          return false
+        }
+        if let sourceFilter,
+          !CandidateFinder.candidateMatchesSourceFilter(candidate, filter: sourceFilter)
+        {
+          return false
+        }
+        return true
       }
-      if let sourceFilter,
-        !CandidateFinder.candidateMatchesSourceFilter(candidate, filter: sourceFilter)
-      {
-        return false
-      }
-      return true
+      candidateFinderFilteredPoolCache = (
+        epoch: candidateFinderCandidatesEpoch,
+        signature: signature,
+        pool: pool
+      )
+      basePool = pool
     }
-    candidateFinderFilteredPoolCache = (
-      epoch: candidateFinderCandidatesEpoch,
-      signature: signature,
-      pool: pool
-    )
-    return (pool, trimmed)
+    if let synthetic = syntheticSlackChannelCandidate(
+      query: trimmed,
+      sourceFilter: sourceFilter,
+      existingPool: basePool)
+    {
+      return (basePool + [synthetic], trimmed)
+    }
+    return (basePool, trimmed)
+  }
+
+  private func syntheticSlackChannelCandidate(
+    query: String,
+    sourceFilter: String?,
+    existingPool: [Candidate]
+  ) -> Candidate? {
+    guard isExplicitSlackChannelFilter(sourceFilter) else { return nil }
+    let slug = Self.stripSlackChannelPrefix(query.trimmed)
+    guard Self.looksLikeSlackChannelSlug(slug) else { return nil }
+    let duplicate = existingPool.contains { candidate in
+      Self.stripSlackChannelPrefix(candidate.title.trimmed).localizedCaseInsensitiveCompare(slug)
+        == .orderedSame
+    }
+    guard !duplicate else { return nil }
+    guard
+      let slackPID = NSWorkspace.shared.runningApplications.first(where: { app in
+        guard !app.isTerminated else { return false }
+        return app.bundleIdentifier == "com.tinyspeck.slackmacgap"
+          || app.bundleIdentifier == "com.tinyspeck.slackmacgap.direct"
+      })?.processIdentifier
+    else { return nil }
+    let payload = #"{"name":"\#(slug)"}"#
+    return CandidateFinder.prepare(
+      Candidate(
+        kind: .plugin("slack_channel"),
+        sourceID: "plugin:slack.channels",
+        source: "slack.channels",
+        pid: slackPID,
+        title: "#\(slug)",
+        subtitle: "Slack channel",
+        sourcePayload: payload,
+        searchAliases: slug,
+        finishesCommand: true,
+        isLocation: true))
+  }
+
+  private func isExplicitSlackChannelFilter(_ sourceFilter: String?) -> Bool {
+    guard let sourceFilter else { return false }
+    let lowered = sourceFilter.lowercased()
+    return lowered == "slack" || lowered == "slack.channels"
+  }
+
+  private static func looksLikeSlackChannelSlug(_ slug: String) -> Bool {
+    guard !slug.isEmpty, slug.count <= 80, let first = slug.unicodeScalars.first else {
+      return false
+    }
+    guard Self.isSlackChannelSlugScalar(first, allowPunctuation: false) else { return false }
+    return slug.unicodeScalars.allSatisfy {
+      Self.isSlackChannelSlugScalar($0, allowPunctuation: true)
+    }
+  }
+
+  private static func stripSlackChannelPrefix(_ value: String) -> String {
+    value.hasPrefix("#") ? String(value.dropFirst()) : value
+  }
+
+  private static func isSlackChannelSlugScalar(
+    _ scalar: UnicodeScalar,
+    allowPunctuation: Bool
+  ) -> Bool {
+    if scalar.value >= 97, scalar.value <= 122 { return true }
+    if scalar.value >= 48, scalar.value <= 57 { return true }
+    return allowPunctuation && (scalar == "-" || scalar == "_" || scalar == ".")
   }
 
   static func candidateCanRenderInCommandBar(_ candidate: Candidate) -> Bool {
@@ -2228,10 +2408,10 @@ extension AppDelegate {
   /// `<cr>` and `<tab>` call with `submit=false` (insert-first).
   /// Return passes `allowFinisher=true`, so source-owned finishers and
   /// exact primary-title matches can open. Tab passes `allowFinisher=false`
-  /// but `submitFinalDestinations=true`, so app, browser-tab, and
-  /// tmux-window rows behave like an explicit Command-Return while
-  /// partial/source rows still rewrite the buffer. `<cmd+cr>` calls with
-  /// `submit=true`, the explicit force-submit path for real candidates.
+  /// but `submitFinalDestinations=true`, so location rows behave like an
+  /// explicit Command-Return while partial/source rows still rewrite the
+  /// buffer. `<cmd+cr>` calls with `submit=true`, the explicit force-submit
+  /// path for real candidates.
   /// Synthetic source-filter rows are always insert-only.
   func actOnSelectedCandidateFinderCandidate(
     submit: Bool,
@@ -2474,17 +2654,32 @@ extension AppDelegate {
     sendNormalModeKey(key, flags: .maskCommand, repeatCount: repeatCount)
   }
 
-  private func sendNormalModeKeySequence(_ keys: [(CGKeyCode, CGEventFlags)]) {
+  private func sendNormalModeKeySequence(
+    _ keys: [(CGKeyCode, CGEventFlags)],
+    repeatCount: Int = 1
+  ) {
     guard let context = normalModeContext() else {
       FlashLog.debug("[normal_mode] no target app for key sequence")
       applyModeOverlay()
       return
     }
-    for (key, flags) in keys {
-      mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
-      NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: context.processID)
+    guard !keys.isEmpty else {
+      scheduleNormalModeRecapture()
+      return
     }
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
+    let count = normalizedRepeatCount(repeatCount)
+    var offsetMs = 0
+    for _ in 0..<count {
+      for (key, flags) in keys {
+        let delay = DispatchTimeInterval.milliseconds(offsetMs)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+          self?.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
+          NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: context.processID)
+        }
+        offsetMs += 35
+      }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(offsetMs + 30)) { [weak self] in
       self?.scheduleNormalModeRecapture()
     }
   }
@@ -2563,8 +2758,8 @@ extension AppDelegate {
   }
 
   func recordAppActivation(_ pid: pid_t) {
-    recordMovement(.app(pid: pid), source: "app_activation")
     recordAppMRU(pid)
+    scheduleAmbientLocationRecord(pid: pid, reason: "app_activation")
   }
 
   /// Raise the app a plugin command asked Flash to bring forward (e.g.

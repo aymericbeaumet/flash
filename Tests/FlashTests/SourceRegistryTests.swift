@@ -269,7 +269,7 @@ final class SourceRegistryTests: XCTestCase {
             identifier: "core.apps",
             capabilities: [.candidates],
             candidateSourceDescriptors: [
-              CandidateSourceDescriptor(name: "core.apps", kind: .apps)
+              CandidateSourceDescriptor(name: "core.apps", kind: .locations)
             ])
         }
       ],
@@ -281,7 +281,7 @@ final class SourceRegistryTests: XCTestCase {
             identifier: "plugin:tmux",
             capabilities: [.candidates],
             candidateSourceDescriptors: [
-              CandidateSourceDescriptor(name: "tmux.windows", kind: .tmuxTabs)
+              CandidateSourceDescriptor(name: "tmux.windows", kind: .locations)
             ])
         ]
       })
@@ -289,9 +289,81 @@ final class SourceRegistryTests: XCTestCase {
     XCTAssertEqual(
       registry.registeredCandidateSourceDescriptors(),
       [
-        CandidateSourceDescriptor(name: "core.apps", kind: .apps),
-        CandidateSourceDescriptor(name: "tmux.windows", kind: .tmuxTabs),
+        CandidateSourceDescriptor(name: "core.apps", kind: .locations),
+        CandidateSourceDescriptor(name: "tmux.windows", kind: .locations),
       ])
+  }
+
+  func testCurrentLocationPrefersCurrentLocationCandidateForFocusedPID() throws {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    let bundleID = try XCTUnwrap(app.bundleIdentifier)
+    let context = AppContext(
+      bundleIdentifier: bundleID,
+      processID: app.processIdentifier,
+      runningApp: app,
+      frontWindowFrame: .zero,
+      allScreensFrame: .zero)
+    let registry = SourceRegistry(
+      descriptors: [],
+      terminalBundleIDs: [],
+      runningApplications: [app],
+      pluginSourcesProvider: {
+        [
+          StubSource(
+            identifier: "plugin:locations",
+            capabilities: [.candidates],
+            candidateSourceDescriptors: [
+              CandidateSourceDescriptor(name: "locations.items", kind: .locations)
+            ],
+            candidatesHandler: { _ in
+              [
+                Candidate(
+                  kind: .plugin("item"),
+                  sourceID: "plugin:locations",
+                  source: "locations.items",
+                  pid: app.processIdentifier,
+                  title: "Background",
+                  isLocation: true),
+                Candidate(
+                  kind: .plugin("item"),
+                  sourceID: "plugin:locations",
+                  source: "locations.items",
+                  pid: app.processIdentifier,
+                  title: "Current",
+                  isLocation: true,
+                  isCurrentLocation: true),
+              ]
+            })
+        ]
+      })
+
+    XCTAssertEqual(registry.currentLocation(in: context)?.title, "Current")
+  }
+
+  func testCurrentLocationFallsBackToFocusedAppCandidate() throws {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    let bundleID = try XCTUnwrap(app.bundleIdentifier)
+    let context = AppContext(
+      bundleIdentifier: bundleID,
+      processID: app.processIdentifier,
+      runningApp: app,
+      frontWindowFrame: .zero,
+      allScreensFrame: .zero)
+    let registry = SourceRegistry(
+      descriptors: [
+        SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
+          ApplicationSource()
+        }
+      ],
+      terminalBundleIDs: [],
+      runningApplications: [app])
+
+    let current = registry.currentLocation(in: context)
+
+    XCTAssertEqual(current?.kind, .app)
+    XCTAssertEqual(current?.pid, app.processIdentifier)
   }
 
   func testPluginSubsourceIdentifierRoutesToOwningPluginSource() {
@@ -303,6 +375,33 @@ final class SourceRegistryTests: XCTestCase {
       pluginSourcesProvider: { [plugin] })
 
     XCTAssertTrue(registry.source(identifier: "plugin:slack.channels") === plugin)
+  }
+
+  func testCandidateMatchingSubsourceIdentifierUsesOwningPluginSource() {
+    let channel = Candidate(
+      kind: .plugin("slack_channel"),
+      sourceID: "plugin:slack.channels",
+      source: "slack.channels",
+      title: "#general",
+      subtitle: "Slack channel",
+      isLocation: true)
+    let plugin = StubSource(
+      identifier: "plugin:slack",
+      capabilities: [.candidates, .appActivation],
+      candidatesHandler: { _ in [channel] },
+      matchHandler: { target in
+        channel.title.localizedCaseInsensitiveContains(target) ? channel : nil
+      })
+    let registry = SourceRegistry(
+      descriptors: [],
+      terminalBundleIDs: [],
+      runningApplications: [],
+      pluginSourcesProvider: { [plugin] })
+
+    let match = registry.candidate(matching: "general", sourceID: "plugin:slack.channels")
+
+    XCTAssertEqual(match?.sourceID, "plugin:slack.channels")
+    XCTAssertEqual(match?.source, "slack.channels")
   }
 
   func testRestoreNavigationRoutesByRegisteredSchemeInPriorityOrder() {

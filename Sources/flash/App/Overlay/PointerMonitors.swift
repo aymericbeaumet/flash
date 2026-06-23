@@ -80,7 +80,12 @@ extension OverlayPanel {
     if inputMode == .commandLine || inputMode == .candidateFinder {
       return true
     }
-    return inputMode == .normal && modeBadgeVisible && modeBadgeCapturesInput
+    // Idle NORMAL must run the monitor so a click on the focused app (e.g. a
+    // website text field) is recognised and enters insert. It is intentionally
+    // NOT gated on `modeBadgeCapturesInput` because capture can be temporarily
+    // suppressed while the mode surface still needs click-intent classification.
+    _ = modeBadgeCapturesInput
+    return inputMode == .normal && modeBadgeVisible
   }
 
   private static func pointerClick(_ event: NSEvent? = nil) -> OverlayPointerClick {

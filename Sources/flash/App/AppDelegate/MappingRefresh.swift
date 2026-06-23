@@ -9,8 +9,9 @@ extension AppDelegate {
   /// coordinator is re-applied only when the effective mappings actually
   /// changed, so an ordinary app switch doesn't churn global-hotkey
   /// registrations.
-  func refreshEffectiveMappings(for bundleID: String?) {
-    let effective = effectiveMode(for: pluginSelectorContext(fallbackBundleID: bundleID))
+  func refreshEffectiveMappings(for bundleID: String?, includeURL: Bool = true) {
+    let effective = effectiveMode(
+      for: pluginSelectorContext(fallbackBundleID: bundleID, includeURL: includeURL))
     overlay?.normalModeMappings = effective.compiledNormal
     if mappingModeChanged(from: lastAppliedMappingMode, to: effective) {
       mappings.apply(mode: effective)
@@ -27,12 +28,13 @@ extension AppDelegate {
 
   func pluginSelectorContext(
     for context: AppContext? = nil,
-    fallbackBundleID: String? = nil
+    fallbackBundleID: String? = nil,
+    includeURL: Bool = true
   ) -> PluginSelectorContext {
     let resolved = context ?? currentNonFlashContext()
     let bundleID = resolved?.bundleIdentifier ?? fallbackBundleID
     let url =
-      pluginManager.needsURLSelectorContext()
+      includeURL && pluginManager.needsURLSelectorContext()
       ? resolved.flatMap { NormalModeDispatcher.documentURL(pid: $0.processID) }
       : nil
     return PluginSelectorContext(bundleID: bundleID, url: url)

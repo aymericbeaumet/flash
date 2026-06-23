@@ -192,6 +192,7 @@ pub mod candidate_metadata {
     pub const SOURCE: &str = "source";
     pub const SOURCE_ID: &str = "source_id";
     pub const KIND: &str = "kind";
+    pub const ENTITY: &str = "entity";
     pub const PID: &str = "pid";
     pub const NAVIGATION_URL: &str = "navigation_url";
     pub const BUNDLE_ID: &str = "bundle_id";
@@ -199,6 +200,8 @@ pub mod candidate_metadata {
     pub const PAYLOAD: &str = "payload";
     pub const ALIASES: &str = "aliases";
     pub const FINISHES_COMMAND: &str = "finishes_command";
+    pub const CURRENT_LOCATION: &str = "current_location";
+    pub const PRIORITY: &str = "priority";
 }
 
 impl Candidate {
@@ -217,6 +220,43 @@ impl Candidate {
 
     pub fn kind(self, kind: impl Into<String>) -> Self {
         self.set(candidate_metadata::KIND, kind)
+    }
+
+    pub fn entity(self, entity: impl Into<String>) -> Self {
+        self.set(candidate_metadata::ENTITY, entity)
+    }
+
+    /// Mark this candidate as a navigable location. Location candidates are
+    /// included in the default flashlight pool and recorded by movement history.
+    pub fn location(self) -> Self {
+        self.entity("location")
+    }
+
+    /// Mark this location as the source's currently focused/active destination.
+    /// The host uses this to feed movement history from ambient app/window focus
+    /// changes such as Cmd+Tab or Cmd+`.
+    pub fn current_location(self, value: bool) -> Self {
+        if value {
+            self.set(candidate_metadata::CURRENT_LOCATION, "1")
+        } else {
+            let mut me = self;
+            me.metadata.remove(candidate_metadata::CURRENT_LOCATION);
+            me
+        }
+    }
+
+    /// Source-provided rank nudge used only as a same-band, same-score
+    /// tiebreaker by the host. Keep this semantic and domain-neutral:
+    /// "important", "active", or "attention-worthy" rows can use it without
+    /// creating plugin-specific source kinds.
+    pub fn priority(self, value: i32) -> Self {
+        if value == 0 {
+            let mut me = self;
+            me.metadata.remove(candidate_metadata::PRIORITY);
+            me
+        } else {
+            self.set(candidate_metadata::PRIORITY, value.to_string())
+        }
     }
 
     pub fn source(self, source: impl Into<String>) -> Self {

@@ -250,6 +250,7 @@ Keys:
 | `hints.mouse_grid_steps`           | int (2..6)     | `3`                  |
 | `hints.mouse_grid_opacity`         | float (0..1)   | `0.5`                |
 | `open.ignored_apps`                | string array   | `[]`                 |
+| `plugins.disabled`                 | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
 | `statusbar.template`               | string         | `"#[align=left]#{mode}#[align=right]#{date}"` |
@@ -288,8 +289,9 @@ Logs are newline-delimited JSON written to stderr and
 `trace`, `debug`, `info`, `warn`, `error`, and `fatal`.
 
 `plugins.third_party` accepts only `github:user/project@<commit-sha>` and `file:<path>`. The `@<commit-sha>` pin is mandatory for `github:` references — it must be a full 40-character lowercase hex commit SHA, and the loader rejects anything else (branch names, tags, short SHAs). Third-party `install` / `start` scripts run as the user with full host privileges, so trusting a moving upstream ref would let a compromised plugin author drop arbitrary code on every config reload; the materializer fetches *exactly* the pinned commit and refuses to start a plugin whose checked-out HEAD doesn't match. Plugin manifests may also declare a `capabilities` array listing the sensitive host surfaces they need (currently `"clipboard"` is the only gated capability); events such as `core:clipboard.changed` are filtered out for any plugin that hasn't opted in.
-Official bundled plugins under `Contents/Resources/Plugins` are always enabled
-in this version and are not configurable. In the checkout they live under root
+Official bundled plugins under `Contents/Resources/Plugins` are enabled unless
+their id is listed in `plugins.disabled`; use `["defaults"]` for a raw host-only
+experience without built-in plugin-layer defaults. In the checkout they live under root
 `Plugins/` so `Scripts/install.sh --dev` can symlink them into the installed app. Every plugin root must contain
 `manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`,
 optional `listen` event patterns, root selectors such as `only_bundle_ids` /

@@ -8,7 +8,7 @@ members = [
   "chromium",
   "clipboard",
   "contacts",
-  "default-keystrokes",
+  "defaults",
   "emojis",
   "firefox",
   "marks",
@@ -22,7 +22,7 @@ members = [
   "spotify",
   "system",
   "tmux",
-  "www",
+  "gmail",
 ]
 
 # Shared dependency versions. Each plugin opts in via

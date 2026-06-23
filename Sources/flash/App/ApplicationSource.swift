@@ -10,7 +10,7 @@ final class ApplicationSource: FlashSource {
   let activationPolicy: FlashSourceActivationPolicy = .always
   let candidateSourceLabels = ["apps"]
   let candidateSourceDescriptors = [
-    CandidateSourceDescriptor(name: "core.apps", kind: .apps)
+    CandidateSourceDescriptor(name: "core.apps", kind: .locations)
   ]
   private let cacheLock = NSLock()
   private var installedItemsCache: [Candidate]?

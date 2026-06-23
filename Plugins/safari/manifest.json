@@ -36,7 +36,7 @@
   "sources": [
     {
       "name": "safari.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     }
   ],
   "source_actions": [

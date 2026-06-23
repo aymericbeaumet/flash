@@ -12,9 +12,9 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       ids,
       [
-        "aiproviders", "calculator", "chromium", "clipboard", "contacts", "default-keystrokes",
-        "emojis", "firefox", "marks", "media", "notes", "processes", "reminders", "safari",
-        "searchengines", "slack", "spotify", "system", "tmux", "www",
+        "aiproviders", "calculator", "chromium", "clipboard", "contacts", "defaults",
+        "emojis", "firefox", "gmail", "marks", "media", "notes", "processes", "reminders",
+        "safari", "searchengines", "slack", "spotify", "system", "tmux",
       ])
 
     let runCommandRequired: Set<String> = [
@@ -43,19 +43,35 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(tmux.navigationSchemes, ["tmux"])
     XCTAssertEqual(
       tmux.candidateSourceDescriptors,
-      [CandidateSourceDescriptor(name: "tmux.windows", kind: .tmuxTabs)])
+      [CandidateSourceDescriptor(name: "tmux.windows", kind: .locations)])
     for id in ["chromium", "firefox", "safari"] {
       let manifest = try XCTUnwrap(manifests.first { $0.id == id })
       XCTAssertFalse(manifest.candidateSourceDescriptors.isEmpty)
       XCTAssertTrue(
-        manifest.candidateSourceDescriptors.allSatisfy { $0.kind == .browserTabs },
-        "\(id) must classify tab sources as browser_tabs")
+        manifest.candidateSourceDescriptors.allSatisfy { $0.kind == .locations },
+        "\(id) must classify tab sources as locations")
     }
-    let www = try XCTUnwrap(manifests.first { $0.id == "www" })
-    XCTAssertEqual(www.priority, 60)
-    XCTAssertEqual(www.capabilities, [.accessibility])
-    XCTAssertEqual(www.onlyURLs, ["https://mail.google.com/*"])
-    XCTAssertEqual(www.sourceActions, ["resource_archive", "resource_next", "resource_previous"])
+    let slack = try XCTUnwrap(manifests.first { $0.id == "slack" })
+    XCTAssertEqual(
+      slack.candidateSourceDescriptors,
+      [CandidateSourceDescriptor(name: "slack.channels", kind: .locations)])
+    let defaults = try XCTUnwrap(manifests.first { $0.id == "defaults" })
+    XCTAssertEqual(
+      Set(defaults.verbs.map(\.name)),
+      ["app_save", "app_print", "document_open", "window_new"])
+
+    let gmail = try XCTUnwrap(manifests.first { $0.id == "gmail" })
+    XCTAssertEqual(gmail.priority, 60)
+    XCTAssertEqual(gmail.capabilities, [.accessibility])
+    XCTAssertEqual(gmail.onlyURLs, ["https://mail.google.com/*"])
+    XCTAssertEqual(gmail.sourceActions, ["resource_archive", "resource_next", "resource_previous"])
+    XCTAssertEqual(gmail.mappings.count, 10)
+    XCTAssertEqual(
+      Set(gmail.mappings.map(\.key)),
+      ["gi", "gs", "gb", "gt", "gd", "ga", "gk", "gl", "gn", "gp"])
+    XCTAssertEqual(
+      gmail.mappings.first { $0.key == "gi" }?.command,
+      ["flash", "send_keys", "--keys=g,i"])
 
     XCTAssertTrue(
       commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
@@ -654,6 +670,14 @@ final class PluginSystemTests: XCTestCase {
     env["FLASH_PLUGIN_VERSION"] = "0.1.0"
     env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
     env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
+    if pluginID == "slack" {
+      let slackDataDir = dataDir.appendingPathComponent("slack-app-state")
+      try FileManager.default.createDirectory(at: slackDataDir, withIntermediateDirectories: true)
+      let configData = try JSONSerialization.data(
+        withJSONObject: ["data_dir": slackDataDir.path],
+        options: [.sortedKeys])
+      env["FLASH_PLUGIN_CONFIG"] = String(data: configData, encoding: .utf8)
+    }
     process.environment = env
 
     let stdin = Pipe()

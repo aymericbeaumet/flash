@@ -9,6 +9,7 @@ enum CandidateMetadataKey {
   static let source = "source"
   static let sourceID = "source_id"
   static let kind = "kind"
+  static let entity = "entity"
   static let pid = "pid"
   static let navigationURL = "navigation_url"
   static let bundleID = "bundle_id"
@@ -16,14 +17,27 @@ enum CandidateMetadataKey {
   static let payload = "payload"
   static let aliases = "aliases"
   static let finishesCommand = "finishes_command"
+  static let currentLocation = "current_location"
+  static let priority = "priority"
 }
 
 extension Candidate {
+  enum Entity: String {
+    case location
+  }
+
   var source: String { metadata[CandidateMetadataKey.source] ?? "" }
   var sourceID: String { metadata[CandidateMetadataKey.sourceID] ?? "" }
   var kind: CandidateKind {
     let raw = metadata[CandidateMetadataKey.kind] ?? ""
     return raw == "app" ? .app : .plugin(raw)
+  }
+  var entity: Entity? {
+    guard let raw = metadata[CandidateMetadataKey.entity] else { return nil }
+    return Entity(rawValue: raw)
+  }
+  var isLocation: Bool {
+    kind == .app || entity == .location
   }
   var pid: pid_t? {
     guard let raw = metadata[CandidateMetadataKey.pid], let value = Int32(raw) else { return nil }
@@ -38,6 +52,11 @@ extension Candidate {
   var sourcePayload: String? { metadata[CandidateMetadataKey.payload] }
   var searchAliases: String { metadata[CandidateMetadataKey.aliases] ?? "" }
   var finishesCommand: Bool { metadata[CandidateMetadataKey.finishesCommand] == "1" }
+  var isCurrentLocation: Bool { metadata[CandidateMetadataKey.currentLocation] == "1" }
+  var priority: Int {
+    guard let raw = metadata[CandidateMetadataKey.priority] else { return 0 }
+    return Int(raw) ?? 0
+  }
 
   /// Build a candidate from the conventional host-side fields. `title` and `url`
   /// land on the typed Candidate fields; everything else goes into `metadata`
@@ -55,10 +74,14 @@ extension Candidate {
     sourcePayload: String? = nil,
     searchAliases: String = "",
     finishesCommand: Bool = false,
+    isLocation: Bool = false,
+    isCurrentLocation: Bool = false,
+    priority: Int = 0,
     extra: [String: String] = [:]
   ) {
     var metadata = extra
     metadata[CandidateMetadataKey.kind] = Self.kindString(kind)
+    if isLocation { metadata[CandidateMetadataKey.entity] = Entity.location.rawValue }
     if !sourceID.isEmpty { metadata[CandidateMetadataKey.sourceID] = sourceID }
     if !source.isEmpty { metadata[CandidateMetadataKey.source] = source }
     if let pid { metadata[CandidateMetadataKey.pid] = String(pid) }
@@ -70,6 +93,8 @@ extension Candidate {
     if let sourcePayload { metadata[CandidateMetadataKey.payload] = sourcePayload }
     if !searchAliases.isEmpty { metadata[CandidateMetadataKey.aliases] = searchAliases }
     if finishesCommand { metadata[CandidateMetadataKey.finishesCommand] = "1" }
+    if isCurrentLocation { metadata[CandidateMetadataKey.currentLocation] = "1" }
+    if priority != 0 { metadata[CandidateMetadataKey.priority] = String(priority) }
     self.init(title: title, url: url, metadata: metadata)
   }
 

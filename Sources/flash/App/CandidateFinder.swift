@@ -85,12 +85,7 @@ enum CandidateFinder {
   }
 
   static func isFinalDestination(_ candidate: Candidate) -> Bool {
-    switch candidate.kind {
-    case .app:
-      return true
-    case .plugin(let kind):
-      return kind == "browser_tab" || kind == "tmux_window"
-    }
+    candidate.isLocation
   }
 
   static func defaultFlashlightSourceRank(_ candidate: Candidate) -> Int? {
@@ -682,7 +677,7 @@ enum CandidateFinder {
     var index: Int
     var score: Int
     /// The query exactly matches / is a full-string prefix of this
-    /// candidate's own name. Lifts the row above the source-family band in
+    /// candidate's own name. Lifts the row above the location band in
     /// `recordPrecedes` so a deliberate name hit (e.g. `safa` → Safari.app)
     /// isn't buried under that family's rows (Safari's tabs).
     var titlePrefixMatch: Bool
@@ -691,6 +686,10 @@ enum CandidateFinder {
     /// Bangs carry the sentinel `bangWeight` so the comparator can
     /// fast-path the strict top band without a separate flag.
     var weight: Int
+    /// Source-provided same-score nudge. This is deliberately below match
+    /// quality and source-band ranking so "important" rows never outrank a
+    /// better textual match.
+    var priority: Int
     var alive: Bool
     var key: String
     var sourceID: String
@@ -713,6 +712,7 @@ enum CandidateFinder {
         titlePrefixMatch: titleMatchesPrefix(match.candidate, normalizedQuery: normalizedQuery),
         defaultFlashlightSourceRank: precedence.defaultFlashlightSourceRank(for: match.candidate),
         weight: precedence.weight(for: match.candidate),
+        priority: match.candidate.priority,
         alive: isAlive(match.candidate),
         key: key,
         sourceID: match.candidate.sourceID)
@@ -770,12 +770,11 @@ enum CandidateFinder {
     //    intent; we surface it above anything else regardless of
     //    how the fuzzy match would score.
     //
-    // 2. The default flashlight source families are a strict band:
-    //    tmux windows/tabs > browser tabs > apps > Slack channels.
-    //    Match quality is authoritative only inside the same band. Other
-    //    sources are normally hidden from the default pool, but when
-    //    sorted explicitly (for example through `@source`) they stay below
-    //    default families unless the compared rows are all outside the band.
+    // 2. Location rows are the default flashlight band. Match quality is
+    //    authoritative inside that band. Other sources are normally hidden from
+    //    the default pool, but when sorted explicitly (for example through
+    //    `@source`) they stay below locations unless both compared rows are
+    //    outside the band.
     //
     // 3. Everything inside the same band is ranked by match quality first.
     //    The precedence weight is the tiebreaker once scores cluster.
@@ -785,7 +784,7 @@ enum CandidateFinder {
 
     // A query that exactly matches / is a full-string prefix of a
     // candidate's own name is a deliberate hit on THAT item, so it crosses
-    // the source-family band below: `safa` surfaces Safari.app above
+    // the location band below: `safa` surfaces Safari.app above
     // Safari's open tabs, `mes` surfaces Messages.app above a tab that
     // merely contains "mes". This restores the ranking `fieldScoreNormalized`
     // documents — without it the band ordering (tabs > apps) buries the app
@@ -806,8 +805,9 @@ enum CandidateFinder {
     if lhs.score != rhs.score { return lhs.score > rhs.score }
 
     // Score-tied tiebreakers: precedence weight (higher first),
-    // alive vs dead, then the stable composite key.
+    // source-provided priority, alive vs dead, then the stable composite key.
     if lhs.weight != rhs.weight { return lhs.weight > rhs.weight }
+    if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
     if lhs.alive != rhs.alive { return lhs.alive }
     if lhs.key != rhs.key { return lhs.key < rhs.key }
     return lhs.sourceID < rhs.sourceID
@@ -886,9 +886,9 @@ enum CandidateFinder {
       return resolvedBase + bonus
     }
 
-    /// Strict default flashlight family rank. Live source descriptors are the
-    /// primary signal; semantic candidate kinds cover offline tests and sources
-    /// that have not registered descriptors.
+    /// Strict default flashlight entity rank. Live source descriptors are the
+    /// primary signal; location metadata covers offline tests and sources that
+    /// have not registered descriptors.
     public func defaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
       let lowered = candidate.source.lowercased()
       for entry in entries {
@@ -929,12 +929,8 @@ enum CandidateFinder {
 
     private static func defaultWeight(for kind: CandidateSourceKind) -> Int {
       switch kind {
-      case .tmuxTabs:
-        return 100
-      case .browserTabs:
-        return 80
-      case .apps:
-        return 40
+      case .locations:
+        return 50
       case .standard:
         return 0
       }
@@ -942,53 +938,25 @@ enum CandidateFinder {
 
     private static func defaultFlashlightSourceRank(for kind: CandidateSourceKind) -> Int? {
       switch kind {
-      case .tmuxTabs:
-        return 4
-      case .browserTabs:
-        return 3
-      case .apps:
-        return 2
+      case .locations:
+        return 1
       case .standard:
         return nil
       }
     }
 
     private static func fallbackSourceKind(for candidate: Candidate) -> CandidateSourceKind {
+      if candidate.isLocation { return .locations }
       switch candidate.kind {
       case .app:
-        return .apps
-      case .plugin(let kind):
-        switch kind {
-        case "tmux_window":
-          return .tmuxTabs
-        case "browser_tab":
-          return .browserTabs
-        default:
-          return .standard
-        }
+        return .locations
+      case .plugin:
+        return .standard
       }
     }
 
     private static func fallbackDefaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
-      switch candidate.kind {
-      case .app:
-        return 2
-      case .plugin(let kind):
-        switch kind {
-        case "tmux_window":
-          return 4
-        case "browser_tab":
-          return 3
-        case "slack_channel":
-          return 1
-        default:
-          break
-        }
-      }
-      let source = candidate.source.lowercased()
-      if source == "slack.channels" || source.hasPrefix("slack.channels.") {
-        return 1
-      }
+      if candidate.isLocation { return 1 }
       return nil
     }
   }
@@ -1039,7 +1007,8 @@ enum CandidateFinder {
 
   private static func secondarySearchText(_ candidate: Candidate) -> String {
     if candidate.kind == browserTabKind {
-      return "\(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate))"
+      return
+        "\(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate)) \(browserTabURLAliases(candidate))"
     }
     return "\(candidate.subtitle) \(urlSearchText(candidate))"
   }
@@ -1070,6 +1039,19 @@ enum CandidateFinder {
       .map { $0.trimmed }
       .filter { !$0.isEmpty }
     return tokens.map { "\($0).\(suffix)" }.joined(separator: " ")
+  }
+
+  private static func browserTabURLAliases(_ candidate: Candidate) -> String {
+    guard
+      candidate.kind == browserTabKind,
+      let host = candidate.url?.host?.lowercased()
+    else { return "" }
+    switch host {
+    case "mail.google.com":
+      return "gmail gmail.com"
+    default:
+      return ""
+    }
   }
 
   private static func fieldScore(
@@ -1123,7 +1105,7 @@ enum CandidateFinder {
 
   /// Direct source-label matches are more intentional than generic title
   /// matches from unrelated sources. This is especially important for dotted
-  /// source families such as `tmux.windows`: typing `tmux` should surface rows
+  /// source labels such as `tmux.windows`: typing `tmux` should surface rows
   /// from that source even when another source has an exact title `tmux`.
   ///
   /// Plain exact source labels stay just below exact title matches so an app

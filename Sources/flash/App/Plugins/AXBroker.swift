@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import FlashCore
 import Foundation
 
 /// Host-side Accessibility broker. The core holds the single TCC grant, so it
@@ -48,6 +49,12 @@ final class AXBroker {
       perform(params, reply: reply)
     case "ax.set":
       setAttribute(params, reply: reply)
+    case "ax.select_child":
+      selectChild(params, reply: reply)
+    case "ax.click":
+      click(params, reply: reply)
+    case "ax.click_point":
+      clickPoint(params, reply: reply)
     default:
       reply(["ok": false, "error": "unknown ax method: \(method)"])
     }
@@ -65,6 +72,7 @@ final class AXBroker {
       (params["follow"] as? [String]).flatMap { $0.isEmpty ? nil : $0 }
       ?? Self.defaultFollow
     let collect = params["collect"] as? [String] ?? []
+    let pruneRoles = Set(params["prune_roles"] as? [String] ?? [])
     let maxNodes = params["max_nodes"] as? Int ?? 3_000
     let geometry = params["geometry"] as? Bool ?? false
 
@@ -88,19 +96,24 @@ final class AXBroker {
       }
       var nodes: [[String: Any]] = []
       for (rootIndex, root) in roots.enumerated() {
-        var bfs = [root]
+        var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
         var index = 0
         while index < bfs.count, nodes.count < maxNodes {
-          let element = bfs[index]
+          let item = bfs[index]
+          let element = item.element
           index += 1
           let handle = self.register(pid: pid, element: element)
           let (attrs, children, frame) = self.readNode(
             element, collect: collect, follow: follow,
             geometry: geometry, screenH: screenH)
           var node: [String: Any] = ["handle": handle, "root": rootIndex, "attrs": attrs]
+          if let parent = item.parent { node["parent"] = parent }
           if let frame { node["frame"] = frame }
           nodes.append(node)
-          bfs.append(contentsOf: children)
+          if let role = attrs[kAXRoleAttribute as String], pruneRoles.contains(role) {
+            continue
+          }
+          bfs.append(contentsOf: children.map { ($0, handle) })
         }
       }
       reply(["ok": true, "nodes": nodes])
@@ -147,6 +160,65 @@ final class AXBroker {
       }
       let status = AXUIElementSetAttributeValue(entry.element, attribute as CFString, cfValue)
       reply(["ok": status == .success])
+    }
+  }
+
+  private func selectChild(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+    guard let parentHandle = uint64Param(params["parent"]),
+      let childHandle = uint64Param(params["child"])
+    else {
+      reply(["ok": false, "error": "ax.select_child requires parent and child"])
+      return
+    }
+    queue.async { [weak self] in
+      guard let self,
+        let parentEntry = self.entries[parentHandle],
+        let childEntry = self.entries[childHandle]
+      else {
+        reply(["ok": false, "error": "stale ax handle"])
+        return
+      }
+      guard parentEntry.pid == childEntry.pid else {
+        reply(["ok": false, "error": "ax handles belong to different processes"])
+        return
+      }
+      let value = [childEntry.element] as CFArray
+      let status = AXUIElementSetAttributeValue(
+        parentEntry.element, kAXSelectedChildrenAttribute as CFString, value)
+      reply(["ok": status == .success])
+    }
+  }
+
+  private func click(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+    guard let handle = handleParam(params) else {
+      reply(["ok": false, "error": "ax.click requires handle"])
+      return
+    }
+    let action = jumpAction(params["action"] as? String)
+    queue.async { [weak self] in
+      guard let self, let entry = self.entries[handle] else {
+        reply(["ok": false, "error": "stale ax handle"])
+        return
+      }
+      guard let frame = self.frameFromAX(entry.element, screenH: self.primaryScreenHeight()) else {
+        reply(["ok": false, "error": "ax.click could not read frame"])
+        return
+      }
+      let point = CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + frame[3] / 2)
+      DispatchQueue.main.async {
+        reply(["ok": ActionDispatcher.synthesizeClick(at: point, action: action)])
+      }
+    }
+  }
+
+  private func clickPoint(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+    guard let point = pointParam(params) else {
+      reply(["ok": false, "error": "ax.click_point requires x and y"])
+      return
+    }
+    let action = jumpAction(params["action"] as? String)
+    DispatchQueue.main.async {
+      reply(["ok": ActionDispatcher.synthesizeClick(at: point, action: action)])
     }
   }
 
@@ -310,8 +382,13 @@ final class AXBroker {
   // MARK: - Param coercion
 
   private func handleParam(_ params: [String: Any]) -> UInt64? {
-    if let number = params["handle"] as? NSNumber { return number.uint64Value }
-    if let value = params["handle"] as? Int, value >= 0 { return UInt64(value) }
+    uint64Param(params["handle"])
+  }
+
+  private func uint64Param(_ value: Any?) -> UInt64? {
+    if let number = value as? NSNumber { return number.uint64Value }
+    if let value = value as? Int, value >= 0 { return UInt64(value) }
+    if let value = value as? UInt64 { return value }
     return nil
   }
 
@@ -319,5 +396,28 @@ final class AXBroker {
     if let number = params[key] as? NSNumber { return pid_t(number.int32Value) }
     if let value = params[key] as? Int { return pid_t(value) }
     return nil
+  }
+
+  private func pointParam(_ params: [String: Any]) -> CGPoint? {
+    guard let x = doubleParam(params["x"]), let y = doubleParam(params["y"]) else { return nil }
+    return CGPoint(x: x, y: y)
+  }
+
+  private func doubleParam(_ value: Any?) -> Double? {
+    if let number = value as? NSNumber { return number.doubleValue }
+    if let value = value as? Double { return value }
+    if let value = value as? Int { return Double(value) }
+    return nil
+  }
+
+  private func jumpAction(_ raw: String?) -> JumpAction {
+    switch raw {
+    case "right_click":
+      return .rightClick
+    case "double_click":
+      return .doubleClick
+    default:
+      return .leftClick
+    }
   }
 }

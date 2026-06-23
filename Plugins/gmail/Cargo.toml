@@ -1,11 +1,11 @@
 [package]
-name = "flash-plugin-www"
+name = "flash-plugin-gmail"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
 [[bin]]
-name = "flash-plugin-www"
+name = "flash-plugin-gmail"
 path = "src/main.rs"
 
 [dependencies]

@@ -826,7 +826,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(AppDelegate.insertFocusExitShouldWaitForPointerRelease(pressedMouseButtons: 2))
   }
 
-
   func testInsertFocusExitOnlyProbesFocusChangingAXNotifications() {
     XCTAssertTrue(
       AppMonitor.notificationMayChangeFocusedElement(
@@ -928,7 +927,9 @@ final class NormalModeTests: XCTestCase {
         inputMode: .commandLine,
         modeBadgeVisible: false,
         modeBadgeCapturesInput: false))
-    XCTAssertFalse(
+    // Idle NORMAL classifies clicks via the monitor even when keyboard capture
+    // is temporarily suppressed.
+    XCTAssertTrue(
       AppDelegate.pointerFocusLossShouldDeferRecaptureForPointerMonitor(
         inputMode: .normal,
         modeBadgeVisible: true,
@@ -1029,6 +1030,22 @@ final class NormalModeTests: XCTestCase {
         activationInFlight: true,
         captureOverride: true
       ).captureInput)
+  }
+
+  func testNormalModeInputCaptureSkipsSourceResolutionSuppression() {
+    XCTAssertTrue(
+      AppDelegate.normalModeShouldOwnKeyboardInput(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false))
+    XCTAssertFalse(
+      AppDelegate.normalModeShouldOwnKeyboardInput(
+        mode: .normal,
+        overlayInputMode: .normal,
+        hasHints: false,
+        activationInFlight: false,
+        sourceResolutionCaptureSuppressed: true))
   }
 
   func testModeStatusBarVisibleInInsertWithoutCapturing() {
@@ -1356,6 +1373,18 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
         mode: .insert,
         menuBarInteractionRecaptureSuppressedUntil: nil,
+        now: now))
+    XCTAssertFalse(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        sourceResolutionCaptureSuppressedUntil: activeSuppression,
+        now: now))
+    XCTAssertTrue(
+      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
+        mode: .normal,
+        menuBarInteractionRecaptureSuppressedUntil: nil,
+        sourceResolutionCaptureSuppressedUntil: expiredSuppression,
         now: now))
   }
 

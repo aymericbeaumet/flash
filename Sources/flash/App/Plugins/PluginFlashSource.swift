@@ -111,18 +111,9 @@ final class PluginFlashSource: FlashSource {
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   ) {
-    // Activate the candidate's owning app on the main thread before
-    // the plugin runs its own resolve. Without this step a tmux
-    // window pick would correctly run `switch-client` but the
-    // terminal app would stay in the background, so the user has
-    // to manually click it to see the new window.
-    if let pid = candidate.pid,
-      let app = NSRunningApplication(processIdentifier: pid)
-    {
-      DispatchQueue.main.async {
-        RunningApplicationActivation.activate(app, options: [.activateAllWindows])
-      }
-    }
+    // The plugin owns the location-changing side effect. The host raises the
+    // returned target pid after a successful resolve; pre-activating here makes
+    // failed resolves look like successful app-only opens.
     plugin.resolveCandidate(candidate, completion: completion)
   }
 
@@ -139,9 +130,10 @@ final class PluginFlashSource: FlashSource {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    guard plugin.manifest.supportsSourceAction(
-      action.wireName,
-      context: selectorContext(for: context))
+    guard
+      plugin.manifest.supportsSourceAction(
+        action.wireName,
+        context: selectorContext(for: context))
     else {
       DispatchQueue.main.async { completion(.unhandled) }
       return

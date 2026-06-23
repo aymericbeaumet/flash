@@ -9,6 +9,11 @@
   "capabilities": [
     "accessibility"
   ],
+  "navigation": {
+    "schemes": [
+      "flash-firefox"
+    ]
+  },
   "only_bundle_ids": [
     "org.mozilla.firefox",
     "org.mozilla.firefoxdeveloperedition"
@@ -22,7 +27,7 @@
   "sources": [
     {
       "name": "firefox.tabs",
-      "kind": "browser_tabs"
+      "kind": "locations"
     }
   ],
   "source_actions": [

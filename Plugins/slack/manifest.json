@@ -5,9 +5,15 @@
   "description": "Slack CLI actions and a channel finder backed by local Slack app state plus AX fallback.",
   "install": "true",
   "start": "exec ./flash-plugin-slack",
+  "request_timeout_ms": 6500,
   "capabilities": [
     "accessibility"
   ],
+  "navigation": {
+    "schemes": [
+      "slack"
+    ]
+  },
   "commands": {
     "items": [
       {
@@ -40,7 +46,8 @@
   ],
   "sources": [
     {
-      "name": "slack.channels"
+      "name": "slack.channels",
+      "kind": "locations"
     }
   ]
 }

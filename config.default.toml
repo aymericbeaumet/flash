@@ -43,7 +43,11 @@ mouse_grid_opacity = 0.5
 ignored_apps = []
 
 [plugins]
-# Official bundled plugins are always enabled in this version.
+# Official bundled plugins are enabled unless listed in `disabled`.
+# Disable `defaults` for a raw host-only experience without built-in
+# plugin-layer defaults such as app_save/app_print/document_open/window_new.
+disabled = []
+
 # Third-party plugins are loaded only when listed here.
 # Supported references:
 #   github:user/project@<40-char commit sha>
@@ -131,11 +135,11 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 [flashlight]
 # Number of suggestion rows shown below the command bar.
 suggestion_count = 10
-# The default flashlight pool is intentionally navigation-only:
-# tmux tabs > browser tabs > apps > Slack channels. Other sources are hidden
-# unless the query includes an explicit @source filter.
+# The default flashlight pool is intentionally location-only: apps, tabs,
+# tmux windows, Slack channels, and any plugin-provided location entities.
+# Other sources are hidden unless the query includes an explicit @source filter.
 # Bonus added to candidates backed by a running process, used as a tiebreaker
-# inside the same source family.
+# inside the same source.
 precedence_alive_bonus = 10
 
 [flashlight.aliases]
@@ -145,9 +149,8 @@ precedence_alive_bonus = 10
 # "@ft" = "@firefox.tabs"
 
 [flashlight.precedence]
-# Optional source-order overrides used as tie-breakers inside the same default
-# source family or for explicit @source result sets. Keys are source labels or
-# parent prefixes.
+# Optional source-order overrides used as tie-breakers for location rows or
+# explicit @source result sets. Keys are source labels or parent prefixes.
 # Example:
 # tmux = 200
 # "firefox.tabs" = 120

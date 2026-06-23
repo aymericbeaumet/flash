@@ -51,6 +51,7 @@ final class PluginProcess {
   /// tell whether this plugin's settings changed.
   let settings: [String: PluginConfigValue]
   var onStatusChanged: (() -> Void)?
+  var onSnapshotChanged: (() -> Void)?
   /// Handles a plugin→host RPC request (`call_host` on the plugin side):
   /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
   /// installs this; `reply` is invoked with the JSON result, possibly async
@@ -292,6 +293,7 @@ final class PluginProcess {
     lock.lock()
     snapshot = snap
     lock.unlock()
+    onSnapshotChanged?()
     notifyStatus()
     return snap
   }
@@ -972,6 +974,7 @@ final class PluginProcess {
       lock.lock()
       snapshot = PluginSnapshot()
       lock.unlock()
+      onSnapshotChanged?()
       notifyStatus()
     case "status.updated":
       applyStatusSegments(params)
@@ -1017,6 +1020,7 @@ final class PluginProcess {
       contextPID: contextPID,
       updatedAt: Date())
     lock.unlock()
+    onSnapshotChanged?()
     notifyStatus()
   }
 

@@ -375,6 +375,36 @@ enum ConfigLoader {
       config.plugins.watchingEnabled = value
     }
 
+    let disabledPath = ["plugins", "disabled"]
+    if let value = table["disabled"] {
+      let location = locations.location(for: disabledPath)
+      guard let parsed = stringArrayValue(value) else {
+        config.addDiagnostic(
+          "plugins.disabled must be an array of plugin ids",
+          location: location)
+        return
+      }
+      let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
+      var disabled = Set<String>()
+      var invalid: [String] = []
+      for raw in parsed {
+        let id = raw.trimmed.lowercased()
+        if !id.isEmpty, id.unicodeScalars.allSatisfy({ allowed.contains($0) }) {
+          disabled.insert(id)
+        } else {
+          invalid.append(raw)
+        }
+      }
+      if invalid.isEmpty {
+        config.plugins.disabled = disabled
+        config.recordLocation(path: "plugins.disabled", location: location)
+      } else {
+        config.addDiagnostic(
+          "plugins.disabled entries must be lowercase [a-z0-9._-]: \(invalid.joined(separator: ", "))",
+          location: location)
+      }
+    }
+
     let thirdPartyPath = ["plugins", "third_party"]
     if let value = table["third_party"] {
       let location = locations.location(for: thirdPartyPath)
