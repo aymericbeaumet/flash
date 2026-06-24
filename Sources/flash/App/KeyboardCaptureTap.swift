@@ -81,6 +81,16 @@ final class KeyboardCaptureTap {
       if let tap = me.tap { CGEvent.tapEnable(tap: tap, enable: true) }
       return passthrough
     }
+    // Pass Flash's own synthesized keys straight through. `send_key` output
+    // (`/`→⌘F, the ⌘⇧[ / ⌘⇧] tab chords, ⌘V, …) is posted with this tag and can
+    // loop back through the session tap; re-capturing it in NORMAL mode would
+    // re-trigger the mapping that sent it — an infinite replay. Mirrors the
+    // synthetic-mouse-tag skip in the pointer monitors.
+    if event.getIntegerValueField(.eventSourceUserData)
+      == NormalModeDispatcher.syntheticKeyEventTag
+    {
+      return passthrough
+    }
     guard type == .keyDown, me.shouldSwallow(event) else { return passthrough }
     if let ns = NSEvent(cgEvent: event) {
       // The swallow (returning nil) is synchronous, so the key never reaches
