@@ -92,6 +92,12 @@ fn link_pattern() -> &'static Regex {
     })
 }
 
+/// A real clickable URL (vs. a path / dotted-host / error-code match). Used to
+/// prioritise URLs when a pane has more links than the per-pane hint budget.
+fn is_url(text: &str) -> bool {
+    text.starts_with("http://") || text.starts_with("https://")
+}
+
 /// Yield `(column, text)` for each link match on a line, bounded by `max_cols`
 /// columns. Column is a character index to mirror the Python implementation.
 fn extract_links(line: &str, max_cols: usize) -> Vec<(usize, String)> {
@@ -967,26 +973,31 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
         else {
             continue;
         };
-        let mut pane_links_seen = 0usize;
+        // Collect this pane's links, then keep the most useful within the
+        // per-pane budget: real URLs first (the user's primary intent), then
+        // the earliest remaining matches in reading order. Without this, a
+        // screenful of file paths / dotted hostnames (a diff, a log) exhausts
+        // the budget before a URL lower down ever gets a hint.
+        let mut pane_links: Vec<RawLink> = Vec::new();
         for (row_idx, content) in raw.split('\n').enumerate() {
             if row_idx as i64 >= pane.rows {
                 break;
             }
-            if pane_links_seen >= LINKS_PER_PANE_LIMIT {
-                break;
-            }
             for (col, text) in extract_links(content, pane.cols as usize) {
-                if pane_links_seen >= LINKS_PER_PANE_LIMIT {
-                    break;
-                }
-                raw_links.push(RawLink {
+                pane_links.push(RawLink {
                     screen_row: top_offset + pane.top + row_idx as i64,
                     screen_col: pane.left + col as i64,
                     text,
                 });
-                pane_links_seen += 1;
             }
         }
+        if pane_links.len() > LINKS_PER_PANE_LIMIT {
+            // Stable sort keeps reading order within each group; `false < true`
+            // floats URLs to the front before truncation.
+            pane_links.sort_by_key(|link| !is_url(&link.text));
+            pane_links.truncate(LINKS_PER_PANE_LIMIT);
+        }
+        raw_links.extend(pane_links);
     }
 
     // Pane chips emit first so the hint assigner allocates the shortest
