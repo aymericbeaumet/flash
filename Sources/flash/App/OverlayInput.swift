@@ -165,6 +165,25 @@ extension OverlayPanel {
       repeatCount: transition.repeatCount)
   }
 
+  /// Route a key delivered by the global keyboard tap (NORMAL / hints capture
+  /// that no longer relies on key-window focus). The tap already decided this
+  /// key is ours; here we just dispatch it the same way `keyDown` /
+  /// `performKeyEquivalent` would when the panel owned the key event.
+  @discardableResult
+  func handleTapCapturedKey(_ event: NSEvent) -> Bool {
+    switch inputMode {
+    case .normal:
+      processNormalModeKey(event)
+      return true
+    case .hints:
+      return handleOverlayKeyEvent(event)
+    default:
+      // Mode changed between the tap's decision and now (e.g. `:` opened the
+      // command line, which owns the key window). Drop it — it was swallowed.
+      return false
+    }
+  }
+
   @discardableResult
   private func handleOverlayKeyEvent(_ event: NSEvent, swallowIgnored: Bool = false) -> Bool {
     guard let coordinator = coordinator else { return false }

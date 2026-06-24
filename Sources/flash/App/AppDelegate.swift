@@ -283,6 +283,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var pointerInsertHandoffToken: UInt64 = 0
   var normalModePendingCommandToken: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
+  /// Captures NORMAL / hints keystrokes without taking key-window focus. nil
+  /// (no grant) falls back to the legacy key-window capture in
+  /// `captureKeyboardInput`.
+  var keyboardCaptureTap: KeyboardCaptureTap?
   var windowGeometryChangeToken: UInt64 = 0
   var windowGeometryChangeInProgress = false
   var activeWindowBorderTrackingTimer: DispatchSourceTimer?
@@ -398,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     logPermissionState()
     installDismissObservers()
     startClipboardMonitor()
+    startKeyboardCaptureTap()
     pluginManager.emit(
       PluginEvent(
         name: "core:flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
@@ -678,6 +683,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
     }
     clipboardMonitor?.start()
+  }
+
+  /// Install the keyboard tap so NORMAL / hints capture no longer needs the
+  /// overlay to be the key window. Requires the Accessibility grant (which Flash
+  /// already needs); if it's missing the tap won't create and we transparently
+  /// fall back to key-window capture.
+  private func startKeyboardCaptureTap() {
+    guard AXIsProcessTrusted() else {
+      FlashLog.warn("[tap] no accessibility grant — using key-window capture for normal mode")
+      return
+    }
+    let tap = KeyboardCaptureTap(
+      shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? false },
+      handle: { [weak self] event in self?.overlay.handleTapCapturedKey(event) })
+    guard tap.start() else { return }
+    keyboardCaptureTap = tap
+    overlay.keyboardCaptureActive = true
+  }
+
+  /// Decide whether the keyboard tap should swallow a `keyDown`. Runs on the main
+  /// thread. INSERT is never touched (keys flow to the focused app); only NORMAL
+  /// mode's own surfaces capture:
+  ///   - NORMAL input: bare keys (the hermetic motions). Modified chords pass
+  ///     through to the Carbon registry / the focused app, exactly as before.
+  ///   - hints: bare keys + magic-modifier clicks (mirrors the overlay's own
+  ///     magic-modifier gate); other chords (e.g. ⌘-tab) pass through.
+  private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
+    guard flashMode == .normal else { return false }
+    let flags = event.flags
+    var strict: ClickModifiers = []
+    if flags.contains(.maskCommand) { strict.insert(.command) }
+    if flags.contains(.maskControl) { strict.insert(.control) }
+    if flags.contains(.maskAlternate) { strict.insert(.option) }
+    switch overlay.inputMode {
+    case .normal:
+      return strict.isEmpty
+    case .hints:
+      return overlay.magicModifiers.isSuperset(of: strict)
+    default:
+      return false
+    }
   }
 
   func emitRunningApplicationsChanged(reason: String) {

@@ -362,7 +362,20 @@ final class OverlayPanel: NSPanel {
   override var canBecomeMain: Bool { false }
   override var acceptsFirstResponder: Bool { true }
 
+  /// True once the global keyboard tap is installed. NORMAL / hints capture then
+  /// runs through the tap instead of the key window, so the overlay no longer
+  /// takes key/active status for those modes (the focused app keeps its colored
+  /// window controls). Set by the AppDelegate at startup; stays false — and the
+  /// key-window path is used — if the tap could not be created.
+  var keyboardCaptureActive = false
+
   var keyboardCaptureIsActive: Bool {
+    // NORMAL / hints capture is owned by the keyboard tap, which doesn't depend
+    // on key-window focus — being visible is enough. (The recapture machinery
+    // keys off this, so reporting "active" here keeps it from churning.)
+    if keyboardCaptureActive, inputMode == .normal || inputMode == .hints {
+      return isVisible
+    }
     if inputMode == .commandLine {
       return isVisible && isKeyWindow
         && (firstResponder === commandTextField || commandTextField.currentEditor() != nil)

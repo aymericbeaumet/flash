@@ -371,6 +371,24 @@ extension OverlayPanel {
   func captureKeyboardInput() {
     let keyBefore = isKeyWindow
     refreshWindowLevelForCurrentContent()
+    // NORMAL / hints input is captured by the global keyboard tap, so we don't
+    // take key/active status here — the focused app keeps its colored window
+    // controls and there's no activation race to leak a key. Just float the
+    // overlay above the content. (Command-line / modal still take the key
+    // window below for their text fields, as does the no-tap fallback.)
+    if keyboardCaptureActive, inputMode == .normal || inputMode == .hints {
+      orderFrontRegardless()
+      // If we still hold activation from a prior command-line / modal (which do
+      // take the key window for their text fields), hand it back so the focused
+      // app reactivates and shows colored window controls. The tap keeps
+      // capturing regardless of who is active.
+      if inputMode == .normal, NSApp.isActive {
+        NSApp.deactivate()
+      }
+      FlashLog.trace(
+        "[overlay] capture_keyboard via=tap input=\(inputMode) active=\(NSApp.isActive)")
+      return
+    }
     // macOS Tahoe (26) refuses to grant key-window status to a non-
     // activating panel while another app holds activation, even with
     // `becomesKeyOnlyIfNeeded = false`. Force activation so the panel
