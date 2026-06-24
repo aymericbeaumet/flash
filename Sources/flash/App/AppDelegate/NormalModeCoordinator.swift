@@ -902,6 +902,11 @@ extension AppDelegate {
 
   static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]
   static let normalModeFocusChangingRecaptureDelaysMs = [0, 1, 4, 8, 16, 30, 60, 120, 250, 500, 900, 1_400]
+  static let normalModeKeyTargetActivationDelayMs = 35
+
+  private static let normalModeKeyModifierMask: CGEventFlags = [
+    .maskCommand, .maskControl, .maskAlternate, .maskShift,
+  ]
   static let normalModeCaptureRecoveryDelaysMs = [250, 750, 1_500, 3_000]
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
@@ -1087,9 +1092,20 @@ extension AppDelegate {
     case .openApp, .pluginCommand, .pluginVerb, .appPrev, .appNext,
       .movementBack, .movementForward, .quitApp, .saveAndQuit:
       return true
+    case .sendKey(_, _, let flagsRawValue):
+      return normalModeKeyDispatchNeedsTargetActivation(
+        flags: CGEventFlags(rawValue: flagsRawValue))
+    case .sendKeys(_, _, let flagsRawValues):
+      return flagsRawValues.contains {
+        normalModeKeyDispatchNeedsTargetActivation(flags: CGEventFlags(rawValue: $0))
+      }
     default:
       return false
     }
+  }
+
+  static func normalModeKeyDispatchNeedsTargetActivation(flags: CGEventFlags) -> Bool {
+    flags.intersection(normalModeKeyModifierMask).isEmpty
   }
 
   func performMappedCommand(_ command: URLCommand, repeatCount: Int = 1) {
@@ -1260,8 +1276,6 @@ extension AppDelegate {
     }
     overlay.setActiveWindowBorder(around: nil)
     let command = Self.commandLineBuffer(from: initialText)
-    notifyPluginsAfterCandidateFinderSnapshot(scope: self.candidateFinderScope)
-    prewarmCandidateFinderCaches(reason: "command_line_open")
     let scope: CommandScope =
       candidateFinderScope.map { .finder(all: $0 == .all) } ?? .commandLine
     dispatchMode(.openCommand(scope: scope, restoreMode: restoreMode))
@@ -1398,142 +1412,127 @@ extension AppDelegate {
     candidateFinderScope = scope
     openCandidateFinderSession(scope: scope)
     overlay.setActiveWindowBorder(around: nil)
-    notifyPluginsAfterCandidateFinderSnapshot(scope: scope)
-    prewarmCandidateFinderCaches(reason: "candidate_finder_open")
     publishCommandSurfaceModeLabel(reason: "candidate_finder_open")
     overlay.displayCandidateFinder(query: "", items: [])
   }
 
-  func prewarmCandidateFinderCaches(reason: String, force: Bool = false) {
-    refreshCandidatesAsync(scope: .running, reason: reason, force: force)
-    refreshCandidatesAsync(scope: .all, reason: reason, force: force)
-  }
-
-  func scheduleCandidateFinderPrewarm(reason: String, delayMs: Int, force: Bool = false) {
-    candidateFinderFocusPrewarmWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      self?.prewarmCandidateFinderCaches(reason: reason, force: force)
-    }
-    candidateFinderFocusPrewarmWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: work)
-  }
-
-  /// Open a flashlight session by freezing one candidate snapshot. This is the
-  /// only time the visible pool is composed for the session: plugin/browser/tmux
-  /// rows must come from already-warm in-memory `candidates(...)` snapshots, not
-  /// session-time `queryCandidates` RPCs. Later plugin snapshot updates can warm
-  /// the next session, but they must not mutate this one.
+  /// Open a flashlight session: paint instantly from the in-process synchronous
+  /// sources (apps), then pull plugin location rows live and merge them in as
+  /// they arrive. Plugins keep their locations warm in memory; the host holds no
+  /// snapshot, so every open reflects the current warm state. The synchronous
+  /// seed makes first paint instant; the parallel pull fills the rest within a
+  /// round-trip without ever blocking the runloop.
   func openCandidateFinderSession(scope: CandidateScope) {
     let startedNs = DispatchTime.now().uptimeNanoseconds
     candidateFinderPrecedenceTable = buildCandidateFinderPrecedenceTable()
-    let cached = preparedCandidateCache(scope: scope)
-    if let cached {
-      candidateFinderCandidates = cached.candidates
-    } else {
-      candidateFinderCandidates = candidateFinderCandidates(for: scope)
-    }
-    candidateFinderSelectedIndex = 0
+    seedAndFanOutCandidateFinder(scope: scope)
     let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
     FlashLog.trace(
-      "[candidate_finder] session_snapshot scope=\(scope) count=\(candidateFinderCandidates.count) "
-        + "cache_hit=\(cached != nil) ms=\(elapsedMs)")
+      "[candidate_finder] session_seed scope=\(scope) count=\(candidateFinderCandidates.count) "
+        + "ms=\(elapsedMs)")
   }
 
-  private func notifyPluginsAfterCandidateFinderSnapshot(scope: CandidateScope) {
-    pluginManager.emit(
-      PluginEvent(
-        name: "core:flashlight.opened",
-        payload: ["scope": scope == .running ? "running" : "all"],
-        bundleID: nil,
-        configPath: nil,
-        focused: nil))
+  /// Seed the session pool from the synchronous in-process sources and kick off
+  /// the parallel pull of plugin location rows. Bumps the session generation so
+  /// any reply still in flight from a previous seed is ignored when it lands.
+  private func seedAndFanOutCandidateFinder(scope: CandidateScope) {
+    candidateFinderScope = scope
+    candidateFinderSessionGeneration &+= 1
+    candidateFinderNonLocationFetched = false
+    candidateFinderCandidates = registry.synchronousCandidates(scope: scope)
+    candidateFinderSelectedIndex = 0
+    fanOutCandidateQueries(
+      registry.locationCandidateSources(), scope: scope,
+      generation: candidateFinderSessionGeneration)
   }
 
-  func invalidateCandidateFinderCaches(reason: String, refreshApps: Bool) {
-    FlashLog.trace("[candidate_finder] refresh_cache reason=\(reason) refresh_apps=\(refreshApps)")
-    clearPreparedCandidateCaches()
-    if refreshApps {
-      registry.refreshRunningApplications()
-    }
-    prewarmCandidateFinderCaches(reason: reason)
+  /// Lazily pull the non-location candidate sources (emojis, search-engine
+  /// bangs, notes, …) the first time the user opts into one via an `@source`
+  /// filter or a `!`bang. They're intentionally kept out of the instant open
+  /// path — only location rows are fetched then — but must be present once the
+  /// user asks. Fans out once per session; replies merge in via the shared path.
+  func fetchNonLocationSourcesIfNeeded() {
+    guard !candidateFinderNonLocationFetched else { return }
+    candidateFinderNonLocationFetched = true
+    fanOutCandidateQueries(
+      registry.nonLocationCandidateSources(), scope: candidateFinderScope,
+      generation: candidateFinderSessionGeneration)
   }
 
-  private func refreshCandidatesAsync(scope: CandidateScope, reason: String, force: Bool = false) {
-    switch scope {
-    case .running:
-      guard force || !candidateFinderRunningAppsRefreshInFlight else { return }
-      candidateFinderRunningAppsRefreshInFlight = true
-    case .all:
-      guard force || !candidateFinderAllAppsRefreshInFlight else { return }
-      candidateFinderAllAppsRefreshInFlight = true
-    }
-
-    FlashLog.trace("[candidate_finder] refresh_start scope=\(scope) reason=\(reason)")
-    candidateFinderCacheQueue.async { [weak self] in
-      guard let self else { return }
-      let startedNs = DispatchTime.now().uptimeNanoseconds
-      let candidates = self.registry.candidates(scope: scope)
-      DispatchQueue.main.async {
-        switch scope {
-        case .running:
-          self.candidateFinderRunningAppsRefreshInFlight = false
-        case .all:
-          self.candidateFinderAllAppsRefreshInFlight = false
-        }
-        self.setPreparedCandidateCache(candidates, scope: scope)
-        let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
-        FlashLog.trace(
-          "[candidate_finder] refresh_done scope=\(scope) count=\(candidates.count) "
-            + "ms=\(elapsedMs) reason=\(reason)"
-        )
+  /// Fan `candidateQuery` out to `sources` in parallel. Each warm reply is
+  /// merged into the open pool as it arrives; a dead or slow plugin simply never
+  /// improves on what's already shown (the query times out host-side and yields
+  /// nothing). `text: ""` asks for the full warm set — the host applies its own
+  /// per-keystroke fuzzy narrowing.
+  private func fanOutCandidateQueries(
+    _ sources: [FlashSource],
+    scope: CandidateScope,
+    generation: UInt64
+  ) {
+    let env = registry.snapshotEnvironment
+    let request = CandidateQuery(scope: scope, text: "")
+    for source in sources {
+      source.queryCandidates(in: env, request: request) { [weak self] candidates in
+        self?.mergeCandidateQueryResults(candidates, from: source, generation: generation)
       }
     }
   }
 
-  private func candidateFinderCandidates(for scope: CandidateScope) -> [Candidate] {
-    // Bangs are NOT in the default pool — they only surface when the
-    // user types `!` (see `updateCandidateMatches`'s bang branch). The
-    // base snapshot is still over every current source: apps from the warmed
-    // `ApplicationSource` cache, and plugin location rows from each source's
-    // in-memory candidates snapshot. Query-time filtering narrows the
-    // default flashlight to location entities, or to whichever
-    // `@source` the user explicitly names. Do not call `queryCandidates`
-    // here — any RPC or live refresh would either delay first paint or mutate
-    // the list after it is visible.
-    let candidates = registry.candidates(scope: scope)
+  /// Merge one source's warm reply into the open session pool, then re-render at
+  /// the current query. Runs on the main thread (the plugin query completion
+  /// hops there). Late replies from a closed or superseded session are dropped
+  /// via the generation guard and the active-surface check.
+  private func mergeCandidateQueryResults(
+    _ candidates: [Candidate],
+    from source: FlashSource,
+    generation: UInt64
+  ) {
+    guard generation == candidateFinderSessionGeneration else { return }
+    switch overlay.inputMode {
+    case .commandLine, .candidateFinder: break
+    default: return
+    }
+    let ownedPrefix = source.identifier + "."
+    var pool = candidateFinderCandidates.filter { candidate in
+      candidate.sourceID != source.identifier && !candidate.sourceID.hasPrefix(ownedPrefix)
+    }
+    pool.append(contentsOf: CandidateFinder.prepare(candidates))
+    candidateFinderCandidates = pool
     FlashLog.trace(
-      "[candidate_finder] snapshot_sync scope=\(scope) count=\(candidates.count)")
-    return candidates
+      "[candidate_finder] merge source=\(source.identifier) count=\(candidates.count) "
+        + "pool=\(candidateFinderCandidates.count)")
+    scheduleCoalescedCandidateFinderRerender()
   }
 
-  private func preparedCandidateCache(scope: CandidateScope)
-    -> (candidates: [Candidate], computedAt: Date)?
-  {
-    switch scope {
-    case .running:
-      return candidateFinderPreparedRunningCache
-    case .all:
-      return candidateFinderPreparedAllCache
+  /// Re-render once per runloop turn no matter how many sources merged in it.
+  /// Appending to the pool is cheap; re-scoring + repainting is not, and doing
+  /// it per source serializes the merges on the main thread (each reply waits
+  /// behind the previous one's full re-score). Coalescing collapses a burst of
+  /// replies into a single repaint so location rows land together and fast.
+  private func scheduleCoalescedCandidateFinderRerender() {
+    guard !candidateFinderMergeRerenderScheduled else { return }
+    candidateFinderMergeRerenderScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.candidateFinderMergeRerenderScheduled = false
+      self.rerenderActiveCandidateFinderSurface()
     }
   }
 
-  private func setPreparedCandidateCache(_ candidates: [Candidate], scope: CandidateScope) {
-    let snapshot = (candidates: candidates, computedAt: Date())
-    switch scope {
-    case .running:
-      candidateFinderPreparedRunningCache = snapshot
-    case .all:
-      candidateFinderPreparedAllCache = snapshot
+  /// Re-score and repaint whichever flashlight surface is open after the pool
+  /// changed mid-session. Both refresh paths fully replace the rendered rows, so
+  /// inserting late candidates is safe; the user's typed query and selection are
+  /// preserved by the existing scoring path.
+  private func rerenderActiveCandidateFinderSurface() {
+    switch overlay.inputMode {
+    case .commandLine:
+      refreshCommandLine(
+        text: overlay.commandLineText, cursorIndex: overlay.commandLineCursorIndex)
+    case .candidateFinder:
+      refreshCandidateFinder(query: overlay.candidateFinderQuery)
+    default:
+      break
     }
-  }
-
-  func clearPreparedCandidateCaches() {
-    candidateFinderFocusPrewarmWork?.cancel()
-    candidateFinderFocusPrewarmWork = nil
-    candidateFinderPreparedRunningCache = nil
-    candidateFinderPreparedAllCache = nil
-    candidateFinderLastPluginSnapshotPrewarmAt = nil
-    candidateFinderLastStandardPluginSnapshotPrewarmAt = nil
   }
 
   func refreshCandidateFinder(query: String) {
@@ -1572,9 +1571,10 @@ extension AppDelegate {
     if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
       clearCommandLineCompletionState()
       if candidateFinderCandidates.isEmpty {
+        // Cold command line (entered without a prior session seed): seed the
+        // synchronous sources and fan out the location pull, same as opening.
         candidateFinderPrecedenceTable = buildCandidateFinderPrecedenceTable()
-        candidateFinderCandidates = candidateFinderCandidates(for: candidateFinderScope)
-        candidateFinderSelectedIndex = 0
+        seedAndFanOutCandidateFinder(scope: candidateFinderScope)
       }
       // Bang lock: once the user has typed a space after `!<token>`, the
       // remainder of the query semantically belongs to that bang's
@@ -1783,6 +1783,15 @@ extension AppDelegate {
     let trimmed = parsed.text
     candidateFinderCurrentQuery = sourceCompletion?.token ?? trimmed
 
+    // Non-location sources (emojis, bangs, notes, …) aren't pulled on open; the
+    // moment the user opts into one via `@source`/`!`bang, fetch them once for
+    // the session. The reply merges in and re-renders this query asynchronously.
+    if parsed.sourceFilter != nil || sourceCompletion != nil || bangCompletion != nil
+      || CandidateFinder.parseBang(trimmed) != nil
+    {
+      fetchNonLocationSourcesIfNeeded()
+    }
+
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,
       sourceFilter: parsed.sourceFilter)
@@ -1957,6 +1966,15 @@ extension AppDelegate {
     }
   }
 
+  /// The bang-list pool: static manifest-declared shebangs plus the dynamic
+  /// bang-kind rows from candidate sources (e.g. searchengines' DDG bangs),
+  /// which land in the session pool once the non-location sources are pulled on
+  /// the first `@source`/`!` keystroke.
+  private func bangListCandidates() -> [Candidate] {
+    pluginManager.shebangCandidates(in: pluginSelectorContext())
+      + candidateFinderCandidates.filter { $0.kind == CandidateFinder.bangKind }
+  }
+
   /// Pick the candidate pool and the text we score against. Three cases:
   ///
   ///   * Bang mode (query starts with `!`) — the pool is the bang registry, or
@@ -1988,15 +2006,11 @@ extension AppDelegate {
       return (scoped, bang.remainder)
     }
     if let bang = CandidateFinder.parseBang(trimmed) {
-      let bangs = CandidateFinder.prepare(
-        pluginManager.shebangCandidates(
-          in: pluginSelectorContext()))
+      let bangs = CandidateFinder.prepare(bangListCandidates())
       return (bangs, bang.token)
     }
     if let bang = CandidateFinder.bangCompletionState(query: trimmed) {
-      let bangs = CandidateFinder.prepare(
-        pluginManager.shebangCandidates(
-          in: pluginSelectorContext()))
+      let bangs = CandidateFinder.prepare(bangListCandidates())
       return (bangs, bang.token)
     }
     // `@<partial>` completion: when the user is in the middle of
@@ -2522,6 +2536,9 @@ extension AppDelegate {
   }
 
   func clearCandidateFinderState() {
+    // Bump the session generation so any in-flight location query that lands
+    // after this teardown is dropped instead of mutating a stale pool.
+    candidateFinderSessionGeneration &+= 1
     overlay.candidateFinderQuery = ""
     candidateFinderCandidates = []
     candidateFinderMatches = []
@@ -2575,8 +2592,12 @@ extension AppDelegate {
       return
     }
     let count = normalizedRepeatCount(repeatCount)
+    let activationDelayMs =
+      activateNormalModeKeyTargetIfNeeded(
+        context, flags: flags)
+      ? Self.normalModeKeyTargetActivationDelayMs : 0
     for index in 0..<count {
-      let delay = DispatchTimeInterval.milliseconds(index * 35)
+      let delay = DispatchTimeInterval.milliseconds(activationDelayMs + index * 35)
       DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
         // Note the synthesized chord so a `postToPid` event that loops back
         // through the Carbon dispatcher can't re-trigger our own hotkey for
@@ -2585,7 +2606,7 @@ extension AppDelegate {
         NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: context.processID)
       }
     }
-    let finalDelay = DispatchTimeInterval.milliseconds((count - 1) * 35 + 35)
+    let finalDelay = DispatchTimeInterval.milliseconds(activationDelayMs + (count - 1) * 35 + 35)
     DispatchQueue.main.asyncAfter(deadline: .now() + finalDelay) { [weak self] in
       guard let self else { return }
       self.scheduleNormalModeRecapture()
@@ -2636,7 +2657,9 @@ extension AppDelegate {
       return
     }
     let count = normalizedRepeatCount(repeatCount)
-    var offsetMs = 0
+    var offsetMs =
+      activateNormalModeKeyTargetIfNeeded(context, keys: keys)
+      ? Self.normalModeKeyTargetActivationDelayMs : 0
     for _ in 0..<count {
       for (key, flags) in keys {
         let delay = DispatchTimeInterval.milliseconds(offsetMs)
@@ -2650,6 +2673,35 @@ extension AppDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(offsetMs + 30)) { [weak self] in
       self?.scheduleNormalModeRecapture()
     }
+  }
+
+  @discardableResult
+  private func activateNormalModeKeyTargetIfNeeded(
+    _ context: AppContext,
+    flags: CGEventFlags
+  ) -> Bool {
+    guard Self.normalModeKeyDispatchNeedsTargetActivation(flags: flags) else { return false }
+    return activateNormalModeKeyTarget(context)
+  }
+
+  @discardableResult
+  private func activateNormalModeKeyTargetIfNeeded(
+    _ context: AppContext,
+    keys: [(CGKeyCode, CGEventFlags)]
+  ) -> Bool {
+    guard keys.contains(where: { Self.normalModeKeyDispatchNeedsTargetActivation(flags: $0.1) })
+    else { return false }
+    return activateNormalModeKeyTarget(context)
+  }
+
+  @discardableResult
+  private func activateNormalModeKeyTarget(_ context: AppContext) -> Bool {
+    guard
+      let app = NSRunningApplication(processIdentifier: context.processID),
+      !app.isTerminated
+    else { return false }
+    RunningApplicationActivation.activate(app, options: [])
+    return true
   }
 
   static func normalModeCommandKeyShortcutIsUnsafeInTerminal(

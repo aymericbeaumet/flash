@@ -777,7 +777,6 @@ final class StatusBarTests: XCTestCase {
       sourceCount: 0,
       commandCount: 0,
       targetCount: 0,
-      candidateCount: 0,
       snapshotAgeMs: nil,
       restartCount: 0,
       lastError: lastError,

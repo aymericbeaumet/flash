@@ -2,12 +2,14 @@ import FlashBrowserTestSupport
 import XCTest
 
 final class BrowserFixtureCatalogTests: XCTestCase {
-  func testCatalogCoversEverySyntheticTemplateAndAllCollectedSnapshots() throws {
+  func testCatalogCoversEverySyntheticTemplateAndAllSnapshotFiles() throws {
     let fixturesDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
       .appendingPathComponent("Tests/BrowserSnapshots", isDirectory: true)
+    let snapshotFiles = try htmlSnapshotFiles(in: fixturesDir)
     let catalog = try BrowserFixtureCatalog.load(from: fixturesDir)
 
     XCTAssertEqual(Set(catalog.fixtures.map(\.name)).count, catalog.fixtures.count)
+    XCTAssertEqual(Set(catalog.fixtures.map(\.file)), Set(snapshotFiles))
 
     let byCategory = Dictionary(grouping: catalog.fixtures, by: \.category)
     // Each synthetic template now has exactly one canonical fixture; the
@@ -34,26 +36,67 @@ final class BrowserFixtureCatalogTests: XCTestCase {
     }
   }
 
-  /// Reverse of the file-existence check above: guards against an orphaned
-  /// `snapshots/*.html` that no manifest entry references. Such a file would
-  /// never be exercised by the browser oracle yet would silently ship and rot.
-  func testEverySnapshotFileIsReferencedByManifest() throws {
-    let fixturesDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-      .appendingPathComponent("Tests/BrowserSnapshots", isDirectory: true)
+  func testCatalogAutodiscoversSnapshotFilesMissingFromManifest() throws {
+    let fixturesDir = try temporaryFixturesDirectory()
     let snapshotsDir = fixturesDir.appendingPathComponent("snapshots", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: snapshotsDir,
+      withIntermediateDirectories: true)
+    try """
+    <html><body><a href="/">Known</a></body></html>
+    """.write(
+      to: snapshotsDir.appendingPathComponent("known.html"),
+      atomically: true,
+      encoding: .utf8)
+    try """
+    <html><body><a href="/">Collected</a></body></html>
+    """.write(
+      to: snapshotsDir.appendingPathComponent("collected-new-page-001.html"),
+      atomically: true,
+      encoding: .utf8)
+    try """
+    {
+      "fixtures": [
+        {
+          "name": "known-name",
+          "file": "known.html",
+          "kind": "synthetic",
+          "category": "synthetic-controls"
+        }
+      ]
+    }
+    """.write(
+      to: fixturesDir.appendingPathComponent("manifest.json"),
+      atomically: true,
+      encoding: .utf8)
+
     let catalog = try BrowserFixtureCatalog.load(from: fixturesDir)
 
-    let referenced = Set(catalog.fixtures.map(\.file))
-    let onDisk = try FileManager.default
-      .contentsOfDirectory(at: snapshotsDir, includingPropertiesForKeys: nil)
-      .filter { $0.pathExtension == "html" }
-      .map { $0.lastPathComponent }
+    XCTAssertEqual(catalog.fixtures.map(\.name), ["known-name", "collected-new-page-001"])
+    XCTAssertEqual(catalog.fixtures.map(\.file), ["known.html", "collected-new-page-001.html"])
+    XCTAssertEqual(catalog.fixtures[1].category, "collected-regression")
+    XCTAssertEqual(catalog.fixtures[1].kind, "collected")
+  }
 
-    for file in onDisk {
-      XCTAssertTrue(
-        referenced.contains(file),
-        "snapshots/\(file) exists on disk but is not listed in manifest.json")
-    }
+  func testCatalogLoadsWithoutManifest() throws {
+    let fixturesDir = try temporaryFixturesDirectory()
+    let snapshotsDir = fixturesDir.appendingPathComponent("snapshots", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: snapshotsDir,
+      withIntermediateDirectories: true)
+    try """
+    <html><body><button>Run</button></body></html>
+    """.write(
+      to: snapshotsDir.appendingPathComponent("baseline-synthetic-extra.html"),
+      atomically: true,
+      encoding: .utf8)
+
+    let catalog = try BrowserFixtureCatalog.load(from: fixturesDir)
+
+    XCTAssertEqual(catalog.fixtures.count, 1)
+    XCTAssertEqual(catalog.fixtures[0].name, "baseline-synthetic-extra")
+    XCTAssertEqual(catalog.fixtures[0].category, "synthetic-controls")
+    XCTAssertEqual(catalog.fixtures[0].kind, "synthetic")
   }
 
   func testFixtureSelectionRejectsUnknownNames() throws {
@@ -93,5 +136,21 @@ final class BrowserFixtureCatalogTests: XCTestCase {
         rect: CGRect(x: 1510, y: 841, width: 200, height: 46),
         side: .flashOnly,
         axRole: "AXLink"))
+  }
+
+  private func htmlSnapshotFiles(in fixturesDir: URL) throws -> [String] {
+    let snapshotsDir = fixturesDir.appendingPathComponent("snapshots", isDirectory: true)
+    return try FileManager.default
+      .contentsOfDirectory(at: snapshotsDir, includingPropertiesForKeys: nil)
+      .filter { $0.pathExtension == "html" }
+      .map(\.lastPathComponent)
+      .sorted()
+  }
+
+  private func temporaryFixturesDirectory() throws -> URL {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-browser-fixtures-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
   }
 }

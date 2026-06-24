@@ -23,7 +23,7 @@ impl FlashPlugin for Spotify {
                 return CommandResponse::error(format!("unknown subcommand: {other}"));
             }
         };
-        let argv = spotify(&ctx, &tail);
+        let argv = spotify(&ctx, &tail).await;
         run_command(&ctx, &argv, Duration::from_secs(timeout))
             .await
             .into_command()
@@ -110,11 +110,11 @@ fn shorten(value: &str) -> String {
     format!("{head}...")
 }
 
-fn spotify(ctx: &Context, tail: &[String]) -> Vec<String> {
+async fn spotify(ctx: &Context, tail: &[String]) -> Vec<String> {
     let config = ctx.config_dir().join("spotify-player");
     let cache = ctx.cache_dir().join("spotify-player");
-    let _ = std::fs::create_dir_all(&config);
-    let _ = std::fs::create_dir_all(&cache);
+    let _ = tokio::fs::create_dir_all(&config).await;
+    let _ = tokio::fs::create_dir_all(&cache).await;
     let mut argv = vec![
         "spotify_player".to_string(),
         "--config-folder".to_string(),

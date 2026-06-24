@@ -4,6 +4,58 @@ import Darwin
 import FlashCore
 import Foundation
 
+struct PluginRegistrationInventory: Equatable {
+  var plugins = 0
+  var commands = 0
+  var mappings = 0
+  var shebangs = 0
+  var verbs = 0
+  var candidateSources = 0
+  var sourceActions = 0
+  var statusSegments = 0
+  var navigationSchemes = 0
+  var helpTopics = 0
+  var listeners = 0
+  var hintProviders = 0
+  var capabilityRequests = 0
+
+  init(manifests: [PluginManifest]) {
+    plugins = manifests.count
+    for manifest in manifests {
+      commands += manifest.commands.count
+      mappings += manifest.mappings.count
+      shebangs += manifest.shebangs.count
+      verbs += manifest.verbs.count
+      candidateSources += manifest.candidateSourceDescriptors.count
+      sourceActions += manifest.sourceActions.count
+      statusSegments += manifest.statusSegments.count
+      navigationSchemes += manifest.navigationSchemes.count
+      helpTopics += manifest.help.topics.count
+      listeners += manifest.listen.count
+      if manifest.providesHints { hintProviders += 1 }
+      capabilityRequests += manifest.capabilities.count
+    }
+  }
+
+  var rows: [(label: String, count: Int)] {
+    [
+      ("plugins", plugins),
+      ("commands", commands),
+      ("mappings", mappings),
+      ("shebangs", shebangs),
+      ("verbs", verbs),
+      ("candidate_sources", candidateSources),
+      ("source_actions", sourceActions),
+      ("status_segments", statusSegments),
+      ("navigation_schemes", navigationSchemes),
+      ("help_topics", helpTopics),
+      ("listeners", listeners),
+      ("hint_providers", hintProviders),
+      ("capability_requests", capabilityRequests),
+    ]
+  }
+}
+
 final class PluginManager {
   private struct CommandKey: Hashable {
     let command: String
@@ -151,8 +203,6 @@ final class PluginManager {
   /// Keyed by plugin id so file-watch restarts (new pid, same manifest) replay
   /// the snapshot exactly once for the new child.
   private var readyAppsSnapshotReplayPIDs: [String: Int] = [:]
-  /// Plugins whose in-memory snapshots may contain dynamic bang rows.
-  private var snapshotBangPlugins: [PluginProcess] = []
   /// True when any loaded manifest or compiled registration references
   /// `only_urls`. Lets hot paths skip AX URL lookup when the loaded plugin set
   /// cannot use it.
@@ -162,7 +212,6 @@ final class PluginManager {
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
   var onStateChanged: (() -> Void)?
-  var onSnapshotChanged: ((String) -> Void)?
   /// Resolver for the `host.normal_mode_target` RPC: returns the focused
   /// non-Flash app context (pid + bundle id) the host considers the
   /// normal-mode target. Plugins (notably `marks`) call this to record or
@@ -211,7 +260,6 @@ final class PluginManager {
       let snapshot = Array(pluginsByID.values)
       for plugin in pluginsByID.values {
         plugin.onStatusChanged = nil
-        plugin.onSnapshotChanged = nil
         plugin.onHostRequest = nil
       }
       pluginsByID.removeAll()
@@ -227,7 +275,6 @@ final class PluginManager {
       eventListenPatternsIndex.removeAll()
       latestRunningApplicationsSnapshot.removeAll()
       readyAppsSnapshotReplayPIDs.removeAll()
-      snapshotBangPlugins.removeAll()
       selectorContextNeedsURL = false
       sourceAdaptersByID.removeAll()
       return snapshot
@@ -440,10 +487,12 @@ final class PluginManager {
   ///   * **Manifest shebangs** — declared statically in `manifest.json`,
   ///     gated per registration against the focused app. Used by plugins
   ///     with a small fixed set of bangs (aiproviders: chatgpt/claude/…).
-  ///   * **Plugin-snapshot bangs** — kind="bang" candidates the plugin
-  ///     publishes via `emit_snapshot`. Used by plugins whose bang list
-  ///     is too large or too dynamic for the manifest (searchengines:
-  ///     ~100 DDG bangs generated from `bangs.tsv` at build time).
+  ///   * **Warm dynamic bangs** — kind="bang" candidates the plugin keeps
+  ///     warm via `set_locations` (searchengines: ~100 DDG bangs generated
+  ///     from `bangs.tsv` at build time). These are *not* returned here; they
+  ///     are pulled into the flashlight session pool via `candidateQuery` and
+  ///     combined with the static rows in
+  ///     `NormalModeCoordinator.bangListCandidates`.
   /// Plugins should not duplicate a token across both surfaces; if they
   /// do, both rows will appear.
   /// Union of every root `only_bundle_ids` entry declared by any loaded plugin.
@@ -462,12 +511,6 @@ final class PluginManager {
       var out: [Candidate] = []
       for item in shebangCandidateIndex where item.selector.matches(context) {
         out.append(item.candidate)
-      }
-      for plugin in snapshotBangPlugins {
-        for snapshot in plugin.candidates(scope: .all)
-        where snapshot.kind == CandidateFinder.bangKind {
-          out.append(snapshot)
-        }
       }
       return out
     }
@@ -643,7 +686,6 @@ final class PluginManager {
     }
     claimedBundleIDsIndex = claimed
     eventListenPatternsIndex = eventPatterns
-    snapshotBangPlugins = pluginsByID.values.sorted(by: { $0.identifier < $1.identifier })
     selectorContextNeedsURL = needsURL
   }
 
@@ -838,10 +880,14 @@ final class PluginManager {
   }
 
   func statusText() -> String {
-    let snapshots = statusSnapshots()
+    let plugins = queue.sync {
+      pluginsByID.values.sorted(by: { $0.identifier < $1.identifier })
+    }
+    let snapshots = plugins.map { $0.statusSnapshot() }
     guard !snapshots.isEmpty else {
       return "# Plugins\n\nNo plugins loaded."
     }
+    let inventory = PluginRegistrationInventory(manifests: plugins.map(\.manifest))
     let headers = ["ID", "STATE", "PID", "HEARTBEAT", "SNAPSHOT", "COMMANDS", "ORIGIN"]
     let rows = snapshots.map { snapshot in
       [
@@ -849,7 +895,7 @@ final class PluginManager {
         snapshot.state,
         snapshot.pid.map(String.init) ?? "-",
         snapshot.heartbeatAgeMs.map { "\($0)ms" } ?? "-",
-        "\(snapshot.targetCount)t/\(snapshot.candidateCount)c",
+        "\(snapshot.targetCount)t",
         "\(snapshot.commandCount)",
         snapshot.origin,
       ]
@@ -864,7 +910,26 @@ final class PluginManager {
     // markdown renderer keeps it in the monospace font — without the
     // fence it would render as proportional paragraphs and the
     // column alignment would collapse.
-    var lines = ["# Plugins", "", "```text"]
+    let inventoryHeaders = ["ITEM", "COUNT"]
+    let inventoryRows = inventory.rows.map { [$0.label, String($0.count)] }
+    let inventoryWidths = inventoryHeaders.indices.map { idx in
+      max(inventoryHeaders[idx].count, inventoryRows.map { $0[idx].count }.max() ?? 0)
+    }
+    func inventoryPadded(_ value: String, _ idx: Int) -> String {
+      value + String(repeating: " ", count: max(0, inventoryWidths[idx] - value.count))
+    }
+    var lines = ["# Plugins", "", "## Registered", "", "```text"]
+    lines.append(
+      inventoryHeaders.indices.map { inventoryPadded(inventoryHeaders[$0], $0) }
+        .joined(separator: "  "))
+    for row in inventoryRows {
+      lines.append(row.indices.map { inventoryPadded(row[$0], $0) }.joined(separator: "  "))
+    }
+    lines.append("```")
+    lines.append("")
+    lines.append("## Runtime")
+    lines.append("")
+    lines.append("```text")
     lines.append(headers.indices.map { padded(headers[$0], $0) }.joined(separator: "  "))
     for row in rows {
       lines.append(row.indices.map { padded(row[$0], $0) }.joined(separator: "  "))
@@ -886,16 +951,6 @@ final class PluginManager {
   func statusSnapshots() -> [PluginStatusSnapshot] {
     queue.sync {
       pluginsByID.values.map { $0.statusSnapshot() }.sorted { $0.id < $1.id }
-    }
-  }
-
-  func snapshotAffectsDefaultFlashlight(pluginID: String) -> Bool {
-    queue.sync {
-      guard let manifest = pluginsByID[pluginID]?.manifest else { return true }
-      guard manifest.providesCandidates else { return false }
-      let descriptors = manifest.candidateSourceDescriptors
-      if descriptors.isEmpty { return true }
-      return descriptors.contains { $0.kind == .locations }
     }
   }
 
@@ -951,9 +1006,6 @@ final class PluginManager {
             self.replayRunningApplicationsSnapshotIfReady(for: plugin)
           }
           self.notifyStateChanged()
-        }
-        plugin.onSnapshotChanged = { [weak self, id = manifest.id] in
-          self?.notifySnapshotChanged(pluginID: id)
         }
         plugin.onHostRequest = { [weak self] method, params, pluginID, reply in
           self?.handleHostRequest(
@@ -1169,12 +1221,6 @@ final class PluginManager {
     }
   }
 
-  private func notifySnapshotChanged(pluginID: String) {
-    DispatchQueue.main.async { [weak self] in
-      self?.onSnapshotChanged?(pluginID)
-    }
-  }
-
   private func replayRunningApplicationsSnapshotIfReady(for plugin: PluginProcess) {
     let snapshot = plugin.statusSnapshot()
     guard snapshot.state == PluginRuntimeState.ready.rawValue, let pid = snapshot.pid else {
@@ -1249,8 +1295,9 @@ extension PluginManager {
       subcommands such as `:slack login`; install and start do not run login
       flows.
 
-      `flash plugins` or `:plugins` opens the plugin status modal. When
-      `[debug] http_inspector_enabled = true` is set, the http inspector page shows live
-      logs, resolved config, and plugin state.
+      `flash plugins` or `:plugins` opens the plugin modal with manifest
+      registration totals and per-plugin runtime status. When `[debug]
+      http_inspector_enabled = true` is set, the http inspector page shows
+      live logs, resolved config, and plugin state.
       """)
 }

@@ -1312,7 +1312,6 @@ struct PluginStatusSnapshot {
   var sourceCount: Int
   var commandCount: Int
   var targetCount: Int
-  var candidateCount: Int
   var snapshotAgeMs: Int?
   var restartCount: Int
   var lastError: String?
@@ -1343,7 +1342,6 @@ struct PluginStatusSnapshot {
       "commands": commands.map {
         ["command": $0.command, "subcommand": $0.subcommand, "description": $0.description]
       },
-      "candidate_count": candidateCount,
       "cpu_percent": cpuPercent ?? NSNull(),
       "description": description,
       "heartbeat_age_ms": heartbeatAgeMs ?? NSNull(),
@@ -1369,9 +1367,11 @@ struct PluginStatusSnapshot {
   }
 }
 
+/// Per-plugin host-side state for the **hint** path (`f`) and status bar.
+/// Candidates are NOT here: flashlight rows are pulled live from warm plugins
+/// via `candidateQuery`, never cached on the host (see `PluginFlashSource`).
 struct PluginSnapshot {
   var targets: [PluginWireTarget] = []
-  var candidates: [Candidate] = []
   var statusSegments: [String: String] = [:]
   var contextPID: pid_t?
   var updatedAt: Date?

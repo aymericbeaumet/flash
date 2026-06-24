@@ -78,13 +78,16 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(gmail.capabilities, [.accessibility])
     XCTAssertEqual(gmail.onlyURLs, ["https://mail.google.com/*"])
     XCTAssertEqual(gmail.sourceActions, ["resource_archive", "resource_next", "resource_previous"])
-    XCTAssertEqual(gmail.mappings.count, 10)
+    XCTAssertEqual(gmail.mappings.count, 11)
     XCTAssertEqual(
       Set(gmail.mappings.map(\.key)),
-      ["gi", "gs", "gb", "gt", "gd", "ga", "gk", "gl", "gn", "gp"])
+      ["gi", "gs", "gb", "gt", "gd", "ga", "gk", "gl", "gn", "gp", "o"])
     XCTAssertEqual(
       gmail.mappings.first { $0.key == "gi" }?.command,
       ["flash", "send_keys", "--keys=g,i"])
+    XCTAssertEqual(
+      gmail.mappings.first { $0.key == "o" }?.command,
+      ["flash", "send_key", "--keys=o"])
 
     XCTAssertTrue(
       commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
@@ -420,6 +423,74 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(manifest.statusSegments, ["battery"])
     XCTAssertEqual(manifest.commands.map(\.subcommand), ["go"])
     XCTAssertEqual(manifest.mappings.map(\.key), ["q"])
+  }
+
+  func testPluginRegistrationInventoryCountsManifestSurfaces() throws {
+    let root = try temporaryPluginRoot(
+      manifest:
+        """
+        {
+          "id": "multi",
+          "name": "Multi",
+          "version": "0.1.0",
+          "description": "Every surface in split provider sections",
+          "install": "true",
+          "start": "true",
+          "listen": ["core:apps.*", "core:config.*"],
+          "capabilities": ["accessibility"],
+          "sources": [
+            { "name": "multi.items" }
+          ],
+          "navigation": { "schemes": ["multi"] },
+          "source_actions": ["resource_archive", "resource_next"],
+          "status": { "segments": ["battery"] },
+          "hints": {},
+          "commands": {
+            "items": [
+              { "command": "multi", "subcommand": "go", "description": "Go" }
+            ]
+          },
+          "mappings": {
+            "items": [
+              { "key": "q", "command": ["flash", "hints_dismiss"] }
+            ]
+          },
+          "shebangs": {
+            "command": "multi",
+            "items": [
+              { "token": "m", "description": "Multi" }
+            ]
+          },
+          "verbs": {
+            "command": "multi",
+            "items": [
+              { "name": "multi_open", "description": "Open" }
+            ]
+          },
+          "help": {
+            "topics": [
+              { "name": "multi", "title": "Multi", "summary": "Multi", "body": "# Multi" }
+            ]
+          }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let manifest = try PluginManifest.load(from: root)
+    let inventory = PluginRegistrationInventory(manifests: [manifest])
+    XCTAssertEqual(inventory.plugins, 1)
+    XCTAssertEqual(inventory.commands, 1)
+    XCTAssertEqual(inventory.mappings, 1)
+    XCTAssertEqual(inventory.shebangs, 1)
+    XCTAssertEqual(inventory.verbs, 1)
+    XCTAssertEqual(inventory.candidateSources, 1)
+    XCTAssertEqual(inventory.sourceActions, 2)
+    XCTAssertEqual(inventory.statusSegments, 1)
+    XCTAssertEqual(inventory.navigationSchemes, 1)
+    XCTAssertEqual(inventory.helpTopics, 1)
+    XCTAssertEqual(inventory.listeners, 2)
+    XCTAssertEqual(inventory.hintProviders, 1)
+    XCTAssertEqual(inventory.capabilityRequests, 1)
   }
 
   func testProvidesFlagsFalseWithoutMatchingProvider() throws {

@@ -81,7 +81,7 @@ impl FlashPlugin for Emojis {
                 .into_iter()
                 .collect(),
         );
-        ctx.emit_snapshot(SOURCE_ID, candidates);
+        ctx.set_locations(SOURCE_ID, candidates);
     }
 }
 

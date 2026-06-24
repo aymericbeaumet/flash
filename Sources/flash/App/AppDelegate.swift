@@ -198,8 +198,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// do that lookup once per session instead of rebuilding the table on every
   /// keystroke.
   var candidateFinderPrecedenceTable: CandidateFinder.PrecedenceTable = .default
-  var candidateFinderPreparedRunningCache: (candidates: [Candidate], computedAt: Date)?
-  var candidateFinderPreparedAllCache: (candidates: [Candidate], computedAt: Date)?
   /// Incremental-narrowing cache for fuzzy scoring. When the next query
   /// extends the previous one (`mo` → `mor` → `moria`), no candidate
   /// that failed `mo` can pass `mor`, so we only need to re-score the
@@ -216,8 +214,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var clipboardModalEntries: [ClipboardModalEntry] = []
   var candidateFinderCurrentQuery = ""
   var candidateFinderScope: CandidateScope = .all
-  let candidateFinderCacheQueue = DispatchQueue(
-    label: "flash.candidate_finder.cache", qos: .utility)
+  /// Bumped every time a flashlight session is (re)seeded. Each async location
+  /// query captures the value live at fan-out and only merges its reply if the
+  /// session is still the same one — so a slow plugin's answer from a closed or
+  /// superseded session can't mutate the visible list.
+  var candidateFinderSessionGeneration: UInt64 = 0
+  /// Whether this session has already pulled the non-location candidate sources
+  /// (emojis, bangs, notes, …). They're fetched lazily the first time the user
+  /// types an `@source`/`!`bang filter, not on open — open fetches only
+  /// locations. Reset when a session is (re)seeded.
+  var candidateFinderNonLocationFetched = false
+  /// Coalesces the re-render triggered by async location merges: many sources
+  /// can reply within one runloop turn, so we append each to the pool
+  /// immediately but re-score/repaint only once per turn instead of N times.
+  var candidateFinderMergeRerenderScheduled = false
   /// Per-keystroke scoring runs Pass A (strict word-start tier, sync,
   /// sub-ms) on the main thread for instant paint, then dispatches
   /// Pass B (full fuzzy ladder) here so longer queries don't block the
@@ -228,13 +238,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// exits early.
   let candidateFinderScoringQueue = DispatchQueue(
     label: "flash.candidate_finder.scoring", qos: .userInteractive)
-  var candidateFinderRunningAppsRefreshInFlight = false
-  var candidateFinderAllAppsRefreshInFlight = false
-  var candidateFinderFocusPrewarmWork: DispatchWorkItem?
-  var candidateFinderPrewarmWork: DispatchWorkItem?
-  var candidateFinderStandardPrewarmWork: DispatchWorkItem?
-  var candidateFinderLastPluginSnapshotPrewarmAt: Date?
-  var candidateFinderLastStandardPluginSnapshotPrewarmAt: Date?
   var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
   var commandLineCompletionItems: [NormalModeDispatcher.CommandLineCompletion] = []
@@ -328,9 +331,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.onStateChanged = { [weak self] in
       self?.pluginStateDidChange()
     }
-    pluginManager.onSnapshotChanged = { [weak self] pluginID in
-      self?.pluginSnapshotsDidChange(pluginID: pluginID)
-    }
     pluginManager.onNormalModeTargetRequested = { [weak self] in
       guard let context = self?.normalModeContext() ?? self?.currentNonFlashContext() else {
         return nil
@@ -384,7 +384,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     selectInitialModeIfNeeded()
     logPermissionState()
     installDismissObservers()
-    prewarmCandidateFinderCaches(reason: "launch")
     startClipboardMonitor()
     pluginManager.emit(
       PluginEvent(
@@ -512,7 +511,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
         self.statusBarController?.updateFocusedApplication(app)
         self.registry.refreshRunningApplications()
-        self.scheduleCandidateFinderPrewarm(reason: "focus_changed", delayMs: 350)
         self.refreshEffectiveMappings(for: app.bundleIdentifier, includeURL: false)
         if self.pluginManager.needsURLSelectorContext() {
           let pid = app.processIdentifier
@@ -588,7 +586,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             focused: false))
       }
       self.emitRunningApplicationsSnapshot(reason: "app_launch")
-      self.invalidateCandidateFinderCaches(reason: "app_launch", refreshApps: false)
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
       }
@@ -614,7 +611,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             focused: false))
       }
       self.emitRunningApplicationsSnapshot(reason: "app_terminate")
-      self.invalidateCandidateFinderCaches(reason: "app_terminate", refreshApps: false)
     }
     workspaceTokens = [appSwitch, activeSpace, appLaunched, appTerminated]
 
@@ -685,12 +681,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
   func applicationWillTerminate(_ notification: Notification) {
-    candidateFinderPrewarmWork?.cancel()
-    candidateFinderPrewarmWork = nil
-    candidateFinderFocusPrewarmWork?.cancel()
-    candidateFinderFocusPrewarmWork = nil
-    candidateFinderStandardPrewarmWork?.cancel()
-    candidateFinderStandardPrewarmWork = nil
     pluginStateRefreshWork?.cancel()
     pluginStateRefreshWork = nil
     clipboardMonitor?.stop()

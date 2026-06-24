@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import json
-import os
 import re
 import struct
 import sys
@@ -10,7 +9,6 @@ from urllib.parse import urlsplit, urlunsplit
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = PROJECT_DIR / "Tests" / "BrowserSnapshots"
 SNAPSHOTS_DIR = FIXTURES_DIR / "snapshots"
-MANIFEST_PATH = FIXTURES_DIR / "manifest.json"
 
 MAX_HTML_BYTES = 8 * 1024 * 1024
 
@@ -78,22 +76,9 @@ def slugify(value):
     return value[:48] or "page"
 
 
-def load_manifest():
-    with MANIFEST_PATH.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def write_manifest(manifest):
-    tmp = MANIFEST_PATH.with_suffix(".json.tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(manifest, handle, indent=2)
-        handle.write("\n")
-    os.replace(tmp, MANIFEST_PATH)
-
-
 def next_fixture_name(title, url):
     base = slugify(title or url or "captured-page")
-    existing = {fixture["name"] for fixture in load_manifest()["fixtures"]}
+    existing = {path.stem for path in SNAPSHOTS_DIR.glob("*.html")}
     index = 1
     while True:
         name = f"collected-{base}-{index:03d}"
@@ -124,16 +109,6 @@ def capture_page(page):
     )
     snapshot_path.write_text(header + html, encoding="utf-8")
 
-    manifest = load_manifest()
-    manifest["fixtures"].append(
-        {
-            "name": name,
-            "file": file_name,
-            "category": "collected-regression",
-            "kind": "collected",
-        }
-    )
-    write_manifest(manifest)
     return {"ok": True, "name": name, "file": file_name}
 
 

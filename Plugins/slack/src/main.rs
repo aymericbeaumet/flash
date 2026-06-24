@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -162,11 +163,11 @@ flash_plugin::plugin!(Slack);
 
 impl FlashPlugin for Slack {
     async fn on_start(&self, ctx: Context) {
-        refresh_workspaces(&ctx);
+        refresh_workspaces(&ctx).await;
         seed_from_slack_api(&ctx).await;
-        seed_from_local_storage_if_stale(&ctx, true);
+        seed_from_local_storage_if_stale(&ctx, true).await;
         seed_from_config(&ctx);
-        ctx.emit_snapshot(CHANNEL_SOURCE_ID, session_candidates());
+        ctx.set_locations(CHANNEL_SOURCE_ID, session_candidates());
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
@@ -178,13 +179,13 @@ impl FlashPlugin for Slack {
                     .filter(|app| SLACK_BUNDLES.contains(&app.bundle_id.as_str()))
                     .map(|app| app.pid)
                     .collect::<Vec<_>>();
-                refresh_workspaces(&ctx);
+                refresh_workspaces(&ctx).await;
                 refresh_snapshot(&ctx, pids).await;
             }
             "core:config.changed" => {
-                refresh_workspaces(&ctx);
+                refresh_workspaces(&ctx).await;
                 seed_from_slack_api(&ctx).await;
-                seed_from_local_storage_if_stale(&ctx, true);
+                seed_from_local_storage_if_stale(&ctx, true).await;
                 seed_from_config(&ctx);
                 refresh_snapshot(&ctx, Vec::new()).await;
             }
@@ -219,12 +220,12 @@ impl FlashPlugin for Slack {
 }
 
 async fn refresh_snapshot(ctx: &Context, pids: Vec<i64>) {
-    seed_from_local_storage_if_stale(ctx, false);
+    seed_from_local_storage_if_stale(ctx, false).await;
     for pid in &pids {
         let fresh = collect_ax_channels(ctx, *pid).await;
         merge_into_session_cache(*pid, fresh);
     }
-    ctx.emit_snapshot(CHANNEL_SOURCE_ID, session_candidates());
+    ctx.set_locations(CHANNEL_SOURCE_ID, session_candidates());
 }
 
 impl Slack {
@@ -755,9 +756,9 @@ fn archived_channel_ids_snapshot() -> HashSet<String> {
 /// plain JSON. Conversation records in IndexedDB/WebStorage are
 /// Chromium/V8 serialized, so we scan them conservatively for the readable
 /// field names Slack already writes (`id`, `name`, `is_channel`, `team_id`).
-fn refresh_workspaces(ctx: &Context) {
+async fn refresh_workspaces(ctx: &Context) {
     let path = slack_data_dir(ctx).join("storage").join("root-state.json");
-    let Ok(text) = fs::read_to_string(&path) else {
+    let Ok(text) = tokio::fs::read_to_string(&path).await else {
         return;
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -814,26 +815,32 @@ fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-fn seed_from_local_storage_if_stale(ctx: &Context, force: bool) {
+async fn seed_from_local_storage_if_stale(ctx: &Context, force: bool) {
     let now = Instant::now();
     let cell = LOCAL_STORAGE_LAST_SEEDED.get_or_init(|| Mutex::new(None));
-    let Ok(mut last) = cell.lock() else {
-        return seed_from_local_storage(ctx);
+    // Decide under the lock, then release it before awaiting — a std::sync
+    // MutexGuard is `!Send` and must never be held across an await point (the
+    // plugin macro requires every handler future to be `Send`).
+    let should_seed = match cell.lock() {
+        Ok(mut last) => {
+            let stale = force
+                || !last.as_ref().is_some_and(|instant| {
+                    now.duration_since(*instant) < LOCAL_STORAGE_REFRESH_INTERVAL
+                });
+            if stale {
+                *last = Some(now);
+            }
+            stale
+        }
+        Err(_) => true,
     };
-    if !force
-        && last
-            .as_ref()
-            .is_some_and(|instant| now.duration_since(*instant) < LOCAL_STORAGE_REFRESH_INTERVAL)
-    {
-        return;
+    if should_seed {
+        seed_from_local_storage(ctx).await;
     }
-    *last = Some(now);
-    drop(last);
-    seed_from_local_storage(ctx);
 }
 
-fn seed_from_local_storage(ctx: &Context) {
-    let channels = local_storage_channels(&slack_data_dir(ctx));
+async fn seed_from_local_storage(ctx: &Context) {
+    let channels = local_storage_channels(&slack_data_dir(ctx)).await;
     if channels.is_empty() {
         return;
     }
@@ -1174,10 +1181,10 @@ fn percent_encode(raw: &str) -> String {
     out
 }
 
-fn local_storage_channels(data_dir: &Path) -> Vec<Channel> {
+async fn local_storage_channels(data_dir: &Path) -> Vec<Channel> {
     let mut out: HashMap<String, Channel> = HashMap::new();
-    for path in slack_indexeddb_files(data_dir) {
-        let Ok(bytes) = fs::read(&path) else {
+    for path in slack_indexeddb_files(data_dir).await {
+        let Ok(bytes) = tokio::fs::read(&path).await else {
             continue;
         };
         for mut channel in parse_indexeddb_channels(&bytes) {
@@ -1194,17 +1201,18 @@ fn local_storage_channels(data_dir: &Path) -> Vec<Channel> {
     out.into_values().collect()
 }
 
-fn slack_indexeddb_files(data_dir: &Path) -> Vec<PathBuf> {
+async fn slack_indexeddb_files(data_dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    collect_regular_files(&data_dir.join("IndexedDB"), 8, &mut files);
+    collect_regular_files(&data_dir.join("IndexedDB"), 8, &mut files).await;
     collect_regular_files(
         &data_dir.join("Local Storage").join("leveldb"),
         2,
         &mut files,
-    );
-    collect_regular_files(&data_dir.join("WebStorage"), 6, &mut files);
-    collect_regular_files(&data_dir.join("Session Storage"), 2, &mut files);
-    collect_regular_files(&data_dir.join("shared_proto_db"), 3, &mut files);
+    )
+    .await;
+    collect_regular_files(&data_dir.join("WebStorage"), 6, &mut files).await;
+    collect_regular_files(&data_dir.join("Session Storage"), 2, &mut files).await;
+    collect_regular_files(&data_dir.join("shared_proto_db"), 3, &mut files).await;
     files.retain(|path| {
         path.extension()
             .and_then(|ext| ext.to_str())
@@ -1219,24 +1227,30 @@ fn slack_indexeddb_files(data_dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn collect_regular_files(path: &Path, depth: usize, out: &mut Vec<PathBuf>) {
-    if depth == 0 {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(path) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_file() {
-            out.push(path);
-        } else if file_type.is_dir() {
-            collect_regular_files(&path, depth - 1, out);
+fn collect_regular_files<'a>(
+    path: &'a Path,
+    depth: usize,
+    out: &'a mut Vec<PathBuf>,
+) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+        if depth == 0 {
+            return;
         }
-    }
+        let Ok(mut entries) = tokio::fs::read_dir(path).await else {
+            return;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type().await else {
+                continue;
+            };
+            if file_type.is_file() {
+                out.push(path);
+            } else if file_type.is_dir() {
+                collect_regular_files(&path, depth - 1, out).await;
+            }
+        }
+    })
 }
 
 fn is_blob_name(name: &str) -> bool {

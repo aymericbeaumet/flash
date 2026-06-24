@@ -113,23 +113,23 @@ fn extract_links(line: &str, max_cols: usize) -> Vec<(usize, String)> {
 
 // ---- tmux invocation --------------------------------------------------------
 
-fn find_tmux() -> Option<String> {
+async fn find_tmux() -> Option<String> {
     for prefix in TMUX_PREFIXES {
         let path = format!("{prefix}/bin/tmux");
-        if let Ok(meta) = std::fs::metadata(&path) {
+        if let Ok(meta) = tokio::fs::metadata(&path).await {
             if meta.is_file() {
                 return Some(path);
             }
         }
     }
-    which("tmux")
+    which("tmux").await
 }
 
-fn which(program: &str) -> Option<String> {
+async fn which(program: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
         let candidate = dir.join(program);
-        if let Ok(meta) = std::fs::metadata(&candidate) {
+        if let Ok(meta) = tokio::fs::metadata(&candidate).await {
             if meta.is_file() {
                 return Some(candidate.to_string_lossy().into_owned());
             }
@@ -219,23 +219,23 @@ fn tmux_socket_argv(tmux_path: &str, socket_path: &str, args: &[&str]) -> Vec<St
     argv
 }
 
-fn tmux_socket_paths() -> Vec<String> {
+async fn tmux_socket_paths() -> Vec<String> {
     let mut paths = Vec::new();
     for base in ["/private/tmp", "/tmp"] {
-        let Ok(entries) = std::fs::read_dir(base) else {
+        let Ok(mut entries) = tokio::fs::read_dir(base).await else {
             continue;
         };
-        for entry in entries.flatten() {
+        while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if !name.starts_with("tmux-") {
                 continue;
             }
-            let Ok(sockets) = std::fs::read_dir(entry.path()) else {
+            let Ok(mut sockets) = tokio::fs::read_dir(entry.path()).await else {
                 continue;
             };
-            for socket in sockets.flatten() {
-                let Ok(file_type) = socket.file_type() else {
+            while let Ok(Some(socket)) = sockets.next_entry().await {
+                let Ok(file_type) = socket.file_type().await else {
                     continue;
                 };
                 if file_type.is_socket() {
@@ -263,7 +263,7 @@ async fn run_tmux_local(
     if result.ok && (!needs_nonempty || !result.stdout.trim().is_empty()) {
         return Ok(result);
     }
-    for socket_path in tmux_socket_paths() {
+    for socket_path in tmux_socket_paths().await {
         result = run_local(&tmux_socket_argv(tmux_path, &socket_path, args), timeout).await;
         if result.ok && (!needs_nonempty || !result.stdout.trim().is_empty()) {
             return Ok(result);
@@ -339,7 +339,7 @@ async fn run_tmux_aggregate(
 
     // Discover sockets once up front; spawning all invocations together
     // means the slowest socket sets the cycle length, not the sum.
-    let socket_paths = tmux_socket_paths();
+    let socket_paths = tmux_socket_paths().await;
     let mut handles: Vec<tokio::task::JoinHandle<Option<String>>> =
         Vec::with_capacity(socket_paths.len() + 1);
 
@@ -620,7 +620,7 @@ fn cached_client_hosted_by(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient
 }
 
 async fn refresh_cached_client_snapshot(plugin: &Tmux) -> Option<ClientSnapshot> {
-    let snapshot = load_client_snapshot(plugin.tmux_path.as_deref()).await?;
+    let snapshot = load_client_snapshot(plugin.resolved_tmux_path().await).await?;
     if let Ok(mut guard) = plugin.client_snapshot().lock() {
         *guard = snapshot.clone();
     }
@@ -700,14 +700,14 @@ fn read_toml_number(text: &str, section: &str, key: &str) -> Option<f64> {
     read_toml_raw(text, section, key)?.parse::<f64>().ok()
 }
 
-fn alacritty_font() -> Option<(String, f64)> {
+async fn alacritty_font() -> Option<(String, f64)> {
     let home = std::env::var("HOME").ok()?;
     let paths = [
         format!("{home}/.config/alacritty/alacritty.toml"),
         format!("{home}/.alacritty.toml"),
     ];
     for path in paths {
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = tokio::fs::read_to_string(&path).await else {
             continue;
         };
         let size = read_toml_number(&text, "font", "size").unwrap_or(11.0);
@@ -741,7 +741,7 @@ fn cell_metrics_appkit(family: &str, size: f64) -> Option<(f64, f64)> {
 /// (cell_w, cell_h, pad_x, pad_y). Alacritty uses font metrics with the
 /// content block centred in the window; every other terminal falls back to a
 /// flat window/cells division.
-fn resolve_geometry(
+async fn resolve_geometry(
     bundle_id: &str,
     win_w: f64,
     win_h: f64,
@@ -749,7 +749,7 @@ fn resolve_geometry(
     rows: f64,
 ) -> (f64, f64, f64, f64) {
     if ALACRITTY_BUNDLES.contains(&bundle_id) {
-        if let Some((family, size)) = alacritty_font() {
+        if let Some((family, size)) = alacritty_font().await {
             if let Some((cell_w, cell_h)) = cell_metrics_appkit(&family, size) {
                 let content_w = cols * cell_w;
                 let content_h = rows * cell_h;
@@ -806,7 +806,7 @@ fn build_target(
 }
 
 async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> DiscoverResponse {
-    let tmux_path = plugin.tmux_path.as_deref();
+    let tmux_path = plugin.resolved_tmux_path().await;
     let Some(pid) = req.pid else {
         return DiscoverResponse::targets(vec![]);
     };
@@ -861,7 +861,8 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
         win_h,
         client_cols as f64,
         client_rows as f64,
-    );
+    )
+    .await;
 
     let pane_list = run_tmux_default(
         tmux_path,
@@ -1283,7 +1284,7 @@ async fn build_candidates_inner(
 
 /// Identity hash of a candidate snapshot — `(title, subtitle, navigation_url,
 /// pid)` for each row, in order. Used by [`refresh_candidate_snapshot_for_path`]
-/// to skip `emit_snapshot` when nothing observable changed.
+/// to skip `set_locations` when nothing observable changed.
 ///
 /// Without this gate, the 1 s background poll would rewrite the host's
 /// cache on every tick even when tmux state was identical. The visible
@@ -1398,12 +1399,12 @@ async fn refresh_candidate_snapshot_for_path_inner(
         fields.insert("first_raw_line".to_string(), build.first_raw_line.clone());
     }
     ctx.log_fields("debug", "[tmux] candidate refresh (emit)", fields);
-    ctx.emit_snapshot(SOURCE_ID, build.candidates);
+    ctx.set_locations(SOURCE_ID, build.candidates);
 }
 
 async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
     refresh_candidate_snapshot_for_path(
-        plugin.tmux_path.as_deref(),
+        plugin.resolved_tmux_path().await,
         ctx,
         plugin.last_snapshot_hash(),
         plugin.client_snapshot(),
@@ -1413,7 +1414,7 @@ async fn refresh_candidate_snapshot(plugin: &Tmux, ctx: &Context) {
 
 async fn refresh_candidate_snapshot_warm(plugin: &Tmux, ctx: &Context) {
     refresh_candidate_snapshot_for_path_warm(
-        plugin.tmux_path.as_deref(),
+        plugin.resolved_tmux_path().await,
         ctx,
         plugin.last_snapshot_hash(),
         plugin.client_snapshot(),
@@ -1430,8 +1431,8 @@ async fn refresh_candidate_snapshot_warm(plugin: &Tmux, ctx: &Context) {
 /// runtime idle most of the cycle.
 const POLL_INTERVAL_SECS: u64 = 1;
 
-fn start_candidate_poll(plugin: &Tmux, ctx: &Context) {
-    let path = plugin.tmux_path.clone();
+async fn start_candidate_poll(plugin: &Tmux, ctx: &Context) {
+    let path = plugin.resolved_tmux_path().await.map(str::to_string);
     let last_hash = std::sync::Arc::clone(&plugin.last_snapshot_hash_arc);
     let client_snapshot = std::sync::Arc::clone(&plugin.client_snapshot_arc);
     let ctx = ctx.clone();
@@ -1685,7 +1686,7 @@ async fn perform_source_action(
     ctx: &Context,
     req: &SourceActionRequest,
 ) -> SourceActionResponse {
-    let tmux_path = plugin.tmux_path.as_deref();
+    let tmux_path = plugin.resolved_tmux_path().await;
     let Some(pid) = req.context.pid else {
         ctx.log(
             "debug",
@@ -1770,7 +1771,7 @@ async fn select_client_for_target(tmux_path: Option<&str>, target: &str) -> Opti
 }
 
 async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> ResolveResponse {
-    let tmux_path = plugin.tmux_path.as_deref();
+    let tmux_path = plugin.resolved_tmux_path().await;
     let payload = candidate.payload_as::<TmuxPayload>().unwrap_or_default();
     let target = payload.tmux_target.as_str();
     if target.is_empty() {
@@ -1855,7 +1856,7 @@ fn resolve_response(
 /// `["flash", "plugin_command", "command=tmux", "subcommand=window", "args=main:1"]`
 /// jumps straight to `main:1`.
 async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
-    let tmux_path = plugin.tmux_path.as_deref();
+    let tmux_path = plugin.resolved_tmux_path().await;
     match cmd.subcommand.as_str() {
         "session" | "window" => {}
         other => {
@@ -1942,7 +1943,7 @@ async fn restore_navigation(
     let Some((kind, target)) = parse_tmux_navigation_url(&request.url) else {
         return SourceActionResponse::unhandled();
     };
-    let tmux_path = plugin.tmux_path.as_deref();
+    let tmux_path = plugin.resolved_tmux_path().await;
     let session = target.split(':').next().unwrap_or(&target);
     let chosen = select_client_for_target(tmux_path, &target).await;
     let tty = chosen.as_ref().map(|c| c.tty.clone()).unwrap_or_default();
@@ -2001,7 +2002,7 @@ async fn restore_navigation(
 // ---- Activation -------------------------------------------------------------
 
 async fn activate(plugin: &Tmux, ctx: &Context, req: &ActivateRequest) {
-    let tmux_path = plugin.tmux_path.as_deref();
+    let tmux_path = plugin.resolved_tmux_path().await;
     let target_id = req.target_id.as_str();
     let entry = plugin
         .target_actions
@@ -2037,7 +2038,13 @@ fn open_link(text: &str) -> bool {
     let suffix = OnceLock::new();
     let re: &Regex = suffix.get_or_init(|| Regex::new(r"(?::\d+){1,2}$").unwrap());
     let target = re.replace(&expanded, "").into_owned();
-    std::process::Command::new("open")
+    // Fire-and-forget: `open` returns immediately and the launched app
+    // outlives this child handle. `spawn()` itself is synchronous (no
+    // `.await`); we only care that the process started, mirroring the
+    // previous fire-and-forget behavior. tokio does not `kill_on_drop`
+    // by default, so dropping the `Child` here does not reap the
+    // spawned `open`.
+    tokio::process::Command::new("open")
         .arg(target)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -2352,7 +2359,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
 // ---- Plugin glue ------------------------------------------------------------
 
 struct Tmux {
-    tmux_path: Option<String>,
+    tmux_path: tokio::sync::OnceCell<Option<String>>,
     target_actions: Mutex<HashMap<String, TargetAction>>,
     /// Latest eager `list-clients` + process-tree sample. Source actions
     /// need the focused tmux client, but they should not fan out across
@@ -2377,6 +2384,12 @@ impl Tmux {
     fn client_snapshot(&self) -> &Mutex<ClientSnapshot> {
         &self.client_snapshot_arc
     }
+
+    /// The tmux binary path, resolved (and cached) on first use via `find_tmux()`.
+    /// Runs inside the SDK's async runtime so `main` never needs its own.
+    async fn resolved_tmux_path(&self) -> Option<&str> {
+        self.tmux_path.get_or_init(find_tmux).await.as_deref()
+    }
 }
 
 flash_plugin::plugin!(Tmux);
@@ -2393,7 +2406,7 @@ impl FlashPlugin for Tmux {
     /// flashlight open and — on timeout — silently fell back to a
     /// stale host cache. See the module-level docs for the invariant.
     async fn on_start(&self, ctx: Context) {
-        if self.tmux_path.is_none() {
+        if self.resolved_tmux_path().await.is_none() {
             ctx.log("warn", "[tmux] tmux binary not found");
         }
         // First build uses the *warm* budget so cold sockets (a tmux
@@ -2410,7 +2423,7 @@ impl FlashPlugin for Tmux {
         // hash dedup. Net effect: the cache is provably stable when
         // we hand off to the poll.
         refresh_candidate_snapshot(self, &ctx).await;
-        start_candidate_poll(self, &ctx);
+        start_candidate_poll(self, &ctx).await;
     }
 
     /// Push events refresh the snapshot immediately. The 1 s poll keeps
@@ -2467,7 +2480,7 @@ impl FlashPlugin for Tmux {
 
 fn main() {
     let plugin = Tmux {
-        tmux_path: find_tmux(),
+        tmux_path: tokio::sync::OnceCell::new(),
         target_actions: Mutex::new(HashMap::new()),
         client_snapshot_arc: std::sync::Arc::new(Mutex::new(ClientSnapshot::default())),
         last_snapshot_hash_arc: std::sync::Arc::new(Mutex::new(None)),

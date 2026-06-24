@@ -33,7 +33,7 @@ impl FlashPlugin for SearchEngines {
                     .payload(token.to_string())
             })
             .collect();
-        ctx.emit_snapshot(SOURCE_ID, candidates);
+        ctx.set_locations(SOURCE_ID, candidates);
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {

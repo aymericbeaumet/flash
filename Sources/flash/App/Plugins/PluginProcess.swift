@@ -51,7 +51,6 @@ final class PluginProcess {
   /// tell whether this plugin's settings changed.
   let settings: [String: PluginConfigValue]
   var onStatusChanged: (() -> Void)?
-  var onSnapshotChanged: (() -> Void)?
   /// Handles a plugin→host RPC request (`call_host` on the plugin side):
   /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
   /// installs this; `reply` is invoked with the JSON result, possibly async
@@ -269,49 +268,20 @@ final class PluginProcess {
     let contextPID = (params["context_pid"] as? Int).map(pid_t.init) ?? defaultPID
     let targetItems = (params["targets"] as? [[String: Any]] ?? [])
       .compactMap { Self.target(from: $0, sourceID: sourceID) }
-    // `discoverTargets` callers (e.g. the tmux plugin) only return
-    // targets — the response carries no `candidates` field. Preserving
-    // the existing candidates is what lets `:flashlight` keep showing
-    // tmux windows between activations; previously every `f` press in
-    // alacritty wiped the candidate list to 0 until the next
-    // `snapshot.updated` notification re-filled it on the focus tick.
-    let previousCandidates: [Candidate]
     let previousStatusSegments: [String: String]
     lock.lock()
-    previousCandidates = snapshot.candidates
     previousStatusSegments = snapshot.statusSegments
     lock.unlock()
-    let candidateItems: [Candidate]
-    if let raw = params["candidates"] as? [[String: Any]] {
-      candidateItems = raw.compactMap {
-        Self.candidate(
-          from: $0,
-          pluginID: manifest.id,
-          pluginName: manifest.name,
-          sourceID: sourceID)
-      }
-    } else {
-      candidateItems = previousCandidates
-    }
     let snap = PluginSnapshot(
       targets: targetItems,
-      candidates: candidateItems,
       statusSegments: previousStatusSegments,
       contextPID: contextPID,
       updatedAt: Date())
     lock.lock()
     snapshot = snap
     lock.unlock()
-    onSnapshotChanged?()
     notifyStatus()
     return snap
-  }
-
-  func candidates(scope: CandidateScope) -> [Candidate] {
-    lock.lock()
-    let items = snapshot.candidates
-    lock.unlock()
-    return items
   }
 
   func queryCandidates(
@@ -345,9 +315,11 @@ final class PluginProcess {
         DispatchQueue.main.async { completion([]) }
         return
       }
+      // The host caches nothing: a missing/empty `candidates` reply just yields
+      // no rows for this source this turn (the warm plugin is the source of
+      // truth, queried fresh on the next open).
       guard let raw = response?["candidates"] as? [[String: Any]] else {
-        let fallback = self.candidates(scope: scope)
-        DispatchQueue.main.async { completion(fallback) }
+        DispatchQueue.main.async { completion([]) }
         return
       }
       let sourceID = response?["source_id"] as? String ?? "plugin:\(self.manifest.id)"
@@ -358,16 +330,6 @@ final class PluginProcess {
           pluginName: self.manifest.name,
           sourceID: sourceID)
       }
-      self.lock.lock()
-      let previous = self.snapshot
-      self.snapshot = PluginSnapshot(
-        targets: previous.targets,
-        candidates: items,
-        statusSegments: previous.statusSegments,
-        contextPID: previous.contextPID,
-        updatedAt: Date())
-      self.lock.unlock()
-      self.notifyStatus()
       DispatchQueue.main.async {
         completion(items)
       }
@@ -550,10 +512,9 @@ final class PluginProcess {
       pid: pid.map(Int.init),
       uptimeMs: startDate.map { Int(now.timeIntervalSince($0) * 1000) },
       heartbeatAgeMs: lastHeartbeatAt.map { Int(now.timeIntervalSince($0) * 1000) },
-      sourceCount: snap.targets.isEmpty && snap.candidates.isEmpty ? 0 : 1,
+      sourceCount: snap.targets.isEmpty ? 0 : 1,
       commandCount: commands.count,
       targetCount: snap.targets.count,
-      candidateCount: snap.candidates.count,
       snapshotAgeMs: snap.updatedAt.map { Int(now.timeIntervalSince($0) * 1000) },
       restartCount: restartCount,
       lastError: lastError,
@@ -999,60 +960,16 @@ final class PluginProcess {
       lastLog = message
       FlashLog.plugin(level, pluginID: manifest.id, message: message, fields: fields)
       notifyStatus()
-    case "snapshot.updated":
-      applySnapshot(params)
     case "snapshot.invalidated":
       lock.lock()
       snapshot = PluginSnapshot()
       lock.unlock()
-      onSnapshotChanged?()
       notifyStatus()
     case "status.updated":
       applyStatusSegments(params)
     default:
       break
     }
-  }
-
-  private func applySnapshot(_ params: [String: Any]) {
-    let sourceID = params["source_id"] as? String ?? "plugin:\(manifest.id)"
-    let contextPID = (params["context_pid"] as? Int).map(pid_t.init)
-    // Carry previous state forward when a particular slot is missing
-    // from the incoming wire frame. Plugins that refresh only one slot
-    // (tmux refreshes `candidates` on focus events, omits `targets`)
-    // should leave the other unchanged rather than nuke it to empty.
-    let previous: PluginSnapshot
-    lock.lock()
-    previous = snapshot
-    lock.unlock()
-    let targetItems: [PluginWireTarget]
-    if let raw = params["targets"] as? [[String: Any]] {
-      targetItems = raw.compactMap { Self.target(from: $0, sourceID: sourceID) }
-    } else {
-      targetItems = previous.targets
-    }
-    let candidateItems: [Candidate]
-    if let raw = params["candidates"] as? [[String: Any]] {
-      candidateItems = raw.compactMap {
-        Self.candidate(
-          from: $0,
-          pluginID: manifest.id,
-          pluginName: manifest.name,
-          sourceID: sourceID)
-      }
-    } else {
-      candidateItems = previous.candidates
-    }
-    lock.lock()
-    snapshot = PluginSnapshot(
-      targets: targetItems,
-      candidates: candidateItems,
-      statusSegments: previous.statusSegments,
-      contextPID: contextPID,
-      updatedAt: Date())
-    lock.unlock()
-    onSnapshotChanged?()
-    notifyStatus()
   }
 
   private func applyStatusSegments(_ params: [String: Any]) {
@@ -1077,7 +994,6 @@ final class PluginProcess {
     lock.lock()
     snapshot = PluginSnapshot(
       targets: previous.targets,
-      candidates: previous.candidates,
       statusSegments: next,
       contextPID: previous.contextPID,
       updatedAt: previous.updatedAt)

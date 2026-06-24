@@ -210,28 +210,45 @@ leader = "\\"
 # Example:
 # "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
 "h" = ["flash", "scroll_left"]
-"j" = ["flash", "resource_next"]
-"k" = ["flash", "resource_previous"]
+"j" = ["flash", "send_key", "--keys=down"]
+"k" = ["flash", "send_key", "--keys=up"]
 "l" = ["flash", "scroll_right"]
 "ctrl-e" = ["flash", "scroll_down"]
 "ctrl-y" = ["flash", "scroll_up"]
 "ctrl-d" = ["flash", "scroll_half_page_down"]
 "ctrl-u" = ["flash", "scroll_half_page_up"]
+# Vimium parity: bare d/u scroll a half page (ctrl-d/ctrl-u stay as
+# vim-style aliases). d is kept free of any hint-mode prefix — double-click
+# hints live on the D prefix below — so the bare keystroke fires instantly.
+"d" = ["flash", "scroll_half_page_down"]
+"u" = ["flash", "scroll_half_page_up"]
 "gg" = ["flash", "scroll_top"]
 "G" = ["flash", "scroll_bottom"]
-"[h" = ["flash", "history_back"]
-"]h" = ["flash", "history_forward"]
+# Vimium H/L — back/forward in history. (Lowercase h/l scroll left/right.)
+# History has no bracket-pair form; H/L replace the old [h/]h.
+"H" = ["flash", "history_back"]
+"L" = ["flash", "history_forward"]
 "[t" = ["flash", "tab_previous"]
 "]t" = ["flash", "tab_next"]
+# Vimium J/K — one tab left (previous) / right (next), capital siblings
+# of gT/gt.
+"J" = ["flash", "tab_previous"]
+"K" = ["flash", "tab_next"]
+# Vimium ]]/[[ — follow the next/previous resource (pagination links).
+"]]" = ["flash", "resource_next"]
+"[[" = ["flash", "resource_previous"]
 # Reorder the current tab. In tmux this swap-windows; in browsers there
 # is no portable equivalent so the mapping is a no-op.
 "[m" = ["flash", "tab_move_previous"]
 "]m" = ["flash", "tab_move_next"]
 "[a" = ["flash", "app_previous"]
 "]a" = ["flash", "app_next"]
-# Reopen the most recently closed tab. Browsers receive ⌘⇧T; tmux has no
-# concept of a closed-window history so it returns "unhandled".
-"T" = ["flash", "tab_reopen"]
+# Restore the most recently closed tab. Vimium binds this to X; browsers
+# receive ⌘⇧T; tmux has no closed-window history so it returns "unhandled".
+"X" = ["flash", "tab_reopen"]
+# Vimium T searches open tabs — Flash opens the flashlight switcher
+# (its default pool is location-only: apps, tabs, tmux windows, …).
+"T" = ["flash", "enter_command_mode", "--input=:flashlight "]
 # cmd+tab / cmd+shift+tab shadow the system app switcher while in normal
 # mode. Carbon hotkeys are scope-bound, so entering insert mode releases
 # the registration and macOS's Dock switcher takes over again.
@@ -253,8 +270,8 @@ leader = "\\"
 "cmd+9" = ["flash", "tab_select", "--index=9"]
 "cmd+r" = ["flash", "app_reload"]                  # ≈ r
 "cmd+shift+r" = ["flash", "app_reload", "--force"] # ≈ R
-"cmd+<lbracket>" = ["flash", "history_back"]       # ⌘[ ≈ [h
-"cmd+<rbracket>" = ["flash", "history_forward"]    # ⌘] ≈ ]h
+"cmd+<lbracket>" = ["flash", "history_back"]       # ⌘[ ≈ H
+"cmd+<rbracket>" = ["flash", "history_forward"]    # ⌘] ≈ L
 "cmd+shift+<lbracket>" = ["flash", "tab_previous"] # ⌘⇧[ ≈ [t / gT
 "cmd+shift+<rbracket>" = ["flash", "tab_next"]     # ⌘⇧] ≈ ]t / gt
 "cmd+t" = ["flash", "tab_new"]                     # ≈ t
@@ -266,6 +283,7 @@ leader = "\\"
 "ctrl+shift+tab" = ["flash", "tab_previous"]       # browser-native ≈ [t
 "g^" = ["flash", "tab_first"]
 "g$" = ["flash", "tab_last"]
+"g0" = ["flash", "tab_first"] # Vimium: first tab (alias of g^)
 "g1" = ["flash", "tab_select", "--index=1"]
 "g2" = ["flash", "tab_select", "--index=2"]
 "g3" = ["flash", "tab_select", "--index=3"]
@@ -281,19 +299,27 @@ leader = "\\"
 "I" = ["flash", "enter_locked_insert_mode"]
 "f" = ["flash", "mouse_target"]
 "sf" = ["flash", "mouse_target", "--secondary"]
-"df" = ["flash", "mouse_target", "--double"]
+# Double-click hints sit on the D ("Double") prefix, not d, so the bare
+# d half-page scroll above stays instant.
+"Df" = ["flash", "mouse_target", "--double"]
 "mf" = ["flash", "mouse_target", "--move"]
 "F" = ["flash", "mouse_grid"]
 "sF" = ["flash", "mouse_grid", "--secondary"]
-"dF" = ["flash", "mouse_grid", "--double"]
+"DF" = ["flash", "mouse_grid", "--double"]
 "mF" = ["flash", "mouse_grid", "--move"]
-"u" = ["flash", "app_undo"]
+# Undo is no longer on bare u (Vimium reuses it for half-page scroll-up);
+# reach it via the command line (:undo) or the app's native ⌘Z.
 "ctrl-r" = ["flash", "app_redo"]
+# yy yanks the current URL/location (Vimium yy).
+"yy" = ["flash", "url_copy"]
 "e" = ["flash", "resource_archive"]
 # tmux-aware close: kills the current tmux window in the current session
 # when an attached tmux client is focused, otherwise falls back to ⌘W.
 "x" = ["flash", "tab_close"]
-"n" = ["flash", "window_new"]
+# Vimium n/N cycle find matches — Flash drives the focused app's native
+# find-again (⌘G / ⌘⇧G) after `/` opens find. New windows stay on ⌘N.
+"n" = ["flash", "send_key", "--keys=cmd+g"]
+"N" = ["flash", "send_key", "--keys=cmd+shift+g"]
 # Context-aware new: opens a new tmux window when a tmux client is focused
 # or a new browser tab in browsers. Other apps do nothing.
 "t" = ["flash", "tab_new"]

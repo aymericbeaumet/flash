@@ -10,22 +10,26 @@ import XCTest
 final class NormalModeTests: XCTestCase {
   func testDirectionalScrollKeys() {
     XCTAssertEqual(command(chars: "h"), .scroll(.left))
-    XCTAssertEqual(command(chars: "j"), .resourceNext)
-    XCTAssertEqual(command(chars: "k"), .resourcePrevious)
+    assertSendKey(command(chars: "j"), keys: "down", keyCode: CGKeyCode(kVK_DownArrow))
+    assertSendKey(command(chars: "k"), keys: "up", keyCode: CGKeyCode(kVK_UpArrow))
     XCTAssertEqual(command(chars: "l"), .scroll(.right))
     XCTAssertEqual(command(chars: "e", flags: [.control]), .scroll(.down))
     XCTAssertEqual(command(chars: "y", flags: [.control]), .scroll(.up))
   }
 
-  func testHalfPageKeysUseControlFormsOnly() {
-    XCTAssertEqual(command(chars: "u"), .undo)
-    XCTAssertNil(command(chars: "d"))
+  func testHalfPageKeysUseBareAndControlForms() {
+    // Vimium parity: bare `d` / `u` scroll a half page; the `ctrl+`
+    // forms remain as vim-style aliases.
+    XCTAssertEqual(command(chars: "d"), .scroll(.halfPageDown))
+    XCTAssertEqual(command(chars: "u"), .scroll(.halfPageUp))
     XCTAssertEqual(command(chars: "u", flags: [.control]), .scroll(.halfPageUp))
     XCTAssertEqual(command(chars: "d", flags: [.control]), .scroll(.halfPageDown))
   }
 
-  func testUndoRedoKeys() {
-    XCTAssertEqual(command(chars: "u"), .undo)
+  func testRedoKey() {
+    // Undo is no longer bound to bare `u` — Vimium reuses it for
+    // half-page scroll-up — but stays reachable via `:undo`. Redo
+    // keeps `ctrl+r`.
     XCTAssertEqual(command(chars: "r", flags: [.control]), .redo)
   }
 
@@ -80,14 +84,18 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "g").pending, "g")
     XCTAssertEqual(command(pending: "g", chars: "g"), .scroll(.top))
     XCTAssertEqual(command(chars: "G", ignoring: "g", flags: [.shift]), .scroll(.bottom))
-    XCTAssertEqual(command(pending: "[", chars: "h"), .historyBack)
-    XCTAssertEqual(command(pending: "]", chars: "h"), .historyForward)
+    // History uses `H`/`L`; `[h`/`]h` were removed, so `[`/`]` + `h`
+    // falls back to a fresh `h` (scroll left).
+    XCTAssertEqual(command(chars: "H", ignoring: "h", flags: [.shift]), .historyBack)
+    XCTAssertEqual(command(chars: "L", ignoring: "l", flags: [.shift]), .historyForward)
+    XCTAssertEqual(command(pending: "[", chars: "h"), .scroll(.left))
+    XCTAssertEqual(command(pending: "]", chars: "h"), .scroll(.left))
     XCTAssertEqual(command(pending: "]", chars: "t"), .tabNext)
     XCTAssertEqual(command(pending: "[", chars: "t"), .tabPrev)
     XCTAssertEqual(command(pending: "[", chars: "a"), .appPrev)
     XCTAssertEqual(command(pending: "]", chars: "a"), .appNext)
     XCTAssertEqual(command(pending: "g", chars: "4"), .tabSelect(index: 4))
-    XCTAssertEqual(command(chars: "n"), .pluginVerb(name: "window_new", args: [:]))
+    assertSendKeyKeys(command(chars: "n"), "cmd+g")
     XCTAssertEqual(command(chars: "t"), .tabNew)
     XCTAssertEqual(command(chars: "e"), .archive)
   }
@@ -96,9 +104,9 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "1").pending, "1")
     XCTAssertEqual(transition(pending: "1", chars: "0").pending, "10")
 
-    let undo = transition(pending: "10", chars: "u")
-    XCTAssertEqual(undo.command, .undo)
-    XCTAssertEqual(undo.repeatCount, 10)
+    let halfPageUp = transition(pending: "10", chars: "u")
+    XCTAssertEqual(halfPageUp.command, .scroll(.halfPageUp))
+    XCTAssertEqual(halfPageUp.repeatCount, 10)
 
     let previousTab = transition(pending: "2[", chars: "t")
     XCTAssertEqual(previousTab.command, .tabPrev)
@@ -134,7 +142,7 @@ final class NormalModeTests: XCTestCase {
 
   func testCopySequences() {
     XCTAssertNil(command(chars: "y"))
-    XCTAssertNil(command(pending: "y", chars: "y"))
+    XCTAssertEqual(command(pending: "y", chars: "y"), .copyURL)
   }
 
   func testMoveMouseSequence() {
@@ -172,10 +180,13 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]),
       .mouseGrid(.click(.rightClick)))
-    XCTAssertEqual(transition(chars: "d").pending, "d")
-    XCTAssertEqual(command(pending: "d", chars: "f"), .mouseTarget(.click(.doubleClick)))
+    // Bare `d` is half-page scroll; double-click hints moved to the
+    // `D` prefix so `d` fires instantly without a sequence-timeout wait.
+    XCTAssertEqual(command(chars: "d"), .scroll(.halfPageDown))
+    XCTAssertEqual(transition(chars: "D", ignoring: "d", flags: [.shift]).pending, "D")
+    XCTAssertEqual(command(pending: "D", chars: "f"), .mouseTarget(.click(.doubleClick)))
     XCTAssertEqual(
-      command(pending: "d", chars: "F", ignoring: "f", flags: [.shift]),
+      command(pending: "D", chars: "F", ignoring: "f", flags: [.shift]),
       .mouseGrid(.click(.doubleClick)))
   }
 
@@ -224,7 +235,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(pending: "g", chars: "i"), .insertMode)
     XCTAssertEqual(command(pending: "[", chars: "i"), .insertMode)
     XCTAssertEqual(command(pending: "]", chars: "i"), .insertMode)
-    XCTAssertEqual(command(pending: "g", chars: "n"), .pluginVerb(name: "window_new", args: [:]))
+    assertSendKeyKeys(command(pending: "g", chars: "n"), "cmd+g")
     XCTAssertEqual(command(pending: "g", chars: "r"), .reload(force: false))
     // Valid sequence continuations still resolve to the mapped action.
     XCTAssertEqual(command(pending: "g", chars: "t"), .tabNext)
@@ -2402,7 +2413,7 @@ final class NormalModeTests: XCTestCase {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in [
       "h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "[h", "]h", "f", "sf", "df", "mf", "F", "sF", "dF", "mF", "u", "ctrl-r", "x", "n",
+      "gg", "G", "H", "L", "f", "sf", "Df", "mf", "F", "sF", "DF", "mF", "u", "ctrl-r", "x", "n",
       "/", "\\<space>", "r", "R", "e", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a",
       "]a", "g1", "g9", "N{mapping}",
@@ -2637,8 +2648,29 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.normalModeActionMayChangeKeyboardFocus(.shellCommand(["open", "-a", "Slack"])))
     XCTAssertTrue(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.appNext))
     XCTAssertTrue(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.movementBack))
+    XCTAssertTrue(
+      AppDelegate.normalModeCommandMayChangeKeyboardFocus(
+        .sendKey(keys: "down", keyCode: CGKeyCode(kVK_DownArrow), flagsRawValue: 0)))
+    XCTAssertTrue(
+      AppDelegate.normalModeCommandMayChangeKeyboardFocus(
+        .sendKeys(
+          keys: "g,i", keyCodes: [CGKeyCode(kVK_ANSI_G), CGKeyCode(kVK_ANSI_I)],
+          flagsRawValues: [0, 0])))
     XCTAssertFalse(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.scroll(.down)))
     XCTAssertFalse(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.reload(force: false)))
+    XCTAssertFalse(
+      AppDelegate.normalModeCommandMayChangeKeyboardFocus(
+        .sendKey(
+          keys: "cmd+f", keyCode: CGKeyCode(kVK_ANSI_F),
+          flagsRawValue: CGEventFlags.maskCommand.rawValue)))
+  }
+
+  func testUnmodifiedNormalModeKeyDispatchRequiresTargetActivation() {
+    XCTAssertTrue(AppDelegate.normalModeKeyDispatchNeedsTargetActivation(flags: []))
+    XCTAssertFalse(AppDelegate.normalModeKeyDispatchNeedsTargetActivation(flags: .maskCommand))
+    XCTAssertFalse(AppDelegate.normalModeKeyDispatchNeedsTargetActivation(flags: .maskControl))
+    XCTAssertFalse(AppDelegate.normalModeKeyDispatchNeedsTargetActivation(flags: .maskAlternate))
+    XCTAssertFalse(AppDelegate.normalModeKeyDispatchNeedsTargetActivation(flags: .maskShift))
   }
 
   func testNormalModeActionDispatchRecapturesOnlyForIdleNormalSurfaces() {
@@ -2797,8 +2829,38 @@ final class NormalModeTests: XCTestCase {
       mappings: CompiledMappings(mappings))
   }
 
+  private func assertSendKey(
+    _ command: URLCommand?,
+    keys: String,
+    keyCode: CGKeyCode,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    guard case .sendKey(let actualKeys, let actualKeyCode, let flagsRawValue) = command else {
+      return XCTFail("expected send_key \(keys)", file: file, line: line)
+    }
+    XCTAssertEqual(actualKeys, keys, file: file, line: line)
+    XCTAssertEqual(actualKeyCode, keyCode, file: file, line: line)
+    XCTAssertEqual(flagsRawValue, 0, file: file, line: line)
+  }
+
   private func key(_ raw: String) -> String {
     NormalModeInterpreter.canonicalizeMappingKey(raw)!
+  }
+
+  /// Assert a command is a `send_key` for the given hotkey, checking only
+  /// the hotkey string (the keyCode / flags are derived from it). Used for
+  /// modified sends like `cmd+g` where the flags raw value is non-zero.
+  private func assertSendKeyKeys(
+    _ command: URLCommand?,
+    _ keys: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    guard case .sendKey(let actualKeys, _, _) = command else {
+      return XCTFail("expected send_key \(keys)", file: file, line: line)
+    }
+    XCTAssertEqual(actualKeys, keys, file: file, line: line)
   }
 
   private func focusSnapshot(

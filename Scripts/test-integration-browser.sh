@@ -89,8 +89,14 @@ EOF
   exit 1
 fi
 
-if [[ ! -f "$FIXTURES_DIR/manifest.json" ]]; then
-  echo "ERROR: browser fixture manifest not found at $FIXTURES_DIR/manifest.json" >&2
+if [[ ! -d "$FIXTURES_DIR/snapshots" ]]; then
+  echo "ERROR: browser fixture snapshots directory not found at $FIXTURES_DIR/snapshots" >&2
+  exit 1
+fi
+
+if ! find "$FIXTURES_DIR/snapshots" -maxdepth 1 -type f -name '*.html' -print -quit |
+  grep -q .; then
+  echo "ERROR: no browser fixture snapshots found in $FIXTURES_DIR/snapshots" >&2
   exit 1
 fi
 

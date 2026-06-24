@@ -70,34 +70,30 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 async { ::flash_plugin::DiscoverResponse::default() }
             }
 
-            /// Default: tell the host to serve from its warm cache. Most
-            /// plugins should leave this method alone.
+            /// Default: serve this plugin's warm locations (the union of every
+            /// [`set_locations`](::flash_plugin::Context::set_locations) call).
+            /// Most plugins should leave this method alone — keep the locations
+            /// warm in the background (`on_start` + `on_event`, plus plugin-owned
+            /// polling when needed) and the host pulls them on demand.
             ///
-            /// The flashlight binds this RPC to the user pressing `f`.
-            /// Anything that runs here adds latency the user feels.
-            /// Overriding `candidate_query` to run subprocesses,
-            /// AppleScript, or other I/O is the canonical anti-pattern
-            /// — when the I/O exceeds `manifest.request_timeout_ms`,
-            /// the host falls back to the stale cache and the 5 s
-            /// live-tick later returns the fresh result, surfacing as
-            /// "outdated candidates that refresh themselves a few
-            /// seconds after typing."
-            ///
-            /// Keep the snapshot warm in the background instead
-            /// (`on_start` + `on_event` push refreshes, plus plugin-owned
-            /// polling when needed) and dedup before emitting (see AGENTS.md
-            /// "Plugin snapshot freshness contract"). Only override this method
-            /// when the plugin owns a stricter timing the host can't
-            /// know about (e.g. completion that depends on the live
-            /// query string).
+            /// The host queries this when the flashlight opens (and when a
+            /// matching `@source`/sigil filter is typed), then applies its own
+            /// fuzzy narrowing against `request.query` — so return the full warm
+            /// set rather than pre-filtering here. Anything that runs I/O here
+            /// (subprocess, AppleScript) adds latency the user feels and risks
+            /// the `manifest.request_timeout_ms` deadline. Only override this
+            /// method when results genuinely depend on the live query string
+            /// (e.g. a server-side search completion).
             fn candidate_query(
                 &self,
                 ctx: ::flash_plugin::Context,
                 request: ::flash_plugin::CandidateQueryRequest,
             ) -> impl ::core::future::Future<Output = ::flash_plugin::CandidateQueryResponse> + ::core::marker::Send
             {
-                let _ = (ctx, request);
-                async { ::flash_plugin::CandidateQueryResponse::snapshot() }
+                let _ = request;
+                async move {
+                    ::flash_plugin::CandidateQueryResponse::candidates(ctx.warm_locations())
+                }
             }
 
             /// Perform a source action (e.g. tab select/cycle).

@@ -76,7 +76,7 @@ Sources/
       Alphabet.swift                 # layout selector / literal hints.keys resolution
     Permissions/PermissionCheck.swift  # AXIsProcessTrusted() — read-only, no UI prompt
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TargetFinalizer, WindowSnapshot, plugin system, source candidates, browser fixture catalog, shared integration support.
-Tests/BrowserSnapshots/              # Browser integration manifest + 100 offline HTML snapshots used by Scripts/test-integration-browser.sh.
+Tests/BrowserSnapshots/              # Browser integration offline HTML snapshots discovered by Scripts/test-integration-browser.sh.
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
 Plugins/                             # Official bundled Rust plugins, members of the Plugins/Cargo.toml workspace, symlinked into the dev app
 Plugins/_rust_flash_plugin/          # Shared Rust plugin SDK crate (package flash_plugin); no Flash business concepts
@@ -350,12 +350,11 @@ kept out of the watched plugin trees) and copies each `flash-plugin-<id>` binary
 next to its `manifest.json`. `dev` is an optimized current-arch release build
 (fast, incremental); `release` is an optimized universal binary (x86_64 + arm64)
 joined with `lipo`. Candidate providers declare manifest root `sources` descriptors, keep
-candidate snapshots warm in memory, refresh from light host events such as
+their locations warm in memory via `set_locations`, refresh from light host events such as
 `core:apps.snapshot`, `core:focus.changed`, and `core:ax.changed` when possible,
-and poll only when the underlying source cannot be watched. The command-bar
-path reads `candidates(...)` snapshots synchronously; `candidateQuery` is not
-used to populate a visible flashlight list and should stay O(memory) unless a
-separate host workflow explicitly needs it. The manifest's `start` is
+and poll only when the underlying source cannot be watched. The host *pulls* each
+location source via `candidateQuery` on flashlight open; that handler must stay
+O(memory) (the `warm_locations()` default) — it is on the hot path. The manifest's `start` is
 `exec ./flash-plugin-<id>` and `install` is a no-op `true` — there is no cargo,
 Python, or interpreter at runtime. `Scripts/build.sh` / `Scripts/install.sh`
 invoke `build-plugins.sh` with the matching mode; dev symlinks the repo
@@ -363,57 +362,69 @@ invoke `build-plugins.sh` with the matching mode; dev symlinks the repo
 per plugin (no sources). The compiled binaries and per-crate build output are
 git-ignored.
 
-**Plugin snapshot freshness contract (binding for every candidate provider).**
-A candidate plugin's job is to keep its in-memory snapshot **in sync with its
-underlying data source at all times** — not "polled and hope for the best",
-not "refreshed on the way out of `candidate_query`." The host freezes one
-already-warm snapshot when the flashlight surface opens, and the user expects
-that visible list to be available within a single frame and stay immutable until
-the surface closes.
+**Warm-locations contract (binding for every candidate provider).** A candidate
+plugin keeps its locations **in memory at all times, in sync with its underlying
+source** — the host holds no candidate cache. When the flashlight opens, the host
+*pulls* each location source via `candidateQuery` in parallel and merges each warm
+reply into the open list as it arrives (`NormalModeCoordinator.fanOutCandidateQueries`
+→ `mergeCandidateQueryResults`). Non-location sources (emojis, bangs, …) are pulled
+lazily the first time the user types an `@source`/`!`bang filter.
 
-  1. **Visible candidate reads must be O(memory).** The flashlight open/search
-     path calls `SourceRegistry.candidates(scope:)`, which reads each source's
-     current `candidates(...)` snapshot synchronously. It must not call
-     `queryCandidates`, wait for plugin RPC, run subprocesses, run AppleScript,
-     or do any I/O whose latency the user would feel. The default plugin
-     `candidate_query` trait method returns `CandidateQueryResponse::snapshot()`;
-     keep that default unless a non-visible host workflow explicitly needs a
-     dynamic query.
+  1. **`candidate_query` must be O(memory).** Keep the default trait method, which
+     returns `ctx.warm_locations()` — the union of every `set_locations` call. Do
+     not run RPC, subprocess, AppleScript, or other I/O in `candidate_query`; its
+     latency lands on the flashlight's hot path. Override it only when results
+     genuinely depend on the live query string (a server-side search completion).
 
-  2. **Push the work to the background.** Refresh on host events that
-     correlate with state change (`core:focus.changed`,
-     `core:apps.launched`, `core:apps.terminated`, `core:flash.started`)
-     and — when the underlying source has no push channel — run a
-     `ctx.interval(...)` poll. The cadence has to be short enough that
-     a change the user just made (a new tmux window, a renamed Slack
-     channel) is in the snapshot by the time they next press `f`. 1 s
-     is the working default for poll-only plugins; raise it only with a
-     measurement that justifies the user-visible staleness.
+  2. **Keep the store warm in the background.** Call `ctx.set_locations(source_id,
+     candidates)` whenever the data changes, refreshing on host events that
+     correlate with change (`core:focus.changed`, `core:apps.launched`,
+     `core:apps.terminated`, `core:apps.snapshot`, `core:flash.started`) and —
+     when the source has no push channel — a `ctx.interval(...)` poll. The store
+     must be fresh by the time the user opens the flashlight; nothing refreshes it
+     on the open path.
 
-  3. **Dedup before emitting.** Hash the candidate vector (title +
-     subtitle + navigation_url + pid is usually sufficient) and skip
-     `emit_snapshot` when nothing observable changed. Late snapshot updates do
-     not mutate the currently visible flashlight list, but they do warm the
-     next session and can still trigger host bookkeeping. The dedup gate makes
-     "snapshot identical to last emit" a true no-op all the way down to the
-     host.
+  3. **Dedup is cheap, not required.** `set_locations` just swaps the in-memory
+     vector, so re-storing identical data is nearly free; still skip an expensive
+     refresh that would produce no change.
 
-  4. **Parallelise per-target I/O.** When the snapshot is sourced from
-     N independent backends (tmux sockets, browser bundles, Slack
-     workspaces, …), spawn the per-backend work concurrently
-     (`tokio::spawn` + `JoinHandle::await`). Sequential fan-out makes
-     the slowest backend dominate every refresh; with three sockets and
-     a 2 s per-call timeout, a single hung server stretches a 50 ms
-     operation into 6 s of background churn that can overlap the next
-     poll.
+  4. **Parallelise per-target I/O.** When the locations come from N independent
+     backends (tmux sockets, browser bundles, Slack workspaces, …), spawn the
+     per-backend work concurrently (`tokio::spawn` + `JoinHandle::await`) so the
+     slowest backend does not dominate every refresh.
 
-  5. **Never nuke the cache on transient failure.** When `build_…`
-     returns `None`, leave the previous snapshot in place and skip the
-     emit. Emitting `[]` makes tmux windows / browser tabs visibly
-     disappear from flashlight every time a single backend hiccups; the
-     next successful poll repopulates them seconds later. The
-     "stale-but-mostly-right" cache is strictly better than the "empty
-     during failure" cache.
+  5. **Never blank the store on transient failure.** When a refresh comes back
+     empty because a backend hiccuped, leave the previous `set_locations` in place
+     rather than storing `[]` — otherwise tabs/windows disappear from the
+     flashlight until the next successful refresh. "Stale-but-mostly-right" beats
+     "empty during failure."
+
+**Plugins must never block the async runtime (enforced, no exceptions).** Every
+plugin runs on a small (2-worker) tokio runtime shared by all its async work —
+events, candidate queries, hint discovery. One blocking syscall pins a worker
+thread and stalls every other in-flight operation (this is exactly how a
+flashlight open ends up waiting hundreds of ms on a single plugin). So sync/
+blocking I/O is **banned outright in plugin code** — there is no
+`#[allow(clippy::disallowed_methods)]` escape hatch. Use the async API everywhere:
+`tokio::fs::*` for files (it offloads to its own blocking pool internally, so
+plugin code stays fully async and never names `std::fs`), `tokio::process::Command`
+for subprocesses, `tokio::time::sleep` for delays. A `read_dir` becomes a
+`tokio::fs::read_dir` stream (`while let Some(entry) = rd.next_entry().await?`);
+make the enclosing helper `async` and `await` it up the call chain. The tokio
+runtime itself is built once by the SDK's `run()` — a plugin's `main` must never
+build its own (`tokio::runtime::Builder`/`block_on`); do async startup work in
+`on_start`, or resolve lazily with a `tokio::sync::OnceCell` (see
+`Plugins/tmux/src/main.rs` `resolved_tmux_path`). Enforced by `Plugins/clippy.toml`
+(`disallowed-methods`/`disallowed-types`):
+
+```
+cargo clippy --manifest-path Plugins/Cargo.toml --workspace --no-deps \
+  --exclude flash_plugin_macros --exclude flash-plugin-searchengines \
+  -- -D clippy::disallowed_methods -D clippy::disallowed_types
+```
+
+(`flash_plugin_macros` and `searchengines`'s `build.rs` read files at *compile*
+time, where there is no async runtime — they're excluded, not allow-listed.)
 
 Tests should pin these invariants in place — see
 `Plugins/tmux/src/main.rs` for the canonical pattern (`hash_candidates`,
@@ -464,7 +475,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]
 
 `:open <query>` and `:flashlight <query>` results render below the centered command line, ordered top-to-bottom with the best match closest to the prompt. App bundles are warmed and cached by `ApplicationSource`. Result titles include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin candidates should provide their own `source` / `title` labels.
 
-**Flashlight loading sequence.** On panel open the host freezes exactly one synchronous candidate snapshot through `SourceRegistry.candidates(scope:)`. That snapshot includes apps from the warm `ApplicationSource` cache and plugin/browser/tmux rows from each source's in-memory `candidates(...)` snapshot. The visible candidate pool is immutable for the lifetime of the command-line / candidate-finder surface: typing, selection movement, plugin `snapshot.updated` notifications, `core:flashlight.opened` responses, app-cache prewarm completions, and background timers must not add, remove, reorder, or re-score against newly arrived rows. Do not call `queryCandidates` from the flashlight open/search/render path, do not reintroduce a pending dynamic buffer, and do not run a live refresh while the surface is open. Plugins are responsible for keeping their snapshots warm before the panel opens; updates that arrive after the snapshot can affect the next session only. This immutability is a UX contract, not an optimization detail.
+**Flashlight loading sequence.** On panel open the host paints instantly from the synchronous in-process sources (`SourceRegistry.synchronousCandidates(scope:)` — apps from the warm `ApplicationSource` cache), then fans out `candidateQuery` to the location-kind plugin sources in parallel (`fanOutCandidateQueries`) and merges each warm reply into the open pool as it arrives (`mergeCandidateQueryResults`), re-rendering once per runloop turn (coalesced). Plugins keep their locations warm in memory (`set_locations`); the host holds no candidate cache, so every open reflects the current warm state. Non-location sources (emojis, bangs) are pulled lazily on the first `@source`/`!`bang keystroke. A `candidateFinderSessionGeneration` token plus an active-surface check drop replies from a closed or superseded session, so a slow plugin can never mutate the wrong list. The merge is additive and idempotent (a source's rows are replaced by `source_id`); the synchronous seed guarantees first paint never blocks on a plugin RPC.
 
 **Candidate schema.** Every candidate is `{ title: String, url: URL?, metadata: [String: String] }`. `title` is the primary searchable string and the highest-precedence ranking field. `url` is the typed openable destination — apps point to their `.app` bundle file URL; browser tabs point to the page URL; sources without an openable destination omit it. `metadata` is fully opaque to FlashCore; sources stash whatever they want there, other plugins may read each other's keys by convention, and the matcher indexes the values at a low tier for fuzzy search. The bundled host uses these conventional keys for routing (defined in `Sources/flash/App/CandidateMetadata.swift` and mirrored as `candidate_metadata::*` constants in `Plugins/_rust_flash_plugin/src/lib.rs`): `source`, `source_id`, `kind`, `entity`, `pid`, `navigation_url`, `bundle_id`, `subtitle`, `payload`, `aliases`, `finishes_command`, `current_location`, `priority`. `priority` must be one shared enum value (`low`, `normal`, `high`, `important`, `urgent`), not a source-local number. The wire format between plugin and host carries `{ title, url, metadata }`.
 
@@ -589,7 +600,7 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `SourceCandidateTests`, …). Deterministic, run in milliseconds, no external state. Run on every `swift test`.
 - **tmux logic** (link extraction, cell geometry, status-bar parsing, client/process-tree resolution) lives in the Rust `Plugins/tmux` crate — cover changes there with crate tests, not Swift tests.
-- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with a pinned reference extension, builds/codesigns the browser oracle runner, then runs the 100-file offline corpus from `Tests/BrowserSnapshots` through a parallel worker pool. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures reference marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch and overmatch against the browser reference. Run order: build + sign once (`./Scripts/install.sh --dev` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
+- **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with a pinned reference extension, builds/codesigns the browser oracle runner, then runs every `Tests/BrowserSnapshots/snapshots/*.html` fixture through a parallel worker pool. `manifest.json`, when present, is only optional metadata/order; unlisted snapshots still run by default. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures reference marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch and overmatch against the browser reference. Run order: build + sign once (`./Scripts/install.sh --dev` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
 - **Native AppKit integration** (`Scripts/test-integration-native.sh`). Builds/codesigns `flash-native-fixture` and `flash-native-oracle`, launches a deterministic AppKit window, compares generic AX targets against expected controls, verifies AXPress mutates a fixture state file, and records the open-NSMenu limitation under the no-key-capture production rule. It covers buttons, image-backed buttons, duplicate labels, checkboxes, radio buttons, popups, search/text areas, tabs, rows, and negative controls such as disabled/hidden/decorative/slider elements. It does not add production global key capture or private APIs, and the script kills its test apps on exit/interruption.
 - **Electron integration** (`Scripts/test-integration-electron.sh`). Runs `npm ci` for the pinned Electron fixture, builds/codesigns `flash-electron-oracle`, launches Electron with a deterministic DOM fixture, reads expected target JSON emitted by the fixture, compares it against Flash's generic AX provider output, and verifies AX activation mutates fixture state. The script kills its oracle app and fixture Electron process on exit/interruption.
 

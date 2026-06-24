@@ -298,22 +298,32 @@ struct Config {
       // (`<leader>`, `<space>`) or for emphasis on a non-obvious key.
       var raw: [(String, MappingCommand)] = [
         ("h", .flashCommand(.scroll(.left))),
-        ("j", .flashCommand(.resourceNext)),
-        ("k", .flashCommand(.resourcePrevious)),
+        ("j", sendKeyMapping("down")),
+        ("k", sendKeyMapping("up")),
         ("l", .flashCommand(.scroll(.right))),
         ("ctrl+e", .flashCommand(.scroll(.down))),
         ("ctrl+y", .flashCommand(.scroll(.up))),
         ("ctrl+d", .flashCommand(.scroll(.halfPageDown))),
         ("ctrl+u", .flashCommand(.scroll(.halfPageUp))),
+        // Vimium parity: bare `d` / `u` scroll a half page (the `ctrl+`
+        // forms above stay as vim-style aliases). `d` is kept free of any
+        // hint-mode prefix — double-click hints live on the `D` prefix
+        // below — so the bare keystroke resolves instantly with no
+        // sequence-timeout wait, the same reason right-click moved `r`→`s`.
+        ("d", .flashCommand(.scroll(.halfPageDown))),
+        ("u", .flashCommand(.scroll(.halfPageUp))),
         ("gg", .flashCommand(.scroll(.top))),
         ("G", .flashCommand(.scroll(.bottom))),
+        // Vimium `H` / `L` — back / forward in history. (Lowercase
+        // `h` / `l` scroll left / right, matching Vimium too.) History has
+        // no bracket-pair form: `[h`/`]h` were dropped in favour of `H`/`L`.
+        ("H", .flashCommand(.historyBack)),
+        ("L", .flashCommand(.historyForward)),
         // Bracket-pair navigation borrows tpope/vim-unimpaired's `[X` =
         // previous, `]X` = next convention so muscle memory transfers
         // straight from Vim. Multi-letter aliases live alongside the
         // primary binding so users coming from `vim-unimpaired` find
         // their letters AND desktop users find an intuitive abbreviation.
-        ("[h", .flashCommand(.historyBack)),
-        ("]h", .flashCommand(.historyForward)),
         ("[t", .flashCommand(.tabPrev)),
         ("]t", .flashCommand(.tabNext)),
         // `[b`/`]b` — Vim "buffer" prev/next. In a desktop context the
@@ -340,11 +350,15 @@ struct Config {
         // Flash's generalized location history.
         ("[w", .flashCommand(.appPrev)),
         ("]w", .flashCommand(.appNext)),
-        // Reopen the most recently closed tab. ⌘⇧T is the cross-browser
-        // standard (Safari/Chrome/Firefox); the host keystroke
-        // fallback delivers it for any non-terminal app, and terminals
-        // (no close-tab history) return `.unhandled`.
-        ("T", .flashCommand(.tabReopen)),
+        // Reopen the most recently closed tab. Vimium binds this to `X`
+        // ("restore"); ⌘⇧T is the cross-browser standard the host
+        // keystroke fallback delivers for any non-terminal app, and
+        // terminals (no close-tab history) return `.unhandled`.
+        ("X", .flashCommand(.tabReopen)),
+        // Vimium `T` searches open tabs. Flash's nearest analogue is the
+        // flashlight switcher (its default pool is location-only: apps,
+        // tabs, tmux windows, …), so `T` opens it pre-seeded.
+        ("T", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
         // Shadow the system app switcher so the user stays inside
         // Flash's normal-mode loop. Carbon registration is scope-bound:
         // entering insert mode unregisters the binding and the Dock
@@ -371,7 +385,7 @@ struct Config {
         // ⌘R / ⌘⇧R → reload / hard reload (mirror of `r` / `R`).
         ("cmd+r", .flashCommand(.reload(force: false))),
         ("cmd+shift+r", .flashCommand(.reload(force: true))),
-        // ⌘[ / ⌘] → history back / forward (mirror of `[h` / `]h`).
+        // ⌘[ / ⌘] → history back / forward (mirror of `H` / `L`).
         ("cmd+<lbracket>", .flashCommand(.historyBack)),
         ("cmd+<rbracket>", .flashCommand(.historyForward)),
         // ⌘⇧[ / ⌘⇧] → previous / next tab (mirror of `[t` / `]t`, `gT` / `gt`).
@@ -396,6 +410,8 @@ struct Config {
         // `tab_first` / `tab_last` source action.
         ("g^", .flashCommand(.tabFirst)),
         ("g$", .flashCommand(.tabLast)),
+        // Vimium `g0` — first tab (alias of `g^`).
+        ("g0", .flashCommand(.tabFirst)),
         ("g1", .flashCommand(.tabSelect(index: 1))),
         ("g2", .flashCommand(.tabSelect(index: 2))),
         ("g3", .flashCommand(.tabSelect(index: 3))),
@@ -409,6 +425,10 @@ struct Config {
         ("ctrl+i", .flashCommand(.movementForward)),
         ("gt", .flashCommand(.tabNext)),
         ("gT", .flashCommand(.tabPrev)),
+        // Vimium `J` / `K` — one tab left (prev) / right (next), the
+        // capital-letter siblings of `gT` / `gt`.
+        ("J", .flashCommand(.tabPrev)),
+        ("K", .flashCommand(.tabNext)),
         ("i", .flashCommand(.insertMode)),
         ("I", .flashCommand(.lockedInsertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick)))),
@@ -418,17 +438,31 @@ struct Config {
         // reload, because right-click hint sequences also began with `r`.
         // `s` has no such pair so the keystroke fires instantly.
         ("sf", .flashCommand(.mouseTarget(.click(.rightClick)))),
-        ("df", .flashCommand(.mouseTarget(.click(.doubleClick)))),
+        // Double-click hints. `D` ("Double") rather than the natural `d`
+        // prefix so the bare `d` half-page scroll above stays instant.
+        ("Df", .flashCommand(.mouseTarget(.click(.doubleClick)))),
         ("mf", .flashCommand(.mouseTarget(.move))),
         ("F", .flashCommand(.mouseGrid(.click(.leftClick)))),
         ("sF", .flashCommand(.mouseGrid(.click(.rightClick)))),
-        ("dF", .flashCommand(.mouseGrid(.click(.doubleClick)))),
+        ("DF", .flashCommand(.mouseGrid(.click(.doubleClick)))),
         ("mF", .flashCommand(.mouseGrid(.move))),
-        ("u", .flashCommand(.undo)),
+        // Undo lives on `u` in Vim, but Vimium reuses `u` for half-page
+        // scroll-up (mapped above). Undo stays reachable via `:undo` /
+        // `:u` and the app's native ⌘Z in insert mode.
         ("ctrl+r", .flashCommand(.redo)),
         ("e", .flashCommand(.archive)),
         ("x", .flashCommand(.close)),
-        ("n", .flashCommand(.pluginVerb(name: "window_new", args: [:]))),
+        // Vimium `n` / `N` cycle find matches. Flash drives the focused
+        // app's native find-again (⌘G / ⌘⇧G) after `/` opens find. New
+        // windows stay on ⌘N (below) — `n` is needed for find parity.
+        ("n", sendKeyMapping("cmd+g")),
+        ("N", sendKeyMapping("cmd+shift+g")),
+        // `yy` yanks the current URL/location (Vimium `yy`).
+        ("yy", .flashCommand(.copyURL)),
+        // Follow the next / previous resource — Vimium's `]]` / `[[`
+        // pagination-link follow, generalized to plugin resources.
+        ("]]", .flashCommand(.resourceNext)),
+        ("[[", .flashCommand(.resourcePrevious)),
         ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
         ("<leader><space>", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
@@ -459,6 +493,13 @@ struct Config {
         }
         return ModeMapping(key: canonical, action: action)
       }
+    }
+
+    private static func sendKeyMapping(_ keys: String) -> MappingCommand {
+      guard let action = parseMappingCommand(argv: ["flash", "send_key", "--keys=\(keys)"]) else {
+        preconditionFailure("invalid default send_key mapping: \(keys)")
+      }
+      return action
     }
 
     func mappings(for mode: FlashMode) -> [ModeMapping] {

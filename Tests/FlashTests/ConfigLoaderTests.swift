@@ -1,3 +1,4 @@
+import Carbon.HIToolbox
 import FlashCore
 import Foundation
 import XCTest
@@ -16,12 +17,14 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.overlay.hintBGTop, "#FFF785")
     XCTAssertEqual(c.overlay.hintBGBottom, "#FFC542")
     XCTAssertEqual(c.overlay.hintBorder, "#E3BE23")
-    XCTAssertEqual(
+    assertSendKey(
       c.mode.normal.first(where: { $0.key == "j" })?.action.command,
-      .resourceNext)
-    XCTAssertEqual(
+      keys: "down",
+      keyCode: CGKeyCode(kVK_DownArrow))
+    assertSendKey(
       c.mode.normal.first(where: { $0.key == "k" })?.action.command,
-      .resourcePrevious)
+      keys: "up",
+      keyCode: CGKeyCode(kVK_UpArrow))
     XCTAssertEqual(c.mode.normalLeader, "\\")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("\\<space>") })?.action.command,
@@ -30,7 +33,7 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == key("sf") })?.action.command,
       .mouseTarget(.click(.rightClick)))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("df") })?.action.command,
+      c.mode.normal.first(where: { $0.key == key("Df") })?.action.command,
       .mouseTarget(.click(.doubleClick)))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
@@ -41,7 +44,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mF") })?.action.command,
       .mouseGrid(.move))
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("yy") }))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("yy") })?.action.command,
+      .copyURL)
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "o" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "O" }))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
@@ -49,9 +54,12 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == key("g4") })?.action.command,
       .tabSelect(index: 4))
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("gN") }))
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == "n" })?.action.command,
-      .pluginVerb(name: "window_new", args: [:]))
+    // Vimium `n` cycles find matches — Flash drives the app's native
+    // find-again (⌘G). New windows stay on ⌘N.
+    guard case .sendKey(let nKeys, _, _) =
+      c.mode.normal.first(where: { $0.key == "n" })?.action.command
+    else { return XCTFail("expected send_key for n") }
+    XCTAssertEqual(nKeys, "cmd+g")
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "t" })?.action.command,
       .tabNew)
@@ -61,11 +69,14 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
       .movementForward)
+    // History dropped its bracket-pair form in favour of Vimium `H`/`L`.
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("[h") }))
+    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("]h") }))
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("[h") })?.action.command,
+      c.mode.normal.first(where: { $0.key == "H" })?.action.command,
       .historyBack)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("]h") })?.action.command,
+      c.mode.normal.first(where: { $0.key == "L" })?.action.command,
       .historyForward)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("[t") })?.action.command,
@@ -905,9 +916,10 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(bareVerb.warnings[0].contains("\"j\""))
     // The built-in default for `j` survives because the user's invalid
     // override never installs.
-    XCTAssertEqual(
+    assertSendKey(
       bareVerb.mode.normal.first(where: { $0.key == "j" })?.action.command,
-      .resourceNext)
+      keys: "down",
+      keyCode: CGKeyCode(kVK_DownArrow))
   }
 
   func testParsesModeMappings() {
@@ -1018,7 +1030,10 @@ final class ConfigLoaderTests: XCTestCase {
       """
     let c = ConfigLoader.parse(toml)
     XCTAssertTrue(c.warnings.contains { $0.contains("[mode.normal.mappings]") })
-    XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .resourceNext)
+    assertSendKey(
+      c.mode.normal.first(where: { $0.key == "j" })?.action.command,
+      keys: "down",
+      keyCode: CGKeyCode(kVK_DownArrow))
   }
 
   func testCLIBeatsEnv() {
@@ -1170,6 +1185,21 @@ final class ConfigLoaderTests: XCTestCase {
 
   private func key(_ raw: String) -> String {
     NormalModeInterpreter.canonicalizeMappingKey(raw)!
+  }
+
+  private func assertSendKey(
+    _ command: URLCommand?,
+    keys: String,
+    keyCode: CGKeyCode,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    guard case .sendKey(let actualKeys, let actualKeyCode, let flagsRawValue) = command else {
+      return XCTFail("expected send_key \(keys)", file: file, line: line)
+    }
+    XCTAssertEqual(actualKeys, keys, file: file, line: line)
+    XCTAssertEqual(actualKeyCode, keyCode, file: file, line: line)
+    XCTAssertEqual(flagsRawValue, 0, file: file, line: line)
   }
 
   private static func parseJSONObject(_ json: String) throws -> [String: Any]? {

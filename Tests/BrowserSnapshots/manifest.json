@@ -329,6 +329,18 @@
       "file": "collected-raycast-google-cloud-console-002.html",
       "category": "collected-regression",
       "kind": "collected"
+    },
+    {
+      "name": "collected-raycast-google-cloud-console-003",
+      "file": "collected-raycast-google-cloud-console-003.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-apis-services-apis-services-raycast-google-cloud-001",
+      "file": "collected-apis-services-apis-services-raycast-google-cloud-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
     }
   ]
 }

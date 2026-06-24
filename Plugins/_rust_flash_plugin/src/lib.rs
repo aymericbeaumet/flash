@@ -31,6 +31,14 @@ pub use flash_plugin_macros::plugin;
 /// response arrives. Cloned into [`Context`] so any handler can call the host.
 type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 
+/// Warm in-memory location store, keyed by `source_id`. Plugins keep their
+/// locations here via [`Context::set_locations`]; the generated
+/// `candidate_query` default serves the union back to the host on demand. This
+/// is the pull model — the host holds no candidate cache of its own. Cloned
+/// into [`Context`] (an `Arc`), so an `on_event` write is visible to the next
+/// `candidateQuery`.
+type WarmLocations = Arc<Mutex<HashMap<String, Vec<Candidate>>>>;
+
 const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -189,7 +197,7 @@ impl JumpTarget {
     }
 }
 
-/// A flashlight candidate. Outbound (emitted via [`Context::emit_snapshot`])
+/// A flashlight candidate. Outbound (emitted via [`Context::set_locations`])
 /// only `title` is required. Inbound (on [`Request::ResolveCandidate`]) the
 /// host echoes back the candidate with the same shape — read structured
 /// payload via [`payload_str`](Candidate::payload_str) /
@@ -936,6 +944,7 @@ pub struct Context {
     config: Value,
     host_pending: HostPending,
     host_counter: Arc<AtomicU64>,
+    locations: WarmLocations,
 }
 
 impl Context {
@@ -1028,29 +1037,37 @@ impl Context {
         Some(NormalModeTarget { pid, bundle_id })
     }
 
-    /// Emit a `snapshot.updated` notification carrying `candidates` (and no
-    /// jump targets) for `source_id`.
+    /// Store this plugin's warm locations for `source_id`, replacing any
+    /// previous set. Nothing is sent to the host — the plugin owns its
+    /// locations in memory and the host pulls them via `candidateQuery` (served
+    /// by the generated `candidate_query` default from [`warm_locations`]). Call
+    /// it whenever the plugin's locations change (`on_start`, `on_event`, polls).
     ///
-    /// **Dedup before calling.** The host treats this as an
-    /// authoritative cache replacement: every call swaps the snapshot
-    /// pointer even when the candidate vector is byte-identical to the
-    /// previous one. The flashlight's 5 s live-tick re-runs
-    /// `candidateQuery` against that cache, so a plugin that re-emits
-    /// unchanged data on every poll forces the user-visible candidate
-    /// list to repaint mid-session for no reason. Hash the candidate
-    /// vector (e.g. `(title, subtitle, navigation_url, pid)`) and skip
-    /// this call when the hash matches the last emit — see AGENTS.md
-    /// "Plugin snapshot freshness contract" and
-    /// `Plugins/tmux/src/main.rs` for the canonical pattern.
-    pub fn emit_snapshot(&self, source_id: &str, candidates: Vec<Candidate>) {
-        let candidates: Vec<Value> = candidates
-            .iter()
-            .filter_map(|c| serde_json::to_value(c).ok())
-            .collect();
-        self.emit.notify(
-            "snapshot.updated",
-            json!({ "targets": [], "candidates": candidates, "source_id": source_id }),
-        );
+    /// Passing an empty vector clears the source. A source whose refresh can
+    /// transiently fail (e.g. an AX read that comes back empty) should guard
+    /// against overwriting a good set with an empty one at the call site, the
+    /// same way it did before this was a pull (see `Plugins/firefox/src/main.rs`).
+    ///
+    /// [`warm_locations`]: Context::warm_locations
+    pub fn set_locations(&self, source_id: &str, candidates: Vec<Candidate>) {
+        if let Ok(mut store) = self.locations.lock() {
+            store.insert(source_id.to_string(), candidates);
+        }
+    }
+
+    /// The union of every warm location set this plugin has published, ordered
+    /// by `source_id` for determinism. The generated `candidate_query` default
+    /// returns this; the host applies its own fuzzy narrowing against the query.
+    pub fn warm_locations(&self) -> Vec<Candidate> {
+        let Ok(store) = self.locations.lock() else {
+            return Vec::new();
+        };
+        let mut entries: Vec<(&String, &Vec<Candidate>)> = store.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        entries
+            .into_iter()
+            .flat_map(|(_, candidates)| candidates.iter().cloned())
+            .collect()
     }
 
     /// Publish status-bar segment values declared by this plugin's
@@ -1082,7 +1099,7 @@ impl Context {
         self.emit.log(level, message, fields);
     }
 
-    fn prepare_dirs(&self) {
+    async fn prepare_dirs(&self) {
         for dir in [
             self.home_dir(),
             self.config_dir(),
@@ -1090,7 +1107,7 @@ impl Context {
             self.share_dir(),
             self.bin_dir(),
         ] {
-            let _ = std::fs::create_dir_all(dir);
+            let _ = tokio::fs::create_dir_all(dir).await;
         }
     }
 }
@@ -1240,6 +1257,7 @@ fn context_from_env(
         config,
         host_pending,
         host_counter,
+        locations: Arc::new(Mutex::new(HashMap::new())),
     }
 }
 
@@ -1287,7 +1305,7 @@ async fn serve<P: Plugin>(plugin: P) {
     let host_pending: HostPending = Arc::new(Mutex::new(HashMap::new()));
     let host_counter = Arc::new(AtomicU64::new(0));
     let ctx = context_from_env(Emitter { tx }, host_pending.clone(), host_counter);
-    ctx.prepare_dirs();
+    ctx.prepare_dirs().await;
     start_parent_liveness_watch();
     ctx.log("info", "[plugin] process ready");
 

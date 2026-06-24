@@ -1,11 +1,10 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use flash_plugin::{
-    run, Candidate, Context, Event, NavigationRequest, ResolveResponse, SourceActionRequest,
-    SourceActionResponse,
+    run, Candidate, Context, Event, NavigationRequest, ResolveResponse, RunningApplication,
+    SourceActionRequest, SourceActionResponse,
 };
 use serde_json::{json, Value};
 
@@ -54,12 +53,7 @@ impl FlashPlugin for Firefox {
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
             "core:apps.snapshot" | "core:flashlight.opened" => {
-                let apps = event
-                    .running_applications
-                    .iter()
-                    .filter(|app| is_firefox(&app.bundle_id))
-                    .map(|app| (app.bundle_id.clone(), app.pid))
-                    .collect::<Vec<_>>();
+                let apps = firefox_apps(&event.running_applications);
                 refresh_snapshot(&ctx, apps).await;
             }
             "core:focus.changed" | "core:window.focus.changed" => {
@@ -96,9 +90,16 @@ impl FlashPlugin for Firefox {
     }
 }
 
-async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, i64)>) {
+fn firefox_apps(apps: &[RunningApplication]) -> Vec<(String, i64)> {
+    apps.iter()
+        .filter(|app| app.pid > 0 && is_firefox(&app.bundle_id))
+        .map(|app| (app.bundle_id.clone(), app.pid))
+        .collect()
+}
+
+async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, i64)>) -> Vec<Candidate> {
     if apps.is_empty() {
-        return;
+        return ctx.warm_locations();
     }
     let mut candidates = Vec::new();
     for (bundle, pid) in apps {
@@ -108,9 +109,10 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, i64)>) {
     }
     if candidates.is_empty() {
         ctx.log("debug", "[firefox] skipped empty tab snapshot");
-        return;
+        return ctx.warm_locations();
     }
-    ctx.emit_snapshot(SOURCE_ID, candidates);
+    ctx.set_locations(SOURCE_ID, candidates);
+    ctx.warm_locations()
 }
 
 fn is_firefox(bundle: &str) -> bool {
@@ -170,8 +172,19 @@ async fn collect_tabs(ctx: &Context, pid: i64) -> Vec<Tab> {
             selected: attr_bool(node, "AXSelected"),
         });
     }
-    merge_session_urls(&mut tabs, &firefox_session_tabs());
+    merge_session_urls(&mut tabs, &firefox_session_tabs().await);
     apply_window_title_selection(&mut tabs, &window_roots);
+    tabs
+}
+
+/// Raise Firefox and snapshot its tabs concurrently. Activation only needs the
+/// pid, so it's independent of the snapshot + session-store read that locates
+/// the target tab — running both under `join!` overlaps the `app.activate`
+/// round-trip with the (disk-bound) tab collection instead of paying for them
+/// back to back. Every tab-switch path (flashlight resolve, navigation restore,
+/// numbered jump) goes through here so the raise is always parallelized.
+async fn activate_and_collect_tabs(ctx: &Context, pid: i64) -> Vec<Tab> {
+    let (_, tabs) = tokio::join!(activate_app(ctx, pid), collect_tabs(ctx, pid));
     tabs
 }
 
@@ -299,11 +312,11 @@ fn title_matches_window(tab_title: &str, window_title: &str) -> bool {
             .is_some_and(|title| title.trim() == tab)
 }
 
-fn firefox_session_tabs() -> Vec<SessionTab> {
+async fn firefox_session_tabs() -> Vec<SessionTab> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for path in firefox_sessionstore_paths() {
-        let Some(text) = read_moz_lz4_json(&path) else {
+    for path in firefox_sessionstore_paths().await {
+        let Some(text) = read_moz_lz4_json(&path).await else {
             continue;
         };
         for tab in parse_session_tabs(&text) {
@@ -315,7 +328,7 @@ fn firefox_session_tabs() -> Vec<SessionTab> {
     out
 }
 
-fn firefox_sessionstore_paths() -> Vec<PathBuf> {
+async fn firefox_sessionstore_paths() -> Vec<PathBuf> {
     let Some(home) = std::env::var_os("HOME") else {
         return Vec::new();
     };
@@ -324,11 +337,11 @@ fn firefox_sessionstore_paths() -> Vec<PathBuf> {
         .join("Application Support")
         .join("Firefox")
         .join("Profiles");
-    let Ok(entries) = fs::read_dir(profiles) else {
+    let Ok(mut entries) = tokio::fs::read_dir(profiles).await else {
         return Vec::new();
     };
     let mut paths = Vec::new();
-    for entry in entries.flatten() {
+    while let Some(entry) = entries.next_entry().await.ok().flatten() {
         let profile = entry.path();
         push_sessionstore_path(
             &mut paths,
@@ -336,15 +349,17 @@ fn firefox_sessionstore_paths() -> Vec<PathBuf> {
             profile
                 .join("sessionstore-backups")
                 .join("recovery.jsonlz4"),
-        );
+        )
+        .await;
         push_sessionstore_path(
             &mut paths,
             1,
             profile
                 .join("sessionstore-backups")
                 .join("previous.jsonlz4"),
-        );
-        push_sessionstore_path(&mut paths, 2, profile.join("sessionstore.jsonlz4"));
+        )
+        .await;
+        push_sessionstore_path(&mut paths, 2, profile.join("sessionstore.jsonlz4")).await;
     }
     paths.sort_by(|lhs, rhs| {
         rhs.0
@@ -355,8 +370,12 @@ fn firefox_sessionstore_paths() -> Vec<PathBuf> {
     paths.into_iter().map(|(_, _, path)| path).collect()
 }
 
-fn push_sessionstore_path(paths: &mut Vec<(u128, usize, PathBuf)>, priority: usize, path: PathBuf) {
-    let Ok(metadata) = fs::metadata(&path) else {
+async fn push_sessionstore_path(
+    paths: &mut Vec<(u128, usize, PathBuf)>,
+    priority: usize,
+    path: PathBuf,
+) {
+    let Ok(metadata) = tokio::fs::metadata(&path).await else {
         return;
     };
     if !metadata.is_file() {
@@ -371,8 +390,8 @@ fn push_sessionstore_path(paths: &mut Vec<(u128, usize, PathBuf)>, priority: usi
     paths.push((modified_ms, priority, path));
 }
 
-fn read_moz_lz4_json(path: &Path) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
+async fn read_moz_lz4_json(path: &Path) -> Option<String> {
+    let bytes = tokio::fs::read(path).await.ok()?;
     decode_moz_lz4_json(&bytes)
 }
 
@@ -533,10 +552,9 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     let Some(pid) = candidate.pid_value() else {
         return ResolveResponse::unresolved();
     };
-    activate_app(ctx, pid).await;
     let url = candidate.url_value().unwrap_or("");
     let name = candidate.title.as_str();
-    let tabs = collect_tabs(ctx, pid).await;
+    let tabs = activate_and_collect_tabs(ctx, pid).await;
     let target = tabs
         .iter()
         .find(|tab| !url.is_empty() && tab.url == url)
@@ -567,8 +585,7 @@ async fn restore_navigation(ctx: &Context, request: &NavigationRequest) -> Sourc
         return SourceActionResponse::unhandled();
     };
     let pid = route.pid;
-    activate_app(ctx, pid).await;
-    let tabs = collect_tabs(ctx, pid).await;
+    let tabs = activate_and_collect_tabs(ctx, pid).await;
     let target = tabs
         .iter()
         .find(|tab| !route.url.is_empty() && tab.url == route.url)
@@ -683,8 +700,7 @@ async fn perform_source_action(
     let (Some(pid), true) = (action.context.pid, index > 0) else {
         return SourceActionResponse::unhandled();
     };
-    activate_app(ctx, pid).await;
-    let tabs = collect_tabs(ctx, pid).await;
+    let tabs = activate_and_collect_tabs(ctx, pid).await;
     let Some(target) = tabs.get((index - 1) as usize) else {
         return SourceActionResponse::unhandled();
     };
@@ -929,6 +945,37 @@ mod tests {
                     url: "https://github.com/aymericbeaumet/flash".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn candidate_query_filters_running_firefox_apps() {
+        let apps = vec![
+            RunningApplication {
+                bundle_id: FIREFOX.into(),
+                pid: 10,
+                localized_name: "Firefox".into(),
+            },
+            RunningApplication {
+                bundle_id: FIREFOX_DEV.into(),
+                pid: 11,
+                localized_name: "Firefox Developer Edition".into(),
+            },
+            RunningApplication {
+                bundle_id: "com.apple.Safari".into(),
+                pid: 12,
+                localized_name: "Safari".into(),
+            },
+            RunningApplication {
+                bundle_id: FIREFOX.into(),
+                pid: 0,
+                localized_name: "Firefox".into(),
+            },
+        ];
+
+        assert_eq!(
+            firefox_apps(&apps),
+            vec![(FIREFOX.into(), 10), (FIREFOX_DEV.into(), 11)]
         );
     }
 

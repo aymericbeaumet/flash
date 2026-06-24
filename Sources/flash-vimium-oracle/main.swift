@@ -132,8 +132,8 @@ private func parseArgs() -> Args {
         by a fixture allow-list JSON sidecar fails the runner.
 
           --fixture <name>      Run one fixture. May be repeated.
-          --fixtures-dir <path> Directory containing manifest.json,
-                                snapshots/, and allowlists/.
+          --fixtures-dir <path> Directory containing snapshots/, optional
+                                manifest.json metadata, and allowlists/.
           --jobs <n|auto>      Parallel Firefox workers. Default: auto.
           --browser-app <path> Firefox-family .app path. Default: Firefox.app,
                                 then Firefox Developer Edition.app.

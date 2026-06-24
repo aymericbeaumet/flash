@@ -123,6 +123,14 @@
           "send_keys",
           "--keys=g,p"
         ]
+      },
+      {
+        "key": "o",
+        "command": [
+          "flash",
+          "send_key",
+          "--keys=o"
+        ]
       }
     ]
   },
@@ -131,8 +139,8 @@
       {
         "name": "gmail",
         "title": "Gmail",
-        "summary": "Gmail source actions and `g...` go-to mappings.",
-        "body": "# Gmail\n\nThis bundled plugin applies only when the focused browser URL is `mail.google.com`.\n\nIt maps Gmail's go-to shortcuts in normal mode by sending Gmail's native two-key sequences: `gi` inbox, `gs` starred, `gb` snoozed, `gt` sent mail, `gd` drafts, `ga` all mail, `gk` tasks, `gl` label, `gn` next page, and `gp` previous page.\n\nIt also owns `resource_archive`, `resource_next`, and `resource_previous` on Gmail thread pages by pressing Gmail's accessible toolbar buttons, so those actions do not depend on Gmail keyboard shortcuts being enabled.\n"
+        "summary": "Gmail source actions and native shortcut mappings.",
+        "body": "# Gmail\n\nThis bundled plugin applies only when the focused browser URL is `mail.google.com`.\n\nIt maps Gmail's go-to shortcuts in normal mode by sending Gmail's native two-key sequences: `gi` inbox, `gs` starred, `gb` snoozed, `gt` sent mail, `gd` drafts, `ga` all mail, `gk` tasks, `gl` label, `gn` next page, and `gp` previous page. It also maps `o` to Gmail's native open-selected-email shortcut.\n\nIt also owns `resource_archive`, `resource_next`, and `resource_previous` on Gmail thread pages by pressing Gmail's accessible toolbar buttons, so those actions do not depend on Gmail keyboard shortcuts being enabled.\n"
       }
     ]
   }

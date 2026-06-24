@@ -188,6 +188,50 @@ final class SourceRegistry {
     return CandidateFinder.prepare(source.candidates(in: env, scope: scope))
   }
 
+  /// Candidates from the in-process built-in sources only (currently
+  /// `core.apps`). This is the instant first-paint seed when a flashlight
+  /// session opens; plugin location rows are pulled asynchronously via
+  /// `queryCandidates` and merged in as they land (the pull model — the host
+  /// keeps no candidate cache of its own).
+  func synchronousCandidates(scope: CandidateScope) -> [Candidate] {
+    refreshRunningApplications()
+    let env = environment
+    lock.lock()
+    let builtIn = Array(activeSourcesByID.values)
+    lock.unlock()
+    var raw: [Candidate] = []
+    for source in builtIn where source.capabilities.contains(.candidates) {
+      raw.append(contentsOf: source.candidates(in: env, scope: scope))
+    }
+    return CandidateFinder.prepare(raw)
+  }
+
+  /// Plugin candidate sources that contribute location rows to the default
+  /// flashlight pool — those declaring a `kind: .locations` descriptor at normal
+  /// priority or above. Fanned out via `queryCandidates` on flashlight open.
+  /// Built-in sources (e.g. `core.apps`) are excluded; they paint synchronously
+  /// via `synchronousCandidates`.
+  func locationCandidateSources() -> [FlashSource] {
+    pluginSourcesProvider().filter { Self.isLocationCandidateSource($0) }
+  }
+
+  /// Plugin candidate sources that do NOT contribute default-pool location rows
+  /// — emojis, search-engine bangs, notes, contacts, etc. These are pulled
+  /// lazily the first time the user types an `@source`/`!`bang filter, not on
+  /// open.
+  func nonLocationCandidateSources() -> [FlashSource] {
+    pluginSourcesProvider().filter { source in
+      source.capabilities.contains(.candidates) && !Self.isLocationCandidateSource(source)
+    }
+  }
+
+  private static func isLocationCandidateSource(_ source: FlashSource) -> Bool {
+    source.capabilities.contains(.candidates)
+      && source.candidateSourceDescriptors.contains { descriptor in
+        descriptor.kind == .locations && descriptor.priority.rank >= FlashPriority.normal.rank
+      }
+  }
+
   var snapshotEnvironment: FlashSourceEnvironment { environment }
 
   func registeredCandidateSourceLabels() -> [String] {

@@ -204,7 +204,7 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, String, i64)>) {
             candidates.push(candidate);
         }
     }
-    ctx.emit_snapshot(SOURCE_ID, candidates);
+    ctx.set_locations(SOURCE_ID, candidates);
 }
 
 async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {

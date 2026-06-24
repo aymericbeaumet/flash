@@ -77,7 +77,7 @@ struct ProcessRow {
 async fn emit_candidates(ctx: &Context) {
     let rows = list_processes(ctx).await;
     let candidates: Vec<Candidate> = rows.into_iter().map(|row| candidate_for(&row)).collect();
-    ctx.emit_snapshot(SOURCE_ID, candidates);
+    ctx.set_locations(SOURCE_ID, candidates);
 }
 
 fn candidate_for(row: &ProcessRow) -> Candidate {

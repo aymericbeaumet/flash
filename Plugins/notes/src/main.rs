@@ -110,7 +110,7 @@ async fn emit_candidates(ctx: &Context) {
                 }),
         );
     }
-    ctx.emit_snapshot(SOURCE_ID, candidates);
+    ctx.set_locations(SOURCE_ID, candidates);
 }
 
 async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {

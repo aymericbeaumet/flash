@@ -34,7 +34,7 @@ flash_plugin::plugin!(Marks);
 
 impl FlashPlugin for Marks {
     async fn on_start(&self, ctx: Context) {
-        if let Some(loaded) = read_state::<MarksState>(&ctx, STATE_FILE) {
+        if let Some(loaded) = read_state::<MarksState>(&ctx, STATE_FILE).await {
             if let Ok(mut state) = self.state.lock() {
                 *state = loaded;
             }
@@ -109,7 +109,7 @@ async fn set_mark_command(
         state.entries.insert(letter.clone(), entry);
         state.clone()
     };
-    write_state(ctx, STATE_FILE, &snapshot);
+    write_state(ctx, STATE_FILE, &snapshot).await;
     ctx.log(
         "debug",
         &format!(
@@ -159,7 +159,7 @@ async fn jump_to_mark_command(
                 }
                 state.clone()
             };
-            write_state(ctx, STATE_FILE, &snapshot);
+            write_state(ctx, STATE_FILE, &snapshot).await;
             return CommandResponse::ok().target_pid(pid);
         }
     }
@@ -177,14 +177,18 @@ async fn activate_app(ctx: &Context, pid: i64) -> bool {
         .unwrap_or(false)
 }
 
-fn read_state<T: serde::de::DeserializeOwned>(ctx: &Context, name: &str) -> Option<T> {
-    let raw = std::fs::read_to_string(ctx.share_dir().join(name)).ok()?;
+async fn read_state<T: serde::de::DeserializeOwned>(ctx: &Context, name: &str) -> Option<T> {
+    let raw = tokio::fs::read_to_string(ctx.share_dir().join(name))
+        .await
+        .ok()?;
     serde_json::from_str(&raw).ok()
 }
 
-fn write_state<T: serde::Serialize>(ctx: &Context, name: &str, value: &T) -> bool {
+async fn write_state<T: serde::Serialize>(ctx: &Context, name: &str, value: &T) -> bool {
     match serde_json::to_string(value) {
-        Ok(raw) => std::fs::write(ctx.share_dir().join(name), raw).is_ok(),
+        Ok(raw) => tokio::fs::write(ctx.share_dir().join(name), raw)
+            .await
+            .is_ok(),
         Err(_) => false,
     }
 }
