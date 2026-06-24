@@ -287,6 +287,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// (no grant) falls back to the legacy key-window capture in
   /// `captureKeyboardInput`.
   var keyboardCaptureTap: KeyboardCaptureTap?
+  /// Debounces re-resolving URL-scoped plugin mappings when the focused
+  /// document changes without an app-focus change (browser tab/navigation).
+  var urlContextMappingRefreshWork: DispatchWorkItem?
   var windowGeometryChangeToken: UInt64 = 0
   var windowGeometryChangeInProgress = false
   var activeWindowBorderTrackingTimer: DispatchSourceTimer?

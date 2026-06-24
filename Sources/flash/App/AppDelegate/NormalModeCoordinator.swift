@@ -154,6 +154,9 @@ extension AppDelegate {
 
   func focusedWindowGeometryDidChange(pid: pid_t, notification: String) {
     guard let context = currentNonFlashContext(), context.processID == pid else { return }
+    // A browser tab switch / navigation surfaces here (title/window AX changes)
+    // without an app-focus change — re-resolve URL-scoped plugin mappings.
+    scheduleURLContextMappingRefresh(pid: pid)
     if pluginManager.hasListener(for: "core:ax.changed") {
       pluginManager.emit(
         PluginEvent(
@@ -272,11 +275,34 @@ extension AppDelegate {
       || reason == .pointerClick || reason == .explicitCommand
   }
 
-  func focusedInputMayHaveChanged(pid _: pid_t) {
-    // Intentionally a no-op. Mode is no longer driven by focus changes — the
-    // only way to leave INSERT is an explicit keyboard request
-    // (`enterNormalMode`). Focus-following auto-exit was the main source of
-    // non-deterministic transitions and has been removed.
+  func focusedInputMayHaveChanged(pid: pid_t) {
+    // Mode is no longer driven by focus changes — the only way to leave INSERT
+    // is an explicit keyboard request (`enterNormalMode`); focus-following
+    // auto-exit was removed. But URL-scoped plugin mappings (e.g. Gmail's `o`)
+    // must follow the focused document, which can change with no app-focus
+    // change (browser tab switch / in-page navigation), so re-resolve them here.
+    scheduleURLContextMappingRefresh(pid: pid)
+  }
+
+  /// Re-resolve URL-scoped plugin mappings for `pid` (e.g. Gmail's `o`, which
+  /// only applies on `mail.google.com`). The effective set is recomputed on
+  /// app-focus change, but a tab switch or in-page navigation keeps the same
+  /// app focused while the document URL — and thus the applicable mappings —
+  /// changes. Debounced so a burst of AX notifications collapses to a single
+  /// `documentURL` probe + remap; a no-op unless a URL-selector plugin is loaded.
+  func scheduleURLContextMappingRefresh(pid: pid_t) {
+    guard pluginManager.needsURLSelectorContext(),
+      let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    else { return }
+    urlContextMappingRefreshWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self,
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+      else { return }
+      self.refreshEffectiveMappings(for: bundleID, includeURL: true)
+    }
+    urlContextMappingRefreshWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
   }
 
   static func insertModeShouldExitAfterFocusedAppChange(
@@ -1666,7 +1692,7 @@ extension AppDelegate {
       // `"*"` marks a wildcard command (whole remainder is args, e.g.
       // `:calc 2 + 2`); the verb is still completable, but there is no
       // concrete subcommand to suggest.
-      if registration.subcommand == "*" { continue }
+      if registration.subcommand.isEmpty || registration.subcommand == "*" { continue }
       if !subcommands[key]!.contains(where: {
         $0.localizedCaseInsensitiveCompare(registration.subcommand) == .orderedSame
       }) {
