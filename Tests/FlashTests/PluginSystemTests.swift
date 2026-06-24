@@ -32,6 +32,16 @@ final class PluginSystemTests: XCTestCase {
           "\(manifest.id) is missing the run subcommand")
       }
     }
+    for root in roots {
+      let data = try Data(contentsOf: root.appendingPathComponent("manifest.json"))
+      let object = try XCTUnwrap(
+        try JSONSerialization.jsonObject(with: data) as? [String: Any])
+      for source in object["sources"] as? [[String: Any]] ?? [] {
+        XCTAssertNotNil(
+          source["priority"],
+          "\(root.lastPathComponent) source \(source["name"] ?? "<unnamed>") must declare priority")
+      }
+    }
     let tmux = try XCTUnwrap(manifests.first { $0.id == "tmux" })
     XCTAssertEqual(tmux.install, "true")
     XCTAssertEqual(tmux.start, "exec ./flash-plugin-tmux")
@@ -43,18 +53,21 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(tmux.navigationSchemes, ["tmux"])
     XCTAssertEqual(
       tmux.candidateSourceDescriptors,
-      [CandidateSourceDescriptor(name: "tmux.windows", kind: .locations)])
+      [CandidateSourceDescriptor(name: "tmux.windows", kind: .locations, priority: .high)])
     for id in ["chromium", "firefox", "safari"] {
       let manifest = try XCTUnwrap(manifests.first { $0.id == id })
       XCTAssertFalse(manifest.candidateSourceDescriptors.isEmpty)
       XCTAssertTrue(
         manifest.candidateSourceDescriptors.allSatisfy { $0.kind == .locations },
         "\(id) must classify tab sources as locations")
+      XCTAssertTrue(
+        manifest.candidateSourceDescriptors.allSatisfy { $0.priority == .high },
+        "\(id) must rank tab sources as high-priority locations")
     }
     let slack = try XCTUnwrap(manifests.first { $0.id == "slack" })
     XCTAssertEqual(
       slack.candidateSourceDescriptors,
-      [CandidateSourceDescriptor(name: "slack.channels", kind: .locations)])
+      [CandidateSourceDescriptor(name: "slack.channels", kind: .locations, priority: .high)])
     let defaults = try XCTUnwrap(manifests.first { $0.id == "defaults" })
     XCTAssertEqual(
       Set(defaults.verbs.map(\.name)),
@@ -153,6 +166,10 @@ final class PluginSystemTests: XCTestCase {
     for (pluginID, binary) in cases {
       try runPluginSmoke(pluginID: pluginID, binary: binary)
     }
+  }
+
+  func testRustPluginExitsWhenDeclaredParentProcessExits() throws {
+    try runPluginParentDeathSmoke(pluginID: "calculator")
   }
 
   func testManifestRootDiscoveryFollowsSymlinkedBundleDirectory() throws {
@@ -767,6 +784,72 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(responseOK(id: 1, messages: messages), true, collector.raw())
     XCTAssertEqual(responseOK(id: -1, messages: messages), true, collector.raw())
     XCTAssertEqual(responseOK(id: 2, messages: messages), true, collector.raw())
+  }
+
+  private func runPluginParentDeathSmoke(pluginID: String) throws {
+    let pluginRoot = repositoryRoot().appendingPathComponent("Plugins/\(pluginID)")
+    let binaryURL = pluginRoot.appendingPathComponent("flash-plugin-\(pluginID)")
+    guard FileManager.default.isExecutableFile(atPath: binaryURL.path) else {
+      throw XCTSkip(
+        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the parent-death smoke test"
+      )
+    }
+
+    let temp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-plugin-parent-\(pluginID)-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: temp) }
+    let dataDir = temp.appendingPathComponent("data")
+    try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+
+    let parent = Process()
+    parent.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    parent.arguments = ["0.2"]
+    try parent.run()
+    defer {
+      if parent.isRunning {
+        parent.terminate()
+      }
+    }
+
+    let process = Process()
+    process.executableURL = binaryURL
+    process.currentDirectoryURL = pluginRoot
+    var env = ProcessInfo.processInfo.environment
+    env["FLASH_PLUGIN_ID"] = pluginID
+    env["FLASH_PLUGIN_VERSION"] = "0.1.0"
+    env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
+    env["FLASH_PLUGIN_PARENT_PID"] = String(parent.processIdentifier)
+    process.environment = env
+
+    let stdin = Pipe()
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardInput = stdin
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    let finished = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in finished.signal() }
+    try process.run()
+    defer {
+      if process.isRunning {
+        process.terminate()
+      }
+      stdin.fileHandleForWriting.closeFile()
+    }
+
+    parent.waitUntilExit()
+    if finished.wait(timeout: .now() + 3) != .success {
+      XCTFail("\(pluginID) plugin did not exit after declared parent exited")
+      return
+    }
+
+    _ = stdout.fileHandleForReading.readDataToEndOfFile()
+    let stderrBody =
+      String(
+        data: stderr.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8) ?? ""
+    XCTAssertEqual(process.terminationStatus, 0, stderrBody)
   }
 
   private func responseOK(id: Int, messages: [[String: Any]]) -> Bool? {

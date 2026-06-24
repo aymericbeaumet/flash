@@ -37,7 +37,7 @@ final class AppMonitor {
   let registry: SourceRegistry
 
   let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
-  var focusedElementDidChange: ((pid_t) -> Void)?
+  var focusedElementDidChange: ((pid_t, String) -> Void)?
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
   var focusedWindowGeometryDidChange: ((pid_t, String) -> Void)?
 
@@ -84,6 +84,7 @@ final class AppMonitor {
   static let modelFreshnessMs: Int = 1500
   static let modelDebounceMs: Int = 80
   static let modelMaintenanceLeadMs: Int = 250
+  static let backgroundModelMinIntervalMs: Int = 2500
 
   init(registry: SourceRegistry, config: Config) {
     self.registry = registry
@@ -111,6 +112,7 @@ final class AppMonitor {
   var modelRefreshDeadline: [pid_t: DispatchTime] = [:]
   var modelRefreshReason: [pid_t: String] = [:]
   var maintenanceRefresh: [pid_t: DispatchWorkItem] = [:]
+  var lastBackgroundModelRefreshAt: [pid_t: DispatchTime] = [:]
   /// Only the latest activation waiter matters — earlier waiters are
   /// stale activations whose generation has already moved on. A scalar
   /// per pid replaces the previous unbounded array; if a second
@@ -157,10 +159,10 @@ final class AppMonitor {
   }
 
   /// AX notifications we subscribe to per focused app. Any one of these
-  /// invalidates the prepared model (bumps `dirtyTokens[pid]`) and schedules a
-  /// debounced rebuild. The set is intentionally generous — false
-  /// positives only cost an 80-ms-debounced background walk, while
-  /// false negatives serve stale hints.
+  /// invalidates the prepared model (bumps `dirtyTokens[pid]`). Only
+  /// structural notifications schedule a background rebuild; value/title churn
+  /// is common during media playback and should make the next activation walk
+  /// fresh without spending background AX time.
   static let observedNotifications: [String] = [
     kAXFocusedUIElementChangedNotification,
     kAXFocusedWindowChangedNotification,
@@ -177,6 +179,11 @@ final class AppMonitor {
     kAXRowExpandedNotification,
     kAXRowCollapsedNotification,
   ]
+
+  static func notificationShouldSchedulePreparedModelRefresh(_ notification: String) -> Bool {
+    notification != kAXValueChangedNotification as String
+      && notification != kAXTitleChangedNotification as String
+  }
 
   static func windowGeometryNotificationRequiresBorderSuspension(_ notification: String) -> Bool {
     notification == kAXWindowMovedNotification

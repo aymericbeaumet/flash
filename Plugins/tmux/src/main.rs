@@ -60,7 +60,7 @@ use std::time::Duration;
 
 use flash_plugin::{
     run, ActivateRequest, Candidate, CommandRequest, CommandResponse, Context, DiscoverRequest,
-    DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, ResolveResponse,
+    DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, Priority, ResolveResponse,
     SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
@@ -793,7 +793,7 @@ fn build_target(
     pid: i64,
     enters_insert_mode: bool,
     prefer_host_click: bool,
-    important: bool,
+    priority: Priority,
 ) -> JumpTarget {
     JumpTarget::new(target_id, Frame::new(x, y, width, height))
         .role(role)
@@ -802,7 +802,7 @@ fn build_target(
         .pid(pid)
         .source_id(SOURCE_ID)
         .prefer_host_click(prefer_host_click)
-        .important(important)
+        .priority(priority)
 }
 
 async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> DiscoverResponse {
@@ -949,11 +949,10 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             // forwarder, so tmux selects the pane before the next
             // keystroke is delivered.
             true,
-            // Important: pane chips are the structural anchors of a
-            // tmux window, so the renderer paints them in the accent
-            // style. Link chips below are everyday clutter and stay
-            // in the default yellow.
-            true,
+            // Pane chips are the structural anchors of a tmux window, so the
+            // renderer paints them in the accent style. Link chips below are
+            // everyday clutter and stay in the default yellow.
+            Priority::Critical,
         ));
         actions.insert(
             target_id,
@@ -1017,7 +1016,7 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             pid,
             false,
             false,
-            false,
+            Priority::Normal,
         ));
         actions.insert(target_id, TargetAction::Link { text: link.text });
     }

@@ -154,13 +154,15 @@ extension AppDelegate {
 
   func focusedWindowGeometryDidChange(pid: pid_t, notification: String) {
     guard let context = currentNonFlashContext(), context.processID == pid else { return }
-    pluginManager.emit(
-      PluginEvent(
-        name: "core:ax.changed",
-        payload: ["notification": notification, "pid": Int(pid)],
-        bundleID: context.bundleIdentifier,
-        configPath: nil,
-        focused: true))
+    if pluginManager.hasListener(for: "core:ax.changed") {
+      pluginManager.emit(
+        PluginEvent(
+          name: "core:ax.changed",
+          payload: ["notification": notification, "pid": Int(pid)],
+          bundleID: context.bundleIdentifier,
+          configPath: nil,
+          focused: true))
+    }
     // The focused-window-changed and main-window-changed AX notifications are
     // exactly the signal plugins want to react to when they care about *which*
     // window inside an app is on top (e.g. an iTerm/Alacritty plugin watching
@@ -412,13 +414,9 @@ extension AppDelegate {
     let mode = modeStore.mode
     let hasHints = !currentHints.isEmpty
     let inFlight = activationInFlight
-    let sourceResolutionSuppressed = sourceResolutionCaptureSuppressionIsActive()
     let inputMode = mode.overlayInputMode(hasHints: hasHints, activationInFlight: inFlight)
-    var capture =
+    let capture =
       captureOverride ?? mode.ownsKeyboard(hasHints: hasHints, activationInFlight: inFlight)
-    if sourceResolutionSuppressed {
-      capture = false
-    }
     let text = modeLabelText(mode.label)
     FlashLog.trace(
       "[mode] overlay mode=\(mode) input=\(inputMode) capture=\(capture) "
@@ -448,7 +446,7 @@ extension AppDelegate {
     editableFocusSuppressedPID = pid
   }
 
-  func scheduleNormalModeRecapture() {
+  func scheduleNormalModeRecapture(delaysMs: [Int] = AppDelegate.normalModeRecaptureDelaysMs) {
     if Self.contextMenuInteractionRecaptureSuppressionIsActive(
       until: contextMenuInteractionRecaptureSuppressedUntil)
     {
@@ -473,10 +471,11 @@ extension AppDelegate {
     normalModeRecaptureToken &+= 1
     let token = normalModeRecaptureToken
     cancelNormalModeCaptureRecovery(reason: "new_recapture")
+    let delays = delaysMs.isEmpty ? [0] : delaysMs
     FlashLog.trace(
       "[mode] schedule_recapture token=\(token) delays="
-        + Self.normalModeRecaptureDelaysMs.map(String.init).joined(separator: ","))
-    for delayMs in Self.normalModeRecaptureDelaysMs {
+        + delays.map(String.init).joined(separator: ","))
+    for delayMs in delays {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
         guard let self else { return }
         guard self.normalModeRecaptureToken == token else {
@@ -494,45 +493,6 @@ extension AppDelegate {
         self.applyModeOverlay(captureOverride: true)
       }
     }
-  }
-
-  func suppressNormalModeCaptureForSourceResolution(durationMs: Int = 6_000) {
-    let duration = max(1, durationMs)
-    normalModeSourceResolutionCaptureSuppressionToken &+= 1
-    let token = normalModeSourceResolutionCaptureSuppressionToken
-    normalModeSourceResolutionCaptureSuppressedUntil = Date().addingTimeInterval(
-      Double(duration) / 1_000.0)
-    normalModeRecaptureToken &+= 1
-    cancelNormalModeCaptureRecovery(reason: "source_resolution")
-    FlashLog.trace("[mode] source_resolution_capture_suppressed token=\(token) ms=\(duration)")
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(duration)) { [weak self] in
-      guard let self, self.normalModeSourceResolutionCaptureSuppressionToken == token else {
-        return
-      }
-      guard self.normalModeSourceResolutionCaptureSuppressedUntil != nil else { return }
-      self.clearNormalModeCaptureSuppression(reason: "source_resolution_timeout")
-      self.scheduleNormalModeRecapture()
-    }
-  }
-
-  func clearNormalModeCaptureSuppression(reason: String) {
-    guard normalModeSourceResolutionCaptureSuppressedUntil != nil else { return }
-    normalModeSourceResolutionCaptureSuppressionToken &+= 1
-    normalModeSourceResolutionCaptureSuppressedUntil = nil
-    FlashLog.trace("[mode] source_resolution_capture_resumed reason=\(reason)")
-  }
-
-  func sourceResolutionCaptureSuppressionIsActive(now: Date = Date()) -> Bool {
-    if Self.sourceResolutionCaptureSuppressionIsActive(
-      until: normalModeSourceResolutionCaptureSuppressedUntil,
-      now: now)
-    {
-      return true
-    }
-    if normalModeSourceResolutionCaptureSuppressedUntil != nil {
-      normalModeSourceResolutionCaptureSuppressedUntil = nil
-    }
-    return false
   }
 
   func noteMenuBarInteraction(reason: String, now: Date = Date()) {
@@ -618,8 +578,6 @@ extension AppDelegate {
         contextMenuInteractionRecaptureSuppressedUntil,
       pointerInsertHandoffRecaptureSuppressedUntil:
         pointerInsertHandoffRecaptureSuppressedUntil,
-      sourceResolutionCaptureSuppressedUntil:
-        normalModeSourceResolutionCaptureSuppressedUntil,
       now: now)
     if !shouldRecapture,
       Self.menuBarInteractionRecaptureSuppressionIsActive(
@@ -642,13 +600,6 @@ extension AppDelegate {
     {
       FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
     }
-    if !shouldRecapture,
-      Self.sourceResolutionCaptureSuppressionIsActive(
-        until: normalModeSourceResolutionCaptureSuppressedUntil,
-        now: now)
-    {
-      FlashLog.trace("[mode] recapture_skip reason=source_resolution")
-    }
     if menuBarInteractionRecaptureSuppressedUntil.map({ $0 <= now }) == true {
       menuBarInteractionRecaptureSuppressedUntil = nil
     }
@@ -658,9 +609,6 @@ extension AppDelegate {
     if pointerInsertHandoffRecaptureSuppressedUntil.map({ $0 <= now }) == true {
       pointerInsertHandoffRecaptureSuppressedUntil = nil
     }
-    if normalModeSourceResolutionCaptureSuppressedUntil.map({ $0 <= now }) == true {
-      normalModeSourceResolutionCaptureSuppressedUntil = nil
-    }
     return shouldRecapture
   }
 
@@ -669,7 +617,6 @@ extension AppDelegate {
     menuBarInteractionRecaptureSuppressedUntil: Date?,
     contextMenuInteractionRecaptureSuppressedUntil: Date? = nil,
     pointerInsertHandoffRecaptureSuppressedUntil: Date? = nil,
-    sourceResolutionCaptureSuppressedUntil: Date? = nil,
     now: Date
   ) -> Bool {
     mode == .normal
@@ -682,9 +629,6 @@ extension AppDelegate {
       && !pointerInsertHandoffRecaptureSuppressionIsActive(
         until: pointerInsertHandoffRecaptureSuppressedUntil,
         now: now)
-      && !sourceResolutionCaptureSuppressionIsActive(
-        until: sourceResolutionCaptureSuppressedUntil,
-        now: now)
   }
 
   static func menuBarInteractionRecaptureSuppressionIsActive(
@@ -696,14 +640,6 @@ extension AppDelegate {
   }
 
   static func contextMenuInteractionRecaptureSuppressionIsActive(
-    until: Date?,
-    now: Date = Date()
-  ) -> Bool {
-    guard let until else { return false }
-    return now < until
-  }
-
-  static func sourceResolutionCaptureSuppressionIsActive(
     until: Date?,
     now: Date = Date()
   ) -> Bool {
@@ -965,6 +901,7 @@ extension AppDelegate {
   }
 
   static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]
+  static let normalModeFocusChangingRecaptureDelaysMs = [0, 1, 4, 8, 16, 30, 60, 120, 250, 500, 900, 1_400]
   static let normalModeCaptureRecoveryDelaysMs = [250, 750, 1_500, 3_000]
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
@@ -1064,17 +1001,15 @@ extension AppDelegate {
   }
 
   var shouldCaptureNormalModeInput: Bool {
-    let sourceResolutionSuppressed = sourceResolutionCaptureSuppressionIsActive()
     return Self.normalModeShouldOwnKeyboardInput(
       mode: flashMode,
       overlayInputMode: overlay.inputMode,
       hasHints: !currentHints.isEmpty,
-      activationInFlight: activationInFlight,
-      sourceResolutionCaptureSuppressed: sourceResolutionSuppressed)
+      activationInFlight: activationInFlight)
   }
 
   @discardableResult
-  func guardNormalModeInputAfterActionDispatch() -> Bool {
+  func guardNormalModeInputAfterActionDispatch(force: Bool = false) -> Bool {
     guard shouldCaptureNormalModeInput else { return false }
     // If the panel already owns the key window AND is routing as normal, the
     // command didn't disturb focus (the common case for scroll/tab/vim
@@ -1084,7 +1019,7 @@ extension AppDelegate {
     // to the focused app ("fires late / lands in the wrong window"). Only
     // re-assert when key was actually lost (e.g. the command activated another
     // app) or the input routing is stale.
-    if overlay.isKeyWindow, overlay.inputMode == .normal { return false }
+    if !force, overlay.keyboardCaptureIsActive, overlay.inputMode == .normal { return false }
     applyModeOverlay(captureOverride: true)
     return true
   }
@@ -1106,12 +1041,9 @@ extension AppDelegate {
     mode: FlashMode,
     overlayInputMode: OverlayInputMode,
     hasHints: Bool,
-    activationInFlight: Bool,
-    sourceResolutionCaptureSuppressed: Bool = false
+    activationInFlight: Bool
   ) -> Bool {
-    guard mode == .normal, !hasHints, !activationInFlight,
-      !sourceResolutionCaptureSuppressed
-    else { return false }
+    guard mode == .normal, !hasHints, !activationInFlight else { return false }
     switch overlayInputMode {
     case .hints, .normal:
       return true
@@ -1122,6 +1054,42 @@ extension AppDelegate {
 
   func hasNormalModeBinding(_ cfg: Config) -> Bool {
     cfg.mode.containsAdvancedModeMapping
+  }
+
+  func dispatchNativeMappingAction(_ action: MappingCommand) {
+    let wasNormal = flashMode == .normal
+    if wasNormal {
+      overlay.normalModePending = ""
+      normalModePendingCommandToken &+= 1
+    }
+    performMappingCommand(action)
+    guard wasNormal else { return }
+    let focusChanging = Self.normalModeActionMayChangeKeyboardFocus(action)
+    if guardNormalModeInputAfterActionDispatch(force: focusChanging) {
+      scheduleNormalModeRecapture(
+        delaysMs: focusChanging
+          ? Self.normalModeFocusChangingRecaptureDelaysMs
+          : Self.normalModeRecaptureDelaysMs)
+    }
+  }
+
+  static func normalModeActionMayChangeKeyboardFocus(_ action: MappingCommand) -> Bool {
+    switch action {
+    case .shellCommand:
+      return true
+    case .flashCommand(let command):
+      return normalModeCommandMayChangeKeyboardFocus(command)
+    }
+  }
+
+  static func normalModeCommandMayChangeKeyboardFocus(_ command: URLCommand) -> Bool {
+    switch command {
+    case .openApp, .pluginCommand, .pluginVerb, .appPrev, .appNext,
+      .movementBack, .movementForward, .quitApp, .saveAndQuit:
+      return true
+    default:
+      return false
+    }
   }
 
   func performMappedCommand(_ command: URLCommand, repeatCount: Int = 1) {

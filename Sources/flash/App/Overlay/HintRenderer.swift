@@ -67,7 +67,7 @@ extension OverlayPanel {
     // with a different length.
     let gradientColors: [CGColor] = [bgBottom.cgColor, bgTop.cgColor]
     let borderCG = border?.cgColor ?? OverlayPanel.fallbackBorderCGColor
-    // Important hints (tmux panes, browser tabs) read from a parallel
+    // Critical hints (tmux panes, browser tabs) read from a parallel
     // set of `overlay.important_hint_*` config keys so the user can
     // restyle them without rebuilding. Fall back to the regular hint
     // palette when a key fails to parse — a malformed colour leaves
@@ -296,7 +296,7 @@ extension OverlayPanel {
             NSColor(cgColor: borderCG)?
             .withAlphaComponent(min(1, alpha + 0.2))
             .cgColor ?? borderCG
-        } else if hint.target.important {
+        } else if hint.target.priority.usesAccentHintStyle {
           chip.colors = importantGradientColors
           chip.borderColor = importantBorderCG
           label.foregroundColor = importantFGCG
@@ -491,14 +491,14 @@ extension OverlayPanel {
         // string's weight — see the note in `display(hints:)`. Cheap;
         // CATextLayer compares font references and noops on equal.
         l.font = labelFont
-        // Memoise per `(display, typedPrefixLen, important)` — the
-        // important variant's fg colour differs, so it can't share
-        // the regular cache key.
-        let labelFG: NSColor = hint.target.important ? importantFGNS : fgNS
+        let accented = hint.target.priority.usesAccentHintStyle
+        // Memoise per `(display, typedPrefixLen, accented)` — the accent
+        // variant's fg colour differs, so it can't share the regular cache key.
+        let labelFG: NSColor = accented ? importantFGNS : fgNS
         let key = AttributedLabelKey(
           display: hint.display,
           typedPrefixLen: prefixLen,
-          important: hint.target.important)
+          accented: accented)
         if let cached = cache[key] {
           l.string = cached
         } else {
@@ -519,7 +519,7 @@ extension OverlayPanel {
   private struct AttributedLabelKey: Hashable {
     let display: String
     let typedPrefixLen: Int
-    let important: Bool
+    let accented: Bool
   }
 
   /// Centered paragraph style — immutable, allocated once.

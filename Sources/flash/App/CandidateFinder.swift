@@ -687,9 +687,9 @@ enum CandidateFinder {
     /// fast-path the strict top band without a separate flag.
     var weight: Int
     /// Source-provided same-score nudge. This is deliberately below match
-    /// quality and source-band ranking so "important" rows never outrank a
-    /// better textual match.
-    var priority: Int
+    /// quality and source-band ranking so salient rows never outrank a better
+    /// textual match.
+    var priority: FlashPriority
     var alive: Bool
     var key: String
     var sourceID: String
@@ -853,7 +853,9 @@ enum CandidateFinder {
       for source in sources {
         let pattern = source.name.trimmed.lowercased()
         guard !pattern.isEmpty else { continue }
-        records[pattern] = (Self.defaultWeight(for: source.kind), source.kind)
+        records[pattern] = (
+          Self.defaultWeight(for: source.kind) + source.priority.rankingWeight,
+          source.kind)
       }
       for (pattern, weight) in overrides {
         let pattern = pattern.trimmed.lowercased()

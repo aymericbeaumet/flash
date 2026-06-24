@@ -22,12 +22,14 @@
     "core:flash.started",
     "core:apps.snapshot",
     "core:focus.changed",
-    "core:ax.changed"
+    "core:window.focus.changed",
+    "core:flashlight.opened"
   ],
   "sources": [
     {
       "name": "firefox.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     }
   ],
   "source_actions": [

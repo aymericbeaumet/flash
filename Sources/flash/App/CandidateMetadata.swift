@@ -53,9 +53,9 @@ extension Candidate {
   var searchAliases: String { metadata[CandidateMetadataKey.aliases] ?? "" }
   var finishesCommand: Bool { metadata[CandidateMetadataKey.finishesCommand] == "1" }
   var isCurrentLocation: Bool { metadata[CandidateMetadataKey.currentLocation] == "1" }
-  var priority: Int {
-    guard let raw = metadata[CandidateMetadataKey.priority] else { return 0 }
-    return Int(raw) ?? 0
+  var priority: FlashPriority {
+    guard let raw = metadata[CandidateMetadataKey.priority] else { return .normal }
+    return FlashPriority(rawValue: raw) ?? .normal
   }
 
   /// Build a candidate from the conventional host-side fields. `title` and `url`
@@ -76,7 +76,7 @@ extension Candidate {
     finishesCommand: Bool = false,
     isLocation: Bool = false,
     isCurrentLocation: Bool = false,
-    priority: Int = 0,
+    priority: FlashPriority = .normal,
     extra: [String: String] = [:]
   ) {
     var metadata = extra
@@ -94,7 +94,7 @@ extension Candidate {
     if !searchAliases.isEmpty { metadata[CandidateMetadataKey.aliases] = searchAliases }
     if finishesCommand { metadata[CandidateMetadataKey.finishesCommand] = "1" }
     if isCurrentLocation { metadata[CandidateMetadataKey.currentLocation] = "1" }
-    if priority != 0 { metadata[CandidateMetadataKey.priority] = String(priority) }
+    if priority != .normal { metadata[CandidateMetadataKey.priority] = priority.rawValue }
     self.init(title: title, url: url, metadata: metadata)
   }
 

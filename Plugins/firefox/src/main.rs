@@ -53,7 +53,7 @@ flash_plugin::plugin!(Firefox);
 impl FlashPlugin for Firefox {
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
-            "core:apps.snapshot" => {
+            "core:apps.snapshot" | "core:flashlight.opened" => {
                 let apps = event
                     .running_applications
                     .iter()
@@ -62,7 +62,7 @@ impl FlashPlugin for Firefox {
                     .collect::<Vec<_>>();
                 refresh_snapshot(&ctx, apps).await;
             }
-            "core:focus.changed" | "core:ax.changed" => {
+            "core:focus.changed" | "core:window.focus.changed" => {
                 let bundle = event.bundle_id.unwrap_or_default();
                 let Some(pid) = event.pid else {
                     return;
@@ -107,7 +107,7 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, i64)>) {
         candidates.extend(tabs.iter().map(|tab| candidate(tab, &source, pid)));
     }
     if candidates.is_empty() {
-        ctx.log("warn", "[firefox] skipped empty tab snapshot");
+        ctx.log("debug", "[firefox] skipped empty tab snapshot");
         return;
     }
     ctx.emit_snapshot(SOURCE_ID, candidates);

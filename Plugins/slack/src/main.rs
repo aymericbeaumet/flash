@@ -3,10 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, Candidate, CommandRequest, CommandResponse, Context, Event, NavigationRequest,
+    run, Candidate, CommandRequest, CommandResponse, Context, Event, NavigationRequest, Priority,
     ResolveResponse, SourceActionResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,7 @@ const CHANNEL_COLLECT: &[&str] = &[
 /// threads, the workspace switcher). The visit budget matches the old
 /// walk so busy workspaces don't silently truncate.
 const MAX_NODES: u64 = 30_000;
+const LOCAL_STORAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Sidebar labels that match the channel-row shape (AXOutlineRow under
 /// the navigator) but are Slack's own chrome rather than user channels.
@@ -94,6 +95,7 @@ const NON_CHANNEL_LABELS: &[&str] = &[
 /// re-renders. Keyed by pid → durable route key when known, otherwise
 /// a workspace-qualified lowercased name.
 static SESSION_CACHE: OnceLock<Mutex<HashMap<i64, HashMap<String, Channel>>>> = OnceLock::new();
+static LOCAL_STORAGE_LAST_SEEDED: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 /// Workspace metadata parsed from `root-state.json`: team_id → workspace.
 static WORKSPACES: OnceLock<Mutex<HashMap<String, Workspace>>> = OnceLock::new();
 /// Archived channels discovered from durable inventory sources. When present,
@@ -162,14 +164,14 @@ impl FlashPlugin for Slack {
     async fn on_start(&self, ctx: Context) {
         refresh_workspaces(&ctx);
         seed_from_slack_api(&ctx).await;
-        seed_from_local_storage(&ctx);
+        seed_from_local_storage_if_stale(&ctx, true);
         seed_from_config(&ctx);
-        refresh_snapshot(&ctx, Vec::new()).await;
+        ctx.emit_snapshot(CHANNEL_SOURCE_ID, session_candidates());
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
-            "core:apps.snapshot" => {
+            "core:apps.snapshot" | "core:flashlight.opened" => {
                 let pids = event
                     .running_applications
                     .iter()
@@ -182,11 +184,11 @@ impl FlashPlugin for Slack {
             "core:config.changed" => {
                 refresh_workspaces(&ctx);
                 seed_from_slack_api(&ctx).await;
-                seed_from_local_storage(&ctx);
+                seed_from_local_storage_if_stale(&ctx, true);
                 seed_from_config(&ctx);
                 refresh_snapshot(&ctx, Vec::new()).await;
             }
-            "core:focus.changed" | "core:ax.changed" => {
+            "core:focus.changed" | "core:window.focus.changed" => {
                 let bundle = event.bundle_id.unwrap_or_default();
                 let Some(pid) = event.pid else {
                     return;
@@ -217,7 +219,7 @@ impl FlashPlugin for Slack {
 }
 
 async fn refresh_snapshot(ctx: &Context, pids: Vec<i64>) {
-    seed_from_local_storage(ctx);
+    seed_from_local_storage_if_stale(ctx, false);
     for pid in &pids {
         let fresh = collect_ax_channels(ctx, *pid).await;
         merge_into_session_cache(*pid, fresh);
@@ -720,21 +722,18 @@ fn merge_channel(into: &mut Channel, other: Channel) {
     }
 }
 
-fn channel_priority(channel: &Channel) -> i32 {
-    let mut priority = 0;
+fn channel_priority(channel: &Channel) -> Priority {
     if channel.current {
-        priority += 300;
+        Priority::Critical
+    } else if channel.unread {
+        Priority::High
+    } else if channel.starred {
+        Priority::High
+    } else if channel.channel_id.is_some() {
+        Priority::Normal
+    } else {
+        Priority::Background
     }
-    if channel.unread {
-        priority += 200;
-    }
-    if channel.starred {
-        priority += 100;
-    }
-    if channel.channel_id.is_some() {
-        priority += 10;
-    }
-    priority
 }
 
 fn archived_channel_ids_snapshot() -> HashSet<String> {
@@ -813,6 +812,24 @@ fn expand_home(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+fn seed_from_local_storage_if_stale(ctx: &Context, force: bool) {
+    let now = Instant::now();
+    let cell = LOCAL_STORAGE_LAST_SEEDED.get_or_init(|| Mutex::new(None));
+    let Ok(mut last) = cell.lock() else {
+        return seed_from_local_storage(ctx);
+    };
+    if !force
+        && last
+            .as_ref()
+            .is_some_and(|instant| now.duration_since(*instant) < LOCAL_STORAGE_REFRESH_INTERVAL)
+    {
+        return;
+    }
+    *last = Some(now);
+    drop(last);
+    seed_from_local_storage(ctx);
 }
 
 fn seed_from_local_storage(ctx: &Context) {

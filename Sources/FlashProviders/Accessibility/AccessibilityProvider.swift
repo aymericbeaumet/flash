@@ -358,7 +358,7 @@ public final class AccessibilityProvider: FlashSource {
       //      `AXRadioButton`/`AXButton` with
       //      subrole `AXTabButton`; surfacing the
       //      subrole lets the walk paint those as
-      //      `important` (tab-strip anchors) in
+      //      high-priority (tab-strip anchors) in
       //      one IPC round-trip.
       kAXDocumentAttribute,  // 11
     ] as CFArray
@@ -636,11 +636,11 @@ public final class AccessibilityProvider: FlashSource {
           return false
         }
       }
-      // Browser tab strips report their entries either as native
-      // `AXTab` or as `AXRadioButton` / `AXButton` with subrole
-      // `AXTabButton` (Firefox + Chromium). Marking them `important`
-      // signals the renderer to paint them in the accent style so the
-      // user can pick out tabs from a dense element grid at a glance.
+      // Browser tab strips report their entries either as native `AXTab` or as
+      // `AXRadioButton` / `AXButton` with subrole `AXTabButton` (Firefox +
+      // Chromium). Raising their priority signals the renderer to paint them in
+      // the accent style so the user can pick out tabs from a dense element grid
+      // at a glance.
       let isTabAnchor =
         capturedRole == "AXTab"
         || (subrole == "AXTabButton"
@@ -673,7 +673,7 @@ public final class AccessibilityProvider: FlashSource {
         resolveClickPoint: resolveClickPoint,
         entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
         preferHostClick: preferHostClick,
-        important: isTabAnchor,
+        priority: isTabAnchor ? .critical : .normal,
         providerID: identifier
       )
       let isRowOrCell = capturedRole == "AXRow" || capturedRole == "AXCell"

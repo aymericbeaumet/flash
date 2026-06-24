@@ -31,7 +31,8 @@
   ],
   "sources": [
     {
-      "name": "processes.processes"
+      "name": "processes.processes",
+      "priority": "normal"
     }
   ]
 }

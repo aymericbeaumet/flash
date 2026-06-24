@@ -36,7 +36,8 @@
   "sources": [
     {
       "name": "safari.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     }
   ],
   "source_actions": [

@@ -20,6 +20,7 @@ extension AppMonitor {
     modelRefreshReason.removeValue(forKey: pid)
     maintenanceRefresh[pid]?.cancel()
     maintenanceRefresh.removeValue(forKey: pid)
+    lastBackgroundModelRefreshAt.removeValue(forKey: pid)
     pendingModelCompletion.removeValue(forKey: pid)
   }
 
@@ -29,6 +30,7 @@ extension AppMonitor {
     modelRefreshReason.removeAll()
     for work in maintenanceRefresh.values { work.cancel() }
     maintenanceRefresh.removeAll()
+    lastBackgroundModelRefreshAt.removeAll()
     pendingModelCompletion.removeAll()
   }
 
@@ -38,11 +40,35 @@ extension AppMonitor {
   /// (e.g. scrolling) stays quiet until it settles. We allocate at
   /// most one in-flight closure per pid for the whole burst.
   func scheduleModelRefresh(for pid: pid_t, reason: String) {
-    let deadline = DispatchTime.now() + .milliseconds(Self.modelDebounceMs)
+    let now = DispatchTime.now()
+    let deadline = backgroundModelRefreshDeadline(pid: pid, reason: reason, now: now)
     modelRefreshDeadline[pid] = deadline
     modelRefreshReason[pid] = reason
     guard modelRefreshArmed.insert(pid).inserted else { return }
     armRefreshTimer(pid: pid, deadline: deadline)
+  }
+
+  private func backgroundModelRefreshDeadline(
+    pid: pid_t,
+    reason: String,
+    now: DispatchTime
+  ) -> DispatchTime {
+    var deadline = now + .milliseconds(Self.modelDebounceMs)
+    guard Self.backgroundModelRefreshShouldThrottle(reason: reason),
+      let last = lastBackgroundModelRefreshAt[pid]
+    else {
+      return deadline
+    }
+    let minIntervalNs = UInt64(Self.backgroundModelMinIntervalMs) * 1_000_000
+    let earliest = DispatchTime(uptimeNanoseconds: last.uptimeNanoseconds + minIntervalNs)
+    if deadline.uptimeNanoseconds < earliest.uptimeNanoseconds {
+      deadline = earliest
+    }
+    return deadline
+  }
+
+  static func backgroundModelRefreshShouldThrottle(reason: String) -> Bool {
+    reason.hasPrefix("ax:") || reason == "queued" || reason == "maintenance"
   }
 
   private func armRefreshTimer(pid: pid_t, deadline: DispatchTime) {
@@ -98,14 +124,14 @@ extension AppMonitor {
       completion?(nil)
       return
     }
-    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
-      completion?(nil)
-      return
-    }
     // Only prepare the front app. Background-app walks would compete
     // with the user's active app for AX IPC bandwidth and produce hints
     // that'd never be served.
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+      completion?(nil)
+      return
+    }
+    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
       completion?(nil)
       return
     }
@@ -127,6 +153,9 @@ extension AppMonitor {
     guard !providers.isEmpty else {
       completion?(nil)
       return
+    }
+    if completion == nil {
+      lastBackgroundModelRefreshAt[pid] = DispatchTime.now()
     }
     guard preparedModels.beginRebuild(pid: pid) else {
       // Last-writer-wins: only the latest activation waiter matters,

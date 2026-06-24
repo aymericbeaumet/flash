@@ -40,14 +40,16 @@
   "listen": [
     "core:apps.*",
     "core:focus.changed",
-    "core:ax.changed",
+    "core:window.focus.changed",
+    "core:flashlight.opened",
     "core:apps.snapshot",
     "core:config.*"
   ],
   "sources": [
     {
       "name": "slack.channels",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     }
   ]
 }

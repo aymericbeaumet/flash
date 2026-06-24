@@ -61,6 +61,7 @@ kill_all_flash() {
   fi
   pkill -f "/Applications/$APP_NAME.app/Contents/MacOS/flash" 2>/dev/null || true
   pkill -f "$STAGING_PATH/Contents/MacOS/flash" 2>/dev/null || true
+  pkill -f "./flash-plugin-" 2>/dev/null || true
   killall "$APP_NAME" 2>/dev/null || true
   sleep 0.4
   local stragglers

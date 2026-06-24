@@ -1391,9 +1391,7 @@ struct PluginWireTarget {
   /// click instead. Used by the tmux plugin's pane targets so a fast
   /// follow-up keystroke can't race a still-in-flight `select-pane`.
   var preferHostClick: Bool
-  /// Marks a target as structurally important inside its source so
-  /// the hint renderer paints it in the accent style. Tmux uses this
-  /// for pane chips (vs. link chips); firefox uses it for tab chips
-  /// (vs. element chips).
-  var important: Bool
+  /// Source-declared target salience. `.critical` renders with the accent hint
+  /// style.
+  var priority: FlashPriority
 }

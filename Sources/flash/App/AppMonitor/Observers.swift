@@ -81,14 +81,16 @@ extension AppMonitor {
   func onAXEvent(pid: pid_t, notification: String) {
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid)
-    scheduleModelRefresh(for: pid, reason: "ax:\(notification)")
+    if Self.notificationShouldSchedulePreparedModelRefresh(notification) {
+      scheduleModelRefresh(for: pid, reason: "ax:\(notification)")
+    }
     if Self.windowGeometryNotificationRequiresBorderSuspension(notification) {
       focusedWindowGeometryDidChange?(pid, notification)
     }
     if Self.notificationMayChangeFocusedElement(notification) {
       focusedElementMayHaveChanged?(pid)
     }
-    focusedElementDidChange?(pid)
+    focusedElementDidChange?(pid, notification)
   }
 
   func invalidateAfterUserAction(pid: pid_t, reason: String) {

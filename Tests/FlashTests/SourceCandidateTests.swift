@@ -5,6 +5,19 @@ import XCTest
 @testable import flash
 
 final class SourceCandidateTests: XCTestCase {
+  func testFlashPriorityContractIsGeneralizedAndOrdered() {
+    XCTAssertEqual(FlashPriority.allCases, [.background, .low, .normal, .high, .critical])
+    XCTAssertEqual(FlashPriority.allCases.map(\.rawValue), [
+      "background", "low", "normal", "high", "critical",
+    ])
+    XCTAssertLessThan(FlashPriority.background, .low)
+    XCTAssertLessThan(FlashPriority.low, .normal)
+    XCTAssertLessThan(FlashPriority.normal, .high)
+    XCTAssertLessThan(FlashPriority.high, .critical)
+    XCTAssertFalse(FlashPriority.high.usesAccentHintStyle)
+    XCTAssertTrue(FlashPriority.critical.usesAccentHintStyle)
+  }
+
   func testPrepareBuildsWordStartMaskFromTitleAndAliasTokens() throws {
     let prepared = CandidateFinder.prepare(
       candidate(
@@ -981,6 +994,25 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(slack, precedence: table))
   }
 
+  func testPrecedenceTableUsesSourceDescriptorPriority() {
+    let table = CandidateFinder.PrecedenceTable(
+      sources: [
+        CandidateSourceDescriptor(name: "terminal.windows", kind: .locations, priority: .high),
+        CandidateSourceDescriptor(name: "web.pages", kind: .locations, priority: .low),
+      ],
+      overrides: [:],
+      aliveBonus: 0)
+    let terminal = candidate(
+      kind: .plugin("window"), source: "terminal.windows", name: "scratch:1",
+      subtitle: "window", bundleIdentifier: "")
+    let web = candidate(
+      kind: .plugin("page"), source: "web.pages", name: "Inbox",
+      subtitle: "page", bundleIdentifier: "")
+
+    XCTAssertEqual(table.weight(for: terminal), 75)
+    XCTAssertEqual(table.weight(for: web), 30)
+  }
+
   func testCandidatePriorityOnlyTieBreaksWithinSameMatchTier() {
     let ordinary = CandidateFinder.prepare(
       candidate(
@@ -989,7 +1021,7 @@ final class SourceCandidateTests: XCTestCase {
     let unread = CandidateFinder.prepare(
       candidate(
         kind: .plugin("slack_channel"), source: "slack.channels", name: "#random",
-        subtitle: "Slack channel", bundleIdentifier: "", isLocation: true, priority: 200))
+        subtitle: "Slack channel", bundleIdentifier: "", isLocation: true, priority: .critical))
 
     XCTAssertEqual(
       CandidateFinder.sortedMatches([
@@ -1658,7 +1690,7 @@ final class SourceCandidateTests: XCTestCase {
     finishesCommand: Bool = false,
     isLocation: Bool = false,
     isCurrentLocation: Bool = false,
-    priority: Int = 0
+    priority: FlashPriority = .normal
   ) -> Candidate {
     Candidate(
       kind: kind,

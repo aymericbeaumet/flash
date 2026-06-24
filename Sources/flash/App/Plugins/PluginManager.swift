@@ -141,6 +141,12 @@ final class PluginManager {
   /// Root `only_bundle_ids` across loaded plugins. Used by focus/flashlight
   /// refresh paths without scanning manifests at runtime.
   private var claimedBundleIDsIndex: Set<String> = []
+  /// Compiled manifest `listen` patterns across loaded plugins. Hot paths use
+  /// this to skip constructing expensive events nobody can receive.
+  private var eventListenPatternsIndex: [PluginPattern] = []
+  /// Latest host-owned running-app snapshot. Plugins that become ready after a
+  /// broadcast can replay this without forcing another LaunchServices walk.
+  private var latestRunningApplicationsSnapshot: [[String: Any]] = []
   /// Process IDs that already received the post-ready running-app snapshot.
   /// Keyed by plugin id so file-watch restarts (new pid, same manifest) replay
   /// the snapshot exactly once for the new child.
@@ -201,9 +207,12 @@ final class PluginManager {
   }
 
   func stop() {
-    queue.sync {
+    let plugins = queue.sync { () -> [PluginProcess] in
+      let snapshot = Array(pluginsByID.values)
       for plugin in pluginsByID.values {
-        plugin.stop()
+        plugin.onStatusChanged = nil
+        plugin.onSnapshotChanged = nil
+        plugin.onHostRequest = nil
       }
       pluginsByID.removeAll()
       commandIndex.removeAll()
@@ -215,15 +224,50 @@ final class PluginManager {
       verbIndex.removeAll()
       mappingIndex.removeAll()
       claimedBundleIDsIndex.removeAll()
+      eventListenPatternsIndex.removeAll()
+      latestRunningApplicationsSnapshot.removeAll()
       readyAppsSnapshotReplayPIDs.removeAll()
       snapshotBangPlugins.removeAll()
       selectorContextNeedsURL = false
       sourceAdaptersByID.removeAll()
+      return snapshot
+    }
+    for plugin in plugins {
+      plugin.stopAndWait(reason: "manager_stop")
     }
   }
 
   func needsURLSelectorContext() -> Bool {
     queue.sync { selectorContextNeedsURL }
+  }
+
+  func hasListener(for eventName: String) -> Bool {
+    queue.sync {
+      eventListenPatternsIndex.contains { $0.matches(eventName) }
+    }
+  }
+
+  func cacheRunningApplicationsSnapshot(_ applications: [[String: Any]]) {
+    queue.async { [weak self] in
+      self?.latestRunningApplicationsSnapshot = applications
+    }
+  }
+
+  func emitRunningApplicationsSnapshot(reason: String, applications: [[String: Any]]) {
+    queue.async { [weak self] in
+      guard let self else { return }
+      self.latestRunningApplicationsSnapshot = applications
+      self.emitOnQueue(
+        PluginEvent(
+          name: "core:apps.snapshot",
+          payload: [
+            "reason": reason,
+            "running_applications": applications,
+          ],
+          bundleID: nil,
+          configPath: nil,
+          focused: nil))
+    }
   }
 
   func updateConfig(_ config: Config) {
@@ -235,9 +279,13 @@ final class PluginManager {
   func emit(_ event: PluginEvent) {
     queue.async { [weak self] in
       guard let self else { return }
-      for plugin in self.pluginsByID.values {
-        plugin.sendEvent(event)
-      }
+      self.emitOnQueue(event)
+    }
+  }
+
+  private func emitOnQueue(_ event: PluginEvent) {
+    for plugin in pluginsByID.values {
+      plugin.sendEvent(event)
     }
   }
 
@@ -585,13 +633,16 @@ final class PluginManager {
   private func rebuildManifestIndex() {
     var claimed = Set<String>()
     var needsURL = false
+    var eventPatterns: [PluginPattern] = []
     for plugin in pluginsByID.values {
       if plugin.manifest.usesURLSelector { needsURL = true }
+      eventPatterns.append(contentsOf: plugin.manifest.listen.map(PluginPattern.init))
       for bundleID in plugin.manifest.onlyBundleIDs {
         claimed.insert(bundleID)
       }
     }
     claimedBundleIDsIndex = claimed
+    eventListenPatternsIndex = eventPatterns
     snapshotBangPlugins = pluginsByID.values.sorted(by: { $0.identifier < $1.identifier })
     selectorContextNeedsURL = needsURL
   }
@@ -886,7 +937,7 @@ final class PluginManager {
         {
           continue
         }
-        existing?.stop()
+        existing?.stopAndWait(reason: "config_reload")
         let plugin = PluginProcess(
           root: item.root,
           manifest: manifest,
@@ -923,7 +974,7 @@ final class PluginManager {
     }
 
     for id in Array(pluginsByID.keys) where !nextIDs.contains(id) {
-      pluginsByID[id]?.stop()
+      pluginsByID[id]?.stopAndWait(reason: "config_removed")
       pluginsByID.removeValue(forKey: id)
       sourceAdaptersByID.removeValue(forKey: id)
       readyAppsSnapshotReplayPIDs.removeValue(forKey: id)
@@ -1129,18 +1180,11 @@ final class PluginManager {
     guard snapshot.state == PluginRuntimeState.ready.rawValue, let pid = snapshot.pid else {
       return
     }
-    let applications = NSWorkspace.shared.runningApplications.compactMap { app -> [String: Any]? in
-      guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
-      return [
-        "bundle_id": bundleID,
-        "localized_name": app.localizedName ?? "",
-        "pid": Int(app.processIdentifier),
-      ]
-    }
     queue.async { [weak self, weak plugin] in
       guard let self, let plugin else { return }
       if self.readyAppsSnapshotReplayPIDs[plugin.identifier] == pid { return }
       self.readyAppsSnapshotReplayPIDs[plugin.identifier] = pid
+      let applications = self.latestRunningApplicationsSnapshot
       plugin.sendEvent(
         PluginEvent(
           name: "core:apps.snapshot",

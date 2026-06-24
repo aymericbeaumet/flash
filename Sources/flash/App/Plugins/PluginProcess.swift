@@ -92,20 +92,25 @@ final class PluginProcess {
   var shebangs: [PluginShebangRegistration] { manifest.shebangs }
 
   func start() {
-    queue.async { [weak self] in
-      self?.startOnQueue(reason: "start")
+    queue.async {
+      self.startOnQueue(reason: "start")
     }
   }
 
   func stop() {
-    queue.async { [weak self] in
-      self?.stopOnQueue(reason: "stop")
+    queue.async {
+      self.stopOnQueue(reason: "stop")
+    }
+  }
+
+  func stopAndWait(reason: String = "stop") {
+    queue.sync {
+      self.stopOnQueue(reason: reason)
     }
   }
 
   func reload(reason: String) {
-    queue.async { [weak self] in
-      guard let self else { return }
+    queue.async {
       // User-initiated reload re-arms the bounded restart loop so a previously
       // exhausted plugin can recover without restarting the resident process.
       self.restartLoopExhausted = false
@@ -151,6 +156,10 @@ final class PluginProcess {
         "name": event.name,
         "payload": payload,
       ])
+  }
+
+  func listens(to eventName: String) -> Bool {
+    listenPatterns.contains { $0.matches(eventName) }
   }
 
   /// Synchronous-style discover for volatile plugins. Sends a
@@ -250,7 +259,7 @@ final class PluginProcess {
       activate: activate,
       entersInsertMode: wire.entersInsertMode,
       preferHostClick: wire.preferHostClick,
-      important: wire.important,
+      priority: wire.priority,
       providerID: wire.sourceID)
   }
 
@@ -616,9 +625,23 @@ final class PluginProcess {
     heartbeatTimer = nil
     removeFileWatchers()
     if let process, process.isRunning {
-      sendNotification(method: "shutdown", params: ["reason": reason])
-      process.terminate()
+      writeFrame([
+        "jsonrpc": "2.0",
+        "method": "shutdown",
+        "params": ["reason": reason],
+      ])
+      stdinPipe?.fileHandleForWriting.closeFile()
+      waitForExit(process, timeout: 1.0)
+      if process.isRunning {
+        process.terminate()
+        waitForExit(process, timeout: 0.5)
+      }
+      if process.isRunning {
+        kill(process.processIdentifier, SIGKILL)
+      }
     }
+    (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+    (process?.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
     process = nil
     stdinPipe = nil
     pending.removeAll()
@@ -761,8 +784,16 @@ final class PluginProcess {
       "FLASH_PLUGIN_VERSION": manifest.version,
       "FLASH_PLUGIN_DATA_DIR": dataDir.path,
       "FLASH_PLUGIN_CONFIG": settingsJSON,
+      "FLASH_PLUGIN_PARENT_PID": String(getpid()),
       "PYTHONDONTWRITEBYTECODE": "1",
     ])
+  }
+
+  private func waitForExit(_ process: Process, timeout: TimeInterval) {
+    let deadline = Date().addingTimeInterval(timeout)
+    while process.isRunning, Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
   }
 
   private func sendRequest(
@@ -1071,6 +1102,13 @@ final class PluginProcess {
     let entersInsertMode =
       raw["enters_insert_mode"] as? Bool
       ?? JumpTarget.textInputRoles.contains(role ?? "")
+    let priority: FlashPriority
+    if let rawPriority = raw["priority"] as? String {
+      guard let parsed = FlashPriority(rawValue: rawPriority) else { return nil }
+      priority = parsed
+    } else {
+      priority = .normal
+    }
     return PluginWireTarget(
       id: id,
       frame: CGRect(x: x, y: y, width: width, height: height),
@@ -1081,7 +1119,7 @@ final class PluginProcess {
       entersInsertMode: entersInsertMode,
       sourceID: raw["source_id"] as? String ?? sourceID,
       preferHostClick: raw["prefer_host_click"] as? Bool ?? false,
-      important: raw["important"] as? Bool ?? false)
+      priority: priority)
   }
 
   private static func candidate(
@@ -1110,6 +1148,11 @@ final class PluginProcess {
     }
     if metadata[CandidateMetadataKey.kind] == nil {
       metadata[CandidateMetadataKey.kind] = "plugin"
+    }
+    if let rawPriority = metadata[CandidateMetadataKey.priority],
+      FlashPriority(rawValue: rawPriority) == nil
+    {
+      return nil
     }
     return Candidate(title: title, url: url, metadata: metadata)
   }

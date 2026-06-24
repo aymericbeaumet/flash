@@ -176,8 +176,12 @@ extension AppDelegate {
     FlashLog.trace(
       "[input] normal dispatch reason=\(reason) action=\(action.diagnosticDescription)")
     performMappingCommand(action, repeatCount: repeatCount)
-    if guardNormalModeInputAfterActionDispatch() {
-      scheduleNormalModeRecapture()
+    let focusChanging = Self.normalModeActionMayChangeKeyboardFocus(action)
+    if guardNormalModeInputAfterActionDispatch(force: focusChanging) {
+      scheduleNormalModeRecapture(
+        delaysMs: focusChanging
+          ? Self.normalModeFocusChangingRecaptureDelaysMs
+          : Self.normalModeRecaptureDelaysMs)
     }
   }
 
@@ -832,12 +836,10 @@ extension AppDelegate {
     }
     overlay.hide()
     resetCommandLineState()
-    suppressNormalModeCaptureForSourceResolution()
     applyModeOverlay(captureOverride: true)
 
     registry.resolveCandidate(candidate) { [weak self] result in
       guard let self else { return }
-      self.clearNormalModeCaptureSuppression(reason: "source_resolved")
       if let pid = result.targetPID {
         // Plugin candidates (e.g. a tmux window) run their side effect
         // inside the plugin process and hand back a `target_pid` for the

@@ -42,14 +42,9 @@ public struct JumpTarget: @unchecked Sendable {
   /// treat the spurious AXPress as a successful click and never deliver
   /// the real one.
   public let preferHostClick: Bool
-  /// Mark a target as structurally important inside its source so the
-  /// renderer can give it a stronger visual treatment than the rest.
-  /// Used by the tmux plugin for pane chips (vs. link chips) and by
-  /// the firefox plugin for tab chips (vs. element chips) — the user
-  /// can scan a screen full of mixed hints and pick out the
-  /// "top-level" entry at a glance. Purely a styling signal; the
-  /// commit path is unchanged.
-  public let important: Bool
+  /// Source-declared salience for this target. The renderer currently paints
+  /// `.critical` targets in the accent style; the commit path is unchanged.
+  public let priority: FlashPriority
 
   public init(
     id: String,
@@ -62,7 +57,7 @@ public struct JumpTarget: @unchecked Sendable {
     resolveClickPoint: (() -> CGPoint?)? = nil,
     entersInsertMode: Bool = false,
     preferHostClick: Bool = false,
-    important: Bool = false,
+    priority: FlashPriority = .normal,
     providerID: String
   ) {
     self.id = id
@@ -75,7 +70,7 @@ public struct JumpTarget: @unchecked Sendable {
     self.resolveClickPoint = resolveClickPoint
     self.entersInsertMode = entersInsertMode
     self.preferHostClick = preferHostClick
-    self.important = important
+    self.priority = priority
     self.providerID = providerID
   }
 

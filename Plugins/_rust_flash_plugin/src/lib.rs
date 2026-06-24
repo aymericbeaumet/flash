@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -68,6 +69,31 @@ impl From<[f64; 4]> for Frame {
     }
 }
 
+/// Shared source salience used by candidate rows, candidate source
+/// declarations, and hint targets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Priority {
+    Background,
+    Low,
+    #[default]
+    Normal,
+    High,
+    Critical,
+}
+
+impl Priority {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Priority::Background => "background",
+            Priority::Low => "low",
+            Priority::Normal => "normal",
+            Priority::High => "high",
+            Priority::Critical => "critical",
+        }
+    }
+}
+
 /// A hint target a plugin emits for the `f` family. `id` is echoed back on
 /// [`Request::ActivateTarget`]; `frame` positions the hint label. Optional
 /// fields are omitted from the wire when unset.
@@ -96,13 +122,10 @@ pub struct JumpTarget {
     /// panes), and is observed *before* Flash forwards anything else.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefer_host_click: Option<bool>,
-    /// Mark a target as structurally important inside its source so
-    /// the host's hint renderer paints it in the accent style (e.g.
-    /// tmux pane chips vs. link chips; firefox tab chips vs. element
-    /// chips). Purely a styling signal — the commit path doesn't
-    /// branch on it.
+    /// Source-declared salience. `Critical` renders with the host's accent hint
+    /// style.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub important: Option<bool>,
+    pub priority: Option<Priority>,
 }
 
 impl JumpTarget {
@@ -117,7 +140,7 @@ impl JumpTarget {
             enters_insert_mode: None,
             source_id: None,
             prefer_host_click: None,
-            important: None,
+            priority: None,
         }
     }
 
@@ -156,8 +179,12 @@ impl JumpTarget {
         self
     }
 
-    pub fn important(mut self, important: bool) -> Self {
-        self.important = Some(important);
+    pub fn priority(mut self, priority: Priority) -> Self {
+        if priority == Priority::Normal {
+            self.priority = None;
+        } else {
+            self.priority = Some(priority);
+        }
         self
     }
 }
@@ -247,15 +274,15 @@ impl Candidate {
 
     /// Source-provided rank nudge used only as a same-band, same-score
     /// tiebreaker by the host. Keep this semantic and domain-neutral:
-    /// "important", "active", or "attention-worthy" rows can use it without
+    /// "active" or "attention-worthy" rows can use it without
     /// creating plugin-specific source kinds.
-    pub fn priority(self, value: i32) -> Self {
-        if value == 0 {
+    pub fn priority(self, priority: Priority) -> Self {
+        if priority == Priority::Normal {
             let mut me = self;
             me.metadata.remove(candidate_metadata::PRIORITY);
             me
         } else {
-            self.set(candidate_metadata::PRIORITY, value.to_string())
+            self.set(candidate_metadata::PRIORITY, priority.as_str())
         }
     }
 
@@ -1106,6 +1133,90 @@ fn env_or(name: &str, fallback: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| fallback.to_string())
 }
 
+fn parent_pid_from_env() -> Option<i32> {
+    std::env::var("FLASH_PLUGIN_PARENT_PID")
+        .ok()
+        .and_then(|raw| raw.parse::<i32>().ok())
+        .filter(|pid| *pid > 1)
+}
+
+fn start_parent_liveness_watch() {
+    let Some(parent_pid) = parent_pid_from_env() else {
+        return;
+    };
+    let _ = std::thread::Builder::new()
+        .name("flash-plugin-parent-watch".to_string())
+        .spawn(move || {
+            wait_for_parent_exit(parent_pid);
+            std::process::exit(0);
+        });
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_parent_exit(parent_pid: i32) {
+    unsafe {
+        let kq = libc::kqueue();
+        if kq == -1 {
+            poll_parent_exit(parent_pid);
+            return;
+        }
+        let change = libc::kevent {
+            ident: parent_pid as libc::uintptr_t,
+            filter: libc::EVFILT_PROC as libc::c_short,
+            flags: (libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR) as libc::c_ushort,
+            fflags: libc::NOTE_EXIT as libc::c_uint,
+            data: 0,
+            udata: ptr::null_mut(),
+        };
+        let registered = libc::kevent(kq, &change, 1, ptr::null_mut(), 0, ptr::null());
+        if registered == -1 {
+            libc::close(kq);
+            poll_parent_exit(parent_pid);
+            return;
+        }
+        loop {
+            let mut event = libc::kevent {
+                ident: 0,
+                filter: 0,
+                flags: 0,
+                fflags: 0,
+                data: 0,
+                udata: ptr::null_mut(),
+            };
+            let rc = libc::kevent(kq, ptr::null(), 0, &mut event, 1, ptr::null());
+            if rc > 0 {
+                libc::close(kq);
+                return;
+            }
+            if rc == -1 {
+                let interrupted =
+                    std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR);
+                if !interrupted {
+                    libc::close(kq);
+                    poll_parent_exit(parent_pid);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn wait_for_parent_exit(parent_pid: i32) {
+    poll_parent_exit(parent_pid);
+}
+
+fn poll_parent_exit(parent_pid: i32) {
+    loop {
+        let missing = unsafe { libc::kill(parent_pid, 0) == -1 }
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        if missing {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
 /// Build a [`Context`] from the `FLASH_PLUGIN_*` environment Flash injects.
 fn context_from_env(
     emit: Emitter,
@@ -1132,11 +1243,12 @@ fn context_from_env(
     }
 }
 
-/// Run the plugin: spin up a multi-thread tokio runtime and serve the
+/// Run the plugin: spin up a bounded multi-thread tokio runtime and serve the
 /// length-prefixed MessagePack protocol until `shutdown` or stdin closes. This
 /// is the single entry point a plugin's `main` calls.
 pub fn run<P: Plugin>(plugin: P) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()
         .expect("flash-plugin: tokio runtime");
@@ -1176,6 +1288,7 @@ async fn serve<P: Plugin>(plugin: P) {
     let host_counter = Arc::new(AtomicU64::new(0));
     let ctx = context_from_env(Emitter { tx }, host_pending.clone(), host_counter);
     ctx.prepare_dirs();
+    start_parent_liveness_watch();
     ctx.log("info", "[plugin] process ready");
 
     let mut stdin = tokio::io::stdin();

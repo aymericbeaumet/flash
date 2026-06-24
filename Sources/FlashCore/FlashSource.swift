@@ -125,20 +125,27 @@ public enum CandidateSourceKind: String, Codable, Sendable, Equatable, Hashable 
 public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
   public var name: String
   public var kind: CandidateSourceKind
+  public var priority: FlashPriority
 
-  public init(name: String, kind: CandidateSourceKind = .standard) {
+  public init(
+    name: String,
+    kind: CandidateSourceKind = .standard,
+    priority: FlashPriority = .normal
+  ) {
     self.name = name
     self.kind = kind
+    self.priority = priority
   }
 
   enum CodingKeys: String, CodingKey {
-    case name, kind
+    case name, kind, priority
   }
 
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     self.name = try c.decode(String.self, forKey: .name)
     self.kind = try c.decodeIfPresent(CandidateSourceKind.self, forKey: .kind) ?? .standard
+    self.priority = try c.decodeIfPresent(FlashPriority.self, forKey: .priority) ?? .normal
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -146,6 +153,9 @@ public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
     try c.encode(name, forKey: .name)
     if kind != .standard {
       try c.encode(kind, forKey: .kind)
+    }
+    if priority != .normal {
+      try c.encode(priority, forKey: .priority)
     }
   }
 }

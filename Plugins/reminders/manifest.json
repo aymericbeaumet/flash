@@ -27,7 +27,8 @@
   ],
   "sources": [
     {
-      "name": "reminders.tasks"
+      "name": "reminders.tasks",
+      "priority": "normal"
     }
   ]
 }

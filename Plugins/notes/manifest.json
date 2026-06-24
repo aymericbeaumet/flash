@@ -27,7 +27,8 @@
   ],
   "sources": [
     {
-      "name": "notes.notes"
+      "name": "notes.notes",
+      "priority": "normal"
     }
   ]
 }

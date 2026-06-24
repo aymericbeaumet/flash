@@ -132,12 +132,11 @@ struct Config {
     var hintBGBottom: String = "#FFC542"
     /// 1px border around the chip.
     var hintBorder: String = "#E3BE23"
-    /// Foreground / gradient / border for hints whose target carries
-    /// the `important` flag (tmux panes, browser tabs, …). Defaults
-    /// to a red-ish Nord-aurora-red gradient so important chips
-    /// read as a structural accent against the regular yellow `f`
-    /// chips. Set any field equal to its `hint*` counterpart to opt
-    /// out of the distinction for that surface.
+    /// Foreground / gradient / border for hints whose target priority is
+    /// `critical` (tmux panes, browser tabs, …). Defaults to a
+    /// red-ish Nord-aurora-red gradient so structural chips read as an accent
+    /// against the regular yellow `f` chips. Set any field equal to its `hint*`
+    /// counterpart to opt out of the distinction for that surface.
     var importantHintFG: String = "#ECEFF4"
     var importantHintBGTop: String = "#BF616A"
     var importantHintBGBottom: String = "#5C3940"

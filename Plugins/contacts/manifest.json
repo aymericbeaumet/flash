@@ -27,7 +27,8 @@
   ],
   "sources": [
     {
-      "name": "contacts.cards"
+      "name": "contacts.cards",
+      "priority": "normal"
     }
   ]
 }

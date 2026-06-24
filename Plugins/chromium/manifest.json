@@ -35,31 +35,38 @@
   "sources": [
     {
       "name": "chrome.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     },
     {
       "name": "chromium.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     },
     {
       "name": "brave.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     },
     {
       "name": "edge.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     },
     {
       "name": "arc.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     },
     {
       "name": "vivaldi.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     },
     {
       "name": "opera.tabs",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     }
   ],
   "source_actions": [

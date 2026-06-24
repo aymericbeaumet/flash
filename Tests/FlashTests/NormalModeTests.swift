@@ -838,6 +838,29 @@ final class NormalModeTests: XCTestCase {
         kAXValueChangedNotification as String))
   }
 
+  func testBackgroundModelRefreshThrottleAppliesOnlyToNoisyRefreshes() {
+    XCTAssertTrue(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "ax:AXValueChanged"))
+    XCTAssertTrue(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "queued"))
+    XCTAssertTrue(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "maintenance"))
+    XCTAssertFalse(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "focus"))
+    XCTAssertFalse(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "config"))
+  }
+
+  func testPreparedModelRefreshSkipsValueAndTitleChurn() {
+    XCTAssertFalse(
+      AppMonitor.notificationShouldSchedulePreparedModelRefresh(
+        kAXValueChangedNotification as String))
+    XCTAssertFalse(
+      AppMonitor.notificationShouldSchedulePreparedModelRefresh(kAXTitleChangedNotification as String)
+    )
+    XCTAssertTrue(
+      AppMonitor.notificationShouldSchedulePreparedModelRefresh(kAXLayoutChangedNotification as String)
+    )
+    XCTAssertTrue(
+      AppMonitor.notificationShouldSchedulePreparedModelRefresh(
+        kAXFocusedWindowChangedNotification as String))
+  }
+
   func testBrowserTabNavigationExitRecognizesCommittedWebURLsOnly() {
     XCTAssertTrue(
       AppDelegate.insertNavigationExitShouldExit(
@@ -1032,7 +1055,7 @@ final class NormalModeTests: XCTestCase {
       ).captureInput)
   }
 
-  func testNormalModeInputCaptureSkipsSourceResolutionSuppression() {
+  func testNormalModeInputCaptureStaysOwnedDuringSourceResolution() {
     XCTAssertTrue(
       AppDelegate.normalModeShouldOwnKeyboardInput(
         mode: .normal,
@@ -1041,11 +1064,10 @@ final class NormalModeTests: XCTestCase {
         activationInFlight: false))
     XCTAssertFalse(
       AppDelegate.normalModeShouldOwnKeyboardInput(
-        mode: .normal,
-        overlayInputMode: .normal,
+        mode: .insert,
+        overlayInputMode: .hints,
         hasHints: false,
-        activationInFlight: false,
-        sourceResolutionCaptureSuppressed: true))
+        activationInFlight: false))
   }
 
   func testModeStatusBarVisibleInInsertWithoutCapturing() {
@@ -1208,6 +1230,12 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.first, 0)
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.prefix(4), [0, 10, 30, 60])
     XCTAssertEqual(AppDelegate.normalModeRecaptureDelaysMs.last, 1_400)
+  }
+
+  func testFocusChangingNormalModeRecaptureScheduleClosesAppActivationGaps() {
+    XCTAssertEqual(AppDelegate.normalModeFocusChangingRecaptureDelaysMs.first, 0)
+    XCTAssertEqual(AppDelegate.normalModeFocusChangingRecaptureDelaysMs.prefix(6), [0, 1, 4, 8, 16, 30])
+    XCTAssertEqual(AppDelegate.normalModeFocusChangingRecaptureDelaysMs.last, 1_400)
   }
 
   func testNormalModeCaptureRecoveryScheduleIsBoundedAndStartsAfterFastRamp() {
@@ -1373,18 +1401,6 @@ final class NormalModeTests: XCTestCase {
       AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
         mode: .insert,
         menuBarInteractionRecaptureSuppressedUntil: nil,
-        now: now))
-    XCTAssertFalse(
-      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
-        mode: .normal,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        sourceResolutionCaptureSuppressedUntil: activeSuppression,
-        now: now))
-    XCTAssertTrue(
-      AppDelegate.workspaceActivationShouldScheduleNormalModeRecapture(
-        mode: .normal,
-        menuBarInteractionRecaptureSuppressedUntil: nil,
-        sourceResolutionCaptureSuppressedUntil: expiredSuppression,
         now: now))
   }
 
@@ -2611,6 +2627,18 @@ final class NormalModeTests: XCTestCase {
     let secondAction = transition(pending: secondPrefix.pending, chars: "s", mappings: mappings)
     XCTAssertEqual(secondAction.command, .openApp(name: "Slack"))
     XCTAssertEqual(secondAction.pending, "")
+  }
+
+  func testAppOpenMappingsAreTreatedAsFocusChangingNormalModeActions() {
+    XCTAssertTrue(
+      AppDelegate.normalModeActionMayChangeKeyboardFocus(
+        .flashCommand(.openApp(name: "Alacritty"))))
+    XCTAssertTrue(
+      AppDelegate.normalModeActionMayChangeKeyboardFocus(.shellCommand(["open", "-a", "Slack"])))
+    XCTAssertTrue(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.appNext))
+    XCTAssertTrue(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.movementBack))
+    XCTAssertFalse(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.scroll(.down)))
+    XCTAssertFalse(AppDelegate.normalModeCommandMayChangeKeyboardFocus(.reload(force: false)))
   }
 
   func testNormalModeActionDispatchRecapturesOnlyForIdleNormalSurfaces() {

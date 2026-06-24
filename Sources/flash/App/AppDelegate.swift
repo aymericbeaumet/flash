@@ -146,8 +146,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
   var statusBarVisible = false
   var normalModeTargetPID: pid_t?
-  var normalModeSourceResolutionCaptureSuppressedUntil: Date?
-  var normalModeSourceResolutionCaptureSuppressionToken: UInt64 = 0
   var candidateFinderCandidates: [Candidate] = [] {
     didSet {
       // Each flashlight session freezes one source snapshot. Bump the
@@ -309,12 +307,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       openConfig: config.open,
       pluginSourcesProvider: { manager.sources })
     monitor = AppMonitor(registry: registry, config: config)
-    monitor.focusedElementDidChange = { [weak self] pid in
+    monitor.focusedElementDidChange = { [weak self] pid, notification in
       guard let self else { return }
+      guard self.pluginManager.hasListener(for: "core:ax.changed") else { return }
       self.pluginManager.emit(
         PluginEvent(
           name: "core:ax.changed",
-          payload: ["pid": Int(pid)],
+          payload: ["notification": notification, "pid": Int(pid)],
           bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
           configPath: nil,
           focused: true))
@@ -338,6 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       return (pid: context.processID, bundleID: context.bundleIdentifier)
     }
+    pluginManager.cacheRunningApplicationsSnapshot(runningApplicationsSnapshot())
     pluginManager.start(config: config)
     configureDebugServer(for: config)
 
@@ -366,7 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     urlHandler = URLEventHandler(handler: dispatch)
     mappings.start(
       dispatch: { [weak self] action in
-        self?.performMappingCommand(action)
+        self?.dispatchNativeMappingAction(action)
       },
       currentMode: { [weak self] in self?.flashMode ?? .insert })
     modeStore.perform = { [weak self] effects, previous, next in
@@ -666,7 +666,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   func emitRunningApplicationsSnapshot(reason: String) {
-    let applications = NSWorkspace.shared.runningApplications.compactMap { app -> [String: Any]? in
+    pluginManager.emitRunningApplicationsSnapshot(
+      reason: reason,
+      applications: runningApplicationsSnapshot())
+  }
+
+  private func runningApplicationsSnapshot() -> [[String: Any]] {
+    NSWorkspace.shared.runningApplications.compactMap { app -> [String: Any]? in
       guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
       return [
         "bundle_id": bundleID,
@@ -674,16 +680,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         "pid": Int(app.processIdentifier),
       ]
     }
-    pluginManager.emit(
-      PluginEvent(
-        name: "core:apps.snapshot",
-        payload: [
-          "reason": reason,
-          "running_applications": applications,
-        ],
-        bundleID: nil,
-        configPath: nil,
-        focused: nil))
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

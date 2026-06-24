@@ -48,7 +48,8 @@
   "sources": [
     {
       "name": "tmux.windows",
-      "kind": "locations"
+      "kind": "locations",
+      "priority": "high"
     }
   ],
   "source_actions": [

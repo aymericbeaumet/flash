@@ -10,7 +10,8 @@
   ],
   "sources": [
     {
-      "name": "emojis.glyphs"
+      "name": "emojis.glyphs",
+      "priority": "normal"
     }
   ]
 }
