@@ -2081,6 +2081,23 @@ fn expand_tilde(text: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn extract_links_keeps_port_and_path() {
+        let only = |s: &str| extract_links(s, 1000).into_iter().next().map(|(_, t)| t);
+        assert_eq!(
+            only("https://admin.test.com:1234").as_deref(),
+            Some("https://admin.test.com:1234")
+        );
+        assert_eq!(
+            only("https://google.com:443/test/a/b/c").as_deref(),
+            Some("https://google.com:443/test/a/b/c")
+        );
+        assert_eq!(
+            only("open https://admin.test.com:1234/x?y=1 now").as_deref(),
+            Some("https://admin.test.com:1234/x?y=1")
+        );
+    }
+
     fn client(tty: &str, session: &str, client_pid: i64, activity: i64) -> TmuxClient {
         TmuxClient {
             tty: tty.to_string(),
