@@ -35,11 +35,42 @@
     return [...rows].sort((a, b) => a.title.localeCompare(b.title));
   });
 
-  // Trusted, loopback-only Markdown authored in HelpDocs.swift — raw HTML
-  // (e.g. <details> collapsibles) is intentionally passed through.
-  const bodyHtml = $derived(
-    selected ? (marked.parse(selected.body, { async: false }) as string) : "",
+  // All resolvable topic names + aliases, for turning cross-references into links.
+  const topicKeys = $derived(
+    new Set(
+      docs.flatMap((d) => [
+        d.name.toLowerCase(),
+        ...(d.aliases ?? []).map((a) => a.toLowerCase()),
+      ]),
+    ),
   );
+
+  // Turn cross-references rendered as inline code into clickable links:
+  //   `:help <topic>` / a bare topic name → that Docs topic (#docs/<topic>)
+  //   `:command …`                        → the Commands tab (#commands)
+  // Operates on the rendered HTML and only matches bare `<code>` spans (inline
+  // code), never `<pre><code class=…>` code blocks, so examples stay literal.
+  function linkifyCodeRefs(html: string, keys: Set<string>): string {
+    return html.replace(/<code>([^<]+)<\/code>/g, (whole, inner: string) => {
+      const help = inner.match(/^:help\s+([\w-]+)$/i);
+      if (help && keys.has(help[1].toLowerCase()))
+        return `<a class="xref" href="#docs/${encodeURIComponent(help[1].toLowerCase())}">${whole}</a>`;
+      if (keys.has(inner.toLowerCase()))
+        return `<a class="xref" href="#docs/${encodeURIComponent(inner.toLowerCase())}">${whole}</a>`;
+      if (/^:[a-z][\w-]*(\s.*)?$/i.test(inner))
+        return `<a class="xref" href="#commands">${whole}</a>`;
+      return whole;
+    });
+  }
+
+  // Trusted, loopback-only Markdown authored in HelpDocs.swift — raw HTML
+  // (e.g. <details> collapsibles) is intentionally passed through. gfm autolinks
+  // bare URLs; we then linkify cross-references.
+  const bodyHtml = $derived.by(() => {
+    if (!selected) return "";
+    const raw = marked.parse(selected.body, { async: false, gfm: true }) as string;
+    return linkifyCodeRefs(raw, topicKeys);
+  });
 
   function openTopic(name: string) {
     location.hash = "docs/" + encodeURIComponent(name);
@@ -228,6 +259,12 @@
   }
   :global(.doc-body a) {
     color: var(--accent);
+  }
+  :global(.doc-body a.xref) {
+    text-decoration: none;
+  }
+  :global(.doc-body a.xref:hover) {
+    text-decoration: underline;
   }
   :global(.doc-body code) {
     background: var(--panel-strong);

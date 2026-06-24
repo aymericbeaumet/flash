@@ -248,6 +248,10 @@ extension AppDelegate {
       "commands": commands,
       "clipboard": clipboardEntries.map { ["preview": $0.preview, "value": $0.value] },
       "docs": docs,
+      "mappings": [
+        "normal_leader": config.mode.normalLeader ?? "",
+        "rows": NormalModeDispatcher.mappingsJSON(config: config),
+      ] as [String: Any],
       "focused_app": [
         "bundle_id": app?.bundleIdentifier ?? NSNull(),
         "localized_name": app?.localizedName ?? NSNull(),

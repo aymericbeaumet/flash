@@ -161,6 +161,16 @@ extension NormalModeDispatcher {
     return lines.joined(separator: "\n")
   }
 
+  /// The configured mappings as structured rows for the inspector's Mappings
+  /// tab — the same `all`/`normal`/`insert` data `mappingsText` renders, minus
+  /// the Markdown table formatting.
+  static func mappingsJSON(config: Config) -> [[String: String]] {
+    (mappingRows(scope: "all", mappings: config.mode.all)
+      + mappingRows(scope: "normal", mappings: config.mode.normal)
+      + mappingRows(scope: "insert", mappings: config.mode.insert))
+      .map { ["scope": $0.scope, "key": $0.key, "action": $0.action] }
+  }
+
   private static func mappingRows(scope: String, mappings: [ModeMapping]) -> [MappingRow] {
     mappings.map { mapping in
       MappingRow(

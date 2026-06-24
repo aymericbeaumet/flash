@@ -57,6 +57,17 @@ export interface FocusedApp {
   pid?: number | null;
 }
 
+export interface MappingRow {
+  scope: string;
+  key: string;
+  action: string;
+}
+
+export interface MappingsState {
+  normal_leader: string;
+  rows: MappingRow[];
+}
+
 export interface ClipboardEntry {
   /// One-line label.
   preview: string;
@@ -82,4 +93,5 @@ export interface InspectorState {
   commands?: CommandInfo[];
   docs?: DocTopic[];
   clipboard?: ClipboardEntry[];
+  mappings?: MappingsState;
 }

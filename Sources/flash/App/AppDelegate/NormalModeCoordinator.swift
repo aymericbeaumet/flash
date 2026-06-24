@@ -1351,21 +1351,17 @@ extension AppDelegate {
       openDebugDashboard(tab: "plugins")
     case .reload:
       let ids = pluginManager.reloadAll()
-      let summary: String
-      if ids.isEmpty {
-        summary = "No plugins are loaded."
-      } else {
-        summary = "Reloading: \(ids.joined(separator: ", "))"
-      }
       FlashLog.info("[plugins] reload command ids=\(ids.joined(separator: ","))")
-      presentModal(reason: "plugins_reload") { "# Plugins reload\n\n\(summary)" }
+      // The plugins tab shows live runtime state, so the reload's progress and
+      // result land there instead of a one-shot modal.
+      openDebugDashboard(tab: "plugins")
     }
   }
 
+  /// `:mappings` — the resolved mapping table now lives in the dashboard's
+  /// Mappings tab (fed by `debugStateJSON`).
   private func showMappings() {
-    presentModal(reason: "enter_mappings") { [self] in
-      NormalModeDispatcher.mappingsText(config: config)
-    }
+    openDebugDashboard(tab: "mappings")
   }
 
   /// Single entry point for every modal surface (`:help`, `:plugins`,

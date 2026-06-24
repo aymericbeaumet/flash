@@ -3,11 +3,27 @@
   import CommandsPanel from "./lib/CommandsPanel.svelte";
   import DocsPanel from "./lib/DocsPanel.svelte";
   import LogList from "./lib/LogList.svelte";
+  import MappingsPanel from "./lib/MappingsPanel.svelte";
   import PluginsPanel from "./lib/PluginsPanel.svelte";
   import { store } from "./lib/store.svelte";
 
-  type Tab = "logs" | "plugins" | "commands" | "docs" | "clipboard" | "state";
-  const validTabs: Tab[] = ["logs", "plugins", "commands", "docs", "clipboard", "state"];
+  type Tab =
+    | "logs"
+    | "plugins"
+    | "commands"
+    | "mappings"
+    | "docs"
+    | "clipboard"
+    | "state";
+  const validTabs: Tab[] = [
+    "logs",
+    "plugins",
+    "commands",
+    "mappings",
+    "docs",
+    "clipboard",
+    "state",
+  ];
 
   // The hash is `#<tab>` or, for the Docs tab, `#docs/<topic>` so `:help <topic>`
   // can deep-link. Split once: first segment selects the tab, the rest is the
@@ -56,12 +72,14 @@
   const commands = $derived(store.state.commands ?? []);
   const docs = $derived(store.state.docs ?? []);
   const clipboard = $derived(store.state.clipboard ?? []);
+  const mappings = $derived(store.state.mappings ?? { normal_leader: "", rows: [] });
   const focused = $derived(store.state.focused_app);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "logs", label: "Logs" },
     { id: "plugins", label: "Plugins" },
     { id: "commands", label: "Commands" },
+    { id: "mappings", label: "Mappings" },
     { id: "docs", label: "Docs" },
     { id: "clipboard", label: "Clipboard" },
     { id: "state", label: "State" },
@@ -89,6 +107,7 @@
         {t.label}
         {#if t.id === "plugins"}<span class="pill">{plugins.length}</span>{/if}
         {#if t.id === "commands"}<span class="pill">{commands.length}</span>{/if}
+        {#if t.id === "mappings"}<span class="pill">{mappings.rows.length}</span>{/if}
         {#if t.id === "docs"}<span class="pill">{docs.length}</span>{/if}
         {#if t.id === "clipboard"}<span class="pill">{clipboard.length}</span>{/if}
       </button>
@@ -106,6 +125,8 @@
     <PluginsPanel {plugins} />
   {:else if tab === "commands"}
     <CommandsPanel {commands} />
+  {:else if tab === "mappings"}
+    <MappingsPanel {mappings} />
   {:else if tab === "docs"}
     <DocsPanel {docs} {topic} />
   {:else if tab === "clipboard"}
