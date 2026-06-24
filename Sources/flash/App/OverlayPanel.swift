@@ -118,7 +118,32 @@ final class OverlayPanel: NSPanel {
   var mouseGridOpacity: Float = 0.5
   var modeLabels: Config.Mode.Labels = .init()
   var magicModifiers: ClickModifiers = .defaultMagic
-  var inputMode: OverlayInputMode = .hints
+  var inputMode: OverlayInputMode = .hints {
+    didSet {
+      guard inputMode != oldValue else { return }
+      // Hide the mouse cursor while hints are on screen so it can't obscure a
+      // chip or distract from picking one; restore it for every other surface
+      // (normal, flashlight, command line, modal) and on dismissal.
+      if inputMode == .hints {
+        hideHintCursor()
+      } else {
+        showHintCursor()
+      }
+    }
+  }
+  /// Guards the ref-counted `CGDisplayHideCursor`/`CGDisplayShowCursor` so the
+  /// cursor can never get stuck hidden across repeated hint renders.
+  private var hintCursorHidden = false
+  func hideHintCursor() {
+    guard !hintCursorHidden else { return }
+    CGDisplayHideCursor(CGMainDisplayID())
+    hintCursorHidden = true
+  }
+  func showHintCursor() {
+    guard hintCursorHidden else { return }
+    CGDisplayShowCursor(CGMainDisplayID())
+    hintCursorHidden = false
+  }
   var normalModePending: String = "" {
     didSet {
       if normalModePending.isEmpty {

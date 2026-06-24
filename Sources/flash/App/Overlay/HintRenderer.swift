@@ -354,6 +354,8 @@ extension OverlayPanel {
     FlashLog.trace(
       "[overlay] hide transient=\(transientContentVisible) mode_badge=\(modeBadgeVisible) "
         + "capture=\(modeBadgeCapturesInput) input=\(inputMode)")
+    // Belt-and-suspenders: never leave the cursor hidden once the overlay is gone.
+    showHintCursor()
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"
