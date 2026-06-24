@@ -15,7 +15,7 @@ final class PluginProcess {
   private var stdinPipe: Pipe?
   private var stdoutBuffer = Data()
   private let lock = NSLock()
-  private var snapshot = PluginSnapshot()
+  private var discovery = PluginDiscovery()
   private var state: PluginRuntimeState = .unloaded
   private var startDate: Date?
   private var lastHeartbeatAt: Date?
@@ -163,12 +163,12 @@ final class PluginProcess {
 
   /// Synchronous-style discover for volatile plugins. Sends a
   /// `discoverTargets` RPC and waits up to `timeout` for the plugin to
-  /// return a snapshot of jump targets for the given context. Used on
+  /// return a fresh set of jump targets for the given context. Used on
   /// each activation when the manifest declares `volatile: true`.
   func discoverTargets(context: AppContext, timeout: TimeInterval) -> [JumpTarget] {
     let startedAt = DispatchTime.now()
     let semaphore = DispatchSemaphore(value: 0)
-    var snapshot: PluginSnapshot?
+    var discovery: PluginDiscovery?
     let frame: [String: Any] = [
       "x": context.frontWindowFrame.minX,
       "y": context.frontWindowFrame.minY,
@@ -186,16 +186,16 @@ final class PluginProcess {
         return
       }
       if let response {
-        snapshot = self.applyDiscoveryResponse(response, defaultPID: context.processID)
+        discovery = self.applyDiscoveryResponse(response, defaultPID: context.processID)
       }
       semaphore.signal()
     }
     let waitResult = semaphore.wait(timeout: .now() + timeout)
     let snap =
-      snapshot
+      discovery
       ?? {
         lock.lock()
-        let s = self.snapshot
+        let s = self.discovery
         lock.unlock()
         return s
       }()
@@ -205,16 +205,16 @@ final class PluginProcess {
         "plugin": manifest.id,
         "pid": "\(context.processID)",
         "bundle": context.bundleIdentifier,
-        "snapshot_targets": "\(snap.targets.count)",
+        "discovery_targets": "\(snap.targets.count)",
         "targets": "\(contextMismatch ? 0 : snap.targets.count)",
         "timed_out": "\(waitResult == .timedOut)",
-        "snapshot_fallback": "\(snapshot == nil)",
+        "discovery_fallback": "\(discovery == nil)",
         "context_mismatch": "\(contextMismatch)",
         "timeout_ms": "\(Int((timeout * 1000).rounded()))",
         "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
       ]
       if let contextPID = snap.contextPID {
-        fields["snapshot_pid"] = "\(contextPID)"
+        fields["discovery_pid"] = "\(contextPID)"
       }
       FlashLog.debug(
         "[plugin] discover_targets",
@@ -262,7 +262,7 @@ final class PluginProcess {
       providerID: wire.sourceID)
   }
 
-  private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginSnapshot
+  private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginDiscovery
   {
     let sourceID = params["source_id"] as? String ?? "plugin:\(manifest.id)"
     let contextPID = (params["context_pid"] as? Int).map(pid_t.init) ?? defaultPID
@@ -270,15 +270,15 @@ final class PluginProcess {
       .compactMap { Self.target(from: $0, sourceID: sourceID) }
     let previousStatusSegments: [String: String]
     lock.lock()
-    previousStatusSegments = snapshot.statusSegments
+    previousStatusSegments = discovery.statusSegments
     lock.unlock()
-    let snap = PluginSnapshot(
+    let snap = PluginDiscovery(
       targets: targetItems,
       statusSegments: previousStatusSegments,
       contextPID: contextPID,
       updatedAt: Date())
     lock.lock()
-    snapshot = snap
+    discovery = snap
     lock.unlock()
     notifyStatus()
     return snap
@@ -338,7 +338,7 @@ final class PluginProcess {
 
   func targets(for context: AppContext) -> [JumpTarget] {
     lock.lock()
-    let snap = snapshot
+    let snap = discovery
     lock.unlock()
     if let contextPID = snap.contextPID, contextPID != context.processID {
       return []
@@ -487,9 +487,9 @@ final class PluginProcess {
     }
   }
 
-  func statusSnapshot() -> PluginStatusSnapshot {
+  func statusSnapshot() -> PluginStatus {
     lock.lock()
-    let snap = snapshot
+    let snap = discovery
     let state = self.state
     let pid = process?.processIdentifier
     let startDate = self.startDate
@@ -501,7 +501,7 @@ final class PluginProcess {
     let now = Date()
     let usage = pid.map { sampleResourceUsageLocked(pid: $0, now: now) }
     lock.unlock()
-    return PluginStatusSnapshot(
+    return PluginStatus(
       id: manifest.id,
       name: manifest.name,
       version: manifest.version,
@@ -515,7 +515,7 @@ final class PluginProcess {
       sourceCount: snap.targets.isEmpty ? 0 : 1,
       commandCount: commands.count,
       targetCount: snap.targets.count,
-      snapshotAgeMs: snap.updatedAt.map { Int(now.timeIntervalSince($0) * 1000) },
+      discoveryAgeMs: snap.updatedAt.map { Int(now.timeIntervalSince($0) * 1000) },
       restartCount: restartCount,
       lastError: lastError,
       lastLog: lastLog,
@@ -853,7 +853,7 @@ final class PluginProcess {
   /// Sanity ceiling on a single frame's payload. Real frames are a few KB at
   /// most; anything larger means the stream desynced and the "length" is
   /// really payload bytes misread as a prefix.
-  // Real payloads (candidate snapshots, command responses) sit well under
+  // Real payloads (candidate query replies, command responses) sit well under
   // 1 MiB. The previous 64 MiB ceiling let a misbehaving plugin starve the
   // host on every frame; 10 MiB still covers any sensible payload while
   // bounding the worst-case allocation.
@@ -960,9 +960,9 @@ final class PluginProcess {
       lastLog = message
       FlashLog.plugin(level, pluginID: manifest.id, message: message, fields: fields)
       notifyStatus()
-    case "snapshot.invalidated":
+    case "discovery.invalidated":
       lock.lock()
-      snapshot = PluginSnapshot()
+      discovery = PluginDiscovery()
       lock.unlock()
       notifyStatus()
     case "status.updated":
@@ -977,7 +977,7 @@ final class PluginProcess {
     let declared = Set(manifest.statusSegments)
     guard !declared.isEmpty else { return }
     lock.lock()
-    let previous = snapshot
+    let previous = discovery
     var next = previous.statusSegments
     lock.unlock()
     for (name, value) in raw {
@@ -992,7 +992,7 @@ final class PluginProcess {
       }
     }
     lock.lock()
-    snapshot = PluginSnapshot(
+    discovery = PluginDiscovery(
       targets: previous.targets,
       statusSegments: next,
       contextPID: previous.contextPID,

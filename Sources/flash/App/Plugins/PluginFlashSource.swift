@@ -72,7 +72,7 @@ final class PluginFlashSource: FlashSource {
   ) -> [Candidate] {
     // Plugin candidates are pulled, not pushed: the host queries warm plugins
     // via `queryCandidates` when the flashlight opens (and on `@source`/`!`).
-    // There is no synchronous snapshot to read here.
+    // There are no host-cached warm locations to read here.
     []
   }
 
@@ -92,7 +92,7 @@ final class PluginFlashSource: FlashSource {
       if candidates.isEmpty {
         // Empty result is the diagnostic-interesting case: distinguish "the
         // plugin isn't ready" from "the plugin ran but has nothing to
-        // contribute". The plugin's lifecycle state and snapshot freshness
+        // contribute". The plugin's lifecycle state and warm-location freshness
         // tell the user whether to wait, reload, or check focus events.
         FlashLog.trace(
           "[candidate_finder] plugin_query source=\(identifier) "

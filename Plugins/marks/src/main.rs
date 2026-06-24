@@ -24,7 +24,7 @@ struct MarkEntry {
 struct Marks {
     state: Mutex<MarksState>,
     /// In-memory `bundle_id → pid` mirror, kept fresh from
-    /// `core:apps.snapshot` / `core:apps.launched` / `core:apps.terminated`.
+    /// `core:apps.changed` / `core:apps.launched` / `core:apps.terminated`.
     /// Used by `jump_to_mark` when the saved pid is dead but the same bundle
     /// is still running under a fresh pid.
     apps: Mutex<HashMap<String, i64>>,
@@ -43,8 +43,8 @@ impl FlashPlugin for Marks {
 
     async fn on_event(&self, _ctx: Context, event: Event) {
         // Refresh the running-apps cache opportunistically. The host emits
-        // `apps.snapshot` on launch and `apps.launched`/`apps.terminated` for
-        // every workspace event, all of which carry the current snapshot.
+        // `apps.changed` on launch and `apps.launched`/`apps.terminated` for
+        // every workspace event, all of which carry the current app list.
         if !event.running_applications.is_empty() {
             if let Ok(mut apps) = self.apps.lock() {
                 apps.clear();

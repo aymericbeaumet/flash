@@ -126,7 +126,8 @@ mappings sit at priority `0`.
 
 ## Runtime Data
 
-Candidates and targets are dynamic and travel over MessagePack. The flashlight
-opens from a synchronous snapshot; do not fetch live candidates in
-`candidate_query` unless the result truly depends on the query string. Keep
-snapshots warm from `on_start`, `on_event`, or plugin-owned polling.
+Candidates and targets are dynamic and travel over MessagePack. The host pulls
+each plugin's warm locations when the flashlight opens; do not fetch live
+candidates in `candidate_query` unless the result truly depends on the query
+string. Keep those locations warm from `on_start`, `on_event`, or plugin-owned
+polling.

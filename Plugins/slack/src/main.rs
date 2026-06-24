@@ -172,7 +172,7 @@ impl FlashPlugin for Slack {
 
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
-            "core:apps.snapshot" | "core:flashlight.opened" => {
+            "core:apps.changed" | "core:flashlight.opened" => {
                 let pids = event
                     .running_applications
                     .iter()
@@ -180,14 +180,14 @@ impl FlashPlugin for Slack {
                     .map(|app| app.pid)
                     .collect::<Vec<_>>();
                 refresh_workspaces(&ctx).await;
-                refresh_snapshot(&ctx, pids).await;
+                refresh_locations(&ctx, pids).await;
             }
             "core:config.changed" => {
                 refresh_workspaces(&ctx).await;
                 seed_from_slack_api(&ctx).await;
                 seed_from_local_storage_if_stale(&ctx, true).await;
                 seed_from_config(&ctx);
-                refresh_snapshot(&ctx, Vec::new()).await;
+                refresh_locations(&ctx, Vec::new()).await;
             }
             "core:focus.changed" | "core:window.focus.changed" => {
                 let bundle = event.bundle_id.unwrap_or_default();
@@ -195,7 +195,7 @@ impl FlashPlugin for Slack {
                     return;
                 };
                 if SLACK_BUNDLES.contains(&bundle.as_str()) {
-                    refresh_snapshot(&ctx, vec![pid]).await;
+                    refresh_locations(&ctx, vec![pid]).await;
                 }
             }
             _ => {}
@@ -219,7 +219,7 @@ impl FlashPlugin for Slack {
     }
 }
 
-async fn refresh_snapshot(ctx: &Context, pids: Vec<i64>) {
+async fn refresh_locations(ctx: &Context, pids: Vec<i64>) {
     seed_from_local_storage_if_stale(ctx, false).await;
     for pid in &pids {
         let fresh = collect_ax_channels(ctx, *pid).await;

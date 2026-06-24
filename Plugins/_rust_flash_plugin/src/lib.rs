@@ -464,7 +464,7 @@ pub struct NormalModeTarget {
 // Inbound requests / events
 // ---------------------------------------------------------------------------
 
-/// One running regular app visible to Flash. Used by `core:apps.snapshot` and
+/// One running regular app visible to Flash. Used by `core:apps.changed` and
 /// by candidate query requests so plugins can refresh app-scoped sources while
 /// keeping the data in memory.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -807,8 +807,8 @@ impl SourceActionResponse {
 }
 
 /// Response to a `candidateQuery`. Omit `candidates` to tell the host to keep
-/// using this plugin's existing snapshot; send `Some(vec)` (even empty) to
-/// replace it with an authoritative fresh result.
+/// using this plugin's existing warm locations; send `Some(vec)` (even empty)
+/// to replace them with an authoritative fresh result.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CandidateQueryResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -818,7 +818,7 @@ pub struct CandidateQueryResponse {
 }
 
 impl CandidateQueryResponse {
-    pub fn snapshot() -> Self {
+    pub fn keep() -> Self {
         Self::default()
     }
 

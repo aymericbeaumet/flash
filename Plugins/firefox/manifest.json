@@ -20,7 +20,7 @@
   ],
   "listen": [
     "core:flash.started",
-    "core:apps.snapshot",
+    "core:apps.changed",
     "core:focus.changed",
     "core:window.focus.changed",
     "core:flashlight.opened"

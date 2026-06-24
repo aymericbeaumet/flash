@@ -116,9 +116,9 @@ final class StatusBarTests: XCTestCase {
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
       context: FlashStatusBarContext(
-        pluginSnapshots: [
-          pluginSnapshot(id: "ok", state: "ready", lastError: nil),
-          pluginSnapshot(id: "bad", state: "failed", lastError: "boom"),
+        pluginStatuses: [
+          pluginStatus(id: "ok", state: "ready", lastError: nil),
+          pluginStatus(id: "bad", state: "failed", lastError: "boom"),
         ]))
 
     XCTAssertEqual(model.rightText, "1/1")
@@ -137,8 +137,8 @@ final class StatusBarTests: XCTestCase {
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
       context: FlashStatusBarContext(
-        pluginSnapshots: [
-          pluginSnapshot(
+        pluginStatuses: [
+          pluginStatus(
             id: "system",
             state: "ready",
             lastError: nil,
@@ -163,8 +163,8 @@ final class StatusBarTests: XCTestCase {
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
       context: FlashStatusBarContext(
-        pluginSnapshots: [
-          pluginSnapshot(id: "system", state: "ready", lastError: nil)
+        pluginStatuses: [
+          pluginStatus(id: "system", state: "ready", lastError: nil)
         ]))
 
     XCTAssertEqual(model.rightText, "")
@@ -757,13 +757,13 @@ final class StatusBarTests: XCTestCase {
           rightText: "")))
   }
 
-  private func pluginSnapshot(
+  private func pluginStatus(
     id: String,
     state: String,
     lastError: String?,
     statusSegments: [String: String] = [:]
-  ) -> PluginStatusSnapshot {
-    PluginStatusSnapshot(
+  ) -> PluginStatus {
+    PluginStatus(
       id: id,
       name: id,
       version: "1.0.0",
@@ -777,7 +777,7 @@ final class StatusBarTests: XCTestCase {
       sourceCount: 0,
       commandCount: 0,
       targetCount: 0,
-      snapshotAgeMs: nil,
+      discoveryAgeMs: nil,
       restartCount: 0,
       lastError: lastError,
       lastLog: nil,

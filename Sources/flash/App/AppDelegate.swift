@@ -364,8 +364,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     statusBarController = FlashStatusBarController(
       overlay: overlay,
       template: config.statusBar.template,
-      pluginSnapshotsProvider: { [weak self] in
-        self?.pluginManager.statusSnapshots() ?? []
+      pluginStatusesProvider: { [weak self] in
+        self?.pluginManager.pluginStatuses() ?? []
       })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
 
@@ -397,7 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.emit(
       PluginEvent(
         name: "core:flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
-    emitRunningApplicationsSnapshot(reason: "launch")
+    emitRunningApplicationsChanged(reason: "launch")
   }
 
   func handleURLCommand(_ cmd: URLCommand) {
@@ -542,7 +542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             bundleID: app.bundleIdentifier,
             configPath: nil,
             focused: true))
-        self.emitRunningApplicationsSnapshot(reason: "focus_changed")
+        self.emitRunningApplicationsChanged(reason: "focus_changed")
         self.recordAppActivation(app.processIdentifier)
         if self.flashMode == .normal {
           self.normalModeTargetPID = app.processIdentifier
@@ -594,7 +594,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             configPath: nil,
             focused: false))
       }
-      self.emitRunningApplicationsSnapshot(reason: "app_launch")
+      self.emitRunningApplicationsChanged(reason: "app_launch")
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
       }
@@ -619,7 +619,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             configPath: nil,
             focused: false))
       }
-      self.emitRunningApplicationsSnapshot(reason: "app_terminate")
+      self.emitRunningApplicationsChanged(reason: "app_terminate")
     }
     workspaceTokens = [appSwitch, activeSpace, appLaunched, appTerminated]
 
@@ -670,8 +670,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     clipboardMonitor?.start()
   }
 
-  func emitRunningApplicationsSnapshot(reason: String) {
-    pluginManager.emitRunningApplicationsSnapshot(
+  func emitRunningApplicationsChanged(reason: String) {
+    pluginManager.emitRunningApplicationsChanged(
       reason: reason,
       applications: runningApplicationsSnapshot())
   }

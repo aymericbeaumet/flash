@@ -42,7 +42,7 @@
     "core:focus.changed",
     "core:window.focus.changed",
     "core:flashlight.opened",
-    "core:apps.snapshot",
+    "core:apps.changed",
     "core:config.*"
   ],
   "sources": [

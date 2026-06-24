@@ -1294,11 +1294,11 @@ struct PluginEvent {
   var frontWindowFrame: CGRect?
   /// Process id of the focused app for the event. Some events embed this
   /// in `payload.pid` already; setting this here also lets PluginProcess
-  /// scope its snapshot to the right context.
+  /// scope its discovery to the right context.
   var pid: pid_t?
 }
 
-struct PluginStatusSnapshot {
+struct PluginStatus {
   var id: String
   var name: String
   var version: String
@@ -1312,7 +1312,7 @@ struct PluginStatusSnapshot {
   var sourceCount: Int
   var commandCount: Int
   var targetCount: Int
-  var snapshotAgeMs: Int?
+  var discoveryAgeMs: Int?
   var restartCount: Int
   var lastError: String?
   var lastLog: String?
@@ -1355,7 +1355,7 @@ struct PluginStatusSnapshot {
       "priority": priority,
       "restart_count": restartCount,
       "root": root,
-      "snapshot_age_ms": snapshotAgeMs ?? NSNull(),
+      "discovery_age_ms": discoveryAgeMs ?? NSNull(),
       "source_count": sourceCount,
       "state": state,
       "status_segments": statusSegments,
@@ -1370,7 +1370,7 @@ struct PluginStatusSnapshot {
 /// Per-plugin host-side state for the **hint** path (`f`) and status bar.
 /// Candidates are NOT here: flashlight rows are pulled live from warm plugins
 /// via `candidateQuery`, never cached on the host (see `PluginFlashSource`).
-struct PluginSnapshot {
+struct PluginDiscovery {
   var targets: [PluginWireTarget] = []
   var statusSegments: [String: String] = [:]
   var contextPID: pid_t?

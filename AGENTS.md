@@ -137,7 +137,7 @@ for s in NSScreen.screens { u = u.union(s.frame) }
 
 The activation hot path **must return the same result for the same UI state**.
 
-An earlier cache attempt got this wrong by serving deadline-truncated snapshots, and by falling back to a fresh walk on cache miss — so two presses in the same UI state could land on either a partial snapshot or a complete fresh walk, producing different hint sets. That broken cache was deleted.
+An earlier cache attempt got this wrong by serving deadline-truncated walk captures, and by falling back to a fresh walk on cache miss — so two presses in the same UI state could land on either a partial capture or a complete fresh walk, producing different hint sets. That broken cache was deleted.
 
 The current prepared model is a different design. It preserves determinism by:
 
@@ -351,7 +351,7 @@ next to its `manifest.json`. `dev` is an optimized current-arch release build
 (fast, incremental); `release` is an optimized universal binary (x86_64 + arm64)
 joined with `lipo`. Candidate providers declare manifest root `sources` descriptors, keep
 their locations warm in memory via `set_locations`, refresh from light host events such as
-`core:apps.snapshot`, `core:focus.changed`, and `core:ax.changed` when possible,
+`core:apps.changed`, `core:focus.changed`, and `core:ax.changed` when possible,
 and poll only when the underlying source cannot be watched. The host *pulls* each
 location source via `candidateQuery` on flashlight open; that handler must stay
 O(memory) (the `warm_locations()` default) — it is on the hot path. The manifest's `start` is
@@ -379,7 +379,7 @@ lazily the first time the user types an `@source`/`!`bang filter.
   2. **Keep the store warm in the background.** Call `ctx.set_locations(source_id,
      candidates)` whenever the data changes, refreshing on host events that
      correlate with change (`core:focus.changed`, `core:apps.launched`,
-     `core:apps.terminated`, `core:apps.snapshot`, `core:flash.started`) and —
+     `core:apps.terminated`, `core:apps.changed`, `core:flash.started`) and —
      when the source has no push channel — a `ctx.interval(...)` poll. The store
      must be fresh by the time the user opens the flashlight; nothing refreshes it
      on the open path.
@@ -428,7 +428,7 @@ time, where there is no async runtime — they're excluded, not allow-listed.)
 
 Tests should pin these invariants in place — see
 `Plugins/tmux/src/main.rs` for the canonical pattern (`hash_candidates`,
-`refresh_candidate_snapshot_for_path` with `last_snapshot_hash` dedup,
+`refresh_candidate_locations_for_path` with `last_locations_hash` dedup,
 `run_tmux_aggregate` parallel fan-out, and the
 `tmux_plugin_uses_default_candidate_query` regression guard).
 

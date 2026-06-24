@@ -46,14 +46,14 @@ flash_plugin::plugin!(Chromium);
 impl FlashPlugin for Chromium {
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
-            "core:flash.started" | "core:apps.snapshot" => {
+            "core:flash.started" | "core:apps.changed" => {
                 let apps = chromium_apps(&event.running_applications);
-                refresh_snapshot(&ctx, apps).await;
+                refresh_locations(&ctx, apps).await;
             }
             "core:apps.launched" | "core:apps.terminated" | "core:focus.changed" => {
                 let apps = chromium_apps(&event.running_applications);
                 if !apps.is_empty() {
-                    refresh_snapshot(&ctx, apps).await;
+                    refresh_locations(&ctx, apps).await;
                 }
             }
             _ => {}
@@ -142,7 +142,7 @@ return out
     )
 }
 
-async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, String, i64)>) {
+async fn refresh_locations(ctx: &Context, apps: Vec<(String, String, i64)>) {
     let mut candidates = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (bundle_id, app_name, pid) in &apps {

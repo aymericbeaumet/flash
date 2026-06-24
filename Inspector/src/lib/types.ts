@@ -23,7 +23,7 @@ export interface PluginInfo {
   pid?: number | null;
   uptime_ms?: number | null;
   heartbeat_age_ms?: number | null;
-  snapshot_age_ms?: number | null;
+  discovery_age_ms?: number | null;
   source_count?: number;
   command_count?: number;
   target_count?: number;

@@ -134,7 +134,7 @@ final class PluginManager {
   }
 
   /// Static bang candidate prepared from manifest shebangs. Dynamic bang
-  /// candidates still come from plugin snapshots.
+  /// candidates are pulled live from warm plugins.
   private struct ShebangCandidateTarget {
     let selector: PluginSelectorStack
     let candidate: Candidate
@@ -300,13 +300,13 @@ final class PluginManager {
     }
   }
 
-  func emitRunningApplicationsSnapshot(reason: String, applications: [[String: Any]]) {
+  func emitRunningApplicationsChanged(reason: String, applications: [[String: Any]]) {
     queue.async { [weak self] in
       guard let self else { return }
       self.latestRunningApplicationsSnapshot = applications
       self.emitOnQueue(
         PluginEvent(
-          name: "core:apps.snapshot",
+          name: "core:apps.changed",
           payload: [
             "reason": reason,
             "running_applications": applications,
@@ -499,7 +499,7 @@ final class PluginManager {
   /// Lets the flashlight refresh path emit synthetic
   /// `core:focus.changed` events for every running app whose AX walk
   /// a plugin owns — even when that app isn't currently focused —
-  /// so the plugin can republish its candidate snapshot before the
+  /// so the plugin can refresh its warm locations before the
   /// next keystroke lands.
   func claimedBundleIDs() -> Set<String> {
     queue.sync { claimedBundleIDsIndex }
@@ -888,7 +888,7 @@ final class PluginManager {
       return "# Plugins\n\nNo plugins loaded."
     }
     let inventory = PluginRegistrationInventory(manifests: plugins.map(\.manifest))
-    let headers = ["ID", "STATE", "PID", "HEARTBEAT", "SNAPSHOT", "COMMANDS", "ORIGIN"]
+    let headers = ["ID", "STATE", "PID", "HEARTBEAT", "TARGETS", "COMMANDS", "ORIGIN"]
     let rows = snapshots.map { snapshot in
       [
         "\(snapshot.id) \(snapshot.version)",
@@ -948,14 +948,14 @@ final class PluginManager {
     return lines.joined(separator: "\n")
   }
 
-  func statusSnapshots() -> [PluginStatusSnapshot] {
+  func pluginStatuses() -> [PluginStatus] {
     queue.sync {
       pluginsByID.values.map { $0.statusSnapshot() }.sorted { $0.id < $1.id }
     }
   }
 
   func stateJSON() -> [[String: Any]] {
-    statusSnapshots().map(\.jsonObject)
+    pluginStatuses().map(\.jsonObject)
   }
 
   private func reloadDesiredPlugins(config: Config) {
@@ -1233,7 +1233,7 @@ final class PluginManager {
       let applications = self.latestRunningApplicationsSnapshot
       plugin.sendEvent(
         PluginEvent(
-          name: "core:apps.snapshot",
+          name: "core:apps.changed",
           payload: [
             "reason": "plugin_ready",
             "running_applications": applications,

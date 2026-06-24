@@ -165,7 +165,7 @@ struct FlashStatusBarContext {
   var now: Date
   var calendar: Calendar
   var locale: Locale
-  var pluginSnapshots: [PluginStatusSnapshot]
+  var pluginStatuses: [PluginStatus]
   var hostName: String
   var userName: String
   var userID: UInt32
@@ -178,7 +178,7 @@ struct FlashStatusBarContext {
     now: Date = Date(),
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX"),
-    pluginSnapshots: [PluginStatusSnapshot] = [],
+    pluginStatuses: [PluginStatus] = [],
     hostName: String = ProcessInfo.processInfo.hostName,
     userName: String = NSUserName(),
     userID: UInt32 = getuid(),
@@ -190,7 +190,7 @@ struct FlashStatusBarContext {
     self.now = now
     self.calendar = calendar
     self.locale = locale
-    self.pluginSnapshots = pluginSnapshots
+    self.pluginStatuses = pluginStatuses
     self.hostName = hostName
     self.userName = userName
     self.userID = userID
@@ -416,7 +416,7 @@ enum FlashStatusBarTemplateEngine {
     case .sdk(let value):
       return resolveSDK(value, context: context)
     case .plugin(let value):
-      return resolvePlugin(value, snapshots: context.pluginSnapshots)
+      return resolvePlugin(value, statuses: context.pluginStatuses)
     case .tmux(let name):
       return resolveTmux(name, context: context)
     case .command:
@@ -449,18 +449,18 @@ enum FlashStatusBarTemplateEngine {
 
   private static func resolvePlugin(
     _ value: FlashStatusBarPluginValue,
-    snapshots: [PluginStatusSnapshot]
+    statuses: [PluginStatus]
   ) -> String {
     switch value {
     case .loadedCount:
-      return "\(snapshots.count)"
+      return "\(statuses.count)"
     case .readyCount:
-      return "\(snapshots.filter { $0.state == "ready" }.count)"
+      return "\(statuses.filter { $0.state == "ready" }.count)"
     case .errorCount:
-      return "\(snapshots.filter { ($0.lastError ?? "").isEmpty == false }.count)"
+      return "\(statuses.filter { ($0.lastError ?? "").isEmpty == false }.count)"
     case .statusSegment(let pluginID, let name):
       guard
-        let text = snapshots.first(where: { $0.id == pluginID })?
+        let text = statuses.first(where: { $0.id == pluginID })?
           .statusSegments[name]?
           .trimmed,
         !text.isEmpty
@@ -777,7 +777,7 @@ final class FlashStatusBarController {
   private let queue = DispatchQueue(label: "flash.status_bar", qos: .utility)
   private let commandQueue = DispatchQueue(label: "flash.status_bar.commands", qos: .utility)
   private var template: FlashStatusBarTemplate
-  private let pluginSnapshotsProvider: () -> [PluginStatusSnapshot]
+  private let pluginStatusesProvider: () -> [PluginStatus]
   private var refreshTimer: DispatchSourceTimer?
   private var effectsTimer: DispatchSourceTimer?
   private var started = false
@@ -796,11 +796,11 @@ final class FlashStatusBarController {
     overlay: OverlayPanel,
     template: FlashStatusBarTemplate,
     refreshIntervalSeconds: TimeInterval = 5,
-    pluginSnapshotsProvider: @escaping () -> [PluginStatusSnapshot] = { [] }
+    pluginStatusesProvider: @escaping () -> [PluginStatus] = { [] }
   ) {
     self.overlay = overlay
     self.template = template
-    self.pluginSnapshotsProvider = pluginSnapshotsProvider
+    self.pluginStatusesProvider = pluginStatusesProvider
     self.refreshIntervalSeconds = refreshIntervalSeconds
   }
 
@@ -973,7 +973,7 @@ final class FlashStatusBarController {
       activeAppName: activeAppName,
       activeBundleIdentifier: activeBundleIdentifier,
       modeLabel: modeLabel,
-      pluginSnapshots: pluginSnapshotsProvider())
+      pluginStatuses: pluginStatusesProvider())
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
       context: context,

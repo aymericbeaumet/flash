@@ -221,7 +221,7 @@ enum HelpDocs {
       ## Plugin candidates
 
       Plugins keep their locations warm in memory, refreshing them on host
-      events such as `core:apps.snapshot`, `core:focus.changed`, and
+      events such as `core:apps.changed`, `core:focus.changed`, and
       `core:window.focus.changed`. On open the host paints in-process sources
       (apps) instantly, then pulls each plugin's warm locations in parallel and
       merges replies as they land, so the visible rows fill within a frame

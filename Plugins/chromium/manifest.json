@@ -27,7 +27,7 @@
   ],
   "listen": [
     "core:flash.started",
-    "core:apps.snapshot",
+    "core:apps.changed",
     "core:apps.launched",
     "core:apps.terminated",
     "core:focus.changed"

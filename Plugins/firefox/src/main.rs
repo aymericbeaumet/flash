@@ -52,9 +52,9 @@ flash_plugin::plugin!(Firefox);
 impl FlashPlugin for Firefox {
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
-            "core:apps.snapshot" | "core:flashlight.opened" => {
+            "core:apps.changed" | "core:flashlight.opened" => {
                 let apps = firefox_apps(&event.running_applications);
-                refresh_snapshot(&ctx, apps).await;
+                refresh_locations(&ctx, apps).await;
             }
             "core:focus.changed" | "core:window.focus.changed" => {
                 let bundle = event.bundle_id.unwrap_or_default();
@@ -62,7 +62,7 @@ impl FlashPlugin for Firefox {
                     return;
                 };
                 if is_firefox(&bundle) {
-                    refresh_snapshot(&ctx, vec![(bundle, pid)]).await;
+                    refresh_locations(&ctx, vec![(bundle, pid)]).await;
                 }
             }
             _ => {}
@@ -97,7 +97,7 @@ fn firefox_apps(apps: &[RunningApplication]) -> Vec<(String, i64)> {
         .collect()
 }
 
-async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, i64)>) -> Vec<Candidate> {
+async fn refresh_locations(ctx: &Context, apps: Vec<(String, i64)>) -> Vec<Candidate> {
     if apps.is_empty() {
         return ctx.warm_locations();
     }
@@ -108,7 +108,7 @@ async fn refresh_snapshot(ctx: &Context, apps: Vec<(String, i64)>) -> Vec<Candid
         candidates.extend(tabs.iter().map(|tab| candidate(tab, &source, pid)));
     }
     if candidates.is_empty() {
-        ctx.log("debug", "[firefox] skipped empty tab snapshot");
+        ctx.log("debug", "[firefox] skipped empty tab list");
         return ctx.warm_locations();
     }
     ctx.set_locations(SOURCE_ID, candidates);

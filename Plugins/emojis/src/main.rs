@@ -2,7 +2,7 @@
 //!
 //! Ships a static, Unicode-derived emoji dataset (glyph + lowercase UCD
 //! name) embedded at build time. On startup it emits the whole set as a
-//! `snapshot.updated` candidate list under the `emoji` source; Flash
+//! `set_locations` candidate list under the `emoji` source; Flash
 //! filters/fuzzy-matches them behind `:emojis <query>` and, on selection,
 //! inserts the glyph into the focused app. The plugin is otherwise inert —
 //! the dataset never changes, so there is nothing to refresh on events.
