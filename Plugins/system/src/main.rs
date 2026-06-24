@@ -1,13 +1,95 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use flash_plugin::{run, CommandRequest, CommandResponse, Context};
+use flash_plugin::{run, Candidate, CommandRequest, CommandResponse, Context, ResolveResponse};
 
-const CGSESSION: &str =
-    "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession";
+const SOURCE_ID: &str = "system.actions";
+
+/// Lock the screen via the modern macOS `⌃⌘Q` shortcut. The classic
+/// `…/Menu Extras/User.menu/…/CGSession -suspend` binary was removed from
+/// recent macOS, so drive the system shortcut through System Events instead.
+const LOCK_SCREEN: &str =
+    "tell application \"System Events\" to keystroke \"q\" using {command down, control down}";
 
 const DARK_TOGGLE: &str =
     "tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode";
+
+#[derive(Clone, Copy, Debug)]
+struct SystemAction {
+    subcommand: &'static str,
+    title: &'static str,
+    subtitle: &'static str,
+    aliases: &'static [&'static str],
+}
+
+const ACTIONS: &[SystemAction] = &[
+    SystemAction {
+        subcommand: "lock",
+        title: "Lock screen",
+        subtitle: "Require password and keep apps running",
+        aliases: &["screen", "secure", "password"],
+    },
+    SystemAction {
+        subcommand: "sleep",
+        title: "Sleep Mac",
+        subtitle: "Put the machine to sleep",
+        aliases: &["suspend", "standby"],
+    },
+    SystemAction {
+        subcommand: "displaysleep",
+        title: "Turn display off",
+        subtitle: "Sleep the display without sleeping the machine",
+        aliases: &["display", "screen", "off"],
+    },
+    SystemAction {
+        subcommand: "restart",
+        title: "Restart Mac",
+        subtitle: "Ask macOS to restart",
+        aliases: &["reboot"],
+    },
+    SystemAction {
+        subcommand: "shutdown",
+        title: "Shut down Mac",
+        subtitle: "Ask macOS to power off",
+        aliases: &["power", "poweroff", "halt"],
+    },
+    SystemAction {
+        subcommand: "logout",
+        title: "Log out",
+        subtitle: "End the current macOS login session",
+        aliases: &["sign out", "signout"],
+    },
+    SystemAction {
+        subcommand: "trash",
+        title: "Empty Trash",
+        subtitle: "Ask Finder to empty the Trash",
+        aliases: &["bin", "garbage"],
+    },
+    SystemAction {
+        subcommand: "dark",
+        title: "Toggle dark mode",
+        subtitle: "Switch between light and dark appearance",
+        aliases: &["appearance", "light"],
+    },
+    SystemAction {
+        subcommand: "screensaver",
+        title: "Start screen saver",
+        subtitle: "Launch ScreenSaverEngine",
+        aliases: &["screen saver", "screensave"],
+    },
+    SystemAction {
+        subcommand: "caffeinate",
+        title: "Keep display awake",
+        subtitle: "Start a detached caffeinate assertion",
+        aliases: &["awake", "prevent sleep"],
+    },
+    SystemAction {
+        subcommand: "decaffeinate",
+        title: "Allow display sleep",
+        subtitle: "Stop running caffeinate processes",
+        aliases: &["allow sleep", "stop caffeinate"],
+    },
+];
 
 struct System;
 
@@ -15,6 +97,7 @@ flash_plugin::plugin!(System);
 
 impl FlashPlugin for System {
     async fn on_start(&self, ctx: Context) {
+        publish_system_actions(&ctx);
         publish_battery_status(&ctx).await;
         let poll_ctx = ctx.clone();
         tokio::spawn(async move {
@@ -26,34 +109,116 @@ impl FlashPlugin for System {
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
-        match command.subcommand.as_str() {
-            "lock" => sh(&ctx, &[CGSESSION, "-suspend"], 10).await,
-            "sleep" => sh(&ctx, &["/usr/bin/pmset", "sleepnow"], 10).await,
-            "displaysleep" => sh(&ctx, &["/usr/bin/pmset", "displaysleepnow"], 10).await,
-            "trash" => run_osascript(
-                &ctx,
-                "tell application \"Finder\" to empty trash",
-                Duration::from_secs(30),
-            )
+        if command.subcommand.is_empty() {
+            return CommandResponse::toast(system_usage());
+        }
+        run_system_action(&ctx, command.subcommand.as_str()).await
+    }
+
+    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
+        let Some(subcommand) = candidate.payload_str() else {
+            return ResolveResponse::unresolved();
+        };
+        let response = run_system_action(&ctx, subcommand).await;
+        if response.ok {
+            ResolveResponse::resolved(None)
+        } else {
+            ctx.log(
+                "warn",
+                &format!(
+                    "[system] action {subcommand} failed: {}",
+                    response
+                        .error
+                        .unwrap_or_else(|| "unknown error".to_string())
+                ),
+            );
+            ResolveResponse::unresolved()
+        }
+    }
+}
+
+fn publish_system_actions(ctx: &Context) {
+    let candidates = ACTIONS.iter().map(system_action_candidate).collect();
+    ctx.set_locations(SOURCE_ID, candidates);
+}
+
+fn system_action_candidate(action: &SystemAction) -> Candidate {
+    Candidate::new(action.title)
+        .kind("system_action")
+        .source_id(SOURCE_ID)
+        .source(SOURCE_ID)
+        .subtitle(action.subtitle)
+        .aliases(
+            action
+                .aliases
+                .iter()
+                .copied()
+                .chain(std::iter::once(action.subcommand)),
+        )
+        .payload(action.subcommand)
+        .finishes_command(true)
+}
+
+fn system_usage() -> String {
+    let subcommands = ACTIONS
+        .iter()
+        .map(|action| action.subcommand)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(":system <{}> or :flashlight @system.actions", subcommands)
+}
+
+async fn run_system_action(ctx: &Context, subcommand: &str) -> CommandResponse {
+    match subcommand {
+        "lock" => run_osascript(ctx, LOCK_SCREEN, Duration::from_secs(10))
             .await
             .into_command(),
-            "dark" => run_osascript(&ctx, DARK_TOGGLE, Duration::from_secs(10))
-                .await
-                .into_command(),
-            "screensaver" => sh(&ctx, &["/usr/bin/open", "-a", "ScreenSaverEngine"], 10).await,
-            // Spawn caffeinate detached so the command returns immediately and
-            // the assertion outlives this short-lived invocation.
-            "caffeinate" => {
-                sh(
-                    &ctx,
-                    &["/bin/sh", "-c", "nohup caffeinate -d >/dev/null 2>&1 &"],
-                    10,
-                )
-                .await
-            }
-            "decaffeinate" => sh(&ctx, &["/usr/bin/killall", "caffeinate"], 10).await,
-            other => CommandResponse::error(format!("unknown subcommand: {other}")),
+        "sleep" => sh(ctx, &["/usr/bin/pmset", "sleepnow"], 10).await,
+        "displaysleep" => sh(ctx, &["/usr/bin/pmset", "displaysleepnow"], 10).await,
+        "restart" => run_osascript(
+            ctx,
+            "tell application \"System Events\" to restart",
+            Duration::from_secs(10),
+        )
+        .await
+        .into_command(),
+        "shutdown" => run_osascript(
+            ctx,
+            "tell application \"System Events\" to shut down",
+            Duration::from_secs(10),
+        )
+        .await
+        .into_command(),
+        "logout" => run_osascript(
+            ctx,
+            "tell application \"System Events\" to log out",
+            Duration::from_secs(10),
+        )
+        .await
+        .into_command(),
+        "trash" => run_osascript(
+            ctx,
+            "tell application \"Finder\" to empty trash",
+            Duration::from_secs(30),
+        )
+        .await
+        .into_command(),
+        "dark" => run_osascript(ctx, DARK_TOGGLE, Duration::from_secs(10))
+            .await
+            .into_command(),
+        "screensaver" => sh(ctx, &["/usr/bin/open", "-a", "ScreenSaverEngine"], 10).await,
+        // Spawn caffeinate detached so the command returns immediately and
+        // the assertion outlives this short-lived invocation.
+        "caffeinate" => {
+            sh(
+                ctx,
+                &["/bin/sh", "-c", "nohup caffeinate -d >/dev/null 2>&1 &"],
+                10,
+            )
+            .await
         }
+        "decaffeinate" => sh(ctx, &["/usr/bin/killall", "caffeinate"], 10).await,
+        other => CommandResponse::error(format!("unknown subcommand: {other}")),
     }
 }
 
@@ -270,6 +435,45 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn action_catalog_has_unique_subcommands() {
+        let mut names = std::collections::HashSet::new();
+        for action in ACTIONS {
+            assert!(
+                names.insert(action.subcommand),
+                "duplicate {}",
+                action.subcommand
+            );
+            assert!(!action.title.is_empty());
+            assert!(!action.subtitle.is_empty());
+        }
+    }
+
+    #[test]
+    fn action_candidates_are_finishers_under_system_source() {
+        let restart = ACTIONS
+            .iter()
+            .find(|action| action.subcommand == "restart")
+            .unwrap();
+        let candidate = system_action_candidate(restart);
+        assert_eq!(candidate.title, "Restart Mac");
+        assert_eq!(candidate.meta("kind"), Some("system_action"));
+        assert_eq!(candidate.meta("source"), Some(SOURCE_ID));
+        assert_eq!(candidate.meta("source_id"), Some(SOURCE_ID));
+        assert_eq!(candidate.payload_str(), Some("restart"));
+        assert_eq!(candidate.meta("finishes_command"), Some("1"));
+        assert!(candidate.meta("aliases").unwrap_or("").contains("reboot"));
+    }
+
+    #[test]
+    fn bare_system_usage_lists_picker_and_actions() {
+        let usage = system_usage();
+        assert!(usage.contains(":system <lock"));
+        assert!(usage.contains("restart"));
+        assert!(usage.contains("shutdown"));
+        assert!(usage.contains(":flashlight @system.actions"));
+    }
 
     #[test]
     fn formats_charged_battery_yellow_with_breathing() {
