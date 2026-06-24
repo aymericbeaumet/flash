@@ -1396,28 +1396,29 @@ extension AppDelegate {
     publishCommandSurfaceModeLabel(reason: reason)
   }
 
-  /// `:clipboard` — fetch the full history from the clipboard plugin and open
-  /// the dedicated selectable modal. The history travels over the plugin
-  /// command RPC (keeping this surface decoupled from the flashlight candidate
-  /// pool); previews render the list while the full values are stashed in
-  /// `clipboardModalEntries` for the paste on Return.
-  func openClipboardModal() {
-    let dispatched = pluginManager.invoke(
+  /// `:clipboard` — history now lives in the HTTP dashboard's Clipboard tab.
+  /// Refresh the host cache from the plugin, then open the browser there. The
+  /// history travels over the plugin command RPC (keeping this surface
+  /// decoupled from the flashlight candidate pool).
+  func openClipboardDashboard() {
+    refreshClipboardDashboardCache()
+    openDebugDashboard(tab: "clipboard")
+  }
+
+  /// Pull the full clipboard history from the plugin into `clipboardEntries`
+  /// (the dashboard payload) and rebroadcast state so an open inspector updates
+  /// live. Driven by `:clipboard` and by each pasteboard change.
+  func refreshClipboardDashboardCache() {
+    _ = pluginManager.invoke(
       command: "clipboard", subcommand: "", args: [], raw: ":clipboard",
       in: pluginSelectorContext()
     ) { [weak self] ok, _, stdout, _ in
-      guard let self else { return }
       let entries = (ok ? stdout : nil).flatMap(Self.decodeClipboardModalEntries) ?? []
-      self.clipboardModalEntries = entries
-      guard !entries.isEmpty else {
-        self.presentModal(reason: "clipboard_empty") { "# Clipboard\n\nNo history yet." }
-        return
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.clipboardEntries = entries
+        self.debugServer?.broadcastState()
       }
-      self.presentSelectableModal(reason: "clipboard", lines: entries.map(\.preview))
-    }
-    if !dispatched {
-      clipboardModalEntries = []
-      presentModal(reason: "clipboard_unavailable") { "# Clipboard\n\nPlugin unavailable." }
     }
   }
 
@@ -2304,14 +2305,14 @@ extension AppDelegate {
       performCommandLineCommand(command)
       return
     }
-    // Bare `:clipboard` opens the dedicated history modal rather than firing
-    // a fire-and-forget plugin command; the host fetches the history and
-    // renders the list itself. `:clipboard <arg>` falls through below.
+    // Bare `:clipboard` opens the dashboard's Clipboard tab rather than firing
+    // a fire-and-forget plugin command; the host caches the history and the web
+    // UI renders it. `:clipboard <arg>` falls through below.
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),
       plugin.command.lowercased() == "clipboard", plugin.subcommand.isEmpty, plugin.args.isEmpty
     {
       finishCommandLineInteraction(reason: "clipboard_submit")
-      openClipboardModal()
+      openClipboardDashboard()
       return
     }
     if let plugin = NormalModeDispatcher.pluginCommandLineInvocation(raw),

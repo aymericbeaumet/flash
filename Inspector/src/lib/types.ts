@@ -57,6 +57,13 @@ export interface FocusedApp {
   pid?: number | null;
 }
 
+export interface ClipboardEntry {
+  /// One-line label.
+  preview: string;
+  /// Full text — copied back to the system clipboard on click.
+  value: string;
+}
+
 export interface DocTopic {
   name: string;
   title: string;
@@ -74,4 +81,5 @@ export interface InspectorState {
   plugins?: PluginInfo[];
   commands?: CommandInfo[];
   docs?: DocTopic[];
+  clipboard?: ClipboardEntry[];
 }

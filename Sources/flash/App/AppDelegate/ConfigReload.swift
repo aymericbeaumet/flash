@@ -246,6 +246,7 @@ extension AppDelegate {
     return [
       "config": configJSON,
       "commands": commands,
+      "clipboard": clipboardEntries.map { ["preview": $0.preview, "value": $0.value] },
       "docs": docs,
       "focused_app": [
         "bundle_id": app?.bundleIdentifier ?? NSNull(),

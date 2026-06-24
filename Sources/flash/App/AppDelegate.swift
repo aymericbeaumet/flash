@@ -212,6 +212,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// Entries backing the dedicated `:clipboard` modal, same order as the
   /// rendered list; the panel owns the selected index, read back on submit.
   var clipboardModalEntries: [ClipboardModalEntry] = []
+  /// Clipboard history mirrored for the inspector's Clipboard tab. Refreshed
+  /// from the clipboard plugin on `:clipboard` and on each pasteboard change,
+  /// then surfaced through `debugStateJSON`.
+  var clipboardEntries: [ClipboardModalEntry] = []
   var candidateFinderCurrentQuery = ""
   var candidateFinderScope: CandidateScope = .all
   /// Bumped every time a flashlight session is (re)seeded. Each async location
@@ -659,13 +663,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// free of polling — the clipboard plugin just subscribes to the event.
   private func startClipboardMonitor() {
     clipboardMonitor = ClipboardMonitor { [weak self] text in
-      self?.pluginManager.emit(
+      guard let self else { return }
+      self.pluginManager.emit(
         PluginEvent(
           name: "core:clipboard.changed",
           payload: ["text": text],
           bundleID: nil,
           configPath: nil,
           focused: nil))
+      // Let the plugin fold the new entry into its history, then refresh the
+      // inspector's Clipboard tab so an open dashboard updates live.
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak self] in
+        self?.refreshClipboardDashboardCache()
+      }
     }
     clipboardMonitor?.start()
   }

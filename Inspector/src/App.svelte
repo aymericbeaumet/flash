@@ -1,12 +1,13 @@
 <script lang="ts">
+  import ClipboardPanel from "./lib/ClipboardPanel.svelte";
   import CommandsPanel from "./lib/CommandsPanel.svelte";
   import DocsPanel from "./lib/DocsPanel.svelte";
   import LogList from "./lib/LogList.svelte";
   import PluginsPanel from "./lib/PluginsPanel.svelte";
   import { store } from "./lib/store.svelte";
 
-  type Tab = "logs" | "plugins" | "commands" | "docs" | "state";
-  const validTabs: Tab[] = ["logs", "plugins", "commands", "docs", "state"];
+  type Tab = "logs" | "plugins" | "commands" | "docs" | "clipboard" | "state";
+  const validTabs: Tab[] = ["logs", "plugins", "commands", "docs", "clipboard", "state"];
 
   // The hash is `#<tab>` or, for the Docs tab, `#docs/<topic>` so `:help <topic>`
   // can deep-link. Split once: first segment selects the tab, the rest is the
@@ -54,6 +55,7 @@
   const plugins = $derived(store.state.plugins ?? []);
   const commands = $derived(store.state.commands ?? []);
   const docs = $derived(store.state.docs ?? []);
+  const clipboard = $derived(store.state.clipboard ?? []);
   const focused = $derived(store.state.focused_app);
 
   const tabs: { id: Tab; label: string }[] = [
@@ -61,6 +63,7 @@
     { id: "plugins", label: "Plugins" },
     { id: "commands", label: "Commands" },
     { id: "docs", label: "Docs" },
+    { id: "clipboard", label: "Clipboard" },
     { id: "state", label: "State" },
   ];
 
@@ -87,6 +90,7 @@
         {#if t.id === "plugins"}<span class="pill">{plugins.length}</span>{/if}
         {#if t.id === "commands"}<span class="pill">{commands.length}</span>{/if}
         {#if t.id === "docs"}<span class="pill">{docs.length}</span>{/if}
+        {#if t.id === "clipboard"}<span class="pill">{clipboard.length}</span>{/if}
       </button>
     {/each}
   </nav>
@@ -104,6 +108,8 @@
     <CommandsPanel {commands} />
   {:else if tab === "docs"}
     <DocsPanel {docs} {topic} />
+  {:else if tab === "clipboard"}
+    <ClipboardPanel entries={clipboard} />
   {:else}
     <div class="state-grid">
       <section>
