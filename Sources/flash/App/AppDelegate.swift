@@ -244,6 +244,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
   var commandLineCompletionSelectedIndex = 0
   var commandLineCompletionQuery: String = ""
+  /// Past executed command-line inputs (most-recent last). up/down (and
+  /// ctrl+n/p, which route to the same handler) recall these when no candidate
+  /// or completion list is active — see `recallCommandLineHistory`.
+  var commandLineHistory: [String] = []
+  /// Index into `commandLineHistory` while recalling; nil when editing a fresh
+  /// buffer. `commandLineHistoryStash` holds that fresh buffer so stepping
+  /// `down` past the newest entry restores what the user was typing.
+  var commandLineHistoryCursor: Int?
+  var commandLineHistoryStash: String = ""
   var editableFocusSuppressedPID: pid_t?
   var selectedInitialMode = false
   var sourceAppPID: pid_t?

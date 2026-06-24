@@ -686,6 +686,9 @@ extension AppDelegate {
     if resetSelection {
       candidateFinderSelectedIndex = 0
     }
+    // A real edit ends history recall: the next up/down stashes this buffer and
+    // starts from the newest entry again.
+    commandLineHistoryCursor = nil
     refreshCommandLine(text: command, cursorIndex: cursorIndex)
   }
 
@@ -720,7 +723,38 @@ extension AppDelegate {
         cursorIndex: overlay.commandLineCursorIndex)
       return true
     }
-    return false
+    return recallCommandLineHistory(delta: delta)
+  }
+
+  /// up/down (and ctrl+n/p, which route here) recall past commands when no
+  /// candidate or completion list is active — `delta < 0` steps to older
+  /// entries; `delta > 0` steps toward newer and finally back to the
+  /// in-progress buffer the user had typed before recalling.
+  private func recallCommandLineHistory(delta: Int) -> Bool {
+    guard !commandLineHistory.isEmpty else { return false }
+    let next: Int?
+    if delta < 0 {
+      switch commandLineHistoryCursor {
+      case nil:
+        commandLineHistoryStash = overlay.commandLineText
+        next = commandLineHistory.count - 1
+      case let cursor?:
+        next = max(0, cursor - 1)
+      }
+    } else {
+      switch commandLineHistoryCursor {
+      case nil:
+        return false
+      case let cursor? where cursor >= commandLineHistory.count - 1:
+        next = nil
+      case let cursor?:
+        next = cursor + 1
+      }
+    }
+    commandLineHistoryCursor = next
+    let text = next.map { commandLineHistory[$0] } ?? commandLineHistoryStash
+    refreshCommandLine(text: text, cursorIndex: text.count)
+    return true
   }
 
   /// `<tab>` in command-line mode. Two paths:

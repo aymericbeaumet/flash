@@ -201,7 +201,7 @@ extension AppDelegate {
     server.start()
   }
 
-  private func debugStateJSON() -> [String: Any] {
+  func debugStateJSON() -> [String: Any] {
     let configJSON: Any
     if let data = config.resolvedConfigJSON.data(using: .utf8),
       let object = try? JSONSerialization.jsonObject(with: data)

@@ -346,6 +346,14 @@ extension OverlayPanel {
         modalScrollGPending = false
         return .lineUp
       }
+      if char == "d" {
+        modalScrollGPending = false
+        return .halfPageDown
+      }
+      if char == "u" {
+        modalScrollGPending = false
+        return .halfPageUp
+      }
       if char == "g" {
         if modalScrollGPending {
           modalScrollGPending = false

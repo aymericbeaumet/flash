@@ -30,6 +30,11 @@ extension OverlayPanel {
   static let modalBorderCGColor: CGColor =
     NSColor(calibratedRed: 0.30, green: 0.34, blue: 0.40, alpha: 1).cgColor
 
+  /// The one width every modal uses (clamped to the screen at render time).
+  /// `:help`, `:plugins`, `:logs`, and doc topics all share it so they read as
+  /// one consistent surface.
+  static let uniformModalWidth: CGFloat = 960
+
   /// Unified entry point. Variant-specific state is set up here so the
   /// pre-existing `displayModal` / `displaySelectableModal` aliases stay
   /// as thin call-site sugar (kept for diff readability).
@@ -94,12 +99,13 @@ extension OverlayPanel {
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     let longestLine = lines.map(\.count).max() ?? text.count
     let lineHeight = fontSize + 5
-    let width = min(
-      max(920, CGFloat(longestLine) * fontSize * 0.60 + 56),
-      max(360, visible.width - 32))
-    let height = min(
-      lineHeight * CGFloat(lines.count) + 34,
-      max(260, visible.height - 80))
+    // Every modal shares one frame so documentation reads in a consistent,
+    // spacious window: a single uniform width (capped to the screen) and a
+    // height that is the golden-ratio *major* portion (≈0.618) of the screen.
+    // Content scrolls within — see `scrollModal`.
+    let goldenMajor: CGFloat = 0.618
+    let width = min(Self.uniformModalWidth, visible.width - 48)
+    let height = min(max(280, (visible.height * goldenMajor).rounded()), visible.height - 40)
     let localX = visible.midX - frame.minX - width / 2
     let localY = visible.midY - frame.minY - height / 2
 

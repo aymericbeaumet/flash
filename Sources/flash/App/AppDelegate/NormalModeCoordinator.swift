@@ -1313,6 +1313,43 @@ extension AppDelegate {
     }
   }
 
+  /// `:logs` — open the HTTP debug inspector dashboard in the default browser.
+  /// The inspector is loopback-only, so we start it on demand when it isn't
+  /// already running (e.g. `[debug] http_inspector_enabled` is off) and open the
+  /// page once the listener has a bound port.
+  func openLogsDashboard() {
+    finishCommandLineInteraction(reason: "logs")
+    if debugServer == nil {
+      let server = DebugServer(
+        host: config.debug.httpInspectorHost,
+        port: config.debug.httpInspectorPort,
+        stateProvider: { [weak self] in self?.debugStateJSON() ?? [:] })
+      debugServer = server
+      server.start()
+    }
+    openDebugDashboardWhenReady(attempt: 0)
+  }
+
+  private func openDebugDashboardWhenReady(attempt: Int) {
+    guard let server = debugServer else { return }
+    if let port = server.listeningPort {
+      let host =
+        (server.host == "0.0.0.0" || server.host.isEmpty) ? "127.0.0.1" : server.host
+      if let url = URL(string: "http://\(host):\(port)/") {
+        NSWorkspace.shared.open(url)
+        FlashLog.info("[logs] opened inspector dashboard at http://\(host):\(port)/")
+      }
+      return
+    }
+    guard attempt < 30 else {
+      FlashLog.warn("[logs] debug inspector did not start in time")
+      return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+      self?.openDebugDashboardWhenReady(attempt: attempt + 1)
+    }
+  }
+
   private func runPluginsSubcommand(_ sub: NormalModeDispatcher.PluginsSubcommand) {
     switch sub {
     case .modal:
@@ -2205,6 +2242,24 @@ extension AppDelegate {
     CandidateFinder.displayTitle(source: source, name: title)
   }
 
+  /// Append a submitted command to the recall history (most-recent last),
+  /// dropping a consecutive duplicate and bounding the size. Records every
+  /// submission, success or not. Resets the recall cursor so the next up/down
+  /// starts from the newest entry.
+  func recordCommandLineHistory(_ rawInput: String) {
+    let entry = rawInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    commandLineHistoryCursor = nil
+    commandLineHistoryStash = ""
+    guard !entry.isEmpty else { return }
+    if commandLineHistory.last != entry {
+      commandLineHistory.append(entry)
+      let cap = 200
+      if commandLineHistory.count > cap {
+        commandLineHistory.removeFirst(commandLineHistory.count - cap)
+      }
+    }
+  }
+
   func submitCommandLine(_ rawInput: String) {
     // `#` output-capture modifier (`:#aws whoami`): strip it up front so all
     // downstream parsing sees a clean command line, and remember to route the
@@ -2218,6 +2273,7 @@ extension AppDelegate {
     // user's intent is what matters; the cost of a bad mark is bounded
     // by the same decay all other frecency entries pay.
     recordCommandLineFrecency(rawInput: raw)
+    recordCommandLineHistory(rawInput)
     // `:open <args>` is a dumb forward to `/usr/bin/open` — no app-finding
     // smarts (that lives in `:flashlight`). Caught first so it never falls
     // into the candidate-finder or command-spec paths.
@@ -2344,6 +2400,8 @@ extension AppDelegate {
       showMappings()
     case .help(let topic):
       showHelp(topic: topic)
+    case .logs:
+      openLogsDashboard()
     }
   }
 
