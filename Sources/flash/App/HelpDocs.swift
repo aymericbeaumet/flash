@@ -220,12 +220,12 @@ enum HelpDocs {
 
       ## Plugin candidates
 
-      Plugins keep candidate snapshots warm through host events such as
-      `core:apps.snapshot`, `core:focus.changed`, and
-      `core:window.focus.changed`. Flashlight merges their current snapshots
-      synchronously once the prompt has a real query or a completed `@source:`
-      selector, so the visible rows do not reshuffle from late plugin
-      responses.
+      Plugins keep their locations warm in memory, refreshing them on host
+      events such as `core:apps.snapshot`, `core:focus.changed`, and
+      `core:window.focus.changed`. On open the host paints in-process sources
+      (apps) instantly, then pulls each plugin's warm locations in parallel and
+      merges replies as they land, so the visible rows fill within a frame
+      without blocking on IPC.
       """)
 
   private static let overviewTopic = HelpTopic(

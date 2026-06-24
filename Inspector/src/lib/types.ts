@@ -57,6 +57,15 @@ export interface FocusedApp {
   pid?: number | null;
 }
 
+export interface DocTopic {
+  name: string;
+  title: string;
+  summary: string;
+  /** Raw Markdown — the Docs tab renders it client-side. */
+  body: string;
+  aliases?: string[];
+}
+
 export interface InspectorState {
   mode?: string;
   overlay?: string;
@@ -64,4 +73,5 @@ export interface InspectorState {
   config?: Record<string, unknown>;
   plugins?: PluginInfo[];
   commands?: CommandInfo[];
+  docs?: DocTopic[];
 }

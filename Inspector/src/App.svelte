@@ -1,28 +1,48 @@
 <script lang="ts">
   import CommandsPanel from "./lib/CommandsPanel.svelte";
+  import DocsPanel from "./lib/DocsPanel.svelte";
   import LogList from "./lib/LogList.svelte";
   import PluginsPanel from "./lib/PluginsPanel.svelte";
   import { store } from "./lib/store.svelte";
 
-  type Tab = "logs" | "plugins" | "commands" | "state";
-  const validTabs: Tab[] = ["logs", "plugins", "commands", "state"];
-  function tabFromHash(): Tab {
-    const h = location.hash.replace(/^#/, "");
-    return (validTabs as string[]).includes(h) ? (h as Tab) : "logs";
+  type Tab = "logs" | "plugins" | "commands" | "docs" | "state";
+  const validTabs: Tab[] = ["logs", "plugins", "commands", "docs", "state"];
+
+  // The hash is `#<tab>` or, for the Docs tab, `#docs/<topic>` so `:help <topic>`
+  // can deep-link. Split once: first segment selects the tab, the rest is the
+  // topic (Docs only).
+  function parseHash(): { tab: Tab; topic: string } {
+    const raw = location.hash.replace(/^#/, "");
+    const slash = raw.indexOf("/");
+    const head = slash === -1 ? raw : raw.slice(0, slash);
+    const rest = slash === -1 ? "" : raw.slice(slash + 1);
+    const tab = (validTabs as string[]).includes(head) ? (head as Tab) : "logs";
+    let topic = "";
+    try {
+      topic = decodeURIComponent(rest);
+    } catch {
+      topic = rest;
+    }
+    return { tab, topic };
   }
-  let tab = $state<Tab>(tabFromHash());
+  let tab = $state<Tab>(parseHash().tab);
+  let topic = $state<string>(parseHash().topic);
 
   function selectTab(id: Tab) {
     tab = id;
+    topic = "";
     if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
   }
 
   $effect(() => {
     store.start();
-    // `:logs`/`:plugins`/`:commands` open the dashboard at `#<tab>`; honor the
-    // initial hash and follow it when the host re-opens an already-open page.
+    // `:logs`/`:plugins`/`:commands`/`:help` open the dashboard at `#<tab>`;
+    // honor the initial hash and follow it when the host re-opens an
+    // already-open page (DocsPanel pushes `#docs/<topic>` on topic clicks).
     const onHash = () => {
-      tab = tabFromHash();
+      const p = parseHash();
+      tab = p.tab;
+      topic = p.topic;
     };
     window.addEventListener("hashchange", onHash);
     return () => {
@@ -33,12 +53,14 @@
 
   const plugins = $derived(store.state.plugins ?? []);
   const commands = $derived(store.state.commands ?? []);
+  const docs = $derived(store.state.docs ?? []);
   const focused = $derived(store.state.focused_app);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "logs", label: "Logs" },
     { id: "plugins", label: "Plugins" },
     { id: "commands", label: "Commands" },
+    { id: "docs", label: "Docs" },
     { id: "state", label: "State" },
   ];
 
@@ -64,6 +86,7 @@
         {t.label}
         {#if t.id === "plugins"}<span class="pill">{plugins.length}</span>{/if}
         {#if t.id === "commands"}<span class="pill">{commands.length}</span>{/if}
+        {#if t.id === "docs"}<span class="pill">{docs.length}</span>{/if}
       </button>
     {/each}
   </nav>
@@ -79,6 +102,8 @@
     <PluginsPanel {plugins} />
   {:else if tab === "commands"}
     <CommandsPanel {commands} />
+  {:else if tab === "docs"}
+    <DocsPanel {docs} {topic} />
   {:else}
     <div class="state-grid">
       <section>

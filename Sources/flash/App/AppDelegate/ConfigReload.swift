@@ -227,9 +227,26 @@ extension AppDelegate {
         ])
       }
     }
+    // Docs are Markdown in `HelpTopic.body`; the inspector's Docs tab renders
+    // them (and `:help [topic]` deep-links there). Ship the raw Markdown so the
+    // browser owns rendering, collapsibles, and topic navigation.
+    let docs = HelpDocs.allTopics(
+      config: config,
+      showModes: modeBadgeEnabled,
+      pluginTopics: pluginManager.pluginHelpTopics()
+    ).map { topic -> [String: Any] in
+      [
+        "name": topic.name,
+        "title": topic.title,
+        "summary": topic.summary,
+        "body": topic.body,
+        "aliases": topic.aliases,
+      ]
+    }
     return [
       "config": configJSON,
       "commands": commands,
+      "docs": docs,
       "focused_app": [
         "bundle_id": app?.bundleIdentifier ?? NSNull(),
         "localized_name": app?.localizedName ?? NSNull(),

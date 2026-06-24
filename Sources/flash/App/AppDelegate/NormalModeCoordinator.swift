@@ -1297,22 +1297,18 @@ extension AppDelegate {
     .normal
   }
 
+  /// `:help [topic]` — docs live in the HTTP dashboard's Docs tab, so open the
+  /// browser there (deep-linked to the topic when one is named).
   func showHelp(topic: String? = nil) {
-    presentModal(reason: "enter_help") { [self] in
-      HelpDocs.render(
-        topic: topic,
-        config: config,
-        showModes: modeBadgeEnabled,
-        pluginTopics: pluginManager.pluginHelpTopics())
-    }
+    openDebugDashboard(tab: "docs", topic: topic)
   }
 
   /// Open the HTTP debug inspector dashboard in the default browser on `tab`
-  /// (`logs` / `plugins` / `commands` / `state`), backing `:logs`, `:plugins`,
-  /// and `:commands`. The inspector is loopback-only and on by default; we still
-  /// start it on demand if it was disabled, and open the page once the listener
-  /// has a bound port.
-  func openDebugDashboard(tab: String) {
+  /// (`logs` / `plugins` / `commands` / `state` / `docs`), optionally deep-linked
+  /// to a `topic` (Docs). Backs `:logs`, `:plugins`, `:commands`, `:help`. The
+  /// inspector is loopback-only and on by default; we still start it on demand if
+  /// it was disabled, and open the page once the listener has a bound port.
+  func openDebugDashboard(tab: String, topic: String? = nil) {
     finishCommandLineInteraction(reason: "debug_dashboard")
     if debugServer == nil {
       let server = DebugServer(
@@ -1322,15 +1318,19 @@ extension AppDelegate {
       debugServer = server
       server.start()
     }
-    openDebugDashboardWhenReady(tab: tab, attempt: 0)
+    openDebugDashboardWhenReady(tab: tab, topic: topic, attempt: 0)
   }
 
-  private func openDebugDashboardWhenReady(tab: String, attempt: Int) {
+  private func openDebugDashboardWhenReady(tab: String, topic: String?, attempt: Int) {
     guard let server = debugServer else { return }
     if let port = server.listeningPort {
       let host =
         (server.host == "0.0.0.0" || server.host.isEmpty) ? "127.0.0.1" : server.host
-      if let url = URL(string: "http://\(host):\(port)/#\(tab)") {
+      let fragment =
+        topic.flatMap { $0.isEmpty ? nil : $0 }
+        .map { "\(tab)/\($0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? $0)" }
+        ?? tab
+      if let url = URL(string: "http://\(host):\(port)/#\(fragment)") {
         NSWorkspace.shared.open(url)
         FlashLog.info("[debug] opened inspector dashboard at \(url.absoluteString)")
       }
@@ -1341,7 +1341,7 @@ extension AppDelegate {
       return
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-      self?.openDebugDashboardWhenReady(tab: tab, attempt: attempt + 1)
+      self?.openDebugDashboardWhenReady(tab: tab, topic: topic, attempt: attempt + 1)
     }
   }
 
