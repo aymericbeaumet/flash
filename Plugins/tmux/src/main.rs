@@ -87,7 +87,14 @@ fn link_pattern() -> &'static Regex {
         // ./ ../ relative paths · dotted host/path tokens · bare file.ext names ·
         // E#### error codes (Rust/cargo, etc.). The trailing `:LINE[:COL]`
         // editor-jump suffix is folded into the path-shaped alternatives.
-        let pattern = r#"https?://[\w./\-?&=@%+:~#!$,;*()]+[\w/]|\$\{?\w+\}?(?:/[\w./\-]+)+|(?:~|/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|(?:\.{1,2}/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+(?:/[^\s\]\r\n][^\s\]\r\n]*)+\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+\.[\w-]+(?::\d+(?::\d+)?)?|(?-u:\b)E\d{4}(?-u:\b)"#;
+        //
+        // The bare `host.ext` alternative requires the final segment to start
+        // with a letter and be 2+ chars (`\.[a-zA-Z][\w-]+`) so noise tokens —
+        // file sizes (`8.2k`), abbreviations (`e.g`), versions (`v0.1.0`) —
+        // don't masquerade as links, while real filenames/domains (`Cargo.toml`,
+        // `README.md`, `beside.com`, `t.io`) still match. URLs and slash-paths
+        // are unaffected.
+        let pattern = r#"https?://[\w./\-?&=@%+:~#!$,;*()]+[\w/]|\$\{?\w+\}?(?:/[\w./\-]+)+|(?:~|/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|(?:\.{1,2}/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+(?:/[^\s\]\r\n][^\s\]\r\n]*)+\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+\.[a-zA-Z][\w-]+(?::\d+(?::\d+)?)?|(?-u:\b)E\d{4}(?-u:\b)"#;
         Regex::new(pattern).expect("tmux link regex")
     })
 }
@@ -2096,6 +2103,29 @@ mod tests {
             only("open https://admin.test.com:1234/x?y=1 now").as_deref(),
             Some("https://admin.test.com:1234/x?y=1")
         );
+    }
+
+    #[test]
+    fn extract_links_drops_size_abbrev_version_noise() {
+        let has = |line: &str, want: &str| extract_links(line, 1000).iter().any(|(_, t)| t == want);
+        // Real filenames / domains / URLs are kept.
+        assert!(has("see Cargo.toml here", "Cargo.toml"));
+        assert!(has("open README.md now", "README.md"));
+        assert!(has("ship config.default.toml ok", "config.default.toml"));
+        assert!(has("host beside.com is up", "beside.com"));
+        assert!(has(
+            "go to https://app.beside.com x",
+            "https://app.beside.com"
+        ));
+        assert!(has("edit src/main.rs:42 fast", "src/main.rs:42"));
+        // Noise must NOT be matched as links.
+        for (line, junk) in [
+            ("size 8.2k total", "8.2k"),
+            ("for e.g. this", "e.g"),
+            ("tag v0.1.0 rc", "v0.1.0"),
+        ] {
+            assert!(!has(line, junk), "expected {junk:?} to be dropped");
+        }
     }
 
     fn client(tty: &str, session: &str, client_pid: i64, activity: i64) -> TmuxClient {
