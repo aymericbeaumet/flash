@@ -200,9 +200,10 @@ struct Config {
     /// `warn` / `error` / `fatal` to mute the steady-state traces.
     var logLevel: FlashLog.Level = .info
     /// When true, Flash binds a loopback-only HTTP server that exposes
-    /// live logs + state inspection. Off by default — turn on with
-    /// `debug.http_inspector_enabled = true`.
-    var httpInspectorEnabled: Bool = false
+    /// live logs + state inspection. On by default — it backs `:logs`,
+    /// `:plugins`, and `:commands`. Disable with
+    /// `debug.http_inspector_enabled = false`.
+    var httpInspectorEnabled: Bool = true
     /// Loopback hostname the inspector binds on. Restricted to
     /// `localhost` / `127.0.0.1` / `::1` (validated at start).
     var httpInspectorHost: String = "localhost"

@@ -5,11 +5,30 @@
   import { store } from "./lib/store.svelte";
 
   type Tab = "logs" | "plugins" | "commands" | "state";
-  let tab = $state<Tab>("logs");
+  const validTabs: Tab[] = ["logs", "plugins", "commands", "state"];
+  function tabFromHash(): Tab {
+    const h = location.hash.replace(/^#/, "");
+    return (validTabs as string[]).includes(h) ? (h as Tab) : "logs";
+  }
+  let tab = $state<Tab>(tabFromHash());
+
+  function selectTab(id: Tab) {
+    tab = id;
+    if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
+  }
 
   $effect(() => {
     store.start();
-    return () => store.stop();
+    // `:logs`/`:plugins`/`:commands` open the dashboard at `#<tab>`; honor the
+    // initial hash and follow it when the host re-opens an already-open page.
+    const onHash = () => {
+      tab = tabFromHash();
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      store.stop();
+    };
   });
 
   const plugins = $derived(store.state.plugins ?? []);
@@ -41,7 +60,7 @@
   <strong class="brand">Flash Inspector</strong>
   <nav>
     {#each tabs as t}
-      <button class:active={tab === t.id} onclick={() => (tab = t.id)}>
+      <button class:active={tab === t.id} onclick={() => selectTab(t.id)}>
         {t.label}
         {#if t.id === "plugins"}<span class="pill">{plugins.length}</span>{/if}
         {#if t.id === "commands"}<span class="pill">{commands.length}</span>{/if}

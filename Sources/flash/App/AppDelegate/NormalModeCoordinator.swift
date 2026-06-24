@@ -1222,7 +1222,7 @@ extension AppDelegate {
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showPlugins:
-      showPlugins()
+      openDebugDashboard(tab: "plugins")
     case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow,
       .pluginVerb:
       handleURLCommand(command)
@@ -1307,18 +1307,13 @@ extension AppDelegate {
     }
   }
 
-  func showPlugins() {
-    presentModal(reason: "enter_plugins") { [self] in
-      pluginManager.statusText()
-    }
-  }
-
-  /// `:logs` — open the HTTP debug inspector dashboard in the default browser.
-  /// The inspector is loopback-only, so we start it on demand when it isn't
-  /// already running (e.g. `[debug] http_inspector_enabled` is off) and open the
-  /// page once the listener has a bound port.
-  func openLogsDashboard() {
-    finishCommandLineInteraction(reason: "logs")
+  /// Open the HTTP debug inspector dashboard in the default browser on `tab`
+  /// (`logs` / `plugins` / `commands` / `state`), backing `:logs`, `:plugins`,
+  /// and `:commands`. The inspector is loopback-only and on by default; we still
+  /// start it on demand if it was disabled, and open the page once the listener
+  /// has a bound port.
+  func openDebugDashboard(tab: String) {
+    finishCommandLineInteraction(reason: "debug_dashboard")
     if debugServer == nil {
       let server = DebugServer(
         host: config.debug.httpInspectorHost,
@@ -1327,33 +1322,33 @@ extension AppDelegate {
       debugServer = server
       server.start()
     }
-    openDebugDashboardWhenReady(attempt: 0)
+    openDebugDashboardWhenReady(tab: tab, attempt: 0)
   }
 
-  private func openDebugDashboardWhenReady(attempt: Int) {
+  private func openDebugDashboardWhenReady(tab: String, attempt: Int) {
     guard let server = debugServer else { return }
     if let port = server.listeningPort {
       let host =
         (server.host == "0.0.0.0" || server.host.isEmpty) ? "127.0.0.1" : server.host
-      if let url = URL(string: "http://\(host):\(port)/") {
+      if let url = URL(string: "http://\(host):\(port)/#\(tab)") {
         NSWorkspace.shared.open(url)
-        FlashLog.info("[logs] opened inspector dashboard at http://\(host):\(port)/")
+        FlashLog.info("[debug] opened inspector dashboard at \(url.absoluteString)")
       }
       return
     }
     guard attempt < 30 else {
-      FlashLog.warn("[logs] debug inspector did not start in time")
+      FlashLog.warn("[debug] inspector did not start in time")
       return
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-      self?.openDebugDashboardWhenReady(attempt: attempt + 1)
+      self?.openDebugDashboardWhenReady(tab: tab, attempt: attempt + 1)
     }
   }
 
   private func runPluginsSubcommand(_ sub: NormalModeDispatcher.PluginsSubcommand) {
     switch sub {
     case .modal:
-      showPlugins()
+      openDebugDashboard(tab: "plugins")
     case .reload:
       let ids = pluginManager.reloadAll()
       let summary: String
@@ -2401,7 +2396,9 @@ extension AppDelegate {
     case .help(let topic):
       showHelp(topic: topic)
     case .logs:
-      openLogsDashboard()
+      openDebugDashboard(tab: "logs")
+    case .commands:
+      openDebugDashboard(tab: "commands")
     }
   }
 

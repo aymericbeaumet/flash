@@ -26,6 +26,7 @@ extension NormalModeDispatcher {
     case mappings
     case help(topic: String?)
     case logs
+    case commands
   }
 
   enum PluginsSubcommand: Equatable {
@@ -264,6 +265,7 @@ extension NormalModeDispatcher {
     CommandLineSpec(names: ["pu[t]", "paste"], bangPolicy: .rejected) { _ in .paste },
     CommandLineSpec(names: ["plugins"], bangPolicy: .rejected) { _ in .plugins(.modal) },
     CommandLineSpec(names: ["logs"], bangPolicy: .rejected) { _ in .logs },
+    CommandLineSpec(names: ["commands"], bangPolicy: .rejected) { _ in .commands },
     CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
   ]
 
@@ -285,8 +287,9 @@ extension NormalModeDispatcher {
     "yank": "Copy the selection (⌘C)",
     "delete": "Cut the selection (⌘X)",
     "put": "Paste (⌘V)",
-    "plugins": "List/reload plugins",
-    "logs": "Open the HTTP debug dashboard in the browser",
+    "plugins": "Open the plugins view in the HTTP debug dashboard",
+    "logs": "Open the logs view in the HTTP debug dashboard",
+    "commands": "Open the commands view in the HTTP debug dashboard",
     "mappings": "Show the active key mappings",
     "open": "Forward args to /usr/bin/open",
     "help": "Open a help topic",

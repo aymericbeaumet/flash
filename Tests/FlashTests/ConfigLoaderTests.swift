@@ -105,7 +105,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
     XCTAssertTrue(c.flashlight.precedence.isEmpty)
     XCTAssertEqual(c.flashlight.precedenceAliveBonus, 10)
-    XCTAssertFalse(c.debug.httpInspectorEnabled)
+    XCTAssertTrue(c.debug.httpInspectorEnabled)
     XCTAssertEqual(c.debug.httpInspectorHost, "localhost")
     XCTAssertEqual(c.debug.httpInspectorPort, 4242)
   }

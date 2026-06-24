@@ -441,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case .showUsage(let topic):
       showHelp(topic: topic)
     case .showPlugins:
-      showPlugins()
+      openDebugDashboard(tab: "plugins")
     case .dismissHints:
       cancelOverlay()
     case .quit:
