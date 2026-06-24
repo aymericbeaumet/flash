@@ -563,29 +563,41 @@ extension AppDelegate {
     }
   }
 
-  /// Virtual/geometric clicks (`f` hint commits and `F`/`dF` mouse-grid
-  /// commits) don't know what element they're hitting until the click has
-  /// landed and the focused app has updated AX. After a short settle delay,
-  /// query the focused element's role and only enter insert mode if it is a
-  /// true text-input surface or terminal-like target. Physical primary clicks
-  /// from NORMAL use the same probe after releasing capture.
-  /// Any pointer commit — a real mouse click OR an `f`/`F` hint commit — hands
-  /// the keyboard to the focused app and enters INSERT, unconditionally. We no
-  /// longer probe the AX role: per product direction, any mouse interaction
-  /// enters insert. This is simpler to reason about and keeps NORMAL free of
-  /// "focused-but-not-capturing" states. The `clickPoint` / `attempt` /
-  /// `hintTargetEntersInsert` parameters are retained for call-site stability.
+  /// Decide whether a committed pointer action hands the keyboard to the focused
+  /// app (INSERT) or keeps NORMAL. The rule is split by intent:
+  ///
+  ///   - A physical mouse click and the `F`/`dF` mouse-grid commit always enter
+  ///     INSERT — the user pointed somewhere and clicked, so give the app the
+  ///     keyboard. These call sites pass `hintTargetEntersInsert == nil`.
+  ///   - The `f` (`mouse_target`) hint commit enters INSERT only when its
+  ///     resolved target is a real text input. Hinting a button/link clicks it
+  ///     but stays in NORMAL, so labels keep flowing. That call site passes the
+  ///     target's editability (`hint.target.entersInsertMode`).
+  ///
+  /// We no longer probe the AX role after the click settles; the caller already
+  /// knows the target's editability (hints) or the intent is unconditional
+  /// (physical/grid), which keeps NORMAL free of "focused-but-not-capturing"
+  /// states. `clickPoint` / `attempt` are retained for call-site stability.
   private func enterInsertModeIfClickedOnTextInput(
     pid: pid_t?,
     clickPoint _: CGPoint? = nil,
     reason: InsertModeTransitionReason,
     attempt _: Int = 0,
     handoffToken: UInt64? = nil,
-    hintTargetEntersInsert _: Bool? = nil,
+    hintTargetEntersInsert: Bool? = nil,
     completion: ((PointerInsertHandoffOutcome) -> Void)? = nil
   ) {
     guard pointerInsertHandoffIsCurrent(handoffToken) else { return }
     guard flashMode == .normal else {
+      completion?(.recaptureNormal)
+      return
+    }
+    // `f` (the `mouse_target` hint) passes the resolved target's editability, so
+    // it only enters insert when the user committed on a real text input —
+    // hinting a button/link clicks it but stays in NORMAL. `F` (the `mouse_grid`
+    // click) and a physical mouse click pass `nil` and always enter insert: a
+    // committed pointer action hands the keyboard to the app.
+    guard hintTargetEntersInsert ?? true else {
       completion?(.recaptureNormal)
       return
     }
