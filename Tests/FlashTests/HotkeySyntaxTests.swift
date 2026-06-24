@@ -141,13 +141,9 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.insert, for: .insert))
   }
 
-  func testDefaultNormalMappingsIncludeCmdTab() {
-    let cmdTab = Config.Mode.defaultNormalMappings.first { $0.key == "cmd+tab" }
-    XCTAssertEqual(cmdTab?.action.command, .appNext)
-    let cmdShiftTab = Config.Mode.defaultNormalMappings.first {
-      $0.key == "cmd+shift+tab"
-    }
-    XCTAssertEqual(cmdShiftTab?.action.command, .appPrev)
+  func testDefaultNormalMappingsOmitCmdChords() {
+    XCTAssertNil(Config.Mode.defaultNormalMappings.first { $0.key == "cmd+tab" })
+    XCTAssertNil(Config.Mode.defaultNormalMappings.first { $0.key == "cmd+shift+tab" })
   }
 
   // MARK: - Action parsing

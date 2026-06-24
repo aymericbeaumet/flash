@@ -345,12 +345,11 @@ struct Config {
         ("]e", .flashCommand(.tabMoveNext)),
         ("[a", .flashCommand(.appPrev)),
         ("]a", .flashCommand(.appNext)),
-        // `[w`/`]w` — Vim's `:wprev`/`:wnext` window-navigation analogue
-        // mapped onto Flash's app MRU. Native `Cmd+\`` window switches
-        // remain owned by macOS, but their AX focused-window event feeds
-        // Flash's generalized location history.
-        ("[w", .flashCommand(.appPrev)),
-        ("]w", .flashCommand(.appNext)),
+        // `[w`/`]w` — Vim's `:wprev`/`:wnext`: cycle the FOCUSED APP's windows
+        // via the native macOS ⌘` / ⌘⇧` shortcuts, sent to the app so it works
+        // wherever macOS window cycling does.
+        ("[w", sendKeyMapping("cmd+shift+`")),
+        ("]w", sendKeyMapping("cmd+`")),
         // Reopen the most recently closed tab. Vimium binds this to `X`
         // ("restore"); ⌘⇧T is the cross-browser standard the host
         // keystroke fallback delivers for any non-terminal app, and
@@ -360,48 +359,15 @@ struct Config {
         // flashlight switcher (its default pool is location-only: apps,
         // tabs, tmux windows, …), so `T` opens it pre-seeded.
         ("T", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
-        // Shadow the system app switcher so the user stays inside
-        // Flash's normal-mode loop. Carbon registration is scope-bound:
-        // entering insert mode unregisters the binding and the Dock
-        // switcher works as usual.
-        ("cmd+tab", .flashCommand(.appNext)),
-        ("cmd+shift+tab", .flashCommand(.appPrev)),
-        // Native macOS / browser navigation chords, shadowed in normal
-        // mode so the keys muscle-memory already knows keep working
-        // without leaving the normal-mode loop. Like `cmd+tab` above
-        // these are scope-bound Carbon registrations: insert mode releases
-        // them so the focused app sees the native chord again. Each maps
-        // to the same Flash command as its vim-style sibling, so the
-        // behaviour is identical whichever binding the user reaches for.
-        // ⌘1–⌘9 → select tab N (mirror of `g1`–`g9`).
-        ("cmd+1", .flashCommand(.tabSelect(index: 1))),
-        ("cmd+2", .flashCommand(.tabSelect(index: 2))),
-        ("cmd+3", .flashCommand(.tabSelect(index: 3))),
-        ("cmd+4", .flashCommand(.tabSelect(index: 4))),
-        ("cmd+5", .flashCommand(.tabSelect(index: 5))),
-        ("cmd+6", .flashCommand(.tabSelect(index: 6))),
-        ("cmd+7", .flashCommand(.tabSelect(index: 7))),
-        ("cmd+8", .flashCommand(.tabSelect(index: 8))),
-        ("cmd+9", .flashCommand(.tabSelect(index: 9))),
-        // ⌘R / ⌘⇧R → reload / hard reload (mirror of `r` / `R`).
-        ("cmd+r", .flashCommand(.reload(force: false))),
-        ("cmd+shift+r", .flashCommand(.reload(force: true))),
-        // ⌘[ / ⌘] → history back / forward (mirror of `H` / `L`).
-        ("cmd+<lbracket>", .flashCommand(.historyBack)),
-        ("cmd+<rbracket>", .flashCommand(.historyForward)),
-        // ⌘⇧[ / ⌘⇧] → previous / next tab (mirror of `[t` / `]t`, `gT` / `gt`).
-        ("cmd+shift+<lbracket>", .flashCommand(.tabPrev)),
-        ("cmd+shift+<rbracket>", .flashCommand(.tabNext)),
-        // ⌘T / ⌘⇧T → new tab / reopen closed tab (mirror of `t` / `T`).
-        ("cmd+t", .flashCommand(.tabNew)),
-        ("cmd+shift+t", .flashCommand(.tabReopen)),
-        // ⌘W → close tab, ⌘N → new window (mirror of `x` / `n`).
-        ("cmd+w", .flashCommand(.tabClose)),
-        ("cmd+n", .flashCommand(.pluginVerb(name: "window_new", args: [:]))),
-        // ⌘F → find (mirror of `/`).
-        ("cmd+f", .flashCommand(.find)),
-        // ⌃Tab / ⌃⇧Tab → next / previous tab — the browser-native
-        // alternative to ⌘⇧] / ⌘⇧[.
+        // No default ⌘-based bindings: the system/browser ⌘ chords
+        // (⌘tab, ⌘1–9, ⌘R, ⌘[ / ⌘], ⌘⇧[ / ⌘⇧], ⌘T, ⌘W, ⌘N, ⌘F) are left to the
+        // OS / focused app. Their vim-style siblings cover the same actions in
+        // normal mode (`gt`/`gT`, `g1`–`g9`, `r`/`R`, `H`/`L`, `[t`/`]t`, `t`,
+        // `x`, `/`, `[a`/`]a`).
+        //
+        // ⌃Tab / ⌃⇧Tab → next / previous tab — browser-native chords shadowed
+        // in normal mode (scope-bound Carbon; insert mode releases them so the
+        // focused app sees the native chord again).
         ("ctrl+tab", .flashCommand(.tabNext)),
         ("ctrl+shift+tab", .flashCommand(.tabPrev)),
         // First / last tab. Vim-style `g^` / `g$` borrowed from
