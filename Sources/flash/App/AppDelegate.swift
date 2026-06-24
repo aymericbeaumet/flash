@@ -696,7 +696,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     let tap = KeyboardCaptureTap(
       shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? false },
-      handle: { [weak self] event in self?.overlay.handleTapCapturedKey(event) })
+      handle: { [weak self] event in self?.routeTapCapturedKey(event) })
     guard tap.start() else { return }
     keyboardCaptureTap = tap
     overlay.keyboardCaptureActive = true
@@ -719,6 +719,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     default:
       return false
     }
+  }
+
+  /// Dispatch a key the tap swallowed in NORMAL mode. Bare keys (and all hints
+  /// keys) go to the overlay interpreter. Modified chords aren't in the
+  /// interpreter's compiled set — they live in the Carbon matcher — so route
+  /// those to `mappings.handle`: a configured chord fires, an unmatched one is
+  /// simply consumed, keeping NORMAL hermetic without breaking native mappings.
+  func routeTapCapturedKey(_ event: NSEvent) {
+    if overlay.inputMode == .normal {
+      let strict = event.modifierFlags.intersection([.command, .control, .option])
+      if !strict.isEmpty {
+        _ = mappings.handle(event: event)
+        return
+      }
+    }
+    overlay.handleTapCapturedKey(event)
   }
 
   func emitRunningApplicationsChanged(reason: String) {
