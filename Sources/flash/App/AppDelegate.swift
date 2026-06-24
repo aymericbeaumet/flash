@@ -703,24 +703,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   }
 
   /// Decide whether the keyboard tap should swallow a `keyDown`. Runs on the main
-  /// thread. INSERT is never touched (keys flow to the focused app); only NORMAL
-  /// mode's own surfaces capture:
-  ///   - NORMAL input: bare keys (the hermetic motions). Modified chords pass
-  ///     through to the Carbon registry / the focused app, exactly as before.
-  ///   - hints: bare keys + magic-modifier clicks (mirrors the overlay's own
-  ///     magic-modifier gate); other chords (e.g. ⌘-tab) pass through.
+  /// thread. INSERT is never touched (keys flow straight to the focused app);
+  /// NORMAL mode is a fully hermetic capture surface (like Vim's normal mode) —
+  /// EVERY key is interpreted as a mapping or consumed, nothing reaches the
+  /// focused app. Modified chords are handled by the interpreter too:
+  /// `normalModeMappings` carries the same compiled set the Carbon registry does,
+  /// and the session tap swallows the event before Carbon dispatch, so there's no
+  /// double-fire. Command-line / modal / candidate-finder own the key window and
+  /// type into their own fields, so the tap leaves those alone.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
     guard flashMode == .normal else { return false }
-    let flags = event.flags
-    var strict: ClickModifiers = []
-    if flags.contains(.maskCommand) { strict.insert(.command) }
-    if flags.contains(.maskControl) { strict.insert(.control) }
-    if flags.contains(.maskAlternate) { strict.insert(.option) }
     switch overlay.inputMode {
-    case .normal:
-      return strict.isEmpty
-    case .hints:
-      return overlay.magicModifiers.isSuperset(of: strict)
+    case .normal, .hints:
+      return true
     default:
       return false
     }
