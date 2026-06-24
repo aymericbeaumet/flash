@@ -9,10 +9,11 @@ enum ActionDispatcher {
     case hostClick
   }
 
-  /// Click pipeline. Click actions do not intentionally move the visible
-  /// cursor; `mf`/`mF` are the explicit move-only commands. When the last
-  /// resort needs a real mouse event, `synthesizeClick` preserves the cursor
-  /// by hiding, warping, clicking, and restoring.
+  /// Click pipeline. By default click actions do not move the visible cursor —
+  /// `synthesizeClick` hides, warps, clicks, then restores. Hint commits pass
+  /// `leaveCursorAtClickPoint: true` so the cursor lands, and stays, on the hint
+  /// the user picked (the click point is the hint chip). `mf`/`mF` remain the
+  /// explicit move-only commands.
   ///
   /// Pipeline:
   ///   1. Modified click → straight to `synthesizeClick`. AX activate
@@ -39,21 +40,29 @@ enum ActionDispatcher {
     on target: JumpTarget,
     pid _: pid_t? = nil,
     clickPoint: CGPoint? = nil,
-    modifiers: ClickModifiers = []
+    modifiers: ClickModifiers = [],
+    leaveCursorAtClickPoint: Bool = false
   ) -> Bool {
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
     if dispatchRoute(for: target, modifiers: modifiers) == .hostClick {
-      return synthesizeClick(at: point, action: action, modifiers: modifiers)
+      return synthesizeClick(
+        at: point, action: action, modifiers: modifiers,
+        preserveCursor: !leaveCursorAtClickPoint)
     }
     if let activate = target.activate, activate(action) {
+      // The AX path never moved the pointer; place it on the hint so a hint
+      // commit leaves the cursor where the user aimed.
+      if leaveCursorAtClickPoint { _ = moveCursor(to: point) }
       return true
     }
     if let pid = target.pid,
       AXClick.clickAtPoint(pid: pid, nsScreenPoint: point, action: action)
     {
+      if leaveCursorAtClickPoint { _ = moveCursor(to: point) }
       return true
     }
-    return synthesizeClick(at: point, action: action)
+    return synthesizeClick(
+      at: point, action: action, preserveCursor: !leaveCursorAtClickPoint)
   }
 
   static func dispatchRoute(for target: JumpTarget, modifiers: ClickModifiers) -> DispatchRoute {
