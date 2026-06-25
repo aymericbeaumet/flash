@@ -127,18 +127,6 @@ final class MappingsCoordinator {
     return true
   }
 
-  /// True if `event` matches an active native mapping, WITHOUT firing it. The
-  /// keyboard tap uses this to decide whether to swallow a modified chord (it's
-  /// a Flash mapping) or let it pass through (a system/app shortcut such as
-  /// ⌃⌘Q lock, ⌘-tab, or Spotlight, which NORMAL mode must not eat).
-  func matches(event: NSEvent) -> Bool {
-    let modifiers = Self.carbonModifiers(from: event.modifierFlags)
-    let virtualKey = UInt32(event.keyCode)
-    return activeMappings.contains {
-      $0.parsed.modifiers == modifiers && $0.parsed.virtualKey == virtualKey
-    }
-  }
-
   private func fire(_ mapping: ModeMapping, scope: ModeScope, parsed: ParsedHotkey) {
     guard mappingApplies(scope: scope, parsed: parsed) else { return }
     let diagnostic = mapping.action.diagnosticDescription

@@ -717,17 +717,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
     guard flashMode == .normal else { return false }
     switch overlay.inputMode {
-    case .normal:
-      let strict = event.flags.intersection([.maskCommand, .maskControl, .maskAlternate])
-      // Bare keys are NORMAL mode's hermetic motions — always swallow.
-      if strict.isEmpty { return true }
-      // Modified chords: swallow only the ones Flash actually maps (fired via
-      // the Carbon matcher). Everything else — ⌃⌘Q lock, ⌘-tab, Spotlight, an
-      // app's own ⌘-shortcut — passes straight through, so NORMAL mode doesn't
-      // eat the system's keyboard shortcuts.
-      guard let ns = NSEvent(cgEvent: event) else { return false }
-      return mappings.matches(event: ns)
-    case .hints:
+    case .normal, .hints:
+      // NORMAL is hermetic: swallow EVERY key — bare motions and modified
+      // chords alike. `routeTapCapturedKey` then fires a configured chord or
+      // silently consumes an unmapped one, so nothing (not even ⌘W / ⌘Q / an
+      // app's own ⌘-shortcut) leaks to the focused app.
       return true
     default:
       return false
