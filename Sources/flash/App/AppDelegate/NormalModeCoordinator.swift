@@ -1287,8 +1287,13 @@ extension AppDelegate {
     }
     overlay.setActiveWindowBorder(around: nil)
     let command = Self.commandLineBuffer(from: initialText)
-    let scope: CommandScope =
-      candidateFinderScope.map { .finder(all: $0 == .all) } ?? .commandLine
+    // The flashlight is just the command line pre-filled with `:flashlight ` —
+    // render it on the native command-line surface (native editing + a blinking
+    // caret + arrow/Ctrl-N-P candidate navigation) instead of the bespoke
+    // `.finder` surface that drew a static `|`. The candidate scope is tracked
+    // separately via `self.candidateFinderScope` / `openCandidateFinderSession`,
+    // so the suggestion pool is unaffected.
+    let scope: CommandScope = .commandLine
     dispatchMode(.openCommand(scope: scope, restoreMode: restoreMode))
     refreshCommandLine(text: command, cursorIndex: command.count)
   }
