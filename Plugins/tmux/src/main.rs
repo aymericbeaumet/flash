@@ -130,13 +130,63 @@ fn extract_links(line: &str, max_cols: usize) -> Vec<(usize, String)> {
 async fn find_tmux() -> Option<String> {
     for prefix in TMUX_PREFIXES {
         let path = format!("{prefix}/bin/tmux");
-        if let Ok(meta) = tokio::fs::metadata(&path).await {
-            if meta.is_file() {
-                return Some(path);
-            }
+        if is_file(&path).await {
+            return Some(path);
         }
     }
-    which("tmux").await
+    if let Some(path) = which("tmux").await {
+        return Some(path);
+    }
+    // Version managers install outside the standard prefixes, and a GUI app's
+    // PATH doesn't include their shims, so the scan above misses tmux entirely
+    // (mise — the primary installer on this host — puts it under
+    // ~/.local/share/mise/installs/…). Resolve through mise when it's present,
+    // then fall back to the user's login+interactive shell, which sources their
+    // full profile (mise/asdf activation, custom PATH exports).
+    if let Some(path) = find_tmux_via_mise().await {
+        return Some(path);
+    }
+    find_tmux_via_login_shell().await
+}
+
+async fn is_file(path: &str) -> bool {
+    tokio::fs::metadata(path)
+        .await
+        .map(|m| m.is_file())
+        .unwrap_or(false)
+}
+
+/// `mise which tmux` → the active tmux binary. `mise` itself installs into a
+/// standard prefix (Homebrew), so it's reachable even when the tools it manages
+/// are not — and it reads the user's global config, so the answer doesn't depend
+/// on the plugin's cwd or PATH.
+async fn find_tmux_via_mise() -> Option<String> {
+    let mut mise = None;
+    for prefix in TMUX_PREFIXES {
+        let path = format!("{prefix}/bin/mise");
+        if is_file(&path).await {
+            mise = Some(path);
+            break;
+        }
+    }
+    let mise = match mise {
+        Some(path) => path,
+        None => which("mise").await?,
+    };
+    let out = run_cmd(&mise, &["which", "tmux"], Duration::from_secs(5)).await?;
+    let path = out.lines().map(str::trim).find(|l| l.starts_with('/'))?;
+    is_file(path).await.then(|| path.to_string())
+}
+
+/// Last resort: the user's login+interactive shell sources their full profile
+/// (mise/asdf activation, custom PATH), so `command -v tmux` there resolves
+/// binaries a GUI app's bare PATH can't. `-i` is required because tool managers
+/// commonly activate from interactive rc files such as `~/.zshrc`.
+async fn find_tmux_via_login_shell() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let out = run_cmd(&shell, &["-lic", "command -v tmux"], Duration::from_secs(6)).await?;
+    let path = out.lines().map(str::trim).find(|l| l.starts_with('/'))?;
+    is_file(path).await.then(|| path.to_string())
 }
 
 async fn which(program: &str) -> Option<String> {
@@ -513,6 +563,38 @@ fn is_ancestor(ancestor_pid: i64, descendant_pid: i64, parent_map: &HashMap<i64,
         }
     }
     false
+}
+
+/// One-line diagnostic for why `client_hosted_by_*` resolved no client: the
+/// focused pid, the `ps` parent-map size, and for every listed client whether
+/// its pid is known to the process sample and whether it chains up to the
+/// focused terminal. Logged on the otherwise-silent no-client path so a single
+/// repro distinguishes empty-client-list vs wrong-focused-pid vs broken-ancestry.
+fn client_resolution_diag(
+    focused_pid: i64,
+    clients: &[TmuxClient],
+    parent_map: &HashMap<i64, i64>,
+) -> String {
+    let entries: Vec<String> = clients
+        .iter()
+        .map(|c| {
+            format!(
+                "{{tty={} sess={} client_pid={} in_pmap={} ancestor_of_focus={}}}",
+                c.tty,
+                c.session,
+                c.client_pid,
+                parent_map.contains_key(&c.client_pid),
+                is_ancestor(focused_pid, c.client_pid, parent_map)
+            )
+        })
+        .collect();
+    format!(
+        "diag focused_pid={} pmap_len={} client_count={} clients=[{}]",
+        focused_pid,
+        parent_map.len(),
+        clients.len(),
+        entries.join(" ")
+    )
 }
 
 fn client_hosted_by_from_map(
@@ -1738,11 +1820,15 @@ async fn perform_source_action(
         return SourceActionResponse::unhandled();
     };
     let Some(client) = client_hosted_by_fresh(plugin, pid).await else {
+        let clients = list_clients(tmux_path).await;
+        let pmap = parent_pid_map().await;
         ctx.log(
-            "debug",
+            "warn",
             &format!(
-                "[tmux] source_action {} unhandled: no tmux client hosted by pid={}",
-                req.name, pid
+                "[tmux] source_action {} unhandled: no tmux client hosted by pid={} | {}",
+                req.name,
+                pid,
+                client_resolution_diag(pid, &clients, &pmap)
             ),
         );
         return SourceActionResponse::unhandled();
