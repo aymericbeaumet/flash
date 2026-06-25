@@ -328,6 +328,96 @@ enum ConfigLoader {
       into: &config)
     applyOverlay(root["overlay"]?.table, locations: locations, into: &config)
     applyDebug(root["debug"]?.table, locations: locations, into: &config)
+    warnUnknownConfigKeys(root: root, locations: locations, into: &config)
+  }
+
+  /// After every known section is applied, warn on keys the loader doesn't
+  /// recognize so a typo surfaces (located, with a suggestion) instead of being
+  /// silently dropped — the single biggest config UX cliff: `[hint]` for
+  /// `[hints]`, `mouse_grid_step` for `mouse_grid_steps`, a stray top-level key.
+  /// Sections with user-defined keys (`[plugin.<id>]`, and the
+  /// `flashlight.aliases`/`flashlight.precedence` subtables) are deliberately
+  /// not enumerated. The schema map lives here, in one place, so it can't drift
+  /// across the scattered appliers.
+  private static func warnUnknownConfigKeys(
+    root: TOMLTable,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
+    let sectionKeys: [String: Set<String>] = [
+      "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
+      "open": ["ignored_apps"],
+      "plugins": ["watching_enabled", "disabled", "third_party"],
+      "statusbar": ["enabled", "template"],
+      "flashlight": ["suggestion_count", "precedence_alive_bonus", "aliases", "precedence"],
+      "mode": ["labels", "sequence_timeout_ms", "normal", "all", "insert"],
+      "overlay": [
+        "font_size", "hint_fg", "hint_bg_top", "hint_bg_bottom", "hint_border",
+        "important_hint_fg", "important_hint_bg_top", "important_hint_bg_bottom",
+        "important_hint_border",
+      ],
+      "debug": [
+        "show_hints_bounds", "hints_bounds_bg", "hints_bounds_fg", "log_level",
+        "http_inspector_enabled", "http_inspector_host", "http_inspector_port",
+      ],
+    ]
+    // `plugin` is a known top-level section but carries user-defined
+    // `[plugin.<id>]` tables, so its keys are not enumerated.
+    let knownSections = Set(sectionKeys.keys).union(["plugin"])
+    warnUnknownKeys(in: root, known: knownSections, path: [], locations: locations, into: &config)
+    for (section, known) in sectionKeys {
+      guard let table = root[section]?.table else { continue }
+      warnUnknownKeys(in: table, known: known, path: [section], locations: locations, into: &config)
+    }
+  }
+
+  /// Emit a located "unknown config key" diagnostic for every key in `table`
+  /// not in `known`, with a Levenshtein "did you mean" when a close match exists.
+  private static func warnUnknownKeys(
+    in table: TOMLTable,
+    known: Set<String>,
+    path: [String],
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
+    for (key, _) in table where !known.contains(key) {
+      let fullPath = path + [key]
+      let dotted = fullPath.joined(separator: ".")
+      let suggestion = closestKnownKey(to: key, in: known).map { " — did you mean '\($0)'?" } ?? ""
+      config.addDiagnostic(
+        "unknown config key '\(dotted)'\(suggestion)",
+        location: locations.location(for: fullPath))
+    }
+  }
+
+  /// The known key closest to `typo` by edit distance, when within a small
+  /// budget — so we suggest only on plausible misspellings, not unrelated keys.
+  private static func closestKnownKey(to typo: String, in known: Set<String>) -> String? {
+    var best: (key: String, distance: Int)?
+    for candidate in known {
+      let distance = levenshtein(typo, candidate)
+      if best == nil || distance < best!.distance { best = (candidate, distance) }
+    }
+    guard let best, best.distance <= 3, best.distance < typo.count else { return nil }
+    return best.key
+  }
+
+  private static func levenshtein(_ s1: String, _ s2: String) -> Int {
+    let a = Array(s1)
+    let b = Array(s2)
+    if a.isEmpty { return b.count }
+    if b.isEmpty { return a.count }
+    var previous = Array(0...b.count)
+    var current = [Int](repeating: 0, count: b.count + 1)
+    for i in 1...a.count {
+      current[0] = i
+      for j in 1...b.count {
+        let cost = a[i - 1] == b[j - 1] ? 0 : 1
+        current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+      }
+      swap(&previous, &current)
+    }
+    return previous[b.count]
   }
 
   private static func applyHints(
@@ -336,19 +426,37 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
-    applyString(table["keys"], path: ["hints", "keys"], message: "hints.keys must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["keys"], path: ["hints", "keys"], message: "hints.keys must be a quoted string",
+      locations: locations, into: &config
+    ) { value, config in
       config.hints.keys = value
     }
-    applyInt(table["min_length"], path: ["hints", "min_length"], message: "hints.min_length must be an integer", locations: locations, into: &config) { value, config in
+    applyInt(
+      table["min_length"], path: ["hints", "min_length"],
+      message: "hints.min_length must be an integer", locations: locations, into: &config
+    ) { value, config in
       config.hints.minLength = value
     }
-    applyStringArray(table["magic_modifiers"], path: ["hints", "magic_modifiers"], message: "hints.magic_modifiers must be an array of strings", locations: locations, into: &config) { value, config in
+    applyStringArray(
+      table["magic_modifiers"], path: ["hints", "magic_modifiers"],
+      message: "hints.magic_modifiers must be an array of strings", locations: locations,
+      into: &config
+    ) { value, config in
       config.hints.magicModifiers = value
     }
-    applyInt(table["mouse_grid_steps"], path: ["hints", "mouse_grid_steps"], message: "hints.mouse_grid_steps must be an integer between 2 and 6", locations: locations, into: &config, validate: { (2...6).contains($0) }) { value, config in
+    applyInt(
+      table["mouse_grid_steps"], path: ["hints", "mouse_grid_steps"],
+      message: "hints.mouse_grid_steps must be an integer between 2 and 6", locations: locations,
+      into: &config, validate: { (2...6).contains($0) }
+    ) { value, config in
       config.hints.mouseGridSteps = value
     }
-    applyDouble(table["mouse_grid_opacity"], path: ["hints", "mouse_grid_opacity"], message: "hints.mouse_grid_opacity must be a number between 0.0 and 1.0", locations: locations, into: &config, validate: { (0.0...1.0).contains($0) }) { value, config in
+    applyDouble(
+      table["mouse_grid_opacity"], path: ["hints", "mouse_grid_opacity"],
+      message: "hints.mouse_grid_opacity must be a number between 0.0 and 1.0",
+      locations: locations, into: &config, validate: { (0.0...1.0).contains($0) }
+    ) { value, config in
       config.hints.mouseGridOpacity = value
     }
   }
@@ -359,7 +467,10 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
-    applyStringArray(table["ignored_apps"], path: ["open", "ignored_apps"], message: "open.ignored_apps must be an array of strings", locations: locations, into: &config) { value, config in
+    applyStringArray(
+      table["ignored_apps"], path: ["open", "ignored_apps"],
+      message: "open.ignored_apps must be an array of strings", locations: locations, into: &config
+    ) { value, config in
       config.open.ignoredApps = value
     }
   }
@@ -371,7 +482,10 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
-    applyBool(table["watching_enabled"], path: ["plugins", "watching_enabled"], message: "plugins.watching_enabled must be true or false", locations: locations, into: &config) { value, config in
+    applyBool(
+      table["watching_enabled"], path: ["plugins", "watching_enabled"],
+      message: "plugins.watching_enabled must be true or false", locations: locations, into: &config
+    ) { value, config in
       config.plugins.watchingEnabled = value
     }
 
@@ -463,10 +577,17 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
-    applyBool(table["enabled"], path: ["statusbar", "enabled"], message: "statusbar.enabled must be true or false", locations: locations, into: &config) { value, config in
+    applyBool(
+      table["enabled"], path: ["statusbar", "enabled"],
+      message: "statusbar.enabled must be true or false", locations: locations, into: &config
+    ) { value, config in
       config.statusBar.enabled = value
     }
-    applyString(table["template"], path: ["statusbar", "template"], message: "statusbar.template must be a quoted template string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["template"], path: ["statusbar", "template"],
+      message: "statusbar.template must be a quoted template string", locations: locations,
+      into: &config
+    ) { value, config in
       config.statusBar.template.template = value
     }
   }
@@ -477,10 +598,18 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
-    applyInt(table["suggestion_count"], path: ["flashlight", "suggestion_count"], message: "flashlight.suggestion_count must be a positive integer", locations: locations, into: &config, validate: { $0 > 0 }) { value, config in
+    applyInt(
+      table["suggestion_count"], path: ["flashlight", "suggestion_count"],
+      message: "flashlight.suggestion_count must be a positive integer", locations: locations,
+      into: &config, validate: { $0 > 0 }
+    ) { value, config in
       config.flashlight.suggestionCount = value
     }
-    applyInt(table["precedence_alive_bonus"], path: ["flashlight", "precedence_alive_bonus"], message: "flashlight.precedence_alive_bonus must be a non-negative integer", locations: locations, into: &config, validate: { $0 >= 0 }) { value, config in
+    applyInt(
+      table["precedence_alive_bonus"], path: ["flashlight", "precedence_alive_bonus"],
+      message: "flashlight.precedence_alive_bonus must be a non-negative integer",
+      locations: locations, into: &config, validate: { $0 >= 0 }
+    ) { value, config in
       config.flashlight.precedenceAliveBonus = value
     }
 
@@ -549,12 +678,20 @@ enum ConfigLoader {
       }
     }
 
-    applyInt(table["sequence_timeout_ms"], path: ["mode", "sequence_timeout_ms"], message: "mode.sequence_timeout_ms must be a non-negative integer", locations: locations, into: &config, validate: { $0 >= 0 }) { value, config in
+    applyInt(
+      table["sequence_timeout_ms"], path: ["mode", "sequence_timeout_ms"],
+      message: "mode.sequence_timeout_ms must be a non-negative integer", locations: locations,
+      into: &config, validate: { $0 >= 0 }
+    ) { value, config in
       config.mode.sequenceTimeoutMs = value
     }
 
     if let normal = table["normal"]?.table {
-      applyString(normal["leader"], path: ["mode", "normal", "leader"], message: "mode.normal.leader must be a non-empty quoted string", locations: locations, into: &config, validate: { !$0.isEmpty }) { value, config in
+      applyString(
+        normal["leader"], path: ["mode", "normal", "leader"],
+        message: "mode.normal.leader must be a non-empty quoted string", locations: locations,
+        into: &config, validate: { !$0.isEmpty }
+      ) { value, config in
         config.mode.normalLeader = canonicalNormalModeKeyToken(value)
       }
       applyModeMappingTable(
@@ -608,31 +745,62 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
-    applyDouble(table["font_size"], path: ["overlay", "font_size"], message: "overlay.font_size must be a number", locations: locations, into: &config) { value, config in
+    applyDouble(
+      table["font_size"], path: ["overlay", "font_size"],
+      message: "overlay.font_size must be a number", locations: locations, into: &config
+    ) { value, config in
       config.overlay.fontSize = value
     }
-    applyString(table["hint_fg"], path: ["overlay", "hint_fg"], message: "overlay.hint_fg must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["hint_fg"], path: ["overlay", "hint_fg"],
+      message: "overlay.hint_fg must be a quoted string", locations: locations, into: &config
+    ) { value, config in
       config.overlay.hintFG = value
     }
-    applyString(table["hint_bg_top"], path: ["overlay", "hint_bg_top"], message: "overlay.hint_bg_top must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["hint_bg_top"], path: ["overlay", "hint_bg_top"],
+      message: "overlay.hint_bg_top must be a quoted string", locations: locations, into: &config
+    ) { value, config in
       config.overlay.hintBGTop = value
     }
-    applyString(table["hint_bg_bottom"], path: ["overlay", "hint_bg_bottom"], message: "overlay.hint_bg_bottom must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["hint_bg_bottom"], path: ["overlay", "hint_bg_bottom"],
+      message: "overlay.hint_bg_bottom must be a quoted string", locations: locations, into: &config
+    ) { value, config in
       config.overlay.hintBGBottom = value
     }
-    applyString(table["hint_border"], path: ["overlay", "hint_border"], message: "overlay.hint_border must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["hint_border"], path: ["overlay", "hint_border"],
+      message: "overlay.hint_border must be a quoted string", locations: locations, into: &config
+    ) { value, config in
       config.overlay.hintBorder = value
     }
-    applyString(table["important_hint_fg"], path: ["overlay", "important_hint_fg"], message: "overlay.important_hint_fg must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["important_hint_fg"], path: ["overlay", "important_hint_fg"],
+      message: "overlay.important_hint_fg must be a quoted string", locations: locations,
+      into: &config
+    ) { value, config in
       config.overlay.importantHintFG = value
     }
-    applyString(table["important_hint_bg_top"], path: ["overlay", "important_hint_bg_top"], message: "overlay.important_hint_bg_top must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["important_hint_bg_top"], path: ["overlay", "important_hint_bg_top"],
+      message: "overlay.important_hint_bg_top must be a quoted string", locations: locations,
+      into: &config
+    ) { value, config in
       config.overlay.importantHintBGTop = value
     }
-    applyString(table["important_hint_bg_bottom"], path: ["overlay", "important_hint_bg_bottom"], message: "overlay.important_hint_bg_bottom must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["important_hint_bg_bottom"], path: ["overlay", "important_hint_bg_bottom"],
+      message: "overlay.important_hint_bg_bottom must be a quoted string", locations: locations,
+      into: &config
+    ) { value, config in
       config.overlay.importantHintBGBottom = value
     }
-    applyString(table["important_hint_border"], path: ["overlay", "important_hint_border"], message: "overlay.important_hint_border must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["important_hint_border"], path: ["overlay", "important_hint_border"],
+      message: "overlay.important_hint_border must be a quoted string", locations: locations,
+      into: &config
+    ) { value, config in
       config.overlay.importantHintBorder = value
     }
   }
@@ -643,13 +811,22 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
-    applyBool(table["show_hints_bounds"], path: ["debug", "show_hints_bounds"], message: "debug.show_hints_bounds must be true or false", locations: locations, into: &config) { value, config in
+    applyBool(
+      table["show_hints_bounds"], path: ["debug", "show_hints_bounds"],
+      message: "debug.show_hints_bounds must be true or false", locations: locations, into: &config
+    ) { value, config in
       config.debug.showHintsBounds = value
     }
-    applyString(table["hints_bounds_bg"], path: ["debug", "hints_bounds_bg"], message: "debug.hints_bounds_bg must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["hints_bounds_bg"], path: ["debug", "hints_bounds_bg"],
+      message: "debug.hints_bounds_bg must be a quoted string", locations: locations, into: &config
+    ) { value, config in
       config.debug.hintsBoundsBG = value
     }
-    applyString(table["hints_bounds_fg"], path: ["debug", "hints_bounds_fg"], message: "debug.hints_bounds_fg must be a quoted string", locations: locations, into: &config) { value, config in
+    applyString(
+      table["hints_bounds_fg"], path: ["debug", "hints_bounds_fg"],
+      message: "debug.hints_bounds_fg must be a quoted string", locations: locations, into: &config
+    ) { value, config in
       config.debug.hintsBoundsFG = value
     }
 
@@ -666,7 +843,11 @@ enum ConfigLoader {
       }
     }
 
-    applyBool(table["http_inspector_enabled"], path: ["debug", "http_inspector_enabled"], message: "debug.http_inspector_enabled must be true or false", locations: locations, into: &config) { value, config in
+    applyBool(
+      table["http_inspector_enabled"], path: ["debug", "http_inspector_enabled"],
+      message: "debug.http_inspector_enabled must be true or false", locations: locations,
+      into: &config
+    ) { value, config in
       config.debug.httpInspectorEnabled = value
     }
 
@@ -683,7 +864,11 @@ enum ConfigLoader {
       }
     }
 
-    applyInt(table["http_inspector_port"], path: ["debug", "http_inspector_port"], message: "debug.http_inspector_port must be an integer in 1..65535", locations: locations, into: &config, validate: { (1...65535).contains($0) }) { value, config in
+    applyInt(
+      table["http_inspector_port"], path: ["debug", "http_inspector_port"],
+      message: "debug.http_inspector_port must be an integer in 1..65535", locations: locations,
+      into: &config, validate: { (1...65535).contains($0) }
+    ) { value, config in
       config.debug.httpInspectorPort = value
     }
   }

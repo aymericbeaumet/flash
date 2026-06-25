@@ -56,8 +56,9 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertNil(c.mode.normal.first(where: { $0.key == key("gN") }))
     // Vimium `n` cycles find matches — Flash drives the app's native
     // find-again (⌘G). New windows stay on ⌘N.
-    guard case .sendKey(let nKeys, _, _) =
-      c.mode.normal.first(where: { $0.key == "n" })?.action.command
+    guard
+      case .sendKey(let nKeys, _, _) =
+        c.mode.normal.first(where: { $0.key == "n" })?.action.command
     else { return XCTFail("expected send_key for n") }
     XCTAssertEqual(nKeys, "cmd+g")
     XCTAssertEqual(
@@ -1164,6 +1165,90 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.loadingDiagnostics.first?.location, ConfigLocation(line: 2, column: 14))
     XCTAssertTrue(
       c.loadingErrorAlertMessage?.contains("hints.min_length must be an integer") == true)
+  }
+
+  func testUnknownTopLevelSectionWarnsWithSuggestion() {
+    let c = ConfigLoader.parse(
+      """
+      [hint]
+      keys = "asdf"
+      """)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("unknown config key 'hint'")
+          && $0.message.contains("did you mean 'hints'")
+      },
+      "expected an unknown-section diagnostic with a suggestion, got: "
+        + "\(c.loadingDiagnostics.map(\.message))")
+  }
+
+  func testUnknownKeyWithinSectionWarnsWithSuggestionAndLocation() {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      mouse_grid_step = 3
+      """)
+    let diag = c.loadingDiagnostics.first {
+      $0.message.contains("unknown config key 'hints.mouse_grid_step'")
+    }
+    XCTAssertNotNil(diag, "got: \(c.loadingDiagnostics.map(\.message))")
+    XCTAssertTrue(diag?.message.contains("did you mean 'mouse_grid_steps'") == true)
+    XCTAssertEqual(diag?.location?.line, 2)
+  }
+
+  func testUserDefinedPluginSettingsAreNotFlaggedAsUnknown() {
+    // [plugin.<id>] tables carry user-defined keys; they must not trip the
+    // unknown-key check.
+    let c = ConfigLoader.parse(
+      """
+      [plugin.spotify]
+      client_id = "abc"
+      anything_goes = true
+      """)
+    XCTAssertFalse(
+      c.loadingDiagnostics.contains { $0.message.contains("unknown config key") },
+      "plugin settings should not be flagged: \(c.loadingDiagnostics.map(\.message))")
+  }
+
+  func testDefaultConfigHasNoUnknownKeyDiagnostics() {
+    // The shipped default config must parse with zero unknown-key warnings —
+    // a guard against the schema map drifting away from config.default.toml.
+    let url = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()  // FlashTests
+      .deletingLastPathComponent()  // Tests
+      .deletingLastPathComponent()  // repo root
+      .appendingPathComponent("config.default.toml")
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+      return XCTFail("could not read config.default.toml at \(url.path)")
+    }
+    let unknown = ConfigLoader.parse(text).loadingDiagnostics
+      .filter { $0.message.contains("unknown config key") }
+      .map(\.message)
+    XCTAssertTrue(unknown.isEmpty, "default config produced unknown-key diagnostics: \(unknown)")
+  }
+
+  func testUnknownCLIFlagWarns() {
+    let c = ConfigLoader.applyOverrides(
+      to: ConfigLoader.parse(""),
+      arguments: ["flash", "--hints-min-lenght=2"],
+      environment: [:])
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("unknown command-line flag '--hints-min-lenght")
+      },
+      "expected an unknown-flag diagnostic, got: \(c.loadingDiagnostics.map(\.message))")
+  }
+
+  func testKnownCLIFlagsDoNotWarn() {
+    let c = ConfigLoader.applyOverrides(
+      to: ConfigLoader.parse(""),
+      arguments: ["flash", "--hints-min-length=3", "--config=/tmp/x.toml"],
+      environment: [:])
+    XCTAssertEqual(c.hints.minLength, 3)
+    XCTAssertFalse(
+      c.loadingDiagnostics.contains { $0.message.contains("unknown command-line flag") },
+      "known flags must not warn (--config is consumed elsewhere): "
+        + "\(c.loadingDiagnostics.map(\.message))")
   }
 
   private func key(_ raw: String) -> String {

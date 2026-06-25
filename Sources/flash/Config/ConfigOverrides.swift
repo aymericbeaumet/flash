@@ -42,7 +42,10 @@ extension ConfigLoader {
       let key = String(rawKey.dropFirst(envPrefix.count))
         .lowercased()
         .replacingOccurrences(of: "_", with: "-")
-      applyOverride(key: key, value: rawVal, into: &config)
+      // Unknown FLASH_* vars are intentionally NOT flagged: the process
+      // environment can carry unrelated FLASH_-prefixed vars (e.g.
+      // FLASH_PLUGIN_DATA_DIR), so a diagnostic here would false-positive.
+      _ = applyOverride(key: key, value: rawVal, into: &config)
     }
   }
 
@@ -53,7 +56,12 @@ extension ConfigLoader {
       guard let eq = body.firstIndex(of: "=") else { continue }
       let key = String(body[..<eq])
       let value = String(body[body.index(after: eq)...])
-      applyOverride(key: key, value: value, into: &config)
+      // A `--key=value` flag is an explicit override attempt; an unrecognized
+      // one is almost certainly a typo (`--hints-min-lenght=2`) and was
+      // previously discarded in silence. Surface it.
+      if !applyOverride(key: key, value: value, into: &config) {
+        config.addDiagnostic("unknown command-line flag '--\(key)=…' (no such config override)")
+      }
     }
   }
 
@@ -61,7 +69,10 @@ extension ConfigLoader {
   /// Values arrive as raw strings (no TOML quoting); int/double/bool
   /// fields parse the value with the standard initialisers and silently
   /// drop malformed input — matching the TOML loader's behaviour.
-  private static func applyOverride(key: String, value: String, into config: inout Config) {
+  /// Returns true if `key` is a recognized override (even when its value is
+  /// malformed and dropped); false for an unknown key, so `applyCLI` can warn.
+  @discardableResult
+  private static func applyOverride(key: String, value: String, into config: inout Config) -> Bool {
     switch key {
     case "hints-keys":
       config.hints.keys = value
@@ -140,14 +151,15 @@ extension ConfigLoader {
         config.debug.logLevel = lvl
         config.clearLocation(path: "debug.log_level")
       }
-    // `--config=` is consumed by `resolvePath`; ignore here so it doesn't
-    // show up as an unknown key.
+    // `--config=` is consumed by `resolvePath`; recognize it here so it
+    // doesn't show up as an unknown flag.
     case "config":
       break
 
     default:
-      break
+      return false
     }
+    return true
   }
 
   private static func boolFromString(_ v: String) -> Bool? {
