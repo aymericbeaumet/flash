@@ -13,5 +13,11 @@
         "description": "DuckDuckGo bang: !<bang> <query>"
       }
     ]
-  }
+  },
+  "sources": [
+    {
+      "name": "searchengines.bangs",
+      "priority": "normal"
+    }
+  ]
 }
