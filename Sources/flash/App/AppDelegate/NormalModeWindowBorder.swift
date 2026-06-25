@@ -2,19 +2,19 @@ import AppKit
 import ApplicationServices
 import FlashCore
 
-// Insert-mode active-window border: paints a colored stroke around the focused
-// app's frontmost window so the user keeps a visual signal of which app will
-// receive typing while advanced mode is configured. The timer-driven poll
-// catches window moves/resizes that AX doesn't notify us about, and the static
-// helpers below are pure decision functions so NormalModeTests can exercise
-// the visibility/equality logic without spinning up an `AppDelegate`.
+// Active-window border: paints a colored stroke around the focused app's
+// frontmost window so the user always knows which window is active — a thin
+// green stroke in normal mode, a thicker blue one in insert. Especially useful
+// for apps with several windows. The timer-driven poll catches window
+// moves/resizes that AX doesn't notify us about, and the static helpers below
+// are pure decision functions so NormalModeTests can exercise the
+// visibility/equality logic without spinning up an `AppDelegate`.
 
 extension AppDelegate {
-  func updateInsertModeActiveWindowBorder(reason: String) {
+  func updateActiveWindowBorder(reason: String) {
     let context = activeWindowBorderContext()
     guard
       Self.activeWindowBorderShouldBeVisible(
-        mode: flashMode,
         modeBadgeEnabled: modeBadgeEnabled,
         hasHints: !currentHints.isEmpty,
         windowGeometryChangeInProgress: windowGeometryChangeInProgress)
@@ -25,8 +25,10 @@ extension AppDelegate {
       }
       return
     }
-    FlashLog.trace("[mode] insert_border_update reason=\(reason)")
-    overlay.setActiveWindowBorder(around: context?.frontWindowFrame)
+    FlashLog.trace("[mode] active_border_update reason=\(reason) mode=\(flashMode)")
+    let style = Self.activeWindowBorderStyle(for: flashMode)
+    overlay.setActiveWindowBorder(
+      around: context?.frontWindowFrame, color: style.color, lineWidth: style.lineWidth)
     startActiveWindowBorderTracking(frame: context?.frontWindowFrame, reason: reason)
   }
 
@@ -61,7 +63,6 @@ extension AppDelegate {
   func pollActiveWindowBorderFrame() {
     guard
       Self.activeWindowBorderTrackingShouldRun(
-        mode: flashMode,
         modeBadgeEnabled: modeBadgeEnabled,
         hasHints: !currentHints.isEmpty)
     else {
@@ -88,7 +89,8 @@ extension AppDelegate {
       // rather than running the hide-during-change dance, which would blank the
       // border for ~160ms exactly as it should first show.
       activeWindowBorderTrackedFrame = frame
-      overlay.setActiveWindowBorder(around: frame)
+      let style = Self.activeWindowBorderStyle(for: flashMode)
+      overlay.setActiveWindowBorder(around: frame, color: style.color, lineWidth: style.lineWidth)
     } else {
       beginTrackedWindowGeometryChange(reason: "frame_poll", frame: frame)
     }
@@ -120,30 +122,37 @@ extension AppDelegate {
   }
 
   static func activeWindowBorderShouldBeVisible(
-    mode: FlashMode,
     modeBadgeEnabled: Bool,
     hasHints: Bool,
     windowGeometryChangeInProgress: Bool
   ) -> Bool {
-    // Insert mode keeps the status bar visible and adds a colored frame
-    // around the focused window so the typing target remains obvious.
-    // Advanced mode (`["flash", "enter_normal_mode"]` bound somewhere) is the gate
-    // — without it Flash has no normal/insert distinction to visualise.
-    // The border is suspended while hints are up so chips aren't framed
-    // by a redundant outline, and while the window is moving/resizing
-    // so the stroke doesn't lag visibly behind the chrome.
-    guard mode == .insert, modeBadgeEnabled else { return false }
+    // The active window carries a frame in BOTH modes — a thin green stroke in
+    // normal, a thicker blue one in insert — so the focused window stays
+    // identifiable (most useful for apps with several windows). Advanced mode
+    // (`["flash", "enter_normal_mode"]` bound somewhere) is the gate: without it
+    // there's no normal/insert distinction to visualise. Suspended while hints
+    // are up (chips aren't double-framed) and while the window is moving/resizing
+    // (the stroke would visibly trail the chrome).
+    guard modeBadgeEnabled else { return false }
     if hasHints { return false }
     if windowGeometryChangeInProgress { return false }
     return true
   }
 
   static func activeWindowBorderTrackingShouldRun(
-    mode: FlashMode,
     modeBadgeEnabled: Bool,
     hasHints: Bool
   ) -> Bool {
-    modeBadgeEnabled && mode == .insert && !hasHints
+    modeBadgeEnabled && !hasHints
+  }
+
+  /// Border stroke style per mode: a thin green stroke in normal (the
+  /// normal-mode accent), a thicker blue one in insert.
+  static func activeWindowBorderStyle(for mode: FlashMode) -> (color: CGColor, lineWidth: CGFloat) {
+    switch mode {
+    case .normal: return (OverlayPanel.nordAuroraGreenCG, 1)
+    case .insert: return (OverlayPanel.nordFrost2CG, 2)
+    }
   }
 
   static func activeWindowBorderFramesApproximatelyEqual(

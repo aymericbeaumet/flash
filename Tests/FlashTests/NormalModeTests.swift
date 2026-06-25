@@ -862,10 +862,12 @@ final class NormalModeTests: XCTestCase {
       AppMonitor.notificationShouldSchedulePreparedModelRefresh(
         kAXValueChangedNotification as String))
     XCTAssertFalse(
-      AppMonitor.notificationShouldSchedulePreparedModelRefresh(kAXTitleChangedNotification as String)
+      AppMonitor.notificationShouldSchedulePreparedModelRefresh(
+        kAXTitleChangedNotification as String)
     )
     XCTAssertTrue(
-      AppMonitor.notificationShouldSchedulePreparedModelRefresh(kAXLayoutChangedNotification as String)
+      AppMonitor.notificationShouldSchedulePreparedModelRefresh(
+        kAXLayoutChangedNotification as String)
     )
     XCTAssertTrue(
       AppMonitor.notificationShouldSchedulePreparedModelRefresh(
@@ -1115,18 +1117,17 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testActiveWindowBorderVisibility() {
-    // Border shows in insert when advanced mode is on, no hints are up,
-    // and no window-geometry transition is in flight.
+    // The border shows in BOTH modes (thin green normal / thicker blue insert)
+    // when advanced mode is on, no hints are up, and no window-geometry
+    // transition is in flight — so the active window is always identifiable.
     XCTAssertTrue(
       AppDelegate.activeWindowBorderShouldBeVisible(
-        mode: .insert,
         modeBadgeEnabled: true,
         hasHints: false,
         windowGeometryChangeInProgress: false))
-    // No advanced mode → no status bar / border distinction to draw.
+    // No advanced mode → no normal/insert distinction to draw.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
-        mode: .insert,
         modeBadgeEnabled: false,
         hasHints: false,
         windowGeometryChangeInProgress: false))
@@ -1134,45 +1135,39 @@ final class NormalModeTests: XCTestCase {
     // doesn't visibly trail behind the chrome.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
-        mode: .insert,
         modeBadgeEnabled: true,
         hasHints: false,
         windowGeometryChangeInProgress: true))
-    // Normal mode uses the status bar without an insert-border frame.
-    XCTAssertFalse(
-      AppDelegate.activeWindowBorderShouldBeVisible(
-        mode: .normal,
-        modeBadgeEnabled: true,
-        hasHints: false,
-        windowGeometryChangeInProgress: false))
     // Hints suppress the border so chips aren't double-framed.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
-        mode: .insert,
         modeBadgeEnabled: true,
         hasHints: true,
         windowGeometryChangeInProgress: false))
   }
 
+  func testActiveWindowBorderStyleIsGreenInNormalAndBlueInInsert() {
+    // Normal = thin green, insert = thicker blue.
+    let normal = AppDelegate.activeWindowBorderStyle(for: .normal)
+    let insert = AppDelegate.activeWindowBorderStyle(for: .insert)
+    XCTAssertEqual(normal.color, OverlayPanel.nordAuroraGreenCG)
+    XCTAssertEqual(normal.lineWidth, 1)
+    XCTAssertEqual(insert.color, OverlayPanel.nordFrost2CG)
+    XCTAssertEqual(insert.lineWidth, 2)
+    XCTAssertGreaterThan(insert.lineWidth, normal.lineWidth)
+  }
+
   func testActiveWindowBorderTrackerRunsWhileGeometryChangeIsInProgress() {
     XCTAssertTrue(
       AppDelegate.activeWindowBorderTrackingShouldRun(
-        mode: .insert,
         modeBadgeEnabled: true,
         hasHints: false))
     XCTAssertFalse(
       AppDelegate.activeWindowBorderTrackingShouldRun(
-        mode: .normal,
-        modeBadgeEnabled: true,
-        hasHints: false))
-    XCTAssertFalse(
-      AppDelegate.activeWindowBorderTrackingShouldRun(
-        mode: .insert,
         modeBadgeEnabled: false,
         hasHints: false))
     XCTAssertFalse(
       AppDelegate.activeWindowBorderTrackingShouldRun(
-        mode: .insert,
         modeBadgeEnabled: true,
         hasHints: true))
   }
@@ -1245,7 +1240,8 @@ final class NormalModeTests: XCTestCase {
 
   func testFocusChangingNormalModeRecaptureScheduleClosesAppActivationGaps() {
     XCTAssertEqual(AppDelegate.normalModeFocusChangingRecaptureDelaysMs.first, 0)
-    XCTAssertEqual(AppDelegate.normalModeFocusChangingRecaptureDelaysMs.prefix(6), [0, 1, 4, 8, 16, 30])
+    XCTAssertEqual(
+      AppDelegate.normalModeFocusChangingRecaptureDelaysMs.prefix(6), [0, 1, 4, 8, 16, 30])
     XCTAssertEqual(AppDelegate.normalModeFocusChangingRecaptureDelaysMs.last, 1_400)
   }
 

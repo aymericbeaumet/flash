@@ -139,12 +139,8 @@ extension AppDelegate {
   }
 
   func refreshCurrentModeSideEffects(reason: String) {
-    switch flashMode {
-    case .insert:
-      updateInsertModeActiveWindowBorder(reason: reason)
-    case .normal:
-      break
-    }
+    // Both modes paint the active-window border (thin green normal / blue insert).
+    updateActiveWindowBorder(reason: reason)
   }
 
   func focusedWindowGeometryDidChange(pid: pid_t, notification: String) {
@@ -200,7 +196,7 @@ extension AppDelegate {
       // the border flicker off (appear-then-vanish) on every app switch and on
       // insert entry.
       scheduleAmbientLocationRecord(pid: pid, reason: "window_focus")
-      updateInsertModeActiveWindowBorder(reason: notification)
+      updateActiveWindowBorder(reason: notification)
     } else {
       beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
     }
@@ -209,23 +205,15 @@ extension AppDelegate {
   func modeWillBeginWindowGeometryChange(reason: String) {
     windowGeometryChangeInProgress = true
     FlashLog.trace("[mode] window_geometry_begin mode=\(flashMode) reason=\(reason)")
-    switch flashMode {
-    case .insert:
-      overlay.setActiveWindowBorder(around: nil)
-    case .normal:
-      break
-    }
+    // Hide the border in both modes while the window moves/resizes so the stroke
+    // doesn't visibly trail the chrome; it's redrawn when the change ends.
+    overlay.setActiveWindowBorder(around: nil)
   }
 
   func modeDidEndWindowGeometryChange(reason: String) {
     windowGeometryChangeInProgress = false
     FlashLog.trace("[mode] window_geometry_end mode=\(flashMode) reason=\(reason)")
-    switch flashMode {
-    case .insert:
-      updateInsertModeActiveWindowBorder(reason: "window_geometry_end_\(reason)")
-    case .normal:
-      break
-    }
+    updateActiveWindowBorder(reason: "window_geometry_end_\(reason)")
   }
 
   private func resetModeInputState() {
@@ -426,7 +414,7 @@ extension AppDelegate {
       captureInput: capture,
       inputMode: capture ? .normal : .hints,
       // Always re-evaluate so a transition out of insert clears the
-      // stale border via `updateInsertModeActiveWindowBorder`'s built-in
+      // stale border via `updateActiveWindowBorder`'s built-in
       // hide branch.
       refreshActiveWindowBorder: true)
   }
@@ -445,7 +433,7 @@ extension AppDelegate {
         + "visible=\(statusBarVisible) hints=\(currentHints.count) in_flight=\(inFlight)")
     statusBarController?.updateModeLabel(text)
     overlay.inputMode = inputMode
-    updateInsertModeActiveWindowBorder(reason: "apply_mode_overlay")
+    updateActiveWindowBorder(reason: "apply_mode_overlay")
     overlay.setModeBadge(
       text: text,
       visible: mode.badgeVisibleIntrinsic && statusBarVisible,
