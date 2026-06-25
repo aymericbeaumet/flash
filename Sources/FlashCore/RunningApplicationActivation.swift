@@ -14,7 +14,7 @@ public enum RunningApplicationActivation {
 
   @discardableResult
   public static func restoreMinimizedWindows(processID pid: pid_t) -> Int {
-    let axApp = AXUIElementCreateApplication(pid)
+    let axApp = AXApp.make(pid: pid)
     var rawWindows: CFTypeRef?
     guard
       AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &rawWindows)

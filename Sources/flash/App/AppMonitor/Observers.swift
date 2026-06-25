@@ -189,7 +189,7 @@ extension AppMonitor {
       return
     }
 
-    let appEl = AXUIElementCreateApplication(pid)
+    let appEl = AXApp.make(pid: pid)
     let ctx = ObserverContext(monitor: self, pid: pid)
     let refcon = Unmanaged.passUnretained(ctx).toOpaque()
 

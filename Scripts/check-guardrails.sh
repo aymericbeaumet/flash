@@ -52,6 +52,15 @@ check_absent_except \
   'KeyboardCaptureTap\.swift' \
   "${PROD_SWIFT[@]}"
 
+# Every production app AX element must carry a bounded messaging timeout, or a
+# wedged app beachballs Flash's main thread for the 6s system default. The
+# AXApp.make factory applies the timeout; nothing else may call the raw API.
+check_absent_except \
+  "app AX elements must be created via AXApp.make (bounded messaging timeout)" \
+  "AXUIElementCreateApplication\\(" \
+  'AXApp\.swift' \
+  "${PROD_SWIFT[@]}"
+
 check_absent \
   "no global keyboard monitors" \
   "addGlobalMonitorForEvents\\(matching:.*(keyDown|keyUp|flagsChanged)" \

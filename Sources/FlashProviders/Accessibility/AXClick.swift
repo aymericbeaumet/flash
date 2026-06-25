@@ -95,7 +95,7 @@ public enum AXClick {
     // AX hit-test takes top-left primary-origin Y-down coords.
     let axX = Float(nsScreenPoint.x)
     let axY = Float(screenH - nsScreenPoint.y)
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     var hit: AXUIElement?
     guard AXUIElementCopyElementAtPosition(app, axX, axY, &hit) == .success,
       let initial = hit

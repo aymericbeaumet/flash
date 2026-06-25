@@ -105,7 +105,7 @@ extension NormalModeDispatcher {
   }
 
   static func documentURL(pid: pid_t) -> String? {
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     var focusedRaw: CFTypeRef?
     if AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focusedRaw)
       == .success,
@@ -133,7 +133,7 @@ extension NormalModeDispatcher {
   }
 
   static func isEditableFocusedElement(pid: pid_t) -> Bool {
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     guard let element = elementAttribute(app, kAXFocusedUIElementAttribute as String) else {
       return false
     }
@@ -141,7 +141,7 @@ extension NormalModeDispatcher {
   }
 
   static func repairSingleStrongEditableFocus(pid: pid_t) -> EditableFocusRepairResult {
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
       isEditable(focused)
     {
@@ -174,14 +174,14 @@ extension NormalModeDispatcher {
   }
 
   static func focusedInputSnapshot(pid: pid_t) -> InputFocusSnapshot? {
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     let element = elementAttribute(app, kAXFocusedUIElementAttribute as String)
     let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
     return inputSnapshot(pid: pid, app: app, element: element, window: window)
   }
 
   static func inputSnapshot(pid: pid_t, at nsScreenPoint: CGPoint) -> InputFocusSnapshot? {
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
     let screenH = primaryScreenHeight()
     let axX = Float(nsScreenPoint.x)
@@ -250,7 +250,7 @@ extension NormalModeDispatcher {
   }
 
   static func focusedElementFrame(pid: pid_t) -> CGRect? {
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     let screenH = primaryScreenHeight()
     if let element = elementAttribute(app, kAXFocusedUIElementAttribute as String),
       let frame = frame(of: element, primaryScreenHeight: screenH)

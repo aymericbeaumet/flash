@@ -86,7 +86,7 @@ final class AXBroker {
       // bottom-left. Resolved once per snapshot so every node's frame uses
       // the same basis. Only needed when geometry is requested.
       let screenH = geometry ? self.primaryScreenHeight() : 0
-      let app = AXUIElementCreateApplication(pid)
+      let app = AXApp.make(pid: pid)
       let roots: [AXUIElement]
       switch rootsMode {
       case "app":

@@ -160,7 +160,7 @@ extension NormalModeDispatcher {
     let actions = scrollActionNames(for: kind)
     guard !actions.isEmpty else { return false }
 
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
       performActionNear(element: focused, actions: actions)
     {
@@ -357,7 +357,7 @@ extension NormalModeDispatcher {
     return NSScreen.main?.frame.height ?? 1080
   }
   private static func scrollBar(axis: Axis, pid: pid_t) -> AXUIElement? {
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
       let bar = scrollBarNear(element: focused, axis: axis)
     {
@@ -451,7 +451,7 @@ extension NormalModeDispatcher {
     guard !windowFrame.isNull, windowFrame.width > 0, windowFrame.height > 0 else {
       return nil
     }
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     guard let window = elementAttribute(app, kAXFocusedWindowAttribute as String) else {
       return nil
     }

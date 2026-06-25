@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import FlashCore
 
 /// Implements the `window_move position=… screen=…` verb against the
 /// focused application's focused window via Accessibility. When the
@@ -21,7 +22,7 @@ enum WindowMover {
     statusBarReservesSpace: Bool,
     targetPID: pid_t
   ) {
-    let axApp = AXUIElementCreateApplication(targetPID)
+    let axApp = AXApp.make(pid: targetPID)
 
     // Resolve the window to move. Three fallbacks because Flash holds
     // key focus during normal-mode capture, so AX answers vary by app:

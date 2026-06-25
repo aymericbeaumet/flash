@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import FlashCore
 
 /// Chrome and other Chromium-based browsers ship their accessibility
 /// engine OFF by default and only enable it when an assistive
@@ -58,7 +59,7 @@ enum ChromiumAccessibilityWaker {
     let pid = app.processIdentifier
     guard pid > 0 else { return }
     queue.async {
-      let appEl = AXUIElementCreateApplication(pid)
+      let appEl = AXApp.make(pid: pid)
       let trueRef = kCFBooleanTrue as CFTypeRef
       _ = AXUIElementSetAttributeValue(
         appEl, "AXEnhancedUserInterface" as CFString, trueRef)

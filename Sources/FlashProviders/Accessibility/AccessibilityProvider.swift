@@ -177,7 +177,7 @@ public final class AccessibilityProvider: FlashSource {
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
-    let app = AXUIElementCreateApplication(context.processID)
+    let app = AXApp.make(pid: context.processID)
     guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String) else {
       DispatchQueue.main.async { completion(.unhandled) }
       return
@@ -202,7 +202,7 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   public func documentURL(in context: AppContext) -> String? {
-    let app = AXUIElementCreateApplication(context.processID)
+    let app = AXApp.make(pid: context.processID)
     var focusedRaw: CFTypeRef?
     if AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focusedRaw)
       == .success,
@@ -399,7 +399,7 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   public func discover(in context: AppContext) throws -> [JumpTarget] {
-    let app = AXUIElementCreateApplication(context.processID)
+    let app = AXApp.make(pid: context.processID)
     // Wake the target app's a11y engine. Some apps (notably Firefox)
     // run a lazy/idle accessibility service that only exposes the
     // window-decoration buttons until an assistive technology
