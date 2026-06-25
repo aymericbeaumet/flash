@@ -2486,14 +2486,16 @@ extension AppDelegate {
     if candidate.kind == CandidateFinder.bangKind,
       let token = candidate.sourcePayload
     {
-      if submit {
-        submitTypedBang(typed: (token: token, remainder: typedBang?.remainder ?? ""))
+      let remainder = typedBang?.remainder ?? ""
+      // Dispatch the search when force-submitted (`<cmd+cr>`) OR on plain `<cr>`
+      // (allowFinisher) once a query is already typed — `!g paris weather`, or a
+      // bang anywhere like `paris weather !g`, searches immediately. Only fall
+      // back to canonicalizing `:flashlight !<token> ` when there's no query yet
+      // (so "type `!g`, then the query" keeps working) or on `<tab>`.
+      if submit || (allowFinisher && !remainder.isEmpty) {
+        submitTypedBang(typed: (token: token, remainder: remainder))
         return
       }
-      // `<cr>`/`<tab>` on a bang row with matches: canonicalize the
-      // buffer to `:flashlight !<token> ` so the cursor sits ready for
-      // the query. The selection is the authority — we don't preserve
-      // any partial token the user typed.
       let buffer = ":flashlight !\(token) "
       refreshCommandLine(text: buffer, cursorIndex: buffer.count)
       return

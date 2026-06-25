@@ -173,4 +173,32 @@ mod tests {
             Some("https://www.google.com/maps/search/{{{s}}}")
         );
     }
+
+    #[test]
+    fn bang_query_builds_a_search_url_the_same_way_for_every_engine() {
+        // `!g paris weather` opens Google searching "paris weather"; the
+        // {{{s}}} substitution is identical for every search engine.
+        let cases = [
+            (
+                "g",
+                "paris weather",
+                "https://www.google.com/search?q=paris%20weather",
+            ),
+            (
+                "ddg",
+                "paris weather",
+                "https://duckduckgo.com/?q=paris%20weather",
+            ),
+            (
+                "b",
+                "paris weather",
+                "https://www.bing.com/search?q=paris%20weather",
+            ),
+        ];
+        for (bang, query, expected) in cases {
+            let template = lookup(bang).unwrap_or_else(|| panic!("bang !{bang} should exist"));
+            let url = template.replace("{{{s}}}", &percent_encode(query));
+            assert_eq!(url, expected, "bang !{bang}");
+        }
+    }
 }
