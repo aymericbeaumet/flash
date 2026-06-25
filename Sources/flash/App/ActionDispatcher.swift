@@ -9,6 +9,22 @@ enum ActionDispatcher {
     case hostClick
   }
 
+  /// Serial queue for the timed parts of click synthesis (the settle pause and
+  /// the mouse-down hold). Those sleeps space the posted CGEvents the way real
+  /// hardware does — they are *inter-event* timing, not a main-thread
+  /// requirement — so they must never run on the main run loop, which also
+  /// services the keyboard capture tap. Serial so concurrent commits can't
+  /// interleave their cursor warp/restore.
+  private static let clickQueue = DispatchQueue(label: "flash.action.click", qos: .userInitiated)
+
+  /// Height of the primary screen (the one whose origin is (0,0)), used for the
+  /// AX(top-left) → NSScreen(bottom-left) Y-flip. `NSScreen` is main-affine, so
+  /// callers must invoke this on the main thread.
+  static func primaryScreenHeight() -> CGFloat {
+    NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
+      ?? NSScreen.main?.frame.height ?? 1080
+  }
+
   /// Click pipeline. By default click actions do not move the visible cursor —
   /// `synthesizeClick` hides, warps, clicks, then restores. Hint commits pass
   /// `leaveCursorAtClickPoint: true` so the cursor lands, and stays, on the hint
@@ -35,34 +51,45 @@ enum ActionDispatcher {
   /// `clickPoint`, when supplied, is the screen-coord point we click in
   /// steps 3 + 4. The expected value is the target's geometric centre
   /// — the same point AX uses for its own press-to-click fallback.
+  ///
+  /// `completion` (if supplied) runs on the main thread once the click has been
+  /// delivered: synchronously for the AX paths, and after the off-main posting
+  /// for the synthesized-click paths. Hint-commit relies on this to probe the
+  /// target's focus *after* the click lands.
   static func perform(
     _ action: JumpAction,
     on target: JumpTarget,
     pid _: pid_t? = nil,
     clickPoint: CGPoint? = nil,
     modifiers: ClickModifiers = [],
-    leaveCursorAtClickPoint: Bool = false
-  ) -> Bool {
+    leaveCursorAtClickPoint: Bool = false,
+    completion: (() -> Void)? = nil
+  ) {
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
     if dispatchRoute(for: target, modifiers: modifiers) == .hostClick {
-      return synthesizeClick(
+      synthesizeClick(
         at: point, action: action, modifiers: modifiers,
-        preserveCursor: !leaveCursorAtClickPoint)
+        preserveCursor: !leaveCursorAtClickPoint, completion: completion)
+      return
     }
     if let activate = target.activate, activate(action) {
       // The AX path never moved the pointer; place it on the hint so a hint
-      // commit leaves the cursor where the user aimed.
+      // commit leaves the cursor where the user aimed. AX activate is
+      // synchronous, so the caller's completion can run now.
       if leaveCursorAtClickPoint { _ = moveCursor(to: point) }
-      return true
+      completion?()
+      return
     }
     if let pid = target.pid,
       AXClick.clickAtPoint(pid: pid, nsScreenPoint: point, action: action)
     {
       if leaveCursorAtClickPoint { _ = moveCursor(to: point) }
-      return true
+      completion?()
+      return
     }
-    return synthesizeClick(
-      at: point, action: action, preserveCursor: !leaveCursorAtClickPoint)
+    synthesizeClick(
+      at: point, action: action, preserveCursor: !leaveCursorAtClickPoint,
+      completion: completion)
   }
 
   static func dispatchRoute(for target: JumpTarget, modifiers: ClickModifiers) -> DispatchRoute {
@@ -75,16 +102,42 @@ enum ActionDispatcher {
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left
   /// origin of primary screen). By default the cursor is hidden, warped to the
   /// click point, clicked, then restored so fallback clicks are transparent.
+  ///
+  /// Returns `true` once the click is enqueued. The blocking posting (settle +
+  /// mouse-down-hold sleeps, ~40–60ms) runs on `clickQueue`, off the main run
+  /// loop, so it no longer starves the keyboard tap; `completion` (if supplied)
+  /// runs on main after the click has been posted.
   @discardableResult
   static func synthesizeClick(
     at screenPoint: CGPoint,
     action: JumpAction,
     modifiers: ClickModifiers = [],
-    preserveCursor: Bool = true
+    preserveCursor: Bool = true,
+    completion: (() -> Void)? = nil
   ) -> Bool {
-    let screenH =
-      NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
-      ?? NSScreen.main?.frame.height ?? 1080
+    // NSScreen / NSWorkspace are main-affine; resolve them on the calling thread
+    // (callers invoke this on main) and hand the constants down to the queue.
+    let screenH = primaryScreenHeight()
+    let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
+    clickQueue.async {
+      postSynthesizedClick(
+        screenPoint: screenPoint, screenH: screenH, action: action, modifiers: modifiers,
+        preserveCursor: preserveCursor, frontmostBundleID: frontmostBundleID)
+      if let completion { DispatchQueue.main.async(execute: completion) }
+    }
+    return true
+  }
+
+  /// The blocking body of `synthesizeClick`, run on `clickQueue`: builds and
+  /// posts the CGEvents with the inter-event sleeps the receiving app expects.
+  private static func postSynthesizedClick(
+    screenPoint: CGPoint,
+    screenH: CGFloat,
+    action: JumpAction,
+    modifiers: ClickModifiers,
+    preserveCursor: Bool,
+    frontmostBundleID: String
+  ) {
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
 
     let source = CGEventSource(stateID: .combinedSessionState)
@@ -109,7 +162,10 @@ enum ActionDispatcher {
         let up = CGEvent(
           mouseEventSource: source, mouseType: upType, mouseCursorPosition: cgPoint,
           mouseButton: button)
-      else { return false }
+      else {
+        FlashLog.warn("[click] could not create CGEvent for synthesized click")
+        return
+      }
       down.flags = modifiers.cgEventFlags
       up.flags = modifiers.cgEventFlags
       down.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
@@ -172,14 +228,12 @@ enum ActionDispatcher {
       CGWarpMouseCursorPosition(originalCursor)
       CGDisplayShowCursor(CGMainDisplayID())
     }
-    let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
     FlashLog.trace(
       "[click] synthesize at=(\(Int(screenPoint.x)),\(Int(screenPoint.y))) "
         + "action=\(action) flags=\(modifiers.cgEventFlags.rawValue) "
         + "modifiers=cmd:\(modifiers.contains(.command)) "
         + "shift:\(modifiers.contains(.shift)) ctrl:\(modifiers.contains(.control)) "
-        + "alt:\(modifiers.contains(.option)) frontmost=\(frontmost)")
-    return true
+        + "alt:\(modifiers.contains(.option)) frontmost=\(frontmostBundleID)")
   }
 
   /// Magic number stamped on every mouse event we synthesize so we can
@@ -196,9 +250,7 @@ enum ActionDispatcher {
   /// a genuine move (driving hover, tracking-area enter/exit, etc.).
   @discardableResult
   static func moveCursor(to screenPoint: CGPoint) -> Bool {
-    let screenH =
-      NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
-      ?? NSScreen.main?.frame.height ?? 1080
+    let screenH = primaryScreenHeight()
     let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
     let previous = CGEvent(source: nil)?.location ?? cgPoint
     CGWarpMouseCursorPosition(cgPoint)

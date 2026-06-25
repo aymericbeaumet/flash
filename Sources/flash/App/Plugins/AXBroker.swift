@@ -206,7 +206,11 @@ final class AXBroker {
       }
       let point = CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + frame[3] / 2)
       DispatchQueue.main.async {
-        reply(["ok": ActionDispatcher.synthesizeClick(at: point, action: action)])
+        // synthesizeClick reads NSScreen/NSWorkspace on this (main) thread, then
+        // posts off-main; reply once the click has actually landed.
+        ActionDispatcher.synthesizeClick(at: point, action: action) {
+          reply(["ok": true])
+        }
       }
     }
   }
@@ -218,7 +222,9 @@ final class AXBroker {
     }
     let action = jumpAction(params["action"] as? String)
     DispatchQueue.main.async {
-      reply(["ok": ActionDispatcher.synthesizeClick(at: point, action: action)])
+      ActionDispatcher.synthesizeClick(at: point, action: action) {
+        reply(["ok": true])
+      }
     }
   }
 

@@ -352,42 +352,47 @@ extension AppDelegate {
     mouseGridDepth = 0
     pendingHintCommitBehavior = .click
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
-      _ = ActionDispatcher.perform(
+      // The click's blocking work now runs off the main run loop; settle Flash's
+      // mode in the completion so it still happens *after* the click lands — the
+      // insert probe below reads the target's focus, which the click changes.
+      ActionDispatcher.perform(
         action, on: hint.target, pid: pid, clickPoint: clickPoint, modifiers: clickModifiers,
-        leaveCursorAtClickPoint: true)
-      guard let self else { return }
-      self.activationInFlight = false
-      if wasNormalMode, actionMayEnterInsert {
-        // Any pointer commit — including right-click — hands the keyboard to
-        // the app and enters insert (the context menu does its own key
-        // tracking, so releasing capture is correct there too).
-        self.enterInsertModeIfClickedOnTextInput(
-          pid: pid,
-          clickPoint: clickPoint,
-          reason: .hintCommit,
-          handoffToken: handoffToken,
-          hintTargetEntersInsert: hint.target.entersInsertMode
-        ) {
-          [weak self] outcome in
-          guard let self else { return }
-          switch outcome {
-          case .enteredInsert:
-            self.clearPointerInsertHandoff(
-              reason: "hint_commit_entered_insert",
-              token: handoffToken)
-          case .recaptureNormal:
-            self.clearPointerInsertHandoff(reason: "hint_commit_probe_done", token: handoffToken)
-            guard self.flashMode == .normal else { return }
-            self.restoreNormalModeAfterCommit(action: action)
-          case .suspendedNativeSurface:
-            self.clearPointerInsertHandoff(
-              reason: "hint_commit_native_surface",
-              token: handoffToken)
-            self.suspendNormalCaptureForNativeSurface(reason: "hint_commit_native_surface")
+        leaveCursorAtClickPoint: true
+      ) { [weak self] in
+        guard let self else { return }
+        self.activationInFlight = false
+        if wasNormalMode, actionMayEnterInsert {
+          // Any pointer commit — including right-click — hands the keyboard to
+          // the app and enters insert (the context menu does its own key
+          // tracking, so releasing capture is correct there too).
+          self.enterInsertModeIfClickedOnTextInput(
+            pid: pid,
+            clickPoint: clickPoint,
+            reason: .hintCommit,
+            handoffToken: handoffToken,
+            hintTargetEntersInsert: hint.target.entersInsertMode
+          ) {
+            [weak self] outcome in
+            guard let self else { return }
+            switch outcome {
+            case .enteredInsert:
+              self.clearPointerInsertHandoff(
+                reason: "hint_commit_entered_insert",
+                token: handoffToken)
+            case .recaptureNormal:
+              self.clearPointerInsertHandoff(reason: "hint_commit_probe_done", token: handoffToken)
+              guard self.flashMode == .normal else { return }
+              self.restoreNormalModeAfterCommit(action: action)
+            case .suspendedNativeSurface:
+              self.clearPointerInsertHandoff(
+                reason: "hint_commit_native_surface",
+                token: handoffToken)
+              self.suspendNormalCaptureForNativeSurface(reason: "hint_commit_native_surface")
+            }
           }
+        } else if wasNormalMode {
+          self.restoreNormalModeAfterCommit(action: action)
         }
-      } else if wasNormalMode {
-        self.restoreNormalModeAfterCommit(action: action)
       }
     }
   }
