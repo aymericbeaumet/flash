@@ -594,6 +594,31 @@ After install, verify:
 
 Karabiner-Elements mappings live in `~/.config/karabiner/karabiner.json` under `profiles[<active>].complex_modifications.rules`.
 
+## Dead code analysis
+
+Static, index-based detection of declarations with no callers. Both tools are read-only — **review findings before deleting.**
+
+### Swift — periphery
+
+```bash
+brew install periphery          # macOS-only Swift tooling
+periphery scan --disable-update-check
+```
+
+`periphery scan` builds the SPM package with an index store and reports unused functions / properties / initializers / types / enums / imports across every target (tests included, so test-only helpers are *not* flagged). `.periphery.yml` pins the config.
+
+It cannot see cross-language usage: **FlashCore / FlashProviders public API consumed by Rust plugins over the MessagePack IPC has no Swift call site and is reported as unused — it is not dead.** Review every `FlashCore` / `FlashProviders` finding against the plugin protocol before deleting. The app layer (`Sources/flash`) has no external consumers, so its findings are safe to remove.
+
+### Rust — built-in `dead_code` lint
+
+```bash
+cd Plugins
+find . -name '*.rs' -not -path './target/*' -exec touch {} +   # force cached crates to re-emit
+cargo clippy --workspace --all-targets 2>&1 | grep -iE 'never used|never read|never constructed'
+```
+
+The plugins are binary crates, so rustc's `dead_code` lint flags unused items (including `pub`) with no extra tooling — touch the sources first, since incremental builds suppress warnings for unchanged crates.
+
 ## Testing UI behavior
 
 Tests in `Tests/FlashTests/` are stratified by what they exercise:
