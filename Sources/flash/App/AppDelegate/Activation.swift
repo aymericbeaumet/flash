@@ -212,12 +212,7 @@ extension AppDelegate {
       return
     }
     overlay.hide()
-    currentHints = []
-    currentPrefix = ""
-    sourceAppPID = nil
-    mouseGridRegion = nil
-    mouseGridDepth = 0
-    pendingHintCommitBehavior = .click
+    clearHintSessionState()
     invalidateActivation(reason: "cancel_overlay")
     applyModeOverlay()
   }

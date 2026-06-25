@@ -131,13 +131,8 @@ extension AppDelegate {
     if hadHints {
       overlay.hide()
     }
-    currentHints = []
-    currentPrefix = ""
-    sourceAppPID = nil
-    mouseGridRegion = nil
-    mouseGridDepth = 0
+    clearHintSessionState()
     pendingAction = .leftClick
-    pendingHintCommitBehavior = .click
     if hadActivation {
       invalidateActivation(reason: reason)
     }
@@ -927,7 +922,9 @@ extension AppDelegate {
   }
 
   static let normalModeRecaptureDelaysMs = [0, 10, 30, 60, 120, 250, 500, 900, 1_400]
-  static let normalModeFocusChangingRecaptureDelaysMs = [0, 1, 4, 8, 16, 30, 60, 120, 250, 500, 900, 1_400]
+  static let normalModeFocusChangingRecaptureDelaysMs = [
+    0, 1, 4, 8, 16, 30, 60, 120, 250, 500, 900, 1_400,
+  ]
   static let normalModeKeyTargetActivationDelayMs = 35
 
   private static let normalModeKeyModifierMask: CGEventFlags = [

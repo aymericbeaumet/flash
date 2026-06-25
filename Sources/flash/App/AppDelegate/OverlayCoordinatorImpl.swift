@@ -264,12 +264,7 @@ extension AppDelegate {
         NormalModeDispatcher.copy(url)
       }
       overlay.hide()
-      currentHints = []
-      currentPrefix = ""
-      sourceAppPID = nil
-      mouseGridRegion = nil
-      mouseGridDepth = 0
-      pendingHintCommitBehavior = .click
+      clearHintSessionState()
       activationGen &+= 1
       applyModeOverlay()
       return
@@ -280,12 +275,7 @@ extension AppDelegate {
       let point = CGPoint(x: chipRect.midX, y: chipRect.midY)
       _ = ActionDispatcher.moveCursor(to: point)
       overlay.hide()
-      currentHints = []
-      currentPrefix = ""
-      sourceAppPID = nil
-      mouseGridRegion = nil
-      mouseGridDepth = 0
-      pendingHintCommitBehavior = .click
+      clearHintSessionState()
       activationGen &+= 1
       applyModeOverlay()
       return
@@ -345,12 +335,7 @@ extension AppDelegate {
     // whatever the user was about to hint, not what they committed to).
     activationInFlight = true
     activationGen &+= 1
-    currentHints = []
-    currentPrefix = ""
-    sourceAppPID = nil
-    mouseGridRegion = nil
-    mouseGridDepth = 0
-    pendingHintCommitBehavior = .click
+    clearHintSessionState()
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
       // The click's blocking work now runs off the main run loop; settle Flash's
       // mode in the completion so it still happens *after* the click lands — the
@@ -421,17 +406,27 @@ extension AppDelegate {
     overlay.modeBadgeCapturesInput = false
   }
 
-  private func dismissTransientPointerStateWithoutRekey(reason: String) {
-    let hadActivation = activationInFlight || activationInFlightGeneration != nil
-    guard !currentHints.isEmpty || hadActivation else { return }
-    overlay.hide()
+  /// Reset the transient hint-session scalars to their idle values. These six
+  /// are the complete "hints showing / mouse-grid in progress" surface; they
+  /// were cleared by copy-paste in ≥8 places, so a newly added session field was
+  /// one missed site away from a leak. Centralizing the reset means a new field
+  /// is added in one place. Call sites keep any *non-session* side effects they
+  /// also perform (activationGen bump, pendingAction reset, overlay.hide()).
+  func clearHintSessionState() {
     currentHints = []
     currentPrefix = ""
     sourceAppPID = nil
     mouseGridRegion = nil
     mouseGridDepth = 0
-    pendingAction = .leftClick
     pendingHintCommitBehavior = .click
+  }
+
+  private func dismissTransientPointerStateWithoutRekey(reason: String) {
+    let hadActivation = activationInFlight || activationInFlightGeneration != nil
+    guard !currentHints.isEmpty || hadActivation else { return }
+    overlay.hide()
+    clearHintSessionState()
+    pendingAction = .leftClick
     if hadActivation {
       invalidateActivation(reason: reason)
     }
@@ -441,13 +436,8 @@ extension AppDelegate {
     overlay.hide()
     let hadActivation = activationInFlight || activationInFlightGeneration != nil
     let hadTransientState = !currentHints.isEmpty || hadActivation
-    currentHints = []
-    currentPrefix = ""
-    sourceAppPID = nil
-    mouseGridRegion = nil
-    mouseGridDepth = 0
+    clearHintSessionState()
     pendingAction = .leftClick
-    pendingHintCommitBehavior = .click
     if hadTransientState {
       invalidateActivation(reason: reason)
     }
@@ -509,13 +499,8 @@ extension AppDelegate {
     let shouldMove = pendingHintCommitBehavior == .mouseGridMove
     let priorPID = sourceAppPID
     overlay.hide()
-    currentHints = []
-    currentPrefix = ""
-    mouseGridRegion = nil
-    mouseGridDepth = 0
+    clearHintSessionState()
     activationGen &+= 1
-    sourceAppPID = nil
-    pendingHintCommitBehavior = .click
     if shouldMove {
       _ = ActionDispatcher.moveCursor(to: point)
       applyModeOverlay()
