@@ -1627,6 +1627,13 @@ extension AppDelegate {
       // confirmed bang anymore) unlocks and the bang list returns.
       let bang = CandidateFinder.parseBangState(query)
       if let bang, bang.confirmed {
+        // The locked-in query now belongs to the bang's dispatch, so keep
+        // `candidateFinderCurrentQuery` current — submit re-parses it for the
+        // remainder. This branch returns before `updateCandidateMatches` (which
+        // normally sets it), so without this it stays stuck at the value from
+        // before the confirming space: `!g weather paris` then searched nothing
+        // and `weather !g paris` searched only "weather".
+        candidateFinderCurrentQuery = query
         candidateFinderMatches = []
         candidateFinderSelectedIndex = 0
         let queryRange = bangRangeInCommand(
