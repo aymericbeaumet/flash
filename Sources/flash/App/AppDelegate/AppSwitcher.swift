@@ -1,17 +1,16 @@
 import AppKit
 import FlashCore
 
-/// `:apps` — a hint-based app switcher. Paints one hint chip on each running
-/// app's front on-screen window (across all apps and monitors); committing a
-/// hint raises that app. Switching is one keystroke and spatial rather than the
+/// `:apps` — a hint-based window switcher. Paints a hint chip on every visible
+/// window of every running app, across all apps and monitors; committing a hint
+/// raises the owning app. Switching is one keystroke and spatial rather than the
 /// Cmd-Tab MRU dance.
 ///
-/// v1 scope: one chip per app, on its topmost visible window. Two deliberate
-/// fast-follows (both need more than the current hint pipeline can express):
-///   - per-window switching (raise a *specific* window via AX `kAXRaiseAction`);
-///   - apps with no on-screen window (hidden / minimised / another Space) —
-///     hinting those needs the chip to show an app NAME, which the letter-chip
-///     renderer doesn't do yet. Those apps remain reachable via `:flashlight`.
+/// Two deliberate fast-follows: (1) raising a *specific* window — multiple
+/// windows of one app currently all raise the app's front window (needs AX
+/// `kAXRaiseAction` + reliable CGWindow↔AXWindow matching); (2) a horizontal
+/// strip of app ICONS for apps with no on-screen window — that needs the overlay
+/// to render images, which the letter-chip path doesn't do yet.
 extension AppDelegate {
   func presentAppSwitcher() {
     let targets = appSwitcherWindowTargets()
@@ -37,8 +36,8 @@ extension AppDelegate {
     FlashLog.trace("[apps] switcher shown windows=\(targets.count)")
   }
 
-  /// One JumpTarget per switchable app, anchored on that app's front-most
-  /// on-screen interaction window. Commit raises the owning app.
+  /// One JumpTarget per visible interaction window of every switchable app, at
+  /// the window's real frame. Commit raises the owning app.
   private func appSwitcherWindowTargets() -> [JumpTarget] {
     let flashPID = ProcessInfo.processInfo.processIdentifier
     let ignored = Set(config.open.ignoredApps.map { $0.lowercased() })
@@ -57,11 +56,11 @@ extension AppDelegate {
     else { return [] }
     let entries = WindowSnapshot.entries(from: info, primaryH: primaryH)
 
-    return Self.appSwitcherTopWindows(entries: entries, switchablePIDs: Set(appByPID.keys))
+    return Self.appSwitcherVisibleWindows(entries: entries, switchablePIDs: Set(appByPID.keys))
       .compactMap { window in
         guard let app = appByPID[window.pid] else { return nil }
         return JumpTarget(
-          id: "apps:\(window.pid)",
+          id: "apps:\(window.pid):\(Int(window.frame.minX)):\(Int(window.frame.minY))",
           frame: window.frame,
           pid: window.pid,
           activate: { _ in
@@ -71,24 +70,18 @@ extension AppDelegate {
       }
   }
 
-  /// The front-most on-screen interaction window for each switchable pid, in
-  /// z-order (front app first). Pure so the dedup/ordering is unit-testable.
+  /// Every visible interaction-surface window owned by a switchable pid, in
+  /// z-order (front-most first). Pure so the filter/ordering is unit-testable.
   /// `entries` must be front-to-back (CGWindowList order).
-  static func appSwitcherTopWindows(
+  static func appSwitcherVisibleWindows(
     entries: [WindowSnapshot.Entry],
     switchablePIDs: Set<pid_t>
   ) -> [(pid: pid_t, frame: CGRect)] {
-    var seen: Set<pid_t> = []
-    var out: [(pid: pid_t, frame: CGRect)] = []
-    for entry in entries
-    where WindowSnapshot.isInteractionSurfaceLayer(entry.layer)
-      && switchablePIDs.contains(entry.pid)
-    {
-      if seen.insert(entry.pid).inserted {
-        out.append((entry.pid, entry.nsBounds))
+    entries
+      .filter {
+        WindowSnapshot.isInteractionSurfaceLayer($0.layer) && switchablePIDs.contains($0.pid)
       }
-    }
-    return out
+      .map { (pid: $0.pid, frame: $0.nsBounds) }
   }
 
   static func appSwitcherIsIgnored(_ app: NSRunningApplication, ignored: Set<String>) -> Bool {
