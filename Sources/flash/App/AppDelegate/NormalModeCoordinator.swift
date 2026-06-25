@@ -2407,8 +2407,6 @@ extension AppDelegate {
       openDebugDashboard(tab: "logs")
     case .commands:
       openDebugDashboard(tab: "commands")
-    case .apps:
-      presentAppSwitcher()
     }
   }
 

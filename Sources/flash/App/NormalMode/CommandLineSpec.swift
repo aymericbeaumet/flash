@@ -27,7 +27,6 @@ extension NormalModeDispatcher {
     case help(topic: String?)
     case logs
     case commands
-    case apps
   }
 
   enum PluginsSubcommand: Equatable {
@@ -268,7 +267,6 @@ extension NormalModeDispatcher {
     CommandLineSpec(names: ["logs"], bangPolicy: .rejected) { _ in .logs },
     CommandLineSpec(names: ["commands"], bangPolicy: .rejected) { _ in .commands },
     CommandLineSpec(names: ["map[pings]"], bangPolicy: .rejected) { _ in .mappings },
-    CommandLineSpec(names: ["apps"], bangPolicy: .rejected) { _ in .apps },
   ]
 
   /// Human-readable descriptions for the built-in command-line commands,
@@ -293,7 +291,6 @@ extension NormalModeDispatcher {
     "logs": "Open the logs view in the HTTP debug dashboard",
     "commands": "Open the commands view in the HTTP debug dashboard",
     "mappings": "Show the active key mappings",
-    "apps": "Hint-switch to any visible app window",
     "open": "Forward args to /usr/bin/open",
     "help": "Open a help topic",
     "flashlight": "Fuzzy finder across apps, tabs, and plugins",
