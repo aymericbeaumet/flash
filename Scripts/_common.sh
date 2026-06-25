@@ -20,6 +20,10 @@ LOGIN_AGENT_PATH="$HOME/Library/LaunchAgents/$LOGIN_AGENT_LABEL.plist"
 CLI_LINK_DIR="$HOME/.local/bin"
 CLI_LINK_PATH="$CLI_LINK_DIR/flash"
 
+# Where the resident app writes its structured log. install.sh tails this to
+# confirm a launched build actually acquired the Accessibility grant.
+FLASH_LOG_PATH="$HOME/Library/Logs/$APP_NAME/flash.log"
+
 # parse_mode <args...> — parses CLI flags. Sets:
 #   MODE — "release" (default) or "dev"
 #
@@ -71,6 +75,34 @@ kill_all_flash() {
     for pid in $stragglers; do kill -9 "$pid" 2>/dev/null || true; done
     sleep 0.2
   fi
+}
+
+# launch_flash_and_check_tap — `open` the installed app and report whether the
+# keyboard-capture CGEventTap actually came up. A running PID is NOT proof
+# Flash works: without the Accessibility grant the tap can't be created and
+# Flash silently falls back to the degraded key-window path, so NORMAL mode
+# stops capturing keys. Flash logs exactly one of these lines per launch once
+# macOS has answered the trust check. Echoes: ok | denied | unknown.
+launch_flash_and_check_tap() {
+  local offset=0
+  [[ -f "$FLASH_LOG_PATH" ]] && offset=$(wc -l <"$FLASH_LOG_PATH" 2>/dev/null || echo 0)
+  open "$INSTALL_PATH"
+  local launch_log
+  for _ in {1..30}; do # up to ~6s for the tap to come up
+    if [[ -f "$FLASH_LOG_PATH" ]]; then
+      launch_log=$(tail -n "+$((offset + 1))" "$FLASH_LOG_PATH" 2>/dev/null || true)
+      if grep -q "keyboard capture tap installed" <<<"$launch_log"; then
+        echo ok
+        return
+      fi
+      if grep -q "no accessibility grant" <<<"$launch_log"; then
+        echo denied
+        return
+      fi
+    fi
+    sleep 0.2
+  done
+  echo unknown
 }
 
 # Ensure a stable self-signed code-signing identity exists in the login

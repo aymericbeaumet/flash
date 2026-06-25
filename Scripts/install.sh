@@ -55,8 +55,7 @@ mkdir -p "$CLI_LINK_DIR"
 ln -sf "$INSTALL_PATH/Contents/MacOS/flash" "$CLI_LINK_PATH"
 
 echo "==> Starting fresh resident process"
-open "$INSTALL_PATH"
-sleep 0.6
+TAP_STATUS=$(launch_flash_and_check_tap)
 
 NEW_PIDS=$(pgrep -f "$INSTALL_PATH/Contents/MacOS/flash" 2>/dev/null || true)
 ALL_PIDS=$(pgrep -f "$APP_NAME.app/Contents/MacOS/flash" 2>/dev/null || true)
@@ -66,8 +65,43 @@ echo "  All Flash PIDs: ${ALL_PIDS:-none}"
 echo "  Signed with:    $SIGN_IDENTITY"
 echo "  Login agent:    $LOGIN_AGENT_PATH"
 echo "  CLI:            $CLI_LINK_PATH"
+case "$TAP_STATUS" in
+  ok) echo "  Accessibility:  ✓ keyboard-capture tap installed" ;;
+  denied) echo "  Accessibility:  ✗ NOT granted — keyboard tap could not be created" ;;
+  *) echo "  Accessibility:  ? unconfirmed (no tap status logged within ~6s)" ;;
+esac
 if [[ -z "${NEW_PIDS:-}" ]]; then
   echo "  WARNING: the installed copy is not running. Check Console.app for launch errors."
+fi
+
+# A running Flash with no Accessibility grant is silently broken: NORMAL mode
+# falls back to key-window capture and stops catching keys. TCC grants can't be
+# scripted, so walk the user through the one-time grant and finish the job —
+# the tap is only created at launch, so Flash must be restarted once enabled.
+if [[ "$TAP_STATUS" != "ok" && -n "${NEW_PIDS:-}" ]]; then
+  echo
+  echo "⚠️  Flash is running but can't capture keys yet — macOS hasn't granted it"
+  echo "    Accessibility. This is a ONE-TIME step; the grant then persists across"
+  echo "    '--dev' rebuilds (they share the stable \"$DEV_SIGN_IDENTITY\" certificate)."
+  echo
+  echo "    Opening System Settings ▸ Privacy & Security ▸ Accessibility…"
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" >/dev/null 2>&1 || true
+  echo "    → Enable \"$APP_NAME\". If it's already listed from an older signature,"
+  echo "      toggle it OFF then ON — or: tccutil reset Accessibility $BUNDLE_ID"
+  if [[ -t 0 ]]; then
+    read -r -t 180 -p "    Press Enter once enabled to restart Flash and verify… " _ || true
+    echo
+    kill_all_flash
+    TAP_STATUS=$(launch_flash_and_check_tap)
+    if [[ "$TAP_STATUS" == "ok" ]]; then
+      echo "  Accessibility:  ✓ keyboard-capture tap installed — Flash is ready."
+    else
+      echo "  Accessibility:  still '$TAP_STATUS'. Enable $APP_NAME, then re-run:"
+      echo "                  ./Scripts/install.sh --$MODE"
+    fi
+  else
+    echo "    Then re-run: ./Scripts/install.sh --$MODE"
+  fi
 fi
 
 echo
