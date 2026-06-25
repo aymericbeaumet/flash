@@ -98,6 +98,27 @@ extension NormalModeDispatcher {
     return ok
   }
 
+  /// Insert `text` as a single synthetic Unicode key event — the whole string
+  /// typed at once, without touching the clipboard. Unlike `typeText` (one event
+  /// per UTF-16 unit, which garbles surrogate pairs / multi-scalar clusters),
+  /// this carries the full UTF-16 in one event, so emoji insert correctly.
+  @discardableResult
+  static func insertUnicode(_ text: String, to pid: pid_t) -> Bool {
+    let source = CGEventSource(stateID: .combinedSessionState)
+    guard
+      let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+      let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+    else { return false }
+    var utf16 = Array(text.utf16)
+    down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+    up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+    down.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+    up.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+    down.postToPid(pid)
+    up.postToPid(pid)
+    return true
+  }
+
   static func cgFlags(from modifierFlags: NSEvent.ModifierFlags) -> CGEventFlags {
     let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
     var flags = CGEventFlags()

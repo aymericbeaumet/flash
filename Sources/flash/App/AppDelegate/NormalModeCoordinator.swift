@@ -2687,16 +2687,22 @@ extension AppDelegate {
   /// invoked (an emoji glyph, a clipboard-history entry, …). The overlay
   /// never takes key focus, so the app's text field is still first
   /// responder once we dismiss.
-  func insertText(_ text: String) {
+  func insertText(_ text: String, viaClipboard: Bool = true) {
     let pid = normalModeContext()?.processID
     overlay.hide()
     resetCommandLineState()
     applyModeOverlay(captureOverride: true)
     guard !text.isEmpty, let pid else { return }
-    NormalModeDispatcher.copy(text)
+    if viaClipboard { NormalModeDispatcher.copy(text) }
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-      NormalModeDispatcher.sendKey(
-        virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand, to: pid)
+      if viaClipboard {
+        NormalModeDispatcher.sendKey(
+          virtualKey: CGKeyCode(kVK_ANSI_V), flags: .maskCommand, to: pid)
+      } else {
+        // Emoji (and other short glyphs): type the Unicode directly so inserting
+        // it doesn't clobber the user's clipboard.
+        NormalModeDispatcher.insertUnicode(text, to: pid)
+      }
       self?.scheduleNormalModeRecapture()
     }
   }

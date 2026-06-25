@@ -849,7 +849,12 @@ extension AppDelegate {
 
   func openSourceItem(_ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true) {
     if CandidateFinder.insertsText(candidate) {
-      insertText(candidate.sourcePayload ?? "")
+      // Emoji type directly (no clipboard); other inserted values (e.g. a
+      // clipboard-history entry, which can be long) keep the reliable
+      // copy + paste.
+      insertText(
+        candidate.sourcePayload ?? "",
+        viaClipboard: candidate.kind != CandidateFinder.emojiKind)
       return
     }
     if shouldRecordMovement {
