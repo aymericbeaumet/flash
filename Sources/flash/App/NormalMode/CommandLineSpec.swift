@@ -16,6 +16,7 @@ extension NormalModeDispatcher {
     case newWindow
     case newTab
     case close
+    case closeWindow
     case find
     case undo
     case redo
@@ -243,7 +244,10 @@ extension NormalModeDispatcher {
   }
 
   static let commandLineSpecs: [CommandLineSpec] = [
-    CommandLineSpec(names: ["q[uit]"], bangPolicy: .accepted) { .quit(force: $0) },
+    // `:q` closes the focused OS window (vim's "close this window"); `:qa[ll]`
+    // quits the whole app. `:q!` / `:qa!` force.
+    CommandLineSpec(names: ["q[uit]"], bangPolicy: .accepted) { _ in .closeWindow },
+    CommandLineSpec(names: ["qa[ll]"], bangPolicy: .accepted) { .quit(force: $0) },
     CommandLineSpec(names: ["w[rite]"], bangPolicy: .accepted) { _ in .save },
     CommandLineSpec(names: ["wq", "x[it]"], bangPolicy: .accepted) {
       .saveAndQuit(force: $0)

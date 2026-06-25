@@ -183,6 +183,25 @@ extension NormalModeDispatcher {
     return isEditable(element)
   }
 
+  /// Close the focused window of `pid` by pressing its standard close button
+  /// (the red traffic-light control). This shuts the OS window itself —
+  /// distinct from `tab_close`/⌘W, which close a tab in tabbed apps. Returns
+  /// false when the window exposes no AX close button (borderless/custom
+  /// windows) so the caller can fall back to a keystroke.
+  static func closeFocusedWindow(pid: pid_t) -> Bool {
+    let app = AXApp.make(pid: pid)
+    guard
+      let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
+        ?? elementAttribute(app, kAXMainWindowAttribute as String)
+    else {
+      return false
+    }
+    guard let closeButton = elementAttribute(window, kAXCloseButtonAttribute as String) else {
+      return false
+    }
+    return AXUIElementPerformAction(closeButton, kAXPressAction as CFString) == .success
+  }
+
   static func repairSingleStrongEditableFocus(pid: pid_t) -> EditableFocusRepairResult {
     let app = AXApp.make(pid: pid)
     if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),

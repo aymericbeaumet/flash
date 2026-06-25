@@ -2389,6 +2389,8 @@ extension AppDelegate {
       performMappedCommand(.tabNew)
     case .close:
       performMappedCommand(.close)
+    case .closeWindow:
+      closeFocusedWindowInNormalMode()
     case .find:
       performMappedCommand(.find)
     case .undo:
@@ -2635,6 +2637,24 @@ extension AppDelegate {
       _ = app.terminate()
     }
     normalModeTargetPID = nil
+    applyModeOverlay()
+  }
+
+  /// `:q` — close the focused app's focused OS window (its red close button),
+  /// leaving the app and its other windows running. Distinct from `x`/`tab_close`
+  /// (a tab / tmux window) and `:qa` (quits the whole app). Falls back to ⌘W when
+  /// the window has no AX close button (borderless/custom windows).
+  private func closeFocusedWindowInNormalMode() {
+    guard let context = normalModeContext() else {
+      FlashLog.debug("[normal_mode] no target app for :q (close window)")
+      applyModeOverlay()
+      return
+    }
+    FlashLog.debug(
+      "[normal_mode] close window pid=\(context.processID) bundle=\(context.bundleIdentifier)")
+    if !NormalModeDispatcher.closeFocusedWindow(pid: context.processID) {
+      sendNormalModeKey(CGKeyCode(kVK_ANSI_W), flags: .maskCommand)
+    }
     applyModeOverlay()
   }
 

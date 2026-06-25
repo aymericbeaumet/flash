@@ -1675,14 +1675,19 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testCommandLineParser() {
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("q"), .quit(force: false))
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qu"), .quit(force: false))
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qui"), .quit(force: false))
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("quit"), .quit(force: false))
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("  QUIT  "), .quit(force: false))
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("q!"), .quit(force: true))
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qu!"), .quit(force: true))
-    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("quit!"), .quit(force: true))
+    // `:q` closes the focused window (force is irrelevant to a window close);
+    // `:qa[ll]` quits the whole app.
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("q"), .closeWindow)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qu"), .closeWindow)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qui"), .closeWindow)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("quit"), .closeWindow)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("  QUIT  "), .closeWindow)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("q!"), .closeWindow)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qu!"), .closeWindow)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("quit!"), .closeWindow)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qa"), .quit(force: false))
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qall"), .quit(force: false))
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand("qa!"), .quit(force: true))
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("w"), .save)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("wr"), .save)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand("wri"), .save)
@@ -1719,7 +1724,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins reload extra"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":mappings"), .mappings)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":map"), .mappings)
-    XCTAssertNil(NormalModeDispatcher.commandLineCommand("qa"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("q!!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("p!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("qu!it"))
