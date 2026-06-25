@@ -651,14 +651,17 @@ final class PluginProcess {
       params: [
         "plugin_id": manifest.id,
         "version": manifest.version,
+        "protocol_version": Self.protocolVersion,
       ]
-    ) { [weak self] _ in
-      self?.clearError()
-      self?.setState(.ready)
+    ) { [weak self] response in
+      guard let self else { return }
+      self.checkProtocolVersion(response)
+      self.clearError()
+      self.setState(.ready)
       // Successful startup resets the backoff counter so a transient crash
       // doesn't accumulate across hours of healthy operation.
-      self?.restartCount = 0
-      self?.restartTimestamps.removeAll()
+      self.restartCount = 0
+      self.restartTimestamps.removeAll()
     }
   }
 
@@ -754,6 +757,34 @@ final class PluginProcess {
     let deadline = Date().addingTimeInterval(timeout)
     while process.isRunning, Date() < deadline {
       Thread.sleep(forTimeInterval: 0.01)
+    }
+  }
+
+  /// Wire-protocol version the host speaks. Sent in `initialize`; the plugin
+  /// echoes the version it was built against. MUST stay in sync with
+  /// `PROTOCOL_VERSION` in the Rust SDK (`_rust_flash_plugin/src/lib.rs`).
+  static let protocolVersion = 1
+
+  /// The plugin echoes the protocol version it was built against. A mismatch —
+  /// or a plugin too old to report one — means the wire contract may have
+  /// drifted, so renamed/removed fields could be decoding to silent defaults on
+  /// one side. Surface it loudly. Non-fatal: bundled plugins rebuild in lockstep
+  /// with the host, and a drifted third-party plugin is better
+  /// degraded-but-visible than hard-killed.
+  private func checkProtocolVersion(_ response: [String: Any]?) {
+    guard let reported = response?["protocol_version"] as? Int else {
+      FlashLog.warn(
+        "[plugin] \(manifest.id) did not report protocol_version "
+          + "(host speaks v\(Self.protocolVersion)) — it may be built against an older SDK; "
+          + "wire fields may decode to defaults",
+        fields: ["plugin": manifest.id])
+      return
+    }
+    if reported != Self.protocolVersion {
+      FlashLog.warn(
+        "[plugin] \(manifest.id) protocol_version v\(reported) != host "
+          + "v\(Self.protocolVersion) — wire contract may have drifted",
+        fields: ["plugin": manifest.id])
     }
   }
 

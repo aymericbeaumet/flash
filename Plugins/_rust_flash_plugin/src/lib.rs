@@ -41,6 +41,13 @@ type WarmLocations = Arc<Mutex<HashMap<String, Vec<Candidate>>>>;
 
 const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
 
+/// Wire-protocol version negotiated in `initialize`: the host sends the version
+/// it speaks, this SDK echoes the version it was built against, and a mismatch
+/// is logged (not fatal) so a renamed/removed field surfaces as drift rather
+/// than silently decoding to a default. Bump on any breaking wire change. MUST
+/// stay in sync with `PluginProcess.protocolVersion` on the host.
+const PROTOCOL_VERSION: u32 = 1;
+
 // ---------------------------------------------------------------------------
 // Core value types
 // ---------------------------------------------------------------------------
@@ -1276,8 +1283,20 @@ pub fn run<P: Plugin>(plugin: P) {
 /// Decode `params` into a typed request payload, falling back to its default
 /// when the shape doesn't match (so a malformed frame degrades to an empty
 /// request rather than a panic).
-fn decode<T: DeserializeOwned + Default>(params: Value) -> T {
-    serde_json::from_value(params).unwrap_or_default()
+fn decode<T: DeserializeOwned + Default>(params: Value, ctx: &Context, what: &str) -> T {
+    match serde_json::from_value::<T>(params) {
+        Ok(value) => value,
+        Err(err) => {
+            // Don't silently fall back to a default — a renamed/removed field
+            // would otherwise make the handler run on empty params with no
+            // signal. Surface it through the host's structured log channel.
+            ctx.log(
+                "warn",
+                &format!("[plugin] could not decode {what} params ({err}); using defaults"),
+            );
+            T::default()
+        }
+    }
 }
 
 async fn serve<P: Plugin>(plugin: P) {
@@ -1330,8 +1349,15 @@ async fn serve<P: Plugin>(plugin: P) {
         if stdin.read_exact(&mut payload).await.is_err() {
             break;
         }
-        let Ok(request) = rmp_serde::from_slice::<Value>(&payload) else {
-            continue;
+        let request = match rmp_serde::from_slice::<Value>(&payload) {
+            Ok(request) => request,
+            Err(err) => {
+                ctx.log(
+                    "warn",
+                    &format!("[plugin] dropped undecodable frame ({err})"),
+                );
+                continue;
+            }
         };
         if !request.is_object() {
             continue;
@@ -1363,7 +1389,21 @@ async fn serve<P: Plugin>(plugin: P) {
 
         match method.as_str() {
             "initialize" => {
-                ctx.emit.respond(id, json!({ "ok": true }));
+                if let Some(host_version) = params.get("protocol_version").and_then(Value::as_u64) {
+                    if host_version != u64::from(PROTOCOL_VERSION) {
+                        ctx.log(
+                            "warn",
+                            &format!(
+                                "[plugin] protocol_version mismatch: host v{host_version}, \
+                                 plugin v{PROTOCOL_VERSION} — wire contract may have drifted"
+                            ),
+                        );
+                    }
+                }
+                ctx.emit.respond(
+                    id,
+                    json!({ "ok": true, "protocol_version": PROTOCOL_VERSION }),
+                );
                 if !started {
                     started = true;
                     let plugin = plugin.clone();
@@ -1391,7 +1431,7 @@ async fn serve<P: Plugin>(plugin: P) {
             }
             "activateTarget" => {
                 // Notification: dispatch through `handle`, never respond.
-                let request = Request::ActivateTarget(decode(params));
+                let request = Request::ActivateTarget(decode(params, &ctx, "activateTarget"));
                 let plugin = plugin.clone();
                 let ctx = ctx.clone();
                 tokio::spawn(async move {
@@ -1400,17 +1440,25 @@ async fn serve<P: Plugin>(plugin: P) {
             }
             other => {
                 let request = match other {
-                    "command.invoke" => Request::Command(decode(params)),
-                    "discoverTargets" => Request::DiscoverTargets(decode(params)),
-                    "candidateQuery" => Request::CandidateQuery(decode(params)),
+                    "command.invoke" => Request::Command(decode(params, &ctx, "command.invoke")),
+                    "discoverTargets" => {
+                        Request::DiscoverTargets(decode(params, &ctx, "discoverTargets"))
+                    }
+                    "candidateQuery" => {
+                        Request::CandidateQuery(decode(params, &ctx, "candidateQuery"))
+                    }
                     "resolveCandidate" => Request::ResolveCandidate(decode(
                         params
                             .get("candidate")
                             .cloned()
                             .unwrap_or_else(|| json!({})),
+                        &ctx,
+                        "resolveCandidate",
                     )),
-                    "sourceAction" => Request::SourceAction(decode(params)),
-                    "navigation.restore" => Request::RestoreNavigation(decode(params)),
+                    "sourceAction" => Request::SourceAction(decode(params, &ctx, "sourceAction")),
+                    "navigation.restore" => {
+                        Request::RestoreNavigation(decode(params, &ctx, "navigation.restore"))
+                    }
                     _ => Request::Unknown {
                         method: other.to_string(),
                     },
