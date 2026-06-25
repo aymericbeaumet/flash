@@ -5,6 +5,9 @@
   "description": "Spotify playback controls backed by spotify_player.",
   "install": "true",
   "start": "exec ./flash-plugin-spotify",
+  "capabilities": [
+    "network"
+  ],
   "commands": {
     "items": [
       {

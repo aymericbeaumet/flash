@@ -5,6 +5,9 @@
   "description": "Hints tmux panes/links and exposes a tmux window finder.",
   "install": "true",
   "start": "exec ./flash-plugin-tmux",
+  "capabilities": [
+    "subprocess"
+  ],
   "priority": 20,
   "volatile": true,
   "request_timeout_ms": 8000,

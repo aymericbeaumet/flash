@@ -611,13 +611,42 @@ final class PluginProcess {
     setState(.stopped)
   }
 
+  /// Seatbelt profile for the plugin's runtime process: allow everything but
+  /// deny outbound network. Returns nil (spawn unsandboxed) for plugins that
+  /// declare `network` (they legitimately reach the network) or `subprocess`
+  /// (they exec privileged helpers like setgid `/bin/ps` that seatbelt forbids —
+  /// no profile can run those without also letting children escape the network
+  /// deny). The install step is never sandboxed (it may fetch dependencies).
+  static func networkSandboxProfile(for manifest: PluginManifest) -> String? {
+    if manifest.capabilities.contains(.network) || manifest.capabilities.contains(.subprocess) {
+      return nil
+    }
+    return "(version 1)\n(allow default)\n(deny network*)"
+  }
+
+  private static let sandboxExecPath = "/usr/bin/sandbox-exec"
+
   private func launch() throws {
     let process = Process()
     let stdin = Pipe()
     let stdout = Pipe()
     let stderr = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = ["-lc", manifest.start]
+    // Run the plugin under a network-denying seatbelt profile unless it declares
+    // it needs the network / privileged subprocess exec. sandbox-exec execs in
+    // place, so the pid we track and the child flash-plugin binary are unchanged.
+    let profile = Self.networkSandboxProfile(for: manifest)
+    let sandboxed =
+      profile != nil && FileManager.default.isExecutableFile(atPath: Self.sandboxExecPath)
+    if sandboxed, let profile {
+      process.executableURL = URL(fileURLWithPath: Self.sandboxExecPath)
+      process.arguments = ["-p", profile, "/bin/sh", "-lc", manifest.start]
+    } else {
+      process.executableURL = URL(fileURLWithPath: "/bin/sh")
+      process.arguments = ["-lc", manifest.start]
+    }
+    FlashLog.info(
+      "[plugin] \(manifest.id) launch network=\(sandboxed ? "denied (sandboxed)" : "allowed")",
+      fields: ["plugin": manifest.id, "network_sandboxed": "\(sandboxed)"])
     process.currentDirectoryURL = root
     process.environment = pluginEnvironment()
     process.standardInput = stdin

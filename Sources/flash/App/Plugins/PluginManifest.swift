@@ -17,6 +17,16 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// `ax.set`). The core owns the single AX permission grant and handle
   /// registry; plugins own app-specific interpretation of the returned nodes.
   case accessibility
+  /// Make outbound network connections. Plugins WITHOUT this run under a
+  /// seatbelt profile (`sandbox-exec`) that denies network, so a compromised or
+  /// buggy plugin can't exfiltrate. Declare it when the plugin reaches the
+  /// network directly or via a child process (e.g. `curl`, an API client).
+  case network
+  /// Exec privileged helper binaries the network sandbox can't run — notably
+  /// setgid `/bin/ps`, which seatbelt refuses (and which no profile can permit
+  /// without also letting children escape the network deny). Implies the plugin
+  /// spawns unsandboxed; used by process inspectors (`processes`, `tmux`).
+  case subprocess
 }
 
 extension PluginCapability {
@@ -124,12 +134,13 @@ struct CompiledPluginSelector: Hashable, Equatable {
     var score = 0
     if !onlyBundleIDs.isEmpty { score += 1_000 }
     if !onlyURLPatterns.isEmpty {
-      let bestURL = context.url.map { url in
-        onlyURLPatterns
-          .filter { $0.matches(url) }
-          .map(\.specificity)
-          .max() ?? 0
-      } ?? 0
+      let bestURL =
+        context.url.map { url in
+          onlyURLPatterns
+            .filter { $0.matches(url) }
+            .map(\.specificity)
+            .max() ?? 0
+        } ?? 0
       score += 1_000 + bestURL
     }
     return score
@@ -192,7 +203,8 @@ struct PluginSelector: Codable, Hashable, Equatable {
     var score = 0
     if !onlyBundleIDs.isEmpty { score += 1_000 }
     if !onlyURLs.isEmpty {
-      let bestURL = onlyURLs
+      let bestURL =
+        onlyURLs
         .filter { pattern in context.url.map { PluginPattern.matches(pattern, $0) } ?? false }
         .map { PluginPattern($0).specificity }
         .max() ?? 0
@@ -1044,7 +1056,8 @@ struct PluginManifest: Codable, Equatable {
     case onlyURLs = "only_urls"
     case requestTimeoutMs = "request_timeout_ms"
     case capabilities, help
-    case hints, commands, mappings, status, shebangs, sourceActions = "source_actions"
+    case hints, commands, mappings, status, shebangs
+    case sourceActions = "source_actions"
     case sources
     case navigation, verbs
   }

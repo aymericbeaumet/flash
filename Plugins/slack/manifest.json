@@ -7,7 +7,8 @@
   "start": "exec ./flash-plugin-slack",
   "request_timeout_ms": 6500,
   "capabilities": [
-    "accessibility"
+    "accessibility",
+    "network"
   ],
   "navigation": {
     "schemes": [
