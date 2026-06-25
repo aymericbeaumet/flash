@@ -7,9 +7,11 @@ import XCTest
 final class SourceCandidateTests: XCTestCase {
   func testFlashPriorityContractIsGeneralizedAndOrdered() {
     XCTAssertEqual(FlashPriority.allCases, [.background, .low, .normal, .high, .critical])
-    XCTAssertEqual(FlashPriority.allCases.map(\.rawValue), [
-      "background", "low", "normal", "high", "critical",
-    ])
+    XCTAssertEqual(
+      FlashPriority.allCases.map(\.rawValue),
+      [
+        "background", "low", "normal", "high", "critical",
+      ])
     XCTAssertLessThan(FlashPriority.background, .low)
     XCTAssertLessThan(FlashPriority.low, .normal)
     XCTAssertLessThan(FlashPriority.normal, .high)
@@ -783,6 +785,17 @@ final class SourceCandidateTests: XCTestCase {
     let multipleBangs = CandidateFinder.parseBang("foo !first bar !second")
     XCTAssertEqual(multipleBangs?.token, "first")
     XCTAssertEqual(multipleBangs?.remainder, "foo bar !second")
+  }
+
+  func testBareSigilShowsCompletionsButATrailingSpaceDismissesThem() {
+    // `!` (and `!partial`) is an in-progress bang → show bang candidates.
+    XCTAssertEqual(CandidateFinder.bangCompletionState(query: "!")?.token, "")
+    XCTAssertEqual(CandidateFinder.bangCompletionState(query: "!goo")?.token, "goo")
+    // A space right after the bare sigil dismisses the suggestions — the same
+    // rule for `@` source completion ("the space dismisses candidates").
+    XCTAssertNil(CandidateFinder.bangCompletionState(query: "! "))
+    XCTAssertEqual(CandidateFinder.sourceCompletionState(query: "@")?.token, "")
+    XCTAssertNil(CandidateFinder.sourceCompletionState(query: "@ "))
   }
 
   func testSelectedBangMatchesOnlyExactTypedToken() {

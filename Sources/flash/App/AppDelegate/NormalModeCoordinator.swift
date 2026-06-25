@@ -1834,6 +1834,7 @@ extension AppDelegate {
 
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,
+      rawQuery: query,
       sourceFilter: parsed.sourceFilter)
     let tFiltered = CFAbsoluteTimeGetCurrent()
 
@@ -2029,6 +2030,7 @@ extension AppDelegate {
   ///     are excluded unless the user opts in via `@<source>`.
   private func buildCandidateFinderPool(
     trimmed: String,
+    rawQuery: String,
     sourceFilter: String?
   ) -> (pool: [Candidate], scoringText: String) {
     if let bang = CandidateFinder.parseBangState(trimmed),
@@ -2049,7 +2051,9 @@ extension AppDelegate {
       let bangs = CandidateFinder.prepare(bangListCandidates())
       return (bangs, bang.token)
     }
-    if let bang = CandidateFinder.bangCompletionState(query: trimmed) {
+    // Use the *raw* (untrimmed) query so a trailing space after a bare sigil
+    // dismisses the suggestions: `!` shows bang candidates, `! ` does not.
+    if let bang = CandidateFinder.bangCompletionState(query: rawQuery) {
       let bangs = CandidateFinder.prepare(bangListCandidates())
       return (bangs, bang.token)
     }
@@ -2058,7 +2062,7 @@ extension AppDelegate {
     // pool for source-completion rows derived from the candidates
     // actually present. This mirrors the bang-completion surface so
     // `<tab>`/`<cr>` semantics stay identical across both modes.
-    if let completion = CandidateFinder.sourceCompletionState(query: trimmed) {
+    if let completion = CandidateFinder.sourceCompletionState(query: rawQuery) {
       let pool = CandidateFinder.prepare(
         knownSourceCompletionCandidates())
       return (pool, completion.token)
