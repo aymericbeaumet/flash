@@ -49,8 +49,8 @@ extension OverlayPanel {
     if glow {
       activeWindowBorderLayer.shadowColor = color
       activeWindowBorderLayer.shadowOffset = .zero
-      activeWindowBorderLayer.shadowRadius = 3
-      activeWindowBorderLayer.shadowOpacity = 0.45
+      activeWindowBorderLayer.shadowRadius = 2
+      activeWindowBorderLayer.shadowOpacity = 0.3
     } else {
       activeWindowBorderLayer.shadowOpacity = 0
     }
