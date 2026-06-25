@@ -2,12 +2,13 @@
   "id": "gmail",
   "name": "Gmail",
   "version": "0.1.0",
-  "description": "Gmail-specific source actions and focused-URL normal-mode mappings.",
+  "description": "Gmail-specific source actions and non-typed normal-mode mappings.",
   "install": "true",
   "start": "exec ./flash-plugin-gmail",
   "priority": 60,
   "capabilities": [
-    "accessibility"
+    "accessibility",
+    "app_control"
   ],
   "request_timeout_ms": 6500,
   "only_bundle_ids": [
@@ -41,6 +42,50 @@
     "resource_next",
     "resource_previous"
   ],
+  "commands": {
+    "items": [
+      {
+        "command": "gmail",
+        "subcommand": "inbox",
+        "description": "Navigate the focused Gmail tab to the inbox without typed shortcuts."
+      },
+      {
+        "command": "gmail",
+        "subcommand": "starred",
+        "description": "Navigate the focused Gmail tab to starred mail without typed shortcuts."
+      },
+      {
+        "command": "gmail",
+        "subcommand": "snoozed",
+        "description": "Navigate the focused Gmail tab to snoozed mail without typed shortcuts."
+      },
+      {
+        "command": "gmail",
+        "subcommand": "sent",
+        "description": "Navigate the focused Gmail tab to sent mail without typed shortcuts."
+      },
+      {
+        "command": "gmail",
+        "subcommand": "drafts",
+        "description": "Navigate the focused Gmail tab to drafts without typed shortcuts."
+      },
+      {
+        "command": "gmail",
+        "subcommand": "all",
+        "description": "Navigate the focused Gmail tab to all mail without typed shortcuts."
+      },
+      {
+        "command": "gmail",
+        "subcommand": "tasks",
+        "description": "Navigate the focused Gmail tab to tasks without typed shortcuts."
+      },
+      {
+        "command": "gmail",
+        "subcommand": "label",
+        "description": "Navigate the focused Gmail tab to the label route without typed shortcuts."
+      }
+    ]
+  },
   "mappings": {
     "priority": 80,
     "items": [
@@ -48,80 +93,86 @@
         "key": "gi",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,i"
+          "plugin_command",
+          "--command=gmail",
+          "--subcommand=inbox"
         ]
       },
       {
         "key": "gs",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,s"
+          "plugin_command",
+          "--command=gmail",
+          "--subcommand=starred"
         ]
       },
       {
         "key": "gb",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,b"
+          "plugin_command",
+          "--command=gmail",
+          "--subcommand=snoozed"
         ]
       },
       {
         "key": "gt",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,t"
+          "plugin_command",
+          "--command=gmail",
+          "--subcommand=sent"
         ]
       },
       {
         "key": "gd",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,d"
+          "plugin_command",
+          "--command=gmail",
+          "--subcommand=drafts"
         ]
       },
       {
         "key": "ga",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,a"
+          "plugin_command",
+          "--command=gmail",
+          "--subcommand=all"
         ]
       },
       {
         "key": "gk",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,k"
+          "plugin_command",
+          "--command=gmail",
+          "--subcommand=tasks"
         ]
       },
       {
         "key": "gl",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,l"
+          "plugin_command",
+          "--command=gmail",
+          "--subcommand=label"
         ]
       },
       {
         "key": "gn",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,n"
+          "history_forward"
         ]
       },
       {
         "key": "gp",
         "command": [
           "flash",
-          "send_keys",
-          "--keys=g,p"
+          "history_back"
         ]
       },
       {
@@ -139,8 +190,8 @@
       {
         "name": "gmail",
         "title": "Gmail",
-        "summary": "Gmail source actions and native shortcut mappings.",
-        "body": "# Gmail\n\nThis bundled plugin applies only when the focused browser URL is `mail.google.com`.\n\nIt maps Gmail's go-to shortcuts in normal mode by sending Gmail's native two-key sequences: `gi` inbox, `gs` starred, `gb` snoozed, `gt` sent mail, `gd` drafts, `ga` all mail, `gk` tasks, `gl` label, `gn` next page, and `gp` previous page. It also maps `o` to Gmail's native open-selected-email shortcut.\n\nIt also owns `resource_archive`, `resource_next`, and `resource_previous` on Gmail thread pages by pressing Gmail's accessible toolbar buttons, so those actions do not depend on Gmail keyboard shortcuts being enabled.\n"
+        "summary": "Gmail source actions and non-typed mappings.",
+        "body": "# Gmail\n\nThis bundled plugin applies only when the focused browser URL is `mail.google.com`.\n\nIt maps Gmail's fixed `g...` go-to destinations to current-tab navigation that preserves the active Gmail account/profile, does not create a new tab, does not full-reload Gmail, and does not depend on Gmail keyboard shortcuts being enabled: `gi` inbox, `gs` starred, `gb` snoozed, `gt` sent mail, `gd` drafts, `ga` all mail, `gk` tasks, and `gl` label. Safari and Chromium-family browsers use page hash navigation; Firefox AX-focuses the existing address bar and submits the target URL through Flash-owned synthetic text input, without using the Cmd-L shortcut or typing into the page. It maps `gn` and `gp` to Flash's browser history forward/back actions, like `L` and `H`, and maps `o` to Gmail's native open-selected-email shortcut.\n\nIt also owns `resource_archive`, `resource_next`, and `resource_previous` on Gmail thread pages by pressing Gmail's accessible toolbar buttons, so those actions do not depend on Gmail keyboard shortcuts being enabled.\n"
       }
     ]
   }

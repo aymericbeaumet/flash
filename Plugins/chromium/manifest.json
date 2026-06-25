@@ -5,6 +5,9 @@
   "description": "Surface tabs and tab actions for Chromium-family browsers (Chrome, Brave, Edge, Arc, Vivaldi, Opera) via AppleScript.",
   "install": "true",
   "start": "exec ./flash-plugin-chromium",
+  "capabilities": [
+    "app_control"
+  ],
   "priority": 30,
   "only_bundle_ids": [
     "com.google.Chrome",

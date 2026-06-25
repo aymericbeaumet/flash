@@ -8,7 +8,8 @@
   "request_timeout_ms": 6500,
   "capabilities": [
     "accessibility",
-    "network"
+    "network",
+    "app_control"
   ],
   "navigation": {
     "schemes": [

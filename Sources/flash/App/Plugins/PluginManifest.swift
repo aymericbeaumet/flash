@@ -27,6 +27,12 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// without also letting children escape the network deny). Implies the plugin
   /// spawns unsandboxed; used by process inspectors (`processes`, `tmux`).
   case subprocess
+  /// Observe and change the focused application: read the focused non-Flash
+  /// app's pid/bundle (`host.normal_mode_target`) and raise an app by pid
+  /// (`app.activate`). Gated because both are cross-app primitives — focus
+  /// surveillance and focus-stealing — that a third-party plugin should have to
+  /// declare rather than reach for silently.
+  case appControl = "app_control"
 }
 
 extension PluginCapability {
