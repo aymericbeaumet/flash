@@ -1,0 +1,108 @@
+{
+  "id": "screenshot",
+  "name": "Screenshot",
+  "version": "0.1.0",
+  "description": "Control macOS native Screenshot shortcuts without capturing pixels inside Flash.",
+  "install": "true",
+  "start": "exec ./flash-plugin-screenshot",
+  "commands": {
+    "items": [
+      {
+        "command": "screenshot",
+        "subcommand": "",
+        "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)"
+      },
+      {
+        "command": "screenshot",
+        "subcommand": "options",
+        "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)"
+      },
+      {
+        "command": "screenshot",
+        "subcommand": "screen",
+        "description": "Capture the screen with macOS Screenshot (Cmd-Shift-3)"
+      },
+      {
+        "command": "screenshot",
+        "subcommand": "selection",
+        "description": "Capture a selected region with macOS Screenshot (Cmd-Shift-4)"
+      },
+      {
+        "command": "screenshot",
+        "subcommand": "window",
+        "description": "Capture a window with macOS Screenshot (Cmd-Shift-4, Space)"
+      },
+      {
+        "command": "screenshot",
+        "subcommand": "screen_clipboard",
+        "description": "Copy a screen capture to the clipboard (Cmd-Ctrl-Shift-3)"
+      },
+      {
+        "command": "screenshot",
+        "subcommand": "selection_clipboard",
+        "description": "Copy a selected-region capture to the clipboard (Cmd-Ctrl-Shift-4)"
+      },
+      {
+        "command": "screenshot",
+        "subcommand": "window_clipboard",
+        "description": "Copy a window capture to the clipboard (Cmd-Ctrl-Shift-4, Space)"
+      }
+    ]
+  },
+  "verbs": {
+    "items": [
+      {
+        "name": "screenshot_options",
+        "command": "screenshot",
+        "subcommand": "options",
+        "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)."
+      },
+      {
+        "name": "screenshot_screen",
+        "command": "screenshot",
+        "subcommand": "screen",
+        "description": "Capture the screen with macOS Screenshot (Cmd-Shift-3)."
+      },
+      {
+        "name": "screenshot_selection",
+        "command": "screenshot",
+        "subcommand": "selection",
+        "description": "Capture a selected region with macOS Screenshot (Cmd-Shift-4)."
+      },
+      {
+        "name": "screenshot_window",
+        "command": "screenshot",
+        "subcommand": "window",
+        "description": "Capture a window with macOS Screenshot (Cmd-Shift-4, Space)."
+      },
+      {
+        "name": "screenshot_screen_clipboard",
+        "command": "screenshot",
+        "subcommand": "screen_clipboard",
+        "description": "Copy a screen capture to the clipboard (Cmd-Ctrl-Shift-3)."
+      },
+      {
+        "name": "screenshot_selection_clipboard",
+        "command": "screenshot",
+        "subcommand": "selection_clipboard",
+        "description": "Copy a selected-region capture to the clipboard (Cmd-Ctrl-Shift-4)."
+      },
+      {
+        "name": "screenshot_window_clipboard",
+        "command": "screenshot",
+        "subcommand": "window_clipboard",
+        "description": "Copy a window capture to the clipboard (Cmd-Ctrl-Shift-4, Space)."
+      }
+    ]
+  },
+  "help": {
+    "topics": [
+      {
+        "name": "screenshot",
+        "title": "Screenshot",
+        "summary": "macOS native screenshot controls.",
+        "body": "# Screenshot\n\nThe screenshot plugin drives macOS's native Screenshot shortcuts through System Events. It does not use `screencapture`, ScreenCaptureKit, or any pixel-reading API inside Flash.\n\nCommands:\n\n- `:screenshot` or `:screenshot options` - open the Screenshot toolbar (`Cmd-Shift-5`)\n- `:screenshot screen` - screen capture to file (`Cmd-Shift-3`)\n- `:screenshot selection` - selected-region capture to file (`Cmd-Shift-4`)\n- `:screenshot window` - window capture to file (`Cmd-Shift-4`, then `Space`)\n- `:screenshot screen_clipboard` - screen capture to clipboard (`Cmd-Ctrl-Shift-3`)\n- `:screenshot selection_clipboard` - selected-region capture to clipboard (`Cmd-Ctrl-Shift-4`)\n- `:screenshot window_clipboard` - window capture to clipboard (`Cmd-Ctrl-Shift-4`, then `Space`)\n\nDirect CLI verbs are also available: `flash screenshot_options`, `flash screenshot_screen`, `flash screenshot_selection`, `flash screenshot_window`, `flash screenshot_screen_clipboard`, `flash screenshot_selection_clipboard`, and `flash screenshot_window_clipboard`.\n\nFor mappings, use the stable plugin-command form, e.g. `[\"flash\", \"plugin_command\", \"--command=screenshot\", \"--subcommand=selection_clipboard\"]`.\n"
+      }
+    ]
+  }
+}

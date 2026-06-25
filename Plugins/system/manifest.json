@@ -2,11 +2,15 @@
   "id": "system",
   "name": "System",
   "version": "0.1.0",
-  "description": "macOS system commands and status segments: lock, sleep, battery, empty trash, toggle dark mode, screensaver, caffeinate.",
+  "description": "macOS system commands and status segments: lock, sleep, restart, shutdown, logout, battery, empty trash, toggle dark mode, screensaver, caffeinate.",
   "install": "true",
   "start": "exec ./flash-plugin-system",
   "commands": {
     "items": [
+      {
+        "command": "system",
+        "description": "Show system action usage"
+      },
       {
         "command": "system",
         "subcommand": "lock",
@@ -21,6 +25,21 @@
         "command": "system",
         "subcommand": "displaysleep",
         "description": "Turn the display off"
+      },
+      {
+        "command": "system",
+        "subcommand": "restart",
+        "description": "Restart the machine"
+      },
+      {
+        "command": "system",
+        "subcommand": "shutdown",
+        "description": "Shut down the machine"
+      },
+      {
+        "command": "system",
+        "subcommand": "logout",
+        "description": "Log out of macOS"
       },
       {
         "command": "system",
@@ -53,5 +72,11 @@
     "segments": [
       "battery"
     ]
-  }
+  },
+  "sources": [
+    {
+      "name": "system.actions",
+      "priority": "normal"
+    }
+  ]
 }

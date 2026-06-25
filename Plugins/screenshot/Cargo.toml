@@ -1,0 +1,13 @@
+[package]
+name = "flash-plugin-screenshot"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-screenshot"
+path = "src/main.rs"
+
+[dependencies]
+flash_plugin = { path = "../_rust_flash_plugin" }
+tokio = { workspace = true }

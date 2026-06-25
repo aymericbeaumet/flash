@@ -14,7 +14,7 @@ final class PluginSystemTests: XCTestCase {
       [
         "aiproviders", "calculator", "chromium", "clipboard", "contacts", "defaults",
         "emojis", "firefox", "gmail", "marks", "media", "notes", "processes", "reminders",
-        "safari", "searchengines", "slack", "spotify", "system", "tmux",
+        "safari", "screenshot", "searchengines", "slack", "spotify", "system", "tmux",
       ])
 
     let runCommandRequired: Set<String> = [
@@ -99,6 +99,29 @@ final class PluginSystemTests: XCTestCase {
       ]))
     let system = try XCTUnwrap(manifests.first { $0.id == "system" })
     XCTAssertEqual(system.statusSegments, ["battery"])
+    XCTAssertEqual(
+      system.candidateSourceDescriptors,
+      [CandidateSourceDescriptor(name: "system.actions", priority: .normal)])
+    XCTAssertTrue(
+      commandNames(for: "system", manifests: manifests).isSuperset(of: [
+        "", "lock", "sleep", "displaysleep", "restart", "shutdown", "logout", "trash", "dark",
+        "screensaver", "caffeinate", "decaffeinate",
+      ]))
+
+    let screenshot = try XCTUnwrap(manifests.first { $0.id == "screenshot" })
+    XCTAssertEqual(
+      Set(screenshot.commands.map(\.subcommand)),
+      [
+        "", "options", "screen", "selection", "window",
+        "screen_clipboard", "selection_clipboard", "window_clipboard",
+      ])
+    XCTAssertEqual(
+      Set(screenshot.verbs.map(\.name)),
+      [
+        "screenshot_options", "screenshot_screen", "screenshot_selection",
+        "screenshot_window", "screenshot_screen_clipboard", "screenshot_selection_clipboard",
+        "screenshot_window_clipboard",
+      ])
   }
 
   func testClipboardManifestRegistersBrowseCommand() throws {

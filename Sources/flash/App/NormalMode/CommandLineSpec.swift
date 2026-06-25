@@ -421,7 +421,7 @@ extension NormalModeDispatcher {
     let subcommands =
       pluginSubcommands.first { key, _ in
         key.localizedCaseInsensitiveCompare(command) == .orderedSame
-      }?.value ?? []
+      }?.value.filter { !$0.isEmpty && $0 != "*" } ?? []
     guard !subcommands.isEmpty else { return nil }
     let items = subcommands.map { name in
       CommandLineCompletion(label: name, insertion: name, kind: .pluginSubcommand)

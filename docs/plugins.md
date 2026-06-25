@@ -27,8 +27,10 @@ for unexpected plugin errors. Plugin log messages recorded by Flash use
 
 Official plugins install their CLI tools under `FLASH_PLUGIN_DATA_DIR`, not into
 global shell paths. Current bundled commands include `:spotify`, `:slack`,
-`:media`, and `:clipboard`; authentication is explicit through command
-subcommands, never during install or start.
+`:media`, `:system`, and `:clipboard`; authentication is explicit through command
+subcommands, never during install or start. The system plugin owns direct
+macOS controls such as `:system lock`, `:system restart`, `:system shutdown`,
+and `:system logout`, plus the explicit `@system.actions` flashlight source.
 
 ## Manifest Shape
 
@@ -107,7 +109,7 @@ mappings sit at priority `0`.
   `@<source>` completion, source-scoped flashlight queries, and default source
   ranking. Each item is `{ "name": "<source.label>", "kind": "<kind>" }`.
   `kind` is optional and defaults to `"default"`; supported kinds are
-  `"default"`, `"apps"`, `"browser_tabs"`, and `"tmux_tabs"`.
+  `"default"` and `"locations"`.
 - **`commands`** — `items[]` are command-line `:` registrations. The host
   indexes them by `(command, subcommand)` on load; wildcard subcommand `"*"`
   consumes the remainder as args.

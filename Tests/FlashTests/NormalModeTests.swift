@@ -2038,6 +2038,18 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginSubcommand })
   }
 
+  func testCommandLineCompletionsSkipBarePluginCommandRegistration() throws {
+    let context = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":system ",
+        pluginCommands: ["system"],
+        pluginSubcommands: ["system": ["", "lock", "restart", "shutdown"]]))
+    XCTAssertEqual(context.prefix, ":system ")
+    XCTAssertEqual(context.query, "")
+    XCTAssertEqual(Set(context.items.map(\.label)), ["lock", "restart", "shutdown"])
+    XCTAssertFalse(context.items.contains { $0.label.isEmpty })
+  }
+
   func testCommandLineCompletionsPluginSubcommandsWithFilter() throws {
     let context = try XCTUnwrap(
       NormalModeDispatcher.commandLineCompletions(

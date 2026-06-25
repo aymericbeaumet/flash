@@ -17,6 +17,7 @@ members = [
   "processes",
   "reminders",
   "safari",
+  "screenshot",
   "searchengines",
   "slack",
   "spotify",
