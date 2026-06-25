@@ -1,4 +1,3 @@
-import FlashCore
 import Foundation
 
 /// Command-line (`:cmd`) command vocabulary, parser, completion engine,

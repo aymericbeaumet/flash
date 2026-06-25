@@ -1,5 +1,4 @@
 import AppKit
-import FlashCore
 import QuartzCore
 
 /// Nord palette + the mode-badge palettes derived from it. Owns the

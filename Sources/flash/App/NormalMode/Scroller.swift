@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
-import FlashProviders
 
 /// Normal-mode scrolling: page-instant, half-page wheel synthesis,
 /// arrow-key fallback. Walks the focused-app AX tree to find scroll

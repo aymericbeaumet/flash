@@ -1,7 +1,5 @@
 import AppKit
 import ApplicationServices
-import FlashCore
-import FlashProviders
 import os
 
 /// Coordinates discovery + hint assignment for the focused app.

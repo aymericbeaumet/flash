@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
-import FlashProviders
 
 // Scroll dispatch for normal mode: `j`/`k`/`gg`/`G`/`<c-d>`/`<c-u>` and the
 // hermetic Scroller fallback. `gg`/`G` (top/bottom) ask any registered

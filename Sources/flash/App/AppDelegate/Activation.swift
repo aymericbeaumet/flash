@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
-import FlashProviders
 
 /// Activation pipeline: from a `URLCommand` (CLI / Apple Event / native
 /// mapping) to the OverlayPanel showing hint chips. Handles the

@@ -1,4 +1,3 @@
-import FlashCore
 import Foundation
 
 /// Help-modal text rendering for the normal-mode interpreter. Includes

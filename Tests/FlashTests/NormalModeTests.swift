@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
-import FlashProviders
 import XCTest
 
 @testable import flash

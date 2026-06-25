@@ -1,4 +1,3 @@
-import FlashCore
 import XCTest
 
 @testable import flash

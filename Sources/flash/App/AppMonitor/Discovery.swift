@@ -1,7 +1,6 @@
 import AppKit
 import ApplicationServices
 import FlashCore
-import FlashProviders
 
 /// Activation discovery pipeline. Activation either serves a prepared
 /// model (instant) or runs the full provider chain on `axQueue`.

@@ -1,6 +1,5 @@
 import AppKit
 import FlashCore
-import FlashProviders
 
 /// Hot-reload pipeline for `flash.toml`. The file watcher fires
 /// `reloadConfig()`, which (re)parses, validates, applies the new

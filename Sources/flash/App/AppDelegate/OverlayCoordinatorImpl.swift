@@ -1,6 +1,5 @@
 import AppKit
 import FlashCore
-import FlashProviders
 
 private enum PointerInsertHandoffOutcome {
   case enteredInsert

@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
-import FlashProviders
 
 /// One `:clipboard` history row: `preview` is the one-line label rendered in
 /// the modal, `value` the full text pasted on selection. Decoded from the

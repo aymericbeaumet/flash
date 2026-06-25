@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
-import FlashProviders
 
 // Tab- and window-action surface for normal mode: `gN`, `[t`/`]t`, `[m`/`]m`,
 // `T`, `t`, `x`, plus the per-bundle fallback keystrokes when no source claims

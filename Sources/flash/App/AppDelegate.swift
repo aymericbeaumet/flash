@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
-import FlashProviders
 
 enum InsertModeTransitionReason: Equatable {
   case explicitCommand
