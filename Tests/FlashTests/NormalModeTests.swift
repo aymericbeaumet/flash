@@ -1147,14 +1147,23 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testActiveWindowBorderStyleIsGreenInNormalAndBlueInInsert() {
-    // Normal = thin green, insert = thicker blue.
+    // Normal = thin green (no glow); insert = thicker, glowing blue. Both share
+    // the same outer edge — insert grows inward.
     let normal = AppDelegate.activeWindowBorderStyle(for: .normal)
     let insert = AppDelegate.activeWindowBorderStyle(for: .insert)
     XCTAssertEqual(normal.color, OverlayPanel.nordAuroraGreenCG)
     XCTAssertEqual(normal.lineWidth, 1)
+    XCTAssertFalse(normal.glow)
     XCTAssertEqual(insert.color, OverlayPanel.nordFrost2CG)
-    XCTAssertEqual(insert.lineWidth, 2)
+    XCTAssertEqual(insert.lineWidth, 3)
+    XCTAssertTrue(insert.glow)
     XCTAssertGreaterThan(insert.lineWidth, normal.lineWidth)
+
+    // Command = thin purple (1px like normal), no glow.
+    let command = AppDelegate.activeWindowBorderStyle(for: .command)
+    XCTAssertEqual(command.color, OverlayPanel.nordAuroraPurpleCG)
+    XCTAssertEqual(command.lineWidth, 1)
+    XCTAssertFalse(command.glow)
   }
 
   func testActiveWindowBorderTrackerRunsWhileGeometryChangeIsInProgress() {

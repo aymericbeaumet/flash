@@ -26,9 +26,10 @@ extension AppDelegate {
       return
     }
     FlashLog.trace("[mode] active_border_update reason=\(reason) mode=\(flashMode)")
-    let style = Self.activeWindowBorderStyle(for: flashMode)
+    let style = Self.activeWindowBorderStyle(for: modeStore.mode.badgeStyle)
     overlay.setActiveWindowBorder(
-      around: context?.frontWindowFrame, color: style.color, lineWidth: style.lineWidth)
+      around: context?.frontWindowFrame, color: style.color, lineWidth: style.lineWidth,
+      glow: style.glow)
     startActiveWindowBorderTracking(frame: context?.frontWindowFrame, reason: reason)
   }
 
@@ -89,8 +90,9 @@ extension AppDelegate {
       // rather than running the hide-during-change dance, which would blank the
       // border for ~160ms exactly as it should first show.
       activeWindowBorderTrackedFrame = frame
-      let style = Self.activeWindowBorderStyle(for: flashMode)
-      overlay.setActiveWindowBorder(around: frame, color: style.color, lineWidth: style.lineWidth)
+      let style = Self.activeWindowBorderStyle(for: modeStore.mode.badgeStyle)
+      overlay.setActiveWindowBorder(
+        around: frame, color: style.color, lineWidth: style.lineWidth, glow: style.glow)
     } else {
       beginTrackedWindowGeometryChange(reason: "frame_poll", frame: frame)
     }
@@ -146,12 +148,17 @@ extension AppDelegate {
     modeBadgeEnabled && !hasHints
   }
 
-  /// Border stroke style per mode: a thin green stroke in normal (the
-  /// normal-mode accent), a thicker blue one in insert.
-  static func activeWindowBorderStyle(for mode: FlashMode) -> (color: CGColor, lineWidth: CGFloat) {
-    switch mode {
-    case .normal: return (OverlayPanel.nordAuroraGreenCG, 1)
-    case .insert: return (OverlayPanel.nordFrost2CG, 2)
+  /// Border stroke style per badge style: a thin green stroke in normal, a thin
+  /// purple one in command (the mode-badge accents), and a thicker,
+  /// softly-glowing blue one in insert. Normal and command share insert's outer
+  /// edge — only insert grows inward (see `activeWindowBorderLocalRect`).
+  static func activeWindowBorderStyle(for badgeStyle: OverlayModeBadgeStyle)
+    -> (color: CGColor, lineWidth: CGFloat, glow: Bool)
+  {
+    switch badgeStyle {
+    case .normal: return (OverlayPanel.nordAuroraGreenCG, 1, false)
+    case .insert: return (OverlayPanel.nordFrost2CG, 3, true)
+    case .command: return (OverlayPanel.nordAuroraPurpleCG, 1, false)
     }
   }
 

@@ -566,6 +566,22 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(local.height, 0)
   }
 
+  func testActiveWindowBorderSharesOuterEdgeRegardlessOfWidth() {
+    // The stroke's OUTER edge must sit at the same position whether the border
+    // is 1px (normal) or 3px (insert) — only the inner edge grows. The stroke is
+    // centered on the path, so the outer edge is `path-inset − lineWidth/2`.
+    let target = CGRect(x: 100, y: 80, width: 500, height: 300)
+    let panel = CGRect(x: 40, y: 20, width: 800, height: 600)
+    let thin = OverlayPanel.activeWindowBorderLocalRect(
+      targetFrame: target, panelFrame: panel, lineWidth: 1)
+    let thick = OverlayPanel.activeWindowBorderLocalRect(
+      targetFrame: target, panelFrame: panel, lineWidth: 3)
+    XCTAssertEqual(thin.minX - 0.5, thick.minX - 1.5, accuracy: 0.001)
+    XCTAssertEqual(thin.minY - 0.5, thick.minY - 1.5, accuracy: 0.001)
+    XCTAssertEqual(thin.maxX + 0.5, thick.maxX + 1.5, accuracy: 0.001)
+    XCTAssertEqual(thin.maxY + 0.5, thick.maxY + 1.5, accuracy: 0.001)
+  }
+
   func testModeBadgeWidthUsesLongestConfiguredLabel() {
     let compact = OverlayPanel.modeBadgeWidth(
       labels: Config.Mode.Labels(normal: "N", insert: "I", command: "C"),

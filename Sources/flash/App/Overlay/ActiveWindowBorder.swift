@@ -9,7 +9,8 @@ extension OverlayPanel {
   func setActiveWindowBorder(
     around targetFrame: CGRect?,
     color: CGColor = OverlayPanel.nordFrost2CG,
-    lineWidth: CGFloat = 2
+    lineWidth: CGFloat = 2,
+    glow: Bool = false
   ) {
     activeWindowBorderToken &+= 1
 
@@ -43,6 +44,16 @@ extension OverlayPanel {
     activeWindowBorderLayer.strokeColor = color
     activeWindowBorderLayer.fillColor = NSColor.clear.cgColor
     activeWindowBorderLayer.lineWidth = lineWidth
+    // Soft, static glow (insert mode): a zero-offset shadow tinted with the
+    // stroke color makes the border read as gently lit, without animating.
+    if glow {
+      activeWindowBorderLayer.shadowColor = color
+      activeWindowBorderLayer.shadowOffset = .zero
+      activeWindowBorderLayer.shadowRadius = 5
+      activeWindowBorderLayer.shadowOpacity = 0.8
+    } else {
+      activeWindowBorderLayer.shadowOpacity = 0
+    }
 
     var sublayers = contentLayer.sublayers ?? []
     if !sublayers.contains(where: { $0 === activeWindowBorderLayer }) {
@@ -54,20 +65,23 @@ extension OverlayPanel {
     }
   }
 
-  /// Position the stroke fully *inside* the target window so the border
-  /// reads as painted ON the window rather than wrapped AROUND it. The
-  /// stroke is centered on the path, so we need to inset the path by
-  /// `lineWidth/2` for the outer edge of the stroke to land *at* the
-  /// window edge, plus another `lineWidth/2` so the entire stroke band
-  /// sits one full width inside the chrome — this is what stops the
-  /// border from spilling onto an adjacent display when the window is
-  /// flush against a screen boundary.
+  /// Position the stroke fully *inside* the target window so the border reads as
+  /// painted ON the window rather than wrapped AROUND it.
+  ///
+  /// The stroke is centered on the path, so the OUTER edge sits at
+  /// `pathInset − lineWidth/2`. To keep that outer edge at a fixed `outerInset`
+  /// inside the window edge — identical in normal (1px) and insert (3px) — while
+  /// only the INNER edge grows with `lineWidth`, the path inset is
+  /// `outerInset + lineWidth/2`. (For the historical 2px width this equals the
+  /// old `inset = lineWidth`.) The outer inset also keeps the border from
+  /// spilling onto an adjacent display when the window is flush to a boundary.
   static func activeWindowBorderLocalRect(
     targetFrame: CGRect,
     panelFrame: CGRect,
-    lineWidth: CGFloat
+    lineWidth: CGFloat,
+    outerInset: CGFloat = 1
   ) -> CGRect {
-    let inset = lineWidth
+    let inset = outerInset + lineWidth / 2
     return CGRect(
       x: targetFrame.minX - panelFrame.minX + inset,
       y: targetFrame.minY - panelFrame.minY + inset,
