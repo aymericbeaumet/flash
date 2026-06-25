@@ -650,6 +650,19 @@ async fn client_hosted_by_cached(plugin: &Tmux, focused_pid: i64) -> Option<Tmux
         .hosted_by(focused_pid)
 }
 
+/// Resolve the tmux client for `focused_pid` from a FRESH snapshot, never the
+/// cache. Source actions are deliberate, infrequent commands, so they pay one
+/// `list-clients` round-trip to avoid acting on a stale cached session: the
+/// snapshot is filled during hint discovery and goes stale the moment the user
+/// `switch-client`s or changes window, which made `x` (tab_close) target the
+/// cached session's window — the wrong one, or one already gone, so it "didn't
+/// always close the active window".
+async fn client_hosted_by_fresh(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient> {
+    refresh_cached_client_snapshot(plugin)
+        .await?
+        .hosted_by(focused_pid)
+}
+
 fn parse_two_ints(line: &str) -> Option<(i64, i64)> {
     let mut parts = line.split_whitespace();
     let a = parts.next()?.parse::<i64>().ok()?;
