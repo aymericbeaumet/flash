@@ -41,9 +41,15 @@ PROD_SWIFT=(
   Sources/FlashProviders
 )
 
-check_absent \
-  "no keyboard event taps or private event capture" \
+# NORMAL/hints capture is intentionally a session-level CGEventTap, confined to
+# the single sanctioned file `KeyboardCaptureTap.swift` (see its header for the
+# rationale: the old key-window model greyed the focused app and leaked keys
+# during the normal→hints handoff). Any *other* production file reaching for a
+# tap is still a hard failure.
+check_absent_except \
+  "no keyboard event taps or private event capture (outside KeyboardCaptureTap)" \
   "CGEventTap|CGEventCreateTap|\\.tapCreate\\(" \
+  'KeyboardCaptureTap\.swift' \
   "${PROD_SWIFT[@]}"
 
 check_absent \

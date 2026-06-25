@@ -28,6 +28,25 @@ final class KeyboardCaptureTap {
 
   var isActive: Bool { tap != nil }
 
+  /// Pure swallow decision: given the coarse flash mode and the overlay's input
+  /// mode, should the tap consume this `keyDown`? NORMAL is a hermetic capture
+  /// surface — every key in `.normal`/`.hints` is swallowed so nothing (not even
+  /// ⌘W / ⌘Q / an app's own shortcut) leaks to the focused app. INSERT and the
+  /// key-window surfaces (command-line / modal / candidate-finder, which type
+  /// into their own fields) are left untouched.
+  ///
+  /// Extracted as a static, side-effect-free function so the tap's single most
+  /// security-sensitive decision is unit-testable without a live `CGEventTap`.
+  static func shouldSwallow(flashMode: FlashMode, inputMode: OverlayInputMode) -> Bool {
+    guard flashMode == .normal else { return false }
+    switch inputMode {
+    case .normal, .hints:
+      return true
+    case .commandLine, .modal, .candidateFinder:
+      return false
+    }
+  }
+
   /// Create + install the tap. Returns false if the OS refused it (no
   /// Accessibility grant), so the caller can fall back to key-window capture.
   @discardableResult

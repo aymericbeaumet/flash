@@ -715,17 +715,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// double-fire. Command-line / modal / candidate-finder own the key window and
   /// type into their own fields, so the tap leaves those alone.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
-    guard flashMode == .normal else { return false }
-    switch overlay.inputMode {
-    case .normal, .hints:
-      // NORMAL is hermetic: swallow EVERY key — bare motions and modified
-      // chords alike. `routeTapCapturedKey` then fires a configured chord or
-      // silently consumes an unmapped one, so nothing (not even ⌘W / ⌘Q / an
-      // app's own ⌘-shortcut) leaks to the focused app.
-      return true
-    default:
-      return false
-    }
+    // The decision depends only on mode × overlay input — the event itself is
+    // never inspected here (NORMAL is hermetic; `routeTapCapturedKey` does the
+    // per-key routing). Kept as a pure static func so it's unit-testable.
+    KeyboardCaptureTap.shouldSwallow(flashMode: flashMode, inputMode: overlay.inputMode)
   }
 
   /// Dispatch a key the tap swallowed in NORMAL mode. Bare keys (and all hints
