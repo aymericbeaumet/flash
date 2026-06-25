@@ -1155,7 +1155,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(normal.lineWidth, 1)
     XCTAssertFalse(normal.glow)
     XCTAssertEqual(insert.color, OverlayPanel.nordFrost2CG)
-    XCTAssertEqual(insert.lineWidth, 3)
+    XCTAssertEqual(insert.lineWidth, 2)
     XCTAssertTrue(insert.glow)
     XCTAssertGreaterThan(insert.lineWidth, normal.lineWidth)
 

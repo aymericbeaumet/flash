@@ -157,7 +157,7 @@ extension AppDelegate {
   {
     switch badgeStyle {
     case .normal: return (OverlayPanel.nordAuroraGreenCG, 1, false)
-    case .insert: return (OverlayPanel.nordFrost2CG, 3, true)
+    case .insert: return (OverlayPanel.nordFrost2CG, 2, true)
     case .command: return (OverlayPanel.nordAuroraPurpleCG, 1, false)
     }
   }
