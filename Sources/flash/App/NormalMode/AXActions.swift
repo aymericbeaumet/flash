@@ -76,6 +76,28 @@ extension NormalModeDispatcher {
     return true
   }
 
+  @discardableResult
+  static func typeText(_ text: String, to pid: pid_t) -> Bool {
+    let source = CGEventSource(stateID: .combinedSessionState)
+    var ok = true
+    for unit in text.utf16 {
+      guard
+        let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+        let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
+      else {
+        ok = false
+        continue
+      }
+      var character = UniChar(unit)
+      down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &character)
+      down.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+      up.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+      down.postToPid(pid)
+      up.postToPid(pid)
+    }
+    return ok
+  }
+
   static func cgFlags(from modifierFlags: NSEvent.ModifierFlags) -> CGEventFlags {
     let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
     var flags = CGEventFlags()
