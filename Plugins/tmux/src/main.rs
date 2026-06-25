@@ -658,9 +658,17 @@ async fn client_hosted_by_cached(plugin: &Tmux, focused_pid: i64) -> Option<Tmux
 /// cached session's window — the wrong one, or one already gone, so it "didn't
 /// always close the active window".
 async fn client_hosted_by_fresh(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient> {
-    refresh_cached_client_snapshot(plugin)
-        .await?
-        .hosted_by(focused_pid)
+    if let Some(client) = refresh_cached_client_snapshot(plugin)
+        .await
+        .and_then(|snapshot| snapshot.hosted_by(focused_pid))
+    {
+        return Some(client);
+    }
+    // A transient `list-clients`/`ps` failure leaves the refresh empty without
+    // clobbering the cache (it bails before overwriting), so fall back to the
+    // last good snapshot — a deliberate action should still fire rather than
+    // silently no-op.
+    cached_client_hosted_by(plugin, focused_pid)
 }
 
 fn parse_two_ints(line: &str) -> Option<(i64, i64)> {
@@ -1729,7 +1737,7 @@ async fn perform_source_action(
         );
         return SourceActionResponse::unhandled();
     };
-    let Some(client) = client_hosted_by_cached(plugin, pid).await else {
+    let Some(client) = client_hosted_by_fresh(plugin, pid).await else {
         ctx.log(
             "debug",
             &format!(
