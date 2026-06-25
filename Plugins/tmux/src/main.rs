@@ -939,12 +939,11 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
         let chip_x = min_x + pad_x + (center_col - pane_chip_cells / 2) as f64 * cell_w;
         let chip_y = min_y + win_h - pad_y - (center_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-p{i}");
-        // Hint commits never auto-enter insert: only the explicit
-        // triggers (`i`, mouse_grid, physical click, AccessibilityProvider
-        // true-text-input targets) do that. A tmux pane is a terminal
-        // surface, not an AX text input, so a pane hint stays in normal
-        // — and shift+hint now behaves exactly like an INSERT-mode
-        // shift+click (raw click delivered, mode unchanged).
+        // A tmux pane is a terminal typing surface, so committing its hint
+        // enters INSERT (`enters_insert_mode` below) — the click lands in the
+        // pane and the keyboard should be ready to type. Link chips, by
+        // contrast, run `open` and stay in NORMAL. shift+hint still delivers a
+        // raw shift+click; only the unmodified commit flips the mode.
         pane_targets.push(build_target(
             &target_id,
             chip_x,
@@ -954,7 +953,7 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             "tmux-pane",
             &pane.id,
             pid,
-            false,
+            true,
             // Synthesize a real mouse click on the pane center rather
             // than firing the plugin's `select-pane` RPC. The RPC
             // returns optimistically (the closure resolves before tmux
@@ -1020,11 +1019,12 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
         let x = min_x + pad_x + link.screen_col as f64 * cell_w;
         let y = min_y + win_h - pad_y - (link.screen_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-l{idx}");
-        // Clicking a link opens/copies it → stay in normal mode. The
-        // `activate` RPC path is the right answer here: the plugin runs
-        // `/usr/bin/open` against the URL, which is what the user
-        // wants. A synthesized click would just select text inside
-        // alacritty.
+        // Opening a link runs `open` against the URL and never touches the
+        // terminal keyboard, so the hint stays in NORMAL — `enters_insert_mode`
+        // is false (the host honors it; only the pane chip above enters insert).
+        // The `activate` RPC path is the right answer here: the plugin runs
+        // `/usr/bin/open` against the URL, which is what the user wants. A
+        // synthesized click would just select text inside alacritty.
         targets.push(build_target(
             &target_id,
             x,

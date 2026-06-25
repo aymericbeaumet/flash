@@ -588,16 +588,11 @@ extension AppDelegate {
       completion?(.recaptureNormal)
       return
     }
-    // A terminal emulator (tmux, shells, REPLs) is always editable even though
-    // AX exposes its grid as a non-text role, so any committed hint/click there
-    // always enters insert — the keyboard should land ready to type. This must
-    // come before the editability guard, since the terminal target reports
-    // `entersInsertMode == false`.
-    if let pid, isTerminalApp(pid: pid) {
-      enterInsertMode(reason: reason, targetPID: pid)
-      completion?(.enteredInsert)
-      return
-    }
+    // The target's own `entersInsertMode` flag is authoritative — including in a
+    // terminal. A tmux pane chip declares `true` (a typing surface, so commit
+    // enters INSERT); a tmux link chip declares `false` (it runs `open` and
+    // never touches the keyboard, so it stays in NORMAL). Physical clicks and
+    // the `F`/`dF` grid pass `nil` and still enter insert via the default below.
     // `f` (the `mouse_target` hint) passes the resolved target's editability, so
     // it only enters insert when the user committed on a real text input —
     // hinting a button/link clicks it but stays in NORMAL. `F` (the `mouse_grid`
@@ -612,22 +607,12 @@ extension AppDelegate {
     completion?(.enteredInsert)
   }
 
-  /// True when `pid` belongs to a known terminal-emulator bundle. Terminals
-  /// are treated as one editable surface for the click / hint / grid → insert
-  /// handoff (see `enterInsertModeIfClickedOnTextInput`).
-  private func isTerminalApp(pid: pid_t) -> Bool {
-    guard let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
-    else { return false }
-    return TerminalBundles.identifiers.contains(bundleID)
-  }
-
-  // `mouseGridCommitShouldEnterInsertMode` removed: outside terminals,
-  // `F`/`sF`/`dF` no longer auto-enter insert. The geometric click can land
-  // anywhere — a button, a tab, a text field, blank canvas — so the only
-  // correct signal is the post-click AX role, queried by
-  // `enterInsertModeIfClickedOnTextInput` (which first short-circuits to
-  // insert for terminal-bundle apps). Move (`mF`) was already a no-op for
-  // insert.
+  // `mouseGridCommitShouldEnterInsertMode` removed: the `F`/`dF` grid commit and
+  // a physical click pass `hintTargetEntersInsert == nil` to
+  // `enterInsertModeIfClickedOnTextInput`, which always enters insert for such
+  // an unconditional pointer action — the user pointed somewhere and clicked.
+  // `f` hint commits instead honor the target's own `entersInsertMode` flag.
+  // Move (`mF`) was already a no-op for insert.
 
   func usesTmuxProvider(_ context: AppContext?) -> Bool {
     guard let context else { return false }
