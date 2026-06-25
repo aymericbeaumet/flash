@@ -13,7 +13,7 @@ final class PluginProcess {
   private let dataDir: URL
   private var process: Process?
   private var stdinPipe: Pipe?
-  private var stdoutBuffer = Data()
+  private var frameCollector = MessagePackFrameCollector(maxFrameBytes: PluginProcess.maxFrameBytes)
   private let lock = NSLock()
   private var discovery = PluginDiscovery()
   private var state: PluginRuntimeState = .unloaded
@@ -923,36 +923,14 @@ final class PluginProcess {
     guard !data.isEmpty else { return }
     queue.async { [weak self] in
       guard let self else { return }
-      self.stdoutBuffer.append(data)
-      self.drainFrames()
-    }
-  }
-
-  /// Pull every complete length-prefixed MessagePack frame out of
-  /// `stdoutBuffer`, leaving any partial tail for the next stdout chunk. The
-  /// wire is a 4-byte big-endian payload length followed by that many bytes.
-  private func drainFrames() {
-    while stdoutBuffer.count >= 4 {
-      let base = stdoutBuffer.startIndex
-      let length =
-        (Int(stdoutBuffer[base]) << 24)
-        | (Int(stdoutBuffer[base + 1]) << 16)
-        | (Int(stdoutBuffer[base + 2]) << 8)
-        | Int(stdoutBuffer[base + 3])
-      // A length past the ceiling means the stream desynced (a stray write to
-      // the plugin's stdout, say). We can't realign mid-stream, so drop the
-      // buffer and surface it rather than try to allocate gigabytes.
-      guard length >= 0, length <= Self.maxFrameBytes else {
-        recordError("[plugin] invalid frame length \(length); resetting stream")
-        stdoutBuffer.removeAll(keepingCapacity: false)
-        return
+      for output in self.frameCollector.append(data) {
+        switch output {
+        case .frame(let payload):
+          self.handleFrame(payload)
+        case .desynced(let length):
+          self.recordError("[plugin] invalid frame length \(length); resetting stream")
+        }
       }
-      guard stdoutBuffer.count >= 4 + length else { return }
-      let payloadStart = base + 4
-      let payloadEnd = payloadStart + length
-      let payload = stdoutBuffer.subdata(in: payloadStart..<payloadEnd)
-      stdoutBuffer.removeSubrange(base..<payloadEnd)
-      handleFrame(payload)
     }
   }
 
