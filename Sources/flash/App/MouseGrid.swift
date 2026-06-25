@@ -40,17 +40,40 @@ enum MouseGrid {
     screens: [NSScreen],
     fallback: CGRect
   ) -> Region {
+    // Root `F`'s grid on the whole *screen* the focused window sits on, not the
+    // window itself: the grid aims the pointer, so it must reach every corner of
+    // the active display — toolbars, the desktop, neighbouring windows — not be
+    // boxed into the front app's frame.
     if let context, !context.frontWindowFrame.isNull,
       context.frontWindowFrame.width > 0,
-      context.frontWindowFrame.height > 0
+      context.frontWindowFrame.height > 0,
+      let screen = screenContaining(context.frontWindowFrame, in: screens)
     {
-      return Region(frame: context.frontWindowFrame)
+      return Region(frame: screen.visibleFrame)
     }
     var union: CGRect = .null
     for screen in screens {
       union = union.union(screen.visibleFrame)
     }
     return Region(frame: union.isNull ? fallback : union)
+  }
+
+  /// The screen the window predominantly occupies (largest frame overlap), or
+  /// nil when the window lands on no known screen. `frame` and `NSScreen.frame`
+  /// share the global bottom-left Cocoa space (`AppContext.frontWindowFrame` is
+  /// stored as `nsBounds`), so the comparison is direct.
+  static func screenContaining(_ frame: CGRect, in screens: [NSScreen]) -> NSScreen? {
+    var best: NSScreen?
+    var bestArea: CGFloat = 0
+    for screen in screens {
+      let overlap = screen.frame.intersection(frame)
+      let area = overlap.isNull ? 0 : overlap.width * overlap.height
+      if area > bestArea {
+        bestArea = area
+        best = screen
+      }
+    }
+    return best
   }
 
   static func preparedRegion(
