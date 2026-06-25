@@ -12,6 +12,13 @@ final class DebugServer {
   private var stateTimer: DispatchSourceTimer?
   private var logs: [[String: Any]] = []
   private var eventConnections: [UUID: NWConnection] = [:]
+  /// Last app-state snapshot — taken on the main thread, then confined to
+  /// `queue`. The server serves this on `/state` and `/events` rather than
+  /// calling `stateProvider` on its own queue (which raced the main thread, the
+  /// data race this fixes — and a synchronous main hop would instead deadlock if
+  /// a caller blocks main, as the test harness does). Seeded in `start()` and
+  /// refreshed by `broadcastState()` and the state timer.
+  private var cachedState: [String: Any] = [:]
   private let maxLogs = 2_000
 
   init(host: String, port: Int, stateProvider: @escaping () -> [String: Any]) {
@@ -47,6 +54,10 @@ final class DebugServer {
           FlashLog.warn("[debug] http inspector failed \(error)")
         }
       }
+      // Seed the cache on the main thread (start() runs on main) so the first
+      // /state request returns data before any broadcast/timer refresh fires.
+      let initialState = stateProvider()
+      queue.async { [weak self] in self?.cachedState = initialState }
       listener.start(queue: queue)
       self.listener = listener
       startStateTimer()
@@ -73,10 +84,30 @@ final class DebugServer {
     eventConnections.removeAll()
   }
 
+  /// Refresh the cache and push state to subscribers. Must be called on the main
+  /// thread — `stateProvider` reads main-only app state (mode, overlay input,
+  /// clipboard, frontmost app, plugin statuses). The snapshot is taken here, on
+  /// main, then the immutable value is handed to `queue`.
   func broadcastState() {
+    let snapshot = stateProvider()
     queue.async { [weak self] in
       guard let self else { return }
-      self.broadcast(event: "state", object: self.stateProvider())
+      self.cachedState = snapshot
+      self.broadcast(event: "state", object: snapshot)
+    }
+  }
+
+  /// Refresh the cached snapshot from the main thread, then broadcast it. Async,
+  /// so a busy/blocked main thread only delays the refresh — it can never
+  /// deadlock the server queue the way a synchronous main hop would.
+  private func refreshStateFromMain() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      let snapshot = self.stateProvider()
+      self.queue.async {
+        self.cachedState = snapshot
+        self.broadcast(event: "state", object: snapshot)
+      }
     }
   }
 
@@ -98,7 +129,7 @@ final class DebugServer {
       deadline: .now() + .seconds(1), repeating: .seconds(1), leeway: .milliseconds(150))
     timer.setEventHandler { [weak self] in
       guard let self, !self.eventConnections.isEmpty else { return }
-      self.broadcast(event: "state", object: self.stateProvider())
+      self.refreshStateFromMain()
     }
     stateTimer = timer
     timer.resume()
@@ -125,7 +156,7 @@ final class DebugServer {
       case "/":
         self.sendHTML(connection)
       case "/state":
-        self.sendJSON(self.stateProvider(), connection: connection)
+        self.sendJSON(self.cachedState, connection: connection)
       case "/logs":
         self.sendJSON(["logs": self.logs], connection: connection)
       case "/events":
@@ -190,7 +221,7 @@ final class DebugServer {
       \r
       """
     send(headers, connection: connection, close: false)
-    sendEvent("state", object: stateProvider(), connection: connection)
+    sendEvent("state", object: cachedState, connection: connection)
     sendEvent("logs", object: ["logs": logs], connection: connection)
     connection.stateUpdateHandler = { [weak self] state in
       if case .cancelled = state {
