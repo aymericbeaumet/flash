@@ -309,7 +309,13 @@ extension OverlayPanel {
       from: leftTrailingDisplay, font: rightFont)
     let leftTrailingWidth =
       leftTrailingDisplay.isEmpty ? 0 : ceil(leftTrailingAttributed.size().width)
-    let leftTrailingX = modeBadgeButtonLayer.frame.maxX + Self.statusBarMinimumGap
+    // Start the trailing run flush against the pill's right edge so the gap
+    // to whatever follows is driven entirely by the template's own spacing
+    // (e.g. `#{mode} · …`), exactly like every other segment boundary on the
+    // bar. A hardcoded gap here would give the pill an inconsistent margin
+    // its neighbours don't have. The bar's screen-edge inset stays put: it's
+    // `statusBarEdgePadding` on `contentX`, not this gap.
+    let leftTrailingX = modeBadgeButtonLayer.frame.maxX
     statusLeftTrailingLabel.frame = CGRect(
       x: leftTrailingX,
       y: textY,
