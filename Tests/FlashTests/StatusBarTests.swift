@@ -77,6 +77,57 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.statusRightDisplayText(""), "")
   }
 
+  func testSegmentsCaptureLinkMarkers() {
+    let segs = FlashStatusBarRenderer.segments(
+      from: "#[link=https://example.com]Open#[nolink] x")
+    XCTAssertEqual(segs.count, 2)
+    XCTAssertEqual(segs[0].text, "Open")
+    XCTAssertEqual(segs[0].link, "https://example.com")
+    XCTAssertEqual(segs[1].text, " x")
+    XCTAssertNil(segs[1].link)
+  }
+
+  func testLinkMarkersAreStrippedFromRenderedText() {
+    // The markers must never render as literal glyphs.
+    let attributed = FlashStatusBarRenderer.attributedStatusString(
+      from: "#[link=https://x]Hi#[nolink]",
+      font: NSFont.monospacedSystemFont(ofSize: 13, weight: .medium))
+    XCTAssertEqual(attributed.string, "Hi")
+  }
+
+  func testLinkRunsMeasureOnlyLinkedTextOffsetPastPrefix() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let (runs, total) = FlashStatusBarRenderer.linkRuns(
+      from: "ab#[link=https://x]CD#[nolink]", font: font)
+    XCTAssertEqual(runs.count, 1)
+    XCTAssertEqual(runs[0].url, "https://x")
+    XCTAssertGreaterThan(runs[0].xOffset, 0)  // shifted right past "ab"
+    XCTAssertGreaterThan(runs[0].width, 0)
+    XCTAssertGreaterThan(total, runs[0].width)  // total includes the prefix
+  }
+
+  func testStatusTextAnimatedDetectsEffectMarkersOnly() {
+    XCTAssertFalse(OverlayPanel.statusTextAnimated("#[fg=colour178]82%"))
+    XCTAssertTrue(OverlayPanel.statusTextAnimated("#[breathing]82%#[nobreathing]"))
+    XCTAssertTrue(OverlayPanel.statusTextAnimated("#[blink]retry#[noblink]"))
+    XCTAssertTrue(OverlayPanel.statusTextAnimated("#[breathe]x"))
+  }
+
+  func testSplitLeftRegionKeepsModePillSeparateFromTrailingStyledRun() {
+    // Plain `#{mode}` left bucket → all pill, no trailing run.
+    let plain = OverlayPanel.splitLeftRegion("NORMAL")
+    XCTAssertEqual(plain.pill, "NORMAL")
+    XCTAssertEqual(plain.trailing, "")
+
+    // `#{mode}` followed by styled content → the first `#[…]` marker is
+    // the boundary; everything after it keeps its own styling instead of
+    // leaking the bold mode-pill palette.
+    let mixed = OverlayPanel.splitLeftRegion(
+      "NORMAL#[fg=colour245] · #[fg=colour178]HN#[fg=colour245] story")
+    XCTAssertEqual(mixed.pill, "NORMAL")
+    XCTAssertEqual(mixed.trailing, "#[fg=colour245] · #[fg=colour178]HN#[fg=colour245] story")
+  }
+
   func testDefaultTemplateRendersModeAndRightSections() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!

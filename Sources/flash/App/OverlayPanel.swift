@@ -69,6 +69,11 @@ final class OverlayPanel: NSPanel {
   let statusAppLabel = CATextLayer()
   let modeBadgeButtonLayer = CAGradientLayer()
   let modeBadgeLabel = CATextLayer()
+  /// Styled text that follows `#{mode}` in the `#[align=left]` bucket. The
+  /// mode pill itself only renders the mode label; anything after it (e.g.
+  /// `#{mode}#[fg=colour245] · HN …`) is a normal tmux-styled run rendered
+  /// here so it doesn't inherit the bold mode-pill palette.
+  let statusLeftTrailingLabel = CATextLayer()
   let statusRightLabel = CATextLayer()
   /// Status bars rendered on every non-main screen. Allocated lazily by
   /// `configureSecondaryStatusBars` and pruned when displays disconnect.
@@ -76,6 +81,14 @@ final class OverlayPanel: NSPanel {
   /// native top-band height so users see the bar at the right vertical
   /// position regardless of which monitor they look at.
   var secondaryStatusBars: [SecondaryStatusBar] = []
+  /// Transparent click-catcher windows placed over `#[link=…]` runs in the
+  /// status bar. The bar panel itself is `ignoresMouseEvents = true`
+  /// (click-through), so each link gets its own tiny interactive panel
+  /// sitting just above the bar. Pooled + repositioned on render.
+  var statusLinkCatchers: [StatusLinkCatcherPanel] = []
+  /// Signature of the currently-installed link rects, so an unchanged
+  /// render skips reordering the catcher windows.
+  var lastStatusLinkSignature: String?
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()
@@ -89,7 +102,21 @@ final class OverlayPanel: NSPanel {
   var modeBadgeVisible = false
   var statusAppText = ""
   var modeBadgeText = "INSERT"
+  /// Styled text that follows `#{mode}` in the `#[align=left]` bucket. Held
+  /// separately from `modeBadgeText` so a mode change (which rewrites only
+  /// the pill label) doesn't blow away the trailing run and flash it.
+  var statusLeftTrailingText = ""
   var statusRightText = ""
+  /// Last content actually pushed to each status-bar text layer. A
+  /// re-render that leaves a segment unchanged skips the `.string`
+  /// reassignment + `setNeedsDisplay()` that would otherwise flash it.
+  /// Animated segments (`#[breathing]` / `#[blink]`) bypass the cache so
+  /// the effects tick keeps advancing.
+  var lastRenderedPill: String?
+  var lastRenderedPillStyle: OverlayModeBadgeStyle?
+  var lastRenderedLeftTrailing: String?
+  var lastRenderedCentre: String?
+  var lastRenderedRight: String?
   var modeBadgeStyle: OverlayModeBadgeStyle = .insert
   var modeBadgeCapturesInput = false
   var commandPromptVisible = false
@@ -323,9 +350,13 @@ final class OverlayPanel: NSPanel {
     modeBadgeLabel.alignmentMode = .center
     modeBadgeLabel.actions = OverlayPanel.noActions
     modeBadgeButtonLayer.sublayers = [modeBadgeLabel]
+    statusLeftTrailingLabel.alignmentMode = .left
+    statusLeftTrailingLabel.actions = OverlayPanel.noActions
     statusRightLabel.alignmentMode = .right
     statusRightLabel.actions = OverlayPanel.noActions
-    modeBadgeLayer.sublayers = [statusAppLabel, modeBadgeButtonLayer, statusRightLabel]
+    modeBadgeLayer.sublayers = [
+      statusAppLabel, modeBadgeButtonLayer, statusLeftTrailingLabel, statusRightLabel,
+    ]
     commandPromptLayer.cornerRadius = 6
     commandPromptLayer.borderWidth = 1.5
     commandPromptLayer.masksToBounds = false

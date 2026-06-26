@@ -242,6 +242,9 @@ struct Config {
     ///                                 into (default: `left`).
     ///   #[fg=…,bold=true]          — inline text styling (passed through
     ///                                 to the renderer).
+    ///   #[link=URL]…#[nolink]      — makes the wrapped run clickable; a
+    ///                                 click opens URL. URL must be
+    ///                                 whitespace/comma-free.
     ///   #{token}                    — template variable (mode, date,
     ///                                 tmux-compatible vars,
     ///                                 plugin:<count>,

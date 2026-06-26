@@ -25,6 +25,9 @@ struct FlashStatusTextSegment: Equatable {
   var reverse: Bool
   var blink: Bool
   var breathing: Bool
+  /// Target opened when this run is clicked. Populated from
+  /// `#[link=URL]…#[nolink]` markers; nil for non-interactive text.
+  var link: String?
 
   init(
     text: String,
@@ -36,7 +39,8 @@ struct FlashStatusTextSegment: Equatable {
     dim: Bool = false,
     reverse: Bool = false,
     blink: Bool = false,
-    breathing: Bool = false
+    breathing: Bool = false,
+    link: String? = nil
   ) {
     self.text = text
     self.foreground = foreground
@@ -48,6 +52,7 @@ struct FlashStatusTextSegment: Equatable {
     self.reverse = reverse
     self.blink = blink
     self.breathing = breathing
+    self.link = link
   }
 }
 
@@ -538,6 +543,7 @@ enum FlashStatusBarRenderer {
   static func segments(from raw: String) -> [FlashStatusTextSegment] {
     let raw = stripClickRanges(from: raw)
     var style = FlashStatusTextStyle()
+    var link: String?
     var segments: [FlashStatusTextSegment] = []
     var buffer = ""
     var index = raw.startIndex
@@ -555,7 +561,8 @@ enum FlashStatusBarRenderer {
           dim: style.dim,
           reverse: style.reverse,
           blink: style.blink,
-          breathing: style.breathing))
+          breathing: style.breathing,
+          link: link))
       buffer = ""
     }
 
@@ -578,6 +585,7 @@ enum FlashStatusBarRenderer {
         flush()
         let bodyStart = raw.index(after: open)
         let marker = String(raw[bodyStart..<close])
+        applyLinkMarker(marker, to: &link)
         applyTmuxMarker(marker, to: &style)
         index = raw.index(after: close)
         continue
@@ -587,6 +595,53 @@ enum FlashStatusBarRenderer {
     }
     flush()
     return segments
+  }
+
+  /// Update the active link target from a `#[…]` marker body. `link=URL`
+  /// opens `URL` on click; `nolink` (or the tmux-native `norange`) closes
+  /// the run. Other tokens are left to `applyTmuxMarker`. URLs must be
+  /// whitespace/comma-free (the marker tokenizer splits on both) — fine
+  /// for ordinary http(s) links.
+  static func applyLinkMarker(_ marker: String, to link: inout String?) {
+    for tokenSub in marker.split(whereSeparator: { $0 == " " || $0 == "," }) {
+      let token = String(tokenSub)
+      if token == "nolink" || token == "norange" {
+        link = nil
+      } else if token.hasPrefix("link=") {
+        let url = String(token.dropFirst("link=".count))
+        link = url.isEmpty ? nil : url
+      }
+    }
+  }
+
+  /// Measure the clickable runs in `raw` against `font`. Returns each
+  /// linked run's x-offset (from the text's leading edge, before any
+  /// alignment padding) and width, plus the total rendered width so the
+  /// caller can offset for centre/right alignment. Widths are measured the
+  /// same way the renderer lays the text out, so the rects line up exactly.
+  static func linkRuns(
+    from raw: String,
+    font: NSFont
+  ) -> (runs: [(xOffset: CGFloat, width: CGFloat, url: String)], totalWidth: CGFloat) {
+    var runs: [(xOffset: CGFloat, width: CGFloat, url: String)] = []
+    var x: CGFloat = 0
+    for segment in segments(from: raw) {
+      let width = FlashStatusBarRenderer.attributedSegment(segment, font: font).size().width
+      if let url = segment.link {
+        // Merge directly-adjacent runs that share a target so a styled
+        // link (e.g. coloured + bold spans) registers one rect.
+        if var last = runs.last, last.url == url,
+          abs(last.xOffset + last.width - x) < 0.5
+        {
+          last.width += width
+          runs[runs.count - 1] = last
+        } else {
+          runs.append((xOffset: x, width: width, url: url))
+        }
+      }
+      x += width
+    }
+    return (runs, x)
   }
 
   static func attributedStatusString(

@@ -75,6 +75,7 @@ extension OverlayPanel {
         for bar in secondaryStatusBars {
           sublayers.removeAll { $0 === bar.backgroundLayer }
         }
+        hideStatusLinkCatchers()
       }
       contentLayer.sublayers = sublayers
       if captureInput {
@@ -95,7 +96,9 @@ extension OverlayPanel {
 
     statusAppText = model.appText
     if !commandPromptVisible {
-      modeBadgeText = model.modeText
+      let (pill, trailing) = Self.splitLeftRegion(model.modeText)
+      modeBadgeText = pill
+      statusLeftTrailingText = trailing
     }
     statusRightText = model.rightText
     guard modeBadgeVisible || commandPromptVisible || candidateFinderResultsVisible else {
@@ -112,8 +115,13 @@ extension OverlayPanel {
   }
 
   func setStatusRightText(_ text: String) {
+    // Round-trip the left region (pill + trailing) so it isn't dropped by
+    // the `splitLeftRegion` in `setStatusBarModel`.
     setStatusBarModel(
-      FlashStatusBarModel(appText: statusAppText, modeText: modeBadgeText, rightText: text))
+      FlashStatusBarModel(
+        appText: statusAppText,
+        modeText: modeBadgeText + statusLeftTrailingText,
+        rightText: text))
   }
 
   func renderModeBadgeOnlyOrHide() {
@@ -155,9 +163,11 @@ extension OverlayPanel {
       }
     } else if modeBadgeCapturesInput {
       contentLayer.sublayers = nil
+      hideStatusLinkCatchers()
       captureKeyboardInput()
     } else {
       contentLayer.sublayers = nil
+      hideStatusLinkCatchers()
       orderOut(nil)
     }
   }
@@ -196,10 +206,11 @@ extension OverlayPanel {
     let modeFontSize = Self.modeIndicatorFontSize(statusBarFontSize: fontSize)
     let labelFont = NSFont.monospacedSystemFont(ofSize: modeFontSize, weight: .bold)
     let rightFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
-    let text = modeBadgeText
+    let pillText = modeBadgeText
+    let leftTrailingRaw = statusLeftTrailingText
     let leftWidth = Self.modeBadgeWidth(
       labels: modeLabels,
-      currentText: text,
+      currentText: pillText,
       fontSize: modeFontSize)
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let visible = snapshot.mainVisibleFrame
@@ -247,7 +258,7 @@ extension OverlayPanel {
         max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
         barFrame.width * 0.52)
     let modeX = contentX
-    let leftLabel = Self.statusLeftText(modeText: text)
+    let leftLabel = Self.statusLeftText(modeText: pillText)
     modeBadgeButtonLayer.frame = CGRect(
       x: modeX,
       y: textY,
@@ -267,19 +278,53 @@ extension OverlayPanel {
     modeBadgeLabel.foregroundColor = palette.foregroundCG
     modeBadgeLabel.contentsScale = scale
     modeBadgeLabel.alignmentMode = .center
-    modeBadgeLabel.string = NSAttributedString(
-      string: leftLabel,
-      attributes: [
-        .font: labelFont,
-        .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
-      ])
+    if lastRenderedPill != leftLabel || lastRenderedPillStyle != modeBadgeStyle {
+      modeBadgeLabel.string = NSAttributedString(
+        string: leftLabel,
+        attributes: [
+          .font: labelFont,
+          .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
+        ])
+      lastRenderedPill = leftLabel
+      lastRenderedPillStyle = modeBadgeStyle
+    }
+
+    // Anything after `#{mode}` in the left bucket renders as its own
+    // tmux-styled run right of the pill — not as part of the bold mode
+    // label — so per-segment `#[fg=…]` styling is honoured instead of
+    // leaking the pill palette into the trailing text.
+    let leftTrailingDisplay = FlashStatusBarRenderer.stripClickRanges(from: leftTrailingRaw.trimmed)
+    let leftTrailingAttributed = FlashStatusBarRenderer.attributedStatusString(
+      from: leftTrailingDisplay, font: rightFont)
+    let leftTrailingWidth =
+      leftTrailingDisplay.isEmpty ? 0 : ceil(leftTrailingAttributed.size().width)
+    let leftTrailingX = modeBadgeButtonLayer.frame.maxX + Self.statusBarMinimumGap
+    statusLeftTrailingLabel.frame = CGRect(
+      x: leftTrailingX,
+      y: textY,
+      width: leftTrailingWidth,
+      height: textHeight)
+    statusLeftTrailingLabel.font = rightFont
+    statusLeftTrailingLabel.fontSize = fontSize
+    statusLeftTrailingLabel.foregroundColor = Self.tmuxGrey245CG
+    statusLeftTrailingLabel.contentsScale = scale
+    statusLeftTrailingLabel.alignmentMode = .left
+    statusLeftTrailingLabel.isHidden = leftTrailingDisplay.isEmpty
+    lastRenderedLeftTrailing = applyStatusText(
+      to: statusLeftTrailingLabel,
+      display: leftTrailingDisplay,
+      attributed: leftTrailingAttributed,
+      previous: lastRenderedLeftTrailing)
 
     // Geometric centring for the `#[align=centre]` bucket. Position
     // around `barFrame.width / 2`, clamped so the centre label never
-    // collides with the mode badge on its left or the reserved right
-    // section on its right. If the centre text doesn't fit between
-    // them, hide it rather than letting an overlap mangle the bar.
-    let modeMaxX = modeBadgeButtonLayer.frame.maxX
+    // collides with the mode badge (and its trailing run) on its left or
+    // the reserved right section on its right. If the centre text doesn't
+    // fit between them, hide it rather than letting an overlap mangle the bar.
+    let modeMaxX =
+      leftTrailingDisplay.isEmpty
+      ? modeBadgeButtonLayer.frame.maxX
+      : statusLeftTrailingLabel.frame.maxX
     let rightSectionStart =
       barFrame.width - Self.statusBarEdgePadding
       - (rightReservedWidth > 0 ? rightReservedWidth + Self.statusBarMinimumGap : 0)
@@ -300,8 +345,11 @@ extension OverlayPanel {
     statusAppLabel.contentsScale = scale
     statusAppLabel.alignmentMode = .center
     statusAppLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
-    statusAppLabel.string = centreAttributed
-    statusAppLabel.setNeedsDisplay()
+    lastRenderedCentre = applyStatusText(
+      to: statusAppLabel,
+      display: centreDisplay,
+      attributed: centreAttributed,
+      previous: lastRenderedCentre)
 
     // Right section is right-aligned: pin its `maxX` to the bar edge
     // (minus padding) regardless of where the mode badge or the centre
@@ -310,7 +358,7 @@ extension OverlayPanel {
     // pushed inward by the centre label's width.
     let rightWidth = max(
       0,
-      barFrame.width - modeBadgeButtonLayer.frame.maxX - Self.statusBarMinimumGap
+      barFrame.width - modeMaxX - Self.statusBarMinimumGap
         - (centreWidth > 0 ? centreWidth + Self.statusBarMinimumGap * 2 : 0)
         - Self.statusBarEdgePadding)
     let rightX = barFrame.width - Self.statusBarEdgePadding - rightWidth
@@ -325,16 +373,46 @@ extension OverlayPanel {
     statusRightLabel.contentsScale = scale
     statusRightLabel.alignmentMode = .right
     statusRightLabel.isHidden = rightDisplayText.isEmpty
-    statusRightLabel.string = FlashStatusBarRenderer.attributedStatusString(
-      from: rightDisplayText,
-      font: rightFont)
-    // CATextLayer normally auto-redraws on string change, but a per-tick
-    // re-publish that only changes per-glyph alpha occasionally lands on
-    // the same backing-store identity check and the layer skips
-    // compositing. An explicit `setNeedsDisplay` forces the bitmap to
-    // refresh every tick — cheap (short string) and the only knob that
-    // reliably renders the breathing effect on the screen.
-    statusRightLabel.setNeedsDisplay()
+    // Only reassign + force a redraw when the right region actually changed
+    // (or is animated — breathing/blink need the per-tick alpha advance).
+    // CATextLayer otherwise auto-redraws on a genuine string change; the
+    // forced `setNeedsDisplay` inside `applyStatusText` covers the animated
+    // case where the glyphs are identical but the alpha moved.
+    lastRenderedRight = applyStatusText(
+      to: statusRightLabel,
+      display: rightDisplayText,
+      attributed: FlashStatusBarRenderer.attributedStatusString(
+        from: rightDisplayText, font: rightFont),
+      previous: lastRenderedRight)
+
+    // Register clickable `#[link=…]` runs on the primary bar. The bar
+    // panel is click-through, so each link gets a transparent catcher
+    // window placed exactly over its rendered rect.
+    let linkBarFrame = modeBadgeLayer.frame
+    var links: [(rect: CGRect, url: URL)] = []
+    if !statusLeftTrailingLabel.isHidden {
+      links += statusLinkRects(
+        raw: leftTrailingRaw, font: rightFont,
+        labelFrame: statusLeftTrailingLabel.frame, alignment: .left,
+        barFrame: linkBarFrame, panelFrame: panelFrame)
+    }
+    if !statusAppLabel.isHidden {
+      links += statusLinkRects(
+        raw: statusAppText, font: rightFont,
+        labelFrame: statusAppLabel.frame, alignment: .center,
+        barFrame: linkBarFrame, panelFrame: panelFrame)
+    }
+    if !statusRightLabel.isHidden {
+      links += statusLinkRects(
+        raw: statusRightText, font: rightFont,
+        labelFrame: statusRightLabel.frame, alignment: .right,
+        barFrame: linkBarFrame, panelFrame: panelFrame)
+    }
+    if modeBadgeVisible {
+      syncStatusLinkCatchers(links)
+    } else {
+      hideStatusLinkCatchers()
+    }
 
     // Same bar on every other screen, sized to that screen's own native
     // top-band height so a 14"-MBP-with-notch + a square external monitor
@@ -349,6 +427,7 @@ extension OverlayPanel {
       palette: palette,
       leftWidth: leftWidth,
       leftLabel: leftLabel,
+      leftTrailingDisplay: leftTrailingDisplay,
       centreDisplay: centreDisplay,
       rightDisplayText: rightDisplayText)
   }
@@ -366,6 +445,7 @@ extension OverlayPanel {
     palette: ModeBadgePalette,
     leftWidth: CGFloat,
     leftLabel: String,
+    leftTrailingDisplay: String,
     centreDisplay: String,
     rightDisplayText: String
   ) {
@@ -412,12 +492,37 @@ extension OverlayPanel {
       bar.modeLabel.fontSize = modeFontSize
       bar.modeLabel.foregroundColor = palette.foregroundCG
       bar.modeLabel.contentsScale = screen.scale
-      bar.modeLabel.string = NSAttributedString(
-        string: leftLabel,
-        attributes: [
-          .font: labelFont,
-          .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
-        ])
+      if bar.lastPill != leftLabel || bar.lastPillStyle != modeBadgeStyle {
+        bar.modeLabel.string = NSAttributedString(
+          string: leftLabel,
+          attributes: [
+            .font: labelFont,
+            .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
+          ])
+        bar.lastPill = leftLabel
+        bar.lastPillStyle = modeBadgeStyle
+      }
+
+      let leftTrailingAttributed = FlashStatusBarRenderer.attributedStatusString(
+        from: leftTrailingDisplay, font: rightFont)
+      let leftTrailingWidth =
+        leftTrailingDisplay.isEmpty ? 0 : ceil(leftTrailingAttributed.size().width)
+      bar.leftTrailingLabel.frame = CGRect(
+        x: bar.modeButtonLayer.frame.maxX + Self.statusBarMinimumGap,
+        y: textY,
+        width: leftTrailingWidth,
+        height: textHeight)
+      bar.leftTrailingLabel.font = rightFont
+      bar.leftTrailingLabel.fontSize = fontSize
+      bar.leftTrailingLabel.foregroundColor = Self.tmuxGrey245CG
+      bar.leftTrailingLabel.contentsScale = screen.scale
+      bar.leftTrailingLabel.alignmentMode = .left
+      bar.leftTrailingLabel.isHidden = leftTrailingDisplay.isEmpty
+      bar.lastLeftTrailing = applyStatusText(
+        to: bar.leftTrailingLabel,
+        display: leftTrailingDisplay,
+        attributed: leftTrailingAttributed,
+        previous: bar.lastLeftTrailing)
 
       let centreAttributed = FlashStatusBarRenderer.attributedStatusString(
         from: centreDisplay, font: rightFont)
@@ -428,7 +533,10 @@ extension OverlayPanel {
         : min(
           max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
           barFrame.width * 0.52)
-      let modeMaxX = bar.modeButtonLayer.frame.maxX
+      let modeMaxX =
+        leftTrailingDisplay.isEmpty
+        ? bar.modeButtonLayer.frame.maxX
+        : bar.leftTrailingLabel.frame.maxX
       let rightSectionStart =
         barFrame.width - Self.statusBarEdgePadding
         - (rightReservedWidth > 0 ? rightReservedWidth + Self.statusBarMinimumGap : 0)
@@ -445,12 +553,15 @@ extension OverlayPanel {
       bar.appLabel.contentsScale = screen.scale
       bar.appLabel.alignmentMode = .center
       bar.appLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
-      bar.appLabel.string = centreAttributed
-      bar.appLabel.setNeedsDisplay()
+      bar.lastCentre = applyStatusText(
+        to: bar.appLabel,
+        display: centreDisplay,
+        attributed: centreAttributed,
+        previous: bar.lastCentre)
 
       let rightWidth = max(
         0,
-        barFrame.width - bar.modeButtonLayer.frame.maxX - Self.statusBarMinimumGap
+        barFrame.width - modeMaxX - Self.statusBarMinimumGap
           - (centreWidth > 0 ? centreWidth + Self.statusBarMinimumGap * 2 : 0)
           - Self.statusBarEdgePadding)
       let rightX = barFrame.width - Self.statusBarEdgePadding - rightWidth
@@ -461,10 +572,12 @@ extension OverlayPanel {
       bar.rightLabel.contentsScale = screen.scale
       bar.rightLabel.alignmentMode = .right
       bar.rightLabel.isHidden = rightDisplayText.isEmpty
-      bar.rightLabel.string = FlashStatusBarRenderer.attributedStatusString(
-        from: rightDisplayText,
-        font: rightFont)
-      bar.rightLabel.setNeedsDisplay()
+      bar.lastRight = applyStatusText(
+        to: bar.rightLabel,
+        display: rightDisplayText,
+        attributed: FlashStatusBarRenderer.attributedStatusString(
+          from: rightDisplayText, font: rightFont),
+        previous: bar.lastRight)
     }
   }
 
@@ -546,8 +659,17 @@ final class SecondaryStatusBar {
   let backgroundLayer = CAGradientLayer()
   let modeButtonLayer = CAGradientLayer()
   let modeLabel = CATextLayer()
+  let leftTrailingLabel = CATextLayer()
   let appLabel = CATextLayer()
   let rightLabel = CATextLayer()
+
+  // Per-bar render cache — mirrors the primary bar's so an unchanged
+  // segment skips its `.string` reassignment + redraw (see `applyStatusText`).
+  var lastPill: String?
+  var lastPillStyle: OverlayModeBadgeStyle?
+  var lastLeftTrailing: String?
+  var lastCentre: String?
+  var lastRight: String?
 
   init() {
     backgroundLayer.cornerRadius = 0
@@ -559,18 +681,63 @@ final class SecondaryStatusBar {
     modeButtonLayer.actions = OverlayPanel.noActions
     modeLabel.alignmentMode = .center
     modeLabel.actions = OverlayPanel.noActions
+    leftTrailingLabel.alignmentMode = .left
+    leftTrailingLabel.actions = OverlayPanel.noActions
     appLabel.alignmentMode = .left
     appLabel.actions = OverlayPanel.noActions
     rightLabel.alignmentMode = .right
     rightLabel.actions = OverlayPanel.noActions
     modeButtonLayer.sublayers = [modeLabel]
-    backgroundLayer.sublayers = [appLabel, modeButtonLayer, rightLabel]
+    backgroundLayer.sublayers = [appLabel, modeButtonLayer, leftTrailingLabel, rightLabel]
   }
 }
 
 extension OverlayPanel {
   static func statusLeftText(modeText: String) -> String {
     modeText
+  }
+
+  /// True when a rendered region carries an effect marker whose appearance
+  /// advances every tick. Such regions must bypass the "skip if unchanged"
+  /// cache so the breathing/blink alpha keeps moving.
+  static func statusTextAnimated(_ display: String) -> Bool {
+    display.contains("#[breathing")
+      || display.contains("#[breathe")
+      || display.contains("#[blink")
+  }
+
+  /// Push `attributed` into `layer` only when the displayed content changed
+  /// (or is animated). Reassigning an identical string and forcing a
+  /// `setNeedsDisplay()` redraws the layer and is what makes the bar flash
+  /// on every app/mode change; skipping it is the whole point. Returns the
+  /// new cache value for the caller to store.
+  @discardableResult
+  func applyStatusText(
+    to layer: CATextLayer,
+    display: String,
+    attributed: @autoclosure () -> NSAttributedString,
+    previous: String?
+  ) -> String {
+    if previous != display || Self.statusTextAnimated(display) {
+      layer.string = attributed()
+      layer.setNeedsDisplay()
+    }
+    return display
+  }
+
+  /// Split the rendered `#[align=left]` bucket into the mode pill label and
+  /// the styled text that follows it. The bucket is `#{mode}` (a plain
+  /// label) followed by optional tmux-styled content; the first `#[…]`
+  /// marker marks the boundary. Without a marker the whole bucket is the
+  /// pill (the default `#[align=left]#{mode}` template), and the trailing
+  /// run is empty.
+  static func splitLeftRegion(_ modeText: String) -> (pill: String, trailing: String) {
+    guard let markerRange = modeText.range(of: "#[") else {
+      return (modeText, "")
+    }
+    let pill = String(modeText[..<markerRange.lowerBound])
+    let trailing = String(modeText[markerRange.lowerBound...])
+    return (pill, trailing)
   }
 
   static func statusRightDisplayText(_ statusRightText: String) -> String {
