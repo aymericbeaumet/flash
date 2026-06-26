@@ -441,6 +441,22 @@ extension NormalModeDispatcher {
   /// with `pluginsCommand(_:)`.
   static let pluginsBuiltinSubcommands: [String] = ["reload"]
 
+  /// Whether typing `query` is enough to actually invoke the command shown
+  /// as `label`, per vim's abbreviation rule. `:q` invokes `quit` (min `q`)
+  /// but NOT `qall` (min `qa`), even though `qall` also starts with `q`.
+  /// Used to rank invokable candidates above merely-prefix-matching ones so
+  /// `:q<CR>` and the suggestion list both land on `quit`, matching the
+  /// command parser (`commandLineCommand`) which already resolves `:q` to
+  /// `quit`. Non-spec labels (plugins, `open`/`help`/`flashlight`) carry no
+  /// abbreviation minimum, so any prefix counts as invokable.
+  static func isInvokableAbbreviation(query: String, label: String) -> Bool {
+    guard
+      let spec = commandLineSpecs.first(where: { $0.names.first?.full == label }),
+      let primary = spec.names.first
+    else { return true }
+    return query.count >= primary.minimumLength
+  }
+
   private static func topLevelCompletions(pluginCommands: [String])
     -> [CommandLineCompletion]
   {

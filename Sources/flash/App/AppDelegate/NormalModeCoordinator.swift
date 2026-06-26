@@ -1539,6 +1539,18 @@ extension AppDelegate {
       return CommandLineCompletionMatch(completion: item, score: score + boost)
     }
     let sorted = scored.sorted { lhs, rhs in
+      // Vim abbreviation precedence: a candidate the query can actually
+      // invoke (`:q` → `quit`) ranks above one it can't yet (`qall` needs
+      // `:qa`), regardless of fuzzy score or frecency. Without this, the
+      // equal-scoring `qall` / `quit` pair falls to the alphabetical
+      // tiebreaker and `qall` wins — surfacing the wrong command for `:q`.
+      if !trimmedQuery.isEmpty {
+        let lhsInvokable = NormalModeDispatcher.isInvokableAbbreviation(
+          query: trimmedQuery, label: lhs.completion.label)
+        let rhsInvokable = NormalModeDispatcher.isInvokableAbbreviation(
+          query: trimmedQuery, label: rhs.completion.label)
+        if lhsInvokable != rhsInvokable { return lhsInvokable }
+      }
       if lhs.score != rhs.score { return lhs.score > rhs.score }
       return lhs.completion.label.localizedCaseInsensitiveCompare(rhs.completion.label)
         == .orderedAscending

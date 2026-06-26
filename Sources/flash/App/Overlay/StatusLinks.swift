@@ -115,11 +115,16 @@ extension OverlayPanel {
       statusLinkCatchers.append(StatusLinkCatcherPanel())
     }
     for (catcher, link) in zip(statusLinkCatchers, links) {
-      // One step above the shields so a click on a link opens it rather
-      // than being swallowed by the bar-wide shield beneath. Still below the
-      // native status bar; links only sit over Flash's own content (left /
-      // centre), never over the system menu-bar extras on the right.
-      catcher.level = NSWindow.Level(rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue + 1)
+      // Sit at the bar's own level (`.mainMenu`, 24): one step above the
+      // shields (23) so a click on a link opens it rather than being swallowed
+      // by the bar-wide shield beneath, but BELOW the native system menu-bar
+      // extras (`.statusBar`, 25). A right-aligned `#[link=…]` run renders at
+      // the far right of the bar — the same band the native clock / Control
+      // Center occupy — so a catcher at `.statusBar` ties with those extras
+      // and, via `orderFrontRegardless`, steals their clicks. At `.mainMenu`
+      // the native extras win; the link stays clickable wherever no native
+      // item sits above it (the bar's own content area).
+      catcher.level = OverlayPanel.persistentStatusWindowLevel
       catcher.setFrame(link.rect, display: false)
       catcher.clickView.frame = NSRect(origin: .zero, size: link.rect.size)
       let url = link.url
@@ -161,11 +166,19 @@ extension OverlayPanel {
       statusBarClickShields.append(StatusLinkCatcherPanel())
     }
     for (shield, rect) in zip(statusBarClickShields, rects) {
-      // Sit at the bar's own level — below the native status bar (`.statusBar`,
-      // where the system menu-bar extras live), so those still receive their
-      // clicks. The shield only catches clicks that would otherwise fall
-      // through Flash's content to the wallpaper (onClick == nil → swallowed).
-      shield.level = OverlayPanel.persistentStatusWindowLevel
+      // Sit one level BELOW the bar (`.mainMenu`, 24) so the native menu bar
+      // outranks the shield everywhere: the right-side system extras live at
+      // `.statusBar` (25) and the left-side app menus / menu-bar background
+      // live at `.mainMenu` (24) — the same level as the bar. A shield at the
+      // bar's own level ties with those app menus and, because it is
+      // `orderFrontRegardless`, wins the tie and swallows clicks meant for the
+      // native menu bar (File/Edit/… never open). One step down lets the menu
+      // bar win, while the shield still sits far above the wallpaper/desktop
+      // (level 0 and below), so it keeps catching the clicks that would
+      // otherwise fall through Flash's content and reveal the desktop
+      // (onClick == nil → swallowed).
+      shield.level = NSWindow.Level(
+        rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue - 1)
       shield.setFrame(rect, display: false)
       shield.clickView.frame = NSRect(origin: .zero, size: rect.size)
       shield.clickView.onClick = nil

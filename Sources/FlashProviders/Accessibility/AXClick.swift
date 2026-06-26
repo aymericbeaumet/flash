@@ -136,6 +136,18 @@ public enum AXClick {
     pid: pid_t,
     maxAncestors: Int = 4
   ) -> Bool {
+    // A terminal emulator is one big typing surface. GPU-rendered terminals
+    // (Alacritty, kitty, WezTerm, Ghostty) expose no `AXTextArea` for their
+    // grid, so the role walk below would miss them and a click would wrongly
+    // stay in NORMAL. Treat the whole window as editable so a click — or the
+    // `F`-grid / physical-click probe that shares this check — drops into
+    // INSERT, exactly like clicking any other text field. tmux/vim/shells run
+    // inside that surface, so this covers them too.
+    if let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+      TerminalBundles.identifiers.contains(bundleID)
+    {
+      return true
+    }
     let screenH = primaryScreenHeight()
     // AX hit-test takes top-left primary-origin Y-down coords.
     let axX = Float(nsScreenPoint.x)
