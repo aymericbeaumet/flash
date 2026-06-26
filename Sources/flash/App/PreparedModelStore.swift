@@ -4,7 +4,6 @@ import Foundation
 
 struct PreparedModel {
   let pid: pid_t
-  let bundleID: String
   let targets: [JumpTarget]
   let hints: [AssignedHint]
   let computedAt: DispatchTime

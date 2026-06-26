@@ -21,7 +21,6 @@ public struct AllowListEntry: Codable {
   /// sat at the screen origin, so their absolute values already equal
   /// page-relative values within tolerance.
   public let rect: [Double]
-  public let reason: String
   public let axRole: String?
   public let domSelector: String?
 
@@ -31,7 +30,6 @@ public struct AllowListEntry: Codable {
   ) {
     self.side = side
     self.rect = rect
-    self.reason = reason
     self.axRole = axRole
     self.domSelector = domSelector
   }

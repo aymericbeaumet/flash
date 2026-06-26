@@ -19,12 +19,6 @@ public final class IntegrationFailureStore {
     lock.unlock()
   }
 
-  public var all: [String] {
-    lock.lock()
-    defer { lock.unlock() }
-    return messages
-  }
-
   public var count: Int {
     lock.lock()
     defer { lock.unlock() }

@@ -9,7 +9,6 @@ import QuartzCore
 extension OverlayPanel {
   static let statusBarEdgePadding: CGFloat = 13
   static let statusBarMinimumGap: CGFloat = 12
-  static let statusBarMaximumAppNameWidth: CGFloat = 220
   static let statusBarMinimumRightTextWidth: CGFloat = 240
 
   func setModeBadge(text: String, visible: Bool, captureInput: Bool, style: OverlayModeBadgeStyle) {
@@ -467,18 +466,6 @@ extension OverlayPanel {
         font: rightFont)
       bar.rightLabel.setNeedsDisplay()
     }
-  }
-
-  /// Drop every secondary status bar from the rendered layer tree. Called
-  /// when the mode badge goes invisible so we don't keep extra-screen
-  /// bars on the wallpaper after advanced mode is disabled.
-  func hideSecondaryStatusBars() {
-    guard !secondaryStatusBars.isEmpty else { return }
-    var sublayers = contentLayer.sublayers ?? []
-    for bar in secondaryStatusBars {
-      sublayers.removeAll { $0 === bar.backgroundLayer }
-    }
-    contentLayer.sublayers = sublayers
   }
 
   static func modeBadgeWidth(

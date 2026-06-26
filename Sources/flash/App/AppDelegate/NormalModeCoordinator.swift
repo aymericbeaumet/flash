@@ -365,9 +365,6 @@ extension AppDelegate {
     pressedMouseButtons != 0
   }
 
-  static let insertNavigationExitPollIntervalMs = 150
-  static let insertNavigationExitPollAttempts = 200
-
   static func insertNavigationExitShouldExit(
     currentURL: String?,
     initialURL: String?
@@ -440,18 +437,13 @@ extension AppDelegate {
       style: mode.badgeStyle)
   }
 
-  func publishCommandSurfaceModeLabel(reason: String) {
-    FlashLog.trace("[mode] status_label command reason=\(reason)")
-    statusBarController?.updateModeLabel(Self.commandSurfaceModeLabel(labels: config.mode.labels))
-  }
-
   static func commandSurfaceModeLabel(labels: Config.Mode.Labels) -> String {
     labels.command
   }
 
+
   func suppressEditableFocus(for pid: pid_t) {
     guard pid > 0 else { return }
-    editableFocusSuppressedPID = pid
   }
 
   func scheduleNormalModeRecapture(delaysMs: [Int] = AppDelegate.normalModeRecaptureDelaysMs) {
@@ -655,149 +647,8 @@ extension AppDelegate {
     return now < until
   }
 
-  static func menuBarPointerShouldReleaseNormalCapture(
-    mode: FlashMode,
-    action: JumpAction
-  ) -> Bool {
-    false
-  }
-
-  static func appPointerShouldReleaseNormalCapture(
-    mode: FlashMode,
-    wasCommandLine: Bool,
-    action: JumpAction
-  ) -> Bool {
-    NormalModePointerPolicy.appClickDecision(
-      mode: mode,
-      wasCommandLine: wasCommandLine,
-      hasHints: false,
-      action: action
-    ).releaseCapture
-  }
-
-  static func appPointerShouldSuspendForContextMenu(
-    mode: FlashMode,
-    wasCommandLine: Bool,
-    action: JumpAction
-  ) -> Bool {
-    NormalModePointerPolicy.appClickDecision(
-      mode: mode,
-      wasCommandLine: wasCommandLine,
-      hasHints: false,
-      action: action
-    ).suspendForNativeSurface
-  }
-
-  static func appPointerShouldProbeForInsert(
-    mode: FlashMode,
-    wasCommandLine: Bool,
-    action: JumpAction
-  ) -> Bool {
-    NormalModePointerPolicy.appClickDecision(
-      mode: mode,
-      wasCommandLine: wasCommandLine,
-      hasHints: false,
-      action: action
-    ).probeForInsert
-  }
-
   static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
     NormalModePointerPolicy.pointerActionMayEnterInsert(action)
-  }
-
-  private func verifyNormalModeCapture(reason: String) {
-    normalModeCaptureVerificationToken &+= 1
-    let token = normalModeCaptureVerificationToken
-    let recaptureToken = normalModeRecaptureToken
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
-      guard let self, self.normalModeCaptureVerificationToken == token else { return }
-      guard
-        Self.normalModeCaptureRecoveryShouldRetry(
-          mode: self.flashMode,
-          overlayInputMode: self.overlay.inputMode,
-          hasHints: !self.currentHints.isEmpty,
-          activationInFlight: self.activationInFlight,
-          keyboardCaptureIsActive: self.overlay.keyboardCaptureIsActive,
-          menuBarInteractionRecaptureSuppressedUntil:
-            self.menuBarInteractionRecaptureSuppressedUntil,
-          contextMenuInteractionRecaptureSuppressedUntil:
-            self.contextMenuInteractionRecaptureSuppressedUntil,
-          pointerInsertHandoffRecaptureSuppressedUntil:
-            self.pointerInsertHandoffRecaptureSuppressedUntil)
-      else { return }
-      // On macOS Tahoe (26) the system can refuse to grant key window to
-      // an accessory app even after `NSApp.activate()` — Firefox holds
-      // activation and won't yield. The original code escalated to
-      // another `scheduleNormalModeRecapture`, which kicked off nine
-      // more retries, each landing back here when they failed and
-      // cascading into a tight loop that pegged the main runloop. The
-      // owning `scheduleNormalModeRecapture` already retries on a
-      // 0/10/30/60/120/250/500/900/1400 ms ramp. If that ramp still
-      // loses the activation race, schedule one bounded late-recovery
-      // series. That avoids the old recursive spin while recovering
-      // from transient front-app activation refusal.
-      FlashLog.debug(
-        "[mode] capture_inactive reason=\(reason) key=\(self.overlay.isKeyWindow) "
-          + "first_responder=\(String(describing: self.overlay.firstResponder))")
-      self.scheduleNormalModeCaptureRecovery(reason: reason, recaptureToken: recaptureToken)
-    }
-  }
-
-  private func scheduleNormalModeCaptureRecovery(reason: String, recaptureToken: UInt64) {
-    guard normalModeCaptureRecoveryRecaptureToken != recaptureToken else { return }
-    guard normalModeRecaptureToken == recaptureToken else { return }
-    normalModeCaptureRecoveryToken &+= 1
-    let recoveryToken = normalModeCaptureRecoveryToken
-    normalModeCaptureRecoveryRecaptureToken = recaptureToken
-    FlashLog.trace(
-      "[mode] capture_recovery_schedule reason=\(reason) token=\(recaptureToken) delays="
-        + Self.normalModeCaptureRecoveryDelaysMs.map(String.init).joined(separator: ","))
-    for (index, delayMs) in Self.normalModeCaptureRecoveryDelaysMs.enumerated() {
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
-        guard let self else { return }
-        guard self.normalModeCaptureRecoveryToken == recoveryToken else {
-          FlashLog.trace(
-            "[mode] capture_recovery_skip token=\(recaptureToken) delay=\(delayMs) "
-              + "reason=stale_recovery")
-          return
-        }
-        guard self.normalModeRecaptureToken == recaptureToken else {
-          FlashLog.trace(
-            "[mode] capture_recovery_skip token=\(recaptureToken) delay=\(delayMs) "
-              + "reason=stale_recapture current=\(self.normalModeRecaptureToken)")
-          return
-        }
-        guard
-          Self.normalModeCaptureRecoveryShouldRetry(
-            mode: self.flashMode,
-            overlayInputMode: self.overlay.inputMode,
-            hasHints: !self.currentHints.isEmpty,
-            activationInFlight: self.activationInFlight,
-            keyboardCaptureIsActive: self.overlay.keyboardCaptureIsActive,
-            menuBarInteractionRecaptureSuppressedUntil:
-              self.menuBarInteractionRecaptureSuppressedUntil,
-            contextMenuInteractionRecaptureSuppressedUntil:
-              self.contextMenuInteractionRecaptureSuppressedUntil,
-            pointerInsertHandoffRecaptureSuppressedUntil:
-              self.pointerInsertHandoffRecaptureSuppressedUntil)
-        else {
-          FlashLog.trace(
-            "[mode] capture_recovery_skip token=\(recaptureToken) delay=\(delayMs) "
-              + "reason=state")
-          return
-        }
-        FlashLog.trace(
-          "[mode] capture_recovery_apply token=\(recaptureToken) delay=\(delayMs)")
-        self.applyModeOverlay(captureOverride: true)
-        if self.overlay.keyboardCaptureIsActive {
-          self.normalModeCaptureRecoveryToken &+= 1
-          self.normalModeCaptureRecoveryRecaptureToken = nil
-          FlashLog.trace("[mode] capture_recovery_done token=\(recaptureToken)")
-        } else if index == Self.normalModeCaptureRecoveryDelaysMs.indices.last {
-          FlashLog.debug("[mode] capture_recovery_exhausted token=\(recaptureToken)")
-        }
-      }
-    }
   }
 
   private func cancelNormalModeCaptureRecovery(reason: String) {
@@ -1379,34 +1230,6 @@ extension AppDelegate {
     openDebugDashboard(tab: "mappings")
   }
 
-  /// Single entry point for every modal surface (`:help`, `:plugins`,
-  /// `:mappings`, plugin-reload toast, `:clipboard`, future modals).
-  /// Centralises the pre-modal cleanup so call sites can't drift on a
-  /// missed step; the renderer is the only thing variants pass in.
-  private func presentModal(
-    reason: String,
-    body: () -> String
-  ) {
-    prepareModalPresentation(reason: reason)
-    overlay.displayModal(body())
-    dispatchMode(.presentModal)
-  }
-
-  /// Shared pre-modal cleanup: mode-pending token bump, hint /
-  /// candidate-finder reset, active-window border clear, overlay
-  /// hide. `presentModal` and `presentSelectableModal` both go through
-  /// it so the surfaces start from an identical state regardless of
-  /// what the user was doing before.
-  private func prepareModalPresentation(reason: String) {
-    normalModePendingCommandToken &+= 1
-    overlay.normalModePending = ""
-    clearTransientHintState(reason: reason)
-    clearCandidateFinderState()
-    overlay.hide()
-    overlay.setActiveWindowBorder(around: nil)
-    publishCommandSurfaceModeLabel(reason: reason)
-  }
-
   /// `:clipboard` — history now lives in the HTTP dashboard's Clipboard tab.
   /// Refresh the host cache from the plugin, then open the browser there. The
   /// history travels over the plugin command RPC (keeping this surface
@@ -1433,31 +1256,9 @@ extension AppDelegate {
     }
   }
 
-  /// Selectable counterpart to `presentModal` — same `prepareModal-
-  /// Presentation` setup, but renders `lines` as the navigable list
-  /// surface (currently only `:clipboard`).
-  private func presentSelectableModal(reason: String, lines: [String]) {
-    prepareModalPresentation(reason: reason)
-    overlay.displaySelectableModal(lines: lines)
-    dispatchMode(.presentModal)
-  }
-
   static func decodeClipboardModalEntries(_ json: String) -> [ClipboardModalEntry]? {
     guard let data = json.data(using: .utf8) else { return nil }
     return try? JSONDecoder().decode([ClipboardModalEntry].self, from: data)
-  }
-
-  private func enterCandidateFinderMode(scope: CandidateScope) {
-    guard flashMode == .normal else { return }
-    overlay.normalModePending = ""
-    clearTransientHintState(reason: "enter_candidate_finder")
-    overlay.candidateFinderQuery = ""
-    overlay.commandLineCursorIndex = 0
-    candidateFinderScope = scope
-    openCandidateFinderSession(scope: scope)
-    overlay.setActiveWindowBorder(around: nil)
-    publishCommandSurfaceModeLabel(reason: "candidate_finder_open")
-    overlay.displayCandidateFinder(query: "", items: [])
   }
 
   /// Open a flashlight session: paint instantly from the in-process synchronous
@@ -1716,7 +1517,6 @@ extension AppDelegate {
         commandLineCompletionSelectedIndex)
       ? commandLineCompletionMatches[commandLineCompletionSelectedIndex].completion.label : nil
     commandLineCompletionPrefix = context.prefix
-    commandLineCompletionItems = context.items
     commandLineCompletionQuery = context.query
     let trimmedQuery = context.query.trimmed
     let scored: [CommandLineCompletionMatch] = context.items.compactMap { item in
@@ -1776,17 +1576,6 @@ extension AppDelegate {
     frecencyStore.recordOpen(itemKey: FrecencyKey.command(label: label))
   }
 
-  /// Frecency boost for a Candidate. Mirrors the prior SearchService
-  /// behaviour: derive the item key from the candidate (bundle id, URL,
-  /// or sourcePayload envelope) and look up the cached integer boost.
-  /// Used by the in-memory ranker inside `runCandidateFinderSearch`.
-  func candidateFrecencyBoost(_ candidate: Candidate) -> Int {
-    guard let frecencyStore, let key = FrecencyMapper.itemKey(for: candidate) else {
-      return 0
-    }
-    return frecencyStore.boost(forKey: key)
-  }
-
   private var commandBarSuggestionCount: Int {
     max(1, config.flashlight.suggestionCount)
   }
@@ -1811,7 +1600,6 @@ extension AppDelegate {
 
   private func clearCommandLineCompletionState() {
     commandLineCompletionPrefix = ""
-    commandLineCompletionItems = []
     commandLineCompletionMatches = []
     commandLineCompletionSelectedIndex = 0
     commandLineCompletionQuery = ""

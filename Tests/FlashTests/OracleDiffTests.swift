@@ -53,7 +53,6 @@ final class OracleDiffTests: XCTestCase {
       role: "link",
       label: "Example",
       marker: "a",
-      cssRect: frame,
       screenRect: frame)
   }
 

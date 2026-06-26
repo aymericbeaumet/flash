@@ -9,7 +9,6 @@ enum NormalModePointerPolicy {
   }
 
   struct MenuBarClickDecision: Equatable {
-    var suppressRecapture: Bool
     var suspendForNativeSurface: Bool
     var dismissTransientHintsWithoutRekey: Bool
   }
@@ -40,7 +39,6 @@ enum NormalModePointerPolicy {
     if pointIsInMenuBar, !activationInFlight {
       return .menuBar(
         MenuBarClickDecision(
-          suppressRecapture: true,
           suspendForNativeSurface: true,
           dismissTransientHintsWithoutRekey: hasHints))
     }

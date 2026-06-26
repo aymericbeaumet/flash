@@ -103,58 +103,6 @@ extension AppMonitor {
     }
   }
 
-  func focusedElementIsEditable(pid: pid_t, completion: @escaping (Bool) -> Void) {
-    axQueue.async {
-      let editable = NormalModeDispatcher.isEditableFocusedElement(pid: pid)
-      DispatchQueue.main.async {
-        completion(editable)
-      }
-    }
-  }
-
-  func focusedInputSnapshot(pid: pid_t, completion: @escaping (InputFocusSnapshot?) -> Void) {
-    axQueue.async {
-      let snapshot = NormalModeDispatcher.focusedInputSnapshot(pid: pid)
-      DispatchQueue.main.async {
-        completion(snapshot)
-      }
-    }
-  }
-
-  func repairSingleStrongEditableFocus(
-    pid: pid_t,
-    completion: @escaping (NormalModeDispatcher.EditableFocusRepairResult) -> Void
-  ) {
-    axQueue.async {
-      let result = NormalModeDispatcher.repairSingleStrongEditableFocus(pid: pid)
-      DispatchQueue.main.async {
-        completion(result)
-      }
-    }
-  }
-
-  func inputSnapshot(
-    pid: pid_t,
-    at nsScreenPoint: CGPoint,
-    completion: @escaping (InputFocusSnapshot?) -> Void
-  ) {
-    axQueue.async {
-      let snapshot = NormalModeDispatcher.inputSnapshot(pid: pid, at: nsScreenPoint)
-      DispatchQueue.main.async {
-        completion(snapshot)
-      }
-    }
-  }
-
-  func focusedDocumentURL(pid: pid_t, completion: @escaping (String?) -> Void) {
-    axQueue.async {
-      let url = NormalModeDispatcher.documentURL(pid: pid)
-      DispatchQueue.main.async {
-        completion(url)
-      }
-    }
-  }
-
   private func onFocusedEnvironmentChanged(reason: String) {
     guard let app = NSWorkspace.shared.frontmostApplication else { return }
     let pid = app.processIdentifier

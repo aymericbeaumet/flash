@@ -98,7 +98,6 @@ final class PreparedModelStoreTests: XCTestCase {
     let hints = targets.map { AssignedHint(target: $0, label: "a") }
     return PreparedModel(
       pid: pid,
-      bundleID: "test.bundle",
       targets: targets,
       hints: hints,
       computedAt: computedAt,

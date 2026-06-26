@@ -131,7 +131,6 @@ extension AppMonitor {
       providers: providers)
     return PreparedModel(
       pid: context.processID,
-      bundleID: context.bundleIdentifier,
       targets: result.targets,
       hints: result.hints,
       computedAt: DispatchTime.now(),

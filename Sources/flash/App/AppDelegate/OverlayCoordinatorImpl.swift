@@ -603,11 +603,6 @@ extension AppDelegate {
   // `f` hint commits instead honor the target's own `entersInsertMode` flag.
   // Move (`mF`) was already a no-op for insert.
 
-  func usesTmuxProvider(_ context: AppContext?) -> Bool {
-    guard let context else { return false }
-    return registry.chain(for: context).contains { $0.identifier == "plugin:tmux" }
-  }
-
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
     mappings.handle(event: event)
   }

@@ -40,8 +40,6 @@ struct CompiledMappings: Equatable {
     self.nonAtomicPrefixes = prefixes
   }
 
-  var isEmpty: Bool { ordered.isEmpty }
-
   func mapping(for key: String) -> ModeMapping? { byKey[key] }
 
   func hasStrictPrefix(_ sequence: String) -> Bool {

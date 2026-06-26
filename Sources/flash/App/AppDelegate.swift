@@ -231,19 +231,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// can reply within one runloop turn, so we append each to the pool
   /// immediately but re-score/repaint only once per turn instead of N times.
   var candidateFinderMergeRerenderScheduled = false
-  /// Per-keystroke scoring runs Pass A (strict word-start tier, sync,
-  /// sub-ms) on the main thread for instant paint, then dispatches
-  /// Pass B (full fuzzy ladder) here so longer queries don't block the
-  /// runloop. The serial label + `.userInteractive` QoS keeps results
-  /// landing in order; the per-call generation check (`candidateFinderIndexGenerationCounter`)
-  /// is what actually cancels a stale scoring job — a new keystroke
-  /// bumps the counter and the next chunk-boundary check in Pass B
-  /// exits early.
-  let candidateFinderScoringQueue = DispatchQueue(
-    label: "flash.candidate_finder.scoring", qos: .userInteractive)
   var pluginStateRefreshWork: DispatchWorkItem?
   var commandLineCompletionPrefix: String = ""
-  var commandLineCompletionItems: [NormalModeDispatcher.CommandLineCompletion] = []
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
   var commandLineCompletionSelectedIndex = 0
   var commandLineCompletionQuery: String = ""
@@ -256,7 +245,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// `down` past the newest entry restores what the user was typing.
   var commandLineHistoryCursor: Int?
   var commandLineHistoryStash: String = ""
-  var editableFocusSuppressedPID: pid_t?
   var selectedInitialMode = false
   var sourceAppPID: pid_t?
   var mouseGridRegion: MouseGrid.Region?
@@ -273,7 +261,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var workspaceTokens: [NSObjectProtocol] = []
   var resignKeyToken: NSObjectProtocol?
   var normalModeRecaptureToken: UInt64 = 0
-  var normalModeCaptureVerificationToken: UInt64 = 0
   var normalModeCaptureRecoveryToken: UInt64 = 0
   var normalModeCaptureRecoveryRecaptureToken: UInt64?
   var menuBarInteractionRecaptureSuppressedUntil: Date?

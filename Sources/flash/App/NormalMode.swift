@@ -16,10 +16,6 @@ struct NormalModeTransition: Equatable {
 
   var command: URLCommand? { action?.command }
 
-  static func command(_ command: URLCommand, repeatCount: Int = 1) -> NormalModeTransition {
-    action(.flashCommand(command), repeatCount: repeatCount)
-  }
-
   static func action(_ action: MappingCommand, repeatCount: Int = 1) -> NormalModeTransition {
     NormalModeTransition(
       pending: "", action: action, repeatCount: max(1, repeatCount))
@@ -36,8 +32,6 @@ struct NormalModeTransition: Equatable {
 struct PendingNormalModeCommand: Equatable {
   var action: MappingCommand
   var repeatCount: Int
-
-  var command: URLCommand? { action.command }
 }
 
 enum NormalModeInterpreter {

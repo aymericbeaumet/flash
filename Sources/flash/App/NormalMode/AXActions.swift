@@ -21,36 +21,6 @@ extension NormalModeDispatcher {
     var isEditable: Bool
   }
 
-  enum EditableFocusRepairResult: Equatable, CustomStringConvertible {
-    case alreadyEditable
-    case repaired(role: String?, frame: CGRect)
-    case noFocusedWindow
-    case noCandidate
-    case ambiguous(Int)
-    case focusFailed(role: String?, frame: CGRect)
-
-    var description: String {
-      switch self {
-      case .alreadyEditable:
-        return "already_editable"
-      case .repaired(let role, let frame):
-        return "repaired role=\(role ?? "nil") frame=\(Self.frameDescription(frame))"
-      case .noFocusedWindow:
-        return "no_focused_window"
-      case .noCandidate:
-        return "no_candidate"
-      case .ambiguous(let count):
-        return "ambiguous count=\(count)"
-      case .focusFailed(let role, let frame):
-        return "focus_failed role=\(role ?? "nil") frame=\(Self.frameDescription(frame))"
-      }
-    }
-
-    private static func frameDescription(_ frame: CGRect) -> String {
-      "\(Int(frame.origin.x)),\(Int(frame.origin.y)),\(Int(frame.width)),\(Int(frame.height))"
-    }
-  }
-
   /// Stamped on every Flash-synthesized keyboard event (via `.eventSourceUserData`)
   /// so the normal-mode key tap never swallows our own output — `/`→⌘F, undo,
   /// tab chords, ⌘V paste, etc. Mirrors `ActionDispatcher.syntheticMouseEventTag`.
@@ -119,16 +89,6 @@ extension NormalModeDispatcher {
     return true
   }
 
-  static func cgFlags(from modifierFlags: NSEvent.ModifierFlags) -> CGEventFlags {
-    let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
-    var flags = CGEventFlags()
-    if independent.contains(.command) { flags.insert(.maskCommand) }
-    if independent.contains(.shift) { flags.insert(.maskShift) }
-    if independent.contains(.control) { flags.insert(.maskControl) }
-    if independent.contains(.option) { flags.insert(.maskAlternate) }
-    return flags
-  }
-
   static func copy(_ value: String) {
     let pb = NSPasteboard.general
     pb.clearContents()
@@ -175,14 +135,6 @@ extension NormalModeDispatcher {
     return firstDocumentURL(in: focusedWindow, maxNodes: 2_000)
   }
 
-  static func isEditableFocusedElement(pid: pid_t) -> Bool {
-    let app = AXApp.make(pid: pid)
-    guard let element = elementAttribute(app, kAXFocusedUIElementAttribute as String) else {
-      return false
-    }
-    return isEditable(element)
-  }
-
   /// Close the focused window of `pid` by pressing its standard close button
   /// (the red traffic-light control). This shuts the OS window itself —
   /// distinct from `tab_close`/⌘W, which close a tab in tabbed apps. Returns
@@ -202,131 +154,6 @@ extension NormalModeDispatcher {
     return AXUIElementPerformAction(closeButton, kAXPressAction as CFString) == .success
   }
 
-  static func repairSingleStrongEditableFocus(pid: pid_t) -> EditableFocusRepairResult {
-    let app = AXApp.make(pid: pid)
-    if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
-      isEditable(focused)
-    {
-      return .alreadyEditable
-    }
-
-    guard let window = elementAttribute(app, kAXFocusedWindowAttribute as String) else {
-      return .noFocusedWindow
-    }
-    let screenH = primaryScreenHeight()
-    let windowFrame = frame(of: window, primaryScreenHeight: screenH)
-    let records = editableFocusRepairRecords(in: window, screenH: screenH, maxNodes: 2_000)
-    let candidates = records.map(\.candidate)
-    let strong = strongEditableFocusCandidates(candidates, windowFrame: windowFrame)
-    guard strong.count == 1, let selected = strong.first else {
-      return strong.isEmpty ? .noCandidate : .ambiguous(strong.count)
-    }
-    guard
-      let record = records.first(where: {
-        editableFocusCandidatesRepresentSameElement($0.candidate, selected)
-      }),
-      let selectedFrame = selected.frame
-    else {
-      return .noCandidate
-    }
-    if AXClick.setFocus(record.element) {
-      return .repaired(role: selected.role, frame: selectedFrame)
-    }
-    return .focusFailed(role: selected.role, frame: selectedFrame)
-  }
-
-  static func focusedInputSnapshot(pid: pid_t) -> InputFocusSnapshot? {
-    let app = AXApp.make(pid: pid)
-    let element = elementAttribute(app, kAXFocusedUIElementAttribute as String)
-    let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
-    return inputSnapshot(pid: pid, app: app, element: element, window: window)
-  }
-
-  static func inputSnapshot(pid: pid_t, at nsScreenPoint: CGPoint) -> InputFocusSnapshot? {
-    let app = AXApp.make(pid: pid)
-    let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
-    let screenH = primaryScreenHeight()
-    let axX = Float(nsScreenPoint.x)
-    let axY = Float(screenH - nsScreenPoint.y)
-    var hit: AXUIElement?
-    if AXUIElementCopyElementAtPosition(app, axX, axY, &hit) == .success,
-      let hit
-    {
-      return inputSnapshot(pid: pid, app: app, element: hit, window: window)
-    }
-    if let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
-      let frame = frame(of: focused, primaryScreenHeight: screenH),
-      frame.insetBy(dx: -3, dy: -3).contains(nsScreenPoint)
-    {
-      return inputSnapshot(pid: pid, app: app, element: focused, window: window)
-    }
-    return inputSnapshot(pid: pid, app: app, element: nil, window: window)
-  }
-
-  private static func inputSnapshot(
-    pid: pid_t,
-    app _: AXUIElement,
-    element: AXUIElement?,
-    window: AXUIElement?
-  ) -> InputFocusSnapshot {
-    let windowRole = window.flatMap { role(of: $0) }
-    let windowSubrole = window.flatMap { stringAttribute($0, kAXSubroleAttribute as String) }
-    let windowDocumentURL =
-      window.flatMap { urlAttribute($0, kAXDocumentAttribute as String) }
-      ?? window.flatMap { urlAttribute($0, kAXURLAttribute as String) }
-    guard let element else {
-      let surface = InputFocusSnapshot.classifySurface(
-        isEditable: false,
-        role: nil,
-        expanded: false,
-        ancestorRoles: [],
-        windowSubrole: windowSubrole,
-        documentURL: windowDocumentURL)
-      return InputFocusSnapshot(
-        pid: pid,
-        surface: surface == .stableNonEditable ? .unavailable : surface,
-        role: nil,
-        windowRole: windowRole,
-        windowSubrole: windowSubrole,
-        documentURL: windowDocumentURL)
-    }
-    let focusedRole = role(of: element)
-    let expanded = boolAttribute(element, "AXExpanded") ?? false
-    let documentURL =
-      documentURLNear(element)
-      ?? windowDocumentURL
-    let surface = InputFocusSnapshot.classifySurface(
-      isEditable: isEditable(element),
-      role: focusedRole,
-      expanded: expanded,
-      ancestorRoles: ancestorRoles(of: element),
-      windowSubrole: windowSubrole,
-      documentURL: documentURL)
-    return InputFocusSnapshot(
-      pid: pid,
-      surface: surface,
-      role: focusedRole,
-      windowRole: windowRole,
-      windowSubrole: windowSubrole,
-      documentURL: documentURL)
-  }
-
-  static func focusedElementFrame(pid: pid_t) -> CGRect? {
-    let app = AXApp.make(pid: pid)
-    let screenH = primaryScreenHeight()
-    if let element = elementAttribute(app, kAXFocusedUIElementAttribute as String),
-      let frame = frame(of: element, primaryScreenHeight: screenH)
-    {
-      return frame
-    }
-    if let window = elementAttribute(app, kAXFocusedWindowAttribute as String),
-      let frame = frame(of: window, primaryScreenHeight: screenH)
-    {
-      return frame
-    }
-    return nil
-  }
-
   static func strongEditableFocusCandidates(
     _ candidates: [EditableFocusRepairCandidate],
     windowFrame: CGRect?
@@ -339,57 +166,6 @@ extension NormalModeDispatcher {
       }
     }
     return strong
-  }
-
-  private static func isEditable(_ element: AXUIElement) -> Bool {
-    var current = element
-    for _ in 0..<8 {
-      if role(of: current).map({ editableRoles.contains($0) }) == true {
-        return true
-      }
-      if boolAttribute(current, "AXIsEditable") == true {
-        return true
-      }
-      if elementAttribute(current, "AXEditableAncestor") != nil
-        || elementAttribute(current, "AXHighestEditableAncestor") != nil
-      {
-        return true
-      }
-      guard let parent = elementAttribute(current, kAXParentAttribute as String) else {
-        return false
-      }
-      current = parent
-    }
-    return false
-  }
-
-  private struct EditableFocusRepairRecord {
-    var candidate: EditableFocusRepairCandidate
-    var element: AXUIElement
-  }
-
-  private static func editableFocusRepairRecords(
-    in root: AXUIElement,
-    screenH: CGFloat,
-    maxNodes: Int
-  ) -> [EditableFocusRepairRecord] {
-    var records: [EditableFocusRepairRecord] = []
-    var queue = [root]
-    var index = 0
-    while index < queue.count, index < maxNodes {
-      let element = queue[index]
-      index += 1
-      let candidate = EditableFocusRepairCandidate(
-        role: role(of: element),
-        subrole: stringAttribute(element, kAXSubroleAttribute as String),
-        frame: frame(of: element, primaryScreenHeight: screenH),
-        enabled: boolAttribute(element, kAXEnabledAttribute as String) ?? true,
-        hidden: boolAttribute(element, kAXHiddenAttribute as String) ?? false,
-        isEditable: isEditable(element))
-      records.append(EditableFocusRepairRecord(candidate: candidate, element: element))
-      queue.append(contentsOf: children(of: element))
-    }
-    return records
   }
 
   private static func editableFocusCandidateIsStrong(
@@ -422,21 +198,6 @@ extension NormalModeDispatcher {
 
   private static func area(_ rect: CGRect) -> CGFloat {
     max(0, rect.width) * max(0, rect.height)
-  }
-
-  private static func ancestorRoles(of element: AXUIElement) -> [String] {
-    var roles: [String] = []
-    var current = element
-    for _ in 0..<8 {
-      guard let parent = elementAttribute(current, kAXParentAttribute as String) else {
-        return roles
-      }
-      if let role = role(of: parent) {
-        roles.append(role)
-      }
-      current = parent
-    }
-    return roles
   }
 
   private static func documentURLNear(_ element: AXUIElement) -> String? {

@@ -30,8 +30,6 @@ extension OverlayPanel {
   static let tmuxRed196 = NSColor(calibratedRed: 1.00, green: 0.00, blue: 0.00, alpha: 1)
 
   static let nordPolarNight0CG = nordPolarNight0.cgColor
-  static let nordPolarNight1CG = nordPolarNight1.cgColor
-  static let nordSnowStorm0CG = nordSnowStorm0.cgColor
   static let nordSnowStorm1CG = nordSnowStorm1.cgColor
   static let nordSnowStorm2CG = nordSnowStorm2.cgColor
   static let nordFrost2CG = nordFrost2.cgColor
@@ -39,7 +37,6 @@ extension OverlayPanel {
   static let nordAuroraYellowCG = nordAuroraYellow.cgColor
   static let nordAuroraPurpleCG = nordAuroraPurple.cgColor
   static let tmuxGrey245CG = tmuxGrey245.cgColor
-  static let tmuxRed196CG = tmuxRed196.cgColor
 
   static let insertPalette = ModeBadgePalette(
     topCG: nordFrost2CG,
@@ -70,6 +67,5 @@ extension OverlayPanel {
     }
   }
 
-  func commandPalette() -> ModeBadgePalette { Self.commandPaletteValue }
   func commandInputPalette() -> ModeBadgePalette { Self.commandInputPaletteValue }
 }

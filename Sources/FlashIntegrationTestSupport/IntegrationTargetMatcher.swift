@@ -43,8 +43,6 @@ public struct IntegrationTargetDiff: Sendable {
   public let matches: [IntegrationTargetMatch]
   public let missing: [ExpectedIntegrationTarget]
   public let unexpected: [JumpTarget]
-
-  public var hasFailures: Bool { !missing.isEmpty || !unexpected.isEmpty }
 }
 
 public enum IntegrationTargetMatcher {

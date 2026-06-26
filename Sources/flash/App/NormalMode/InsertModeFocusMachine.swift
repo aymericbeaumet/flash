@@ -68,20 +68,10 @@ struct InputFocusSnapshot: Equatable {
     }
   }
 
-  var pid: pid_t
   var surface: Surface
-  var role: String?
-  var windowRole: String?
-  var windowSubrole: String?
-  var documentURL: String?
 
   var isEditable: Bool {
     if case .editable = surface { return true }
-    return false
-  }
-
-  var isTransientInteraction: Bool {
-    if case .transientInteraction = surface { return true }
     return false
   }
 
@@ -187,10 +177,6 @@ enum InsertModeFocusMachine {
   /// otherwise spun the resamplers forever and welded the user into NORMAL.
   /// `transientResampleMaxAttempts * transientResampleMs ≈ 0.8 s`.
   static let transientResampleMaxAttempts = 5
-
-  static func shouldArmGenericExit(snapshot: InputFocusSnapshot) -> Bool {
-    snapshot.isEditable
-  }
 
   static func insertFocusChangeDecision(
     focusedPID: pid_t?,

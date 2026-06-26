@@ -372,14 +372,6 @@ enum HintAssigner {
     return labels
   }
 
-  /// Higher is better. Favours adjacent-character pairs that alternate between
-  /// left and right hand, then rewards high-value layout keys; penalises
-  /// same-key repeats and same-hand pairs. Kept for tests / external callers;
-  /// the fast path lives in `computeSortedCandidates`.
-  static func scoreLabel(_ label: String, leftHand: Set<Character>) -> Int {
-    scoreLabel(label, leftHand: leftHand, keyScores: [:])
-  }
-
   static func scoreLabel(
     _ label: String,
     leftHand: Set<Character>,

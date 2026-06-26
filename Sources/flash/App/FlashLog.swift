@@ -147,21 +147,6 @@ enum FlashLog {
   ) {
     emit(.warn, source: source, fields: fields, message)
   }
-  static func error(
-    _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
-  ) {
-    emit(.error, source: source, fields: fields, message)
-  }
-  static func fatal(
-    _ message: @autoclosure () -> String,
-    fields: [String: String] = [:],
-    source: String = FlashLog.coreSource(fileID: #fileID, function: #function)
-  ) {
-    emit(.fatal, source: source, fields: fields, message)
-  }
-
   static func plugin(
     _ level: Level,
     pluginID: String,

@@ -7,8 +7,6 @@ import Foundation
 public enum BrowserTestProfile {
   public static let releaseAppPath = "/Applications/Firefox.app"
   public static let developerEditionAppPath = "/Applications/Firefox Developer Edition.app"
-  public static let releaseBundleID = "org.mozilla.firefox"
-  public static let developerEditionBundleID = "org.mozilla.firefoxdeveloperedition"
 
   public static func defaultAppPath(
     environment: [String: String] = ProcessInfo.processInfo.environment

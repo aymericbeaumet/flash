@@ -272,30 +272,4 @@ enum ActionDispatcher {
     return true
   }
 
-  @discardableResult
-  static func forwardKeyDown(_ event: NSEvent, to pid: pid_t?) -> Bool {
-    if let forwarded = event.cgEvent?.copy() {
-      if let pid {
-        forwarded.postToPid(pid)
-      } else {
-        forwarded.post(tap: .cghidEventTap)
-      }
-      return true
-    }
-
-    let source = CGEventSource(stateID: .combinedSessionState)
-    guard
-      let down = CGEvent(
-        keyboardEventSource: source,
-        virtualKey: CGKeyCode(event.keyCode),
-        keyDown: true)
-    else { return false }
-    down.flags = NormalModeDispatcher.cgFlags(from: event.modifierFlags)
-    if let pid {
-      down.postToPid(pid)
-    } else {
-      down.post(tap: .cghidEventTap)
-    }
-    return true
-  }
 }

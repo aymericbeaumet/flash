@@ -12,18 +12,16 @@ public struct VimiumAnchor {
   public let role: String
   public let label: String
   public let marker: String
-  public let cssRect: CGRect
   public let screenRect: CGRect
 
   public init(
     tag: String, role: String, label: String, marker: String,
-    cssRect: CGRect, screenRect: CGRect
+    screenRect: CGRect
   ) {
     self.tag = tag
     self.role = role
     self.label = label
     self.marker = marker
-    self.cssRect = cssRect
     self.screenRect = screenRect
   }
 }
@@ -34,7 +32,6 @@ public struct OracleSnapshot {
   public let flashTargets: [JumpTarget]
   public let vimiumAnchors: [VimiumAnchor]
   public let hintWidthSamples: [HintWidthSample]
-  public let transform: OracleTransform
   public let fiducialResidual: Double
   /// Screen-space bounds of the page viewport, derived from the
   /// Marionette-reported `viewport.innerWidth/innerHeight` projected
@@ -44,13 +41,12 @@ public struct OracleSnapshot {
   public init(
     flashTargets: [JumpTarget], vimiumAnchors: [VimiumAnchor],
     hintWidthSamples: [HintWidthSample],
-    transform: OracleTransform, fiducialResidual: Double,
+    fiducialResidual: Double,
     pageScreenRect: CGRect
   ) {
     self.flashTargets = flashTargets
     self.vimiumAnchors = vimiumAnchors
     self.hintWidthSamples = hintWidthSamples
-    self.transform = transform
     self.fiducialResidual = fiducialResidual
     self.pageScreenRect = pageScreenRect
   }
@@ -211,7 +207,7 @@ public enum VimiumOracle {
         x: a.rect[0], y: a.rect[1], width: a.rect[2], height: a.rect[3])
       return VimiumAnchor(
         tag: a.tag, role: a.role, label: a.label, marker: a.marker,
-        cssRect: cssR, screenRect: transform.screenRect(fromCSS: cssR))
+        screenRect: transform.screenRect(fromCSS: cssR))
     }
 
     let flashCandidates = flashTargets.enumerated().map { ordinal, target in
@@ -241,7 +237,6 @@ public enum VimiumOracle {
       flashTargets: finalizedTargets,
       vimiumAnchors: anchors,
       hintWidthSamples: samples,
-      transform: transform,
       fiducialResidual: residual,
       pageScreenRect: pageRect)
   }
@@ -362,17 +357,10 @@ public enum VimiumOracle {
     let id: String
     let x: Double
     let y: Double
-    let w: Double
-    let h: Double
   }
   private struct Viewport: Decodable {
-    let scrollX: Double
-    let scrollY: Double
     let innerWidth: Double
     let innerHeight: Double
-    let dpr: Double
-    let scrollHeight: Double?
-    let atBottom: Bool?
     let mozInnerScreenX: Double?
     let mozInnerScreenY: Double?
   }

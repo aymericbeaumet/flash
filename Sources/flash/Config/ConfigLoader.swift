@@ -2,17 +2,6 @@ import Foundation
 import TOMLKit
 
 enum ConfigLoader {
-  /// Lookup chain for the TOML file path. First existing wins.
-  ///   1. `--config=<path>` on the command line
-  ///   2. `FLASH_CONFIG` environment variable
-  ///   3. `$XDG_CONFIG_HOME/flash/flash.toml`
-  ///   4. `~/.config/flash/flash.toml`
-  static var defaultPath: URL {
-    resolvePath(
-      arguments: CommandLine.arguments,
-      environment: ProcessInfo.processInfo.environment)
-  }
-
   /// Every candidate path in lookup order. Used by the config-file
   /// watcher: a watcher per path catches both edits to the active
   /// config AND creation of a higher-precedence one (e.g. user adds
@@ -64,19 +53,6 @@ enum ConfigLoader {
     let url = resolvePath(arguments: args, environment: env)
     let parsed = parseFile(at: url, environment: env)
     return applyOverrides(to: parsed, arguments: args, environment: env)
-  }
-
-  /// Load from a specific path, with the current process's environment
-  /// + arguments still applied as overrides. Used by hot-reload (it
-  /// already knows the resolved path).
-  static func load(from url: URL) -> Config {
-    let env = ProcessInfo.processInfo.environment
-    let parsed = parseFile(at: url, environment: env)
-    return applyOverrides(
-      to: parsed,
-      arguments: CommandLine.arguments,
-      environment: env
-    )
   }
 
   private static func parseFile(at url: URL, environment: [String: String]) -> Config {

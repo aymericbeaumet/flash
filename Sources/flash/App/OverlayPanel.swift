@@ -96,7 +96,6 @@ final class OverlayPanel: NSPanel {
   var commandPromptPrefix = ":"
   var candidateFinderResultsVisible = false
   var candidateFinderResultsMeasurementText = ""
-  var candidateFinderResultsAttributedText: NSAttributedString?
   var candidateFinderResultsItems: [CandidateDisplayItem] = []
   var candidateFinderResultsShowsEmptyMessage = false
   var activeWindowBorderToken: UInt64 = 0

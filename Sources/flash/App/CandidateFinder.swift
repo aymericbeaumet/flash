@@ -88,10 +88,6 @@ enum CandidateFinder {
     candidate.isLocation
   }
 
-  static func defaultFlashlightSourceRank(_ candidate: Candidate) -> Int? {
-    PrecedenceTable.default.defaultFlashlightSourceRank(for: candidate)
-  }
-
   static func isDefaultFlashlightCandidate(
     _ candidate: Candidate,
     precedence: PrecedenceTable = .default
@@ -1054,17 +1050,6 @@ enum CandidateFinder {
     default:
       return ""
     }
-  }
-
-  private static func fieldScore(
-    query: String,
-    field: String,
-    base: Int,
-    normalize: (String) -> String,
-    fuzzyScore: (String, String) -> Int?
-  ) -> Int? {
-    fieldScoreNormalized(
-      query: query, normalized: normalize(field), base: base, fuzzyScore: fuzzyScore)
   }
 
   /// Same scoring rules as `fieldScore`, but the caller has already

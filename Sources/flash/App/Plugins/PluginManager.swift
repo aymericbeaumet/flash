@@ -37,23 +37,6 @@ struct PluginRegistrationInventory: Equatable {
     }
   }
 
-  var rows: [(label: String, count: Int)] {
-    [
-      ("plugins", plugins),
-      ("commands", commands),
-      ("mappings", mappings),
-      ("shebangs", shebangs),
-      ("verbs", verbs),
-      ("candidate_sources", candidateSources),
-      ("source_actions", sourceActions),
-      ("status_segments", statusSegments),
-      ("navigation_schemes", navigationSchemes),
-      ("help_topics", helpTopics),
-      ("listeners", listeners),
-      ("hint_providers", hintProviders),
-      ("capability_requests", capabilityRequests),
-    ]
-  }
 }
 
 final class PluginManager {
@@ -452,35 +435,6 @@ final class PluginManager {
     }
   }
 
-  /// The display description for the bang `token` in the focused window
-  /// context: the exact registration's if present, else the `"*"`
-  /// catch-all's. `nil` when no plugin would claim the token — mirroring
-  /// ``invokeShebang(token:query:in:onResult:)`` exactly, so a
-  /// surfaced bang row can never fail to dispatch.
-  func shebangDescription(
-    token: String,
-    in context: PluginSelectorContext = PluginSelectorContext()
-  ) -> String? {
-    let lcToken = token.lowercased()
-    return queue.sync {
-      if let exact = Self.bestTarget(
-        shebangIndex[lcToken] ?? [],
-        in: context,
-        specificity: { $0.specificity(in: $1) })
-      {
-        return exact.description
-      }
-      if let wildcard = Self.bestTarget(
-        wildcardShebangTargets,
-        in: context,
-        specificity: { $0.specificity(in: $1) })
-      {
-        return wildcard.description
-      }
-      return nil
-    }
-  }
-
   /// Synthetic flashlight rows for every exact-token bang registration
   /// (the `"*"` catch-all has no concrete token to list — typed `!<token>`
   /// queries surface it live instead). Two sources combine here:
@@ -495,16 +449,6 @@ final class PluginManager {
   ///     `NormalModeCoordinator.bangListCandidates`.
   /// Plugins should not duplicate a token across both surfaces; if they
   /// do, both rows will appear.
-  /// Union of every root `only_bundle_ids` entry declared by any loaded plugin.
-  /// Lets the flashlight refresh path emit synthetic
-  /// `core:focus.changed` events for every running app whose AX walk
-  /// a plugin owns — even when that app isn't currently focused —
-  /// so the plugin can refresh its warm locations before the
-  /// next keystroke lands.
-  func claimedBundleIDs() -> Set<String> {
-    queue.sync { claimedBundleIDsIndex }
-  }
-
   func shebangCandidates(in context: PluginSelectorContext = PluginSelectorContext()) -> [Candidate]
   {
     queue.sync {
@@ -685,27 +629,6 @@ final class PluginManager {
     }
   }
 
-  func hasCommand(
-    command: String,
-    subcommand: String,
-    in context: PluginSelectorContext = PluginSelectorContext()
-  ) -> Bool {
-    let lcCommand = command.lowercased()
-    let key = CommandKey(command: lcCommand, subcommand: subcommand.lowercased())
-    return queue.sync {
-      if Self.bestTarget(
-        commandIndex[key] ?? [],
-        in: context,
-        specificity: { $0.specificity(in: $1) }) != nil
-      {
-        return true
-      }
-      return Self.bestTarget(
-        wildcardCommandIndex[lcCommand] ?? [],
-        in: context,
-        specificity: { $0.specificity(in: $1) }) != nil
-    }
-  }
 
   /// Rebuild the command lookup index. Must be called from `queue` after
   /// `pluginsByID` changes.
@@ -950,83 +873,10 @@ final class PluginManager {
     }
   }
 
-  func statusText() -> String {
-    let plugins = queue.sync {
-      pluginsByID.values.sorted(by: { $0.identifier < $1.identifier })
-    }
-    let snapshots = plugins.map { $0.statusSnapshot() }
-    guard !snapshots.isEmpty else {
-      return "# Plugins\n\nNo plugins loaded."
-    }
-    let inventory = PluginRegistrationInventory(manifests: plugins.map(\.manifest))
-    let headers = ["ID", "STATE", "PID", "HEARTBEAT", "TARGETS", "COMMANDS", "ORIGIN"]
-    let rows = snapshots.map { snapshot in
-      [
-        "\(snapshot.id) \(snapshot.version)",
-        snapshot.state,
-        snapshot.pid.map(String.init) ?? "-",
-        snapshot.heartbeatAgeMs.map { "\($0)ms" } ?? "-",
-        "\(snapshot.targetCount)t",
-        "\(snapshot.commandCount)",
-        snapshot.origin,
-      ]
-    }
-    let widths = headers.indices.map { idx in
-      max(headers[idx].count, rows.map { $0[idx].count }.max() ?? 0)
-    }
-    func padded(_ value: String, _ idx: Int) -> String {
-      value + String(repeating: " ", count: max(0, widths[idx] - value.count))
-    }
-    // Wrap the column-aligned table in a fenced code block so the
-    // markdown renderer keeps it in the monospace font — without the
-    // fence it would render as proportional paragraphs and the
-    // column alignment would collapse.
-    let inventoryHeaders = ["ITEM", "COUNT"]
-    let inventoryRows = inventory.rows.map { [$0.label, String($0.count)] }
-    let inventoryWidths = inventoryHeaders.indices.map { idx in
-      max(inventoryHeaders[idx].count, inventoryRows.map { $0[idx].count }.max() ?? 0)
-    }
-    func inventoryPadded(_ value: String, _ idx: Int) -> String {
-      value + String(repeating: " ", count: max(0, inventoryWidths[idx] - value.count))
-    }
-    var lines = ["# Plugins", "", "## Registered", "", "```text"]
-    lines.append(
-      inventoryHeaders.indices.map { inventoryPadded(inventoryHeaders[$0], $0) }
-        .joined(separator: "  "))
-    for row in inventoryRows {
-      lines.append(row.indices.map { inventoryPadded(row[$0], $0) }.joined(separator: "  "))
-    }
-    lines.append("```")
-    lines.append("")
-    lines.append("## Runtime")
-    lines.append("")
-    lines.append("```text")
-    lines.append(headers.indices.map { padded(headers[$0], $0) }.joined(separator: "  "))
-    for row in rows {
-      lines.append(row.indices.map { padded(row[$0], $0) }.joined(separator: "  "))
-    }
-    lines.append("```")
-    let errors = snapshots.compactMap { snapshot -> String? in
-      guard let error = snapshot.lastError, !error.isEmpty else { return nil }
-      return "- `\(snapshot.id)`: \(error)"
-    }
-    if !errors.isEmpty {
-      lines.append("")
-      lines.append("## Last errors")
-      lines.append("")
-      lines.append(contentsOf: errors)
-    }
-    return lines.joined(separator: "\n")
-  }
-
   func pluginStatuses() -> [PluginStatus] {
     queue.sync {
       pluginsByID.values.map { $0.statusSnapshot() }.sorted { $0.id < $1.id }
     }
-  }
-
-  func stateJSON() -> [[String: Any]] {
-    pluginStatuses().map(\.jsonObject)
   }
 
   private func reloadDesiredPlugins(config: Config) {

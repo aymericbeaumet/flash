@@ -24,45 +24,6 @@ public enum FirefoxHarness {
     }
   }
 
-  /// Launch Firefox with the fixture page and wait until it reports at
-  /// least one AX window. Returns the running app.
-  public static func launchWithFixture() throws -> NSRunningApplication {
-    guard FileManager.default.fileExists(atPath: FirefoxFixture.appPath) else {
-      throw LaunchError.notInstalled(FirefoxFixture.appPath)
-    }
-    let url = FirefoxFixture.dataURL()
-
-    let config = NSWorkspace.OpenConfiguration()
-    config.activates = true
-    config.addsToRecentItems = false
-
-    var launched: NSRunningApplication?
-    var launchError: Error?
-    let sem = DispatchSemaphore(value: 0)
-    NSWorkspace.shared.open(
-      [url], withApplicationAt: URL(fileURLWithPath: FirefoxFixture.appPath),
-      configuration: config
-    ) { app, error in
-      launched = app
-      launchError = error
-      sem.signal()
-    }
-    if sem.wait(timeout: .now() + 20) == .timedOut {
-      throw LaunchError.openTimedOut
-    }
-    if let launchError {
-      throw LaunchError.openFailed(launchError)
-    }
-    guard let app = launched else {
-      throw LaunchError.openFailed(
-        NSError(domain: "FirefoxHarness", code: 0))
-    }
-    guard waitForAXWindow(app, timeout: 20) else {
-      throw LaunchError.noAXWindow
-    }
-    return app
-  }
-
   /// Launch a Firefox-family browser with a dedicated profile and a URL.
   /// Uses `Process` (not `open -a`) because Launch Services routes
   /// Firefox-family apps to an already-running default-profile instance
@@ -451,36 +412,6 @@ public enum FirefoxHarness {
       frontWindowFrame: unbounded,
       allScreensFrame: screen
     )
-  }
-
-  /// Repeatedly walk via `provider.discover` until either the AXLink
-  /// floor for the fixture is reached, or `timeout` expires. Returns
-  /// the last walk's targets + the discovered AXWebArea frame.
-  ///
-  /// Firefox's a11y service is lazy — until something wakes it, the
-  /// web area only exposes chrome buttons. `AccessibilityProvider`
-  /// sets `AXEnhancedUserInterface` / `AXManualAccessibility` on every
-  /// discover() call, which is enough to wake it, but the wake itself
-  /// is asynchronous (Firefox needs to build the in-memory AX tree
-  /// for the document). This loop polls until the expected fixture
-  /// links surface.
-  public static func waitForStableTree(
-    provider: AccessibilityProvider,
-    context: AppContext,
-    timeout: TimeInterval
-  ) -> (targets: [JumpTarget], webAreaFrame: CGRect?) {
-    let expectedLinks = FirefoxFixture.Counts.expectedLinks
-    var lastTargets: [JumpTarget] = []
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline {
-      lastTargets =
-        (try? provider.discover(in: context)) ?? []
-      let linkCount = lastTargets.filter { $0.role == "AXLink" }.count
-      if linkCount >= expectedLinks { break }
-      Thread.sleep(forTimeInterval: 0.25)
-    }
-    let web = findWebAreaFrame(pid: context.processID)
-    return (lastTargets, web)
   }
 
   private static func primaryScreenHeight() -> CGFloat {

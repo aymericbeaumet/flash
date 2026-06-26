@@ -705,9 +705,4 @@ extension OverlayPanel {
     mouseGridColors[index % mouseGridColors.count]
   }
 
-  private static func mouseGridDepth(from id: String) -> Int? {
-    let parts = id.split(separator: ":", maxSplits: 2)
-    guard parts.count == 3, parts[0] == "mouse_grid" else { return nil }
-    return Int(parts[1])
-  }
 }

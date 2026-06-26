@@ -26,8 +26,6 @@ final class KeyboardCaptureTap {
     self.handle = handle
   }
 
-  var isActive: Bool { tap != nil }
-
   /// Pure swallow decision: given the coarse flash mode and the overlay's input
   /// mode, should the tap consume this `keyDown`? NORMAL is a hermetic capture
   /// surface — every key in `.normal`/`.hints` is swallowed so nothing (not even
@@ -75,15 +73,6 @@ final class KeyboardCaptureTap {
     CGEvent.tapEnable(tap: port, enable: true)
     FlashLog.info("[tap] keyboard capture tap installed")
     return true
-  }
-
-  func stop() {
-    if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
-    if let source = runLoopSource {
-      CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-    }
-    runLoopSource = nil
-    tap = nil
   }
 
   private static func dispatch(

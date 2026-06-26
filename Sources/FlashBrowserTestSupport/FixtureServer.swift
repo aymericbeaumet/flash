@@ -25,11 +25,9 @@ public final class FixtureServer {
   }
 
   private let listener: NWListener
-  private let html: String
   public let port: UInt16
 
   public init(html: String) throws {
-    self.html = html
     let listener = try NWListener(using: .tcp)
     self.listener = listener
 

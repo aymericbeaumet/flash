@@ -36,12 +36,6 @@ final class CLIRecorder: FirefoxE2ERecorder {
   private let lock = NSLock()
   private var storedFailures: [String] = []
 
-  var failures: [String] {
-    lock.lock()
-    defer { lock.unlock() }
-    return storedFailures
-  }
-
   func pass(_ msg: String) { log("\(Colour.green)✓\(Colour.reset) \(msg)") }
 
   func fail(_ msg: String) {
@@ -210,20 +204,17 @@ final class OracleSession {
   let firefox: NSRunningApplication
   let marionette: MarionetteClient
   let context: AppContext
-  let profilePath: String
 
   init(
     workerID: Int,
     firefox: NSRunningApplication,
     marionette: MarionetteClient,
-    context: AppContext,
-    profilePath: String
+    context: AppContext
   ) {
     self.workerID = workerID
     self.firefox = firefox
     self.marionette = marionette
     self.context = context
-    self.profilePath = profilePath
   }
 
   static func start(workerID: Int, appPath: String) throws -> OracleSession {
@@ -248,8 +239,7 @@ final class OracleSession {
       workerID: workerID,
       firefox: firefox,
       marionette: marionette,
-      context: context,
-      profilePath: profilePath)
+      context: context)
   }
 
   func stop() {
@@ -311,12 +301,6 @@ private final class SummaryStore {
   func append(_ summary: FixtureSummary) {
     lock.lock()
     summaries.append(summary)
-    lock.unlock()
-  }
-
-  func failSession(_ message: String) {
-    lock.lock()
-    sessionFailures.append(message)
     lock.unlock()
   }
 
@@ -500,7 +484,6 @@ private struct RawAXNode {
   let hasPress: Bool
   let url: String
   let actions: [String]
-  let depth: Int
 }
 
 private func diagnoseScreenHeight() -> CGFloat {
@@ -610,7 +593,7 @@ private func diagnoseCollectRawNodes(pid: pid_t) -> [RawAXNode] {
             role: role, subrole: subrole, label: label, frame: frame,
             enabled: enabled, hidden: hidden, insideWebArea: nowWeb,
             hasPress: actions.contains(kAXPressAction as String),
-            url: diagnoseURL(element), actions: actions, depth: depth))
+            url: diagnoseURL(element), actions: actions))
       }
     }
     if let children = vals[8] as? [AXUIElement] {

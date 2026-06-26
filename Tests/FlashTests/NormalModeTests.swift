@@ -1436,7 +1436,6 @@ final class NormalModeTests: XCTestCase {
         decision,
         .menuBar(
           NormalModePointerPolicy.MenuBarClickDecision(
-            suppressRecapture: true,
             suspendForNativeSurface: true,
             dismissTransientHintsWithoutRekey: false)))
     }
@@ -1582,7 +1581,6 @@ final class NormalModeTests: XCTestCase {
         pointIsInMenuBar: true),
       .menuBar(
         NormalModePointerPolicy.MenuBarClickDecision(
-          suppressRecapture: true,
           suspendForNativeSurface: true,
           dismissTransientHintsWithoutRekey: true)))
   }
@@ -2889,13 +2887,7 @@ final class NormalModeTests: XCTestCase {
     windowSubrole: String? = nil,
     documentURL: String? = nil
   ) -> InputFocusSnapshot {
-    InputFocusSnapshot(
-      pid: pid_t(42),
-      surface: surface,
-      role: role,
-      windowRole: "AXWindow",
-      windowSubrole: windowSubrole,
-      documentURL: documentURL)
+    InputFocusSnapshot(surface: surface)
   }
 
   private func editableRepairCandidate(

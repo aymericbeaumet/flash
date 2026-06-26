@@ -34,7 +34,6 @@ extension OverlayPanel {
   func clearCandidateFinderResults() {
     candidateFinderResultsVisible = false
     candidateFinderResultsMeasurementText = ""
-    candidateFinderResultsAttributedText = nil
     candidateFinderResultsItems = []
     candidateFinderResultsShowsEmptyMessage = false
     for layer in candidateFinderResultRowLayers {
@@ -51,7 +50,6 @@ extension OverlayPanel {
       ]
       candidateFinderResultsShowsEmptyMessage = true
       candidateFinderResultsMeasurementText = emptyText
-      candidateFinderResultsAttributedText = nil
       candidateFinderResultsVisible = true
       return
     }
@@ -70,7 +68,6 @@ extension OverlayPanel {
     candidateFinderResultsItems = visualItems
     candidateFinderResultsShowsEmptyMessage = false
     candidateFinderResultsMeasurementText = plainLines.joined(separator: "\n")
-    candidateFinderResultsAttributedText = nil
     candidateFinderResultsVisible = true
   }
 
@@ -191,12 +188,6 @@ extension OverlayPanel {
 
   static func candidateFinderFontSize(overlayFontSize: CGFloat) -> CGFloat {
     max(overlayFontSize + 1, 12)
-  }
-
-  static func candidateFinderParagraphStyle() -> NSParagraphStyle {
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.lineSpacing = candidateFinderLineSpacing
-    return paragraph
   }
 
   static func candidateFinderResultAttributedLine(

@@ -134,18 +134,6 @@ final class FrecencyStore {
     return boostSnapshot.isEmpty
   }
 
-  /// Wipe a single key. Used when a caller learns an item is no
-  /// longer resolvable (uninstalled app, removed URL).
-  func forget(itemKey: String) {
-    lock.lock()
-    let removed = entries.removeValue(forKey: itemKey) != nil
-    if removed {
-      boostSnapshot.removeValue(forKey: itemKey)
-      dirty = true
-    }
-    lock.unlock()
-    if removed { scheduleFlush() }
-  }
 
   /// Block until any pending write has hit disk. Tests + shutdown.
   func drain() {
@@ -258,9 +246,6 @@ enum FrecencyKey {
   static func app(bundleID: String) -> String { "app.bundle:\(bundleID)" }
   static func appPath(_ path: String) -> String { "app.path:\(path)" }
   static func url(_ canonical: String) -> String { "url:\(canonical)" }
-  static func document(collection: String, docKey: String) -> String {
-    "doc:\(collection):\(docKey)"
-  }
   /// Command-line completion entries (`:flashlight`, `:help`, …) so
   /// the empty `:` prompt surfaces frequently-typed commands.
   static func command(label: String) -> String {

@@ -2,9 +2,7 @@ import Foundation
 
 public struct IntegrationTimingEvent: Codable, Sendable {
   public let name: String
-  public let elapsedMs: Double
   public let durationMs: Double?
-  public let detail: String?
 }
 
 public final class IntegrationTimer {
@@ -15,13 +13,10 @@ public final class IntegrationTimer {
   public init() {}
 
   public func mark(_ name: String, detail: String? = nil) {
-    let now = DispatchTime.now().uptimeNanoseconds
     append(
       IntegrationTimingEvent(
         name: name,
-        elapsedMs: ms(now - startNs),
-        durationMs: nil,
-        detail: detail))
+        durationMs: nil))
   }
 
   public func measure<T>(_ name: String, detail: String? = nil, _ body: () throws -> T) rethrows
@@ -33,9 +28,7 @@ public final class IntegrationTimer {
       append(
         IntegrationTimingEvent(
           name: name,
-          elapsedMs: ms(now - startNs),
-          durationMs: ms(now - stageStart),
-          detail: detail))
+          durationMs: ms(now - stageStart)))
     }
     return try body()
   }

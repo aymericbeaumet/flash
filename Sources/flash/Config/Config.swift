@@ -483,13 +483,6 @@ struct Config {
     private(set) var compiledNormal = CompiledMappings()
     private(set) var compiledInsert = CompiledMappings()
 
-    func compiledMappings(for mode: FlashMode) -> CompiledMappings {
-      switch mode {
-      case .normal: return compiledNormal
-      case .insert: return compiledInsert
-      }
-    }
-
     mutating func recompileMappings() {
       compiledNormal = CompiledMappings(mappings(for: .normal))
       compiledInsert = CompiledMappings(mappings(for: .insert))

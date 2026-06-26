@@ -96,12 +96,6 @@ final class PluginProcess {
     }
   }
 
-  func stop() {
-    queue.async {
-      self.stopOnQueue(reason: "stop")
-    }
-  }
-
   func stopAndWait(reason: String = "stop") {
     queue.sync {
       self.stopOnQueue(reason: reason)
@@ -155,10 +149,6 @@ final class PluginProcess {
         "name": event.name,
         "payload": payload,
       ])
-  }
-
-  func listens(to eventName: String) -> Bool {
-    listenPatterns.contains { $0.matches(eventName) }
   }
 
   /// Synchronous-style discover for volatile plugins. Sends a

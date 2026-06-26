@@ -26,8 +26,6 @@ struct FlashStatusTextSegment: Equatable {
   var blink: Bool
   var breathing: Bool
 
-  var hasAnimatedEffect: Bool { blink || breathing }
-
   init(
     text: String,
     foreground: FlashStatusTextColor,

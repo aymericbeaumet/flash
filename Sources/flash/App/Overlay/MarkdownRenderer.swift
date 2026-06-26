@@ -89,7 +89,6 @@ enum FlashMarkdownRenderer {
   private struct RenderContext {
     let style: Style
     var depth: Int
-    var inBlockquote: Bool = false
   }
 
   // MARK: Block-level rendering
@@ -284,7 +283,6 @@ enum FlashMarkdownRenderer {
       .paragraphStyle: para,
     ]
     var childContext = context
-    childContext.inBlockquote = true
     for child in quote.children {
       if let paragraph = child as? Paragraph {
         renderInlineChildren(of: paragraph, into: out, style: context.style, attrs: attrs)

@@ -118,32 +118,6 @@ extension OverlayPanel {
     pointerLocalMonitor = nil
   }
 
-  func installModalDismissMonitors() {
-    removeModalDismissMonitors()
-    let clickMask: NSEvent.EventTypeMask = [
-      .leftMouseDown, .rightMouseDown, .otherMouseDown,
-    ]
-    modalClickGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickMask) {
-      [weak self] _ in
-      DispatchQueue.main.async {
-        guard let self, self.inputMode == .modal else { return }
-        self.coordinator?.overlayDidCancelModal()
-      }
-    }
-    modalClickLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: clickMask) {
-      [weak self] event in
-      guard let self, self.inputMode == .modal else { return event }
-      guard event.window === self else { return event }
-      if self.modalScrollView.frame.contains(event.locationInWindow) {
-        return event
-      }
-      DispatchQueue.main.async {
-        self.coordinator?.overlayDidCancelModal()
-      }
-      return nil
-    }
-  }
-
   func removeModalDismissMonitors() {
     for m in [modalClickGlobalMonitor, modalClickLocalMonitor] {
       if let m { NSEvent.removeMonitor(m) }

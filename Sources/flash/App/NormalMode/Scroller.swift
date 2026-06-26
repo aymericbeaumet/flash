@@ -439,9 +439,6 @@ extension NormalModeDispatcher {
       && numberAttribute(element, kAXMaxValueAttribute as String) != nil
   }
 
-  static let editableRoles: Set<String> = [
-    "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
-  ]
   static let documentRoles: Set<String> = ["AXWebArea", "AXDocument"]
 
   private static func pageScrollTarget(pid: pid_t, visibleIn windowFrame: CGRect)

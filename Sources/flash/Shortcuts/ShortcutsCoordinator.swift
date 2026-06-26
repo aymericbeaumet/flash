@@ -51,12 +51,6 @@ final class MappingsCoordinator {
     self.currentMode = currentMode
   }
 
-  func stop() {
-    hotkeys.unregisterAll()
-    mappingDispatch = nil
-    currentMode = nil
-  }
-
   func apply(mode: Config.Mode) {
     configuredMode = mode
     rebuild(for: lastAppliedFlashMode)

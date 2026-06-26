@@ -6,11 +6,6 @@ import Foundation
 
 public struct AXNodeSnapshot: Sendable {
   public let role: String?
-  public let label: String?
-  public let frame: CGRect?
-  public let enabled: Bool
-  public let actions: [String]
-  public let depth: Int
 }
 
 public enum AXIntegrationHarness {
@@ -168,12 +163,7 @@ public enum AXIntegrationHarness {
       let (element, depth) = queue.removeFirst()
       out.append(
         AXNodeSnapshot(
-          role: role(of: element),
-          label: label(of: element),
-          frame: frame(of: element),
-          enabled: boolAttribute(element, kAXEnabledAttribute as CFString, default: true),
-          actions: actions(of: element),
-          depth: depth))
+          role: role(of: element)))
       queue.append(contentsOf: children(of: element).map { ($0, depth + 1) })
     }
     return out
