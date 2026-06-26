@@ -95,6 +95,20 @@ extension NormalModeDispatcher {
     pb.setString(value, forType: .string)
   }
 
+  /// The text currently selected in the focused element of `pid`, read
+  /// straight off the AX tree so a yank doesn't have to round-trip through the
+  /// clipboard. Returns nil when nothing is selected or the app doesn't expose
+  /// `AXSelectedText` (web content, terminals) — the caller then falls back to
+  /// synthesizing ⌘C.
+  static func selectedText(pid: pid_t) -> String? {
+    let app = AXApp.make(pid: pid)
+    guard let focused = elementAttribute(app, kAXFocusedUIElementAttribute as String),
+      let text = stringAttribute(focused, kAXSelectedTextAttribute as String),
+      !text.isEmpty
+    else { return nil }
+    return text
+  }
+
   /// Forward argv to `/usr/bin/open` verbatim. Deliberately dumb: whatever
   /// the user typed after `:open` is handed straight to the system opener
   /// (URLs, files, `-a App`, …). All app-finding smartness lives in

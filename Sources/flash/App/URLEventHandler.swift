@@ -46,6 +46,16 @@ enum URLCommand: Hashable {
   /// glyph lands.
   case enterCommand(input: String, restoreMode: Bool)
   case copyURL
+  /// Yank (copy) the focused app's current selection into a register.
+  /// `register == nil` (and the synonyms `+` / `*` / `"`) targets the system
+  /// clipboard; a named register (`a`–`z`, `0`–`9`) is an in-process buffer
+  /// that survives clipboard churn. An uppercase name appends to the matching
+  /// lowercase register. See ``RegisterStore``.
+  case yankSelection(register: String?)
+  /// Paste a register's contents into the focused app by typing them (so it
+  /// never disturbs the clipboard, even for a named register). Same register
+  /// grammar as ``yankSelection(register:)``.
+  case paste(register: String?)
   case tabNext
   case tabPrev
   case tabFirst
@@ -290,6 +300,8 @@ final class URLEventHandler: NSObject {
     "app_find": { _ in .find },
     "app_open_finder": { a in .candidateFinder(all: a.bool("all")) },
     "url_copy": { _ in .copyURL },
+    "yank_selection": { a in .yankSelection(register: registerArg(a)) },
+    "paste": { a in .paste(register: registerArg(a)) },
     "tab_next": { _ in .tabNext },
     "tab_previous": { _ in .tabPrev },
     "tab_first": { _ in .tabFirst },
@@ -359,6 +371,8 @@ final class URLEventHandler: NSObject {
     flash app_open_finder [--all]
     flash enter_command_mode --input='<text>' [--restore-mode]
     flash url_copy
+    flash yank_selection [--register=<name>]
+    flash paste [--register=<name>]
     flash tab_next
     flash tab_previous
     flash tab_first
@@ -451,6 +465,14 @@ private func alertCommand(_ a: VerbArgs) -> URLCommand? {
   let styleRaw = a.value("style") ?? AlertCommand.Style.standard.rawValue
   guard let style = AlertCommand.Style(rawValue: styleRaw) else { return nil }
   return .showAlert(AlertCommand(message: message, duration: duration, style: style))
+}
+
+/// Read the optional `--register=<name>` arg shared by `yank_selection` and
+/// `paste`. An empty/absent value resolves to nil (the system clipboard);
+/// otherwise the raw name is preserved and interpreted by ``RegisterStore``.
+private func registerArg(_ a: VerbArgs) -> String? {
+  guard let raw = a.value("register"), !raw.isEmpty else { return nil }
+  return raw
 }
 
 private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {

@@ -2605,6 +2605,91 @@ final class NormalModeTests: XCTestCase {
       .scroll(.halfPageDown))
   }
 
+  // MARK: - Yank / paste registers
+
+  func testBareYankAndPasteUseTheUnnamedRegister() {
+    // `p` has no longer mapping, so it commits immediately with no register.
+    XCTAssertEqual(command(chars: "p"), .paste(register: nil))
+    // `y` is a one-key prefix of `yy`, so it pends and resolves on timeout.
+    let yanked = transition(chars: "y")
+    XCTAssertNil(yanked.command)
+    XCTAssertEqual(yanked.pending, "y")
+    XCTAssertEqual(
+      NormalModeInterpreter.pendingCommand(
+        pending: yanked.pending, mappings: defaultMappings)?.action.command,
+      .yankSelection(register: nil))
+  }
+
+  func testRegisterPrefixRoutesPasteToANamedRegister() {
+    let quote = transition(chars: "\"")
+    XCTAssertNil(quote.command)
+    XCTAssertEqual(quote.pending, "\"")
+    let named = transition(pending: quote.pending, chars: "a")
+    XCTAssertEqual(named.pending, "\"a")
+    XCTAssertEqual(
+      transition(pending: named.pending, chars: "p").command,
+      .paste(register: "a"))
+  }
+
+  func testRegisterPrefixRoutesYankToANamedRegisterOnTimeout() {
+    let named = transition(pending: "\"", chars: "a")
+    let yanked = transition(pending: named.pending, chars: "y")
+    XCTAssertNil(yanked.command)
+    XCTAssertEqual(yanked.pending, "\"ay")
+    XCTAssertEqual(
+      NormalModeInterpreter.pendingCommand(
+        pending: yanked.pending, mappings: defaultMappings)?.action.command,
+      .yankSelection(register: "a"))
+  }
+
+  func testRegisterNameDigitIsNotMistakenForACount() {
+    // `"1p` is register 1, not a one-times paste — the leading `"` disambiguates.
+    let named = transition(pending: "\"", chars: "1")
+    XCTAssertEqual(named.pending, "\"1")
+    XCTAssertEqual(
+      transition(pending: named.pending, chars: "p").command,
+      .paste(register: "1"))
+  }
+
+  func testClipboardSynonymRegisterIsCaptured() {
+    let named = transition(pending: "\"", chars: "+")
+    XCTAssertEqual(named.pending, "\"+")
+    XCTAssertEqual(
+      transition(pending: named.pending, chars: "p").command,
+      .paste(register: "+"))
+  }
+
+  func testRegisterPrefixIsSuppressedWhenQuoteIsMapped() {
+    // A user who binds `"` keeps their mapping; register prefixing steps aside.
+    let mappings = [ModeMapping(key: "\"", action: .flashCommand(.scroll(.up)))]
+    XCTAssertEqual(command(chars: "\"", mappings: mappings), .scroll(.up))
+  }
+
+  func testRegisterStoreNamedBufferRoundTrips() {
+    let store = RegisterStore()
+    store.write("hello", register: "a")
+    XCTAssertEqual(store.read(register: "a"), "hello")
+    // A different register is independent.
+    XCTAssertNil(store.read(register: "b"))
+  }
+
+  func testRegisterStoreUppercaseNameAppends() {
+    let store = RegisterStore()
+    store.write("foo", register: "a")
+    store.write("bar", register: "A")
+    XCTAssertEqual(store.read(register: "a"), "foobar")
+    // Reads are case-insensitive.
+    XCTAssertEqual(store.read(register: "A"), "foobar")
+  }
+
+  func testRegisterStoreRecognizesSystemClipboardSynonyms() {
+    XCTAssertTrue(RegisterStore.isSystemClipboard(nil))
+    XCTAssertTrue(RegisterStore.isSystemClipboard("+"))
+    XCTAssertTrue(RegisterStore.isSystemClipboard("*"))
+    XCTAssertTrue(RegisterStore.isSystemClipboard("\""))
+    XCTAssertFalse(RegisterStore.isSystemClipboard("a"))
+  }
+
   func testCommandModifiedMappingsDispatchConfiguredActionsInNormalMode() {
     let mappings = [
       ModeMapping(key: "cmd+delete", action: .flashCommand(.scroll(.halfPageUp))),
@@ -2865,6 +2950,10 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       NormalModeDispatcher.edgeScrollValue(lower: 10, upper: 90, edge: .maximum),
       90)
+  }
+
+  private var defaultMappings: CompiledMappings {
+    CompiledMappings(Config.default.mode.normal)
   }
 
   private func command(

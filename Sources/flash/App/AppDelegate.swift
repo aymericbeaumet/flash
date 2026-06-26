@@ -162,6 +162,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
   var statusBarVisible = false
   var normalModeTargetPID: pid_t?
+  /// Vim-style yank/paste registers. The unnamed register is the system
+  /// clipboard; named registers (`a`–`z`, `0`–`9`) are in-process buffers.
+  let registers = RegisterStore()
   var candidateFinderCandidates: [Candidate] = [] {
     didSet {
       // Each flashlight session freezes one source snapshot. Bump the
@@ -477,7 +480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterCommandLineMode()
     case .scroll, .reload, .undo, .redo, .archive, .resourceNext, .resourcePrevious,
       .close, .tabClose, .find, .candidateFinder,
-      .enterCommand, .copyURL,
+      .enterCommand, .copyURL, .yankSelection, .paste,
       .tabNext, .tabPrev, .tabFirst, .tabLast, .tabSelect,
       .tabMovePrev, .tabMoveNext, .tabReopen,
       .historyBack, .historyForward,

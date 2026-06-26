@@ -1756,47 +1756,6 @@ async fn tab_move(tmux_path: Option<&str>, client: &TmuxClient, direction: &str)
         .is_some()
 }
 
-/// `gg` / `G` inside a tmux client. The host's wheel-delta fallback can't
-/// reach the bottom of a live buffer (wheel-down past the cursor is a
-/// no-op in tmux mouse mode), so the plugin claims the action and drives
-/// it via copy-mode commands directly:
-///
-///   * `top`: enter copy mode (if not already), then `history-top` to
-///     jump to the oldest scrollback line.
-///   * `bottom`: `cancel` exits copy mode, which automatically returns
-///     the view to the live (bottom) buffer. A no-op when not in copy
-///     mode, which is the correct semantics — the user is already at
-///     the bottom.
-async fn scroll_extreme(tmux_path: Option<&str>, client: &TmuxClient, end: &str) -> bool {
-    let session_target = format!("{}:", client.session);
-    match end {
-        "top" => {
-            // -u opens copy mode and pre-scrolls one page up so the
-            // subsequent history-top has something to anchor on for
-            // single-line panes; harmless when scrollback is large.
-            if run_tmux_default(tmux_path, &["copy-mode", "-u", "-t", &session_target])
-                .await
-                .is_none()
-            {
-                return false;
-            }
-            run_tmux_default(
-                tmux_path,
-                &["send-keys", "-t", &session_target, "-X", "history-top"],
-            )
-            .await
-            .is_some()
-        }
-        "bottom" => run_tmux_default(
-            tmux_path,
-            &["send-keys", "-t", &session_target, "-X", "cancel"],
-        )
-        .await
-        .is_some(),
-        _ => false,
-    }
-}
-
 async fn reload_client(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
     run_tmux_default(tmux_path, &["refresh-client", "-t", &client.tty])
         .await
@@ -1843,8 +1802,6 @@ async fn perform_source_action(
         "tab_close" => tab_close(tmux_path, &client).await,
         "tab_move_next" => tab_move(tmux_path, &client, "next").await,
         "tab_move_previous" => tab_move(tmux_path, &client, "previous").await,
-        "scroll_top" => scroll_extreme(tmux_path, &client, "top").await,
-        "scroll_bottom" => scroll_extreme(tmux_path, &client, "bottom").await,
         "app_reload" => reload_client(tmux_path, &client).await,
         _ => return SourceActionResponse::unhandled(),
     };

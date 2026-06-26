@@ -310,6 +310,14 @@ leader = "\\"
 # Undo is no longer on bare u (Vimium reuses it for half-page scroll-up);
 # reach it via the command line (:undo) or the app's native ⌘Z.
 "ctrl-r" = ["flash", "app_redo"]
+# y yanks (copies) the current selection; p pastes it back. With no register
+# these use the system clipboard, so they interoperate with copy/paste in every
+# other app. A "<name> prefix routes through a register instead: "ay yanks into
+# register a, "ap pastes from it (registers a-z, 0-9 survive clipboard churn; an
+# uppercase name like "Ay appends; +, *, and " name the system clipboard). Bare
+# y commits after the sequence timeout because it's a one-key prefix of yy.
+"y" = ["flash", "yank_selection"]
+"p" = ["flash", "paste"]
 # yy yanks the current URL/location (Vimium yy).
 "yy" = ["flash", "url_copy"]
 "e" = ["flash", "resource_archive"]

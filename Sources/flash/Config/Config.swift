@@ -427,6 +427,14 @@ struct Config {
         // windows stay on ⌘N (below) — `n` is needed for find parity.
         ("n", sendKeyMapping("cmd+g")),
         ("N", sendKeyMapping("cmd+shift+g")),
+        // `y` yanks (copies) the current selection; `p` pastes it back.
+        // With no register prefix these use the system clipboard — `"ay` /
+        // `"ap` route through the named register `a` instead (a-z, 0-9; an
+        // uppercase name appends). `y` is a one-key prefix of `yy` below, so a
+        // bare `y` commits after the sequence timeout — `yy` (yank URL) fires
+        // immediately on the second key.
+        ("y", .flashCommand(.yankSelection(register: nil))),
+        ("p", .flashCommand(.paste(register: nil))),
         // `yy` yanks the current URL/location (Vimium `yy`).
         ("yy", .flashCommand(.copyURL)),
         // Follow the next / previous resource — Vimium's `]]` / `[[`
@@ -769,6 +777,12 @@ extension URLCommand {
       if restoreMode { args.append(flag("restore-mode")) }
       return verb("enter_command_mode", args)
     case .copyURL: return verb("url_copy")
+    case .yankSelection(let register):
+      if let register { return verb("yank_selection", [kv("register", register)]) }
+      return verb("yank_selection")
+    case .paste(let register):
+      if let register { return verb("paste", [kv("register", register)]) }
+      return verb("paste")
     case .tabNext: return verb("tab_next")
     case .tabPrev: return verb("tab_previous")
     case .tabFirst: return verb("tab_first")

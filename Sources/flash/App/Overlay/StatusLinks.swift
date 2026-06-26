@@ -116,8 +116,10 @@ extension OverlayPanel {
     }
     for (catcher, link) in zip(statusLinkCatchers, links) {
       // One step above the shields so a click on a link opens it rather
-      // than being swallowed by the bar-wide shield beneath.
-      catcher.level = NSWindow.Level(rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue + 2)
+      // than being swallowed by the bar-wide shield beneath. Still below the
+      // native status bar; links only sit over Flash's own content (left /
+      // centre), never over the system menu-bar extras on the right.
+      catcher.level = NSWindow.Level(rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue + 1)
       catcher.setFrame(link.rect, display: false)
       catcher.clickView.frame = NSRect(origin: .zero, size: link.rect.size)
       let url = link.url
@@ -159,9 +161,11 @@ extension OverlayPanel {
       statusBarClickShields.append(StatusLinkCatcherPanel())
     }
     for (shield, rect) in zip(statusBarClickShields, rects) {
-      // Below the link catchers; swallows the click (onClick == nil) so it
-      // never reaches the wallpaper.
-      shield.level = NSWindow.Level(rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue + 1)
+      // Sit at the bar's own level — below the native status bar (`.statusBar`,
+      // where the system menu-bar extras live), so those still receive their
+      // clicks. The shield only catches clicks that would otherwise fall
+      // through Flash's content to the wallpaper (onClick == nil → swallowed).
+      shield.level = OverlayPanel.persistentStatusWindowLevel
       shield.setFrame(rect, display: false)
       shield.clickView.frame = NSRect(origin: .zero, size: rect.size)
       shield.clickView.onClick = nil

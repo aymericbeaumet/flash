@@ -41,15 +41,46 @@ enum NormalModeInterpreter {
   private struct PendingState {
     var count: Int?
     var prefix: String
+    /// The register captured from a `"<name>` prefix, if any. `nil` means no
+    /// register prefix was typed (the operator falls back to the system
+    /// clipboard). Distinct from `awaitingRegister`.
+    var register: String?
+    /// True after a bare `"` was typed but before its name key arrived — the
+    /// interpreter is parked waiting for the register name.
+    var awaitingRegister: Bool
+
+    init(
+      count: Int? = nil,
+      prefix: String,
+      register: String? = nil,
+      awaitingRegister: Bool = false
+    ) {
+      self.count = count
+      self.prefix = prefix
+      self.register = register
+      self.awaitingRegister = awaitingRegister
+    }
 
     var repeatCount: Int { count ?? 1 }
 
+    /// Serialize back into the opaque `pending` string. The register part
+    /// leads (`"` alone while awaiting, `"a` once named) so a register name
+    /// that is itself a digit can't be mistaken for a repeat count. The count
+    /// follows, then the encoded key-atom prefix.
     var encoded: String {
-      "\(count.map(String.init) ?? "")\(prefix)"
+      let registerPart: String
+      if awaitingRegister {
+        registerPart = "\""
+      } else if let register {
+        registerPart = "\"" + register
+      } else {
+        registerPart = ""
+      }
+      return "\(registerPart)\(count.map(String.init) ?? "")\(prefix)"
     }
 
     func appendingPrefix(_ next: String) -> String {
-      PendingState(count: count, prefix: next).encoded
+      PendingState(count: count, prefix: next, register: register).encoded
     }
   }
 
@@ -69,12 +100,41 @@ enum NormalModeInterpreter {
     let actualChar = firstCharacter(characters)
     let state = pendingState(pending)
 
+    // A bare `"` parked us waiting for a register name. Consume this key as
+    // that name. An invalid name (escape is handled above; arrows, chords,
+    // …) abandons the register prefix and re-interprets the key from scratch
+    // so it isn't silently swallowed.
+    if state.awaitingRegister {
+      if let name = actualChar, isRegisterNameChar(name) {
+        return .pending(PendingState(prefix: "", register: String(name)).encoded)
+      }
+      return interpret(
+        pending: "",
+        keyCode: keyCode,
+        modifierFlags: modifierFlags,
+        characters: characters,
+        charactersIgnoringModifiers: charactersIgnoringModifiers,
+        mappings: mappings)
+    }
+
     if state.prefix.isEmpty, let digit = digitValue(ignoredChar) {
       if state.count == nil, digit == 0 {
         return .consume
       }
       let next = min(((state.count ?? 0) * 10) + digit, maxRepeatCount)
-      return .pending(PendingState(count: next, prefix: "").encoded)
+      return .pending(
+        PendingState(count: next, prefix: "", register: state.register).encoded)
+    }
+
+    // `"` starts a register prefix (Vim's `"<reg>`), but only when it's at the
+    // head of a fresh command and the user hasn't bound `"` to something else.
+    // Count-before-register (`3"a…`) is intentionally unsupported so the
+    // encoding stays unambiguous; register-then-count (`"a3…`) works.
+    if state.prefix.isEmpty, state.register == nil, state.count == nil,
+      actualChar == "\"",
+      mappings.mapping(for: "\"") == nil, !mappings.hasStrictPrefix("\"")
+    {
+      return .pending(PendingState(prefix: "", awaitingRegister: true).encoded)
     }
 
     let keys = mappingKeys(
@@ -92,7 +152,9 @@ enum NormalModeInterpreter {
       let exact = mappings.mapping(for: sequence)
       let hasLonger = mappings.hasStrictPrefix(sequence)
       if let mapping = exact, !hasLonger {
-        return .action(mapping.action, repeatCount: state.repeatCount)
+        return .action(
+          applyingRegister(state.register, to: mapping.action),
+          repeatCount: state.repeatCount)
       }
       if exact != nil || hasLonger {
         return .pending(state.appendingPrefix(sequence))
@@ -140,7 +202,33 @@ enum NormalModeInterpreter {
     guard !state.prefix.isEmpty,
       let mapping = mappings.mapping(for: state.prefix)
     else { return nil }
-    return PendingNormalModeCommand(action: mapping.action, repeatCount: state.repeatCount)
+    return PendingNormalModeCommand(
+      action: applyingRegister(state.register, to: mapping.action),
+      repeatCount: state.repeatCount)
+  }
+
+  /// Bake a captured register into a yank/paste action. The register only
+  /// modifies clipboard operators; for every other command (and when no
+  /// register was typed) the action passes through unchanged — Vim likewise
+  /// ignores a register prefix on commands that don't read one.
+  static func applyingRegister(_ register: String?, to action: MappingCommand) -> MappingCommand {
+    guard let register, case .flashCommand(let command) = action else { return action }
+    switch command {
+    case .yankSelection:
+      return .flashCommand(.yankSelection(register: register))
+    case .paste:
+      return .flashCommand(.paste(register: register))
+    default:
+      return action
+    }
+  }
+
+  /// Characters accepted as a `"<name>` register: letters (uppercase appends),
+  /// digits, and the system-clipboard synonyms `+` / `*` / `"`.
+  static func isRegisterNameChar(_ ch: Character) -> Bool {
+    if ch == "+" || ch == "*" || ch == "\"" { return true }
+    guard ch.isASCII else { return false }
+    return ch.isLetter || ch.isNumber
   }
 
   static func pendingSequenceTimedOut(
@@ -154,13 +242,29 @@ enum NormalModeInterpreter {
   }
 
   private static func pendingState(_ pending: String) -> PendingState {
-    let digitPrefix = pending.prefix { ch in
+    // Decode the leading register part (`"` alone, or `"` + one name char),
+    // mirroring `PendingState.encoded`.
+    var rest = Substring(pending)
+    var register: String? = nil
+    var awaitingRegister = false
+    if rest.first == "\"" {
+      let afterQuote = rest.dropFirst()
+      if let name = afterQuote.first {
+        register = String(name)
+        rest = afterQuote.dropFirst()
+      } else {
+        awaitingRegister = true
+        rest = ""
+      }
+    }
+    let digitPrefix = rest.prefix { ch in
       guard let value = ch.wholeNumberValue else { return false }
       return value >= 0 && value <= 9
     }
-    let prefix = String(pending.dropFirst(digitPrefix.count))
+    let prefix = String(rest.dropFirst(digitPrefix.count))
     let count = digitPrefix.isEmpty ? nil : Int(digitPrefix).map { min($0, maxRepeatCount) }
-    return PendingState(count: count, prefix: prefix)
+    return PendingState(
+      count: count, prefix: prefix, register: register, awaitingRegister: awaitingRegister)
   }
 
   private static func digitValue(_ char: Character?) -> Int? {

@@ -40,7 +40,7 @@ extension OverlayPanel {
   /// Faint outline for the NORMAL-mode pill. The normal pill is dark-on-dark
   /// (same fill as the bar) so without a border it has no visible edge — a
   /// 1px, low-alpha white hairline reads as a subtle frame around it.
-  static let statusModeNormalBorderCG = NSColor(calibratedWhite: 1, alpha: 0.22).cgColor
+  static let statusModeNormalBorderCG = NSColor(calibratedWhite: 1, alpha: 0.08).cgColor
 
   static let insertPalette = ModeBadgePalette(
     topCG: nordFrost2CG,

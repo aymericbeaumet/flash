@@ -65,8 +65,6 @@
     "tab_close",
     "tab_move_previous",
     "tab_move_next",
-    "scroll_top",
-    "scroll_bottom",
     "app_reload"
   ]
 }

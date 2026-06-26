@@ -1039,6 +1039,10 @@ extension AppDelegate {
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()
+    case .yankSelection(let register):
+      yankSelection(into: register)
+    case .paste(let register):
+      pasteRegister(register, repeatCount: repeatCount)
     case .tabNext:
       tabNextInNormalMode(repeatCount: repeatCount)
     case .tabPrev:
@@ -2613,6 +2617,82 @@ extension AppDelegate {
       return true
     default:
       return false
+    }
+  }
+
+  /// `y` — copy the focused app's current selection into `register`. Reads the
+  /// selection off the AX tree when the app exposes it (no clipboard churn);
+  /// otherwise synthesizes ⌘C and stores whatever lands on the pasteboard.
+  private func yankSelection(into register: String?) {
+    guard let context = normalModeContext() else {
+      FlashLog.debug("[normal_mode] no target app for yank_selection")
+      applyModeOverlay()
+      return
+    }
+    let pid = context.processID
+    if let text = NormalModeDispatcher.selectedText(pid: pid) {
+      registers.write(text, register: register)
+      FlashLog.debug("[normal_mode] yank ax len=\(text.count) register=\(register ?? "*clipboard*")")
+      applyModeOverlay()
+      return
+    }
+    // No AX selection exposed (web content, terminals): fall back to ⌘C and
+    // read the pasteboard once its change-count ticks.
+    let beforeChange = NSPasteboard.general.changeCount
+    mappings.noteSyntheticKey(virtualKey: UInt32(kVK_ANSI_C), flags: .maskCommand)
+    NormalModeDispatcher.sendKey(virtualKey: CGKeyCode(kVK_ANSI_C), flags: .maskCommand, to: pid)
+    pollPasteboard(after: beforeChange, attempts: 20) { [weak self] text in
+      guard let self else { return }
+      if let text, !text.isEmpty {
+        self.registers.write(text, register: register)
+        FlashLog.debug(
+          "[normal_mode] yank clipboard len=\(text.count) register=\(register ?? "*clipboard*")")
+      } else {
+        FlashLog.debug("[normal_mode] yank ⌘C produced no selection")
+      }
+      self.scheduleNormalModeRecapture()
+    }
+  }
+
+  /// `p` — paste `register`'s contents into the focused app by typing them, so
+  /// pasting a named register never disturbs the clipboard. `repeatCount`
+  /// pastes the contents that many times (`3p`).
+  private func pasteRegister(_ register: String?, repeatCount: Int) {
+    guard let context = normalModeContext() else {
+      FlashLog.debug("[normal_mode] no target app for paste")
+      applyModeOverlay()
+      return
+    }
+    guard let text = registers.read(register: register), !text.isEmpty else {
+      FlashLog.debug("[normal_mode] paste register=\(register ?? "*clipboard*") empty")
+      applyModeOverlay()
+      return
+    }
+    let payload = String(repeating: text, count: normalizedRepeatCount(repeatCount))
+    NormalModeDispatcher.insertUnicode(payload, to: context.processID)
+    scheduleNormalModeRecapture()
+  }
+
+  /// Poll the general pasteboard until its change-count moves past `change`
+  /// (our synthesized ⌘C landed) or `attempts` run out, then hand the string
+  /// to `completion`. Stays on the main queue so it composes with the rest of
+  /// normal-mode dispatch.
+  private func pollPasteboard(
+    after change: Int,
+    attempts: Int,
+    completion: @escaping (String?) -> Void
+  ) {
+    guard attempts > 0 else {
+      completion(nil)
+      return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(15)) { [weak self] in
+      let pasteboard = NSPasteboard.general
+      if pasteboard.changeCount != change {
+        completion(pasteboard.string(forType: .string))
+      } else {
+        self?.pollPasteboard(after: change, attempts: attempts - 1, completion: completion)
+      }
     }
   }
 
