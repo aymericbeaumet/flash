@@ -195,6 +195,19 @@ extension OverlayPanel {
     }
   }
 
+  /// Resign the command field's editor so its reused field editor is dropped.
+  /// A *submit* activates another app, which resigns our key window — and the OS
+  /// uses that to tear down the field editor, so the next open rebuilds it. A
+  /// *cancel* (Escape) has no such trigger, so the reused editor stayed
+  /// associated and the next open's refocus was a no-op → no caret. Resigning
+  /// here makes the cancel close symmetric with submit.
+  func resignCommandTextFieldFocus() {
+    guard firstResponder === commandTextField || commandTextField.currentEditor() != nil else {
+      return
+    }
+    makeFirstResponder(self)
+  }
+
   func setCommandTextFieldText(
     _ text: String, cursorIndex: Int, underlineRange: NSRange? = nil
   ) {

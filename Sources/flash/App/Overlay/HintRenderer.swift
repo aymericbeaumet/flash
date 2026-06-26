@@ -413,24 +413,29 @@ extension OverlayPanel {
     let responderDescription: String
     if inputMode == .commandLine {
       commandTextField.isHidden = false
-      // The field editor is reused across open/close cycles and does NOT restart
-      // its caret blink timer on its own when it regains focus — and the blink
-      // only auto-restarts on a `selectedRange` change, which we intentionally
-      // skip when the cursor didn't move. So on the 2nd+ open of any command bar
-      // the caret sat solid. Detect the focus *transition* (not a re-render from
-      // an async candidate merge, where the field is already editing) and kick the
-      // blink timer exactly once, so the caret blinks consistently on every open.
-      let wasEditing = commandTextField.currentEditor() != nil
+      // The field editor is reused across open/close cycles. A *stale* editor can
+      // persist (so `currentEditor() != nil` even though the field isn't focused),
+      // making the refocus a no-op and leaving no caret on the 2nd+ open. The
+      // reliable "actually editing" signal is that the live first responder IS
+      // this field's editor. On a real (re)open it isn't, so force a clean refocus
+      // (resign first → rebuild the editor) and restart the blink timer; on an
+      // async-merge re-render the field IS editing, so leave it untouched.
+      let editing =
+        firstResponder != nil && firstResponder === commandTextField.currentEditor()
+      if !editing {
+        makeFirstResponder(nil)
+      }
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
-      if !wasEditing {
+      if !editing {
         (commandTextField.currentEditor() as? NSTextView)?
           .updateInsertionPointStateAndRestartTimer(true)
       }
-      responderDescription = "command"
+      responderDescription = editing ? "command(edit)" : "command(refocus)"
       FlashLog.trace(
         "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
-          + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode)")
+          + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode) "
+          + "editor=\(commandTextField.currentEditor() != nil)")
       return
     }
     if inputMode == .modal {

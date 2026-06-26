@@ -2391,6 +2391,12 @@ extension AppDelegate {
   }
 
   func finishCommandLineInteraction(reason: String) {
+    // Drop the field editor explicitly so a cancel (Escape) closes the bar the
+    // same way a submit does — a submit's app activation resigns our key window,
+    // which the OS uses to tear the editor down; a cancel has no such trigger, so
+    // without this the reused editor stayed associated and the next open showed
+    // no caret.
+    overlay.resignCommandTextFieldFocus()
     // The reducer pops the surface's recorded `restoreTo`; the resulting
     // base-mode entry effects tear down the command-line overlay.
     dispatchMode(.closeCommand(reason: reason))
