@@ -268,9 +268,18 @@ extension OverlayPanel {
     editor.insertionPointColor = Self.nordSnowStorm2
     let value = commandTextField.stringValue
     let cursor = max(0, commandLineCursorIndex)
-    editor.selectedRange = NSRange(
+    let target = NSRange(
       location: utf16Offset(forCharacterOffset: cursor, in: value),
       length: 0)
+    // Re-assigning `selectedRange` restarts the caret's blink phase. This runs on
+    // every re-render — including each async candidate merge while the flashlight /
+    // emoji suggestions stream in — so setting it unconditionally kept resetting
+    // the caret to solid (no blink), unlike a plain `:` command with no merges.
+    // Only set it when the cursor actually moved, so the blink stays consistent
+    // across every command-bar surface.
+    if editor.selectedRange != target {
+      editor.selectedRange = target
+    }
   }
 
   func commandTextFieldCursorIndex() -> Int {
