@@ -386,6 +386,22 @@ final class OverlayPanel: NSPanel {
   override var canBecomeMain: Bool { false }
   override var acceptsFirstResponder: Bool { true }
 
+  override func becomeKey() {
+    super.becomeKey()
+    // Activation can land asynchronously on this macOS, so the window may become
+    // key *after* `captureKeyboardInput` already ran. A field editor only shows a
+    // blinking caret in a key window, so when we key while a command bar is open,
+    // (re)focus the field and restart its blink — otherwise a cancel→reopen left
+    // the caret missing until the next keystroke.
+    if inputMode == .commandLine {
+      commandTextField.isHidden = false
+      makeFirstResponder(commandTextField)
+      syncCommandTextFieldSelection()
+      (commandTextField.currentEditor() as? NSTextView)?
+        .updateInsertionPointStateAndRestartTimer(true)
+    }
+  }
+
   /// True once the global keyboard tap is installed. NORMAL / hints capture then
   /// runs through the tap instead of the key window, so the overlay no longer
   /// takes key/active status for those modes (the focused app keeps its colored

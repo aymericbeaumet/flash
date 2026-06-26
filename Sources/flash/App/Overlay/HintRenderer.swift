@@ -404,7 +404,13 @@ extension OverlayPanel {
     // request; the normal-mode coordinator verifies the result and runs
     // bounded recovery if WindowServer does not hand us key ownership
     // immediately.
-    if !NSApp.isActive {
+    // Being the active app is NOT enough — the command-line panel itself must be
+    // the KEY window for the field editor's caret to blink. After a *cancel*
+    // close the app stays active, so gating only on `!isActive` skipped
+    // re-activation and the non-activating panel never regained key (`makeKey()`
+    // alone doesn't grant it on this macOS), leaving no caret. Re-activate
+    // whenever we aren't the key window so the panel reliably regains it.
+    if !NSApp.isActive || !isKeyWindow {
       requestApplicationActivationForKeyboardCapture()
     }
     orderFrontRegardless()
