@@ -88,10 +88,19 @@ struct WindowSnapshot {
     // as a hintable surface. This keeps hints scoped to one current surface
     // while still allowing same-pid popovers/dialogs/floating windows above a
     // main layer-0 window.
+    // Some apps draw small sub-surfaces as their own layer-0 WindowServer
+    // windows that float over the main window — Firefox's tab-hover preview
+    // card, for one (a ~280×78 window with no accessibility presence). The
+    // frontmost-same-pid rule would pick that card and collapse the whole active
+    // surface onto it. Promote past such cards to the window they're anchored
+    // over so the border and hint scope stay on the real surface; the card still
+    // occludes its little patch like any other window.
+    let layer0App = entries.filter { $0.pid == focusedPid && $0.layer == 0 }.map(\.nsBounds)
     var activeWindowIndex: Int? = nil
     for (idx, e) in entries.enumerated()
       where e.pid == focusedPid && isInteractionSurfaceLayer(e.layer)
     {
+      if e.layer == 0, isAnchoredCard(e.nsBounds, amongLayer0App: layer0App) { continue }
       activeWindowIndex = idx
       break
     }
@@ -134,8 +143,46 @@ struct WindowSnapshot {
   }
 
   static func topApplicationWindowFrame(entries: [Entry], focusedPid: pid_t) -> CGRect? {
-    entries.first { $0.pid == focusedPid && $0.layer == 0 }?.nsBounds
+    let layer0App = entries.filter { $0.pid == focusedPid && $0.layer == 0 }.map(\.nsBounds)
+    return entries.first {
+      $0.pid == focusedPid && $0.layer == 0
+        && !isAnchoredCard($0.nsBounds, amongLayer0App: layer0App)
+    }?.nsBounds
   }
+
+  /// A layer-0 window that floats over a larger layer-0 window of the same app —
+  /// e.g. Firefox's tab-hover preview card drawn over the browser window. These
+  /// are sub-surfaces, not real windows (the card isn't even in the app's
+  /// accessibility tree), so letting one become the active surface collapses the
+  /// active-window border and hint scope onto a tiny card. We merge them into the
+  /// window they're anchored over instead.
+  ///
+  /// Restricted to layer 0 on purpose: genuine floating popovers, dialogs, and
+  /// password-manager panels live above layer 0 (`.floatingWindow` &c.) and must
+  /// keep their own scope (see `testFocusedHighLayerPopupBecomesActiveSurface`).
+  /// A card qualifies only when it's fully contained (modulo a few px of slop)
+  /// within a same-app layer-0 window whose area is ≥ `1 / anchoredCardMaxAreaFraction`×
+  /// larger, so same-size sibling windows and substantial dialogs are left alone.
+  static func isAnchoredCard(_ frame: CGRect, amongLayer0App parents: [CGRect]) -> Bool {
+    let area = frame.width * frame.height
+    guard area > 0 else { return false }
+    for parent in parents where parent != frame {
+      guard parent.width * parent.height >= area / anchoredCardMaxAreaFraction else { continue }
+      if parent.insetBy(dx: -anchoredCardContainmentSlop, dy: -anchoredCardContainmentSlop)
+        .contains(frame)
+      {
+        return true
+      }
+    }
+    return false
+  }
+
+  /// A card is merged only when it covers at most this fraction of its parent's
+  /// area — small enough to be a hover card/dropdown, not a peer dialog.
+  static let anchoredCardMaxAreaFraction: CGFloat = 0.25
+  /// Px of slack allowed when testing containment, so a card that poke a hair
+  /// past the parent edge (screen-edge tabs) still counts as anchored.
+  static let anchoredCardContainmentSlop: CGFloat = 8
 
   static func topInteractionEntry(
     at point: CGPoint,

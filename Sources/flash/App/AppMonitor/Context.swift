@@ -130,13 +130,18 @@ extension AppMonitor {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let info = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]]
     else { return nil }
-    return WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
-      .first {
-        WindowSnapshot.isInteractionSurfaceLayer($0.layer)
-          && $0.pid == pid
-          && $0.pid != getpid()
-      }?
-      .nsBounds
+    let entries = WindowSnapshot.entries(from: info, primaryH: primaryScreenHeight())
+    // Match `WindowSnapshot.build`: a layer-0 card anchored over the app's main
+    // window (Firefox tab-hover preview) shouldn't become the front window frame.
+    let layer0App = entries.filter { $0.layer == 0 && $0.pid == pid && $0.pid != getpid() }
+      .map(\.nsBounds)
+    return entries.first {
+      WindowSnapshot.isInteractionSurfaceLayer($0.layer)
+        && $0.pid == pid
+        && $0.pid != getpid()
+        && !($0.layer == 0 && WindowSnapshot.isAnchoredCard($0.nsBounds, amongLayer0App: layer0App))
+    }?
+    .nsBounds
   }
 
   private func topApplicationWindowFrame(for pid: pid_t) -> CGRect? {
