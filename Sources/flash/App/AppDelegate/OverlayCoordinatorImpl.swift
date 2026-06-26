@@ -657,6 +657,18 @@ extension AppDelegate {
   }
 
   func overlayDidCancelCommandLine() {
+    // Hand activation back to the app the bar covered, the way a *submit* does via
+    // its app switch. `NSApp.deactivate()` is advisory and ignored on this macOS
+    // (Flash stays "active"), so the non-activating panel couldn't regain key on
+    // the next open and showed no caret. Activating another app reliably
+    // deactivates Flash, so reopening forces a clean re-activation → the panel
+    // keys → the caret returns. Mirrors the working submit path.
+    if let context = currentNonFlashContext() ?? normalModeContext(),
+      let app = NSRunningApplication(processIdentifier: context.processID),
+      !app.isTerminated
+    {
+      RunningApplicationActivation.activate(app, options: [])
+    }
     finishCommandLineInteraction(reason: "command_cancel")
   }
 
