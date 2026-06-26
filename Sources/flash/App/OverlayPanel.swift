@@ -89,6 +89,12 @@ final class OverlayPanel: NSPanel {
   /// Signature of the currently-installed link rects, so an unchanged
   /// render skips reordering the catcher windows.
   var lastStatusLinkSignature: String?
+  /// Full-bar transparent shields (one per screen) that swallow clicks on
+  /// the status bar so they don't fall through to the wallpaper (which, with
+  /// macOS "click wallpaper to reveal desktop", would reveal the desktop).
+  /// They sit below the link catchers, so links still win.
+  var statusBarClickShields: [StatusLinkCatcherPanel] = []
+  var lastStatusShieldSignature: String?
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()

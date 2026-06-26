@@ -24,9 +24,13 @@ final class StatusLinkCatcherView: NSView {
         userInfo: nil))
   }
 
-  override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
-  override func mouseEntered(with event: NSEvent) { NSCursor.pointingHand.set() }
+  override func cursorUpdate(with event: NSEvent) { cursor.set() }
+  override func mouseEntered(with event: NSEvent) { cursor.set() }
   override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
+
+  /// Pointing hand for real links; the default arrow for the swallow-only
+  /// shield (which has no `onClick`).
+  private var cursor: NSCursor { onClick == nil ? .arrow : .pointingHand }
 }
 
 final class StatusLinkCatcherPanel: NSPanel {
@@ -111,12 +115,65 @@ extension OverlayPanel {
       statusLinkCatchers.append(StatusLinkCatcherPanel())
     }
     for (catcher, link) in zip(statusLinkCatchers, links) {
+      // One step above the shields so a click on a link opens it rather
+      // than being swallowed by the bar-wide shield beneath.
+      catcher.level = NSWindow.Level(rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue + 2)
       catcher.setFrame(link.rect, display: false)
       catcher.clickView.frame = NSRect(origin: .zero, size: link.rect.size)
       let url = link.url
       catcher.clickView.onClick = { NSWorkspace.shared.open(url) }
       catcher.orderFrontRegardless()
     }
+  }
+
+  /// Status-bar rects (one per screen), in screen coordinates, matching the
+  /// bar layout `configureModeBadge` / `configureSecondaryStatusBars` use.
+  func statusBarScreenRects(panelFrame: CGRect, fontSize: CGFloat) -> [CGRect] {
+    OverlayPanel.currentScreenSnapshot().screens.map { screen in
+      let barFrame = OverlayPanel.statusBarFrame(
+        screenFrame: screen.frame,
+        visibleFrame: screen.visibleFrame,
+        panelFrame: panelFrame,
+        fontSize: fontSize)
+      return CGRect(
+        x: panelFrame.minX + barFrame.minX,
+        y: panelFrame.minY + barFrame.minY,
+        width: barFrame.width,
+        height: barFrame.height)
+    }
+  }
+
+  /// Place one transparent shield per status-bar rect to swallow stray
+  /// clicks. Skips work when the rects are unchanged.
+  func syncStatusBarShields(_ rects: [CGRect]) {
+    let signature = rects
+      .map { "\($0.origin.x),\($0.origin.y),\($0.width),\($0.height)" }
+      .joined(separator: ";")
+    if signature == lastStatusShieldSignature { return }
+    lastStatusShieldSignature = signature
+
+    while statusBarClickShields.count > rects.count {
+      statusBarClickShields.removeLast().orderOut(nil)
+    }
+    while statusBarClickShields.count < rects.count {
+      statusBarClickShields.append(StatusLinkCatcherPanel())
+    }
+    for (shield, rect) in zip(statusBarClickShields, rects) {
+      // Below the link catchers; swallows the click (onClick == nil) so it
+      // never reaches the wallpaper.
+      shield.level = NSWindow.Level(rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue + 1)
+      shield.setFrame(rect, display: false)
+      shield.clickView.frame = NSRect(origin: .zero, size: rect.size)
+      shield.clickView.onClick = nil
+      shield.orderFrontRegardless()
+    }
+  }
+
+  func hideStatusBarShields() {
+    guard !statusBarClickShields.isEmpty || lastStatusShieldSignature != nil else { return }
+    for shield in statusBarClickShields { shield.orderOut(nil) }
+    statusBarClickShields.removeAll()
+    lastStatusShieldSignature = nil
   }
 
   /// Tear down every catcher window (bar hidden / no links).

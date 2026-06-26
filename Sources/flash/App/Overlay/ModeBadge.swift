@@ -76,6 +76,7 @@ extension OverlayPanel {
           sublayers.removeAll { $0 === bar.backgroundLayer }
         }
         hideStatusLinkCatchers()
+        hideStatusBarShields()
       }
       contentLayer.sublayers = sublayers
       if captureInput {
@@ -164,10 +165,12 @@ extension OverlayPanel {
     } else if modeBadgeCapturesInput {
       contentLayer.sublayers = nil
       hideStatusLinkCatchers()
+      hideStatusBarShields()
       captureKeyboardInput()
     } else {
       contentLayer.sublayers = nil
       hideStatusLinkCatchers()
+      hideStatusBarShields()
       orderOut(nil)
     }
   }
@@ -266,7 +269,15 @@ extension OverlayPanel {
       height: textHeight)
     modeBadgeButtonLayer.contentsScale = scale
     modeBadgeButtonLayer.colors = [palette.bottomCG, palette.topCG]
-    modeBadgeButtonLayer.borderColor = palette.borderCG
+    // NORMAL mode: a thin, faint hairline so the dark-on-dark pill reads as
+    // a framed badge. Other modes have a contrasting fill, so no border.
+    if modeBadgeStyle == .normal {
+      modeBadgeButtonLayer.borderWidth = 1
+      modeBadgeButtonLayer.borderColor = Self.statusModeNormalBorderCG
+    } else {
+      modeBadgeButtonLayer.borderWidth = 0
+      modeBadgeButtonLayer.borderColor = palette.borderCG
+    }
 
     modeBadgeLabel.frame = CGRect(
       x: 0,
@@ -409,9 +420,11 @@ extension OverlayPanel {
         barFrame: linkBarFrame, panelFrame: panelFrame)
     }
     if modeBadgeVisible {
+      syncStatusBarShields(statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize))
       syncStatusLinkCatchers(links)
     } else {
       hideStatusLinkCatchers()
+      hideStatusBarShields()
     }
 
     // Same bar on every other screen, sized to that screen's own native
@@ -485,7 +498,13 @@ extension OverlayPanel {
         x: modeX, y: textY, width: leftWidth, height: textHeight)
       bar.modeButtonLayer.contentsScale = screen.scale
       bar.modeButtonLayer.colors = [palette.bottomCG, palette.topCG]
-      bar.modeButtonLayer.borderColor = palette.borderCG
+      if modeBadgeStyle == .normal {
+        bar.modeButtonLayer.borderWidth = 1
+        bar.modeButtonLayer.borderColor = Self.statusModeNormalBorderCG
+      } else {
+        bar.modeButtonLayer.borderWidth = 0
+        bar.modeButtonLayer.borderColor = palette.borderCG
+      }
 
       bar.modeLabel.frame = CGRect(x: 0, y: 0, width: max(1, leftWidth), height: textHeight)
       bar.modeLabel.font = labelFont
