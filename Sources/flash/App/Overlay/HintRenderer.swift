@@ -413,8 +413,20 @@ extension OverlayPanel {
     let responderDescription: String
     if inputMode == .commandLine {
       commandTextField.isHidden = false
+      // The field editor is reused across open/close cycles and does NOT restart
+      // its caret blink timer on its own when it regains focus — and the blink
+      // only auto-restarts on a `selectedRange` change, which we intentionally
+      // skip when the cursor didn't move. So on the 2nd+ open of any command bar
+      // the caret sat solid. Detect the focus *transition* (not a re-render from
+      // an async candidate merge, where the field is already editing) and kick the
+      // blink timer exactly once, so the caret blinks consistently on every open.
+      let wasEditing = commandTextField.currentEditor() != nil
       makeFirstResponder(commandTextField)
       syncCommandTextFieldSelection()
+      if !wasEditing {
+        (commandTextField.currentEditor() as? NSTextView)?
+          .updateInsertionPointStateAndRestartTimer(true)
+      }
       responderDescription = "command"
       FlashLog.trace(
         "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
