@@ -1,5 +1,6 @@
 import AppKit
 import FlashCore
+import FlashProviders
 
 private enum PointerInsertHandoffOutcome {
   case enteredInsert
@@ -98,11 +99,22 @@ extension AppDelegate {
       cancelOverlay()
     }
     if decision.probeForInsert {
+      // Left / double click: enter INSERT only when the click landed on a text
+      // input — the same editability rule the `f` hint applies via the target's
+      // own role. A physical click carries only a point, so probe the AX element
+      // there. (Right-click never reaches here; it suspends above.)
+      let clickedTextInput: Bool
+      if let location = click?.location, let pid = targetPID {
+        clickedTextInput = AXClick.isTextInput(at: location, pid: pid)
+      } else {
+        clickedTextInput = false
+      }
       enterInsertModeIfClickedOnTextInput(
         pid: targetPID,
         clickPoint: click?.location,
         reason: .pointerClick,
-        handoffToken: handoffToken
+        handoffToken: handoffToken,
+        hintTargetEntersInsert: clickedTextInput
       ) {
         [weak self] outcome in
         guard let self else { return }
@@ -264,7 +276,7 @@ extension AppDelegate {
       }
       overlay.hide()
       clearHintSessionState()
-      activationGen &+= 1
+      activationLifecycle.supersede()
       applyModeOverlay()
       return
     }
@@ -275,7 +287,7 @@ extension AppDelegate {
       _ = ActionDispatcher.moveCursor(to: point)
       overlay.hide()
       clearHintSessionState()
-      activationGen &+= 1
+      activationLifecycle.supersede()
       applyModeOverlay()
       return
     }
@@ -333,7 +345,7 @@ extension AppDelegate {
     // click would then fire during the new activation (clicking
     // whatever the user was about to hint, not what they committed to).
     activationInFlight = true
-    activationGen &+= 1
+    activationLifecycle.supersede()
     clearHintSessionState()
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
       // The click's blocking work now runs off the main run loop; settle Flash's
@@ -401,23 +413,22 @@ extension AppDelegate {
 
   private func suspendNormalCaptureForNativeSurface(reason: String) {
     noteContextMenuInteraction(reason: reason)
-    overlay.inputMode = .normal
-    overlay.modeBadgeCapturesInput = false
+    // Record the native surface as mode context and let the single
+    // projection-driven writer set inputMode + capture — no direct `overlay.*`
+    // pokes, so the badge and routing can't drift from the mode. Cleared when
+    // capture is re-established (recapture / a mode transition).
+    nativeSurfaceSuspended = true
+    applyModeOverlay()
   }
 
-  /// Reset the transient hint-session scalars to their idle values. These six
-  /// are the complete "hints showing / mouse-grid in progress" surface; they
-  /// were cleared by copy-paste in ≥8 places, so a newly added session field was
-  /// one missed site away from a leak. Centralizing the reset means a new field
-  /// is added in one place. Call sites keep any *non-session* side effects they
-  /// also perform (activationGen bump, pendingAction reset, overlay.hide()).
+  /// Reset the transient "hints showing / mouse-grid in progress" session to its
+  /// idle values in one assignment. Resetting `HintSession` to its default means
+  /// a newly added session field is cleared automatically — no per-field reset
+  /// line to forget (the leak the previous copy-pasted-in-8-places reset risked).
+  /// Call sites keep any *non-session* side effects they also perform (the
+  /// activation generation bump, `pendingAction` reset, `overlay.hide()`).
   func clearHintSessionState() {
-    currentHints = []
-    currentPrefix = ""
-    sourceAppPID = nil
-    mouseGridRegion = nil
-    mouseGridDepth = 0
-    pendingHintCommitBehavior = .click
+    hintSession = HintSession()
   }
 
   private func dismissTransientPointerStateWithoutRekey(reason: String) {
@@ -441,7 +452,6 @@ extension AppDelegate {
       invalidateActivation(reason: reason)
     }
     applyModeOverlay(captureOverride: false)
-    overlay.inputMode = .normal
   }
 
   private func forwardPhysicalPointerClickIfNeeded(
@@ -499,7 +509,7 @@ extension AppDelegate {
     let priorPID = sourceAppPID
     overlay.hide()
     clearHintSessionState()
-    activationGen &+= 1
+    activationLifecycle.supersede()
     if shouldMove {
       _ = ActionDispatcher.moveCursor(to: point)
       applyModeOverlay()
@@ -523,11 +533,16 @@ extension AppDelegate {
       suspendNormalCaptureForNativeSurface(reason: "mouse_grid_right_click")
     } else {
       applyModeOverlay(captureOverride: false)
+      // Editability-aware like `f`: a grid click targets a bare point, so probe
+      // the AX element there to decide insert-vs-normal instead of always
+      // entering insert.
+      let gridTextInput = priorPID.map { AXClick.isTextInput(at: point, pid: $0) } ?? false
       enterInsertModeIfClickedOnTextInput(
         pid: priorPID,
         clickPoint: point,
         reason: .hintCommit,
-        handoffToken: handoffToken
+        handoffToken: handoffToken,
+        hintTargetEntersInsert: gridTextInput
       ) {
         [weak self] outcome in
         guard let self else { return }
@@ -549,20 +564,22 @@ extension AppDelegate {
   }
 
   /// Decide whether a committed pointer action hands the keyboard to the focused
-  /// app (INSERT) or keeps NORMAL. The rule is split by intent:
+  /// app (INSERT) or keeps NORMAL. The rule is uniform across every trigger: a
+  /// left / double click enters INSERT *only* when it lands on a text input,
+  /// otherwise NORMAL navigation continues. Each call site supplies that
+  /// editability via `hintTargetEntersInsert`:
   ///
-  ///   - A physical mouse click and the `F`/`dF` mouse-grid commit always enter
-  ///     INSERT — the user pointed somewhere and clicked, so give the app the
-  ///     keyboard. These call sites pass `hintTargetEntersInsert == nil`.
-  ///   - The `f` (`mouse_target`) hint commit enters INSERT only when its
-  ///     resolved target is a real text input. Hinting a button/link clicks it
-  ///     but stays in NORMAL, so labels keep flowing. That call site passes the
-  ///     target's editability (`hint.target.entersInsertMode`).
+  ///   - `f` (`mouse_target`) hint: the resolved target's own role
+  ///     (`hint.target.entersInsertMode`).
+  ///   - `F`/`dF` mouse-grid and physical clicks: a point-based AX hit-test at
+  ///     the click site (`AXClick.isTextInput(at:pid:)`), since those carry only
+  ///     a point and no resolved target.
   ///
-  /// We no longer probe the AX role after the click settles; the caller already
-  /// knows the target's editability (hints) or the intent is unconditional
-  /// (physical/grid), which keeps NORMAL free of "focused-but-not-capturing"
-  /// states. `clickPoint` / `attempt` are retained for call-site stability.
+  /// Right-click never reaches here — it opens a context menu and stays in
+  /// NORMAL via `suspendNormalCaptureForNativeSurface`. A nil
+  /// `hintTargetEntersInsert` still defaults to "enter insert" for safety, but
+  /// every live call site now passes an explicit value. `clickPoint` / `attempt`
+  /// are retained for call-site stability.
   private func enterInsertModeIfClickedOnTextInput(
     pid: pid_t?,
     clickPoint _: CGPoint? = nil,
@@ -577,16 +594,14 @@ extension AppDelegate {
       completion?(.recaptureNormal)
       return
     }
-    // The target's own `entersInsertMode` flag is authoritative — including in a
-    // terminal. A tmux pane chip declares `true` (a typing surface, so commit
-    // enters INSERT); a tmux link chip declares `false` (it runs `open` and
-    // never touches the keyboard, so it stays in NORMAL). Physical clicks and
-    // the `F`/`dF` grid pass `nil` and still enter insert via the default below.
-    // `f` (the `mouse_target` hint) passes the resolved target's editability, so
-    // it only enters insert when the user committed on a real text input —
-    // hinting a button/link clicks it but stays in NORMAL. `F` (the `mouse_grid`
-    // click) and a physical mouse click pass `nil` and always enter insert: a
-    // committed pointer action hands the keyboard to the app.
+    // The supplied editability is authoritative — including in a terminal. A
+    // tmux pane chip declares `true` (a typing surface, so commit enters
+    // INSERT); a tmux link chip declares `false` (it runs `open` and never
+    // touches the keyboard, so it stays in NORMAL). `f` passes the resolved
+    // target's `entersInsertMode`; the `F`/`dF` grid and physical clicks pass an
+    // AX hit-test of the click point (`AXClick.isTextInput`). All three stay in
+    // NORMAL when the click did not land on a text input — a button/link is
+    // clicked but keyboard navigation continues.
     guard hintTargetEntersInsert ?? true else {
       completion?(.recaptureNormal)
       return
@@ -597,11 +612,11 @@ extension AppDelegate {
   }
 
   // `mouseGridCommitShouldEnterInsertMode` removed: the `F`/`dF` grid commit and
-  // a physical click pass `hintTargetEntersInsert == nil` to
-  // `enterInsertModeIfClickedOnTextInput`, which always enters insert for such
-  // an unconditional pointer action — the user pointed somewhere and clicked.
-  // `f` hint commits instead honor the target's own `entersInsertMode` flag.
-  // Move (`mF`) was already a no-op for insert.
+  // a physical click now probe the click point with `AXClick.isTextInput` and
+  // pass the result to `enterInsertModeIfClickedOnTextInput`, so they enter
+  // insert only on a text input — the same editability rule as the `f` hint's
+  // `entersInsertMode` flag. Move (`mF`) was already a no-op for insert, and
+  // right-click never enters insert (it suspends for the context menu).
 
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
     mappings.handle(event: event)

@@ -60,12 +60,12 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    activationGen &+= 1
-    activationInFlight = false
-    activationInFlightGeneration = nil
+    activationLifecycle.invalidate()
     currentHints = hints
     currentPrefix = ""
-    overlay.inputMode = .hints
+    // Single projection-driven writer (yields `.hints` with the grid hints up),
+    // not a direct `overlay.inputMode` poke.
+    applyModeOverlay()
     overlay.display(hints: hints)
   }
 
@@ -122,11 +122,11 @@ extension AppDelegate {
       return
     }
 
-    activationGen &+= 1
-    let myGen = activationGen
-    activationInFlight = true
-    activationInFlightGeneration = myGen
-    overlay.inputMode = .hints
+    let myGen = activationLifecycle.begin()
+    // Route through the single projection-driven writer (which yields `.hints`
+    // while a walk is in flight) instead of a direct `overlay.inputMode` poke, so
+    // inputMode + capture can't drift from the mode.
+    applyModeOverlay()
     FlashLog.trace(
       "[activation] dispatch_discover gen=\(myGen) pid=\(context.processID) "
         + "bundle=\(context.bundleIdentifier)")
@@ -135,16 +135,13 @@ extension AppDelegate {
       targetFilter: targetFilter
     ) { [weak self] hints in
       guard let self else { return }
-      if self.activationInFlightGeneration == myGen {
-        self.activationInFlight = false
-        self.activationInFlightGeneration = nil
-      }
+      self.activationLifecycle.complete(token: myGen)
       FlashLog.trace(
         "[activation] discover_complete gen=\(myGen) current_gen=\(self.activationGen) "
           + "hints=\(hints.count) mode=\(self.flashMode)")
       // The walk is done; gate is open for the next activation
       // regardless of whether *this* walk's result is still relevant.
-      guard self.activationGen == myGen else {
+      guard self.activationLifecycle.isCurrent(myGen) else {
         FlashLog.debug(
           "[activation] stale_generation pid=\(context.processID) "
             + "bundle=\(context.bundleIdentifier)"

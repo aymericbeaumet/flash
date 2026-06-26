@@ -66,10 +66,23 @@ enum NormalModePointerPolicy {
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false)
     }
-    // Any click in NORMAL — left, right, or double — hands the keyboard to the
-    // app and enters INSERT. Right-click opens a native context menu that does
-    // its own modal key tracking, so releasing capture there is correct too,
-    // and it keeps NORMAL free of "shown but not capturing" states.
+    // Right-click opens a native context menu that runs its own modal key
+    // session — it must NEVER flip the mode (same rule as the `f`/`F` commits).
+    // Suspend normal capture so the menu owns the keyboard, then NORMAL resumes
+    // when it dismisses; drop any transient hints first so they don't linger
+    // behind the menu.
+    if action == .rightClick {
+      return AppClickDecision(
+        releaseCapture: false,
+        probeForInsert: false,
+        suspendForNativeSurface: true,
+        dismissTransientHintsWithoutRekey: hasHints)
+    }
+    // Left / double click hands the keyboard to the app, but only enters INSERT
+    // when the click lands on a text input — the caller probes the click point
+    // (`AXClick.isTextInput`) so this matches the editability-aware `f` rule.
+    // On a button/link the click still goes through and NORMAL navigation
+    // continues.
     return AppClickDecision(
       releaseCapture: true,
       probeForInsert: true,
@@ -79,8 +92,13 @@ enum NormalModePointerPolicy {
 
   static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
     switch action {
-    case .leftClick, .doubleClick, .rightClick:
+    case .leftClick, .doubleClick:
       return true
+    case .rightClick:
+      // Right-click only ever opens a context menu; it never hands the keyboard
+      // to the app, so a committed right-click stays in NORMAL (the menu takes
+      // its own modal session via `suspendNormalCaptureForNativeSurface`).
+      return false
     }
   }
 

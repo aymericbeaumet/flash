@@ -75,6 +75,9 @@ extension AppDelegate {
 
   /// Per-base-mode bookkeeping that must run before the surface is rendered.
   private func applyEnterBookkeeping(_ next: Mode) {
+    // Any base-mode transition ends a transient native-surface suspension; clear
+    // it before the surface renders so capture isn't pinned off afterward.
+    nativeSurfaceSuspended = false
     switch next {
     case .normal:
       if let context = normalModeContext() {
@@ -114,9 +117,7 @@ extension AppDelegate {
         "[activation] invalidate reason=\(reason) gen=\(activationGen) "
           + "in_flight_gen=\(String(describing: activationInFlightGeneration))")
     }
-    activationGen &+= 1
-    activationInFlight = false
-    activationInFlightGeneration = nil
+    activationLifecycle.invalidate()
   }
 
   private func clearTransientHintState(reason: String) {
@@ -419,13 +420,18 @@ extension AppDelegate {
     let mode = modeStore.mode
     let hasHints = !currentHints.isEmpty
     let inFlight = activationInFlight
-    let inputMode = mode.overlayInputMode(hasHints: hasHints, activationInFlight: inFlight)
+    let suspended = nativeSurfaceSuspended
+    let inputMode = mode.overlayInputMode(
+      hasHints: hasHints, activationInFlight: inFlight, nativeSurfaceSuspended: suspended)
+    // A native-surface suspension forces capture off even when a caller passes
+    // `captureOverride: true` (e.g. a recapture attempt that raced a menu open).
     let capture =
-      captureOverride ?? mode.ownsKeyboard(hasHints: hasHints, activationInFlight: inFlight)
+      (captureOverride ?? mode.ownsKeyboard(hasHints: hasHints, activationInFlight: inFlight))
+      && !suspended
     let text = modeLabelText(mode.label)
     FlashLog.trace(
       "[mode] overlay mode=\(mode) input=\(inputMode) capture=\(capture) "
-        + "override=\(String(describing: captureOverride)) "
+        + "override=\(String(describing: captureOverride)) suspended=\(suspended) "
         + "visible=\(statusBarVisible) hints=\(currentHints.count) in_flight=\(inFlight)")
     statusBarController?.updateModeLabel(text)
     overlay.inputMode = inputMode
@@ -459,6 +465,10 @@ extension AppDelegate {
       FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
       return
     }
+    // Reaching here means no suppression is active — any native surface (context
+    // menu) has dismissed — so clear the suspend flag before re-establishing
+    // capture, otherwise the projection keeps capture pinned off.
+    nativeSurfaceSuspended = false
     // Flip `overlay.inputMode` to `.normal` synchronously before
     // scheduling the retries. The 0 ms entry below is still a
     // `DispatchQueue.main.asyncAfter` — it doesn't run until the next
@@ -600,15 +610,7 @@ extension AppDelegate {
     {
       FlashLog.trace("[mode] recapture_skip reason=pointer_insert_handoff_pending")
     }
-    if menuBarInteractionRecaptureSuppressedUntil.map({ $0 <= now }) == true {
-      menuBarInteractionRecaptureSuppressedUntil = nil
-    }
-    if contextMenuInteractionRecaptureSuppressedUntil.map({ $0 <= now }) == true {
-      contextMenuInteractionRecaptureSuppressedUntil = nil
-    }
-    if pointerInsertHandoffRecaptureSuppressedUntil.map({ $0 <= now }) == true {
-      pointerInsertHandoffRecaptureSuppressedUntil = nil
-    }
+    recaptureSuppression.pruneExpired(now: now)
     return shouldRecapture
   }
 
@@ -635,16 +637,14 @@ extension AppDelegate {
     until: Date?,
     now: Date
   ) -> Bool {
-    guard let until else { return false }
-    return now < until
+    RecaptureSuppression.active(until, now: now)
   }
 
   static func contextMenuInteractionRecaptureSuppressionIsActive(
     until: Date?,
     now: Date = Date()
   ) -> Bool {
-    guard let until else { return false }
-    return now < until
+    RecaptureSuppression.active(until, now: now)
   }
 
   static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
@@ -831,8 +831,7 @@ extension AppDelegate {
     until: Date?,
     now: Date = Date()
   ) -> Bool {
-    guard let until else { return false }
-    return now < until
+    RecaptureSuppression.active(until, now: now)
   }
 
   static func normalModeCaptureRecoveryShouldRetry(

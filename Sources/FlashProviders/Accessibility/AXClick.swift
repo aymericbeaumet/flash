@@ -118,6 +118,61 @@ public enum AXClick {
     }
   }
 
+  /// True if the AX element at `nsScreenPoint` in process `pid` is a typing
+  /// surface (one of `JumpTarget.textInputRoles`). Walks up to `maxAncestors`
+  /// levels the way `clickAtPoint` does, because a hit-test often lands on an
+  /// inner node (an `AXStaticText`/`AXGroup`) whose editable container is a
+  /// level or two up.
+  ///
+  /// This is the point-based equivalent of a hint target's own
+  /// `entersInsertMode` role check: the `F`-grid and physical-click paths have
+  /// only a screen point (no resolved AX target), so they ask the hit-test
+  /// what's there to decide insert-vs-normal the same way the `f` hint does.
+  /// Returns false when the point can't be resolved — the deterministic
+  /// "unknown ⇒ stay in NORMAL" default, matching how a roleless hint target
+  /// reports `entersInsertMode == false`.
+  public static func isTextInput(
+    at nsScreenPoint: CGPoint,
+    pid: pid_t,
+    maxAncestors: Int = 4
+  ) -> Bool {
+    let screenH = primaryScreenHeight()
+    // AX hit-test takes top-left primary-origin Y-down coords.
+    let axX = Float(nsScreenPoint.x)
+    let axY = Float(screenH - nsScreenPoint.y)
+    let app = AXApp.make(pid: pid)
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(app, axX, axY, &hit) == .success,
+      let initial = hit
+    else { return false }
+
+    var current = initial
+    var depth = 0
+    while true {
+      if let role = copyRole(current), JumpTarget.textInputRoles.contains(role) {
+        return true
+      }
+      if depth >= maxAncestors { return false }
+      var parentRaw: CFTypeRef?
+      guard
+        AXUIElementCopyAttributeValue(current, kAXParentAttribute as CFString, &parentRaw)
+          == .success,
+        let parentCF = parentRaw,
+        CFGetTypeID(parentCF) == AXUIElementGetTypeID()
+      else { return false }
+      current = parentCF as! AXUIElement
+      depth += 1
+    }
+  }
+
+  private static func copyRole(_ element: AXUIElement) -> String? {
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &raw) == .success
+    else { return nil }
+    return raw as? String
+  }
+
   private static func primaryScreenHeight() -> CGFloat {
     if let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) {
       return primary.frame.height

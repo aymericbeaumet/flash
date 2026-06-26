@@ -66,7 +66,7 @@ enum ActionDispatcher {
     completion: (() -> Void)? = nil
   ) {
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
-    if dispatchRoute(for: target, modifiers: modifiers) == .hostClick {
+    if dispatchRoute(for: target, action: action, modifiers: modifiers) == .hostClick {
       synthesizeClick(
         at: point, action: action, modifiers: modifiers,
         preserveCursor: !leaveCursorAtClickPoint, completion: completion)
@@ -92,8 +92,18 @@ enum ActionDispatcher {
       completion: completion)
   }
 
-  static func dispatchRoute(for target: JumpTarget, modifiers: ClickModifiers) -> DispatchRoute {
-    if !modifiers.isEmpty || target.preferHostClick {
+  static func dispatchRoute(
+    for target: JumpTarget,
+    action: JumpAction,
+    modifiers: ClickModifiers
+  ) -> DispatchRoute {
+    // Right-click must land as a real mouse-down at the click point. A genuine
+    // right-click makes the app anchor its context menu at the cursor, whereas
+    // the AX `AXShowMenu` action (the first step of `.accessibilityThenHostClick`)
+    // opens the *correct* menu but at the element's own default spot — typically
+    // the top-left of the screen, never where the user aimed. The `F` mouse-grid
+    // already synthesizes; routing `f` here too keeps the two consistent.
+    if action == .rightClick || !modifiers.isEmpty || target.preferHostClick {
       return .hostClick
     }
     return .accessibilityThenHostClick

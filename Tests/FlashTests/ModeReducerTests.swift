@@ -211,6 +211,22 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertTrue(
       Mode.command(scope: .commandLine, restoreTo: .normal)
         .ownsKeyboard(hasHints: false, activationInFlight: false))
+
+    // Native-surface suspension (context menu up): never capture, in any base
+    // mode; NORMAL stays `.normal`-routed so the cursor stays visible under the
+    // menu (the `.hints` routing would hide it).
+    XCTAssertFalse(
+      Mode.normal.ownsKeyboard(
+        hasHints: false, activationInFlight: false, nativeSurfaceSuspended: true))
+    XCTAssertFalse(
+      Mode.command(scope: .commandLine, restoreTo: .normal)
+        .ownsKeyboard(hasHints: false, activationInFlight: false, nativeSurfaceSuspended: true))
+    XCTAssertEqual(
+      Mode.normal.overlayInputMode(
+        hasHints: false, activationInFlight: false, nativeSurfaceSuspended: true), .normal)
+    XCTAssertEqual(
+      Mode.normal.overlayInputMode(
+        hasHints: true, activationInFlight: false, nativeSurfaceSuspended: true), .normal)
   }
 
   /// The "COMMAND is a lie" regression: the command surface must produce the

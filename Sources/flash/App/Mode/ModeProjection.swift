@@ -28,7 +28,17 @@ extension Mode {
   /// True when the overlay owns the keyboard as a command surface. For NORMAL
   /// this is only true when idle — while hints are on screen or an activation
   /// is in flight the overlay is routing hint letters, not commands.
-  func ownsKeyboard(hasHints: Bool, activationInFlight: Bool) -> Bool {
+  func ownsKeyboard(
+    hasHints: Bool,
+    activationInFlight: Bool,
+    nativeSurfaceSuspended: Bool = false
+  ) -> Bool {
+    // A native surface (a context menu / OS popup) runs its own modal key
+    // session, so the overlay must not capture while one is up — even though the
+    // base mode is unchanged. This is the projection's single home for the
+    // "suspended for a native surface" fact, so `suspendNormalCaptureForNativeSurface`
+    // sets a flag and re-renders instead of poking `overlay` fields directly.
+    if nativeSurfaceSuspended { return false }
     switch self {
     case .disabled, .insert:
       return false
@@ -42,7 +52,16 @@ extension Mode {
   /// The overlay's input-routing mode. This REPLACES the independently-stored
   /// `overlay.inputMode`; the executor sets `overlay.inputMode` to exactly this
   /// value whenever the mode, hint state, or activation changes.
-  func overlayInputMode(hasHints: Bool, activationInFlight: Bool) -> OverlayInputMode {
+  func overlayInputMode(
+    hasHints: Bool,
+    activationInFlight: Bool,
+    nativeSurfaceSuspended: Bool = false
+  ) -> OverlayInputMode {
+    // While suspended for a native surface, route as `.normal` (never `.hints`):
+    // `.hints` hides the mouse cursor, but the user needs a visible cursor to
+    // drive the context menu. Capture is off regardless (see `ownsKeyboard`); this
+    // only governs cursor visibility / routing for when capture later resumes.
+    if nativeSurfaceSuspended, case .normal = self { return .normal }
     switch self {
     case .disabled, .insert:
       return .hints

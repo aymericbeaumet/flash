@@ -1464,8 +1464,9 @@ final class NormalModeTests: XCTestCase {
         probeForInsert: true,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
-    // Any click in NORMAL — including right-click — releases capture and
-    // enters insert; the native context menu does its own key tracking.
+    // Right-click never flips the mode: it suspends normal capture so the
+    // native context menu owns the keyboard, and drops any transient hints
+    // showing behind it (so `dismissTransientHintsWithoutRekey` tracks hasHints).
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
         mode: .normal,
@@ -1473,9 +1474,20 @@ final class NormalModeTests: XCTestCase {
         hasHints: true,
         action: .rightClick),
       NormalModePointerPolicy.AppClickDecision(
-        releaseCapture: true,
-        probeForInsert: true,
-        suspendForNativeSurface: false,
+        releaseCapture: false,
+        probeForInsert: false,
+        suspendForNativeSurface: true,
+        dismissTransientHintsWithoutRekey: true))
+    XCTAssertEqual(
+      NormalModePointerPolicy.appClickDecision(
+        mode: .normal,
+        wasCommandLine: false,
+        hasHints: false,
+        action: .rightClick),
+      NormalModePointerPolicy.AppClickDecision(
+        releaseCapture: false,
+        probeForInsert: false,
+        suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
       NormalModePointerPolicy.appClickDecision(
@@ -1499,6 +1511,42 @@ final class NormalModeTests: XCTestCase {
         probeForInsert: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
+  }
+
+  func testPointerActionMayEnterInsertExcludesRightClick() {
+    // Left / double click can hand the keyboard to the app (subject to the
+    // editability probe at commit); right-click only ever opens a context menu
+    // and must keep the current mode, so it is excluded here. This is what keeps
+    // the `f`-hint right-click commit on the suspend path instead of insert.
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.leftClick))
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.doubleClick))
+    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.rightClick))
+  }
+
+  func testNormalAppRightClickSuspendsForContextMenuInsteadOfInsert() {
+    // Top-level decision: a physical right-click on the app body resolves to an
+    // app decision that suspends for the native surface (the context menu) and
+    // never releases capture into an insert handoff — uniform with the `f`/`F`
+    // right-click commits.
+    let decision = NormalModePointerPolicy.pointerDecision(
+      mode: .normal,
+      overlayInputMode: .normal,
+      hasHints: false,
+      activationInFlight: false,
+      intent: .click(
+        OverlayPointerClick(
+          action: .rightClick,
+          location: CGPoint(x: 200, y: 200),
+          modifiers: [])),
+      pointIsInMenuBar: false)
+    XCTAssertEqual(
+      decision,
+      .app(
+        NormalModePointerPolicy.AppClickDecision(
+          releaseCapture: false,
+          probeForInsert: false,
+          suspendForNativeSurface: true,
+          dismissTransientHintsWithoutRekey: false)))
   }
 
   func testPhysicalPointerClickForwardingOnlyCoversActivationOnlyPrimaryClicks() {

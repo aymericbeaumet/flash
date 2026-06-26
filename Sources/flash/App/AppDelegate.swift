@@ -125,10 +125,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var lastConfigErrorAlertMessage: String?
   var configErrorAlertVisible = false
 
-  var currentHints: [AssignedHint] = []
-  var currentPrefix: String = ""
+  /// The transient hint / mouse-grid session content. Reset in one move
+  /// (`clearHintSessionState`), so a new session field can't leak by being
+  /// forgotten in a hand-maintained reset list. The named accessors below
+  /// forward to it so existing call sites keep their field names.
+  var hintSession = HintSession()
+  var currentHints: [AssignedHint] {
+    get { hintSession.hints }
+    set { hintSession.hints = newValue }
+  }
+  var currentPrefix: String {
+    get { hintSession.prefix }
+    set { hintSession.prefix = newValue }
+  }
+  /// The pointer action a committed hint performs. NOT part of `hintSession`:
+  /// the mouse-grid commit reads it *after* the session reset, so it must
+  /// outlive `clearHintSessionState()`.
   var pendingAction: JumpAction = .leftClick
-  var pendingHintCommitBehavior: HintCommitBehavior = .click
+  var pendingHintCommitBehavior: HintCommitBehavior {
+    get { hintSession.commitBehavior }
+    set { hintSession.commitBehavior = newValue }
+  }
   /// The single source of truth for the app's mode. Every UI-facing fact
   /// (overlay input routing, status bar, badge, capture, mapping scope) is a
   /// projection of `modeStore.mode`; transitions go through `dispatchMode`.
@@ -246,9 +263,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var commandLineHistoryCursor: Int?
   var commandLineHistoryStash: String = ""
   var selectedInitialMode = false
-  var sourceAppPID: pid_t?
-  var mouseGridRegion: MouseGrid.Region?
-  var mouseGridDepth = 0
+  var sourceAppPID: pid_t? {
+    get { hintSession.sourceAppPID }
+    set { hintSession.sourceAppPID = newValue }
+  }
+  var mouseGridRegion: MouseGrid.Region? {
+    get { hintSession.mouseGridRegion }
+    set { hintSession.mouseGridRegion = newValue }
+  }
+  var mouseGridDepth: Int {
+    get { hintSession.mouseGridDepth }
+    set { hintSession.mouseGridDepth = newValue }
+  }
   var movementCurrent: MovementEntry?
   var movementBackStack: [MovementEntry] = []
   var movementForwardStack: [MovementEntry] = []
@@ -263,10 +289,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var normalModeRecaptureToken: UInt64 = 0
   var normalModeCaptureRecoveryToken: UInt64 = 0
   var normalModeCaptureRecoveryRecaptureToken: UInt64?
-  var menuBarInteractionRecaptureSuppressedUntil: Date?
-  var contextMenuInteractionRecaptureSuppressedUntil: Date?
-  var pointerInsertHandoffRecaptureSuppressedUntil: Date?
+  /// Consolidated recapture-suppression windows (was three parallel `Date?`
+  /// fields). The named accessors below forward to it so existing call sites and
+  /// tests keep their field names while the storage + predicate live in one
+  /// tested value.
+  var recaptureSuppression = RecaptureSuppression()
+  var menuBarInteractionRecaptureSuppressedUntil: Date? {
+    get { recaptureSuppression.menuBarUntil }
+    set { recaptureSuppression.menuBarUntil = newValue }
+  }
+  var contextMenuInteractionRecaptureSuppressedUntil: Date? {
+    get { recaptureSuppression.contextMenuUntil }
+    set { recaptureSuppression.contextMenuUntil = newValue }
+  }
+  var pointerInsertHandoffRecaptureSuppressedUntil: Date? {
+    get { recaptureSuppression.pointerInsertHandoffUntil }
+    set { recaptureSuppression.pointerInsertHandoffUntil = newValue }
+  }
   var pointerInsertHandoffToken: UInt64 = 0
+  /// True while a native surface (context menu / OS popup) owns the keyboard.
+  /// The sole non-base-mode input to the capture projection — set by
+  /// `suspendNormalCaptureForNativeSurface`, cleared when capture is
+  /// re-established (recapture or any mode transition). Keeps `overlay.inputMode`
+  /// and the badge's capture flag from drifting away from the mode.
+  var nativeSurfaceSuspended = false
   var normalModePendingCommandToken: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   /// Captures NORMAL / hints keystrokes without taking key-window focus. nil
@@ -280,23 +326,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var windowGeometryChangeInProgress = false
   var activeWindowBorderTrackingTimer: DispatchSourceTimer?
   var activeWindowBorderTrackedFrame: CGRect?
+  /// The activation generation-token machine (stale-walk rejection). The named
+  /// accessors below forward to it so existing call sites keep working; the
+  /// `begin`/`complete`/`supersede`/`invalidate` operations are the consolidated
+  /// home for what were scattered inline three-field mutations.
+  var activationLifecycle = ActivationLifecycle()
   /// Set while an activation walk is in flight on the AX queue. New URL
   /// events that arrive during this window are dropped, not queued. Same
   /// guard rejects re-entry if hints are already on screen.
-  var activationInFlight: Bool = false
+  var activationInFlight: Bool {
+    get { activationLifecycle.inFlight }
+    set { activationLifecycle.inFlight = newValue }
+  }
   /// Bumped on every `activate(action:)` *and* every `cancelOverlay()`.
   /// The discovery completion captures the value at activation time and
   /// only renders if it still matches when the walk finishes. This is what
   /// prevents a stale walk from rendering hints over the wrong app after
   /// the user dismisses or switches focus mid-flight.
-  var activationGen: UInt64 = 0
+  var activationGen: UInt64 {
+    get { activationLifecycle.generation }
+    set { activationLifecycle.generation = newValue }
+  }
   /// AX trust is checked once per session — until we observe `true`, we
   /// re-query each time. Once granted, the value is sticky for the rest
   /// of the run. Saves one IPC per activation in the steady state.
   /// Reset to `false` if an activation walk returns zero targets, which
   /// is the symptom of permission revocation mid-session.
   var cachedAccessibilityTrusted: Bool = false
-  var activationInFlightGeneration: UInt64?
+  var activationInFlightGeneration: UInt64? {
+    get { activationLifecycle.inFlightGeneration }
+    set { activationLifecycle.inFlightGeneration = newValue }
+  }
   var lastPermissionPromptAt: Date?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
