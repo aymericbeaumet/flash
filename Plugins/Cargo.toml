@@ -23,7 +23,6 @@ members = [
   "spotify",
   "system",
   "tmux",
-  "gmail",
 ]
 
 # Shared dependency versions. Each plugin opts in via

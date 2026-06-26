@@ -353,12 +353,12 @@ final class ConfigLoaderTests: XCTestCase {
     let c = ConfigLoader.parse(
       """
       [plugins]
-      disabled = ["defaults", "GMAIL"]
+      disabled = ["defaults", "TMUX"]
       third_party = ["github:user/project@\(sha)", "file:../plugins/spotify"]
       """,
       sourceURL: source)
 
-    XCTAssertEqual(c.plugins.disabled, Set(["defaults", "gmail"]))
+    XCTAssertEqual(c.plugins.disabled, Set(["defaults", "tmux"]))
     XCTAssertEqual(c.plugins.thirdParty.count, 2)
     XCTAssertEqual(c.plugins.thirdParty[0].raw, "github:user/project@\(sha)")
     if case .github(let owner, let repository, let commit) = c.plugins.thirdParty[0].kind {

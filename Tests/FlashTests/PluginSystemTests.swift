@@ -13,7 +13,7 @@ final class PluginSystemTests: XCTestCase {
       ids,
       [
         "aiproviders", "calculator", "chromium", "clipboard", "contacts", "defaults",
-        "emojis", "firefox", "gmail", "marks", "media", "notes", "processes", "reminders",
+        "emojis", "firefox", "marks", "media", "notes", "processes", "reminders",
         "safari", "screenshot", "searchengines", "slack", "spotify", "system", "tmux",
       ])
 
@@ -72,46 +72,6 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       Set(defaults.verbs.map(\.name)),
       ["app_save", "app_print", "document_open", "window_new"])
-
-    let gmail = try XCTUnwrap(manifests.first { $0.id == "gmail" })
-    XCTAssertEqual(gmail.priority, 60)
-    XCTAssertEqual(gmail.capabilities, [.accessibility, .appControl])
-    XCTAssertEqual(gmail.onlyURLs, ["https://mail.google.com/*"])
-    XCTAssertEqual(gmail.sourceActions, ["resource_archive", "resource_next", "resource_previous"])
-    XCTAssertEqual(
-      gmail.commands.map { "\($0.command) \($0.subcommand)" },
-      [
-        "gmail inbox", "gmail starred", "gmail snoozed", "gmail sent", "gmail drafts",
-        "gmail all", "gmail tasks", "gmail label",
-      ])
-    XCTAssertEqual(gmail.mappings.count, 11)
-    XCTAssertEqual(
-      Set(gmail.mappings.map(\.key)),
-      ["gi", "gs", "gb", "gt", "gd", "ga", "gk", "gl", "gn", "gp", "o"])
-    let expectedGmailMappings = [
-      "gi": "inbox",
-      "gs": "starred",
-      "gb": "snoozed",
-      "gt": "sent",
-      "gd": "drafts",
-      "ga": "all",
-      "gk": "tasks",
-      "gl": "label",
-    ]
-    for (key, subcommand) in expectedGmailMappings {
-      XCTAssertEqual(
-        gmail.mappings.first { $0.key == key }?.command,
-        ["flash", "plugin_command", "--command=gmail", "--subcommand=\(subcommand)"])
-    }
-    XCTAssertEqual(
-      gmail.mappings.first { $0.key == "gn" }?.command,
-      ["flash", "history_forward"])
-    XCTAssertEqual(
-      gmail.mappings.first { $0.key == "gp" }?.command,
-      ["flash", "history_back"])
-    XCTAssertEqual(
-      gmail.mappings.first { $0.key == "o" }?.command,
-      ["flash", "send_key", "--keys=o"])
 
     XCTAssertTrue(
       commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
