@@ -29,7 +29,15 @@ enum NormalModePointerPolicy {
     pointIsInMenuBar: Bool
   ) -> PointerDecision {
     if case .scroll = intent {
-      if overlayInputMode == .commandLine || overlayInputMode == .candidateFinder || hasHints {
+      // The command bar / candidate list is a focused, keyboard-driven
+      // surface: a stray scroll (trackpad inertia, reading the page behind
+      // it) must NOT tear it down — the user dismisses it with Esc. Hints are
+      // different: a scroll there means "let me read the page", so the
+      // transient hints get out of the way.
+      if overlayInputMode == .commandLine || overlayInputMode == .candidateFinder {
+        return .passThrough
+      }
+      if hasHints {
         return .cancelOverlay
       }
       return .passThrough

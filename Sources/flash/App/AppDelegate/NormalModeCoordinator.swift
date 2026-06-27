@@ -1595,21 +1595,20 @@ extension AppDelegate {
     max(1, config.flashlight.suggestionCount)
   }
 
-  func commandLineCompletionDisplayItems(windowSize: Int? = nil) -> [CandidateDisplayItem] {
+  func commandLineCompletionDisplayItems() -> [CandidateDisplayItem] {
     guard !commandLineCompletionMatches.isEmpty else { return [] }
-    let windowSize = windowSize ?? commandBarSuggestionCount
-    let maxStart = max(0, commandLineCompletionMatches.count - windowSize)
-    let start = min(
-      max(0, commandLineCompletionSelectedIndex - windowSize / 2), maxStart)
-    let end = min(commandLineCompletionMatches.count, start + windowSize)
-    return commandLineCompletionMatches[start..<end].enumerated().map { offset, match in
+    // Unlike the flashlight finder (which windows thousands of apps via
+    // `commandBarSuggestionCount`), the `:` command list is a small, bounded
+    // set — show every match at once so opening the command bar reveals the
+    // whole catalogue rather than a scrolling slice.
+    return commandLineCompletionMatches.enumerated().map { index, match in
       CandidateDisplayItem(
         title: match.completion.label,
         highlightedRanges: commandLineCompletionQuery.isEmpty
           ? []
           : NormalModeDispatcher.fuzzyHighlightRanges(
             query: commandLineCompletionQuery, candidate: match.completion.label),
-        isSelected: start + offset == commandLineCompletionSelectedIndex)
+        isSelected: index == commandLineCompletionSelectedIndex)
     }
   }
 

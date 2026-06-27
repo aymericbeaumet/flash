@@ -377,8 +377,10 @@ final class OverlayPanel: NSPanel {
     commandCaretLayer.backgroundColor = Self.nordSnowStorm2CG
     commandCaretLayer.isHidden = true
     commandPromptLayer.sublayers = [commandPromptLabel, commandCaretLayer]
-    candidateFinderResultsLayer.cornerRadius = 4
-    candidateFinderResultsLayer.borderWidth = 1
+    // Match the command-input box exactly so the two stacked boxes read as
+    // one surface — same corner radius and border weight as `commandPromptLayer`.
+    candidateFinderResultsLayer.cornerRadius = 6
+    candidateFinderResultsLayer.borderWidth = 1.5
     candidateFinderResultsLayer.masksToBounds = true
     candidateFinderResultsLayer.actions = OverlayPanel.noActions
     candidateFinderResultsLabel.alignmentMode = .left
