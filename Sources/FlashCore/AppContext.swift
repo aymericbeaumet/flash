@@ -1,5 +1,9 @@
 import AppKit
 
+// @unchecked Sendable: `runningApp` is `NSRunningApplication`, which Apple has
+// not annotated `Sendable`. Each `AppContext` is constructed once on the main
+// thread from a focus snapshot and treated as immutable thereafter; provider
+// walks and source resolvers only read its fields from background queues.
 public struct AppContext: @unchecked Sendable {
   public let bundleIdentifier: String
   public let processID: pid_t

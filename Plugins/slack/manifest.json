@@ -1,0 +1,57 @@
+{
+  "id": "slack",
+  "name": "Slack",
+  "version": "0.1.0",
+  "description": "Slack CLI actions and a channel finder backed by local Slack app state plus AX fallback.",
+  "install": "true",
+  "start": "exec ./flash-plugin-slack",
+  "request_timeout_ms": 6500,
+  "capabilities": [
+    "accessibility",
+    "network",
+    "app_control"
+  ],
+  "navigation": {
+    "schemes": [
+      "slack"
+    ]
+  },
+  "commands": {
+    "items": [
+      {
+        "command": "slack",
+        "subcommand": "login",
+        "description": "Authenticate the Slack CLI"
+      },
+      {
+        "command": "slack",
+        "subcommand": "version",
+        "description": "Show Slack CLI version"
+      },
+      {
+        "command": "slack",
+        "subcommand": "run",
+        "description": "Run slack with raw arguments"
+      }
+    ]
+  },
+  "only_bundle_ids": [
+    "com.tinyspeck.slackmacgap",
+    "com.tinyspeck.slackmacgap.direct"
+  ],
+  "listen": [
+    "core:apps.*",
+    "core:focus.changed",
+    "core:window.focus.changed",
+    "core:flashlight.opened",
+    "core:apps.changed",
+    "core:config.*"
+  ],
+  "sources": [
+    {
+      "name": "slack.channels",
+      "kind": "locations",
+      "priority": "high"
+    }
+  ]
+}

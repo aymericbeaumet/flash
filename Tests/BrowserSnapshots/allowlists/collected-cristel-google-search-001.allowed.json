@@ -1,0 +1,58 @@
+{
+  "entries": [
+    {
+      "side": "flashOnly",
+      "rect": [11, 868, 110, 44],
+      "reason": "Firefox AX exposes a visible accessibility skip link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1335, 600, 128, 122],
+      "reason": "Firefox AX exposes a Google shopping image link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1473, 600, 128, 122],
+      "reason": "Firefox AX exposes a Google shopping image link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1611, 600, 128, 122],
+      "reason": "Firefox AX exposes a Google shopping image link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1749, 600, 128, 122],
+      "reason": "Firefox AX exposes a Google shopping image link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1343, 408, 112, 22],
+      "reason": "Firefox AX exposes a Google shopping attribution link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1481, 408, 112, 22],
+      "reason": "Firefox AX exposes a Google shopping attribution link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1619, 408, 112, 22],
+      "reason": "Firefox AX exposes a Google shopping attribution link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [1757, 408, 112, 22],
+      "reason": "Firefox AX exposes a Google shopping attribution link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    }
+  ]
+}

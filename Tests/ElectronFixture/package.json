@@ -1,0 +1,13 @@
+{
+  "name": "flash-electron-fixture",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Deterministic Electron AX fixture for Flash integration tests",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "42.3.3"
+  }
+}

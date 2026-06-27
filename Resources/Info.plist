@@ -28,16 +28,7 @@
     <true/>
     <key>NSAccessibilityUsageDescription</key>
     <string>Flash uses the Accessibility API to find clickable elements in the focused application so it can show jump-hints.</string>
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>Flash Activation</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>flash</string>
-            </array>
-        </dict>
-    </array>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Flash sends Apple Events to focus or launch the apps you bind to mapping commands, and to make sure their main window appears.</string>
 </dict>
 </plist>

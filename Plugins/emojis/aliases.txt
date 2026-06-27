@@ -1,0 +1,901 @@
+😀	grinning
+😁	grin grinning_face_with_smiling_eyes
+😂	joy lol cry_laugh
+😃	smiley smiling
+😄	smile happy
+😅	sweat_smile relief
+😆	laughing satisfied
+😇	innocent halo
+😉	wink winking
+😊	blush
+😋	yum
+😌	relieved
+😍	heart_eyes love_eyes
+😎	sunglasses cool
+😏	smirk
+😐	neutral_face
+😑	expressionless
+😒	unamused
+😓	sweat
+😔	pensive
+😕	confused
+😖	confounded
+😘	kissing_heart kiss
+😙	kissing_smiling_eyes
+😚	kissing_closed_eyes
+😛	stuck_out_tongue tongue
+😜	stuck_out_tongue_winking_eye
+😝	stuck_out_tongue_closed_eyes
+😞	disappointed
+😟	worried
+😠	angry mad
+😡	rage angry_mad furious
+😢	cry crying sad
+😣	persevere
+😤	triumph
+😥	disappointed_relieved
+😦	frowning
+😧	anguished
+😨	fearful
+😩	weary
+😪	sleepy
+😫	tired_face
+😬	grimacing
+😭	sob crying_loudly
+😮	open_mouth
+😯	hushed
+😰	cold_sweat
+😱	scream
+😲	astonished
+😳	flushed
+😴	sleeping zzz tired
+😵	dizzy_face
+😶	no_mouth
+😷	mask sick
+🙁	slightly_frowning_face
+🙂	slightly_smiling_face
+🙃	upside_down_face
+🙄	roll_eyes eye_roll
+🤔	thinking hmm
+🤐	zipper_mouth
+🤑	money_mouth
+🤒	thermometer_face sick
+🤓	nerd nerd_face
+🤕	head_bandage
+🤗	hugging hug
+🤤	drooling
+🤥	lying_face liar
+🤧	sneezing
+🤨	raised_eyebrow
+🤩	star_struck
+🤪	zany_face crazy
+🤫	shushing
+🤬	cursing swearing
+🤭	hand_over_mouth oops
+🤮	vomit puke
+🤯	mind_blown exploding_head
+🥱	yawning
+🥳	partying_face party
+🥴	woozy
+🥵	hot
+🥶	cold freezing
+🥺	pleading begging puppy_eyes
+🤣	rofl rolling
+🤡	clown
+🤠	cowboy
+🤢	nauseated sick
+🦄	unicorn
+🐱	cat kitten
+🐶	dog puppy
+🐭	mouse
+🐹	hamster
+🐰	rabbit bunny
+🦊	fox
+🐻	bear teddy
+🐼	panda
+🐨	koala
+🐯	tiger
+🦁	lion
+🐮	cow moo
+🐷	pig oink
+🐸	frog
+🐵	monkey
+🐔	chicken hen
+🐧	penguin
+🐦	bird
+🐤	chick baby_chicken
+🐣	hatching_chick
+🐥	front_facing_baby_chick
+🐺	wolf
+🐗	boar
+🐴	horse
+🦓	zebra
+🦒	giraffe
+🦏	rhinoceros
+🦛	hippopotamus hippo
+🐘	elephant
+🐳	whale
+🐬	dolphin
+🐟	fish
+🐠	tropical_fish
+🐡	blowfish
+🦈	shark
+🐙	octopus
+🐚	shell
+🐌	snail
+🦋	butterfly
+🐛	bug worm caterpillar
+🐜	ant
+🐝	bee honeybee
+🐞	ladybug
+🦗	cricket
+🕷	spider
+🦂	scorpion
+🦀	crab rust
+🦞	lobster
+🦐	shrimp
+🐍	snake python
+🦎	lizard
+🐢	turtle
+❤️	heart love red_heart
+🧡	orange_heart
+💛	yellow_heart
+💚	green_heart
+💙	blue_heart
+💜	purple_heart
+🖤	black_heart
+🤍	white_heart
+🤎	brown_heart
+💔	broken_heart heartbreak
+❣️	heart_exclamation
+💕	two_hearts
+💞	revolving_hearts
+💓	heartbeat
+💗	heartpulse heart_pulse
+💖	sparkling_heart
+💘	cupid heart_arrow
+💝	gift_heart
+💟	heart_decoration
+☮️	peace
+✝️	cross
+☪️	star_and_crescent
+🕉	om
+☸️	wheel_of_dharma
+✡️	star_of_david
+🔯	six_pointed_star
+🕎	menorah
+☯️	yin_yang
+☦️	orthodox_cross
+🛐	place_of_worship
+⛎	ophiuchus
+♈	aries
+♉	taurus
+♊	gemini
+♋	cancer
+♌	leo
+♍	virgo
+♎	libra
+♏	scorpio scorpius
+♐	sagittarius
+♑	capricorn
+♒	aquarius
+♓	pisces
+🆔	id
+⚛️	atom
+🉑	accept
+☢️	radioactive
+☣️	biohazard
+📴	mobile_phone_off
+📳	vibration_mode
+🈶	u6709
+🈚	u7121
+🈸	u7533
+🈺	u55b6
+🈷️	u6708
+✴️	eight_pointed_black_star
+🆚	vs versus
+💮	white_flower
+🉐	ideograph_advantage
+㊙️	secret
+㊗️	congratulations
+🈴	u5408
+🈵	u6e80
+🈹	u5272
+🈲	u7981
+🅰️	a
+🅱️	b
+🆎	ab
+🆑	cl
+🅾️	o
+🆘	sos help
+❌	x cross_mark no
+⭕	o_circle red_circle_o
+🛑	stop stop_sign no_entry
+⛔	no_entry no_entry_sign
+📛	name_badge
+🚫	prohibited not_allowed
+💯	hundred 100 perfect
+💢	anger
+♨️	hot_springs
+🚷	no_pedestrians
+🚯	do_not_litter
+🚳	no_bicycles
+🚱	non_potable_water
+🔞	underage
+📵	no_mobile_phones
+❗	exclamation
+❕	grey_exclamation
+❓	question
+❔	grey_question
+‼️	bangbang
+⁉️	interrobang
+🔅	low_brightness
+🔆	high_brightness
+〽️	part_alternation_mark
+⚠️	warning danger
+🚸	children_crossing
+🔱	trident
+⚜️	fleur_de_lis
+🔰	beginner
+♻️	recycle
+✅	check check_mark white_check_mark yes
+🈯	chinese_reserved
+💹	chart
+❇️	sparkle
+✳️	eight_spoked_asterisk
+❎	negative_squared_cross
+🌐	globe globe_with_meridians
+💠	diamond_with_a_dot
+Ⓜ️	m metro
+🌀	cyclone
+💤	zzz sleep
+🏧	atm
+🚾	wc
+♿	wheelchair accessible
+🅿️	parking
+🈳	u7a7a
+🈂️	u30b5
+🛂	passport_control
+🛃	customs
+🛄	baggage_claim
+🛅	left_luggage
+🚹	mens men
+🚺	womens women
+🚼	baby_symbol
+🚻	restroom
+🚮	put_litter_in_its_place
+🎦	cinema
+📶	signal_strength
+🈁	u3053
+🔣	symbols
+ℹ️	information_source info
+🔤	abc
+🔡	abcd
+🔠	capital_abcd
+🆖	ng
+🆗	ok_sign ok_button
+🆙	up
+🆒	cool_sign
+🆕	new
+🆓	free
+0️⃣	zero
+1️⃣	one
+2️⃣	two
+3️⃣	three
+4️⃣	four
+5️⃣	five
+6️⃣	six
+7️⃣	seven
+8️⃣	eight
+9️⃣	nine
+🔟	keycap_ten
+🔢	1234 numbers
+#️⃣	hash
+*️⃣	asterisk
+▶️	arrow_forward play
+⏸	pause
+⏯	play_pause
+⏹	stop_button
+⏺	record
+⏭	next_track
+⏮	previous_track
+⏩	fast_forward
+⏪	rewind
+🔼	arrow_up_small
+🔽	arrow_down_small
+⏫	double_up arrow_double_up
+⏬	double_down arrow_double_down
+◀️	arrow_backward
+🔀	shuffle twisted_rightwards_arrows
+🔁	repeat loop
+🔂	repeat_one
+🔄	arrows_counterclockwise
+🔃	arrows_clockwise
+🎵	musical_note music_note
+🎶	notes
+➕	plus
+➖	minus
+➗	divide
+✖️	multiply heavy_multiplication_x
+🟰	equals
+♾️	infinity
+💲	dollar
+💱	currency_exchange
+®	registered
+©	copyright
+™	tm trademark
+🔚	end
+🔙	back
+🔛	on
+🔝	top
+🔜	soon
+☑️	ballot_box_with_check check_box
+🔘	radio_button
+🔴	red_circle
+🟠	orange_circle
+🟡	yellow_circle
+🟢	green_circle
+🔵	blue_circle
+🟣	purple_circle
+⚫	black_circle
+⚪	white_circle
+🟤	brown_circle
+🟥	red_square
+🟧	orange_square
+🟨	yellow_square
+🟩	green_square
+🟦	blue_square
+🟪	purple_square
+⬛	black_square
+⬜	white_square
+🟫	brown_square
+🔺	small_red_triangle
+🔻	small_red_triangle_down
+🔸	small_orange_diamond
+🔹	small_blue_diamond
+🔶	large_orange_diamond
+🔷	large_blue_diamond
+🔳	white_square_button
+🔲	black_square_button
+💁	information_desk_person tip
+🙅	no_good
+🙆	ok ok_woman
+🙋	raising_hand hand_up
+🙇	bow bow_down
+🙏	pray prayer thanks please folded_hands
+🤲	palms_up_together
+👏	clap applause
+🙌	raised_hands praise hands_up
+🤝	handshake deal
+🤜	right_fist
+🤛	left_fist
+👊	fist_bump punch
+✊	fist
+👍	thumbsup +1 yes thumb_up like
+👎	thumbsdown -1 no thumb_down dislike
+👌	ok_hand
+🤌	pinched_fingers
+🤏	pinching_hand
+🤞	fingers_crossed crossed_fingers
+🤟	love_you
+🤘	rock_on metal horns
+🤙	call_me shaka
+🫶	heart_hands
+🫰	finger_heart
+🫵	pointing_you
+🫱	right_hand
+🫲	left_hand
+🫳	palm_down
+🫴	palm_up
+👋	wave hi hello bye
+👈	point_left
+👉	point_right
+👆	point_up
+👇	point_down
+☝️	point_up_one
+✋	hand raised_hand
+🖐	hand_splayed
+🖖	vulcan_salute spock live_long_prosper
+✌️	v peace_sign victory
+🖕	middle_finger
+✍️	writing_hand
+💅	nail_care nail_polish
+🤳	selfie
+💪	muscle flex strong
+🦾	mechanical_arm
+🦿	mechanical_leg
+🦵	leg
+🦶	foot
+👂	ear
+🦻	hearing_aid
+👃	nose
+🧠	brain
+🫀	anatomical_heart
+🫁	lungs
+🦷	tooth
+🦴	bone
+👀	eyes look watching
+👁	eye
+👅	tongue_out
+👄	lips mouth
+🫦	biting_lip
+👶	baby
+🧒	child
+👦	boy
+👧	girl
+🧑	person
+👨	man
+👩	woman
+🧓	older_person
+👴	old_man grandpa
+👵	old_woman grandma
+🧔	bearded_person beard
+🤴	prince
+👸	princess
+🤵	tuxedo groom
+👰	bride
+🙎	pouting
+🙍	person_frowning
+💃	dancer dance
+🕺	man_dancing
+🚶	walking pedestrian
+🏃	runner running
+🧎	kneeling
+🏋️	weight_lifter lifting
+🤸	cartwheel
+⛹️	bouncing_ball
+🤺	fencer fencing
+🤾	handball
+⛷	skier
+🏂	snowboarder
+🏌️	golfer
+🏄	surfer surfing
+🚣	rowboat rowing
+🏊	swimmer swimming
+⛹	bouncing_ball_person
+🚴	bicyclist biking
+🚵	mountain_bicyclist mountain_biking
+🤹	juggling
+🧘	meditation lotus_position
+🛀	bath bathing
+🛌	sleeping_bed
+🦸	superhero
+🦹	supervillain
+🧙	mage wizard
+🧚	fairy
+🧛	vampire
+🧜	mermaid merperson
+🧝	elf
+🧞	genie
+🧟	zombie
+👮	cop police
+🕵	detective spy
+💂	guard
+🥷	ninja
+👷	construction_worker builder
+👸	princess_royal
+🤴	prince_royal
+👲	man_with_gua_pi_mao
+🧕	hijab
+👳	turban
+👮‍♀️	policewoman
+👨‍⚕️	male_doctor doctor
+👩‍⚕️	female_doctor doctor
+👨‍🌾	farmer
+👨‍🍳	cook chef
+👨‍🎓	graduate student
+👨‍🎤	rockstar singer
+👨‍🎨	artist
+👨‍🏫	teacher professor
+👨‍💼	office_worker
+👨‍🔧	mechanic
+👨‍🔬	scientist
+👨‍💻	developer coder programmer
+👨‍🚀	astronaut
+👨‍🚒	firefighter
+🍕	pizza
+🍔	burger hamburger
+🌮	taco
+🌯	burrito
+🍣	sushi
+🍱	bento
+🍜	ramen noodles
+🥗	salad
+🥪	sandwich
+🥙	stuffed_flatbread
+🍩	doughnut donut
+🍪	cookie
+🍰	cake slice
+🎂	birthday birthday_cake
+🧁	cupcake
+🍫	chocolate
+🍬	candy
+🍭	lollipop
+🍦	icecream ice_cream
+🍨	ice_cream_bowl
+🍿	popcorn
+🍻	beers cheers
+🍺	beer
+🍷	wine
+🥂	champagne_glass
+🍸	cocktail martini
+🍹	tropical_drink
+🍶	sake
+🥃	whiskey tumbler
+🍼	baby_bottle
+🥛	milk
+☕	coffee cafe
+🍵	tea
+🥤	soft_drink soda
+🧋	bubble_tea boba
+🧃	beverage_box juice_box
+🍾	champagne bottle_popping
+🚀	rocket launch ship_it
+🛸	ufo
+🛰	satellite
+🌠	stars
+🌌	milky_way galaxy
+⭐	star
+🌟	star2 shining_star
+✨	sparkles
+☀️	sunny
+🌞	sun_face
+🌝	full_moon_face
+🌚	new_moon_face
+🌛	first_quarter_moon_face
+🌜	last_quarter_moon_face
+🌙	moon crescent_moon
+🌍	earth_africa
+🌎	earth_americas
+🌏	earth_asia
+🌐	globe
+☁️	cloud
+⛅	partly_sunny
+☁	cloudy
+🌧	rain rain_cloud
+⛈	thunder_cloud
+🌩	lightning
+⛄	snowman snow
+☃️	snowman_with_snow
+❄️	snowflake
+🌪	tornado
+🌫	fog
+🌬	wind
+💨	dash dashing
+💦	sweat_drops drops
+☔	rain_umbrella
+☂	umbrella
+☔️	with_rain_umbrella
+🔥	fire lit hot flame
+💥	boom explosion collision
+🌈	rainbow
+💧	droplet
+🌊	wave_ocean ocean
+🎉	tada party celebrate
+🎊	confetti_ball confetti
+🎈	balloon
+🎁	gift present
+🎀	ribbon
+🎂	cake_birthday
+🥳	party_face
+🪅	pinata
+🎆	fireworks
+🎇	sparkler
+🧨	firecracker
+🎄	christmas_tree
+🎃	jack_o_lantern halloween pumpkin
+🎗	reminder_ribbon
+🎟	admission_tickets
+🎫	ticket
+🎖	military_medal medal
+🏆	trophy
+🏅	medal_sports
+🥇	first_place gold_medal
+🥈	second_place silver_medal
+🥉	third_place bronze_medal
+⚽	soccer_ball football_soccer
+⚾	baseball
+🥎	softball
+🏀	basketball
+🏐	volleyball
+🏈	football
+🏉	rugby
+🎾	tennis
+🥏	frisbee
+🎳	bowling
+🏏	cricket_game
+🏑	field_hockey
+🏒	ice_hockey
+🥍	lacrosse
+🏓	ping_pong table_tennis
+🏸	badminton
+🥊	boxing
+🥋	martial_arts
+🥅	goal_net
+⛳	golf
+🪁	kite
+🏹	bow_arrow
+🎣	fishing fishing_pole
+🤿	diving_mask
+🥽	goggles
+🎽	running_shirt
+🛹	skateboard
+⛸	ice_skate
+🥌	curling_stone
+🎿	ski
+⛷	skier_alt
+🛷	sled
+🎯	dart bullseye target
+🎱	pool_8ball billiards
+🔮	crystal_ball magic
+🪄	magic_wand
+🎮	video_game gaming
+🕹	joystick
+🎰	slot_machine
+🧩	puzzle_piece
+🎲	dice
+♟	chess_pawn
+🧿	nazar_amulet
+🃏	joker_card
+🀄	mahjong
+🎴	flower_playing_cards
+♠️	spades
+♥️	hearts
+♦️	diamonds
+♣️	clubs
+🎭	performing_arts
+🎨	art artist_palette
+🧵	thread
+🪡	sewing_needle
+🪢	knot
+🧶	yarn
+👓	eyeglasses glasses
+🕶	sunglasses_alt dark_glasses
+🥽	safety_goggles
+🥼	lab_coat
+🦺	safety_vest
+👔	necktie
+👕	shirt tshirt
+👖	jeans pants
+🧣	scarf
+🧤	gloves
+🧥	coat
+🧦	socks
+👗	dress
+👘	kimono
+🥻	sari
+🩱	one_piece_swimsuit
+🩲	briefs
+🩳	shorts
+👙	bikini
+👚	womans_clothes
+👛	purse
+👜	handbag
+👝	pouch
+🛍	shopping shopping_bags
+🎒	backpack school_bag
+👞	mans_shoe
+👟	athletic_shoe sneaker
+🥾	hiking_boot
+🥿	flat_shoe
+👠	high_heel
+👡	sandal
+🩰	ballet_shoes
+👢	boot
+👑	crown
+👒	womans_hat
+🎩	tophat
+🎓	mortar_board grad graduation
+🧢	billed_cap
+🪖	military_helmet
+⛑	rescue_worker_helmet
+📿	prayer_beads
+💄	lipstick
+💍	ring engagement_ring
+💎	gem diamond
+🔇	mute
+🔈	speaker
+🔉	sound
+🔊	loud_sound
+📢	loudspeaker
+📣	mega megaphone
+📯	postal_horn
+🔔	bell ring
+🔕	no_bell silent
+🎼	musical_score
+🎵	music_note_single
+🎶	music_notes
+🎙	studio_microphone
+🎚	level_slider
+🎛	control_knobs
+🎤	mic microphone
+🎧	headphones
+📻	radio
+🎷	saxophone
+🪗	accordion
+🎸	guitar
+🪕	banjo
+🎹	musical_keyboard piano
+🎺	trumpet
+🎻	violin
+🪘	long_drum
+🥁	drum
+📱	mobile iphone phone
+📲	calling
+☎️	telephone phone_old
+📞	telephone_receiver
+📟	pager
+📠	fax
+🔋	battery
+🪫	low_battery
+🔌	plug electric_plug
+💻	laptop computer
+🖥	desktop_computer
+🖨	printer
+⌨️	keyboard
+🖱	computer_mouse
+🖲	trackball
+💽	minidisc
+💾	floppy_disk save
+💿	cd
+📀	dvd
+🧮	abacus
+🎥	movie_camera
+🎞	film_frames
+📽	film_projector
+🎬	clapper clapperboard
+📺	tv television
+📷	camera
+📸	camera_with_flash
+📹	video_camera
+📼	vhs
+🔍	mag magnifying_glass_left
+🔎	mag_right magnifying_glass_right
+🕯	candle
+💡	bulb idea lightbulb
+🔦	flashlight torch
+🏮	lantern
+🪔	diya_lamp
+📔	notebook_decorative
+📕	closed_book
+📖	book open_book
+📗	green_book
+📘	blue_book
+📙	orange_book
+📚	books
+📓	notebook
+📒	ledger
+📃	page_with_curl
+📜	scroll
+📄	page_facing_up
+📰	newspaper
+🗞	rolled_newspaper
+📑	bookmark_tabs
+🔖	bookmark
+🏷	label tag
+💰	moneybag money
+🪙	coin
+💴	yen
+💵	dollar_bill
+💶	euro
+💷	pound
+💸	money_with_wings
+💳	credit_card
+🧾	receipt
+✉️	email envelope
+📧	e_mail
+📨	incoming_envelope
+📩	envelope_with_arrow
+📤	outbox_tray
+📥	inbox_tray
+📦	package
+📫	mailbox
+📪	mailbox_closed
+📬	mailbox_with_mail
+📭	mailbox_with_no_mail
+📮	postbox
+🗳	ballot_box
+✏️	pencil2
+✒️	black_nib
+🖋	fountain_pen
+🖊	pen
+🖌	paintbrush
+🖍	crayon
+📝	memo pencil note
+💼	briefcase
+📁	file_folder folder
+📂	open_file_folder open_folder
+🗂	card_index_dividers
+📅	date calendar
+📆	calendar_alt
+🗒	spiral_notepad
+🗓	spiral_calendar
+📇	card_index
+📈	chart_increasing chart_up
+📉	chart_decreasing chart_down
+📊	bar_chart
+📋	clipboard
+📌	pushpin pin
+📍	round_pushpin
+📎	paperclip
+🖇	paperclips
+📏	straight_ruler
+📐	triangular_ruler
+✂️	scissors cut
+🗃	card_file_box
+🗄	file_cabinet
+🗑	wastebasket trash
+🔒	lock locked
+🔓	unlock unlocked
+🔏	lock_with_ink_pen
+🔐	closed_lock_with_key
+🔑	key
+🗝	old_key
+🔨	hammer
+🪓	axe
+⛏	pick
+⚒	hammer_and_pick
+🛠	hammer_and_wrench tools
+🗡	dagger
+⚔	crossed_swords
+🔫	water_pistol gun
+🪃	boomerang
+🏹	bow_arrows
+🛡	shield
+🪚	carpentry_saw saw
+🔧	wrench
+🪛	screwdriver
+🔩	nut_and_bolt
+⚙	gear settings
+🗜	clamp
+⚖	scales balance
+🦯	probing_cane
+🔗	link
+⛓	chain_link chains
+🪝	hook
+🧰	toolbox
+🧲	magnet
+🪜	ladder
+⚗	alembic
+🧪	test_tube
+🧫	petri_dish
+🧬	dna
+🔬	microscope
+🔭	telescope
+📡	satellite_antenna
+💉	syringe
+🩸	drop_of_blood
+💊	pill drugs
+🩹	bandage
+🩺	stethoscope
+🚪	door
+🛗	elevator
+🪞	mirror
+🪟	window
+🛏	bed
+🛋	couch sofa
+🪑	chair
+🚽	toilet
+🪠	plunger
+🚿	shower
+🛁	bathtub
+🪤	mouse_trap
+🪒	razor
+🧴	lotion_bottle
+🧷	safety_pin
+🧹	broom
+🧺	basket
+🧻	roll_of_paper toilet_paper
+🪣	bucket
+🧼	soap
+🪥	toothbrush
+🧽	sponge
+🧯	fire_extinguisher
+🛒	shopping_cart cart
+🚬	smoking cigarette
+⚰	coffin
+🪦	headstone
+⚱	funeral_urn
+🗿	moai moyai statue
+🪧	placard sign
+🪪	identification_card

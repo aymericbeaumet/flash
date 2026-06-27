@@ -1,0 +1,18 @@
+[package]
+name = "flash-plugin-tmux"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-tmux"
+path = "src/main.rs"
+
+[dependencies]
+flash_plugin = { path = "../_rust_flash_plugin" }
+serde = { workspace = true }
+regex = { workspace = true }
+tokio = { workspace = true }
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSGeometry", "NSString"] }
+objc2-app-kit = { workspace = true, features = ["NSFont", "objc2-core-foundation"] }

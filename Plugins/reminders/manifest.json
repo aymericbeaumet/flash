@@ -1,0 +1,34 @@
+{
+  "id": "reminders",
+  "name": "Reminders",
+  "version": "0.1.0",
+  "description": "Surface macOS Reminders entries in flashlight, plus `:reminders` open helper.",
+  "install": "true",
+  "start": "exec ./flash-plugin-reminders",
+  "priority": 12,
+  "commands": {
+    "items": [
+      {
+        "command": "reminders",
+        "subcommand": "open",
+        "description": "Open Reminders.app"
+      },
+      {
+        "command": "reminders",
+        "subcommand": "refresh",
+        "description": "Refresh the cached reminders list"
+      }
+    ]
+  },
+  "listen": [
+    "core:flash.started",
+    "core:config.*",
+    "core:apps.*"
+  ],
+  "sources": [
+    {
+      "name": "reminders.tasks",
+      "priority": "normal"
+    }
+  ]
+}

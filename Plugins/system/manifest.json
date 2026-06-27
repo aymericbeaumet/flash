@@ -1,0 +1,82 @@
+{
+  "id": "system",
+  "name": "System",
+  "version": "0.1.0",
+  "description": "macOS system commands and status segments: lock, sleep, restart, shutdown, logout, battery, empty trash, toggle dark mode, screensaver, caffeinate.",
+  "install": "true",
+  "start": "exec ./flash-plugin-system",
+  "commands": {
+    "items": [
+      {
+        "command": "system",
+        "description": "Show system action usage"
+      },
+      {
+        "command": "system",
+        "subcommand": "lock",
+        "description": "Lock the screen"
+      },
+      {
+        "command": "system",
+        "subcommand": "sleep",
+        "description": "Put the machine to sleep"
+      },
+      {
+        "command": "system",
+        "subcommand": "displaysleep",
+        "description": "Turn the display off"
+      },
+      {
+        "command": "system",
+        "subcommand": "restart",
+        "description": "Restart the machine"
+      },
+      {
+        "command": "system",
+        "subcommand": "shutdown",
+        "description": "Shut down the machine"
+      },
+      {
+        "command": "system",
+        "subcommand": "logout",
+        "description": "Log out of macOS"
+      },
+      {
+        "command": "system",
+        "subcommand": "trash",
+        "description": "Empty the Trash"
+      },
+      {
+        "command": "system",
+        "subcommand": "dark",
+        "description": "Toggle dark mode"
+      },
+      {
+        "command": "system",
+        "subcommand": "screensaver",
+        "description": "Start the screen saver"
+      },
+      {
+        "command": "system",
+        "subcommand": "caffeinate",
+        "description": "Prevent the machine from sleeping"
+      },
+      {
+        "command": "system",
+        "subcommand": "decaffeinate",
+        "description": "Allow the machine to sleep again"
+      }
+    ]
+  },
+  "status": {
+    "segments": [
+      "battery"
+    ]
+  },
+  "sources": [
+    {
+      "name": "system.actions",
+      "priority": "normal"
+    }
+  ]
+}

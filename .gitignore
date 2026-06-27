@@ -9,6 +9,11 @@ DerivedData/
 *.xcodeproj
 *.xcworkspace
 
+## Rust plugin build output
+Plugins/*/target/
+Plugins/*/flash-plugin-*
+Plugins/target/
+
 ## Editor / OS
 .DS_Store
 .vscode/
@@ -17,3 +22,10 @@ DerivedData/
 ## Local config / scratch
 karabiner.json.bak-*
 *.bak-flash
+
+## Stray empty top-level dirs left over from earlier dev workflows. Keeping
+## them out of the index avoids accidental commits if they ever pick up content.
+/home/
+/cache/
+/bin/
+/config/

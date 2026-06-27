@@ -1,0 +1,34 @@
+{
+  "id": "contacts",
+  "name": "Contacts",
+  "version": "0.1.0",
+  "description": "Surface macOS Contacts entries in flashlight, plus `:contacts` open helper.",
+  "install": "true",
+  "start": "exec ./flash-plugin-contacts",
+  "priority": 12,
+  "commands": {
+    "items": [
+      {
+        "command": "contacts",
+        "subcommand": "open",
+        "description": "Open Contacts.app"
+      },
+      {
+        "command": "contacts",
+        "subcommand": "refresh",
+        "description": "Refresh the cached contacts list"
+      }
+    ]
+  },
+  "listen": [
+    "core:flash.started",
+    "core:config.*",
+    "core:apps.*"
+  ],
+  "sources": [
+    {
+      "name": "contacts.cards",
+      "priority": "normal"
+    }
+  ]
+}

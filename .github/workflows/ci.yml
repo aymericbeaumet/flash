@@ -3,12 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+    tags:
+      - "*.*.*"
   pull_request:
 
 jobs:
   format:
     name: Format
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show swift-format version
@@ -23,7 +25,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show swift-format version
@@ -31,9 +33,47 @@ jobs:
       - name: Lint
         run: swift format lint --strict --recursive Sources Tests Package.swift
 
+  guardrails:
+    name: Guardrails
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check hard-rule guardrails
+        run: ./Scripts/check-guardrails.sh
+
+  plugins:
+    name: Plugins (cargo)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Cargo registry + workspace target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            Plugins/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Plugins/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: cargo fmt --check
+        working-directory: Plugins
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        working-directory: Plugins
+        # `-D warnings` makes clippy a hard gate so warnings can't accumulate
+        # quietly across the 17-crate workspace.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo build (release)
+        working-directory: Plugins
+        run: cargo build --workspace --release
+      - name: cargo test
+        working-directory: Plugins
+        run: cargo test --workspace
+
   build:
     name: Build
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show Swift version
@@ -50,7 +90,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Show Swift version
@@ -64,3 +104,148 @@ jobs:
             ${{ runner.os }}-spm-test-
       - name: Test
         run: swift test
+
+  inspector:
+    name: Inspector
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: Inspector/pnpm-lock.yaml
+      - name: Install inspector deps
+        working-directory: Inspector
+        run: pnpm install --frozen-lockfile
+      - name: Build inspector bundle
+        working-directory: Inspector
+        run: pnpm build
+      - name: Stage bundle as SwiftPM resource
+        run: cp Inspector/dist/index.html Sources/flash/Resources/inspector.html
+      - name: Require committed bundle to be up to date
+        # The committed resource must match a fresh build of Inspector/.
+        # If this fails, run Scripts/build-inspector.sh and commit the result.
+        run: git diff --exit-code Sources/flash/Resources/inspector.html
+
+  homebrew:
+    name: Homebrew
+    runs-on: macos-15
+    needs: [format, lint, guardrails, build, test, inspector]
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure deployment
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "branch" && "$GITHUB_REF_NAME" == "main" ]]; then
+            short_sha="${GITHUB_SHA::8}"
+            build_date="$(date -u +%Y%m%d)"
+            version="nightly-${build_date}-${short_sha}"
+            release_tag="nightly"
+            cask_token="flash@nightly"
+            asset_name="Flash-${version}.zip"
+            marketing_version=""
+          elif [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            version="$GITHUB_REF_NAME"
+            release_tag="$GITHUB_REF_NAME"
+            cask_token="flash@$GITHUB_REF_NAME"
+            asset_name="Flash-${version}.zip"
+            marketing_version="$GITHUB_REF_NAME"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "cask_token=$cask_token" >> "$GITHUB_OUTPUT"
+          echo "asset_name=$asset_name" >> "$GITHUB_OUTPUT"
+          echo "marketing_version=$marketing_version" >> "$GITHUB_OUTPUT"
+
+      - name: Package Flash.app
+        id: package
+        if: steps.meta.outputs.deploy == 'true'
+        run: |
+          zip_path="$RUNNER_TEMP/${{ steps.meta.outputs.asset_name }}"
+          if [[ -n "${{ steps.meta.outputs.marketing_version }}" ]]; then
+            export FLASH_MARKETING_VERSION="${{ steps.meta.outputs.marketing_version }}"
+          fi
+          export FLASH_BUNDLE_VERSION="${{ github.run_number }}"
+          export FLASH_ZIP_PATH="$zip_path"
+          bash Scripts/build.sh --release
+          echo "zip_path=$zip_path" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cat "$zip_path.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release asset
+        if: steps.meta.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="${{ steps.meta.outputs.release_tag }}"
+          title="Flash ${{ steps.meta.outputs.version }}"
+          notes="Automated build from ${GITHUB_SHA}."
+          if ! gh release view "$release_tag" >/dev/null 2>&1; then
+            args=(release create "$release_tag" --target "$GITHUB_SHA" --title "$title" --notes "$notes")
+            if [[ "$release_tag" == "nightly" ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
+          fi
+          gh release upload \
+            "$release_tag" \
+            "${{ steps.package.outputs.zip_path }}#${{ steps.meta.outputs.asset_name }}" \
+            --clobber
+
+      - name: Check Homebrew tap token
+        if: steps.meta.outputs.deploy == 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "HOMEBREW_TAP_TOKEN secret is required to push aymericbeaumet/homebrew-tap"
+            exit 1
+          fi
+
+      - name: Checkout Homebrew tap
+        if: steps.meta.outputs.deploy == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: aymericbeaumet/homebrew-tap
+          path: homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update Homebrew cask
+        if: steps.meta.outputs.deploy == 'true'
+        run: |
+          url="https://github.com/aymericbeaumet/flash/releases/download/${{ steps.meta.outputs.release_tag }}/${{ steps.meta.outputs.asset_name }}"
+          bash Scripts/update-homebrew-cask.sh \
+            --tap-dir homebrew-tap \
+            --token "${{ steps.meta.outputs.cask_token }}" \
+            --version "${{ steps.meta.outputs.version }}" \
+            --url "$url" \
+            --sha256 "${{ steps.package.outputs.sha256 }}"
+          ruby -c "homebrew-tap/Casks/${{ steps.meta.outputs.cask_token }}.rb"
+
+      - name: Push Homebrew tap update
+        if: steps.meta.outputs.deploy == 'true'
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "Casks/${{ steps.meta.outputs.cask_token }}.rb"
+          if git diff --cached --quiet; then
+            echo "No Homebrew tap changes"
+            exit 0
+          fi
+          git commit -m "Update flash ${{ steps.meta.outputs.version }}"
+          git push

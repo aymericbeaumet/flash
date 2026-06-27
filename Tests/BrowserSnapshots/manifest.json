@@ -1,0 +1,346 @@
+{
+  "fixtures": [
+    {
+      "name": "baseline-synthetic-001",
+      "file": "baseline-synthetic-001.html",
+      "kind": "synthetic",
+      "category": "synthetic-controls"
+    },
+    {
+      "kind": "synthetic",
+      "category": "synthetic-layout",
+      "name": "layout-synthetic-021",
+      "file": "layout-synthetic-021.html"
+    },
+    {
+      "kind": "realistic",
+      "category": "docs-reference",
+      "file": "docs-reference-041.html",
+      "name": "docs-reference-041"
+    },
+    {
+      "kind": "realistic",
+      "category": "article-news",
+      "file": "article-news-053.html",
+      "name": "article-news-053"
+    },
+    {
+      "kind": "realistic",
+      "category": "forum-thread",
+      "name": "forum-thread-065",
+      "file": "forum-thread-065.html"
+    },
+    {
+      "name": "developer-code-077",
+      "file": "developer-code-077.html",
+      "kind": "realistic",
+      "category": "developer-code"
+    },
+    {
+      "name": "commerce-listing-089",
+      "file": "commerce-listing-089.html",
+      "kind": "realistic",
+      "category": "commerce-listing"
+    },
+    {
+      "kind": "collected",
+      "category": "collected-regression",
+      "file": "collected-test-google-search-001.html",
+      "name": "collected-test-google-search-001"
+    },
+    {
+      "file": "collected-reddit-the-heart-of-the-internet-001.html",
+      "name": "collected-reddit-the-heart-of-the-internet-001",
+      "kind": "collected",
+      "category": "collected-regression"
+    },
+    {
+      "kind": "collected",
+      "category": "collected-regression",
+      "name": "collected-feed-linkedin-001",
+      "file": "collected-feed-linkedin-001.html"
+    },
+    {
+      "kind": "collected",
+      "category": "collected-regression",
+      "name": "collected-patches-linkedin-001",
+      "file": "collected-patches-linkedin-001.html"
+    },
+    {
+      "name": "collected-instagram-google-search-001",
+      "file": "collected-instagram-google-search-001.html",
+      "kind": "collected",
+      "category": "collected-regression"
+    },
+    {
+      "category": "collected-regression",
+      "kind": "collected",
+      "name": "collected-instagram-001",
+      "file": "collected-instagram-001.html"
+    },
+    {
+      "name": "collected-home-x-001",
+      "file": "collected-home-x-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-facebook-001",
+      "file": "collected-facebook-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-20-facebook-001",
+      "file": "collected-20-facebook-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "category": "collected-regression",
+      "kind": "collected",
+      "file": "collected-20-facebook-002.html",
+      "name": "collected-20-facebook-002"
+    },
+    {
+      "category": "collected-regression",
+      "kind": "collected",
+      "file": "collected-20-facebook-003.html",
+      "name": "collected-20-facebook-003"
+    },
+    {
+      "category": "collected-regression",
+      "kind": "collected",
+      "file": "collected-u-s-military-turned-gps-into-a-global-numbers-st-001.html",
+      "name": "collected-u-s-military-turned-gps-into-a-global-numbers-st-001"
+    },
+    {
+      "kind": "collected",
+      "category": "collected-regression",
+      "name": "collected-the-go-programming-language-001",
+      "file": "collected-the-go-programming-language-001.html"
+    },
+    {
+      "name": "collected-rust-programming-language-001",
+      "file": "collected-rust-programming-language-001.html",
+      "kind": "collected",
+      "category": "collected-regression"
+    },
+    {
+      "name": "collected-cristel-google-search-001",
+      "file": "collected-cristel-google-search-001.html",
+      "kind": "collected",
+      "category": "collected-regression"
+    },
+    {
+      "kind": "collected",
+      "category": "collected-regression",
+      "name": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-001",
+      "file": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-001.html"
+    },
+    {
+      "file": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-002.html",
+      "name": "collected-articles-de-cuisson-et-ustensiles-de-cuisine-hau-002",
+      "kind": "collected",
+      "category": "collected-regression"
+    },
+    {
+      "name": "collected-casseroles-inox-haut-de-gamme-cristel-001",
+      "file": "collected-casseroles-inox-haut-de-gamme-cristel-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "file": "collected-po-le-en-inox-bross-amovible-strate-amovible-po--001.html",
+      "name": "collected-po-le-en-inox-bross-amovible-strate-amovible-po--001",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "file": "collected-la-cocotte-magique-google-search-001.html",
+      "name": "collected-la-cocotte-magique-google-search-001",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-guild-wars-3-revealed-franchise-wide-sale-redact-001",
+      "file": "collected-guild-wars-3-revealed-franchise-wide-sale-redact-001.html",
+      "kind": "collected",
+      "category": "collected-regression"
+    },
+    {
+      "file": "collected-welcome-please-verify-your-email-address-redacte-001.html",
+      "name": "collected-welcome-please-verify-your-email-address-redacte-001",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "kind": "collected",
+      "category": "collected-regression",
+      "name": "collected-best-spotify-cli-google-search-001",
+      "file": "collected-best-spotify-cli-google-search-001.html"
+    },
+    {
+      "category": "collected-regression",
+      "kind": "collected",
+      "name": "collected-linear-cli-google-search-001",
+      "file": "collected-linear-cli-google-search-001.html"
+    },
+    {
+      "name": "collected-new-chat-claude-001",
+      "file": "collected-new-chat-claude-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-mobilier-et-d-corations-int-rieur-et-ext-rieur-i-001",
+      "file": "collected-mobilier-et-d-corations-int-rieur-et-ext-rieur-i-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-tous-nos-produits-ikea-001",
+      "file": "collected-tous-nos-produits-ikea-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-am-nagement-ext-rieur-ikea-001",
+      "file": "collected-am-nagement-ext-rieur-ikea-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-caillebotis-pas-cher-sol-dalle-terrasse-ikea-001",
+      "file": "collected-caillebotis-pas-cher-sol-dalle-terrasse-ikea-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-caillebotis-pas-cher-sol-dalle-terrasse-ikea-002",
+      "file": "collected-caillebotis-pas-cher-sol-dalle-terrasse-ikea-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-general-001",
+      "file": "collected-general-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-pages-001",
+      "file": "collected-pages-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-pages-002",
+      "file": "collected-pages-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-pages-003",
+      "file": "collected-pages-003.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-raycast-google-cloud-console-001",
+      "file": "collected-raycast-google-cloud-console-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-meet-aymeric-h-l-ne-hackaton-ads-001",
+      "file": "collected-meet-aymeric-h-l-ne-hackaton-ads-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-aymeric-beaumet-software-engineer-posts-talks-pr-001",
+      "file": "collected-aymeric-beaumet-software-engineer-posts-talks-pr-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-developers-please-nurture-your-coding-experience-001",
+      "file": "collected-developers-please-nurture-your-coding-experience-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-projects-by-aymeric-beaumet-aymeric-beaumet-001",
+      "file": "collected-projects-by-aymeric-beaumet-aymeric-beaumet-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-backend-fix-call-history-pagination-dropping-old-001",
+      "file": "collected-backend-fix-call-history-pagination-dropping-old-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-backend-fix-call-history-pagination-dropping-old-002",
+      "file": "collected-backend-fix-call-history-pagination-dropping-old-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-backend-fix-call-history-pagination-dropping-old-003",
+      "file": "collected-backend-fix-call-history-pagination-dropping-old-003.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-chats-beside-s-inbox-beside-001",
+      "file": "collected-chats-beside-s-inbox-beside-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-hacker-news-001",
+      "file": "collected-hacker-news-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-ads-close-the-path-1-2-3-gaps-in-google-ads-conv-001",
+      "file": "collected-ads-close-the-path-1-2-3-gaps-in-google-ads-conv-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-new-chat-claude-002",
+      "file": "collected-new-chat-claude-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-callrail-google-search-001",
+      "file": "collected-callrail-google-search-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-raycast-google-cloud-console-002",
+      "file": "collected-raycast-google-cloud-console-002.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-raycast-google-cloud-console-003",
+      "file": "collected-raycast-google-cloud-console-003.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    },
+    {
+      "name": "collected-apis-services-apis-services-raycast-google-cloud-001",
+      "file": "collected-apis-services-apis-services-raycast-google-cloud-001.html",
+      "category": "collected-regression",
+      "kind": "collected"
+    }
+  ]
+}

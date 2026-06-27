@@ -1,0 +1,14 @@
+[package]
+name = "flash-plugin-calculator"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-calculator"
+path = "src/main.rs"
+
+[dependencies]
+fasteval2 = "2.1"
+flash_plugin = { path = "../_rust_flash_plugin" }
+tokio = { workspace = true }

@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "side": "flashOnly",
+      "rect": [8, 1, 99.5, 16],
+      "reason": "Firefox AX exposes a bottom-clipped Facebook profile metadata link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    },
+    {
+      "side": "flashOnly",
+      "rect": [121, 1, 82.5, 16],
+      "reason": "Firefox AX exposes a bottom-clipped Facebook profile metadata link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    }
+  ]
+}
