@@ -337,6 +337,99 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(model.modeText, "NORMAL")
   }
 
+  func testTokenTruncationEllipsisGlyphCountsTowardBudget() {
+    // `=4…` → 3 visible characters + the ellipsis glyph = 4 cells wide.
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.parseTokenTruncation("=4…:mode").truncation,
+      .head(4, ellipsis: true))
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]#{=4…:mode}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.mode", token: "mode", source: .sdk(.modeLabel))
+      ])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template, context: FlashStatusBarContext(modeLabel: "COMMAND"))
+    XCTAssertEqual(model.modeText, "COM…")
+  }
+
+  func testTokenTruncationAsciiDotsAreAcceptedAsEllipsis() {
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.parseTokenTruncation("=4...:mode").truncation,
+      .head(4, ellipsis: true))
+  }
+
+  func testTokenTruncationLeavesShortValueWithoutEllipsis() {
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.applyTruncation(
+        "NORMAL", truncation: .head(10, ellipsis: true)),
+      "NORMAL")
+  }
+
+  func testTokenTruncationCountsVisibleCharsNotStyleMarkers() {
+    // Markers pass through without counting; the kept run keeps its
+    // formatting and the ellipsis inherits the still-open style.
+    let styled = "#[fg=colour178]HN#[fg=colour245] #[italics]hello world#[noitalics]"
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.applyTruncation(styled, truncation: .head(6, ellipsis: true)),
+      "#[fg=colour178]HN#[fg=colour245] #[italics]he…")
+    // A bare `#` (not `#[`) is an ordinary visible character.
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.applyTruncation("C# rocks", truncation: .head(2, ellipsis: false)),
+      "C#")
+  }
+
+  func testTokenTruncationTailKeepsTrailingVisibleWindowWithLeadingEllipsis() {
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.applyTruncation(
+        "abcdef", truncation: .tail(4, ellipsis: true)),
+      "…def")
+  }
+
+  func testTokenTruncationDropsWhitespaceAdjacentToEllipsis() {
+    // When the trim lands on a space the glyph sits flush against the text —
+    // no "foo …". `=5…` keeps 4 visible cells ("foo" + the dropped space),
+    // and the trailing space is removed before the glyph is appended.
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.applyTruncation(
+        "foo bar", truncation: .head(5, ellipsis: true)),
+      "foo…")
+    // Tail side: the leading space is dropped before the glyph is prepended.
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.applyTruncation(
+        "bar foo", truncation: .tail(5, ellipsis: true)),
+      "…foo")
+    // Multiple adjacent spaces are all trimmed.
+    XCTAssertEqual(
+      FlashStatusBarTemplateEngine.applyTruncation(
+        "ab   cd", truncation: .head(6, ellipsis: true)),
+      "ab…")
+  }
+
+  func testEllipsisTruncationAppliesToStyledScriptValueAtRender() {
+    // A `#{=N…:script:…}` wrapper trims the resolved (styled) command
+    // output to N visible cells, keeping markers and ellipsising the rest.
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]#{mode} · #{=8…:script:/tmp/hn.sh}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.mode", token: "mode", source: .sdk(.modeLabel)),
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.script:/tmp/hn.sh",
+          token: "script:/tmp/hn.sh",
+          source: .command(.script("/tmp/hn.sh"))),
+      ])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(modeLabel: "NORMAL"),
+      dynamicValues: [
+        "statusbar.template.script:/tmp/hn.sh":
+          "#[fg=colour178]HN#[fg=colour245] hello world"
+      ])
+    // "HN hello" = 8 visible cells → "HN hell" (7) + "…", markers intact.
+    XCTAssertEqual(model.modeText, "NORMAL · #[fg=colour178]HN#[fg=colour245] hell…")
+  }
+
   func testStyleSegmentParserHonoursItalicsUnderlineDimReverseBackground() {
     let segments = FlashStatusBarRenderer.segments(
       from: "#[fg=colour178,bg=colour0,bold,italics,underscore]Hi"
@@ -536,13 +629,16 @@ final class StatusBarTests: XCTestCase {
       maximumWidth: 1_600)
     XCTAssertEqual(short, 1_068)
     XCTAssertEqual(long, 1_068)
-    // The screen cap still wins when the prompt would otherwise overflow.
-    let clamped = OverlayPanel.candidateFinderResultsWidth(
+    // The width is exactly the prompt's, regardless of content or the screen
+    // cap: the prompt is already clamped to the visible region, and the two
+    // stacked boxes must share an edge to read as one surface, so
+    // `maximumWidth` no longer trims it.
+    let wide = OverlayPanel.candidateFinderResultsWidth(
       commandPromptWidth: 2_000,
       longestLineCharacterCount: 200,
       fontSize: 14,
       maximumWidth: 1_600)
-    XCTAssertEqual(clamped, 1_600)
+    XCTAssertEqual(wide, 2_000)
   }
 
   func testSystemStatusBarSpaceReservationRemovesMenuBarAutoHide() {

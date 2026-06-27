@@ -242,11 +242,14 @@ enum FlashStatusBarTemplateEngine {
   /// `variableByToken`. Tmux-flavoured extras supported here:
   ///   `##`               → literal `#`
   ///   `#{=N:token}`      → resolve `token`, then truncate to the first N
-  ///                        visible characters (no terminal escape
-  ///                        awareness — Flash's renderer drives the
-  ///                        styling separately).
+  ///                        visible characters. `#[…]` style/link markers
+  ///                        pass through without counting, so styled runs
+  ///                        keep their formatting.
   ///   `#{=-N:token}`     → resolve `token`, then truncate to the last N
   ///                        visible characters (trailing window).
+  ///   `#{=N…:token}`     → as above but append `…` (ASCII `...` also
+  ///   `#{=-N…:token}`      accepted) when the value was actually trimmed;
+  ///                        the glyph counts toward N.
   static func renderAligned(
     _ raw: String,
     variableByToken: [String: FlashStatusBarTemplateVariable],
@@ -333,26 +336,42 @@ enum FlashStatusBarTemplateEngine {
     return (left, centre, right)
   }
 
+  /// One Unicode ellipsis glyph stands in for the trimmed-away text. A
+  /// single-cell character keeps the visible-length budget honest: a
+  /// truncated `#{=N…:…}` run is exactly `N` visible characters wide.
+  static let truncationEllipsis = "…"
+
   enum Truncation: Equatable {
-    /// Keep the first `n` characters.
-    case head(Int)
-    /// Keep the last `n` characters.
-    case tail(Int)
+    /// Keep the first `n` visible characters. `ellipsis` appends `…` when
+    /// the value was actually shortened (the glyph counts toward `n`).
+    case head(Int, ellipsis: Bool)
+    /// Keep the last `n` visible characters; `ellipsis` prepends `…`.
+    case tail(Int, ellipsis: Bool)
   }
 
   /// Split `#{=N:mode}` into (`"mode"`, `.head(N)`), `#{=-N:mode}` into
   /// (`"mode"`, `.tail(N)`), and plain `#{mode}` into (`"mode"`, nil).
-  /// Mirrors tmux's `=N:` / `=-N:` length-limit operators.
+  /// Mirrors tmux's `=N:` / `=-N:` length-limit operators, plus a Flash
+  /// extension: a trailing `…` (or ASCII `...`) on the width — `#{=N…:…}`
+  /// / `#{=-N…:…}` — appends an ellipsis glyph when the value is trimmed.
   static func parseTokenTruncation(_ body: String) -> (token: String, truncation: Truncation?) {
     guard body.hasPrefix("=") else { return (body, nil) }
     let afterEquals = body.dropFirst()
     guard let colon = afterEquals.firstIndex(of: ":") else { return (body, nil) }
-    let widthSlice = afterEquals[..<colon]
+    var widthSlice = afterEquals[..<colon]
     let token = String(afterEquals[afterEquals.index(after: colon)...]).trimmed
+    var ellipsis = false
+    if widthSlice.hasSuffix("…") {
+      ellipsis = true
+      widthSlice = widthSlice.dropLast()
+    } else if widthSlice.hasSuffix("...") {
+      ellipsis = true
+      widthSlice = widthSlice.dropLast(3)
+    }
     let isTail = widthSlice.first == "-"
     let digits = isTail ? widthSlice.dropFirst() : widthSlice
     guard let width = Int(digits), width > 0 else { return (body, nil) }
-    return (token, isTail ? .tail(width) : .head(width))
+    return (token, isTail ? .tail(width, ellipsis: ellipsis) : .head(width, ellipsis: ellipsis))
   }
 
   static func normalizedTemplate(_ raw: String) -> String {
@@ -385,15 +404,69 @@ enum FlashStatusBarTemplateEngine {
     return trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
   }
 
-  static func applyTruncation(_ value: String, truncation: Truncation) -> String {
-    switch truncation {
-    case .head(let n):
-      if value.count <= n { return value }
-      return String(value.prefix(n))
-    case .tail(let n):
-      if value.count <= n { return value }
-      return String(value.suffix(n))
+  /// Split a resolved value into atoms, treating `#[…]` style/link markers
+  /// as zero-width passthrough so truncation counts only what the user
+  /// actually sees. A bare `#` (e.g. "C# tips") is an ordinary visible
+  /// character — only `#[` opens a marker.
+  private static func truncationAtoms(_ value: String) -> [(text: Substring, visible: Bool)] {
+    var atoms: [(text: Substring, visible: Bool)] = []
+    var i = value.startIndex
+    while i < value.endIndex {
+      if value[i] == "#",
+        let open = value.index(i, offsetBy: 1, limitedBy: value.endIndex),
+        open < value.endIndex,
+        value[open] == "[",
+        let close = value[open...].firstIndex(of: "]")
+      {
+        atoms.append((value[i...close], false))
+        i = value.index(after: close)
+        continue
+      }
+      atoms.append((value[i...i], true))
+      i = value.index(after: i)
     }
+    return atoms
+  }
+
+  static func applyTruncation(_ value: String, truncation: Truncation) -> String {
+    let (limit, fromTail, ellipsis): (Int, Bool, Bool)
+    switch truncation {
+    case .head(let n, let e): (limit, fromTail, ellipsis) = (n, false, e)
+    case .tail(let n, let e): (limit, fromTail, ellipsis) = (n, true, e)
+    }
+
+    let atoms = truncationAtoms(value)
+    let visibleCount = atoms.reduce(0) { $0 + ($1.visible ? 1 : 0) }
+    if visibleCount <= limit { return value }
+
+    // Reserve one cell for the glyph so the trimmed run is exactly `limit`
+    // visible characters wide (or fewer when no ellipsis is requested).
+    let keep = ellipsis ? max(0, limit - 1) : limit
+    let ordered = fromTail ? Array(atoms.reversed()) : atoms
+    var kept: [Substring] = []
+    var seen = 0
+    for atom in ordered {
+      if seen >= keep { break }
+      if atom.visible { seen += 1 }
+      kept.append(atom.text)
+    }
+    if fromTail { kept.reverse() }
+
+    var out = kept.joined()
+    if ellipsis {
+      // The glyph sits flush against the text: drop whitespace adjacent to it
+      // so a truncation that lands on a space doesn't render "foo …". The width
+      // budget already reserved the glyph's cell (`keep = limit - 1`), so the
+      // trimmed run stays within `limit` visible characters.
+      if fromTail {
+        while let first = out.first, first.isWhitespace { out.removeFirst() }
+        out = truncationEllipsis + out
+      } else {
+        while let last = out.last, last.isWhitespace { out.removeLast() }
+        out += truncationEllipsis
+      }
+    }
+    return out
   }
 
   /// Recognise an alignment marker body. Returns nil for style markers

@@ -1104,15 +1104,16 @@ enum ConfigLoader {
         }
         let bodyStart = raw.index(after: open)
         let body = String(raw[bodyStart..<close]).trimmed
-        // `#{=N:token}` / `#{=-N:token}` truncation operators carry the
-        // real token after the `:`. Resolve through the same helper the
-        // renderer uses so the two stay in sync.
+        // `#{=N:token}` / `#{=-N:token}` (and the `#{=N…:token}` ellipsis
+        // variant) truncation operators carry the real token after the `:`.
+        // Resolve through the same helper the renderer uses so the two stay
+        // in sync.
         let (token, _) = FlashStatusBarTemplateEngine.parseTokenTruncation(body)
         if let source = parseStatusBarTemplateSource(token, sourceURL: sourceURL) {
           appendToken(token, source: source)
         } else {
           config.addDiagnostic(
-            "statusbar.\(path) template variable \"\(body)\" must be mode, active_app_name, active_bundle_identifier, date, a tmux variable, plugin:<name>, plugin:<plugin>.<segment>, script:<path>, or command:<shell> (optionally wrapped in #{=N:…} for length-limit)",
+            "statusbar.\(path) template variable \"\(body)\" must be mode, active_app_name, active_bundle_identifier, date, a tmux variable, plugin:<name>, plugin:<plugin>.<segment>, script:<path>, or command:<shell> (optionally wrapped in #{=N:…} / #{=N…:…} for length-limit)",
             location: config.valueLocations["statusbar.\(path)"])
         }
         index = raw.index(after: close)
