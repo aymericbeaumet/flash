@@ -1,0 +1,10 @@
+{
+  "entries": [
+    {
+      "side": "flashOnly",
+      "rect": [11, 898.5, 110, 44],
+      "reason": "Firefox AX exposes a visible accessibility skip link that Vimium does not mark in this snapshot.",
+      "axRole": "AXLink"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+[package]
+name = "flash-plugin-media"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-media"
+path = "src/main.rs"
+
+[dependencies]
+flash_plugin = { path = "../_rust_flash_plugin" }
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSGeometry"] }
+objc2-app-kit = { workspace = true, features = [
+  "NSEvent",
+  "NSGraphicsContext",
+  "objc2-core-graphics",
+] }
+objc2-core-graphics = { workspace = true, features = ["CGEvent", "CGEventTypes"] }
+tokio = { workspace = true }

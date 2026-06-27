@@ -1,0 +1,7 @@
+# periphery (Swift dead-code) config — see AGENTS.md "Dead code analysis".
+# Flash is an app, not a published library, so unused `public` declarations are
+# dead too; do not retain them. Caveat: FlashCore/FlashProviders API used only
+# by Rust plugins over IPC has no Swift caller and is reported as unused —
+# review those before deleting.
+disable_update_check: true
+retain_public: false

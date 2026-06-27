@@ -1,0 +1,12 @@
+[package]
+name = "flash-plugin-defaults"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-defaults"
+path = "src/main.rs"
+
+[dependencies]
+flash_plugin = { path = "../_rust_flash_plugin" }

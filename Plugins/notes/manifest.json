@@ -1,0 +1,34 @@
+{
+  "id": "notes",
+  "name": "Notes",
+  "version": "0.1.0",
+  "description": "Surface macOS Notes entries in flashlight, plus `:notes` open helper.",
+  "install": "true",
+  "start": "exec ./flash-plugin-notes",
+  "priority": 12,
+  "commands": {
+    "items": [
+      {
+        "command": "notes",
+        "subcommand": "open",
+        "description": "Open Notes.app"
+      },
+      {
+        "command": "notes",
+        "subcommand": "refresh",
+        "description": "Refresh the cached notes list"
+      }
+    ]
+  },
+  "listen": [
+    "core:flash.started",
+    "core:config.*",
+    "core:apps.*"
+  ],
+  "sources": [
+    {
+      "name": "notes.notes",
+      "priority": "normal"
+    }
+  ]
+}

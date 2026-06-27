@@ -1,0 +1,70 @@
+{
+  "id": "tmux",
+  "name": "tmux",
+  "version": "0.1.0",
+  "description": "Hints tmux panes/links and exposes a tmux window finder.",
+  "install": "true",
+  "start": "exec ./flash-plugin-tmux",
+  "capabilities": [
+    "subprocess"
+  ],
+  "priority": 20,
+  "volatile": true,
+  "request_timeout_ms": 8000,
+  "hints": {},
+  "commands": {
+    "items": [
+      {
+        "command": "tmux",
+        "subcommand": "session",
+        "description": "Switch the active tmux client to a session by name and raise its terminal."
+      },
+      {
+        "command": "tmux",
+        "subcommand": "window",
+        "description": "Switch the active tmux client to a session:window target and raise its terminal."
+      }
+    ]
+  },
+  "navigation": {
+    "schemes": [
+      "tmux"
+    ]
+  },
+  "only_bundle_ids": [
+    "org.alacritty",
+    "io.alacritty",
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "dev.warp.Warp-Stable",
+    "co.zeit.hyperterm",
+    "co.zeit.hyper"
+  ],
+  "listen": [
+    "core:focus.changed",
+    "core:apps.terminated",
+    "core:flashlight.opened",
+    "core:flash.started"
+  ],
+  "sources": [
+    {
+      "name": "tmux.windows",
+      "kind": "locations",
+      "priority": "high"
+    }
+  ],
+  "source_actions": [
+    "tab_select",
+    "tab_next",
+    "tab_prev",
+    "tab_first",
+    "tab_last",
+    "tab_new",
+    "tab_close",
+    "tab_move_previous",
+    "tab_move_next",
+    "app_reload"
+  ]
+}

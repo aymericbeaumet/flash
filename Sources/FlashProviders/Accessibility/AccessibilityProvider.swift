@@ -4,44 +4,106 @@ import FlashCore
 
 /// Single, universal AX walker. No per-app variants — every macOS app is
 /// treated by the same rules: clickable controls, text inputs, and rows in
-/// virtualised lists. Section-header rows are suppressed via `skipSubroles`.
+/// virtualised lists.
 ///
 /// The role/skip/depth/target sets are intentionally *not* exposed for
 /// per-app override. The project's working assumption is that generic rules
 /// are good enough; if a specific app misbehaves we tune the universal set,
-/// not the per-app fork. See AGENTS.md ("Project layout" + "Browser DOM
-/// bridge") for the rationale.
+/// not the per-app fork. See AGENTS.md ("Project layout") for the rationale.
 ///
 /// Performance contract:
-///   - Exactly one IPC per visited element (batched via
-///     AXUIElementCopyMultipleAttributeValues).
-///   - Prefer kAXVisibleChildrenAttribute over kAXChildrenAttribute so
-///     scrolled-off content in NSOutlineView / NSTableView / NSCollectionView
-///     is never walked. On Notes' 292-row sidebar this turns a ~300-element
-///     walk into a ~30-element walk — only the visible rows are touched.
+///   - Exactly one batched IPC per visited element via
+///     `AXUIElementCopyMultipleAttributeValues`.
+///   - Walks the full `kAXChildrenAttribute` tree, then supplements native
+///     table/outline containers with `kAXVisibleRowsAttribute` when available.
+///     This keeps the complete tree path deterministic while still catching
+///     virtualised native lists that expose rows only through the visible-row
+///     attribute.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
 ///     returned targets is deterministic).
-public final class AccessibilityProvider: JumpProvider {
+///   - No per-IPC timeout. macOS default (6 s) is in place. Any tighter
+///     cap silently dropped Firefox's `AXWebArea` subtree (lazy build).
+///   - Top-level subtrees always fan out across concurrent workers via
+///     `DispatchQueue.concurrentPerform`, pipelining many AX IPCs
+///     against the target app's main thread. The single-attribute
+///     children fallback recovers Firefox's batched-IPC drops.
+///   - Action-name IPCs needed to confirm tentative targets (web-area
+///     roleless-with-AXPress, standalone AXImage) are buffered as
+///     `pendingTargets` during the walk and resolved in parallel after
+///     it completes, so the IPC pipeline isn't serialised on inline
+///     follow-up reads.
+public final class AccessibilityProvider: FlashSource {
   public let identifier: String = "accessibility"
+  public let displayName: String = "accessibility"
   public let priority: Int = 10
+  public let readinessPolicy: FlashSourceReadinessPolicy = .continuous
+  public let capabilities: FlashSourceCapabilities = [.jumpTargets, .documentURL, .tabSelection]
 
-  /// Every clickable / focusable role we recognise. Generic across apps.
+  /// Roles we recognise in native (non-web) AX trees. Broader than the
+  /// web allowlist because native apps surface things the web doesn't —
+  /// virtualised list rows, disclosure triangles, icon-only AXImage
+  /// buttons.
   public static let roles: Set<String> = [
     // Click targets
     "AXButton", "AXLink",
     "AXMenuItem", "AXMenuButton",
     "AXPopUpButton",
     "AXCheckBox", "AXRadioButton",
+    "AXSlider", "AXIncrementor", "AXHandle",
     "AXTab",
     "AXDisclosureTriangle",
     // Text inputs
-    "AXTextField", "AXSearchField", "AXTextArea",
+    "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
     // Virtualised list rows (each row is one click target)
     "AXRow", "AXCell",
     // Icon-only buttons sometimes report as AXImage. Gated below by
     // ancestor-role + AXPress to avoid double-hinting decorative
     // images inside links/buttons.
     "AXImage",
+  ]
+
+  /// Roles we accept inside an `AXWebArea`. Vimium-style allowlist:
+  /// only true semantic controls. Notably excludes:
+  ///   - `AXImage` — web AXImages are nearly always decorative; Vimium
+  ///     only hints `<img cursor:zoom-*>` and we can't see CSS via AX.
+  ///   - `AXRow` / `AXCell` — web tables aren't click targets the way
+  ///     virtualised native lists are.
+  ///   - Any AXPress-on-AXGroup fallback. AX surfaces `AXPress` on
+  ///     countless structural wrappers; accepting them displaces the
+  ///     real link/button via the smaller-frame-wins dedup.
+  public static let webClickableRoles: Set<String> = [
+    "AXLink", "AXButton",
+    "AXCheckBox", "AXRadioButton",
+    "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
+    "AXPopUpButton",
+    "AXTab",
+    "AXMenuItem",
+  ]
+
+  /// Web controls that should receive a real host mouse click instead
+  /// of an AXPress/AXOpen action. Browser AX layers can report
+  /// AXPress success for these roles while the page's DOM click handler
+  /// never runs (Gmail message-body links are one concrete example).
+  /// Editable web controls are deliberately excluded so they keep the
+  /// direct AX focus path and enter insert mode predictably.
+  public static let webHostClickRoles: Set<String> = [
+    "AXLink", "AXButton",
+    "AXCheckBox", "AXRadioButton",
+    "AXPopUpButton",
+    "AXTab",
+    "AXMenuItem",
+    "AXRow", "AXCell",
+  ]
+
+  /// Extra web roles accepted only inside browser-extension documents, and
+  /// only after an `AXPress` action check. Password-manager popups expose
+  /// vault rows/options this way; ordinary web pages still use the stricter
+  /// Vimium-style semantic allowlist above.
+  public static let webExtensionPopupPressRoles: Set<String> = [
+    "AXGroup",
+    "AXList",
+    "AXListItem",
+    "AXOption",
   ]
 
   /// Roles whose descendant AXImage is considered decorative (already
@@ -56,48 +118,196 @@ public final class AccessibilityProvider: JumpProvider {
     "AXTab",
   ]
 
-  /// Roles where we add a target and *do not* descend further. Restricted
-  /// to virtualised-list rows because those are the only elements where the
-  /// fanout below the target is both huge (per-row icons, labels, dates)
-  /// and uninteresting (no independent click targets). For everything
-  /// else — buttons, popups, menu items — we descend, which means a
-  /// button that has an open menu underneath it gets its menu items
-  /// hinted alongside the button itself.
-  public static let leafRoles: Set<String> = [
-    "AXRow", "AXCell",
-  ]
-
-  /// AppKit's standard subroles for "section header" rows in
-  /// NSOutlineView/NSTableView. We *don't* add these as targets, but we
-  /// keep descending — so the disclosure triangle inside the header gets
-  /// hinted on its own.
-  public static let skipSubroles: Set<String> = [
-    "AXOutlineSecondaryRow",
-    "AXSecondaryOutlineRow",
-    "AXSeparatorRow",
-    "AXGroupRow",
-  ]
-
   /// Roles for which "click" really means "focus the input". AXPress on a
   /// search field is a no-op and a synthesized mouse click on top of an
   /// already-keyed app may land in the wrong subview; setting
   /// `kAXFocusedAttribute = true` is the unambiguous AX-level way.
-  static let textInputRoles: Set<String> = [
-    "AXTextField", "AXSearchField", "AXTextArea",
-  ]
-
-  public static let maxDepth: Int = 80
-  public static let maxTargets: Int = 1500
-
-  /// When set, the next walk writes one line per visited element to this
-  /// file. Owned and toggled by AppMonitor based on `debug.dump_ax`. The
-  /// AX provider runs serially on a single queue (see AppMonitor), so a
-  /// plain mutable property is safe here.
-  public var dumpURL: URL?
+  /// Runaway guards rather than real limits. Real AX trees rarely exceed
+  /// ~30 levels of depth or a few thousand elements, but the previous
+  /// caps (80 / 1500) hid genuine tree content from the dump on
+  /// virtualised lists with many rows. If a walk hits either cap there
+  /// is almost certainly a cycle in the AX tree.
+  public static let maxDepth: Int = 500
+  public static let maxTargets: Int = 100_000
+  /// How many separate `concurrentPerform` fan-outs a single walk path
+  /// is allowed. Each fan-out point pays a small dispatch-queue cost
+  /// but unblocks N AX IPCs in parallel. Two levels covers the typical
+  /// "menu bar + content window + ... + big content group" shape: the
+  /// first fan-out splits across the window's direct children; each
+  /// of those workers can then fan out one more time inside its
+  /// subtree (e.g. inside an AXWebArea or a large AXGroup). Beyond
+  /// two levels the dispatch overhead dominates the IPC win.
+  public static let maxFanoutLevels: Int = 2
 
   public init() {}
 
   public func supports(_ context: AppContext) -> Bool { true }
+
+  public static func prefersHostClick(
+    insideWebArea: Bool,
+    role: String?,
+    isExtensionPopupPressRole: Bool = false
+  ) -> Bool {
+    guard insideWebArea else { return false }
+    if let role, JumpTarget.textInputRoles.contains(role) {
+      return false
+    }
+    if isExtensionPopupPressRole {
+      return true
+    }
+    guard let role else { return false }
+    return webHostClickRoles.contains(role)
+  }
+
+  public func performAction(
+    _ action: SourceAction,
+    in context: AppContext,
+    environment: FlashSourceEnvironment,
+    completion: @escaping (SourceActionResult) -> Void
+  ) {
+    // Generic AX walker only handles `tab_select` today: it walks the focused
+    // window for tablist children and presses the Nth tab. Everything else
+    // falls through so the next source (or the host keystroke fallback)
+    // can run.
+    guard case .tabSelect(let index) = action else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    guard index > 0 else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    let app = AXApp.make(pid: context.processID)
+    guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String) else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    let tabs = Self.tabElements(in: focusedWindow)
+    guard index <= tabs.count else {
+      DispatchQueue.main.async { completion(.unhandled) }
+      return
+    }
+    if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
+      RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
+    }
+    let tab = tabs[index - 1]
+    let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
+    let selected =
+      pressed
+      || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+        == .success
+    DispatchQueue.main.async {
+      completion(selected ? .performed(pid: context.processID) : .unhandled)
+    }
+  }
+
+  public func documentURL(in context: AppContext) -> String? {
+    let app = AXApp.make(pid: context.processID)
+    var focusedRaw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focusedRaw)
+      == .success,
+      let element = focusedRaw,
+      CFGetTypeID(element) == AXUIElementGetTypeID()
+    {
+      let focusedElement = element as! AXUIElement
+      if let url = Self.documentURLNear(focusedElement) {
+        return url
+      }
+    }
+
+    var windowRaw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &windowRaw)
+        == .success,
+      let window = windowRaw,
+      CFGetTypeID(window) == AXUIElementGetTypeID()
+    else { return nil }
+    let focusedWindow = window as! AXUIElement
+    if let url = Self.urlAttribute(focusedWindow, kAXDocumentAttribute as String)
+      ?? Self.urlAttribute(focusedWindow, kAXURLAttribute as String)
+    {
+      return url
+    }
+    return Self.firstDocumentURL(in: focusedWindow, maxNodes: 2_000)
+  }
+
+  private static let documentRoles: Set<String> = ["AXWebArea", "AXDocument"]
+
+  private static func documentURLNear(_ element: AXUIElement) -> String? {
+    var current = element
+    for _ in 0..<10 {
+      if role(of: current).map({ documentRoles.contains($0) }) == true {
+        if let url = urlAttribute(current, kAXURLAttribute as String)
+          ?? urlAttribute(current, kAXDocumentAttribute as String)
+        {
+          return url
+        }
+      }
+      guard let parent = elementAttribute(current, kAXParentAttribute as String) else {
+        return nil
+      }
+      current = parent
+    }
+    return nil
+  }
+
+  private static func firstDocumentURL(in root: AXUIElement, maxNodes: Int) -> String? {
+    var queue = [root]
+    var index = 0
+    while index < queue.count, index < maxNodes {
+      let element = queue[index]
+      index += 1
+      if role(of: element).map({ documentRoles.contains($0) }) == true {
+        if let url = urlAttribute(element, kAXURLAttribute as String)
+          ?? urlAttribute(element, kAXDocumentAttribute as String)
+        {
+          return url
+        }
+      }
+      queue.append(contentsOf: children(of: element))
+    }
+    return nil
+  }
+
+  private static func role(of element: AXUIElement) -> String? {
+    AXAttribute.role(element)
+  }
+
+  private static func children(of element: AXUIElement) -> [AXUIElement] {
+    AXAttribute.children(element)
+  }
+
+  private static func tabElements(in root: AXUIElement) -> [AXUIElement] {
+    var out: [AXUIElement] = []
+    var seen = Set<UInt>()
+    var queue = [root]
+    var index = 0
+    while index < queue.count, index < 3_000 {
+      let element = queue[index]
+      index += 1
+      let role = role(of: element)
+      let subrole = stringAttribute(element, kAXSubroleAttribute as String)
+      if role == "AXTab" || subrole == "AXTabButton" {
+        if seen.insert(CFHash(element)).inserted {
+          out.append(element)
+        }
+      }
+      queue.append(contentsOf: children(of: element))
+    }
+    return out
+  }
+
+  private static func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
+    AXAttribute.element(element, name)
+  }
+
+  private static func stringAttribute(_ element: AXUIElement, _ name: String) -> String? {
+    AXAttribute.string(element, name)
+  }
+
+  private static func urlAttribute(_ element: AXUIElement, _ name: String) -> String? {
+    AXAttribute.url(element, name)
+  }
 
   // Cached CFTypeID for AXValue. AXUIElementCopyMultipleAttributeValues
   // returns AXValueAttributeError (which is itself an AXValue with type
@@ -113,34 +323,96 @@ public final class AccessibilityProvider: JumpProvider {
     return (cf as! AXValue)
   }
 
+  private static func stringValue(_ v: Any) -> String? {
+    guard let value = v as? String else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private static func urlValue(_ v: Any) -> String? {
+    if let url = v as? URL {
+      return url.absoluteString
+    }
+    let cf = v as CFTypeRef
+    if CFGetTypeID(cf) == CFURLGetTypeID() {
+      return (cf as! URL).absoluteString
+    }
+    return stringValue(v)
+  }
+
   // The attribute array we pass to AXUIElementCopyMultipleAttributeValues.
   // Indices are hot-path constants — keep them in sync with `walk`.
   private static let batchAttrs: CFArray =
     [
       kAXRoleAttribute,  // 0
-      kAXSubroleAttribute,  // 1
-      kAXPositionAttribute,  // 2
-      kAXSizeAttribute,  // 3
-      kAXEnabledAttribute,  // 4
-      "AXVisibleChildren",  // 5 — virtualised containers
-      "AXVisibleRows",  // 6 — NSTableView / NSOutlineView specifically
-      kAXChildrenAttribute,  // 7 — fallback
+      kAXPositionAttribute,  // 1
+      kAXSizeAttribute,  // 2
+      kAXEnabledAttribute,  // 3
+      kAXChildrenAttribute,  // 4
+      kAXTitleAttribute,  // 5
+      kAXDescriptionAttribute,  // 6
+      kAXValueAttribute,  // 7
+      kAXURLAttribute,  // 8
+      kAXHiddenAttribute,  // 9
+      kAXSubroleAttribute,  // 10 — Firefox/Chrome tabs report role
+      //      `AXRadioButton`/`AXButton` with
+      //      subrole `AXTabButton`; surfacing the
+      //      subrole lets the walk paint those as
+      //      high-priority (tab-strip anchors) in
+      //      one IPC round-trip.
+      kAXDocumentAttribute,  // 11
     ] as CFArray
 
-  public func discover(in context: AppContext, deadline: Date) throws -> [JumpTarget] {
-    try discover(in: context, deadline: deadline, descendIntoWebAreas: true)
+  /// Per-worker mutable state. `WalkState` is per-thread under concurrent
+  /// walks; serial walks pass one through the whole recursion.
+  private struct WalkState {
+    var confirmedTargets: [JumpTarget] = []
+    /// Targets whose acceptance is contingent on an action-name IPC.
+    /// Collected during the walk; resolved in parallel after the
+    /// walk completes (see `resolvePendingActionChecks`).
+    var pendingTargets: [PendingTarget] = []
+    var idCounter: Int = 0
   }
 
-  /// `descendIntoWebAreas` is false only when a higher-priority browser DOM
-  /// provider already returned page targets. In that case AX still
-  /// contributes browser chrome controls, but skipping AXWebArea descendants
-  /// avoids walking the entire web page twice.
-  public func discover(
-    in context: AppContext,
-    deadline _: Date,
-    descendIntoWebAreas: Bool
-  ) throws -> [JumpTarget] {
-    let app = AXUIElementCreateApplication(context.processID)
+  /// Tentative target awaiting an action-name IPC. The candidate is fully
+  /// formed — if the action check passes, it's appended to
+  /// `confirmedTargets` as-is; otherwise dropped.
+  private struct PendingTarget {
+    let candidate: JumpTarget
+    let element: AXUIElement
+  }
+
+  /// Lock-protected collector for merging per-worker `WalkState`s back
+  /// onto the activation's combined result. Allocated once per
+  /// concurrent fan-out.
+  private final class WalkCollector {
+    let lock = NSLock()
+    var confirmedTargets: [JumpTarget] = []
+    var pendingTargets: [PendingTarget] = []
+
+    func absorb(_ state: WalkState) {
+      lock.lock()
+      confirmedTargets.append(contentsOf: state.confirmedTargets)
+      pendingTargets.append(contentsOf: state.pendingTargets)
+      lock.unlock()
+    }
+  }
+
+  public func discover(in context: AppContext) throws -> [JumpTarget] {
+    let app = AXApp.make(pid: context.processID)
+    // Wake the target app's a11y engine. Some apps (notably Firefox)
+    // run a lazy/idle accessibility service that only exposes the
+    // window-decoration buttons until an assistive technology
+    // explicitly signals it's reading the tree. The undocumented but
+    // widely-used `AXEnhancedUserInterface` and `AXManualAccessibility`
+    // attributes are the standard signals — VoiceOver sets the same
+    // ones. Best-effort: errors are ignored because most apps don't
+    // recognise these attributes and that's fine.
+    let trueRef = kCFBooleanTrue as CFTypeRef
+    _ = AXUIElementSetAttributeValue(
+      app, "AXEnhancedUserInterface" as CFString, trueRef)
+    _ = AXUIElementSetAttributeValue(
+      app, "AXManualAccessibility" as CFString, trueRef)
     let screenH = primaryScreenHeight()
 
     // The clip rect is supplied by AppMonitor from its single
@@ -156,43 +428,93 @@ public final class AccessibilityProvider: JumpProvider {
     let clip = context.frontWindowFrame
     guard !clip.isNull else { return [] }
 
-    var out: [JumpTarget] = []
-    var idCounter = 0
+    // Active-surface only. One IPC up front to resolve
+    // kAXFocusedWindowAttribute and walk that subtree exclusively. This
+    // is the *correct* way to scope to a single window — relying on a
+    // geometric region filter alone leaves edge cases where AX-reported
+    // frames from sibling windows or the app's AXMenuBar happen to
+    // land inside the active window's bounds (full-screen apps, off-
+    // screen popovers, AX coordinate quirks) and bleed through as
+    // stray hints.
+    //
+    // If `kAXFocusedWindow` is missing (rare — happens momentarily during
+    // app launches and in some automated Firefox sessions), fall back to the
+    // first reported app surface. This keeps the walk scoped to one
+    // foreground-app surface without broadening to app/menu-bar children.
+    guard let focusedWindow = Self.focusedOrFirstWindow(in: app) else { return [] }
 
-    // Open the dump file (truncate) if requested. We hold the handle
-    // for the whole walk so per-element writes don't reopen on each
-    // line.
-    var dumpHandle: FileHandle?
-    if let url = dumpURL {
-      dumpHandle = openDumpFile(at: url, context: context)
-    }
-    defer { try? dumpHandle?.close() }
-
-    // Walk straight from the app element. The batched read inside `walk`
-    // pulls kAXChildrenAttribute as one of its fields, so we don't need
-    // a separate kAXChildrenAttribute IPC on the app first. The app's
-    // role (AXApplication) doesn't match `roles`, so it doesn't become
-    // a target itself — it just descends.
+    var state = WalkState()
+    // The root walk uses the "r" prefix; concurrent fan-out workers use
+    // "w<i>" (see depth-0 fan-out below). This keeps target IDs unique
+    // across the focused window's own target (if it's hinted) and the
+    // per-worker subtree results.
     walk(
-      app, depth: 0, screenH: screenH, visible: clip,
-      pid: context.processID, descendIntoWebAreas: descendIntoWebAreas,
-      insideClickable: false, parentRole: nil, dump: dumpHandle,
-      out: &out, idCounter: &idCounter)
-    return out
+      focusedWindow,
+      depth: 0,
+      screenH: screenH,
+      visible: clip,
+      pid: context.processID,
+      insideClickable: false,
+      insideWebArea: false,
+      insideExtensionDocument: false,
+      parentRole: nil,
+      idPrefix: "r",
+      fanoutBudget: Self.maxFanoutLevels,
+      state: &state
+    )
+
+    // Parallel resolution of pending action-name checks. These are
+    // tentative targets the walker buffered instead of paying an inline
+    // IPC per element (the inline pattern doubled the IPC count on
+    // web-heavy apps because every AXGroup-in-webarea and every
+    // standalone AXImage triggered an extra `AXUIElementCopyActionNames`
+    // round-trip). Resolving in parallel lets the target app's main
+    // thread service multiple action-name reads concurrently.
+    let survivors = resolvePendingActionChecks(state.pendingTargets)
+    state.confirmedTargets.append(contentsOf: survivors)
+    return state.confirmedTargets
   }
 
-  private func openDumpFile(at url: URL, context: AppContext) -> FileHandle? {
-    let fm = FileManager.default
-    try? fm.createDirectory(
-      at: url.deletingLastPathComponent(),
-      withIntermediateDirectories: true)
-    fm.createFile(atPath: url.path, contents: nil)
-    guard let handle = try? FileHandle(forWritingTo: url) else { return nil }
-    let header =
-      "# flash AX dump  bundle=\(context.bundleIdentifier)  pid=\(context.processID)  time=\(Date())\n"
-    if let data = header.data(using: .utf8) { handle.write(data) }
-    return handle
+  private static func focusedOrFirstWindow(in app: AXUIElement) -> AXUIElement? {
+    for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+      if let window = elementAttribute(app, attribute as String),
+        isTopLevelInteractionSurface(window)
+      {
+        return window
+      }
+    }
+    var windowsRaw: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRaw)
+      == .success,
+      let windows = windowsRaw as? [AXUIElement]
+    {
+      return windows.first { isTopLevelInteractionSurface($0) }
+    }
+    return nil
   }
+
+  private static func isTopLevelInteractionSurface(_ element: AXUIElement) -> Bool {
+    if let role = role(of: element), topLevelInteractionSurfaceRoles.contains(role) {
+      return true
+    }
+    guard let subrole = stringAttribute(element, kAXSubroleAttribute as String) else {
+      return false
+    }
+    return topLevelInteractionSurfaceSubroles.contains(subrole)
+  }
+
+  private static let topLevelInteractionSurfaceRoles: Set<String> = [
+    "AXWindow",
+    "AXPopover",
+  ]
+
+  private static let topLevelInteractionSurfaceSubroles: Set<String> = [
+    "AXDialog",
+    "AXFloatingWindow",
+    "AXPopover",
+    "AXSheet",
+    "AXSystemDialog",
+  ]
 
   private func walk(
     _ element: AXUIElement,
@@ -200,15 +522,16 @@ public final class AccessibilityProvider: JumpProvider {
     screenH: CGFloat,
     visible: CGRect,
     pid: pid_t,
-    descendIntoWebAreas: Bool,
     insideClickable: Bool,
+    insideWebArea: Bool,
+    insideExtensionDocument: Bool,
     parentRole: String?,
-    dump: FileHandle?,
-    out: inout [JumpTarget],
-    idCounter: inout Int
+    idPrefix: String,
+    fanoutBudget: Int,
+    state: inout WalkState
   ) {
     if depth > Self.maxDepth { return }
-    if out.count >= Self.maxTargets { return }
+    if state.confirmedTargets.count >= Self.maxTargets { return }
 
     var valuesRef: CFArray?
     let err = AXUIElementCopyMultipleAttributeValues(
@@ -217,190 +540,248 @@ public final class AccessibilityProvider: JumpProvider {
       AXCopyMultipleAttributeOptions(rawValue: 0),
       &valuesRef
     )
-    guard err == .success, let vals = valuesRef as? [Any], vals.count == 8 else { return }
+    guard err == .success, let vals = valuesRef as? [Any], vals.count == 12 else { return }
 
     let role = vals[0] as? String
-    let subrole = vals[1] as? String
-    let posValue = Self.axValue(vals[2])
-    let sizeValue = Self.axValue(vals[3])
-    let enabled = (vals[4] as? Bool) ?? true
-    let visibleChildren = vals[5] as? [AXUIElement]
-    let visibleRows = vals[6] as? [AXUIElement]
-    let allChildren = vals[7] as? [AXUIElement]
+    let posValue = Self.axValue(vals[1])
+    let sizeValue = Self.axValue(vals[2])
+    let enabled = (vals[3] as? Bool) ?? true
+    let allChildren = vals[4] as? [AXUIElement]
+    let label =
+      Self.stringValue(vals[5]) ?? Self.stringValue(vals[6]) ?? Self.stringValue(vals[7])
+    let url = Self.urlValue(vals[8]) ?? Self.urlValue(vals[11])
+    let hidden = (vals[9] as? Bool) ?? false
+    let subrole = vals[10] as? String
+    let currentOrAncestorInsideExtensionDocument =
+      insideExtensionDocument || Self.isExtensionDocumentURL(url)
 
-    if !descendIntoWebAreas, role == "AXWebArea" {
-      return
+    // Role allowlist: web pages use the narrower Vimium-equivalent set
+    // (true semantic controls only); native apps use the broader set
+    // (rows, cells, disclosure triangles, icon-only AXImage buttons).
+    // Disabled elements never hint — they're visible but inert, and
+    // the user would just click into a no-op.
+    //
+    // Electron apps (Slack, Discord, etc.) render their entire UI inside
+    // an `AXWebArea`, so the strict web allowlist would skip their
+    // list/row chrome. Admit `AXRow`/`AXCell` here too — the
+    // `isRowOrCell` branch below routes them through the deferred
+    // `AXPress` check, so decorative HTML table cells (no press action)
+    // are filtered out while genuine click targets like Slack channels
+    // come through.
+    let isRowOrCellRole = role == "AXRow" || role == "AXCell"
+    let isExtensionPopupPressRole =
+      insideWebArea
+      && currentOrAncestorInsideExtensionDocument
+      && (role.map { Self.webExtensionPopupPressRoles.contains($0) } ?? false)
+    let baseAllowlist = insideWebArea ? Self.webClickableRoles : Self.roles
+    var roleAllowed =
+      role.map { baseAllowlist.contains($0) } ?? false
+      || (insideWebArea && isRowOrCellRole)
+      || isExtensionPopupPressRole
+    if roleAllowed, role == "AXImage", insideClickable {
+      roleAllowed = false
     }
-
-    // When dumping, fetch the supported actions + label upfront so the
-    // line includes enough signal to diagnose role mismatches. Skipped
-    // in the normal hot path — those IPCs are not free.
-    var dumpActions: [String]? = nil
-    var dumpLabel: String? = nil
-    if dump != nil {
-      dumpActions = actionNames(element)
-      dumpLabel =
-        stringAttr(element, kAXTitleAttribute as CFString)
-        ?? stringAttr(element, kAXDescriptionAttribute as CFString)
-        ?? stringAttr(element, kAXValueAttribute as CFString)
-    }
-
-    var addedAsTarget = false
-    if enabled,
-      let r = role, Self.roles.contains(r),
+    // Vimium-parity heuristic for AXLink-only: drop anchors smaller
+    // than 13x13. These are virtually always wrappers around a
+    // decorative CSS sprite or a hidden hit-region — HN-style upvote
+    // arrows, "..." pagination dots, etc. Firefox AX often propagates
+    // the child element's `title` attribute to the link, so an
+    // accessible-name check doesn't discriminate. Vimium skips them
+    // because the visible content (computed style) renders as
+    // invisible or non-pointer; we can't see CSS but the size is a
+    // reliable proxy (real icon links are 16x16+, real text links
+    // are taller than 13px).
+    if roleAllowed, insideWebArea, role == "AXLink",
       let posV = posValue, let sizeV = sizeValue,
-      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH)
+      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      frame.width < 13, frame.height < 13
     {
-      // Skip subroles that mark non-target group containers (e.g. outline
-      // section headers). We still descend, so their children can be
-      // hinted individually.
-      let suppressed = subrole.map { Self.skipSubroles.contains($0) } ?? false
-      // AXImage refinement:
-      //   1. If we're inside a clickable container ancestor (AXLink,
-      //      AXButton, ...) treat the image as decorative — the
-      //      ancestor already owns the hint. Kills the
-      //      `<a><img/>text</a>` double-hint case in Firefox.
-      //   2. If we're standalone (no clickable ancestor), an AXImage
-      //      is only a real click target when it exposes a press
-      //      action. Pure decorative `<img>` exposes no actions.
-      //   See AccessibilityProvider.clickableContainerRoles.
-      var imageDecorative = false
-      if r == "AXImage" {
-        if insideClickable {
-          imageDecorative = true
-        } else if !imageHasPressAction(element) {
-          imageDecorative = true
+      roleAllowed = false
+    }
+    // `enabled` is checked per-branch below rather than in this gate: a
+    // disabled row/cell can still be the real click target (see the
+    // row/cell branch), whereas every other disabled element stays inert.
+    if let posV = posValue, let sizeV = sizeValue,
+      let frame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      visible.containsInclusive(CGPoint(x: frame.midX, y: frame.midY)),
+      roleAllowed, !hidden
+    {
+      state.idCounter += 1
+      let captured = element
+      let capturedRole = role ?? "AXUnknown"
+      // Web content frequently exposes AXPress on semantic controls even
+      // when the page's real click handler only observes trusted mouse
+      // events. Use the host-click path for non-editable web controls;
+      // text inputs keep the AX focus path below so insert-mode entry
+      // stays deterministic.
+      let preferHostClick = Self.prefersHostClick(
+        insideWebArea: insideWebArea,
+        role: capturedRole,
+        isExtensionPopupPressRole: isExtensionPopupPressRole)
+      let activate: ((JumpAction) -> Bool) = { action in
+        if preferHostClick {
+          return false
         }
-      }
-      if !suppressed, !imageDecorative {
-        let center = CGPoint(x: frame.midX, y: frame.midY)
-        if visible.contains(center) {
-          let clipped = frame.intersection(visible)
-          if !clipped.isNull, clipped.width >= 4, clipped.height >= 4 {
-            idCounter += 1
-            let captured = element
-            let capturedRole = r
-            // CGEvent uses Y-down screen coords (origin top-left of
-            // primary). Our `frame` is in NSScreen coords (Y-up,
-            // origin bottom-left), so flip back.
-            let cgClickPoint = CGPoint(x: frame.midX, y: screenH - frame.midY)
-            let activate: ((JumpAction) -> Bool) = { action in
-              switch action {
-              case .leftClick:
-                // Text inputs don't respond to AXPress — pressing a
-                // search field is meaningless. The correct AX-level
-                // action is to set kAXFocusedAttribute = true, which
-                // moves keyboard focus to the field. The user can
-                // then start typing immediately.
-                if Self.textInputRoles.contains(capturedRole) {
-                  let setErr = AXUIElementSetAttributeValue(
-                    captured,
-                    kAXFocusedAttribute as CFString,
-                    kCFBooleanTrue
-                  )
-                  if setErr == .success { return true }
-                }
-                if AXUIElementPerformAction(captured, kAXPressAction as CFString) == .success {
-                  return true
-                }
-                if AXUIElementPerformAction(captured, "AXOpen" as CFString) == .success {
-                  return true
-                }
-                if AXUIElementPerformAction(captured, "AXConfirm" as CFString) == .success {
-                  return true
-                }
-                // Fallback: AX action didn't take. Try to
-                // locate a descendant that *does* expose a
-                // press action and click on its centre — the
-                // detected node may be an inert
-                // `<div role="tab">` whose actual handler
-                // lives a level or two below. If no clickable
-                // descendant exists, synthesize a click at
-                // the detected element's own centre as the
-                // ultimate fallback.
-                if let (childEl, childCG) = Self.firstActionableDescendant(
-                  captured, screenH: screenH)
-                {
-                  if AXUIElementPerformAction(childEl, kAXPressAction as CFString) == .success {
-                    return true
-                  }
-                  if AXUIElementPerformAction(childEl, "AXOpen" as CFString) == .success {
-                    return true
-                  }
-                  if AXUIElementPerformAction(childEl, "AXConfirm" as CFString) == .success {
-                    return true
-                  }
-                  return Self.synthesizeMouseClick(at: childCG, button: .left)
-                }
-                return Self.synthesizeMouseClick(at: cgClickPoint, button: .left)
-              case .rightClick:
-                if AXUIElementPerformAction(captured, kAXShowMenuAction as CFString) == .success {
-                  return true
-                }
-                if let (childEl, childCG) = Self.firstActionableDescendant(
-                  captured, screenH: screenH)
-                {
-                  if AXUIElementPerformAction(childEl, kAXShowMenuAction as CFString) == .success {
-                    return true
-                  }
-                  return Self.synthesizeMouseClick(at: childCG, button: .right)
-                }
-                return Self.synthesizeMouseClick(at: cgClickPoint, button: .right)
-              }
-            }
-            out.append(
-              JumpTarget(
-                id: "ax-\(pid)-\(idCounter)",
-                frame: frame,
-                role: r,
-                accessibilityLabel: nil,
-                pid: pid,
-                activate: activate,
-                providerID: identifier
-              ))
-            addedAsTarget = true
+        switch action {
+        case .leftClick:
+          if JumpTarget.textInputRoles.contains(capturedRole),
+            AXClick.setFocus(captured)
+          {
+            return true
           }
+          return AXClick.tryActions(captured, action: .leftClick)
+        case .rightClick:
+          return AXClick.tryActions(captured, action: .rightClick)
+        case .doubleClick:
+          return false
         }
+      }
+      // Browser tab strips report their entries either as native `AXTab` or as
+      // `AXRadioButton` / `AXButton` with subrole `AXTabButton` (Firefox +
+      // Chromium). Raising their priority signals the renderer to paint them in
+      // the accent style so the user can pick out tabs from a dense element grid
+      // at a glance.
+      let isTabAnchor =
+        capturedRole == "AXTab"
+        || (subrole == "AXTabButton"
+          && (capturedRole == "AXRadioButton" || capturedRole == "AXButton"))
+      // Multi-line web links report a union bounding box whose centre can fall
+      // in the empty gap between wrapped lines, so a synthesized click there
+      // misses. Resolve the first character's box centre instead — guaranteed
+      // on the element — lazily at commit (no hint-walk cost) and only when the
+      // target is clearly multi-line; single-line targets keep the proven
+      // frame centre.
+      let resolveClickPoint: (() -> CGPoint?)? =
+        insideWebArea
+        ? {
+          guard
+            let charRect = AXAttribute.boundsForRange(
+              captured, location: 0, length: 1, screenH: screenH),
+            frame.height > charRect.height * 1.5
+          else { return nil }
+          return CGPoint(x: charRect.midX, y: charRect.midY)
+        }
+        : nil
+      let candidate = JumpTarget(
+        id: "ax-\(pid)-\(idPrefix)-\(state.idCounter)",
+        frame: frame,
+        role: capturedRole,
+        accessibilityLabel: label,
+        url: url,
+        pid: pid,
+        activate: activate,
+        resolveClickPoint: resolveClickPoint,
+        entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
+        preferHostClick: preferHostClick,
+        priority: isTabAnchor ? .critical : .normal,
+        providerID: identifier
+      )
+      let isRowOrCell = capturedRole == "AXRow" || capturedRole == "AXCell"
+      if enabled {
+        // Icon-only AXImage buttons defer to the AXPress check (decorative
+        // images report no press action); web-area rows do the same so
+        // HTML <tr>/<td> stays filtered while Slack/Discord/Electron
+        // channel rows (which expose AXPress) come through; everything
+        // else is confirmed.
+        if role == "AXImage" || (insideWebArea && isRowOrCell) || isExtensionPopupPressRole {
+          state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
+        } else {
+          state.confirmedTargets.append(candidate)
+        }
+      } else if isRowOrCell {
+        // Virtualised list rows/cells frequently report enabled=false even
+        // when they are the real click target — Messages conversation rows
+        // do exactly this, which is why `f` surfaced no hints over the chat
+        // list. Admit them only when they actually expose AXPress so we
+        // recover the actionable rows without hinting genuinely inert UI.
+        state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
       }
     }
 
-    // Leaf-role pruning: stop descending once we've added a target whose
-    // role we consider atomic.
-    if addedAsTarget, let r = role, Self.leafRoles.contains(r) {
-      return
+    // Always walk `kAXChildrenAttribute`. Native table/outline views sometimes
+    // expose their virtualised rows only through `kAXVisibleRowsAttribute`, so
+    // add that list as a supplement instead of replacing the child walk.
+    //
+    // **Single-attribute children fallback**: the batched IPC can
+    // occasionally drop `kAXChildrenAttribute` (returns an error
+    // placeholder in vals[5] instead of the real child list — Firefox's
+    // a11y does this for `AXTabPanel` under concurrent IPC contention).
+    // Re-query that one attribute on its own when the batch came back
+    // empty.
+    var children: [AXUIElement] = allChildren ?? []
+    if children.isEmpty {
+      var raw: CFTypeRef?
+      if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
+        == .success,
+        let arr = raw as? [AXUIElement]
+      {
+        children = arr
+      }
     }
-
-    // Emit a dump line for this element (after the gating decision so
-    // the dump reflects what the walker actually saw + did). We log
-    // every visited node, not just the ones that become targets — the
-    // false-negatives are exactly the lines without a `hint=1` tag.
-    if let dump = dump {
-      writeDumpLine(
-        dump,
-        depth: depth,
-        role: role,
-        subrole: subrole,
-        parentRole: parentRole,
-        posValue: posValue,
-        sizeValue: sizeValue,
-        screenH: screenH,
-        enabled: enabled,
-        actions: dumpActions ?? [],
-        label: dumpLabel,
-        hinted: addedAsTarget
-      )
-    }
-
-    // Prefer the narrowest "visible" view of children that the element
-    // implements:
-    //   1. kAXVisibleChildrenAttribute (NSCollectionView, generic scroll)
-    //   2. kAXVisibleRowsAttribute (NSTableView / NSOutlineView)
-    //   3. kAXChildrenAttribute (everything else, fallback)
-    // For Notes' 292-row sidebar this drops the walk to the ~12 rows
-    // actually rendered on screen.
-    let children = visibleChildren ?? visibleRows ?? allChildren ?? []
+    children = Self.childrenIncludingVisibleRows(
+      for: element,
+      role: role,
+      children: children)
     let nowInsideClickable =
       insideClickable || (role.map { Self.clickableContainerRoles.contains($0) } ?? false)
+    let nowInsideWebArea = insideWebArea || role == "AXWebArea"
+    let nowInsideExtensionDocument = currentOrAncestorInsideExtensionDocument
+
+    // Concurrent fan-out fires at the first multi-child node on each
+    // walk path, up to `maxFanoutLevels` times per path. The original
+    // version fanned out only at depth 0 (the focused window's direct
+    // children), which left big subtrees serial — Firefox's content
+    // AXGroup, AWS Console's web area. Allowing one more fan-out level
+    // inside each depth-0 worker pipelines the IPC against the target
+    // app's main thread for those big subtrees too.
+    //
+    // The bottleneck is still the target app's main thread, so each
+    // fan-out level pays for itself only if the children would each
+    // generate a meaningful IPC stream. Two levels covers the typical
+    // case; deeper than that the dispatch overhead dominates. Single-
+    // child case falls through to the serial loop below.
+    if fanoutBudget > 0, children.count > 1 {
+      let collector = WalkCollector()
+      let captureScreenH = screenH
+      let captureVisible = visible
+      let capturePid = pid
+      let captureInsideClickable = nowInsideClickable
+      let captureInsideWebArea = nowInsideWebArea
+      let captureInsideExtensionDocument = nowInsideExtensionDocument
+      let captureParentRole = role
+      let captureDepth = depth
+      let captureIdPrefix = idPrefix
+      let captureNewBudget = fanoutBudget - 1
+      let childrenSnapshot = children
+      DispatchQueue.concurrentPerform(iterations: childrenSnapshot.count) { i in
+        var workerState = WalkState()
+        // Encode the fan-out level into the id prefix so ids stay
+        // unique across nested fan-out points. Outer fan-out emits
+        // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
+        let childPrefix = captureIdPrefix == "r" ? "w\(i)" : "\(captureIdPrefix)w\(i)"
+        self.walk(
+          childrenSnapshot[i],
+          depth: captureDepth + 1,
+          screenH: captureScreenH,
+          visible: captureVisible,
+          pid: capturePid,
+          insideClickable: captureInsideClickable,
+          insideWebArea: captureInsideWebArea,
+          insideExtensionDocument: captureInsideExtensionDocument,
+          parentRole: captureParentRole,
+          idPrefix: childPrefix,
+          fanoutBudget: captureNewBudget,
+          state: &workerState
+        )
+        collector.absorb(workerState)
+      }
+      collector.lock.lock()
+      state.confirmedTargets.append(contentsOf: collector.confirmedTargets)
+      state.pendingTargets.append(contentsOf: collector.pendingTargets)
+      collector.lock.unlock()
+      return
+    }
+
     for child in children {
       walk(
         child,
@@ -408,15 +789,46 @@ public final class AccessibilityProvider: JumpProvider {
         screenH: screenH,
         visible: visible,
         pid: pid,
-        descendIntoWebAreas: descendIntoWebAreas,
         insideClickable: nowInsideClickable,
+        insideWebArea: nowInsideWebArea,
+        insideExtensionDocument: nowInsideExtensionDocument,
         parentRole: role,
-        dump: dump,
-        out: &out,
-        idCounter: &idCounter
+        idPrefix: idPrefix,
+        fanoutBudget: fanoutBudget,
+        state: &state
       )
-      if out.count >= Self.maxTargets { return }
+      if state.confirmedTargets.count >= Self.maxTargets { return }
     }
+  }
+
+  /// Parallel resolution of action-name IPCs for tentative targets that
+  /// the walker bookkept during the recursive descent. Each
+  /// `AXUIElementCopyActionNames` is independent so they can run
+  /// concurrently, bounded by the target app's main-thread service rate
+  /// (and `DispatchQueue.concurrentPerform`'s thread pool sizing).
+  ///
+  /// The walk previously paid this IPC inline per element — for AWS
+  /// Console (every page-tree AXGroup exposes `AXPress`) that doubled
+  /// the IPC count. Deferring and parallelising trims ~30–40 % off the
+  /// web-heavy-app walk wall time.
+  private func resolvePendingActionChecks(_ pending: [PendingTarget]) -> [JumpTarget] {
+    if pending.isEmpty { return [] }
+    // Per-iteration write into a UInt8 buffer is byte-aligned and the
+    // indices are disjoint, so this is safe without locking.
+    // (Concurrent reads of `pending` are also safe — it's a value
+    // type, never mutated during the parallel pass.)
+    var keep = [UInt8](repeating: 0, count: pending.count)
+    keep.withUnsafeMutableBufferPointer { buf in
+      DispatchQueue.concurrentPerform(iterations: pending.count) { i in
+        buf[i] = AXClick.hasPressAction(pending[i].element) ? 1 : 0
+      }
+    }
+    var out: [JumpTarget] = []
+    out.reserveCapacity(pending.count)
+    for (i, k) in keep.enumerated() where k == 1 {
+      out.append(pending[i].candidate)
+    }
+    return out
   }
 
   private func primaryScreenHeight() -> CGFloat {
@@ -426,175 +838,55 @@ public final class AccessibilityProvider: JumpProvider {
     return NSScreen.main?.frame.height ?? 1080
   }
 
+  public static func isExtensionDocumentURL(_ value: String?) -> Bool {
+    guard let value,
+      let scheme = URL(string: value)?.scheme?.lowercased()
+    else { return false }
+    return extensionDocumentSchemes.contains(scheme)
+  }
+
+  private static let extensionDocumentSchemes: Set<String> = [
+    "chrome-extension",
+    "moz-extension",
+    "safari-web-extension",
+  ]
+
+  private static func childrenIncludingVisibleRows(
+    for element: AXUIElement,
+    role: String?,
+    children: [AXUIElement]
+  ) -> [AXUIElement] {
+    guard role == "AXTable" || role == "AXOutline" else { return children }
+    var rawRows: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, kAXVisibleRowsAttribute as CFString, &rawRows)
+        == .success,
+      let rows = rawRows as? [AXUIElement],
+      !rows.isEmpty
+    else { return children }
+
+    var seen = Set<CFHashCode>()
+    var combined: [AXUIElement] = []
+    combined.reserveCapacity(children.count + rows.count)
+    for child in children + rows {
+      guard seen.insert(CFHash(child)).inserted else { continue }
+      combined.append(child)
+    }
+    return combined
+  }
+
   private func frameFromAX(pos: AXValue, size: AXValue, screenH: CGFloat) -> CGRect? {
     guard AXValueGetType(pos) == .cgPoint, AXValueGetType(size) == .cgSize else { return nil }
     var origin = CGPoint.zero
     var sz = CGSize.zero
     AXValueGetValue(pos, .cgPoint, &origin)
     AXValueGetValue(size, .cgSize, &sz)
-    if sz.width <= 0 || sz.height <= 0 { return nil }
+    // Minimum visual area gate. 1x1 anchors are a common tracking-
+    // pixel idiom that Vimium correctly skips (Utils.areClientRectsTooSmall);
+    // 3x3 is the conservative threshold that drops them without
+    // touching real icon-only buttons (16x16+).
+    if sz.width < 3 || sz.height < 3 { return nil }
     let flippedY = screenH - origin.y - sz.height
     return CGRect(x: origin.x, y: flippedY, width: sz.width, height: sz.height)
-  }
-
-  /// Breadth-first search for a descendant of `root` that exposes any of
-  /// the press-style AX actions, returning the descendant plus the CGEvent
-  /// click point (Y-down screen coords) at its centre. Used at click time
-  /// when the detected hint element is an inert wrapper whose actual
-  /// handler lives one or two levels deeper — a common pattern on
-  /// Firefox tab strips and React `role="tab"`/`role="button"` widgets.
-  ///
-  /// Bounded by `maxDepth` and `maxNodes` so a single click never blows
-  /// up the AX IPC budget on a pathological subtree. The traversal is
-  /// only invoked when the root's own AX actions have all failed, so the
-  /// extra cost is paid at most once per Flash activation.
-  static func firstActionableDescendant(
-    _ root: AXUIElement,
-    screenH: CGFloat,
-    maxDepth: Int = 6,
-    maxNodes: Int = 200
-  ) -> (AXUIElement, CGPoint)? {
-    var queue: [(AXUIElement, Int)] = [(root, 0)]
-    var visited = 0
-    while !queue.isEmpty {
-      let (el, depth) = queue.removeFirst()
-      visited += 1
-      if visited > maxNodes { return nil }
-      if depth > 0,
-        elementHasPressAction(el),
-        let frame = frameForElement(el, screenH: screenH)
-      {
-        let cg = CGPoint(x: frame.midX, y: screenH - frame.midY)
-        return (el, cg)
-      }
-      if depth >= maxDepth { continue }
-      var raw: CFTypeRef?
-      if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &raw) == .success,
-        let children = raw as? [AXUIElement]
-      {
-        for child in children { queue.append((child, depth + 1)) }
-      }
-    }
-    return nil
-  }
-
-  private static func elementHasPressAction(_ element: AXUIElement) -> Bool {
-    var names: CFArray?
-    guard AXUIElementCopyActionNames(element, &names) == .success,
-      let arr = names as? [String]
-    else { return false }
-    return arr.contains(kAXPressAction)
-      || arr.contains("AXOpen")
-      || arr.contains("AXConfirm")
-  }
-
-  private static func frameForElement(_ element: AXUIElement, screenH: CGFloat) -> CGRect? {
-    var posRaw: CFTypeRef?
-    var sizeRaw: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRaw) == .success,
-      AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRaw) == .success,
-      let posCF = posRaw, let sizeCF = sizeRaw,
-      CFGetTypeID(posCF) == AXValueGetTypeID(),
-      CFGetTypeID(sizeCF) == AXValueGetTypeID()
-    else { return nil }
-    let posVal = posCF as! AXValue
-    let sizeVal = sizeCF as! AXValue
-    guard AXValueGetType(posVal) == .cgPoint, AXValueGetType(sizeVal) == .cgSize else { return nil }
-    var origin = CGPoint.zero
-    var sz = CGSize.zero
-    AXValueGetValue(posVal, .cgPoint, &origin)
-    AXValueGetValue(sizeVal, .cgSize, &sz)
-    if sz.width <= 0 || sz.height <= 0 { return nil }
-    let flippedY = screenH - origin.y - sz.height
-    return CGRect(x: origin.x, y: flippedY, width: sz.width, height: sz.height)
-  }
-
-  /// Post a real `leftMouseDown`+`leftMouseUp` (or right-button equivalent)
-  /// pair via CGEvent at the given screen point. Used as the fallback when
-  /// no AX action takes — i.e. the element exposes `AXLink`/`AXButton`/
-  /// `AXTab` but has no `AXPress`/`AXOpen`/`AXConfirm` handler, which is
-  /// common for `<div onclick>` widgets and the Firefox tab strip.
-  ///
-  /// The events post to `.cghidEventTap` so they're delivered to whichever
-  /// app owns the window under the point — that's the same path an actual
-  /// user click takes. Requires the Accessibility (assistive) permission
-  /// Flash already needs to read AX trees; no extra grant.
-  static func synthesizeMouseClick(at point: CGPoint, button: CGMouseButton) -> Bool {
-    let source = CGEventSource(stateID: .hidSystemState)
-    let downType: CGEventType = (button == .right) ? .rightMouseDown : .leftMouseDown
-    let upType: CGEventType = (button == .right) ? .rightMouseUp : .leftMouseUp
-    guard
-      let down = CGEvent(
-        mouseEventSource: source, mouseType: downType,
-        mouseCursorPosition: point, mouseButton: button),
-      let up = CGEvent(
-        mouseEventSource: source, mouseType: upType,
-        mouseCursorPosition: point, mouseButton: button)
-    else { return false }
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
-    return true
-  }
-
-  private func actionNames(_ element: AXUIElement) -> [String] {
-    var names: CFArray?
-    let err = AXUIElementCopyActionNames(element, &names)
-    guard err == .success, let arr = names as? [String] else { return [] }
-    return arr
-  }
-
-  /// Standalone `AXImage` gate. We treat an image as a real click target
-  /// only when it exposes a press-style action — pure decorative
-  /// `<img>` exposes none. Called only when `role == "AXImage"` and
-  /// there is no clickable ancestor, so the one extra IPC per check is
-  /// bounded by the per-page image count.
-  private func imageHasPressAction(_ element: AXUIElement) -> Bool {
-    let actions = Set(actionNames(element))
-    return actions.contains(kAXPressAction)
-      || actions.contains("AXOpen")
-      || actions.contains("AXConfirm")
-  }
-
-  private func stringAttr(_ element: AXUIElement, _ attribute: CFString) -> String? {
-    var raw: CFTypeRef?
-    let err = AXUIElementCopyAttributeValue(element, attribute, &raw)
-    guard err == .success else { return nil }
-    let s = raw as? String
-    guard let s, !s.isEmpty else { return nil }
-    return s
-  }
-
-  private func writeDumpLine(
-    _ handle: FileHandle,
-    depth: Int,
-    role: String?,
-    subrole: String?,
-    parentRole: String?,
-    posValue: AXValue?,
-    sizeValue: AXValue?,
-    screenH: CGFloat,
-    enabled: Bool,
-    actions: [String],
-    label: String?,
-    hinted: Bool
-  ) {
-    let frame: CGRect?
-    if let p = posValue, let s = sizeValue {
-      frame = frameFromAX(pos: p, size: s, screenH: screenH)
-    } else {
-      frame = nil
-    }
-    let indent = String(repeating: "  ", count: min(depth, 40))
-    let f =
-      frame.map { "(\(Int($0.minX)),\(Int($0.minY)),\(Int($0.width))x\(Int($0.height)))" } ?? "-"
-    let acts = actions.isEmpty ? "-" : actions.joined(separator: ",")
-    let lbl = label.map { "\"\($0.replacingOccurrences(of: "\"", with: "\\\""))\"" } ?? "-"
-    let line = """
-      \(indent)d=\(depth) role=\(role ?? "?") subrole=\(subrole ?? "-") parent=\(parentRole ?? "-") frame=\(f) enabled=\(enabled) actions=\(acts) label=\(lbl)\(hinted ? " hint=1" : "")
-      """
-    if let data = (line + "\n").data(using: .utf8) {
-      handle.write(data)
-    }
   }
 }

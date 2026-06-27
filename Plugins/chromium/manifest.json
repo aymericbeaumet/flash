@@ -1,0 +1,80 @@
+{
+  "id": "chromium",
+  "name": "Chromium",
+  "version": "0.1.0",
+  "description": "Surface tabs and tab actions for Chromium-family browsers (Chrome, Brave, Edge, Arc, Vivaldi, Opera) via AppleScript.",
+  "install": "true",
+  "start": "exec ./flash-plugin-chromium",
+  "capabilities": [
+    "app_control"
+  ],
+  "priority": 30,
+  "only_bundle_ids": [
+    "com.google.Chrome",
+    "com.google.Chrome.canary",
+    "com.google.Chrome.beta",
+    "com.google.Chrome.dev",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.brave.Browser.beta",
+    "com.brave.Browser.nightly",
+    "com.microsoft.edgemac",
+    "com.microsoft.edgemac.Beta",
+    "com.microsoft.edgemac.Dev",
+    "com.microsoft.edgemac.Canary",
+    "company.thebrowser.Browser",
+    "com.vivaldi.Vivaldi",
+    "com.operasoftware.Opera",
+    "com.operasoftware.OperaNext",
+    "com.operasoftware.OperaDeveloper"
+  ],
+  "listen": [
+    "core:flash.started",
+    "core:apps.changed",
+    "core:apps.launched",
+    "core:apps.terminated",
+    "core:focus.changed"
+  ],
+  "sources": [
+    {
+      "name": "chrome.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "chromium.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "brave.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "edge.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "arc.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "vivaldi.tabs",
+      "kind": "locations",
+      "priority": "high"
+    },
+    {
+      "name": "opera.tabs",
+      "kind": "locations",
+      "priority": "high"
+    }
+  ],
+  "source_actions": [
+    "tab_select",
+    "tab_new",
+    "tab_close"
+  ]
+}

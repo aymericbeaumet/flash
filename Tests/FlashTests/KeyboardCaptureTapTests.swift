@@ -1,0 +1,33 @@
+import XCTest
+
+@testable import flash
+
+/// The keyboard tap's swallow decision is the single most security-sensitive
+/// branch in the input path: get it wrong in one direction and NORMAL leaks
+/// keys to the focused app; wrong in the other and INSERT (or a command-line
+/// field) goes deaf. These pin the full mode × input-mode matrix.
+final class KeyboardCaptureTapTests: XCTestCase {
+  func testNormalModeSwallowsBareAndHintInput() {
+    XCTAssertTrue(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .normal))
+    XCTAssertTrue(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .hints))
+  }
+
+  func testNormalModeNeverSwallowsKeyWindowSurfaces() {
+    // Command-line / modal / candidate-finder own the key window and type into
+    // their own fields — the tap must pass those through untouched.
+    XCTAssertFalse(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .commandLine))
+    XCTAssertFalse(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .modal))
+    XCTAssertFalse(
+      KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .candidateFinder))
+  }
+
+  func testInsertModeNeverSwallows() {
+    // INSERT is invisible to the tap regardless of overlay input mode — keys
+    // flow straight to the focused app.
+    for inputMode: OverlayInputMode in [.normal, .hints, .commandLine, .modal, .candidateFinder] {
+      XCTAssertFalse(
+        KeyboardCaptureTap.shouldSwallow(flashMode: .insert, inputMode: inputMode),
+        "insert mode should never swallow (inputMode=\(inputMode))")
+    }
+  }
+}

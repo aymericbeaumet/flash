@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "side": "vimiumOnly",
+      "rect": [847, 464, 342, 64],
+      "reason": "Google Meet join screen reflow: the 'Use Gemini to take notes' promo card animates in ~1s after load, appearing as a new clickable div and pushing the join controls down ~100pt. The animation lands between Flash's AX capture and Vimium's 'f' capture, so Vimium sees the post-reflow layout plus the late-appearing card while Flash captured the pre-reflow layout. Flash detects every control present at capture time; this card simply was not in the AX tree yet. Rect is page-relative (origin = fiducial pageScreenRect) so it is invariant to the offscreen window placement.",
+      "domSelector": "div"
+    },
+    {
+      "side": "vimiumOnly",
+      "rect": [1119, 488, 58, 16],
+      "reason": "Same Google Meet reflow: 'Start' button at its post-reflow Y (488). Flash detected the identical button ~100pt away at its pre-reflow Y — see the matching flashOnly soft-warning — so this is a timing shift, not a missed target. Rect is page-relative (origin = fiducial pageScreenRect).",
+      "domSelector": "button"
+    },
+    {
+      "side": "vimiumOnly",
+      "rect": [977, 432, 83, 16],
+      "reason": "Same Google Meet reflow: 'Join now' button at its post-reflow Y (432). Flash detected the identical button ~100pt away at its pre-reflow Y — see the matching flashOnly soft-warning — so this is a timing shift, not a missed target. Rect is page-relative (origin = fiducial pageScreenRect).",
+      "domSelector": "button"
+    }
+  ]
+}

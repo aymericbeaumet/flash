@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Scaffold a new bundled Rust plugin under Plugins/<id>/ with a manifest,
+# Cargo.toml, and a minimal command-handling main.rs. The generated plugin
+# registers a single `:<id> ping` command so it builds and runs immediately;
+# edit src/main.rs to add real behavior.
+#
+# Usage: new-plugin.sh <id> "<Display Name>" "<one-line description>"
+#   <id>  lowercase [a-z0-9._-], also the binary name suffix.
+
+if [[ $# -lt 3 ]]; then
+  echo "usage: $0 <id> \"<Display Name>\" \"<description>\"" >&2
+  exit 2
+fi
+
+ID="$1"
+NAME="$2"
+DESCRIPTION="$3"
+
+if [[ ! "$ID" =~ ^[a-z0-9._-]+$ ]]; then
+  echo "error: id must match [a-z0-9._-]+ (got: $ID)" >&2
+  exit 2
+fi
+
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DIR="$PROJECT_DIR/Plugins/$ID"
+
+if [[ -e "$DIR" ]]; then
+  echo "error: $DIR already exists" >&2
+  exit 1
+fi
+
+mkdir -p "$DIR/src"
+
+cat >"$DIR/manifest.json" <<JSON
+{
+  "id": "$ID",
+  "name": "$NAME",
+  "version": "0.1.0",
+  "description": "$DESCRIPTION",
+  "install": "true",
+  "start": "exec ./flash-plugin-$ID",
+  "commands": [
+    { "command": "$ID", "subcommand": "ping", "description": "Smoke-test the $NAME plugin" }
+  ]
+}
+JSON
+
+cat >"$DIR/Cargo.toml" <<TOML
+[package]
+name = "flash-plugin-$ID"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "flash-plugin-$ID"
+path = "src/main.rs"
+
+[dependencies]
+flash_plugin = { path = "../_rust_flash_plugin" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+TOML
+
+cat >"$DIR/src/main.rs" <<'RUST'
+use flash_plugin::{run, CommandResponse, Context, Plugin, Request, Response};
+
+struct PluginImpl;
+
+impl Plugin for PluginImpl {
+    async fn handle(&self, _ctx: Context, request: Request) -> Response {
+        let Request::Command(cmd) = request else {
+            return CommandResponse::error("unsupported request").into();
+        };
+        match cmd.subcommand.as_str() {
+            "ping" => CommandResponse::toast("pong").into(),
+            other => CommandResponse::error(format!("unknown subcommand: {other}")).into(),
+        }
+    }
+}
+
+fn main() {
+    run(PluginImpl);
+}
+RUST
+
+echo "Created Plugins/$ID"
+echo "Next: add \"$ID\" to the expected-id set in Tests/FlashTests/PluginSystemTests.swift,"
+echo "then run Scripts/build-plugins.sh."
