@@ -123,6 +123,19 @@ extension AppDelegate {
           self.clearPointerInsertHandoff(
             reason: "physical_pointer_entered_insert",
             token: handoffToken)
+          // Deliver the click to the app too. When Flash was the active app
+          // the original physical click is consumed by macOS as a focus
+          // transfer and never reaches the control under the cursor, so the
+          // target (e.g. a tmux status-bar tab in a terminal) sees the mode
+          // flip to INSERT but no actual click — the window/tab never
+          // switches. Re-synthesise it so entering INSERT *and* acting on the
+          // click happen together. The forward guard already no-ops when Flash
+          // wasn't active (the click reached the app on its own then), so this
+          // can't double-deliver.
+          self.forwardPhysicalPointerClickIfNeeded(
+            decision: decision,
+            click: click,
+            targetPID: targetPID)
         case .recaptureNormal:
           self.clearPointerInsertHandoff(reason: "physical_pointer_probe_done", token: handoffToken)
           self.forwardPhysicalPointerClickIfNeeded(
@@ -459,7 +472,9 @@ extension AppDelegate {
     click: OverlayPointerClick?,
     targetPID: pid_t?
   ) {
-    guard Self.physicalPointerClickShouldBeForwarded(decision: decision, click: click),
+    guard
+      Self.physicalPointerClickShouldBeForwarded(
+        decision: decision, click: click, targetPID: targetPID),
       let click
     else { return }
     if let targetPID, let app = NSRunningApplication(processIdentifier: targetPID) {
@@ -480,15 +495,30 @@ extension AppDelegate {
 
   static func physicalPointerClickShouldBeForwarded(
     decision: NormalModePointerPolicy.AppClickDecision,
-    click: OverlayPointerClick?
+    click: OverlayPointerClick?,
+    targetPID: pid_t?
   ) -> Bool {
-    guard decision.releaseCapture, let click, click.flashWasActive else { return false }
+    guard decision.releaseCapture, let click else { return false }
     switch click.action {
-    case .leftClick, .doubleClick:
-      return true
     case .rightClick:
       return false
+    case .leftClick, .doubleClick:
+      break
     }
+    // Forward (re-synthesise) the click whenever the original physical click
+    // could not have reached the target on its own:
+    //   - Flash was the active app → the OS consumed the click as a focus
+    //     transfer away from Flash, or
+    //   - the clicked window belongs to an app that was NOT frontmost → the
+    //     click was consumed activating that app, so the control under the
+    //     cursor (e.g. a tmux status-bar tab) never received it.
+    // When the target was already the frontmost app the physical click landed
+    // directly, so forwarding would double-deliver — skip it.
+    if click.flashWasActive { return true }
+    if let targetPID, click.frontmostPIDAtClick > 0, targetPID != click.frontmostPIDAtClick {
+      return true
+    }
+    return false
   }
 
   private func commitMouseGridCell(hint: AssignedHint, clickModifiers: ClickModifiers) {

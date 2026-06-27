@@ -25,6 +25,12 @@ struct OverlayPointerClick: Equatable {
   var location: CGPoint
   var modifiers: ClickModifiers
   var flashWasActive: Bool = false
+  /// The frontmost application's PID at the instant of the click (before the
+  /// click could activate anything). When the clicked window belongs to a
+  /// *different* app, macOS consumes this first click as a window-activation
+  /// event and the control under the cursor never sees it — so Flash must
+  /// re-synthesise it. `-1` when unknown.
+  var frontmostPIDAtClick: pid_t = -1
 }
 
 final class CommandLineTextField: NSTextField {

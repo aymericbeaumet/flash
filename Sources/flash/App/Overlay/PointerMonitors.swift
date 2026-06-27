@@ -100,14 +100,16 @@ extension OverlayPanel {
     let modifiers = ClickModifiers(
       eventFlags: event?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? [],
       allowed: .all)
+    let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
     let flashWasActive =
       NSApp.isActive
-      || NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid()
+      || frontmostPID == getpid()
     return OverlayPointerClick(
       action: action,
       location: NSEvent.mouseLocation,
       modifiers: modifiers,
-      flashWasActive: flashWasActive)
+      flashWasActive: flashWasActive,
+      frontmostPIDAtClick: frontmostPID)
   }
 
   func removePointerMonitors() {

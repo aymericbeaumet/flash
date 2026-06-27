@@ -1564,27 +1564,49 @@ final class NormalModeTests: XCTestCase {
     XCTAssertTrue(
       AppDelegate.physicalPointerClickShouldBeForwarded(
         decision: released,
-        click: pointerClick(.leftClick, flashWasActive: true)))
+        click: pointerClick(.leftClick, flashWasActive: true),
+        targetPID: nil))
     XCTAssertTrue(
       AppDelegate.physicalPointerClickShouldBeForwarded(
         decision: released,
-        click: pointerClick(.doubleClick, flashWasActive: true)))
+        click: pointerClick(.doubleClick, flashWasActive: true),
+        targetPID: nil))
     XCTAssertFalse(
       AppDelegate.physicalPointerClickShouldBeForwarded(
         decision: released,
-        click: pointerClick(.leftClick, flashWasActive: false)))
+        click: pointerClick(.leftClick, flashWasActive: false),
+        targetPID: nil))
     XCTAssertFalse(
       AppDelegate.physicalPointerClickShouldBeForwarded(
         decision: released,
-        click: pointerClick(.rightClick, flashWasActive: true)))
+        click: pointerClick(.rightClick, flashWasActive: true),
+        targetPID: nil))
     XCTAssertFalse(
       AppDelegate.physicalPointerClickShouldBeForwarded(
         decision: notReleased,
-        click: pointerClick(.leftClick, flashWasActive: true)))
+        click: pointerClick(.leftClick, flashWasActive: true),
+        targetPID: nil))
     XCTAssertFalse(
       AppDelegate.physicalPointerClickShouldBeForwarded(
         decision: released,
-        click: nil))
+        click: nil,
+        targetPID: nil))
+
+    // Clicking a window owned by an app that was NOT frontmost at click time:
+    // the physical click is consumed activating that app, so Flash must forward
+    // a synthetic click even though Flash itself was never active.
+    XCTAssertTrue(
+      AppDelegate.physicalPointerClickShouldBeForwarded(
+        decision: released,
+        click: pointerClick(.leftClick, flashWasActive: false, frontmostPIDAtClick: 111),
+        targetPID: 222))
+    // Clicking the already-frontmost app: the physical click landed directly,
+    // so forwarding would double-deliver — don't.
+    XCTAssertFalse(
+      AppDelegate.physicalPointerClickShouldBeForwarded(
+        decision: released,
+        click: pointerClick(.leftClick, flashWasActive: false, frontmostPIDAtClick: 222),
+        targetPID: 222))
   }
 
   func testNormalModePointerPolicyTopLevelDecisions() {
@@ -3046,13 +3068,15 @@ final class NormalModeTests: XCTestCase {
 
   private func pointerClick(
     _ action: JumpAction,
-    flashWasActive: Bool
+    flashWasActive: Bool,
+    frontmostPIDAtClick: pid_t = -1
   ) -> OverlayPointerClick {
     OverlayPointerClick(
       action: action,
       location: CGPoint(x: 100, y: 100),
       modifiers: [],
-      flashWasActive: flashWasActive)
+      flashWasActive: flashWasActive,
+      frontmostPIDAtClick: frontmostPIDAtClick)
   }
 
   private func shouldExitAfterFocusedElementChange(
