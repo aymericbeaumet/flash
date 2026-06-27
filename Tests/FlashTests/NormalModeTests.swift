@@ -1628,6 +1628,8 @@ final class NormalModeTests: XCTestCase {
         intent: .scroll,
         pointIsInMenuBar: false),
       .cancelOverlay)
+    // A scroll over the command bar passes through (it must not tear the prompt
+    // down — the user dismisses it with Esc), unlike a scroll over hints.
     XCTAssertEqual(
       NormalModePointerPolicy.pointerDecision(
         mode: .normal,
@@ -1636,7 +1638,7 @@ final class NormalModeTests: XCTestCase {
         activationInFlight: false,
         intent: .scroll,
         pointIsInMenuBar: false),
-      .cancelOverlay)
+      .passThrough)
     XCTAssertEqual(
       NormalModePointerPolicy.pointerDecision(
         mode: .normal,

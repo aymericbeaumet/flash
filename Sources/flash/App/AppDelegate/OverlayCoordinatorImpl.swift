@@ -99,22 +99,17 @@ extension AppDelegate {
       cancelOverlay()
     }
     if decision.probeForInsert {
-      // Left / double click: enter INSERT only when the click landed on a text
-      // input — the same editability rule the `f` hint applies via the target's
-      // own role. A physical click carries only a point, so probe the AX element
-      // there. (Right-click never reaches here; it suspends above.)
-      let clickedTextInput: Bool
-      if let location = click?.location, let pid = targetPID {
-        clickedTextInput = AXClick.isTextInput(at: location, pid: pid)
-      } else {
-        clickedTextInput = false
-      }
+      // A physical left / double click ALWAYS hands the keyboard to the app and
+      // enters INSERT — no editability probe. The user clicked with the mouse to
+      // work in that app, so that intent is unconditional (unlike the `f`/`F`
+      // keyboard-driven commits, which still gate on the target's role).
+      // Right-click never reaches here; it suspends above.
       enterInsertModeIfClickedOnTextInput(
         pid: targetPID,
         clickPoint: click?.location,
         reason: .pointerClick,
         handoffToken: handoffToken,
-        hintTargetEntersInsert: clickedTextInput
+        hintTargetEntersInsert: true
       ) {
         [weak self] outcome in
         guard let self else { return }
@@ -594,22 +589,20 @@ extension AppDelegate {
   }
 
   /// Decide whether a committed pointer action hands the keyboard to the focused
-  /// app (INSERT) or keeps NORMAL. The rule is uniform across every trigger: a
-  /// left / double click enters INSERT *only* when it lands on a text input,
-  /// otherwise NORMAL navigation continues. Each call site supplies that
-  /// editability via `hintTargetEntersInsert`:
+  /// app (INSERT) or keeps NORMAL. Each call site supplies the intent via
+  /// `hintTargetEntersInsert`:
   ///
+  ///   - Physical left / double mouse click: always `true` — clicking with the
+  ///     mouse unconditionally enters INSERT, no editability probe.
   ///   - `f` (`mouse_target`) hint: the resolved target's own role
-  ///     (`hint.target.entersInsertMode`).
-  ///   - `F`/`dF` mouse-grid and physical clicks: a point-based AX hit-test at
-  ///     the click site (`AXClick.isTextInput(at:pid:)`), since those carry only
-  ///     a point and no resolved target.
+  ///     (`hint.target.entersInsertMode`), so a link/button stays in NORMAL.
+  ///   - `F`/`dF` mouse-grid: a point-based AX hit-test at the click site
+  ///     (`AXClick.isTextInput(at:pid:)`), since it carries only a point.
   ///
   /// Right-click never reaches here — it opens a context menu and stays in
   /// NORMAL via `suspendNormalCaptureForNativeSurface`. A nil
-  /// `hintTargetEntersInsert` still defaults to "enter insert" for safety, but
-  /// every live call site now passes an explicit value. `clickPoint` / `attempt`
-  /// are retained for call-site stability.
+  /// `hintTargetEntersInsert` defaults to "enter insert". `clickPoint` /
+  /// `attempt` are retained for call-site stability.
   private func enterInsertModeIfClickedOnTextInput(
     pid: pid_t?,
     clickPoint _: CGPoint? = nil,
@@ -641,12 +634,13 @@ extension AppDelegate {
     completion?(.enteredInsert)
   }
 
-  // `mouseGridCommitShouldEnterInsertMode` removed: the `F`/`dF` grid commit and
-  // a physical click now probe the click point with `AXClick.isTextInput` and
-  // pass the result to `enterInsertModeIfClickedOnTextInput`, so they enter
-  // insert only on a text input — the same editability rule as the `f` hint's
-  // `entersInsertMode` flag. Move (`mF`) was already a no-op for insert, and
-  // right-click never enters insert (it suspends for the context menu).
+  // `mouseGridCommitShouldEnterInsertMode` removed: the `F`/`dF` grid commit
+  // probes the click point with `AXClick.isTextInput` and passes the result to
+  // `enterInsertModeIfClickedOnTextInput`, so it enters insert only on a text
+  // input — the same editability rule as the `f` hint's `entersInsertMode` flag.
+  // A physical mouse click always enters insert (no probe). Move (`mF`) was
+  // already a no-op for insert, and right-click never enters insert (it suspends
+  // for the context menu).
 
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
     mappings.handle(event: event)
