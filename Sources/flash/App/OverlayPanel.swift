@@ -101,6 +101,12 @@ final class OverlayPanel: NSPanel {
   /// They sit below the link catchers, so links still win.
   var statusBarClickShields: [StatusLinkCatcherPanel] = []
   var lastStatusShieldSignature: String?
+  /// Screen-coordinate `#[link=…]` rects + targets for the currently rendered
+  /// bar. The keyboard/mouse capture tap reads these to open a link when a
+  /// click lands on one (and to know which bar clicks to swallow), so clicks
+  /// are intercepted deterministically before any app sees them — the
+  /// click-catcher windows can't reliably receive clicks in the menu-bar band.
+  var statusBarLinkTargetsScreen: [(rect: CGRect, url: URL)] = []
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()

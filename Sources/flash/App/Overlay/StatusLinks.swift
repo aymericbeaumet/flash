@@ -195,6 +195,7 @@ extension OverlayPanel {
 
   /// Tear down every catcher window (bar hidden / no links).
   func hideStatusLinkCatchers() {
+    statusBarLinkTargetsScreen = []
     guard !statusLinkCatchers.isEmpty || lastStatusLinkSignature != nil else { return }
     for catcher in statusLinkCatchers { catcher.orderOut(nil) }
     statusLinkCatchers.removeAll()

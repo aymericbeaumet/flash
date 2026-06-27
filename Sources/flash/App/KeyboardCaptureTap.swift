@@ -20,10 +20,22 @@ final class KeyboardCaptureTap {
   private var runLoopSource: CFRunLoopSource?
   private let shouldSwallow: (CGEvent) -> Bool
   private let handle: (NSEvent) -> Void
+  /// Decide whether a mouse-button event should be consumed (returns true to
+  /// swallow it so it never reaches any app/window). Runs on the main thread in
+  /// the tap callback; any heavier side effect (e.g. opening a link) must be
+  /// deferred by the closure itself. Used to intercept clicks on Flash's status
+  /// bar — window-level click-catchers can't reliably receive clicks in the
+  /// menu-bar band, so the swallow happens here instead.
+  private let mouseShouldSwallow: (CGEventType, CGEvent) -> Bool
 
-  init(shouldSwallow: @escaping (CGEvent) -> Bool, handle: @escaping (NSEvent) -> Void) {
+  init(
+    shouldSwallow: @escaping (CGEvent) -> Bool,
+    handle: @escaping (NSEvent) -> Void,
+    mouseShouldSwallow: @escaping (CGEventType, CGEvent) -> Bool = { _, _ in false }
+  ) {
     self.shouldSwallow = shouldSwallow
     self.handle = handle
+    self.mouseShouldSwallow = mouseShouldSwallow
   }
 
   /// Pure swallow decision: given the coarse flash mode and the overlay's input
@@ -50,7 +62,14 @@ final class KeyboardCaptureTap {
   @discardableResult
   func start() -> Bool {
     guard tap == nil else { return true }
-    let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+    let maskedTypes: [CGEventType] = [
+      .keyDown,
+      .leftMouseDown, .leftMouseUp,
+      .rightMouseDown, .rightMouseUp,
+      .otherMouseDown, .otherMouseUp,
+    ]
+    var mask: CGEventMask = 0
+    for t in maskedTypes { mask |= CGEventMask(1) << CGEventMask(t.rawValue) }
     let refcon = Unmanaged.passUnretained(self).toOpaque()
     guard
       let port = CGEvent.tapCreate(
@@ -98,6 +117,20 @@ final class KeyboardCaptureTap {
       == NormalModeDispatcher.syntheticKeyEventTag
     {
       return passthrough
+    }
+    switch type {
+    case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+      .otherMouseDown, .otherMouseUp:
+      // Skip Flash's own forwarded clicks (tagged) so re-synthesised clicks
+      // still reach their target app instead of being swallowed here.
+      if event.getIntegerValueField(.eventSourceUserData)
+        == ActionDispatcher.syntheticMouseEventTag
+      {
+        return passthrough
+      }
+      return me.mouseShouldSwallow(type, event) ? nil : passthrough
+    default:
+      break
     }
     guard type == .keyDown, me.shouldSwallow(event) else { return passthrough }
     if let ns = NSEvent(cgEvent: event) {

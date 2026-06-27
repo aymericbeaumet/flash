@@ -428,6 +428,7 @@ extension OverlayPanel {
     if modeBadgeVisible {
       syncStatusBarShields(statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize))
       syncStatusLinkCatchers(links)
+      statusBarLinkTargetsScreen = links
     } else {
       hideStatusLinkCatchers()
       hideStatusBarShields()

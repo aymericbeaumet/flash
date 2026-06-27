@@ -748,10 +748,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     }
     let tap = KeyboardCaptureTap(
       shouldSwallow: { [weak self] event in self?.keyboardTapShouldSwallow(event) ?? false },
-      handle: { [weak self] event in self?.routeTapCapturedKey(event) })
+      handle: { [weak self] event in self?.routeTapCapturedKey(event) },
+      mouseShouldSwallow: { [weak self] type, event in
+        self?.keyboardTapMouseShouldSwallow(type, event) ?? false
+      })
     guard tap.start() else { return }
     keyboardCaptureTap = tap
     overlay.keyboardCaptureActive = true
+  }
+
+  /// Decide whether a mouse click should be swallowed by the tap so it never
+  /// reaches the app behind Flash's status bar. The window-level click-catchers
+  /// can't reliably receive clicks in the macOS menu-bar band, so interception
+  /// happens here. A click is swallowed when it lands on the bar and either it's
+  /// a `#[link=…]` run (which is opened) or the bar owns that screen's band
+  /// (i.e. the native menu bar is auto-hidden, so app windows sit under the bar
+  /// — without this the click would activate them). When the native menu bar
+  /// reserves space it stays clickable: only link runs are swallowed there.
+  private func keyboardTapMouseShouldSwallow(_ type: CGEventType, _ event: CGEvent) -> Bool {
+    guard overlay.modeBadgeVisible else { return false }
+    let primaryH = Self.tapPrimaryScreenHeight()
+    // CGEvent location is global with a top-left origin; convert to AppKit's
+    // bottom-left screen coordinates to match the stored rects.
+    let nsPoint = CGPoint(x: event.location.x, y: primaryH - event.location.y)
+
+    let onLink = overlay.statusBarLinkTargetsScreen.first { $0.rect.contains(nsPoint) }
+    if let onLink {
+      if type == .leftMouseDown {
+        let url = onLink.url
+        DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+      }
+      return true
+    }
+    return Self.statusBarOwnsBand(at: nsPoint)
+  }
+
+  /// True when `nsPoint` is inside a screen's status-bar band AND that screen's
+  /// native menu bar is auto-hidden (reserves no space), so app windows draw
+  /// under the bar and a click there must be swallowed. When the menu bar is
+  /// reserved the app never sits under the band and the native menu must keep
+  /// its clicks, so this returns false (the bar stays under the native one).
+  static func statusBarOwnsBand(at nsPoint: CGPoint) -> Bool {
+    for screen in OverlayPanel.currentScreenSnapshot().screens {
+      let height = OverlayPanel.statusBarHeight(
+        screenFrame: screen.frame, visibleFrame: screen.visibleFrame, fontSize: 13)
+      let band = CGRect(
+        x: screen.frame.minX,
+        y: screen.frame.maxY - height,
+        width: screen.frame.width,
+        height: height)
+      guard band.contains(nsPoint) else { continue }
+      return (screen.frame.maxY - screen.visibleFrame.maxY) <= 0.5
+    }
+    return false
+  }
+
+  private static func tapPrimaryScreenHeight() -> CGFloat {
+    NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
+      ?? NSScreen.main?.frame.height ?? 0
   }
 
   /// Decide whether the keyboard tap should swallow a `keyDown`. Runs on the main
