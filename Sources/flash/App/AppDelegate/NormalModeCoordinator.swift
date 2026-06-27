@@ -447,7 +447,6 @@ extension AppDelegate {
     labels.command
   }
 
-
   func suppressEditableFocus(for pid: pid_t) {
     guard pid > 0 else { return }
   }
@@ -2643,7 +2642,8 @@ extension AppDelegate {
     let pid = context.processID
     if let text = NormalModeDispatcher.selectedText(pid: pid) {
       registers.write(text, register: register)
-      FlashLog.debug("[normal_mode] yank ax len=\(text.count) register=\(register ?? "*clipboard*")")
+      FlashLog.debug(
+        "[normal_mode] yank ax len=\(text.count) register=\(register ?? "*clipboard*")")
       applyModeOverlay()
       return
     }

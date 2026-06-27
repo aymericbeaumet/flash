@@ -133,7 +133,8 @@ final class WindowSnapshotTests: XCTestCase {
     XCTAssertFalse(WindowSnapshot.isAnchoredCard(card, amongLayer0App: [card]))
     // A card-sized window that isn't contained in the parent isn't anchored.
     let offscreenCard = CGRect(x: 2000, y: 600, width: 280, height: 78)
-    XCTAssertFalse(WindowSnapshot.isAnchoredCard(offscreenCard, amongLayer0App: [offscreenCard, main]))
+    XCTAssertFalse(
+      WindowSnapshot.isAnchoredCard(offscreenCard, amongLayer0App: [offscreenCard, main]))
   }
 
   func testTopInteractionEntryAtPointUsesZOrderAndIgnoresFlashPID() {

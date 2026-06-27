@@ -134,7 +134,8 @@ public struct BrowserFixtureCatalog: Decodable {
       .contentsOfDirectory(
         at: snapshotsDir,
         includingPropertiesForKeys: [.isRegularFileKey],
-        options: [.skipsHiddenFiles])
+        options: [.skipsHiddenFiles]
+      )
       .filter { url in
         guard url.pathExtension.lowercased() == "html" else { return false }
         let values = try? url.resourceValues(forKeys: [.isRegularFileKey])

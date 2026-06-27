@@ -63,7 +63,8 @@ final class ModeReducerTests: XCTestCase {
   }
 
   func testOnlyKeyboardAndConfigLeaveInsert() {
-    XCTAssertEqual(ModeReducer.reduce(.insert(locked: false), .enterNormal(targetPID: 7)).0, .normal)
+    XCTAssertEqual(
+      ModeReducer.reduce(.insert(locked: false), .enterNormal(targetPID: 7)).0, .normal)
     XCTAssertEqual(
       ModeReducer.reduce(.insert(locked: true), .enterNormal(targetPID: 7)).0, .normal)
     XCTAssertEqual(
@@ -113,7 +114,8 @@ final class ModeReducerTests: XCTestCase {
 
   func testCommandLifecycleRestores() {
     // Default exit is NORMAL (matches commandLineExitMode).
-    var (mode, _) = ModeReducer.reduce(.normal, .openCommand(scope: .commandLine, restoreMode: false))
+    var (mode, _) = ModeReducer.reduce(
+      .normal, .openCommand(scope: .commandLine, restoreMode: false))
     XCTAssertEqual(mode, .command(scope: .commandLine, restoreTo: .normal))
     XCTAssertEqual(ModeReducer.reduce(mode, .closeCommand(reason: "x")).0, .normal)
 
@@ -125,7 +127,8 @@ final class ModeReducerTests: XCTestCase {
 
     // Flashlight from disabled (advanced off) returns to disabled, never a
     // phantom NORMAL.
-    (mode, _) = ModeReducer.reduce(.disabled, .openCommand(scope: .finder(all: false), restoreMode: false))
+    (mode, _) = ModeReducer.reduce(
+      .disabled, .openCommand(scope: .finder(all: false), restoreMode: false))
     XCTAssertEqual(mode, .command(scope: .finder(all: false), restoreTo: .disabled))
     XCTAssertEqual(ModeReducer.reduce(mode, .closeCommand(reason: "x")).0, .disabled)
   }
@@ -138,7 +141,8 @@ final class ModeReducerTests: XCTestCase {
 
   func testCloseCommandFromNonCommandIsNoop() {
     XCTAssertEqual(ModeReducer.reduce(.normal, .closeCommand(reason: "x")).0, .normal)
-    XCTAssertEqual(ModeReducer.reduce(.insert(locked: false), .dismissModal).0, .insert(locked: false))
+    XCTAssertEqual(
+      ModeReducer.reduce(.insert(locked: false), .dismissModal).0, .insert(locked: false))
   }
 
   // MARK: Determinism + totality
@@ -165,8 +169,10 @@ final class ModeReducerTests: XCTestCase {
     let insert = ModeReducer.enterEffects(for: .insert(locked: false), targetPID: 42)
     XCTAssertEqual(
       insert,
-      [.setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle, .renderSurface,
-       .activateFocusedApp(pid: 42)])
+      [
+        .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle, .renderSurface,
+        .activateFocusedApp(pid: 42),
+      ])
     XCTAssertFalse(insert.contains(.scheduleRecapture), "insert must not grab the keyboard")
 
     let command = ModeReducer.enterEffects(
@@ -190,8 +196,11 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(Mode.modal(restoreTo: .normal).label, .command)
 
     // overlay input mode (idle, no hints / activation)
-    XCTAssertEqual(Mode.insert(locked: false).overlayInputMode(hasHints: false, activationInFlight: false), .hints)
-    XCTAssertEqual(Mode.normal.overlayInputMode(hasHints: false, activationInFlight: false), .normal)
+    XCTAssertEqual(
+      Mode.insert(locked: false).overlayInputMode(hasHints: false, activationInFlight: false),
+      .hints)
+    XCTAssertEqual(
+      Mode.normal.overlayInputMode(hasHints: false, activationInFlight: false), .normal)
     // normal with hints up routes hint letters, not commands
     XCTAssertEqual(Mode.normal.overlayInputMode(hasHints: true, activationInFlight: false), .hints)
     XCTAssertEqual(Mode.normal.overlayInputMode(hasHints: false, activationInFlight: true), .hints)
@@ -205,7 +214,8 @@ final class ModeReducerTests: XCTestCase {
       Mode.modal(restoreTo: .normal).overlayInputMode(hasHints: false, activationInFlight: false),
       .modal)
 
-    XCTAssertFalse(Mode.insert(locked: false).ownsKeyboard(hasHints: false, activationInFlight: false))
+    XCTAssertFalse(
+      Mode.insert(locked: false).ownsKeyboard(hasHints: false, activationInFlight: false))
     XCTAssertTrue(Mode.normal.ownsKeyboard(hasHints: false, activationInFlight: false))
     XCTAssertFalse(Mode.normal.ownsKeyboard(hasHints: true, activationInFlight: false))
     XCTAssertTrue(
@@ -239,7 +249,6 @@ final class ModeReducerTests: XCTestCase {
     XCTAssertEqual(Mode.insert(locked: false).badgeStyle, .insert)
     XCTAssertEqual(Mode.disabled.badgeStyle, .insert)
   }
-
 
   // MARK: Structural purity
 

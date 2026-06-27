@@ -134,7 +134,6 @@ final class FrecencyStore {
     return boostSnapshot.isEmpty
   }
 
-
   /// Block until any pending write has hit disk. Tests + shutdown.
   func drain() {
     let group = DispatchGroup()

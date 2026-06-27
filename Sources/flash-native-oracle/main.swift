@@ -323,7 +323,8 @@ private func postMouseClick(at nsScreenPoint: CGPoint, action: JumpAction) {
   CGWarpMouseCursorPosition(point)
   Thread.sleep(forTimeInterval: 0.03)
   func post(_ type: CGEventType, button: CGMouseButton) {
-    CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button)?
+    CGEvent(
+      mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button)?
       .post(tap: .cghidEventTap)
   }
   switch action {
@@ -513,8 +514,11 @@ private func findAXNode(
 private func axStatusItemSearchRoots(app: NSRunningApplication) -> [AXUIElement] {
   var roots: [AXUIElement] = []
   appendStatusItemRoots(from: AXUIElementCreateApplication(app.processIdentifier), to: &roots)
-  for systemUI in NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.SystemUIServer") {
-    appendStatusItemRoots(from: AXUIElementCreateApplication(systemUI.processIdentifier), to: &roots)
+  for systemUI in NSRunningApplication.runningApplications(
+    withBundleIdentifier: "com.apple.SystemUIServer")
+  {
+    appendStatusItemRoots(
+      from: AXUIElementCreateApplication(systemUI.processIdentifier), to: &roots)
   }
   appendStatusItemRoots(from: AXUIElementCreateSystemWide(), to: &roots)
   return roots
@@ -565,7 +569,8 @@ private func runResidentModeProbe(
     try waitForFlashMode("normal", args: args, timeout: 4)
 
     let primaryBefore = readState(args.statePath)["primary", default: 0]
-    postMouseClick(at: try targetCenter(label: "Primary Action", targets: targets), action: .leftClick)
+    postMouseClick(
+      at: try targetCenter(label: "Primary Action", targets: targets), action: .leftClick)
     try waitForState(path: args.statePath, key: "primary", value: primaryBefore + 1, timeout: 4)
     assertFlashMode("normal", args: args, recorder: recorder, label: "native button left click")
 
@@ -579,7 +584,8 @@ private func runResidentModeProbe(
     try runFlash("enter_normal_mode", args: args)
     try waitForFlashMode("normal", args: args, timeout: 4)
     let contextBefore = readState(args.statePath)["context_menu", default: 0]
-    postMouseClick(at: try targetCenter(label: "Context Target", targets: targets), action: .rightClick)
+    postMouseClick(
+      at: try targetCenter(label: "Context Target", targets: targets), action: .rightClick)
     try waitForState(
       path: args.statePath,
       key: "context_menu",

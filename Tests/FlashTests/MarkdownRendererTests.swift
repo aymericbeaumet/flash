@@ -59,7 +59,8 @@ final class MarkdownRendererTests: XCTestCase {
       let attrs = attributed.attributes(at: nsRange.location, effectiveRange: nil)
       return attrs[.font] as? NSFont
     }
-    XCTAssertTrue(font(forContaining: "bold")?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+    XCTAssertTrue(
+      font(forContaining: "bold")?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
     XCTAssertTrue(
       font(forContaining: "italic")?.fontDescriptor.symbolicTraits.contains(.italic) ?? false)
   }

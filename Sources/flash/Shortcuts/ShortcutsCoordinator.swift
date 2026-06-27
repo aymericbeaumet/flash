@@ -174,7 +174,9 @@ final class MappingsCoordinator {
     let key = Self.echoKey(virtualKey: virtualKey, modifiers: Self.carbonModifiers(fromCG: flags))
     let now = Date()
     let priorCount =
-      syntheticEchoes[key].map { now.timeIntervalSince($0.at) < Self.syntheticEchoWindow ? $0.count : 0 }
+      syntheticEchoes[key].map {
+        now.timeIntervalSince($0.at) < Self.syntheticEchoWindow ? $0.count : 0
+      }
       ?? 0
     syntheticEchoes[key] = (count: priorCount + 1, at: now)
   }

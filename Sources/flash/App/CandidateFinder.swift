@@ -851,7 +851,8 @@ enum CandidateFinder {
         guard !pattern.isEmpty else { continue }
         records[pattern] = (
           Self.defaultWeight(for: source.kind) + source.priority.rankingWeight,
-          source.kind)
+          source.kind
+        )
       }
       for (pattern, weight) in overrides {
         let pattern = pattern.trimmed.lowercased()

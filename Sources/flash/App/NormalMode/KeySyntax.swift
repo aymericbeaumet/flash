@@ -270,8 +270,7 @@ extension NormalModeInterpreter {
       return (translateNamedKey(alias) ?? alias, end)
     }
     for fullname in punctuationFullNames.values.sorted(by: { $0.count > $1.count })
-      where tail.hasPrefix(fullname)
-    {
+    where tail.hasPrefix(fullname) {
       let end = s.index(idx, offsetBy: fullname.count)
       guard let translated = translateNamedKey(fullname) else { continue }
       return (translated, end)

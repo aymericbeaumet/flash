@@ -195,7 +195,7 @@ final class StatusBarTests: XCTestCase {
             lastError: nil,
             statusSegments: [
               "battery": "#[range=user|bat-prefs fg=colour178]82%#[norange]"
-            ]),
+            ])
         ]))
 
     XCTAssertEqual(model.rightText, "#[fg=colour178]82%")
@@ -375,7 +375,8 @@ final class StatusBarTests: XCTestCase {
       "#[fg=colour178]HN#[fg=colour245] #[italics]he…")
     // A bare `#` (not `#[`) is an ordinary visible character.
     XCTAssertEqual(
-      FlashStatusBarTemplateEngine.applyTruncation("C# rocks", truncation: .head(2, ellipsis: false)),
+      FlashStatusBarTemplateEngine.applyTruncation(
+        "C# rocks", truncation: .head(2, ellipsis: false)),
       "C#")
   }
 
@@ -699,7 +700,8 @@ final class StatusBarTests: XCTestCase {
 
     let emojiHeight = ceil(emojiFont.ascender - emojiFont.descender + emojiFont.leading)
 
-    XCTAssertGreaterThanOrEqual(OverlayPanel.candidateFinderResultRowHeight(font: font), emojiHeight)
+    XCTAssertGreaterThanOrEqual(
+      OverlayPanel.candidateFinderResultRowHeight(font: font), emojiHeight)
   }
 
   func testCandidateFinderResultRowHeightStaysCompactForSmallerEmojiFont() throws {
@@ -720,7 +722,8 @@ final class StatusBarTests: XCTestCase {
       fontSize: 13)
     let ns = line.string as NSString
     let range = ns.range(of: "🙏")
-    let font = try? XCTUnwrap(line.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+    let font = try? XCTUnwrap(
+      line.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
 
     XCTAssertEqual(font?.familyName, "Apple Color Emoji")
   }
@@ -735,7 +738,8 @@ final class StatusBarTests: XCTestCase {
       fontSize: 13)
     let ns = line.string as NSString
     let range = ns.range(of: "🕲")
-    let font = try? XCTUnwrap(line.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+    let font = try? XCTUnwrap(
+      line.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
 
     XCTAssertNotEqual(font?.familyName, "Apple Color Emoji")
   }

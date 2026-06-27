@@ -238,6 +238,9 @@ fn load_manifest() -> Value {
     let dir = std::env::var("CARGO_MANIFEST_DIR")
         .expect("flash_plugin::plugin!: CARGO_MANIFEST_DIR is not set");
     let path = PathBuf::from(dir).join("manifest.json");
+    // Compile-time proc-macro expansion — not on an async runtime, so blocking
+    // I/O is correct here.
+    #[allow(clippy::disallowed_methods)]
     let raw = std::fs::read_to_string(&path).unwrap_or_else(|err| {
         panic!(
             "flash_plugin::plugin!: cannot read {}: {err}",

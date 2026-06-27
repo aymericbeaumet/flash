@@ -629,7 +629,6 @@ final class PluginManager {
     }
   }
 
-
   /// Rebuild the command lookup index. Must be called from `queue` after
   /// `pluginsByID` changes.
   private func rebuildCommandIndex() {

@@ -102,7 +102,8 @@ extension OverlayPanel {
   /// work when the rect/target set is unchanged so a re-render that doesn't
   /// move a link doesn't churn the windows.
   func syncStatusLinkCatchers(_ links: [(rect: CGRect, url: URL)]) {
-    let signature = links
+    let signature =
+      links
       .map { "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.url.absoluteString)" }
       .joined(separator: ";")
     if signature == lastStatusLinkSignature { return }
@@ -153,7 +154,8 @@ extension OverlayPanel {
   /// Place one transparent shield per status-bar rect to swallow stray
   /// clicks. Skips work when the rects are unchanged.
   func syncStatusBarShields(_ rects: [CGRect]) {
-    let signature = rects
+    let signature =
+      rects
       .map { "\($0.origin.x),\($0.origin.y),\($0.width),\($0.height)" }
       .joined(separator: ";")
     if signature == lastStatusShieldSignature { return }

@@ -270,8 +270,8 @@ fn titles_match(ax_title: &str, session_title: &str) -> bool {
 }
 
 fn apply_window_title_selection(tabs: &mut [Tab], window_roots: &[WindowRoot]) {
-    for root_index in 0..window_roots.len() {
-        let window_title = window_roots[root_index].title.trim();
+    for (root_index, root) in window_roots.iter().enumerate() {
+        let window_title = root.title.trim();
         if window_title.is_empty() {
             continue;
         }
@@ -841,6 +841,7 @@ async fn activate_app(ctx: &Context, pid: i64) -> bool {
         .unwrap_or(false)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ax_snapshot(
     ctx: &Context,
     pid: i64,

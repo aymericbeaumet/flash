@@ -741,7 +741,8 @@ enum FlashStatusBarRenderer {
     let background =
       segment.reverse ? segment.foreground : segment.background
     let fg = nsColor(for: foreground)
-    let bg = segment.background == .defaultBackground && !segment.reverse
+    let bg =
+      segment.background == .defaultBackground && !segment.reverse
       ? nil : nsColor(for: background)
     // Dim ~ tmux's reduced-intensity attribute; render at 60% alpha on the
     // foreground colour. We can't dim a bg fill the same way, so leave bg
@@ -1053,7 +1054,8 @@ final class FlashStatusBarController {
       nextClockRefreshAt = nil
       return
     }
-    nextClockRefreshAt = now.addingTimeInterval(TimeInterval(nextClockRefreshDelayMilliseconds(from: now)) / 1_000)
+    nextClockRefreshAt = now.addingTimeInterval(
+      TimeInterval(nextClockRefreshDelayMilliseconds(from: now)) / 1_000)
   }
 
   private func armRefreshTimer() {

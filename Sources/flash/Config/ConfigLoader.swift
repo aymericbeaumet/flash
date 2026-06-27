@@ -424,17 +424,17 @@ enum ConfigLoader {
     applyInt(
       table["mouse_grid_steps"], path: ["hints", "mouse_grid_steps"],
       message: "hints.mouse_grid_steps must be an integer between 2 and 6", locations: locations,
-      into: &config, validate: { (2...6).contains($0) }
-    ) { value, config in
-      config.hints.mouseGridSteps = value
-    }
+      into: &config, validate: { (2...6).contains($0) },
+      assign: { value, config in
+        config.hints.mouseGridSteps = value
+      })
     applyDouble(
       table["mouse_grid_opacity"], path: ["hints", "mouse_grid_opacity"],
       message: "hints.mouse_grid_opacity must be a number between 0.0 and 1.0",
-      locations: locations, into: &config, validate: { (0.0...1.0).contains($0) }
-    ) { value, config in
-      config.hints.mouseGridOpacity = value
-    }
+      locations: locations, into: &config, validate: { (0.0...1.0).contains($0) },
+      assign: { value, config in
+        config.hints.mouseGridOpacity = value
+      })
   }
 
   private static func applyOpen(
@@ -577,17 +577,17 @@ enum ConfigLoader {
     applyInt(
       table["suggestion_count"], path: ["flashlight", "suggestion_count"],
       message: "flashlight.suggestion_count must be a positive integer", locations: locations,
-      into: &config, validate: { $0 > 0 }
-    ) { value, config in
-      config.flashlight.suggestionCount = value
-    }
+      into: &config, validate: { $0 > 0 },
+      assign: { value, config in
+        config.flashlight.suggestionCount = value
+      })
     applyInt(
       table["precedence_alive_bonus"], path: ["flashlight", "precedence_alive_bonus"],
       message: "flashlight.precedence_alive_bonus must be a non-negative integer",
-      locations: locations, into: &config, validate: { $0 >= 0 }
-    ) { value, config in
-      config.flashlight.precedenceAliveBonus = value
-    }
+      locations: locations, into: &config, validate: { $0 >= 0 },
+      assign: { value, config in
+        config.flashlight.precedenceAliveBonus = value
+      })
 
     if let aliases = table["aliases"]?.table {
       for (key, value) in aliases {
@@ -657,19 +657,19 @@ enum ConfigLoader {
     applyInt(
       table["sequence_timeout_ms"], path: ["mode", "sequence_timeout_ms"],
       message: "mode.sequence_timeout_ms must be a non-negative integer", locations: locations,
-      into: &config, validate: { $0 >= 0 }
-    ) { value, config in
-      config.mode.sequenceTimeoutMs = value
-    }
+      into: &config, validate: { $0 >= 0 },
+      assign: { value, config in
+        config.mode.sequenceTimeoutMs = value
+      })
 
     if let normal = table["normal"]?.table {
       applyString(
         normal["leader"], path: ["mode", "normal", "leader"],
         message: "mode.normal.leader must be a non-empty quoted string", locations: locations,
-        into: &config, validate: { !$0.isEmpty }
-      ) { value, config in
-        config.mode.normalLeader = canonicalNormalModeKeyToken(value)
-      }
+        into: &config, validate: { !$0.isEmpty },
+        assign: { value, config in
+          config.mode.normalLeader = canonicalNormalModeKeyToken(value)
+        })
       applyModeMappingTable(
         normal["mappings"]?.table,
         scope: .normal,
@@ -843,10 +843,10 @@ enum ConfigLoader {
     applyInt(
       table["http_inspector_port"], path: ["debug", "http_inspector_port"],
       message: "debug.http_inspector_port must be an integer in 1..65535", locations: locations,
-      into: &config, validate: { (1...65535).contains($0) }
-    ) { value, config in
-      config.debug.httpInspectorPort = value
-    }
+      into: &config, validate: { (1...65535).contains($0) },
+      assign: { value, config in
+        config.debug.httpInspectorPort = value
+      })
   }
 
   private static func applyModeMappingTable(

@@ -230,8 +230,8 @@ extension NormalModeDispatcher {
     var index = key.startIndex
     while index < key.endIndex {
       if let named = displayNamedKeyTokens.first(where: { token in
-          key[index...].hasPrefix(token)
-        }) {
+        key[index...].hasPrefix(token)
+      }) {
         atoms.append(displaySingleAtom(named))
         index = key.index(index, offsetBy: named.count)
         continue

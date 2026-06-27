@@ -9,6 +9,9 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+// Build script — runs at compile time, not on an async runtime, so blocking
+// filesystem I/O is correct here.
+#[allow(clippy::disallowed_methods)]
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let src = Path::new(&manifest_dir).join("bangs.tsv");

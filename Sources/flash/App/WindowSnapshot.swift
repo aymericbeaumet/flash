@@ -98,8 +98,7 @@ struct WindowSnapshot {
     let layer0App = entries.filter { $0.pid == focusedPid && $0.layer == 0 }.map(\.nsBounds)
     var activeWindowIndex: Int? = nil
     for (idx, e) in entries.enumerated()
-      where e.pid == focusedPid && isInteractionSurfaceLayer(e.layer)
-    {
+    where e.pid == focusedPid && isInteractionSurfaceLayer(e.layer) {
       if e.layer == 0, isAnchoredCard(e.nsBounds, amongLayer0App: layer0App) { continue }
       activeWindowIndex = idx
       break

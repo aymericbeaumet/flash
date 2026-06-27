@@ -288,7 +288,8 @@ enum NormalModeInterpreter {
       ignoredChar: ignoredChar)
     let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
     if let modified,
-      independent.contains(.command) || independent.contains(.option) || independent.contains(.control)
+      independent.contains(.command) || independent.contains(.option)
+        || independent.contains(.control)
     {
       return [modified]
     }

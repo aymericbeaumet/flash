@@ -726,9 +726,7 @@ fn merge_channel(into: &mut Channel, other: Channel) {
 fn channel_priority(channel: &Channel) -> Priority {
     if channel.current {
         Priority::Critical
-    } else if channel.unread {
-        Priority::High
-    } else if channel.starred {
+    } else if channel.unread || channel.starred {
         Priority::High
     } else if channel.channel_id.is_some() {
         Priority::Normal
@@ -1106,8 +1104,7 @@ fn curl_config_string(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
-        .replace('\n', "")
-        .replace('\r', "")
+        .replace(['\n', '\r'], "")
 }
 
 async fn run_curl_config(ctx: &Context, config: &str, timeout: Duration) -> CommandOutput {
@@ -1523,7 +1520,7 @@ fn field_bool(chunk: &str, field: &str) -> Option<bool> {
 
 fn contains_positive_numeric_field(chunk: &str, field: &str) -> bool {
     let marker = field;
-    let Some(index) = chunk.find(&marker) else {
+    let Some(index) = chunk.find(marker) else {
         return false;
     };
     let rest = &chunk[index + marker.len()..];

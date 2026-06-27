@@ -108,7 +108,8 @@ enum FlashMarkdownRenderer {
     case let list as UnorderedList:
       renderList(list, ordered: false, startIndex: 1, into: out, context: &context)
     case let list as OrderedList:
-      renderList(list, ordered: true, startIndex: Int(list.startIndex), into: out, context: &context)
+      renderList(
+        list, ordered: true, startIndex: Int(list.startIndex), into: out, context: &context)
     case let quote as BlockQuote:
       renderBlockquote(quote, into: out, context: &context)
     case is ThematicBreak:

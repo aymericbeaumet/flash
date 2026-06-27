@@ -84,7 +84,7 @@ let package = Package(
     .target(
       name: "FlashCore",
       dependencies: [
-        .product(name: "MessagePack", package: "MessagePack.swift"),
+        .product(name: "MessagePack", package: "MessagePack.swift")
       ],
       path: "Sources/FlashCore",
       swiftSettings: strictSwiftSettings
