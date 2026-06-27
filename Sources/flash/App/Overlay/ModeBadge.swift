@@ -533,8 +533,13 @@ extension OverlayPanel {
         from: leftTrailingDisplay, font: rightFont)
       let leftTrailingWidth =
         leftTrailingDisplay.isEmpty ? 0 : ceil(leftTrailingAttributed.size().width)
+      // Flush against the pill's right edge, exactly like the primary bar
+      // (see `leftTrailingX` above). The gap to the trailing run is driven
+      // entirely by the template's own spacing (e.g. `#{mode} · …`); adding
+      // a `statusBarMinimumGap` here gave secondary screens a wider mode↔dot
+      // gap than the primary, which read as inconsistent across displays.
       bar.leftTrailingLabel.frame = CGRect(
-        x: bar.modeButtonLayer.frame.maxX + Self.statusBarMinimumGap,
+        x: bar.modeButtonLayer.frame.maxX,
         y: textY,
         width: leftTrailingWidth,
         height: textHeight)
