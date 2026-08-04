@@ -808,8 +808,10 @@ final class SourceCandidateTests: XCTestCase {
 
   func testDisplayWindowFollowsSelectionAndClampsAtBothEnds() {
     // Selection near the top: window starts at 0.
-    XCTAssertEqual(CandidateFinder.displayWindow(count: 100, selectedIndex: 0, windowSize: 10), 0..<10)
-    XCTAssertEqual(CandidateFinder.displayWindow(count: 100, selectedIndex: 4, windowSize: 10), 0..<10)
+    XCTAssertEqual(
+      CandidateFinder.displayWindow(count: 100, selectedIndex: 0, windowSize: 10), 0..<10)
+    XCTAssertEqual(
+      CandidateFinder.displayWindow(count: 100, selectedIndex: 4, windowSize: 10), 0..<10)
     // Mid-list: selection stays centred.
     XCTAssertEqual(
       CandidateFinder.displayWindow(count: 100, selectedIndex: 50, windowSize: 10), 45..<55)

@@ -1056,7 +1056,7 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
     documentURLHandler: @escaping (AppContext) -> String? = { _ in nil },
     queryEvaluationHandler:
       @escaping (QueryEvaluationRequest, @escaping ([Candidate]) -> Void) -> Void =
-        { _, done in done([]) },
+      { _, done in done([]) },
     restoreHandler: @escaping (URL) -> SourceActionResult = { _ in .unhandled }
   ) {
     self.identifier = identifier

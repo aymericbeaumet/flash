@@ -207,8 +207,7 @@ final class PluginManager {
   /// posting can register each chord with the mappings dispatcher first
   /// (`noteSyntheticKey`) — a `postToPid` event can loop back through the
   /// Carbon hotkey path and re-trigger the user's own binding for the combo.
-  var onSyntheticKeysRequested:
-    ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)?
+  var onSyntheticKeysRequested: ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
     self.baseDataDir = baseDataDir

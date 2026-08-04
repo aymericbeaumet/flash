@@ -191,17 +191,20 @@ final class PluginSystemTests: XCTestCase {
           "items": [{ "command": "demo", "description": "Demo", "descrption": "typo" }]
         }
         """#,
-        "manifest.json commands.items[0] unknown field descrption"),
+        "manifest.json commands.items[0] unknown field descrption"
+      ),
       (
         #"""
         "sources": [{ "name": "demo.items", "priority": "normal", "priorty": 2 }]
         """#,
-        "manifest.json sources[0] unknown field priorty"),
+        "manifest.json sources[0] unknown field priorty"
+      ),
       (
         #"""
         "help": { "topics": [{ "name": "demo", "title": "Demo", "summray": "typo" }] }
         """#,
-        "manifest.json help.topics[0] unknown field summray"),
+        "manifest.json help.topics[0] unknown field summray"
+      ),
     ]
 
     for (provider, expected) in fixtures {
@@ -371,7 +374,9 @@ final class PluginSystemTests: XCTestCase {
 
     let callbacks = PluginProcess.takePendingCallbacks(&pending)
     XCTAssertTrue(pending.isEmpty)
-    callbacks.forEach { $0(nil) }
+    for callback in callbacks {
+      callback(nil)
+    }
     XCTAssertEqual(calls, ["generic"])
   }
 
