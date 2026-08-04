@@ -47,6 +47,6 @@ public protocol FlashQueryEvaluator: AnyObject {
   )
 }
 
-public extension FlashQueryEvaluator {
-  var queryEvaluationPrefixes: Set<String> { [] }
+extension FlashQueryEvaluator {
+  public var queryEvaluationPrefixes: Set<String> { [] }
 }

@@ -959,13 +959,13 @@ final class PluginProcess {
     Self.sanitizedPluginEnvironment(
       base: FlashProcessEnvironment.shared.environment,
       overrides: [
-      "FLASH_PLUGIN_ID": manifest.id,
-      "FLASH_PLUGIN_VERSION": manifest.version,
-      "FLASH_PLUGIN_DATA_DIR": dataDir.path,
-      "FLASH_PLUGIN_CONFIG": settingsJSON,
-      "FLASH_PLUGIN_PARENT_PID": String(getpid()),
-      "PYTHONDONTWRITEBYTECODE": "1",
-    ])
+        "FLASH_PLUGIN_ID": manifest.id,
+        "FLASH_PLUGIN_VERSION": manifest.version,
+        "FLASH_PLUGIN_DATA_DIR": dataDir.path,
+        "FLASH_PLUGIN_CONFIG": settingsJSON,
+        "FLASH_PLUGIN_PARENT_PID": String(getpid()),
+        "PYTHONDONTWRITEBYTECODE": "1",
+      ])
   }
 
   static func sanitizedPluginEnvironment(

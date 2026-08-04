@@ -298,7 +298,8 @@ final class OverlayInputTests: XCTestCase {
         textView: textView,
         doCommandBy: #selector(NSResponder.moveToEndOfLine(_:))))
 
-    XCTAssertEqual(textView.selectedRange, NSRange(location: textView.string.utf16.count, length: 0))
+    XCTAssertEqual(
+      textView.selectedRange, NSRange(location: textView.string.utf16.count, length: 0))
     XCTAssertEqual(panel.commandLineCursorIndex, panel.commandTextField.stringValue.count)
 
     textView.setSelectedRange(NSRange(location: 4, length: 0))
@@ -307,7 +308,8 @@ final class OverlayInputTests: XCTestCase {
         panel.commandTextField,
         textView: textView,
         doCommandBy: #selector(NSResponder.moveToRightEndOfLine(_:))))
-    XCTAssertEqual(textView.selectedRange, NSRange(location: textView.string.utf16.count, length: 0))
+    XCTAssertEqual(
+      textView.selectedRange, NSRange(location: textView.string.utf16.count, length: 0))
   }
 
   func testCommandLineKarabinerCmdRightKeyEquivalentMovesCaret() throws {
