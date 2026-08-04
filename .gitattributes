@@ -1,0 +1,3 @@
+# Generated artifacts and captured pages are fixtures, not implementation.
+Sources/flash/Resources/inspector.html linguist-generated=true
+Tests/BrowserSnapshots/snapshots/** linguist-generated=true
