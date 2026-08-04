@@ -10,6 +10,11 @@ struct SourceDescriptor {
 }
 
 final class SourceRegistry {
+  private struct PluginSnapshotReply {
+    let source: FlashSource
+    let candidates: [Candidate]
+  }
+
   private let descriptors: [SourceDescriptor]
   private let terminalBundleIDs: Set<String>
   private let runningApplicationsProvider: () -> [NSRunningApplication]
@@ -65,7 +70,7 @@ final class SourceRegistry {
     lock.lock()
     let builtIn = Array(activeSourcesByID.values)
     lock.unlock()
-    return (builtIn + pluginSourcesProvider()).sorted { lhs, rhs in
+    return (builtIn + activePluginSources()).sorted { lhs, rhs in
       if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
       return lhs.identifier < rhs.identifier
     }
@@ -138,63 +143,17 @@ final class SourceRegistry {
     return false
   }
 
-  func candidates(scope: CandidateScope) -> [Candidate] {
-    let startedNs = DispatchTime.now().uptimeNanoseconds
-    refreshRunningApplications()
-    let allSources = sources
-    var sourceSnapshot: [FlashSource] = []
-    var excluded: [String] = []
-    for source in allSources {
-      if source.capabilities.contains(.candidates) {
-        sourceSnapshot.append(source)
-      } else {
-        excluded.append(
-          "\(source.identifier)(caps=\(source.capabilities.traceDescription))")
-      }
-    }
-    if !excluded.isEmpty {
-      FlashLog.trace(
-        "[candidate_finder] candidates_pool considered=\(allSources.count) "
-          + "passing=\(sourceSnapshot.count) excluded=[\(excluded.joined(separator: ","))]")
-    }
-    let env = environment
-    var raw: [Candidate] = []
-    for source in sourceSnapshot {
-      // Candidate-finder sessions freeze this synchronous snapshot. Do not call
-      // `queryCandidates` here; plugins are expected to keep candidates warm in
-      // memory and late updates are for the next session.
-      let sourceStartedNs = DispatchTime.now().uptimeNanoseconds
-      let sourceCandidates = source.candidates(in: env, scope: scope)
-      let sourceMs = Int((DispatchTime.now().uptimeNanoseconds &- sourceStartedNs) / 1_000_000)
-      FlashLog.trace(
-        "[candidate_finder] source=\(source.identifier) count=\(sourceCandidates.count) "
-          + "ms=\(sourceMs)")
-      raw.append(contentsOf: sourceCandidates)
-    }
-    let prepareStartedNs = DispatchTime.now().uptimeNanoseconds
-    let prepared = CandidateFinder.prepare(raw)
-    let prepareMs = Int((DispatchTime.now().uptimeNanoseconds &- prepareStartedNs) / 1_000_000)
-    let totalMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
-    FlashLog.trace(
-      "[candidate_finder] prepare scope=\(scope) raw=\(raw.count) prepared=\(prepared.count) "
-        + "prepare_ms=\(prepareMs) total_ms=\(totalMs)")
-    return prepared
-  }
-
   func coreAppCandidates(scope: CandidateScope) -> [Candidate] {
-    refreshRunningApplications()
     let env = environment
     guard let source = source(identifier: "core.apps") else { return [] }
     return CandidateFinder.prepare(source.candidates(in: env, scope: scope))
   }
 
-  /// Candidates from the in-process built-in sources only (currently
-  /// `core.apps`). This is the instant first-paint seed when a flashlight
-  /// session opens; plugin location rows are pulled asynchronously via
-  /// `queryCandidates` and merged in as they land (the pull model — the host
-  /// keeps no candidate cache of its own).
+  /// Candidates from in-process built-in sources for non-first-paint
+  /// consumers. Flashlight first paint routes `core.apps` through
+  /// `initialCandidateSnapshotSources()` so it can await only an already-running
+  /// resident prewarm without performing activation-time I/O.
   func synchronousCandidates(scope: CandidateScope) -> [Candidate] {
-    refreshRunningApplications()
     let env = environment
     lock.lock()
     let builtIn = Array(activeSourcesByID.values)
@@ -206,36 +165,302 @@ final class SourceRegistry {
     return CandidateFinder.prepare(raw)
   }
 
+  /// Resolve one complete, ephemeral candidate snapshot without retaining a
+  /// host cache. Built-in warm sources contribute synchronously; active plugin
+  /// stores are pulled in parallel and published once when all settle or the
+  /// bounded timeout expires. Completion always runs on the main queue.
+  func snapshotCandidates(
+    scope: CandidateScope,
+    timeoutMs: Int = 150,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { [weak self] in
+        self?.snapshotCandidates(scope: scope, timeoutMs: timeoutMs, completion: completion)
+      }
+      return
+    }
+    let builtIn = synchronousCandidates(scope: scope)
+    let plugins =
+      activePluginSources()
+      .filter { $0.capabilities.contains(.candidates) }
+    gatherPluginSnapshots(
+      plugins,
+      scope: scope,
+      timeoutMs: timeoutMs,
+      operation: "candidate_snapshot"
+    ) { replies in
+      var aggregate = builtIn
+      for reply in replies {
+        aggregate.append(contentsOf: CandidateFinder.prepare(reply.candidates))
+      }
+      completion(aggregate)
+    }
+  }
+
+  /// Location-only variant for movement/mark resolution. Avoids pulling warm
+  /// emoji, notes, contacts, and other non-navigational catalogs on every focus
+  /// change.
+  func locationSnapshotCandidates(
+    scope: CandidateScope,
+    timeoutMs: Int = 150,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { [weak self] in
+        self?.locationSnapshotCandidates(
+          scope: scope,
+          timeoutMs: timeoutMs,
+          completion: completion)
+      }
+      return
+    }
+    let builtIn = synchronousCandidates(scope: scope)
+    gatherPluginSnapshots(
+      locationCandidateSources(),
+      scope: scope,
+      timeoutMs: timeoutMs,
+      operation: "location_snapshot"
+    ) { replies in
+      var aggregate = builtIn
+      for reply in replies {
+        aggregate.append(contentsOf: CandidateFinder.prepare(reply.candidates))
+      }
+      completion(aggregate)
+    }
+  }
+
   /// Plugin candidate sources that contribute location rows to the default
   /// flashlight pool — those declaring a `kind: .locations` descriptor at normal
-  /// priority or above. Fanned out via `queryCandidates` on flashlight open.
-  /// Built-in sources (e.g. `core.apps`) are excluded; they paint synchronously
-  /// via `synchronousCandidates`.
+  /// priority or above. The hidden initial barrier fans these out via
+  /// `snapshotCandidates` before the first candidate reveal. Built-ins are
+  /// excluded because callers gather them through their built-in path.
   func locationCandidateSources() -> [FlashSource] {
-    pluginSourcesProvider().filter { Self.isLocationCandidateSource($0) }
+    return activePluginSources().filter { Self.isLocationCandidateSource($0) }
+  }
+
+  /// Every source whose complete location snapshot must be frozen before the
+  /// first flashlight publication. Unlike later gathers this includes built-in
+  /// candidate sources: `core.apps` may still be awaiting its resident-startup
+  /// index and therefore participates in the same host deadline as plugins.
+  func initialCandidateSnapshotSources() -> [FlashSource] {
+    lock.lock()
+    let builtIn = activeSourcesByID.values.filter(Self.isLocationCandidateSource)
+    lock.unlock()
+    var byID: [String: FlashSource] = [:]
+    for source in builtIn + locationCandidateSources() {
+      byID[source.identifier] = source
+    }
+    return byID.values.sorted { $0.identifier < $1.identifier }
   }
 
   /// Plugin candidate sources that do NOT contribute default-pool location rows
   /// — emojis, search-engine bangs, notes, contacts, etc. These are pulled
   /// lazily the first time the user types an `@source`/`!`bang filter, not on
   /// open.
-  func nonLocationCandidateSources() -> [FlashSource] {
-    pluginSourcesProvider().filter { source in
+  func nonLocationCandidateSources(matching sourceFilter: String? = nil) -> [FlashSource] {
+    return activePluginSources().filter { source in
       source.capabilities.contains(.candidates) && !Self.isLocationCandidateSource(source)
+        && sourceFilter.map { filter in
+          source.candidateSourceDescriptors.contains { descriptor in
+            CandidateFinder.sourceLabel(descriptor.name, matchesFilter: filter)
+          }
+        } != false
+    }
+  }
+
+  /// Plugin adapters may stay resident while their owning applications are
+  /// closed. Apply the same manifest activation policy as built-in descriptors
+  /// before any snapshot or query so inactive browser plugins never join the
+  /// flashlight fan-out.
+  private func activePluginSources() -> [FlashSource] {
+    lock.lock()
+    let applications = runningApplications
+    lock.unlock()
+    return pluginSourcesProvider().filter { source in
+      Self.activationPolicyMatches(
+        source.activationPolicy,
+        runningApplications: applications,
+        terminalBundleIDs: terminalBundleIDs)
+    }
+  }
+
+  /// One-shot parallel fan-in for plugin-owned warm stores. The host never
+  /// retains these replies. Duplicate callbacks and replies after the deadline
+  /// are ignored, and output order is stable by source id.
+  private func gatherPluginSnapshots(
+    _ rawSources: [FlashSource],
+    scope: CandidateScope,
+    timeoutMs: Int,
+    operation: String,
+    completion: @escaping ([PluginSnapshotReply]) -> Void
+  ) {
+    var sourcesByID: [String: FlashSource] = [:]
+    for source in rawSources {
+      sourcesByID[source.identifier] = source
+    }
+    let sources = sourcesByID.values.sorted { $0.identifier < $1.identifier }
+    guard !sources.isEmpty else {
+      completion([])
+      return
+    }
+
+    let timeoutMs = max(1, timeoutMs)
+    let env = environment
+    var pending = Set(sources.map(\.identifier))
+    var replies: [String: PluginSnapshotReply] = [:]
+    var finished = false
+
+    func finish(timedOut: Bool) {
+      guard !finished else { return }
+      finished = true
+      if timedOut, !pending.isEmpty {
+        FlashLog.warn(
+          "[plugin_snapshot] aggregate_timeout operation=\(operation) "
+            + "timeout_ms=\(timeoutMs) pending=[\(pending.sorted().joined(separator: ","))]")
+      }
+      completion(
+        sources.compactMap { source in
+          replies[source.identifier]
+        })
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(timeoutMs)) {
+      finish(timedOut: true)
+    }
+
+    for source in sources {
+      let startedNs = DispatchTime.now().uptimeNanoseconds
+      source.snapshotCandidates(in: env, scope: scope) { candidates in
+        DispatchQueue.main.async {
+          guard !finished else { return }
+          let elapsedMs = Self.elapsedMs(since: startedNs)
+          guard pending.remove(source.identifier) != nil else {
+            FlashLog.warn(
+              "[plugin_snapshot] duplicate source=\(source.identifier) operation=\(operation)")
+            return
+          }
+          replies[source.identifier] = PluginSnapshotReply(
+            source: source,
+            candidates: candidates)
+          if elapsedMs >= 100 {
+            FlashLog.warn(
+              "[plugin_snapshot] slow source=\(source.identifier) operation=\(operation) "
+                + "elapsed_ms=\(elapsedMs) count=\(candidates.count)")
+          }
+          if pending.isEmpty {
+            finish(timedOut: false)
+          }
+        }
+      }
     }
   }
 
   private static func isLocationCandidateSource(_ source: FlashSource) -> Bool {
     source.capabilities.contains(.candidates)
       && source.candidateSourceDescriptors.contains { descriptor in
-        descriptor.kind == .locations && descriptor.priority.rank >= FlashPriority.normal.rank
+        descriptor.kind == .locations
       }
   }
 
   var snapshotEnvironment: FlashSourceEnvironment { environment }
 
+  /// Evaluate one exact input against every plugin that registered for the
+  /// requested surface. Results are ephemeral: the host returns at most once,
+  /// after every evaluator settles or the fixed CPU-path budget expires, and
+  /// ignores late replies. Callers own query generations and must discard a
+  /// completion whose input is no longer current.
+  func evaluateQuery(
+    _ request: QueryEvaluationRequest,
+    timeoutMs: Int = 50,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { [weak self] in
+        self?.evaluateQuery(request, timeoutMs: timeoutMs, completion: completion)
+      }
+      return
+    }
+    guard !request.text.trimmed.isEmpty else {
+      completion([])
+      return
+    }
+    let evaluators =
+      sources
+      .compactMap { $0 as? FlashQueryEvaluator }
+      .filter {
+        guard $0.queryEvaluationSurfaces.contains(request.surface) else { return false }
+        guard let exclusivePrefix = request.exclusivePrefix else { return true }
+        return $0.queryEvaluationPrefixes.contains(exclusivePrefix)
+      }
+      .sorted { lhs, rhs in
+        if lhs.queryEvaluationPriority != rhs.queryEvaluationPriority {
+          return lhs.queryEvaluationPriority > rhs.queryEvaluationPriority
+        }
+        return lhs.queryEvaluatorIdentifier < rhs.queryEvaluatorIdentifier
+      }
+    guard !evaluators.isEmpty else {
+      completion([])
+      return
+    }
+
+    let env = environment
+    var pending = evaluators.count
+    var finished = false
+    var results: [String: [Candidate]] = [:]
+    var settled = Set<String>()
+
+    func finish(timedOut: Bool) {
+      guard !finished else { return }
+      finished = true
+      if timedOut, settled.count < evaluators.count {
+        let missing =
+          evaluators
+          .map(\.queryEvaluatorIdentifier)
+          .filter { !settled.contains($0) }
+          .joined(separator: ",")
+        FlashLog.warn(
+          "[query_evaluator] aggregate timeout_ms=\(max(1, timeoutMs)) pending=[\(missing)]")
+      }
+      let ordered = evaluators.flatMap {
+        results[$0.queryEvaluatorIdentifier] ?? []
+      }
+      completion(CandidateFinder.prepare(ordered))
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(max(1, timeoutMs))) {
+      finish(timedOut: true)
+    }
+
+    func settle(_ evaluator: FlashQueryEvaluator, candidates: [Candidate]) {
+      guard !finished else { return }
+      let identifier = evaluator.queryEvaluatorIdentifier
+      guard settled.insert(identifier).inserted else { return }
+      results[identifier] = candidates
+      pending -= 1
+      if pending == 0 {
+        finish(timedOut: false)
+      }
+    }
+
+    for evaluator in evaluators {
+      evaluator.evaluateQuery(request, in: env) { candidates in
+        // PluginProcess already returns query responses on main. Avoid a
+        // second main-queue hop: under a busy first-paint turn that extra hop
+        // can land behind the aggregate deadline even though the plugin
+        // completed in time. Non-plugin evaluators retain a queue-agnostic API.
+        if Thread.isMainThread {
+          settle(evaluator, candidates: candidates)
+        } else {
+          DispatchQueue.main.async {
+            settle(evaluator, candidates: candidates)
+          }
+        }
+      }
+    }
+  }
+
   func registeredCandidateSourceLabels() -> [String] {
-    refreshRunningApplications()
     var seen = Set<String>()
     var labels: [String] = []
     for source in sources where source.capabilities.contains(.candidates) {
@@ -257,7 +482,6 @@ final class SourceRegistry {
   }
 
   func registeredCandidateSourceDescriptors() -> [CandidateSourceDescriptor] {
-    refreshRunningApplications()
     var seen = Set<String>()
     var descriptors: [CandidateSourceDescriptor] = []
     for source in sources where source.capabilities.contains(.candidates) {
@@ -283,13 +507,28 @@ final class SourceRegistry {
     return descriptors
   }
 
-  func candidate(
+  func resolveCandidate(
     matching target: String,
-    sourceID: String? = nil
-  ) -> Candidate? {
+    sourceID: String? = nil,
+    timeoutMs: Int = 150,
+    completion: @escaping (Candidate?) -> Void
+  ) {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { [weak self] in
+        self?.resolveCandidate(
+          matching: target,
+          sourceID: sourceID,
+          timeoutMs: timeoutMs,
+          completion: completion)
+      }
+      return
+    }
     refreshRunningApplications()
     let env = environment
-    let sourceSnapshot = sources.filter { source in
+    lock.lock()
+    let builtIn = Array(activeSourcesByID.values)
+    lock.unlock()
+    let builtInSources = builtIn.filter { source in
       source.capabilities.contains(.appActivation)
         && (sourceID == nil || Self.source(source, owns: sourceID!))
     }
@@ -300,15 +539,49 @@ final class SourceRegistry {
     // title contains the query. Skip text-insertion candidates entirely so an
     // app_open can never type emoji content into the focused field.
     let ordered =
-      sourceSnapshot.filter { $0.identifier == "core.apps" }
-      + sourceSnapshot.filter { $0.identifier != "core.apps" }
+      builtInSources.filter { $0.identifier == "core.apps" }
+      + builtInSources.filter { $0.identifier != "core.apps" }
     for source in ordered {
       guard let item = source.candidate(matching: target, in: env),
-        !CandidateFinder.insertsText(item)
+        !CandidateFinder.insertsText(item),
+        item.effect == nil
       else { continue }
-      return CandidateFinder.prepare(item)
+      completion(CandidateFinder.prepare(item))
+      return
     }
-    return nil
+
+    let plugins = activePluginSources().filter { source in
+      source.capabilities.contains(.appActivation)
+        && Self.isLocationCandidateSource(source)
+        && (sourceID == nil || Self.source(source, owns: sourceID!))
+    }
+    gatherPluginSnapshots(
+      plugins,
+      scope: .all,
+      timeoutMs: timeoutMs,
+      operation: "candidate_match"
+    ) { replies in
+      let orderedReplies = replies.sorted { lhs, rhs in
+        if lhs.source.priority != rhs.source.priority {
+          return lhs.source.priority > rhs.source.priority
+        }
+        return lhs.source.identifier < rhs.source.identifier
+      }
+      for reply in orderedReplies {
+        let prepared = CandidateFinder.prepare(reply.candidates)
+        if let item = prepared.first(where: { candidate in
+          candidate.isLocation
+            && candidate.effect == nil
+            && !CandidateFinder.insertsText(candidate)
+            && (candidate.title.localizedCaseInsensitiveContains(target)
+              || candidate.displayTitle.localizedCaseInsensitiveContains(target))
+        }) {
+          completion(item)
+          return
+        }
+      }
+      completion(nil)
+    }
   }
 
   func candidate(forProcessID pid: pid_t) -> Candidate? {
@@ -324,21 +597,27 @@ final class SourceRegistry {
     return nil
   }
 
-  func currentLocation(in context: AppContext) -> Candidate? {
+  func currentLocation(in context: AppContext, candidates: [Candidate]) -> Candidate? {
     let locationCandidates =
-      candidates(scope: .all)
+      candidates
       .filter { $0.isLocation && $0.kind != CandidateFinder.sourceKind }
     let samePID = locationCandidates.filter { $0.pid == context.processID }
     if let current = samePID.first(where: \.isCurrentLocation) {
       return current
     }
+    // Zero or one same-process locations are already unambiguous. Do not ask
+    // the Accessibility source for a document URL: its native-app fallback may
+    // walk up to 2,000 AX nodes, and cannot change which candidate wins here.
+    if samePID.isEmpty {
+      return candidate(forProcessID: context.processID)
+    }
+    if samePID.count == 1 {
+      return samePID[0]
+    }
     if let documentURL = documentURL(in: context),
       let current = location(in: samePID, matchingURLString: documentURL)
     {
       return current
-    }
-    if samePID.count == 1 {
-      return samePID[0]
     }
     if let app = samePID.first(where: { $0.kind == .app }) {
       return app
@@ -413,7 +692,7 @@ final class SourceRegistry {
         && source.navigationSchemes.contains(scheme)
     }
     guard !sourceSnapshot.isEmpty else {
-      FlashLog.debug("[navigation] no route handler scheme=\(scheme) url=\(url.absoluteString)")
+      FlashLog.debug("[navigation] no route handler scheme=\(scheme)")
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
@@ -447,7 +726,7 @@ final class SourceRegistry {
       return builtIn
     }
     lock.unlock()
-    let pluginSources = pluginSourcesProvider()
+    let pluginSources = activePluginSources()
     if let exact = pluginSources.first(where: { $0.identifier == identifier }) {
       return exact
     }

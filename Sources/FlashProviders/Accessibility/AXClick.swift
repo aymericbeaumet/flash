@@ -177,6 +177,42 @@ public enum AXClick {
     }
   }
 
+  /// Whether the app's *currently focused* element is a text input. Unlike
+  /// `isTextInput(at:)` (which hit-tests a screen point), this follows focus —
+  /// so it catches a click that *opened* a new input elsewhere (e.g. Slack's
+  /// "Search" trigger opening the extended-search overlay and focusing its
+  /// field, which sits nowhere near the clicked point).
+  public static func focusedIsTextInput(pid: pid_t) -> Bool {
+    if let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+      TerminalBundles.identifiers.contains(bundleID)
+    {
+      return true
+    }
+    guard let focused = focusedElement(pid: pid) else { return false }
+    return isTextInput(focused)
+  }
+
+  /// The app's currently focused element, or nil when it exposes none. The
+  /// returned ref supports `CFEqual` identity against a later read of the same
+  /// element, which is what the passthrough focus follow uses to distinguish
+  /// "the chord moved focus here" from "this was focused all along".
+  public static func focusedElement(pid: pid_t) -> AXUIElement? {
+    let app = AXApp.make(pid: pid)
+    var focusedRaw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focusedRaw)
+        == .success,
+      let focusedCF = focusedRaw,
+      CFGetTypeID(focusedCF) == AXUIElementGetTypeID()
+    else { return nil }
+    return (focusedCF as! AXUIElement)
+  }
+
+  public static func isTextInput(_ element: AXUIElement) -> Bool {
+    guard let role = copyRole(element) else { return false }
+    return JumpTarget.textInputRoles.contains(role)
+  }
+
   private static func copyRole(_ element: AXUIElement) -> String? {
     var raw: CFTypeRef?
     guard

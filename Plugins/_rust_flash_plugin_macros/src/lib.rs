@@ -3,10 +3,9 @@
 //! adapter that routes every wire request to the matching trait method.
 //!
 //! `manifest.json` is the single source of truth. The macro inspects the
-//! declared `commands` / `shebangs` sections to decide which handler methods
-//! are *required* (either section makes `on_command` mandatory — omit it and the
-//! crate fails to compile). Every other handler is a defaulted trait method the
-//! plugin overrides only when it serves that surface.
+//! declared surfaces to decide which handler methods are *required*: commands
+//! or shebangs require `on_command`, candidate sources require `on_start`, and
+//! a `queries` provider requires the synchronous `query_evaluate` hook.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
@@ -21,20 +20,18 @@ pub fn plugin(input: TokenStream) -> TokenStream {
     let ty = parse_type(input.into());
     let manifest = load_manifest();
 
+    let has_candidate_sources = manifest_has_candidate_sources(&manifest);
+    let on_start_decl = on_start_decl(has_candidate_sources);
     let on_command_decl = on_command_decl(manifest_has_command(&manifest));
+    let query_evaluate_decl = query_evaluate_decl(manifest_has_query_evaluator(&manifest));
     let expanded = quote! {
         /// The plugin contract for this crate, specialized to its `manifest.json`.
-        /// Implement the required methods (a `commands`/`shebang` provider makes
-        /// `on_command` required); override any defaulted handler the plugin serves.
+        /// Implement the required methods (`sources` makes `on_start` required;
+        /// commands/shebangs make `on_command` required; `queries` makes the
+        /// synchronous `query_evaluate` hook required); override any remaining
+        /// defaulted handler the plugin serves.
         pub trait FlashPlugin: ::core::marker::Send + ::core::marker::Sync + 'static {
-            /// Seed an initial snapshot or kick off provisioning after `initialize`.
-            fn on_start(
-                &self,
-                ctx: ::flash_plugin::Context,
-            ) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
-                let _ = ctx;
-                async {}
-            }
+            #on_start_decl
 
             /// Handle a subscribed host event (`core:focus.changed`, …).
             fn on_event(
@@ -47,6 +44,8 @@ pub fn plugin(input: TokenStream) -> TokenStream {
             }
 
             #on_command_decl
+
+            #query_evaluate_decl
 
             /// Resolve a flashlight candidate the plugin emitted.
             fn resolve_candidate(
@@ -68,32 +67,6 @@ pub fn plugin(input: TokenStream) -> TokenStream {
             {
                 let _ = (ctx, request);
                 async { ::flash_plugin::DiscoverResponse::default() }
-            }
-
-            /// Default: serve this plugin's warm locations (the union of every
-            /// [`set_locations`](::flash_plugin::Context::set_locations) call).
-            /// Most plugins should leave this method alone — keep the locations
-            /// warm in the background (`on_start` + `on_event`, plus plugin-owned
-            /// polling when needed) and the host pulls them on demand.
-            ///
-            /// The host queries this when the flashlight opens (and when a
-            /// matching `@source`/sigil filter is typed), then applies its own
-            /// fuzzy narrowing against `request.query` — so return the full warm
-            /// set rather than pre-filtering here. Anything that runs I/O here
-            /// (subprocess, AppleScript) adds latency the user feels and risks
-            /// the `manifest.request_timeout_ms` deadline. Only override this
-            /// method when results genuinely depend on the live query string
-            /// (e.g. a server-side search completion).
-            fn candidate_query(
-                &self,
-                ctx: ::flash_plugin::Context,
-                request: ::flash_plugin::CandidateQueryRequest,
-            ) -> impl ::core::future::Future<Output = ::flash_plugin::CandidateQueryResponse> + ::core::marker::Send
-            {
-                let _ = request;
-                async move {
-                    ::flash_plugin::CandidateQueryResponse::candidates(ctx.warm_locations())
-                }
             }
 
             /// Perform a source action (e.g. tab select/cycle).
@@ -147,6 +120,10 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 <Self as FlashPlugin>::on_start(self, ctx)
             }
 
+            fn requires_initial_locations(&self) -> bool {
+                #has_candidate_sources
+            }
+
             fn on_event(
                 &self,
                 ctx: ::flash_plugin::Context,
@@ -183,11 +160,6 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                                 <Self as FlashPlugin>::discover_targets(self, ctx, request).await,
                             )
                         }
-                        ::flash_plugin::Request::CandidateQuery(request) => {
-                            ::flash_plugin::Response::CandidateQuery(
-                                <Self as FlashPlugin>::candidate_query(self, ctx, request).await,
-                            )
-                        }
                         ::flash_plugin::Request::SourceAction(request) => {
                             ::flash_plugin::Response::SourceAction(
                                 <Self as FlashPlugin>::source_action(self, ctx, request).await,
@@ -201,6 +173,11 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                         ::flash_plugin::Request::ActivateTarget(request) => {
                             <Self as FlashPlugin>::activate_target(self, ctx, request).await;
                             ::flash_plugin::Response::None
+                        }
+                        ::flash_plugin::Request::QueryEvaluate(request) => {
+                            ::flash_plugin::Response::QueryEvaluate(
+                                <Self as FlashPlugin>::query_evaluate(self, request),
+                            )
                         }
                         ::flash_plugin::Request::Unknown { method } => ::flash_plugin::Response::Command(
                             ::flash_plugin::CommandResponse::error(::std::format!(
@@ -261,6 +238,18 @@ fn manifest_has_command(manifest: &Value) -> bool {
     section_has_items(manifest, "commands") || section_has_items(manifest, "shebangs")
 }
 
+fn manifest_has_candidate_sources(manifest: &Value) -> bool {
+    manifest
+        .get("sources")
+        .and_then(Value::as_array)
+        .map(|sources| !sources.is_empty())
+        .unwrap_or(false)
+}
+
+fn manifest_has_query_evaluator(manifest: &Value) -> bool {
+    matches!(manifest.get("queries"), Some(Value::Object(_)))
+}
+
 fn section_has_items(manifest: &Value, section: &str) -> bool {
     manifest
         .get(section)
@@ -290,5 +279,74 @@ fn on_command_decl(required: bool) -> TokenStream2 {
                 async { ::flash_plugin::CommandResponse::error("plugin declares no commands") }
             }
         }
+    }
+}
+
+/// Query evaluation is deliberately synchronous and receives no Context. This
+/// makes filesystem, subprocess, network, and host RPC I/O unavailable through
+/// the SDK surface used on every flashlight keystroke.
+fn query_evaluate_decl(required: bool) -> TokenStream2 {
+    let signature = quote! {
+        /// Return ephemeral answer candidates for one exact input.
+        fn query_evaluate(
+            &self,
+            request: ::flash_plugin::QueryEvaluateRequest,
+        ) -> ::flash_plugin::QueryEvaluateResponse
+    };
+    if required {
+        quote! { #signature; }
+    } else {
+        quote! {
+            #signature {
+                let _ = request;
+                ::flash_plugin::QueryEvaluateResponse::default()
+            }
+        }
+    }
+}
+
+/// `on_start` is required when the manifest declares candidate sources. The SDK
+/// runtime additionally verifies that it publishes the canonical aggregate
+/// `plugin:<id>` warm-store key before the initialize response succeeds.
+fn on_start_decl(required: bool) -> TokenStream2 {
+    let signature = quote! {
+        /// Seed this plugin's canonical aggregate warm store (`plugin:<id>`)
+        /// before initialization completes. Publish an authoritative empty
+        /// snapshot when no rows exist.
+        fn on_start(
+            &self,
+            ctx: ::flash_plugin::Context,
+        ) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send
+    };
+    if required {
+        quote! { #signature; }
+    } else {
+        quote! {
+            #signature {
+                let _ = ctx;
+                async {}
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{manifest_has_candidate_sources, manifest_has_query_evaluator};
+    use serde_json::json;
+
+    #[test]
+    fn candidate_sources_require_startup_hook() {
+        assert!(manifest_has_candidate_sources(&json!({
+            "sources": [{"name": "example.items"}]
+        })));
+        assert!(!manifest_has_candidate_sources(&json!({"sources": []})));
+        assert!(!manifest_has_candidate_sources(&json!({})));
+    }
+
+    #[test]
+    fn queries_require_synchronous_evaluator() {
+        assert!(manifest_has_query_evaluator(&json!({"queries": {}})));
+        assert!(!manifest_has_query_evaluator(&json!({})));
     }
 }

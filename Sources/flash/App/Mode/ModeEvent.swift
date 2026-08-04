@@ -4,7 +4,7 @@ import Foundation
 // This is the exhaustive, documented list the audit asked for: if it is not a
 // case here, it cannot move the mode. Notably absent — and deliberately so —
 // are the old automatic triggers (app/element focus-change exit, browser URL
-// polling, timed editable-focus probes, pointer-handoff deferrals). The mouse
+// polling, timed focus-exit probes, pointer-handoff deferrals). The mouse
 // can ENTER insert (`clickResolved`) but nothing here can make it LEAVE insert
 // except `enterNormal` (a keyboard request).
 enum ModeEvent: Equatable {
@@ -25,12 +25,6 @@ enum ModeEvent: Equatable {
 
   /// Command-line submit or cancel — both close the surface to its `restoreTo`.
   case closeCommand(reason: String)
-
-  /// `:help` / `:plugins` / `:clipboard` etc.
-  case presentModal
-
-  /// Escape / selection out of a modal.
-  case dismissModal
 
   /// A click — real mouse OR an `f`/`F` hint — resolved by the shared editable
   /// detector. `entersInsert` is the detector's verdict. From NORMAL an

@@ -64,6 +64,19 @@ enum URLCommand: Hashable {
   case tabMovePrev
   case tabMoveNext
   case tabReopen
+  /// Cycle to the next / previous split inside the focused window. Terminal
+  /// sources (tmux) claim these via the `pane_navigation` source action;
+  /// every other app falls back to the native ⌘] / ⌘[ chord.
+  case paneNext
+  case panePrev
+  /// Create a side-by-side or stacked split inside the focused window.
+  /// Terminal sources (tmux) claim these via source actions; the host has no
+  /// generic native-key fallback for apps that do not support split panes.
+  case paneSplitVertical
+  case paneSplitHorizontal
+  /// Close the active split inside the focused window. Tmux claims this via a
+  /// source action; non-terminal apps should keep using `tab_close`.
+  case paneClose
   case historyBack
   case historyForward
   case movementBack
@@ -310,6 +323,11 @@ final class URLEventHandler: NSObject {
     "tab_move_previous": { _ in .tabMovePrev },
     "tab_move_next": { _ in .tabMoveNext },
     "tab_reopen": { _ in .tabReopen },
+    "pane_next": { _ in .paneNext },
+    "pane_previous": { _ in .panePrev },
+    "pane_split_vertical": { _ in .paneSplitVertical },
+    "pane_split_horizontal": { _ in .paneSplitHorizontal },
+    "pane_close": { _ in .paneClose },
     "history_back": { _ in .historyBack },
     "history_forward": { _ in .historyForward },
     "movement_back": { _ in .movementBack },
@@ -381,6 +399,11 @@ final class URLEventHandler: NSObject {
     flash tab_move_previous
     flash tab_move_next
     flash tab_reopen
+    flash pane_next
+    flash pane_previous
+    flash pane_split_vertical
+    flash pane_split_horizontal
+    flash pane_close
     flash history_back
     flash history_forward
     flash movement_back

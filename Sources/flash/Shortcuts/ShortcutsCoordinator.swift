@@ -28,7 +28,7 @@ final class MappingsCoordinator {
   private var currentMode: (() -> FlashMode)?
   private var activeMappings: [ActiveMapping] = []
   private var configuredMode: Config.Mode = .init()
-  private var lastAppliedFlashMode: FlashMode = .insert
+  private var lastAppliedScope: MappingScope = .insert
   private var lastFireDiagnostic: String?
   private var lastFireAt: Date = .distantPast
   /// Chords Flash just synthesized into the focused app (e.g. the `⌘⇧]`
@@ -53,28 +53,24 @@ final class MappingsCoordinator {
 
   func apply(mode: Config.Mode) {
     configuredMode = mode
-    rebuild(for: lastAppliedFlashMode)
+    rebuild(for: lastAppliedScope)
   }
 
-  /// Re-register Carbon hotkeys for the current flash mode. The mode
-  /// matters for scope == .normal / .insert because Carbon registrations
-  /// are global — a registered .normal hotkey would still **consume**
-  /// the key combo system-wide while in insert mode, leaving it without
-  /// a dispatch path. That's broken for system shortcuts like `cmd+tab`:
-  /// the user expects them to pass through to the Dock when Flash is in
-  /// insert. Re-registering on mode flips lets scope-bound shortcuts
-  /// switch between "Flash captures" and "system handles".
-  func applyForFlashMode(_ flashMode: FlashMode) {
-    guard flashMode != lastAppliedFlashMode else { return }
-    rebuild(for: flashMode)
+  /// Re-register Carbon hotkeys for the current input surface. Carbon
+  /// registrations are global. All-scope mappings stay active on every surface;
+  /// normal- and insert-scoped mappings are removed while the command field owns
+  /// the keyboard.
+  func apply(scope: MappingScope) {
+    guard scope != lastAppliedScope else { return }
+    rebuild(for: scope)
   }
 
-  private func rebuild(for flashMode: FlashMode) {
-    lastAppliedFlashMode = flashMode
+  private func rebuild(for mappingScope: MappingScope) {
+    lastAppliedScope = mappingScope
     hotkeys.unregisterAll()
     activeMappings.removeAll(keepingCapacity: true)
     for (scope, mapping) in Self.nativeMappings(in: configuredMode) {
-      guard Self.scopeIsActive(scope, for: flashMode) else { continue }
+      guard Self.scopeIsActive(scope, for: mappingScope) else { continue }
       guard let parsed = HotkeySyntax.parse(hotkey: mapping.key) else {
         if mapping.key.contains("+") {
           FlashLog.warn("[mappings] could not parse native mapping \"\(mapping.key)\"")
@@ -97,28 +93,48 @@ final class MappingsCoordinator {
     }
   }
 
-  static func scopeIsActive(_ scope: ModeScope, for flashMode: FlashMode) -> Bool {
-    switch scope {
-    case .all: return true
-    case .normal: return flashMode == .normal
-    case .insert: return flashMode == .insert
+  static func scopeIsActive(_ scope: ModeScope, for mappingScope: MappingScope) -> Bool {
+    switch mappingScope {
+    case .command:
+      return scope == .all
+    case .normal:
+      switch scope {
+      case .all, .normal: return true
+      case .insert: return false
+      }
+    case .insert:
+      switch scope {
+      case .all, .insert: return true
+      case .normal: return false
+      }
     }
   }
 
   // MARK: - Hot path
 
   func handle(event: NSEvent) -> Bool {
-    let modifiers = Self.carbonModifiers(from: event.modifierFlags)
-    let virtualKey = UInt32(event.keyCode)
     guard
-      let active = activeMappings.first(where: {
-        $0.parsed.modifiers == modifiers && $0.parsed.virtualKey == virtualKey
-      })
-    else {
-      return false
-    }
+      let active = activeMapping(
+        virtualKey: UInt32(event.keyCode),
+        modifiers: Self.carbonModifiers(from: event.modifierFlags))
+    else { return false }
     fire(active.mapping, scope: active.scope, parsed: active.parsed)
     return true
+  }
+
+  /// Whether a chord matches an active mapping, without firing it — from raw
+  /// CGEvent fields so the tap's swallow decision stays off the `NSEvent`
+  /// (keyboard-layout-resolving) path on the hot per-keystroke route. Lets an
+  /// *unmapped* chord pass through (`passthrough_modifiers`) while a mapped one
+  /// is still captured.
+  func hasMapping(virtualKey: UInt32, cgFlags: CGEventFlags) -> Bool {
+    activeMapping(virtualKey: virtualKey, modifiers: Self.carbonModifiers(fromCG: cgFlags)) != nil
+  }
+
+  private func activeMapping(virtualKey: UInt32, modifiers: UInt32) -> ActiveMapping? {
+    activeMappings.first {
+      $0.parsed.modifiers == modifiers && $0.parsed.virtualKey == virtualKey
+    }
   }
 
   private func fire(_ mapping: ModeMapping, scope: ModeScope, parsed: ParsedHotkey) {

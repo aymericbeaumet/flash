@@ -128,6 +128,48 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(mixed.trailing, "#[fg=colour245] · #[fg=colour178]HN#[fg=colour245] story")
   }
 
+  func testParsesMonitorScope() {
+    XCTAssertEqual(ConfigLoader.parse("").statusBar.monitor, .all)
+    XCTAssertEqual(
+      ConfigLoader.parse(
+        """
+        [statusbar]
+        monitor = "primary"
+        """
+      ).statusBar.monitor, .primary)
+    // Invalid value is diagnosed and left at the default.
+    let bad = ConfigLoader.parse(
+      """
+      [statusbar]
+      monitor = "left"
+      """)
+    XCTAssertEqual(bad.statusBar.monitor, .all)
+    XCTAssertTrue(bad.loadingDiagnostics.contains { $0.message.contains("statusbar.monitor") })
+  }
+
+  func testParsesCycleToken() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "#{cycle:~/hn.sh} #{cycle=90:~/x.sh --flag}"
+      """)
+    let vars = c.statusBar.template.variables
+    guard
+      case .cycle(_, let defaultPeriod)? =
+        vars.first(where: { $0.token == "cycle:~/hn.sh" })?.source
+    else { return XCTFail("expected a cycle variable") }
+    XCTAssertEqual(defaultPeriod, 60)
+    guard
+      case .cycle(_, let customPeriod)? =
+        vars.first(where: { $0.token == "cycle=90:~/x.sh --flag" })?.source
+    else { return XCTFail("expected a cycle=90 variable") }
+    XCTAssertEqual(customPeriod, 90)
+    // Cycle runs a subprocess (a command section) and is also its own
+    // cycleSections bucket.
+    XCTAssertEqual(c.statusBar.template.commandSections.count, 2)
+    XCTAssertEqual(c.statusBar.template.cycleSections.count, 2)
+  }
+
   func testDefaultTemplateRendersModeAndRightSections() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -535,13 +577,12 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(panel.commandPromptLayer.shadowRadius, 0)
   }
 
-  func testPersistentStatusBarSitsAtNativeMenuBarLevel() {
-    // `.statusBar` (level 25) is the system-status-item band where
-    // windows can't become key — putting Flash there locked normal-mode
-    // capture out and spun the recapture loop forever. `.mainMenu`
-    // (level 24) lets the panel own key focus; the bar's opaque
-    // `backgroundColor` (set in `configureModeBadge`) keeps the
-    // translucent native menu bar from bleeding through.
+  func testPersistentStatusBarIsPlainWindowBelowNativeMenuBar() {
+    // The bar is an ordinary elevated window (`.floating`): above the focused
+    // app's normal windows, but well below the native menu bar (app menus at
+    // `.mainMenu`/24, extras at `.statusBar`/25) so the menu bar wins the
+    // z-order and expands on top of Flash. Not jammed against the menu-bar band
+    // at `.mainMenu - 1`, where it competed with the system menu bar for clicks.
     XCTAssertEqual(
       OverlayPanel.windowLevelForOverlayContent(
         inputMode: .normal,
@@ -552,10 +593,13 @@ final class StatusBarTests: XCTestCase {
       OverlayPanel.persistentStatusWindowLevel.rawValue)
     XCTAssertEqual(
       OverlayPanel.persistentStatusWindowLevel.rawValue,
-      NSWindow.Level.mainMenu.rawValue)
+      NSWindow.Level.floating.rawValue)
+    XCTAssertGreaterThan(
+      OverlayPanel.persistentStatusWindowLevel.rawValue,
+      NSWindow.Level.normal.rawValue)
     XCTAssertLessThan(
       OverlayPanel.persistentStatusWindowLevel.rawValue,
-      NSWindow.Level.statusBar.rawValue)
+      NSWindow.Level.mainMenu.rawValue)
   }
 
   func testTransientSurfacesUseElevatedOverlayWindowLevel() {
@@ -565,14 +609,6 @@ final class StatusBarTests: XCTestCase {
         commandPromptVisible: true,
         candidateFinderResultsVisible: false,
         transientContentVisible: false
-      ).rawValue,
-      OverlayPanel.transientOverlayWindowLevel.rawValue)
-    XCTAssertEqual(
-      OverlayPanel.windowLevelForOverlayContent(
-        inputMode: .modal,
-        commandPromptVisible: false,
-        candidateFinderResultsVisible: false,
-        transientContentVisible: true
       ).rawValue,
       OverlayPanel.transientOverlayWindowLevel.rawValue)
   }
@@ -593,6 +629,39 @@ final class StatusBarTests: XCTestCase {
       minimumY: 10)
 
     XCTAssertEqual(y, 10)
+  }
+
+  func testCandidateFinderMaxVisibleRowsNeverIntrudeIntoThePrompt() {
+    // 520.5 prompt minY, 10 minimumY, 6 gap, 7 vertical padding × 2:
+    // available = 520.5 - 6 - 10 - 14 = 490.5 → with 18pt rows + 2pt gaps
+    // each extra row costs 20pt after the first: (490.5 + 2) / 20 = 24 rows.
+    let rows = OverlayPanel.candidateFinderMaxVisibleRows(
+      commandPromptFrame: CGRect(x: 644, y: 520.5, width: 440, height: 38),
+      minimumY: 10,
+      rowHeight: 18,
+      lineSpacing: 2,
+      verticalPadding: 7)
+    XCTAssertEqual(rows, 24)
+
+    // The clamped row count must produce a panel that fits between the
+    // prompt and the bottom margin — the overlap this guards against.
+    let height = CGFloat(rows) * 18 + CGFloat(rows - 1) * 2 + 7 * 2
+    XCTAssertLessThanOrEqual(height, 520.5 - 6 - 10)
+
+    // One more row would have overlapped.
+    let tallerHeight = CGFloat(rows + 1) * 18 + CGFloat(rows) * 2 + 7 * 2
+    XCTAssertGreaterThan(tallerHeight, 520.5 - 6 - 10)
+  }
+
+  func testCandidateFinderMaxVisibleRowsFloorsAtOneRow() {
+    // A prompt hugging the screen bottom still shows the top match.
+    let rows = OverlayPanel.candidateFinderMaxVisibleRows(
+      commandPromptFrame: CGRect(x: 82, y: 12, width: 180, height: 38),
+      minimumY: 10,
+      rowHeight: 18,
+      lineSpacing: 2,
+      verticalPadding: 7)
+    XCTAssertEqual(rows, 1)
   }
 
   func testCandidateFinderResultsWidthStartsAtCommandPromptWidth() {
@@ -655,6 +724,26 @@ final class StatusBarTests: XCTestCase {
     XCTAssertTrue(enabled.contains(.autoHideDock))
     XCTAssertFalse(disabled.contains(.autoHideMenuBar))
     XCTAssertTrue(disabled.contains(.autoHideDock))
+  }
+
+  func testStatusBarLinkClickAcceptsStationaryAndSmallJitter() {
+    // A release at (or within the slop of) the press point is a click.
+    XCTAssertTrue(
+      StatusBarClickView.isClick(
+        from: CGPoint(x: 100, y: 12), to: CGPoint(x: 100, y: 12)))
+    XCTAssertTrue(
+      StatusBarClickView.isClick(
+        from: CGPoint(x: 100, y: 12), to: CGPoint(x: 103, y: 14)))
+  }
+
+  func testStatusBarLinkClickRejectsDrag() {
+    // A release dragged past the slop opens nothing.
+    XCTAssertFalse(
+      StatusBarClickView.isClick(
+        from: CGPoint(x: 100, y: 12), to: CGPoint(x: 140, y: 12)))
+    XCTAssertFalse(
+      StatusBarClickView.isClick(
+        from: CGPoint(x: 100, y: 12), to: CGPoint(x: 100, y: 30)))
   }
 
   func testCandidateFinderResultsKeepBestMatchOnTop() {

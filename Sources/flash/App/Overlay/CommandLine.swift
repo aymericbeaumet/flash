@@ -407,6 +407,19 @@ extension OverlayPanel: NSTextFieldDelegate {
     case #selector(NSResponder.moveDown(_:)):
       _ = coordinator?.overlayDidMoveCommandLineSelection(1)
       return true
+    case #selector(NSResponder.moveToEndOfLine(_:)),
+      #selector(NSResponder.moveToRightEndOfLine(_:)):
+      // NSTextView's default key bindings map Ctrl-E (and layouts that use
+      // the right-end variant) to one of these selectors. Because the
+      // command field owns a custom delegate, handle the selector explicitly
+      // instead of relying on the field editor's fallback path. Keep Flash's
+      // cursor model in sync as well: moving the insertion point does not
+      // emit controlTextDidChange, and the next candidate render would
+      // otherwise snap it back to the old index.
+      textView.setSelectedRange(
+        NSRange(location: textView.string.utf16.count, length: 0))
+      _ = syncCommandLineStateFromFieldForCommand()
+      return true
     default:
       return false
     }

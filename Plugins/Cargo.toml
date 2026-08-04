@@ -28,7 +28,7 @@ members = [
 # Shared dependency versions. Each plugin opts in via
 # `serde = { workspace = true, ... }` so all crates resolve to identical
 # transitive versions and the single workspace `Cargo.lock` is the only
-# source of truth. Plugin-specific deps (e.g. `fasteval2`) stay inline in
+# source of truth. Plugin-specific deps (e.g. calculator's `fend-core`) stay inline in
 # the plugin's own Cargo.toml.
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

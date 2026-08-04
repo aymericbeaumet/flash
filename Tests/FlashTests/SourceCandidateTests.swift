@@ -6,18 +6,19 @@ import XCTest
 
 final class SourceCandidateTests: XCTestCase {
   func testFlashPriorityContractIsGeneralizedAndOrdered() {
-    XCTAssertEqual(FlashPriority.allCases, [.background, .low, .normal, .high, .critical])
+    XCTAssertEqual(FlashPriority.allCases, [.low, .normal, .high, .important, .urgent])
     XCTAssertEqual(
       FlashPriority.allCases.map(\.rawValue),
       [
-        "background", "low", "normal", "high", "critical",
+        "low", "normal", "high", "important", "urgent",
       ])
-    XCTAssertLessThan(FlashPriority.background, .low)
     XCTAssertLessThan(FlashPriority.low, .normal)
     XCTAssertLessThan(FlashPriority.normal, .high)
-    XCTAssertLessThan(FlashPriority.high, .critical)
+    XCTAssertLessThan(FlashPriority.high, .important)
+    XCTAssertLessThan(FlashPriority.important, .urgent)
     XCTAssertFalse(FlashPriority.high.usesAccentHintStyle)
-    XCTAssertTrue(FlashPriority.critical.usesAccentHintStyle)
+    XCTAssertTrue(FlashPriority.important.usesAccentHintStyle)
+    XCTAssertTrue(FlashPriority.urgent.usesAccentHintStyle)
   }
 
   func testPrepareBuildsWordStartMaskFromTitleAndAliasTokens() throws {
@@ -178,17 +179,19 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertEqual(sorted.map(\.candidate.title), ["Zulu", "Alpha"])
   }
 
-  func testStrongerMatchWinsWithinLocationBand() throws {
-    // Location rows share one default band. Match quality leads inside it.
-    let deadPrefix = CandidateFinder.prepare(
+  func testStrongerMatchWinsWithinLocationCategory() throws {
+    // Rows in the same location category (here: two running apps) are
+    // ordered by match quality — the category ladder only ranks across
+    // categories.
+    let shortPrefix = CandidateFinder.prepare(
       candidate(
         kind: .app,
         source: "core.apps",
         name: "Finder Pro",
         subtitle: "app",
         bundleIdentifier: "com.example.finderpro",
-        pid: nil))
-    let alivePrefix = CandidateFinder.prepare(
+        pid: 456))
+    let longPrefix = CandidateFinder.prepare(
       candidate(
         kind: .app,
         source: "core.apps",
@@ -197,22 +200,23 @@ final class SourceCandidateTests: XCTestCase {
         bundleIdentifier: "com.example.findernotes",
         pid: 123))
 
-    let deadScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: deadPrefix))
-    let aliveScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: alivePrefix))
+    let shortScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: shortPrefix))
+    let longScore = try XCTUnwrap(CandidateFinder.score(query: "finder", candidate: longPrefix))
 
     let sorted = CandidateFinder.sortedMatches([
-      CandidateMatch(candidate: deadPrefix, score: deadScore),
-      CandidateMatch(candidate: alivePrefix, score: aliveScore),
+      CandidateMatch(candidate: shortPrefix, score: shortScore),
+      CandidateMatch(candidate: longPrefix, score: longScore),
     ])
 
     // Whichever candidate scores higher comes first.
-    let expectedFirst = deadScore >= aliveScore ? "Finder Pro" : "Finder notes"
+    let expectedFirst = shortScore >= longScore ? "Finder Pro" : "Finder notes"
     XCTAssertEqual(sorted.first?.candidate.title, expectedFirst)
   }
 
-  func testDefaultFlashlightLocationBandUsesMatchQuality() throws {
-    // Tabs and apps are both generalized locations. Once they are in that
-    // band, a stronger title match wins across source labels.
+  func testDefaultFlashlightLocationBandPrefersAppsOverTabs() throws {
+    // Tabs and apps are both generalized locations, but the category ladder
+    // puts running apps above browser tabs; the stronger app match here also
+    // wins on score, so both signals agree.
     let messagesApp = CandidateFinder.prepare(
       candidate(
         kind: .app,
@@ -269,6 +273,39 @@ final class SourceCandidateTests: XCTestCase {
   }
 
   func testLocationScoreTiesUseStableCandidateKeys() {
+    let firefoxTab = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("browser_tab"),
+        source: "firefox",
+        name: "agentic",
+        subtitle: "browser tab",
+        bundleIdentifier: "org.mozilla.firefox",
+        pid: 4242,
+        url: URL(string: "https://example.test/agentic"),
+        isLocation: true))
+    let safariTab = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("browser_tab"),
+        source: "safari",
+        name: "agentic",
+        subtitle: "browser tab",
+        bundleIdentifier: "com.apple.Safari",
+        pid: 4243,
+        url: URL(string: "https://example.test/agentic"),
+        isLocation: true))
+
+    // Same category, exact score tie: fall back to the stable composite key.
+    let sorted = CandidateFinder.sortedMatches([
+      CandidateMatch(candidate: safariTab, score: 10_120),
+      CandidateMatch(candidate: firefoxTab, score: 10_120),
+    ])
+    XCTAssertEqual(sorted.map(\.candidate.source), ["firefox", "safari"])
+  }
+
+  func testCategoryLadderBeatsScoreAcrossLocationCategories() {
+    // The location band's category ladder is strict: a tmux window leads a
+    // browser tab even when the tab's match score is far higher. Only a
+    // deliberate name hit (`titlePrefixMatch`) crosses categories.
     let browserTab = CandidateFinder.prepare(
       candidate(
         kind: .plugin("browser_tab"),
@@ -283,31 +320,23 @@ final class SourceCandidateTests: XCTestCase {
       candidate(
         kind: .plugin("tmux_window"),
         source: "tmux",
-        name: "agentic",
+        name: "flash",
         subtitle: "tmux window",
         bundleIdentifier: "",
         pid: 4242,
         isLocation: true))
 
-    // Locations do not carry plugin-domain tiers. Exact score ties fall back
-    // to the stable composite key.
     let sorted = CandidateFinder.sortedMatches([
-      CandidateMatch(candidate: browserTab, score: 10_120),
-      CandidateMatch(candidate: tmuxWindow, score: 10_120),
-    ])
-    XCTAssertEqual(sorted.map(\.candidate.source), ["firefox", "tmux"])
-
-    // A stronger location match crosses source labels.
-    let scoreDrivenOrder = CandidateFinder.sortedMatches([
       CandidateMatch(candidate: browserTab, score: 14_000),
       CandidateMatch(candidate: tmuxWindow, score: 10_120),
     ])
-    XCTAssertEqual(scoreDrivenOrder.map(\.candidate.source), ["firefox", "tmux"])
+    XCTAssertEqual(sorted.map(\.candidate.source), ["tmux", "firefox"])
   }
 
-  func testFlashlightOrderBangLocationsThenRest() {
-    // Bangs remain the top command surface. Generalized locations are the
-    // default flashlight band after that. Hidden non-location sources sort
+  func testFlashlightOrderBangThenCategoryLadderThenRest() {
+    // Bangs remain the top command surface. Generalized locations follow,
+    // laddered by category: tmux windows > running apps > installed apps >
+    // browser tabs > remaining locations. Hidden non-location sources sort
     // below and are filtered from the live default pool unless the user types
     // `@source`.
     let bang = CandidateFinder.prepare(
@@ -332,10 +361,10 @@ final class SourceCandidateTests: XCTestCase {
       candidate(
         kind: .app, source: "core.apps", name: "z-inactive",
         subtitle: "app", bundleIdentifier: "com.example.inactive", pid: nil))
-    let slack = CandidateFinder.prepare(
+    let pluginLocation = CandidateFinder.prepare(
       candidate(
-        kind: .plugin("slack_channel"), source: "slack.channels", name: "z-slack",
-        subtitle: "slack channel", bundleIdentifier: "", pid: nil,
+        kind: .plugin("project"), source: "projects.locations", name: "z-location",
+        subtitle: "project location", bundleIdentifier: "", pid: nil,
         isLocation: true))
     let note = CandidateFinder.prepare(
       candidate(
@@ -348,46 +377,46 @@ final class SourceCandidateTests: XCTestCase {
       CandidateMatch(candidate: activeApp, score: 0),
       CandidateMatch(candidate: tab, score: 0),
       CandidateMatch(candidate: tmux, score: 0),
-      CandidateMatch(candidate: slack, score: 0),
+      CandidateMatch(candidate: pluginLocation, score: 0),
       CandidateMatch(candidate: bang, score: 0),
     ])
 
     XCTAssertEqual(
       sorted.map(\.candidate.title),
-      ["z-bang", "z-active", "z-inactive", "z-slack", "z-tab", "z-tmux", "z-note"])
+      ["z-bang", "z-tmux", "z-active", "z-inactive", "z-tab", "z-location", "z-note"])
   }
 
-  func testNamePrefixMatchCrossesLocationBand() {
+  func testNamePrefixMatchCrossesCategoryLadder() {
     let safariApp = CandidateFinder.prepare(
       candidate(
         kind: .app, source: "core.apps", name: "Safari",
         subtitle: "app", bundleIdentifier: "com.apple.Safari", pid: 4242))
-    // A browser tab whose own name does NOT start with the query — it would
+    // A tmux window whose own name does NOT start with the query — it would
     // only match `safa` via an unrelated field (here it doesn't match at all;
-    // the score is supplied directly to isolate the band/tier ordering).
-    let firefoxTab = CandidateFinder.prepare(
+    // the score is supplied directly to isolate the ladder ordering).
+    let tmuxWindow = CandidateFinder.prepare(
       candidate(
-        kind: .plugin("browser_tab"), source: "firefox", name: "Apple Newsroom",
-        subtitle: "browser tab", bundleIdentifier: "org.mozilla.firefox", pid: 4242,
-        url: URL(string: "https://example.test/safari"),
+        kind: .plugin("tmux_window"), source: "tmux", name: "logs safari",
+        subtitle: "tmux window", bundleIdentifier: "", pid: 4242,
         isLocation: true))
 
-    // No query: match score keeps the browser tab above the app.
+    // No query: the category ladder keeps the tmux window above the app.
     let banded = CandidateFinder.sortedMatches([
-      CandidateMatch(candidate: safariApp, score: 12_000),
-      CandidateMatch(candidate: firefoxTab, score: 14_000),
+      CandidateMatch(candidate: safariApp, score: 14_000),
+      CandidateMatch(candidate: tmuxWindow, score: 12_000),
     ])
-    XCTAssertEqual(banded.map(\.candidate.source), ["firefox", "core.apps"])
+    XCTAssertEqual(banded.map(\.candidate.source), ["tmux", "core.apps"])
 
-    // Typing `safa` — a full-string prefix of the app's own name — lifts
-    // Safari.app above the tab despite the tab's higher score.
+    // Typing `safa` — a full-string prefix of the app's own name but not of
+    // the window's — lifts Safari.app above the tmux window despite the
+    // ladder.
     let prefixed = CandidateFinder.sortedMatches(
       [
-        CandidateMatch(candidate: safariApp, score: 12_000),
-        CandidateMatch(candidate: firefoxTab, score: 14_000),
+        CandidateMatch(candidate: safariApp, score: 14_000),
+        CandidateMatch(candidate: tmuxWindow, score: 12_000),
       ],
       normalizedQuery: "safa")
-    XCTAssertEqual(prefixed.map(\.candidate.source), ["core.apps", "firefox"])
+    XCTAssertEqual(prefixed.map(\.candidate.source), ["core.apps", "tmux"])
   }
 
   func testDefaultFlashlightVisibilityOnlyIncludesLocations() {
@@ -400,9 +429,9 @@ final class SourceCandidateTests: XCTestCase {
     let app = candidate(
       kind: .app, source: "core.apps", name: "Safari",
       subtitle: "app", bundleIdentifier: "com.apple.Safari")
-    let slack = candidate(
-      kind: .plugin("slack_channel"), source: "slack.channels", name: "#general",
-      subtitle: "slack channel", bundleIdentifier: "", isLocation: true)
+    let pluginLocation = candidate(
+      kind: .plugin("project"), source: "projects.locations", name: "Flash",
+      subtitle: "project location", bundleIdentifier: "", isLocation: true)
     let note = candidate(
       kind: .plugin("note"), source: "notes.notes", name: "shopping",
       subtitle: "note", bundleIdentifier: "")
@@ -414,16 +443,17 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(tmux))
     XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(tab))
     XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(app))
-    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(slack))
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(pluginLocation))
     XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(note))
     XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(emoji))
     XCTAssertFalse(CandidateFinder.isDefaultFlashlightCandidate(source))
   }
 
-  func testHigherScoreWinsEvenOverActiveAppTier() {
-    // Score leads: a dead exact match (11k) outranks a live weak match
-    // (10k) even though active apps are the higher tier — tier only
-    // settles score ties.
+  func testRunningAppOutranksInstalledAppUnlessNameHit() {
+    // The ladder is strict between running and installed apps: absent a
+    // deliberate name hit, the running app leads even against a stronger
+    // installed-app match. Typing the installed app's own name prefix
+    // restores it to the top.
     let deadExact = CandidateFinder.prepare(
       candidate(
         kind: .app,
@@ -441,12 +471,57 @@ final class SourceCandidateTests: XCTestCase {
         bundleIdentifier: "com.apple.MobileSMS",
         pid: 123))
 
-    let sorted = CandidateFinder.sortedMatches([
+    let laddered = CandidateFinder.sortedMatches([
       CandidateMatch(candidate: aliveWeak, score: 10_000),
       CandidateMatch(candidate: deadExact, score: 11_000),
     ])
+    XCTAssertEqual(laddered.map(\.candidate.title), ["Messages", "System Settings"])
 
-    XCTAssertEqual(sorted.map(\.candidate.title), ["System Settings", "Messages"])
+    let prefixed = CandidateFinder.sortedMatches(
+      [
+        CandidateMatch(candidate: aliveWeak, score: 10_000),
+        CandidateMatch(candidate: deadExact, score: 11_000),
+      ],
+      normalizedQuery: "system")
+    XCTAssertEqual(prefixed.map(\.candidate.title), ["System Settings", "Messages"])
+  }
+
+  func testExactAliasHitCrossesCategoryLadder() {
+    // An exact alias is a deliberate hit: it promotes the aliased row above
+    // higher-ladder categories, preserving the alias tier's meaning. A mere
+    // alias prefix is NOT promoted — short aliases would otherwise lift half
+    // the list on a single letter.
+    // Title deliberately does not start with the alias, so the promotion
+    // can only come from the alias itself.
+    let browserApp = CandidateFinder.prepare(
+      candidate(
+        kind: .app, source: "core.apps", name: "Mozilla Browser",
+        subtitle: "app", bundleIdentifier: "org.mozilla.firefox", pid: nil,
+        searchAliases: "ff web"))
+    let tmuxWindow = CandidateFinder.prepare(
+      candidate(
+        kind: .plugin("tmux_window"), source: "tmux", name: "flash frontend",
+        subtitle: "tmux window", bundleIdentifier: "", pid: 4242,
+        isLocation: true))
+
+    let aliased = CandidateFinder.sortedMatches(
+      [
+        CandidateMatch(candidate: browserApp, score: 16_000),
+        CandidateMatch(candidate: tmuxWindow, score: 10_000),
+      ],
+      normalizedQuery: "ff")
+    XCTAssertEqual(aliased.map(\.candidate.source), ["core.apps", "tmux"])
+
+    // `f` is a prefix of the alias `ff` but not an exact hit; the app is not
+    // promoted, and the tmux window (whose own name does start with `f`)
+    // keeps its ladder position on top.
+    let aliasPrefixOnly = CandidateFinder.sortedMatches(
+      [
+        CandidateMatch(candidate: browserApp, score: 12_000),
+        CandidateMatch(candidate: tmuxWindow, score: 10_000),
+      ],
+      normalizedQuery: "f")
+    XCTAssertEqual(aliasPrefixOnly.map(\.candidate.source), ["tmux", "core.apps"])
   }
 
   func testBangCandidatesAlwaysWinEvenAgainstStrongerNonBangScores() {
@@ -566,6 +641,71 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(settings.url?.absoluteString.hasPrefix("file://") ?? false)
   }
 
+  func testApplicationSourceInitialPrewarmDoesNotBlockMemoryOnlyGather() {
+    let scanStarted = expectation(description: "installed app scan started")
+    let releaseScan = DispatchSemaphore(value: 0)
+    let installed = Candidate(
+      kind: .app,
+      sourceID: "core.apps",
+      source: "core.apps",
+      title: "Indexed App",
+      subtitle: "app",
+      bundleIdentifier: "test.indexed",
+      url: URL(fileURLWithPath: "/Applications/Indexed App.app"))
+    let source = ApplicationSource(
+      installedAppScanner: {
+        XCTAssertFalse(Thread.isMainThread)
+        scanStarted.fulfill()
+        releaseScan.wait()
+        return [installed]
+      },
+      watchesApplicationDirectories: false)
+    wait(for: [scanStarted], timeout: 1)
+
+    let started = CFAbsoluteTimeGetCurrent()
+    let beforeIndex = source.candidates(
+      in: FlashSourceEnvironment(runningApplications: []),
+      scope: .all)
+    let elapsed = CFAbsoluteTimeGetCurrent() - started
+    XCTAssertTrue(beforeIndex.isEmpty)
+    XCTAssertLessThan(elapsed, 0.05)
+
+    releaseScan.signal()
+  }
+
+  func testApplicationSourcePrewarmAtomicallyPublishesInstalledSnapshot() {
+    let installed = Candidate(
+      kind: .app,
+      sourceID: "core.apps",
+      source: "core.apps",
+      title: "Indexed App",
+      subtitle: "app",
+      bundleIdentifier: "test.indexed",
+      url: URL(fileURLWithPath: "/Applications/Indexed App.app"))
+    let source = ApplicationSource(
+      installedAppScanner: { [installed] },
+      watchesApplicationDirectories: false,
+      automaticallyPrewarms: false)
+    let indexed = expectation(description: "installed snapshot published")
+
+    XCTAssertTrue(
+      source.candidates(
+        in: FlashSourceEnvironment(runningApplications: []),
+        scope: .all
+      ).isEmpty)
+    source.prewarmInstalledApps {
+      indexed.fulfill()
+    }
+    wait(for: [indexed], timeout: 1)
+
+    let candidates = source.candidates(
+      in: FlashSourceEnvironment(runningApplications: []),
+      scope: .all)
+    XCTAssertEqual(candidates.map(\.title), ["Indexed App"])
+    XCTAssertEqual(candidates.first?.normalizedScoringFields.title, "indexed app")
+    XCTAssertFalse(candidates.first?.sortKey.isEmpty ?? true)
+  }
+
   func testBrowserTabDisplayTitleIncludesSourceTitleAndURL() throws {
     // The browser tab discovery now lives in `Plugins/{safari,firefox,
     // chromium}` — this test still exercises the host's candidate-prep
@@ -664,6 +804,23 @@ final class SourceCandidateTests: XCTestCase {
         viaEntry.map(\.score), naive.map(\.score),
         "score stream diverged from naive scan for query '\(query)'")
     }
+  }
+
+  func testDisplayWindowFollowsSelectionAndClampsAtBothEnds() {
+    // Selection near the top: window starts at 0.
+    XCTAssertEqual(CandidateFinder.displayWindow(count: 100, selectedIndex: 0, windowSize: 10), 0..<10)
+    XCTAssertEqual(CandidateFinder.displayWindow(count: 100, selectedIndex: 4, windowSize: 10), 0..<10)
+    // Mid-list: selection stays centred.
+    XCTAssertEqual(
+      CandidateFinder.displayWindow(count: 100, selectedIndex: 50, windowSize: 10), 45..<55)
+    // Selection near the end: window pins to the tail.
+    XCTAssertEqual(
+      CandidateFinder.displayWindow(count: 100, selectedIndex: 99, windowSize: 10), 90..<100)
+    // Fewer matches than the window: everything shows.
+    XCTAssertEqual(CandidateFinder.displayWindow(count: 3, selectedIndex: 1, windowSize: 10), 0..<3)
+    // Degenerate inputs.
+    XCTAssertEqual(CandidateFinder.displayWindow(count: 0, selectedIndex: 0, windowSize: 10), 0..<0)
+    XCTAssertEqual(CandidateFinder.displayWindow(count: 5, selectedIndex: 0, windowSize: 0), 0..<0)
   }
 
   func testParseBangStateConfirmedOnTrailingSpace() {
@@ -985,7 +1142,7 @@ final class SourceCandidateTests: XCTestCase {
       sources: [
         CandidateSourceDescriptor(name: "terminal.windows", kind: .locations),
         CandidateSourceDescriptor(name: "web.pages", kind: .locations),
-        CandidateSourceDescriptor(name: "slack.channels", kind: .locations),
+        CandidateSourceDescriptor(name: "projects.locations", kind: .locations),
       ],
       overrides: [:],
       aliveBonus: 0)
@@ -995,16 +1152,16 @@ final class SourceCandidateTests: XCTestCase {
     let web = candidate(
       kind: .plugin("page"), source: "web.pages", name: "Inbox",
       subtitle: "page", bundleIdentifier: "")
-    let slack = candidate(
-      kind: .plugin("slack_channel"), source: "slack.channels", name: "#general",
-      subtitle: "slack channel", bundleIdentifier: "")
+    let project = candidate(
+      kind: .plugin("project"), source: "projects.locations", name: "Flash",
+      subtitle: "project location", bundleIdentifier: "")
 
     XCTAssertEqual(table.weight(for: terminal), 50)
     XCTAssertEqual(table.weight(for: web), 50)
-    XCTAssertEqual(table.weight(for: slack), 50)
+    XCTAssertEqual(table.weight(for: project), 50)
     XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(terminal, precedence: table))
     XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(web, precedence: table))
-    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(slack, precedence: table))
+    XCTAssertTrue(CandidateFinder.isDefaultFlashlightCandidate(project, precedence: table))
   }
 
   func testPrecedenceTableUsesSourceDescriptorPriority() {
@@ -1029,26 +1186,26 @@ final class SourceCandidateTests: XCTestCase {
   func testCandidatePriorityOnlyTieBreaksWithinSameMatchTier() {
     let ordinary = CandidateFinder.prepare(
       candidate(
-        kind: .plugin("slack_channel"), source: "slack.channels", name: "#general",
-        subtitle: "Slack channel", bundleIdentifier: "", isLocation: true))
-    let unread = CandidateFinder.prepare(
+        kind: .plugin("project"), source: "projects.locations", name: "General",
+        subtitle: "Project location", bundleIdentifier: "", isLocation: true))
+    let important = CandidateFinder.prepare(
       candidate(
-        kind: .plugin("slack_channel"), source: "slack.channels", name: "#random",
-        subtitle: "Slack channel", bundleIdentifier: "", isLocation: true, priority: .critical))
+        kind: .plugin("project"), source: "projects.locations", name: "Random",
+        subtitle: "Project location", bundleIdentifier: "", isLocation: true, priority: .urgent))
 
     XCTAssertEqual(
       CandidateFinder.sortedMatches([
         CandidateMatch(candidate: ordinary, score: 0),
-        CandidateMatch(candidate: unread, score: 0),
+        CandidateMatch(candidate: important, score: 0),
       ]).first?.candidate.title,
-      "#random")
+      "Random")
 
     XCTAssertEqual(
       CandidateFinder.sortedMatches([
         CandidateMatch(candidate: ordinary, score: 10),
-        CandidateMatch(candidate: unread, score: 5),
+        CandidateMatch(candidate: important, score: 5),
       ]).first?.candidate.title,
-      "#general")
+      "General")
   }
 
   func testDefaultFlashlightVisibilityUsesDescriptorsWithoutTreatingOverridesAsOptIn() {
@@ -1259,8 +1416,8 @@ final class SourceCandidateTests: XCTestCase {
   func testSourceCompletionCandidateHasStableShapeAndRanksByToken() throws {
     let firefox = CandidateFinder.prepare(
       CandidateFinder.sourceCompletionCandidate("firefox.tabs"))
-    let slack = CandidateFinder.prepare(
-      CandidateFinder.sourceCompletionCandidate("slack.channels"))
+    let notes = CandidateFinder.prepare(
+      CandidateFinder.sourceCompletionCandidate("notes.notes"))
 
     XCTAssertEqual(firefox.kind, CandidateFinder.sourceKind)
     XCTAssertEqual(firefox.source, "source")
@@ -1272,7 +1429,7 @@ final class SourceCandidateTests: XCTestCase {
     let query = NormalModeDispatcher.normalizedSearchText("fire")
     let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
     let matches = CandidateFinder.scoreMatches(
-      pool: [slack, firefox],
+      pool: [notes, firefox],
       normalizedQuery: query,
       fuzzyScore: fuzzy,
       allowParallel: false)
@@ -1336,6 +1493,13 @@ final class SourceCandidateTests: XCTestCase {
       subtitle: "browser tab",
       bundleIdentifier: "org.mozilla.firefox",
       isLocation: true)
+    let answer = Candidate(
+      title: "2",
+      metadata: [
+        CandidateMetadataKey.source: "calculator",
+        CandidateMetadataKey.sourceID: "plugin:calculator",
+      ],
+      effect: .copyText("2"))
 
     XCTAssertTrue(CandidateFinder.isFinalDestination(app))
     XCTAssertTrue(CandidateFinder.selectionFinishes(app, query: "mes"))
@@ -1344,6 +1508,8 @@ final class SourceCandidateTests: XCTestCase {
     XCTAssertTrue(CandidateFinder.selectionFinishes(browserTab, query: "gmail"))
     XCTAssertTrue(CandidateFinder.isFinalDestination(tmux))
     XCTAssertTrue(CandidateFinder.selectionFinishes(tmux, query: "scr"))
+    XCTAssertTrue(CandidateFinder.isFinalDestination(answer))
+    XCTAssertEqual(CandidateFinder.prepare(answer).displayTitle, "2")
     var source = CandidateFinder.sourceCompletionCandidate("tmux.windows")
     source.metadata[CandidateMetadataKey.finishesCommand] = "1"
     XCTAssertFalse(CandidateFinder.isFinalDestination(source))
@@ -1392,6 +1558,7 @@ final class SourceCandidateTests: XCTestCase {
       subtitle: "browser tab",
       bundleIdentifier: "org.mozilla.firefox",
       isLocation: true)
+    let answer = Candidate(title: "2", effect: .copyText("2"))
     var source = CandidateFinder.sourceCompletionCandidate("tmux.windows")
     source.metadata[CandidateMetadataKey.finishesCommand] = "1"
 
@@ -1413,6 +1580,13 @@ final class SourceCandidateTests: XCTestCase {
       CandidateFinder.selectionSubmits(
         browserTab,
         query: "system",
+        submit: false,
+        allowFinisher: false,
+        submitFinalDestinations: true))
+    XCTAssertTrue(
+      CandidateFinder.selectionSubmits(
+        answer,
+        query: "1+1",
         submit: false,
         allowFinisher: false,
         submitFinalDestinations: true))
@@ -1667,6 +1841,12 @@ final class SourceCandidateTests: XCTestCase {
     let dangling = NormalModeDispatcher.candidateFinderSourceFilter("@")
     XCTAssertNil(dangling.sourceFilter)
     XCTAssertEqual(dangling.text, "@")
+  }
+
+  func testSourceLabelFilterUsesCandidateDottedPrefixSemantics() {
+    XCTAssertTrue(CandidateFinder.sourceLabel("emojis.glyphs", matchesFilter: "emojis"))
+    XCTAssertTrue(CandidateFinder.sourceLabel("emojis.glyphs", matchesFilter: "EMOJIS.GLYPHS"))
+    XCTAssertFalse(CandidateFinder.sourceLabel("notes.notes", matchesFilter: "emojis"))
   }
 
   func testCandidateMatchesSourceFilterAcceptsExactAndPrefix() {

@@ -39,14 +39,29 @@ extension OverlayPanel {
     {
       return
     }
-    // Modal mode owns its own scroll view: a wheel tick over the help /
-    // `:plugins` / `:clipboard` panel scrolls the content directly via
-    // the embedded `NSScrollView`. Cancelling on every wheel event made
-    // those modals impossible to scroll with the trackpad — the first
-    // tick dismissed the modal before the user could read past the
-    // viewport. Clicks still dismiss (handled by the dedicated modal
-    // dismiss monitors with their own hit-test against the panel).
-    if inputMode == .modal, event.type == .scrollWheel {
+    // A click on Flash's own status-bar window (a `#[link=…]` run, or the
+    // click-through band) is Flash UI, not an app interaction — the local
+    // monitor sees it because the panel is in this process. Never treat it as a
+    // "clicked the app" intent (which would flip NORMAL → INSERT). This matters
+    // under an auto-hidden menu bar, where `pointIsInMenuBar` sees a zero-height
+    // reserved band and would otherwise route the click to the app decision.
+    if event.window is StatusBarClickPanel {
+      return
+    }
+    // A scroll wheel event only has a job when transient hint content is
+    // showing — then a scroll means "let me read the page", so the hints get
+    // out of the way (`pointerDecision` returns `.cancelOverlay`). In every
+    // other state (idle NORMAL, command line, candidate finder) the decision is
+    // a guaranteed no-op `.passThrough`, so drop the event here rather than
+    // paying a `DispatchQueue.main.async` hop + policy call + `FlashLog.trace`
+    // per tick. A single inertial-scroll gesture emits ~125 events/sec; without
+    // this gate that flooded the main run loop with no-op dispatches (and, at
+    // trace level, that many log writes), starving the keyboard-capture tap that
+    // shares the run loop — felt as laggy mode switches and even sluggish ⌘Tab,
+    // worst in scroll-heavy apps like Notes. Once the first scroll dismisses the
+    // hints, `transientContentVisible` flips false and the rest of the gesture is
+    // dropped here too.
+    if event.type == .scrollWheel, !transientContentVisible {
       return
     }
     let intent: OverlayPointerIntent =
@@ -118,13 +133,5 @@ extension OverlayPanel {
     }
     pointerGlobalMonitor = nil
     pointerLocalMonitor = nil
-  }
-
-  func removeModalDismissMonitors() {
-    for m in [modalClickGlobalMonitor, modalClickLocalMonitor] {
-      if let m { NSEvent.removeMonitor(m) }
-    }
-    modalClickGlobalMonitor = nil
-    modalClickLocalMonitor = nil
   }
 }

@@ -20,11 +20,9 @@
     "org.mozilla.firefoxdeveloperedition"
   ],
   "listen": [
-    "core:flash.started",
     "core:apps.changed",
     "core:focus.changed",
-    "core:window.focus.changed",
-    "core:flashlight.opened"
+    "core:window.focus.changed"
   ],
   "sources": [
     {

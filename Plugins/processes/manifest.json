@@ -28,7 +28,6 @@
     ]
   },
   "listen": [
-    "core:flash.started",
     "core:apps.launched",
     "core:apps.terminated"
   ],

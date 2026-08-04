@@ -3,8 +3,9 @@ import Foundation
 
 /// Host-side convention names for routing fields stashed in `Candidate.metadata`.
 /// FlashCore makes no claim on these — they're just the strings the bundled
-/// sources and host code agree on. Plugins are free to ignore them, share them,
-/// or invent their own.
+/// sources and host code agree on. Plugins may add their own metadata, but the
+/// host stamps `source_id` from the owning process and never trusts a wire value
+/// for cross-plugin routing.
 enum CandidateMetadataKey {
   static let source = "source"
   static let sourceID = "source_id"
@@ -77,6 +78,7 @@ extension Candidate {
     isLocation: Bool = false,
     isCurrentLocation: Bool = false,
     priority: FlashPriority = .normal,
+    effect: CandidateEffect? = nil,
     extra: [String: String] = [:]
   ) {
     var metadata = extra
@@ -95,7 +97,7 @@ extension Candidate {
     if finishesCommand { metadata[CandidateMetadataKey.finishesCommand] = "1" }
     if isCurrentLocation { metadata[CandidateMetadataKey.currentLocation] = "1" }
     if priority != .normal { metadata[CandidateMetadataKey.priority] = priority.rawValue }
-    self.init(title: title, url: url, metadata: metadata)
+    self.init(title: title, url: url, metadata: metadata, effect: effect)
   }
 
   static func kindString(_ kind: CandidateKind) -> String {

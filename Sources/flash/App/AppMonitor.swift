@@ -35,9 +35,10 @@ final class AppMonitor {
   let registry: SourceRegistry
 
   let axQueue = DispatchQueue(label: "flash.ax", qos: .userInitiated)
+  let mainThreadWatchdog = MainThreadWatchdog()
   var focusedElementDidChange: ((pid_t, String) -> Void)?
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
-  var focusedWindowGeometryDidChange: ((pid_t, String) -> Void)?
+  var activeWindowMayHaveChanged: ((pid_t, String) -> Void)?
 
   // MARK: Config (shared between main + axQueue)
   //
@@ -84,6 +85,29 @@ final class AppMonitor {
   static let modelMaintenanceLeadMs: Int = 250
   static let backgroundModelMinIntervalMs: Int = 2500
 
+  /// AX event storm visibility. `onAXEvent` is otherwise silent, so a
+  /// notification flood from a churning app (Notes re-rendering its note
+  /// list mid-iCloud-sync) was invisible in the log while it cost both the
+  /// app's main thread (generation) and Flash's (delivery). Events are
+  /// counted per pid and flushed as at most one line per window, only for
+  /// pids whose rate is storm-like. Typing sits around 10–20 events/s and
+  /// stays quiet; sustained scrolling can brush the threshold, which is
+  /// itself worth seeing.
+  static let axEventStormWindowMs: Int = 1000
+  static let axEventStormThresholdPerSecond: Int = 120
+
+  /// Some native apps expose enough AX structure that background warming is
+  /// more disruptive than a cold on-demand hint walk. Keep activation explicit
+  /// for those apps: focus changes still invalidate stale models, but Flash
+  /// does not poke their AX tree just because they became frontmost.
+  static let automaticPreparedModelExcludedBundleIdentifiers: Set<String> = [
+    "com.apple.Notes"
+  ]
+
+  static func shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: String) -> Bool {
+    !automaticPreparedModelExcludedBundleIdentifiers.contains(bundleIdentifier)
+  }
+
   init(registry: SourceRegistry, config: Config) {
     self.registry = registry
     self.config = config
@@ -98,6 +122,8 @@ final class AppMonitor {
   var preparedModels = PreparedModelStore()
   var dirtyTokens: [pid_t: UInt64] = [:]
   var observers: [pid_t: ObserverEntry] = [:]
+  var axEventStormWindowStart = DispatchTime.now()
+  var axEventStormCounts: [pid_t: [String: Int]] = [:]
   /// Coalesced model refresh scheduling. The previous implementation
   /// allocated a fresh `DispatchWorkItem` for every observed AX event
   /// and cancelled the previous one. Under scroll storms
@@ -124,10 +150,29 @@ final class AppMonitor {
   /// state instead of one per app switch.
   var warnedMissingAXPermission = false
 
-  struct ObserverEntry {
+  final class ObserverEntry {
     let observer: AXObserver
     let appElement: AXUIElement
     let context: ObserverContext
+    /// Exactly the notifications registered at install time, so teardown
+    /// removes the same set (full vs light differs per bundle).
+    let notifications: [String]
+    /// Accessed only on `axQueue`. Move/resize/minimize/destruction
+    /// notifications are emitted by the window element, not the application
+    /// element, so the focused window needs its own registrations.
+    var focusedWindow: AXUIElement?
+
+    init(
+      observer: AXObserver,
+      appElement: AXUIElement,
+      context: ObserverContext,
+      notifications: [String]
+    ) {
+      self.observer = observer
+      self.appElement = appElement
+      self.context = context
+      self.notifications = notifications
+    }
   }
 
   /// The `refcon` blob passed to the C AXObserver callback. Held alive
@@ -135,13 +180,29 @@ final class AppMonitor {
   final class ObserverContext {
     weak var monitor: AppMonitor?
     let pid: pid_t
+    private let focusedWindowLock = NSLock()
+    private var focusedWindow: AXUIElement?
+
     init(monitor: AppMonitor, pid: pid_t) {
       self.monitor = monitor
       self.pid = pid
     }
+
+    func setFocusedWindow(_ window: AXUIElement?) {
+      focusedWindowLock.lock()
+      focusedWindow = window
+      focusedWindowLock.unlock()
+    }
+
+    func isFocusedWindow(_ element: AXUIElement) -> Bool {
+      focusedWindowLock.lock()
+      defer { focusedWindowLock.unlock() }
+      guard let focusedWindow else { return false }
+      return CFEqual(focusedWindow, element)
+    }
   }
 
-  static let observerCallback: AXObserverCallback = { _, _, notification, refcon in
+  static let observerCallback: AXObserverCallback = { _, element, notification, refcon in
     guard let refcon else { return }
     let ctx = Unmanaged<ObserverContext>.fromOpaque(refcon).takeUnretainedValue()
     guard let monitor = ctx.monitor else { return }
@@ -152,7 +213,10 @@ final class AppMonitor {
     // on main here. Hop anyway to make the invariant explicit and
     // bullet-proof against future relocation of the source.
     MainThreadHopper.runOrAsync {
-      monitor.onAXEvent(pid: pid, notification: notificationName)
+      monitor.onAXEvent(
+        pid: pid,
+        notification: notificationName,
+        observedElementIsFocusedWindow: ctx.isFocusedWindow(element))
     }
   }
 
@@ -171,6 +235,11 @@ final class AppMonitor {
     kAXValueChangedNotification,
     kAXWindowResizedNotification,
     kAXWindowMovedNotification,
+    kAXWindowCreatedNotification,
+    kAXWindowMiniaturizedNotification,
+    kAXWindowDeminiaturizedNotification,
+    kAXApplicationHiddenNotification,
+    kAXApplicationShownNotification,
     kAXTitleChangedNotification,
     kAXCreatedNotification,
     kAXUIElementDestroyedNotification,
@@ -178,16 +247,74 @@ final class AppMonitor {
     kAXRowCollapsedNotification,
   ]
 
+  /// Reduced set for bundles excluded from automatic model warming
+  /// (`automaticPreparedModelExcludedBundleIdentifiers`). For those apps a
+  /// prepared model is only built on explicit activation and served within
+  /// `modelFreshnessMs`, so churn-level invalidation (value / created /
+  /// destroyed / layout / rows) buys almost nothing — while forcing the app
+  /// to generate a notification on its main thread for every mutation.
+  /// Notes re-rendering its note list during an iCloud sync burst is
+  /// exactly the moment that cost hurts. Keep only what drives mode,
+  /// border, and focus behaviour.
+  static let lightObservedNotifications: [String] = [
+    kAXFocusedUIElementChangedNotification,
+    kAXFocusedWindowChangedNotification,
+    kAXMainWindowChangedNotification,
+    kAXWindowMovedNotification,
+    kAXWindowResizedNotification,
+    kAXWindowCreatedNotification,
+    kAXWindowMiniaturizedNotification,
+    kAXWindowDeminiaturizedNotification,
+    kAXApplicationHiddenNotification,
+    kAXApplicationShownNotification,
+    kAXUIElementDestroyedNotification,
+  ]
+
+  static let focusedWindowObservedNotifications: [String] = [
+    kAXWindowMovedNotification,
+    kAXWindowResizedNotification,
+    kAXWindowMiniaturizedNotification,
+    kAXWindowDeminiaturizedNotification,
+    kAXUIElementDestroyedNotification,
+  ]
+
+  static func observedNotifications(forBundleIdentifier bundleIdentifier: String?) -> [String] {
+    guard let bundleIdentifier,
+      automaticPreparedModelExcludedBundleIdentifiers.contains(bundleIdentifier)
+    else { return observedNotifications }
+    return lightObservedNotifications
+  }
+
   static func notificationShouldSchedulePreparedModelRefresh(_ notification: String) -> Bool {
     notification != kAXValueChangedNotification as String
       && notification != kAXTitleChangedNotification as String
   }
 
-  static func windowGeometryNotificationRequiresBorderSuspension(_ notification: String) -> Bool {
-    notification == kAXWindowMovedNotification
+  static func notificationMayChangeActiveWindowBorder(
+    _ notification: String,
+    observedElementIsFocusedWindow: Bool
+  ) -> Bool {
+    if notification == kAXUIElementDestroyedNotification as String {
+      return observedElementIsFocusedWindow
+    }
+    return notification == kAXWindowMovedNotification
       || notification == kAXWindowResizedNotification
       || notification == kAXFocusedWindowChangedNotification
       || notification == kAXMainWindowChangedNotification
+      || notification == kAXWindowCreatedNotification
+      || notification == kAXWindowMiniaturizedNotification
+      || notification == kAXWindowDeminiaturizedNotification
+      || notification == kAXApplicationHiddenNotification
+      || notification == kAXApplicationShownNotification
+  }
+
+  static func notificationMayChangeObservedWindow(_ notification: String) -> Bool {
+    notification == kAXFocusedWindowChangedNotification
+      || notification == kAXMainWindowChangedNotification
+      || notification == kAXWindowCreatedNotification
+      || notification == kAXWindowMiniaturizedNotification
+      || notification == kAXWindowDeminiaturizedNotification
+      || notification == kAXUIElementDestroyedNotification
   }
 
   static func notificationMayChangeFocusedElement(_ notification: String) -> Bool {
@@ -201,6 +328,9 @@ final class AppMonitor {
 
   func start() {
     installWorkspaceObservers()
+    // The tap source, AX observer sources, and all mode logic share the
+    // main run loop; when it stalls, input stalls system-wide. Record it.
+    mainThreadWatchdog.start()
     wakeChromiumAccessibilityForAllRunningApps()
     if let app = NSWorkspace.shared.frontmostApplication {
       onFocusedAppChanged(to: app)

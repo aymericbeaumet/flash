@@ -1,5 +1,14 @@
 import Foundation
 
+/// Which native mapping set Carbon should own. All-scope mappings stay active
+/// everywhere; command-line and candidate-finder surfaces exclude the normal-
+/// and insert-only scopes while their field editor owns the keyboard.
+enum MappingScope: Equatable {
+  case normal
+  case insert
+  case command
+}
+
 // What the reducer asks the AppKit edge (`ModeExecutor`) to do after a
 // transition. The reducer DESCRIBES; the executor PERFORMS. Keeping effects as
 // data is what lets the reducer stay pure and fully unit-testable.
@@ -8,9 +17,9 @@ import Foundation
 // AppDelegate routine — so the executor is a dumb `switch` with no decisions of
 // its own.
 enum ModeEffect: Equatable {
-  /// Re-register the scope-bound Carbon hotkeys for this insert/normal axis.
-  /// (`mappings.applyForFlashMode`; the executor dedupes no-op re-applies.)
-  case setMappingScope(FlashMode)
+  /// Re-register the scope-bound Carbon hotkeys for the active surface.
+  /// (`mappings.apply(scope:)`; the executor dedupes no-op re-applies.)
+  case setMappingScope(MappingScope)
 
   /// Recompute and push everything derived from `Mode`: `overlay.inputMode`,
   /// the badge (text/style/visibility/capture), the status-bar label, and the

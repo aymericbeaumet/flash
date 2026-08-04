@@ -66,11 +66,12 @@ extension ConfigLoader {
   }
 
   /// The single source of truth for what `--<key>=<value>` means.
-  /// Values arrive as raw strings (no TOML quoting); int/double/bool
-  /// fields parse the value with the standard initialisers and silently
-  /// drop malformed input — matching the TOML loader's behaviour.
-  /// Returns true if `key` is a recognized override (even when its value is
-  /// malformed and dropped); false for an unknown key, so `applyCLI` can warn.
+  /// Values arrive as raw strings (no TOML quoting); int/double/bool/color
+  /// fields parse + range-check the value and, on failure, add a located
+  /// diagnostic (matching the TOML loader's reject-loudly stance) rather than
+  /// dropping it silently. Returns true if `key` is a recognized override
+  /// (even when its value was malformed and diagnosed); false for an unknown
+  /// key, so `applyCLI` can warn.
   @discardableResult
   private static func applyOverride(key: String, value: String, into config: inout Config) -> Bool {
     switch key {
@@ -78,9 +79,11 @@ extension ConfigLoader {
       config.hints.keys = value
       config.clearLocation(path: "hints.keys")
     case "hints-min-length":
-      if let i = Int(value) {
+      if let i = Int(value), (1...8).contains(i) {
         config.hints.minLength = i
         config.clearLocation(path: "hints.min_length")
+      } else {
+        config.addDiagnostic("hints.min_length override must be an integer between 1 and 8")
       }
     case "hints-magic-modifiers":
       if let values = parseOverrideStringArray(value) {
@@ -100,56 +103,73 @@ extension ConfigLoader {
       }
 
     case "overlay-font-size":
-      if let d = Double(value) {
+      if let d = Double(value), d >= 1, d <= 200 {
         config.overlay.fontSize = d
         config.clearLocation(path: "overlay.font_size")
+      } else {
+        config.addDiagnostic("overlay.font_size override must be a number between 1 and 200")
       }
     case "overlay-hint-fg":
-      config.overlay.hintFG = value
-      config.clearLocation(path: "overlay.hint_fg")
+      applyColorOverride(value, path: "overlay.hint_fg", into: &config) { $0.overlay.hintFG = $1 }
     case "overlay-hint-bg-top":
-      config.overlay.hintBGTop = value
-      config.clearLocation(path: "overlay.hint_bg_top")
+      applyColorOverride(value, path: "overlay.hint_bg_top", into: &config) {
+        $0.overlay.hintBGTop = $1
+      }
     case "overlay-hint-bg-bottom":
-      config.overlay.hintBGBottom = value
-      config.clearLocation(path: "overlay.hint_bg_bottom")
+      applyColorOverride(value, path: "overlay.hint_bg_bottom", into: &config) {
+        $0.overlay.hintBGBottom = $1
+      }
     case "overlay-hint-border":
-      config.overlay.hintBorder = value
-      config.clearLocation(path: "overlay.hint_border")
+      applyColorOverride(value, path: "overlay.hint_border", into: &config) {
+        $0.overlay.hintBorder = $1
+      }
     case "overlay-important-hint-fg":
-      config.overlay.importantHintFG = value
-      config.clearLocation(path: "overlay.important_hint_fg")
+      applyColorOverride(value, path: "overlay.important_hint_fg", into: &config) {
+        $0.overlay.importantHintFG = $1
+      }
     case "overlay-important-hint-bg-top":
-      config.overlay.importantHintBGTop = value
-      config.clearLocation(path: "overlay.important_hint_bg_top")
+      applyColorOverride(value, path: "overlay.important_hint_bg_top", into: &config) {
+        $0.overlay.importantHintBGTop = $1
+      }
     case "overlay-important-hint-bg-bottom":
-      config.overlay.importantHintBGBottom = value
-      config.clearLocation(path: "overlay.important_hint_bg_bottom")
+      applyColorOverride(value, path: "overlay.important_hint_bg_bottom", into: &config) {
+        $0.overlay.importantHintBGBottom = $1
+      }
     case "overlay-important-hint-border":
-      config.overlay.importantHintBorder = value
-      config.clearLocation(path: "overlay.important_hint_border")
+      applyColorOverride(value, path: "overlay.important_hint_border", into: &config) {
+        $0.overlay.importantHintBorder = $1
+      }
 
     case "flashlight-suggestion-count":
       if let i = Int(value), i > 0 {
         config.flashlight.suggestionCount = i
         config.clearLocation(path: "flashlight.suggestion_count")
+      } else {
+        config.addDiagnostic("flashlight.suggestion_count override must be a positive integer")
       }
 
     case "debug-show-bounds":
       if let b = boolFromString(value) {
         config.debug.showHintsBounds = b
         config.clearLocation(path: "debug.show_hints_bounds")
+      } else {
+        config.addDiagnostic("debug.show_hints_bounds override must be true or false")
       }
     case "debug-bounds-bg":
-      config.debug.hintsBoundsBG = value
-      config.clearLocation(path: "debug.hints_bounds_bg")
+      applyColorOverride(value, path: "debug.hints_bounds_bg", into: &config) {
+        $0.debug.hintsBoundsBG = $1
+      }
     case "debug-bounds-fg":
-      config.debug.hintsBoundsFG = value
-      config.clearLocation(path: "debug.hints_bounds_fg")
+      applyColorOverride(value, path: "debug.hints_bounds_fg", into: &config) {
+        $0.debug.hintsBoundsFG = $1
+      }
     case "debug-log-level":
       if let lvl = FlashLog.Level.parse(value) {
         config.debug.logLevel = lvl
         config.clearLocation(path: "debug.log_level")
+      } else {
+        config.addDiagnostic(
+          "debug.log_level override must be trace/debug/info/warn/error/fatal")
       }
     // `--config=` is consumed by `resolvePath`; recognize it here so it
     // doesn't show up as an unknown flag.
@@ -160,6 +180,21 @@ extension ConfigLoader {
       return false
     }
     return true
+  }
+
+  /// Validate + assign a hex-color override, mirroring the TOML loader's
+  /// `isValidHexColor` gate so a malformed `--overlay-hint-fg=garbage` is
+  /// rejected loudly instead of assigned raw and silently failing at draw.
+  private static func applyColorOverride(
+    _ value: String, path: String, into config: inout Config,
+    assign: (inout Config, String) -> Void
+  ) {
+    guard isValidHexColor(value) else {
+      config.addDiagnostic("\(path) override must be a hex color (#RRGGBB / #RRGGBBAA)")
+      return
+    }
+    assign(&config, value)
+    config.clearLocation(path: path)
   }
 
   private static func boolFromString(_ v: String) -> Bool? {

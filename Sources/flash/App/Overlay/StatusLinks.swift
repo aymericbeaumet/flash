@@ -1,16 +1,67 @@
 import AppKit
+import CoreGraphics
 import FlashCore
 
-/// Transparent overlay that turns a `#[link=…]` run in the status bar into a
-/// clickable target. The status-bar panel is click-through
-/// (`ignoresMouseEvents = true`) so it never steals clicks from the menu bar
-/// underneath; these catchers re-add interactivity only over the exact link
-/// rects.
-final class StatusLinkCatcherView: NSView {
-  var onClick: (() -> Void)?
+/// The status bar's click surface: one window per screen spanning the menu-bar
+/// band, routed by normal Cocoa hit-testing — no CGEvent tap. Two jobs:
+///
+///   1. Swallow every click that lands in the band so a click on the bar never
+///      falls through to the wallpaper ("click to show desktop") or the app
+///      beneath it. This is why the whole band is covered, not just the links.
+///   2. Open a `#[link=…]` run when the click lands on one (a real click, not a
+///      drag).
+///
+/// It sits at `OverlayPanel.statusBarClickWindowLevel` (the system menu-bar
+/// level) because macOS only delivers menu-bar-band clicks to windows at that
+/// level. To avoid stealing the native menu bar's own clicks, the window flips
+/// to click-through (`ignoresMouseEvents = true`) whenever the auto-hidden menu
+/// bar is revealed (`OverlayPanel.menuBarRevealTimer`), so native wins then;
+/// when the menu bar is folded away, the band is Flash's and the window
+/// swallows the click.
+final class StatusBarClickView: NSView {
+  /// Link sub-rects in this view's coordinate space, with their targets.
+  var links: [(rect: CGRect, url: URL)] = [] {
+    didSet { window?.invalidateCursorRects(for: self) }
+  }
+
+  /// Window-space location of the in-flight `mouseDown`, used to tell a click
+  /// from a drag: a link opens only if the pointer comes back up within
+  /// `dragSlop` of where it went down. A drag (window-drag, selection sweep,
+  /// a slip toward a menu) opens nothing — but is still swallowed.
+  private var mouseDownLocation: NSPoint?
+
+  /// Movement past this (points) counts as a drag, not a click.
+  static let dragSlop: CGFloat = 4
+
+  /// Pure click-vs-drag test, exposed for unit testing.
+  static func isClick(from down: NSPoint, to up: NSPoint) -> Bool {
+    let dx = up.x - down.x
+    let dy = up.y - down.y
+    return (dx * dx + dy * dy) <= dragSlop * dragSlop
+  }
 
   override func mouseDown(with event: NSEvent) {
-    onClick?()
+    mouseDownLocation = event.locationInWindow
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    defer { mouseDownLocation = nil }
+    guard let start = mouseDownLocation,
+      Self.isClick(from: start, to: event.locationInWindow)
+    else { return }
+    let local = convert(event.locationInWindow, from: nil)
+    if let url = links.first(where: { $0.rect.contains(local) })?.url {
+      // `activates = true` brings the handling browser to the front and gives
+      // it keyboard focus. The plain `open(url)` opens the tab in the
+      // background (the click panel is non-activating, so the previously
+      // focused app keeps focus) — typing then lands in the old app.
+      let configuration = NSWorkspace.OpenConfiguration()
+      configuration.activates = true
+      NSWorkspace.shared.open(url, configuration: configuration, completionHandler: nil)
+    }
+    // Non-link clicks are intentionally not forwarded (no super call): the band
+    // is Flash's while the menu bar is folded, so the click stops here instead
+    // of leaking to the wallpaper or the window underneath.
   }
 
   override func updateTrackingAreas() {
@@ -19,21 +70,27 @@ final class StatusLinkCatcherView: NSView {
     addTrackingArea(
       NSTrackingArea(
         rect: bounds,
-        options: [.activeAlways, .cursorUpdate, .mouseEnteredAndExited],
+        options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited],
         owner: self,
         userInfo: nil))
   }
 
-  override func cursorUpdate(with event: NSEvent) { cursor.set() }
-  override func mouseEntered(with event: NSEvent) { cursor.set() }
+  override func mouseMoved(with event: NSEvent) { updateCursor(at: event) }
+  override func mouseEntered(with event: NSEvent) { updateCursor(at: event) }
   override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
 
-  /// Pointing hand for real links; the default arrow for the swallow-only
-  /// shield (which has no `onClick`).
-  private var cursor: NSCursor { onClick == nil ? .arrow : .pointingHand }
+  /// Pointing hand over a link run, the default arrow over the rest of the bar.
+  private func updateCursor(at event: NSEvent) {
+    let local = convert(event.locationInWindow, from: nil)
+    if links.contains(where: { $0.rect.contains(local) }) {
+      NSCursor.pointingHand.set()
+    } else {
+      NSCursor.arrow.set()
+    }
+  }
 }
 
-final class StatusLinkCatcherPanel: NSPanel {
+final class StatusBarClickPanel: NSPanel {
   override var canBecomeKey: Bool { false }
   override var canBecomeMain: Bool { false }
 
@@ -46,15 +103,14 @@ final class StatusLinkCatcherPanel: NSPanel {
     isOpaque = false
     backgroundColor = .clear
     hasShadow = false
-    // One step above the bar so the click lands here, not on the bar (or
-    // the native menu bar) beneath it.
-    level = NSWindow.Level(rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue + 1)
+    level = OverlayPanel.statusBarClickWindowLevel
     ignoresMouseEvents = false
+    acceptsMouseMovedEvents = true
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-    contentView = StatusLinkCatcherView(frame: .zero)
+    contentView = StatusBarClickView(frame: .zero)
   }
 
-  var clickView: StatusLinkCatcherView { contentView as! StatusLinkCatcherView }
+  var clickView: StatusBarClickView { contentView as! StatusBarClickView }
 }
 
 extension OverlayPanel {
@@ -98,44 +154,8 @@ extension OverlayPanel {
     return result
   }
 
-  /// Pool, position, and show one catcher window per link rect. Skips all
-  /// work when the rect/target set is unchanged so a re-render that doesn't
-  /// move a link doesn't churn the windows.
-  func syncStatusLinkCatchers(_ links: [(rect: CGRect, url: URL)]) {
-    let signature =
-      links
-      .map { "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.url.absoluteString)" }
-      .joined(separator: ";")
-    if signature == lastStatusLinkSignature { return }
-    lastStatusLinkSignature = signature
-
-    while statusLinkCatchers.count > links.count {
-      statusLinkCatchers.removeLast().orderOut(nil)
-    }
-    while statusLinkCatchers.count < links.count {
-      statusLinkCatchers.append(StatusLinkCatcherPanel())
-    }
-    for (catcher, link) in zip(statusLinkCatchers, links) {
-      // Sit at the bar's own level (`.mainMenu`, 24): one step above the
-      // shields (23) so a click on a link opens it rather than being swallowed
-      // by the bar-wide shield beneath, but BELOW the native system menu-bar
-      // extras (`.statusBar`, 25). A right-aligned `#[link=…]` run renders at
-      // the far right of the bar — the same band the native clock / Control
-      // Center occupy — so a catcher at `.statusBar` ties with those extras
-      // and, via `orderFrontRegardless`, steals their clicks. At `.mainMenu`
-      // the native extras win; the link stays clickable wherever no native
-      // item sits above it (the bar's own content area).
-      catcher.level = OverlayPanel.persistentStatusWindowLevel
-      catcher.setFrame(link.rect, display: false)
-      catcher.clickView.frame = NSRect(origin: .zero, size: link.rect.size)
-      let url = link.url
-      catcher.clickView.onClick = { NSWorkspace.shared.open(url) }
-      catcher.orderFrontRegardless()
-    }
-  }
-
-  /// Status-bar rects (one per screen), in screen coordinates, matching the
-  /// bar layout `configureModeBadge` / `configureSecondaryStatusBars` use.
+  /// Per-screen status-bar band rects in screen coordinates, matching the bar
+  /// layout `configureModeBadge` / `configureSecondaryStatusBars` render into.
   func statusBarScreenRects(panelFrame: CGRect, fontSize: CGFloat) -> [CGRect] {
     OverlayPanel.currentScreenSnapshot().screens.map { screen in
       let barFrame = OverlayPanel.statusBarFrame(
@@ -151,56 +171,123 @@ extension OverlayPanel {
     }
   }
 
-  /// Place one transparent shield per status-bar rect to swallow stray
-  /// clicks. Skips work when the rects are unchanged.
-  func syncStatusBarShields(_ rects: [CGRect]) {
+  /// Pool, position, and show one full-band click window per screen, each
+  /// carrying the link runs that fall inside its band (in window-local
+  /// coordinates). Skips all work when nothing moved.
+  func syncStatusBarClickWindows(
+    bandRects: [CGRect],
+    links: [(rect: CGRect, url: URL)]
+  ) {
     let signature =
-      rects
-      .map { "\($0.origin.x),\($0.origin.y),\($0.width),\($0.height)" }
+      (bandRects.map { "\($0.origin.x),\($0.origin.y),\($0.width),\($0.height)" }
+      + links.map {
+        "\($0.rect.origin.x),\($0.rect.origin.y),\($0.rect.width)|\($0.url.absoluteString)"
+      })
       .joined(separator: ";")
-    if signature == lastStatusShieldSignature { return }
-    lastStatusShieldSignature = signature
+    if signature == lastStatusBarClickSignature { return }
+    lastStatusBarClickSignature = signature
 
-    while statusBarClickShields.count > rects.count {
-      statusBarClickShields.removeLast().orderOut(nil)
+    while statusBarClickWindows.count > bandRects.count {
+      statusBarClickWindows.removeLast().orderOut(nil)
     }
-    while statusBarClickShields.count < rects.count {
-      statusBarClickShields.append(StatusLinkCatcherPanel())
+    while statusBarClickWindows.count < bandRects.count {
+      statusBarClickWindows.append(StatusBarClickPanel())
     }
-    for (shield, rect) in zip(statusBarClickShields, rects) {
-      // Sit one level BELOW the bar (`.mainMenu`, 24) so the native menu bar
-      // outranks the shield everywhere: the right-side system extras live at
-      // `.statusBar` (25) and the left-side app menus / menu-bar background
-      // live at `.mainMenu` (24) — the same level as the bar. A shield at the
-      // bar's own level ties with those app menus and, because it is
-      // `orderFrontRegardless`, wins the tie and swallows clicks meant for the
-      // native menu bar (File/Edit/… never open). One step down lets the menu
-      // bar win, while the shield still sits far above the wallpaper/desktop
-      // (level 0 and below), so it keeps catching the clicks that would
-      // otherwise fall through Flash's content and reveal the desktop
-      // (onClick == nil → swallowed).
-      shield.level = NSWindow.Level(
-        rawValue: OverlayPanel.persistentStatusWindowLevel.rawValue - 1)
-      shield.setFrame(rect, display: false)
-      shield.clickView.frame = NSRect(origin: .zero, size: rect.size)
-      shield.clickView.onClick = nil
-      shield.orderFrontRegardless()
+    for (window, band) in zip(statusBarClickWindows, bandRects) {
+      window.level = OverlayPanel.statusBarClickWindowLevel
+      window.setFrame(band, display: false)
+      let view = window.clickView
+      view.frame = NSRect(origin: .zero, size: band.size)
+      view.links = links.compactMap { link in
+        guard band.intersects(link.rect) else { return nil }
+        let local = CGRect(
+          x: link.rect.minX - band.minX,
+          y: link.rect.minY - band.minY,
+          width: link.rect.width,
+          height: link.rect.height)
+        return (rect: local, url: link.url)
+      }
+      window.orderFrontRegardless()
+    }
+    startMenuBarRevealTracking()
+  }
+
+  /// Tear down every click window (bar hidden).
+  func hideStatusBarClickWindows() {
+    stopMenuBarRevealTracking()
+    guard !statusBarClickWindows.isEmpty || lastStatusBarClickSignature != nil else { return }
+    for window in statusBarClickWindows { window.orderOut(nil) }
+    statusBarClickWindows.removeAll()
+    lastStatusBarClickSignature = nil
+  }
+
+  // MARK: Reveal-aware yielding
+
+  /// The click windows outrank the native menu bar (so the band delivers clicks
+  /// to them at all), so they must step aside while the auto-hidden menu bar is
+  /// actually revealed. Poll on a short cadence and flip `ignoresMouseEvents`:
+  /// revealed → click-through (native wins); folded → catch.
+  func startMenuBarRevealTracking() {
+    guard menuBarRevealTimer == nil else { return }
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(
+      deadline: .now(), repeating: .milliseconds(80), leeway: .milliseconds(30))
+    timer.setEventHandler { [weak self] in self?.updateClickWindowsForMenuBarReveal() }
+    menuBarRevealTimer = timer
+    timer.resume()
+  }
+
+  func stopMenuBarRevealTracking() {
+    menuBarRevealTimer?.cancel()
+    menuBarRevealTimer = nil
+    // Leave the windows catching (the default) so a stale click-through state
+    // can't survive a hide/show.
+    for window in statusBarClickWindows where window.ignoresMouseEvents {
+      window.ignoresMouseEvents = false
     }
   }
 
-  func hideStatusBarShields() {
-    guard !statusBarClickShields.isEmpty || lastStatusShieldSignature != nil else { return }
-    for shield in statusBarClickShields { shield.orderOut(nil) }
-    statusBarClickShields.removeAll()
-    lastStatusShieldSignature = nil
+  private func updateClickWindowsForMenuBarReveal() {
+    guard !statusBarClickWindows.isEmpty else { return }
+    let revealed = Self.nativeMenuBarLikelyRevealed()
+    for window in statusBarClickWindows where window.ignoresMouseEvents != revealed {
+      window.ignoresMouseEvents = revealed
+    }
   }
 
-  /// Tear down every catcher window (bar hidden / no links).
-  func hideStatusLinkCatchers() {
-    statusBarLinkTargetsScreen = []
-    guard !statusLinkCatchers.isEmpty || lastStatusLinkSignature != nil else { return }
-    for catcher in statusLinkCatchers { catcher.orderOut(nil) }
-    statusLinkCatchers.removeAll()
-    lastStatusLinkSignature = nil
+  /// Cheap gate + window scan. The auto-hidden menu bar only shows while the
+  /// pointer is at the very top of the main display, so skip the scan entirely
+  /// otherwise — the menu bar is folded and the band is Flash's.
+  static func nativeMenuBarLikelyRevealed() -> Bool {
+    guard
+      let main = NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main
+    else { return false }
+    // `mouseLocation` is bottom-left global; the band is at the top (high y).
+    let pointer = NSEvent.mouseLocation
+    guard pointer.y >= main.frame.maxY - 40 else { return false }
+    return nativeMenuBarIsRevealed(mainScreenWidth: main.frame.width)
+  }
+
+  /// True when the window server has an on-screen window at the main-menu level
+  /// spanning the top of the main display — i.e. the menu bar is revealed.
+  /// Matches by level + bounds only (no window-title read), so it needs no
+  /// Screen Recording permission.
+  static func nativeMenuBarIsRevealed(mainScreenWidth: CGFloat) -> Bool {
+    guard
+      let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
+        as? [[String: Any]]
+    else { return false }
+    let menuLayer = Int(CGWindowLevelForKey(.mainMenuWindow))
+    for info in infos {
+      guard
+        let layer = info[kCGWindowLayer as String] as? Int, layer == menuLayer,
+        let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+        let y = bounds["Y"], let width = bounds["Width"]
+      else { continue }
+      // CGWindow bounds use a top-left global origin: a revealed menu bar sits
+      // flush at the top (y ~ 0) and spans most of the main display.
+      if y <= 1, width >= mainScreenWidth * 0.6 { return true }
+    }
+    return false
   }
 }

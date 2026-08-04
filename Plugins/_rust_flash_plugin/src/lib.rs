@@ -13,13 +13,16 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
+
+#[path = "../../_bounded_process.rs"]
+mod bounded_process;
 
 /// Generate the typed plugin surface from `manifest.json` at compile time. See
 /// the `flash_plugin_macros` crate. Invoke as `flash_plugin::plugin!(MyPlugin);`
@@ -32,21 +35,39 @@ pub use flash_plugin_macros::plugin;
 type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 
 /// Warm in-memory location store, keyed by `source_id`. Plugins keep their
-/// locations here via [`Context::set_locations`]; the generated
-/// `candidate_query` default serves the union back to the host on demand. This
-/// is the pull model — the host holds no candidate cache of its own. Cloned
-/// into [`Context`] (an `Arc`), so an `on_event` write is visible to the next
-/// `candidateQuery`.
-type WarmLocations = Arc<Mutex<HashMap<String, Vec<Candidate>>>>;
+/// locations here via [`Context::set_locations`]; the SDK runtime serves the
+/// union directly for `sources.snapshot`, so plugin code cannot put I/O on the
+/// catalog-gathering path. This is the pull model — the host holds no candidate
+/// cache of its own. Cloned into [`Context`] (an `Arc`), so an `on_event` write
+/// is visible to the next `sources.snapshot`.
+type WarmLocations = Arc<Mutex<HashMap<String, Arc<Vec<Candidate>>>>>;
 
 const MAX_FRAME_BYTES: usize = 10 * 1024 * 1024;
+const MAX_TELEMETRY_FRAME_BYTES: usize = 256 * 1024;
+const CONTROL_QUEUE_CAPACITY: usize = 64;
+const TELEMETRY_QUEUE_CAPACITY: usize = 128;
+const EVENT_QUEUE_CAPACITY: usize = 256;
+const EVENT_HANDLER_WARN_AFTER: Duration = Duration::from_secs(1);
+const EVENT_HANDLER_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_CATALOG_CANDIDATES: usize = 10_000;
+const MAX_CATALOG_ENCODED_BYTES: usize = 4 * 1024 * 1024;
+const MAX_QUERY_ANSWERS: usize = 16;
+const MAX_QUERY_ENCODED_BYTES: usize = 256 * 1024;
+const MAX_CANDIDATE_TITLE_BYTES: usize = 4 * 1024;
+const MAX_CANDIDATE_URL_BYTES: usize = 16 * 1024;
+const MAX_CANDIDATE_METADATA_ENTRIES: usize = 64;
+const MAX_CANDIDATE_METADATA_KEY_BYTES: usize = 256;
+const MAX_CANDIDATE_METADATA_VALUE_BYTES: usize = 64 * 1024;
+const MAX_CANDIDATE_EFFECT_BYTES: usize = 64 * 1024;
+const MAX_QUERY_FIELD_BYTES: usize = 16 * 1024;
+const COMMAND_STDOUT_LIMIT: usize = 4 * 1024 * 1024;
+const COMMAND_STDERR_LIMIT: usize = 256 * 1024;
 
-/// Wire-protocol version negotiated in `initialize`: the host sends the version
-/// it speaks, this SDK echoes the version it was built against, and a mismatch
-/// is logged (not fatal) so a renamed/removed field surfaces as drift rather
-/// than silently decoding to a default. Bump on any breaking wire change. MUST
-/// stay in sync with `PluginProcess.protocolVersion` on the host.
-const PROTOCOL_VERSION: u32 = 1;
+/// Wire-protocol version negotiated in `initialize`. A mismatch is fatal: the
+/// host and plugin must agree on lifecycle and payload semantics before the
+/// plugin can become ready. Bump on any breaking wire change. MUST stay in sync
+/// with `PluginProcess.protocolVersion` on the host.
+const PROTOCOL_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Core value types
@@ -89,22 +110,22 @@ impl From<[f64; 4]> for Frame {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
-    Background,
     Low,
     #[default]
     Normal,
     High,
-    Critical,
+    Important,
+    Urgent,
 }
 
 impl Priority {
     pub fn as_str(self) -> &'static str {
         match self {
-            Priority::Background => "background",
             Priority::Low => "low",
             Priority::Normal => "normal",
             Priority::High => "high",
-            Priority::Critical => "critical",
+            Priority::Important => "important",
+            Priority::Urgent => "urgent",
         }
     }
 }
@@ -126,8 +147,6 @@ pub struct JumpTarget {
     pub pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enters_insert_mode: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_id: Option<String>,
     /// When `true`, the host should drop the plugin-side `activate` path
     /// (which fires a `target.action` RPC and races with subsequent
     /// keystrokes — `tmux select-pane` for example is async by nature)
@@ -137,8 +156,8 @@ pub struct JumpTarget {
     /// panes), and is observed *before* Flash forwards anything else.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefer_host_click: Option<bool>,
-    /// Source-declared salience. `Critical` renders with the host's accent hint
-    /// style.
+    /// Source-declared salience. `Important` and `Urgent` render with the
+    /// host's accent hint style.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<Priority>,
 }
@@ -153,7 +172,6 @@ impl JumpTarget {
             url: None,
             pid: None,
             enters_insert_mode: None,
-            source_id: None,
             prefer_host_click: None,
             priority: None,
         }
@@ -181,11 +199,6 @@ impl JumpTarget {
 
     pub fn enters_insert_mode(mut self, enters: bool) -> Self {
         self.enters_insert_mode = Some(enters);
-        self
-    }
-
-    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
-        self.source_id = Some(source_id.into());
         self
     }
 
@@ -224,6 +237,319 @@ pub struct Candidate {
     /// search.
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+    /// Explicit user-triggered effect the host validates and performs when this
+    /// row is selected. Evaluation/rendering never executes it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub effect: Option<CandidateEffect>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CandidateEffect {
+    CopyText { text: String },
+}
+
+/// Narrow output from a pure query evaluator. Evaluators cannot manufacture
+/// catalog/navigation metadata, URLs, pids, priorities, or routing ownership;
+/// the host stamps all of those fields and only accepts this closed answer
+/// shape.
+#[derive(Clone, Debug, Serialize)]
+pub struct QueryAnswer {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+    pub effect: CandidateEffect,
+}
+
+impl QueryAnswer {
+    pub fn copy_text(title: impl Into<String>, subtitle: Option<impl Into<String>>) -> Self {
+        let title = title.into();
+        Self {
+            effect: CandidateEffect::CopyText {
+                text: title.clone(),
+            },
+            title,
+            subtitle: subtitle.map(Into::into),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BoundaryViolation {
+    boundary: &'static str,
+    rule: &'static str,
+    item_index: Option<usize>,
+    actual: usize,
+    limit: usize,
+}
+
+impl BoundaryViolation {
+    fn new(
+        boundary: &'static str,
+        rule: &'static str,
+        item_index: Option<usize>,
+        actual: usize,
+        limit: usize,
+    ) -> Self {
+        Self {
+            boundary,
+            rule,
+            item_index,
+            actual,
+            limit,
+        }
+    }
+
+    fn log_fields(&self) -> BTreeMap<String, String> {
+        let mut fields = BTreeMap::from([
+            ("boundary".to_string(), self.boundary.to_string()),
+            ("rule".to_string(), self.rule.to_string()),
+            ("actual".to_string(), self.actual.to_string()),
+            ("limit".to_string(), self.limit.to_string()),
+        ]);
+        if let Some(index) = self.item_index {
+            fields.insert("item_index".to_string(), index.to_string());
+        }
+        fields
+    }
+}
+
+#[derive(Serialize)]
+struct CatalogCandidatesRef<'a> {
+    candidates: &'a [Candidate],
+}
+
+#[derive(Serialize)]
+struct QueryAnswersRef<'a> {
+    answers: &'a [QueryAnswer],
+}
+
+fn reject_oversized_field(
+    boundary: &'static str,
+    rule: &'static str,
+    item_index: usize,
+    actual: usize,
+    limit: usize,
+) -> Result<(), BoundaryViolation> {
+    if actual <= limit {
+        Ok(())
+    } else {
+        Err(BoundaryViolation::new(
+            boundary,
+            rule,
+            Some(item_index),
+            actual,
+            limit,
+        ))
+    }
+}
+
+fn add_aggregate_bytes(
+    total: &mut usize,
+    additional: usize,
+    boundary: &'static str,
+    item_index: usize,
+    limit: usize,
+) -> Result<(), BoundaryViolation> {
+    *total = total.checked_add(additional).ok_or_else(|| {
+        BoundaryViolation::new(
+            boundary,
+            "aggregate_string_bytes",
+            Some(item_index),
+            usize::MAX,
+            limit,
+        )
+    })?;
+    if *total > limit {
+        return Err(BoundaryViolation::new(
+            boundary,
+            "aggregate_string_bytes",
+            Some(item_index),
+            *total,
+            limit,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_catalog_candidates(candidates: &[Candidate]) -> Result<(), BoundaryViolation> {
+    if candidates.len() > MAX_CATALOG_CANDIDATES {
+        return Err(BoundaryViolation::new(
+            "catalog",
+            "candidate_count",
+            None,
+            candidates.len(),
+            MAX_CATALOG_CANDIDATES,
+        ));
+    }
+
+    let mut aggregate_string_bytes = 0usize;
+    for (index, candidate) in candidates.iter().enumerate() {
+        reject_oversized_field(
+            "catalog",
+            "title_bytes",
+            index,
+            candidate.title.len(),
+            MAX_CANDIDATE_TITLE_BYTES,
+        )?;
+        add_aggregate_bytes(
+            &mut aggregate_string_bytes,
+            candidate.title.len(),
+            "catalog",
+            index,
+            MAX_CATALOG_ENCODED_BYTES,
+        )?;
+
+        if let Some(url) = &candidate.url {
+            reject_oversized_field(
+                "catalog",
+                "url_bytes",
+                index,
+                url.len(),
+                MAX_CANDIDATE_URL_BYTES,
+            )?;
+            add_aggregate_bytes(
+                &mut aggregate_string_bytes,
+                url.len(),
+                "catalog",
+                index,
+                MAX_CATALOG_ENCODED_BYTES,
+            )?;
+        }
+
+        if candidate.metadata.len() > MAX_CANDIDATE_METADATA_ENTRIES {
+            return Err(BoundaryViolation::new(
+                "catalog",
+                "metadata_entries",
+                Some(index),
+                candidate.metadata.len(),
+                MAX_CANDIDATE_METADATA_ENTRIES,
+            ));
+        }
+        for (key, value) in &candidate.metadata {
+            reject_oversized_field(
+                "catalog",
+                "metadata_key_bytes",
+                index,
+                key.len(),
+                MAX_CANDIDATE_METADATA_KEY_BYTES,
+            )?;
+            reject_oversized_field(
+                "catalog",
+                "metadata_value_bytes",
+                index,
+                value.len(),
+                MAX_CANDIDATE_METADATA_VALUE_BYTES,
+            )?;
+            add_aggregate_bytes(
+                &mut aggregate_string_bytes,
+                key.len(),
+                "catalog",
+                index,
+                MAX_CATALOG_ENCODED_BYTES,
+            )?;
+            add_aggregate_bytes(
+                &mut aggregate_string_bytes,
+                value.len(),
+                "catalog",
+                index,
+                MAX_CATALOG_ENCODED_BYTES,
+            )?;
+        }
+
+        if let Some(CandidateEffect::CopyText { text }) = &candidate.effect {
+            reject_oversized_field(
+                "catalog",
+                "effect_text_bytes",
+                index,
+                text.len(),
+                MAX_CANDIDATE_EFFECT_BYTES,
+            )?;
+            add_aggregate_bytes(
+                &mut aggregate_string_bytes,
+                text.len(),
+                "catalog",
+                index,
+                MAX_CATALOG_ENCODED_BYTES,
+            )?;
+        }
+    }
+
+    let encoded = rmp_serde::to_vec(&CatalogCandidatesRef { candidates })
+        .map_err(|_| BoundaryViolation::new("catalog", "messagepack_encoding", None, 1, 0))?;
+    if encoded.len() > MAX_CATALOG_ENCODED_BYTES {
+        return Err(BoundaryViolation::new(
+            "catalog",
+            "encoded_bytes",
+            None,
+            encoded.len(),
+            MAX_CATALOG_ENCODED_BYTES,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_query_answers(answers: &[QueryAnswer]) -> Result<(), BoundaryViolation> {
+    if answers.len() > MAX_QUERY_ANSWERS {
+        return Err(BoundaryViolation::new(
+            "query",
+            "answer_count",
+            None,
+            answers.len(),
+            MAX_QUERY_ANSWERS,
+        ));
+    }
+
+    let mut aggregate_string_bytes = 0usize;
+    for (index, answer) in answers.iter().enumerate() {
+        for (rule, value) in [
+            ("title_bytes", answer.title.as_str()),
+            (
+                "effect_text_bytes",
+                match &answer.effect {
+                    CandidateEffect::CopyText { text } => text.as_str(),
+                },
+            ),
+        ] {
+            reject_oversized_field("query", rule, index, value.len(), MAX_QUERY_FIELD_BYTES)?;
+            add_aggregate_bytes(
+                &mut aggregate_string_bytes,
+                value.len(),
+                "query",
+                index,
+                MAX_QUERY_ENCODED_BYTES,
+            )?;
+        }
+        if let Some(subtitle) = &answer.subtitle {
+            reject_oversized_field(
+                "query",
+                "subtitle_bytes",
+                index,
+                subtitle.len(),
+                MAX_QUERY_FIELD_BYTES,
+            )?;
+            add_aggregate_bytes(
+                &mut aggregate_string_bytes,
+                subtitle.len(),
+                "query",
+                index,
+                MAX_QUERY_ENCODED_BYTES,
+            )?;
+        }
+    }
+
+    let encoded = rmp_serde::to_vec(&QueryAnswersRef { answers })
+        .map_err(|_| BoundaryViolation::new("query", "messagepack_encoding", None, 1, 0))?;
+    if encoded.len() > MAX_QUERY_ENCODED_BYTES {
+        return Err(BoundaryViolation::new(
+            "query",
+            "encoded_bytes",
+            None,
+            encoded.len(),
+            MAX_QUERY_ENCODED_BYTES,
+        ));
+    }
+    Ok(())
 }
 
 /// Conventional metadata keys used by Flash's bundled host. Plugins can stash
@@ -252,6 +578,7 @@ impl Candidate {
             title: title.into(),
             url: None,
             metadata: HashMap::new(),
+            effect: None,
         }
     }
 
@@ -372,6 +699,13 @@ impl Candidate {
         self.set(candidate_metadata::PAYLOAD, payload)
     }
 
+    /// Copy `text` only after the user selects this candidate. The host owns
+    /// pasteboard access; the plugin performs no clipboard I/O.
+    pub fn copy_text(mut self, text: impl Into<String>) -> Self {
+        self.effect = Some(CandidateEffect::CopyText { text: text.into() });
+        self
+    }
+
     /// Attach a structured payload, serialized to a JSON string. Read it back
     /// on resolution with [`payload_as`](Candidate::payload_as).
     pub fn payload_json<T: Serialize>(mut self, value: &T) -> Self {
@@ -471,9 +805,9 @@ pub struct NormalModeTarget {
 // Inbound requests / events
 // ---------------------------------------------------------------------------
 
-/// One running regular app visible to Flash. Used by `core:apps.changed` and
-/// by candidate query requests so plugins can refresh app-scoped sources while
-/// keeping the data in memory.
+/// One running regular app visible to Flash. The SDK owns one current snapshot:
+/// it is initialized by the handshake and replaced atomically before each
+/// serialized `core:apps.changed` callback.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RunningApplication {
     #[serde(default)]
@@ -494,12 +828,16 @@ pub struct Event {
     pub pid: Option<i64>,
     pub front_window_frame: Option<Frame>,
     pub text: Option<String>,
-    pub running_applications: Vec<RunningApplication>,
+}
+
+struct QueuedEvent {
+    event: Event,
+    running_applications: Vec<RunningApplication>,
+    enqueued_at: Instant,
 }
 
 #[derive(Deserialize)]
 struct EventWire {
-    #[serde(default)]
     name: String,
     #[serde(default)]
     payload: EventPayload,
@@ -520,17 +858,21 @@ struct EventPayload {
 }
 
 impl Event {
-    fn from_params(params: Value) -> Self {
+    fn from_params(params: Value) -> Result<QueuedEvent, String> {
         match serde_json::from_value::<EventWire>(params) {
-            Ok(wire) => Event {
-                name: wire.name,
-                bundle_id: wire.payload.bundle_id,
-                pid: wire.payload.pid,
-                front_window_frame: wire.payload.front_window_frame,
-                text: wire.payload.text,
+            Ok(wire) if !wire.name.trim().is_empty() => Ok(QueuedEvent {
+                event: Event {
+                    name: wire.name,
+                    bundle_id: wire.payload.bundle_id,
+                    pid: wire.payload.pid,
+                    front_window_frame: wire.payload.front_window_frame,
+                    text: wire.payload.text,
+                },
                 running_applications: wire.payload.running_applications,
-            },
-            Err(_) => Event::default(),
+                enqueued_at: Instant::now(),
+            }),
+            Ok(_) => Err("event name must not be empty".to_string()),
+            Err(error) => Err(format!("invalid event params: {error}")),
         }
     }
 }
@@ -565,7 +907,7 @@ impl CommandRequest {
     }
 }
 
-/// A `discoverTargets` request, carrying the focused app's identity and front
+/// A `hints.discover` request, carrying the focused app's identity and front
 /// window geometry.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct DiscoverRequest {
@@ -588,7 +930,7 @@ pub struct ActionContext {
     pub front_window_frame: Option<Frame>,
 }
 
-/// A `sourceAction` request (e.g. `tab_select`). `index` is set for the
+/// A `source.action` request (e.g. `tab_select`). `index` is set for the
 /// numbered-tab actions.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct SourceActionRequest {
@@ -608,20 +950,14 @@ pub struct NavigationRequest {
     pub url: String,
 }
 
-/// A `candidateQuery` request from the flashlight. `query` is the current
-/// search text for plugins that intentionally serve live query-dependent
-/// results.
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct CandidateQueryRequest {
+#[derive(Deserialize)]
+struct InitializeRequest {
+    protocol_version: u32,
     #[serde(default)]
-    pub scope: String,
-    #[serde(default)]
-    pub query: String,
-    #[serde(default)]
-    pub running_applications: Vec<RunningApplication>,
+    running_applications: Vec<RunningApplication>,
 }
 
-/// An `activateTarget` notification: act on the [`JumpTarget`] the plugin
+/// A `hints.activate` notification: act on the [`JumpTarget`] the plugin
 /// emitted earlier (matched by `target_id`) with the given click `action`.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ActivateRequest {
@@ -631,16 +967,28 @@ pub struct ActivateRequest {
     pub target_id: String,
 }
 
+/// One exact input sent to a pure query evaluator. Implementations must only
+/// parse/compute against immutable in-memory state.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct QueryEvaluateRequest {
+    #[serde(default)]
+    pub surface: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub query: String,
+}
+
 /// A non-lifecycle request dispatched to [`Plugin::handle`].
 #[derive(Clone, Debug)]
 pub enum Request {
     Command(CommandRequest),
     DiscoverTargets(DiscoverRequest),
-    CandidateQuery(CandidateQueryRequest),
     ResolveCandidate(Candidate),
     SourceAction(SourceActionRequest),
     RestoreNavigation(NavigationRequest),
     ActivateTarget(ActivateRequest),
+    QueryEvaluate(QueryEvaluateRequest),
     /// Any other method name the host sent. Return a
     /// [`CommandResponse::error`] for these.
     Unknown {
@@ -668,6 +1016,166 @@ pub struct CommandResponse {
     pub stdout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// The result of running a subprocess via `run_command` / `run_osascript`:
+/// exit success plus captured stdout/stderr. `into_command` folds it into a
+/// `CommandResponse` (trimmed + length-capped). This lives in the SDK so the
+/// subprocess sandbox policy has exactly one audited home instead of being
+/// copy-pasted into every plugin.
+#[derive(Default)]
+pub struct CommandOutput {
+    pub ok: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub status: i32,
+}
+
+impl CommandOutput {
+    pub fn into_command(self) -> CommandResponse {
+        CommandResponse {
+            ok: self.ok,
+            stdout: (!self.stdout.trim().is_empty()).then(|| shorten(&self.stdout)),
+            error: (!self.ok && !self.stderr.trim().is_empty()).then(|| shorten(&self.stderr)),
+            ..Default::default()
+        }
+    }
+}
+
+/// Run `osascript -e <script>` with the same sandboxed env + timeout as
+/// `run_command`.
+pub async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> CommandOutput {
+    run_command(
+        ctx,
+        &[
+            "/usr/bin/osascript".to_string(),
+            "-e".to_string(),
+            script.to_string(),
+        ],
+        timeout,
+    )
+    .await
+}
+
+/// Run a subprocess with Flash's plugin sandbox environment: the plugin data
+/// dir as cwd, `HOME`/`XDG_*` pointed at the plugin's own dirs, the plugin bin
+/// dir prepended to `PATH`, no stdin, piped stdout/stderr, `kill_on_drop`, and a
+/// hard timeout. The single audited home for how a plugin shells out.
+pub async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CommandOutput {
+    let started_at = Instant::now();
+    let Some((program, args)) = argv.split_first() else {
+        let output = CommandOutput {
+            ok: false,
+            stderr: "empty argv".to_string(),
+            status: -1,
+            ..Default::default()
+        };
+        log_command_latency(ctx, "<empty>", &output, started_at.elapsed(), timeout);
+        return output;
+    };
+    let executable = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("<unknown>");
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(&ctx.data_dir)
+        .env("HOME", ctx.home_dir())
+        .env("XDG_CONFIG_HOME", ctx.config_dir())
+        .env("XDG_CACHE_HOME", ctx.cache_dir())
+        .env("XDG_DATA_HOME", ctx.share_dir())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                ctx.bin_dir().display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        );
+    let output = match bounded_process::capture(
+        &mut command,
+        None,
+        timeout,
+        COMMAND_STDOUT_LIMIT,
+        COMMAND_STDERR_LIMIT,
+    )
+    .await
+    {
+        Ok(output) => CommandOutput {
+            ok: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            status: output.status.code().unwrap_or(-1),
+        },
+        Err(error) => {
+            let diagnostic = error.diagnostic();
+            ctx.log_fields(
+                "warn",
+                "[plugin] subprocess capture failed",
+                BTreeMap::from([
+                    ("executable".to_string(), executable.to_string()),
+                    ("diagnostic".to_string(), diagnostic.clone()),
+                    (
+                        "elapsed_ms".to_string(),
+                        started_at.elapsed().as_millis().to_string(),
+                    ),
+                ]),
+            );
+            CommandOutput {
+                ok: false,
+                stderr: diagnostic,
+                status: error.status(),
+                ..Default::default()
+            }
+        }
+    };
+    log_command_latency(ctx, executable, &output, started_at.elapsed(), timeout);
+    output
+}
+
+fn command_latency_requires_warning(output: &CommandOutput, elapsed: Duration) -> bool {
+    output.status == 124 || elapsed >= Duration::from_secs(1)
+}
+
+fn log_command_latency(
+    ctx: &Context,
+    executable: &str,
+    output: &CommandOutput,
+    elapsed: Duration,
+    timeout: Duration,
+) {
+    if !command_latency_requires_warning(output, elapsed) {
+        return;
+    }
+    ctx.log_fields(
+        "warn",
+        "[plugin] subprocess slow",
+        BTreeMap::from([
+            ("executable".to_string(), executable.to_string()),
+            ("elapsed_ms".to_string(), elapsed.as_millis().to_string()),
+            ("timeout_ms".to_string(), timeout.as_millis().to_string()),
+            ("status".to_string(), output.status.to_string()),
+        ]),
+    );
+}
+
+/// Wrap `value` as an AppleScript string literal (escaping `\` and `"`).
+pub fn applescript_quote(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// Trim + cap a string for a toast / diagnostic (2000 chars, `...` suffix).
+pub fn shorten(value: &str) -> String {
+    const LIMIT: usize = 2000;
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_string();
+    }
+    let head: String = trimmed.chars().take(LIMIT - 3).collect();
+    format!("{head}...")
 }
 
 impl CommandResponse {
@@ -707,7 +1215,7 @@ impl CommandResponse {
     }
 }
 
-/// Response to a `discoverTargets`. `targets` is always sent; `candidates` is
+/// Response to `hints.discover`. `targets` is always sent; `candidates` is
 /// omitted to preserve the host's previously emitted candidates (send
 /// `Some(vec)` — even empty — to replace them).
 #[derive(Clone, Debug, Default, Serialize)]
@@ -715,8 +1223,6 @@ pub struct DiscoverResponse {
     pub targets: Vec<JumpTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<Candidate>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_pid: Option<i64>,
 }
@@ -729,18 +1235,13 @@ impl DiscoverResponse {
         }
     }
 
-    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
-        self.source_id = Some(source_id.into());
-        self
-    }
-
     pub fn context_pid(mut self, pid: i64) -> Self {
         self.context_pid = Some(pid);
         self
     }
 }
 
-/// Response to a `resolveCandidate`.
+/// Response to `candidate.resolve`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ResolveResponse {
     pub did_resolve: bool,
@@ -769,7 +1270,7 @@ impl ResolveResponse {
     }
 }
 
-/// Response to a `sourceAction`.
+/// Response to `source.action`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SourceActionResponse {
     pub did_perform: bool,
@@ -813,32 +1314,31 @@ impl SourceActionResponse {
     }
 }
 
-/// Response to a `candidateQuery`. Omit `candidates` to tell the host to keep
-/// using this plugin's existing warm locations; send `Some(vec)` (even empty)
-/// to replace them with an authoritative fresh result.
+/// Runtime-owned response to `sources.snapshot`. Plugins publish into
+/// [`Context`] during lifecycle callbacks; they cannot override snapshot
+/// gathering or put I/O on this path.
 #[derive(Clone, Debug, Default, Serialize)]
-pub struct CandidateQueryResponse {
+struct SourceSnapshotResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates: Option<Vec<Candidate>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_id: Option<String>,
 }
 
-impl CandidateQueryResponse {
-    pub fn keep() -> Self {
-        Self::default()
-    }
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct QueryEvaluateResponse {
+    pub answers: Vec<QueryAnswer>,
+}
 
-    pub fn candidates(candidates: Vec<Candidate>) -> Self {
+impl QueryEvaluateResponse {
+    pub fn answers(answers: Vec<QueryAnswer>) -> Self {
+        Self { answers }
+    }
+}
+
+impl SourceSnapshotResponse {
+    fn candidates(candidates: Vec<Candidate>) -> Self {
         Self {
             candidates: Some(candidates),
-            ..Self::default()
         }
-    }
-
-    pub fn source_id(mut self, source_id: impl Into<String>) -> Self {
-        self.source_id = Some(source_id.into());
-        self
     }
 }
 
@@ -849,22 +1349,39 @@ impl CandidateQueryResponse {
 pub enum Response {
     Command(CommandResponse),
     Discover(DiscoverResponse),
-    CandidateQuery(CandidateQueryResponse),
     Resolve(ResolveResponse),
     SourceAction(SourceActionResponse),
+    QueryEvaluate(QueryEvaluateResponse),
     None,
 }
 
 impl Response {
-    fn to_value(&self) -> Value {
+    fn validate_boundary(&self) -> Result<(), BoundaryViolation> {
         match self {
-            Response::Command(r) => serde_json::to_value(r).unwrap_or(Value::Null),
-            Response::Discover(r) => serde_json::to_value(r).unwrap_or(Value::Null),
-            Response::CandidateQuery(r) => serde_json::to_value(r).unwrap_or(Value::Null),
-            Response::Resolve(r) => serde_json::to_value(r).unwrap_or(Value::Null),
-            Response::SourceAction(r) => serde_json::to_value(r).unwrap_or(Value::Null),
-            Response::None => Value::Null,
+            Response::Discover(response) => {
+                if let Some(candidates) = &response.candidates {
+                    validate_catalog_candidates(candidates)?;
+                }
+            }
+            Response::QueryEvaluate(response) => validate_query_answers(&response.answers)?,
+            Response::Command(_)
+            | Response::Resolve(_)
+            | Response::SourceAction(_)
+            | Response::None => {}
         }
+        Ok(())
+    }
+
+    fn to_value(&self) -> Result<Value, &'static str> {
+        let value = match self {
+            Response::Command(response) => serde_json::to_value(response),
+            Response::Discover(response) => serde_json::to_value(response),
+            Response::Resolve(response) => serde_json::to_value(response),
+            Response::SourceAction(response) => serde_json::to_value(response),
+            Response::QueryEvaluate(response) => serde_json::to_value(response),
+            Response::None => return Ok(Value::Null),
+        };
+        value.map_err(|_| "plugin response could not be encoded")
     }
 }
 
@@ -880,12 +1397,6 @@ impl From<DiscoverResponse> for Response {
     }
 }
 
-impl From<CandidateQueryResponse> for Response {
-    fn from(value: CandidateQueryResponse) -> Self {
-        Response::CandidateQuery(value)
-    }
-}
-
 impl From<ResolveResponse> for Response {
     fn from(value: ResolveResponse) -> Self {
         Response::Resolve(value)
@@ -898,36 +1409,260 @@ impl From<SourceActionResponse> for Response {
     }
 }
 
+impl From<QueryEvaluateResponse> for Response {
+    fn from(value: QueryEvaluateResponse) -> Self {
+        Response::QueryEvaluate(value)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Emitter / Context
 // ---------------------------------------------------------------------------
 
-/// Serializes outgoing protocol frames onto a single stdout writer task so
-/// frames emitted from concurrent handlers never interleave. Cheap to clone.
+/// Protocol responses and plugin→host calls use a bounded control lane.
+/// Telemetry/status notifications use a separate bounded lane. The writer
+/// always drains ready control frames first, so log storms cannot delay a
+/// `sources.snapshot`, query, heartbeat, or shutdown response.
 #[derive(Clone)]
 struct Emitter {
-    tx: mpsc::UnboundedSender<Vec<u8>>,
+    senders: Arc<Mutex<EmitterSenders>>,
+    telemetry_drops: Arc<AtomicU64>,
+}
+
+struct EmitterSenders {
+    control: Option<mpsc::Sender<Vec<u8>>>,
+    telemetry: Option<mpsc::Sender<Vec<u8>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FrameEncodingError {
+    Serialization,
+    Oversized {
+        encoded_bytes: usize,
+        limit_bytes: usize,
+    },
+}
+
+impl FrameEncodingError {
+    fn reason(self) -> &'static str {
+        match self {
+            FrameEncodingError::Serialization => "serialization_failed",
+            FrameEncodingError::Oversized { .. } => "frame_too_large",
+        }
+    }
+
+    fn response_error(self) -> &'static str {
+        match self {
+            FrameEncodingError::Serialization => "plugin response serialization failed",
+            FrameEncodingError::Oversized { .. } => "plugin response exceeded outbound frame limit",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ControlSendError {
+    Encoding(FrameEncodingError),
+    Closed,
+}
+
+struct OutboundReceiver {
+    control: mpsc::Receiver<Vec<u8>>,
+    telemetry: mpsc::Receiver<Vec<u8>>,
+    control_open: bool,
+    telemetry_open: bool,
+}
+
+impl OutboundReceiver {
+    fn new(control: mpsc::Receiver<Vec<u8>>, telemetry: mpsc::Receiver<Vec<u8>>) -> Self {
+        Self {
+            control,
+            telemetry,
+            control_open: true,
+            telemetry_open: true,
+        }
+    }
+
+    async fn recv(&mut self) -> Option<Vec<u8>> {
+        while self.control_open || self.telemetry_open {
+            tokio::select! {
+                biased;
+                payload = self.control.recv(), if self.control_open => {
+                    match payload {
+                        Some(payload) => return Some(payload),
+                        None => self.control_open = false,
+                    }
+                }
+                payload = self.telemetry.recv(), if self.telemetry_open => {
+                    match payload {
+                        Some(payload) => return Some(payload),
+                        None => self.telemetry_open = false,
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 impl Emitter {
-    fn send(&self, value: Value) {
-        if let Ok(payload) = rmp_serde::to_vec(&value) {
-            if payload.len() > MAX_FRAME_BYTES {
-                return;
+    fn new(control: mpsc::Sender<Vec<u8>>, telemetry: mpsc::Sender<Vec<u8>>) -> Self {
+        Self {
+            senders: Arc::new(Mutex::new(EmitterSenders {
+                control: Some(control),
+                telemetry: Some(telemetry),
+            })),
+            telemetry_drops: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn encode(value: &Value, limit_bytes: usize) -> Result<Vec<u8>, FrameEncodingError> {
+        let payload = rmp_serde::to_vec(value).map_err(|_| FrameEncodingError::Serialization)?;
+        if payload.len() > limit_bytes {
+            return Err(FrameEncodingError::Oversized {
+                encoded_bytes: payload.len(),
+                limit_bytes,
+            });
+        }
+        Ok(payload)
+    }
+
+    fn report_frame_rejection(&self, lane: &'static str, error: FrameEncodingError) {
+        let mut fields = BTreeMap::from([
+            ("lane".to_string(), lane.to_string()),
+            ("reason".to_string(), error.reason().to_string()),
+        ]);
+        match error {
+            FrameEncodingError::Serialization => {
+                eprintln!(
+                    "[plugin] outbound frame rejected lane={lane} reason={}",
+                    error.reason(),
+                );
             }
-            let _ = self.tx.send(payload);
+            FrameEncodingError::Oversized {
+                encoded_bytes,
+                limit_bytes,
+            } => {
+                fields.insert("encoded_bytes".to_string(), encoded_bytes.to_string());
+                fields.insert("limit_bytes".to_string(), limit_bytes.to_string());
+                eprintln!(
+                    "[plugin] outbound frame rejected lane={lane} reason={} limit_bytes={limit_bytes}",
+                    error.reason(),
+                );
+            }
+        }
+
+        // stderr is the last-resort diagnostic channel when the rejected frame
+        // itself cannot traverse stdout. Never include the original payload.
+        let diagnostic = json!({
+            "jsonrpc": "2.0",
+            "method": "flash.log",
+            "params": {
+                "level": "warn",
+                "message": "[plugin] outbound frame rejected",
+                "fields": fields,
+            },
+        });
+        if let Ok(payload) = Self::encode(&diagnostic, MAX_TELEMETRY_FRAME_BYTES) {
+            self.try_send_telemetry(payload);
+        }
+    }
+
+    async fn send_control(&self, lane: &'static str, value: Value) -> Result<(), ControlSendError> {
+        let payload = match Self::encode(&value, MAX_FRAME_BYTES) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.report_frame_rejection(lane, error);
+                return Err(ControlSendError::Encoding(error));
+            }
+        };
+        let sender = self
+            .senders
+            .lock()
+            .ok()
+            .and_then(|senders| senders.control.clone())
+            .ok_or(ControlSendError::Closed)?;
+        sender
+            .send(payload)
+            .await
+            .map_err(|_| ControlSendError::Closed)
+    }
+
+    fn try_send_telemetry(&self, payload: Vec<u8>) {
+        let sender = self
+            .senders
+            .lock()
+            .ok()
+            .and_then(|senders| senders.telemetry.clone());
+        let Some(sender) = sender else {
+            return;
+        };
+        match sender.try_send(payload) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                let dropped = self.telemetry_drops.fetch_add(1, Ordering::Relaxed) + 1;
+                if dropped == 1 || dropped.is_power_of_two() {
+                    eprintln!(
+                        "[plugin] outbound telemetry queue full; dropped_frames={dropped} capacity={TELEMETRY_QUEUE_CAPACITY}"
+                    );
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {}
+        }
+    }
+
+    /// Close both shared output lanes even when detached plugin tasks still
+    /// retain `Context` clones. Queued frames drain first; later emits become
+    /// no-ops. This lets graceful shutdown finish without waiting for interval
+    /// loops that the tokio runtime will cancel as it drops.
+    fn close(&self) {
+        if let Ok(mut senders) = self.senders.lock() {
+            senders.control.take();
+            senders.telemetry.take();
         }
     }
 
     fn notify(&self, method: &str, params: Value) {
-        self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+        let value = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        match Self::encode(&value, MAX_TELEMETRY_FRAME_BYTES) {
+            Ok(payload) => self.try_send_telemetry(payload),
+            Err(error) => self.report_frame_rejection("telemetry", error),
+        }
     }
 
-    fn respond(&self, id: Value, result: Value) {
+    async fn request(&self, id: u64, method: &str, params: Value) -> Result<(), ControlSendError> {
+        self.send_control(
+            "host_request",
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params,
+            }),
+        )
+        .await
+    }
+
+    async fn respond(&self, id: Value, result: Value) {
         if id.is_null() {
             return;
         }
-        self.send(json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+        let response = json!({ "jsonrpc": "2.0", "id": id.clone(), "result": result });
+        if let Err(error) = self.send_control("response", response).await {
+            let ControlSendError::Encoding(encoding_error) = error else {
+                return;
+            };
+            let fallback = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "ok": false,
+                    "error": encoding_error.response_error(),
+                },
+            });
+            // The fallback is fixed-size and content-free. Failure here means
+            // stdout has closed; there is no remaining protocol path to report.
+            let _ = self.send_control("response_error", fallback).await;
+        }
     }
 
     fn log(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
@@ -952,6 +1687,27 @@ pub struct Context {
     host_pending: HostPending,
     host_counter: Arc<AtomicU64>,
     locations: WarmLocations,
+    running_applications: Arc<Mutex<Vec<RunningApplication>>>,
+}
+
+/// Serializes refresh producers and snapshots running applications only after
+/// the gate is acquired. This prevents a delayed poll from publishing against
+/// an app list captured before a newer `core:apps.changed` refresh.
+#[derive(Clone, Default)]
+pub struct RefreshGate {
+    inner: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl RefreshGate {
+    pub async fn run<T, F, Fut>(&self, ctx: &Context, operation: F) -> T
+    where
+        F: FnOnce(Context, Vec<RunningApplication>) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let _guard = self.inner.lock().await;
+        let applications = ctx.running_applications();
+        operation(ctx.clone(), applications).await
+    }
 }
 
 impl Context {
@@ -995,23 +1751,47 @@ impl Context {
     }
 
     pub async fn call_host_timeout(&self, method: &str, params: Value, timeout: Duration) -> Value {
+        let started_at = Instant::now();
         let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         if let Ok(mut pending) = self.host_pending.lock() {
             pending.insert(id, tx);
         }
-        self.emit.send(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        }));
-        match tokio::time::timeout(timeout, rx).await {
+        let outcome = tokio::time::timeout(timeout, async {
+            self.emit.request(id, method, params).await?;
+            rx.await.map_err(|_| ControlSendError::Closed)
+        })
+        .await;
+        match outcome {
             Ok(Ok(value)) => value,
-            _ => {
+            Ok(Err(ControlSendError::Encoding(_))) => {
                 if let Ok(mut pending) = self.host_pending.lock() {
                     pending.remove(&id);
                 }
+                json!({ "ok": false, "error": "host call exceeded outbound frame limit" })
+            }
+            Ok(Err(ControlSendError::Closed)) => {
+                if let Ok(mut pending) = self.host_pending.lock() {
+                    pending.remove(&id);
+                }
+                json!({ "ok": false, "error": "host call output closed" })
+            }
+            Err(_) => {
+                if let Ok(mut pending) = self.host_pending.lock() {
+                    pending.remove(&id);
+                }
+                self.log_fields(
+                    "warn",
+                    "[plugin] host RPC timed out",
+                    BTreeMap::from([
+                        ("method".to_string(), method.to_string()),
+                        (
+                            "elapsed_ms".to_string(),
+                            started_at.elapsed().as_millis().to_string(),
+                        ),
+                        ("timeout_ms".to_string(), timeout.as_millis().to_string()),
+                    ]),
+                );
                 json!({ "ok": false, "error": "host call timed out" })
             }
         }
@@ -1046,35 +1826,130 @@ impl Context {
 
     /// Store this plugin's warm locations for `source_id`, replacing any
     /// previous set. Nothing is sent to the host — the plugin owns its
-    /// locations in memory and the host pulls them via `candidateQuery` (served
-    /// by the generated `candidate_query` default from [`warm_locations`]). Call
-    /// it whenever the plugin's locations change (`on_start`, `on_event`, polls).
+    /// locations in memory and the SDK runtime serves them directly when the
+    /// host requests `sources.snapshot`. Call it whenever the plugin's locations
+    /// change (`on_start`, `on_event`, polls).
     ///
-    /// Passing an empty vector clears the source. A source whose refresh can
-    /// transiently fail (e.g. an AX read that comes back empty) should guard
-    /// against overwriting a good set with an empty one at the call site, the
-    /// same way it did before this was a pull (see `Plugins/firefox/src/main.rs`).
+    /// Passing an empty vector is an authoritative successful clear. Refresh
+    /// code must model source failure separately (for example
+    /// `Result<Vec<Candidate>, Failure>`): publish every `Ok`, including
+    /// `Ok([])`, and preserve the last-good vector only for `Err`. Publications
+    /// outside the SDK's count, field, or encoded-byte limits are rejected
+    /// atomically with a content-free warning and also preserve the last-good
+    /// vector.
     ///
     /// [`warm_locations`]: Context::warm_locations
     pub fn set_locations(&self, source_id: &str, candidates: Vec<Candidate>) {
+        if source_id.len() > MAX_CANDIDATE_METADATA_KEY_BYTES {
+            self.log_fields(
+                "warn",
+                "[plugin] rejected catalog publication",
+                BoundaryViolation::new(
+                    "catalog",
+                    "source_id_bytes",
+                    None,
+                    source_id.len(),
+                    MAX_CANDIDATE_METADATA_KEY_BYTES,
+                )
+                .log_fields(),
+            );
+            return;
+        }
+        if let Err(violation) = validate_catalog_candidates(&candidates) {
+            self.log_fields(
+                "warn",
+                "[plugin] rejected catalog publication",
+                violation.log_fields(),
+            );
+            return;
+        }
+        let candidates = Arc::new(candidates);
         if let Ok(mut store) = self.locations.lock() {
             store.insert(source_id.to_string(), candidates);
         }
     }
 
-    /// The union of every warm location set this plugin has published, ordered
-    /// by `source_id` for determinism. The generated `candidate_query` default
-    /// returns this; the host applies its own fuzzy narrowing against the query.
-    pub fn warm_locations(&self) -> Vec<Candidate> {
+    /// Whether this source has published an initial warm snapshot. An
+    /// authoritative empty vector counts as published.
+    pub fn has_locations(&self, source_id: &str) -> bool {
+        self.locations
+            .lock()
+            .map(|store| store.contains_key(source_id))
+            .unwrap_or(false)
+    }
+
+    fn canonical_location_source_id(&self) -> String {
+        format!("plugin:{}", self.plugin_id)
+    }
+
+    fn published_location_source_ids(&self) -> Vec<String> {
         let Ok(store) = self.locations.lock() else {
             return Vec::new();
         };
-        let mut entries: Vec<(&String, &Vec<Candidate>)> = store.iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
+        let mut ids = store.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    fn set_running_applications(&self, applications: Vec<RunningApplication>) {
+        if let Ok(mut current) = self.running_applications.lock() {
+            *current = applications;
+        }
+    }
+
+    /// Current host-owned running-app snapshot. It is available during
+    /// `on_start` from the initialize handshake, then replaced atomically by
+    /// the SDK before each serialized `core:apps.changed` callback.
+    pub fn running_applications(&self) -> Vec<RunningApplication> {
+        self.running_applications
+            .lock()
+            .map(|applications| applications.clone())
+            .unwrap_or_default()
+    }
+
+    /// Run one background refresh at a fixed interval. The first tick waits for
+    /// `period`; callers perform their authoritative initial refresh in
+    /// `on_start`. The callback is awaited before scheduling the next tick, so
+    /// one interval can never overlap itself.
+    pub fn interval<F, Fut>(&self, period: Duration, mut callback: F) -> tokio::task::JoinHandle<()>
+    where
+        F: FnMut(Context) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let ctx = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(period).await;
+                callback(ctx.clone()).await;
+            }
+        })
+    }
+
+    /// The union of every warm location set this plugin has published, ordered
+    /// by `source_id` for determinism. The SDK runtime returns this directly;
+    /// the host applies its own fuzzy narrowing against the query.
+    pub fn warm_locations(&self) -> Vec<Candidate> {
+        let entries = {
+            let Ok(store) = self.locations.lock() else {
+                return Vec::new();
+            };
+            let mut entries = store
+                .iter()
+                .map(|(source_id, candidates)| (source_id.clone(), Arc::clone(candidates)))
+                .collect::<Vec<_>>();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            entries
+        };
         entries
             .into_iter()
-            .flat_map(|(_, candidates)| candidates.iter().cloned())
+            .flat_map(|(_, candidates)| candidates.as_ref().clone())
             .collect()
+    }
+
+    fn validated_warm_locations(&self) -> Result<Vec<Candidate>, BoundaryViolation> {
+        let candidates = self.warm_locations();
+        validate_catalog_candidates(&candidates)?;
+        Ok(candidates)
     }
 
     /// Publish status-bar segment values declared by this plugin's
@@ -1128,11 +2003,20 @@ impl Context {
 /// returns a `Send` future so the runtime can drive handlers concurrently
 /// without blocking the heartbeat/serve loop.
 pub trait Plugin: Send + Sync + 'static {
-    /// Called once after `initialize`, on a background task. Use it to seed an
-    /// initial snapshot or kick off provisioning.
+    /// Called once during `initialize`, on a background task. Initialization
+    /// does not complete until this future returns. Candidate-source plugins
+    /// must publish an initial warm snapshot (including authoritative empty)
+    /// before returning.
     fn on_start(&self, ctx: Context) -> impl Future<Output = ()> + Send {
         let _ = ctx;
         async {}
+    }
+
+    /// Generated from the plugin manifest. The runtime uses this to reject a
+    /// candidate plugin that returns from `on_start` without calling
+    /// `set_locations`.
+    fn requires_initial_locations(&self) -> bool {
+        false
     }
 
     /// Host event (`core:focus.changed`, `core:apps.launched`, `core:config.changed`, …).
@@ -1150,6 +2034,90 @@ pub trait Plugin: Send + Sync + 'static {
     fn on_shutdown(&self, ctx: Context, reason: String) -> impl Future<Output = ()> + Send {
         let _ = (ctx, reason);
         async {}
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupState {
+    Pending,
+    Ready,
+    Failed,
+}
+
+async fn startup_succeeded(mut state: watch::Receiver<StartupState>) -> bool {
+    loop {
+        match *state.borrow() {
+            StartupState::Ready => return true,
+            StartupState::Failed => return false,
+            StartupState::Pending => {}
+        }
+        if state.changed().await.is_err() {
+            return false;
+        }
+    }
+}
+
+fn startup_is_ready(state: &watch::Receiver<StartupState>) -> bool {
+    *state.borrow() == StartupState::Ready
+}
+
+/// Deliver host events after initialization, exactly once and in wire order.
+/// A single worker prevents a slow stale refresh from overtaking a newer
+/// `core:apps.changed` publication. Warm snapshots never join this queue: they
+/// clone the last atomically published store immediately while maintenance
+/// continues in the background.
+async fn run_event_worker<P: Plugin>(
+    plugin: Arc<P>,
+    ctx: Context,
+    mut events: mpsc::Receiver<QueuedEvent>,
+    startup: watch::Receiver<StartupState>,
+    handler_timeout: Duration,
+) {
+    if !startup_succeeded(startup).await {
+        return;
+    }
+
+    while let Some(queued) = events.recv().await {
+        let event_name = queued.event.name.clone();
+        let queue_elapsed = queued.enqueued_at.elapsed();
+        if event_name == "core:apps.changed" {
+            // The empty list is authoritative too: a terminated final app must
+            // clear the snapshot before plugin code rebuilds its warm catalog.
+            ctx.set_running_applications(queued.running_applications);
+        }
+
+        let started_at = Instant::now();
+        let outcome =
+            tokio::time::timeout(handler_timeout, plugin.on_event(ctx.clone(), queued.event)).await;
+        let handler_elapsed = started_at.elapsed();
+        let fields = BTreeMap::from([
+            ("event".to_string(), event_name),
+            (
+                "queue_ms".to_string(),
+                queue_elapsed.as_millis().to_string(),
+            ),
+            (
+                "handler_ms".to_string(),
+                handler_elapsed.as_millis().to_string(),
+            ),
+        ]);
+        match outcome {
+            Err(_) => {
+                let mut fields = fields;
+                fields.insert(
+                    "timeout_ms".to_string(),
+                    handler_timeout.as_millis().to_string(),
+                );
+                ctx.log_fields("warn", "[plugin] event handler timed out", fields);
+            }
+            Ok(()) if handler_elapsed >= EVENT_HANDLER_WARN_AFTER => {
+                ctx.log_fields("warn", "[plugin] slow event handler", fields);
+            }
+            Ok(()) if queue_elapsed >= EVENT_HANDLER_WARN_AFTER => {
+                ctx.log_fields("warn", "[plugin] event queue delayed", fields);
+            }
+            Ok(()) => {}
+        }
     }
 }
 
@@ -1181,7 +2149,6 @@ fn wait_for_parent_exit(parent_pid: i32) {
     unsafe {
         let kq = libc::kqueue();
         if kq == -1 {
-            poll_parent_exit(parent_pid);
             return;
         }
         let change = libc::kevent {
@@ -1195,7 +2162,6 @@ fn wait_for_parent_exit(parent_pid: i32) {
         let registered = libc::kevent(kq, &change, 1, ptr::null_mut(), 0, ptr::null());
         if registered == -1 {
             libc::close(kq);
-            poll_parent_exit(parent_pid);
             return;
         }
         loop {
@@ -1217,7 +2183,6 @@ fn wait_for_parent_exit(parent_pid: i32) {
                     std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR);
                 if !interrupted {
                     libc::close(kq);
-                    poll_parent_exit(parent_pid);
                     return;
                 }
             }
@@ -1226,18 +2191,9 @@ fn wait_for_parent_exit(parent_pid: i32) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn wait_for_parent_exit(parent_pid: i32) {
-    poll_parent_exit(parent_pid);
-}
-
-fn poll_parent_exit(parent_pid: i32) {
+fn wait_for_parent_exit(_parent_pid: i32) {
     loop {
-        let missing = unsafe { libc::kill(parent_pid, 0) == -1 }
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
-        if missing {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::park();
     }
 }
 
@@ -1265,6 +2221,7 @@ fn context_from_env(
         host_pending,
         host_counter,
         locations: Arc::new(Mutex::new(HashMap::new())),
+        running_applications: Arc::new(Mutex::new(Vec::new())),
     }
 }
 
@@ -1280,36 +2237,56 @@ pub fn run<P: Plugin>(plugin: P) {
     runtime.block_on(serve(plugin));
 }
 
-/// Decode `params` into a typed request payload, falling back to its default
-/// when the shape doesn't match (so a malformed frame degrades to an empty
-/// request rather than a panic).
-fn decode<T: DeserializeOwned + Default>(params: Value, ctx: &Context, what: &str) -> T {
-    match serde_json::from_value::<T>(params) {
+/// Decode one typed request payload. Malformed input is a protocol error, never
+/// an invitation to run the handler against a fabricated default value.
+fn decode<T: DeserializeOwned>(params: Value, what: &str) -> Result<T, String> {
+    serde_json::from_value::<T>(params).map_err(|error| format!("invalid {what} params: {error}"))
+}
+
+async fn reject_request(ctx: &Context, id: Value, error: String) {
+    ctx.log(
+        "warn",
+        &format!("[plugin] rejected malformed request ({error})"),
+    );
+    ctx.emit
+        .respond(id, json!({ "ok": false, "error": error }))
+        .await;
+}
+
+fn validated_response_value(ctx: &Context, response: &Response) -> Value {
+    if let Err(violation) = response.validate_boundary() {
+        ctx.log_fields(
+            "warn",
+            "[plugin] rejected response at SDK boundary",
+            violation.log_fields(),
+        );
+        return json!({
+            "ok": false,
+            "error": "plugin response rejected by SDK candidate limits",
+        });
+    }
+    match response.to_value() {
         Ok(value) => value,
-        Err(err) => {
-            // Don't silently fall back to a default — a renamed/removed field
-            // would otherwise make the handler run on empty params with no
-            // signal. Surface it through the host's structured log channel.
+        Err(error) => {
             ctx.log(
                 "warn",
-                &format!("[plugin] could not decode {what} params ({err}); using defaults"),
+                "[plugin] rejected response that could not be encoded",
             );
-            T::default()
+            json!({ "ok": false, "error": error })
         }
     }
 }
 
 async fn serve<P: Plugin>(plugin: P) {
     let plugin = Arc::new(plugin);
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (control_tx, control_rx) = mpsc::channel::<Vec<u8>>(CONTROL_QUEUE_CAPACITY);
+    let (telemetry_tx, telemetry_rx) = mpsc::channel::<Vec<u8>>(TELEMETRY_QUEUE_CAPACITY);
     let writer = tokio::spawn(async move {
         // 64 KiB buffer coalesces the 4-byte header and payload into one write
         // syscall per frame; we flush every frame to keep latency low.
         let mut out = BufWriter::with_capacity(64 * 1024, tokio::io::stdout());
-        while let Some(payload) = rx.recv().await {
-            if payload.len() > MAX_FRAME_BYTES {
-                continue;
-            }
+        let mut outbound = OutboundReceiver::new(control_rx, telemetry_rx);
+        while let Some(payload) = outbound.recv().await {
             let len = (payload.len() as u32).to_be_bytes();
             if out.write_all(&len).await.is_err() {
                 break;
@@ -1323,7 +2300,11 @@ async fn serve<P: Plugin>(plugin: P) {
 
     let host_pending: HostPending = Arc::new(Mutex::new(HashMap::new()));
     let host_counter = Arc::new(AtomicU64::new(0));
-    let ctx = context_from_env(Emitter { tx }, host_pending.clone(), host_counter);
+    let ctx = context_from_env(
+        Emitter::new(control_tx, telemetry_tx),
+        host_pending.clone(),
+        host_counter,
+    );
     ctx.prepare_dirs().await;
     start_parent_liveness_watch();
     ctx.log("info", "[plugin] process ready");
@@ -1331,6 +2312,15 @@ async fn serve<P: Plugin>(plugin: P) {
     let mut stdin = tokio::io::stdin();
     let mut len_buf = [0u8; 4];
     let mut started = false;
+    let (startup_tx, startup_rx) = watch::channel(StartupState::Pending);
+    let (event_tx, event_rx) = mpsc::channel::<QueuedEvent>(EVENT_QUEUE_CAPACITY);
+    let event_worker = tokio::spawn(run_event_worker(
+        plugin.clone(),
+        ctx.clone(),
+        event_rx,
+        startup_rx.clone(),
+        EVENT_HANDLER_TIMEOUT,
+    ));
     loop {
         // Read the 4-byte big-endian length prefix. A clean EOF here means the
         // host closed our stdin; anything mid-frame is an unexpected EOF — both
@@ -1343,6 +2333,14 @@ async fn serve<P: Plugin>(plugin: P) {
             continue;
         }
         if len > MAX_FRAME_BYTES {
+            ctx.log_fields(
+                "warn",
+                "[plugin] rejected oversized inbound frame",
+                BTreeMap::from([
+                    ("encoded_bytes".to_string(), len.to_string()),
+                    ("limit_bytes".to_string(), MAX_FRAME_BYTES.to_string()),
+                ]),
+            );
             break;
         }
         let mut payload = vec![0u8; len];
@@ -1389,29 +2387,95 @@ async fn serve<P: Plugin>(plugin: P) {
 
         match method.as_str() {
             "initialize" => {
-                if let Some(host_version) = params.get("protocol_version").and_then(Value::as_u64) {
-                    if host_version != u64::from(PROTOCOL_VERSION) {
-                        ctx.log(
-                            "warn",
-                            &format!(
-                                "[plugin] protocol_version mismatch: host v{host_version}, \
-                                 plugin v{PROTOCOL_VERSION} — wire contract may have drifted"
-                            ),
-                        );
+                if started {
+                    ctx.emit
+                        .respond(
+                            id,
+                            json!({
+                                "ok": false,
+                                "protocol_version": PROTOCOL_VERSION,
+                                "error": "initialize may only be called once",
+                            }),
+                        )
+                        .await;
+                    continue;
+                }
+                let initialize = match serde_json::from_value::<InitializeRequest>(params) {
+                    Ok(initialize) => initialize,
+                    Err(err) => {
+                        let _ = startup_tx.send(StartupState::Failed);
+                        ctx.emit
+                            .respond(
+                                id,
+                                json!({
+                                    "ok": false,
+                                    "protocol_version": PROTOCOL_VERSION,
+                                    "error": format!("invalid initialize params: {err}"),
+                                }),
+                            )
+                            .await;
+                        continue;
                     }
+                };
+                if initialize.protocol_version != PROTOCOL_VERSION {
+                    let _ = startup_tx.send(StartupState::Failed);
+                    ctx.emit
+                        .respond(
+                            id,
+                            json!({
+                                "ok": false,
+                                "protocol_version": PROTOCOL_VERSION,
+                                "error": format!(
+                                    "protocol_version mismatch: host v{}, plugin v{}",
+                                    initialize.protocol_version, PROTOCOL_VERSION
+                                ),
+                            }),
+                        )
+                        .await;
+                    continue;
                 }
-                ctx.emit.respond(
-                    id,
-                    json!({ "ok": true, "protocol_version": PROTOCOL_VERSION }),
-                );
-                if !started {
-                    started = true;
-                    let plugin = plugin.clone();
-                    let ctx = ctx.clone();
-                    tokio::spawn(async move { plugin.on_start(ctx).await });
-                }
+                started = true;
+                ctx.set_running_applications(initialize.running_applications);
+                let plugin = plugin.clone();
+                let ctx = ctx.clone();
+                let startup_tx = startup_tx.clone();
+                tokio::spawn(async move {
+                    plugin.on_start(ctx.clone()).await;
+                    let published_sources = ctx.published_location_source_ids();
+                    let canonical_source = ctx.canonical_location_source_id();
+                    if plugin.requires_initial_locations() && !ctx.has_locations(&canonical_source)
+                    {
+                        let error = format!(
+                            "candidate plugin returned from on_start without set_locations({canonical_source:?}, ...)"
+                        );
+                        ctx.log("error", &error);
+                        let _ = startup_tx.send(StartupState::Failed);
+                        ctx.emit
+                            .respond(
+                                id,
+                                json!({
+                                    "ok": false,
+                                    "protocol_version": PROTOCOL_VERSION,
+                                    "error": error,
+                                }),
+                            )
+                            .await;
+                        return;
+                    }
+                    let _ = startup_tx.send(StartupState::Ready);
+                    ctx.emit
+                        .respond(
+                            id,
+                            json!({
+                                "ok": true,
+                                "protocol_version": PROTOCOL_VERSION,
+                                "published_sources": published_sources,
+                            }),
+                        )
+                        .await;
+                });
             }
-            "heartbeat" => ctx.emit.respond(id, json!({ "ok": true })),
+            "heartbeat" => ctx.emit.respond(id, json!({ "ok": true })).await,
             "shutdown" => {
                 let reason = params
                     .get("reason")
@@ -1419,62 +2483,841 @@ async fn serve<P: Plugin>(plugin: P) {
                     .unwrap_or("unknown")
                     .to_string();
                 plugin.on_shutdown(ctx.clone(), reason).await;
-                ctx.emit.respond(id, json!({ "ok": true }));
+                ctx.emit.respond(id, json!({ "ok": true })).await;
                 break;
             }
             "event" => {
-                let event = Event::from_params(params);
-                ctx.emit.respond(id, json!({ "ok": true }));
-                let plugin = plugin.clone();
-                let ctx = ctx.clone();
-                tokio::spawn(async move { plugin.on_event(ctx, event).await });
+                let event = match Event::from_params(params) {
+                    Ok(event) => event,
+                    Err(error) => {
+                        ctx.log(
+                            "warn",
+                            &format!("[plugin] rejected malformed event ({error})"),
+                        );
+                        ctx.emit
+                            .respond(id, json!({ "ok": false, "error": error }))
+                            .await;
+                        continue;
+                    }
+                };
+                let event_name = event.event.name.clone();
+                match event_tx.try_send(event) {
+                    Ok(()) => ctx.emit.respond(id, json!({ "ok": true })).await,
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        ctx.log_fields(
+                            "warn",
+                            "[plugin] event queue full; dropped event",
+                            BTreeMap::from([
+                                ("event".to_string(), event_name),
+                                ("capacity".to_string(), EVENT_QUEUE_CAPACITY.to_string()),
+                            ]),
+                        );
+                        ctx.emit
+                            .respond(
+                                id,
+                                json!({ "ok": false, "error": "plugin event queue full" }),
+                            )
+                            .await;
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        ctx.log_fields(
+                            "warn",
+                            "[plugin] dropped event after startup failure",
+                            BTreeMap::from([("event".to_string(), event_name)]),
+                        );
+                        ctx.emit
+                            .respond(
+                                id,
+                                json!({ "ok": false, "error": "plugin event worker stopped" }),
+                            )
+                            .await;
+                    }
+                }
             }
-            "activateTarget" => {
+            "hints.activate" => {
                 // Notification: dispatch through `handle`, never respond.
-                let request = Request::ActivateTarget(decode(params, &ctx, "activateTarget"));
+                let request = match decode(params, "hints.activate") {
+                    Ok(request) => Request::ActivateTarget(request),
+                    Err(error) => {
+                        ctx.log(
+                            "warn",
+                            &format!("[plugin] dropped malformed hints.activate ({error})"),
+                        );
+                        continue;
+                    }
+                };
                 let plugin = plugin.clone();
                 let ctx = ctx.clone();
+                let startup_rx = startup_rx.clone();
                 tokio::spawn(async move {
-                    plugin.handle(ctx, request).await;
+                    if startup_succeeded(startup_rx).await {
+                        plugin.handle(ctx, request).await;
+                    }
                 });
             }
-            other => {
-                let request = match other {
-                    "command.invoke" => Request::Command(decode(params, &ctx, "command.invoke")),
-                    "discoverTargets" => {
-                        Request::DiscoverTargets(decode(params, &ctx, "discoverTargets"))
+            "sources.snapshot" => {
+                // Binding hot-path contract: clone the last complete atomically
+                // published store immediately. Event/poll maintenance continues
+                // independently and can only affect a later read.
+                if !startup_is_ready(&startup_rx) {
+                    ctx.emit
+                        .respond(
+                            id,
+                            json!({ "ok": false, "error": "plugin startup incomplete" }),
+                        )
+                        .await;
+                    continue;
+                }
+                let candidates = match ctx.validated_warm_locations() {
+                    Ok(candidates) => candidates,
+                    Err(violation) => {
+                        ctx.log_fields(
+                            "warn",
+                            "[plugin] rejected catalog snapshot at SDK boundary",
+                            violation.log_fields(),
+                        );
+                        ctx.emit
+                            .respond(
+                                id,
+                                json!({
+                                    "ok": false,
+                                    "error": "plugin catalog rejected by SDK candidate limits",
+                                }),
+                            )
+                            .await;
+                        continue;
                     }
-                    "candidateQuery" => {
-                        Request::CandidateQuery(decode(params, &ctx, "candidateQuery"))
+                };
+                let result = serde_json::to_value(SourceSnapshotResponse::candidates(candidates))
+                    .unwrap_or_else(|_| {
+                        json!({
+                            "ok": false,
+                            "error": "plugin catalog response could not be encoded",
+                        })
+                    });
+                ctx.emit.respond(id, result).await;
+            }
+            "query.evaluate" => {
+                // Query evaluators may depend on immutable state established by
+                // `on_start` (calculator exchange rates, local indexes, …). The
+                // host only dispatches to ready/degraded processes, so this path
+                // never waits for startup or lifecycle-event I/O.
+                if !startup_is_ready(&startup_rx) {
+                    ctx.emit
+                        .respond(
+                            id,
+                            json!({ "ok": false, "error": "plugin startup incomplete" }),
+                        )
+                        .await;
+                    continue;
+                }
+                let request = match decode(params, "query.evaluate") {
+                    Ok(request) => Request::QueryEvaluate(request),
+                    Err(error) => {
+                        reject_request(&ctx, id, error).await;
+                        continue;
                     }
-                    "resolveCandidate" => Request::ResolveCandidate(decode(
-                        params
-                            .get("candidate")
-                            .cloned()
-                            .unwrap_or_else(|| json!({})),
-                        &ctx,
-                        "resolveCandidate",
-                    )),
-                    "sourceAction" => Request::SourceAction(decode(params, &ctx, "sourceAction")),
-                    "navigation.restore" => {
-                        Request::RestoreNavigation(decode(params, &ctx, "navigation.restore"))
-                    }
-                    _ => Request::Unknown {
-                        method: other.to_string(),
-                    },
                 };
                 let plugin = plugin.clone();
                 let ctx = ctx.clone();
                 tokio::spawn(async move {
+                    let evaluation_started_at = Instant::now();
                     let response = plugin.handle(ctx.clone(), request).await;
-                    ctx.emit.respond(id, response.to_value());
+                    let evaluation_elapsed_ms = evaluation_started_at.elapsed().as_millis();
+                    if evaluation_elapsed_ms > 10 {
+                        ctx.log_fields(
+                            "warn",
+                            "[plugin] slow query evaluator",
+                            BTreeMap::from([(
+                                "elapsed_ms".to_string(),
+                                evaluation_elapsed_ms.to_string(),
+                            )]),
+                        );
+                    }
+                    let result = validated_response_value(&ctx, &response);
+                    ctx.emit.respond(id, result).await;
+                });
+            }
+            other => {
+                let request = match other {
+                    "command.invoke" => decode(params, "command.invoke").map(Request::Command),
+                    "hints.discover" => {
+                        decode(params, "hints.discover").map(Request::DiscoverTargets)
+                    }
+                    "candidate.resolve" => params
+                        .get("candidate")
+                        .cloned()
+                        .ok_or_else(|| {
+                            "invalid candidate.resolve params: missing candidate".to_string()
+                        })
+                        .and_then(|candidate| decode(candidate, "candidate.resolve"))
+                        .map(Request::ResolveCandidate),
+                    "source.action" => decode(params, "source.action").map(Request::SourceAction),
+                    "navigation.restore" => {
+                        decode(params, "navigation.restore").map(Request::RestoreNavigation)
+                    }
+                    _ => Ok(Request::Unknown {
+                        method: other.to_string(),
+                    }),
+                };
+                let request = match request {
+                    Ok(request) => request,
+                    Err(error) => {
+                        reject_request(&ctx, id, error).await;
+                        continue;
+                    }
+                };
+                let plugin = plugin.clone();
+                let ctx = ctx.clone();
+                let startup_rx = startup_rx.clone();
+                tokio::spawn(async move {
+                    if !startup_succeeded(startup_rx).await {
+                        ctx.emit
+                            .respond(id, json!({ "ok": false, "error": "plugin startup failed" }))
+                            .await;
+                        return;
+                    }
+                    let response = plugin.handle(ctx.clone(), request).await;
+                    let result = validated_response_value(&ctx, &response);
+                    ctx.emit.respond(id, result).await;
                 });
             }
         }
     }
 
-    // Drop the last emitter handle so the writer task can drain and flush any
-    // queued frames (notably the shutdown response) before we exit.
+    // The worker owns an emitter clone and may still be waiting for startup;
+    // cancel it before draining stdout so process teardown cannot hang.
+    event_worker.abort();
+    let _ = event_worker.await;
+    // Detached interval/background tasks may retain Context clones indefinitely.
+    // Close their shared emitter explicitly, then drain queued frames (notably a
+    // shutdown response) before the runtime drops and cancels those tasks.
+    ctx.emit.close();
     drop(ctx);
     let _ = writer.await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_context() -> Context {
+        let (control_tx, _control_rx) = mpsc::channel(16);
+        let (telemetry_tx, _telemetry_rx) = mpsc::channel(16);
+        Context {
+            plugin_id: "test".to_string(),
+            version: "0.0.0".to_string(),
+            data_dir: PathBuf::from("."),
+            emit: Emitter::new(control_tx, telemetry_tx),
+            config: json!({}),
+            host_pending: Arc::new(Mutex::new(HashMap::new())),
+            host_counter: Arc::new(AtomicU64::new(0)),
+            locations: Arc::new(Mutex::new(HashMap::new())),
+            running_applications: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    #[test]
+    fn authoritative_empty_locations_count_as_initialized() {
+        let ctx = test_context();
+        assert!(!ctx.has_locations("plugin:test"));
+
+        ctx.set_locations("plugin:test", Vec::new());
+
+        assert!(ctx.has_locations("plugin:test"));
+        assert_eq!(
+            ctx.published_location_source_ids(),
+            vec!["plugin:test".to_string()]
+        );
+        assert!(ctx.warm_locations().is_empty());
+    }
+
+    #[test]
+    fn running_applications_snapshot_is_clone_isolated() {
+        let ctx = test_context();
+        ctx.set_running_applications(vec![RunningApplication {
+            bundle_id: "com.example.App".to_string(),
+            pid: 42,
+            localized_name: "Example".to_string(),
+        }]);
+
+        let mut first_read = ctx.running_applications();
+        first_read.clear();
+        let second_read = ctx.running_applications();
+
+        assert_eq!(second_read.len(), 1);
+        assert_eq!(second_read[0].bundle_id, "com.example.App");
+        assert_eq!(second_read[0].pid, 42);
+    }
+
+    #[test]
+    fn malformed_events_are_rejected_instead_of_becoming_default_events() {
+        assert!(Event::from_params(json!({ "payload": {} })).is_err());
+        assert!(Event::from_params(json!({ "name": "", "payload": {} })).is_err());
+        assert!(Event::from_params(json!({
+            "name": "core:apps.changed",
+            "payload": { "running_applications": "not-an-array" }
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn malformed_request_params_are_rejected_without_default_fallback() {
+        assert!(decode::<CommandRequest>(
+            json!({ "command": "calc", "args": "not-an-array" }),
+            "command.invoke"
+        )
+        .is_err());
+        assert!(decode::<SourceActionRequest>(
+            json!({ "name": "tab_select", "index": "not-an-integer" }),
+            "source.action"
+        )
+        .is_err());
+        assert!(decode::<Candidate>(json!({}), "candidate.resolve").is_err());
+    }
+
+    #[test]
+    fn catalog_boundary_rejects_counts_fields_and_aggregate_bytes() {
+        let too_many = vec![Candidate::new("x"); MAX_CATALOG_CANDIDATES + 1];
+        assert_eq!(
+            validate_catalog_candidates(&too_many).unwrap_err().rule,
+            "candidate_count"
+        );
+
+        let oversized_title = vec![Candidate::new("x".repeat(MAX_CANDIDATE_TITLE_BYTES + 1))];
+        assert_eq!(
+            validate_catalog_candidates(&oversized_title)
+                .unwrap_err()
+                .rule,
+            "title_bytes"
+        );
+
+        let aggregate = (0..65)
+            .map(|index| {
+                Candidate::new(format!("candidate {index}"))
+                    .metadata("payload", "x".repeat(MAX_CANDIDATE_METADATA_VALUE_BYTES))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            validate_catalog_candidates(&aggregate).unwrap_err().rule,
+            "aggregate_string_bytes"
+        );
+    }
+
+    #[test]
+    fn invalid_catalog_publication_preserves_last_good_snapshot() {
+        let ctx = test_context();
+        ctx.set_locations("plugin:test", vec![Candidate::new("last good")]);
+
+        ctx.set_locations(
+            "plugin:test",
+            vec![Candidate::new("x".repeat(MAX_CANDIDATE_TITLE_BYTES + 1))],
+        );
+
+        let candidates = ctx.warm_locations();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].title, "last good");
+    }
+
+    #[test]
+    fn query_boundary_rejects_counts_fields_and_aggregate_bytes() {
+        let too_many = vec![QueryAnswer::copy_text("1", None::<String>); MAX_QUERY_ANSWERS + 1];
+        assert_eq!(
+            validate_query_answers(&too_many).unwrap_err().rule,
+            "answer_count"
+        );
+
+        let oversized =
+            QueryAnswer::copy_text("x".repeat(MAX_QUERY_FIELD_BYTES + 1), None::<String>);
+        assert_eq!(
+            validate_query_answers(&[oversized]).unwrap_err().rule,
+            "title_bytes"
+        );
+
+        let aggregate = (0..MAX_QUERY_ANSWERS)
+            .map(|_| QueryAnswer::copy_text("x".repeat(10 * 1024), None::<String>))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            validate_query_answers(&aggregate).unwrap_err().rule,
+            "aggregate_string_bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn control_responses_overtake_queued_telemetry() {
+        let (control_tx, control_rx) = mpsc::channel(4);
+        let (telemetry_tx, telemetry_rx) = mpsc::channel(4);
+        let emitter = Emitter::new(control_tx, telemetry_tx);
+        let mut outbound = OutboundReceiver::new(control_rx, telemetry_rx);
+
+        emitter.notify("status.updated", json!({ "segments": {} }));
+        emitter.respond(json!(7), json!({ "ok": true })).await;
+
+        let first = outbound.recv().await.unwrap();
+        let first: Value = rmp_serde::from_slice(&first).unwrap();
+        assert_eq!(first.get("id"), Some(&json!(7)));
+
+        let second = outbound.recv().await.unwrap();
+        let second: Value = rmp_serde::from_slice(&second).unwrap();
+        assert_eq!(
+            second.get("method").and_then(Value::as_str),
+            Some("status.updated")
+        );
+    }
+
+    #[tokio::test]
+    async fn outbound_telemetry_queue_is_bounded() {
+        let (control_tx, _control_rx) = mpsc::channel(1);
+        let (telemetry_tx, _telemetry_rx) = mpsc::channel(1);
+        let emitter = Emitter::new(control_tx, telemetry_tx);
+
+        emitter.notify("status.updated", json!({ "segments": {} }));
+        emitter.notify("status.updated", json!({ "segments": {} }));
+
+        assert_eq!(emitter.telemetry_drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn oversized_response_becomes_small_explicit_error() {
+        let (control_tx, control_rx) = mpsc::channel(4);
+        let (telemetry_tx, telemetry_rx) = mpsc::channel(4);
+        let emitter = Emitter::new(control_tx, telemetry_tx);
+        let mut outbound = OutboundReceiver::new(control_rx, telemetry_rx);
+
+        emitter
+            .respond(json!(9), json!({ "value": "x".repeat(MAX_FRAME_BYTES) }))
+            .await;
+
+        let payload = outbound.recv().await.unwrap();
+        let response: Value = rmp_serde::from_slice(&payload).unwrap();
+        assert_eq!(response.get("id"), Some(&json!(9)));
+        assert_eq!(
+            response.pointer("/result/error").and_then(Value::as_str),
+            Some("plugin response exceeded outbound frame limit")
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_notification_emits_content_free_warning() {
+        let (control_tx, control_rx) = mpsc::channel(4);
+        let (telemetry_tx, telemetry_rx) = mpsc::channel(4);
+        let emitter = Emitter::new(control_tx, telemetry_tx);
+        let mut outbound = OutboundReceiver::new(control_rx, telemetry_rx);
+
+        emitter.notify(
+            "status.updated",
+            json!({ "value": "x".repeat(MAX_TELEMETRY_FRAME_BYTES) }),
+        );
+
+        let payload = outbound.recv().await.unwrap();
+        let warning: Value = rmp_serde::from_slice(&payload).unwrap();
+        assert_eq!(
+            warning.get("method").and_then(Value::as_str),
+            Some("flash.log")
+        );
+        assert_eq!(
+            warning.pointer("/params/message").and_then(Value::as_str),
+            Some("[plugin] outbound frame rejected")
+        );
+        assert!(warning.to_string().len() < 1_000);
+    }
+
+    #[tokio::test]
+    async fn closing_emitter_releases_writer_despite_retained_context_clone() {
+        let (control_tx, control_rx) = mpsc::channel(4);
+        let (telemetry_tx, telemetry_rx) = mpsc::channel(4);
+        let emitter = Emitter::new(control_tx, telemetry_tx);
+        let mut outbound = OutboundReceiver::new(control_rx, telemetry_rx);
+        let retained = emitter.clone();
+
+        emitter.notify("before.close", json!({}));
+        assert!(outbound.recv().await.is_some());
+
+        emitter.close();
+        retained.notify("after.close", json!({}));
+        assert!(outbound.recv().await.is_none());
+    }
+
+    #[test]
+    fn subprocess_latency_warning_classification_covers_slow_and_timed_out_runs() {
+        let success = CommandOutput {
+            ok: true,
+            status: 0,
+            ..Default::default()
+        };
+        let expected_probe_failure = CommandOutput {
+            ok: false,
+            status: 1,
+            ..Default::default()
+        };
+        let timeout = CommandOutput {
+            ok: false,
+            status: 124,
+            ..Default::default()
+        };
+
+        assert!(!command_latency_requires_warning(
+            &success,
+            Duration::from_millis(999)
+        ));
+        assert!(command_latency_requires_warning(
+            &success,
+            Duration::from_secs(1)
+        ));
+        assert!(command_latency_requires_warning(
+            &timeout,
+            Duration::from_millis(1)
+        ));
+        assert!(!command_latency_requires_warning(
+            &expected_probe_failure,
+            Duration::from_millis(1)
+        ));
+    }
+
+    struct RecordingPlugin {
+        observations: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    impl Plugin for RecordingPlugin {
+        fn on_event(&self, ctx: Context, event: Event) -> impl Future<Output = ()> + Send {
+            let observations = self.observations.clone();
+            async move {
+                let marker = event.text.unwrap_or_default();
+                if marker == "first" {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                let bundle = ctx
+                    .running_applications()
+                    .first()
+                    .map(|app| app.bundle_id.clone())
+                    .unwrap_or_default();
+                ctx.set_locations(
+                    "plugin:test",
+                    vec![Candidate::new(format!("published:{marker}"))],
+                );
+                observations.lock().unwrap().push((marker, bundle));
+            }
+        }
+
+        async fn handle(&self, _ctx: Context, _request: Request) -> Response {
+            Response::None
+        }
+    }
+
+    struct BlockingPublicationPlugin {
+        started: Mutex<Option<oneshot::Sender<()>>>,
+        release: Mutex<Option<oneshot::Receiver<()>>>,
+    }
+
+    impl Plugin for BlockingPublicationPlugin {
+        fn on_event(&self, ctx: Context, event: Event) -> impl Future<Output = ()> + Send {
+            let started = self.started.lock().unwrap().take();
+            let release = self.release.lock().unwrap().take();
+            async move {
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                if let Some(release) = release {
+                    let _ = release.await;
+                }
+                ctx.set_locations(
+                    "plugin:test",
+                    vec![Candidate::new(
+                        event.text.unwrap_or_else(|| "published".to_string()),
+                    )],
+                );
+            }
+        }
+
+        async fn handle(&self, _ctx: Context, _request: Request) -> Response {
+            Response::None
+        }
+    }
+
+    struct TimeoutRecoveryPlugin {
+        completed: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Plugin for TimeoutRecoveryPlugin {
+        fn on_event(&self, _ctx: Context, event: Event) -> impl Future<Output = ()> + Send {
+            let completed = self.completed.clone();
+            async move {
+                if event.text.as_deref() == Some("stuck") {
+                    std::future::pending::<()>().await;
+                }
+                completed
+                    .lock()
+                    .unwrap()
+                    .push(event.text.unwrap_or_default());
+            }
+        }
+
+        async fn handle(&self, _ctx: Context, _request: Request) -> Response {
+            Response::None
+        }
+    }
+
+    #[tokio::test]
+    async fn event_worker_waits_for_startup_and_applies_app_snapshots_in_wire_order() {
+        let ctx = test_context();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let plugin = Arc::new(RecordingPlugin {
+            observations: observations.clone(),
+        });
+        let (event_tx, event_rx) = mpsc::channel(4);
+        let (startup_tx, startup_rx) = watch::channel(StartupState::Pending);
+        let worker = tokio::spawn(run_event_worker(
+            plugin,
+            ctx,
+            event_rx,
+            startup_rx,
+            EVENT_HANDLER_TIMEOUT,
+        ));
+
+        for (marker, bundle) in [
+            ("first", "com.example.First"),
+            ("second", "com.example.Second"),
+        ] {
+            event_tx
+                .send(QueuedEvent {
+                    event: Event {
+                        name: "core:apps.changed".to_string(),
+                        text: Some(marker.to_string()),
+                        ..Event::default()
+                    },
+                    running_applications: vec![RunningApplication {
+                        bundle_id: bundle.to_string(),
+                        pid: 1,
+                        localized_name: String::new(),
+                    }],
+                    enqueued_at: Instant::now(),
+                })
+                .await
+                .unwrap();
+        }
+        tokio::task::yield_now().await;
+        assert!(observations.lock().unwrap().is_empty());
+
+        startup_tx.send(StartupState::Ready).unwrap();
+        drop(event_tx);
+        worker.await.unwrap();
+
+        assert_eq!(
+            *observations.lock().unwrap(),
+            vec![
+                ("first".to_string(), "com.example.First".to_string()),
+                ("second".to_string(), "com.example.Second".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn in_flight_event_refresh_does_not_block_atomic_warm_store_read() {
+        let ctx = test_context();
+        ctx.set_locations("plugin:test", vec![Candidate::new("old")]);
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let plugin = Arc::new(BlockingPublicationPlugin {
+            started: Mutex::new(Some(started_tx)),
+            release: Mutex::new(Some(release_rx)),
+        });
+        let (event_tx, event_rx) = mpsc::channel(1);
+        let (_startup_tx, startup_rx) = watch::channel(StartupState::Ready);
+        let worker = tokio::spawn(run_event_worker(
+            plugin,
+            ctx.clone(),
+            event_rx,
+            startup_rx,
+            EVENT_HANDLER_TIMEOUT,
+        ));
+
+        event_tx
+            .send(QueuedEvent {
+                event: Event {
+                    name: "core:focus.changed".to_string(),
+                    text: Some("new".to_string()),
+                    ..Event::default()
+                },
+                running_applications: Vec::new(),
+                enqueued_at: Instant::now(),
+            })
+            .await
+            .unwrap();
+        started_rx.await.unwrap();
+
+        // `sources.snapshot` is exactly this clone. Maintenance can be slow,
+        // but gathering always receives one complete last-published vector.
+        assert_eq!(ctx.warm_locations()[0].title, "old");
+
+        release_tx.send(()).unwrap();
+        drop(event_tx);
+        worker.await.unwrap();
+        assert_eq!(ctx.warm_locations()[0].title, "new");
+    }
+
+    #[tokio::test]
+    async fn event_watchdog_cancels_a_stuck_handler_and_delivers_the_next_event() {
+        let ctx = test_context();
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let plugin = Arc::new(TimeoutRecoveryPlugin {
+            completed: completed.clone(),
+        });
+        let (event_tx, event_rx) = mpsc::channel(2);
+        let (_startup_tx, startup_rx) = watch::channel(StartupState::Ready);
+        let worker = tokio::spawn(run_event_worker(
+            plugin,
+            ctx,
+            event_rx,
+            startup_rx,
+            Duration::from_millis(10),
+        ));
+
+        for marker in ["stuck", "next"] {
+            event_tx
+                .send(QueuedEvent {
+                    event: Event {
+                        name: "core:focus.changed".to_string(),
+                        text: Some(marker.to_string()),
+                        ..Event::default()
+                    },
+                    running_applications: Vec::new(),
+                    enqueued_at: Instant::now(),
+                })
+                .await
+                .unwrap();
+        }
+        drop(event_tx);
+        worker.await.unwrap();
+
+        assert_eq!(*completed.lock().unwrap(), vec!["next".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn bounded_event_queue_rejects_excess_work_without_waiting() {
+        let (event_tx, _event_rx) = mpsc::channel(1);
+        let event = || QueuedEvent {
+            event: Event {
+                name: "core:focus.changed".to_string(),
+                ..Event::default()
+            },
+            running_applications: Vec::new(),
+            enqueued_at: Instant::now(),
+        };
+
+        event_tx.try_send(event()).unwrap();
+        assert!(matches!(
+            event_tx.try_send(event()),
+            Err(mpsc::error::TrySendError::Full(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn context_interval_waits_for_first_tick_and_never_overlaps_itself() {
+        let ctx = test_context();
+        let calls = Arc::new(AtomicU64::new(0));
+        let in_flight = Arc::new(AtomicU64::new(0));
+        let max_in_flight = Arc::new(AtomicU64::new(0));
+        let handle = ctx.interval(Duration::from_millis(5), {
+            let calls = calls.clone();
+            let in_flight = in_flight.clone();
+            let max_in_flight = max_in_flight.clone();
+            move |_| {
+                let calls = calls.clone();
+                let in_flight = in_flight.clone();
+                let max_in_flight = max_in_flight.clone();
+                async move {
+                    let active = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_in_flight.fetch_max(active, Ordering::SeqCst);
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(8)).await;
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+        });
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        tokio::time::sleep(Duration::from_millis(32)).await;
+        handle.abort();
+
+        assert!(calls.load(Ordering::SeqCst) >= 2);
+        assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_gate_reads_running_apps_after_waiting_for_older_refresh() {
+        let ctx = test_context();
+        ctx.set_running_applications(vec![RunningApplication {
+            bundle_id: "com.example.Old".to_string(),
+            pid: 1,
+            localized_name: String::new(),
+        }]);
+        let gate = RefreshGate::default();
+        let (first_started_tx, first_started_rx) = oneshot::channel();
+        let (release_first_tx, release_first_rx) = oneshot::channel();
+        let first = {
+            let gate = gate.clone();
+            let ctx = ctx.clone();
+            tokio::spawn(async move {
+                gate.run(&ctx, move |_, apps| async move {
+                    first_started_tx.send(()).unwrap();
+                    release_first_rx.await.unwrap();
+                    apps[0].bundle_id.clone()
+                })
+                .await
+            })
+        };
+        first_started_rx.await.unwrap();
+
+        let second = {
+            let gate = gate.clone();
+            let ctx = ctx.clone();
+            tokio::spawn(async move {
+                gate.run(&ctx, |_, apps| async move { apps[0].bundle_id.clone() })
+                    .await
+            })
+        };
+        tokio::task::yield_now().await;
+        ctx.set_running_applications(vec![RunningApplication {
+            bundle_id: "com.example.New".to_string(),
+            pid: 2,
+            localized_name: String::new(),
+        }]);
+        release_first_tx.send(()).unwrap();
+
+        assert_eq!(first.await.unwrap(), "com.example.Old");
+        assert_eq!(second.await.unwrap(), "com.example.New");
+    }
+
+    #[tokio::test]
+    async fn lifecycle_gate_waits_for_startup_readiness() {
+        let (tx, rx) = watch::channel(StartupState::Pending);
+        let waiter = tokio::spawn(startup_succeeded(rx));
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+
+        tx.send(StartupState::Ready).unwrap();
+
+        assert!(waiter.await.unwrap());
+    }
+
+    #[test]
+    fn warm_request_readiness_check_is_immediate_and_requires_ready() {
+        let (_pending_tx, pending_rx) = watch::channel(StartupState::Pending);
+        let (_ready_tx, ready_rx) = watch::channel(StartupState::Ready);
+        let (_failed_tx, failed_rx) = watch::channel(StartupState::Failed);
+
+        assert!(!startup_is_ready(&pending_rx));
+        assert!(startup_is_ready(&ready_rx));
+        assert!(!startup_is_ready(&failed_rx));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_gate_unblocks_false_when_startup_fails() {
+        let (tx, rx) = watch::channel(StartupState::Pending);
+        let waiter = tokio::spawn(startup_succeeded(rx));
+
+        tx.send(StartupState::Failed).unwrap();
+
+        assert!(!waiter.await.unwrap());
+    }
 }

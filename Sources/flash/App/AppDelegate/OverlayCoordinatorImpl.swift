@@ -330,10 +330,19 @@ extension AppDelegate {
         + "shift:\(clickModifiers.contains(.shift)) "
         + "ctrl:\(clickModifiers.contains(.control)) "
         + "alt:\(clickModifiers.contains(.option)) "
-        + "enters_insert=\(hint.target.entersInsertMode)")
+        + "enters_insert=\(hint.target.entersInsertMode) "
+        + "transfers_focus=\(hint.target.transfersFocus)")
 
+    // A focus-transferring target (status-bar link → browser) never takes the
+    // insert-handoff / probe path: the source app's focused element is
+    // unrelated to the commit (a terminal even reports always-editable), and
+    // an INSERT entry's re-activation would steal focus back from the app the
+    // commit just opened. Its activation must also not be preceded by a
+    // source-app re-activate for the same reason.
+    let mayProbeInsert =
+      wasNormalMode && actionMayEnterInsert && !hint.target.transfersFocus
     let handoffToken: UInt64?
-    if wasNormalMode, actionMayEnterInsert {
+    if mayProbeInsert {
       handoffToken = notePointerInsertHandoff(reason: "hint_commit")
     } else {
       handoffToken = nil
@@ -344,7 +353,9 @@ extension AppDelegate {
     overlay.hide()
     // Restore focus to the target app before dispatching, so AXPress / the
     // synthesized click both reach the intended window.
-    if let pid, let app = NSRunningApplication(processIdentifier: pid) {
+    if let pid, !hint.target.transfersFocus,
+      let app = NSRunningApplication(processIdentifier: pid)
+    {
       RunningApplicationActivation.activate(app, options: [])
     }
     // Hold the activation gate closed across the click dispatch. Without
@@ -365,7 +376,7 @@ extension AppDelegate {
       ) { [weak self] in
         guard let self else { return }
         self.activationInFlight = false
-        if wasNormalMode, actionMayEnterInsert {
+        if mayProbeInsert {
           // Any pointer commit — including right-click — hands the keyboard to
           // the app and enters insert (the context menu does its own key
           // tracking, so releasing capture is correct there too).
@@ -626,7 +637,14 @@ extension AppDelegate {
     // NORMAL when the click did not land on a text input — a button/link is
     // clicked but keyboard navigation continues.
     guard hintTargetEntersInsert ?? true else {
-      completion?(.recaptureNormal)
+      // The hinted target wasn't itself a text input, but the click may have
+      // *opened* one that now has focus — e.g. Slack's "Search" trigger opens
+      // the extended-search overlay and focuses its field. Let the existing AX
+      // focused-element observer complete the handoff; if no focus event arrives
+      // inside the short window, recapture normal once.
+      armPointerInsertFocusHandoff(pid: pid, reason: reason, token: handoffToken) { entered in
+        completion?(entered ? .enteredInsert : .recaptureNormal)
+      }
       return
     }
     let targetPID = pid ?? currentNonFlashContext()?.processID
@@ -646,32 +664,6 @@ extension AppDelegate {
     mappings.handle(event: event)
   }
 
-  func overlayDidCancelModal() {
-    clipboardModalEntries = []
-    normalModePendingCommandToken &+= 1
-    overlay.normalModePending = ""
-    // The reducer pops the modal's `restoreTo`; the base-mode entry effects
-    // hide the modal overlay and restore capture.
-    dispatchMode(.dismissModal)
-  }
-
-  /// Paste the highlighted `:clipboard` entry. The panel owns the selected
-  /// index; map it back to the full value and route through `insertText`
-  /// (stash on the pasteboard, synth ⌘V into the focused app), same as an
-  /// emoji picked from the flashlight.
-  func overlayDidSubmitSelectableModal() {
-    let index = overlay.selectableModalSelectedIndex
-    guard clipboardModalEntries.indices.contains(index) else {
-      overlayDidCancelModal()
-      return
-    }
-    let value = clipboardModalEntries[index].value
-    clipboardModalEntries = []
-    normalModePendingCommandToken &+= 1
-    overlay.normalModePending = ""
-    insertText(value)
-  }
-
   /// Forward the `[flashlight.aliases]` lookup to the pure helper on
   /// `CandidateFinder` so the panel can rewrite `!g ` → `!google ` in
   /// place. Empty alias map (the default) short-circuits inside the
@@ -683,16 +675,6 @@ extension AppDelegate {
       text: text,
       cursorIndex: cursorIndex,
       aliases: config.flashlight.aliases)
-  }
-
-  /// Modal mode is hermetic: keys are swallowed, never forwarded to the
-  /// focused app. Dismissal flows through `cancelOperation` (Esc / Ctrl-C)
-  /// or click-outside via the modal dismiss monitors, never via an
-  /// arbitrary keystroke leaking into the underlying window. Only Insert
-  /// mode forwards input to the focused app.
-  func overlayDidPassThroughModalKey(_ event: NSEvent) {
-    FlashLog.trace(
-      "[modal] consume key=\(event.keyCode) chars=\(event.charactersIgnoringModifiers ?? "")")
   }
 
   func overlayDidCancelCommandLine() {
@@ -801,7 +783,7 @@ extension AppDelegate {
   ///     `:<plugin> <action>`): insert the selected completion's
   ///     `value` into the buffer without sending — the user can keep
   ///     typing args, or hit `<cr>` to send.
-  ///   * Candidate *finder* (`:flashlight` / `:open` / `:emojis`):
+  ///   * Candidate *finder* (`:flashlight` / `:emojis`):
   ///     `<tab>` submits final location rows, otherwise inserts the selected
   ///     candidate's canonical command text.
   ///     Cycling moves to arrow keys and `<shift-tab>`.
@@ -885,14 +867,26 @@ extension AppDelegate {
   }
 
   func openSourceItem(matching target: String) {
-    guard let item = registry.candidate(matching: target) else {
-      FlashLog.warn("[app_open] no source item found for \"\(target)\"")
-      return
+    sourceItemResolutionGeneration &+= 1
+    let generation = sourceItemResolutionGeneration
+    registry.resolveCandidate(matching: target) { [weak self] item in
+      guard let self, generation == self.sourceItemResolutionGeneration else { return }
+      guard let item else {
+        FlashLog.warn("[app_open] no source item found")
+        return
+      }
+      self.openSourceItem(item)
     }
-    openSourceItem(item)
   }
 
   func openSourceItem(_ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true) {
+    if case .copyText(let text) = candidate.effect {
+      overlay.hide()
+      resetCommandLineState()
+      applyModeOverlay(captureOverride: true)
+      NormalModeDispatcher.copy(text)
+      return
+    }
     if CandidateFinder.insertsText(candidate) {
       // Emoji type directly (no clipboard); other inserted values (e.g. a
       // clipboard-history entry, which can be long) keep the reliable
@@ -935,7 +929,7 @@ extension AppDelegate {
         // log line is the only breadcrumb the user can correlate with
         // the plugin's own log inside `~/Library/Logs/Flash/flash.log`.
         FlashLog.warn(
-          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) name=\(candidate.title) display=\(candidate.displayTitle)"
+          "[candidate_finder] unresolved candidate source=\(candidate.sourceID) kind=\(candidate.kind)"
         )
       }
       if shouldRecordMovement, let navigationURL = result.navigationURL {

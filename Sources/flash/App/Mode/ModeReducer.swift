@@ -36,15 +36,6 @@ enum ModeReducer {
       let next = restoreTo.mode
       return (next, enterEffects(for: next, targetPID: nil))
 
-    case .presentModal:
-      let next = Mode.modal(restoreTo: defaultSurfaceReturn(from: state))
-      return (next, enterEffects(for: next, targetPID: nil))
-
-    case .dismissModal:
-      guard case .modal(let restoreTo) = state else { return (state, []) }
-      let next = restoreTo.mode
-      return (next, enterEffects(for: next, targetPID: nil))
-
     case .clickResolved(let entersInsert, let targetPID):
       // The mouse only acts in NORMAL and can never leave INSERT.
       guard case .normal = state else { return (state, []) }
@@ -77,7 +68,7 @@ enum ModeReducer {
       // Sticky/global: never flips the mode. Only the command surfaces need to
       // reclaim key focus after an app switch.
       switch state {
-      case .normal, .command, .modal:
+      case .normal, .command:
         return (state, [.scheduleRecapture])
       case .insert, .disabled:
         return (state, [])
@@ -105,11 +96,10 @@ enum ModeReducer {
       return [
         .setMappingScope(.insert), .clearTransientHintState, .hideOverlayIfIdle, .renderSurface,
       ]
-    case .command, .modal:
-      // Surfaces run with NORMAL's scope so normal-scoped hotkeys stay live.
-      // Hint cleanup is owned by the surface's content setup
-      // (`enterCommandLineMode` / `prepareModalPresentation`).
-      return [.setMappingScope(mode.flashMode), .renderSurface, .scheduleRecapture]
+    case .command:
+      // Command surfaces own every key. Hint cleanup is owned by the
+      // surface's content setup (`enterCommandLineMode`).
+      return [.setMappingScope(.command), .renderSurface, .scheduleRecapture]
     }
   }
 

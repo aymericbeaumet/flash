@@ -1,12 +1,16 @@
-use std::process::Stdio;
-use std::time::Duration;
+use std::collections::BTreeMap;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, Candidate, CommandRequest, CommandResponse, Context, Event, ResolveResponse,
+    run, run_command, Candidate, CommandOutput, CommandRequest, CommandResponse, Context, Event,
+    RefreshGate, ResolveResponse,
 };
 
 const SOURCE_ID: &str = "plugin:processes";
 const POLL_SECONDS: u64 = 10;
+const SLOW_REFRESH_MS: u128 = 1_000;
+static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 
 struct Processes;
 
@@ -14,30 +18,39 @@ flash_plugin::plugin!(Processes);
 
 impl FlashPlugin for Processes {
     async fn on_start(&self, ctx: Context) {
-        emit_candidates(&ctx).await;
-        let poll_ctx = ctx.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(POLL_SECONDS)).await;
-                emit_candidates(&poll_ctx).await;
-            }
-        });
+        let initial_succeeded = refresh_candidates(&ctx).await;
+        if should_publish_degraded_initial(initial_succeeded, ctx.has_locations(SOURCE_ID)) {
+            log_degraded_initial(&ctx);
+            ctx.set_locations(SOURCE_ID, Vec::new());
+            let retry_ctx = ctx.clone();
+            tokio::spawn(async move {
+                refresh_candidates(&retry_ctx).await;
+            });
+        }
+        drop(
+            ctx.interval(Duration::from_secs(POLL_SECONDS), |ctx| async move {
+                refresh_candidates(&ctx).await;
+            }),
+        );
     }
 
     async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
             event.name.as_str(),
-            "core:flash.started" | "core:apps.launched" | "core:apps.terminated"
+            "core:apps.launched" | "core:apps.terminated"
         ) {
-            emit_candidates(&ctx).await;
+            refresh_candidates(&ctx).await;
         }
     }
 
     async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
         match command.subcommand.as_str() {
             "refresh" => {
-                emit_candidates(&ctx).await;
-                CommandResponse::toast("processes refreshed")
+                if refresh_candidates(&ctx).await {
+                    CommandResponse::toast("processes refreshed")
+                } else {
+                    CommandResponse::error("processes refresh failed")
+                }
             }
             "kill" => kill_command(&ctx, command.query().trim()).await,
             other => CommandResponse::error(format!("unknown subcommand: {other}")),
@@ -53,7 +66,7 @@ impl FlashPlugin for Processes {
             // Best effort: refresh so the row disappears immediately.
             let refresh_ctx = ctx.clone();
             tokio::spawn(async move {
-                emit_candidates(&refresh_ctx).await;
+                refresh_candidates(&refresh_ctx).await;
             });
             ResolveResponse::resolved(None)
         } else {
@@ -74,10 +87,65 @@ struct ProcessRow {
     mem: f32,
 }
 
-async fn emit_candidates(ctx: &Context) {
-    let rows = list_processes(ctx).await;
-    let candidates: Vec<Candidate> = rows.into_iter().map(|row| candidate_for(&row)).collect();
+async fn refresh_candidates(ctx: &Context) -> bool {
+    REFRESH_GATE
+        .run(ctx, |ctx, _running| async move {
+            refresh_candidates_inner(&ctx).await
+        })
+        .await
+}
+
+async fn refresh_candidates_inner(ctx: &Context) -> bool {
+    let started_at = Instant::now();
+    let Some(candidates) = collect_candidates(ctx).await else {
+        log_refresh(ctx, "failed", ctx.warm_locations().len(), started_at);
+        return false;
+    };
+    // A successful empty `ps` response is authoritative. Only an execution
+    // failure preserves the previous snapshot.
+    let count = candidates.len();
     ctx.set_locations(SOURCE_ID, candidates);
+    log_refresh(
+        ctx,
+        if count == 0 { "empty" } else { "ok" },
+        count,
+        started_at,
+    );
+    true
+}
+
+fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) {
+    let elapsed_ms = started_at.elapsed().as_millis();
+    let fields = BTreeMap::from([
+        ("outcome".to_string(), outcome.to_string()),
+        ("candidates".to_string(), count.to_string()),
+        ("elapsed_ms".to_string(), elapsed_ms.to_string()),
+    ]);
+    ctx.log_fields("debug", "[processes] warm refresh", fields.clone());
+    if elapsed_ms >= SLOW_REFRESH_MS {
+        ctx.log_fields("warn", "[processes] warm refresh slow", fields);
+    }
+}
+
+fn should_publish_degraded_initial(initial_succeeded: bool, has_last_good: bool) -> bool {
+    !initial_succeeded && !has_last_good
+}
+
+fn log_degraded_initial(ctx: &Context) {
+    ctx.log_fields(
+        "warn",
+        "[processes] initial warm catalog degraded",
+        BTreeMap::from([
+            ("outcome".to_string(), "empty_without_last_good".to_string()),
+            ("candidates".to_string(), "0".to_string()),
+            ("retry".to_string(), "immediate_background".to_string()),
+        ]),
+    );
+}
+
+async fn collect_candidates(ctx: &Context) -> Option<Vec<Candidate>> {
+    let rows = list_processes(ctx).await?;
+    Some(rows.into_iter().map(|row| candidate_for(&row)).collect())
 }
 
 fn candidate_for(row: &ProcessRow) -> Candidate {
@@ -92,7 +160,7 @@ fn candidate_for(row: &ProcessRow) -> Candidate {
         .payload(pid.to_string())
 }
 
-async fn list_processes(ctx: &Context) -> Vec<ProcessRow> {
+async fn list_processes(ctx: &Context) -> Option<Vec<ProcessRow>> {
     // Empty `=` headers omit the column titles, so output is rows only.
     let argv = [
         "/bin/ps".to_string(),
@@ -102,9 +170,9 @@ async fn list_processes(ctx: &Context) -> Vec<ProcessRow> {
     let result = run_command(ctx, &argv, Duration::from_secs(5)).await;
     if !result.ok {
         ctx.log("warn", &format!("[processes] ps failed: {}", result.stderr));
-        return Vec::new();
+        return None;
     }
-    result.stdout.lines().filter_map(parse_ps_row).collect()
+    Some(result.stdout.lines().filter_map(parse_ps_row).collect())
 }
 
 fn parse_ps_row(line: &str) -> Option<ProcessRow> {
@@ -142,7 +210,9 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
             CommandResponse::error(format!("kill pid {pid}: {}", result.stderr.trim()))
         };
     }
-    let rows = list_processes(ctx).await;
+    let Some(rows) = list_processes(ctx).await else {
+        return CommandResponse::error("process list failed");
+    };
     let needle = query.to_ascii_lowercase();
     let matches: Vec<&ProcessRow> = rows
         .iter()
@@ -188,65 +258,6 @@ async fn send_term(ctx: &Context, pid: i32) -> CommandOutput {
     .await
 }
 
-#[derive(Clone, Debug, Default)]
-struct CommandOutput {
-    ok: bool,
-    stdout: String,
-    stderr: String,
-    _status: i32,
-}
-
-async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CommandOutput {
-    let Some((program, args)) = argv.split_first() else {
-        return CommandOutput {
-            ok: false,
-            stderr: "empty argv".to_string(),
-            _status: -1,
-            ..Default::default()
-        };
-    };
-    let mut command = tokio::process::Command::new(program);
-    command
-        .args(args)
-        .current_dir(&ctx.data_dir)
-        .env("HOME", ctx.home_dir())
-        .env("XDG_CONFIG_HOME", ctx.config_dir())
-        .env("XDG_CACHE_HOME", ctx.cache_dir())
-        .env("XDG_DATA_HOME", ctx.share_dir())
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                ctx.bin_dir().display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    match tokio::time::timeout(timeout, command.output()).await {
-        Ok(Ok(output)) => CommandOutput {
-            ok: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            _status: output.status.code().unwrap_or(-1),
-        },
-        Ok(Err(err)) => CommandOutput {
-            ok: false,
-            stderr: err.to_string(),
-            _status: -1,
-            ..Default::default()
-        },
-        Err(_) => CommandOutput {
-            ok: false,
-            stderr: format!("timed out after {}ms", timeout.as_millis()),
-            _status: 124,
-            ..Default::default()
-        },
-    }
-}
-
 fn main() {
     run(Processes);
 }
@@ -278,5 +289,12 @@ mod tests {
     fn rejects_empty_or_malformed_row() {
         assert!(parse_ps_row("").is_none());
         assert!(parse_ps_row("notapid 1 2 cmd").is_none());
+    }
+
+    #[test]
+    fn transient_startup_failure_only_uses_empty_when_no_last_good_exists() {
+        assert!(should_publish_degraded_initial(false, false));
+        assert!(!should_publish_degraded_initial(false, true));
+        assert!(!should_publish_degraded_initial(true, false));
     }
 }

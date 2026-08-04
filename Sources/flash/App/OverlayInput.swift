@@ -15,7 +15,6 @@ enum OverlayInputMode: Equatable {
   case hints
   case normal
   case commandLine
-  case modal
   case candidateFinder
 }
 
@@ -107,9 +106,6 @@ extension OverlayPanel {
       if handleCommandLineEditingShortcut(event) { return true }
       return super.performKeyEquivalent(with: event)
     }
-    if inputMode == .modal {
-      return handleModalKeyEvent(event)
-    }
     if inputMode == .candidateFinder {
       return handleCandidateFinderKeyEvent(event)
     }
@@ -192,9 +188,6 @@ extension OverlayPanel {
     }
 
     if inputMode == .commandLine { return false }
-    if inputMode == .modal {
-      return handleModalKeyEvent(event)
-    }
     if inputMode == .candidateFinder {
       return handleCandidateFinderKeyEvent(event)
     }
@@ -266,6 +259,29 @@ extension OverlayPanel {
       coordinator?.overlayDidForceSubmitCommandLineSelection()
       return true
     }
+    // The user's Karabiner Unix bindings translate Ctrl-E into Cmd-Right
+    // (and Ctrl-A into Cmd-Left) before the event reaches us. Those modified
+    // arrow events are eligible for `performKeyEquivalent`, so let the
+    // command field's editor consume them here instead of letting the panel
+    // swallow them before `doCommandBy:` can see the corresponding selector.
+    if modifiers.intersection([.control, .option]).isEmpty,
+      !modifiers.contains(.shift),
+      let editor = commandTextField.currentEditor() as? NSTextView
+    {
+      switch event.keyCode {
+      case 123:  // Cmd-Left
+        editor.moveToBeginningOfLine(nil)
+        commandLineCursorIndex = commandTextFieldCursorIndex()
+        return true
+      case 124:  // Cmd-Right
+        editor.setSelectedRange(
+          NSRange(location: editor.string.utf16.count, length: 0))
+        commandLineCursorIndex = commandTextFieldCursorIndex()
+        return true
+      default:
+        break
+      }
+    }
     guard
       let char = event.charactersIgnoringModifiers?.lowercased().first,
       let editor = commandTextField.currentEditor() as? NSTextView
@@ -288,126 +304,6 @@ extension OverlayPanel {
       return false
     }
     return true
-  }
-
-  @discardableResult
-  private func handleModalKeyEvent(_ event: NSEvent) -> Bool {
-    guard let coordinator = coordinator else { return false }
-    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let ignoredChar =
-      NormalModeInterpreter.firstCharacter(event.charactersIgnoringModifiers)?
-      .lowercased().first
-    // Dismissal triggers: Esc, vim-style `q`, Ctrl-C, and Cmd-W. Every
-    // other key is consumed silently — modal mode is hermetic, keys
-    // never leak to the focused app.
-    let isEsc = event.keyCode == 53
-    let isQ = modifiers.isEmpty && ignoredChar == "q"
-    let isCtrlC = modifiers == .control && ignoredChar == "c"
-    let isCmdW = modifiers == .command && ignoredChar == "w"
-    if isEsc || isQ || isCtrlC || isCmdW {
-      FlashLog.trace("[input] modal dismiss key=\(event.keyCode)")
-      coordinator.overlayDidCancelModal()
-      return true
-    }
-    if modalSelectable {
-      // The `:clipboard` list: Return / keypad-enter pastes the selection;
-      // arrows, `j`/`k`, and Ctrl-N/Ctrl-P move it. Other keys fall through
-      // to the silent consume below (the list has no text filter).
-      if event.keyCode == 36 || event.keyCode == 76 {
-        coordinator.overlayDidSubmitSelectableModal()
-        return true
-      }
-      let isUp =
-        event.keyCode == 126 || (modifiers.isEmpty && ignoredChar == "k")
-        || (modifiers == .control && ignoredChar == "p")
-      let isDown =
-        event.keyCode == 125 || (modifiers.isEmpty && ignoredChar == "j")
-        || (modifiers == .control && ignoredChar == "n")
-      if isUp {
-        moveSelectableModalSelection(-1)
-        return true
-      }
-      if isDown {
-        moveSelectableModalSelection(1)
-        return true
-      }
-    } else if let scroll = consumeModalScrollKey(modifiers: modifiers, char: ignoredChar) {
-      // Text modals (`:help`, `:plugins`, `:mappings`, plugin toasts):
-      // vim-style scroll bindings navigate the modal's own scroll view,
-      // hermetic to the focused app and without leaving modal mode.
-      scrollModal(scroll)
-      return true
-    }
-    FlashLog.trace("[input] modal consume key=\(event.keyCode)")
-    coordinator.overlayDidPassThroughModalKey(event)
-    return true
-  }
-
-  /// Maps a modal-mode key to the matching scroll motion. Mirrors the
-  /// `[mode.normal.mappings]` defaults (`j/k`, `ctrl+e/y`, `ctrl+d/u`,
-  /// `gg`, `G`) so modal scroll feels identical to normal-mode scroll.
-  /// Manages a one-key `g` pending state for `gg` — cleared on any other
-  /// key, on shift, or on the sequence timeout.
-  private func consumeModalScrollKey(
-    modifiers: NSEvent.ModifierFlags,
-    char: Character?
-  ) -> OverlayPanel.ModalScrollKind? {
-    guard let char else {
-      modalScrollGPending = false
-      return nil
-    }
-    if modifiers.isEmpty {
-      if char == "j" {
-        modalScrollGPending = false
-        return .lineDown
-      }
-      if char == "k" {
-        modalScrollGPending = false
-        return .lineUp
-      }
-      if char == "d" {
-        modalScrollGPending = false
-        return .halfPageDown
-      }
-      if char == "u" {
-        modalScrollGPending = false
-        return .halfPageUp
-      }
-      if char == "g" {
-        if modalScrollGPending {
-          modalScrollGPending = false
-          return .top
-        }
-        modalScrollGPending = true
-        DispatchQueue.main.asyncAfter(
-          deadline: .now() + .milliseconds(normalModeSequenceTimeoutMs)
-        ) { [weak self] in
-          self?.modalScrollGPending = false
-        }
-        return nil
-      }
-    }
-    if modifiers == .shift, char == "g" {
-      modalScrollGPending = false
-      return .bottom
-    }
-    if modifiers == .control {
-      modalScrollGPending = false
-      if char == "e" { return .lineDown }
-      if char == "y" { return .lineUp }
-      if char == "d" { return .halfPageDown }
-      if char == "u" { return .halfPageUp }
-    }
-    modalScrollGPending = false
-    return nil
-  }
-
-  /// Routes a `ModalTextView` keyDown through the modal interpreter. Read-only
-  /// modals still need global modal exits (`q`, Escape, Ctrl-C, Cmd-W), while
-  /// selectable modals also use it for list motions and Return.
-  func consumeModalKeyDown(_ event: NSEvent) -> Bool {
-    guard inputMode == .modal else { return false }
-    return handleModalKeyEvent(event)
   }
 
   @discardableResult
@@ -464,7 +360,7 @@ extension OverlayPanel {
     }
     guard let chars = event.characters, !chars.isEmpty else { return true }
     candidateFinderQuery.append(contentsOf: chars.filter { !$0.isNewline })
-    FlashLog.trace("[input] candidate_finder query=\(candidateFinderQuery)")
+    FlashLog.trace("[input] candidate_finder length=\(candidateFinderQuery.count)")
     coordinator.overlayDidUpdateCandidateFinderQuery(candidateFinderQuery)
     return true
   }

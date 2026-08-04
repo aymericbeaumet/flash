@@ -39,6 +39,7 @@ extension AppDelegate {
       }
       appNavigationTargetPID = candidate
       appCurrent = candidate
+      preparePendingApplicationActivation(app, reason: "app_navigation")
       RunningApplicationActivation.activate(app, options: [.activateAllWindows])
       return
     }
@@ -97,29 +98,97 @@ extension AppDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
       guard let self, self.ambientLocationRecordToken == token else { return }
       guard let context = self.currentNonFlashContext(), context.processID == pid else { return }
-      let recordedPreciseLocation = self.recordCurrentLocation(in: context, source: reason)
-      guard !recordedPreciseLocation else { return }
+      self.resolveAmbientLocation(
+        in: context,
+        source: reason,
+        token: token,
+        retryAfterAppFallback: true)
+    }
+  }
+
+  /// Resolve source-specific locations from one ephemeral plugin snapshot, then
+  /// perform the Accessibility fallback on the AX queue. The host retains
+  /// neither plugin rows nor the aggregate after this completion.
+  private func resolveAmbientLocation(
+    in context: AppContext,
+    source: String,
+    token: UInt64,
+    retryAfterAppFallback: Bool
+  ) {
+    resolveCurrentLocation(in: context) { [weak self] location in
+      guard let self, self.ambientLocationRecordToken == token else { return }
+      guard
+        let focused = self.currentNonFlashContext(),
+        focused.processID == context.processID
+      else { return }
+
+      let recordedPreciseLocation = self.recordAmbientLocation(
+        location,
+        processID: context.processID,
+        source: source)
+      guard retryAfterAppFallback, !recordedPreciseLocation else { return }
+
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(750)) { [weak self] in
         guard let self, self.ambientLocationRecordToken == token else { return }
-        guard let context = self.currentNonFlashContext(), context.processID == pid else { return }
-        _ = self.recordCurrentLocation(in: context, source: "\(reason)_retry")
+        guard
+          let retryContext = self.currentNonFlashContext(),
+          retryContext.processID == context.processID
+        else { return }
+        self.resolveAmbientLocation(
+          in: retryContext,
+          source: "\(source)_retry",
+          token: token,
+          retryAfterAppFallback: false)
+      }
+    }
+  }
+
+  /// Pull active plugin stores in parallel on main, then keep AX-dependent URL
+  /// disambiguation serialized on AppMonitor's queue. Completion returns to main.
+  private func resolveCurrentLocation(
+    in context: AppContext,
+    completion: @escaping (Candidate?) -> Void
+  ) {
+    registry.locationSnapshotCandidates(scope: .all) { [weak self] candidates in
+      guard let self else { return }
+      let registry: SourceRegistry = self.registry
+      self.monitor.axQueue.async {
+        let location = registry.currentLocation(in: context, candidates: candidates)
+        DispatchQueue.main.async {
+          completion(location)
+        }
       }
     }
   }
 
   @discardableResult
-  func recordCurrentLocation(in context: AppContext, source: String) -> Bool {
-    if let location = registry.currentLocation(in: context) {
+  private func recordAmbientLocation(
+    _ location: Candidate?,
+    processID: pid_t,
+    source: String
+  ) -> Bool {
+    if let location {
       recordMovement(.candidate(location), source: source)
       return location.kind != .app
     } else {
-      recordMovement(.app(pid: context.processID), source: source)
+      recordMovement(.app(pid: processID), source: source)
       return false
     }
   }
 
   func navigateMovementHistory(direction: NavigationDirection) {
-    let current = currentMovementEntry()
+    movementLocationResolutionGeneration &+= 1
+    let generation = movementLocationResolutionGeneration
+    currentMovementEntry { [weak self] current in
+      guard let self, generation == self.movementLocationResolutionGeneration else { return }
+      self.finishNavigateMovementHistory(direction: direction, current: current)
+    }
+  }
+
+  private func finishNavigateMovementHistory(
+    direction: NavigationDirection,
+    current: MovementEntry?
+  ) {
     if let current { movementCurrent = current }
 
     var sourceStack: [MovementEntry]
@@ -161,20 +230,32 @@ extension AppDelegate {
     applyModeOverlay()
   }
 
-  private func currentMovementEntry() -> MovementEntry? {
+  private func currentMovementEntry(completion: @escaping (MovementEntry?) -> Void) {
     if let context = currentNonFlashContext() {
-      if let location = registry.currentLocation(in: context) {
-        return .candidate(location)
+      resolveCurrentLocation(in: context) { [weak self] location in
+        guard let self,
+          self.currentNonFlashContext()?.processID == context.processID
+        else {
+          completion(nil)
+          return
+        }
+        if let location {
+          completion(.candidate(location))
+        } else {
+          completion(.app(pid: context.processID))
+        }
       }
-      return .app(pid: context.processID)
+      return
     }
     if let current = movementCurrent {
-      return current
+      completion(current)
+      return
     }
     if let pid = normalModeTargetPID {
-      return .app(pid: pid)
+      completion(.app(pid: pid))
+      return
     }
-    return nil
+    completion(nil)
   }
 
   private func restoreMovement(_ entry: MovementEntry) {
@@ -225,13 +306,13 @@ extension AppDelegate {
         }
         self.scheduleNormalModeRecapture()
       case .failed:
-        FlashLog.warn("[movement] route restore failed url=\(url.absoluteString)")
+        FlashLog.warn("[movement] route restore failed scheme=\(url.scheme ?? "nil")")
         self.scheduleNormalModeRecapture()
       case .unhandled:
         if let fallback {
           self.openSourceItem(fallback, recordMovement: false)
         } else {
-          FlashLog.debug("[movement] route restore unhandled url=\(url.absoluteString)")
+          FlashLog.debug("[movement] route restore unhandled scheme=\(url.scheme ?? "nil")")
           self.applyModeOverlay()
         }
       }

@@ -21,9 +21,15 @@ final class FrecencyStore {
     /// curate the list. 14d matches the prior GRDB store.
     var halfLifeDays: Double = 14.0
     /// Cap on the integer boost added to the live ranker's score.
-    /// Stays below the smallest adjacent scoring-tier gap in
-    /// `CandidateFinder.fieldScoreNormalized` (700) so frecency
-    /// reorders **within** match-quality tiers and never crosses one.
+    /// The per-field tiers in `CandidateFinder.fieldScoreNormalized` are
+    /// equal (+5000), string-prefix (+2500…3000), word-prefix (+1200…1500),
+    /// substring (+380…800), and fuzzy (+1…500). At 600 the boost stays below
+    /// the equal→prefix (2000) and prefix→word-prefix (1000) gaps, so a
+    /// frecent item never jumps into a higher exact/prefix tier. It *can*
+    /// reorder across the lower word-prefix / substring / fuzzy tiers — those
+    /// gaps are ≤400 and substring/fuzzy already overlap — which is intended:
+    /// a heavily-used substring/fuzzy hit may outrank a fresh weaker match in
+    /// the same field.
     var maxBoost: Int = 600
     /// Multiplier on `log(1 + decayedScore)` before the cap. Tuned
     /// so ~6 opens within the half-life saturates the boost.

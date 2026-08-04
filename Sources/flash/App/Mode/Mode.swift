@@ -33,9 +33,6 @@ enum Mode: Equatable {
   /// Command line / flashlight surface. `restoreTo` records where to land when
   /// the surface closes.
   case command(scope: CommandScope, restoreTo: ReturnMode)
-
-  /// Read-only / selectable modal (`:help`, `:plugins`, `:clipboard`).
-  case modal(restoreTo: ReturnMode)
 }
 
 /// Which command surface is active. `finder` is the flashlight candidate picker
@@ -71,7 +68,6 @@ extension Mode {
     case .normal: return .normal
     // Surfaces nest at most one deep in practice; collapse to their own base.
     case .command(_, let restoreTo): return restoreTo
-    case .modal(let restoreTo): return restoreTo
     }
   }
 

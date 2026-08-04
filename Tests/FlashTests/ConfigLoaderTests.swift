@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 import FlashCore
 import Foundation
@@ -70,9 +71,13 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "ctrl-i" })?.action.command,
       .movementForward)
-    // History dropped its bracket-pair form in favour of Vimium `H`/`L`.
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("[h") }))
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == key("]h") }))
+    // History: `H`/`L` with `[h`/`]h` as unimpaired-style aliases.
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("[h") })?.action.command,
+      .historyBack)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("]h") })?.action.command,
+      .historyForward)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "H" })?.action.command,
       .historyBack)
@@ -106,7 +111,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.flashlight.suggestionCount, 10)
     XCTAssertTrue(c.flashlight.precedence.isEmpty)
     XCTAssertEqual(c.flashlight.precedenceAliveBonus, 10)
-    XCTAssertTrue(c.debug.httpInspectorEnabled)
+    XCTAssertFalse(c.debug.httpInspectorEnabled)
     XCTAssertEqual(c.debug.httpInspectorHost, "localhost")
     XCTAssertEqual(c.debug.httpInspectorPort, 4242)
   }
@@ -128,6 +133,25 @@ final class ConfigLoaderTests: XCTestCase {
     }
     XCTAssertEqual(command("ctrl+tab"), .tabNext)
     XCTAssertEqual(command("ctrl+shift+tab"), .tabPrev)
+  }
+
+  func testParsesPassthroughModifiers() {
+    XCTAssertEqual(ConfigLoader.parse("").mode.normalPassthroughModifiers, [])
+    let c = ConfigLoader.parse(
+      """
+      [mode.normal]
+      passthrough_modifiers = ["cmd", "ctrl"]
+      """)
+    XCTAssertEqual(c.mode.normalPassthroughModifiers, ["cmd", "ctrl"])
+  }
+
+  func testPassthroughModifierMaskMapsKnownNamesAndIgnoresUnknown() {
+    XCTAssertEqual(AppDelegate.passthroughModifierCGFlags([]), [])
+    XCTAssertEqual(AppDelegate.passthroughModifierCGFlags(["cmd"]), .maskCommand)
+    XCTAssertEqual(AppDelegate.passthroughModifierCGFlags(["bogus"]), [])
+    XCTAssertEqual(
+      AppDelegate.passthroughModifierCGFlags(["command", "ctrl", "alt", "shift"]),
+      [.maskCommand, .maskControl, .maskAlternate, .maskShift])
   }
 
   func testParsesStatusBarTemplate() {
@@ -646,6 +670,21 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(plugins["third_party"] as? [String], [])
     XCTAssertEqual(
       statusBar["template"] as? String, "#[align=left]#{mode}#[align=right]#{date}")
+  }
+
+  func testResolvedConfigJSONNeverIncludesPluginSettingValues() throws {
+    let config = ConfigLoader.parse(
+      """
+      [plugin.calculator]
+      target_currencies = ["USD"]
+      api_token = "top-secret"
+      """)
+
+    XCTAssertFalse(config.resolvedConfigJSON.contains("top-secret"))
+    let root = try XCTUnwrap(Self.parseJSONObject(config.resolvedConfigJSON))
+    let plugins = try XCTUnwrap(root["plugins"] as? [String: Any])
+    XCTAssertEqual(plugins["configured"] as? [String], ["calculator"])
+    XCTAssertNil(plugins["settings"])
   }
 
   func testResolvedHintsKeysJSONIncludesDefaultAndResolvedAlphabet() throws {
@@ -1273,5 +1312,43 @@ final class ConfigLoaderTests: XCTestCase {
   private static func parseJSONObject(_ json: String) throws -> [String: Any]? {
     let data = Data(json.utf8)
     return try JSONSerialization.jsonObject(with: data) as? [String: Any]
+  }
+
+  /// Guard against defaults drift: `config.default.toml` is the canonical
+  /// user-facing reference and every value it sets is documented as the
+  /// built-in default, so parsing it must reproduce `Config()`'s defaults.
+  /// This is the exact class of bug that let `debug.http_inspector_enabled`
+  /// diverge (code `true`, reference `false`). When you add a scalar field,
+  /// set it to its default in config.default.toml and it stays covered here.
+  func testConfigDefaultTOMLMatchesBuiltinDefaults() {
+    let url = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()  // FlashTests
+      .deletingLastPathComponent()  // Tests
+      .deletingLastPathComponent()  // repo root
+      .appendingPathComponent("config.default.toml")
+    guard let toml = try? String(contentsOf: url, encoding: .utf8) else {
+      return XCTFail("config.default.toml not found at \(url.path)")
+    }
+    let d = Config()
+    let c = ConfigLoader.parse(toml)
+
+    XCTAssertEqual(c.hints.keys, d.hints.keys)
+    XCTAssertEqual(c.hints.minLength, d.hints.minLength)
+    XCTAssertEqual(c.hints.magicModifiers, d.hints.magicModifiers)
+    XCTAssertEqual(c.hints.mouseGridSteps, d.hints.mouseGridSteps)
+    XCTAssertEqual(c.hints.mouseGridOpacity, d.hints.mouseGridOpacity)
+    XCTAssertEqual(c.overlay.fontSize, d.overlay.fontSize)
+    XCTAssertEqual(c.statusBar.enabled, d.statusBar.enabled)
+    XCTAssertEqual(c.statusBar.template.template, d.statusBar.template.template)
+    XCTAssertEqual(c.statusBar.monitor, d.statusBar.monitor)
+    XCTAssertEqual(c.flashlight.suggestionCount, d.flashlight.suggestionCount)
+    XCTAssertEqual(c.flashlight.precedenceAliveBonus, d.flashlight.precedenceAliveBonus)
+    XCTAssertEqual(c.mode.labels, d.mode.labels)
+    XCTAssertEqual(c.mode.sequenceTimeoutMs, d.mode.sequenceTimeoutMs)
+    XCTAssertEqual(c.debug.showHintsBounds, d.debug.showHintsBounds)
+    XCTAssertEqual(c.debug.logLevel, d.debug.logLevel)
+    XCTAssertEqual(c.debug.httpInspectorEnabled, d.debug.httpInspectorEnabled)
+    XCTAssertEqual(c.debug.httpInspectorHost, d.debug.httpInspectorHost)
+    XCTAssertEqual(c.debug.httpInspectorPort, d.debug.httpInspectorPort)
   }
 }

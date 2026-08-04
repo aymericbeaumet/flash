@@ -13,10 +13,9 @@ final class KeyboardCaptureTapTests: XCTestCase {
   }
 
   func testNormalModeNeverSwallowsKeyWindowSurfaces() {
-    // Command-line / modal / candidate-finder own the key window and type into
-    // their own fields — the tap must pass those through untouched.
+    // Command-line / candidate-finder own the key window and type into their
+    // own fields — the tap must pass those through untouched.
     XCTAssertFalse(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .commandLine))
-    XCTAssertFalse(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .modal))
     XCTAssertFalse(
       KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .candidateFinder))
   }
@@ -24,7 +23,7 @@ final class KeyboardCaptureTapTests: XCTestCase {
   func testInsertModeNeverSwallows() {
     // INSERT is invisible to the tap regardless of overlay input mode — keys
     // flow straight to the focused app.
-    for inputMode: OverlayInputMode in [.normal, .hints, .commandLine, .modal, .candidateFinder] {
+    for inputMode: OverlayInputMode in [.normal, .hints, .commandLine, .candidateFinder] {
       XCTAssertFalse(
         KeyboardCaptureTap.shouldSwallow(flashMode: .insert, inputMode: inputMode),
         "insert mode should never swallow (inputMode=\(inputMode))")

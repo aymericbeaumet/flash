@@ -1,7 +1,7 @@
 import Foundation
 
-/// Fuzzy match scoring + highlight extraction for `:open` / `:flashlight`
-/// candidate finders. The interpreter normalises strings once before
+/// Fuzzy match scoring + highlight extraction for the `:flashlight` candidate
+/// finder. The interpreter normalises strings once before
 /// the scoring pass so per-candidate work is just the score+LCS math.
 ///
 /// Split out of NormalMode.swift; same public surface, no behaviour

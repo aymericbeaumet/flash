@@ -16,10 +16,11 @@ import FlashCore
 /// and on `didLaunchApplicationNotification` for new ones) gives the
 /// tree time to populate before the user ever triggers Flash.
 ///
-/// Belt-and-suspenders: `AccessibilityProvider.discover` still sets
-/// the same attributes on every walk so a Chromium variant we
-/// didn't recognise here still wakes the first time the user
-/// triggers Flash on it.
+/// Belt-and-suspenders: `AccessibilityProvider.discover` still sets the
+/// same attributes on every non-Apple-app walk, so a Chromium variant we
+/// didn't recognise here still wakes the first time the user triggers
+/// Flash on it. (Apple's native apps are skipped there — the flag is
+/// process-sticky and degrades SwiftUI-heavy apps like Notes.)
 enum ChromiumAccessibilityWaker {
   static let chromiumBundleIDs: Set<String> = [
     "com.google.Chrome",

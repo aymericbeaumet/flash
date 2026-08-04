@@ -42,8 +42,15 @@ public struct JumpTarget: @unchecked Sendable {
   /// treat the spurious AXPress as a successful click and never deliver
   /// the real one.
   public let preferHostClick: Bool
+  /// When true, activating this target hands focus to a DIFFERENT
+  /// application (e.g. a status-bar link opening in the default browser).
+  /// The commit path keeps the current mode, skips the opened-text-input
+  /// probe, and never re-activates the source app around the click — the
+  /// receiving app's own activation must win the focus handoff.
+  public let transfersFocus: Bool
   /// Source-declared salience for this target. The renderer currently paints
-  /// `.critical` targets in the accent style; the commit path is unchanged.
+  /// `.important` and `.urgent` targets in the accent style; the commit path
+  /// is unchanged.
   public let priority: FlashPriority
 
   public init(
@@ -57,6 +64,7 @@ public struct JumpTarget: @unchecked Sendable {
     resolveClickPoint: (() -> CGPoint?)? = nil,
     entersInsertMode: Bool = false,
     preferHostClick: Bool = false,
+    transfersFocus: Bool = false,
     priority: FlashPriority = .normal,
     providerID: String
   ) {
@@ -70,6 +78,7 @@ public struct JumpTarget: @unchecked Sendable {
     self.resolveClickPoint = resolveClickPoint
     self.entersInsertMode = entersInsertMode
     self.preferHostClick = preferHostClick
+    self.transfersFocus = transfersFocus
     self.priority = priority
     self.providerID = providerID
   }

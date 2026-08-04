@@ -73,7 +73,7 @@ check_absent \
 
 check_absent_except \
   "no production menu bar, Dock, status, or alert UI" \
-  "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|NSMenu\\(|NSMenuItem|\\.mainMenu|setActivationPolicy\\(\\.regular" \
+  "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|NSMenu\\(|NSMenuItem|\\.mainMenu\\b|setActivationPolicy\\(\\.regular" \
   'NSStatusBar\.system\.thickness|NSWindow\.Level = \.mainMenu|app\.mainMenu\?\.menuBarHeight|previousMenu = app\.mainMenu|app\.mainMenu = previousMenu|app\.mainMenu = measurementMenu|NSMenu\(title: "Flash"\)|NSMenuItem\(title: "Flash"' \
   Sources/flash Resources/Info.plist
 
@@ -93,6 +93,44 @@ check_absent \
   Sources README.md
 
 if [[ -d Plugins ]]; then
+  check_absent \
+    "plugin wire methods use namespaced protocol-v2 names" \
+    '"(discoverTargets|activateTarget|resolveCandidate|sourceAction)"' \
+    Sources/flash Plugins/_rust_flash_plugin
+
+  check_absent \
+    "candidate catalog gathering is SDK-owned; plugins cannot define candidate_query" \
+    "candidate_query" \
+    Plugins
+
+  check_absent \
+    "query evaluators are synchronous CPU-only hooks" \
+    "async fn query_evaluate" \
+    Plugins
+
+  for manifest in Plugins/*/manifest.json; do
+    if rg -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest"; then
+      plugin_dir="${manifest%/manifest.json}"
+      source="$plugin_dir/src/main.rs"
+      if [[ ! -f "$source" ]] || ! rg -q 'async fn on_start' "$source"; then
+        echo "GUARDRAIL FAILED: candidate plugin must implement on_start: $plugin_dir" >&2
+        fail=1
+      fi
+      if [[ ! -f "$source" ]] || ! rg -q 'set_locations[[:space:]]*\(' "$source"; then
+        echo "GUARDRAIL FAILED: candidate plugin must publish warm locations: $plugin_dir" >&2
+        fail=1
+      fi
+    fi
+    if rg -q '^[[:space:]]*"queries"[[:space:]]*:' "$manifest"; then
+      plugin_dir="${manifest%/manifest.json}"
+      source="$plugin_dir/src/main.rs"
+      if [[ ! -f "$source" ]] || ! rg -q 'fn query_evaluate[[:space:]]*\(' "$source"; then
+        echo "GUARDRAIL FAILED: query plugin must implement synchronous query_evaluate: $plugin_dir" >&2
+        fail=1
+      fi
+    fi
+  done
+
   check_absent \
     "plugin installs must stay localized to FLASH_PLUGIN_DATA_DIR" \
     "sudo|brew install|npm install -g|deno install -g|/usr/local/bin|\\$HOME/\\.local/bin|~/\\.local/bin" \

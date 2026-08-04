@@ -122,6 +122,11 @@ extension OverlayPanel {
     if debugEnabled {
       newSublayers.append(debugShapeLayer)
     }
+    // Status bar goes in first so its opaque band sits *under* the hint chips —
+    // the status-bar link hints render over the bar instead of behind it. App
+    // hints never overlap the bar (they're filtered out of the menu-bar band by
+    // the visible-region test), so nothing else changes visually.
+    appendModeBadgeLayerIfNeeded(to: &newSublayers, panelFrame: frame)
 
     hintLayers.reserveCapacity(hints.count)
     labelLayers.reserveCapacity(hints.count)
@@ -317,7 +322,6 @@ extension OverlayPanel {
       hintLayers.append(chip)
       labelLayers.append(label)
     }
-    appendModeBadgeLayerIfNeeded(to: &newSublayers, panelFrame: frame)
 
     contentLayer.sublayers = newSublayers
     if debugEnabled {
@@ -360,7 +364,6 @@ extension OverlayPanel {
     commandPromptVisible = false
     commandPromptPrefix = ":"
     commandCaretLayer.isHidden = true
-    hideModalTextView()
     hideCommandTextField()
     clearCandidateFinderResults()
     commandLineText = ""
@@ -442,16 +445,6 @@ extension OverlayPanel {
         "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
           + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode) "
           + "editor=\(commandTextField.currentEditor() != nil)")
-      return
-    }
-    if inputMode == .modal {
-      modalTextView.overlayCoordinator = coordinator
-      modalScrollView.isHidden = false
-      makeFirstResponder(modalTextView)
-      responderDescription = "modal"
-      FlashLog.trace(
-        "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
-          + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode)")
       return
     }
     makeFirstResponder(self)
@@ -636,9 +629,13 @@ extension OverlayPanel {
     labelLayers.removeAll(keepingCapacity: true)
     debugShapeLayer.path = nil
     debugShapeLayer.isHidden = true
-    activeWindowBorderLayer.path = nil
+    // NOT the active-window border: it's owned by `setActiveWindowBorder`
+    // (its visibility is `path != nil`), independent of transient hint/alert
+    // content. Clearing it here blanked the colored focus border whenever an
+    // alert/banner/hide ran, so it stayed gone until the next geometry event.
+    // Transient renderers re-attach it via
+    // `appendActiveWindowBorderLayerIfNeeded`.
     commandCaretLayer.isHidden = true
-    hideModalTextView()
     clearCandidateFinderResults()
     lastTargetLocalRects.removeAll(keepingCapacity: true)
   }

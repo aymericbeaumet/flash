@@ -3,7 +3,31 @@ import Darwin
 import FlashCore
 import Foundation
 
+enum PluginCandidateSourcePolicy {
+  case catalog(allowed: Set<String>)
+}
+
 final class PluginProcess {
+  typealias RequestCompletion = ([String: Any]?) -> Void
+  struct PendingRequest {
+    let completion: RequestCompletion
+    let settleOnStop: Bool
+    let method: String
+    let startedAt: DispatchTime
+
+    init(
+      completion: @escaping RequestCompletion,
+      settleOnStop: Bool,
+      method: String = "test",
+      startedAt: DispatchTime = .now()
+    ) {
+      self.completion = completion
+      self.settleOnStop = settleOnStop
+      self.method = method
+      self.startedAt = startedAt
+    }
+  }
+
   let root: URL
   let manifest: PluginManifest
   let origin: PluginOrigin
@@ -11,6 +35,9 @@ final class PluginProcess {
 
   private let queue: DispatchQueue
   private let dataDir: URL
+  /// Latest host-owned app snapshot. Each child launch receives the value once
+  /// in `initialize`, including automatic restarts of this PluginProcess.
+  private var initialRunningApplications: [[String: Any]]
   private var process: Process?
   private var stdinPipe: Pipe?
   private var frameCollector = MessagePackFrameCollector(maxFrameBytes: PluginProcess.maxFrameBytes)
@@ -22,7 +49,19 @@ final class PluginProcess {
   private var awaitingHeartbeat = false
   private var heartbeatMisses = 0
   private var heartbeatTimer: DispatchSourceTimer?
+  /// Queue-confined proof that the current child generation completed the
+  /// protocol-v2 initialize/on_start publication boundary. Runtime state alone
+  /// is insufficient: heartbeat degradation must never make a starting child
+  /// eligible for warm reads.
+  private var initializationCompleted = false
   private var restartCount = 0
+  /// Set only while `stopOnQueue` is sending its `shutdown` frame, so the
+  /// write-error recovery in `writeFrame` doesn't recurse back into stop.
+  private var isStopping = false
+  /// Guards `notifyStatus` so a burst of status changes collapses to one
+  /// main-thread callback per runloop turn instead of one hop per change.
+  private var statusNotificationPending = false
+  private let statusNotifyLock = NSLock()
   /// Timestamps of recent restart attempts. Bounded restart loop: if
   /// `restartWindowAttempts` restarts happen within `restartWindowSeconds`,
   /// the plugin is parked in `.crashed` and stops auto-restarting. The user
@@ -32,7 +71,7 @@ final class PluginProcess {
   private static let restartWindowSeconds: TimeInterval = 300
   private var restartLoopExhausted = false
   private var requestID: Int = 0
-  private var pending: [Int: ([String: Any]?) -> Void] = [:]
+  private var pending: [Int: PendingRequest] = [:]
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
   private var fileWatcherFDs: [Int32] = []
   private var reloadWork: DispatchWorkItem?
@@ -63,7 +102,8 @@ final class PluginProcess {
     origin: PluginOrigin,
     baseDataDir: URL,
     watchFiles: Bool = true,
-    settings: [String: PluginConfigValue] = [:]
+    settings: [String: PluginConfigValue] = [:],
+    initialRunningApplications: [[String: Any]] = []
   ) {
     self.root = root
     self.manifest = manifest
@@ -73,6 +113,7 @@ final class PluginProcess {
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.watchFiles = watchFiles
     self.settings = settings
+    self.initialRunningApplications = initialRunningApplications
   }
 
   var identifier: String { manifest.id }
@@ -93,6 +134,12 @@ final class PluginProcess {
   func start() {
     queue.async {
       self.startOnQueue(reason: "start")
+    }
+  }
+
+  func updateRunningApplicationsSnapshot(_ applications: [[String: Any]]) {
+    queue.async {
+      self.initialRunningApplications = applications
     }
   }
 
@@ -152,7 +199,7 @@ final class PluginProcess {
   }
 
   /// Synchronous-style discover for volatile plugins. Sends a
-  /// `discoverTargets` RPC and waits up to `timeout` for the plugin to
+  /// `hints.discover` RPC and waits up to `timeout` for the plugin to
   /// return a fresh set of jump targets for the given context. Used on
   /// each activation when the manifest declares `volatile: true`.
   func discoverTargets(context: AppContext, timeout: TimeInterval) -> [JumpTarget] {
@@ -170,7 +217,7 @@ final class PluginProcess {
       "pid": Int(context.processID),
       "front_window_frame": frame,
     ]
-    sendRequest(method: "discoverTargets", params: params) { [weak self] response in
+    sendRequest(method: "hints.discover", params: params) { [weak self] response in
       guard let self else {
         semaphore.signal()
         return
@@ -254,7 +301,7 @@ final class PluginProcess {
 
   private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginDiscovery
   {
-    let sourceID = params["source_id"] as? String ?? "plugin:\(manifest.id)"
+    let sourceID = "plugin:\(manifest.id)"
     let contextPID = (params["context_pid"] as? Int).map(pid_t.init) ?? defaultPID
     let targetItems = (params["targets"] as? [[String: Any]] ?? [])
       .compactMap { Self.target(from: $0, sourceID: sourceID) }
@@ -274,51 +321,120 @@ final class PluginProcess {
     return snap
   }
 
-  func queryCandidates(
-    scope: CandidateScope,
-    query: String,
-    environment: FlashSourceEnvironment,
-    completion: @escaping ([Candidate]) -> Void
-  ) {
-    let applications = environment.runningApplications.compactMap { app -> [String: Any]? in
-      guard let bundleID = app.bundleIdentifier, !app.isTerminated else { return nil }
-      return [
-        "bundle_id": bundleID,
-        "pid": Int(app.processIdentifier),
-        "localized_name": app.localizedName ?? "",
-      ]
-    }
-    let scopeName: String
-    switch scope {
-    case .running:
-      scopeName = "running"
-    case .all:
-      scopeName = "all"
-    }
-    let params: [String: Any] = [
-      "scope": scopeName,
-      "query": query,
-      "running_applications": applications,
-    ]
-    sendRequest(method: "candidateQuery", params: params) { [weak self] response in
+  func snapshotCandidates(completion: @escaping ([Candidate]) -> Void) {
+    // Catalog snapshots are complete warm-store reads. Filtering is host-owned,
+    // and running-app state is seeded by initialize then refreshed by
+    // `core:apps.changed`, so this wire request intentionally carries no data.
+    sendRequest(
+      method: "sources.snapshot",
+      params: [:],
+      timeout: .milliseconds(150),
+      requiresWarmProcess: true
+    ) { [weak self] response in
       guard let self else {
         DispatchQueue.main.async { completion([]) }
         return
       }
-      // The host caches nothing: a missing/empty `candidates` reply just yields
-      // no rows for this source this turn (the warm plugin is the source of
-      // truth, queried fresh on the next open).
-      guard let raw = response?["candidates"] as? [[String: Any]] else {
+      guard let response else {
         DispatchQueue.main.async { completion([]) }
         return
       }
-      let sourceID = response?["source_id"] as? String ?? "plugin:\(self.manifest.id)"
-      let items = raw.compactMap {
-        Self.candidate(
-          from: $0,
+      guard let raw = response["candidates"] as? [[String: Any]] else {
+        FlashLog.plugin(
+          .warn,
           pluginID: self.manifest.id,
-          pluginName: self.manifest.name,
-          sourceID: sourceID)
+          message: "[plugin] malformed sources.snapshot envelope",
+          fields: ["method": "sources.snapshot"])
+        DispatchQueue.main.async { completion([]) }
+        return
+      }
+      let sourceID = "plugin:\(self.manifest.id)"
+      let allowedSources = Set(self.manifest.candidateSources)
+      guard
+        let items = Self.catalogCandidates(
+          from: raw,
+          sourceID: sourceID,
+          allowedSources: allowedSources)
+      else {
+        FlashLog.plugin(
+          .warn,
+          pluginID: self.manifest.id,
+          message: "[plugin] rejected malformed or oversized catalog snapshot",
+          fields: [
+            "received": String(raw.count),
+            "candidate_limit": String(Self.maxCatalogCandidates),
+            "string_bytes_limit": String(Self.maxCatalogEncodedBytes),
+          ])
+        DispatchQueue.main.async { completion([]) }
+        return
+      }
+      DispatchQueue.main.async {
+        completion(items)
+      }
+    }
+  }
+
+  func evaluateQuery(
+    _ request: QueryEvaluationRequest,
+    environment: FlashSourceEnvironment,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    // Query evaluation is an O(memory), CPU-only hot path. App/external state
+    // reaches plugins through initialize + events and must already be warm.
+    _ = environment
+    let scopeName: String
+    switch request.scope {
+    case .running: scopeName = "running"
+    case .all: scopeName = "all"
+    }
+    let params: [String: Any] = [
+      "surface": request.surface.rawValue,
+      "scope": scopeName,
+      "query": request.text,
+    ]
+    sendRequest(
+      method: "query.evaluate",
+      params: params,
+      timeout: .milliseconds(50),
+      requiresWarmProcess: true
+    ) { [weak self] response in
+      guard let self else {
+        DispatchQueue.main.async { completion([]) }
+        return
+      }
+      guard let response else {
+        DispatchQueue.main.async { completion([]) }
+        return
+      }
+      guard let raw = response["answers"] as? [[String: Any]] else {
+        FlashLog.plugin(
+          .warn,
+          pluginID: self.manifest.id,
+          message: "[plugin] malformed query.evaluate envelope",
+          fields: ["method": "query.evaluate"])
+        DispatchQueue.main.async { completion([]) }
+        return
+      }
+      let sourceID = "plugin:\(self.manifest.id)"
+      let declaredSource = self.manifest.queriesProvider?.source?.trimmed ?? ""
+      let querySource = declaredSource.isEmpty ? self.manifest.id : declaredSource
+      guard
+        let items = Self.queryAnswers(
+          from: raw,
+          sourceID: sourceID,
+          source: querySource)
+      else {
+        FlashLog.plugin(
+          .warn,
+          pluginID: self.manifest.id,
+          message: "[plugin] rejected malformed or oversized query answers",
+          fields: [
+            "received": String(raw.count),
+            "answer_limit": String(Self.maxQueryAnswersPerEvaluator),
+            "string_bytes_limit": String(Self.maxQueryEncodedBytes),
+          ])
+        DispatchQueue.main.async { completion([]) }
+        return
       }
       DispatchQueue.main.async {
         completion(items)
@@ -345,7 +461,7 @@ final class PluginProcess {
     let params: [String: Any] = [
       "candidate": candidateJSON(candidate)
     ]
-    sendRequest(method: "resolveCandidate", params: params) { response in
+    sendRequest(method: "candidate.resolve", params: params) { response in
       let didResolve = response?["did_resolve"] as? Bool ?? false
       let pid = response?["target_pid"] as? Int
       let navigationURL = (response?["navigation_url"] as? String).flatMap(URL.init(string:))
@@ -406,7 +522,7 @@ final class PluginProcess {
     var params = extra
     params["name"] = name
     params["context"] = contextJSON(context)
-    sendRequest(method: "sourceAction", params: params) { [weak self] response in
+    sendRequest(method: "source.action", params: params) { [weak self] response in
       let result: SourceActionResult
       if let response {
         let didPerform = response["did_perform"] as? Bool ?? false
@@ -467,7 +583,8 @@ final class PluginProcess {
         result = .failed
       }
       FlashLog.trace(
-        "[plugin] navigation_restore plugin=\(self?.manifest.id ?? "?") url=\(url.absoluteString) "
+        "[plugin] navigation_restore plugin=\(self?.manifest.id ?? "?") "
+          + "scheme=\(url.scheme ?? "nil") "
           + "disposition=\(result.disposition) "
           + "target_pid=\(result.targetPID.map(String.init) ?? "nil")",
         source: "plugin:\(self?.manifest.id ?? "?")")
@@ -519,6 +636,15 @@ final class PluginProcess {
       statusSegments: snap.statusSegments)
   }
 
+  /// Cheap lifecycle read for hot-path adapters. Unlike `statusSnapshot`, this
+  /// does not sample process CPU/memory or allocate the full diagnostics model.
+  func runtimeStateSnapshot() -> PluginRuntimeState {
+    lock.lock()
+    let state = self.state
+    lock.unlock()
+    return state
+  }
+
   /// Read the plugin subprocess's resident memory and CPU time via
   /// `proc_pid_rusage`, deriving an instantaneous CPU percentage from the
   /// delta against the previous sample. Mutates `lastCPUSample`, so the
@@ -553,6 +679,7 @@ final class PluginProcess {
 
   private func startOnQueue(reason: String) {
     stopOnQueue(reason: "pre_start")
+    initializationCompleted = false
     setState(.installing)
     do {
       try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
@@ -572,15 +699,21 @@ final class PluginProcess {
   }
 
   private func stopOnQueue(reason: String) {
+    // Remove every callback before invoking any of them. A completion can
+    // enqueue another plugin request, so iterating the live dictionary would
+    // be reentrant and could strand or double-complete work.
+    let abandonedCallbacks = Self.takePendingCallbacks(&pending)
     heartbeatTimer?.cancel()
     heartbeatTimer = nil
     removeFileWatchers()
     if let process, process.isRunning {
+      isStopping = true
       writeFrame([
         "jsonrpc": "2.0",
         "method": "shutdown",
         "params": ["reason": reason],
       ])
+      isStopping = false
       stdinPipe?.fileHandleForWriting.closeFile()
       waitForExit(process, timeout: 1.0)
       if process.isRunning {
@@ -595,10 +728,24 @@ final class PluginProcess {
     (process?.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
     process = nil
     stdinPipe = nil
-    pending.removeAll()
+    initializationCompleted = false
     awaitingHeartbeat = false
     heartbeatMisses = 0
     setState(.stopped)
+    for callback in abandonedCallbacks {
+      callback(nil)
+    }
+  }
+
+  static func takePendingCallbacks(
+    _ pending: inout [Int: PendingRequest]
+  ) -> [RequestCompletion] {
+    let callbacks = pending.keys.sorted().compactMap { id -> RequestCompletion? in
+      guard let request = pending[id], request.settleOnStop else { return nil }
+      return request.completion
+    }
+    pending.removeAll(keepingCapacity: true)
+    return callbacks
   }
 
   /// Seatbelt profile for the plugin's runtime process: allow everything but
@@ -665,17 +812,58 @@ final class PluginProcess {
     self.stdinPipe = stdin
     self.startDate = Date()
     self.lastHeartbeatAt = Date()
+    let initializationStartedAt = DispatchTime.now()
     sendRequest(
       method: "initialize",
       params: [
         "plugin_id": manifest.id,
         "version": manifest.version,
         "protocol_version": Self.protocolVersion,
-      ]
-    ) { [weak self] response in
-      guard let self else { return }
-      self.checkProtocolVersion(response)
+        "running_applications": initialRunningApplications,
+      ],
+      timeout: Self.startupTimeout,
+      settleOnStop: false
+    ) { [weak self, weak process] response in
+      guard let self, let process, self.process === process else { return }
+      let elapsedMs = Int(
+        (DispatchTime.now().uptimeNanoseconds
+          &- initializationStartedAt.uptimeNanoseconds) / 1_000_000)
+      if response != nil {
+        FlashLog.plugin(
+          elapsedMs > 1_000 ? .warn : .info,
+          pluginID: self.manifest.id,
+          message: "[plugin] initialization settled elapsed_ms=\(elapsedMs)",
+          fields: ["elapsed_ms": String(elapsedMs)])
+      }
+      guard let response else {
+        self.failStartup(
+          "[plugin] initialization timed out after \(Self.startupTimeoutSeconds)s",
+          fatal: false)
+        return
+      }
+      guard Self.acceptsProtocolVersion(response) else {
+        let reported = Self.protocolVersionValue(response).map(String.init) ?? "missing"
+        self.failStartup(
+          "[plugin] protocol_version \(reported) != host v\(Self.protocolVersion)",
+          fatal: true)
+        return
+      }
+      guard response["ok"] as? Bool == true else {
+        let error = response["error"] as? String ?? "plugin rejected initialization"
+        self.failStartup("[plugin] initialization failed: \(error)", fatal: true)
+        return
+      }
+      if !self.manifest.sources.isEmpty,
+        !Self.hasCanonicalInitialPublication(response, pluginID: self.manifest.id)
+      {
+        self.failStartup(
+          "[plugin] initialization failed: candidate source did not publish exactly "
+            + "\"plugin:\(self.manifest.id)\"",
+          fatal: true)
+        return
+      }
       self.clearError()
+      self.initializationCompleted = true
       self.setState(.ready)
       // Successful startup resets the backoff counter so a transient crash
       // doesn't accumulate across hours of healthy operation.
@@ -700,7 +888,16 @@ final class PluginProcess {
     process.standardOutput = out
     process.standardError = err
     try process.run()
+    // Bound a hung install script (network stall, interactive `read`, a wedged
+    // build) so it can't pin this plugin's serial queue forever — heartbeat and
+    // stop both run on that queue. Mirrors PluginManager.runGit's kill pattern.
+    let killer = DispatchQueue.global(qos: .utility)
+    let killWork = DispatchWorkItem {
+      if process.isRunning { process.terminate() }
+    }
+    killer.asyncAfter(deadline: .now() + .seconds(120), execute: killWork)
     process.waitUntilExit()
+    killWork.cancel()
     let stdoutData = out.fileHandleForReading.readDataToEndOfFile()
     let stderrData = err.fileHandleForReading.readDataToEndOfFile()
     // Persist the install script's output even on success. Third-party
@@ -759,10 +956,9 @@ final class PluginProcess {
   }
 
   private func pluginEnvironment() -> [String: String] {
-    // Plugin-specific vars are overrides on the shared login-shell cache so
-    // they never leak into the global environment used by other child
-    // processes (status bar, command mappings, …).
-    FlashProcessEnvironment.shared.environment(withOverrides: [
+    Self.sanitizedPluginEnvironment(
+      base: FlashProcessEnvironment.shared.environment,
+      overrides: [
       "FLASH_PLUGIN_ID": manifest.id,
       "FLASH_PLUGIN_VERSION": manifest.version,
       "FLASH_PLUGIN_DATA_DIR": dataDir.path,
@@ -772,6 +968,32 @@ final class PluginProcess {
     ])
   }
 
+  static func sanitizedPluginEnvironment(
+    base: [String: String],
+    overrides: [String: String]
+  ) -> [String: String] {
+    // Runtime plugins get process basics, never the complete login-shell
+    // environment (cloud tokens, agent sockets, unrelated app secrets, …).
+    // Plugin credentials belong in that plugin's own config table.
+    let allowed = [
+      "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "SHELL",
+      "TERM", "TMPDIR", "USER", "__CF_USER_TEXT_ENCODING",
+    ]
+    var environment: [String: String] = [:]
+    for key in allowed {
+      if let value = base[key] {
+        environment[key] = value
+      }
+    }
+    if environment["PATH", default: ""].isEmpty {
+      environment["PATH"] = FlashProcessEnvironment.fallbackPath
+    }
+    for (key, value) in overrides {
+      environment[key] = value
+    }
+    return environment
+  }
+
   private func waitForExit(_ process: Process, timeout: TimeInterval) {
     let deadline = Date().addingTimeInterval(timeout)
     while process.isRunning, Date() < deadline {
@@ -779,48 +1001,99 @@ final class PluginProcess {
     }
   }
 
-  /// Wire-protocol version the host speaks. Sent in `initialize`; the plugin
-  /// echoes the version it was built against. MUST stay in sync with
-  /// `PROTOCOL_VERSION` in the Rust SDK (`_rust_flash_plugin/src/lib.rs`).
-  static let protocolVersion = 1
+  /// Wire-protocol version the host speaks. Version agreement is a hard startup
+  /// boundary because v2 makes readiness mean `on_start` and initial warm-source
+  /// publication have completed.
+  static let protocolVersion = 2
+  static let maxCatalogCandidates = 10_000
+  static let maxCatalogEncodedBytes = 4 * 1024 * 1024
+  static let maxQueryAnswersPerEvaluator = 16
+  static let maxQueryEncodedBytes = 256 * 1024
+  static let maxCandidateTitleBytes = 4 * 1024
+  static let maxCandidateURLBytes = 16 * 1024
+  static let maxCandidateMetadataEntries = 64
+  static let maxCandidateMetadataKeyBytes = 256
+  static let maxCandidateMetadataValueBytes = 64 * 1024
+  static let maxCandidateEffectBytes = 64 * 1024
+  static let maxQueryFieldBytes = 16 * 1024
+  static let startupTimeoutSeconds = 15
+  private static let startupTimeout = DispatchTimeInterval.seconds(startupTimeoutSeconds)
 
-  /// The plugin echoes the protocol version it was built against. A mismatch —
-  /// or a plugin too old to report one — means the wire contract may have
-  /// drifted, so renamed/removed fields could be decoding to silent defaults on
-  /// one side. Surface it loudly. Non-fatal: bundled plugins rebuild in lockstep
-  /// with the host, and a drifted third-party plugin is better
-  /// degraded-but-visible than hard-killed.
-  private func checkProtocolVersion(_ response: [String: Any]?) {
-    guard let reported = response?["protocol_version"] as? Int else {
-      FlashLog.warn(
-        "[plugin] \(manifest.id) did not report protocol_version "
-          + "(host speaks v\(Self.protocolVersion)) — it may be built against an older SDK; "
-          + "wire fields may decode to defaults",
-        fields: ["plugin": manifest.id])
-      return
+  static func acceptsProtocolVersion(_ response: [String: Any]?) -> Bool {
+    protocolVersionValue(response) == protocolVersion
+  }
+
+  static func hasCanonicalInitialPublication(
+    _ response: [String: Any]?,
+    pluginID: String
+  ) -> Bool {
+    guard let values = response?["published_sources"] as? [Any] else { return false }
+    let sources = values.compactMap { $0 as? String }
+    return sources.count == values.count
+      && sources == ["plugin:\(pluginID)"]
+  }
+
+  private static func protocolVersionValue(_ response: [String: Any]?) -> Int? {
+    if let value = response?["protocol_version"] as? Int { return value }
+    return (response?["protocol_version"] as? NSNumber)?.intValue
+  }
+
+  private func failStartup(_ message: String, fatal: Bool) {
+    recordError(message)
+    FlashLog.plugin(.error, pluginID: manifest.id, message: message)
+    if fatal {
+      // A wire mismatch or a source that violates the initial-publication
+      // contract will not recover by immediately launching the same binary.
+      // Explicit reload/file change resets this latch.
+      restartLoopExhausted = true
     }
-    if reported != Self.protocolVersion {
-      FlashLog.warn(
-        "[plugin] \(manifest.id) protocol_version v\(reported) != host "
-          + "v\(Self.protocolVersion) — wire contract may have drifted",
-        fields: ["plugin": manifest.id])
+    stopOnQueue(reason: fatal ? "startup_rejected" : "startup_timeout")
+    setState(.crashed)
+    if !fatal {
+      scheduleRestart()
     }
   }
 
   private func sendRequest(
     method: String,
     params: [String: Any],
+    timeout: DispatchTimeInterval? = nil,
+    settleOnStop: Bool = true,
+    requiresWarmProcess: Bool = false,
     completion: (([String: Any]?) -> Void)? = nil
   ) {
+    let startedAt = DispatchTime.now()
     queue.async { [weak self] in
       guard let self else { return }
+      if requiresWarmProcess,
+        !Self.warmRequestIsDispatchable(
+          state: self.runtimeStateSnapshot(),
+          initializationCompleted: self.initializationCompleted,
+          processRunning: self.process?.isRunning == true)
+      {
+        completion?(nil)
+        return
+      }
       self.requestID += 1
       let id = self.requestID
       if let completion {
-        self.pending[id] = completion
-        self.queue.asyncAfter(deadline: .now() + self.requestTimeout) { [weak self] in
-          guard let self, let callback = self.pending.removeValue(forKey: id) else { return }
-          callback(nil)
+        self.pending[id] = PendingRequest(
+          completion: completion,
+          settleOnStop: settleOnStop,
+          method: method,
+          startedAt: startedAt)
+        self.queue.asyncAfter(deadline: .now() + (timeout ?? self.requestTimeout)) { [weak self] in
+          guard let self, let request = self.pending.removeValue(forKey: id) else { return }
+          let elapsedMs = Self.elapsedMilliseconds(since: startedAt)
+          FlashLog.plugin(
+            .warn,
+            pluginID: self.manifest.id,
+            message: "[plugin] request timed out method=\(method) elapsed_ms=\(elapsedMs)",
+            fields: [
+              "method": method,
+              "elapsed_ms": elapsedMs,
+            ])
+          request.completion(nil)
         }
       }
       self.writeFrame([
@@ -892,10 +1165,18 @@ final class PluginProcess {
     do {
       try stdinPipe?.fileHandleForWriting.write(contentsOf: frame)
     } catch {
-      // A broken pipe during teardown is expected, so only surface a write
-      // failure while the subprocess is supposed to be alive.
-      if process?.isRunning == true {
+      // A broken pipe during teardown is expected, so only act while the
+      // subprocess is supposed to be alive (and not while we're already sending
+      // the shutdown frame from `stopOnQueue`).
+      if process?.isRunning == true, !isStopping {
         recordError("[plugin] failed to write IPC message (method=\(label)): \(error)")
+        // The stdin pipe is broken: every subsequent RPC will fail too, so the
+        // plugin is effectively unreachable even though it still "runs". Don't
+        // wait ~10s for the heartbeat to notice — tear down and restart now
+        // (mirrors the heartbeat-miss recovery).
+        restartCount += 1
+        stopOnQueue(reason: "write_error")
+        scheduleRestart()
       }
     }
   }
@@ -903,7 +1184,7 @@ final class PluginProcess {
   /// Sanity ceiling on a single frame's payload. Real frames are a few KB at
   /// most; anything larger means the stream desynced and the "length" is
   /// really payload bytes misread as a prefix.
-  // Real payloads (candidate query replies, command responses) sit well under
+  // Real payloads (candidate snapshots, query answers, command responses) sit well under
   // 1 MiB. The previous 64 MiB ceiling let a misbehaving plugin starve the
   // host on every frame; 10 MiB still covers any sensible payload while
   // bounding the worst-case allocation.
@@ -936,7 +1217,7 @@ final class PluginProcess {
       recordError("[plugin] undecodable IPC frame: \(error)")
       return
     }
-    handleProtocolMessage(object)
+    handleProtocolMessage(object, payloadBytes: payload.count)
   }
 
   private func handleStderr(_ data: Data) {
@@ -952,7 +1233,7 @@ final class PluginProcess {
     }
   }
 
-  private func handleProtocolMessage(_ object: [String: Any]) {
+  private func handleProtocolMessage(_ object: [String: Any], payloadBytes: Int) {
     if let responseID = object["id"] as? Int,
       object["method"] == nil
     {
@@ -964,9 +1245,40 @@ final class PluginProcess {
         lastHeartbeatAt = Date()
         awaitingHeartbeat = false
         heartbeatMisses = 0
+        if initializationCompleted, runtimeStateSnapshot() == .degraded {
+          setState(.ready)
+        }
       }
-      if let callback = pending.removeValue(forKey: responseID) {
-        callback(result)
+      if let request = pending.removeValue(forKey: responseID) {
+        let elapsedMsValue = Self.elapsedMillisecondsValue(since: request.startedAt)
+        let elapsedMs = Self.elapsedMilliseconds(since: request.startedAt)
+        if let limit = Self.responsePayloadLimit(for: request.method),
+          payloadBytes > limit
+        {
+          FlashLog.plugin(
+            .warn,
+            pluginID: manifest.id,
+            message: "[plugin] rejected oversized response",
+            fields: [
+              "method": request.method,
+              "bytes": String(payloadBytes),
+              "limit": String(limit),
+              "elapsed_ms": elapsedMs,
+            ])
+          request.completion(nil)
+          return
+        }
+        if elapsedMsValue > 1_000, request.method != "initialize" {
+          FlashLog.plugin(
+            .warn,
+            pluginID: manifest.id,
+            message: "[plugin] slow request method=\(request.method) elapsed_ms=\(elapsedMs)",
+            fields: [
+              "method": request.method,
+              "elapsed_ms": elapsedMs,
+            ])
+        }
+        request.completion(result)
       }
       return
     }
@@ -1000,6 +1312,20 @@ final class PluginProcess {
     }
   }
 
+  private static func responsePayloadLimit(for method: String) -> Int? {
+    // Allow a small fixed envelope overhead above the SDK's encoded
+    // `{ candidates: ... }` / `{ answers: ... }` boundary. The response also
+    // carries JSON-RPC id/result keys that are outside those SDK-owned values.
+    switch method {
+    case "sources.snapshot":
+      return maxCatalogEncodedBytes + 1_024
+    case "query.evaluate":
+      return maxQueryEncodedBytes + 1_024
+    default:
+      return nil
+    }
+  }
+
   private func applyStatusSegments(_ params: [String: Any]) {
     guard let raw = params["segments"] as? [String: Any] else { return }
     let declared = Set(manifest.statusSegments)
@@ -1029,7 +1355,7 @@ final class PluginProcess {
     notifyStatus()
   }
 
-  private static func target(from raw: [String: Any], sourceID: String) -> PluginWireTarget? {
+  static func target(from raw: [String: Any], sourceID: String) -> PluginWireTarget? {
     guard let id = raw["id"] as? String else { return nil }
     let frameRaw = raw["frame"] as? [String: Any] ?? raw
     guard
@@ -1061,35 +1387,135 @@ final class PluginProcess {
       url: raw["url"] as? String,
       pid: (raw["pid"] as? Int).map(pid_t.init),
       entersInsertMode: entersInsertMode,
-      sourceID: raw["source_id"] as? String ?? sourceID,
+      sourceID: sourceID,
       preferHostClick: raw["prefer_host_click"] as? Bool ?? false,
       priority: priority)
   }
 
-  private static func candidate(
+  static func candidate(
     from raw: [String: Any],
-    pluginID: String,
-    pluginName: String,
-    sourceID: String
+    sourceID: String,
+    sourcePolicy: PluginCandidateSourcePolicy
   ) -> Candidate? {
-    guard let title = raw["title"] as? String, !title.isEmpty else { return nil }
-    let url = (raw["url"] as? String).flatMap(URL.init(string:))
+    Self.decodedCatalogCandidate(
+      from: raw,
+      sourceID: sourceID,
+      sourcePolicy: sourcePolicy
+    )?.candidate
+  }
+
+  static func catalogCandidates(
+    from raw: [[String: Any]],
+    sourceID: String,
+    allowedSources: Set<String>
+  ) -> [Candidate]? {
+    guard raw.count <= maxCatalogCandidates else { return nil }
+    var aggregateBytes = 0
+    var candidates: [Candidate] = []
+    candidates.reserveCapacity(raw.count)
+    for item in raw {
+      guard
+        let decoded = Self.decodedCatalogCandidate(
+          from: item,
+          sourceID: sourceID,
+          sourcePolicy: .catalog(allowed: allowedSources)),
+        let nextBytes = Self.addingBytes(
+          aggregateBytes,
+          decoded.stringBytes,
+          limit: maxCatalogEncodedBytes)
+      else {
+        // A source snapshot is atomic. Keeping the valid prefix would expose a
+        // deterministic but incomplete catalog and hide the plugin defect.
+        return nil
+      }
+      aggregateBytes = nextBytes
+      candidates.append(decoded.candidate)
+    }
+    return candidates
+  }
+
+  private static func decodedCatalogCandidate(
+    from raw: [String: Any],
+    sourceID: String,
+    sourcePolicy: PluginCandidateSourcePolicy
+  ) -> (candidate: Candidate, stringBytes: Int)? {
+    let allowedKeys: Set<String> = ["title", "url", "metadata", "effect"]
+    guard Set(raw.keys).isSubset(of: allowedKeys),
+      let title = raw["title"] as? String,
+      !title.isEmpty,
+      title.utf8.count <= maxCandidateTitleBytes
+    else { return nil }
+
+    var stringBytes = title.utf8.count
+    let url: URL?
+    if let rawURL = raw["url"] {
+      guard
+        let value = rawURL as? String,
+        value.utf8.count <= maxCandidateURLBytes,
+        let parsed = URL(string: value),
+        parsed.scheme != nil,
+        let nextBytes = Self.addingBytes(
+          stringBytes,
+          value.utf8.count,
+          limit: maxCatalogEncodedBytes)
+      else { return nil }
+      url = parsed
+      stringBytes = nextBytes
+    } else {
+      url = nil
+    }
+
     var metadata: [String: String] = [:]
-    if let dict = raw["metadata"] as? [String: Any] {
-      for (key, value) in dict {
-        guard let stringValue = Self.metadataString(value) else { continue }
-        metadata[key] = stringValue
+    if let rawMetadata = raw["metadata"] {
+      guard
+        let dict = rawMetadata as? [String: Any],
+        dict.count <= maxCandidateMetadataEntries
+      else { return nil }
+      metadata.reserveCapacity(dict.count + 2)
+      for (key, rawValue) in dict {
+        guard
+          key.utf8.count <= maxCandidateMetadataKeyBytes,
+          let value = rawValue as? String,
+          value.utf8.count <= maxCandidateMetadataValueBytes,
+          let withKey = Self.addingBytes(
+            stringBytes,
+            key.utf8.count,
+            limit: maxCatalogEncodedBytes),
+          let withValue = Self.addingBytes(
+            withKey,
+            value.utf8.count,
+            limit: maxCatalogEncodedBytes)
+        else { return nil }
+        stringBytes = withValue
+        metadata[key] = value
       }
     }
-    // Fill the host-side routing defaults the plugin may have omitted. These are
-    // host conventions, not part of FlashCore's schema — sources are free to
-    // override or skip them when they have no meaningful value.
-    if metadata[CandidateMetadataKey.source] == nil {
-      metadata[CandidateMetadataKey.source] = pluginName
+
+    let effect: CandidateEffect?
+    if let rawEffect = raw["effect"] {
+      guard
+        let decoded = Self.candidateEffect(
+          from: rawEffect,
+          maxTextBytes: maxCandidateEffectBytes),
+        let nextBytes = Self.addingBytes(
+          stringBytes,
+          decoded.textBytes,
+          limit: maxCatalogEncodedBytes)
+      else { return nil }
+      effect = decoded.effect
+      stringBytes = nextBytes
+    } else {
+      effect = nil
     }
-    if metadata[CandidateMetadataKey.sourceID] == nil {
-      metadata[CandidateMetadataKey.sourceID] = sourceID
+
+    switch sourcePolicy {
+    case .catalog(let allowed):
+      guard let source = metadata[CandidateMetadataKey.source], allowed.contains(source) else {
+        return nil
+      }
     }
+    // Routing ownership is always host-stamped too.
+    metadata[CandidateMetadataKey.sourceID] = sourceID
     if metadata[CandidateMetadataKey.kind] == nil {
       metadata[CandidateMetadataKey.kind] = "plugin"
     }
@@ -1098,16 +1524,131 @@ final class PluginProcess {
     {
       return nil
     }
-    return Candidate(title: title, url: url, metadata: metadata)
+    return (
+      Candidate(title: title, url: url, metadata: metadata, effect: effect),
+      stringBytes
+    )
   }
 
-  private static func metadataString(_ value: Any) -> String? {
-    if let string = value as? String { return string }
-    if let bool = value as? Bool { return bool ? "1" : "0" }
-    if let int = value as? Int { return String(int) }
-    if let int64 = value as? Int64 { return String(int64) }
-    if let double = value as? Double { return String(double) }
-    return nil
+  static func queryAnswer(
+    from raw: [String: Any],
+    sourceID: String,
+    source: String
+  ) -> Candidate? {
+    Self.decodedQueryAnswer(
+      from: raw,
+      sourceID: sourceID,
+      source: source
+    )?.candidate
+  }
+
+  static func queryAnswers(
+    from raw: [[String: Any]],
+    sourceID: String,
+    source: String
+  ) -> [Candidate]? {
+    guard raw.count <= maxQueryAnswersPerEvaluator else { return nil }
+    var aggregateBytes = 0
+    var candidates: [Candidate] = []
+    candidates.reserveCapacity(raw.count)
+    for item in raw {
+      guard
+        let decoded = Self.decodedQueryAnswer(
+          from: item,
+          sourceID: sourceID,
+          source: source),
+        let nextBytes = Self.addingBytes(
+          aggregateBytes,
+          decoded.stringBytes,
+          limit: maxQueryEncodedBytes)
+      else { return nil }
+      aggregateBytes = nextBytes
+      candidates.append(decoded.candidate)
+    }
+    return candidates
+  }
+
+  private static func decodedQueryAnswer(
+    from raw: [String: Any],
+    sourceID: String,
+    source: String
+  ) -> (candidate: Candidate, stringBytes: Int)? {
+    let allowedKeys: Set<String> = ["title", "subtitle", "effect"]
+    guard Set(raw.keys).isSubset(of: allowedKeys),
+      let title = raw["title"] as? String,
+      !title.isEmpty,
+      title.utf8.count <= maxQueryFieldBytes,
+      let rawEffect = raw["effect"],
+      let decodedEffect = Self.candidateEffect(
+        from: rawEffect,
+        maxTextBytes: maxQueryFieldBytes)
+    else { return nil }
+    var stringBytes = title.utf8.count
+    guard
+      let withEffect = Self.addingBytes(
+        stringBytes,
+        decodedEffect.textBytes,
+        limit: maxQueryEncodedBytes)
+    else { return nil }
+    stringBytes = withEffect
+    let subtitle: String?
+    if let rawSubtitle = raw["subtitle"] {
+      guard
+        let value = rawSubtitle as? String,
+        value.utf8.count <= maxQueryFieldBytes,
+        let nextBytes = Self.addingBytes(
+          stringBytes,
+          value.utf8.count,
+          limit: maxQueryEncodedBytes)
+      else { return nil }
+      subtitle = value
+      stringBytes = nextBytes
+    } else {
+      subtitle = nil
+    }
+    var metadata: [String: String] = [
+      CandidateMetadataKey.source: source,
+      CandidateMetadataKey.sourceID: sourceID,
+      CandidateMetadataKey.kind: "query_answer",
+      CandidateMetadataKey.priority: FlashPriority.urgent.rawValue,
+      CandidateMetadataKey.finishesCommand: "1",
+    ]
+    if let subtitle, !subtitle.isEmpty {
+      metadata[CandidateMetadataKey.subtitle] = subtitle
+    }
+    return (
+      Candidate(title: title, metadata: metadata, effect: decodedEffect.effect),
+      stringBytes
+    )
+  }
+
+  private static func candidateEffect(
+    from raw: Any,
+    maxTextBytes: Int
+  ) -> (effect: CandidateEffect, textBytes: Int)? {
+    guard let effect = raw as? [String: Any],
+      Set(effect.keys) == Set(["type", "text"]),
+      let type = effect["type"] as? String
+    else {
+      return nil
+    }
+    switch type {
+    case "copy_text":
+      guard
+        let text = effect["text"] as? String,
+        !text.isEmpty,
+        text.utf8.count <= maxTextBytes
+      else { return nil }
+      return (.copyText(text), text.utf8.count)
+    default:
+      return nil
+    }
+  }
+
+  private static func addingBytes(_ lhs: Int, _ rhs: Int, limit: Int) -> Int? {
+    let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+    guard !overflow, sum <= limit else { return nil }
+    return sum
   }
 
   private static func number(_ value: Any?) -> Double? {
@@ -1124,6 +1665,12 @@ final class PluginProcess {
     ]
     if let url = candidate.url {
       dict["url"] = url.absoluteString
+    }
+    if case .copyText(let text) = candidate.effect {
+      dict["effect"] = [
+        "type": "copy_text",
+        "text": text,
+      ]
     }
     return dict
   }
@@ -1143,7 +1690,7 @@ final class PluginProcess {
 
   private func activateTarget(_ targetID: String, action: JumpAction) {
     sendNotification(
-      method: "activateTarget",
+      method: "hints.activate",
       params: [
         "action": actionName(action),
         "target_id": targetID,
@@ -1170,10 +1717,12 @@ final class PluginProcess {
   }
 
   private func heartbeat() {
-    guard process?.isRunning == true else { return }
+    guard initializationCompleted, process?.isRunning == true else { return }
     if awaitingHeartbeat {
       heartbeatMisses += 1
-      setState(.degraded)
+      if runtimeStateSnapshot() == .ready {
+        setState(.degraded)
+      }
       if heartbeatMisses >= 2 {
         recordError("[plugin] heartbeat missed")
         restartCount += 1
@@ -1189,6 +1738,16 @@ final class PluginProcess {
       "method": "heartbeat",
       "params": ["time_unix_ms": Int64((Date().timeIntervalSince1970 * 1000).rounded())],
     ])
+  }
+
+  static func warmRequestIsDispatchable(
+    state: PluginRuntimeState,
+    initializationCompleted: Bool,
+    processRunning: Bool
+  ) -> Bool {
+    initializationCompleted
+      && processRunning
+      && (state == .ready || state == .degraded)
   }
 
   private func scheduleRestart() {
@@ -1240,8 +1799,25 @@ final class PluginProcess {
   }
 
   private func notifyStatus() {
+    // Coalesce: a chatty plugin spamming `flash.log` / `status.updated` would
+    // otherwise schedule an unbounded number of main-thread callbacks (the
+    // tap-starvation class). Collapse bursts to one main hop per runloop turn;
+    // `onStatusChanged` re-reads the latest state, so nothing is lost.
+    // A dedicated lock (not the state `lock`) so this can never deadlock with a
+    // caller that holds `lock` while changing state and then notifies.
+    statusNotifyLock.lock()
+    if statusNotificationPending {
+      statusNotifyLock.unlock()
+      return
+    }
+    statusNotificationPending = true
+    statusNotifyLock.unlock()
     DispatchQueue.main.async { [weak self] in
-      self?.onStatusChanged?()
+      guard let self else { return }
+      self.statusNotifyLock.lock()
+      self.statusNotificationPending = false
+      self.statusNotifyLock.unlock()
+      self.onStatusChanged?()
     }
   }
 
@@ -1305,7 +1881,11 @@ final class PluginProcess {
   }
 
   private static func elapsedMilliseconds(since start: DispatchTime) -> String {
+    String(format: "%.2f", elapsedMillisecondsValue(since: start))
+  }
+
+  private static func elapsedMillisecondsValue(since start: DispatchTime) -> Double {
     let nanos = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
-    return String(format: "%.2f", Double(nanos) / 1_000_000)
+    return Double(nanos) / 1_000_000
   }
 }
