@@ -27,11 +27,10 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// without also letting children escape the network deny). Implies the plugin
   /// spawns unsandboxed; used by process inspectors (`processes`, `tmux`).
   case subprocess
-  /// Observe and change the focused application: read the focused non-Flash
-  /// app's pid/bundle (`host.normal_mode_target`) and raise an app by pid
-  /// (`app.activate`). Gated because both are cross-app primitives — focus
-  /// surveillance and focus-stealing — that a third-party plugin should have to
-  /// declare rather than reach for silently.
+  /// Read the host's current normal-mode target pid/bundle
+  /// (`host.normal_mode_target`) and raise an app by pid (`app.activate`).
+  /// Running-app/focus event observation is controlled separately by manifest
+  /// `listen` patterns and is not gated by this capability.
   case appControl = "app_control"
 }
 
@@ -293,22 +292,20 @@ struct PluginCommandRegistration: Codable, Hashable {
 
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: DynamicKey.self)
-    func string(_ key: String) -> String? {
-      try? c.decode(String.self, forKey: DynamicKey(stringValue: key))
+    func string(_ key: String) throws -> String? {
+      try c.decodeIfPresent(String.self, forKey: DynamicKey(stringValue: key))
     }
-    self.command = string("command") ?? ""
-    self.subcommand = string("subcommand") ?? ""
-    self.description = string("description") ?? ""
+    self.command = try string("command") ?? ""
+    self.subcommand = try string("subcommand") ?? ""
+    self.description = try string("description") ?? ""
     self.selector = PluginSelector(
-      onlyBundleIDs: (try? c.decode(
-        [String].self, forKey: DynamicKey(stringValue: "only_bundle_ids"))) ?? [],
-      onlyURLs: (try? c.decode([String].self, forKey: DynamicKey(stringValue: "only_urls")))
-        ?? [])
+      onlyBundleIDs: try c.decodeIfPresent(
+        [String].self, forKey: DynamicKey(stringValue: "only_bundle_ids")) ?? [],
+      onlyURLs: try c.decodeIfPresent(
+        [String].self, forKey: DynamicKey(stringValue: "only_urls")) ?? [])
     var meta: [String: String] = [:]
     for key in c.allKeys where key.stringValue.hasPrefix("_") {
-      if let value = try? c.decode(String.self, forKey: key) {
-        meta[key.stringValue] = value
-      }
+      meta[key.stringValue] = try c.decode(String.self, forKey: key)
     }
     self.meta = meta
   }
@@ -382,23 +379,21 @@ struct PluginShebangRegistration: Codable, Hashable {
 
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: DynamicKey.self)
-    func string(_ key: String) -> String? {
-      try? c.decode(String.self, forKey: DynamicKey(stringValue: key))
+    func string(_ key: String) throws -> String? {
+      try c.decodeIfPresent(String.self, forKey: DynamicKey(stringValue: key))
     }
-    self.token = string("token") ?? ""
-    self.command = string("command") ?? ""
-    self.description = string("description") ?? ""
+    self.token = try string("token") ?? ""
+    self.command = try string("command") ?? ""
+    self.description = try string("description") ?? ""
     self.selector = PluginSelector(
-      onlyBundleIDs: (try? c.decode(
-        [String].self, forKey: DynamicKey(stringValue: "only_bundle_ids"))) ?? [],
-      onlyURLs: (try? c.decode([String].self, forKey: DynamicKey(stringValue: "only_urls")))
-        ?? [])
-    self.candidateSource = string("candidate_source")
+      onlyBundleIDs: try c.decodeIfPresent(
+        [String].self, forKey: DynamicKey(stringValue: "only_bundle_ids")) ?? [],
+      onlyURLs: try c.decodeIfPresent(
+        [String].self, forKey: DynamicKey(stringValue: "only_urls")) ?? [])
+    self.candidateSource = try string("candidate_source")
     var meta: [String: String] = [:]
     for key in c.allKeys where key.stringValue.hasPrefix("_") {
-      if let value = try? c.decode(String.self, forKey: key) {
-        meta[key.stringValue] = value
-      }
+      meta[key.stringValue] = try c.decode(String.self, forKey: key)
     }
     self.meta = meta
   }
@@ -557,8 +552,9 @@ struct PluginMappingRegistration: Codable, Hashable {
     if let priority { try c.encode(priority, forKey: .priority) }
   }
 
-  /// `mode` string → `ModeScope`; an unknown value falls back to `.normal`
-  /// (the common case — overriding `f`/nav keys lives in normal mode).
+  /// `mode` string → `ModeScope`. Loaded manifests validate the value before
+  /// registrations are exposed; the fallback only protects programmatic test
+  /// construction from trapping.
   var scope: ModeScope { ModeScope(rawValue: mode) ?? .normal }
 }
 
@@ -677,6 +673,59 @@ struct PluginHintsProvider: Codable, Equatable {
 
   func encode(to encoder: Encoder) throws {
     try gate.encode(to: encoder)
+  }
+}
+
+/// Declares pure, per-input candidate evaluation. This is intentionally only
+/// a surface registration: the plugin owns parsing and decides whether an
+/// input matches. The host never executes plugin-supplied regular expressions.
+struct PluginQueriesProvider: Codable, Equatable {
+  var surfaces: [QueryEvaluationSurface]
+  var priority: Int?
+  /// Host-owned provenance label stamped onto every evaluator answer. When
+  /// omitted, the manifest id is used.
+  var source: String?
+  /// Literal prefixes that exclusively route matching flashlight input to this
+  /// evaluator. This is deliberately not a regex surface.
+  var exclusivePrefixes: [String]
+
+  init(
+    surfaces: [QueryEvaluationSurface] = [.flashlight],
+    priority: Int? = nil,
+    source: String? = nil,
+    exclusivePrefixes: [String] = []
+  ) {
+    self.surfaces = surfaces
+    self.priority = priority
+    self.source = source
+    self.exclusivePrefixes = exclusivePrefixes
+  }
+
+  enum CodingKeys: String, CodingKey, CaseIterable {
+    case surfaces, priority, source
+    case exclusivePrefixes = "exclusive_prefixes"
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.surfaces =
+      try c.decodeIfPresent([QueryEvaluationSurface].self, forKey: .surfaces)
+      ?? [.flashlight]
+    self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
+    self.source = try c.decodeIfPresent(String.self, forKey: .source)
+    self.exclusivePrefixes = try c.decodeIfPresent([String].self, forKey: .exclusivePrefixes) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if surfaces != [.flashlight] {
+      try c.encode(surfaces, forKey: .surfaces)
+    }
+    if let priority { try c.encode(priority, forKey: .priority) }
+    if let source { try c.encode(source, forKey: .source) }
+    if !exclusivePrefixes.isEmpty {
+      try c.encode(exclusivePrefixes, forKey: .exclusivePrefixes)
+    }
   }
 }
 
@@ -898,6 +947,7 @@ struct PluginManifest: Codable, Equatable {
   /// Host event-name patterns this plugin listens to. `*` is the only wildcard.
   var listen: [String]
   var hintsProvider: PluginHintsProvider?
+  var queriesProvider: PluginQueriesProvider?
   var commandProvider: PluginCommandsProvider?
   var mappingProvider: PluginMappingsProvider?
   var statusProvider: PluginStatusProvider?
@@ -1023,6 +1073,10 @@ struct PluginManifest: Codable, Equatable {
     hintsProvider != nil
   }
 
+  var providesQueryEvaluation: Bool {
+    queriesProvider?.surfaces.isEmpty == false
+  }
+
   /// True when any provider opts the plugin into the candidate/flashlight
   /// surface. Gates the candidate-adjacent capabilities (`.candidates`, plus the
   /// app-activation and tab operations that act on candidate-like entities) so a
@@ -1046,6 +1100,7 @@ struct PluginManifest: Codable, Equatable {
   func providerSupports(context: PluginSelectorContext) -> Bool {
     guard selector.matches(context) else { return false }
     return hintsProvider != nil
+      || providesQueryEvaluation
       || !sourceActions.isEmpty
       || navigationProvider != nil
       || !sources.isEmpty
@@ -1062,7 +1117,7 @@ struct PluginManifest: Codable, Equatable {
     case onlyURLs = "only_urls"
     case requestTimeoutMs = "request_timeout_ms"
     case capabilities, help
-    case hints, commands, mappings, status, shebangs
+    case hints, queries, commands, mappings, status, shebangs
     case sourceActions = "source_actions"
     case sources
     case navigation, verbs
@@ -1073,6 +1128,7 @@ struct PluginManifest: Codable, Equatable {
     install: String, start: String,
     listen: [String] = [],
     hintsProvider: PluginHintsProvider? = nil,
+    queriesProvider: PluginQueriesProvider? = nil,
     commandProvider: PluginCommandsProvider? = nil,
     mappingProvider: PluginMappingsProvider? = nil,
     statusProvider: PluginStatusProvider? = nil,
@@ -1096,6 +1152,7 @@ struct PluginManifest: Codable, Equatable {
     self.start = start
     self.listen = Self.uniqueTrimmed(listen)
     self.hintsProvider = hintsProvider
+    self.queriesProvider = queriesProvider
     self.commandProvider = commandProvider
     self.mappingProvider = mappingProvider
     self.statusProvider = statusProvider
@@ -1122,6 +1179,7 @@ struct PluginManifest: Codable, Equatable {
     self.start = try c.decode(String.self, forKey: .start)
     self.listen = Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .listen) ?? [])
     self.hintsProvider = try c.decodeIfPresent(PluginHintsProvider.self, forKey: .hints)
+    self.queriesProvider = try c.decodeIfPresent(PluginQueriesProvider.self, forKey: .queries)
     self.commandProvider = try c.decodeIfPresent(PluginCommandsProvider.self, forKey: .commands)
     self.mappingProvider = try c.decodeIfPresent(PluginMappingsProvider.self, forKey: .mappings)
     self.statusProvider = try c.decodeIfPresent(PluginStatusProvider.self, forKey: .status)
@@ -1155,6 +1213,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(start, forKey: .start)
     if !listen.isEmpty { try c.encode(listen, forKey: .listen) }
     if let hintsProvider { try c.encode(hintsProvider, forKey: .hints) }
+    if let queriesProvider { try c.encode(queriesProvider, forKey: .queries) }
     if !sources.isEmpty { try c.encode(sources, forKey: .sources) }
     if let commandProvider { try c.encode(commandProvider, forKey: .commands) }
     if let mappingProvider { try c.encode(mappingProvider, forKey: .mappings) }
@@ -1207,19 +1266,130 @@ struct PluginManifest: Codable, Equatable {
   static func load(from root: URL) throws -> PluginManifest {
     let url = root.appendingPathComponent("manifest.json")
     let data = try Data(contentsOf: url)
-    try rejectUnknownTopLevelKeys(in: data)
+    try rejectUnknownManifestKeys(in: data)
     let manifest = try JSONDecoder().decode(PluginManifest.self, from: data)
     try manifest.validate()
     return manifest
   }
 
-  private static func rejectUnknownTopLevelKeys(in data: Data) throws {
+  private static func rejectUnknownManifestKeys(in data: Data) throws {
     let object = try JSONSerialization.jsonObject(with: data)
     guard let dictionary = object as? [String: Any] else { return }
-    let allowed = Set(CodingKeys.allCases.map(\.stringValue))
-    let unknown = Set(dictionary.keys).subtracting(allowed)
+    try rejectUnknownKeys(
+      in: dictionary,
+      allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+      path: "manifest.json")
+
+    try rejectObject(
+      dictionary["hints"],
+      allowed: ["modes", "priority"],
+      path: "manifest.json hints")
+    try rejectObject(
+      dictionary["queries"],
+      allowed: Set(PluginQueriesProvider.CodingKeys.allCases.map(\.stringValue)),
+      path: "manifest.json queries")
+    try rejectProviderItems(
+      dictionary["commands"],
+      providerKeys: ["modes", "priority", "items"],
+      itemKeys: ["command", "subcommand", "description", "only_bundle_ids", "only_urls"],
+      allowPrivateItemKeys: true,
+      path: "manifest.json commands")
+    try rejectProviderItems(
+      dictionary["mappings"],
+      providerKeys: ["modes", "priority", "items"],
+      itemKeys: ["key", "mode", "command", "only_bundle_ids", "only_urls", "priority"],
+      path: "manifest.json mappings")
+    try rejectObject(
+      dictionary["status"],
+      allowed: ["modes", "priority", "segments"],
+      path: "manifest.json status")
+    try rejectProviderItems(
+      dictionary["shebangs"],
+      providerKeys: ["modes", "priority", "command", "items"],
+      itemKeys: [
+        "token", "command", "description", "only_bundle_ids", "only_urls",
+        "candidate_source",
+      ],
+      allowPrivateItemKeys: true,
+      path: "manifest.json shebangs")
+    try rejectObject(
+      dictionary["navigation"],
+      allowed: ["modes", "priority", "schemes"],
+      path: "manifest.json navigation")
+    try rejectProviderItems(
+      dictionary["verbs"],
+      providerKeys: ["modes", "priority", "command", "items"],
+      itemKeys: [
+        "name", "command", "subcommand", "description", "inline_keystrokes",
+        "only_bundle_ids", "only_urls",
+      ],
+      path: "manifest.json verbs")
+    try rejectArrayObjects(
+      dictionary["sources"],
+      allowed: ["name", "kind", "priority"],
+      path: "manifest.json sources")
+
+    if let help = dictionary["help"] as? [String: Any] {
+      try rejectUnknownKeys(in: help, allowed: ["topics"], path: "manifest.json help")
+      try rejectArrayObjects(
+        help["topics"],
+        allowed: ["name", "title", "summary", "body", "aliases"],
+        path: "manifest.json help.topics")
+    }
+  }
+
+  private static func rejectProviderItems(
+    _ value: Any?,
+    providerKeys: Set<String>,
+    itemKeys: Set<String>,
+    allowPrivateItemKeys: Bool = false,
+    path: String
+  ) throws {
+    guard let provider = value as? [String: Any] else { return }
+    try rejectUnknownKeys(in: provider, allowed: providerKeys, path: path)
+    try rejectArrayObjects(
+      provider["items"],
+      allowed: itemKeys,
+      allowPrivateKeys: allowPrivateItemKeys,
+      path: "\(path).items")
+  }
+
+  private static func rejectObject(
+    _ value: Any?,
+    allowed: Set<String>,
+    path: String
+  ) throws {
+    guard let object = value as? [String: Any] else { return }
+    try rejectUnknownKeys(in: object, allowed: allowed, path: path)
+  }
+
+  private static func rejectArrayObjects(
+    _ value: Any?,
+    allowed: Set<String>,
+    allowPrivateKeys: Bool = false,
+    path: String
+  ) throws {
+    guard let objects = value as? [[String: Any]] else { return }
+    for (index, object) in objects.enumerated() {
+      try rejectUnknownKeys(
+        in: object,
+        allowed: allowed,
+        allowPrivateKeys: allowPrivateKeys,
+        path: "\(path)[\(index)]")
+    }
+  }
+
+  private static func rejectUnknownKeys(
+    in object: [String: Any],
+    allowed: Set<String>,
+    allowPrivateKeys: Bool = false,
+    path: String
+  ) throws {
+    let unknown = object.keys.filter {
+      !allowed.contains($0) && !(allowPrivateKeys && $0.hasPrefix("_"))
+    }
     if let key = unknown.sorted().first {
-      throw PluginError.invalidManifest("manifest.json unknown field \(key)")
+      throw PluginError.invalidManifest("\(path) unknown field \(key)")
     }
   }
 
@@ -1238,10 +1408,14 @@ struct PluginManifest: Codable, Equatable {
       }
     }
     let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
-    guard id.lowercased() == id,
+    // Reject `.`/`..`/anything containing `..`: the id becomes the plugin's
+    // FLASH_PLUGIN_DATA_DIR component (baseDataDir/<id>), so `..` would escape
+    // the data root. Only reachable via a `file:` plugin, but cheap to close.
+    guard id.lowercased() == id, id != ".", id != "..", !id.contains(".."),
       id.unicodeScalars.allSatisfy({ allowed.contains($0) })
     else {
-      throw PluginError.invalidManifest("manifest.json id must be lowercase [a-z0-9._-]")
+      throw PluginError.invalidManifest(
+        "manifest.json id must be lowercase [a-z0-9._-] and not contain \"..\"")
     }
     for command in commands {
       // An empty subcommand registers a *top-level* command (`:copy`), and
@@ -1249,6 +1423,28 @@ struct PluginManifest: Codable, Equatable {
       // Only the command verb itself is mandatory.
       if command.command.trimmed.isEmpty {
         throw PluginError.invalidManifest("plugin command must not be empty")
+      }
+    }
+    for shebang in shebangs {
+      if shebang.token.trimmed.isEmpty {
+        throw PluginError.invalidManifest("plugin shebang token must not be empty")
+      }
+    }
+    for mapping in mappings {
+      guard ModeScope(rawValue: mapping.mode) != nil else {
+        throw PluginError.invalidManifest(
+          "plugin mapping mode \(mapping.mode) must be all, normal, or insert")
+      }
+    }
+    if let source = queriesProvider?.source, source.trimmed.isEmpty {
+      throw PluginError.invalidManifest("plugin query source must not be empty")
+    }
+    for prefix in queriesProvider?.exclusivePrefixes ?? [] {
+      guard !prefix.isEmpty, prefix.trimmed == prefix,
+        !prefix.contains(where: { $0.isWhitespace })
+      else {
+        throw PluginError.invalidManifest(
+          "plugin query exclusive prefix must be a non-whitespace literal")
       }
     }
     let statusAllowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_-")
@@ -1388,7 +1584,7 @@ struct PluginStatus {
 
 /// Per-plugin host-side state for the **hint** path (`f`) and status bar.
 /// Candidates are NOT here: flashlight rows are pulled live from warm plugins
-/// via `candidateQuery`, never cached on the host (see `PluginFlashSource`).
+/// via `sources.snapshot`, never cached on the host (see `PluginFlashSource`).
 struct PluginDiscovery {
   var targets: [PluginWireTarget] = []
   var statusSegments: [String: String] = [:]
@@ -1410,7 +1606,7 @@ struct PluginWireTarget {
   /// click instead. Used by the tmux plugin's pane targets so a fast
   /// follow-up keystroke can't race a still-in-flight `select-pane`.
   var preferHostClick: Bool
-  /// Source-declared target salience. `.critical` renders with the accent hint
-  /// style.
+  /// Source-declared target salience. `.important` and `.urgent` render with
+  /// the accent hint style.
   var priority: FlashPriority
 }

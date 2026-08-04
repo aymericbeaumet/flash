@@ -15,13 +15,13 @@ enum ModeLabel: Equatable {
 
 extension Mode {
   /// The coarse insert/normal axis used by consumers that only care about that
-  /// distinction: the Carbon mapping scope (`mappings.applyForFlashMode`) and
-  /// the pointer interaction policy. Surfaces (command/modal) keep NORMAL's
-  /// scope so normal-scoped hotkeys stay live while a surface is open.
+  /// distinction and the pointer interaction policy. Command surfaces have a
+  /// separate mapping scope effect that unregisters Carbon mappings while the
+  /// field editor owns the keyboard.
   var flashMode: FlashMode {
     switch self {
     case .disabled, .insert: return .insert
-    case .normal, .command, .modal: return .normal
+    case .normal, .command: return .normal
     }
   }
 
@@ -44,7 +44,7 @@ extension Mode {
       return false
     case .normal:
       return !hasHints && !activationInFlight
-    case .command, .modal:
+    case .command:
       return true
     }
   }
@@ -73,8 +73,6 @@ extension Mode {
       case .commandLine: return .commandLine
       case .finder: return .candidateFinder
       }
-    case .modal:
-      return .modal
     }
   }
 
@@ -83,7 +81,7 @@ extension Mode {
     switch self {
     case .disabled, .insert: return .insert
     case .normal: return .normal
-    case .command, .modal: return .command
+    case .command: return .command
     }
   }
 
@@ -94,7 +92,7 @@ extension Mode {
     switch self {
     case .disabled, .insert: return .insert
     case .normal: return .normal
-    case .command, .modal: return .command
+    case .command: return .command
     }
   }
 

@@ -282,6 +282,61 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.commandLineSelectionDeltas, [-1, 1])
   }
 
+  func testCommandLineControlEMovesCaretToEndOfLine() {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.commandTextField.stringValue = ":flashlight 1 * 1"
+    panel.commandLineText = panel.commandTextField.stringValue
+    let textView = NSTextView()
+    textView.string = panel.commandTextField.stringValue
+    textView.setSelectedRange(NSRange(location: 4, length: 0))
+
+    XCTAssertTrue(
+      panel.control(
+        panel.commandTextField,
+        textView: textView,
+        doCommandBy: #selector(NSResponder.moveToEndOfLine(_:))))
+
+    XCTAssertEqual(textView.selectedRange, NSRange(location: textView.string.utf16.count, length: 0))
+    XCTAssertEqual(panel.commandLineCursorIndex, panel.commandTextField.stringValue.count)
+
+    textView.setSelectedRange(NSRange(location: 4, length: 0))
+    XCTAssertTrue(
+      panel.control(
+        panel.commandTextField,
+        textView: textView,
+        doCommandBy: #selector(NSResponder.moveToRightEndOfLine(_:))))
+    XCTAssertEqual(textView.selectedRange, NSRange(location: textView.string.utf16.count, length: 0))
+  }
+
+  func testCommandLineKarabinerCmdRightKeyEquivalentMovesCaret() throws {
+    let panel = OverlayPanel()
+    panel.inputMode = .commandLine
+    panel.commandTextField.stringValue = ":flashlight 1 * 1"
+    panel.commandLineText = panel.commandTextField.stringValue
+    panel.orderFrontRegardless()
+    defer { panel.orderOut(nil) }
+    XCTAssertTrue(panel.makeFirstResponder(panel.commandTextField))
+    let editor = try XCTUnwrap(panel.commandTextField.currentEditor() as? NSTextView)
+    editor.setSelectedRange(NSRange(location: 4, length: 0))
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [.command],
+        timestamp: 0,
+        windowNumber: panel.windowNumber,
+        context: nil,
+        characters: "",
+        charactersIgnoringModifiers: "",
+        isARepeat: false,
+        keyCode: 124))
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
+    XCTAssertEqual(editor.selectedRange, NSRange(location: editor.string.utf16.count, length: 0))
+  }
+
   func testCommandLineReturnSubmitsWithoutClearingCommandBufferFirst() {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
@@ -325,30 +380,6 @@ final class OverlayInputTests: XCTestCase {
     ] {
       XCTAssertNotNil(OverlayPanel.noActions[key], "missing \(key)")
     }
-  }
-
-  func testReadOnlyModalTextViewConsumesQToDismiss() throws {
-    let panel = OverlayPanel()
-    let coordinator = SpyOverlayCoordinator()
-    panel.coordinator = coordinator
-    panel.inputMode = .modal
-    panel.modalSelectable = false
-    let event = try XCTUnwrap(
-      NSEvent.keyEvent(
-        with: .keyDown,
-        location: .zero,
-        modifierFlags: [],
-        timestamp: 0,
-        windowNumber: panel.windowNumber,
-        context: nil,
-        characters: "q",
-        charactersIgnoringModifiers: "q",
-        isARepeat: false,
-        keyCode: 12))
-
-    XCTAssertTrue(panel.consumeModalKeyDown(event))
-    XCTAssertEqual(coordinator.cancelModalCount, 1)
-    XCTAssertEqual(coordinator.passThroughModalCount, 0)
   }
 
   func testPointerIntentMonitorRunsForCapturingNormalModeBadge() {
@@ -640,8 +671,6 @@ private func keyEvent(
 }
 
 private final class SpyOverlayCoordinator: OverlayCoordinator {
-  var cancelModalCount = 0
-  var passThroughModalCount = 0
   var commandLineSelectionDeltas: [Int] = []
   var insertSelectionCount = 0
   var submittedCommands: [String] = []
@@ -672,8 +701,6 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     mappingEventsToHandle -= 1
     return true
   }
-  func overlayDidCancelModal() { cancelModalCount += 1 }
-  func overlayDidPassThroughModalKey(_ event: NSEvent) { passThroughModalCount += 1 }
   func overlayDidCancelCommandLine() {}
   func overlayDidUpdateCommandLine(
     _ command: String,
@@ -696,7 +723,6 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   func overlayDidUpdateCandidateFinderQuery(_ query: String) {}
   func overlayDidMoveCandidateFinderSelection(_ delta: Int) {}
   func overlayDidSubmitCandidateFinder() {}
-  func overlayDidSubmitSelectableModal() {}
   func overlayExpandFlashlightAlias(
     _ text: String,
     cursorIndex: Int

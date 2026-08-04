@@ -64,6 +64,19 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
   /// integrations use this for app-specific motions such as Gmail's
   /// newer/older conversation buttons.
   public static let resourceNavigation = FlashSourceCapabilities(rawValue: 1 << 14)
+  /// Source handles `cmd+[`/`cmd+]` (`pane_previous`/`pane_next`): cycle the
+  /// active split *inside* the focused window. Tmux is the canonical case
+  /// (`select-pane -t :.-`/`:.+`); no browser has an analogue, so off-terminal
+  /// apps fall back to re-emitting the native ⌘[ / ⌘] chord.
+  public static let paneNavigation = FlashSourceCapabilities(rawValue: 1 << 15)
+  /// Source handles `pane_split_vertical` / `pane_split_horizontal`: create a
+  /// new split inside the focused window. Tmux is the canonical case; the
+  /// host does not synthesize a fallback keystroke when no source claims it.
+  public static let paneSplitting = FlashSourceCapabilities(rawValue: 1 << 16)
+  /// Source handles `pane_close`: close the active split inside the focused
+  /// window. Tmux is the canonical case; browsers/native apps keep using
+  /// `tab_close` / their own native close semantics.
+  public static let paneClosing = FlashSourceCapabilities(rawValue: 1 << 17)
 
   /// Human-readable list of the flags this set carries, for trace logs.
   /// Order is stable so log lines diff cleanly between runs.
@@ -84,6 +97,9 @@ public struct FlashSourceCapabilities: OptionSet, Sendable {
     if contains(.resourceArchiving) { names.append("resourceArchiving") }
     if contains(.navigationRoutes) { names.append("navigationRoutes") }
     if contains(.resourceNavigation) { names.append("resourceNavigation") }
+    if contains(.paneNavigation) { names.append("paneNavigation") }
+    if contains(.paneSplitting) { names.append("paneSplitting") }
+    if contains(.paneClosing) { names.append("paneClosing") }
     return names.isEmpty ? "none" : names.joined(separator: "|")
   }
 }
@@ -106,7 +122,7 @@ public enum CandidateScope: Sendable {
 public enum CandidateKind: Sendable, Equatable {
   case app
   /// Any non-app candidate, tagged by its source's wire-kind string
-  /// (e.g. "browser_tab", "slack_channel", "tmux_window"). Both native
+  /// (e.g. "browser_tab", "note", "tmux_window"). Both native
   /// sources and stdio plugins funnel through this single case so the
   /// runtime carries no per-integration kinds.
   case plugin(String)
@@ -117,8 +133,8 @@ public enum CandidateSourceKind: String, Codable, Sendable, Equatable, Hashable 
   /// the user names the source explicitly or config gives it custom behavior.
   case standard = "default"
   /// Navigable locations surfaced in the default flashlight pool and suitable
-  /// for movement-history traversal. Apps, tabs, tmux windows, Slack channels,
-  /// and third-party plugin destinations all use this shared source kind.
+  /// for movement-history traversal. Apps, tabs, tmux windows, and third-party
+  /// plugin destinations all use this shared source kind.
   case locations
 }
 
@@ -165,15 +181,18 @@ public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
 // `CandidateFinder`'s ranking queue; consumers treat it as immutable for the
 // lifetime of a flashlight query.
 //
-// Schema is intentionally minimal: a primary `title` (the highest-precedence
-// ranking field), an openable `url`, and a free-form `metadata` map. FlashCore
-// makes no decisions on what's inside `metadata` — sources are free to stash
-// whatever they want; the host or other plugins may read those keys, and the
-// matcher indexes them at a low tier for fuzzy search.
+// Schema is intentionally small: a primary `title` (the highest-precedence
+// ranking field), an openable `url`, a free-form `metadata` map, and an optional
+// closed `effect` union validated and executed by the host only after explicit
+// selection. The matcher indexes metadata at a low tier for fuzzy search.
 public struct Candidate: @unchecked Sendable {
   public var title: String
   public var url: URL?
   public var metadata: [String: String]
+  /// A host-owned, explicitly user-triggered effect. Plugins describe the
+  /// effect; the resident validates and performs it when this row is selected.
+  /// Merely evaluating or rendering a candidate never executes the effect.
+  public var effect: CandidateEffect?
   // Derived ranking caches populated by `CandidateFinder.prepare`; not part of
   // the public per-candidate contract.
   public var displayTitle: String
@@ -187,6 +206,7 @@ public struct Candidate: @unchecked Sendable {
     title: String,
     url: URL? = nil,
     metadata: [String: String] = [:],
+    effect: CandidateEffect? = nil,
     displayTitle: String = "",
     normalizedSearchText: String = "",
     normalizedScoringFields: NormalizedScoringFields = NormalizedScoringFields(),
@@ -197,6 +217,7 @@ public struct Candidate: @unchecked Sendable {
     self.title = title
     self.url = url
     self.metadata = metadata
+    self.effect = effect
     self.displayTitle = displayTitle
     self.normalizedSearchText = normalizedSearchText
     self.normalizedScoringFields = normalizedScoringFields
@@ -204,6 +225,11 @@ public struct Candidate: @unchecked Sendable {
     self.scoringMask = scoringMask
     self.wordStartMask = wordStartMask
   }
+}
+
+public enum CandidateEffect: Sendable, Equatable {
+  /// Replace the system clipboard with `text`.
+  case copyText(String)
 }
 
 public struct NormalizedScoringFields: Sendable {
@@ -258,16 +284,6 @@ public struct FlashSourceEnvironment {
   }
 }
 
-public struct CandidateQuery: Sendable {
-  public let scope: CandidateScope
-  public let text: String
-
-  public init(scope: CandidateScope, text: String) {
-    self.scope = scope
-    self.text = text
-  }
-}
-
 public struct CandidateResolution: Sendable {
   public let targetPID: pid_t?
   public let didResolve: Bool
@@ -301,6 +317,11 @@ public enum SourceAction: Sendable, Equatable {
   case tabMovePrev
   case tabMoveNext
   case tabReopen
+  case paneNext
+  case panePrev
+  case paneSplitVertical
+  case paneSplitHorizontal
+  case paneClose
   case reload(force: Bool)
   case archive
   case resourceNext
@@ -317,6 +338,9 @@ public enum SourceAction: Sendable, Equatable {
     case .tabClose: return .tabClosing
     case .tabMovePrev, .tabMoveNext: return .tabReorder
     case .tabReopen: return .tabReopen
+    case .paneNext, .panePrev: return .paneNavigation
+    case .paneSplitVertical, .paneSplitHorizontal: return .paneSplitting
+    case .paneClose: return .paneClosing
     case .reload: return .reload
     case .archive: return .resourceArchiving
     case .resourceNext, .resourcePrevious: return .resourceNavigation
@@ -337,6 +361,11 @@ public enum SourceAction: Sendable, Equatable {
     case .tabMovePrev: return "tab_move_previous"
     case .tabMoveNext: return "tab_move_next"
     case .tabReopen: return "tab_reopen"
+    case .paneNext: return "pane_next"
+    case .panePrev: return "pane_previous"
+    case .paneSplitVertical: return "pane_split_vertical"
+    case .paneSplitHorizontal: return "pane_split_horizontal"
+    case .paneClose: return "pane_close"
     case .reload: return "app_reload"
     case .archive: return "resource_archive"
     case .resourceNext: return "resource_next"
@@ -399,7 +428,7 @@ public protocol FlashSource: AnyObject {
   /// sources with active-window selectors can add selector specificity here.
   func priority(in context: AppContext) -> Int
   /// Capabilities this source contributes. A source can expose hints,
-  /// `:open` items, document URL resolution, app activation, or any
+  /// flashlight items, document URL resolution, app activation, or any
   /// combination of those without separate registration paths.
   var capabilities: FlashSourceCapabilities { get }
   /// Cheap process-level activation gate. The registry instantiates and
@@ -420,7 +449,7 @@ public protocol FlashSource: AnyObject {
   /// host terminal doesn't expose to AX at all.
   var resultsAreVolatile: Bool { get }
   /// User-facing source labels this provider owns for `@<source>` completion
-  /// and source-scoped candidate queries. Labels should be canonical dotted
+  /// and source-scoped candidate snapshots. Labels should be canonical dotted
   /// source names such as `firefox.tabs` or `tmux.windows`; short prefixes are
   /// inferred by the host filter matcher.
   var candidateSourceLabels: [String] { get }
@@ -437,22 +466,22 @@ public protocol FlashSource: AnyObject {
   /// Providers must not deadline-truncate results; a slow complete walk is
   /// preferable to serving a partial, activation-dependent hint set.
   func discover(in context: AppContext) throws -> [JumpTarget]
-  /// Return complete, deterministic open/search items for this source's
+  /// Return complete, deterministic flashlight/search items for this source's
   /// current enabled environment. The command bar freezes this synchronous
-  /// snapshot when `:open` / `:flashlight` opens; keep it warm in memory and
+  /// snapshot when `:flashlight` opens; keep it warm in memory and
   /// never rely on a visible session to fetch candidates later.
   func candidates(
     in environment: FlashSourceEnvironment,
     scope: CandidateScope
   ) -> [Candidate]
-  /// Query this source on demand outside the visible command-bar path. The
-  /// command bar must not call this while opening or rendering `:open` /
-  /// `:flashlight`, because async arrivals would either delay first paint or
-  /// mutate a displayed list. Plugin-backed sources should keep
-  /// ``candidates(in:scope:)`` warm instead.
-  func queryCandidates(
+  /// Pull this source's complete warm snapshot. The command bar may call this
+  /// only while its initial candidate barrier is hidden, then reveals one
+  /// frozen aggregate. It must never merge a reply into an already-displayed
+  /// list. Implementations perform no I/O on this path. A source may await an
+  /// already-running startup prewarm, but this call must never initiate one.
+  func snapshotCandidates(
     in environment: FlashSourceEnvironment,
-    request: CandidateQuery,
+    scope: CandidateScope,
     completion: @escaping ([Candidate]) -> Void
   )
   /// Resolve a previously returned candidate. The completion must be
@@ -508,17 +537,12 @@ extension FlashSource {
   ) -> [Candidate] {
     []
   }
-  public func queryCandidates(
+  public func snapshotCandidates(
     in environment: FlashSourceEnvironment,
-    request: CandidateQuery,
+    scope: CandidateScope,
     completion: @escaping ([Candidate]) -> Void
   ) {
-    DispatchQueue.global(qos: .utility).async {
-      let items = self.candidates(in: environment, scope: request.scope)
-      DispatchQueue.main.async {
-        completion(items)
-      }
-    }
+    completion(candidates(in: environment, scope: scope))
   }
   public func resolveCandidate(
     _ candidate: Candidate,

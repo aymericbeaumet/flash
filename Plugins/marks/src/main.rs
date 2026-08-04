@@ -39,21 +39,18 @@ impl FlashPlugin for Marks {
                 *state = loaded;
             }
         }
+        replace_running_apps(self, &ctx);
     }
 
-    async fn on_event(&self, _ctx: Context, event: Event) {
-        // Refresh the running-apps cache opportunistically. The host emits
-        // `apps.changed` on launch and `apps.launched`/`apps.terminated` for
-        // every workspace event, all of which carry the current app list.
-        if !event.running_applications.is_empty() {
-            if let Ok(mut apps) = self.apps.lock() {
-                apps.clear();
-                for app in &event.running_applications {
-                    if !app.bundle_id.is_empty() && app.pid > 0 {
-                        apps.insert(app.bundle_id.clone(), app.pid);
-                    }
-                }
-            }
+    async fn on_event(&self, ctx: Context, event: Event) {
+        if matches!(
+            event.name.as_str(),
+            "core:flash.started"
+                | "core:apps.changed"
+                | "core:apps.launched"
+                | "core:apps.terminated"
+        ) {
+            replace_running_apps(self, &ctx);
         }
     }
 
@@ -62,6 +59,17 @@ impl FlashPlugin for Marks {
             "set_mark" => set_mark_command(self, &ctx, &command).await,
             "jump_to_mark" => jump_to_mark_command(self, &ctx, &command).await,
             other => CommandResponse::error(format!("unknown subcommand: {other}")),
+        }
+    }
+}
+
+fn replace_running_apps(plugin: &Marks, ctx: &Context) {
+    if let Ok(mut apps) = plugin.apps.lock() {
+        apps.clear();
+        for app in ctx.running_applications() {
+            if !app.bundle_id.is_empty() && app.pid > 0 {
+                apps.insert(app.bundle_id, app.pid);
+            }
         }
     }
 }

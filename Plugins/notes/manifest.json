@@ -21,7 +21,6 @@
     ]
   },
   "listen": [
-    "core:flash.started",
     "core:config.*",
     "core:apps.*"
   ],

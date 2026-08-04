@@ -68,6 +68,9 @@ watching_enabled = true
 # visibility — it is independent of advanced mode (the enter_normal_mode
 # binding). Defaults to false.
 enabled = false
+# Which displays show the bar: "all" (default, every screen's top band) or
+# "primary" (only the main / menu-bar display).
+monitor = "all"
 # Single template string for the status bar. Use tmux-style alignment
 # markers to switch which region subsequent content lands in:
 #
@@ -136,7 +139,7 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 # Number of suggestion rows shown below the command bar.
 suggestion_count = 10
 # The default flashlight pool is intentionally location-only: apps, tabs,
-# tmux windows, Slack channels, and any plugin-provided location entities.
+# tmux windows, and any plugin-provided location entities.
 # Other sources are hidden unless the query includes an explicit @source filter.
 # Bonus added to candidates backed by a running process, used as a tiebreaker
 # inside the same source.
@@ -168,7 +171,9 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 sequence_timeout_ms = 1000
 
 [mode.all.mappings]
-# Mappings available in insert and normal modes.
+# Modified-key mappings available in every mode, including command-line and
+# candidate-finder surfaces. Non-modified keys are read only while Flash owns
+# normal-mode input, as described below.
 # Every value is an argv array. Arrays starting with "flash" or a path whose
 # basename is "flash" dispatch the verb in-process; any other head is launched
 # as argv (no shell wrap) with `~` and env expansion on each element. Bare
@@ -225,9 +230,11 @@ leader = "\\"
 "gg" = ["flash", "scroll_top"]
 "G" = ["flash", "scroll_bottom"]
 # Vimium H/L — back/forward in history. (Lowercase h/l scroll left/right.)
-# History has no bracket-pair form; H/L replace the old [h/]h.
+# [h/]h alias these, unimpaired-style.
 "H" = ["flash", "history_back"]
 "L" = ["flash", "history_forward"]
+"[h" = ["flash", "history_back"]
+"]h" = ["flash", "history_forward"]
 "[t" = ["flash", "tab_previous"]
 "]t" = ["flash", "tab_next"]
 # Vimium J/K — one tab left (previous) / right (next), capital siblings
@@ -275,6 +282,8 @@ leader = "\\"
 "cmd+shift+<lbracket>" = ["flash", "tab_previous"] # ⌘⇧[ ≈ [t / gT
 "cmd+shift+<rbracket>" = ["flash", "tab_next"]     # ⌘⇧] ≈ ]t / gt
 "cmd+t" = ["flash", "tab_new"]                     # ≈ t
+# The bundled tmux plugin additionally scopes cmd+d / cmd+shift+d / cmd+w to
+# supported terminal bundles for tmux pane split/close actions.
 "cmd+shift+t" = ["flash", "tab_reopen"]            # ≈ T
 "cmd+w" = ["flash", "tab_close"]                   # ≈ x
 "cmd+n" = ["flash", "window_new"]                  # ≈ n

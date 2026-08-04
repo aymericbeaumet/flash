@@ -65,6 +65,18 @@ extension OverlayPanel {
     }
   }
 
+  /// Re-attach the active-window border to a freshly rebuilt sublayer stack
+  /// when it's currently shown (`path != nil`). Transient overlays (hints,
+  /// `displayAlert`, `displayBanner`) rebuild `contentLayer.sublayers` from
+  /// scratch, so without this a toast blanks the colored focus border until the
+  /// next window move re-draws it.
+  func appendActiveWindowBorderLayerIfNeeded(to sublayers: inout [CALayer]) {
+    guard activeWindowBorderLayer.path != nil else { return }
+    if !sublayers.contains(where: { $0 === activeWindowBorderLayer }) {
+      sublayers.append(activeWindowBorderLayer)
+    }
+  }
+
   /// Position the stroke fully *inside* the target window so the border reads as
   /// painted ON the window rather than wrapped AROUND it.
   ///

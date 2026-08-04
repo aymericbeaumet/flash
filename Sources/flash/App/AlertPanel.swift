@@ -97,6 +97,7 @@ extension OverlayPanel {
 
     var sublayers: [CALayer] = [box]
     appendModeBadgeLayerIfNeeded(to: &sublayers, panelFrame: frame)
+    appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
     contentLayer.sublayers = sublayers
     transientContentVisible = true
     hintLayers.append(box)

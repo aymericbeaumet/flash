@@ -75,8 +75,7 @@ extension OverlayPanel {
         for bar in secondaryStatusBars {
           sublayers.removeAll { $0 === bar.backgroundLayer }
         }
-        hideStatusLinkCatchers()
-        hideStatusBarShields()
+        hideStatusBarClickWindows()
       }
       contentLayer.sublayers = sublayers
       if captureInput {
@@ -164,13 +163,11 @@ extension OverlayPanel {
       }
     } else if modeBadgeCapturesInput {
       contentLayer.sublayers = nil
-      hideStatusLinkCatchers()
-      hideStatusBarShields()
+      hideStatusBarClickWindows()
       captureKeyboardInput()
     } else {
       contentLayer.sublayers = nil
-      hideStatusLinkCatchers()
-      hideStatusBarShields()
+      hideStatusBarClickWindows()
       orderOut(nil)
     }
   }
@@ -305,10 +302,14 @@ extension OverlayPanel {
     // label — so per-segment `#[fg=…]` styling is honoured instead of
     // leaking the pill palette into the trailing text.
     let leftTrailingDisplay = FlashStatusBarRenderer.stripClickRanges(from: leftTrailingRaw.trimmed)
-    let leftTrailingAttributed = FlashStatusBarRenderer.attributedStatusString(
-      from: leftTrailingDisplay, font: rightFont)
-    let leftTrailingWidth =
-      leftTrailingDisplay.isEmpty ? 0 : ceil(leftTrailingAttributed.size().width)
+    // A `#{cycle:…}` run arrives wrapped in `#[cyc]…#[nocyc]`. Pull it out so it
+    // renders in its own clipped layer that can slide vertically, while the
+    // static text around it (the pill, the "HN" label) stays in the base layer.
+    let (cyclePrefix, cycleContent, cycleSuffix) = Self.splitCycleRun(leftTrailingDisplay)
+    let baseDisplay = cyclePrefix + cycleSuffix
+    let baseAttributed = FlashStatusBarRenderer.attributedStatusString(
+      from: baseDisplay, font: rightFont)
+    let baseWidth = baseDisplay.isEmpty ? 0 : ceil(baseAttributed.size().width)
     // Start the trailing run flush against the pill's right edge so the gap
     // to whatever follows is driven entirely by the template's own spacing
     // (e.g. `#{mode} · …`), exactly like every other segment boundary on the
@@ -319,19 +320,63 @@ extension OverlayPanel {
     statusLeftTrailingLabel.frame = CGRect(
       x: leftTrailingX,
       y: textY,
-      width: leftTrailingWidth,
+      width: baseWidth,
       height: textHeight)
     statusLeftTrailingLabel.font = rightFont
     statusLeftTrailingLabel.fontSize = fontSize
     statusLeftTrailingLabel.foregroundColor = Self.tmuxGrey245CG
     statusLeftTrailingLabel.contentsScale = scale
     statusLeftTrailingLabel.alignmentMode = .left
-    statusLeftTrailingLabel.isHidden = leftTrailingDisplay.isEmpty
+    statusLeftTrailingLabel.isHidden = baseDisplay.isEmpty
     lastRenderedLeftTrailing = applyStatusText(
       to: statusLeftTrailingLabel,
-      display: leftTrailingDisplay,
-      attributed: leftTrailingAttributed,
+      display: baseDisplay,
+      attributed: baseAttributed,
       previous: lastRenderedLeftTrailing)
+
+    var leftTrailingMaxX = statusLeftTrailingLabel.frame.maxX
+    if let cycleContent, !cycleContent.isEmpty {
+      // Position the cycle run just past the prefix ("· HN "). Clipped to one
+      // line height so a push transition slides the current line up and out and
+      // the next in from below.
+      let prefixWidth =
+        cyclePrefix.isEmpty
+        ? 0
+        : ceil(
+          FlashStatusBarRenderer.attributedStatusString(from: cyclePrefix, font: rightFont)
+            .size().width)
+      let cycleAttributed = FlashStatusBarRenderer.attributedStatusString(
+        from: cycleContent, font: rightFont)
+      let cycleWidth = ceil(cycleAttributed.size().width)
+      statusLeftTrailingCycleLayer.frame = CGRect(
+        x: leftTrailingX + prefixWidth, y: textY, width: cycleWidth, height: textHeight)
+      statusLeftTrailingCycleLayer.font = rightFont
+      statusLeftTrailingCycleLayer.fontSize = fontSize
+      statusLeftTrailingCycleLayer.foregroundColor = Self.tmuxGrey245CG
+      statusLeftTrailingCycleLayer.contentsScale = scale
+      statusLeftTrailingCycleLayer.alignmentMode = .left
+      statusLeftTrailingCycleLayer.isHidden = false
+      if cycleContent != lastRenderedLeftTrailingCycle {
+        // Animate only a genuine line change — not the first appearance, and not
+        // the effects/refresh re-renders that pass the same line.
+        if lastRenderedLeftTrailingCycle != nil {
+          let slide = CATransition()
+          slide.type = .push
+          slide.subtype = .fromBottom  // next enters from below, current exits up
+          slide.duration = 0.42
+          slide.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+          statusLeftTrailingCycleLayer.add(slide, forKey: "cycleSlide")
+        }
+        statusLeftTrailingCycleLayer.string = cycleAttributed
+        statusLeftTrailingCycleLayer.setNeedsDisplay()
+        lastRenderedLeftTrailingCycle = cycleContent
+      }
+      leftTrailingMaxX = statusLeftTrailingCycleLayer.frame.maxX
+    } else {
+      statusLeftTrailingCycleLayer.isHidden = true
+      lastRenderedLeftTrailingCycle = nil
+    }
+    let hasLeftTrailing = !baseDisplay.isEmpty || !(cycleContent ?? "").isEmpty
 
     // Geometric centring for the `#[align=centre]` bucket. Position
     // around `barFrame.width / 2`, clamped so the centre label never
@@ -339,9 +384,7 @@ extension OverlayPanel {
     // the reserved right section on its right. If the centre text doesn't
     // fit between them, hide it rather than letting an overlap mangle the bar.
     let modeMaxX =
-      leftTrailingDisplay.isEmpty
-      ? modeBadgeButtonLayer.frame.maxX
-      : statusLeftTrailingLabel.frame.maxX
+      hasLeftTrailing ? leftTrailingMaxX : modeBadgeButtonLayer.frame.maxX
     let rightSectionStart =
       barFrame.width - Self.statusBarEdgePadding
       - (rightReservedWidth > 0 ? rightReservedWidth + Self.statusBarMinimumGap : 0)
@@ -407,10 +450,18 @@ extension OverlayPanel {
     // window placed exactly over its rendered rect.
     let linkBarFrame = modeBadgeLayer.frame
     var links: [(rect: CGRect, url: URL)] = []
-    if !statusLeftTrailingLabel.isHidden {
+    if !statusLeftTrailingLabel.isHidden || !statusLeftTrailingCycleLayer.isHidden {
+      // Measured from the full `leftTrailingRaw` (cycle sentinels are
+      // zero-width markers), so the rotating title's link rect lands at
+      // `prefixWidth` — exactly where the cycle layer draws it. The link rect
+      // is recomputed each render, so it tracks whichever line is showing.
       links += statusLinkRects(
         raw: leftTrailingRaw, font: rightFont,
-        labelFrame: statusLeftTrailingLabel.frame, alignment: .left,
+        labelFrame: CGRect(
+          x: modeBadgeButtonLayer.frame.maxX, y: statusLeftTrailingLabel.frame.minY,
+          width: leftTrailingMaxX - modeBadgeButtonLayer.frame.maxX,
+          height: statusLeftTrailingLabel.frame.height),
+        alignment: .left,
         barFrame: linkBarFrame, panelFrame: panelFrame)
     }
     if !statusAppLabel.isHidden {
@@ -426,12 +477,16 @@ extension OverlayPanel {
         barFrame: linkBarFrame, panelFrame: panelFrame)
     }
     if modeBadgeVisible {
-      syncStatusBarShields(statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize))
-      syncStatusLinkCatchers(links)
-      statusBarLinkTargetsScreen = links
+      // Seed the per-screen link table with the primary bar; the secondary
+      // bars append their own screens below. `f` reads this to hint the links
+      // on the active window's screen only.
+      statusBarLinkRectsByScreen = [(screenFrame: screenFrame, links: links)]
+      syncStatusBarClickWindows(
+        bandRects: statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize),
+        links: links)
     } else {
-      hideStatusLinkCatchers()
-      hideStatusBarShields()
+      statusBarLinkRectsByScreen = []
+      hideStatusBarClickWindows()
     }
 
     // Same bar on every other screen, sized to that screen's own native
@@ -471,8 +526,13 @@ extension OverlayPanel {
   ) {
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let mainFrame = snapshot.mainFrame
-    // Skip the main screen — its bar is the primary one rendered above.
-    let extras = snapshot.screens.filter { $0.frame != mainFrame }
+    // Skip the main screen — its bar is the primary one rendered above. With
+    // `monitor = "primary"`, skip every other screen too (extras empty tears
+    // down any bars from a previous `all` render).
+    let extras =
+      statusBarMonitor == .primary
+      ? []
+      : snapshot.screens.filter { $0.frame != mainFrame }
 
     // Shrink the cache before growing it: if a display disconnected the
     // tail bars become orphans whose layers we want to detach.
@@ -609,6 +669,37 @@ extension OverlayPanel {
         attributed: FlashStatusBarRenderer.attributedStatusString(
           from: rightDisplayText, font: rightFont),
         previous: bar.lastRight)
+
+      // Record this screen's `#[link=…]` rects for the `f` hint path. The
+      // secondary bars are click-through (only the primary bar wires click
+      // windows), but a hint chip opens the URL directly, so we still want the
+      // rects here — computed against this screen's own bar + label frames so
+      // the chip lands on the link the user sees on that display. Each region's
+      // alignment matches the layer's `alignmentMode` set above (left / centre /
+      // right).
+      if modeBadgeVisible {
+        let secondaryBarFrame = bar.backgroundLayer.frame
+        var screenLinks: [(rect: CGRect, url: URL)] = []
+        if !bar.leftTrailingLabel.isHidden {
+          screenLinks += statusLinkRects(
+            raw: statusLeftTrailingText, font: rightFont,
+            labelFrame: bar.leftTrailingLabel.frame, alignment: .left,
+            barFrame: secondaryBarFrame, panelFrame: panelFrame)
+        }
+        if !bar.appLabel.isHidden {
+          screenLinks += statusLinkRects(
+            raw: statusAppText, font: rightFont,
+            labelFrame: bar.appLabel.frame, alignment: .center,
+            barFrame: secondaryBarFrame, panelFrame: panelFrame)
+        }
+        if !bar.rightLabel.isHidden {
+          screenLinks += statusLinkRects(
+            raw: statusRightText, font: rightFont,
+            labelFrame: bar.rightLabel.frame, alignment: .right,
+            barFrame: secondaryBarFrame, panelFrame: panelFrame)
+        }
+        statusBarLinkRectsByScreen.append((screenFrame: screen.frame, links: screenLinks))
+      }
     }
   }
 
@@ -762,6 +853,22 @@ extension OverlayPanel {
   /// marker marks the boundary. Without a marker the whole bucket is the
   /// pill (the default `#[align=left]#{mode}` template), and the trailing
   /// run is empty.
+  /// Split a rendered run at its `#[cyc]…#[nocyc]` cycle sentinels into the
+  /// static text before it, the rotating content (sentinels removed), and the
+  /// text after it. Returns `(raw, nil, "")` when there's no cycle. v1 assumes
+  /// at most one cycle per region; anything in the suffix renders in the base
+  /// layer (fine when the cycle is the tail of the region, as with HN).
+  static func splitCycleRun(_ raw: String) -> (prefix: String, cycle: String?, suffix: String) {
+    guard let start = raw.range(of: "#[cyc]"),
+      let end = raw.range(of: "#[nocyc]", range: start.upperBound..<raw.endIndex)
+    else { return (raw, nil, "") }
+    return (
+      String(raw[..<start.lowerBound]),
+      String(raw[start.upperBound..<end.lowerBound]),
+      String(raw[end.upperBound...])
+    )
+  }
+
   static func splitLeftRegion(_ modeText: String) -> (pill: String, trailing: String) {
     guard let markerRange = modeText.range(of: "#[") else {
       return (modeText, "")
@@ -798,7 +905,6 @@ extension OverlayPanel {
       || candidateFinderResultsVisible
       || inputMode == .commandLine
       || inputMode == .candidateFinder
-      || inputMode == .modal
     {
       return transientOverlayWindowLevel
     }

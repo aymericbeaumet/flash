@@ -32,10 +32,16 @@ enum CommandMappingRunner {
     process.executableURL = plan.executableURL
     process.arguments = plan.arguments
     FlashProcessEnvironment.shared.apply(to: process)
-    if let null = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/dev/null")) {
-      process.standardOutput = null
-      process.standardError = null
-    }
+    // Discard output through the shared null device. Do NOT open our own
+    // `FileHandle(forWritingTo: /dev/null)` and assign it to both streams: an
+    // owned FileHandle is double-closed when `Process` tears it down after
+    // launch, which corrupts an unrelated descriptor and surfaces as
+    // intermittent EBADF ("Bad file descriptor") on a *later* launch — that is
+    // why `[mode.normal] <leader>…` shell mappings would stop firing. Also pin
+    // stdin so the child never inherits one of Flash's (launchd-owned) fds.
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
     do {
       try process.run()
       FlashLog.debug("[mappings] launched \(argvDiagnostic(argv)) pid=\(process.processIdentifier)")

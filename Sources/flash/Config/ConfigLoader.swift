@@ -324,7 +324,7 @@ enum ConfigLoader {
       "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
       "open": ["ignored_apps"],
       "plugins": ["watching_enabled", "disabled", "third_party"],
-      "statusbar": ["enabled", "template"],
+      "statusbar": ["enabled", "template", "monitor"],
       "flashlight": ["suggestion_count", "precedence_alive_bonus", "aliases", "precedence"],
       "mode": ["labels", "sequence_timeout_ms", "normal", "all", "insert"],
       "overlay": [
@@ -410,10 +410,11 @@ enum ConfigLoader {
     }
     applyInt(
       table["min_length"], path: ["hints", "min_length"],
-      message: "hints.min_length must be an integer", locations: locations, into: &config
-    ) { value, config in
-      config.hints.minLength = value
-    }
+      message: "hints.min_length must be an integer between 1 and 8", locations: locations,
+      into: &config, validate: { (1...8).contains($0) },
+      assign: { value, config in
+        config.hints.minLength = value
+      })
     applyStringArray(
       table["magic_modifiers"], path: ["hints", "magic_modifiers"],
       message: "hints.magic_modifiers must be an array of strings", locations: locations,
@@ -566,6 +567,13 @@ enum ConfigLoader {
     ) { value, config in
       config.statusBar.template.template = value
     }
+    applyString(
+      table["monitor"], path: ["statusbar", "monitor"],
+      message: "statusbar.monitor must be \"all\" or \"primary\"", locations: locations,
+      into: &config, validate: { Config.StatusBar.Monitor(rawValue: $0.lowercased()) != nil },
+      assign: { value, config in
+        config.statusBar.monitor = Config.StatusBar.Monitor(rawValue: value.lowercased()) ?? .all
+      })
   }
 
   private static func applyFlashlight(
@@ -670,6 +678,21 @@ enum ConfigLoader {
         assign: { value, config in
           config.mode.normalLeader = canonicalNormalModeKeyToken(value)
         })
+      applyStringArray(
+        normal["passthrough_modifiers"], path: ["mode", "normal", "passthrough_modifiers"],
+        message:
+          "mode.normal.passthrough_modifiers must be an array of "
+          + "\"cmd\"/\"ctrl\"/\"alt\"/\"shift\"",
+        locations: locations, into: &config,
+        assign: { value, config in
+          for token in KeyModifier.parseList(value).unknown {
+            config.addDiagnostic(
+              "mode.normal.passthrough_modifiers: unknown modifier \"\(token)\" "
+                + "(use cmd/ctrl/alt/shift)",
+              location: locations.location(for: ["mode", "normal", "passthrough_modifiers"]))
+          }
+          config.mode.normalPassthroughModifiers = value
+        })
       applyModeMappingTable(
         normal["mappings"]?.table,
         scope: .normal,
@@ -679,9 +702,11 @@ enum ConfigLoader {
         pendingModeMappings: &pendingModeMappings,
         into: &config)
 
-      for (key, _) in normal where key != "leader" && key != "mappings" {
+      for (key, _) in normal
+      where key != "leader" && key != "passthrough_modifiers" && key != "mappings" {
         config.addDiagnostic(
-          "mode.normal mappings must be declared under [mode.normal.mappings]",
+          "mode.normal: unknown key '\(key)' — mappings belong under "
+            + "[mode.normal.mappings]; valid keys are leader, passthrough_modifiers, mappings",
           location: locations.location(for: ["mode", "normal", key]))
       }
     }
@@ -695,6 +720,12 @@ enum ConfigLoader {
         sourceURL: sourceURL,
         pendingModeMappings: &pendingModeMappings,
         into: &config)
+
+      for (key, _) in all where key != "mappings" {
+        config.addDiagnostic(
+          "mode.all: unknown key '\(key)' — mappings belong under [mode.all.mappings]",
+          location: locations.location(for: ["mode", "all", key]))
+      }
     }
 
     if let insert = table["insert"]?.table {
@@ -709,7 +740,7 @@ enum ConfigLoader {
 
       for (key, _) in insert where key != "mappings" {
         config.addDiagnostic(
-          "mode.insert mappings must be declared under [mode.insert.mappings]",
+          "mode.insert: unknown key '\(key)' — mappings belong under [mode.insert.mappings]",
           location: locations.location(for: ["mode", "insert", key]))
       }
     }
@@ -723,62 +754,67 @@ enum ConfigLoader {
     guard let table else { return }
     applyDouble(
       table["font_size"], path: ["overlay", "font_size"],
-      message: "overlay.font_size must be a number", locations: locations, into: &config
-    ) { value, config in
-      config.overlay.fontSize = value
-    }
+      message: "overlay.font_size must be a number between 1 and 200", locations: locations,
+      into: &config, validate: { $0 >= 1 && $0 <= 200 },
+      assign: { value, config in
+        config.overlay.fontSize = value
+      })
     applyString(
       table["hint_fg"], path: ["overlay", "hint_fg"],
-      message: "overlay.hint_fg must be a quoted string", locations: locations, into: &config
-    ) { value, config in
-      config.overlay.hintFG = value
-    }
+      message: "overlay.hint_fg must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.hintFG = value
+      })
     applyString(
       table["hint_bg_top"], path: ["overlay", "hint_bg_top"],
-      message: "overlay.hint_bg_top must be a quoted string", locations: locations, into: &config
-    ) { value, config in
-      config.overlay.hintBGTop = value
-    }
+      message: "overlay.hint_bg_top must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.hintBGTop = value
+      })
     applyString(
       table["hint_bg_bottom"], path: ["overlay", "hint_bg_bottom"],
-      message: "overlay.hint_bg_bottom must be a quoted string", locations: locations, into: &config
-    ) { value, config in
-      config.overlay.hintBGBottom = value
-    }
+      message: "overlay.hint_bg_bottom must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.hintBGBottom = value
+      })
     applyString(
       table["hint_border"], path: ["overlay", "hint_border"],
-      message: "overlay.hint_border must be a quoted string", locations: locations, into: &config
-    ) { value, config in
-      config.overlay.hintBorder = value
-    }
+      message: "overlay.hint_border must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.hintBorder = value
+      })
     applyString(
       table["important_hint_fg"], path: ["overlay", "important_hint_fg"],
-      message: "overlay.important_hint_fg must be a quoted string", locations: locations,
-      into: &config
-    ) { value, config in
-      config.overlay.importantHintFG = value
-    }
+      message: "overlay.important_hint_fg must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.importantHintFG = value
+      })
     applyString(
       table["important_hint_bg_top"], path: ["overlay", "important_hint_bg_top"],
-      message: "overlay.important_hint_bg_top must be a quoted string", locations: locations,
-      into: &config
-    ) { value, config in
-      config.overlay.importantHintBGTop = value
-    }
+      message: "overlay.important_hint_bg_top must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.importantHintBGTop = value
+      })
     applyString(
       table["important_hint_bg_bottom"], path: ["overlay", "important_hint_bg_bottom"],
-      message: "overlay.important_hint_bg_bottom must be a quoted string", locations: locations,
-      into: &config
-    ) { value, config in
-      config.overlay.importantHintBGBottom = value
-    }
+      message: "overlay.important_hint_bg_bottom must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.importantHintBGBottom = value
+      })
     applyString(
       table["important_hint_border"], path: ["overlay", "important_hint_border"],
-      message: "overlay.important_hint_border must be a quoted string", locations: locations,
-      into: &config
-    ) { value, config in
-      config.overlay.importantHintBorder = value
-    }
+      message: "overlay.important_hint_border must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.importantHintBorder = value
+      })
   }
 
   private static func applyDebug(
@@ -795,16 +831,18 @@ enum ConfigLoader {
     }
     applyString(
       table["hints_bounds_bg"], path: ["debug", "hints_bounds_bg"],
-      message: "debug.hints_bounds_bg must be a quoted string", locations: locations, into: &config
-    ) { value, config in
-      config.debug.hintsBoundsBG = value
-    }
+      message: "debug.hints_bounds_bg must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.debug.hintsBoundsBG = value
+      })
     applyString(
       table["hints_bounds_fg"], path: ["debug", "hints_bounds_fg"],
-      message: "debug.hints_bounds_fg must be a quoted string", locations: locations, into: &config
-    ) { value, config in
-      config.debug.hintsBoundsFG = value
-    }
+      message: "debug.hints_bounds_fg must be a hex color like #RRGGBB or #RRGGBBAA",
+      locations: locations, into: &config, validate: { isValidHexColor($0) },
+      assign: { value, config in
+        config.debug.hintsBoundsFG = value
+      })
 
     let logLevelPath = ["debug", "log_level"]
     if let value = table["log_level"] {
@@ -881,6 +919,18 @@ enum ConfigLoader {
           location: location)
       }
     }
+  }
+
+  /// A hint / bounds color is `#`-optional 6- or 8-digit hex (`RRGGBB` or
+  /// `RRGGBBAA`), matching `OverlayPanel.nsColor(fromHex:)`. Empty is allowed
+  /// (renders as no color). Anything else is a typo and is rejected loudly
+  /// rather than silently falling back to a default at draw time.
+  static func isValidHexColor(_ raw: String) -> Bool {
+    var s = raw.trimmingCharacters(in: .whitespaces)
+    if s.isEmpty { return true }
+    if s.hasPrefix("#") { s.removeFirst() }
+    guard s.count == 6 || s.count == 8 else { return false }
+    return s.allSatisfy(\.isHexDigit)
   }
 
   private static func applyString(
@@ -1191,6 +1241,28 @@ enum ConfigLoader {
     case "command":
       return .command(.shell(body))
     default:
+      // `#{cycle:path}` (default 60s) or `#{cycle=N:path}` (rotate every N
+      // seconds): run `path`, then reel through its output lines. `body` is the
+      // script + optional argv, split like `script:`.
+      if kind == "cycle" || kind.hasPrefix("cycle=") {
+        let period: Int
+        if let eq = kind.firstIndex(of: "="),
+          let parsed = Int(kind[kind.index(after: eq)...]), parsed > 0
+        {
+          period = parsed
+        } else {
+          period = 60
+        }
+        let parts = body.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard let scriptPath = parts.first else { return nil }
+        let resolved = resolveCommandArgument(scriptPath, sourceURL: sourceURL)
+        let args = Array(parts.dropFirst())
+        let command =
+          args.isEmpty
+          ? FlashStatusBarCommand.script(resolved)
+          : FlashStatusBarCommand.scriptWithArgs(resolved, args: args)
+        return .cycle(command: command, periodSeconds: period)
+      }
       return nil
     }
   }

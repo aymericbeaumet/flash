@@ -11,7 +11,7 @@ Activation comes either through the `flash` CLI (which AppleEvents the verb to t
 ## Hard rules (do not violate)
 
 1. **No UI surface** beyond the transparent hint overlay, the advanced-mode status bar / command-line cell, the help and open-app overlays, and explicit `alert_show` toast. No menu bar item, no `NSStatusItem`, no `NSDockTile`, no `NSAlert`, no preferences window. Logging is stderr / `~/Library/Logs/Flash/`.
-2. **No arbitrary global key capture.** `RegisterEventHotKey` is allowed only for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do not add `CGEventTap`, global key monitors, keyloggers, or Input Monitoring. Hint, normal-mode, command-line, help, and open-app typing still belongs only in `NSPanel.keyDown` on the overlay panel itself.
+2. **Keyboard capture is confined to the sanctioned session tap + Carbon.** Global keystroke handling lives in exactly two places: (a) `Sources/flash/App/KeyboardCaptureTap.swift`, a session-level `CGEventTap` (`.cgSessionEventTap`, `keyDown` only, never mouse) that *swallows* keys only while in NORMAL / hints and passes everything else — INSERT, command-line, candidate-finder, modified chords, and Flash's own synthetic keys — straight through; and (b) `RegisterEventHotKey` for explicit modified-key entries in `[mode.all.mappings]`, `[mode.normal.mappings]`, or `[mode.insert.mappings]`. Do **not** add any *other* event tap, global key monitor, or keylogger, and the tap must never persist, log, or exfiltrate keystrokes — its only job is the swallow-vs-passthrough decision (`KeyboardCaptureTap.shouldSwallow`, a pure unit-tested function). `Scripts/check-guardrails.sh` enforces that `CGEventTap` appears only in `KeyboardCaptureTap.swift`. The tap runs under the Accessibility grant; if the OS refuses it, capture falls back to the overlay `NSPanel.keyDown` key-window path. Command-line, help, and open-app typing (the key-window surfaces) are handled through `NSPanel.keyDown` and are never swallowed by the tap.
 3. **Autolaunch is install-script-owned.** `Scripts/install.sh` may install the user LaunchAgent that opens `/Applications/Flash.app` at login. Do not add login-item UI, background helpers, or additional autostart mechanisms elsewhere.
 4. **No unowned resident helpers / no custom external IPC.** External activation is `NSAppleEventManager` receiving the custom `Flsh`/`Cmd ` event class from the `flash` CLI; native mappings dispatch pre-resolved `MappingAction` values in the resident app. Flash-managed plugin children are allowed only through length-prefixed MessagePack over stdin/stdout with stderr reserved for unexpected errors; Flash owns their lifecycle, heartbeat, reload, and shutdown. Do not add Unix sockets, mach services, background helpers, daemonized clients, or any always-running client outside `PluginManager`. Do not re-introduce a `flash://` URL scheme; the only allowed external entry point is the custom AppleEvent sent by the `flash` CLI sibling.
 5. **Single resident process.** Code assumes one `NSApplication` instance; bundle identifier `com.flash.app`.
@@ -43,6 +43,7 @@ Sources/
     JumpTarget.swift                 # A clickable thing with a screen rect + optional activate closure
     JumpAction.swift                 # .leftClick | .rightClick | .doubleClick
     FlashSource.swift                # FlashSource protocol + readiness/activation policy + capability set
+    QueryEvaluator.swift             # Typed additive per-input answer facet; separate from catalog sources
     TargetFinalizer.swift            # Shared visible-region filter + smaller-frame-wins dedup before label assignment
   FlashProviders/                    # Built-in jump-target sources (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
@@ -61,15 +62,12 @@ Sources/
       HintAssigner.swift             # Prefix-free label generator + memoised candidate cache
       ActionDispatcher.swift         # AXPress preferred; CGEvent click fallback
       SourceRegistry.swift           # Built-in source descriptors; activation-gated source loading + priority chain
-      PluginSystem.swift             # manifest.json, MessagePack plugin process lifecycle, plugin source adapter
+      PluginSystem.swift             # manifest.json, MessagePack plugin lifecycle facade
+      Plugins/                       # Plugin manifest/process/manager, AX broker, and FlashSource adapter
       DebugServer.swift              # loopback-only dense HTTP/SSE debug page
-      CandidateFinder.swift                # Shared :open candidate preparation and app merge helpers
-      ApplicationSource.swift        # Running/installed app source and `app_open` verb resolver
-      BrowserTabSources.swift        # Shared helpers for :open browser tabs (bundle IDs, AX/AppleScript utilities)
-      FirefoxTabsSource.swift        # FirefoxTabsSource — AX-driven, enabled only while Firefox is running
-      SafariTabsSource.swift         # SafariTabsSource — AppleScript with AX fallback, enabled only while Safari is running
-      ChromiumTabsSource.swift       # ChromiumTabsSource — AppleScript-driven, enabled only while a Chromium-family browser is running
-      SlackSource.swift              # :open Slack channels, enabled only while Slack runs
+      CandidateFinder.swift          # Flashlight candidate preparation, fuzzy matching, and answer merge
+      CandidateSnapshotBarrier.swift # One-shot, bounded first-paint fan-in for warmed catalog snapshots
+      ApplicationSource.swift        # Warm app catalog and `app_open` verb resolver
     Config/
       Config.swift                   # Decoded model — defaults here MUST match config.default.toml
       ConfigLoader.swift             # TOMLKit-backed TOML loading + DispatchSource fs-watch hot-reload
@@ -156,7 +154,7 @@ See *Prepared model contract* below for the exact invariants.
 
 - Workspace focus change → bump new pid.
 - Config reload, active Space change, and screen-parameter change → bump the focused pid.
-- Any of these AX notifications on the focused pid: `kAXFocusedUIElementChanged`, `kAXFocusedWindowChanged`, `kAXMainWindowChanged`, `kAXLayoutChanged`, `kAXSelectedChildrenChanged`, `kAXSelectedRowsChanged`, `kAXValueChanged`, `kAXWindowResized`, `kAXWindowMoved`, `kAXTitleChanged`, `kAXCreated`, `kAXUIElementDestroyed`, `kAXRowExpanded`, `kAXRowCollapsed`.
+- Any of these AX notifications on the focused pid: `kAXFocusedUIElementChanged`, `kAXFocusedWindowChanged`, `kAXMainWindowChanged`, `kAXLayoutChanged`, `kAXSelectedChildrenChanged`, `kAXSelectedRowsChanged`, `kAXValueChanged`, `kAXWindowResized`, `kAXWindowMoved`, `kAXWindowCreated`, `kAXWindowMiniaturized`, `kAXWindowDeminiaturized`, `kAXApplicationHidden`, `kAXApplicationShown`, `kAXTitleChanged`, `kAXCreated`, `kAXUIElementDestroyed`, `kAXRowExpanded`, `kAXRowCollapsed`.
 
 **Walk life-cycle:**
 
@@ -174,6 +172,8 @@ See *Prepared model contract* below for the exact invariants.
 
 If you add new AX events that mutate UI state, add them to `AppMonitor.observedNotifications` in the same commit — otherwise the model can silently serve stale hints when those events fire. The freshness ceiling is a safety belt for events we forgot to subscribe to; don't lean on it as a primary mechanism.
 
+The active-window mode border has a stricter lifecycle than the prepared hint model. `AppMonitor` registers move, resize, minimize, restore, and destruction notifications directly on the focused AX window (application-level registration alone does not reliably receive window-owned events), and refreshes that registration when focus/window lifecycle changes. Border reconciliation is event-driven: lifecycle events update immediately and schedule only bounded, one-shot WindowServer checks to absorb delayed state propagation; there is no resident border poll. Lock/session switch, screen sleep, system sleep, and secure login/screen-saver activation hide the border and cancel pending checks immediately; resume rebuilds from the current WindowServer frame and runs a bounded recovery sequence. A missing frame always clears the stroke rather than preserving a ghost window.
+
 ## Animations
 
 CALayer mutates implicitly animate by default — including `frame`, `bounds`, `position`, `hidden`, `backgroundColor`. The visible bug was hints sliding into position after being shown. Two safeguards in `OverlayPanel`:
@@ -190,46 +190,29 @@ If you add a new visible property (gradient, shadow path, …), add its key to `
 
 ## Adding a new source
 
-A source conforms to `FlashSource` in `FlashCore`. A source can contribute jump targets, `:open` items, document URL resolution, app activation, or any combination through `capabilities`:
-
-```swift
-public protocol FlashSource: AnyObject {
-    var identifier: String { get }
-    var displayName: String { get }
-    var priority: Int { get }
-    var capabilities: FlashSourceCapabilities { get }
-    var activationPolicy: FlashSourceActivationPolicy { get }
-    var readinessPolicy: FlashSourceReadinessPolicy { get }
-    var candidateSourceLabels: [String] { get }
-    var candidateSourceDescriptors: [CandidateSourceDescriptor] { get }
-    func supports(_ context: AppContext) -> Bool
-    func discover(in context: AppContext) throws -> [JumpTarget]
-    func candidates(in environment: FlashSourceEnvironment, scope: CandidateScope) -> [Candidate]
-    func queryCandidates(in environment: FlashSourceEnvironment, request: CandidateQuery, completion: @escaping ([Candidate]) -> Void)
-    func resolveCandidate(_ item: Candidate, in environment: FlashSourceEnvironment, completion: @escaping (CandidateResolution) -> Void)
-    func tabSelect(at index: Int, in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
-    func tabNext(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
-    func tabPrev(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
-    func tabNew(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
-    func tabClose(in context: AppContext, environment: FlashSourceEnvironment, completion: @escaping (SourceActionResult) -> Void)
-}
-```
+A source conforms to `FlashSource` in `FlashCore`. The canonical declaration is
+`Sources/FlashCore/FlashSource.swift`; do not duplicate its full signature here.
+It is the host adapter for jump targets, warmed catalog snapshots, candidate
+resolution, focused-document lookup, source actions, and navigation restore.
+Per-input computation deliberately uses the separate `FlashQueryEvaluator`
+facet in `Sources/FlashCore/QueryEvaluator.swift`: do not add query parsing or a
+regex-claim API to `FlashSource`.
 
 Most source methods are optional in practice through default protocol-extension implementations that return no candidates, no document URL, or `.unhandled`. Implement only the capabilities the source actually owns.
 
 Steps:
 
-1. Create the source in `Sources/FlashProviders/<Group>/` when it is reusable jump-target logic, or under `Sources/flash/App/` when it is app-owned `:open` / command-resolution glue.
+1. Create the source in `Sources/FlashProviders/<Group>/` when it is reusable jump-target logic, or under `Sources/flash/App/` when it is app-owned `:flashlight` / command-resolution glue.
 2. Implement the protocol. For jump targets, return a complete deterministic `[JumpTarget]` set with **global NSScreen coordinates** (bottom-left origin of primary screen). Do not deadline-truncate output.
-3. For `:open` / `:flashlight` items, return `Candidate` values using the canonical `{ source, name, url }` contract. `source` is a short stable label, `name` is the primary title, and `url` should be openable whenever present. App candidates must use an absolute `file://` URL to the `.app` bundle; browser tabs and external resources should use their canonical openable URL. Omit `url` only when the source must resolve through source-specific payload or AX state. Use the shared `FlashPriority` / plugin SDK `Priority` enum (`low`, `normal`, `high`, `important`, `urgent`) for candidate row salience; do not invent plugin-domain source kinds for ranking.
-4. Pick an activation policy. Use `.always` only for cheap universal sources, `.bundleIDs(...)` for app-scoped sources like Slack/browser tabs, and `.terminalBundles` for terminal-backed sources. `SourceRegistry` instantiates non-`.always` sources only while a matching app is running.
+3. For `:flashlight` catalog items, return `Candidate(title:url:metadata:effect:)`. `title` is the primary searchable value, `metadata["source"]` is a short stable manifest-declared label, and `url` should be openable whenever present. App candidates must use an absolute `file://` URL to the `.app` bundle; browser tabs and external resources should use their canonical openable URL. Omit `url` only when the source must resolve through source-specific payload or AX state. Use the shared `FlashPriority` / plugin SDK `Priority` enum (`low`, `normal`, `high`, `important`, `urgent`) for candidate row salience; do not invent plugin-domain source kinds for ranking. `:open` is not a finder: it forwards its arguments verbatim to `/usr/bin/open`.
+4. Pick an activation policy. Use `.always` only for cheap universal sources, `.bundleIDs(...)` for app-scoped sources like browser tabs, and `.terminalBundles` for terminal-backed sources. `SourceRegistry` instantiates non-`.always` sources only while a matching app is running.
 5. Register a `SourceDescriptor` in `Sources/flash/App/SourceRegistry.swift`. Pick a numeric provider priority for overlapping jump-target providers — higher wins. Candidate source descriptors separately declare generalized source priority with `CandidateSourceDescriptor(name:kind:priority:)` or plugin manifest `sources[].priority`; keep those source priorities semantic (`low` … `urgent`) rather than plugin-specific.
    Existing jump-target provider scale:
    - 20: the bundled `tmux` plugin (terminals with a tmux client in the process subtree)
    - 10: generic `AccessibilityProvider` (universal AX walker; also handles browser in-page DOM via `AXWebArea` descendants)
 6. Add focused tests. At minimum cover source activation gating in `SourceRegistryTests` or the source's parsing/resolution helpers, then update README when user-facing behavior changes.
 
-Flash deliberately uses **only two jump-target sources**: `AccessibilityProvider` as the universal default, and the bundled `tmux` plugin's hints provider for terminals whose visible content macOS Accessibility cannot see. App-specific sources may contribute `:open` items or custom resolution when that data does not belong in the AX walker. There is no DOM bridge / `do JavaScript` provider — browser page content reaches us through `AXWebArea` descendants the same way every other web area does. If you find yourself reaching for AppleScript-based discovery, surface that to the user instead of adding it.
+Flash deliberately uses **only two jump-target sources**: `AccessibilityProvider` as the universal default, and the bundled `tmux` plugin's hints provider for terminals whose visible content macOS Accessibility cannot see. App-specific sources may contribute `:flashlight` items or custom resolution when that data does not belong in the AX walker. There is no DOM bridge / `do JavaScript` provider — browser page content reaches us through `AXWebArea` descendants the same way every other web area does. If you find yourself reaching for AppleScript-based discovery, surface that to the user instead of adding it.
 
 A `JumpTarget.activate` closure overrides the default action. Use it when the underlying API has a cheaper / more reliable way to "click" than synthesizing a `CGEvent` (e.g. AX can call `kAXPressAction`).
 
@@ -254,7 +237,9 @@ Keys:
 | `plugins.disabled`                 | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
+| `statusbar.enabled`                | bool           | `false`              |
 | `statusbar.template`               | string         | `"#[align=left]#{mode}#[align=right]#{date}"` |
+| `statusbar.monitor`                | string (`"all"` \| `"primary"`) | `"all"`  |
 | `flashlight.suggestion_count`      | int            | `10`                 |
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |
@@ -263,6 +248,7 @@ Keys:
 | `mode.sequence_timeout_ms`         | int (ms)       | `1000`               |
 | `[mode.all.mappings]` entries      | argv array mapping (`["flash", "<verb>"...]` or `[<argv>...]`) | none             |
 | `mode.normal.leader`               | string         | `"\\"`             |
+| `mode.normal.passthrough_modifiers` | string array  | `[]`                 |
 | `[mode.normal.mappings]` entries   | argv array mapping              | built-in normal map |
 | `[mode.insert.mappings]` entries   | argv array mapping              | none             |
 | `debug.show_hints_bounds`                | bool           | `false`              |
@@ -278,8 +264,8 @@ and removes `"shift"` because shifted-character input is ambiguous at the
 hint-input layer: Flash cannot distinguish `shift+1` from `!`. `[]` disables
 modified clicks.
 
-`open.ignored_apps` excludes app results from `:open` and
-the `app_open name=...` verb. Entries match an app's display name, bundle
+`open.ignored_apps` excludes app results from `:flashlight` and the
+`app_open name=...` verb. Entries match an app's display name, bundle
 identifier, full bundle path, `.app` filename, or filename without `.app`,
 case-insensitively.
 
@@ -289,7 +275,7 @@ Logs are newline-delimited JSON written to stderr and
 `debug.log_level = "trace"` includes AX tree dumps. Accepted levels are
 `trace`, `debug`, `info`, `warn`, `error`, and `fatal`.
 
-`plugins.third_party` accepts only `github:user/project@<commit-sha>` and `file:<path>`. The `@<commit-sha>` pin is mandatory for `github:` references — it must be a full 40-character lowercase hex commit SHA, and the loader rejects anything else (branch names, tags, short SHAs). Third-party `install` / `start` scripts run as the user with full host privileges, so trusting a moving upstream ref would let a compromised plugin author drop arbitrary code on every config reload; the materializer fetches *exactly* the pinned commit and refuses to start a plugin whose checked-out HEAD doesn't match. Plugin manifests may also declare a `capabilities` array listing the sensitive host surfaces they need (currently `"clipboard"` is the only gated capability); events such as `core:clipboard.changed` are filtered out for any plugin that hasn't opted in.
+`plugins.third_party` accepts only `github:user/project@<commit-sha>` and `file:<path>`. The `@<commit-sha>` pin is mandatory for `github:` references — it must be a full 40-character lowercase hex commit SHA, and the loader rejects anything else (branch names, tags, short SHAs). Third-party `install` / `start` scripts run as the user with full host privileges, so trusting a moving upstream ref would let a compromised plugin author drop arbitrary code on every config reload; the materializer fetches *exactly* the pinned commit and refuses to start a plugin whose checked-out HEAD doesn't match. Plugin manifests declare sensitive runtime surfaces through `capabilities`: `"clipboard"` gates `core:clipboard.changed`, `"accessibility"` gates the AX broker, `"network"` opts out of the default network-denying seatbelt profile, `"subprocess"` permits privileged helpers that cannot run under that profile, and `"app_control"` gates the `host.normal_mode_target` and `app.activate` host RPCs. Running-app and focus events are currently delivered according to `listen` independently of `"app_control"`; the capability does not gate observation. Omitted capabilities are default-denied.
 Official bundled plugins under `Contents/Resources/Plugins` are enabled unless
 their id is listed in `plugins.disabled`; use `["defaults"]` for a raw host-only
 experience without built-in plugin-layer defaults. In the checkout they live under root
@@ -299,14 +285,25 @@ optional `listen` event patterns, root selectors such as `only_bundle_ids` /
 `only_urls`, and provider registrations. Command providers expose one or more
 subcommands; status providers expose named segments through `segments`.
 There is no `manifest_version` field on master. The host rejects unknown
-top-level manifest keys instead of accepting legacy aliases. `install` and `start` are
-shell strings run from the plugin root; Flash passes
-`FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`, and `FLASH_PLUGIN_DATA_DIR`.
+top-level and nested provider/item manifest keys instead of accepting legacy
+aliases; malformed known fields are rejected instead of silently defaulted.
+Mapping items must use exactly `all`, `normal`, or `insert` scopes. `install` and
+`start` are shell strings run from the plugin root. Runtime children receive
+`FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`, `FLASH_PLUGIN_DATA_DIR`,
+`FLASH_PLUGIN_PARENT_PID`, and the plugin's `[plugin.<id>]` settings serialized
+as a JSON object in `FLASH_PLUGIN_CONFIG`. Flash does not inherit the complete
+login environment: it preserves only basic process locale/path keys, so secrets
+and credentials must be explicit plugin settings rather than ambient
+environment variables. The debug inspector may report setting keys but must
+redact their values.
 Plugins speak length-prefixed MessagePack over stdin/stdout: a 4-byte
 big-endian payload length followed by a MessagePack value. Host input goes to
 stdin, successful or failed protocol results go to stdout, and unexpected
 errors go to stderr. Plugins can log through the Flash logger by sending
-`flash.log` protocol notifications.
+`flash.log` protocol notifications. Protocol v2 uses namespaced method names:
+`sources.snapshot`, `query.evaluate`, `hints.discover`, `hints.activate`,
+`candidate.resolve`, `source.action`, `command.invoke`, and
+`navigation.restore`; do not add camel-case aliases.
 Official plugin installers must keep downloaded CLI binaries under their own
 `FLASH_PLUGIN_DATA_DIR`; do not write into global shell paths.
 
@@ -338,7 +335,7 @@ business concepts**. Shared dep versions (serde, tokio, rmp-serde, objc2,
 …) live in `[workspace.dependencies]` and each crate inherits them via
 `{ workspace = true }`, so every plugin resolves the same transitive graph
 through a single `Plugins/Cargo.lock`. Per-crate Cargo.tomls keep only their
-own plugin-specific deps (`fasteval2` in calculator, etc.) and no
+own plugin-specific deps (`fend-core` / `quick-xml` in calculator, etc.) and no
 `[profile.release]` — the size-optimized release profile lives once at the
 workspace root. A plugin's `main.rs` implements the `Plugin`
 trait; everything domain-specific lives there, never in the template. The crate
@@ -353,8 +350,9 @@ joined with `lipo`. Candidate providers declare manifest root `sources` descript
 their locations warm in memory via `set_locations`, refresh from light host events such as
 `core:apps.changed`, `core:focus.changed`, and `core:ax.changed` when possible,
 and poll only when the underlying source cannot be watched. The host *pulls* each
-location source via `candidateQuery` on flashlight open; that handler must stay
-O(memory) (the `warm_locations()` default) — it is on the hot path. The manifest's `start` is
+location source via the SDK-owned `sources.snapshot` RPC on flashlight open;
+plugins cannot override that O(memory) warm-store read or put I/O on the hot
+path. The manifest's `start` is
 `exec ./flash-plugin-<id>` and `install` is a no-op `true` — there is no cargo,
 Python, or interpreter at runtime. `Scripts/build.sh` / `Scripts/install.sh`
 invoke `build-plugins.sh` with the matching mode; dev symlinks the repo
@@ -362,22 +360,59 @@ invoke `build-plugins.sh` with the matching mode; dev symlinks the repo
 per plugin (no sources). The compiled binaries and per-crate build output are
 git-ignored.
 
-**Warm-locations contract (binding for every candidate provider).** A candidate
-plugin keeps its locations **in memory at all times, in sync with its underlying
-source** — the host holds no candidate cache. When the flashlight opens, the host
-*pulls* each location source via `candidateQuery` in parallel and merges each warm
-reply into the open list as it arrives (`NormalModeCoordinator.fanOutCandidateQueries`
-→ `mergeCandidateQueryResults`). Non-location sources (emojis, bangs, …) are pulled
-lazily the first time the user types an `@source`/`!`bang filter.
+**Warm-catalog contract (binding for every candidate provider).** Every candidate
+plugin owns one canonical, complete catalog snapshot and keeps it **in memory at
+all times, in sync with its underlying source** — the host holds no persistent
+plugin candidate cache. All filesystem, database, subprocess, AX, AppleScript,
+and network work belongs to bounded startup/event/poll refreshes in the
+background. When the flashlight opens, the host
+*pulls* each location source via `sources.snapshot` in parallel behind a
+session-local first-paint barrier. The prompt appears immediately with its result
+list hidden; the host publishes one deterministic frozen list when every source
+settles or the 150-ms end-to-end budget expires. Replies after publication are
+ignored until the next open. Non-default source snapshots (emojis, notes, …)
+remain warm too; the host simply waits to read/filter them until the user types
+an explicit `@source`/`!`bang filter.
 
-  1. **`candidate_query` must be O(memory).** Keep the default trait method, which
-     returns `ctx.warm_locations()` — the union of every `set_locations` call. Do
-     not run RPC, subprocess, AppleScript, or other I/O in `candidate_query`; its
-     latency lands on the flashlight's hot path. Override it only when results
-     genuinely depend on the live query string (a server-side search completion).
+  1. **Catalog gathering is SDK-owned and O(memory).** There is no plugin
+     `candidate_query` hook. The SDK runtime answers `sources.snapshot` directly
+     from `ctx.warm_locations()`, so a catalog provider cannot accidentally run
+     RPC, subprocess, AppleScript, or other I/O on the flashlight hot path.
 
-  2. **Keep the store warm in the background.** Call `ctx.set_locations(source_id,
-     candidates)` whenever the data changes, refreshing on host events that
+  2. **Publish before ready, then keep the store warm.** A manifest with `sources`
+     makes `on_start` compile-required. The host passes its initial running-app
+     snapshot once in protocol-v2 `initialize`; `on_start` reads it through
+     `ctx.running_applications()` and must call
+     `ctx.set_locations("plugin:<manifest-id>", candidates)` before returning.
+     This is the plugin's canonical aggregate catalog even when its candidates
+     carry several user-facing source labels. Publish an authoritative `[]` when
+     no rows exist: the SDK withholds initialize success until that key exists,
+     returns its publication inventory, and the host accepts readiness only when
+     `published_sources` is exactly `["plugin:<manifest-id>"]`. Missing, extra,
+     differently named, or malformed publications are fatal startup violations;
+     there is no compatibility translation. After startup, keep replacing that
+     same canonical `plugin:<manifest-id>` entry with the complete aggregate;
+     user-facing `sources[].name` labels belong inside candidate metadata, not
+     in additional warm-store keys. The SDK queues events until startup
+     completes, then runs
+     `on_event` serially in wire order through a bounded 256-event queue.
+     Overflow is rejected immediately and logged without payload content; never
+     replace this with an unbounded queue. Plugin-private maintenance queues must
+     likewise be bounded and should coalesce redundant refresh triggers.
+     Outbound control and telemetry use separate bounded lanes (64 and 128
+     slots); control is prioritized, telemetry is capped at 256 KiB and may be
+     dropped with content-free warnings, and every wire frame is capped at 10 MiB.
+     `sources.snapshot` and `query.evaluate`
+     deliberately do **not** join that maintenance queue: they clone the last
+     complete atomically published state immediately, even while an event/poll
+     refresh is in flight. A refresh publishes only after it has built a full
+     replacement; partial state is never exposed. An `on_event` that delegates
+     to a private/coalescing worker must still await it when later events depend
+     on wire-order causality, but slow maintenance must never delay a warm read.
+     Immediately before each
+     `core:apps.changed` callback it atomically replaces the snapshot returned by
+     `ctx.running_applications()` (including an authoritative empty list).
+     Refresh on host events that
      correlate with change (`core:focus.changed`, `core:apps.launched`,
      `core:apps.terminated`, `core:apps.changed`, `core:flash.started`) and —
      when the source has no push channel — a `ctx.interval(...)` poll. The store
@@ -389,19 +424,83 @@ lazily the first time the user types an `@source`/`!`bang filter.
      refresh that would produce no change.
 
   4. **Parallelise per-target I/O.** When the locations come from N independent
-     backends (tmux sockets, browser bundles, Slack workspaces, …), spawn the
+     backends (tmux sockets, browser bundles, app databases, …), spawn the
      per-backend work concurrently (`tokio::spawn` + `JoinHandle::await`) so the
      slowest backend does not dominate every refresh.
 
-  5. **Never blank the store on transient failure.** When a refresh comes back
-     empty because a backend hiccuped, leave the previous `set_locations` in place
-     rather than storing `[]` — otherwise tabs/windows disappear from the
-     flashlight until the next successful refresh. "Stale-but-mostly-right" beats
-     "empty during failure."
+  5. **Model empty and failure as different types.** Refresh helpers return the
+     equivalent of `Result<Vec<Candidate>, Failure>`: `Ok([])` is an
+     authoritative successful empty snapshot and **must clear** the corresponding
+     store/partition, while `Err(...)` preserves that partition's last-good
+     value. Never infer failure from an empty vector, and never translate a
+     transient error into `set_locations(..., [])`. The only first-process-start
+     exception is when a bounded initial refresh fails and no last-good value
+     exists yet: because the SDK requires the canonical key before readiness, the
+     plugin may publish an explicitly logged **degraded initial baseline** of
+     `[]`, only after checking that the canonical store is absent, and must
+     schedule an immediate background retry. That degraded baseline is not an
+     authoritative source-empty result and must never overwrite an existing
+     snapshot.
+
+  6. **Bound every refresh.** Startup cannot wait indefinitely for a backend.
+     Every filesystem scan, decoded file, subprocess output, API call, AX walk,
+     and fan-out must have explicit time/count/byte bounds appropriate to the
+     source. Publish the last-good snapshot on transient failure; on a first-run
+     failure use the logged degraded-baseline rule above and retry in the
+     background. Do not move that recovery work onto `sources.snapshot`.
+
+**Query-evaluator contract.** A manifest root `"queries": {}` registers the
+plugin for bare flashlight input; `surfaces` defaults to `["flashlight"]`.
+Evaluators are additive parsers by default. A provider may declare literal
+`exclusive_prefixes` (for example `"="` for a calculator); a matching request
+is routed only to providers declaring that exact marker. The host never accepts
+plugin regexes, and explicit `!bang` / `@source` intent bypasses evaluators.
+The generated `query_evaluate` hook is synchronous and receives no `Context`.
+It may only compute from the request plus immutable state warmed during
+`on_start` / events — no filesystem, subprocess, network, AppleScript, or other
+I/O. Responses to `query.evaluate` are combined once behind a 50-ms host
+deadline, ordered by provider priority, prepended in a fixed answer lane, and
+discarded when their per-query generation is stale. A response may contain at
+most 16 answers; crossing that or any field/aggregate payload boundary rejects
+the whole response and logs only content-free counts/limits.
+The wire response is the narrow
+`{ "answers": [{ "title": String, "subtitle"?: String, "effect": { "type": "copy_text", "text": String } }] }`
+shape. Unknown keys, URLs, metadata, pids, priorities, and routing fields are
+rejected; the host owns and stamps answer provenance, urgency, and finisher
+semantics.
+Return, Tab, and Command-Return stay deferred until both the evaluator aggregate
+and the answer-lane re-render settle for that exact session/query generation;
+edits and cancellation discard the deferred action.
+The bundled calculator uses `fend-core`; `1+1`, `2 km to m`, and currency
+expressions produce copyable answers. Before reporting ready it loads the
+last-good ECB rate snapshot from disk into immutable evaluator state; any
+network refresh runs in the background and atomically replaces that state
+without delaying arithmetic or query evaluation. It defaults target conversions
+to USD; configure up to eight codes with
+`[plugin.calculator] target_currencies = ["USD", "EUR"]`.
+
+**Plugin latency telemetry is binding and content-free.** The SDK warns when
+the synchronous body of a query evaluator takes more than 10 ms; the host
+separately warns when its end-to-end query RPC reaches 40 ms, before the 50-ms
+hard deadline. Warn when a catalog snapshot takes at least 100 ms or startup
+takes more than 1 s. Every serialized event records queue and handler latency;
+either reaching 1 s emits a warning, and a handler is cancelled after the
+15-second watchdog so one stuck refresh cannot stop later maintenance forever.
+Queue-overflow warnings include the fixed capacity but never event payloads.
+The flashlight's catalog
+first-paint barrier remains 150 ms end to end. Every host RPC timeout
+and every successful generic RPC over 1 s logs the plugin id, method, and
+elapsed milliseconds; plugin-to-host RPC timeouts log the method and
+elapsed/timeout only. The shared subprocess runner warns at 1 s or timeout with
+the executable, status, elapsed, and timeout. Background/event
+refreshers log outcome (`ok`, `partial`, `failed`, or authoritative `empty`),
+candidate count, and elapsed milliseconds. These records must never contain the
+query text, candidate titles/URLs/payloads, clipboard text, event payload, or
+other user data.
 
 **Plugins must never block the async runtime (enforced, no exceptions).** Every
 plugin runs on a small (2-worker) tokio runtime shared by all its async work —
-events, candidate queries, hint discovery. One blocking syscall pins a worker
+events, catalog refreshes, hint discovery. One blocking syscall pins a worker
 thread and stalls every other in-flight operation (this is exactly how a
 flashlight open ends up waiting hundreds of ms on a single plugin). So sync/
 blocking I/O is **banned outright in plugin code** — there is no
@@ -429,14 +528,18 @@ time, where there is no async runtime — they're excluded, not allow-listed.)
 Tests should pin these invariants in place — see
 `Plugins/tmux/src/main.rs` for the canonical pattern (`hash_candidates`,
 `refresh_candidate_locations_for_path` with `last_locations_hash` dedup,
-`run_tmux_aggregate` parallel fan-out, and the
-`tmux_plugin_uses_default_candidate_query` regression guard).
+and `run_tmux_aggregate_inventory` parallel fan-out). `Scripts/check-guardrails.sh`
+rejects any plugin `candidate_query` implementation and requires every manifest
+with `sources` to implement `on_start` and publish through `set_locations`; it
+also rejects async `query_evaluate` hooks and requires every `queries` provider
+to implement the synchronous hook.
 
 Setting `debug.http_inspector_enabled = true` starts a loopback-only single-page
 debug server with live logs, resolved config, focused app state, and plugin
 state, bound to `debug.http_inspector_host` (`localhost` / `127.0.0.1` / `::1`)
-and `debug.http_inspector_port`. Keep it dense and diagnostic-focused; do not
-turn it into a preference UI.
+and `debug.http_inspector_port`. Resolved plugin setting keys may be shown, but
+their values stay redacted. Keep it dense and diagnostic-focused; do not turn
+it into a preference UI.
 
 Performance behaviours are **not configurable.** The prepared AX model,
 the concurrent subtree walk, and the parallel deferred action-name
@@ -449,7 +552,9 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
 
 `[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = ["flash", "<verb>", "--key=value"]` (in-process verb) or `"key" = ["<executable>", "<arg>", …]` (argv exec). `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`.
 
-- `[mode.all.mappings]` applies in insert and normal modes.
+- Modified-key entries in `[mode.all.mappings]` apply in every mode, including
+  command-line and candidate-finder surfaces. Non-modified entries are available
+  only while the overlay owns normal-mode input.
 - `[mode.normal.mappings]` applies only while the overlay is capturing normal-mode input.
 - `[mode.insert.mappings]` applies only in insert mode.
 
@@ -473,17 +578,17 @@ Every action Flash takes must have a corresponding entry in `URLEventHandler.com
 
 Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]`, `mouse_grid [secondary=1|double=1|move=1]`, `enter_command_mode [input=<text> restore_mode=1]`, `scroll_left`, `scroll_down`, `scroll_up`, `scroll_right`, `scroll_half_page_down`, `scroll_half_page_up`, `scroll_top`, `scroll_bottom`, `app_reload [force=1]`, `app_undo`, `app_redo`, `window_close`, `app_find`, `app_open_finder [all=1]`, `url_copy`, `tab_next`, `tab_previous`, `tab_first`, `tab_last`, `tab_select index=<n>`, `tab_close`, `history_back`, `history_forward`, `movement_back`, `movement_forward`, `app_quit [force=1]`, `app_save`, `app_save_and_quit [force=1]`, `app_print`, `document_open`, `window_new`, `tab_new`, `clipboard_copy`, `clipboard_cut`, `clipboard_paste`, `clipboard_copy_all`, `plugins`, and `plugin_command command=<command> subcommand=<subcommand>`.
 
-`:open <query>` and `:flashlight <query>` results render below the centered command line, ordered top-to-bottom with the best match closest to the prompt. App bundles are warmed and cached by `ApplicationSource`. Result titles include the source prefix, e.g. `[tmux] scratch gors`, `[firefox] Gmail (https://mail.google.com)`, `[slack] #general`. Plugin candidates should provide their own `source` / `title` labels.
+`:flashlight <query>` results render below the centered command line, ordered top-to-bottom with the best match closest to the prompt. `:open <args>` is a dumb forward to `/usr/bin/open` and never enters the finder. App bundles are warmed and cached by `ApplicationSource`. Result titles include the source prefix, e.g. `[tmux] scratch gors` or `[firefox] Gmail (https://mail.google.com)`. Plugin candidates should provide their own `source` / `title` labels.
 
-**Flashlight loading sequence.** On panel open the host paints instantly from the synchronous in-process sources (`SourceRegistry.synchronousCandidates(scope:)` — apps from the warm `ApplicationSource` cache), then fans out `candidateQuery` to the location-kind plugin sources in parallel (`fanOutCandidateQueries`) and merges each warm reply into the open pool as it arrives (`mergeCandidateQueryResults`), re-rendering once per runloop turn (coalesced). Plugins keep their locations warm in memory (`set_locations`); the host holds no candidate cache, so every open reflects the current warm state. Non-location sources (emojis, bangs) are pulled lazily on the first `@source`/`!`bang keystroke. A `candidateFinderSessionGeneration` token plus an active-surface check drop replies from a closed or superseded session, so a slow plugin can never mutate the wrong list. The merge is additive and idempotent (a source's rows are replaced by `source_id`); the synchronous seed guarantees first paint never blocks on a plugin RPC.
+**Flashlight loading sequence.** On panel open the host renders and focuses the command prompt immediately with no result rows. Every default location source — including `core.apps` — joins `CandidateSnapshotBarrier`; ready/degraded plugin sources answer immediately from SDK-owned warm stores and `ApplicationSource` answers from its atomic installed-bundle cache. `ApplicationSource` starts that index asynchronously during resident startup. If the first open races it, the snapshot callback only awaits the already-running prewarm; activation never initiates filesystem I/O. The list is revealed exactly once, in deterministic source-id order, when every source settles or the 150-ms end-to-end first-paint budget expires. Every plugin lifecycle state other than ready/degraded settles immediately instead of consuming the paint budget. Late replies, including a late initial app index, are logged and ignored for that session; the next open reads the completed warm state. A `candidateFinderSessionGeneration` token and deadline cancellation drop work from closed or superseded sessions. The host keeps no persistent plugin candidate cache. Non-default source catalogs remain plugin-warm but are read/filtered only after the first explicit `@source`/`!`bang query.
 
-**Candidate schema.** Every candidate is `{ title: String, url: URL?, metadata: [String: String] }`. `title` is the primary searchable string and the highest-precedence ranking field. `url` is the typed openable destination — apps point to their `.app` bundle file URL; browser tabs point to the page URL; sources without an openable destination omit it. `metadata` is fully opaque to FlashCore; sources stash whatever they want there, other plugins may read each other's keys by convention, and the matcher indexes the values at a low tier for fuzzy search. The bundled host uses these conventional keys for routing (defined in `Sources/flash/App/CandidateMetadata.swift` and mirrored as `candidate_metadata::*` constants in `Plugins/_rust_flash_plugin/src/lib.rs`): `source`, `source_id`, `kind`, `entity`, `pid`, `navigation_url`, `bundle_id`, `subtitle`, `payload`, `aliases`, `finishes_command`, `current_location`, `priority`. `priority` must be one shared enum value (`low`, `normal`, `high`, `important`, `urgent`), not a source-local number. The wire format between plugin and host carries `{ title, url, metadata }`.
+**Candidate schemas.** Catalog rows use `{ title: String, url: URL?, metadata: [String: String], effect: CandidateEffect? }`. `title` is the primary searchable string and the highest-precedence ranking field. `url` is the typed openable destination — apps point to their `.app` bundle file URL; browser tabs point to the page URL; sources without an openable destination omit it. `effect` is a closed, host-validated action union; only `copy_text` exists, and rendering never executes it. `metadata` is opaque to FlashCore and the matcher indexes its values at a low tier, but plugin-process ownership is not: the host always overwrites `source_id` with `plugin:<manifest-id>` before routing. Catalog candidates may choose `source` only from their manifest-declared descriptors. The bundled host conventions (defined in `Sources/flash/App/CandidateMetadata.swift` and mirrored as `candidate_metadata::*` constants in `Plugins/_rust_flash_plugin/src/lib.rs`) are: `source`, `source_id`, `kind`, `entity`, `pid`, `navigation_url`, `bundle_id`, `subtitle`, `payload`, `aliases`, `finishes_command`, `current_location`, `priority`. `priority` must be one shared enum value (`low`, `normal`, `high`, `important`, `urgent`), not a source-local number. Catalogs are bounded to 10,000 candidates / 4 MiB encoded; titles to 4 KiB, URLs to 16 KiB, metadata to 64 entries with 256-byte keys and 64-KiB values, and effect text to 64 KiB. A catalog snapshot is atomic: one malformed or oversized row rejects the complete snapshot, never a valid-looking prefix. Query evaluators have the narrower `{ answers: [{ title, subtitle?, effect }] }` response described above: they cannot emit URLs or metadata, and the host stamps their registered source, `query_answer` kind, plugin ownership, urgency, and finisher behavior. Query responses are bounded to 16 answers / 256 KiB with 16-KiB title, subtitle, and effect-text fields. For both shapes, the only accepted effect is exactly `{ type: "copy_text", text: String }`; unknown keys or malformed effects reject the complete catalog/query response.
 
-**Flashlight source ordering.** `CandidateFinder.sortedMatches` ranks results in two bands. Registered `!<bang>` candidates form a strict top band — a typed bang always wins, because a bang signals explicit dispatch intent. All other candidates are ordered by match quality (the field-aware exact/prefix/word-prefix/substring/fuzzy ladder in `fieldScoreNormalized`); source tier is only consulted as a tiebreaker when scores match. Defaults come from native source descriptors and plugin manifest `sources[].kind` values (`locations` vs. `default`) plus the shared source `priority` enum, with `precedence_alive_bonus` nudging pid-backed candidates above inactive rows from the same source. Candidate row `priority` is an additional same-score tiebreaker below source weight. `[flashlight.precedence]` is an override layer for specific source labels or parent prefixes. The earlier strict-tier sort hid strong prefix matches on app names under weak fuzzy hits on browser tabs (`:flashlight safari` would surface random Firefox pages but not Safari.app) — match quality must lead.
+**Flashlight source ordering.** Explicit `!<bang>` / `@source` intent owns the surface and does not run bare query evaluators. For bare text, ephemeral query answers occupy a fixed prepended lane and are never fuzzy-filtered by their answer title; the frozen catalog below them is ordered by `CandidateFinder.sortedMatches`. A deliberate exact/title-prefix/alias hit is promoted first. Default location rows then follow the strict category ladder `tmux window > running app > installed app > browser tab > remaining location`; match quality (the field-aware exact/prefix/word-prefix/substring/fuzzy ladder in `fieldScoreNormalized`) is authoritative only within one category. Defaults come from native source descriptors and plugin manifest `sources[].kind` values (`locations` vs. `default`) plus the shared source `priority` enum. Once match scores tie, source weight (including `precedence_alive_bonus` for pid-backed candidates), candidate priority, alive state, and stable identity break the tie in that order. `[flashlight.precedence]` overrides the source weight for specific source labels or parent prefixes; it does not change source kind or the category ladder.
 
 **Flashlight bangs.** Registered plugin bangs are exclusively in scope when the user types `!`. With no `!` typed the candidate pool excludes bang candidates entirely; the moment the query starts with `!`, the pool is replaced with the bang registry alone (no app/tab/tmux noise), fuzzy-matched against the token text after `!`. Submitting a bang routes the remainder through `PluginManager.invokeShebang`; the catch-all `"*"` registration is reached through the same path when no exact token matches what the user typed. A bang manifest entry can declare a `candidate_source` — once the user confirms `!<token> ` (trailing space), the flashlight pool swaps to that source's live candidates so the user picks the target directly (e.g. `!kill ` → processes plugin's process list; selection routes through that source's `resolve_candidate`).
 
-**Flashlight key bindings (unified contract).** App, browser-tab, and tmux-window rows are final destinations: selecting them with `<tab>` or `<cr>` submits the row, equivalent to `<cmd+cr>`. Synthetic source-filter rows insert `@<source> ` and are never finishers, including on `<cmd+cr>`. Bang rows insert `!<token> `, and non-final real source-owned rows insert `@<source> <name> `. `<cr>` otherwise uses the insert-first path unless the selected candidate is a source-owned finisher (`Candidate.finishesCommand`), an exact primary-title match, or a text-insertion candidate such as an emoji. `<cmd+cr>` is the explicit force-submit/open chord for real candidates. Cycling moves to arrow keys and `<shift-tab>`. Command-line *completions* (`:help <topic>`, `:plugins <sub>`, `:<plugin> <action>`) keep their separate contract: `<tab>` inserts the value without sending, while `<cr>` inserts and then submits only for terminal/plugin-subcommand completions; `acceptsArgs` completions leave the line open.
+**Flashlight key bindings (unified contract).** App, browser-tab, tmux-window, and typed-effect answer rows are final destinations: selecting them with `<tab>` or `<cr>` submits the row, equivalent to `<cmd+cr>` (a calculator answer copies its exact result). Synthetic source-filter rows insert `@<source> ` and are never finishers, including on `<cmd+cr>`. Bang rows insert `!<token> `, and non-final real source-owned rows insert `@<source> <name> `. `<cr>` otherwise uses the insert-first path unless the selected candidate is a source-owned finisher (`Candidate.finishesCommand`), an exact primary-title match, or a text-insertion candidate such as an emoji. `<cmd+cr>` is the explicit force-submit/open chord for real candidates. Cycling moves to arrow keys and `<shift-tab>`. Command-line *completions* (`:help <topic>`, `:plugins <sub>`, `:<plugin> <action>`) keep their separate contract: `<tab>` inserts the value without sending, while `<cr>` inserts and then submits only for terminal/plugin-subcommand completions; `acceptsArgs` completions leave the line open.
 
 **Flashlight source narrowing.** `:flashlight @<source> <query>` restricts the pool to one source — `@<source>` is the only structured filter, no `@<field>:<pattern>` form. `NormalModeDispatcher.candidateFinderSourceFilter` parses the first `@<token>` in the query; `CandidateFinder.candidateMatchesSourceFilter` matches it against `candidate.source` by exact name or prefix on dotted labels (`@firefox` matches `firefox.tabs`). A confirmed `@<source> ` with no residual text lists every candidate from that source — `:flashlight @emojis.glyphs ` enumerates the whole emoji set, otherwise excluded from the default pool. The flag is ignored in `:emojis` mode.
 
@@ -491,7 +596,7 @@ App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_comma
 
 **Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` run `switch-client` against the most-recently-active client and return the terminal pid hosting the target session. Bind them to a key with `["flash", "plugin_command", "--command=tmux", "--subcommand=window", "--args=main:1"]` (the `args` value is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
 
-**Command-line candidate contract.** Command and sub-command suggestions (`:help <topic>`, `:plugins <sub>`, `:<plugin> <subcommand>`, the top-level `:<tab>` list) are modelled by `CommandLineCompletion`. Every candidate has a **value** (`insertion`) and a **label** (`label`). The label is purely cosmetic — it is what shows in the suggestion list and never affects behaviour; when omitted, set it equal to the value so the value shows through. Selection semantics are uniform across built-in and plugin candidates: `<tab>` inserts the selected candidate's value into the buffer **without** sending the command (keep typing args), and `<CR>` inserts the value, then submits for terminal/plugin-subcommand completions or leaves the line open for `acceptsArgs`. Arrow keys (and `<shift-tab>`) cycle the selection. The candidate finder (`:open` / `:flashlight` / `:emojis`) is a separate live-results mechanism with canonical command insertions; app, browser-tab, and tmux-window rows are final destinations and submit on `<tab>`/`<CR>`, `<CR>` may also open when the row is a finisher or exact enough, `<cmd+cr>` force-opens real candidates, and synthetic `[source] @...` rows only insert their source token.
+**Command-line candidate contract.** Command and sub-command suggestions (`:help <topic>`, `:plugins <sub>`, `:<plugin> <subcommand>`, the top-level `:<tab>` list) are modelled by `CommandLineCompletion`. Every candidate has a **value** (`insertion`) and a **label** (`label`). The label is purely cosmetic — it is what shows in the suggestion list and never affects behaviour; when omitted, set it equal to the value so the value shows through. Selection semantics are uniform across built-in and plugin candidates: `<tab>` inserts the selected candidate's value into the buffer **without** sending the command (keep typing args), and `<CR>` inserts the value, then submits for terminal/plugin-subcommand completions or leaves the line open for `acceptsArgs`. Arrow keys (and `<shift-tab>`) cycle the selection. The candidate finder (`:flashlight` / `:emojis`) is a separate live-results mechanism with canonical command insertions; app, browser-tab, and tmux-window rows are final destinations and submit on `<tab>`/`<CR>`, `<CR>` may also open when the row is a finisher or exact enough, `<cmd+cr>` force-opens real candidates, and synthetic `[source] @...` rows only insert their source token. `:open` remains a direct `/usr/bin/open` forward and does not participate.
 
 ### Unified Action Contracts
 
@@ -539,7 +644,7 @@ Declared / conditional:
 
 Not required:
 
-- **Input Monitoring** — **NOT** required and **NOT** requested. If you find yourself wanting to request it, you're violating rule (2) above.
+- **Input Monitoring** — **NOT** required and **NOT** requested. Flash's session-level `KeyboardCaptureTap` (see rule 2) operates under the Accessibility grant, so it does not need the separate Input Monitoring permission. If you find yourself wanting to request Input Monitoring, stop and reconsider.
 - **Screen Recording** — **NOT** required and **NOT** requested. See rule (7) above. The plist no longer declares `NSScreenCaptureUsageDescription`.
 
 ### TCC and rebuilds
@@ -557,6 +662,8 @@ Not required:
 # Trigger and verify
 flash mouse_target
 ```
+
+**Iteration-loop rule (agents): every iteration ends with deploy + commit + push.** After each change that builds and passes tests, the loop is non-negotiably: (1) `./Scripts/install.sh --dev` so the running app reflects the change, then (2) commit and push. Don't batch several changes before deploying, and don't leave verified work uncommitted — each green iteration is deployed and pushed before moving on.
 
 `./Scripts/install.sh --dev` is what builds optimized current-arch products, codesigns, quits the running instance, replaces the bundle, symlinks bundled plugins for live reload, and relaunches. After any code edit (Swift, Info.plist, config defaults, scripts), re-run it. `swift build` / `swift test` are useful only for type-check and unit tests — they do **not** update the binary the system actually runs. `./Scripts/build.sh --dev` does the same build without installing; `--release` produces an optimized universal (Intel + Apple Silicon) `.app` + zip.
 
@@ -645,21 +752,24 @@ Do not claim UI-level changes "work" based on the type-checker alone. State expl
 
 ## Known limitations
 
-### Open menus dismiss when Flash activates
+### Open menus dismiss when Flash activates (largely resolved)
 
 When any non-menu window becomes the system's key window, AppKit's menu
-tracking session cancels and the menu closes. Flash's overlay panel becomes
-key in order to receive the user's hint keystrokes via `NSPanel.keyDown`,
-which trips this dismissal — so triggering Flash on top of an open
-`NSMenu` / `NSPopover` / popup-button menu collapses it.
+tracking session cancels and the menu closes. Historically Flash's overlay
+panel became key to receive hint keystrokes via `NSPanel.keyDown`, which
+tripped this dismissal whenever Flash was triggered on top of an open
+`NSMenu` / `NSPopover` / popup-button menu.
 
-There are two ways around this and both are off the table:
-1. **Global event tap (`CGEventTap` / `addGlobalMonitorForEvents`)** would
-   let us read keystrokes without taking key window, so the menu would
-   stay open. Banned by hard rule (2): no arbitrary global key capture.
-2. **Render through a CGS / WindowServer-level window** below the menu
-   plane. This uses private SkyLight APIs that aren't part of the public
-   AppKit surface. Out of scope.
+Flash now captures NORMAL / hint keystrokes through the session-level
+`KeyboardCaptureTap` (a `CGEventTap`) **without** taking key window, so with
+the Accessibility grant in place activating Flash no longer collapses an open
+menu. This is the "global event tap" approach that used to be off the table;
+it is now the sanctioned capture path (see hard rule 2).
+
+Residual: the collapse can still occur only in the key-window *fallback*
+path, which is reached only when the Accessibility grant is missing — in which
+case hint clicking itself would not work anyway. Rendering below the menu
+plane via private CGS / SkyLight APIs remains out of scope.
 
 ### `cmd+tab` cannot be fully intercepted without user opt-in
 
@@ -675,9 +785,6 @@ Control → "Move focus to next window"** (or the variant on their macOS
 release). After that, Flash's Carbon binding is the only handler. We
 don't auto-disable it on the user's behalf; the default `cmd+tab` mapping
 stays in the normal-mode map for users who've opted in.
-
-Workaround for users: dismiss the menu, trigger Flash on the menu's parent
-button (which is hinted), commit, then read the menu.
 
 ## Common pitfalls
 

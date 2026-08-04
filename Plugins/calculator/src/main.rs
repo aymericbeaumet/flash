@@ -1,94 +1,85 @@
-use std::process::Stdio;
-use std::time::Duration;
+mod evaluator;
+mod rates;
 
-use flash_plugin::{run, CommandRequest, CommandResponse, Context};
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
 
-struct Calculator;
+use flash_plugin::{run, Context, QueryEvaluateRequest, QueryEvaluateResponse};
+
+use rates::RatesStore;
+
+#[derive(Default)]
+struct Calculator {
+    rates: RatesStore,
+    target_currencies: Arc<RwLock<Vec<String>>>,
+}
 
 flash_plugin::plugin!(Calculator);
 
 impl FlashPlugin for Calculator {
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
-        // Registered as a wildcard command, so the whole remainder arrives as
-        // args (`:calc 2 + 2` and `:calc 2+2` both work).
-        let expr = command.query();
-        if expr.is_empty() {
-            return CommandResponse::error("empty expression");
+    async fn on_start(&self, ctx: Context) {
+        if let Ok(mut targets) = self.target_currencies.write() {
+            *targets = configured_targets(&ctx);
         }
-        let mut namespace = fasteval2::EmptyNamespace;
-        let value = match fasteval2::ez_eval(&expr, &mut namespace) {
-            Ok(v) => v,
-            Err(err) => return CommandResponse::error(format!("cannot evaluate: {err}")),
-        };
-        let result = format_num(value);
+        rates::seed_and_refresh(ctx, self.rates.clone()).await;
+    }
 
-        // Copy the result to the clipboard; surface "expr = result" as the
-        // command stdout so the host can show it in a toast.
-        let script = format!("set the clipboard to {}", applescript_quote(&result));
-        run_osascript(&ctx, &script, Duration::from_secs(10)).await;
-
-        CommandResponse::toast(format!("{expr} = {result}"))
+    fn query_evaluate(&self, request: QueryEvaluateRequest) -> QueryEvaluateResponse {
+        if request.surface != "flashlight" {
+            return QueryEvaluateResponse::default();
+        }
+        let targets = self
+            .target_currencies
+            .read()
+            .map(|targets| targets.clone())
+            .unwrap_or_default();
+        QueryEvaluateResponse::answers(evaluator::evaluate(&request.query, &self.rates, &targets))
     }
 }
 
-async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) {
-    let argv = [
-        "/usr/bin/osascript".to_string(),
-        "-e".to_string(),
-        script.to_string(),
-    ];
-    let _ = run_command(ctx, &argv, timeout).await;
+fn configured_targets(ctx: &Context) -> Vec<String> {
+    normalize_targets(ctx.config_json::<Vec<String>>("target_currencies"))
 }
 
-async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> bool {
-    let Some((program, args)) = argv.split_first() else {
-        return false;
+fn normalize_targets(configured: Option<Vec<String>>) -> Vec<String> {
+    let Some(configured) = configured else {
+        return vec!["USD".to_string()];
     };
-    let mut command = tokio::process::Command::new(program);
-    command
-        .args(args)
-        .current_dir(&ctx.data_dir)
-        .env("HOME", ctx.home_dir())
-        .env("XDG_CONFIG_HOME", ctx.config_dir())
-        .env("XDG_CACHE_HOME", ctx.cache_dir())
-        .env("XDG_DATA_HOME", ctx.share_dir())
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                ctx.bin_dir().display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    match tokio::time::timeout(timeout, command.output()).await {
-        Ok(Ok(output)) => output.status.success(),
-        _ => false,
-    }
-}
-
-fn applescript_quote(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
-}
-
-fn format_num(value: f64) -> String {
-    if !value.is_finite() {
-        return value.to_string();
-    }
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        return format!("{}", value as i64);
-    }
-    let formatted = format!("{value:.10}");
-    formatted
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string()
+    let mut seen = HashSet::new();
+    configured
+        .into_iter()
+        .map(|currency| currency.trim().to_ascii_uppercase())
+        .filter(|currency| {
+            currency.len() == 3
+                && currency.bytes().all(|byte| byte.is_ascii_uppercase())
+                && seen.insert(currency.clone())
+        })
+        .take(8)
+        .collect()
 }
 
 fn main() {
-    run(Calculator);
+    run(Calculator::default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_targets;
+
+    #[test]
+    fn targets_default_to_usd() {
+        assert_eq!(normalize_targets(None), ["USD"]);
+    }
+
+    #[test]
+    fn targets_are_normalized_deduplicated_and_bounded() {
+        let configured = vec![
+            " eur ".to_string(),
+            "USD".to_string(),
+            "eur".to_string(),
+            "no".to_string(),
+            "123".to_string(),
+        ];
+        assert_eq!(normalize_targets(Some(configured)), ["EUR", "USD"]);
+    }
 }

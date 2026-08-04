@@ -129,16 +129,20 @@ final class HotkeySyntaxTests: XCTestCase {
   }
 
   func testScopeIsActiveGovernsCarbonRegistration() {
-    // `applyForFlashMode` filters Carbon registrations through
+    // The mapping scope filters Carbon registrations through
     // `scopeIsActive`. A `.normal`-scope mapping (e.g. `cmd+tab`) must
     // be **unregistered** in insert mode so the Dock app switcher gets
-    // the key combo. `.all` mappings stay registered in both modes.
+    // the key combo. `.all` mappings stay registered in every mode, including
+    // command-line and candidate-finder surfaces.
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .normal))
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .insert))
+    XCTAssertTrue(MappingsCoordinator.scopeIsActive(.all, for: .command))
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.normal, for: .normal))
     XCTAssertFalse(MappingsCoordinator.scopeIsActive(.normal, for: .insert))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.normal, for: .command))
     XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .normal))
     XCTAssertTrue(MappingsCoordinator.scopeIsActive(.insert, for: .insert))
+    XCTAssertFalse(MappingsCoordinator.scopeIsActive(.insert, for: .command))
   }
 
   func testDefaultNormalMappingsOmitCmdChords() {
@@ -422,6 +426,13 @@ final class HotkeySyntaxTests: XCTestCase {
       .tabSelect(index: 4))
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "tab_new"])?.command, .tabNew)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "tab_close"])?.command, .tabClose)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "pane_split_vertical"])?.command,
+      .paneSplitVertical)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "pane_split_horizontal"])?.command,
+      .paneSplitHorizontal)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "pane_close"])?.command, .paneClose)
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "history_back"])?.command, .historyBack)
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "history_forward"])?.command, .historyForward)

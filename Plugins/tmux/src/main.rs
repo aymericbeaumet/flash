@@ -4,31 +4,17 @@
 //!
 //! Tmux exposes no native host event stream for window-list changes (no
 //! `core:focus.changed`-style ping fires when the user creates/renames/
-//! closes a window inside an attached client). The plugin therefore owns
-//! its own freshness loop, keeping its locations warm in memory:
+//! closes a window inside an attached client). The plugin therefore keeps
+//! locations warm with a background refresh loop:
 //!
-//!   1. `on_start` runs an immediate `build_candidates` and stores the
-//!      initial warm locations. Subsequent flashlight opens never block on
-//!      this seed — by the time the user can press `f`, the warm locations
-//!      are populated.
-//!   2. A 1 s background poll re-runs `build_candidates` and replaces the
-//!      warm locations **only when the candidate hash actually changed**. The
-//!      dedup gate is the load-bearing invariant: without it the warm cache
-//!      would be rewritten on every poll even when tmux state was
-//!      identical. Flashlight pulls the warm locations once when it opens, so
-//!      unchanged plugin polls must be true no-ops.
-//!   3. Host events (`core:focus.changed`, `core:flash.started`,
-//!      `core:apps.terminated`) trigger an additional refresh so a
-//!      focus-in catches state that drifted while the user was
-//!      elsewhere.
-//!   4. The host's `candidateQuery` RPC is **NOT overridden**. The
-//!      default contract (return `CandidateQueryResponse::keep()`)
-//!      is what we want: the host pulls the warm locations instantly, no
-//!      subprocesses fire on the user's `f` keypress. Letting
-//!      `candidate_query` run `build_candidates` was the previous bug —
-//!      the user either waited on tmux I/O or saw stale warm locations become
-//!      correct only after a later refresh.
-//!   5. The eager refresh also retains its `list-clients` + process tree
+//!   1. `on_start` seeds the in-memory locations, then a 1 s background poll
+//!      keeps them current. The candidate hash gates writes, so unchanged
+//!      refreshes are true no-ops.
+//!   2. Host events (`core:focus.changed`, `core:apps.terminated`) trigger an
+//!      additional refresh at explicit interaction boundaries.
+//!   3. `sources.snapshot` is served directly from the SDK's warm store and
+//!      performs no tmux I/O on the flashlight hot path.
+//!   4. Each refresh also retains its `list-clients` + process tree
 //!      sample. Hint discovery and source actions consult that warm cache
 //!      first, so `[t` / `]t` do not rediscover every tmux socket before
 //!      running the single tmux command that actually changes windows.
@@ -40,7 +26,7 @@
 //!
 //! ## Hint discovery
 //!
-//! On each activation Flash calls `discoverTargets` with the focused
+//! On each activation Flash calls `hints.discover` with the focused
 //! app's pid + window frame; the plugin returns pane-chip and link-chip
 //! targets in screen coordinates.
 //!
@@ -53,20 +39,25 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::os::unix::fs::FileTypeExt;
-use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, ActivateRequest, Candidate, CommandRequest, CommandResponse, Context, DiscoverRequest,
-    DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, Priority, ResolveResponse,
-    SourceActionRequest, SourceActionResponse,
+    run, ActivateRequest, Candidate, CandidateEffect, CommandRequest, CommandResponse, Context,
+    DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, Priority,
+    ResolveResponse, SourceActionRequest, SourceActionResponse,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+#[path = "../../_bounded_process.rs"]
+mod bounded_process;
+
+const SUBPROCESS_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
+const SUBPROCESS_STDERR_LIMIT: usize = 64 * 1024;
 const SOURCE_ID: &str = "plugin:tmux";
 const NAV_SCHEME: &str = "tmux";
 
@@ -77,6 +68,7 @@ const TMUX_FIELD_SEP: &str = "|||";
 
 const LINKS_PER_PANE_LIMIT: usize = 40;
 const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
+const SLOW_CANDIDATE_REFRESH_MS: u128 = 1_000;
 
 // ---- Link extraction --------------------------------------------------------
 
@@ -231,31 +223,50 @@ async fn run_local(argv: &[String], timeout: Duration) -> CliResult {
         };
     };
     let mut command = tokio::process::Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    match tokio::time::timeout(timeout, command.output()).await {
-        Ok(Ok(output)) => CliResult {
-            ok: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            status: output.status.code().unwrap_or(-1),
-        },
-        Ok(Err(err)) => CliResult {
-            ok: false,
-            stderr: err.to_string(),
-            status: -1,
-            ..Default::default()
-        },
-        Err(_) => CliResult {
-            ok: false,
-            stderr: format!("timed out after {}ms", timeout.as_millis()),
-            status: 124,
-            ..Default::default()
-        },
+    command.args(args);
+    let started_at = Instant::now();
+    match bounded_process::capture(
+        &mut command,
+        None,
+        timeout,
+        SUBPROCESS_STDOUT_LIMIT,
+        SUBPROCESS_STDERR_LIMIT,
+    )
+    .await
+    {
+        Ok(output) => {
+            if started_at.elapsed() >= Duration::from_secs(1) {
+                eprintln!(
+                    "[tmux] subprocess slow elapsed_ms={} status={}",
+                    started_at.elapsed().as_millis(),
+                    output
+                        .status
+                        .code()
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "signal".to_string())
+                );
+            }
+            CliResult {
+                ok: output.status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                status: output.status.code().unwrap_or(-1),
+            }
+        }
+        Err(error) => {
+            eprintln!(
+                "[tmux] subprocess capture failed elapsed_ms={} status={} detail={}",
+                started_at.elapsed().as_millis(),
+                error.status(),
+                error.diagnostic()
+            );
+            CliResult {
+                ok: false,
+                stderr: error.diagnostic(),
+                status: error.status(),
+                ..Default::default()
+            }
+        }
     }
 }
 
@@ -389,22 +400,33 @@ async fn run_tmux_default(tmux_path: Option<&str>, args: &[&str]) -> Option<Stri
 /// sockets, a single dead server stretched a 50 ms operation into 6 s.
 /// Now the cycle length is `max(socket)` instead of `sum(sockets)`.
 ///
-/// Identical lines are deduplicated so an alias between the default
-/// invocation and an explicit `-S <path>` for the same socket doesn't
-/// double-count rows. Empty output is returned as `None` so the caller can
-/// preserve the previous warm locations on a transient failure.
-async fn run_tmux_aggregate(
+/// Identical lines are deduplicated so an alias between the default invocation
+/// and an explicit `-S <path>` for the same socket doesn't double-count rows.
+/// We distinguish a confirmed absent server from a timeout/unknown failure:
+/// absence authoritatively clears stale windows, while any transient failure
+/// preserves the complete last-good aggregate (we cannot safely identify which
+/// prior rows belonged to the failed socket after outputs are merged).
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum TmuxAggregate {
+    Output(String),
+    Absent,
+    TransientFailure,
+}
+
+async fn run_tmux_aggregate_inventory(
     tmux_path: Option<&str>,
     args: &[&str],
     timeout: Duration,
-) -> Option<String> {
-    let path = tmux_path?.to_string();
+) -> TmuxAggregate {
+    let Some(path) = tmux_path.map(str::to_string) else {
+        return TmuxAggregate::Absent;
+    };
     let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
     // Discover sockets once up front; spawning all invocations together
     // means the slowest socket sets the cycle length, not the sum.
     let socket_paths = tmux_socket_paths().await;
-    let mut handles: Vec<tokio::task::JoinHandle<Option<String>>> =
+    let mut handles: Vec<tokio::task::JoinHandle<CliResult>> =
         Vec::with_capacity(socket_paths.len() + 1);
 
     // Default-socket invocation. Without `-S`, tmux resolves to whichever
@@ -417,12 +439,7 @@ async fn run_tmux_aggregate(
         let args_owned = args_owned.clone();
         handles.push(tokio::spawn(async move {
             let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
-            let result = run_local(&tmux_argv(&path, &args_ref), timeout).await;
-            if result.ok {
-                Some(result.stdout)
-            } else {
-                None
-            }
+            run_local(&tmux_argv(&path, &args_ref), timeout).await
         }));
     }
 
@@ -431,28 +448,51 @@ async fn run_tmux_aggregate(
         let args_owned = args_owned.clone();
         handles.push(tokio::spawn(async move {
             let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
-            let result =
-                run_local(&tmux_socket_argv(&path, &socket_path, &args_ref), timeout).await;
-            if result.ok {
-                Some(result.stdout)
-            } else {
-                None
-            }
+            run_local(&tmux_socket_argv(&path, &socket_path, &args_ref), timeout).await
         }));
     }
 
-    let mut outputs: Vec<String> = Vec::with_capacity(handles.len());
+    let mut results = Vec::with_capacity(handles.len());
+    let mut join_failed = false;
     for handle in handles {
-        if let Ok(Some(stdout)) = handle.await {
-            outputs.push(stdout);
+        match handle.await {
+            Ok(result) => results.push(result),
+            Err(_) => join_failed = true,
         }
     }
+    classify_tmux_aggregate(&results, join_failed)
+}
 
-    let merged = merge_socket_outputs(outputs.iter().map(String::as_str));
-    if merged.is_empty() {
-        return None;
+fn classify_tmux_aggregate(results: &[CliResult], join_failed: bool) -> TmuxAggregate {
+    if join_failed || results.iter().any(is_transient_tmux_failure) {
+        return TmuxAggregate::TransientFailure;
     }
-    Some(merged)
+    let merged = merge_socket_outputs(
+        results
+            .iter()
+            .filter(|result| result.ok)
+            .map(|result| result.stdout.as_str()),
+    );
+    if merged.is_empty() {
+        TmuxAggregate::Absent
+    } else {
+        TmuxAggregate::Output(merged)
+    }
+}
+
+fn is_transient_tmux_failure(result: &CliResult) -> bool {
+    !result.ok && !is_absent_tmux_server(result)
+}
+
+fn is_absent_tmux_server(result: &CliResult) -> bool {
+    if result.ok {
+        return false;
+    }
+    let error = result.stderr.to_ascii_lowercase();
+    error.contains("no server running")
+        || (error.contains("error connecting to")
+            && (error.contains("no such file") || error.contains("connection refused")))
+        || error.contains("failed to connect to server")
 }
 
 /// Concatenate the stdout of multiple tmux invocations (one per socket)
@@ -478,20 +518,8 @@ where
     merged.join("\n")
 }
 
-async fn run_tmux_aggregate_default(tmux_path: Option<&str>, args: &[&str]) -> Option<String> {
-    run_tmux_aggregate(tmux_path, args, Duration::from_secs(2)).await
-}
-
-/// Same as [`run_tmux_aggregate_default`] with a longer per-socket
-/// budget. Used for the initial location build only — a cold tmux
-/// server (just started, or paged out) can take well over the 2 s
-/// budget on its first list-windows call, which used to leave the
-/// flashlight with a partial location set until the next 1 s poll caught
-/// the missed sockets. 6 s is generous enough that even a cold
-/// `tmux -L work` socket inside a sleeping shell completes on the
-/// first try.
-async fn run_tmux_aggregate_warm(tmux_path: Option<&str>, args: &[&str]) -> Option<String> {
-    run_tmux_aggregate(tmux_path, args, Duration::from_secs(6)).await
+async fn run_tmux_inventory_default(tmux_path: Option<&str>, args: &[&str]) -> TmuxAggregate {
+    run_tmux_aggregate_inventory(tmux_path, args, Duration::from_secs(2)).await
 }
 
 fn trimmed(value: Option<String>) -> Option<String> {
@@ -575,25 +603,20 @@ fn client_resolution_diag(
     clients: &[TmuxClient],
     parent_map: &HashMap<i64, i64>,
 ) -> String {
-    let entries: Vec<String> = clients
+    let clients_in_process_sample = clients
         .iter()
-        .map(|c| {
-            format!(
-                "{{tty={} sess={} client_pid={} in_pmap={} ancestor_of_focus={}}}",
-                c.tty,
-                c.session,
-                c.client_pid,
-                parent_map.contains_key(&c.client_pid),
-                is_ancestor(focused_pid, c.client_pid, parent_map)
-            )
-        })
-        .collect();
+        .filter(|client| parent_map.contains_key(&client.client_pid))
+        .count();
+    let ancestry_matches = clients
+        .iter()
+        .filter(|client| is_ancestor(focused_pid, client.client_pid, parent_map))
+        .count();
     format!(
-        "diag focused_pid={} pmap_len={} client_count={} clients=[{}]",
-        focused_pid,
+        "diag pmap_len={} client_count={} clients_in_pmap={} ancestry_matches={}",
         parent_map.len(),
         clients.len(),
-        entries.join(" ")
+        clients_in_process_sample,
+        ancestry_matches,
     )
 }
 
@@ -659,7 +682,7 @@ impl ClientSnapshot {
     }
 }
 
-async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
+async fn list_clients_inventory(tmux_path: Option<&str>) -> Result<Vec<TmuxClient>, ()> {
     let format = format!(
         "#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
@@ -668,9 +691,10 @@ async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
     // a single-socket invocation silently drops every client (and
     // therefore every window-resolution route) attached to other tmux
     // servers running on the host.
-    let raw = run_tmux_aggregate_default(tmux_path, &["list-clients", "-F", &format]).await;
-    let Some(raw) = raw else {
-        return Vec::new();
+    let raw = match run_tmux_inventory_default(tmux_path, &["list-clients", "-F", &format]).await {
+        TmuxAggregate::Output(raw) => raw,
+        TmuxAggregate::Absent => return Ok(Vec::new()),
+        TmuxAggregate::TransientFailure => return Err(()),
     };
     let mut out = Vec::new();
     for line in raw.lines() {
@@ -692,11 +716,15 @@ async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
             activity,
         });
     }
-    out
+    Ok(out)
+}
+
+async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
+    list_clients_inventory(tmux_path).await.unwrap_or_default()
 }
 
 async fn load_client_snapshot(tmux_path: Option<&str>) -> Option<ClientSnapshot> {
-    let clients = list_clients(tmux_path).await;
+    let clients = list_clients_inventory(tmux_path).await.ok()?;
     if clients.is_empty() {
         return None;
     }
@@ -917,7 +945,6 @@ fn build_target(
         .label(label)
         .enters_insert_mode(enters_insert_mode)
         .pid(pid)
-        .source_id(SOURCE_ID)
         .prefer_host_click(prefer_host_click)
         .priority(priority)
 }
@@ -1069,7 +1096,7 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             // Pane chips are the structural anchors of a tmux window, so the
             // renderer paints them in the accent style. Link chips below are
             // everyday clutter and stay in the default yellow.
-            Priority::Critical,
+            Priority::Urgent,
         ));
         actions.insert(
             target_id,
@@ -1308,46 +1335,21 @@ struct CandidateBuild {
     client_snapshot: ClientSnapshot,
     client_count: usize,
     raw_line_count: usize,
-    first_raw_line: String,
 }
 
 async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
-    build_candidates_inner(tmux_path, BuildBudget::Steady).await
-}
-
-/// Same as [`build_candidates`] but gives every per-socket tmux call a
-/// longer timeout. Used by `on_start` to give cold sockets a real shot
-/// at the *first* location build — otherwise the user opens flashlight right
-/// after Flash starts, sees only the windows from the fast-responding
-/// socket, and has to wait for the next steady-state poll for the
-/// slower socket to fold in.
-async fn build_candidates_warm(tmux_path: Option<&str>) -> Option<CandidateBuild> {
-    build_candidates_inner(tmux_path, BuildBudget::Warm).await
-}
-
-#[derive(Debug, Clone, Copy)]
-enum BuildBudget {
-    /// Background poll cadence — per-socket calls cap at 2 s.
-    Steady,
-    /// Warm-up budget — per-socket calls cap at 6 s. Used only at
-    /// plugin start.
-    Warm,
-}
-
-async fn build_candidates_inner(
-    tmux_path: Option<&str>,
-    budget: BuildBudget,
-) -> Option<CandidateBuild> {
     if tmux_path.is_none() {
         return Some(CandidateBuild {
             candidates: Vec::new(),
             client_snapshot: ClientSnapshot::default(),
             client_count: 0,
             raw_line_count: 0,
-            first_raw_line: String::new(),
         });
     }
-    let clients = list_clients(tmux_path).await;
+    let clients = match list_clients_inventory(tmux_path).await {
+        Ok(clients) => clients,
+        Err(()) => return None,
+    };
     let client_by_session = client_by_session(&clients);
     let pmap = if clients.is_empty() {
         HashMap::new()
@@ -1375,24 +1377,22 @@ async fn build_candidates_inner(
     // (e.g. a `tmux -L work` socket) are invisible to the flashlight
     // finder — the user sees only the first responding server's
     // windows.
-    let raw = match budget {
-        BuildBudget::Steady => {
-            run_tmux_aggregate_default(tmux_path, &["list-windows", "-a", "-F", &format]).await?
-        }
-        BuildBudget::Warm => {
-            run_tmux_aggregate_warm(tmux_path, &["list-windows", "-a", "-F", &format]).await?
-        }
-    };
+    let raw =
+        match run_tmux_inventory_default(tmux_path, &["list-windows", "-a", "-F", &format]).await {
+            TmuxAggregate::Output(raw) => raw,
+            TmuxAggregate::Absent => {
+                return Some(CandidateBuild {
+                    candidates: Vec::new(),
+                    client_snapshot,
+                    client_count: clients.len(),
+                    raw_line_count: 0,
+                });
+            }
+            TmuxAggregate::TransientFailure => return None,
+        };
 
     let home = std::env::var("HOME").unwrap_or_default();
     let raw_line_count = raw.split('\n').filter(|line| !line.is_empty()).count();
-    let first_raw_line = raw
-        .lines()
-        .next()
-        .unwrap_or("")
-        .chars()
-        .take(180)
-        .collect::<String>();
     let candidates =
         build_candidates_from_window_list(&raw, &clients, &terminal_pid_by_session, &home);
     Some(CandidateBuild {
@@ -1400,81 +1400,86 @@ async fn build_candidates_inner(
         client_snapshot,
         client_count: clients.len(),
         raw_line_count,
-        first_raw_line,
     })
 }
 
-/// Identity hash of the warm location set — `(title, subtitle, navigation_url,
-/// pid)` for each row, in order. Used by [`refresh_candidate_locations_for_path`]
-/// to skip `set_locations` when nothing observable changed.
+/// Identity hash of the complete host-visible and routing location set. Used by
+/// [`refresh_candidate_locations_for_path`] to skip `set_locations` only when
+/// every field is unchanged — including current-location state and the payload
+/// that identifies the tmux client.
 ///
-/// Without this gate, the 1 s background poll would rewrite the warm
-/// cache on every tick even when tmux state was identical. The visible
-/// flashlight surface pulls the warm locations once at open time, so unchanged
-/// tmux polls should not churn the warm cache or future-session
-/// bookkeeping.
+/// Without this gate, event-triggered refreshes would rewrite the warm cache
+/// even when tmux state was identical. The visible flashlight surface pulls the
+/// warm locations once at open time, so unchanged refreshes should not churn
+/// the warm cache or future-session bookkeeping.
 fn hash_candidates(candidates: &[Candidate]) -> u64 {
-    use flash_plugin::candidate_metadata as meta;
     let mut hasher = DefaultHasher::new();
     candidates.len().hash(&mut hasher);
     for candidate in candidates {
         candidate.title.hash(&mut hasher);
-        candidate
-            .meta(meta::SUBTITLE)
-            .unwrap_or("")
-            .hash(&mut hasher);
-        candidate
-            .meta(meta::NAVIGATION_URL)
-            .unwrap_or("")
-            .hash(&mut hasher);
-        candidate.pid_value().unwrap_or(0).hash(&mut hasher);
+        candidate.url.hash(&mut hasher);
+        let mut metadata = candidate.metadata.iter().collect::<Vec<_>>();
+        metadata.sort_unstable_by_key(|(key, _)| *key);
+        for (key, value) in metadata {
+            key.hash(&mut hasher);
+            value.hash(&mut hasher);
+        }
+        match &candidate.effect {
+            Some(CandidateEffect::CopyText { text }) => {
+                1u8.hash(&mut hasher);
+                text.hash(&mut hasher);
+            }
+            None => 0u8.hash(&mut hasher),
+        }
     }
     hasher.finish()
 }
 
 /// Rebuild the warm locations and store them **only when the
 /// candidate hash differs from the last store**. The dedup gate is what
-/// keeps unchanged polls as no-ops — see the module-level "Warm-location
+/// keeps unchanged refreshes as no-ops — see the module-level "Warm-location
 /// contract" docs.
 ///
 /// On a transient tmux failure (e.g. every socket invocation timed out)
 /// we leave the previous warm locations in place: the host keeps pulling
-/// them for synchronous reads, and the next successful poll re-syncs. We
+/// them for synchronous reads, and the next successful refresh re-syncs. We
 /// do *not* store an empty set in this case — nuking the warm cache to `[]`
 /// would make tmux windows vanish from flashlight every time a single
 /// socket call hiccuped.
+#[derive(Default)]
+struct CandidateRefreshCoordinator {
+    lock: tokio::sync::Mutex<()>,
+}
+
+impl CandidateRefreshCoordinator {
+    async fn run<T>(&self, work: impl Future<Output = T>) -> T {
+        let _guard = self.lock.lock().await;
+        work.await
+    }
+}
+
 async fn refresh_candidate_locations_for_path(
     tmux_path: Option<&str>,
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
     client_snapshot: &Mutex<ClientSnapshot>,
+    coordinator: &CandidateRefreshCoordinator,
 ) {
-    refresh_candidate_locations_for_path_inner(
-        tmux_path,
-        ctx,
-        last_hash,
-        client_snapshot,
-        BuildBudget::Steady,
-    )
-    .await;
-}
-
-/// Warm-budget variant used at plugin start; see [`build_candidates_warm`]
-/// for why we hand cold sockets a generous timeout on the first build.
-async fn refresh_candidate_locations_for_path_warm(
-    tmux_path: Option<&str>,
-    ctx: &Context,
-    last_hash: &Mutex<Option<u64>>,
-    client_snapshot: &Mutex<ClientSnapshot>,
-) {
-    refresh_candidate_locations_for_path_inner(
-        tmux_path,
-        ctx,
-        last_hash,
-        client_snapshot,
-        BuildBudget::Warm,
-    )
-    .await;
+    let requested_at = Instant::now();
+    coordinator
+        .run(async {
+            let queue_wait_ms = requested_at.elapsed().as_millis();
+            refresh_candidate_locations_for_path_inner(
+                tmux_path,
+                ctx,
+                last_hash,
+                client_snapshot,
+                requested_at,
+                queue_wait_ms,
+            )
+            .await;
+        })
+        .await;
 }
 
 async fn refresh_candidate_locations_for_path_inner(
@@ -1482,17 +1487,21 @@ async fn refresh_candidate_locations_for_path_inner(
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
     client_snapshot: &Mutex<ClientSnapshot>,
-    budget: BuildBudget,
+    requested_at: Instant,
+    queue_wait_ms: u128,
 ) {
-    let build_result = match budget {
-        BuildBudget::Steady => build_candidates(tmux_path).await,
-        BuildBudget::Warm => build_candidates_warm(tmux_path).await,
-    };
+    let build_result = build_candidates(tmux_path).await;
+    let elapsed_ms = requested_at.elapsed().as_millis();
+    let work_ms = elapsed_ms.saturating_sub(queue_wait_ms);
     let Some(build) = build_result else {
-        ctx.log(
+        let fields =
+            candidate_refresh_log_fields("failed", elapsed_ms, queue_wait_ms, work_ms, None, None);
+        ctx.log_fields(
             "debug",
             "[tmux] candidate refresh skipped — tmux transient failure",
+            fields.clone(),
         );
+        warn_if_candidate_refresh_slow(ctx, fields, elapsed_ms);
         return;
     };
     if let Ok(mut guard) = client_snapshot.lock() {
@@ -1501,27 +1510,78 @@ async fn refresh_candidate_locations_for_path_inner(
     let new_hash = hash_candidates(&build.candidates);
     let unchanged = matches!(last_hash.lock(), Ok(guard) if *guard == Some(new_hash));
     if unchanged {
-        // Still useful to record that we polled — at trace level so a
+        // Still useful to record that we refreshed — at trace level so a
         // healthy cache doesn't drown out other plugins. The warm
         // locations are untouched, so the flashlight surface
         // doesn't repaint.
-        let mut fields = BTreeMap::new();
-        fields.insert("candidates".to_string(), build.candidates.len().to_string());
-        ctx.log_fields("debug", "[tmux] candidate refresh (unchanged)", fields);
+        let fields = candidate_refresh_log_fields(
+            "ok",
+            elapsed_ms,
+            queue_wait_ms,
+            work_ms,
+            Some(build.candidates.len()),
+            Some("unchanged"),
+        );
+        ctx.log_fields(
+            "debug",
+            "[tmux] candidate refresh (unchanged)",
+            fields.clone(),
+        );
+        warn_if_candidate_refresh_slow(ctx, fields, elapsed_ms);
         return;
     }
     if let Ok(mut guard) = last_hash.lock() {
         *guard = Some(new_hash);
     }
-    let mut fields = BTreeMap::new();
-    fields.insert("candidates".to_string(), build.candidates.len().to_string());
+    let mut fields = candidate_refresh_log_fields(
+        if build.candidates.is_empty() {
+            "empty"
+        } else {
+            "ok"
+        },
+        elapsed_ms,
+        queue_wait_ms,
+        work_ms,
+        Some(build.candidates.len()),
+        Some("published"),
+    );
     fields.insert("clients".to_string(), build.client_count.to_string());
     fields.insert("raw_lines".to_string(), build.raw_line_count.to_string());
-    if build.candidates.is_empty() && !build.first_raw_line.is_empty() {
-        fields.insert("first_raw_line".to_string(), build.first_raw_line.clone());
-    }
-    ctx.log_fields("debug", "[tmux] candidate refresh (emit)", fields);
+    ctx.log_fields("debug", "[tmux] candidate refresh (emit)", fields.clone());
+    warn_if_candidate_refresh_slow(ctx, fields, elapsed_ms);
     ctx.set_locations(SOURCE_ID, build.candidates);
+}
+
+fn candidate_refresh_log_fields(
+    outcome: &str,
+    elapsed_ms: u128,
+    queue_wait_ms: u128,
+    work_ms: u128,
+    candidates: Option<usize>,
+    change: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    fields.insert("outcome".to_string(), outcome.to_string());
+    fields.insert("elapsed_ms".to_string(), elapsed_ms.to_string());
+    fields.insert("queue_wait_ms".to_string(), queue_wait_ms.to_string());
+    fields.insert("work_ms".to_string(), work_ms.to_string());
+    if let Some(candidates) = candidates {
+        fields.insert("candidates".to_string(), candidates.to_string());
+    }
+    if let Some(change) = change {
+        fields.insert("change".to_string(), change.to_string());
+    }
+    fields
+}
+
+fn warn_if_candidate_refresh_slow(
+    ctx: &Context,
+    fields: BTreeMap<String, String>,
+    elapsed_ms: u128,
+) {
+    if elapsed_ms >= SLOW_CANDIDATE_REFRESH_MS {
+        ctx.log_fields("warn", "[tmux] candidate refresh slow", fields);
+    }
 }
 
 async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
@@ -1530,35 +1590,32 @@ async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
         ctx,
         plugin.last_locations_hash(),
         plugin.client_snapshot(),
+        plugin.candidate_refresh_coordinator(),
     )
     .await;
 }
 
-async fn refresh_candidate_locations_warm(plugin: &Tmux, ctx: &Context) {
-    refresh_candidate_locations_for_path_warm(
-        plugin.resolved_tmux_path().await,
-        ctx,
-        plugin.last_locations_hash(),
-        plugin.client_snapshot(),
-    )
-    .await;
-}
-
-/// Background poll cadence. **Do not raise without measuring**: the
-/// flashlight expects the warm locations to be in sync with the user's tmux
-/// state at all times, so the cycle has to be short enough that a
-/// window the user just created is in the cache by the time they
-/// press `f`. 1 s is the sweet spot — `build_candidates` typically
-/// finishes in 50-200 ms with parallel socket fan-out, leaving the
-/// runtime idle most of the cycle.
 const POLL_INTERVAL_SECS: u64 = 1;
+const STARTUP_WARM_BUDGET: Duration = Duration::from_secs(10);
 
-async fn start_candidate_poll(plugin: &Tmux, ctx: &Context) {
-    let path = plugin.resolved_tmux_path().await.map(str::to_string);
+fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
+    let tmux_path = std::sync::Arc::clone(&plugin.tmux_path);
     let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
     let client_snapshot = std::sync::Arc::clone(&plugin.client_snapshot_arc);
+    let coordinator = std::sync::Arc::clone(&plugin.candidate_refresh_coordinator_arc);
     let ctx = ctx.clone();
     tokio::spawn(async move {
+        let path = tmux_path.get_or_init(find_tmux).await.clone();
+        if retry_immediately {
+            refresh_candidate_locations_for_path(
+                path.as_deref(),
+                &ctx,
+                &last_hash,
+                &client_snapshot,
+                &coordinator,
+            )
+            .await;
+        }
         loop {
             tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
             refresh_candidate_locations_for_path(
@@ -1566,6 +1623,7 @@ async fn start_candidate_poll(plugin: &Tmux, ctx: &Context) {
                 &ctx,
                 &last_hash,
                 &client_snapshot,
+                &coordinator,
             )
             .await;
         }
@@ -1700,8 +1758,8 @@ async fn tab_new(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) ->
             ctx.log(
                 "warn",
                 &format!(
-                    "[tmux] new-window -t {} failed ({}), retrying without -c",
-                    session_target, err
+                    "[tmux] new-window failed with cwd; retrying without cwd detail_bytes={}",
+                    err.len()
                 ),
             );
             let bare = [
@@ -1717,7 +1775,10 @@ async fn tab_new(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) ->
                 Err(err) => {
                     ctx.log(
                         "warn",
-                        &format!("[tmux] new-window -t {} failed: {}", session_target, err),
+                        &format!(
+                            "[tmux] new-window failed status=error detail_bytes={}",
+                            err.len()
+                        ),
                     );
                     None
                 }
@@ -1733,13 +1794,185 @@ async fn tab_new(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) ->
     .await
 }
 
-async fn tab_close(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
-    // Target the session directly: tmux resolves a bare session name to its
-    // active window, which is exactly the window every client attached to that
-    // session is viewing. This avoids a fragile `display-message -c <tty>`
-    // round-trip (the previous approach), whose failure made the host fall
-    // back to ⌘W and quit the whole terminal app instead of closing the window.
-    run_tmux_default(tmux_path, &["kill-window", "-t", &client.session])
+async fn pane_split(
+    tmux_path: Option<&str>,
+    ctx: &Context,
+    client: &TmuxClient,
+    vertical: bool,
+) -> bool {
+    let Some(pane_target) = trimmed(
+        run_tmux_default(
+            tmux_path,
+            &["display-message", "-c", &client.tty, "-p", "#{pane_id}"],
+        )
+        .await,
+    ) else {
+        ctx.log("warn", "[tmux] split-window could not resolve current pane");
+        return false;
+    };
+    let current_path = trimmed(
+        run_tmux_default(
+            tmux_path,
+            &[
+                "display-message",
+                "-c",
+                &client.tty,
+                "-p",
+                "#{pane_current_path}",
+            ],
+        )
+        .await,
+    );
+    // User-facing orientation names describe the resulting pane geometry.
+    // Tmux's `-h` means "split the window horizontally", which creates a
+    // vertical divider and side-by-side panes; `-v` creates stacked panes.
+    let split_flag = if vertical { "-h" } else { "-v" };
+    let orientation = if vertical { "vertical" } else { "horizontal" };
+    let mut attempt: Vec<String> = vec![
+        "split-window".into(),
+        split_flag.into(),
+        "-P".into(),
+        "-F".into(),
+        "#{pane_id}".into(),
+        "-t".into(),
+        pane_target.clone(),
+    ];
+    if let Some(ref path) = current_path {
+        attempt.push("-c".into());
+        attempt.push(path.clone());
+    }
+    let created = match run_tmux_capture(
+        tmux_path,
+        &attempt.iter().map(String::as_str).collect::<Vec<_>>(),
+        Duration::from_secs(2),
+    )
+    .await
+    {
+        Ok(out) => trimmed(Some(out)),
+        Err(err) if current_path.is_some() => {
+            ctx.log(
+                "warn",
+                &format!(
+                    "[tmux] split-window failed with cwd; retrying without cwd \
+                     orientation={} detail_bytes={}",
+                    orientation,
+                    err.len()
+                ),
+            );
+            let bare = [
+                "split-window",
+                split_flag,
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                &pane_target,
+            ];
+            match run_tmux_capture(tmux_path, &bare, Duration::from_secs(2)).await {
+                Ok(out) => trimmed(Some(out)),
+                Err(err) => {
+                    ctx.log(
+                        "warn",
+                        &format!(
+                            "[tmux] split-window failed orientation={} detail_bytes={}",
+                            orientation,
+                            err.len()
+                        ),
+                    );
+                    None
+                }
+            }
+        }
+        Err(err) => {
+            ctx.log(
+                "warn",
+                &format!(
+                    "[tmux] split-window failed orientation={} detail_bytes={}",
+                    orientation,
+                    err.len()
+                ),
+            );
+            None
+        }
+    };
+    let Some(created) = created else { return false };
+    let _ = created;
+    ctx.log_fields(
+        "debug",
+        "[tmux] pane split",
+        BTreeMap::from([("orientation".to_string(), orientation.to_string())]),
+    );
+    true
+}
+
+async fn tab_close(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) -> bool {
+    // Pin the kill to the EXACT window the focused client displays, resolved
+    // from its own tty, rather than the session's ambiguous "current window".
+    // `kill-window -t <session>` is correct only when the session's
+    // current-window pointer matches what *this* client shows — a second client
+    // on the same session, a grouped session, or a same-named session on another
+    // socket can leave them diverged, so `x` closed a window the user wasn't
+    // looking at ("sometimes closes the wrong tab"). The client's `#{window_id}`
+    // (`@N`, unique + stable across index renumbering) removes that ambiguity.
+    //
+    // Fall back to `-t <session>` when the tty lookup fails so a transient
+    // `display-message` error still closes *a* window rather than dropping to
+    // the host's ⌘W fallback (which quits the whole terminal app).
+    let window_id = trimmed(
+        run_tmux_default(
+            tmux_path,
+            &["display-message", "-c", &client.tty, "-p", "#{window_id}"],
+        )
+        .await,
+    );
+    let target = window_id.clone().unwrap_or_else(|| client.session.clone());
+    let ok = run_tmux_default(tmux_path, &["kill-window", "-t", &target])
+        .await
+        .is_some();
+    ctx.log_fields(
+        "debug",
+        "[tmux] tab close",
+        BTreeMap::from([
+            (
+                "resolved_window_id".to_string(),
+                window_id.is_some().to_string(),
+            ),
+            ("ok".to_string(), ok.to_string()),
+        ]),
+    );
+    ok
+}
+
+async fn pane_close(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) -> bool {
+    let Some(pane_id) = trimmed(
+        run_tmux_default(
+            tmux_path,
+            &["display-message", "-c", &client.tty, "-p", "#{pane_id}"],
+        )
+        .await,
+    ) else {
+        ctx.log("warn", "[tmux] pane close could not resolve current pane");
+        return false;
+    };
+    let ok = run_tmux_default(tmux_path, &["kill-pane", "-t", &pane_id])
+        .await
+        .is_some();
+    ctx.log_fields(
+        "debug",
+        "[tmux] pane close",
+        BTreeMap::from([("ok".to_string(), ok.to_string())]),
+    );
+    ok
+}
+
+/// `cmd+[` / `cmd+]`: cycle the active pane of the client's current window.
+/// `:.+` / `:.-` are tmux's pane-relative selectors (the built-in `o`
+/// gesture), wrapping at the ends. Scoped to `<session>:` so the cycle
+/// targets the window this client is showing, mirroring `tab_adjacent`.
+async fn pane_select(tmux_path: Option<&str>, client: &TmuxClient, direction: &str) -> bool {
+    let selector = if direction == "next" { ".+" } else { ".-" };
+    let target = format!("{}:{}", client.session, selector);
+    run_tmux_default(tmux_path, &["select-pane", "-t", &target])
         .await
         .is_some()
 }
@@ -1784,9 +2017,8 @@ async fn perform_source_action(
         ctx.log(
             "warn",
             &format!(
-                "[tmux] source_action {} unhandled: no tmux client hosted by pid={} | {}",
+                "[tmux] source_action {} unhandled: no hosted tmux client | {}",
                 req.name,
-                pid,
                 client_resolution_diag(pid, &clients, &pmap)
             ),
         );
@@ -1799,18 +2031,24 @@ async fn perform_source_action(
         "tab_first" => tab_extreme(tmux_path, &client, "first").await,
         "tab_last" => tab_extreme(tmux_path, &client, "last").await,
         "tab_new" => tab_new(tmux_path, ctx, &client).await,
-        "tab_close" => tab_close(tmux_path, &client).await,
+        "tab_close" => tab_close(tmux_path, ctx, &client).await,
         "tab_move_next" => tab_move(tmux_path, &client, "next").await,
         "tab_move_previous" => tab_move(tmux_path, &client, "previous").await,
+        "pane_next" => pane_select(tmux_path, &client, "next").await,
+        "pane_previous" => pane_select(tmux_path, &client, "previous").await,
+        "pane_split_vertical" => pane_split(tmux_path, ctx, &client, true).await,
+        "pane_split_horizontal" => pane_split(tmux_path, ctx, &client, false).await,
+        "pane_close" => pane_close(tmux_path, ctx, &client).await,
         "app_reload" => reload_client(tmux_path, &client).await,
         _ => return SourceActionResponse::unhandled(),
     };
-    ctx.log(
+    ctx.log_fields(
         "debug",
-        &format!(
-            "[tmux] source_action {} client_tty={} session={} ok={}",
-            req.name, client.tty, client.session, ok
-        ),
+        "[tmux] source action",
+        BTreeMap::from([
+            ("action".to_string(), req.name.clone()),
+            ("ok".to_string(), ok.to_string()),
+        ]),
     );
     // A tmux client hosts the focused terminal, so this source owns the
     // action either way: a failed tmux command must report `failed` (not
@@ -1911,8 +2149,7 @@ fn resolve_response(
     ctx: &Context,
 ) -> ResolveResponse {
     let mut fields = BTreeMap::new();
-    fields.insert("target".to_string(), target.to_string());
-    fields.insert("tty".to_string(), tty.to_string());
+    fields.insert("used_client".to_string(), (!tty.is_empty()).to_string());
     match terminal_pid {
         Some(tp) => {
             fields.insert("terminal_pid".to_string(), tp.to_string());
@@ -2043,10 +2280,7 @@ async fn restore_navigation(
             .await
             .is_some();
     if !switched {
-        ctx.log(
-            "warn",
-            &format!("[tmux] navigation restore failed target={target}"),
-        );
+        ctx.log("warn", "[tmux] navigation restore failed");
         return SourceActionResponse::failed(None).navigation_url(request.url.clone());
     }
 
@@ -2070,14 +2304,18 @@ async fn restore_navigation(
             }
         }
     };
-    ctx.log(
+    ctx.log_fields(
         "debug",
-        &format!(
-            "[tmux] navigation restored kind={kind} target={target} pid={}",
-            terminal_pid
-                .map(|pid| pid.to_string())
-                .unwrap_or_else(|| "nil".to_string())
-        ),
+        "[tmux] navigation restored",
+        BTreeMap::from([
+            ("kind".to_string(), kind),
+            (
+                "target_pid".to_string(),
+                terminal_pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "nil".to_string()),
+            ),
+        ]),
     );
     SourceActionResponse::performed(terminal_pid).navigation_url(request.url.clone())
 }
@@ -2101,17 +2339,15 @@ async fn activate(plugin: &Tmux, ctx: &Context, req: &ActivateRequest) {
                 .await
                 .is_some()
         }
-        Some(TargetAction::Link { text }) => open_link(&text),
+        Some(TargetAction::Link { text }) => open_link(&text).await,
         None => false,
     };
     if !ok {
-        let mut fields = BTreeMap::new();
-        fields.insert("target_id".to_string(), target_id.to_string());
-        ctx.log_fields("debug", "[tmux] activate dropped", fields);
+        ctx.log("debug", "[tmux] activate dropped");
     }
 }
 
-fn open_link(text: &str) -> bool {
+async fn open_link(text: &str) -> bool {
     if text.is_empty() {
         return false;
     }
@@ -2121,18 +2357,8 @@ fn open_link(text: &str) -> bool {
     let suffix = OnceLock::new();
     let re: &Regex = suffix.get_or_init(|| Regex::new(r"(?::\d+){1,2}$").unwrap());
     let target = re.replace(&expanded, "").into_owned();
-    // Fire-and-forget: `open` returns immediately and the launched app
-    // outlives this child handle. `spawn()` itself is synchronous (no
-    // `.await`); we only care that the process started, mirroring the
-    // previous fire-and-forget behavior. tokio does not `kill_on_drop`
-    // by default, so dropping the `Child` here does not reap the
-    // spawned `open`.
-    tokio::process::Command::new("open")
-        .arg(target)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
+    let argv = ["/usr/bin/open".to_string(), target];
+    run_local(&argv, Duration::from_secs(5)).await.ok
 }
 
 fn expand_tilde(text: &str) -> String {
@@ -2379,14 +2605,106 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
         assert!(lines.contains(&"play\t1\tshell\tzsh\t/Users/ab/play"));
     }
 
+    #[test]
+    fn aggregate_inventory_clears_confirmed_absent_servers() {
+        let absent = CliResult {
+            stderr: "no server running on /private/tmp/tmux-501/default".to_string(),
+            status: 1,
+            ..CliResult::default()
+        };
+        assert_eq!(
+            classify_tmux_aggregate(&[absent], false),
+            TmuxAggregate::Absent
+        );
+    }
+
+    #[test]
+    fn aggregate_inventory_preserves_everything_on_any_transient_failure() {
+        let successful = CliResult {
+            ok: true,
+            stdout: "work\t1\teditor".to_string(),
+            status: 0,
+            ..CliResult::default()
+        };
+        let timeout = CliResult {
+            stderr: "timed out after 2000ms".to_string(),
+            status: 124,
+            ..CliResult::default()
+        };
+        assert_eq!(
+            classify_tmux_aggregate(&[successful, timeout], false),
+            TmuxAggregate::TransientFailure
+        );
+    }
+
+    #[test]
+    fn aggregate_inventory_keeps_live_outputs_when_other_servers_are_absent() {
+        let successful = CliResult {
+            ok: true,
+            stdout: "work\t1\teditor".to_string(),
+            status: 0,
+            ..CliResult::default()
+        };
+        let absent = CliResult {
+            stderr: "error connecting to /tmp/tmux-501/old (No such file or directory)".to_string(),
+            status: 1,
+            ..CliResult::default()
+        };
+        assert_eq!(
+            classify_tmux_aggregate(&[successful, absent], false),
+            TmuxAggregate::Output("work\t1\teditor".to_string())
+        );
+    }
+
     // ---- Warm-location contract ------------------------------------------
     //
     // The dedup gate in `refresh_candidate_locations_for_path` is the
-    // load-bearing invariant that prevents unchanged tmux polls from
+    // load-bearing invariant that prevents unchanged tmux refreshes from
     // rewriting the warm cache. These tests pin it down: any future
     // refactor that breaks them is also re-introducing the original
     // symptom (user opens flashlight and sees stale or incomplete tmux
-    // candidates until a later refresh catches up).
+    // candidates after a refresh catches up).
+
+    #[tokio::test]
+    async fn candidate_refresh_coordinator_serializes_overlapping_refreshes() {
+        let coordinator = std::sync::Arc::new(CandidateRefreshCoordinator::default());
+        let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
+        let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel();
+        let first_coordinator = std::sync::Arc::clone(&coordinator);
+        let first = tokio::spawn(async move {
+            first_coordinator
+                .run(async move {
+                    let _ = first_started_tx.send(());
+                    let _ = release_first_rx.await;
+                })
+                .await;
+        });
+        first_started_rx.await.expect("first refresh started");
+
+        let (second_started_tx, mut second_started_rx) = tokio::sync::oneshot::channel();
+        let second_coordinator = std::sync::Arc::clone(&coordinator);
+        let second = tokio::spawn(async move {
+            second_coordinator
+                .run(async move {
+                    let _ = second_started_tx.send(());
+                })
+                .await;
+        });
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut second_started_rx)
+                .await
+                .is_err(),
+            "the second refresh must not begin while the first owns the coordinator"
+        );
+        release_first_tx.send(()).expect("release first refresh");
+        first.await.expect("first refresh task");
+        tokio::time::timeout(Duration::from_secs(1), &mut second_started_rx)
+            .await
+            .expect("second refresh started after release")
+            .expect("second refresh signal");
+        second.await.expect("second refresh task");
+    }
 
     fn fake_candidate(target: &str, name: &str, pid: i64) -> Candidate {
         let payload = TmuxPayload {
@@ -2416,7 +2734,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             a, b,
             "identical candidate vectors must hash identically — \
              otherwise the dedup gate keeps re-emitting and the host \
-             cache churns on every poll"
+             cache churns on every refresh"
         );
     }
 
@@ -2445,67 +2763,64 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             hash_candidates(&before),
             hash_candidates(&after),
             "pid is part of the hash because the host uses it for app \
-             activation — a pid drift across polls must trigger an emit"
+             activation — a pid drift across refreshes must trigger an emit"
         );
     }
 
-    /// The plugin must not override `candidate_query`. The default trait
-    /// method returns `CandidateQueryResponse::keep()`, which the
-    /// host treats as "serve from the warm locations without blocking" —
-    /// that is the entire point of the warm-location contract.
-    /// This test reaches into the generated trait via a struct that
-    /// implements `FlashPlugin` and confirms `candidate_query` falls
-    /// back to the default (no method body declared on `Tmux`).
-    ///
-    /// If a future change adds an `async fn candidate_query` to the
-    /// `impl FlashPlugin for Tmux` block, this test still compiles —
-    /// the assertion is in the runtime behavior: any candidate_query
-    /// that does subprocess work would re-introduce the session-time lag the
-    /// user complained about. The companion AGENTS.md note ("Warm-locations
-    /// contract") is the human-readable guardrail.
     #[test]
-    fn tmux_plugin_uses_default_candidate_query() {
-        // The default response carries neither `candidates` nor
-        // `source_id` — both are `None` so the wire frame serializes
-        // to an empty object. The host interprets that as "use the
-        // warm locations you already have."
-        let response = flash_plugin::CandidateQueryResponse::keep();
-        assert!(
-            response.candidates.is_none(),
-            "keep() must not carry inline candidates — that would \
-             defeat the warm-locations fast path"
-        );
-        assert!(response.source_id.is_none());
+    fn hash_candidates_diverges_on_current_location_change() {
+        let before = vec![fake_candidate("work:1", "editor", 1356)];
+        let after = vec![fake_candidate("work:1", "editor", 1356).current_location(true)];
+
+        assert_ne!(hash_candidates(&before), hash_candidates(&after));
+    }
+
+    #[test]
+    fn hash_candidates_diverges_on_routing_payload_change() {
+        let before = vec![fake_candidate("work:1", "editor", 1356)];
+        let payload = TmuxPayload {
+            tmux_target: "work:1".to_string(),
+            tmux_client_tty: "/dev/ttys999".to_string(),
+            client_pid: Some(42),
+            terminal_pid: Some(1356),
+        };
+        let after = vec![fake_candidate("work:1", "editor", 1356).payload_json(&payload)];
+
+        assert_ne!(hash_candidates(&before), hash_candidates(&after));
     }
 }
 
 // ---- Plugin glue ------------------------------------------------------------
 
 struct Tmux {
-    tmux_path: tokio::sync::OnceCell<Option<String>>,
+    tmux_path: std::sync::Arc<tokio::sync::OnceCell<Option<String>>>,
     target_actions: Mutex<HashMap<String, TargetAction>>,
     /// Latest eager `list-clients` + process-tree sample. Source actions
     /// need the focused tmux client, but they should not fan out across
     /// every tmux socket on the hot key path when the poller already did
     /// that work.
     client_snapshot_arc: std::sync::Arc<Mutex<ClientSnapshot>>,
-    /// Hash of the last snapshot we emitted to the host. Wrapped in an
-    /// `Arc` so the background poll task can hold it alongside the
-    /// plugin instance — both reach for the same Mutex, and the dedup
-    /// invariant requires a single source of truth.
+    /// Hash of the last snapshot we emitted to the host. Shared by the poller
+    /// and event-triggered refreshes so the dedup invariant has one source of
+    /// truth.
     last_locations_hash_arc: std::sync::Arc<Mutex<Option<u64>>>,
+    /// Serializes the complete build → hash → publish cycle shared by startup,
+    /// the one-second poll, and push events. Without it, an older slow refresh
+    /// can finish after a newer one and overwrite the warm store with stale rows.
+    candidate_refresh_coordinator_arc: std::sync::Arc<CandidateRefreshCoordinator>,
 }
 
 impl Tmux {
-    /// Accessor used by [`refresh_candidate_locations`] when called with
-    /// `&self`. The poll task takes an owned `Arc` instead so it
-    /// outlives the plugin trait method's borrow.
     fn last_locations_hash(&self) -> &Mutex<Option<u64>> {
         &self.last_locations_hash_arc
     }
 
     fn client_snapshot(&self) -> &Mutex<ClientSnapshot> {
         &self.client_snapshot_arc
+    }
+
+    fn candidate_refresh_coordinator(&self) -> &CandidateRefreshCoordinator {
+        &self.candidate_refresh_coordinator_arc
     }
 
     /// The tmux binary path, resolved (and cached) on first use via `find_tmux()`.
@@ -2518,50 +2833,49 @@ impl Tmux {
 flash_plugin::plugin!(Tmux);
 
 impl FlashPlugin for Tmux {
-    /// On startup we run one immediate `build_candidates` so the warm
-    /// locations are populated before the user can press `f`, then we
-    /// hand the freshness loop off to `start_candidate_poll`.
-    ///
-    /// We intentionally do **not** override `candidate_query` (the
-    /// default returns `CandidateQueryResponse::keep()`). The
-    /// previous implementation ran `build_candidates` inline inside the
-    /// RPC handler, which gave the user a 2-8 s wait on every
-    /// flashlight open and — on timeout — silently fell back to
-    /// stale warm locations. See the module-level docs for the invariant.
     async fn on_start(&self, ctx: Context) {
-        if self.resolved_tmux_path().await.is_none() {
-            ctx.log("warn", "[tmux] tmux binary not found");
+        let initial = tokio::time::timeout(STARTUP_WARM_BUDGET, async {
+            if self.resolved_tmux_path().await.is_none() {
+                ctx.log("warn", "[tmux] tmux binary not found");
+            }
+            refresh_candidate_locations(self, &ctx).await;
+        })
+        .await;
+        if initial.is_err() {
+            ctx.log_fields(
+                "warn",
+                "[tmux] initial warm catalog timed out",
+                BTreeMap::from([
+                    (
+                        "timeout_ms".to_string(),
+                        STARTUP_WARM_BUDGET.as_millis().to_string(),
+                    ),
+                    ("retry".to_string(), "immediate_background".to_string()),
+                ]),
+            );
         }
-        // First build uses the *warm* budget so cold sockets (a tmux
-        // server the user hasn't talked to since boot, or one that
-        // page-faulted in) get a real chance to respond before we
-        // hand the warm locations off as "stable". Otherwise the user would
-        // open flashlight a beat after Flash starts, see only the
-        // fast socket's windows, and have to wait for the next 1 s
-        // poll to fold in the rest.
-        refresh_candidate_locations_warm(self, &ctx).await;
-        // Immediate second build with the steady budget. Any sockets
-        // that woke up during the warm build are now hot, so this run
-        // either stores a delta (more windows) or no-ops via the
-        // hash dedup. Net effect: the warm cache is provably stable when
-        // we hand off to the poll.
-        refresh_candidate_locations(self, &ctx).await;
-        start_candidate_poll(self, &ctx).await;
+        let degraded_initial = !ctx.has_locations(SOURCE_ID);
+        if degraded_initial {
+            ctx.log_fields(
+                "warn",
+                "[tmux] initial warm catalog degraded",
+                BTreeMap::from([
+                    ("outcome".to_string(), "empty_without_last_good".to_string()),
+                    ("candidates".to_string(), "0".to_string()),
+                    ("retry".to_string(), "immediate_background".to_string()),
+                ]),
+            );
+            ctx.set_locations(SOURCE_ID, Vec::new());
+        }
+        start_candidate_poll(self, &ctx, degraded_initial);
     }
 
-    /// Push events refresh the warm locations immediately. The 1 s poll keeps
-    /// us in sync on its own, but `core:focus.changed` is the cheapest
-    /// possible signal that the user is about to interact with a
-    /// terminal — taking the refresh hit here means the warm locations are
-    /// guaranteed-fresh when they open flashlight from that app, even
-    /// if the poll happened to fire 900 ms ago.
+    /// Push events refresh the warm locations immediately. The poll keeps the
+    /// store current between host-visible interaction boundaries.
     async fn on_event(&self, ctx: Context, event: Event) {
         if matches!(
             event.name.as_str(),
-            "core:focus.changed"
-                | "core:flash.started"
-                | "core:apps.terminated"
-                | "core:flashlight.opened"
+            "core:focus.changed" | "core:apps.terminated"
         ) {
             refresh_candidate_locations(self, &ctx).await;
         }
@@ -2603,10 +2917,13 @@ impl FlashPlugin for Tmux {
 
 fn main() {
     let plugin = Tmux {
-        tmux_path: tokio::sync::OnceCell::new(),
+        tmux_path: std::sync::Arc::new(tokio::sync::OnceCell::new()),
         target_actions: Mutex::new(HashMap::new()),
         client_snapshot_arc: std::sync::Arc::new(Mutex::new(ClientSnapshot::default())),
         last_locations_hash_arc: std::sync::Arc::new(Mutex::new(None)),
+        candidate_refresh_coordinator_arc: std::sync::Arc::new(
+            CandidateRefreshCoordinator::default(),
+        ),
     };
     run(plugin);
 }

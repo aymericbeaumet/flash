@@ -1,5 +1,5 @@
 # Plugins run on a small (2-worker) tokio runtime shared by every async task —
-# events, candidate queries, hint discovery. A single blocking syscall pins one
+# events, catalog refreshes, hint discovery. A single blocking syscall pins one
 # of those worker threads and stalls every other in-flight operation, which is
 # exactly how a flashlight open ends up waiting hundreds of ms on one plugin.
 #

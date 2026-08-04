@@ -154,6 +154,75 @@ extension AppDelegate {
       })
   }
 
+  /// `cmd+[` / `cmd+]`: cycle the active split inside the focused window.
+  /// Routed through the `pane_next`/`pane_previous` source action — only tmux
+  /// claims it today (`select-pane -t :.+`/`.-`). No browser or native window
+  /// has an in-window split to cycle, so every non-terminal app falls back to
+  /// re-emitting the native ⌘] / ⌘[ chord (history / back-forward in most
+  /// apps), keeping the binding transparent off-terminal. The tmux plugin's
+  /// manifest scopes the chords to terminal bundles, so this fallback only
+  /// fires when a terminal is focused but no tmux client hosts it.
+  func paneNavigateInNormalMode(direction: SourceTabDirection, repeatCount: Int) {
+    let actionName = direction == .next ? "pane_next" : "pane_previous"
+    performTabSourceAction(
+      name: actionName,
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        if direction == .next {
+          registry.perform(.paneNext, in: context, completion: completion)
+        } else {
+          registry.perform(.panePrev, in: context, completion: completion)
+        }
+      },
+      fallback: { [weak self] _, count in
+        let key: CGKeyCode =
+          direction == .next
+          ? CGKeyCode(kVK_ANSI_RightBracket) : CGKeyCode(kVK_ANSI_LeftBracket)
+        self?.sendNormalModeKey(key, flags: .maskCommand, repeatCount: count)
+      })
+  }
+
+  /// Create a split inside the focused terminal when a source explicitly owns
+  /// that pane model. Today tmux is the only owner. There is no generic
+  /// fallback chord because `cmd+d` means unrelated things in terminal hosts
+  /// and non-terminal apps; if tmux is not detected, the mapping is a no-op
+  /// with a diagnostic.
+  func paneSplitInNormalMode(vertical: Bool, repeatCount: Int) {
+    let actionName = vertical ? "pane_split_vertical" : "pane_split_horizontal"
+    performTabSourceAction(
+      name: actionName,
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        if vertical {
+          registry.perform(.paneSplitVertical, in: context, completion: completion)
+        } else {
+          registry.perform(.paneSplitHorizontal, in: context, completion: completion)
+        }
+      },
+      fallback: { [weak self] context, _ in
+        FlashLog.debug(
+          "[normal_mode] \(actionName) unsupported bundle=\(context.bundleIdentifier)")
+        self?.applyModeOverlay()
+      })
+  }
+
+  /// Close the active split inside the focused terminal. This is intentionally
+  /// distinct from `tab_close`: tmux `cmd+w` should close the current pane,
+  /// while normal-mode `x` still closes the tmux window.
+  func paneCloseInNormalMode(repeatCount: Int) {
+    performTabSourceAction(
+      name: "pane_close",
+      repeatCount: repeatCount,
+      action: { registry, context, completion in
+        registry.perform(.paneClose, in: context, completion: completion)
+      },
+      fallback: { [weak self] context, _ in
+        FlashLog.debug(
+          "[normal_mode] pane_close unsupported bundle=\(context.bundleIdentifier)")
+        self?.applyModeOverlay()
+      })
+  }
+
   /// Bundles whose tab strip honours `⌘⇧Page Up / ⌘⇧Page Down` for
   /// moving the focused tab left / right. Firefox (release +
   /// developer edition) is the canonical example; other Mozilla-based

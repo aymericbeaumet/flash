@@ -148,12 +148,22 @@ extension AppDelegate {
         )
         return
       }
+      // Left-click hints (`f`) also label the Flash status bar's `#[link=…]`
+      // runs, but only on the bar sitting on the active window's screen — so
+      // the visible links get a hint without duplicating them across every
+      // mirrored bar.
+      let statusBarTargets: [JumpTarget] =
+        commitBehavior == .click && action == .leftClick
+        ? self.statusBarLinkTargets(forActiveWindowFrame: context.frontWindowFrame)
+        : []
+
       if hints.isEmpty {
         // Empty result is also the symptom of accessibility
         // permission being revoked between activations: AX walks
         // silently return [] when the process is no longer trusted.
         // Cheap to re-check — and we want the permission banner to
-        // appear instead of the user staring at nothing.
+        // appear instead of the user staring at nothing. Surface it
+        // regardless of any status-bar links (which don't need AX).
         if !PermissionCheck.isAccessibilityTrusted {
           self.cachedAccessibilityTrusted = false
           self.promptForAccessibility()
@@ -161,22 +171,96 @@ extension AppDelegate {
             "[activation] accessibility_revoked pid=\(context.processID) "
               + "bundle=\(context.bundleIdentifier)"
           )
-        } else {
+          self.applyModeOverlay()
+          return
+        }
+        if statusBarTargets.isEmpty {
           FlashLog.debug(
             "[activation] no_targets pid=\(context.processID) "
               + "bundle=\(context.bundleIdentifier)"
           )
+          self.applyModeOverlay()
+          return
         }
-        self.applyModeOverlay()
-        return
       }
-      self.currentHints = hints
+      // Re-assign labels over the combined set so the app targets and the
+      // status-bar links share one prefix-free alphabet (app targets keep the
+      // shorter labels — they come first).
+      let displayHints =
+        statusBarTargets.isEmpty
+        ? hints
+        : self.assignHints(hints.map(\.target) + statusBarTargets)
+      self.currentHints = displayHints
       self.currentPrefix = ""
-      self.overlay.display(hints: hints)
+      self.overlay.display(hints: displayHints)
       FlashLog.debug(
         "[activation] displayed pid=\(context.processID) "
-          + "bundle=\(context.bundleIdentifier) hints=\(hints.count)"
+          + "bundle=\(context.bundleIdentifier) hints=\(displayHints.count) "
+          + "status_links=\(statusBarTargets.count)"
       )
+    }
+  }
+
+  /// Assign prefix-free hint labels over `targets` using the active alphabet —
+  /// the same policy `AppMonitor` uses, so a re-assembled hint set (app targets
+  /// + status-bar links) stays consistent with a plain discovery result.
+  private func assignHints(_ targets: [JumpTarget]) -> [AssignedHint] {
+    let resolved = config.resolvedAlphabet
+    return HintAssigner.assign(
+      targets: targets,
+      alphabet: resolved.chars,
+      leftHand: resolved.leftHand,
+      keyScores: resolved.keyScores,
+      minLength: config.hints.minLength)
+  }
+
+  /// Hint targets for the Flash status bar's `#[link=…]` runs on the bar that
+  /// sits on the active window's screen. The rects are captured each render
+  /// (`configureModeBadge`) in screen coordinates; here we pick the screen the
+  /// focused window predominantly occupies and turn each link run into a
+  /// `JumpTarget` whose commit opens the URL (mirroring `StatusBarClickView`).
+  /// Returns `[]` when the bar is hidden or the active window is on a screen
+  /// without a bar.
+  private func statusBarLinkTargets(forActiveWindowFrame windowFrame: CGRect) -> [JumpTarget] {
+    let byScreen = overlay.statusBarLinkRectsByScreen
+    guard !byScreen.isEmpty, !windowFrame.isNull else { return [] }
+    func overlapArea(_ a: CGRect, _ b: CGRect) -> CGFloat {
+      let r = a.intersection(b)
+      return r.isNull ? 0 : r.width * r.height
+    }
+    guard
+      let best = byScreen.max(by: {
+        overlapArea($0.screenFrame, windowFrame) < overlapArea($1.screenFrame, windowFrame)
+      }),
+      overlapArea(best.screenFrame, windowFrame) > 0
+    else { return [] }
+    return best.links.enumerated().map { idx, link in
+      let url = link.url
+      // A short, leading-edge chip: the 2pt-high frame makes `chipFrame` centre
+      // the chip on the bar band's midline and anchor it to the run's leading
+      // edge (the run is wider than a chip), so the label lands over the link.
+      let frame = CGRect(
+        x: link.rect.minX,
+        y: link.rect.midY - 1,
+        width: max(link.rect.width, 1),
+        height: 2)
+      return JumpTarget(
+        id: "statusbar_link_\(idx)_\(url.absoluteString)",
+        frame: frame,
+        role: "AXLink",
+        url: url.absoluteString,
+        activate: { _ in
+          // `activates = true` brings the handling app forward and focuses it,
+          // matching the bar's own click handler; a background `open` would
+          // leave keyboard focus on the previously active app.
+          let configuration = NSWorkspace.OpenConfiguration()
+          configuration.activates = true
+          NSWorkspace.shared.open(url, configuration: configuration, completionHandler: nil)
+          return true
+        },
+        entersInsertMode: false,
+        transfersFocus: true,
+        providerID: "statusbar")
     }
   }
 

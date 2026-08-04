@@ -102,7 +102,7 @@ extension AppMonitor {
       let currentToken = self.dirtyTokens[model.pid] ?? 0
       guard currentToken == token, self.configRevision == revision else { return }
       guard NSWorkspace.shared.frontmostApplication?.processIdentifier == model.pid else { return }
-      self.runModelRefresh(pid: model.pid, reason: "maintenance", completion: nil)
+      self.scheduleModelRefresh(for: model.pid, reason: "maintenance")
     }
     maintenanceRefresh[model.pid] = work
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: work)
@@ -140,6 +140,18 @@ extension AppMonitor {
     let cfg = snapshotConfig()
     guard let context = makeContext(for: app) else {
       completion?(nil)
+      return
+    }
+    if completion == nil,
+      !Self.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: context.bundleIdentifier)
+    {
+      FlashLog.debug(
+        "[ax] model_refresh_skipped",
+        fields: [
+          "pid": "\(pid)",
+          "bundle": context.bundleIdentifier,
+          "reason": reason,
+        ])
       return
     }
     if registry.anyVolatileSourceApplies(to: context) {

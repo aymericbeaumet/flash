@@ -91,8 +91,11 @@ extension NormalModeDispatcher {
     return rest.split(whereSeparator: { $0.isWhitespace }).map(String.init)
   }
 
+  /// Recognize the flashlight command only after its separating whitespace has
+  /// been typed. Bare `:flashlight` still belongs to top-level command
+  /// completion because the verb is not syntactically committed yet.
   static func commandLineCandidateQuery(_ raw: String) -> String? {
-    commandLineQuery(raw, name: "flashlight", acceptsBareCommand: true)
+    commandLineQuery(raw, name: "flashlight")
   }
 
   struct CandidateFinderQuery: Equatable {
@@ -156,8 +159,7 @@ extension NormalModeDispatcher {
 
   private static func commandLineQuery(
     _ raw: String,
-    name: String,
-    acceptsBareCommand: Bool
+    name: String
   ) -> String? {
     var body = raw.trimmingCharacters(in: .newlines)
     body.removeLeadingWhitespace()
@@ -166,9 +168,6 @@ extension NormalModeDispatcher {
       body.removeLeadingWhitespace()
     }
 
-    if acceptsBareCommand, body.lowercased() == name {
-      return ""
-    }
     guard body.count > name.count else { return nil }
     let nameEnd = body.index(body.startIndex, offsetBy: name.count)
     guard body[..<nameEnd].lowercased() == name else { return nil }
@@ -181,6 +180,9 @@ extension NormalModeDispatcher {
     // string editing can leak them through paste).
     var query = String(body[restStart...])
     query = String(query.drop(while: { $0 == " " || $0 == "\t" }))
+    // Preserve a leading `=` marker. It is calculator-owned syntax, not a
+    // generic flashlight-query rewrite; evaluator plugins can claim it
+    // explicitly while ordinary catalog matching still sees the marker.
     query = query.replacingOccurrences(of: "\n", with: "")
     return query
   }
@@ -280,7 +282,7 @@ extension NormalModeDispatcher {
     "write": "Save the focused document (⌘S)",
     "wq": "Save then quit",
     "print": "Print the focused document",
-    "edit": "Open the candidate finder (`:open`)",
+    "edit": "Open the flashlight candidate finder",
     "new": "Open a new window",
     "tabnew": "Open a new tab",
     "bdelete": "Close the focused window/tab",

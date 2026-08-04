@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import FlashCore
+import FlashProviders
 
 /// One `:clipboard` history row: `preview` is the one-line label rendered in
 /// the modal, `value` the full text pasted on selection. Decoded from the
@@ -53,7 +54,7 @@ extension AppDelegate {
     for effect in effects {
       switch effect {
       case .setMappingScope(let scope):
-        mappings.applyForFlashMode(scope)
+        mappings.apply(scope: scope)
       case .clearTransientHintState:
         // Reads the still-current overlay surface to tear down a command /
         // modal we are leaving, then clears hint + input state.
@@ -76,8 +77,11 @@ extension AppDelegate {
   /// Per-base-mode bookkeeping that must run before the surface is rendered.
   private func applyEnterBookkeeping(_ next: Mode) {
     // Any base-mode transition ends a transient native-surface suspension; clear
-    // it before the surface renders so capture isn't pinned off afterward.
+    // it before the surface renders so capture isn't pinned off afterward. The
+    // same goes for a pending passthrough-chord focus follow — it belongs to
+    // the NORMAL session that armed it.
     nativeSurfaceSuspended = false
+    passthroughFocusFollow = nil
     switch next {
     case .normal:
       if let context = normalModeContext() {
@@ -86,7 +90,7 @@ extension AppDelegate {
       }
     case .insert, .disabled:
       normalModeTargetPID = nil
-    case .command, .modal:
+    case .command:
       break
     }
   }
@@ -143,7 +147,7 @@ extension AppDelegate {
     updateActiveWindowBorder(reason: reason)
   }
 
-  func focusedWindowGeometryDidChange(pid: pid_t, notification: String) {
+  func activeWindowMayHaveChanged(pid: pid_t, notification: String) {
     guard let context = currentNonFlashContext(), context.processID == pid else { return }
     // A browser tab switch / navigation surfaces here (title/window AX changes)
     // without an app-focus change — re-resolve URL-scoped plugin mappings.
@@ -196,27 +200,17 @@ extension AppDelegate {
       // the border flicker off (appear-then-vanish) on every app switch and on
       // insert entry.
       scheduleAmbientLocationRecord(pid: pid, reason: "window_focus")
-      updateActiveWindowBorder(reason: notification)
-    } else {
-      beginTrackedWindowGeometryChange(reason: notification, frame: context.frontWindowFrame)
     }
-  }
-
-  func modeWillBeginWindowGeometryChange(reason: String) {
-    windowGeometryChangeInProgress = true
-    FlashLog.trace("[mode] window_geometry_begin mode=\(flashMode) reason=\(reason)")
-    // Hide the border in both modes while the window moves/resizes so the stroke
-    // doesn't visibly trail the chrome; it's redrawn when the change ends.
-    overlay.setActiveWindowBorder(around: nil)
-  }
-
-  func modeDidEndWindowGeometryChange(reason: String) {
-    windowGeometryChangeInProgress = false
-    FlashLog.trace("[mode] window_geometry_end mode=\(flashMode) reason=\(reason)")
-    updateActiveWindowBorder(reason: "window_geometry_end_\(reason)")
+    // Window AX notifications are delivered after the operation. Resolve the
+    // authoritative WindowServer frame now and replace (or clear) the stroke in
+    // one transaction; delaying behind a quiet period leaves a stale border.
+    updateActiveWindowBorder(reason: notification)
+    scheduleActiveWindowBorderReconciliation(
+      delaysMs: [Self.activeWindowBorderEventSettleDelayMs], reason: notification)
   }
 
   private func resetModeInputState() {
+    cancelCandidateFinderSessionWork()
     overlay.normalModePending = ""
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
@@ -238,9 +232,6 @@ extension AppDelegate {
       FlashLog.trace("[mode] close_modal input=candidate_finder reason=\(reason)")
       clearCandidateFinderState()
       overlay.hide()
-    case .modal:
-      FlashLog.trace("[mode] close_modal input=modal reason=\(reason)")
-      overlay.hide()
     case .hints, .normal:
       break
     }
@@ -254,8 +245,12 @@ extension AppDelegate {
     // gate against `.explicitCommand` left those mappings stuck in
     // NORMAL after the side-effect fired, so typing went to the empty
     // search bar / new tab via the system, then nothing.
+    // `.passthroughFocus` is user-driven too: it fires only inside the short
+    // window a `passthrough_modifiers` chord armed, so the mode flip still
+    // traces to an explicit keystroke.
     reason == .hintCommit || reason == .normalModeInput || reason == .lockedNormalModeInput
       || reason == .pointerClick || reason == .explicitCommand
+      || reason == .passthroughFocus
   }
 
   func focusedInputMayHaveChanged(pid: pid_t) {
@@ -265,6 +260,89 @@ extension AppDelegate {
     // must follow the focused document, which can change with no app-focus
     // change (browser tab switch / in-page navigation), so re-resolve them here.
     scheduleURLContextMappingRefresh(pid: pid)
+    completePointerInsertFocusHandoffIfReady(eventPID: pid)
+  }
+
+  /// Arm the passthrough focus follow for the NORMAL-mode target app, then
+  /// snapshot its currently focused element on the next main-loop turn. The
+  /// snapshot is what lets the fire path require that focus MOVED — an AX
+  /// read never runs on the tap's keystroke path, and a hung app can only
+  /// stall the deferred hop, not the swallow decision.
+  func armPassthroughFocusFollow() {
+    guard let pid = normalModeTargetPID else { return }
+    passthroughFocusFollow = PassthroughFocusFollow(
+      pid: pid,
+      deadline: .now() + .milliseconds(Self.passthroughFocusFollowWindowMs))
+    DispatchQueue.main.async { [weak self] in
+      guard let self, var armed = self.passthroughFocusFollow,
+        armed.pid == pid, !armed.beforeResolved
+      else { return }
+      armed.before = AXClick.focusedElement(pid: pid)
+      armed.beforeResolved = true
+      self.passthroughFocusFollow = armed
+    }
+  }
+
+  /// A `passthrough_modifiers` chord recently flowed to `pid` and the app just
+  /// fired a genuine element-focus change. If focus landed on a text input the
+  /// chord opened (⌘F find bar, ⌘K jump dialog, ⌘L URL bar), follow it into
+  /// INSERT so the next keystrokes reach the field instead of being eaten by
+  /// NORMAL capture. Focus must land on a DIFFERENT element than the arm-time
+  /// snapshot: apps like Slack keep an editable composer focused at all times,
+  /// and without the identity gate any AX churn inside the window flipped
+  /// INSERT (and its app re-activation stole focus from e.g. a browser the
+  /// user had just opened a link into). Non-qualifying events keep the window
+  /// armed; only the deadline, a swallowed key, or a mode transition disarm it.
+  func followPassthroughChordFocus(pid: pid_t) {
+    guard let armed = passthroughFocusFollow else { return }
+    guard DispatchTime.now() < armed.deadline else {
+      passthroughFocusFollow = nil
+      return
+    }
+    // Without the arm-time snapshot there is no way to tell "the chord opened
+    // this input" from "it was focused all along" — bias toward NORMAL.
+    guard armed.beforeResolved else { return }
+    guard
+      Self.passthroughFocusFollowMayFire(
+        armedPID: armed.pid,
+        eventPID: pid,
+        frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+        mode: flashMode,
+        overlayInputMode: overlay.inputMode,
+        hasHints: !currentHints.isEmpty,
+        activationInFlight: activationInFlight,
+        bundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier),
+      let current = AXClick.focusedElement(pid: pid),
+      AXClick.isTextInput(current),
+      armed.before.map({ !CFEqual($0, current) }) ?? true
+    else { return }
+    passthroughFocusFollow = nil
+    FlashLog.trace("[mode] passthrough_focus_follow pid=\(pid)")
+    enterInsertMode(reason: .passthroughFocus, targetPID: pid)
+  }
+
+  /// Pure gate for the passthrough focus follow. The pid must match the app
+  /// the chord was sent to AND still be frontmost — an app switch inside the
+  /// window keeps the mode sticky (`.focusedAppChanged` never flips modes).
+  /// Terminals are excluded because `focusedIsTextInput` reports them as
+  /// always-editable, so a chord there carries no focus signal to follow.
+  static func passthroughFocusFollowMayFire(
+    armedPID: pid_t,
+    eventPID: pid_t,
+    frontmostPID: pid_t?,
+    mode: FlashMode,
+    overlayInputMode: OverlayInputMode,
+    hasHints: Bool,
+    activationInFlight: Bool,
+    bundleIdentifier: String?
+  ) -> Bool {
+    guard armedPID == eventPID, frontmostPID == eventPID else { return false }
+    guard mode == .normal, overlayInputMode == .normal, !hasHints, !activationInFlight
+    else { return false }
+    if let bundleIdentifier, TerminalBundles.identifiers.contains(bundleIdentifier) {
+      return false
+    }
+    return true
   }
 
   /// Re-resolve URL-scoped plugin mappings for `pid` (e.g. Gmail's `o`, which
@@ -540,6 +618,7 @@ extension AppDelegate {
           + "current=\(pointerInsertHandoffToken)")
       return
     }
+    pointerInsertFocusHandoff = nil
     if pointerInsertHandoffRecaptureSuppressedUntil != nil {
       FlashLog.trace("[mode] pointer_insert_handoff_clear reason=\(reason)")
     }
@@ -549,12 +628,59 @@ extension AppDelegate {
 
   func cancelPointerInsertHandoff(reason: String) {
     let hadSuppression = pointerInsertHandoffRecaptureSuppressedUntil != nil
+    pointerInsertFocusHandoff = nil
     pointerInsertHandoffRecaptureSuppressedUntil = nil
     pointerInsertHandoffToken &+= 1
     if hadSuppression {
       normalModeRecaptureToken &+= 1
       FlashLog.trace("[mode] pointer_insert_handoff_cancel reason=\(reason)")
     }
+  }
+
+  func armPointerInsertFocusHandoff(
+    pid: pid_t?,
+    reason: InsertModeTransitionReason,
+    token: UInt64?,
+    completion: @escaping (Bool) -> Void
+  ) {
+    pointerInsertFocusHandoff = PointerInsertFocusHandoff(
+      pid: pid, reason: reason, token: token, completion: completion)
+    if completePointerInsertFocusHandoffIfReady(eventPID: pid) { return }
+
+    let generation = pointerInsertHandoffToken
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(Self.pointerInsertFocusHandoffTimeoutMs)
+    ) { [weak self] in
+      guard let self, let pending = self.pointerInsertFocusHandoff else { return }
+      guard pending.token == token, self.pointerInsertHandoffToken == generation else { return }
+      self.pointerInsertFocusHandoff = nil
+      pending.completion(false)
+    }
+  }
+
+  @discardableResult
+  func completePointerInsertFocusHandoffIfReady(eventPID: pid_t?) -> Bool {
+    guard let pending = pointerInsertFocusHandoff else { return false }
+    guard flashMode == .normal else {
+      pointerInsertFocusHandoff = nil
+      return false
+    }
+    guard pointerInsertHandoffIsCurrent(pending.token) else {
+      pointerInsertFocusHandoff = nil
+      return false
+    }
+    if let expectedPID = pending.pid, let eventPID, expectedPID != eventPID {
+      return false
+    }
+    let targetPID = pending.pid ?? eventPID ?? currentNonFlashContext()?.processID
+    guard let targetPID, targetPID > 0, AXClick.focusedIsTextInput(pid: targetPID) else {
+      return false
+    }
+    pointerInsertFocusHandoff = nil
+    FlashLog.trace("[mode] pointer_insert_focus_handoff pid=\(targetPID)")
+    enterInsertMode(reason: pending.reason, targetPID: targetPID)
+    pending.completion(true)
+    return true
   }
 
   func pointerInsertHandoffIsCurrent(_ token: UInt64?, now: Date = Date()) -> Bool {
@@ -771,14 +897,14 @@ extension AppDelegate {
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
   static let pointerInsertHandoffRecaptureSuppressionMs = 1_500
+  static let pointerInsertFocusHandoffTimeoutMs = 220
   // Brief: just long enough for the pointer monitor to turn a click into INSERT
   // before we reclaim key. Any longer and an app that spontaneously steals
   // focus would sit on it while the badge still reads NORMAL — the exact
   // "shown but not capturing" inconsistency we want to make impossible.
   static let pointerFocusLossRecaptureDeferralMs = 120
-  static let windowGeometryQuietMs = 160
-  static let activeWindowBorderTrackingIntervalMs = 50
-  static let activeWindowBorderTrackingLeewayMs = 10
+  static let activeWindowBorderEventSettleDelayMs = 80
+  static let activeWindowBorderRecoveryDelaysMs = [80, 250, 750]
   static let activeWindowBorderFrameTolerance: CGFloat = 1
 
   private static func pointerFocusLossTarget() -> String {
@@ -848,7 +974,7 @@ extension AppDelegate {
       return false
     }
     switch overlayInputMode {
-    case .commandLine, .modal, .candidateFinder:
+    case .commandLine, .candidateFinder:
       return false
     case .hints, .normal:
       break
@@ -911,7 +1037,7 @@ extension AppDelegate {
     switch overlayInputMode {
     case .hints, .normal:
       return true
-    case .commandLine, .modal, .candidateFinder:
+    case .commandLine, .candidateFinder:
       return false
     }
   }
@@ -1056,6 +1182,16 @@ extension AppDelegate {
       tabMoveInNormalMode(direction: .previous, repeatCount: repeatCount)
     case .tabMoveNext:
       tabMoveInNormalMode(direction: .next, repeatCount: repeatCount)
+    case .paneNext:
+      paneNavigateInNormalMode(direction: .next, repeatCount: repeatCount)
+    case .panePrev:
+      paneNavigateInNormalMode(direction: .previous, repeatCount: repeatCount)
+    case .paneSplitVertical:
+      paneSplitInNormalMode(vertical: true, repeatCount: repeatCount)
+    case .paneSplitHorizontal:
+      paneSplitInNormalMode(vertical: false, repeatCount: repeatCount)
+    case .paneClose:
+      paneCloseInNormalMode(repeatCount: repeatCount)
     case .tabReopen:
       tabReopenInNormalMode(repeatCount: repeatCount)
     case .historyBack:
@@ -1132,7 +1268,6 @@ extension AppDelegate {
     resetCommandLineState()
     if let candidateFinderScope {
       self.candidateFinderScope = candidateFinderScope
-      openCandidateFinderSession(scope: candidateFinderScope)
     } else {
       self.candidateFinderScope = .all
       clearCandidateFinderState()
@@ -1147,6 +1282,12 @@ extension AppDelegate {
     // so the suggestion pool is unaffected.
     let scope: CommandScope = .commandLine
     dispatchMode(.openCommand(scope: scope, restoreMode: restoreMode))
+    if let candidateFinderScope {
+      openCandidateFinderSession(scope: candidateFinderScope)
+      if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
+        prefetchNonLocationSources(forCandidateQuery: query)
+      }
+    }
     refreshCommandLine(text: command, cursorIndex: command.count)
   }
 
@@ -1263,75 +1404,300 @@ extension AppDelegate {
     return try? JSONDecoder().decode([ClipboardModalEntry].self, from: data)
   }
 
-  /// Open a flashlight session: paint instantly from the in-process synchronous
-  /// sources (apps), then pull plugin location rows live and merge them in as
-  /// they arrive. Plugins keep their locations warm in memory; the host holds no
-  /// snapshot, so every open reflects the current warm state. The synchronous
-  /// seed makes first paint instant; the parallel pull fills the rest within a
-  /// round-trip without ever blocking the runloop.
+  static var candidateFinderFirstPaintBudgetMs: Int { 150 }
+  static var candidateFinderSlowReplyWarningMs: Int { 100 }
+
+  /// Open a flashlight session behind a short, session-local fan-in barrier.
+  /// The command prompt paints immediately with no rows. Built-in applications
+  /// and every eligible plugin's in-memory location catalog are then frozen into
+  /// one deterministic snapshot and revealed exactly once. Nothing is retained
+  /// in the host after the session closes.
   func openCandidateFinderSession(scope: CandidateScope) {
     let startedNs = DispatchTime.now().uptimeNanoseconds
     candidateFinderPrecedenceTable = buildCandidateFinderPrecedenceTable()
-    seedAndFanOutCandidateFinder(scope: scope)
-    let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
-    FlashLog.trace(
-      "[candidate_finder] session_seed scope=\(scope) count=\(candidateFinderCandidates.count) "
-        + "ms=\(elapsedMs)")
-  }
-
-  /// Seed the session pool from the synchronous in-process sources and kick off
-  /// the parallel pull of plugin location rows. Bumps the session generation so
-  /// any reply still in flight from a previous seed is ignored when it lands.
-  private func seedAndFanOutCandidateFinder(scope: CandidateScope) {
     candidateFinderScope = scope
     candidateFinderSessionGeneration &+= 1
-    candidateFinderNonLocationFetched = false
-    candidateFinderCandidates = registry.synchronousCandidates(scope: scope)
+    invalidateCandidateQueryEvaluation()
+    let generation = candidateFinderSessionGeneration
+    candidateFinderFetchedNonLocationSourceIDs.removeAll()
+    candidateFinderDeferredNonLocationSnapshots.removeAll()
+    candidateFinderInitialDeadlineWork?.cancel()
+    candidateFinderInitialDeadlineWork = nil
+    candidateFinderInitialSnapshotReady = false
+    candidateFinderSubmissionDeferral.cancel()
+    candidateFinderCandidates = []
+    candidateFinderMatches = []
     candidateFinderSelectedIndex = 0
-    fanOutCandidateQueries(
-      registry.locationCandidateSources(), scope: scope,
-      generation: candidateFinderSessionGeneration)
+
+    // Built-in candidate sources join the barrier too: core.apps may still be
+    // waiting on its asynchronous resident-startup index, so it is gathered as
+    // a regular expected source instead of being frozen as a partial seed.
+    var sourcesByID: [String: FlashSource] = [:]
+    for source in registry.initialCandidateSnapshotSources() {
+      sourcesByID[source.identifier] = source
+    }
+    let sources = sourcesByID.values.sorted { $0.identifier < $1.identifier }
+    candidateFinderInitialBarrier = CandidateSnapshotBarrier(
+      generation: generation,
+      startedNs: startedNs,
+      expectedSourceIDs: sources.map(\.identifier))
+
+    let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
+    FlashLog.trace(
+      "[candidate_finder] snapshot_begin generation=\(generation) scope=\(scope) "
+        + "sources=\(sources.count) seed_ms=\(elapsedMs)")
+
+    // Let `enterCommandLineMode` render/focus the native text field first.
+    // Snapshots start on the next main turn, so even a future synchronous source
+    // cannot publish rows before the prompt has appeared.
+    DispatchQueue.main.async { [weak self] in
+      self?.startInitialCandidateSnapshots(
+        sources,
+        scope: scope,
+        generation: generation)
+    }
   }
 
-  /// Lazily pull the non-location candidate sources (emojis, search-engine
-  /// bangs, notes, …) the first time the user opts into one via an `@source`
-  /// filter or a `!`bang. They're intentionally kept out of the instant open
-  /// path — only location rows are fetched then — but must be present once the
-  /// user asks. Fans out once per session; replies merge in via the shared path.
-  func fetchNonLocationSourcesIfNeeded() {
-    guard !candidateFinderNonLocationFetched else { return }
-    candidateFinderNonLocationFetched = true
-    fanOutCandidateQueries(
-      registry.nonLocationCandidateSources(), scope: candidateFinderScope,
-      generation: candidateFinderSessionGeneration)
-  }
-
-  /// Fan `candidateQuery` out to `sources` in parallel. Each warm reply is
-  /// merged into the open pool as it arrives; a dead or slow plugin simply never
-  /// improves on what's already shown (the query times out host-side and yields
-  /// nothing). `text: ""` asks for the full warm set — the host applies its own
-  /// per-keystroke fuzzy narrowing.
-  private func fanOutCandidateQueries(
+  private func startInitialCandidateSnapshots(
     _ sources: [FlashSource],
     scope: CandidateScope,
     generation: UInt64
   ) {
+    guard generation == candidateFinderSessionGeneration,
+      let barrier = candidateFinderInitialBarrier,
+      barrier.generation == generation
+    else { return }
+
+    let elapsedMs = Int(
+      (DispatchTime.now().uptimeNanoseconds &- barrier.startedNs) / 1_000_000)
+    let remainingMs = max(0, Self.candidateFinderFirstPaintBudgetMs - elapsedMs)
+    if remainingMs == 0 {
+      finalizeInitialCandidateSnapshot(
+        generation: generation, reason: .firstPaintBudget)
+      return
+    }
+
+    let deadline = DispatchWorkItem { [weak self] in
+      self?.finalizeInitialCandidateSnapshot(
+        generation: generation, reason: .firstPaintBudget)
+    }
+    candidateFinderInitialDeadlineWork = deadline
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + .milliseconds(remainingMs),
+      execute: deadline)
+
+    guard !sources.isEmpty else {
+      finalizeInitialCandidateSnapshot(
+        generation: generation, reason: .allSourcesSettled)
+      return
+    }
+
     let env = registry.snapshotEnvironment
-    let request = CandidateQuery(scope: scope, text: "")
     for source in sources {
-      source.queryCandidates(in: env, request: request) { [weak self] candidates in
-        self?.mergeCandidateQueryResults(candidates, from: source, generation: generation)
+      let snapshotStartedNs = DispatchTime.now().uptimeNanoseconds
+      source.snapshotCandidates(in: env, scope: scope) { [weak self] candidates in
+        self?.recordInitialCandidateReply(
+          candidates,
+          sourceID: source.identifier,
+          generation: generation,
+          snapshotStartedNs: snapshotStartedNs)
       }
     }
   }
 
-  /// Merge one source's warm reply into the open session pool, then re-render at
-  /// the current query. Runs on the main thread (the plugin query completion
-  /// hops there). Late replies from a closed or superseded session are dropped
-  /// via the generation guard and the active-surface check.
-  private func mergeCandidateQueryResults(
+  private func recordInitialCandidateReply(
+    _ candidates: [Candidate],
+    sourceID: String,
+    generation: UInt64,
+    snapshotStartedNs: UInt64
+  ) {
+    let nowNs = DispatchTime.now().uptimeNanoseconds
+    let latencyMs = Int((nowNs &- snapshotStartedNs) / 1_000_000)
+    guard generation == candidateFinderSessionGeneration else {
+      FlashLog.trace(
+        "[candidate_finder] snapshot_reply_ignored source=\(sourceID) "
+          + "generation=\(generation) reason=stale_session ms=\(latencyMs)")
+      return
+    }
+    guard var barrier = candidateFinderInitialBarrier,
+      barrier.generation == generation
+    else {
+      if candidateFinderInitialSnapshotReady {
+        FlashLog.warn(
+          "[candidate_finder] snapshot_reply_late source=\(sourceID) "
+            + "generation=\(generation) ms=\(latencyMs) count=\(candidates.count) ignored=true")
+      }
+      return
+    }
+
+    let result = barrier.record(
+      sourceID: sourceID,
+      candidates: candidates,
+      latencyMs: latencyMs)
+    candidateFinderInitialBarrier = barrier
+    switch result {
+    case .accepted:
+      FlashLog.trace(
+        "[candidate_finder] snapshot_reply source=\(sourceID) generation=\(generation) "
+          + "ms=\(latencyMs) count=\(candidates.count) "
+          + "settled=\(barrier.settledSourceCount)/\(barrier.expectedSourceCount)")
+      if latencyMs >= Self.candidateFinderSlowReplyWarningMs {
+        FlashLog.warn(
+          "[candidate_finder] snapshot_reply_slow source=\(sourceID) "
+            + "generation=\(generation) ms=\(latencyMs) "
+            + "budget_ms=\(Self.candidateFinderFirstPaintBudgetMs)")
+      }
+      if barrier.isSettled {
+        finalizeInitialCandidateSnapshot(
+          generation: generation, reason: .allSourcesSettled)
+      }
+    case .duplicate:
+      FlashLog.warn(
+        "[candidate_finder] snapshot_reply_ignored source=\(sourceID) "
+          + "generation=\(generation) reason=duplicate")
+    case .unknownSource:
+      FlashLog.warn(
+        "[candidate_finder] snapshot_reply_ignored source=\(sourceID) "
+          + "generation=\(generation) reason=unknown_source")
+    case .finalized:
+      FlashLog.warn(
+        "[candidate_finder] snapshot_reply_late source=\(sourceID) "
+          + "generation=\(generation) ms=\(latencyMs) count=\(candidates.count) ignored=true")
+    }
+  }
+
+  private func finalizeInitialCandidateSnapshot(
+    generation: UInt64,
+    reason: CandidateSnapshotBarrier.FinalizationReason
+  ) {
+    guard generation == candidateFinderSessionGeneration,
+      var barrier = candidateFinderInitialBarrier,
+      barrier.generation == generation,
+      let snapshot = barrier.finalize(reason: reason)
+    else { return }
+
+    candidateFinderInitialDeadlineWork?.cancel()
+    candidateFinderInitialDeadlineWork = nil
+    // Keep the finalized barrier installed while the raw snapshot is prepared
+    // off-main. `refreshCommandLine` continues to show a live empty prompt and
+    // late opt-in replies are buffered rather than overwriting this first
+    // deterministic publication.
+    candidateFinderInitialBarrier = barrier
+    if !snapshot.missingSourceIDs.isEmpty {
+      FlashLog.warn(
+        "[candidate_finder] snapshot_budget_missed generation=\(generation) "
+          + "budget_ms=\(Self.candidateFinderFirstPaintBudgetMs) "
+          + "missing=\(snapshot.missingSourceIDs.joined(separator: ","))")
+    }
+
+    let startedNs = barrier.startedNs
+    let expectedSourceCount = barrier.expectedSourceCount
+    let settledSourceCount = snapshot.replies.count
+    let latencies = snapshot.sourceLatencies.isEmpty ? "none" : snapshot.sourceLatencies
+    candidateFinderPreparationQueue.async { [weak self] in
+      var frozen: [Candidate] = []
+      for reply in snapshot.replies {
+        frozen.append(contentsOf: CandidateFinder.prepare(reply.candidates))
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self,
+          generation == self.candidateFinderSessionGeneration,
+          self.candidateFinderInitialBarrier?.generation == generation
+        else { return }
+
+        self.candidateFinderCandidates = frozen
+        self.candidateFinderSelectedIndex = 0
+        self.candidateFinderInitialBarrier = nil
+        self.candidateFinderInitialSnapshotReady = true
+        self.publishDeferredNonLocationSnapshots(generation: generation)
+
+        let elapsedMs = Int(
+          (DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
+        FlashLog.info(
+          "[candidate_finder] snapshot_ready generation=\(generation) reason=\(reason.rawValue) "
+            + "count=\(self.candidateFinderCandidates.count) "
+            + "settled=\(settledSourceCount)/\(expectedSourceCount) "
+            + "ms=\(elapsedMs) source_ms=\(latencies)")
+        self.rerenderActiveCandidateFinderSurface()
+      }
+    }
+  }
+
+  /// Lazily pull non-location candidate stores when the user opts into them.
+  /// A confirmed `@source` fetches only providers that declare a matching
+  /// source label; bang completion still asks for all providers because some
+  /// bang rows (the DuckDuckGo registry) are catalog-driven. Providers are
+  /// tracked individually so switching explicit sources later in the same
+  /// session still works without repeating prior snapshots.
+  func fetchNonLocationSourcesIfNeeded(matching sourceFilter: String? = nil) {
+    let sources = registry.nonLocationCandidateSources(matching: sourceFilter)
+    let pending = sources.filter { source in
+      candidateFinderFetchedNonLocationSourceIDs.insert(source.identifier).inserted
+    }
+    guard !pending.isEmpty else { return }
+    fanOutCandidateSnapshots(
+      pending,
+      generation: candidateFinderSessionGeneration)
+  }
+
+  /// Start only the warm non-location snapshots implied by the current query.
+  /// This can run while the initial location barrier is still preparing, which
+  /// overlaps plugin decoding with first-paint work. Partial `@source`
+  /// completion remains manifest-only and performs no catalog request.
+  private func prefetchNonLocationSources(forCandidateQuery query: String) {
+    let sourceCompletion = CandidateFinder.sourceCompletionState(query: query)
+    let bangCompletion = CandidateFinder.bangCompletionState(query: query)
+    let parsed =
+      sourceCompletion == nil
+      ? NormalModeDispatcher.candidateFinderSourceFilter(query)
+      : NormalModeDispatcher.CandidateFinderQuery(sourceFilter: nil, text: query)
+    let parsedBang = CandidateFinder.parseBang(parsed.text)
+    if let sourceFilter = parsed.sourceFilter {
+      fetchNonLocationSourcesIfNeeded(matching: sourceFilter)
+    } else if bangCompletion != nil || parsedBang != nil {
+      fetchNonLocationSourcesIfNeeded()
+    }
+  }
+
+  /// Fan user-requested non-location snapshots out in parallel. Initial location
+  /// sources use the one-publish barrier above; this merge path is only reached
+  /// after an explicit `@source` / `!` opt-in.
+  private func fanOutCandidateSnapshots(
+    _ sources: [FlashSource],
+    generation: UInt64
+  ) {
+    let env = registry.snapshotEnvironment
+    for source in sources {
+      source.snapshotCandidates(in: env, scope: candidateFinderScope) {
+        [weak self] candidates in
+        self?.mergeCandidateSnapshotResults(candidates, from: source, generation: generation)
+      }
+    }
+  }
+
+  /// Merge one explicitly requested non-location source into the frozen initial
+  /// pool, then re-render at the current query. Late replies from a closed or
+  /// superseded session are dropped via the generation and surface guards.
+  private func mergeCandidateSnapshotResults(
     _ candidates: [Candidate],
     from source: FlashSource,
+    generation: UInt64
+  ) {
+    let sourceID = source.identifier
+    candidateFinderPreparationQueue.async { [weak self] in
+      let prepared = CandidateFinder.prepare(candidates)
+      DispatchQueue.main.async { [weak self] in
+        self?.receivePreparedCandidateSnapshot(
+          prepared,
+          sourceID: sourceID,
+          generation: generation)
+      }
+    }
+  }
+
+  private func receivePreparedCandidateSnapshot(
+    _ candidates: [Candidate],
+    sourceID: String,
     generation: UInt64
   ) {
     guard generation == candidateFinderSessionGeneration else { return }
@@ -1339,23 +1705,39 @@ extension AppDelegate {
     case .commandLine, .candidateFinder: break
     default: return
     }
-    let ownedPrefix = source.identifier + "."
-    var pool = candidateFinderCandidates.filter { candidate in
-      candidate.sourceID != source.identifier && !candidate.sourceID.hasPrefix(ownedPrefix)
+    if candidateFinderInitialBarrier != nil {
+      candidateFinderDeferredNonLocationSnapshots[sourceID] = candidates
+      FlashLog.trace(
+        "[candidate_finder] merge_deferred source=\(sourceID) count=\(candidates.count)")
+      return
     }
-    pool.append(contentsOf: CandidateFinder.prepare(candidates))
-    candidateFinderCandidates = pool
-    FlashLog.trace(
-      "[candidate_finder] merge source=\(source.identifier) count=\(candidates.count) "
-        + "pool=\(candidateFinderCandidates.count)")
+    publishPreparedCandidateSnapshot(candidates, sourceID: sourceID)
     scheduleCoalescedCandidateFinderRerender()
   }
 
-  /// Re-render once per runloop turn no matter how many sources merged in it.
-  /// Appending to the pool is cheap; re-scoring + repainting is not, and doing
-  /// it per source serializes the merges on the main thread (each reply waits
-  /// behind the previous one's full re-score). Coalescing collapses a burst of
-  /// replies into a single repaint so location rows land together and fast.
+  private func publishPreparedCandidateSnapshot(_ candidates: [Candidate], sourceID: String) {
+    let ownedPrefix = sourceID + "."
+    var pool = candidateFinderCandidates.filter { candidate in
+      candidate.sourceID != sourceID && !candidate.sourceID.hasPrefix(ownedPrefix)
+    }
+    pool.append(contentsOf: candidates)
+    candidateFinderCandidates = pool
+    FlashLog.trace(
+      "[candidate_finder] merge source=\(sourceID) count=\(candidates.count) "
+        + "pool=\(candidateFinderCandidates.count)")
+  }
+
+  private func publishDeferredNonLocationSnapshots(generation: UInt64) {
+    guard generation == candidateFinderSessionGeneration else { return }
+    let deferred = candidateFinderDeferredNonLocationSnapshots
+    candidateFinderDeferredNonLocationSnapshots.removeAll()
+    for sourceID in deferred.keys.sorted() {
+      guard let candidates = deferred[sourceID] else { continue }
+      publishPreparedCandidateSnapshot(candidates, sourceID: sourceID)
+    }
+  }
+
+  /// Re-render once per runloop turn no matter how many opt-in sources merged.
   private func scheduleCoalescedCandidateFinderRerender() {
     guard !candidateFinderMergeRerenderScheduled else { return }
     candidateFinderMergeRerenderScheduled = true
@@ -1380,6 +1762,13 @@ extension AppDelegate {
     default:
       break
     }
+    if candidateFinderQueryEvaluationSettledGeneration
+      == candidateFinderQueryEvaluationInFlightGeneration
+    {
+      candidateFinderQueryEvaluationSettledGeneration = nil
+      candidateFinderQueryEvaluationInFlightGeneration = nil
+    }
+    replayDeferredCandidateSubmissionIfReady()
   }
 
   func refreshCandidateFinder(query: String) {
@@ -1417,11 +1806,28 @@ extension AppDelegate {
     overlay.commandLineCursorIndex = cursorIndex ?? command.count
     if let query = NormalModeDispatcher.commandLineCandidateQuery(command) {
       clearCommandLineCompletionState()
-      if candidateFinderCandidates.isEmpty {
-        // Cold command line (entered without a prior session seed): seed the
-        // synchronous sources and fan out the location pull, same as opening.
-        candidateFinderPrecedenceTable = buildCandidateFinderPrecedenceTable()
-        seedAndFanOutCandidateFinder(scope: candidateFinderScope)
+      if candidateFinderCandidates.isEmpty,
+        candidateFinderInitialBarrier == nil,
+        !candidateFinderInitialSnapshotReady
+      {
+        // Cold command line (typed without a mapped flashlight entry): begin
+        // the same one-publish initial gather as an explicit open.
+        openCandidateFinderSession(scope: candidateFinderScope)
+      }
+      if candidateFinderInitialBarrier != nil {
+        prefetchNonLocationSources(forCandidateQuery: query)
+        // Keep the native text field live while the initial catalogs fan in,
+        // but do not paint an apps-only list or a false "no matching app"
+        // result. Finalization re-scores the latest text and reveals rows once.
+        candidateFinderCurrentQuery = query
+        candidateFinderMatches = []
+        candidateFinderSelectedIndex = 0
+        overlay.displayCommandLine(
+          command,
+          suggestions: nil,
+          emptyText: "",
+          cursorIndex: overlay.commandLineCursorIndex)
+        return
       }
       // Bang lock: once the user has typed a space after `!<token>`, the
       // remainder of the query semantically belongs to that bang's
@@ -1440,6 +1846,7 @@ extension AppDelegate {
         // normally sets it), so without this it stays stuck at the value from
         // before the confirming space: `!g weather paris` then searched nothing
         // and `weather !g paris` searched only "weather".
+        invalidateCandidateQueryEvaluation()
         candidateFinderCurrentQuery = query
         candidateFinderMatches = []
         candidateFinderSelectedIndex = 0
@@ -1596,18 +2003,23 @@ extension AppDelegate {
 
   func commandLineCompletionDisplayItems() -> [CandidateDisplayItem] {
     guard !commandLineCompletionMatches.isEmpty else { return [] }
-    // Unlike the flashlight finder (which windows thousands of apps via
-    // `commandBarSuggestionCount`), the `:` command list is a small, bounded
-    // set — show every match at once so opening the command bar reveals the
-    // whole catalogue rather than a scrolling slice.
-    return commandLineCompletionMatches.enumerated().map { index, match in
+    // Same windowed slice as the flashlight finder. This list used to show
+    // every match at once ("reveal the whole catalogue"), but the plugin
+    // command set has outgrown the band between the centered prompt and the
+    // screen bottom — an unwindowed list drew up across the prompt itself.
+    // Arrow keys scroll the window over the full match set.
+    let window = CandidateFinder.displayWindow(
+      count: commandLineCompletionMatches.count,
+      selectedIndex: commandLineCompletionSelectedIndex,
+      windowSize: commandBarSuggestionCount)
+    return commandLineCompletionMatches[window].enumerated().map { offset, match in
       CandidateDisplayItem(
         title: match.completion.label,
         highlightedRanges: commandLineCompletionQuery.isEmpty
           ? []
           : NormalModeDispatcher.fuzzyHighlightRanges(
             query: commandLineCompletionQuery, candidate: match.completion.label),
-        isSelected: index == commandLineCompletionSelectedIndex)
+        isSelected: window.lowerBound + offset == commandLineCompletionSelectedIndex)
     }
   }
 
@@ -1634,15 +2046,26 @@ extension AppDelegate {
       : NormalModeDispatcher.CandidateFinderQuery(sourceFilter: nil, text: query)
     let trimmed = parsed.text
     candidateFinderCurrentQuery = sourceCompletion?.token ?? trimmed
+    let calculatorOnly = trimmed.first == "="
+    if calculatorOnly {
+      candidateFinderIncrementalCache = nil
+      beginCandidateQueryEvaluationIfNeeded(text: trimmed)
+      // A leading `=` is an exclusive evaluator marker. Do not score or show
+      // the ordinary catalog while its owning calculator answers settle.
+      applyCandidateMatches([])
+      return
+    }
+    let parsedBang = CandidateFinder.parseBang(trimmed)
+    let usesTransientCompletionPool =
+      sourceCompletion != nil
+      || bangCompletion != nil
+      || parsedBang != nil
 
     // Non-location sources (emojis, bangs, notes, …) aren't pulled on open; the
-    // moment the user opts into one via `@source`/`!`bang, fetch them once for
-    // the session. The reply merges in and re-renders this query asynchronously.
-    if parsed.sourceFilter != nil || sourceCompletion != nil || bangCompletion != nil
-      || CandidateFinder.parseBang(trimmed) != nil
-    {
-      fetchNonLocationSourcesIfNeeded()
-    }
+    // moment the user confirms an `@source` or types a `!`bang, fetch the warm
+    // stores needed for that intent. Source-completion rows come from manifest
+    // declarations, so partial `@em...` input performs no catalog snapshots.
+    prefetchNonLocationSources(forCandidateQuery: query)
 
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,
@@ -1655,8 +2078,8 @@ extension AppDelegate {
     candidateFinderIndexGenerationCounter &+= 1
     let generation = candidateFinderIndexGenerationCounter
 
-    if sourceCompletion != nil || bangCompletion != nil || CandidateFinder.parseBang(trimmed) != nil
-    {
+    if usesTransientCompletionPool {
+      invalidateCandidateQueryEvaluation()
       let normalizedQuery = NormalModeDispatcher.normalizedSearchText(scoringText)
       let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
       let scored = CandidateFinder.scoreMatches(
@@ -1675,6 +2098,7 @@ extension AppDelegate {
     }
 
     if scoringText.trimmed.isEmpty {
+      invalidateCandidateQueryEvaluation()
       let fuzzy = NormalModeDispatcher.fuzzyScore(normalizedQuery:normalizedCandidate:)
       let scored = CandidateFinder.scoreMatches(
         pool: pool,
@@ -1689,6 +2113,17 @@ extension AppDelegate {
       candidateFinderIncrementalCache = nil
       applyCandidateMatches(sorted)
       return
+    }
+
+    // Bare input is additive: every registered evaluator gets the same exact
+    // text. A confirmed `@source` remains catalog-only, but still uses the
+    // large-pool ranker below (parallel scoring, incremental narrowing, and a
+    // bounded display sort). Evaluator rows live in a fixed answer lane and
+    // never enter this fuzzy scorer or its incremental cache.
+    if parsed.sourceFilter == nil {
+      beginCandidateQueryEvaluationIfNeeded(text: scoringText.trimmed)
+    } else {
+      invalidateCandidateQueryEvaluation()
     }
 
     // Score on the main thread so the keystroke and its fresh result
@@ -1774,21 +2209,16 @@ extension AppDelegate {
     applyCandidateMatches(sorted)
     if !trimmed.isEmpty {
       let tRendered = CFAbsoluteTimeGetCurrent()
-      let top = sorted.prefix(5).map { match in
-        "\(match.candidate.source):\(match.candidate.title)=\(match.score)"
-      }.joined(separator: "|")
       let dFilter = Int((tFiltered - t0) * 1000)
       let dScore = Int((tScored - tScoringStart) * 1000)
       let dSort = Int((tSorted - tScored) * 1000)
       let dRender = Int((tRendered - tSorted) * 1000)
       let dTotal = Int((tRendered - t0) * 1000)
       FlashLog.trace(
-        "[candidate_finder] q=\"\(trimmed)\" pool=\(pool.count) "
-          + "scored=\(scoringPool.count) inc=\(isIncremental) "
+        "[candidate_finder] pool=\(pool.count) scored=\(scoringPool.count) inc=\(isIncremental) "
           + "matches=\(sorted.count) "
           + "total_ms=\(dTotal) filter_ms=\(dFilter) score_ms=\(dScore) "
-          + "sort_ms=\(dSort) render_ms=\(dRender) "
-          + "top5=[\(top)]")
+          + "sort_ms=\(dSort) render_ms=\(dRender)")
     }
   }
 
@@ -1810,13 +2240,81 @@ extension AppDelegate {
   /// Centralised so the SearchService completion and the disabled-
   /// mode fallback can't drift on the selection-bounds rules.
   private func applyCandidateMatches(_ matches: [CandidateMatch]) {
-    candidateFinderMatches = matches
-    if matches.isEmpty {
+    let answerKeys = Set(
+      candidateFinderQueryAnswers.map {
+        "\($0.sourceID)\u{0}\($0.title)"
+      })
+    let catalogMatches = matches.filter {
+      !answerKeys.contains("\($0.candidate.sourceID)\u{0}\($0.candidate.title)")
+    }
+    let answers = candidateFinderQueryAnswers.enumerated().map { index, candidate in
+      CandidateMatch(candidate: candidate, score: Int.max - index)
+    }
+    candidateFinderMatches = answers + catalogMatches
+    if candidateFinderMatches.isEmpty {
       candidateFinderSelectedIndex = 0
     } else {
       candidateFinderSelectedIndex = min(
-        max(candidateFinderSelectedIndex, 0), matches.count - 1)
+        max(candidateFinderSelectedIndex, 0), candidateFinderMatches.count - 1)
     }
+  }
+
+  /// Launch one evaluator fan-out per canonical bare query. The session and
+  /// per-query generations jointly reject results from closed surfaces and
+  /// superseded keystrokes. `SourceRegistry` itself completes only once, so a
+  /// multi-plugin response produces a single repaint.
+  private func beginCandidateQueryEvaluationIfNeeded(text: String) {
+    let exactText = text.trimmed
+    guard !exactText.isEmpty, exactText != candidateFinderQueryEvaluationText else {
+      return
+    }
+    candidateFinderQueryEvaluationGeneration &+= 1
+    let evaluationGeneration = candidateFinderQueryEvaluationGeneration
+    let sessionGeneration = candidateFinderSessionGeneration
+    candidateFinderQueryEvaluationText = exactText
+    candidateFinderQueryAnswers = []
+    candidateFinderQueryEvaluationInFlightGeneration = evaluationGeneration
+    candidateFinderQueryEvaluationSettledGeneration = nil
+
+    registry.evaluateQuery(
+      QueryEvaluationRequest(
+        surface: .flashlight,
+        scope: candidateFinderScope,
+        text: exactText,
+        exclusivePrefix: exactText.first == "=" ? "=" : nil)
+    ) { [weak self] candidates in
+      guard let self,
+        sessionGeneration == self.candidateFinderSessionGeneration,
+        evaluationGeneration == self.candidateFinderQueryEvaluationGeneration,
+        exactText == self.candidateFinderQueryEvaluationText
+      else { return }
+      switch self.overlay.inputMode {
+      case .commandLine, .candidateFinder: break
+      default: return
+      }
+      self.candidateFinderQueryAnswers = candidates
+      if !candidates.isEmpty {
+        self.candidateFinderSelectedIndex = 0
+      }
+      if !candidates.isEmpty || self.candidateFinderSubmissionDeferral.hasPendingAction {
+        // Do not open the submission gate until the coalesced render has put
+        // these answers into `candidateFinderMatches`.
+        self.candidateFinderQueryEvaluationSettledGeneration = evaluationGeneration
+        self.scheduleCoalescedCandidateFinderRerender()
+      } else {
+        // No answer lane changed and nobody is waiting to submit, so the fuzzy
+        // rows already on screen are final for this exact query.
+        self.candidateFinderQueryEvaluationInFlightGeneration = nil
+      }
+    }
+  }
+
+  private func invalidateCandidateQueryEvaluation() {
+    candidateFinderQueryEvaluationGeneration &+= 1
+    candidateFinderQueryEvaluationInFlightGeneration = nil
+    candidateFinderQueryEvaluationSettledGeneration = nil
+    candidateFinderQueryEvaluationText = ""
+    candidateFinderQueryAnswers = []
   }
 
   /// The bang-list pool: static manifest-declared shebangs plus the dynamic
@@ -1919,78 +2417,7 @@ extension AppDelegate {
       )
       basePool = pool
     }
-    if let synthetic = syntheticSlackChannelCandidate(
-      query: trimmed,
-      sourceFilter: sourceFilter,
-      existingPool: basePool)
-    {
-      return (basePool + [synthetic], trimmed)
-    }
     return (basePool, trimmed)
-  }
-
-  private func syntheticSlackChannelCandidate(
-    query: String,
-    sourceFilter: String?,
-    existingPool: [Candidate]
-  ) -> Candidate? {
-    guard isExplicitSlackChannelFilter(sourceFilter) else { return nil }
-    let slug = Self.stripSlackChannelPrefix(query.trimmed)
-    guard Self.looksLikeSlackChannelSlug(slug) else { return nil }
-    let duplicate = existingPool.contains { candidate in
-      Self.stripSlackChannelPrefix(candidate.title.trimmed).localizedCaseInsensitiveCompare(slug)
-        == .orderedSame
-    }
-    guard !duplicate else { return nil }
-    guard
-      let slackPID = NSWorkspace.shared.runningApplications.first(where: { app in
-        guard !app.isTerminated else { return false }
-        return app.bundleIdentifier == "com.tinyspeck.slackmacgap"
-          || app.bundleIdentifier == "com.tinyspeck.slackmacgap.direct"
-      })?.processIdentifier
-    else { return nil }
-    let payload = #"{"name":"\#(slug)"}"#
-    return CandidateFinder.prepare(
-      Candidate(
-        kind: .plugin("slack_channel"),
-        sourceID: "plugin:slack.channels",
-        source: "slack.channels",
-        pid: slackPID,
-        title: "#\(slug)",
-        subtitle: "Slack channel",
-        sourcePayload: payload,
-        searchAliases: slug,
-        finishesCommand: true,
-        isLocation: true))
-  }
-
-  private func isExplicitSlackChannelFilter(_ sourceFilter: String?) -> Bool {
-    guard let sourceFilter else { return false }
-    let lowered = sourceFilter.lowercased()
-    return lowered == "slack" || lowered == "slack.channels"
-  }
-
-  private static func looksLikeSlackChannelSlug(_ slug: String) -> Bool {
-    guard !slug.isEmpty, slug.count <= 80, let first = slug.unicodeScalars.first else {
-      return false
-    }
-    guard Self.isSlackChannelSlugScalar(first, allowPunctuation: false) else { return false }
-    return slug.unicodeScalars.allSatisfy {
-      Self.isSlackChannelSlugScalar($0, allowPunctuation: true)
-    }
-  }
-
-  private static func stripSlackChannelPrefix(_ value: String) -> String {
-    value.hasPrefix("#") ? String(value.dropFirst()) : value
-  }
-
-  private static func isSlackChannelSlugScalar(
-    _ scalar: UnicodeScalar,
-    allowPunctuation: Bool
-  ) -> Bool {
-    if scalar.value >= 97, scalar.value <= 122 { return true }
-    if scalar.value >= 48, scalar.value <= 57 { return true }
-    return allowPunctuation && (scalar == "-" || scalar == "_" || scalar == ".")
   }
 
   static func candidateCanRenderInCommandBar(_ candidate: Candidate) -> Bool {
@@ -2034,22 +2461,22 @@ extension AppDelegate {
 
   func candidateFinderDisplayItems(windowSize: Int? = nil) -> [CandidateDisplayItem] {
     guard !candidateFinderMatches.isEmpty else { return [] }
-    let windowSize = windowSize ?? commandBarSuggestionCount
-    let maxStart = max(0, candidateFinderMatches.count - windowSize)
-    let start = min(max(0, candidateFinderSelectedIndex - windowSize / 2), maxStart)
-    let end = min(candidateFinderMatches.count, start + windowSize)
-    return candidateFinderMatches[start..<end].enumerated().map { offset, match in
+    let window = CandidateFinder.displayWindow(
+      count: candidateFinderMatches.count,
+      selectedIndex: candidateFinderSelectedIndex,
+      windowSize: windowSize ?? commandBarSuggestionCount)
+    return candidateFinderMatches[window].enumerated().map { offset, match in
       let title =
         match.candidate.displayTitle.isEmpty
         ? candidateFinderDisplayTitle(match.candidate) : match.candidate.displayTitle
       return CandidateDisplayItem(
         title: title,
-        highlightedRanges: candidateFinderCurrentQuery.isEmpty
+        highlightedRanges: candidateFinderCurrentQuery.isEmpty || match.candidate.effect != nil
           ? []
           : NormalModeDispatcher.fuzzyHighlightRanges(
             query: candidateFinderCurrentQuery,
             candidate: title),
-        isSelected: start + offset == candidateFinderSelectedIndex)
+        isSelected: window.lowerBound + offset == candidateFinderSelectedIndex)
     }
   }
 
@@ -2281,6 +2708,22 @@ extension AppDelegate {
     allowFinisher: Bool = true,
     submitFinalDestinations: Bool = false
   ) {
+    let initialSnapshotPending = candidateFinderInitialBarrier != nil
+    let evaluationInFlight = candidateFinderQueryEvaluationInFlightGeneration
+    if initialSnapshotPending || evaluationInFlight != nil {
+      candidateFinderSubmissionDeferral.deferAction(
+        CandidateSubmissionDeferral.Action(
+          submit: submit,
+          allowFinisher: allowFinisher,
+          submitFinalDestinations: submitFinalDestinations),
+        sessionGeneration: candidateFinderSessionGeneration,
+        query: activeCandidateFinderInputText(),
+        evaluationGeneration: initialSnapshotPending ? nil : evaluationInFlight)
+      FlashLog.trace(
+        "[candidate_finder] action_deferred session=\(candidateFinderSessionGeneration) "
+          + "query_generation=\(evaluationInFlight.map(String.init) ?? "initial")")
+      return
+    }
     let typedBang = CandidateFinder.parseBang(candidateFinderCurrentQuery)
     let isEmpty = candidateFinderMatches.isEmpty
 
@@ -2338,6 +2781,48 @@ extension AppDelegate {
       return
     }
     replaceCommandLineCandidateQuery(with: CandidateFinder.commandInsertionText(candidate))
+  }
+
+  /// Replay a held selection only when both asynchronous first-row boundaries
+  /// have settled for the same session, exact query, and evaluator generation.
+  /// A user edit, cancel, or superseding evaluation discards the action.
+  private func replayDeferredCandidateSubmissionIfReady() {
+    let resolution = candidateFinderSubmissionDeferral.resolve(
+      sessionGeneration: candidateFinderSessionGeneration,
+      query: activeCandidateFinderInputText(),
+      currentEvaluationGeneration: candidateFinderQueryEvaluationGeneration,
+      initialSnapshotPending: candidateFinderInitialBarrier != nil,
+      evaluationInFlightGeneration: candidateFinderQueryEvaluationInFlightGeneration)
+    switch resolution {
+    case .none, .waiting:
+      return
+    case .discarded:
+      FlashLog.trace(
+        "[candidate_finder] deferred_action_discarded session=\(candidateFinderSessionGeneration)")
+    case .replay(let action):
+      FlashLog.trace(
+        "[candidate_finder] deferred_action_replay session=\(candidateFinderSessionGeneration)")
+      actOnSelectedCandidateFinderCandidate(
+        submit: action.submit,
+        allowFinisher: action.allowFinisher,
+        submitFinalDestinations: action.submitFinalDestinations)
+    }
+  }
+
+  /// Exact user-visible candidate query, before `@source`/bang parsing rewrites
+  /// `candidateFinderCurrentQuery` for scoring. Using this for deferral identity
+  /// preserves initial-barrier submission for explicit selectors and makes any
+  /// intervening edit invalidate the held action.
+  private func activeCandidateFinderInputText() -> String {
+    switch overlay.inputMode {
+    case .commandLine:
+      return NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText)
+        ?? candidateFinderCurrentQuery
+    case .candidateFinder:
+      return overlay.candidateFinderQuery
+    default:
+      return candidateFinderCurrentQuery
+    }
   }
 
   /// Rewrite the trailing `@<partial>` token inside the live command
@@ -2425,9 +2910,7 @@ extension AppDelegate {
   }
 
   func clearCandidateFinderState() {
-    // Bump the session generation so any in-flight location query that lands
-    // after this teardown is dropped instead of mutating a stale pool.
-    candidateFinderSessionGeneration &+= 1
+    cancelCandidateFinderSessionWork()
     overlay.candidateFinderQuery = ""
     candidateFinderCandidates = []
     candidateFinderMatches = []
@@ -2435,6 +2918,20 @@ extension AppDelegate {
     candidateFinderCurrentQuery = ""
     candidateFinderPrecedenceTable = .default
     candidateFinderIncrementalCache = nil
+  }
+
+  private func cancelCandidateFinderSessionWork() {
+    // Bump the generation and cancel the UI deadline so in-flight plugin
+    // replies cannot publish into a closed or superseded session.
+    candidateFinderSessionGeneration &+= 1
+    invalidateCandidateQueryEvaluation()
+    candidateFinderInitialDeadlineWork?.cancel()
+    candidateFinderInitialDeadlineWork = nil
+    candidateFinderInitialBarrier = nil
+    candidateFinderInitialSnapshotReady = false
+    candidateFinderSubmissionDeferral.cancel()
+    candidateFinderFetchedNonLocationSourceIDs.removeAll()
+    candidateFinderDeferredNonLocationSnapshots.removeAll()
   }
 
   private func quitNormalModeTargetApp(force: Bool = false) {
@@ -2712,12 +3209,23 @@ extension AppDelegate {
       FlashLog.debug("[normal_mode] no target app for copyDocumentURL")
       return
     }
-    guard let url = registry.documentURL(in: context) else {
-      FlashLog.debug(
-        "[normal_mode] no AX document URL exposed by \(context.bundleIdentifier)")
-      return
+    // Resolve the URL on the AX queue, not main: `registry.documentURL` walks the
+    // AX tree with blocking IPCs (up to a few thousand nodes on a miss) and the
+    // main run loop hosts the keyboard-capture tap, so a wedged app would stall
+    // input for a whole `url_copy` keystroke. `url_copy` has no latency contract;
+    // keep the walk off main (mirroring how discovery runs the provider chain on
+    // `axQueue`) and write the pasteboard back on main.
+    let registry: SourceRegistry = self.registry
+    monitor.axQueue.async {
+      guard let url = registry.documentURL(in: context) else {
+        FlashLog.debug(
+          "[normal_mode] no AX document URL exposed by \(context.bundleIdentifier)")
+        return
+      }
+      DispatchQueue.main.async {
+        NormalModeDispatcher.copy(url)
+      }
     }
-    NormalModeDispatcher.copy(url)
   }
 
   func normalModeContext() -> AppContext? {

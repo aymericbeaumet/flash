@@ -17,6 +17,7 @@ enum CandidateFinder {
   }
 
   static let browserTabKind = CandidateKind.plugin("browser_tab")
+  static let tmuxWindowKind = CandidateKind.plugin("tmux_window")
   static let emojiKind = CandidateKind.plugin("emoji")
   /// Synthetic flashlight rows for registered plugin bangs (`!<token>`);
   /// selecting one dispatches the bang instead of resolving a candidate.
@@ -85,7 +86,7 @@ enum CandidateFinder {
   }
 
   static func isFinalDestination(_ candidate: Candidate) -> Bool {
-    candidate.isLocation
+    candidate.isLocation || candidate.effect != nil
   }
 
   static func isDefaultFlashlightCandidate(
@@ -95,7 +96,23 @@ enum CandidateFinder {
     precedence.defaultFlashlightSourceRank(for: candidate) != nil
   }
 
+  /// The half-open slice of `count` matches a display surface shows: at most
+  /// `windowSize` rows, following the selection (kept centred once it scrolls
+  /// past the middle) and clamped at both ends. Shared by the flashlight
+  /// finder and the `:` completion list so arrow keys scroll both the same
+  /// way.
+  static func displayWindow(count: Int, selectedIndex: Int, windowSize: Int) -> Range<Int> {
+    guard count > 0, windowSize > 0 else { return 0..<0 }
+    let maxStart = max(0, count - windowSize)
+    let start = min(max(0, selectedIndex - windowSize / 2), maxStart)
+    let end = min(count, start + windowSize)
+    return start..<end
+  }
+
   static func displayTitle(_ candidate: Candidate) -> String {
+    if candidate.effect != nil {
+      return candidate.title
+    }
     if candidate.kind == bangKind {
       return bangDisplayTitle(candidate)
     }
@@ -105,7 +122,7 @@ enum CandidateFinder {
     if candidate.kind == browserTabKind {
       return browserTabDisplayTitle(candidate)
     }
-    if candidate.kind == .plugin("tmux_window") {
+    if candidate.kind == tmuxWindowKind {
       return tmuxWindowDisplayTitle(candidate)
     }
     return displayTitle(source: candidate.source, name: candidate.title)
@@ -260,12 +277,20 @@ enum CandidateFinder {
   /// source labels (`firefox` matches `firefox.tabs`), so a user can narrow
   /// by short name without having to type the full canonical label.
   static func candidateMatchesSourceFilter(_ candidate: Candidate, filter: String) -> Bool {
+    sourceLabel(candidate.source, matchesFilter: filter)
+      || (candidate.kind == .app && filter.lowercased() == "apps")
+  }
+
+  /// Source-label form of ``candidateMatchesSourceFilter``. Snapshot routing
+  /// uses manifest-declared labels before any candidate rows have crossed the
+  /// plugin boundary, so it needs the exact same dotted-prefix semantics
+  /// without manufacturing a throwaway `Candidate`.
+  static func sourceLabel(_ label: String, matchesFilter filter: String) -> Bool {
     let needle = filter.lowercased()
     guard !needle.isEmpty else { return true }
-    let source = candidate.source.lowercased()
+    let source = label.lowercased()
     if source == needle { return true }
     if source.hasPrefix(needle + ".") { return true }
-    if candidate.kind == .app, needle == "apps" { return true }
     return false
   }
 
@@ -319,12 +344,28 @@ enum CandidateFinder {
     return (newText, cursorIndex + delta)
   }
 
-  static func prepare(
-    _ candidates: [Candidate],
-    normalize: (String) -> String = NormalModeDispatcher.normalizedSearchText
-  ) -> [Candidate] {
-    candidates.map { prepare($0, normalize: normalize) }
+  static func prepare(_ candidates: [Candidate]) -> [Candidate] {
+    guard candidates.count >= parallelPrepareThreshold else {
+      return candidates.map { candidate in
+        candidate.sortKey.isEmpty ? prepare(candidate) : candidate
+      }
+    }
+    // Preparation is pure and each output slot depends on exactly one input.
+    // Large immutable catalogs (installed apps, emoji) spend most of their
+    // first-paint time normalizing independent strings, so preserve input order
+    // while distributing that CPU work across cores.
+    return [Candidate](unsafeUninitializedCapacity: candidates.count) {
+      buffer, initializedCount in
+      DispatchQueue.concurrentPerform(iterations: candidates.count) { index in
+        let candidate = candidates[index]
+        let prepared = candidate.sortKey.isEmpty ? prepare(candidate) : candidate
+        buffer.baseAddress!.advanced(by: index).initialize(to: prepared)
+      }
+      initializedCount = candidates.count
+    }
   }
+
+  private static let parallelPrepareThreshold = 64
 
   static func prepare(
     _ candidate: Candidate,
@@ -610,7 +651,15 @@ enum CandidateFinder {
       return pool.map { CandidateMatch(candidate: $0, score: 0) }
     }
     let prefilter = queryPrefilter(normalizedQuery: normalizedQuery)
-    if allowParallel, pool.count >= parallelScoreThreshold {
+    let parallelThreshold: Int
+    if pool.first?.kind == emojiKind {
+      parallelThreshold = emojiParallelScoreThreshold
+    } else if normalizedQuery.count >= 3 {
+      parallelThreshold = complexQueryParallelScoreThreshold
+    } else {
+      parallelThreshold = parallelScoreThreshold
+    }
+    if allowParallel, pool.count >= parallelThreshold {
       let scored = [CandidateMatch?](unsafeUninitializedCapacity: pool.count) {
         buffer, initializedCount in
         DispatchQueue.concurrentPerform(iterations: pool.count) { index in
@@ -631,6 +680,18 @@ enum CandidateFinder {
   }
 
   private static let parallelScoreThreshold = 600
+  /// Emoji rows have aliases plus long Unicode names and therefore do more
+  /// fuzzy-field work than ordinary location rows, even while the one/two-char
+  /// word-start gate is active. Their explicit source pool is homogeneous, so
+  /// fan out a narrowed emoji result set before it consumes a full frame.
+  private static let emojiParallelScoreThreshold = 64
+  /// At three characters the short-query word-start gate disengages and the
+  /// typo ladder gains its first edit, making each surviving candidate much
+  /// more expensive. Emoji aliases hit this boundary especially hard: after
+  /// incremental narrowing, ~100–200 rows can still consume a full frame when
+  /// scored serially. Fan that heavier work out sooner while keeping cheap
+  /// one/two-character pools sequential.
+  private static let complexQueryParallelScoreThreshold = 64
 
   @inline(__always)
   private static func scoreMatch(
@@ -654,15 +715,18 @@ enum CandidateFinder {
   }
 
   /// True when `normalizedQuery` is a non-empty exact match or full-string
-  /// prefix of the candidate's own (already-normalized) name. Drives the
-  /// cross-band promotion in `recordPrecedes`. Both name fields are
-  /// normalized at `prepare` time with the same pipeline as the query, so
-  /// this is a like-for-like prefix test.
+  /// prefix of the candidate's own (already-normalized) name, or exactly one
+  /// of its aliases. Drives the cross-band promotion in `recordPrecedes`.
+  /// Both name fields are normalized at `prepare` time with the same pipeline
+  /// as the query, so this is a like-for-like prefix test. Aliases only count
+  /// on an exact hit — they are short deliberate tokens, and prefix-matching
+  /// them would promote half the list on a single letter.
   static func titleMatchesPrefix(_ candidate: Candidate, normalizedQuery: String) -> Bool {
     guard !normalizedQuery.isEmpty else { return false }
     let fields = candidate.normalizedScoringFields
     return (!fields.title.isEmpty && fields.title.hasPrefix(normalizedQuery))
       || (!fields.displayTitle.isEmpty && fields.displayTitle.hasPrefix(normalizedQuery))
+      || fields.aliases.contains(normalizedQuery)
   }
 
   /// Decorated record so each candidate's tier / alive / key fields are
@@ -758,7 +822,7 @@ enum CandidateFinder {
   }
 
   private static func recordPrecedes(_ lhs: SortRecord, _ rhs: SortRecord) -> Bool {
-    // Two-band design:
+    // Banded design:
     //
     // 1. Bangs (`!<token>`) are a strict top band — they carry the
     //    sentinel `bangWeight` so they're easy to detect. A user
@@ -766,25 +830,28 @@ enum CandidateFinder {
     //    intent; we surface it above anything else regardless of
     //    how the fuzzy match would score.
     //
-    // 2. Location rows are the default flashlight band. Match quality is
-    //    authoritative inside that band. Other sources are normally hidden from
-    //    the default pool, but when sorted explicitly (for example through
-    //    `@source`) they stay below locations unless both compared rows are
-    //    outside the band.
+    // 2. Location rows are the default flashlight band, internally laddered
+    //    by category (tmux windows > running apps > installed apps > browser
+    //    tabs > remaining locations — see `locationBandRank`). Match quality
+    //    is authoritative inside one category, never across categories; the
+    //    only cross-category promotion is a deliberate name hit (below).
+    //    Other sources are normally hidden from the default pool, but when
+    //    sorted explicitly (for example through `@source`) they stay below
+    //    locations unless both compared rows are outside the band.
     //
-    // 3. Everything inside the same band is ranked by match quality first.
-    //    The precedence weight is the tiebreaker once scores cluster.
+    // 3. Everything inside the same category is ranked by match quality
+    //    first. The precedence weight is the tiebreaker once scores cluster.
     let lhsIsBang = lhs.weight == PrecedenceTable.bangWeight
     let rhsIsBang = rhs.weight == PrecedenceTable.bangWeight
     if lhsIsBang != rhsIsBang { return lhsIsBang }
 
     // A query that exactly matches / is a full-string prefix of a
-    // candidate's own name is a deliberate hit on THAT item, so it crosses
-    // the location band below: `safa` surfaces Safari.app above
-    // Safari's open tabs, `mes` surfaces Messages.app above a tab that
-    // merely contains "mes". This restores the ranking `fieldScoreNormalized`
-    // documents — without it the band ordering (tabs > apps) buries the app
-    // no matter how strong its name match is.
+    // candidate's own name (or exactly one of its aliases) is a deliberate
+    // hit on THAT item, so it crosses the category ladder below: `safa`
+    // surfaces Safari.app above tmux windows and tabs, `mes` surfaces
+    // Messages.app above a tab that merely contains "mes", and an exact
+    // alias keeps the alias tier meaningful across categories. Without it
+    // the ladder would bury the item no matter how strong its name match is.
     if lhs.titlePrefixMatch != rhs.titlePrefixMatch { return lhs.titlePrefixMatch }
 
     switch (lhs.defaultFlashlightSourceRank, rhs.defaultFlashlightSourceRank) {
@@ -887,7 +954,8 @@ enum CandidateFinder {
 
     /// Strict default flashlight entity rank. Live source descriptors are the
     /// primary signal; location metadata covers offline tests and sources that
-    /// have not registered descriptors.
+    /// have not registered descriptors. Location-kind candidates return their
+    /// category ladder rank; standard sources return nil (below the band).
     public func defaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
       let lowered = candidate.source.lowercased()
       for entry in entries {
@@ -895,7 +963,12 @@ enum CandidateFinder {
           continue
         }
         guard let kind = entry.kind else { continue }
-        return Self.defaultFlashlightSourceRank(for: kind)
+        switch kind {
+        case .locations:
+          return Self.locationBandRank(for: candidate)
+        case .standard:
+          return nil
+        }
       }
       return Self.fallbackDefaultFlashlightSourceRank(for: candidate)
     }
@@ -935,13 +1008,18 @@ enum CandidateFinder {
       }
     }
 
-    private static func defaultFlashlightSourceRank(for kind: CandidateSourceKind) -> Int? {
-      switch kind {
-      case .locations:
-        return 1
-      case .standard:
-        return nil
-      }
+    /// Category ladder inside the default (location) band, highest first:
+    /// tmux windows > running apps > installed apps > browser tabs > the
+    /// remaining plugin-provided locations. Compared before match
+    /// score in `recordPrecedes`, so the ladder is strict: a weak tmux match
+    /// still leads a strong tab match. Deliberate name hits
+    /// (`titlePrefixMatch`) are the only cross-category promotion, which
+    /// keeps `safa` → Safari.app and exact aliases working.
+    static func locationBandRank(for candidate: Candidate) -> Int {
+      if candidate.kind == tmuxWindowKind { return 5 }
+      if candidate.kind == .app { return candidate.pid != nil ? 4 : 3 }
+      if candidate.kind == browserTabKind { return 2 }
+      return 1
     }
 
     private static func fallbackSourceKind(for candidate: Candidate) -> CandidateSourceKind {
@@ -955,7 +1033,7 @@ enum CandidateFinder {
     }
 
     private static func fallbackDefaultFlashlightSourceRank(for candidate: Candidate) -> Int? {
-      if candidate.isLocation { return 1 }
+      if candidate.isLocation { return locationBandRank(for: candidate) }
       return nil
     }
   }

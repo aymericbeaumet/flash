@@ -1,14 +1,17 @@
-use std::process::Stdio;
-use std::time::Duration;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, Candidate, Context, Event, ResolveResponse, RunningApplication, SourceActionRequest,
-    SourceActionResponse,
+    applescript_quote, run, run_osascript, Candidate, Context, Event, RefreshGate, ResolveResponse,
+    RunningApplication, SourceActionRequest, SourceActionResponse,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 const SOURCE_ID: &str = "plugin:chromium";
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const STARTUP_REFRESH_BUDGET: Duration = Duration::from_secs(11);
+static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 
 const CHROMIUM_BUNDLES: &[&str] = &[
     "com.google.Chrome",
@@ -44,17 +47,37 @@ struct Chromium;
 flash_plugin::plugin!(Chromium);
 
 impl FlashPlugin for Chromium {
+    async fn on_start(&self, ctx: Context) {
+        let initial_succeeded =
+            match tokio::time::timeout(STARTUP_REFRESH_BUDGET, refresh_locations(&ctx)).await {
+                Ok(succeeded) => succeeded,
+                Err(_) => {
+                    ctx.log(
+                        "warn",
+                        "[chromium] initial warm refresh timed out budget_ms=11000",
+                    );
+                    false
+                }
+            };
+        if !initial_succeeded && !ctx.has_locations(SOURCE_ID) {
+            log_degraded_initial(&ctx);
+            ctx.set_locations(SOURCE_ID, Vec::new());
+            let retry_ctx = ctx.clone();
+            tokio::spawn(async move {
+                refresh_locations(&retry_ctx).await;
+            });
+        }
+        start_refresh_poll(&ctx);
+    }
+
     async fn on_event(&self, ctx: Context, event: Event) {
         match event.name.as_str() {
-            "core:flash.started" | "core:apps.changed" => {
-                let apps = chromium_apps(&event.running_applications);
-                refresh_locations(&ctx, apps).await;
-            }
-            "core:apps.launched" | "core:apps.terminated" | "core:focus.changed" => {
-                let apps = chromium_apps(&event.running_applications);
-                if !apps.is_empty() {
-                    refresh_locations(&ctx, apps).await;
-                }
+            "core:apps.changed"
+            | "core:apps.launched"
+            | "core:apps.terminated"
+            | "core:focus.changed"
+            | "core:window.focus.changed" => {
+                refresh_locations(&ctx).await;
             }
             _ => {}
         }
@@ -142,69 +165,162 @@ return out
     )
 }
 
-async fn refresh_locations(ctx: &Context, apps: Vec<(String, String, i64)>) {
+async fn refresh_locations(ctx: &Context) -> bool {
+    REFRESH_GATE
+        .run(ctx, |ctx, running| async move {
+            refresh_locations_for_apps(&ctx, chromium_apps(&running)).await
+        })
+        .await
+}
+
+async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i64)>) -> bool {
+    let started_at = Instant::now();
+    // A complete running-app snapshot with no matching browser is authoritative:
+    // clear dead tab rows.
+    if apps.is_empty() {
+        ctx.set_locations(SOURCE_ID, Vec::new());
+        log_refresh(ctx, "empty", 0, started_at);
+        return true;
+    }
+    // Fetch each browser's tab list concurrently: each osascript is hundreds of
+    // ms and the browsers are independent, so serializing made a refresh cost the
+    // sum. Spawn per app, then join and dedup in app order (deterministic).
+    let mut handles = Vec::with_capacity(apps.len());
+    for (bundle_id, app_name, pid) in apps {
+        let ctx = ctx.clone();
+        handles.push((
+            pid,
+            tokio::spawn(async move {
+                let app_label = if app_name.is_empty() {
+                    "Browser".to_string()
+                } else {
+                    app_name
+                };
+                let source = source_name(&bundle_id, &app_label);
+                let result =
+                    run_osascript(&ctx, &list_script(&app_label), Duration::from_secs(10)).await;
+                if !result.ok {
+                    return None;
+                }
+                let mut rows = Vec::new();
+                for line in result.stdout.lines() {
+                    let mut parts = line.splitn(3, '\t');
+                    let title = parts.next().unwrap_or("").trim();
+                    let url = parts.next().unwrap_or("").trim();
+                    let current = parts
+                        .next()
+                        .map(|value| value.trim() == "1")
+                        .unwrap_or(false);
+                    if title.is_empty() && url.is_empty() {
+                        continue;
+                    }
+                    let key = format!("{pid}|{title}|{url}");
+                    let display = if title.is_empty() {
+                        url.to_string()
+                    } else {
+                        title.to_string()
+                    };
+                    let payload = TabPayload {
+                        bundle_id: bundle_id.clone(),
+                        app_name: app_label.clone(),
+                        url: url.to_string(),
+                    };
+                    let mut candidate = Candidate::new(display)
+                        .kind("browser_tab")
+                        .location()
+                        .source_id(SOURCE_ID)
+                        .source(&source)
+                        .subtitle("browser tab")
+                        .bundle_id(&bundle_id)
+                        .pid(pid)
+                        .payload_json(&payload)
+                        .current_location(current);
+                    if !url.is_empty() {
+                        candidate = candidate.url(url);
+                    }
+                    rows.push((key, candidate));
+                }
+                // `Some([])` is a successful authoritative zero-tab result;
+                // `None` above is the only transient-failure signal.
+                Some(rows)
+            }),
+        ));
+    }
     let mut candidates = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for (bundle_id, app_name, pid) in &apps {
-        let app_label = if app_name.is_empty() {
-            "Browser".to_string()
-        } else {
-            app_name.clone()
-        };
-        let source = source_name(bundle_id, &app_label);
-        let result = run_osascript(ctx, &list_script(&app_label), Duration::from_secs(10)).await;
-        if !result.ok {
-            ctx.log(
-                "warn",
-                &format!(
-                    "[chromium] list failed bundle={} stderr={}",
-                    bundle_id, result.stderr
-                ),
-            );
-            continue;
-        }
-        for line in result.stdout.lines() {
-            let mut parts = line.splitn(3, '\t');
-            let title = parts.next().unwrap_or("").trim();
-            let url = parts.next().unwrap_or("").trim();
-            let current = parts
-                .next()
-                .map(|value| value.trim() == "1")
-                .unwrap_or(false);
-            if title.is_empty() && url.is_empty() {
-                continue;
+    let mut failed_pids = std::collections::HashSet::new();
+    let mut successful_apps = 0;
+    for (pid, handle) in handles {
+        match handle.await {
+            Ok(Some(rows)) => {
+                successful_apps += 1;
+                for (key, candidate) in rows {
+                    if seen.insert(key) {
+                        candidates.push(candidate);
+                    }
+                }
             }
-            let key = format!("{pid}|{title}|{url}");
-            if !seen.insert(key) {
-                continue;
+            Ok(None) | Err(_) => {
+                failed_pids.insert(pid);
             }
-            let display = if title.is_empty() {
-                url.to_string()
-            } else {
-                title.to_string()
-            };
-            let payload = TabPayload {
-                bundle_id: bundle_id.clone(),
-                app_name: app_label.clone(),
-                url: url.to_string(),
-            };
-            let mut candidate = Candidate::new(display)
-                .kind("browser_tab")
-                .location()
-                .source_id(SOURCE_ID)
-                .source(&source)
-                .subtitle("browser tab")
-                .bundle_id(bundle_id)
-                .pid(*pid)
-                .payload_json(&payload)
-                .current_location(current);
-            if !url.is_empty() {
-                candidate = candidate.url(url);
-            }
-            candidates.push(candidate);
         }
     }
+    // Preserve only the failed running editions. Successful empty results clear
+    // that edition, and rows for browsers no longer in the host snapshot drop.
+    if !failed_pids.is_empty() {
+        candidates.extend(ctx.warm_locations().into_iter().filter(|candidate| {
+            candidate
+                .pid_value()
+                .is_some_and(|pid| failed_pids.contains(&pid))
+        }));
+    }
+    if successful_apps == 0 {
+        let count = candidates.len();
+        // The current running-app snapshot authoritatively prunes terminated
+        // pids, while every still-running failed pid keeps its last-good rows.
+        // On first process start there is no last-good key yet; on_start emits
+        // the explicitly degraded baseline and retries immediately.
+        if ctx.has_locations(SOURCE_ID) {
+            ctx.set_locations(SOURCE_ID, candidates);
+        }
+        log_refresh(ctx, "failed", count, started_at);
+        return false;
+    }
+    let outcome = if !failed_pids.is_empty() {
+        "partial"
+    } else if candidates.is_empty() {
+        "empty"
+    } else {
+        "ok"
+    };
+    let count = candidates.len();
     ctx.set_locations(SOURCE_ID, candidates);
+    log_refresh(ctx, outcome, count, started_at);
+    true
+}
+
+fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) {
+    let elapsed_ms = started_at.elapsed().as_millis();
+    ctx.log(
+        if elapsed_ms >= 1_000 { "warn" } else { "debug" },
+        &format!(
+            "[chromium] refresh outcome={} count={} elapsed_ms={}",
+            outcome, count, elapsed_ms
+        ),
+    );
+}
+
+fn log_degraded_initial(ctx: &Context) {
+    ctx.log(
+        "warn",
+        "[chromium] initial warm catalog degraded outcome=empty_without_last_good candidates=0 retry=immediate_background",
+    );
+}
+
+fn start_refresh_poll(ctx: &Context) {
+    drop(ctx.interval(POLL_INTERVAL, |ctx| async move {
+        refresh_locations(&ctx).await;
+    }));
 }
 
 async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
@@ -247,7 +363,18 @@ return "missing"
         app = applescript_quote(&app_name),
         target = applescript_quote(&url)
     );
-    let _ = run_osascript(ctx, &script, Duration::from_secs(10)).await;
+    let result = run_osascript(ctx, &script, Duration::from_secs(10)).await;
+    if !result.ok || result.stdout.trim() != "ok" {
+        ctx.log(
+            "warn",
+            &format!(
+                "[chromium] tab-select did not confirm (ok={}, out={:?})",
+                result.ok,
+                result.stdout.trim()
+            ),
+        );
+    }
+    // The window was activated regardless, so still report a best-effort raise.
     ResolveResponse::resolved(Some(pid))
 }
 
@@ -378,14 +505,6 @@ fn canonical_app_name(bundle_id: &str) -> &'static str {
     }
 }
 
-#[derive(Default)]
-struct CommandOutput {
-    ok: bool,
-    stdout: String,
-    stderr: String,
-    _status: i32,
-}
-
 async fn activate_app(ctx: &Context, pid: i64) -> bool {
     ctx.call_host("app.activate", json!({ "pid": pid }))
         .await
@@ -394,75 +513,32 @@ async fn activate_app(ctx: &Context, pid: i64) -> bool {
         .unwrap_or(false)
 }
 
-async fn run_osascript(ctx: &Context, script: &str, timeout: Duration) -> CommandOutput {
-    run_command(
-        ctx,
-        &[
-            "/usr/bin/osascript".to_string(),
-            "-e".to_string(),
-            script.to_string(),
-        ],
-        timeout,
-    )
-    .await
-}
-
-async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> CommandOutput {
-    let Some((program, args)) = argv.split_first() else {
-        return CommandOutput {
-            ok: false,
-            stderr: "empty argv".to_string(),
-            _status: -1,
-            ..Default::default()
-        };
-    };
-    let mut command = tokio::process::Command::new(program);
-    command
-        .args(args)
-        .current_dir(&ctx.data_dir)
-        .env("HOME", ctx.home_dir())
-        .env("XDG_CONFIG_HOME", ctx.config_dir())
-        .env("XDG_CACHE_HOME", ctx.cache_dir())
-        .env("XDG_DATA_HOME", ctx.share_dir())
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                ctx.bin_dir().display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    match tokio::time::timeout(timeout, command.output()).await {
-        Ok(Ok(output)) => CommandOutput {
-            ok: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            _status: output.status.code().unwrap_or(-1),
-        },
-        Ok(Err(err)) => CommandOutput {
-            ok: false,
-            stderr: err.to_string(),
-            _status: -1,
-            ..Default::default()
-        },
-        Err(_) => CommandOutput {
-            ok: false,
-            stderr: format!("timed out after {}ms", timeout.as_millis()),
-            _status: 124,
-            ..Default::default()
-        },
-    }
-}
-
-fn applescript_quote(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
-}
-
 fn main() {
     run(Chromium);
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn source_name_distinguishes_browser_editions() {
+        assert_eq!(
+            source_name("com.google.Chrome", "Google Chrome"),
+            "chrome.tabs"
+        );
+        assert_eq!(
+            source_name("com.brave.Browser", "Brave Browser"),
+            "brave.tabs"
+        );
+        assert_eq!(
+            source_name("com.microsoft.edgemac", "Microsoft Edge"),
+            "edge.tabs"
+        );
+    }
+
+    #[test]
+    fn startup_refresh_budget_stays_below_host_initialize_timeout() {
+        assert!(STARTUP_REFRESH_BUDGET < Duration::from_secs(15));
+    }
 }

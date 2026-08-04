@@ -126,6 +126,11 @@ enum FlashStatusBarSource: Equatable {
   case plugin(FlashStatusBarPluginValue)
   case tmux(String)
   case command(FlashStatusBarCommand)
+  /// Like `.command`, but the script's output is split into lines and shown one
+  /// at a time, rotating (sliding up) every `periodSeconds`. The current line is
+  /// what's published, so a `#[link=…]` marker on it makes the click target
+  /// track whatever line is showing.
+  case cycle(command: FlashStatusBarCommand, periodSeconds: Int)
 }
 
 struct FlashStatusBarTemplateVariable: Equatable {
@@ -142,10 +147,24 @@ struct FlashStatusBarTemplate: Equatable {
   var template: String
   var variables: [FlashStatusBarTemplateVariable]
 
+  /// Variables whose value comes from running a subprocess — both plain
+  /// `.command` and `.cycle` (which additionally rotates its lines).
   var commandSections: [FlashStatusBarTemplateVariable] {
     var seen: Set<String> = []
     return variables.filter {
-      if case .command = $0.source { return true }
+      switch $0.source {
+      case .command, .cycle: return true
+      default: return false
+      }
+    }.filter {
+      seen.insert($0.id).inserted
+    }
+  }
+
+  var cycleSections: [FlashStatusBarTemplateVariable] {
+    var seen: Set<String> = []
+    return variables.filter {
+      if case .cycle = $0.source { return true }
       return false
     }.filter {
       seen.insert($0.id).inserted
@@ -498,6 +517,16 @@ enum FlashStatusBarTemplateEngine {
     case .command:
       return FlashStatusBarRenderer.stripClickRanges(
         from: dynamicValues[variable.id]?.trimmed ?? "")
+    case .cycle:
+      // A cycle publishes its current line into `dynamicValues[id]` (with its
+      // own `#[link=…]` marker), so it reads back like a command — but wrapped
+      // in `#[cyc]…#[nocyc]` sentinels so the renderer can pull the rotating run
+      // into its own clipped layer and slide it. The sentinels are zero-width
+      // `#[…]` markers, so truncation/measurement ignore them, and an
+      // unhandled region renders them as nothing.
+      let line = FlashStatusBarRenderer.stripClickRanges(
+        from: dynamicValues[variable.id]?.trimmed ?? "")
+      return line.isEmpty ? "" : "#[cyc]" + line + "#[nocyc]"
     }
   }
 
@@ -907,6 +936,17 @@ final class FlashStatusBarController {
   private let pluginStatusesProvider: () -> [PluginStatus]
   private var refreshTimer: DispatchSourceTimer?
   private var effectsTimer: DispatchSourceTimer?
+  private var cycleTimer: DispatchSourceTimer?
+  /// Per-`#{cycle:…}` variable: its output lines, which one is showing, its
+  /// rotation period, and when it last rotated. Refreshed (re-run) on the
+  /// command cadence; rotated by `cycleTimer`.
+  private struct CycleState {
+    var lines: [String]
+    var index: Int
+    var periodSeconds: Int
+    var lastRotate: Date
+  }
+  private var cycles: [String: CycleState] = [:]
   private var started = false
   private var commandRefreshGeneration: UInt64 = 0
   private var commandRefreshInFlight = false
@@ -952,6 +992,8 @@ final class FlashStatusBarController {
       self.nextClockRefreshAt = nil
       self.effectsTimer?.cancel()
       self.effectsTimer = nil
+      self.cycleTimer?.cancel()
+      self.cycleTimer = nil
       self.commandRefreshGeneration &+= 1
       self.commandRefreshInFlight = false
       self.started = false
@@ -1003,10 +1045,15 @@ final class FlashStatusBarController {
     commandQueue.async { [weak self] in
       guard let self else { return }
       var updates: [String: String] = [:]
+      var cycleUpdates: [String: (lines: [String], period: Int)] = [:]
       for section in sections {
-        guard case .command(let command) = section.source else { continue }
-        if let output = self.runCommand(command) {
-          updates[section.id] = output
+        switch section.source {
+        case .command(let command):
+          if let output = self.runCommand(command) { updates[section.id] = output }
+        case .cycle(let command, let period):
+          cycleUpdates[section.id] = (self.runCommandLines(command) ?? [], period)
+        default:
+          break
         }
       }
       self.queue.async { [weak self] in
@@ -1015,15 +1062,69 @@ final class FlashStatusBarController {
         for (id, output) in updates {
           self.dynamicValues[id] = output
         }
+        for (id, update) in cycleUpdates {
+          self.applyCycleRefresh(id: id, lines: update.lines, period: update.period)
+        }
         self.commandRefreshInFlight = false
+        self.armCycleTimer()
         self.publishCurrentModel()
       }
     }
   }
 
+  /// Fold a fresh run's lines into a cycle's state, keeping the currently shown
+  /// index where possible so a re-fetch doesn't jump the visible line.
+  private func applyCycleRefresh(id: String, lines: [String], period: Int) {
+    var state =
+      cycles[id]
+      ?? CycleState(lines: [], index: 0, periodSeconds: period, lastRotate: Date())
+    state.lines = lines
+    state.periodSeconds = period
+    if state.index >= lines.count { state.index = 0 }
+    cycles[id] = state
+    dynamicValues[id] = lines.isEmpty ? "" : lines[state.index]
+    FlashLog.debug("[statusbar] cycle refresh id=\(id) lines=\(lines.count) index=\(state.index)")
+  }
+
+  /// Rotate cycles on their period. A single 1s timer drives it; `tickCycles`
+  /// advances only cycles whose period has actually elapsed (time-based, off
+  /// `lastRotate`). Armed once and left running — re-creating it on every
+  /// command refresh would reset its deadline and it would never fire.
+  private func armCycleTimer() {
+    guard cycleTimer == nil else { return }
+    guard cycles.values.contains(where: { $0.lines.count > 1 }) else { return }
+    let timer = DispatchSource.makeTimerSource(queue: queue)
+    timer.schedule(
+      deadline: .now() + .seconds(1), repeating: .seconds(1), leeway: .milliseconds(200))
+    timer.setEventHandler { [weak self] in self?.tickCycles() }
+    cycleTimer = timer
+    timer.resume()
+  }
+
+  private func tickCycles() {
+    let now = Date()
+    var changed = false
+    for id in Array(cycles.keys) {
+      guard var state = cycles[id], state.lines.count > 1 else { continue }
+      guard now.timeIntervalSince(state.lastRotate) >= Double(state.periodSeconds) - 0.5 else {
+        continue
+      }
+      state.index = (state.index + 1) % state.lines.count
+      state.lastRotate = now
+      cycles[id] = state
+      dynamicValues[id] = state.lines[state.index]
+      changed = true
+      FlashLog.debug("[statusbar] cycle rotate id=\(id) index=\(state.index)/\(state.lines.count)")
+    }
+    if changed { publishCurrentModel() }
+  }
+
   private func refreshSourcesForCurrentTemplate() {
     refreshTimer?.cancel()
     refreshTimer = nil
+    cycleTimer?.cancel()
+    cycleTimer = nil
+    cycles = cycles.filter { id, _ in template.cycleSections.contains { $0.id == id } }
     nextCommandRefreshAt = nil
     nextClockRefreshAt = nil
     commandRefreshGeneration &+= 1
@@ -1180,7 +1281,23 @@ final class FlashStatusBarController {
       || raw.contains("#[blink")
   }
 
+  /// Single-line command value (stdout trimmed; nil if empty).
   private func runCommand(_ command: FlashStatusBarCommand) -> String? {
+    let trimmed = runCommandOutput(command)?.trimmed
+    return (trimmed?.isEmpty ?? true) ? nil : trimmed
+  }
+
+  /// Multi-line command value for `#{cycle:…}` — one non-empty line per entry,
+  /// each trimmed. nil if the command produced nothing.
+  private func runCommandLines(_ command: FlashStatusBarCommand) -> [String]? {
+    guard let output = runCommandOutput(command) else { return nil }
+    let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+      .map { String($0).trimmed }
+      .filter { !$0.isEmpty }
+    return lines.isEmpty ? nil : lines
+  }
+
+  private func runCommandOutput(_ command: FlashStatusBarCommand) -> String? {
     guard let executable = command.argv.first, !executable.isEmpty else { return nil }
 
     let process = Process()
@@ -1189,7 +1306,19 @@ final class FlashStatusBarController {
     FlashProcessEnvironment.shared.apply(to: process)
     let stdout = Pipe()
     process.standardOutput = stdout
-    process.standardError = Pipe()
+    // Discard stderr through the shared null device. An unread stderr `Pipe()`
+    // can fill its ~64KB buffer and wedge the child before it exits.
+    process.standardError = FileHandle.nullDevice
+
+    // Signal completion from `terminationHandler` rather than parking a pooled
+    // GCD thread in `waitUntilExit()`. A status command that hangs and ignores
+    // SIGTERM would otherwise leak that blocked thread on every refresh until
+    // the dispatch pool (soft limit ~70) is exhausted — which then starves even
+    // Apple Event delivery, so `flash <verb>` (e.g. a script's `alert_show`)
+    // starts timing out with errAETimeout (-1712). Only the dedicated command
+    // queue blocks here, never a shared pool thread.
+    let semaphore = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in semaphore.signal() }
 
     do {
       try process.run()
@@ -1197,23 +1326,20 @@ final class FlashStatusBarController {
       return nil
     }
 
-    let semaphore = DispatchSemaphore(value: 0)
-    DispatchQueue.global(qos: .utility).async {
-      process.waitUntilExit()
-      semaphore.signal()
-    }
-
     if semaphore.wait(timeout: .now() + command.timeoutSeconds) == .timedOut {
-      process.terminate()
-      _ = semaphore.wait(timeout: .now() + 0.5)
+      let pid = process.processIdentifier
+      process.terminate()  // SIGTERM
+      // Escalate to SIGKILL shortly after if it's still alive, without blocking
+      // this queue or parking a thread on the process.
+      DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+        if process.isRunning { kill(pid, SIGKILL) }
+      }
       return nil
     }
 
     guard process.terminationStatus == 0 else { return nil }
     let data = stdout.fileHandleForReading.readDataToEndOfFile()
-    guard let output = String(data: data, encoding: .utf8) else { return nil }
-    let trimmed = output.trimmed
-    return trimmed.isEmpty ? nil : trimmed
+    return String(data: data, encoding: .utf8)
   }
 
   private func expandHome(_ raw: String) -> String {

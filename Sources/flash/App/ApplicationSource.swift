@@ -13,11 +13,89 @@ final class ApplicationSource: FlashSource {
     CandidateSourceDescriptor(name: "core.apps", kind: .locations, priority: .high)
   ]
   private let cacheLock = NSLock()
-  private var installedItemsCache: [Candidate]?
+  /// Always-readable immutable snapshot. An empty array means the resident's
+  /// first asynchronous index has not landed yet (or there are no installed
+  /// apps); the flashlight gather never turns that state into a main-thread
+  /// filesystem scan.
+  private var installedItemsCache: [Candidate] = []
+  private var installedIndexReady = false
+  private var installedIndexWaiters: [() -> Void] = []
   private var ignoredAppMatcher: IgnoredAppMatcher
+  private var directoryWatcher: ApplicationDirectoryWatcher?
+  private let installedAppScanner: () -> [Candidate]
+  private let indexQueue = DispatchQueue(
+    label: "com.flash.app.application-index",
+    qos: .utility)
 
-  init(ignoredApps: [String] = []) {
+  init(
+    ignoredApps: [String] = [],
+    installedAppScanner: (() -> [Candidate])? = nil,
+    watchesApplicationDirectories: Bool = true,
+    automaticallyPrewarms: Bool = true
+  ) {
     self.ignoredAppMatcher = IgnoredAppMatcher(ignoredApps)
+    self.installedAppScanner =
+      installedAppScanner
+      ?? { Self.scanApplicationBundleCandidates(roots: Self.applicationSearchRoots()) }
+    if watchesApplicationDirectories {
+      startDirectoryWatcher()
+    }
+    if automaticallyPrewarms {
+      prewarmInstalledApps()
+    }
+  }
+
+  /// Watch the application roots so a freshly installed (or removed) app
+  /// shows up in flashlight without a Flash restart. The installed-apps
+  /// scan is otherwise cached for the process lifetime — see
+  /// `installedAppItems()`.
+  private func startDirectoryWatcher() {
+    let paths = Self.applicationSearchRoots()
+      .map(\.path)
+      .filter { FileManager.default.fileExists(atPath: $0) }
+    guard !paths.isEmpty else { return }
+    directoryWatcher = ApplicationDirectoryWatcher(paths: paths) { [weak self] in
+      self?.prewarmInstalledApps()
+    }
+  }
+
+  /// Queue a complete installed-app index off the caller thread. The resident
+  /// starts one during `ApplicationSource` construction; directory changes and
+  /// ignore-list changes reuse the same serial queue. The optional completion
+  /// is intentionally internal and makes the asynchronous cache contract
+  /// deterministic in tests.
+  func prewarmInstalledApps(completion: (() -> Void)? = nil) {
+    indexQueue.async { [weak self] in
+      self?.reindexInstalledApps()
+      completion?()
+    }
+  }
+
+  /// Rescan the application roots and atomically replace the installed-apps
+  /// snapshot. The scan happens outside the lock; the swap drops if the ignore
+  /// set changed underneath it, because that change queues its own newer scan.
+  private func reindexInstalledApps() {
+    cacheLock.lock()
+    let matcher = ignoredAppMatcher
+    cacheLock.unlock()
+
+    let scanned = CandidateFinder.prepare(
+      installedAppScanner().filter { !matcher.contains($0) })
+
+    var waiters: [() -> Void] = []
+    cacheLock.lock()
+    if ignoredAppMatcher == matcher {
+      installedItemsCache = scanned
+      if !installedIndexReady {
+        installedIndexReady = true
+        waiters = installedIndexWaiters
+        installedIndexWaiters.removeAll(keepingCapacity: false)
+      }
+    }
+    cacheLock.unlock()
+    for waiter in waiters {
+      DispatchQueue.main.async(execute: waiter)
+    }
   }
 
   func supports(_ context: AppContext) -> Bool { false }
@@ -39,6 +117,36 @@ final class ApplicationSource: FlashSource {
         running: running,
         installed: installedAppItems())
     }
+  }
+
+  /// Return the current app snapshot without ever initiating filesystem work.
+  /// Running-only scope is immediately complete. All-app scope settles
+  /// synchronously once the resident's initial index exists; a cold request
+  /// merely waits on that already-running prewarm and lets the host's 150-ms
+  /// barrier decide whether the reply belongs to this session.
+  func snapshotCandidates(
+    in environment: FlashSourceEnvironment,
+    scope: CandidateScope,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    guard scope == .all else {
+      completion(candidates(in: environment, scope: scope))
+      return
+    }
+    cacheLock.lock()
+    if installedIndexReady {
+      cacheLock.unlock()
+      completion(candidates(in: environment, scope: scope))
+      return
+    }
+    installedIndexWaiters.append { [weak self] in
+      guard let self else {
+        completion([])
+        return
+      }
+      completion(self.candidates(in: environment, scope: scope))
+    }
+    cacheLock.unlock()
   }
 
   func candidate(
@@ -116,10 +224,18 @@ final class ApplicationSource: FlashSource {
   }
 
   func updateIgnoredApps(_ ignoredApps: [String]) {
+    let matcher = IgnoredAppMatcher(ignoredApps)
     cacheLock.lock()
-    ignoredAppMatcher = IgnoredAppMatcher(ignoredApps)
-    installedItemsCache = nil
+    guard ignoredAppMatcher != matcher else {
+      cacheLock.unlock()
+      return
+    }
+    ignoredAppMatcher = matcher
+    // Apply newly ignored entries immediately to the current atomic snapshot;
+    // the queued full scan restores any entries that were newly unignored.
+    installedItemsCache.removeAll { matcher.contains($0) }
     cacheLock.unlock()
+    prewarmInstalledApps()
   }
 
   private func ignoredAppMatcherSnapshot() -> IgnoredAppMatcher {
@@ -244,27 +360,9 @@ final class ApplicationSource: FlashSource {
 
   private func installedAppItems() -> [Candidate] {
     cacheLock.lock()
-    let matcher = ignoredAppMatcher
-    if let cached = installedItemsCache {
-      cacheLock.unlock()
-      return cached
-    }
+    let cached = installedItemsCache
     cacheLock.unlock()
-
-    let scanned = Self.scanApplicationBundleCandidates(roots: Self.applicationSearchRoots())
-      .filter { !matcher.contains($0) }
-    cacheLock.lock()
-    if let cached = installedItemsCache {
-      cacheLock.unlock()
-      return cached
-    }
-    guard ignoredAppMatcher == matcher else {
-      cacheLock.unlock()
-      return scanned
-    }
-    installedItemsCache = scanned
-    cacheLock.unlock()
-    return scanned
+    return cached
   }
 
   private static func appBundleItem(fromBundleURL url: URL) -> Candidate {

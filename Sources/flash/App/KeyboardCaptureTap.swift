@@ -20,22 +20,13 @@ final class KeyboardCaptureTap {
   private var runLoopSource: CFRunLoopSource?
   private let shouldSwallow: (CGEvent) -> Bool
   private let handle: (NSEvent) -> Void
-  /// Decide whether a mouse-button event should be consumed (returns true to
-  /// swallow it so it never reaches any app/window). Runs on the main thread in
-  /// the tap callback; any heavier side effect (e.g. opening a link) must be
-  /// deferred by the closure itself. Used to intercept clicks on Flash's status
-  /// bar — window-level click-catchers can't reliably receive clicks in the
-  /// menu-bar band, so the swallow happens here instead.
-  private let mouseShouldSwallow: (CGEventType, CGEvent) -> Bool
 
   init(
     shouldSwallow: @escaping (CGEvent) -> Bool,
-    handle: @escaping (NSEvent) -> Void,
-    mouseShouldSwallow: @escaping (CGEventType, CGEvent) -> Bool = { _, _ in false }
+    handle: @escaping (NSEvent) -> Void
   ) {
     self.shouldSwallow = shouldSwallow
     self.handle = handle
-    self.mouseShouldSwallow = mouseShouldSwallow
   }
 
   /// Pure swallow decision: given the coarse flash mode and the overlay's input
@@ -52,7 +43,7 @@ final class KeyboardCaptureTap {
     switch inputMode {
     case .normal, .hints:
       return true
-    case .commandLine, .modal, .candidateFinder:
+    case .commandLine, .candidateFinder:
       return false
     }
   }
@@ -62,12 +53,11 @@ final class KeyboardCaptureTap {
   @discardableResult
   func start() -> Bool {
     guard tap == nil else { return true }
-    let maskedTypes: [CGEventType] = [
-      .keyDown,
-      .leftMouseDown, .leftMouseUp,
-      .rightMouseDown, .rightMouseUp,
-      .otherMouseDown, .otherMouseUp,
-    ]
+    // Keyboard only. Status-bar link clicks are handled by an ordinary app
+    // window (`StatusLinkCatcherPanel`) through normal Cocoa hit-testing — the
+    // tap deliberately never inspects or swallows mouse events, so native menus,
+    // screenshots, and drags that begin in the bar band are untouched.
+    let maskedTypes: [CGEventType] = [.keyDown]
     var mask: CGEventMask = 0
     for t in maskedTypes { mask |= CGEventMask(1) << CGEventMask(t.rawValue) }
     let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -103,8 +93,14 @@ final class KeyboardCaptureTap {
     guard let refcon else { return passthrough }
     let me = Unmanaged<KeyboardCaptureTap>.fromOpaque(refcon).takeUnretainedValue()
     // The system disables a tap that runs over its time budget; re-enable and
-    // pass this event through so capture self-heals.
+    // pass this event through so capture self-heals. A timeout disable is
+    // direct evidence the main run loop (which hosts the tap source) stalled
+    // past the OS budget — i.e. keyboard input went dead system-wide — so it
+    // must leave a trace even though the recovery is automatic.
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+      FlashLog.warn(
+        "[tap] re-enabled after "
+          + "\(type == .tapDisabledByTimeout ? "timeout" : "user_input") disable")
       if let tap = me.tap { CGEvent.tapEnable(tap: tap, enable: true) }
       return passthrough
     }
@@ -117,20 +113,6 @@ final class KeyboardCaptureTap {
       == NormalModeDispatcher.syntheticKeyEventTag
     {
       return passthrough
-    }
-    switch type {
-    case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
-      .otherMouseDown, .otherMouseUp:
-      // Skip Flash's own forwarded clicks (tagged) so re-synthesised clicks
-      // still reach their target app instead of being swallowed here.
-      if event.getIntegerValueField(.eventSourceUserData)
-        == ActionDispatcher.syntheticMouseEventTag
-      {
-        return passthrough
-      }
-      return me.mouseShouldSwallow(type, event) ? nil : passthrough
-    default:
-      break
     }
     guard type == .keyDown, me.shouldSwallow(event) else { return passthrough }
     if let ns = NSEvent(cgEvent: event) {

@@ -116,7 +116,9 @@ extension AppDelegate {
     for diagnostic in cfg.loadingDiagnostics {
       FlashLog.warn("[config] \(diagnostic.logMessage)")
     }
-    FlashLog.debug("[config] resolved_config=\(cfg.resolvedConfigJSON)")
+    FlashLog.debug(
+      "[config] resolved warnings=\(cfg.warnings.count) "
+        + "configured_plugins=\(cfg.plugins.settings.count)")
     FlashLog.debug("[config] resolved_hints_keys=\(cfg.resolvedHintsKeysJSON)")
     showConfigErrorAlertIfNeeded(for: cfg)
     overlay.overlayConfig = cfg.overlay
@@ -130,7 +132,7 @@ extension AppDelegate {
     pluginManager.emit(
       PluginEvent(
         name: "core:config.changed",
-        payload: ["resolved": cfg.resolvedConfigJSON],
+        payload: [:],
         bundleID: nil,
         configPath: "*",
         focused: nil))
@@ -143,6 +145,7 @@ extension AppDelegate {
     // it is NOT derived from advanced mode. `[statusbar] enabled` alone
     // decides whether the bar (and its reserved screen space) appears.
     statusBarVisible = cfg.statusBar.enabled
+    overlay.statusBarMonitor = cfg.statusBar.monitor
     applySystemStatusBarSpaceReservation(enabled: statusBarVisible)
     if statusBarVisible {
       statusBarController?.start()

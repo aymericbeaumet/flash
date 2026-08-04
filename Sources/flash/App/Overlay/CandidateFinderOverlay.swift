@@ -2,14 +2,15 @@ import AppKit
 import FlashCore
 import QuartzCore
 
-/// Candidate finder results panel: the list of `:open` /
-/// `:flashlight` matches that appears below the centered command-line prompt.
+/// Candidate finder results panel: the list of `:flashlight` matches that
+/// appears below the centered command-line prompt.
 /// Renders one `CATextLayer` per visible row. A single multi-line layer was
 /// cheaper for plain text but expensive for emoji searches because CoreText
 /// had to resolve fallback fonts across the whole list on every keystroke.
 extension OverlayPanel {
   func displayCandidateFinder(query: String, items: [CandidateDisplayItem]) {
-    FlashLog.trace("[overlay] display_candidate_finder query=\(query) items=\(items.count)")
+    FlashLog.trace(
+      "[overlay] display_candidate_finder query_length=\(query.count) items=\(items.count)")
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer {
@@ -79,7 +80,20 @@ extension OverlayPanel {
     let visible = snapshot.mainVisibleFrame
     let scale = snapshot.mainScale
     let rowItems = candidateFinderResultsItems
-    let rowCount = max(1, rowItems.count)
+    let rowHeight = Self.candidateFinderResultRowHeight(font: labelFont)
+    let minimumY = visible.minY - panelFrame.minY + 10
+    // Clamp the row count to what physically fits between the prompt and
+    // the screen bottom. `candidateFinderResultsY` clamps only the panel's
+    // origin, so without this an oversized list (e.g. a large configured
+    // suggestion count) grows taller than the available band and draws up
+    // across the prompt itself.
+    let maxRows = Self.candidateFinderMaxVisibleRows(
+      commandPromptFrame: commandPromptLayer.frame,
+      minimumY: minimumY,
+      rowHeight: rowHeight,
+      lineSpacing: Self.candidateFinderLineSpacing,
+      verticalPadding: Self.candidateFinderVerticalPadding)
+    let rowCount = max(1, min(rowItems.count, maxRows))
     let measurementLines = candidateFinderResultsMeasurementText.split(
       separator: "\n",
       omittingEmptySubsequences: false)
@@ -95,13 +109,11 @@ extension OverlayPanel {
     // Compute height from the exact visible row count. The row layers below
     // fill this height directly, so there is no trailing multi-line text
     // fragment slack after the final candidate.
-    let rowHeight = Self.candidateFinderResultRowHeight(font: labelFont)
     let labelHeight = Self.candidateFinderResultsHeight(
       lineCount: rowCount,
       font: labelFont,
       lineSpacing: Self.candidateFinderLineSpacing)
     let height = labelHeight + Self.candidateFinderVerticalPadding * 2
-    let minimumY = visible.minY - panelFrame.minY + 10
     let y = Self.candidateFinderResultsY(
       commandPromptFrame: commandPromptLayer.frame,
       height: height,
@@ -257,6 +269,23 @@ extension OverlayPanel {
     height: CGFloat,
     minimumY: CGFloat
   ) -> CGFloat {
-    max(minimumY, commandPromptFrame.minY - 6 - height)
+    max(minimumY, commandPromptFrame.minY - candidateFinderPromptGap - height)
+  }
+
+  /// How many result rows fit between the command prompt's bottom edge and
+  /// the screen's bottom margin (`minimumY`). Always at least 1 so a
+  /// degenerate geometry still shows the top match / empty message.
+  static func candidateFinderMaxVisibleRows(
+    commandPromptFrame: CGRect,
+    minimumY: CGFloat,
+    rowHeight: CGFloat,
+    lineSpacing: CGFloat,
+    verticalPadding: CGFloat
+  ) -> Int {
+    guard rowHeight > 0 else { return 1 }
+    let available =
+      commandPromptFrame.minY - candidateFinderPromptGap - minimumY - verticalPadding * 2
+    let rows = Int((available + lineSpacing) / (rowHeight + lineSpacing))
+    return max(1, rows)
   }
 }

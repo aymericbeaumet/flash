@@ -21,8 +21,13 @@ import FlashCore
 ///     attribute.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
 ///     returned targets is deterministic).
-///   - No per-IPC timeout. macOS default (6 s) is in place. Any tighter
-///     cap silently dropped Firefox's `AXWebArea` subtree (lazy build).
+///   - Per-IPC messaging timeout is bounded, not the 6 s system default:
+///     the walk root is built via `AXApp.make` (guardrail-enforced), which
+///     applies `AXApp.defaultMessagingTimeout` (1.5 s) to the app element
+///     and every element reached through it, so a wedged app can't beachball
+///     the main run loop for the full 6 s. The single-attribute children
+///     fallback (below) recovers the batched-IPC drops this cap can cause on
+///     Firefox's lazily-built `AXWebArea` subtree.
 ///   - Top-level subtrees always fan out across concurrent workers via
 ///     `DispatchQueue.concurrentPerform`, pipelining many AX IPCs
 ///     against the target app's main thread. The single-attribute
@@ -382,37 +387,30 @@ public final class AccessibilityProvider: FlashSource {
     let element: AXUIElement
   }
 
-  /// Lock-protected collector for merging per-worker `WalkState`s back
-  /// onto the activation's combined result. Allocated once per
-  /// concurrent fan-out.
-  private final class WalkCollector {
-    let lock = NSLock()
-    var confirmedTargets: [JumpTarget] = []
-    var pendingTargets: [PendingTarget] = []
-
-    func absorb(_ state: WalkState) {
-      lock.lock()
-      confirmedTargets.append(contentsOf: state.confirmedTargets)
-      pendingTargets.append(contentsOf: state.pendingTargets)
-      lock.unlock()
-    }
-  }
-
   public func discover(in context: AppContext) throws -> [JumpTarget] {
     let app = AXApp.make(pid: context.processID)
-    // Wake the target app's a11y engine. Some apps (notably Firefox)
-    // run a lazy/idle accessibility service that only exposes the
-    // window-decoration buttons until an assistive technology
+    // Wake the target app's a11y engine. Some apps (notably Firefox and
+    // Chromium/Electron) run a lazy/idle accessibility service that only
+    // exposes the window-decoration buttons until an assistive technology
     // explicitly signals it's reading the tree. The undocumented but
     // widely-used `AXEnhancedUserInterface` and `AXManualAccessibility`
     // attributes are the standard signals — VoiceOver sets the same
     // ones. Best-effort: errors are ignored because most apps don't
     // recognise these attributes and that's fine.
-    let trueRef = kCFBooleanTrue as CFTypeRef
-    _ = AXUIElementSetAttributeValue(
-      app, "AXEnhancedUserInterface" as CFString, trueRef)
-    _ = AXUIElementSetAttributeValue(
-      app, "AXManualAccessibility" as CFString, trueRef)
+    //
+    // Skipped for Apple's own apps: they're native AppKit/WebKit (WebKit
+    // self-enables its web-area tree on first AX access) and the flag is
+    // process-sticky — it survives until the app relaunches and tells it an
+    // assistive client is permanently watching. SwiftUI-heavy apps like
+    // Notes respond with eager accessibility bookkeeping on every UI
+    // update, measurably degrading them long after the walk that set it.
+    if !context.bundleIdentifier.hasPrefix("com.apple.") {
+      let trueRef = kCFBooleanTrue as CFTypeRef
+      _ = AXUIElementSetAttributeValue(
+        app, "AXEnhancedUserInterface" as CFString, trueRef)
+      _ = AXUIElementSetAttributeValue(
+        app, "AXManualAccessibility" as CFString, trueRef)
+    }
     let screenH = primaryScreenHeight()
 
     // The clip rect is supplied by AppMonitor from its single
@@ -673,7 +671,7 @@ public final class AccessibilityProvider: FlashSource {
         resolveClickPoint: resolveClickPoint,
         entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
         preferHostClick: preferHostClick,
-        priority: isTabAnchor ? .critical : .normal,
+        priority: isTabAnchor ? .urgent : .normal,
         providerID: identifier
       )
       let isRowOrCell = capturedRole == "AXRow" || capturedRole == "AXCell"
@@ -696,6 +694,33 @@ public final class AccessibilityProvider: FlashSource {
         // recover the actionable rows without hinting genuinely inert UI.
         state.pendingTargets.append(PendingTarget(candidate: candidate, element: captured))
       }
+    }
+
+    // Descent pruning (native only). An element whose frame is valid and lies
+    // wholly outside the visible clip cannot contain an on-screen target: a
+    // native container lays its children out within its own bounds, and the
+    // capture gate above already rejects anything outside `visible` — so
+    // skipping the subtree changes no hint output, it only avoids the per-node
+    // batch IPC for descendants that would all be discarded anyway.
+    //
+    // This is what makes Notes (and any long native list) usable: Notes exposes
+    // its whole note list — ~300 rows, ~2500 AX nodes — and answers AX ~0.4ms a
+    // node, so an unpruned walk pins Notes' AX main thread for 1–2s on every
+    // focus change and every keystroke-driven re-walk. That saturation is felt
+    // as system-wide input lag because Flash's key tap shares the main runloop.
+    // Pruning the scrolled-off rows cuts the walk ~2500 → ~470 nodes.
+    //
+    // Restricted to `!insideWebArea`: CSS transforms / `overflow: visible` /
+    // fixed positioning let a web node render outside its ancestor's reported
+    // frame, so geometric containment isn't guaranteed there. Never prune the
+    // root (`depth == 0`) or a frameless / zero-size container — its children
+    // may carry the real geometry.
+    if depth > 0, !insideWebArea,
+      let posV = posValue, let sizeV = sizeValue,
+      let elementFrame = frameFromAX(pos: posV, size: sizeV, screenH: screenH),
+      !elementFrame.isEmpty, !visible.intersects(elementFrame)
+    {
+      return
     }
 
     // Always walk `kAXChildrenAttribute`. Native table/outline views sometimes
@@ -741,7 +766,6 @@ public final class AccessibilityProvider: FlashSource {
     // case; deeper than that the dispatch overhead dominates. Single-
     // child case falls through to the serial loop below.
     if fanoutBudget > 0, children.count > 1 {
-      let collector = WalkCollector()
       let captureScreenH = screenH
       let captureVisible = visible
       let capturePid = pid
@@ -753,32 +777,41 @@ public final class AccessibilityProvider: FlashSource {
       let captureIdPrefix = idPrefix
       let captureNewBudget = fanoutBudget - 1
       let childrenSnapshot = children
-      DispatchQueue.concurrentPerform(iterations: childrenSnapshot.count) { i in
-        var workerState = WalkState()
-        // Encode the fan-out level into the id prefix so ids stay
-        // unique across nested fan-out points. Outer fan-out emits
-        // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
-        let childPrefix = captureIdPrefix == "r" ? "w\(i)" : "\(captureIdPrefix)w\(i)"
-        self.walk(
-          childrenSnapshot[i],
-          depth: captureDepth + 1,
-          screenH: captureScreenH,
-          visible: captureVisible,
-          pid: capturePid,
-          insideClickable: captureInsideClickable,
-          insideWebArea: captureInsideWebArea,
-          insideExtensionDocument: captureInsideExtensionDocument,
-          parentRole: captureParentRole,
-          idPrefix: childPrefix,
-          fanoutBudget: captureNewBudget,
-          state: &workerState
-        )
-        collector.absorb(workerState)
+      // Each worker writes only its own slot: the indices are disjoint so this
+      // is lock-free (mirrors `resolvePendingActionChecks`), AND the merge below
+      // runs in child order regardless of completion order. That determinism
+      // matters — `TargetFinalizer`'s dedup tiebreak keys off this ordering, so
+      // the old lock-based append (order = worker scheduling) could flip which
+      // of two equal-area overlapping targets survived dedup run-to-run.
+      var workerStates = [WalkState](repeating: WalkState(), count: childrenSnapshot.count)
+      workerStates.withUnsafeMutableBufferPointer { buf in
+        DispatchQueue.concurrentPerform(iterations: childrenSnapshot.count) { i in
+          var workerState = WalkState()
+          // Encode the fan-out level into the id prefix so ids stay
+          // unique across nested fan-out points. Outer fan-out emits
+          // "w0", "w1", ..., inner fan-out emits "<outerPrefix>w0", etc.
+          let childPrefix = captureIdPrefix == "r" ? "w\(i)" : "\(captureIdPrefix)w\(i)"
+          self.walk(
+            childrenSnapshot[i],
+            depth: captureDepth + 1,
+            screenH: captureScreenH,
+            visible: captureVisible,
+            pid: capturePid,
+            insideClickable: captureInsideClickable,
+            insideWebArea: captureInsideWebArea,
+            insideExtensionDocument: captureInsideExtensionDocument,
+            parentRole: captureParentRole,
+            idPrefix: childPrefix,
+            fanoutBudget: captureNewBudget,
+            state: &workerState
+          )
+          buf[i] = workerState
+        }
       }
-      collector.lock.lock()
-      state.confirmedTargets.append(contentsOf: collector.confirmedTargets)
-      state.pendingTargets.append(contentsOf: collector.pendingTargets)
-      collector.lock.unlock()
+      for workerState in workerStates {
+        state.confirmedTargets.append(contentsOf: workerState.confirmedTargets)
+        state.pendingTargets.append(contentsOf: workerState.pendingTargets)
+      }
       return
     }
 

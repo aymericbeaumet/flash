@@ -37,34 +37,34 @@ final class CommandLineTextField: NSTextField {
   override var acceptsFirstResponder: Bool { true }
 }
 
-final class ModalTextView: NSTextView {
-  weak var overlayCoordinator: OverlayCoordinator?
-
-  override var acceptsFirstResponder: Bool { true }
-
-  override func keyDown(with event: NSEvent) {
-    if let panel = window as? OverlayPanel, panel.consumeModalKeyDown(event) { return }
-    overlayCoordinator?.overlayDidPassThroughModalKey(event)
-  }
-
-  override func cancelOperation(_ sender: Any?) {
-    overlayCoordinator?.overlayDidCancelModal()
-  }
-}
-
 final class OverlayPanel: NSPanel {
   static let transientOverlayWindowLevel: NSWindow.Level = .screenSaver
-  // `.statusBar` (level 25) sits in the band macOS reserves for system
-  // status items — windows there can't become key, which locks Flash's
-  // normal-mode capture out of the panel and spins the recapture loop
-  // forever. The main-menu window level (24) lets us own key focus; we make the
-  // Flash status bar visually solid by setting an opaque
-  // `backgroundColor` on its gradient layer rather than relying on
-  // outranking the translucent native menu bar.
-  static let persistentStatusWindowLevel: NSWindow.Level = .mainMenu
+  // The Flash status bar is an ordinary elevated window: above the focused
+  // app's normal windows so it stays visible, but a plain `.floating` level —
+  // NOT jammed against the menu-bar band one level under the system menu
+  // window, where it competed with the system menu bar for clicks. The native
+  // menu bar (app menus at the menu-bar window level 24, extras at
+  // `.statusBar`/25, and the auto-hide reveal the system draws on hover) sits
+  // well above `.floating`, so by pure window z-order it expands on top of
+  // Flash and takes the click; when it's tucked away, the band is Flash's.
+  // Normal-mode keystroke capture runs through the session CGEvent tap (not
+  // key focus), and the key-window fallback still works at this level (only
+  // `.statusBar`/25 is barred from becoming key).
+  static let persistentStatusWindowLevel: NSWindow.Level = .floating
+  // The status bar's *visual* lives on the `.floating` panel above, but its
+  // click windows must sit at the system menu-bar level: macOS only delivers
+  // menu-bar-band clicks to windows at (or above) that level — lower windows
+  // get nothing and the click falls through to the desktop. They don't steal
+  // native clicks despite outranking it, because they flip to click-through
+  // (`ignoresMouseEvents`) whenever the native menu bar is revealed; see
+  // `nativeMenuBarIsRevealed` / `menuBarRevealTimer`.
+  static let statusBarClickWindowLevel: NSWindow.Level = .statusBar
   static let candidateFinderHorizontalPadding: CGFloat = 8
   static let candidateFinderVerticalPadding: CGFloat = 7
   static let candidateFinderLineSpacing: CGFloat = 2
+  /// Vertical gap between the command prompt's bottom edge and the top of
+  /// the results panel below it.
+  static let candidateFinderPromptGap: CGFloat = 6
 
   let contentLayer = CALayer()
   var hintLayers: [CAGradientLayer] = []
@@ -80,6 +80,11 @@ final class OverlayPanel: NSPanel {
   /// `#{mode}#[fg=colour245] · HN …`) is a normal tmux-styled run rendered
   /// here so it doesn't inherit the bold mode-pill palette.
   let statusLeftTrailingLabel = CATextLayer()
+  /// The rotating `#{cycle:…}` run in the left-trailing region, rendered in its
+  /// own layer (clipped to one line) so it can slide vertically while the text
+  /// around it — the mode pill, the "HN" label — stays put.
+  let statusLeftTrailingCycleLayer = CATextLayer()
+  var lastRenderedLeftTrailingCycle: String?
   let statusRightLabel = CATextLayer()
   /// Status bars rendered on every non-main screen. Allocated lazily by
   /// `configureSecondaryStatusBars` and pruned when displays disconnect.
@@ -87,32 +92,30 @@ final class OverlayPanel: NSPanel {
   /// native top-band height so users see the bar at the right vertical
   /// position regardless of which monitor they look at.
   var secondaryStatusBars: [SecondaryStatusBar] = []
-  /// Transparent click-catcher windows placed over `#[link=…]` runs in the
-  /// status bar. The bar panel itself is `ignoresMouseEvents = true`
-  /// (click-through), so each link gets its own tiny interactive panel
-  /// sitting just above the bar. Pooled + repositioned on render.
-  var statusLinkCatchers: [StatusLinkCatcherPanel] = []
-  /// Signature of the currently-installed link rects, so an unchanged
-  /// render skips reordering the catcher windows.
-  var lastStatusLinkSignature: String?
-  /// Full-bar transparent shields (one per screen) that swallow clicks on
-  /// the status bar so they don't fall through to the wallpaper (which, with
-  /// macOS "click wallpaper to reveal desktop", would reveal the desktop).
-  /// They sit below the link catchers, so links still win.
-  var statusBarClickShields: [StatusLinkCatcherPanel] = []
-  var lastStatusShieldSignature: String?
-  /// Screen-coordinate `#[link=…]` rects + targets for the currently rendered
-  /// bar. The keyboard/mouse capture tap reads these to open a link when a
-  /// click lands on one (and to know which bar clicks to swallow), so clicks
-  /// are intercepted deterministically before any app sees them — the
-  /// click-catcher windows can't reliably receive clicks in the menu-bar band.
-  var statusBarLinkTargetsScreen: [(rect: CGRect, url: URL)] = []
+  /// Which displays render the bar (`[statusbar] monitor`). `primary` skips the
+  /// secondary (non-main) screen bars. Set by the AppDelegate on config load.
+  var statusBarMonitor: Config.StatusBar.Monitor = .all
+  /// One full-band click window per screen (the bar's visual lives on this
+  /// click-through panel, so these windows do the click work). They swallow
+  /// band clicks so a click on the bar never reveals the desktop, and open a
+  /// `#[link=…]` run when the click lands on one. Pooled + repositioned on
+  /// render. See `StatusBarClickPanel`.
+  var statusBarClickWindows: [StatusBarClickPanel] = []
+  /// Signature of the currently-installed band + link rects, so an unchanged
+  /// render skips reordering the click windows.
+  var lastStatusBarClickSignature: String?
+  /// Per-screen status-bar `#[link=…]` rects in screen coordinates, rebuilt on
+  /// every `configureModeBadge`. Keyed by each screen's frame so the `f` hint
+  /// path can place link hints only on the bar of the active window's screen
+  /// (not on every mirrored bar). Empty while the bar is hidden.
+  var statusBarLinkRectsByScreen: [(screenFrame: CGRect, links: [(rect: CGRect, url: URL)])] = []
+  /// Repeating probe that flips the click windows to click-through while the
+  /// native (auto-hidden) menu bar is revealed, so native wins those clicks.
+  var menuBarRevealTimer: DispatchSourceTimer?
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()
   let commandTextField = CommandLineTextField(frame: .zero)
-  let modalScrollView = NSScrollView(frame: .zero)
-  let modalTextView = ModalTextView(frame: .zero)
   let candidateFinderResultsLayer = CAGradientLayer()
   let candidateFinderResultsLabel = CATextLayer()
   var candidateFinderResultRowLayers: [CATextLayer] = []
@@ -205,19 +208,6 @@ final class OverlayPanel: NSPanel {
     didSet { commandLineCursorIndex = min(max(commandLineCursorIndex, 0), commandLineText.count) }
   }
   var candidateFinderQuery: String = ""
-
-  /// Dedicated `:clipboard` history modal. When `modalSelectable` is set the
-  /// `.modal` surface renders `selectableModalLines` as a navigable list
-  /// (arrows / `j` / `k`, Enter pastes the selection) instead of the
-  /// read-only help / `:plugins` text where every key is consumed.
-  var modalSelectable = false
-  var selectableModalLines: [String] = []
-  var selectableModalSelectedIndex = 0
-  /// One-key vim sequence buffer for the modal: when set, the next
-  /// `g` keypress maps to `scrollModal(.top)`. Cleared by any other key
-  /// or by the sequence-timeout fired from
-  /// `consumeModalScrollKey`.
-  var modalScrollGPending = false
 
   // Fallback border colour when the configured `hint_border` is malformed.
   static let fallbackBorderCGColor = NSColor.black.withAlphaComponent(0.4).cgColor
@@ -370,10 +360,15 @@ final class OverlayPanel: NSPanel {
     modeBadgeButtonLayer.sublayers = [modeBadgeLabel]
     statusLeftTrailingLabel.alignmentMode = .left
     statusLeftTrailingLabel.actions = OverlayPanel.noActions
+    statusLeftTrailingCycleLayer.alignmentMode = .left
+    statusLeftTrailingCycleLayer.actions = OverlayPanel.noActions
+    statusLeftTrailingCycleLayer.masksToBounds = true
+    statusLeftTrailingCycleLayer.isHidden = true
     statusRightLabel.alignmentMode = .right
     statusRightLabel.actions = OverlayPanel.noActions
     modeBadgeLayer.sublayers = [
-      statusAppLabel, modeBadgeButtonLayer, statusLeftTrailingLabel, statusRightLabel,
+      statusAppLabel, modeBadgeButtonLayer, statusLeftTrailingLabel,
+      statusLeftTrailingCycleLayer, statusRightLabel,
     ]
     commandPromptLayer.cornerRadius = 6
     commandPromptLayer.borderWidth = 1.5
@@ -407,9 +402,7 @@ final class OverlayPanel: NSPanel {
 
     self.contentView = view
     configureCommandTextField()
-    configureModalTextView()
     view.addSubview(commandTextField)
-    view.addSubview(modalScrollView)
     installPointerMonitors()
   }
 
@@ -418,7 +411,6 @@ final class OverlayPanel: NSPanel {
       NotificationCenter.default.removeObserver(observer)
     }
     removePointerMonitors()
-    removeModalDismissMonitors()
   }
 
   /// Allocate `count` chip+label layers and stash them in the pools. Called
@@ -471,10 +463,6 @@ final class OverlayPanel: NSPanel {
       return isVisible && isKeyWindow
         && (firstResponder === commandTextField || commandTextField.currentEditor() != nil)
     }
-    if inputMode == .modal {
-      return isVisible && isKeyWindow
-        && (firstResponder === self || firstResponder === modalTextView)
-    }
     return isVisible && isKeyWindow && firstResponder === self
   }
 
@@ -492,8 +480,6 @@ final class OverlayPanel: NSPanel {
   /// is gone.
   var pointerGlobalMonitor: Any?
   var pointerLocalMonitor: Any?
-  var modalClickGlobalMonitor: Any?
-  var modalClickLocalMonitor: Any?
 
   /// single device-pixel row and renders crisp.
   static func snap(_ rect: CGRect, scale: CGFloat) -> CGRect {
@@ -566,8 +552,6 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
-  func overlayDidCancelModal()
-  func overlayDidPassThroughModalKey(_ event: NSEvent)
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool
@@ -578,7 +562,6 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidUpdateCandidateFinderQuery(_ query: String)
   func overlayDidMoveCandidateFinderSelection(_ delta: Int)
   func overlayDidSubmitCandidateFinder()
-  func overlayDidSubmitSelectableModal()
   /// `[flashlight.aliases]` lookup hook. Returns the rewritten buffer +
   /// cursor when the latest keystroke landed on `<space>` after a
   /// registered shorthand bang (`!g ` → `!google `), `nil` otherwise.

@@ -28,21 +28,33 @@ extension AppDelegate {
       performScrollExtreme(kind, context: context, repeatCount: repeatCount)
       return
     }
-    var didScroll = false
-    for _ in 0..<normalizedRepeatCount(repeatCount) {
-      if NormalModeDispatcher.scroll(
-        kind,
-        pid: context.processID,
-        bundleID: context.bundleIdentifier,
-        windowFrame: context.frontWindowFrame)
-      {
-        didScroll = true
+    // Run the scroll off the main thread: `NormalModeDispatcher.scroll` walks the
+    // AX tree (up to ~600 nodes) to find the scrollable pane before synthesizing
+    // a wheel event, and main hosts the keyboard-capture tap — doing it inline
+    // stalled input for a whole `j`/`k` on a slow app. The scroll only touches
+    // thread-safe AX + CGEvent APIs, so hop to `axQueue` and update the overlay
+    // back on main. Rapid repeats serialize on the queue instead of blocking main.
+    let repeats = normalizedRepeatCount(repeatCount)
+    let pid = context.processID
+    let bundleID = context.bundleIdentifier
+    let windowFrame = context.frontWindowFrame
+    let monitor: AppMonitor = self.monitor
+    monitor.axQueue.async { [weak self] in
+      var didScroll = false
+      for _ in 0..<repeats {
+        if NormalModeDispatcher.scroll(kind, pid: pid, bundleID: bundleID, windowFrame: windowFrame)
+        {
+          didScroll = true
+        }
+      }
+      DispatchQueue.main.async {
+        guard let self else { return }
+        if didScroll {
+          monitor.invalidateAfterUserAction(pid: pid, reason: "normal_scroll")
+        }
+        self.applyModeOverlay()
       }
     }
-    if didScroll {
-      monitor.invalidateAfterUserAction(pid: context.processID, reason: "normal_scroll")
-    }
-    applyModeOverlay()
   }
 
   func performScrollExtreme(

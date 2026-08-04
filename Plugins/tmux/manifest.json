@@ -44,9 +44,7 @@
   ],
   "listen": [
     "core:focus.changed",
-    "core:apps.terminated",
-    "core:flashlight.opened",
-    "core:flash.started"
+    "core:apps.terminated"
   ],
   "sources": [
     {
@@ -65,6 +63,100 @@
     "tab_close",
     "tab_move_previous",
     "tab_move_next",
+    "pane_next",
+    "pane_previous",
+    "pane_split_vertical",
+    "pane_split_horizontal",
+    "pane_close",
     "app_reload"
-  ]
+  ],
+  "mappings": {
+    "items": [
+      {
+        "key": "cmd+1",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=1"]
+      },
+      {
+        "key": "cmd+2",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=2"]
+      },
+      {
+        "key": "cmd+3",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=3"]
+      },
+      {
+        "key": "cmd+4",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=4"]
+      },
+      {
+        "key": "cmd+5",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=5"]
+      },
+      {
+        "key": "cmd+6",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=6"]
+      },
+      {
+        "key": "cmd+7",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=7"]
+      },
+      {
+        "key": "cmd+8",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=8"]
+      },
+      {
+        "key": "cmd+9",
+        "mode": "all",
+        "command": ["flash", "tab_select", "--index=9"]
+      },
+      {
+        "key": "cmd+shift+<lbracket>",
+        "mode": "all",
+        "command": ["flash", "tab_previous"]
+      },
+      {
+        "key": "cmd+shift+<rbracket>",
+        "mode": "all",
+        "command": ["flash", "tab_next"]
+      },
+      {
+        "key": "cmd+t",
+        "mode": "all",
+        "command": ["flash", "tab_new"]
+      },
+      {
+        "key": "cmd+d",
+        "mode": "all",
+        "command": ["flash", "pane_split_vertical"]
+      },
+      {
+        "key": "cmd+shift+d",
+        "mode": "all",
+        "command": ["flash", "pane_split_horizontal"]
+      },
+      {
+        "key": "cmd+w",
+        "mode": "all",
+        "command": ["flash", "pane_close"]
+      },
+      {
+        "key": "cmd+<lbracket>",
+        "mode": "all",
+        "command": ["flash", "pane_previous"]
+      },
+      {
+        "key": "cmd+<rbracket>",
+        "mode": "all",
+        "command": ["flash", "pane_next"]
+      }
+    ]
+  }
 }

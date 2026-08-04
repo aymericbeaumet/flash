@@ -69,6 +69,7 @@ extension OverlayPanel {
     chip.sublayers = [label]
     var sublayers: [CALayer] = [chip]
     appendModeBadgeLayerIfNeeded(to: &sublayers, panelFrame: frame)
+    appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
     contentLayer.sublayers = sublayers
     transientContentVisible = true
     hintLayers.append(chip)

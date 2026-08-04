@@ -37,25 +37,12 @@ enum HotkeySyntax {
 
   static func parseModifiers<S: Sequence>(_ tokens: S) -> UInt32
   where S.Element == String {
+    // Modifier spellings live in one place (`KeyModifier`). Unknown tokens are
+    // dropped here; the registration then fails on the incomplete chord and the
+    // caller logs the bad source line.
     var flags: UInt32 = 0
     for raw in tokens {
-      switch raw.lowercased() {
-      case "cmd", "command":
-        flags |= UInt32(cmdKey)
-      case "shift":
-        flags |= UInt32(shiftKey)
-      case "alt", "opt", "option":
-        flags |= UInt32(optionKey)
-      case "ctrl", "control":
-        flags |= UInt32(controlKey)
-      case "":
-        continue
-      default:
-        // Unknown modifier — log via the caller's diagnostic path
-        // by returning what we have; the registration will likely
-        // fail and the caller will log the bad source line.
-        continue
-      }
+      if let modifier = KeyModifier(token: raw) { flags |= modifier.carbonFlag }
     }
     return flags
   }

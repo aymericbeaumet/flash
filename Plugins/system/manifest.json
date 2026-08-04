@@ -73,6 +73,9 @@
       "battery"
     ]
   },
+  "listen": [
+    "core:power.changed"
+  ],
   "sources": [
     {
       "name": "system.actions",

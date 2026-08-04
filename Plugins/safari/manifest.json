@@ -30,11 +30,11 @@
     "com.apple.SafariTechnologyPreview"
   ],
   "listen": [
-    "core:flash.started",
     "core:apps.changed",
     "core:apps.launched",
     "core:apps.terminated",
-    "core:focus.changed"
+    "core:focus.changed",
+    "core:window.focus.changed"
   ],
   "sources": [
     {

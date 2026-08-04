@@ -13,6 +13,8 @@ DerivedData/
 Plugins/*/target/
 Plugins/*/flash-plugin-*
 Plugins/target/
+# Bundled plugins are executable crates: pin their shared dependency graph.
+!Plugins/Cargo.lock
 
 ## Editor / OS
 .DS_Store

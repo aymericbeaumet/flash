@@ -83,12 +83,11 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(transition(chars: "g").pending, "g")
     XCTAssertEqual(command(pending: "g", chars: "g"), .scroll(.top))
     XCTAssertEqual(command(chars: "G", ignoring: "g", flags: [.shift]), .scroll(.bottom))
-    // History uses `H`/`L`; `[h`/`]h` were removed, so `[`/`]` + `h`
-    // falls back to a fresh `h` (scroll left).
+    // History: `H`/`L`, with `[h`/`]h` as unimpaired-style aliases.
     XCTAssertEqual(command(chars: "H", ignoring: "h", flags: [.shift]), .historyBack)
     XCTAssertEqual(command(chars: "L", ignoring: "l", flags: [.shift]), .historyForward)
-    XCTAssertEqual(command(pending: "[", chars: "h"), .scroll(.left))
-    XCTAssertEqual(command(pending: "]", chars: "h"), .scroll(.left))
+    XCTAssertEqual(command(pending: "[", chars: "h"), .historyBack)
+    XCTAssertEqual(command(pending: "]", chars: "h"), .historyForward)
     XCTAssertEqual(command(pending: "]", chars: "t"), .tabNext)
     XCTAssertEqual(command(pending: "[", chars: "t"), .tabPrev)
     XCTAssertEqual(command(pending: "[", chars: "a"), .appPrev)
@@ -258,10 +257,78 @@ final class NormalModeTests: XCTestCase {
     // pass when they want the side-effect followed by a switch to
     // INSERT. They're user-driven, so the gate must let them through.
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .explicitCommand))
+    // `.passthroughFocus` only fires inside the window an explicit
+    // `passthrough_modifiers` chord armed, so it is user-driven too.
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .passthroughFocus))
     // `.advancedModeDisabled` stays out of the user-driven set — config
     // reload uses `force: true` to bypass the gate when it needs to
     // leave NORMAL because the user removed the normal-mode binding.
     XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .advancedModeDisabled))
+  }
+
+  func testPassthroughFocusFollowFiresOnlyForTheArmedFrontmostAppInIdleNormal() {
+    func mayFire(
+      armedPID: pid_t = 7,
+      eventPID: pid_t = 7,
+      frontmostPID: pid_t? = 7,
+      mode: FlashMode = .normal,
+      overlayInputMode: OverlayInputMode = .normal,
+      hasHints: Bool = false,
+      activationInFlight: Bool = false,
+      bundleIdentifier: String? = "org.mozilla.firefox"
+    ) -> Bool {
+      AppDelegate.passthroughFocusFollowMayFire(
+        armedPID: armedPID,
+        eventPID: eventPID,
+        frontmostPID: frontmostPID,
+        mode: mode,
+        overlayInputMode: overlayInputMode,
+        hasHints: hasHints,
+        activationInFlight: activationInFlight,
+        bundleIdentifier: bundleIdentifier)
+    }
+
+    XCTAssertTrue(mayFire())
+    // The follow is pinned to the app that received the chord: an event from
+    // another pid, or a frontmost change (⌘Tab inside the window), keeps the
+    // mode sticky.
+    XCTAssertFalse(mayFire(eventPID: 8, frontmostPID: 8))
+    XCTAssertFalse(mayFire(frontmostPID: 8))
+    XCTAssertFalse(mayFire(frontmostPID: nil))
+    // Only idle NORMAL follows — INSERT, hints, surfaces, and in-flight
+    // activations own the keyboard story already.
+    XCTAssertFalse(mayFire(mode: .insert))
+    XCTAssertFalse(mayFire(overlayInputMode: .hints))
+    XCTAssertFalse(mayFire(overlayInputMode: .commandLine))
+    XCTAssertFalse(mayFire(hasHints: true))
+    XCTAssertFalse(mayFire(activationInFlight: true))
+    // Terminals report every focus as editable, so there is no signal.
+    XCTAssertFalse(mayFire(bundleIdentifier: "com.apple.Terminal"))
+    XCTAssertTrue(mayFire(bundleIdentifier: nil))
+  }
+
+  func testPassthroughFocusFollowDoesNotArmForMessagesConversationTraversal() {
+    XCTAssertFalse(
+      AppDelegate.passthroughChordMayArmFocusFollow(
+        virtualKey: UInt32(kVK_ANSI_LeftBracket),
+        flags: [.maskCommand, .maskShift],
+        bundleIdentifier: "com.apple.MobileSMS"))
+    XCTAssertFalse(
+      AppDelegate.passthroughChordMayArmFocusFollow(
+        virtualKey: UInt32(kVK_ANSI_RightBracket),
+        flags: [.maskCommand, .maskShift],
+        bundleIdentifier: "com.apple.Messages"))
+
+    XCTAssertTrue(
+      AppDelegate.passthroughChordMayArmFocusFollow(
+        virtualKey: UInt32(kVK_ANSI_F),
+        flags: .maskCommand,
+        bundleIdentifier: "com.apple.MobileSMS"))
+    XCTAssertTrue(
+      AppDelegate.passthroughChordMayArmFocusFollow(
+        virtualKey: UInt32(kVK_ANSI_LeftBracket),
+        flags: [.maskCommand, .maskShift],
+        bundleIdentifier: "org.mozilla.firefox"))
   }
 
   func testInsertModeExitsWhenFocusedElementStopsBeingEditable() {
@@ -856,6 +923,13 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "config"))
   }
 
+  func testAutomaticPreparedModelRefreshSkipsNotes() {
+    XCTAssertFalse(
+      AppMonitor.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: "com.apple.Notes"))
+    XCTAssertTrue(
+      AppMonitor.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: "com.apple.TextEdit"))
+  }
+
   func testPreparedModelRefreshSkipsValueAndTitleChurn() {
     XCTAssertFalse(
       AppMonitor.notificationShouldSchedulePreparedModelRefresh(
@@ -1117,32 +1191,31 @@ final class NormalModeTests: XCTestCase {
 
   func testActiveWindowBorderVisibility() {
     // The border shows in BOTH modes (thin green normal / thicker blue insert)
-    // when advanced mode is on, no hints are up, and no window-geometry
-    // transition is in flight — so the active window is always identifiable.
+    // when advanced mode is on, no hints are up, and the desktop session is
+    // active — so the active window is always identifiable.
     XCTAssertTrue(
       AppDelegate.activeWindowBorderShouldBeVisible(
         modeBadgeEnabled: true,
         hasHints: false,
-        windowGeometryChangeInProgress: false))
+        sessionActive: true))
     // No advanced mode → no normal/insert distinction to draw.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         modeBadgeEnabled: false,
         hasHints: false,
-        windowGeometryChangeInProgress: false))
-    // Suspended while the window is moving/resizing so the stroke
-    // doesn't visibly trail behind the chrome.
+        sessionActive: true))
+    // Lock/session switch/sleep hides the border immediately.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         modeBadgeEnabled: true,
         hasHints: false,
-        windowGeometryChangeInProgress: true))
+        sessionActive: false))
     // Hints suppress the border so chips aren't double-framed.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
         modeBadgeEnabled: true,
         hasHints: true,
-        windowGeometryChangeInProgress: false))
+        sessionActive: true))
   }
 
   func testActiveWindowBorderStyleIsGreenInNormalAndBlueInInsert() {
@@ -1163,21 +1236,6 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command.color, OverlayPanel.nordAuroraPurpleCG)
     XCTAssertEqual(command.lineWidth, 1)
     XCTAssertFalse(command.glow)
-  }
-
-  func testActiveWindowBorderTrackerRunsWhileGeometryChangeIsInProgress() {
-    XCTAssertTrue(
-      AppDelegate.activeWindowBorderTrackingShouldRun(
-        modeBadgeEnabled: true,
-        hasHints: false))
-    XCTAssertFalse(
-      AppDelegate.activeWindowBorderTrackingShouldRun(
-        modeBadgeEnabled: false,
-        hasHints: false))
-    XCTAssertFalse(
-      AppDelegate.activeWindowBorderTrackingShouldRun(
-        modeBadgeEnabled: true,
-        hasHints: true))
   }
 
   func testActiveWindowBorderFrameComparisonIgnoresTinyJitter() {
@@ -1204,20 +1262,42 @@ final class NormalModeTests: XCTestCase {
         tolerance: 1))
   }
 
-  func testActiveWindowBorderPollIgnoresTransientMissingWindowSamples() {
+  func testActiveWindowBorderReconciliationNeverKeepsAStaleFrame() {
     let tracked = CGRect(x: 10, y: 20, width: 300, height: 200)
+    XCTAssertEqual(
+      AppDelegate.activeWindowBorderReconciliationAction(
+        trackedFrame: tracked, currentFrame: nil, tolerance: 1),
+      .hide)
+    XCTAssertEqual(
+      AppDelegate.activeWindowBorderReconciliationAction(
+        trackedFrame: nil, currentFrame: tracked, tolerance: 1),
+      .redraw)
+    XCTAssertEqual(
+      AppDelegate.activeWindowBorderReconciliationAction(
+        trackedFrame: tracked,
+        currentFrame: CGRect(x: 12, y: 20, width: 300, height: 200),
+        tolerance: 1),
+      .redraw)
+    XCTAssertEqual(
+      AppDelegate.activeWindowBorderReconciliationAction(
+        trackedFrame: tracked,
+        currentFrame: CGRect(x: 10.5, y: 20, width: 300, height: 200),
+        tolerance: 1),
+      .none)
+  }
+
+  func testActiveWindowBorderRecognizesSecureSystemSurfaces() {
+    XCTAssertTrue(
+      AppDelegate.activeWindowBorderSecureUISuspendsSession(
+        bundleIdentifier: "com.apple.loginwindow"))
+    XCTAssertTrue(
+      AppDelegate.activeWindowBorderSecureUISuspendsSession(
+        bundleIdentifier: "com.apple.ScreenSaver.Engine"))
     XCTAssertFalse(
-      AppDelegate.activeWindowBorderPollShouldUpdate(
-        trackedFrame: tracked,
-        currentFrame: nil))
-    XCTAssertTrue(
-      AppDelegate.activeWindowBorderPollShouldUpdate(
-        trackedFrame: nil,
-        currentFrame: nil))
-    XCTAssertTrue(
-      AppDelegate.activeWindowBorderPollShouldUpdate(
-        trackedFrame: tracked,
-        currentFrame: CGRect(x: 12, y: 20, width: 300, height: 200)))
+      AppDelegate.activeWindowBorderSecureUISuspendsSession(
+        bundleIdentifier: "com.apple.finder"))
+    XCTAssertFalse(
+      AppDelegate.activeWindowBorderSecureUISuspendsSession(bundleIdentifier: nil))
   }
 
   func testCommandSurfacesPublishCommandStatusLabel() {
@@ -1225,19 +1305,63 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(AppDelegate.commandSurfaceModeLabel(labels: labels), "C")
   }
 
-  func testWindowGeometryNotificationsSuspendInsertBorder() {
+  func testWindowLifecycleNotificationsRefreshActiveBorder() {
     XCTAssertTrue(
-      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(kAXWindowMovedNotification))
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXWindowMovedNotification, observedElementIsFocusedWindow: false))
     XCTAssertTrue(
-      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(kAXWindowResizedNotification))
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXWindowResizedNotification, observedElementIsFocusedWindow: false))
     XCTAssertTrue(
-      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(
-        kAXFocusedWindowChangedNotification))
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXFocusedWindowChangedNotification, observedElementIsFocusedWindow: false))
     XCTAssertTrue(
-      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(
-        kAXMainWindowChangedNotification))
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXMainWindowChangedNotification, observedElementIsFocusedWindow: false))
+    XCTAssertTrue(
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXWindowCreatedNotification, observedElementIsFocusedWindow: false))
+    XCTAssertTrue(
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXWindowMiniaturizedNotification, observedElementIsFocusedWindow: false))
+    XCTAssertTrue(
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXWindowDeminiaturizedNotification, observedElementIsFocusedWindow: false))
+    XCTAssertTrue(
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXUIElementDestroyedNotification, observedElementIsFocusedWindow: true))
     XCTAssertFalse(
-      AppMonitor.windowGeometryNotificationRequiresBorderSuspension(kAXValueChangedNotification))
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXUIElementDestroyedNotification, observedElementIsFocusedWindow: false))
+    XCTAssertFalse(
+      AppMonitor.notificationMayChangeActiveWindowBorder(
+        kAXValueChangedNotification, observedElementIsFocusedWindow: false))
+  }
+
+  func testFocusedWindowObserverTracksWindowOwnedNotifications() {
+    let focusedWindowNotifications: Set<String> = [
+      kAXWindowMovedNotification as String,
+      kAXWindowResizedNotification as String,
+      kAXWindowMiniaturizedNotification as String,
+      kAXWindowDeminiaturizedNotification as String,
+      kAXUIElementDestroyedNotification as String,
+    ]
+    XCTAssertEqual(Set(AppMonitor.focusedWindowObservedNotifications), focusedWindowNotifications)
+
+    // Even bundles with background warming disabled still need every cheap
+    // window lifecycle signal so their border cannot go stale.
+    let appWindowLifecycleNotifications: Set<String> = [
+      kAXWindowCreatedNotification as String,
+      kAXWindowMiniaturizedNotification as String,
+      kAXWindowDeminiaturizedNotification as String,
+      kAXApplicationHiddenNotification as String,
+      kAXApplicationShownNotification as String,
+      kAXUIElementDestroyedNotification as String,
+    ]
+    XCTAssertTrue(
+      appWindowLifecycleNotifications.isSubset(of: Set(AppMonitor.observedNotifications)))
+    XCTAssertTrue(
+      appWindowLifecycleNotifications.isSubset(of: Set(AppMonitor.lightObservedNotifications)))
   }
 
   func testNormalModeRecaptureScheduleStartsImmediatelyAndRetriesAggressively() {
@@ -2102,6 +2226,15 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(typo.prefix, ":")
     XCTAssertEqual(typo.query, "helps")
     XCTAssertTrue(typo.items.isEmpty)
+
+    let exact = try XCTUnwrap(
+      NormalModeDispatcher.commandLineCompletions(
+        ":flashlight",
+        pluginCommands: [],
+        pluginSubcommands: [:]))
+    XCTAssertEqual(exact.prefix, ":")
+    XCTAssertEqual(exact.query, "flashlight")
+    XCTAssertEqual(exact.items.map(\.label), ["flashlight"])
   }
 
   func testCommandLineCompletionsPluginSubcommands() throws {
@@ -2183,9 +2316,17 @@ final class NormalModeTests: XCTestCase {
     // `:open` is a dumb forward, not a candidate finder — it must not feed
     // the candidate query path.
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":open firefox"))
-    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight"), "")
+    XCTAssertNil(
+      NormalModeDispatcher.commandLineCandidateQuery(":flashlight"),
+      "candidate rows must wait for the command-delimiting space")
+    XCTAssertEqual(NormalModeDispatcher.commandLineCandidateQuery(":flashlight "), "")
     XCTAssertEqual(
       NormalModeDispatcher.commandLineCandidateQuery(":flashlight gmail.com"), "gmail.com")
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineCandidateQuery(":flashlight = 10 * 10"), "= 10 * 10")
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineCandidateQuery(":flashlight   =10 euros + 10 euros"),
+      "=10 euros + 10 euros")
     // Trailing whitespace is preserved on purpose — `parseBangState`
     // uses it as the signal that the user committed to a bang. Leading
     // whitespace + tabs between the verb and the argument are still
@@ -2252,18 +2393,18 @@ final class NormalModeTests: XCTestCase {
     XCTAssertGreaterThan(compact, spread)
   }
 
-  func testFuzzyScoreMatchesSlackHashtagChannelByChannelName() {
+  func testFuzzyScoreMatchesHashPrefixedCandidateByName() {
     let candidate = CandidateFinder.prepare(
       Candidate(
-        kind: .plugin("slack_channel"),
-        sourceID: "slack",
-        source: "slack",
+        kind: .plugin("project"),
+        sourceID: "projects",
+        source: "projects",
         pid: 123,
         title: "#schedule",
-        subtitle: "Slack channel",
-        bundleIdentifier: "com.tinyspeck.slackmacgap"))
+        subtitle: "Project location",
+        bundleIdentifier: "com.example.projects"))
 
-    XCTAssertEqual(candidate.normalizedSearchText, "slack #schedule slack channel")
+    XCTAssertEqual(candidate.normalizedSearchText, "projects #schedule project location")
     XCTAssertNotNil(
       NormalModeDispatcher.fuzzyScore(
         normalizedQuery: NormalModeDispatcher.normalizedSearchText("#schedule"),
@@ -2521,6 +2662,12 @@ final class NormalModeTests: XCTestCase {
         "missing \(mapping)")
     }
     XCTAssertFalse(help.contains("flash enter_normal_mode"))
+  }
+
+  func testNormalModeHelpTopicMentionsTmuxSplitMappings() {
+    let topic = NormalModeDispatcher.helpTopic(config: .default, showModes: true)
+    XCTAssertTrue(topic.body.contains("cmd+d"))
+    XCTAssertTrue(topic.body.contains("cmd+shift+d"))
   }
 
   func testHelpTextIsDerivedFromConfiguredMappings() {

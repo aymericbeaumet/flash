@@ -52,12 +52,24 @@ struct PluginReference: Equatable {
     let path = atSplit[0]
     let commit = atSplit[1].lowercased()
     let parts = path.split(separator: "/", maxSplits: 1).map(String.init)
-    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty,
+    guard parts.count == 2, isValidGithubComponent(parts[0]), isValidGithubComponent(parts[1]),
       isFullCommitSHA(commit)
     else { return nil }
     return PluginReference(
       raw: trimmed,
       kind: .github(owner: parts[0], repository: parts[1], commit: commit))
+  }
+
+  /// A GitHub owner / repo path component: non-empty, restricted to
+  /// `[A-Za-z0-9._-]`, and never `.`/`..` or containing `..`. Without this an
+  /// owner/repo of `..` would flow into the materialized cache path
+  /// (`github/<owner>-<repository>-<sha>`) and the `git clone` URL; the fix
+  /// closes the traversal footgun at the parse boundary.
+  private static func isValidGithubComponent(_ s: String) -> Bool {
+    guard !s.isEmpty, s != ".", s != "..", !s.contains("..") else { return false }
+    let allowed = CharacterSet(
+      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+    return s.unicodeScalars.allSatisfy { allowed.contains($0) }
   }
 
   /// Full 40-character lowercase hex commit SHA. Short SHAs are rejected: they
@@ -133,7 +145,7 @@ struct Config {
     /// 1px border around the chip.
     var hintBorder: String = "#E3BE23"
     /// Foreground / gradient / border for hints whose target priority is
-    /// `critical` (tmux panes, browser tabs, …). Defaults to a
+    /// `important` or `urgent` (tmux panes, browser tabs, …). Defaults to a
     /// red-ish Nord-aurora-red gradient so structural chips read as an accent
     /// against the regular yellow `f` chips. Set any field equal to its `hint*`
     /// counterpart to opt out of the distinction for that surface.
@@ -169,6 +181,9 @@ struct Config {
     /// `"firefox"` covers `firefox.tabs`, `firefox.bookmarks`, …). Higher
     /// weight wins. Entries not listed use the source descriptor kind declared
     /// by the native source or plugin manifest: location sources > default.
+    /// Weights cannot cross the location band's category ladder (tmux windows
+    /// > running apps > installed apps > browser tabs > the rest) — that
+    /// ordering is strict and compared before match score.
     ///
     /// Example:
     /// ```toml
@@ -199,11 +214,14 @@ struct Config {
     /// stuck-mode/input issue, `debug` for broader diagnostics, or
     /// `warn` / `error` / `fatal` to mute the steady-state traces.
     var logLevel: FlashLog.Level = .info
-    /// When true, Flash binds a loopback-only HTTP server that exposes
-    /// live logs + state inspection. On by default — it backs `:logs`,
-    /// `:plugins`, and `:commands`. Disable with
-    /// `debug.http_inspector_enabled = false`.
-    var httpInspectorEnabled: Bool = true
+    /// When true, Flash binds a loopback-only HTTP server *at launch* that
+    /// exposes live logs + resolved config + clipboard history for the
+    /// inspector dashboard. Off by default (fail-safe): the dashboard-backed
+    /// verbs (`:logs`, `:plugins`, `:commands`, `:help`, …) start the server
+    /// on demand via `openDebugDashboard`, so they still work with this off —
+    /// this flag only controls whether the server listens continuously from
+    /// launch. Enable with `debug.http_inspector_enabled = true`.
+    var httpInspectorEnabled: Bool = false
     /// Loopback hostname the inspector binds on. Restricted to
     /// `localhost` / `127.0.0.1` / `::1` (validated at start).
     var httpInspectorHost: String = "localhost"
@@ -231,11 +249,21 @@ struct Config {
     var settings: [String: [String: PluginConfigValue]] = [:]
   }
   struct StatusBar {
+    /// Which displays show the bar. `all` (default) puts it on every screen's
+    /// top band; `primary` shows it only on the main (menu-bar) display.
+    enum Monitor: String {
+      case all
+      case primary
+    }
+
     /// Whether the persistent top status bar is shown. This is the *sole*
     /// condition for the bar's visibility — it is deliberately independent
     /// of advanced mode (the `enter_normal_mode` binding). Off by default;
     /// set `[statusbar] enabled = true` to opt in.
     var enabled: Bool = false
+    /// Which monitors the bar renders on. `[statusbar] monitor = "primary"`
+    /// limits it to the main display; `"all"` (default) covers every screen.
+    var monitor: Monitor = .all
     /// Single-string status-bar template using tmux-style format markers:
     ///   #[align=left|centre|right]  — switches which alignment region
     ///                                 subsequent text/variables accumulate
@@ -280,6 +308,12 @@ struct Config {
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
+    /// Modifiers (`cmd` / `ctrl` / `alt` / `shift`) that make an *unmapped*
+    /// modified chord in NORMAL mode fall through to the focused app instead of
+    /// being swallowed. Example: with `["cmd"]`, pressing ⌘T in NORMAL replicates
+    /// ⌘T to the app (a new tab opens) while Flash stays in NORMAL. An explicit
+    /// `[mode.normal.mappings]` binding for the chord still wins.
+    var normalPassthroughModifiers: [String] = []
     var labels = Labels()
     /// How long the interpreter waits for the next key in a pending
     /// sequence before resolving the longest matching prefix.
@@ -319,8 +353,8 @@ struct Config {
         ("gg", .flashCommand(.scroll(.top))),
         ("G", .flashCommand(.scroll(.bottom))),
         // Vimium `H` / `L` — back / forward in history. (Lowercase
-        // `h` / `l` scroll left / right, matching Vimium too.) History has
-        // no bracket-pair form: `[h`/`]h` were dropped in favour of `H`/`L`.
+        // `h` / `l` scroll left / right, matching Vimium too.) `[h`/`]h` alias
+        // these below, in the bracket-pair block.
         ("H", .flashCommand(.historyBack)),
         ("L", .flashCommand(.historyForward)),
         // Bracket-pair navigation borrows tpope/vim-unimpaired's `[X` =
@@ -330,6 +364,10 @@ struct Config {
         // their letters AND desktop users find an intuitive abbreviation.
         ("[t", .flashCommand(.tabPrev)),
         ("]t", .flashCommand(.tabNext)),
+        // `[h`/`]h` — back / forward in history, the unimpaired-style alias for
+        // `H`/`L`.
+        ("[h", .flashCommand(.historyBack)),
+        ("]h", .flashCommand(.historyForward)),
         // `[b`/`]b` — Vim "buffer" prev/next. In a desktop context the
         // closest analogue is a browser/terminal tab, so this aliases
         // `[t`/`]t` directly.
@@ -652,9 +690,10 @@ struct Config {
         "disabled": plugins.disabled.sorted(),
         "third_party": plugins.thirdParty.map(\.raw),
         "watching_enabled": plugins.watchingEnabled,
-        "settings": plugins.settings.mapValues { table in
-          table.mapValues(\.jsonValue)
-        },
+        // Diagnostics/inspector JSON is intentionally value-free: per-plugin
+        // settings can contain API tokens and are delivered only to that
+        // plugin through FLASH_PLUGIN_CONFIG.
+        "configured": plugins.settings.keys.sorted(),
       ],
       "statusbar": [
         "enabled": statusBar.enabled,
@@ -793,6 +832,11 @@ extension URLCommand {
     case .tabMovePrev: return verb("tab_move_previous")
     case .tabMoveNext: return verb("tab_move_next")
     case .tabReopen: return verb("tab_reopen")
+    case .paneNext: return verb("pane_next")
+    case .panePrev: return verb("pane_previous")
+    case .paneSplitVertical: return verb("pane_split_vertical")
+    case .paneSplitHorizontal: return verb("pane_split_horizontal")
+    case .paneClose: return verb("pane_close")
     case .historyBack: return verb("history_back")
     case .historyForward: return verb("history_forward")
     case .movementBack: return verb("movement_back")

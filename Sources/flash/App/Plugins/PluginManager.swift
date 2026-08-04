@@ -17,6 +17,7 @@ struct PluginRegistrationInventory: Equatable {
   var helpTopics = 0
   var listeners = 0
   var hintProviders = 0
+  var queryEvaluators = 0
   var capabilityRequests = 0
 
   init(manifests: [PluginManifest]) {
@@ -33,6 +34,7 @@ struct PluginRegistrationInventory: Equatable {
       helpTopics += manifest.help.topics.count
       listeners += manifest.listen.count
       if manifest.providesHints { hintProviders += 1 }
+      if manifest.providesQueryEvaluation { queryEvaluators += 1 }
       capabilityRequests += manifest.capabilities.count
     }
   }
@@ -179,13 +181,10 @@ final class PluginManager {
   /// Compiled manifest `listen` patterns across loaded plugins. Hot paths use
   /// this to skip constructing expensive events nobody can receive.
   private var eventListenPatternsIndex: [PluginPattern] = []
-  /// Latest host-owned running-app snapshot. Plugins that become ready after a
-  /// broadcast can replay this without forcing another LaunchServices walk.
+  /// Latest host-owned running-app snapshot. Captured into each new
+  /// `PluginProcess` and delivered once in `initialize`, before initial source
+  /// warming and readiness complete.
   private var latestRunningApplicationsSnapshot: [[String: Any]] = []
-  /// Process IDs that already received the post-ready running-app snapshot.
-  /// Keyed by plugin id so file-watch restarts (new pid, same manifest) replay
-  /// the snapshot exactly once for the new child.
-  private var readyAppsSnapshotReplayPIDs: [String: Int] = [:]
   /// True when any loaded manifest or compiled registration references
   /// `only_urls`. Lets hot paths skip AX URL lookup when the loaded plugin set
   /// cannot use it.
@@ -203,6 +202,13 @@ final class PluginManager {
   /// the focused process while normal mode is active. Set by AppDelegate
   /// during plugin setup.
   var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String)?)?
+  /// Executor for the `input.post_keys` RPC: posts a short synthesized chord
+  /// sequence to a pid at the given interval. Set by AppDelegate so the
+  /// posting can register each chord with the mappings dispatcher first
+  /// (`noteSyntheticKey`) — a `postToPid` event can loop back through the
+  /// Carbon hotkey path and re-trigger the user's own binding for the combo.
+  var onSyntheticKeysRequested:
+    ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)?
 
   init(baseDataDir: URL = PluginManager.defaultDataDir()) {
     self.baseDataDir = baseDataDir
@@ -257,7 +263,6 @@ final class PluginManager {
       claimedBundleIDsIndex.removeAll()
       eventListenPatternsIndex.removeAll()
       latestRunningApplicationsSnapshot.removeAll()
-      readyAppsSnapshotReplayPIDs.removeAll()
       selectorContextNeedsURL = false
       sourceAdaptersByID.removeAll()
       return snapshot
@@ -279,7 +284,11 @@ final class PluginManager {
 
   func cacheRunningApplicationsSnapshot(_ applications: [[String: Any]]) {
     queue.async { [weak self] in
-      self?.latestRunningApplicationsSnapshot = applications
+      guard let self else { return }
+      self.latestRunningApplicationsSnapshot = applications
+      for plugin in self.pluginsByID.values {
+        plugin.updateRunningApplicationsSnapshot(applications)
+      }
     }
   }
 
@@ -287,6 +296,9 @@ final class PluginManager {
     queue.async { [weak self] in
       guard let self else { return }
       self.latestRunningApplicationsSnapshot = applications
+      for plugin in self.pluginsByID.values {
+        plugin.updateRunningApplicationsSnapshot(applications)
+      }
       self.emitOnQueue(
         PluginEvent(
           name: "core:apps.changed",
@@ -368,7 +380,7 @@ final class PluginManager {
       FlashLog.debug(
         "[plugin_command] command=\(command) subcommand=\(resolved.subcommand) ok=\(ok) "
           + "target_pid=\(pid.map(String.init) ?? "nil") "
-          + "navigation_url=\(navigationURL?.absoluteString ?? "nil")")
+          + "navigation_scheme=\(navigationURL?.scheme ?? "nil")")
       onResult?(ok, pid, stdout, navigationURL)
     }
     return true
@@ -405,7 +417,7 @@ final class PluginManager {
       FlashLog.debug(
         "[plugin_shebang] token=\(token) command=\(target.command) ok=\(ok) "
           + "target_pid=\(pid.map(String.init) ?? "nil") "
-          + "navigation_url=\(navigationURL?.absoluteString ?? "nil")")
+          + "navigation_scheme=\(navigationURL?.scheme ?? "nil")")
       onResult?(ok, pid, stdout, navigationURL)
     }
     return true
@@ -444,7 +456,7 @@ final class PluginManager {
   ///   * **Warm dynamic bangs** — kind="bang" candidates the plugin keeps
   ///     warm via `set_locations` (searchengines: ~100 DDG bangs generated
   ///     from `bangs.tsv` at build time). These are *not* returned here; they
-  ///     are pulled into the flashlight session pool via `candidateQuery` and
+  ///     are pulled into the flashlight session pool via `sources.snapshot` and
   ///     combined with the static rows in
   ///     `NormalModeCoordinator.bangListCandidates`.
   /// Plugins should not duplicate a token across both surfaces; if they
@@ -469,6 +481,7 @@ final class PluginManager {
     method: String,
     params: [String: Any],
     pluginID: String,
+    capabilities: Set<PluginCapability>,
     reply: @escaping ([String: Any]) -> Void
   ) {
     switch method {
@@ -476,7 +489,7 @@ final class PluginManager {
       // Round-trip validation of the bidirectional channel.
       reply(["ok": true, "echo": params])
     case "host.normal_mode_target":
-      guard pluginHasCapability(pluginID, .appControl) else {
+      guard capabilities.contains(.appControl) else {
         reply(["ok": false, "error": "missing app_control capability"])
         return
       }
@@ -493,19 +506,25 @@ final class PluginManager {
         ])
       }
     case "app.activate":
-      guard pluginHasCapability(pluginID, .appControl) else {
+      guard capabilities.contains(.appControl) else {
         reply(["ok": false, "error": "missing app_control capability"])
         return
       }
       activatePluginApp(params, reply: reply)
     case "input.replace_text_and_submit":
-      guard pluginHasCapability(pluginID, .accessibility) else {
+      guard capabilities.contains(.accessibility) else {
         reply(["ok": false, "error": "missing accessibility capability"])
         return
       }
       replaceTextAndSubmit(params, reply: reply)
+    case "input.post_keys":
+      guard capabilities.contains(.accessibility) else {
+        reply(["ok": false, "error": "missing accessibility capability"])
+        return
+      }
+      postSyntheticKeys(params, reply: reply)
     case let method where method.hasPrefix("ax."):
-      guard pluginHasCapability(pluginID, .accessibility) else {
+      guard capabilities.contains(.accessibility) else {
         reply(["ok": false, "error": "missing accessibility capability"])
         return
       }
@@ -515,12 +534,6 @@ final class PluginManager {
         "[plugin] unknown host method \(method) from \(pluginID)",
         fields: ["method": method, "plugin": pluginID])
       reply(["ok": false, "error": "unknown host method: \(method)"])
-    }
-  }
-
-  private func pluginHasCapability(_ pluginID: String, _ capability: PluginCapability) -> Bool {
-    queue.sync {
-      pluginsByID[pluginID]?.manifest.capabilities.contains(capability) ?? false
     }
   }
 
@@ -538,6 +551,60 @@ final class PluginManager {
         return
       }
       RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+      reply(["ok": true])
+    }
+  }
+
+  private static let syntheticKeyModifierNames: [String: CGEventFlags] = [
+    "command": .maskCommand,
+    "control": .maskControl,
+    "option": .maskAlternate,
+    "shift": .maskShift,
+  ]
+
+  /// `input.post_keys`: post a short synthesized chord sequence to a pid
+  /// (plugin fast paths like the firefox tab jump: ⌘8 + n×ctrl+PgDn).
+  /// Modifier chords dispatch through the target's key-equivalent path, so
+  /// the app does NOT need to be frontmost — that's the point: the switch
+  /// runs in parallel with `app.activate`. Chord-only (every step must name
+  /// at least one modifier) and bounded, so this can never be used to type
+  /// text into the target.
+  private func postSyntheticKeys(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let pid = (params["pid"] as? Int).map(pid_t.init), pid > 0,
+      let steps = params["keys"] as? [[String: Any]],
+      !steps.isEmpty, steps.count <= 32
+    else {
+      reply(["ok": false, "error": "input.post_keys requires pid and 1-32 keys"])
+      return
+    }
+    var chords: [(key: CGKeyCode, flags: CGEventFlags)] = []
+    for step in steps {
+      guard let rawCode = step["key_code"] as? Int, rawCode >= 0, rawCode < 0x80,
+        let names = step["modifiers"] as? [String], !names.isEmpty
+      else {
+        reply(["ok": false, "error": "each key needs key_code and non-empty modifiers"])
+        return
+      }
+      var flags: CGEventFlags = []
+      for name in names {
+        guard let flag = Self.syntheticKeyModifierNames[name.lowercased()] else {
+          reply(["ok": false, "error": "unknown modifier: \(name)"])
+          return
+        }
+        flags.insert(flag)
+      }
+      chords.append((key: CGKeyCode(rawCode), flags: flags))
+    }
+    let intervalMs = min(max((params["interval_ms"] as? Int) ?? 35, 8), 100)
+    guard let post = onSyntheticKeysRequested else {
+      reply(["ok": false, "error": "key posting unavailable"])
+      return
+    }
+    DispatchQueue.main.async {
+      post(pid, chords, intervalMs)
       reply(["ok": true])
     }
   }
@@ -797,7 +864,7 @@ final class PluginManager {
         "[plugin_verb] command name=\(lcName) plugin=\(target.plugin.identifier) "
           + "subcommand=\(target.subcommand) ok=\(ok) "
           + "target_pid=\(pid.map(String.init) ?? "nil") "
-          + "navigation_url=\(navigationURL?.absoluteString ?? "nil")")
+          + "navigation_scheme=\(navigationURL?.scheme ?? "nil")")
       onResult?(ok, pid, stdout, navigationURL)
     }
     return true
@@ -919,17 +986,23 @@ final class PluginManager {
           origin: item.origin,
           baseDataDir: baseDataDir,
           watchFiles: config.plugins.watchingEnabled,
-          settings: settings)
-        plugin.onStatusChanged = { [weak self, weak plugin] in
-          guard let self else { return }
-          if let plugin {
-            self.replayRunningApplicationsSnapshotIfReady(for: plugin)
-          }
-          self.notifyStateChanged()
+          settings: settings,
+          initialRunningApplications: latestRunningApplicationsSnapshot)
+        plugin.onStatusChanged = { [weak self] in
+          self?.notifyStateChanged()
         }
+        // Capture immutable authorization with the process. A host RPC arrives
+        // on PluginProcess.queue; consulting PluginManager.queue synchronously
+        // from there would invert the reload path
+        // (manager queue -> stopAndWait -> process queue) and can deadlock.
+        let capabilities = manifest.capabilities
         plugin.onHostRequest = { [weak self] method, params, pluginID, reply in
           self?.handleHostRequest(
-            method: method, params: params, pluginID: pluginID, reply: reply)
+            method: method,
+            params: params,
+            pluginID: pluginID,
+            capabilities: capabilities,
+            reply: reply)
         }
         pluginsByID[manifest.id] = plugin
         sourceAdaptersByID[manifest.id] = PluginFlashSource(plugin: plugin)
@@ -949,7 +1022,6 @@ final class PluginManager {
       pluginsByID[id]?.stopAndWait(reason: "config_removed")
       pluginsByID.removeValue(forKey: id)
       sourceAdaptersByID.removeValue(forKey: id)
-      readyAppsSnapshotReplayPIDs.removeValue(forKey: id)
     }
     rebuildCommandIndex()
     rebuildShebangIndex()
@@ -1138,29 +1210,6 @@ final class PluginManager {
   private func notifyStateChanged() {
     DispatchQueue.main.async { [weak self] in
       self?.onStateChanged?()
-    }
-  }
-
-  private func replayRunningApplicationsSnapshotIfReady(for plugin: PluginProcess) {
-    let snapshot = plugin.statusSnapshot()
-    guard snapshot.state == PluginRuntimeState.ready.rawValue, let pid = snapshot.pid else {
-      return
-    }
-    queue.async { [weak self, weak plugin] in
-      guard let self, let plugin else { return }
-      if self.readyAppsSnapshotReplayPIDs[plugin.identifier] == pid { return }
-      self.readyAppsSnapshotReplayPIDs[plugin.identifier] = pid
-      let applications = self.latestRunningApplicationsSnapshot
-      plugin.sendEvent(
-        PluginEvent(
-          name: "core:apps.changed",
-          payload: [
-            "reason": "plugin_ready",
-            "running_applications": applications,
-          ],
-          bundleID: nil,
-          configPath: nil,
-          focused: nil))
     }
   }
 

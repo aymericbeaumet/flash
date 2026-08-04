@@ -167,8 +167,8 @@ enum HelpDocs {
       # Flashlight
 
       Flashlight is the unified candidate finder. Its default pool surfaces
-      location rows such as apps, tabs, tmux windows, Slack channels, and
-      plugin-provided destinations; explicit source filters can show other
+      location rows such as apps, tabs, tmux windows, and plugin-provided
+      destinations; explicit source filters can show other
       plugin candidate sets such as contacts, notes, and reminders.
 
       ## Entry points
@@ -184,9 +184,9 @@ enum HelpDocs {
 
       Add `@<source>` (or `--<source>`) selectors *anywhere* in the query
       to restrict the pool, e.g. `:flashlight @notes inbox` searches only
-      notes. Order is irrelevant — `@tmux @slack test` and
-      `test @slack @tmux` are the same — and several selectors widen the
-      pool (OR): `@tmux @slack` shows both. The token matches a source
+      notes. Order is irrelevant — `@tmux @notes test` and
+      `test @notes @tmux` are the same — and several selectors widen the
+      pool (OR): `@tmux @notes` shows both. The token matches a source
       name (or prefix: `@fire` → firefox) and a few groups:
       `@browser`/`@tabs`, `@apps`. Bare `:flashlight @notes` lists every
       note. Typing an incomplete source token such as `@fire` shows source
@@ -197,6 +197,17 @@ enum HelpDocs {
       inserts the selected bang token, and adding a space locks it for the
       remaining query.
 
+      Bare input also runs every pure query evaluator registered for the
+      flashlight surface. Evaluators return typed, additive answers rather than
+      claiming inputs with regular expressions. Flash gathers them for at most
+      50 ms, accepts up to 16 answers per evaluator, and places them in a fixed
+      lane above fuzzy catalog matches; `!bang` and `@source` input bypasses
+      that lane. The bundled calculator handles arithmetic (`1+1`), units
+      (`2 km to m`), and currencies (`10 euros`, `10 euros + 10 euros`).
+      It loads cached rates before becoming ready and refreshes them over the
+      network only in the background. Selecting an answer with `<tab>` or
+      `<cr>` copies the exact result.
+
       Location rows are final destinations: `<tab>` or `<cr>` submits the
       selected row directly, the same as `<cmd-cr>`.
 
@@ -206,8 +217,8 @@ enum HelpDocs {
 
       ## Ranking
 
-      The default result pool is location-only: apps, tabs, tmux windows,
-      Slack channels, and plugin-provided locations. Other sources are hidden
+      The default result pool is location-only: apps, tabs, tmux windows, and
+      plugin-provided locations. Other sources are hidden
       unless you type an explicit `@source` filter.
 
       Inside the location band, scoring layers are:
@@ -220,12 +231,16 @@ enum HelpDocs {
 
       ## Plugin candidates
 
-      Plugins keep their locations warm in memory, refreshing them on host
-      events such as `core:apps.changed`, `core:focus.changed`, and
-      `core:window.focus.changed`. On open the host paints in-process sources
-      (apps) instantly, then pulls each plugin's warm locations in parallel and
-      merges replies as they land, so the visible rows fill within a frame
-      without blocking on IPC.
+      Every candidate plugin owns a canonical catalog snapshot and keeps it
+      warm in memory, refreshing it in the background from host events or
+      polling. Reading a plugin snapshot is synchronous and performs no I/O.
+      On open the prompt appears immediately with its rows hidden while Flash
+      reads every default source in parallel, including the warm `core.apps`
+      index. Plugin states other than ready/degraded settle immediately. Flash
+      reveals the initial catalog exactly once when every source settles or
+      the 150 ms first-paint budget expires. Late replies are logged and
+      ignored for that session; the next open reads the completed warm state
+      instead of visually reloading the current list.
       """)
 
   private static let overviewTopic = HelpTopic(
@@ -238,9 +253,9 @@ enum HelpDocs {
       `:help` opens the topic index.
       `:help <topic>` opens a specific topic, for example `:help plugins`.
 
-      Help topics are Markdown text rendered in the Flash modal. The runtime
-      docs are kept in Swift source files next to the feature code they
-      describe, so command behavior and help text can change together.
+      Help topics are Markdown text rendered in the Flash inspector dashboard.
+      The runtime docs are kept in Swift source files next to the feature code
+      they describe, so command behavior and help text can change together.
       """)
 
   private static func index(_ topics: [HelpTopic]) -> String {

@@ -49,8 +49,28 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(tmux.priority, 20)
     XCTAssertTrue(tmux.onlyBundleIDs.contains("org.alacritty"))
     XCTAssertTrue(tmux.sourceActions.contains("tab_new"))
+    XCTAssertTrue(tmux.sourceActions.contains("pane_split_vertical"))
+    XCTAssertTrue(tmux.sourceActions.contains("pane_split_horizontal"))
+    XCTAssertTrue(tmux.sourceActions.contains("pane_close"))
     XCTAssertTrue(tmux.sourceActions.contains("app_reload"))
     XCTAssertEqual(tmux.navigationSchemes, ["tmux"])
+    for index in 1...9 {
+      let mapping = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+\(index)" })
+      XCTAssertEqual(mapping.scope, .all)
+      XCTAssertEqual(mapping.command, ["flash", "tab_select", "--index=\(index)"])
+    }
+    let tmuxCommandT = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+t" })
+    XCTAssertEqual(tmuxCommandT.scope, .all)
+    XCTAssertEqual(tmuxCommandT.command, ["flash", "tab_new"])
+    let tmuxCommandD = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+d" })
+    XCTAssertEqual(tmuxCommandD.scope, .all)
+    XCTAssertEqual(tmuxCommandD.command, ["flash", "pane_split_vertical"])
+    let tmuxCommandShiftD = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+shift+d" })
+    XCTAssertEqual(tmuxCommandShiftD.scope, .all)
+    XCTAssertEqual(tmuxCommandShiftD.command, ["flash", "pane_split_horizontal"])
+    let tmuxCommandW = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+w" })
+    XCTAssertEqual(tmuxCommandW.scope, .all)
+    XCTAssertEqual(tmuxCommandW.command, ["flash", "pane_close"])
     XCTAssertEqual(
       tmux.candidateSourceDescriptors,
       [CandidateSourceDescriptor(name: "tmux.windows", kind: .locations, priority: .high)])
@@ -65,13 +85,17 @@ final class PluginSystemTests: XCTestCase {
         "\(id) must rank tab sources as high-priority locations")
     }
     let slack = try XCTUnwrap(manifests.first { $0.id == "slack" })
-    XCTAssertEqual(
-      slack.candidateSourceDescriptors,
-      [CandidateSourceDescriptor(name: "slack.channels", kind: .locations, priority: .high)])
+    XCTAssertTrue(slack.candidateSourceDescriptors.isEmpty)
+    XCTAssertTrue(slack.navigationSchemes.isEmpty)
+    XCTAssertEqual(slack.capabilities, [.network])
     let defaults = try XCTUnwrap(manifests.first { $0.id == "defaults" })
     XCTAssertEqual(
       Set(defaults.verbs.map(\.name)),
       ["app_save", "app_print", "document_open", "window_new"])
+    let calculator = try XCTUnwrap(manifests.first { $0.id == "calculator" })
+    XCTAssertTrue(calculator.providesQueryEvaluation)
+    XCTAssertEqual(calculator.queriesProvider?.surfaces, [.flashlight])
+    XCTAssertEqual(calculator.capabilities, [.network])
 
     XCTAssertTrue(
       commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
@@ -82,6 +106,7 @@ final class PluginSystemTests: XCTestCase {
         "login", "version", "run",
       ]))
     let system = try XCTUnwrap(manifests.first { $0.id == "system" })
+    XCTAssertEqual(system.listen, ["core:power.changed"])
     XCTAssertEqual(system.statusSegments, ["battery"])
     XCTAssertEqual(
       system.candidateSourceDescriptors,
@@ -116,6 +141,526 @@ final class PluginSystemTests: XCTestCase {
       manifest.commands.first { $0.command == "clipboard" && $0.subcommand.isEmpty },
       "clipboard plugin must register the bare `:clipboard` history command")
     XCTAssertFalse(browse.description.isEmpty)
+  }
+
+  func testQueriesManifestRegistrationDefaultsToFlashlightSurface() throws {
+    let data = try XCTUnwrap(
+      """
+      {
+        "id": "answers",
+        "name": "Answers",
+        "version": "1.0.0",
+        "description": "Pure query answers",
+        "install": "true",
+        "start": "exec ./flash-plugin-answers",
+        "queries": {}
+      }
+      """.data(using: .utf8))
+    let manifest = try JSONDecoder().decode(PluginManifest.self, from: data)
+
+    XCTAssertTrue(manifest.providesQueryEvaluation)
+    XCTAssertEqual(manifest.queriesProvider?.surfaces, [.flashlight])
+  }
+
+  func testQueriesManifestRejectsRegexAndOtherUnknownFields() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "bad-query-router",
+          "name": "Bad query router",
+          "version": "1.0.0",
+          "description": "fixture",
+          "install": "true",
+          "start": "true",
+          "queries": { "regex": "^.+$" }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("manifest.json queries unknown field regex"))
+    }
+  }
+
+  func testManifestRejectsUnknownNestedProviderFields() throws {
+    let fixtures: [(String, String)] = [
+      (
+        #"""
+        "commands": {
+          "items": [{ "command": "demo", "description": "Demo", "descrption": "typo" }]
+        }
+        """#,
+        "manifest.json commands.items[0] unknown field descrption"),
+      (
+        #"""
+        "sources": [{ "name": "demo.items", "priority": "normal", "priorty": 2 }]
+        """#,
+        "manifest.json sources[0] unknown field priorty"),
+      (
+        #"""
+        "help": { "topics": [{ "name": "demo", "title": "Demo", "summray": "typo" }] }
+        """#,
+        "manifest.json help.topics[0] unknown field summray"),
+    ]
+
+    for (provider, expected) in fixtures {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "nested",
+            "name": "Nested",
+            "version": "1.0.0",
+            "description": "Nested schema fixture",
+            "install": "true",
+            "start": "true",
+            \(provider)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+
+      XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+        XCTAssertTrue(String(describing: error).contains(expected), String(describing: error))
+      }
+    }
+  }
+
+  func testManifestRejectsInvalidMappingMode() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "bad-mode",
+          "name": "Bad mode",
+          "version": "1.0.0",
+          "description": "Invalid mapping scope",
+          "install": "true",
+          "start": "true",
+          "mappings": {
+            "items": [{ "key": "x", "mode": "command", "command": ["true"] }]
+          }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains(
+          "plugin mapping mode command must be all, normal, or insert"))
+    }
+  }
+
+  func testManifestRejectsMalformedCommandAndShebangFields() throws {
+    let fixtures = [
+      #""""commands": { "items": [{ "command": "demo", "description": 42 }] }"""#,
+      #""""commands": { "items": [{ "command": "demo", "_url": 42 }] }"""#,
+      #""""shebangs": { "items": [{ "token": 42 }] }"""#,
+    ]
+
+    for provider in fixtures {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "malformed",
+            "name": "Malformed",
+            "version": "1.0.0",
+            "description": "Malformed field fixture",
+            "install": "true",
+            "start": "true",
+            \(provider)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root))
+    }
+  }
+
+  func testCandidateSourcePluginsDeclareAuthoritativeWarmStartup() throws {
+    let roots = try officialPluginRoots()
+    let manifests = try roots.map { try PluginManifest.load(from: $0) }
+    let candidateIDs = Set(
+      manifests.filter { !$0.candidateSourceDescriptors.isEmpty }.map(\.id))
+    XCTAssertEqual(
+      candidateIDs,
+      [
+        "chromium", "contacts", "emojis", "firefox", "notes", "processes", "reminders",
+        "safari", "searchengines", "system", "tmux",
+      ])
+
+    for root in roots where candidateIDs.contains(root.lastPathComponent) {
+      let body = try String(contentsOf: root.appendingPathComponent("src/main.rs"))
+      XCTAssertTrue(
+        body.contains("async fn on_start"),
+        "\(root.lastPathComponent) must warm manifest sources during on_start")
+      XCTAssertTrue(
+        body.contains("set_locations("),
+        "\(root.lastPathComponent) must publish an authoritative warm snapshot")
+      XCTAssertTrue(
+        body.contains(#""plugin:\#(root.lastPathComponent)""#),
+        "\(root.lastPathComponent) must publish under its canonical plugin:<id> key")
+      XCTAssertFalse(
+        body.contains("candidate_query"),
+        "\(root.lastPathComponent) cannot override SDK-owned source snapshots")
+    }
+  }
+
+  func testPluginProtocolVersionRequiresExactV2() {
+    XCTAssertEqual(PluginProcess.protocolVersion, 2)
+    XCTAssertTrue(
+      PluginProcess.acceptsProtocolVersion([
+        "ok": true,
+        "protocol_version": 2,
+      ]))
+    XCTAssertFalse(PluginProcess.acceptsProtocolVersion(["protocol_version": 1]))
+    XCTAssertFalse(PluginProcess.acceptsProtocolVersion(["ok": true]))
+    XCTAssertFalse(PluginProcess.acceptsProtocolVersion(nil))
+  }
+
+  func testCandidatePluginReadinessRequiresExactlyItsCanonicalWarmPublication() {
+    XCTAssertTrue(
+      PluginProcess.hasCanonicalInitialPublication(
+        ["published_sources": ["plugin:notes"]],
+        pluginID: "notes"))
+    XCTAssertFalse(
+      PluginProcess.hasCanonicalInitialPublication(
+        ["published_sources": []],
+        pluginID: "notes"))
+    XCTAssertFalse(
+      PluginProcess.hasCanonicalInitialPublication(
+        ["published_sources": ["plugin:other"]],
+        pluginID: "notes"))
+    XCTAssertFalse(
+      PluginProcess.hasCanonicalInitialPublication(
+        ["published_sources": ["plugin:notes", "plugin:extra"]],
+        pluginID: "notes"))
+  }
+
+  func testQueryEvaluatorAnswerPayloadsAreRejectedAtomicallyAboveTheCap() {
+    let answer: [String: Any] = [
+      "title": "2",
+      "effect": ["type": "copy_text", "text": "2"],
+    ]
+    XCTAssertEqual(PluginProcess.maxQueryAnswersPerEvaluator, 16)
+    XCTAssertEqual(
+      PluginProcess.queryAnswers(
+        from: Array(repeating: answer, count: 16),
+        sourceID: "plugin:calculator",
+        source: "calculator")?.count,
+      16)
+    XCTAssertNil(
+      PluginProcess.queryAnswers(
+        from: Array(repeating: answer, count: 17),
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+  }
+
+  func testStoppingPluginSettlesGenericRequestsButCancelsLifecycleCallback() {
+    var calls: [String] = []
+    var pending: [Int: PluginProcess.PendingRequest] = [
+      2: .init(
+        completion: { response in
+          XCTAssertNil(response)
+          calls.append("generic")
+        },
+        settleOnStop: true),
+      1: .init(
+        completion: { _ in
+          XCTFail("intentional stop must cancel the pending initialize callback")
+        },
+        settleOnStop: false),
+    ]
+
+    let callbacks = PluginProcess.takePendingCallbacks(&pending)
+    XCTAssertTrue(pending.isEmpty)
+    callbacks.forEach { $0(nil) }
+    XCTAssertEqual(calls, ["generic"])
+  }
+
+  func testUnloadedPluginSnapshotSettlesImmediatelyWithoutWireTimeout() throws {
+    let data = try XCTUnwrap(
+      """
+      {
+        "id": "cold-source",
+        "name": "Cold source",
+        "version": "1.0.0",
+        "description": "fixture",
+        "install": "true",
+        "start": "true",
+        "sources": [
+          { "name": "cold.items", "kind": "locations", "priority": "normal" }
+        ]
+      }
+      """.data(using: .utf8))
+    let manifest = try JSONDecoder().decode(PluginManifest.self, from: data)
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("flash-plugin-cold-\(UUID().uuidString)")
+    let process = PluginProcess(
+      root: root,
+      manifest: manifest,
+      origin: .official,
+      baseDataDir: root)
+    let source = PluginFlashSource(plugin: process)
+    let settled = expectation(description: "known-dead adapter settles")
+    let started = CFAbsoluteTimeGetCurrent()
+
+    source.snapshotCandidates(
+      in: FlashSourceEnvironment(runningApplications: []),
+      scope: .all
+    ) { candidates in
+      XCTAssertTrue(candidates.isEmpty)
+      XCTAssertLessThan(CFAbsoluteTimeGetCurrent() - started, 0.05)
+      settled.fulfill()
+    }
+
+    wait(for: [settled], timeout: 1)
+  }
+
+  func testWarmRequestsOnlyDispatchAfterCanonicalStartupPublication() {
+    XCTAssertTrue(PluginFlashSource.warmRequestIsDispatchable(state: .ready))
+    XCTAssertTrue(PluginFlashSource.warmRequestIsDispatchable(state: .degraded))
+    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .unloaded))
+    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .installing))
+    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .starting))
+    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .crashed))
+    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .stopped))
+  }
+
+  func testPluginProcessRechecksWarmReadinessAtTheWireQueueBoundary() {
+    XCTAssertTrue(
+      PluginProcess.warmRequestIsDispatchable(
+        state: .ready, initializationCompleted: true, processRunning: true))
+    XCTAssertTrue(
+      PluginProcess.warmRequestIsDispatchable(
+        state: .degraded, initializationCompleted: true, processRunning: true))
+    XCTAssertFalse(
+      PluginProcess.warmRequestIsDispatchable(
+        state: .degraded, initializationCompleted: false, processRunning: true))
+    XCTAssertFalse(
+      PluginProcess.warmRequestIsDispatchable(
+        state: .starting, initializationCompleted: false, processRunning: true))
+    XCTAssertFalse(
+      PluginProcess.warmRequestIsDispatchable(
+        state: .ready, initializationCompleted: true, processRunning: false))
+  }
+
+  func testPluginRuntimeEnvironmentDropsUnrelatedSecrets() {
+    let environment = PluginProcess.sanitizedPluginEnvironment(
+      base: [
+        "HOME": "/Users/demo",
+        "PATH": "/opt/homebrew/bin:/usr/bin",
+        "SHELL": "/bin/zsh",
+        "AWS_SECRET_ACCESS_KEY": "secret",
+        "SLACK_API_TOKEN": "secret",
+        "SSH_AUTH_SOCK": "/tmp/agent.sock",
+      ],
+      overrides: [
+        "FLASH_PLUGIN_ID": "calculator",
+        "FLASH_PLUGIN_CONFIG": "{}",
+      ])
+
+    XCTAssertEqual(environment["HOME"], "/Users/demo")
+    XCTAssertEqual(environment["PATH"], "/opt/homebrew/bin:/usr/bin")
+    XCTAssertEqual(environment["FLASH_PLUGIN_ID"], "calculator")
+    XCTAssertNil(environment["AWS_SECRET_ACCESS_KEY"])
+    XCTAssertNil(environment["SLACK_API_TOKEN"])
+    XCTAssertNil(environment["SSH_AUTH_SOCK"])
+  }
+
+  func testPluginCandidateCannotSpoofRoutingOwner() throws {
+    let candidate = try XCTUnwrap(
+      PluginProcess.candidate(
+        from: [
+          "title": "Owned result",
+          "metadata": [
+            "source": "safe.items",
+            "source_id": "plugin:attacker",
+          ],
+        ],
+        sourceID: "plugin:safe",
+        sourcePolicy: .catalog(allowed: ["safe.items"])))
+
+    XCTAssertEqual(candidate.source, "safe.items")
+    XCTAssertEqual(candidate.sourceID, "plugin:safe")
+
+    XCTAssertNil(
+      PluginProcess.candidate(
+        from: [
+          "title": "Impostor",
+          "metadata": ["source": "other.items"],
+        ],
+        sourceID: "plugin:safe",
+        sourcePolicy: .catalog(allowed: ["safe.items"])))
+  }
+
+  func testPluginCatalogPayloadIsStrictBoundedAndAtomic() throws {
+    let valid: [String: Any] = [
+      "title": "Safe result",
+      "url": "https://example.com/item",
+      "metadata": [
+        "source": "safe.items",
+        "kind": "document",
+      ],
+    ]
+    XCTAssertEqual(
+      PluginProcess.catalogCandidates(
+        from: [valid],
+        sourceID: "plugin:safe",
+        allowedSources: ["safe.items"])?.count,
+      1)
+
+    var unknownKey = valid
+    unknownKey["command"] = "spoof"
+    XCTAssertNil(
+      PluginProcess.catalogCandidates(
+        from: [valid, unknownKey],
+        sourceID: "plugin:safe",
+        allowedSources: ["safe.items"]),
+      "one malformed row rejects the complete warm snapshot")
+
+    var nonStringMetadata = valid
+    nonStringMetadata["metadata"] = [
+      "source": "safe.items",
+      "pid": 123,
+    ]
+    XCTAssertNil(
+      PluginProcess.candidate(
+        from: nonStringMetadata,
+        sourceID: "plugin:safe",
+        sourcePolicy: .catalog(allowed: ["safe.items"])))
+
+    var relativeURL = valid
+    relativeURL["url"] = "relative/path"
+    XCTAssertNil(
+      PluginProcess.candidate(
+        from: relativeURL,
+        sourceID: "plugin:safe",
+        sourcePolicy: .catalog(allowed: ["safe.items"])))
+
+    var oversizedTitle = valid
+    oversizedTitle["title"] = String(
+      repeating: "x",
+      count: PluginProcess.maxCandidateTitleBytes + 1)
+    XCTAssertNil(
+      PluginProcess.candidate(
+        from: oversizedTitle,
+        sourceID: "plugin:safe",
+        sourcePolicy: .catalog(allowed: ["safe.items"])))
+
+    XCTAssertNil(
+      PluginProcess.catalogCandidates(
+        from: Array(
+          repeating: valid,
+          count: PluginProcess.maxCatalogCandidates + 1),
+        sourceID: "plugin:safe",
+        allowedSources: ["safe.items"]))
+  }
+
+  func testPluginHintTargetCannotSpoofProviderOwnership() throws {
+    let target = try XCTUnwrap(
+      PluginProcess.target(
+        from: [
+          "id": "hint",
+          "frame": [
+            "x": 10,
+            "y": 20,
+            "width": 30,
+            "height": 40,
+          ],
+          "source_id": "plugin:attacker",
+        ],
+        sourceID: "plugin:safe"))
+
+    XCTAssertEqual(target.sourceID, "plugin:safe")
+  }
+
+  func testQueryAnswerHasANarrowShapeAndGetsHostOwnedSemantics() throws {
+    let candidate = try XCTUnwrap(
+      PluginProcess.queryAnswer(
+        from: [
+          "title": "2",
+          "subtitle": "1+1",
+          "effect": ["type": "copy_text", "text": "2"],
+        ],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+    guard case .copyText(let text) = candidate.effect else {
+      return XCTFail("expected copy_text effect")
+    }
+    XCTAssertEqual(text, "2")
+    XCTAssertEqual(candidate.source, "calculator")
+    XCTAssertEqual(candidate.sourceID, "plugin:calculator")
+    XCTAssertEqual(candidate.kind, .plugin("query_answer"))
+    XCTAssertEqual(candidate.priority, .urgent)
+    XCTAssertTrue(candidate.finishesCommand)
+    XCTAssertNil(candidate.url)
+
+    XCTAssertNil(
+      PluginProcess.queryAnswer(
+        from: [
+          "title": "unsafe",
+          "effect": ["type": "unknown", "text": "unsafe"],
+        ],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+    XCTAssertNil(
+      PluginProcess.queryAnswer(
+        from: [
+          "title": "empty",
+          "effect": ["type": "copy_text", "text": ""],
+        ],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+    XCTAssertNil(
+      PluginProcess.queryAnswer(
+        from: [
+          "title": "spoof",
+          "url": "https://example.com",
+          "effect": ["type": "copy_text", "text": "spoof"],
+        ],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+    XCTAssertNil(
+      PluginProcess.queryAnswer(
+        from: [
+          "title": "extra effect field",
+          "effect": [
+            "type": "copy_text",
+            "text": "unsafe",
+            "url": "https://example.com",
+          ],
+        ],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+  }
+
+  func testQueryAnswerFieldAndAggregateLimitsAreStrict() {
+    let oversizedField = String(
+      repeating: "x",
+      count: PluginProcess.maxQueryFieldBytes + 1)
+    XCTAssertNil(
+      PluginProcess.queryAnswer(
+        from: [
+          "title": oversizedField,
+          "effect": ["type": "copy_text", "text": "x"],
+        ],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+
+    let largeAnswer: [String: Any] = [
+      "title": String(repeating: "t", count: PluginProcess.maxQueryFieldBytes),
+      "subtitle": String(repeating: "s", count: PluginProcess.maxQueryFieldBytes),
+      "effect": [
+        "type": "copy_text",
+        "text": String(repeating: "e", count: PluginProcess.maxQueryFieldBytes),
+      ],
+    ]
+    XCTAssertNil(
+      PluginProcess.queryAnswers(
+        from: Array(
+          repeating: largeAnswer,
+          count: PluginProcess.maxQueryAnswersPerEvaluator),
+        sourceID: "plugin:calculator",
+        source: "calculator"),
+      "individually valid answers must still fit the aggregate response budget")
   }
 
   func testDecodeClipboardModalEntriesRoundTripsPluginJSON() throws {
@@ -765,14 +1310,6 @@ final class PluginSystemTests: XCTestCase {
     env["FLASH_PLUGIN_VERSION"] = "0.1.0"
     env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
     env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
-    if pluginID == "slack" {
-      let slackDataDir = dataDir.appendingPathComponent("slack-app-state")
-      try FileManager.default.createDirectory(at: slackDataDir, withIntermediateDirectories: true)
-      let configData = try JSONSerialization.data(
-        withJSONObject: ["data_dir": slackDataDir.path],
-        options: [.sortedKeys])
-      env["FLASH_PLUGIN_CONFIG"] = String(data: configData, encoding: .utf8)
-    }
     process.environment = env
 
     let stdin = Pipe()
@@ -787,8 +1324,8 @@ final class PluginSystemTests: XCTestCase {
     try process.run()
 
     // The smoke test exercises only the managed MessagePack protocol. The
-    // plugin owns subprocess execution now, so the host harness just waits for
-    // the command response before sending shutdown.
+    // plugin owns subprocess execution now. Initialization does not respond
+    // until on_start and any required warm-source publication complete.
     let collector = MessagePackFrameCollector()
     let writeLock = NSLock()
     func send(_ object: [String: Any]) {
@@ -804,6 +1341,7 @@ final class PluginSystemTests: XCTestCase {
       stdin.fileHandleForWriting.write(frame)
       writeLock.unlock()
     }
+    let initialized = DispatchSemaphore(value: 0)
     let commandResponded = DispatchSemaphore(value: 0)
 
     stdout.fileHandleForReading.readabilityHandler = { handle in
@@ -815,13 +1353,32 @@ final class PluginSystemTests: XCTestCase {
         if message["method"] is String {
           continue
         }
-        if (message["id"] as? NSNumber)?.intValue == 2 {
+        switch (message["id"] as? NSNumber)?.intValue {
+        case 1:
+          initialized.signal()
+        case 2:
           commandResponded.signal()
+        default:
+          break
         }
       }
     }
 
-    send(["id": 1, "jsonrpc": "2.0", "method": "initialize", "params": [:]])
+    send([
+      "id": 1,
+      "jsonrpc": "2.0",
+      "method": "initialize",
+      "params": [
+        "protocol_version": PluginProcess.protocolVersion,
+        "running_applications": [
+          [
+            "bundle_id": "com.example.Test",
+            "localized_name": "Test",
+            "pid": 42,
+          ]
+        ],
+      ],
+    ])
     send(["id": -1, "jsonrpc": "2.0", "method": "heartbeat", "params": [:]])
     send([
       "id": 2,
@@ -835,6 +1392,12 @@ final class PluginSystemTests: XCTestCase {
       ],
     ])
 
+    if initialized.wait(timeout: .now() + 15) != .success {
+      stdout.fileHandleForReading.readabilityHandler = nil
+      process.terminate()
+      XCTFail("\(pluginID) plugin did not complete warm initialization")
+      return
+    }
     if commandResponded.wait(timeout: .now() + 5) != .success {
       stdout.fileHandleForReading.readabilityHandler = nil
       process.terminate()

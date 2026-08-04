@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_rust_flash_plugin" }
+libc = { workspace = true }
 serde = { workspace = true }
 regex = { workspace = true }
 tokio = { workspace = true }

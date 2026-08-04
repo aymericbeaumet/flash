@@ -19,7 +19,9 @@ flash_plugin::plugin!(Clipboard);
 impl FlashPlugin for Clipboard {
     async fn on_start(&self, ctx: Context) {
         let loaded = read_state(&ctx, HISTORY_FILE).await.unwrap_or_default();
-        *self.history.lock().unwrap() = loaded;
+        if let Ok(mut hist) = self.history.lock() {
+            *hist = loaded;
+        }
     }
 
     // The core owns the pasteboard watch (it reads NSPasteboard's changeCount
@@ -36,7 +38,9 @@ impl FlashPlugin for Clipboard {
             return;
         }
         let snapshot = {
-            let mut hist = self.history.lock().unwrap();
+            let Ok(mut hist) = self.history.lock() else {
+                return;
+            };
             if hist.first().map(String::as_str) == Some(text.as_str()) {
                 None
             } else {
@@ -72,10 +76,10 @@ impl Clipboard {
     /// first — the payload the host's `:clipboard` modal renders. `preview`
     /// is the one-line label; `value` is the full text pasted on selection.
     fn history_response(&self) -> CommandResponse {
-        let entries: Vec<HistoryEntry> = self
-            .history
-            .lock()
-            .unwrap()
+        let Ok(hist) = self.history.lock() else {
+            return CommandResponse::error("clipboard history unavailable".to_string());
+        };
+        let entries: Vec<HistoryEntry> = hist
             .iter()
             .map(|text| HistoryEntry {
                 preview: preview(text),

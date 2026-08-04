@@ -38,10 +38,6 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0"),
     .package(url: "https://github.com/a2/MessagePack.swift", from: "4.0.0"),
-    // Apple's cmark-gfm wrapper. Used to parse `:help`, `:mappings`,
-    // `:plugins`, and plugin toasts as CommonMark + GFM and render
-    // them into the modal text view as styled `NSAttributedString`s.
-    .package(url: "https://github.com/apple/swift-markdown.git", from: "0.8.0"),
   ],
   targets: [
     .executableTarget(
@@ -49,11 +45,11 @@ let package = Package(
       dependencies: [
         "FlashCore", "FlashProviders",
         .product(name: "TOMLKit", package: "TOMLKit"),
-        .product(name: "Markdown", package: "swift-markdown"),
       ],
       path: "Sources/flash",
       resources: [.copy("Resources/inspector.html")],
-      swiftSettings: strictSwiftSettings
+      swiftSettings: strictSwiftSettings,
+      linkerSettings: [.linkedFramework("IOKit")]
     ),
     .executableTarget(
       name: "flash-vimium-oracle",

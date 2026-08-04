@@ -17,12 +17,19 @@ struct ClickModifiers: OptionSet, Equatable {
 
   init(names: [String]) {
     var out: ClickModifiers = []
-    for name in names {
-      if let modifier = Self.modifier(named: name) {
-        out.insert(modifier)
-      }
+    for modifier in KeyModifier.parseList(names).modifiers {
+      out.insert(Self.from(modifier))
     }
     self = out
+  }
+
+  static func from(_ modifier: KeyModifier) -> ClickModifiers {
+    switch modifier {
+    case .command: return .command
+    case .option: return .option
+    case .control: return .control
+    case .shift: return .shift
+    }
   }
 
   init(eventFlags: NSEvent.ModifierFlags, allowed: ClickModifiers = .all) {
@@ -57,15 +64,5 @@ struct ClickModifiers: OptionSet, Equatable {
       out.insert(.maskShift)
     }
     return out
-  }
-
-  private static func modifier(named rawName: String) -> ClickModifiers? {
-    switch rawName.lowercased() {
-    case "cmd", "command": return .command
-    case "alt", "option": return .option
-    case "ctrl", "control": return .control
-    case "shift": return .shift
-    default: return nil
-    }
   }
 }
