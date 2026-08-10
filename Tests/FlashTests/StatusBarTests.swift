@@ -113,6 +113,32 @@ final class StatusBarTests: XCTestCase {
     XCTAssertTrue(OverlayPanel.statusTextAnimated("#[breathe]x"))
   }
 
+  func testEffectTickRefreshesAnimatedTextWithoutRecomputingStatusBarLayout() throws {
+    let panel = OverlayPanel()
+    panel.modeBadgeVisible = true
+    panel.statusRightText = "#[breathing]82%#[nobreathing]"
+    panel.statusRightLabel.frame = CGRect(x: 100, y: 4, width: 240, height: 17)
+    let originalFrame = panel.statusRightLabel.frame
+    let originalSublayers = panel.contentLayer.sublayers
+
+    panel.refreshStatusBarEffects(currentTime: 2.5)
+    let bright = try XCTUnwrap(panel.statusRightLabel.string as? NSAttributedString)
+    let brightColor = try XCTUnwrap(
+      bright.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+
+    panel.refreshStatusBarEffects(currentTime: 7.5)
+    let dim = try XCTUnwrap(panel.statusRightLabel.string as? NSAttributedString)
+    let dimColor = try XCTUnwrap(
+      dim.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
+
+    XCTAssertEqual(brightColor.alphaComponent, 1.0, accuracy: 0.001)
+    XCTAssertEqual(dimColor.alphaComponent, 0.80, accuracy: 0.001)
+    XCTAssertEqual(panel.statusRightLabel.frame, originalFrame)
+    XCTAssertEqual(
+      panel.contentLayer.sublayers?.map(ObjectIdentifier.init),
+      originalSublayers?.map(ObjectIdentifier.init))
+  }
+
   func testSplitLeftRegionKeepsModePillSeparateFromTrailingStyledRun() {
     // Plain `#{mode}` left bucket → all pill, no trailing run.
     let plain = OverlayPanel.splitLeftRegion("NORMAL")

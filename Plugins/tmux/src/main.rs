@@ -15,9 +15,10 @@
 //!   3. `sources.snapshot` is served directly from the SDK's warm store and
 //!      performs no tmux I/O on the flashlight hot path.
 //!   4. Each refresh also retains its `list-clients` + process tree
-//!      sample. Hint discovery and source actions consult that warm cache
-//!      first, so `[t` / `]t` do not rediscover every tmux socket before
-//!      running the single tmux command that actually changes windows.
+//!      sample. The expensive host-wide process tree is reused while the tmux
+//!      client pid set is unchanged. Hint discovery and source actions consult
+//!      that warm cache first, so `[t` / `]t` do not rediscover every tmux
+//!      socket before running the single command that actually changes windows.
 //!
 //! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) is
 //! parallelised via `tokio::spawn` so a single hung socket can't stall
@@ -42,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::os::unix::fs::FileTypeExt;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
@@ -670,7 +671,7 @@ struct TmuxClient {
 #[derive(Clone, Default)]
 struct ClientSnapshot {
     clients: Vec<TmuxClient>,
-    parent_map: HashMap<i64, i64>,
+    parent_map: Arc<HashMap<i64, i64>>,
 }
 
 impl ClientSnapshot {
@@ -696,27 +697,25 @@ async fn list_clients_inventory(tmux_path: Option<&str>) -> Result<Vec<TmuxClien
         TmuxAggregate::Absent => return Ok(Vec::new()),
         TmuxAggregate::TransientFailure => return Err(()),
     };
-    let mut out = Vec::new();
-    for line in raw.lines() {
-        let parts = split_tmux_fields(line, 4);
-        if parts.len() < 3 {
-            continue;
-        }
-        let Ok(client_pid) = parts[2].parse::<i64>() else {
-            continue;
-        };
-        let activity = parts
-            .get(3)
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(0);
-        out.push(TmuxClient {
-            tty: parts[0].to_string(),
-            session: parts[1].to_string(),
-            client_pid,
-            activity,
-        });
+    Ok(raw.lines().filter_map(parse_tmux_client).collect())
+}
+
+fn parse_tmux_client(line: &str) -> Option<TmuxClient> {
+    let parts = split_tmux_fields(line, 4);
+    if parts.len() < 3 {
+        return None;
     }
-    Ok(out)
+    let client_pid = parts[2].parse::<i64>().ok()?;
+    let activity = parts
+        .get(3)
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    Some(TmuxClient {
+        tty: parts[0].to_string(),
+        session: parts[1].to_string(),
+        client_pid,
+        activity,
+    })
 }
 
 async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
@@ -731,7 +730,7 @@ async fn load_client_snapshot(tmux_path: Option<&str>) -> Option<ClientSnapshot>
     let parent_map = parent_pid_map().await;
     Some(ClientSnapshot {
         clients,
-        parent_map,
+        parent_map: Arc::new(parent_map),
     })
 }
 
@@ -1337,7 +1336,39 @@ struct CandidateBuild {
     raw_line_count: usize,
 }
 
-async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
+const CANDIDATE_CLIENT_RECORD: &str = "client";
+const CANDIDATE_WINDOW_RECORD: &str = "window";
+
+fn parse_candidate_inventory(raw: &str) -> (Vec<TmuxClient>, String) {
+    let client_prefix = format!("{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}");
+    let window_prefix = format!("{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}");
+    let mut clients = Vec::new();
+    let mut windows = Vec::new();
+    for line in raw.lines() {
+        if let Some(client) = line
+            .strip_prefix(&client_prefix)
+            .and_then(parse_tmux_client)
+        {
+            clients.push(client);
+        } else if let Some(window) = line.strip_prefix(&window_prefix) {
+            windows.push(window);
+        }
+    }
+    (clients, windows.join("\n"))
+}
+
+fn same_client_processes(previous: &[TmuxClient], current: &[TmuxClient]) -> bool {
+    let mut previous_pids: Vec<i64> = previous.iter().map(|client| client.client_pid).collect();
+    let mut current_pids: Vec<i64> = current.iter().map(|client| client.client_pid).collect();
+    previous_pids.sort_unstable();
+    current_pids.sort_unstable();
+    previous_pids == current_pids
+}
+
+async fn build_candidates(
+    tmux_path: Option<&str>,
+    previous_client_snapshot: &ClientSnapshot,
+) -> Option<CandidateBuild> {
     if tmux_path.is_none() {
         return Some(CandidateBuild {
             candidates: Vec::new(),
@@ -1346,15 +1377,49 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
             raw_line_count: 0,
         });
     }
-    let clients = match list_clients_inventory(tmux_path).await {
-        Ok(clients) => clients,
-        Err(()) => return None,
+    let client_format = format!(
+        "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
+    );
+    let window_format = format!(
+        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}"
+    );
+    // A single tmux process per socket emits both inventories. Polling the two
+    // commands separately doubled process creation and socket discovery for
+    // the plugin's one-second freshness contract.
+    let raw = match run_tmux_inventory_default(
+        tmux_path,
+        &[
+            "list-clients",
+            "-F",
+            &client_format,
+            ";",
+            "list-windows",
+            "-a",
+            "-F",
+            &window_format,
+        ],
+    )
+    .await
+    {
+        TmuxAggregate::Output(raw) => raw,
+        TmuxAggregate::Absent => {
+            return Some(CandidateBuild {
+                candidates: Vec::new(),
+                client_snapshot: ClientSnapshot::default(),
+                client_count: 0,
+                raw_line_count: 0,
+            });
+        }
+        TmuxAggregate::TransientFailure => return None,
     };
+    let (clients, raw) = parse_candidate_inventory(&raw);
     let client_by_session = client_by_session(&clients);
     let pmap = if clients.is_empty() {
-        HashMap::new()
+        Arc::new(HashMap::new())
+    } else if same_client_processes(&previous_client_snapshot.clients, &clients) {
+        Arc::clone(&previous_client_snapshot.parent_map)
     } else {
-        parent_pid_map().await
+        Arc::new(parent_pid_map().await)
     };
     let mut terminal_pid_by_session: HashMap<String, Option<i64>> = HashMap::new();
     for (session, client) in &client_by_session {
@@ -1365,31 +1430,8 @@ async fn build_candidates(tmux_path: Option<&str>) -> Option<CandidateBuild> {
     }
     let client_snapshot = ClientSnapshot {
         clients: clients.clone(),
-        parent_map: pmap.clone(),
+        parent_map: Arc::clone(&pmap),
     };
-
-    let format = format!(
-        "#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}"
-    );
-    // Aggregated across every tmux socket: `list-windows -a` is "all
-    // windows on this server", not "all windows on this host". Without
-    // the per-socket fan-out, sessions running on a second tmux server
-    // (e.g. a `tmux -L work` socket) are invisible to the flashlight
-    // finder — the user sees only the first responding server's
-    // windows.
-    let raw =
-        match run_tmux_inventory_default(tmux_path, &["list-windows", "-a", "-F", &format]).await {
-            TmuxAggregate::Output(raw) => raw,
-            TmuxAggregate::Absent => {
-                return Some(CandidateBuild {
-                    candidates: Vec::new(),
-                    client_snapshot,
-                    client_count: clients.len(),
-                    raw_line_count: 0,
-                });
-            }
-            TmuxAggregate::TransientFailure => return None,
-        };
 
     let home = std::env::var("HOME").unwrap_or_default();
     let raw_line_count = raw.split('\n').filter(|line| !line.is_empty()).count();
@@ -1490,7 +1532,11 @@ async fn refresh_candidate_locations_for_path_inner(
     requested_at: Instant,
     queue_wait_ms: u128,
 ) {
-    let build_result = build_candidates(tmux_path).await;
+    let previous_client_snapshot = client_snapshot
+        .lock()
+        .map(|snapshot| snapshot.clone())
+        .unwrap_or_default();
+    let build_result = build_candidates(tmux_path, &previous_client_snapshot).await;
     let elapsed_ms = requested_at.elapsed().as_millis();
     let work_ms = elapsed_ms.saturating_sub(queue_wait_ms);
     let Some(build) = build_result else {
@@ -2425,6 +2471,49 @@ mod tests {
             client_pid,
             activity,
         }
+    }
+
+    #[test]
+    fn process_tree_cache_key_uses_only_the_tmux_client_pid_set() {
+        let previous = vec![
+            client("/dev/ttys000", "scratch", 1443, 10),
+            client("/dev/ttys001", "work", 2000, 20),
+        ];
+        let same_processes_new_state = vec![
+            client("/dev/ttys009", "renamed", 2000, 200),
+            client("/dev/ttys008", "other", 1443, 100),
+        ];
+        let replacement_process = vec![
+            client("/dev/ttys000", "scratch", 1443, 10),
+            client("/dev/ttys002", "new", 3000, 30),
+        ];
+
+        assert!(same_client_processes(&previous, &same_processes_new_state));
+        assert!(!same_client_processes(&previous, &replacement_process));
+    }
+
+    #[test]
+    fn combined_candidate_inventory_splits_client_and_window_records() {
+        let raw = [
+            "client|||/dev/ttys000|||scratch|||1443|||100",
+            "window|||scratch|||4|||flash|||node|||/tmp/work|||1",
+            "window|||scratch|||5|||logs|||tail|||/tmp/work|||0",
+        ]
+        .join("\n");
+
+        let (clients, windows) = parse_candidate_inventory(&raw);
+
+        assert_eq!(clients.len(), 1);
+        assert_eq!(clients[0].client_pid, 1443);
+        assert_eq!(clients[0].session, "scratch");
+        assert_eq!(
+            windows,
+            [
+                "scratch|||4|||flash|||node|||/tmp/work|||1",
+                "scratch|||5|||logs|||tail|||/tmp/work|||0",
+            ]
+            .join("\n")
+        );
     }
 
     #[test]

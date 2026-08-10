@@ -64,6 +64,8 @@ extension AppMonitor {
     // re-resolving the bundle frame here.
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid)
+    axEventStormingPIDs.remove(pid)
+    axEventStormCounts.removeValue(forKey: pid)
     if observers[pid] == nil {
       installObserver(for: pid)
     } else {
@@ -77,6 +79,8 @@ extension AppMonitor {
     teardownObserver(for: pid)
     preparedModels.remove(pid: pid)
     dirtyTokens.removeValue(forKey: pid)
+    axEventStormingPIDs.remove(pid)
+    axEventStormCounts.removeValue(forKey: pid)
     cancelRefreshWork(for: pid)
   }
 
@@ -85,10 +89,10 @@ extension AppMonitor {
     notification: String,
     observedElementIsFocusedWindow: Bool
   ) {
-    noteAXEventForStormDetection(pid: pid, notification: notification)
+    let eventStorming = noteAXEventForStormDetection(pid: pid, notification: notification)
     dirtyTokens[pid, default: 0] &+= 1
     invalidatePreparedModel(for: pid)
-    if Self.notificationShouldSchedulePreparedModelRefresh(notification) {
+    if Self.notificationShouldSchedulePreparedModelRefresh(notification), !eventStorming {
       scheduleModelRefresh(for: pid, reason: "ax:\(notification)")
     }
     if Self.notificationMayChangeObservedWindow(notification) {
@@ -121,7 +125,8 @@ extension AppMonitor {
   /// Count observed AX notifications per pid; flush at most one log line
   /// per window, and only for pids whose event rate is storm-like. See the
   /// constants on `AppMonitor` for why this exists at all.
-  func noteAXEventForStormDetection(pid: pid_t, notification: String) {
+  @discardableResult
+  func noteAXEventForStormDetection(pid: pid_t, notification: String) -> Bool {
     let now = DispatchTime.now()
     let elapsedMs = Int(
       (now.uptimeNanoseconds - axEventStormWindowStart.uptimeNanoseconds) / 1_000_000)
@@ -130,17 +135,28 @@ extension AppMonitor {
       axEventStormWindowStart = now
     }
     axEventStormCounts[pid, default: [:]][notification, default: 0] += 1
+    let total = axEventStormCounts[pid]?.values.reduce(0, +) ?? 0
+    if total >= Self.axEventStormCountThreshold,
+      axEventStormingPIDs.insert(pid).inserted
+    {
+      suppressScheduledBackgroundModelRefresh(for: pid)
+      let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "?"
+      FlashLog.debug(
+        "[ax] model_refresh_suppressed pid=\(pid) bundle=\(bundle) reason=event_storm")
+    }
+    return axEventStormingPIDs.contains(pid)
   }
 
   private func flushAXEventStormWindow(elapsedMs: Int) {
     defer { axEventStormCounts.removeAll(keepingCapacity: true) }
+    var stormingPIDs: Set<pid_t> = []
     for (pid, byName) in axEventStormCounts {
       let total = byName.values.reduce(0, +)
       // Rate, not raw count: the flush is triggered by the first event after
       // the window boundary, so a quiet stretch can leave elapsedMs well
       // above the nominal window and a raw-count check would misfire.
-      let perSecond = total * 1000 / max(elapsedMs, 1)
-      guard perSecond >= Self.axEventStormThresholdPerSecond else { continue }
+      guard Self.axEventRateIsStorm(count: total, elapsedMs: elapsedMs) else { continue }
+      stormingPIDs.insert(pid)
       let top = byName.sorted { $0.value > $1.value }.prefix(3)
         .map { "\($0.key)=\($0.value)" }
         .joined(separator: ",")
@@ -149,6 +165,7 @@ extension AppMonitor {
         "[ax] event_storm pid=\(pid) bundle=\(bundle) count=\(total) "
           + "window_ms=\(elapsedMs) top=\(top)")
     }
+    axEventStormingPIDs = stormingPIDs
   }
 
   private func onFocusedEnvironmentChanged(reason: String) {

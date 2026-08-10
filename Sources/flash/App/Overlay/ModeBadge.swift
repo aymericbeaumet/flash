@@ -77,6 +77,7 @@ extension OverlayPanel {
         }
         hideStatusBarClickWindows()
       }
+      appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
       contentLayer.sublayers = sublayers
       if captureInput {
         captureKeyboardInput()
@@ -136,6 +137,7 @@ extension OverlayPanel {
       configureCommandPrompt(panelFrame: frame)
       configureCandidateFinderResults(panelFrame: frame)
       var sublayers: [CALayer] = []
+      appendActiveWindowBorderLayerIfNeeded(to: &sublayers)
       if modeBadgeVisible {
         sublayers.append(modeBadgeLayer)
         for bar in secondaryStatusBars {
@@ -147,9 +149,6 @@ extension OverlayPanel {
       }
       if candidateFinderResultsVisible {
         sublayers.append(candidateFinderResultsLayer)
-      }
-      if activeWindowBorderVisible {
-        sublayers.append(activeWindowBorderLayer)
       }
       contentLayer.sublayers = sublayers
       if modeBadgeCapturesInput {
@@ -826,6 +825,87 @@ extension OverlayPanel {
     display.contains("#[breathing")
       || display.contains("#[breathe")
       || display.contains("#[blink")
+  }
+
+  /// Advance breathing/blink attributes without running status-bar layout.
+  ///
+  /// Effect ticks do not change text, geometry, link hit targets, screen
+  /// inventory, or command-field state. Re-entering `setStatusBarModel` for
+  /// every 20-fps tick used to recompute all of those and kept Flash plus
+  /// WindowServer busy while otherwise idle. This path rebuilds only the
+  /// attributed strings whose effect markers actually depend on time.
+  func refreshStatusBarEffects(currentTime: TimeInterval = CACurrentMediaTime()) {
+    guard modeBadgeVisible else { return }
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+
+    let font = NSFont.monospacedSystemFont(
+      ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
+      weight: .medium)
+    let leftDisplay = FlashStatusBarRenderer.stripClickRanges(
+      from: statusLeftTrailingText.trimmed)
+    let centreDisplay = FlashStatusBarRenderer.stripClickRanges(from: statusAppText.trimmed)
+    let rightDisplay = Self.statusRightDisplayText(statusRightText)
+    let (cyclePrefix, cycleContent, cycleSuffix) = Self.splitCycleRun(leftDisplay)
+    refreshAnimatedStatusText(
+      on: statusLeftTrailingLabel,
+      display: cyclePrefix + cycleSuffix,
+      font: font,
+      currentTime: currentTime)
+    if let cycleContent {
+      refreshAnimatedStatusText(
+        on: statusLeftTrailingCycleLayer,
+        display: cycleContent,
+        font: font,
+        currentTime: currentTime)
+    }
+    refreshAnimatedStatusText(
+      on: statusAppLabel,
+      display: centreDisplay,
+      font: font,
+      currentTime: currentTime)
+    refreshAnimatedStatusText(
+      on: statusRightLabel,
+      display: rightDisplay,
+      font: font,
+      currentTime: currentTime)
+
+    // Secondary bars mirror the complete left run in one layer, so refresh
+    // that raw display directly instead of applying the primary bar's split
+    // cycle-layer representation.
+    for bar in secondaryStatusBars {
+      refreshAnimatedStatusText(
+        on: bar.leftTrailingLabel,
+        display: leftDisplay,
+        font: font,
+        currentTime: currentTime)
+      refreshAnimatedStatusText(
+        on: bar.appLabel,
+        display: centreDisplay,
+        font: font,
+        currentTime: currentTime)
+      refreshAnimatedStatusText(
+        on: bar.rightLabel,
+        display: rightDisplay,
+        font: font,
+        currentTime: currentTime)
+    }
+  }
+
+  private func refreshAnimatedStatusText(
+    on layer: CATextLayer,
+    display: String,
+    font: NSFont,
+    currentTime: TimeInterval
+  ) {
+    guard Self.statusTextAnimated(display) else { return }
+    layer.string = FlashStatusBarRenderer.attributedStatusString(
+      from: display,
+      font: font,
+      currentTime: currentTime)
+    layer.setNeedsDisplay()
   }
 
   /// Push `attributed` into `layer` only when the displayed content changed

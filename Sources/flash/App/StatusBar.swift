@@ -922,12 +922,11 @@ enum FlashStatusBarRenderer {
 }
 
 final class FlashStatusBarController {
-  /// ~20 fps. Slow enough that the breathing dim feels organic (4-second
-  /// period × 80 samples per cycle), fast enough to not introduce a
-  /// noticeable stutter when blink toggles. The status-bar re-render is
-  /// just an `NSAttributedString` rebuild + a CATextLayer reassignment,
-  /// so the per-tick cost is well under a millisecond.
-  static let effectsTickMilliseconds = 50
+  /// 4 fps. The breathing curve has a 10-second period, so this still gives it
+  /// 40 tiny alpha steps per cycle; blink reacts within 250 ms. Redrawing a
+  /// CATextLayer requires real AppKit/WindowServer work even when geometry is
+  /// unchanged, so a display-rate timer would waste CPU for no visible gain.
+  static let effectsTickMilliseconds = 250
 
   private weak var overlay: OverlayPanel?
   private let queue = DispatchQueue(label: "flash.status_bar", qos: .utility)
@@ -1221,15 +1220,14 @@ final class FlashStatusBarController {
     refreshEffectsTimer(for: model)
   }
 
-  /// Re-publishes the *current* model to the overlay, bypassing the
-  /// "skip if unchanged" guard. The renderer reads `CACurrentMediaTime`
-  /// when it builds attributed strings, so the per-segment alpha for
-  /// `#[breathing]` / `#[blink]` segments advances on each re-publish
-  /// even though the underlying text hasn't moved.
+  /// Advances only the attributed strings carrying time-based effects. Text,
+  /// geometry, link targets, and screen layout are unchanged by an effect tick,
+  /// so re-publishing the complete model here would wastefully rebuild the
+  /// entire status bar at 20 fps.
   private func tickEffects() {
-    guard let model = lastPublishedModel else { return }
+    guard lastPublishedModel != nil else { return }
     DispatchQueue.main.async { [weak overlay] in
-      overlay?.setStatusBarModel(model)
+      overlay?.refreshStatusBarEffects()
     }
   }
 

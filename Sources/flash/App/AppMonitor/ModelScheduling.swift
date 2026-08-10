@@ -22,6 +22,7 @@ extension AppMonitor {
     maintenanceRefresh.removeValue(forKey: pid)
     lastBackgroundModelRefreshAt.removeValue(forKey: pid)
     pendingModelCompletion.removeValue(forKey: pid)
+    slowAutomaticModelRefreshPIDs.remove(pid)
   }
 
   func cancelAllRefreshWork() {
@@ -32,6 +33,7 @@ extension AppMonitor {
     maintenanceRefresh.removeAll()
     lastBackgroundModelRefreshAt.removeAll()
     pendingModelCompletion.removeAll()
+    slowAutomaticModelRefreshPIDs.removeAll()
   }
 
   /// Debounced model refresh. Multiple events arriving within
@@ -40,6 +42,12 @@ extension AppMonitor {
   /// (e.g. scrolling) stays quiet until it settles. We allocate at
   /// most one in-flight closure per pid for the whole burst.
   func scheduleModelRefresh(for pid: pid_t, reason: String) {
+    let speculative = Self.backgroundModelRefreshShouldThrottle(reason: reason)
+    guard
+      !speculative
+        || (!axEventStormingPIDs.contains(pid)
+          && !slowAutomaticModelRefreshPIDs.contains(pid))
+    else { return }
     let now = DispatchTime.now()
     let deadline = backgroundModelRefreshDeadline(pid: pid, reason: reason, now: now)
     modelRefreshDeadline[pid] = deadline
@@ -71,6 +79,19 @@ extension AppMonitor {
     reason.hasPrefix("ax:") || reason == "queued" || reason == "maintenance"
   }
 
+  /// Drop only speculative/noisy work when a notification storm is detected.
+  /// Focus/config/user-action refreshes retain priority, and activation never
+  /// enters this scheduler: it calls `runModelRefresh` with a completion and
+  /// still performs one complete deterministic walk on demand.
+  func suppressScheduledBackgroundModelRefresh(for pid: pid_t) {
+    guard let reason = modelRefreshReason[pid],
+      Self.backgroundModelRefreshShouldThrottle(reason: reason)
+    else { return }
+    modelRefreshArmed.remove(pid)
+    modelRefreshDeadline.removeValue(forKey: pid)
+    modelRefreshReason.removeValue(forKey: pid)
+  }
+
   private func armRefreshTimer(pid: pid_t, deadline: DispatchTime) {
     DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
       guard let self else { return }
@@ -94,6 +115,8 @@ extension AppMonitor {
 
   private func scheduleMaintenanceRefresh(for model: PreparedModel) {
     maintenanceRefresh[model.pid]?.cancel()
+    maintenanceRefresh.removeValue(forKey: model.pid)
+    guard !slowAutomaticModelRefreshPIDs.contains(model.pid) else { return }
     let delayMs = max(0, Self.modelFreshnessMs - Self.modelMaintenanceLeadMs)
     let token = model.dirtyToken
     let revision = model.configRevision
@@ -180,18 +203,45 @@ extension AppMonitor {
 
     axQueue.async { [weak self] in
       guard let self else { return }
+      let rebuildStartedAt = DispatchTime.now()
       let built = self.buildPreparedModel(
         context: context,
         providers: providers,
         cfg: cfg,
         dirtyToken: startToken,
         configRevision: revision)
+      let rebuildEndedAt = DispatchTime.now()
+      let rebuildElapsedMs =
+        Double(
+          rebuildEndedAt.uptimeNanoseconds - rebuildStartedAt.uptimeNanoseconds) / 1_000_000
       DispatchQueue.main.async {
         let shouldRunQueued = self.preparedModels.finishRebuild(pid: pid)
         let waiter = self.pendingModelCompletion.removeValue(forKey: pid)
         defer {
           if shouldRunQueued {
             self.scheduleModelRefresh(for: pid, reason: "queued")
+          }
+        }
+
+        if completion == nil {
+          let wasSlow = self.slowAutomaticModelRefreshPIDs.contains(pid)
+          let isSlow = Self.automaticModelRefreshIsSlow(elapsedMs: rebuildElapsedMs)
+          if isSlow {
+            self.slowAutomaticModelRefreshPIDs.insert(pid)
+            self.maintenanceRefresh[pid]?.cancel()
+            self.maintenanceRefresh.removeValue(forKey: pid)
+            if !wasSlow {
+              FlashLog.debug(
+                "[ax] model_refresh_backoff",
+                fields: [
+                  "pid": "\(pid)",
+                  "bundle": context.bundleIdentifier,
+                  "reason": reason,
+                  "elapsed_ms": String(format: "%.2f", rebuildElapsedMs),
+                ])
+            }
+          } else {
+            self.slowAutomaticModelRefreshPIDs.remove(pid)
           }
         }
 

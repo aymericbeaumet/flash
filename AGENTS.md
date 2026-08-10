@@ -159,6 +159,14 @@ See *Prepared model contract* below for the exact invariants.
 **Walk life-cycle:**
 
 1. `scheduleModelRefresh(for: pid)` — 80-ms debounced. Multiple bumps coalesce.
+   When a pid exceeds the AX event-storm threshold, every event still bumps its
+   dirty token and invalidates the model, but speculative AX/queued/maintenance
+   rebuilds pause until a quiet event window clears the storm. Explicit hint
+   activation still runs one complete deterministic walk on demand.
+   Likewise, an automatic walk that takes at least 50 ms keeps its completed
+   model but backs that pid off from further speculative AX/queued/maintenance
+   warming; focus/config refreshes may reassess it, and activation remains a
+   complete on-demand walk.
 2. On debounce fire, capture `startToken = dirtyTokens[pid]` and `configRevision` on main, dispatch a continuous-provider walk on `axQueue`.
 3. Walk runs to completion (never truncated).
 4. Result hops back to main. If token and config revision still match AND pid is still frontmost → write a `PreparedModel` with targets, assigned hints, token, config revision, and timestamp. Else discard.

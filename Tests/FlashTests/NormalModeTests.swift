@@ -923,6 +923,69 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(AppMonitor.backgroundModelRefreshShouldThrottle(reason: "config"))
   }
 
+  func testAXEventStormSuppressesOnlySpeculativePreparedModelRefreshes() {
+    let registry = SourceRegistry(descriptors: [], runningApplications: [])
+    let monitor = AppMonitor(registry: registry, config: .default)
+    let pid = pid_t(42)
+    monitor.scheduleModelRefresh(for: pid, reason: "ax:AXUIElementDestroyed")
+    XCTAssertTrue(monitor.modelRefreshArmed.contains(pid))
+
+    for _ in 0..<AppMonitor.axEventStormCountThreshold {
+      monitor.noteAXEventForStormDetection(
+        pid: pid, notification: kAXUIElementDestroyedNotification as String)
+    }
+
+    XCTAssertTrue(monitor.axEventStormingPIDs.contains(pid))
+    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    monitor.scheduleModelRefresh(for: pid, reason: "ax:AXUIElementDestroyed")
+    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    monitor.scheduleModelRefresh(for: pid, reason: "maintenance")
+    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+
+    monitor.scheduleModelRefresh(for: pid, reason: "focus")
+    XCTAssertTrue(monitor.modelRefreshArmed.contains(pid))
+    monitor.cancelRefreshWork(for: pid)
+  }
+
+  func testAXEventStormThresholdUsesEventRate() {
+    XCTAssertTrue(
+      AppMonitor.axEventRateIsStorm(
+        count: AppMonitor.axEventStormThresholdPerSecond,
+        elapsedMs: 1000))
+    XCTAssertFalse(
+      AppMonitor.axEventRateIsStorm(
+        count: AppMonitor.axEventStormThresholdPerSecond - 1,
+        elapsedMs: 1000))
+    XCTAssertFalse(
+      AppMonitor.axEventRateIsStorm(
+        count: AppMonitor.axEventStormThresholdPerSecond,
+        elapsedMs: 2000))
+  }
+
+  func testSlowAutomaticPreparedModelRefreshBacksOffOnlySpeculativeWork() {
+    XCTAssertTrue(
+      AppMonitor.automaticModelRefreshIsSlow(
+        elapsedMs: AppMonitor.slowAutomaticModelRefreshThresholdMs))
+    XCTAssertFalse(
+      AppMonitor.automaticModelRefreshIsSlow(
+        elapsedMs: AppMonitor.slowAutomaticModelRefreshThresholdMs - 0.01))
+
+    let registry = SourceRegistry(descriptors: [], runningApplications: [])
+    let monitor = AppMonitor(registry: registry, config: .default)
+    let pid = pid_t(43)
+    monitor.slowAutomaticModelRefreshPIDs.insert(pid)
+
+    monitor.scheduleModelRefresh(for: pid, reason: "ax:AXLayoutChanged")
+    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    monitor.scheduleModelRefresh(for: pid, reason: "queued")
+    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    monitor.scheduleModelRefresh(for: pid, reason: "maintenance")
+    XCTAssertFalse(monitor.modelRefreshArmed.contains(pid))
+    monitor.scheduleModelRefresh(for: pid, reason: "focus")
+    XCTAssertTrue(monitor.modelRefreshArmed.contains(pid))
+    monitor.cancelRefreshWork(for: pid)
+  }
+
   func testAutomaticPreparedModelRefreshSkipsNotes() {
     XCTAssertFalse(
       AppMonitor.shouldRunAutomaticPreparedModelRefresh(bundleIdentifier: "com.apple.Notes"))

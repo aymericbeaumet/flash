@@ -56,25 +56,29 @@ extension OverlayPanel {
     }
 
     var sublayers = contentLayer.sublayers ?? []
-    if !sublayers.contains(where: { $0 === activeWindowBorderLayer }) {
-      sublayers.append(activeWindowBorderLayer)
-    }
+    // The focus stroke is background chrome. Keep every transient Flash
+    // surface (command prompt, candidates, alerts, status bar) above it so a
+    // target-window edge that crosses one of those surfaces never paints
+    // through the foreground UI.
+    sublayers.removeAll { $0 === activeWindowBorderLayer }
+    sublayers.insert(activeWindowBorderLayer, at: 0)
     contentLayer.sublayers = sublayers
     if !isVisible {
       orderFrontRegardless()
     }
   }
 
-  /// Re-attach the active-window border to a freshly rebuilt sublayer stack
+  /// Re-attach the active-window border behind a freshly rebuilt sublayer stack
   /// when it's currently shown (`path != nil`). Transient overlays (hints,
   /// `displayAlert`, `displayBanner`) rebuild `contentLayer.sublayers` from
   /// scratch, so without this a toast blanks the colored focus border until the
-  /// next window move re-draws it.
+  /// next window move re-draws it. Inserting at index zero is the z-order
+  /// contract: Flash's interactive/transient UI must always remain fully above
+  /// the window-focus chrome.
   func appendActiveWindowBorderLayerIfNeeded(to sublayers: inout [CALayer]) {
     guard activeWindowBorderLayer.path != nil else { return }
-    if !sublayers.contains(where: { $0 === activeWindowBorderLayer }) {
-      sublayers.append(activeWindowBorderLayer)
-    }
+    sublayers.removeAll { $0 === activeWindowBorderLayer }
+    sublayers.insert(activeWindowBorderLayer, at: 0)
   }
 
   /// Position the stroke fully *inside* the target window so the border reads as

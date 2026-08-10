@@ -84,6 +84,15 @@ final class AppMonitor {
   static let modelDebounceMs: Int = 80
   static let modelMaintenanceLeadMs: Int = 250
   static let backgroundModelMinIntervalMs: Int = 2500
+  /// Automatic warming that costs this much is no longer a background win:
+  /// repeating it every freshness cycle burns a visible fraction of a core.
+  /// Keep the completed model, then let focus/config reassess and activation
+  /// perform a full on-demand walk when the model becomes stale.
+  static let slowAutomaticModelRefreshThresholdMs: Double = 50
+
+  static func automaticModelRefreshIsSlow(elapsedMs: Double) -> Bool {
+    elapsedMs >= slowAutomaticModelRefreshThresholdMs
+  }
 
   /// AX event storm visibility. `onAXEvent` is otherwise silent, so a
   /// notification flood from a churning app (Notes re-rendering its note
@@ -95,6 +104,14 @@ final class AppMonitor {
   /// itself worth seeing.
   static let axEventStormWindowMs: Int = 1000
   static let axEventStormThresholdPerSecond: Int = 120
+
+  static func axEventRateIsStorm(count: Int, elapsedMs: Int) -> Bool {
+    count * 1000 / max(elapsedMs, 1) >= axEventStormThresholdPerSecond
+  }
+
+  static var axEventStormCountThreshold: Int {
+    max(1, axEventStormThresholdPerSecond * axEventStormWindowMs / 1000)
+  }
 
   /// Some native apps expose enough AX structure that background warming is
   /// more disruptive than a cold on-demand hint walk. Keep activation explicit
@@ -124,6 +141,14 @@ final class AppMonitor {
   var observers: [pid_t: ObserverEntry] = [:]
   var axEventStormWindowStart = DispatchTime.now()
   var axEventStormCounts: [pid_t: [String: Int]] = [:]
+  /// Pids whose current/previous observation window crossed the storm
+  /// threshold. Their dirty tokens still advance on every event, but automatic
+  /// background warming pauses until a quiet window proves the burst ended.
+  var axEventStormingPIDs: Set<pid_t> = []
+  /// Pids whose last focus/config-driven automatic walk exceeded the useful
+  /// background-work budget. AX/queued/maintenance warming stays paused for
+  /// them until another explicit focus/config refresh measures a cheap tree.
+  var slowAutomaticModelRefreshPIDs: Set<pid_t> = []
   /// Coalesced model refresh scheduling. The previous implementation
   /// allocated a fresh `DispatchWorkItem` for every observed AX event
   /// and cancelled the previous one. Under scroll storms

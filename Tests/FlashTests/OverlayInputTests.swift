@@ -615,6 +615,19 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(thin.maxY + 0.5, thick.maxY + 1.5, accuracy: 0.001)
   }
 
+  func testActiveWindowBorderStaysBehindCommandAndCandidateLayers() {
+    let panel = OverlayPanel()
+    panel.activeWindowBorderLayer.path = CGPath(
+      rect: CGRect(x: 0, y: 0, width: 100, height: 100), transform: nil)
+    var layers: [CALayer] = [panel.commandPromptLayer, panel.candidateFinderResultsLayer]
+
+    panel.appendActiveWindowBorderLayerIfNeeded(to: &layers)
+
+    XCTAssertTrue(layers[0] === panel.activeWindowBorderLayer)
+    XCTAssertTrue(layers[1] === panel.commandPromptLayer)
+    XCTAssertTrue(layers[2] === panel.candidateFinderResultsLayer)
+  }
+
   func testModeBadgeWidthUsesLongestConfiguredLabel() {
     let compact = OverlayPanel.modeBadgeWidth(
       labels: Config.Mode.Labels(normal: "N", insert: "I", command: "C"),
