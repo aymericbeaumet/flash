@@ -42,8 +42,6 @@ extension NormalModeDispatcher {
         - In browsers this maps to tab selection.
         - `n` opens a new window with Cmd-N.
         - `t` opens a browser tab or tmux window when the focused source supports it.
-        - `cmd+d` / `cmd+shift+d` split tmux panes vertically or horizontally.
-        - `cmd+w` closes the active tmux pane.
         - `r` reloads browsers or refreshes the focused tmux client.
         - `e` archives the focused resource when a website source supports it.
 

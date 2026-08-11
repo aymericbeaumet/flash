@@ -235,6 +235,7 @@ dependencies = [
  "objc2-foundation",
  "regex",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

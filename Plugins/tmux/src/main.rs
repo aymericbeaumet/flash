@@ -20,10 +20,9 @@
 //!      that warm cache first, so `[t` / `]t` do not rediscover every tmux
 //!      socket before running the single command that actually changes windows.
 //!
-//! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) is
-//! parallelised via `tokio::spawn` so a single hung socket can't stall
-//! the whole refresh — the slowest socket sets the cycle length, not
-//! the sum.
+//! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) and
+//! per-host SSH inventory refreshes run concurrently so one slow socket or
+//! remote host cannot make every independent backend wait behind it.
 //!
 //! ## Hint discovery
 //!
@@ -42,7 +41,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -53,6 +53,7 @@ use flash_plugin::{
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 #[path = "../../_bounded_process.rs"]
 mod bounded_process;
@@ -64,12 +65,17 @@ const NAV_SCHEME: &str = "tmux";
 
 const TMUX_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/usr"];
 const ENV_PATH: &str = "/usr/bin/env";
+const HOSTNAME_PATH: &str = "/bin/hostname";
+const ID_PATH: &str = "/usr/bin/id";
 const PS_PATH: &str = "/bin/ps";
+const SSH_PATH: &str = "/usr/bin/ssh";
 const TMUX_FIELD_SEP: &str = "|||";
 
 const LINKS_PER_PANE_LIMIT: usize = 40;
 const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
 const SLOW_CANDIDATE_REFRESH_MS: u128 = 1_000;
+const REMOTE_POLL_INTERVAL_SECS: u64 = 5;
+const REMOTE_RETRY_DELAYS_SECS: [u64; 3] = [15, 30, 60];
 
 // ---- Link extraction --------------------------------------------------------
 
@@ -214,6 +220,404 @@ struct CliResult {
     status: i32,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct LocalTmuxConfig {
+    label: String,
+    terminal_window_title: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RemoteTmuxConfig {
+    id: String,
+    label: String,
+    host: String,
+    tmux_path: String,
+    terminal_window_title: String,
+    terminal_window_handle: Option<u64>,
+    terminal_pid: i64,
+    transport_pid: i64,
+    home: String,
+    control_path: Option<PathBuf>,
+    ssh_options: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProcessRecord {
+    pid: i64,
+    ppid: i64,
+    tty: String,
+    command: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RemoteTransport {
+    host: String,
+    tmux_path: String,
+    home: String,
+    ssh_options: Vec<String>,
+}
+
+fn executable_name(command: &str) -> &str {
+    command.rsplit('/').next().unwrap_or(command)
+}
+
+async fn local_hostname() -> String {
+    run_cmd(HOSTNAME_PATH, &["-s"], Duration::from_secs(1))
+        .await
+        .unwrap_or_default()
+        .trim()
+        .split('.')
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("local")
+        .to_string()
+}
+
+async fn local_tmux_config() -> LocalTmuxConfig {
+    LocalTmuxConfig {
+        label: local_hostname().await,
+        terminal_window_title: String::new(),
+    }
+}
+
+async fn remote_control_path() -> Option<PathBuf> {
+    let uid = run_cmd(ID_PATH, &["-u"], Duration::from_secs(1))
+        .await?
+        .trim()
+        .parse::<u32>()
+        .ok()?;
+    let directory = PathBuf::from(format!("/tmp/flash-tmux-{uid}"));
+    match tokio::fs::symlink_metadata(&directory).await {
+        Ok(metadata) => {
+            if !metadata.is_dir() || metadata.uid() != uid {
+                return None;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if tokio::fs::create_dir(&directory).await.is_err() {
+                let metadata = tokio::fs::symlink_metadata(&directory).await.ok()?;
+                if !metadata.is_dir() || metadata.uid() != uid {
+                    return None;
+                }
+            }
+        }
+        Err(_) => return None,
+    }
+    tokio::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+        .await
+        .ok()?;
+    Some(directory.join("ssh-%C"))
+}
+
+fn split_command_line(raw: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in raw.chars() {
+        if escaped {
+            word.push(ch);
+            escaped = false;
+            continue;
+        }
+        match quote {
+            Some('"') if ch == '\\' => escaped = true,
+            Some(active) if ch == active => quote = None,
+            Some(_) => word.push(ch),
+            None if ch == '\\' => escaped = true,
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if ch.is_whitespace() => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            None => word.push(ch),
+        }
+    }
+    if escaped {
+        word.push('\\');
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+fn ssh_option_takes_value(option: &str) -> bool {
+    option.len() == 2
+        && option
+            .chars()
+            .nth(1)
+            .is_some_and(|flag| "BbcDEeFIiJLlmOopQRSWw".contains(flag))
+}
+
+fn ssh_destination_index(words: &[String]) -> Option<usize> {
+    let mut index = 1;
+    while index < words.len() {
+        let word = &words[index];
+        if word == "--" {
+            return (index + 1 < words.len()).then_some(index + 1);
+        }
+        if !word.starts_with('-') || word == "-" {
+            return Some(index);
+        }
+        index += if ssh_option_takes_value(word) { 2 } else { 1 };
+    }
+    None
+}
+
+fn retained_ssh_options(words: &[String]) -> Vec<String> {
+    let mut retained = Vec::new();
+    let mut index = 0;
+    while index < words.len() {
+        let option = &words[index];
+        let takes_value = ssh_option_takes_value(option);
+        let value = takes_value.then(|| words.get(index + 1)).flatten();
+        let keep = matches!(
+            option.as_str(),
+            "-4" | "-6" | "-B" | "-b" | "-F" | "-I" | "-i" | "-J" | "-l" | "-p"
+        ) || option == "-o"
+            && value.is_some_and(|value| {
+                let key = value
+                    .split('=')
+                    .next()
+                    .unwrap_or(value)
+                    .to_ascii_lowercase();
+                !matches!(
+                    key.as_str(),
+                    "batchmode"
+                        | "connectionattempts"
+                        | "connecttimeout"
+                        | "controlmaster"
+                        | "controlpath"
+                        | "controlpersist"
+                        | "remotecommand"
+                        | "requesttty"
+                )
+            });
+        if keep {
+            retained.push(option.clone());
+            if let Some(value) = value {
+                retained.push(value.clone());
+            }
+        }
+        index += if takes_value { 2 } else { 1 };
+    }
+    retained
+}
+
+fn tmux_command_index(words: &[String], start: usize) -> Option<usize> {
+    words
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find(|(_, word)| executable_name(word) == "tmux")
+        .map(|(index, _)| index)
+}
+
+fn inferred_remote_home(host: &str, tmux_words: &[String]) -> String {
+    let user = host
+        .split('@')
+        .next()
+        .filter(|_| host.contains('@'))
+        .unwrap_or("");
+    if user.is_empty() {
+        return String::new();
+    }
+    for pair in tmux_words.windows(2) {
+        if pair[0] != "-c" {
+            continue;
+        }
+        for prefix in ["/home/", "/Users/"] {
+            let expected = format!("{prefix}{user}");
+            if pair[1] == expected || pair[1].starts_with(&format!("{expected}/")) {
+                return expected;
+            }
+        }
+    }
+    String::new()
+}
+
+fn parse_ssh_transport(command: &str) -> Option<RemoteTransport> {
+    let words = split_command_line(command);
+    if executable_name(words.first()?) != "ssh" {
+        return None;
+    }
+    let destination = ssh_destination_index(&words)?;
+    let tmux_index = tmux_command_index(&words, destination + 1)?;
+    let host = words[destination].clone();
+    Some(RemoteTransport {
+        home: inferred_remote_home(&host, &words[tmux_index + 1..]),
+        tmux_path: words[tmux_index].clone(),
+        ssh_options: retained_ssh_options(&words[1..destination]),
+        host,
+    })
+}
+
+fn parse_mosh_transport(command: &str) -> Option<RemoteTransport> {
+    let marker = command.find(" -# ")? + 4;
+    let end = command[marker..].rfind(" | ")? + marker;
+    let words = split_command_line(&command[marker..end]);
+    let separator = words.iter().rposition(|word| word == "--")?;
+    if separator == 0 || separator + 1 >= words.len() {
+        return None;
+    }
+    let host = words[separator - 1].clone();
+    let tmux_index = tmux_command_index(&words, separator + 1)?;
+    Some(RemoteTransport {
+        home: inferred_remote_home(&host, &words[tmux_index + 1..]),
+        tmux_path: words[tmux_index].clone(),
+        ssh_options: Vec::new(),
+        host,
+    })
+}
+
+fn parse_remote_transport(command: &str, process_name: &str) -> Option<RemoteTransport> {
+    match process_name {
+        "ssh" => parse_ssh_transport(command),
+        "mosh-client" => parse_mosh_transport(command),
+        _ => None,
+    }
+}
+
+fn remote_host_name(host: &str) -> &str {
+    host.rsplit('@').next().unwrap_or(host)
+}
+
+fn remote_host_label(host: &str) -> String {
+    remote_host_name(host)
+        .trim_matches(['[', ']'])
+        .split(['.', ':'])
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("remote")
+        .to_string()
+}
+
+fn terminal_title_for_host(nodes: &[AxWindowNode], host: &str) -> String {
+    let full = remote_host_name(host).to_ascii_lowercase();
+    let short = remote_host_label(host).to_ascii_lowercase();
+    nodes
+        .iter()
+        .filter_map(|node| node.attrs.get("AXTitle"))
+        .max_by_key(|title| {
+            let lower = title.to_ascii_lowercase();
+            if !full.is_empty() && lower.contains(&full) {
+                3
+            } else if !short.is_empty() && lower.contains(&short) {
+                2
+            } else {
+                0
+            }
+        })
+        .filter(|title| {
+            let lower = title.to_ascii_lowercase();
+            (!full.is_empty() && lower.contains(&full))
+                || (!short.is_empty() && lower.contains(&short))
+                || nodes.len() == 1
+        })
+        .cloned()
+        .unwrap_or_default()
+}
+
+async fn process_records() -> Vec<ProcessRecord> {
+    let Some(raw) = run_cmd(
+        PS_PATH,
+        &["-axo", "pid=,ppid=,tty=,comm="],
+        Duration::from_millis(1500),
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    raw.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some(ProcessRecord {
+                pid: fields.next()?.parse().ok()?,
+                ppid: fields.next()?.parse().ok()?,
+                tty: fields.next()?.to_string(),
+                command: fields.next()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+async fn process_command(pid: i64) -> Option<String> {
+    run_cmd(
+        PS_PATH,
+        &["-ww", "-p", &pid.to_string(), "-o", "command="],
+        Duration::from_millis(1500),
+    )
+    .await
+    .map(|command| command.trim().to_string())
+    .filter(|command| !command.is_empty())
+}
+
+async fn discover_remote_tmux_configs(ctx: &Context) -> BTreeMap<String, RemoteTmuxConfig> {
+    let control_path = remote_control_path().await;
+    let records = process_records().await;
+    let parent_map = records
+        .iter()
+        .map(|record| (record.pid, record.ppid))
+        .collect::<HashMap<_, _>>();
+    let application_pids = ctx
+        .running_applications()
+        .into_iter()
+        .map(|application| application.pid)
+        .collect::<BTreeSet<_>>();
+    let mut windows_by_pid: HashMap<i64, Vec<AxWindowNode>> = HashMap::new();
+    let mut discovered = BTreeMap::new();
+    for record in records {
+        let process_name = executable_name(&record.command);
+        if !matches!(process_name, "ssh" | "mosh-client")
+            || matches!(record.tty.as_str(), "?" | "??" | "-")
+        {
+            continue;
+        }
+        let Some(terminal_pid) = find_top_level_ancestor(record.pid, &parent_map)
+            .filter(|pid| application_pids.contains(pid))
+        else {
+            continue;
+        };
+        let Some(command) = process_command(record.pid).await else {
+            continue;
+        };
+        let Some(transport) = parse_remote_transport(&command, process_name) else {
+            continue;
+        };
+        let nodes = if let Some(nodes) = windows_by_pid.get(&terminal_pid) {
+            nodes.clone()
+        } else {
+            let nodes = terminal_window_nodes(ctx, terminal_pid).await;
+            windows_by_pid.insert(terminal_pid, nodes.clone());
+            nodes
+        };
+        let label = remote_host_label(&transport.host);
+        let id = format!(
+            "remote:{}",
+            remote_host_name(&transport.host).to_ascii_lowercase()
+        );
+        let terminal_window_title = terminal_title_for_host(&nodes, &id["remote:".len()..]);
+        let terminal_window_handle = window_handle_for_title(&nodes, &terminal_window_title);
+        let config = RemoteTmuxConfig {
+            id: id.clone(),
+            label,
+            host: transport.host,
+            tmux_path: transport.tmux_path,
+            terminal_window_title,
+            terminal_window_handle,
+            terminal_pid,
+            transport_pid: record.pid,
+            home: transport.home,
+            control_path: control_path.clone(),
+            ssh_options: transport.ssh_options,
+        };
+        discovered.insert(id, config);
+    }
+    discovered
+}
+
 async fn run_local(argv: &[String], timeout: Duration) -> CliResult {
     let Some((program, args)) = argv.split_first() else {
         return CliResult {
@@ -269,6 +673,64 @@ async fn run_local(argv: &[String], timeout: Duration) -> CliResult {
             }
         }
     }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn remote_tmux_command(config: &RemoteTmuxConfig, args: &[&str]) -> String {
+    let mut words = vec![
+        shell_quote(ENV_PATH),
+        "-u".to_string(),
+        "TMUX".to_string(),
+        "-u".to_string(),
+        "TMUX_PANE".to_string(),
+        "-u".to_string(),
+        "TMUX_TMPDIR".to_string(),
+        "-u".to_string(),
+        "TMPDIR".to_string(),
+        shell_quote(&config.tmux_path),
+    ];
+    words.extend(args.iter().map(|arg| shell_quote(arg)));
+    words.join(" ")
+}
+
+fn remote_ssh_argv(config: &RemoteTmuxConfig, command: &str) -> Vec<String> {
+    let mut argv = vec![SSH_PATH.to_string(), "-T".to_string()];
+    argv.extend(config.ssh_options.iter().cloned());
+    argv.extend([
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ConnectTimeout=5".to_string(),
+        "-o".to_string(),
+        "ConnectionAttempts=1".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=yes".to_string(),
+    ]);
+    if let Some(control_path) = config.control_path.as_ref() {
+        argv.extend([
+            "-o".to_string(),
+            "ControlMaster=auto".to_string(),
+            "-o".to_string(),
+            "ControlPersist=60".to_string(),
+            "-o".to_string(),
+            format!("ControlPath={}", control_path.display()),
+        ]);
+    }
+    argv.extend(["--".to_string(), config.host.clone(), command.to_string()]);
+    argv
+}
+
+async fn run_remote_tmux(config: &RemoteTmuxConfig, args: &[&str], timeout: Duration) -> CliResult {
+    let command = remote_tmux_command(config, args);
+    run_local(&remote_ssh_argv(config, &command), timeout).await
+}
+
+async fn run_remote_tmux_default(config: &RemoteTmuxConfig, args: &[&str]) -> Option<String> {
+    let result = run_remote_tmux(config, args, Duration::from_secs(7)).await;
+    result.ok.then_some(result.stdout)
 }
 
 fn tmux_argv(tmux_path: &str, args: &[&str]) -> Vec<String> {
@@ -660,18 +1122,22 @@ fn split_tmux_fields(line: &str, max_fields: usize) -> Vec<&str> {
 
 // ---- tmux clients -----------------------------------------------------------
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct TmuxClient {
     tty: String,
     session: String,
     client_pid: i64,
     activity: i64,
+    backend_id: String,
+    remote: bool,
 }
 
 #[derive(Clone, Default)]
 struct ClientSnapshot {
     clients: Vec<TmuxClient>,
     parent_map: Arc<HashMap<i64, i64>>,
+    window_title_by_client_pid: Arc<HashMap<i64, String>>,
+    window_handle_by_client_pid: Arc<HashMap<i64, u64>>,
 }
 
 impl ClientSnapshot {
@@ -680,6 +1146,32 @@ impl ClientSnapshot {
             return None;
         }
         client_hosted_by_from_map(&self.clients, focused_pid, &self.parent_map)
+    }
+
+    fn hosted_by_window(&self, focused_pid: i64, window_title: &str) -> Option<TmuxClient> {
+        if window_title.is_empty() {
+            return self.hosted_by(focused_pid);
+        }
+        let mut hosted = self
+            .clients
+            .iter()
+            .filter(|client| is_ancestor(focused_pid, client.client_pid, &self.parent_map))
+            .cloned()
+            .collect::<Vec<_>>();
+        if hosted.is_empty() {
+            return self.hosted_by(focused_pid);
+        }
+        let normalized_title = window_title.to_ascii_lowercase();
+        hosted.sort_by_key(|client| {
+            let exact_window = self
+                .window_title_by_client_pid
+                .get(&client.client_pid)
+                .is_some_and(|title| title == window_title) as i64;
+            let session_match =
+                normalized_title.contains(&client.session.to_ascii_lowercase()) as i64;
+            std::cmp::Reverse((exact_window, session_match, client.activity))
+        });
+        hosted.into_iter().next()
     }
 }
 
@@ -701,6 +1193,10 @@ async fn list_clients_inventory(tmux_path: Option<&str>) -> Result<Vec<TmuxClien
 }
 
 fn parse_tmux_client(line: &str) -> Option<TmuxClient> {
+    parse_tmux_client_for_backend(line, "local")
+}
+
+fn parse_tmux_client_for_backend(line: &str, backend_id: &str) -> Option<TmuxClient> {
     let parts = split_tmux_fields(line, 4);
     if parts.len() < 3 {
         return None;
@@ -715,11 +1211,65 @@ fn parse_tmux_client(line: &str) -> Option<TmuxClient> {
         session: parts[1].to_string(),
         client_pid,
         activity,
+        backend_id: backend_id.to_string(),
+        remote: backend_id != "local",
     })
 }
 
 async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
     list_clients_inventory(tmux_path).await.unwrap_or_default()
+}
+
+async fn list_remote_clients(config: &RemoteTmuxConfig) -> Result<Vec<TmuxClient>, ()> {
+    let format = format!(
+        "#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
+    );
+    let result = run_remote_tmux(
+        config,
+        &["list-clients", "-F", &format],
+        Duration::from_secs(7),
+    )
+    .await;
+    if !result.ok {
+        return Err(());
+    }
+    Ok(result
+        .stdout
+        .lines()
+        .filter_map(|line| parse_tmux_client_for_backend(line, &config.id))
+        .collect())
+}
+
+async fn run_tmux_for_client(plugin: &Tmux, client: &TmuxClient, args: &[&str]) -> Option<String> {
+    if client.remote {
+        let config = plugin.remote_config(&client.backend_id)?;
+        run_remote_tmux_default(&config, args).await
+    } else {
+        run_tmux_default(plugin.resolved_tmux_path().await, args).await
+    }
+}
+
+async fn run_tmux_for_client_capture(
+    plugin: &Tmux,
+    client: &TmuxClient,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, String> {
+    if client.remote {
+        let config = plugin
+            .remote_config(&client.backend_id)
+            .ok_or_else(|| "remote tmux transport is no longer attached".to_string())?;
+        let result = run_remote_tmux(&config, args, timeout).await;
+        if result.ok {
+            Ok(result.stdout)
+        } else if result.stderr.trim().is_empty() {
+            Err(format!("remote tmux exited status={}", result.status))
+        } else {
+            Err(result.stderr.trim().to_string())
+        }
+    } else {
+        run_tmux_capture(plugin.resolved_tmux_path().await, args, timeout).await
+    }
 }
 
 async fn load_client_snapshot(tmux_path: Option<&str>) -> Option<ClientSnapshot> {
@@ -731,6 +1281,8 @@ async fn load_client_snapshot(tmux_path: Option<&str>) -> Option<ClientSnapshot>
     Some(ClientSnapshot {
         clients,
         parent_map: Arc::new(parent_map),
+        window_title_by_client_pid: Arc::new(HashMap::new()),
+        window_handle_by_client_pid: Arc::new(HashMap::new()),
     })
 }
 
@@ -743,41 +1295,314 @@ fn cached_client_hosted_by(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient
 }
 
 async fn refresh_cached_client_snapshot(plugin: &Tmux) -> Option<ClientSnapshot> {
-    let snapshot = load_client_snapshot(plugin.resolved_tmux_path().await).await?;
+    let mut snapshot = load_client_snapshot(plugin.resolved_tmux_path().await).await?;
     if let Ok(mut guard) = plugin.client_snapshot().lock() {
+        if same_client_processes(&guard.clients, &snapshot.clients) {
+            snapshot.window_title_by_client_pid = Arc::clone(&guard.window_title_by_client_pid);
+            snapshot.window_handle_by_client_pid = Arc::clone(&guard.window_handle_by_client_pid);
+        }
         *guard = snapshot.clone();
     }
     Some(snapshot)
 }
 
-async fn client_hosted_by_cached(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient> {
-    if let Some(client) = cached_client_hosted_by(plugin, focused_pid) {
-        return Some(client);
-    }
-    refresh_cached_client_snapshot(plugin)
-        .await?
-        .hosted_by(focused_pid)
+#[derive(Clone, Debug, Deserialize)]
+struct AxWindowNode {
+    handle: u64,
+    #[serde(default)]
+    attrs: HashMap<String, String>,
 }
 
-/// Resolve the tmux client for `focused_pid` from a FRESH snapshot, never the
-/// cache. Source actions are deliberate, infrequent commands, so they pay one
-/// `list-clients` round-trip to avoid acting on a stale cached session: the
-/// snapshot is filled during hint discovery and goes stale the moment the user
-/// `switch-client`s or changes window, which made `x` (tab_close) target the
-/// cached session's window — the wrong one, or one already gone, so it "didn't
-/// always close the active window".
-async fn client_hosted_by_fresh(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient> {
-    if let Some(client) = refresh_cached_client_snapshot(plugin)
-        .await
-        .and_then(|snapshot| snapshot.hosted_by(focused_pid))
-    {
-        return Some(client);
+fn ax_window_nodes(value: &Value) -> Vec<AxWindowNode> {
+    if !value.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return Vec::new();
     }
-    // A transient `list-clients`/`ps` failure leaves the refresh empty without
-    // clobbering the cache (it bails before overwriting), so fall back to the
-    // last good snapshot — a deliberate action should still fire rather than
-    // silently no-op.
-    cached_client_hosted_by(plugin, focused_pid)
+    value
+        .get("nodes")
+        .cloned()
+        .and_then(|nodes| serde_json::from_value(nodes).ok())
+        .unwrap_or_default()
+}
+
+fn focused_window_title_from_nodes(nodes: &[AxWindowNode]) -> Option<&str> {
+    nodes
+        .iter()
+        .find(|node| {
+            node.attrs.get("AXFocused").map(String::as_str) == Some("1")
+                || node.attrs.get("AXMain").map(String::as_str) == Some("1")
+        })
+        .or_else(|| nodes.first())
+        .and_then(|node| node.attrs.get("AXTitle"))
+        .map(String::as_str)
+}
+
+fn window_handle_for_title(nodes: &[AxWindowNode], title: &str) -> Option<u64> {
+    nodes
+        .iter()
+        .find(|node| node.attrs.get("AXTitle").map(String::as_str) == Some(title))
+        .map(|node| node.handle)
+}
+
+async fn terminal_window_nodes(ctx: &Context, pid: i64) -> Vec<AxWindowNode> {
+    let value = ctx
+        .call_host(
+            "ax.snapshot",
+            json!({
+                "pid": pid,
+                "roots": "windows",
+                "follow": ["AXFlashNoChildren"],
+                "collect": ["AXTitle", "AXFocused", "AXMain"],
+                "max_nodes": 64,
+                "geometry": false,
+            }),
+        )
+        .await;
+    ax_window_nodes(&value)
+}
+
+async fn focused_terminal_window_title(ctx: &Context, pid: i64) -> Option<String> {
+    let nodes = terminal_window_nodes(ctx, pid).await;
+    focused_window_title_from_nodes(&nodes).map(str::to_string)
+}
+
+async fn raise_terminal_window_handle(ctx: &Context, pid: i64, handle: u64) -> bool {
+    // Discovery already resolved the exact AX window. Activating the app and
+    // raising/focusing that cached handle in one host wave keeps a warm remote
+    // jump off the AX snapshot path entirely.
+    let (activation, raised, main, focused) = tokio::join!(
+        ctx.call_host("app.activate", json!({ "pid": pid })),
+        ctx.call_host(
+            "ax.perform",
+            json!({ "handle": handle, "action": "AXRaise" }),
+        ),
+        ctx.call_host(
+            "ax.set",
+            json!({ "handle": handle, "attribute": "AXMain", "value": true }),
+        ),
+        ctx.call_host(
+            "ax.set",
+            json!({ "handle": handle, "attribute": "AXFocused", "value": true }),
+        )
+    );
+    let activated = activation
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let raised = raised.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let main = main.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let focused = focused.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    activated && (raised || main || focused)
+}
+
+async fn raise_terminal_window(
+    ctx: &Context,
+    pid: i64,
+    cached_handle: Option<u64>,
+    title: &str,
+) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    if let Some(handle) = cached_handle {
+        if raise_terminal_window_handle(ctx, pid, handle).await {
+            return true;
+        }
+        // AX handles expire when a terminal window is recreated. Fall through
+        // to the title lookup once so stale discovery heals transparently.
+    }
+    if title.is_empty() {
+        return ctx
+            .call_host("app.activate", json!({ "pid": pid }))
+            .await
+            .get("ok")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    }
+    // App activation and the AX lookup are independent. This is the cold/stale
+    // fallback; warm candidates use the cached handle above.
+    let (activation, nodes) = tokio::join!(
+        ctx.call_host("app.activate", json!({ "pid": pid })),
+        terminal_window_nodes(ctx, pid)
+    );
+    let activated = activation
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(handle) = window_handle_for_title(&nodes, title) else {
+        return activated;
+    };
+    // Raising, making main, and making focused are likewise independent AX
+    // mutations on the same already-resolved window.
+    let (raised, main, focused) = tokio::join!(
+        ctx.call_host(
+            "ax.perform",
+            json!({ "handle": handle, "action": "AXRaise" }),
+        ),
+        ctx.call_host(
+            "ax.set",
+            json!({ "handle": handle, "attribute": "AXMain", "value": true }),
+        ),
+        ctx.call_host(
+            "ax.set",
+            json!({ "handle": handle, "attribute": "AXFocused", "value": true }),
+        )
+    );
+    let raised = raised.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let main = main.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let focused = focused.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    activated && (raised || main || focused)
+}
+
+fn local_window_title_score(title: &str, session: &str, local_label: &str) -> usize {
+    let title = title.to_ascii_lowercase();
+    let session = session.to_ascii_lowercase();
+    let local_label = local_label.to_ascii_lowercase();
+    let mut score = 0;
+    if !local_label.is_empty() && title.contains(&local_label) {
+        score += 4;
+    }
+    if !session.is_empty() && title.contains(&session) {
+        score += 2;
+    }
+    score
+}
+
+async fn discover_local_client_windows(
+    ctx: &Context,
+    clients: &[TmuxClient],
+    parent_map: &HashMap<i64, i64>,
+    local_label: &str,
+) -> (HashMap<i64, String>, HashMap<i64, u64>) {
+    let mut clients_by_terminal: BTreeMap<i64, Vec<&TmuxClient>> = BTreeMap::new();
+    for client in clients {
+        if let Some(terminal_pid) = find_top_level_ancestor(client.client_pid, parent_map) {
+            clients_by_terminal
+                .entry(terminal_pid)
+                .or_default()
+                .push(client);
+        }
+    }
+    let mut resolved_titles = HashMap::new();
+    let mut resolved_handles = HashMap::new();
+    for (terminal_pid, mut hosted_clients) in clients_by_terminal {
+        let mut windows = terminal_window_nodes(ctx, terminal_pid).await;
+        hosted_clients.sort_by_key(|client| std::cmp::Reverse(client.activity));
+        for client in hosted_clients {
+            let best = windows
+                .iter()
+                .enumerate()
+                .map(|(index, node)| {
+                    let title = node.attrs.get("AXTitle").map(String::as_str).unwrap_or("");
+                    (
+                        index,
+                        local_window_title_score(title, &client.session, local_label),
+                    )
+                })
+                .max_by_key(|(_, score)| *score);
+            let Some((index, score)) = best else {
+                continue;
+            };
+            if score == 0 && windows.len() != 1 {
+                continue;
+            }
+            let node = windows.remove(index);
+            if let Some(title) = node.attrs.get("AXTitle").filter(|title| !title.is_empty()) {
+                resolved_titles.insert(client.client_pid, title.clone());
+                resolved_handles.insert(client.client_pid, node.handle);
+            }
+        }
+    }
+    (resolved_titles, resolved_handles)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FocusedTmuxBackend {
+    Local,
+    Remote(String),
+}
+
+async fn focused_tmux_backend(
+    plugin: &Tmux,
+    ctx: &Context,
+    pid: i64,
+) -> Option<FocusedTmuxBackend> {
+    let remotes = plugin.remote_configs();
+    if remotes.is_empty() {
+        return Some(FocusedTmuxBackend::Local);
+    }
+    let title = focused_terminal_window_title(ctx, pid)
+        .await
+        .unwrap_or_default();
+    let normalized_title = title.to_ascii_lowercase();
+    if let Some(remote) = remotes.values().find(|remote| {
+        if remote.terminal_pid != pid {
+            return false;
+        }
+        let host = remote_host_name(&remote.host).to_ascii_lowercase();
+        let label = remote.label.to_ascii_lowercase();
+        (!remote.terminal_window_title.is_empty() && title == remote.terminal_window_title)
+            || (!host.is_empty() && normalized_title.contains(&host))
+            || (!label.is_empty() && normalized_title.contains(&label))
+    }) {
+        return Some(FocusedTmuxBackend::Remote(remote.id.clone()));
+    }
+    if cached_client_hosted_by(plugin, pid).is_some() {
+        return Some(FocusedTmuxBackend::Local);
+    }
+    let mut matching_remotes = remotes.values().filter(|remote| remote.terminal_pid == pid);
+    let only = matching_remotes.next()?;
+    matching_remotes
+        .next()
+        .is_none()
+        .then(|| FocusedTmuxBackend::Remote(only.id.clone()))
+}
+
+async fn remote_client_for_target(
+    config: &RemoteTmuxConfig,
+    target: Option<&str>,
+) -> Option<TmuxClient> {
+    let mut clients = list_remote_clients(config).await.ok()?;
+    clients.sort_by_key(|client| std::cmp::Reverse(client.activity));
+    let target_session = target.and_then(|value| value.split(':').next());
+    target_session
+        .and_then(|session| {
+            clients
+                .iter()
+                .find(|client| client.session == session)
+                .cloned()
+        })
+        .or_else(|| clients.into_iter().next())
+}
+
+async fn focused_tmux_client(
+    plugin: &Tmux,
+    ctx: &Context,
+    pid: i64,
+    fresh: bool,
+) -> Option<TmuxClient> {
+    match focused_tmux_backend(plugin, ctx, pid).await? {
+        FocusedTmuxBackend::Local => {
+            let fresh_snapshot = if fresh {
+                refresh_cached_client_snapshot(plugin).await
+            } else {
+                None
+            };
+            let snapshot = fresh_snapshot.or_else(|| {
+                plugin
+                    .client_snapshot()
+                    .lock()
+                    .ok()
+                    .map(|snapshot| snapshot.clone())
+            })?;
+            let title = focused_terminal_window_title(ctx, pid)
+                .await
+                .unwrap_or_default();
+            snapshot.hosted_by_window(pid, &title)
+        }
+        FocusedTmuxBackend::Remote(backend_id) => {
+            remote_client_for_target(&plugin.remote_config(&backend_id)?, None).await
+        }
+    }
 }
 
 fn parse_two_ints(line: &str) -> Option<(i64, i64)> {
@@ -910,7 +1735,7 @@ async fn resolve_geometry(
 
 #[derive(Clone)]
 enum TargetAction {
-    Pane { pane_id: String },
+    Pane { pane_id: String, backend_id: String },
     Link { text: String },
 }
 
@@ -948,8 +1773,11 @@ fn build_target(
         .priority(priority)
 }
 
-async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> DiscoverResponse {
-    let tmux_path = plugin.resolved_tmux_path().await;
+async fn discover_targets_for_context(
+    plugin: &Tmux,
+    ctx: &Context,
+    req: &DiscoverRequest,
+) -> DiscoverResponse {
     let Some(pid) = req.pid else {
         return DiscoverResponse::targets(vec![]);
     };
@@ -959,11 +1787,11 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
     let win_h = frame.height;
     let min_x = frame.x;
     let min_y = frame.y;
-    if tmux_path.is_none() || win_w <= 0.0 || win_h <= 0.0 {
+    if win_w <= 0.0 || win_h <= 0.0 {
         return DiscoverResponse::targets(vec![]).context_pid(pid);
     }
 
-    let Some(client) = client_hosted_by_cached(plugin, pid).await else {
+    let Some(client) = focused_tmux_client(plugin, ctx, pid, false).await else {
         return DiscoverResponse::targets(vec![]).context_pid(pid);
     };
 
@@ -979,8 +1807,9 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
     let combined_format = format!(
         "#{{client_width}} #{{client_height}}{TMUX_FIELD_SEP}#{{status}} #{{status-position}}"
     );
-    let combined = run_tmux_default(
-        tmux_path,
+    let combined = run_tmux_for_client(
+        plugin,
+        &client,
         &["display-message", "-c", &client.tty, "-p", &combined_format],
     )
     .await;
@@ -1007,8 +1836,9 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
     )
     .await;
 
-    let pane_list = run_tmux_default(
-        tmux_path,
+    let pane_list = run_tmux_for_client(
+        plugin,
+        &client,
         &[
             "list-panes",
             "-t",
@@ -1101,10 +1931,12 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
             target_id,
             TargetAction::Pane {
                 pane_id: pane.id.clone(),
+                backend_id: client.backend_id.clone(),
             },
         );
 
-        let Some(raw) = run_tmux_default(tmux_path, &["capture-pane", "-t", &pane.id, "-p"]).await
+        let Some(raw) =
+            run_tmux_for_client(plugin, &client, &["capture-pane", "-t", &pane.id, "-p"]).await
         else {
             continue;
         };
@@ -1180,8 +2012,19 @@ async fn discover_targets_for_context(plugin: &Tmux, req: &DiscoverRequest) -> D
 
 /// Round-tripped through the host so candidate resolution can re-drive
 /// `switch-client` against the right session/client.
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
+struct CandidateBackend {
+    id: String,
+    label: String,
+    terminal_window_title: String,
+    terminal_window_handle: Option<u64>,
+    terminal_pid: Option<i64>,
+    remote: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct TmuxPayload {
+    backend_id: String,
     tmux_target: String,
     #[serde(default)]
     tmux_client_tty: String,
@@ -1189,6 +2032,70 @@ struct TmuxPayload {
     client_pid: Option<i64>,
     #[serde(default)]
     terminal_pid: Option<i64>,
+    #[serde(default)]
+    terminal_window_handle: Option<u64>,
+    terminal_window_title: String,
+    #[serde(default)]
+    remote: bool,
+}
+
+fn routed_client_from_payload(payload: &TmuxPayload) -> Option<TmuxClient> {
+    if payload.backend_id.is_empty()
+        || payload.tmux_target.is_empty()
+        || payload.tmux_client_tty.is_empty()
+    {
+        return None;
+    }
+    Some(TmuxClient {
+        tty: payload.tmux_client_tty.clone(),
+        session: payload
+            .tmux_target
+            .split(':')
+            .next()
+            .unwrap_or(&payload.tmux_target)
+            .to_string(),
+        client_pid: payload.client_pid.unwrap_or(0),
+        activity: 0,
+        backend_id: payload.backend_id.clone(),
+        remote: payload.remote,
+    })
+}
+
+fn cached_terminal_pid(plugin: &Tmux, payload: &TmuxPayload) -> Option<i64> {
+    payload.terminal_pid.or_else(|| {
+        let client_pid = payload.client_pid?;
+        let snapshot = plugin.client_snapshot().lock().ok()?;
+        find_top_level_ancestor(client_pid, &snapshot.parent_map)
+    })
+}
+
+fn cached_payload_for_route(
+    plugin: &Tmux,
+    backend_id: &str,
+    tmux_target: &str,
+) -> Option<TmuxPayload> {
+    let partitions = plugin.candidate_partitions().lock().ok()?;
+    let candidates = if backend_id == "local" {
+        &partitions.local
+    } else {
+        partitions.remote.get(backend_id)?
+    };
+    candidates.iter().find_map(|candidate| {
+        let payload = candidate.payload_as::<TmuxPayload>()?;
+        (payload.backend_id == backend_id && payload.tmux_target == tmux_target).then_some(payload)
+    })
+}
+
+fn routed_tmux_target(backend_id: &str, target: &str) -> String {
+    format!("{backend_id}|{target}")
+}
+
+fn split_routed_tmux_target(target: &str) -> Option<(&str, &str)> {
+    let (backend_id, tmux_target) = target.split_once('|')?;
+    if backend_id.is_empty() || tmux_target.is_empty() {
+        return None;
+    }
+    Some((backend_id, tmux_target))
 }
 
 fn tmux_navigation_url(kind: &str, target: &str) -> String {
@@ -1255,7 +2162,10 @@ fn build_candidates_from_window_list(
     raw: &str,
     clients: &[TmuxClient],
     terminal_pid_by_session: &HashMap<String, Option<i64>>,
+    window_title_by_client_pid: &HashMap<i64, String>,
+    window_handle_by_client_pid: &HashMap<i64, u64>,
     home: &str,
+    backend: &CandidateBackend,
 ) -> Vec<Candidate> {
     let client_by_session = client_by_session(clients);
     let mut out = Vec::new();
@@ -1280,13 +2190,30 @@ fn build_candidates_from_window_list(
             cwd = format!("~{}", &cwd[home.len()..]);
         }
         let client = client_by_session.get(session).or_else(|| clients.first());
-        let terminal_pid = terminal_pid_by_session.get(session).copied().flatten();
+        let terminal_pid = terminal_pid_by_session
+            .get(session)
+            .copied()
+            .flatten()
+            .or(backend.terminal_pid);
+        let terminal_window_title = client
+            .and_then(|client| window_title_by_client_pid.get(&client.client_pid))
+            .cloned()
+            .unwrap_or_else(|| backend.terminal_window_title.clone());
+        let terminal_window_handle = client
+            .and_then(|client| window_handle_by_client_pid.get(&client.client_pid))
+            .copied()
+            .or(backend.terminal_window_handle);
 
         let target = format!("{session}:{index}");
-        let primary = if name.is_empty() {
+        let window_name = if name.is_empty() {
             target.clone()
         } else {
             name.to_string()
+        };
+        let primary = if backend.label.is_empty() {
+            window_name
+        } else {
+            format!("{} · {window_name}", backend.label)
         };
         let mut secondary_parts: Vec<&str> = Vec::new();
         if !name.is_empty() {
@@ -1303,12 +2230,17 @@ fn build_candidates_from_window_list(
             secondary_parts.join(" · ")
         };
 
-        let navigation_url = tmux_navigation_url("window", &target);
+        let navigation_url =
+            tmux_navigation_url("window", &routed_tmux_target(&backend.id, &target));
         let payload = TmuxPayload {
+            backend_id: backend.id.clone(),
             tmux_target: target,
             tmux_client_tty: client.map(|c| c.tty.clone()).unwrap_or_default(),
             client_pid: client.map(|c| c.client_pid),
             terminal_pid,
+            terminal_window_handle,
+            terminal_window_title,
+            remote: backend.remote,
         };
         let mut candidate = Candidate::new(primary)
             .kind("tmux_window")
@@ -1340,6 +2272,10 @@ const CANDIDATE_CLIENT_RECORD: &str = "client";
 const CANDIDATE_WINDOW_RECORD: &str = "window";
 
 fn parse_candidate_inventory(raw: &str) -> (Vec<TmuxClient>, String) {
+    parse_candidate_inventory_for_backend(raw, "local")
+}
+
+fn parse_candidate_inventory_for_backend(raw: &str, backend_id: &str) -> (Vec<TmuxClient>, String) {
     let client_prefix = format!("{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}");
     let window_prefix = format!("{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}");
     let mut clients = Vec::new();
@@ -1347,7 +2283,7 @@ fn parse_candidate_inventory(raw: &str) -> (Vec<TmuxClient>, String) {
     for line in raw.lines() {
         if let Some(client) = line
             .strip_prefix(&client_prefix)
-            .and_then(parse_tmux_client)
+            .and_then(|line| parse_tmux_client_for_backend(line, backend_id))
         {
             clients.push(client);
         } else if let Some(window) = line.strip_prefix(&window_prefix) {
@@ -1367,7 +2303,9 @@ fn same_client_processes(previous: &[TmuxClient], current: &[TmuxClient]) -> boo
 
 async fn build_candidates(
     tmux_path: Option<&str>,
+    ctx: &Context,
     previous_client_snapshot: &ClientSnapshot,
+    local_config: &LocalTmuxConfig,
 ) -> Option<CandidateBuild> {
     if tmux_path.is_none() {
         return Some(CandidateBuild {
@@ -1428,18 +2366,125 @@ async fn build_candidates(
             find_top_level_ancestor(client.client_pid, &pmap),
         );
     }
+    let (window_title_by_client_pid, window_handle_by_client_pid) = if clients.is_empty() {
+        (Arc::new(HashMap::new()), Arc::new(HashMap::new()))
+    } else if same_client_processes(&previous_client_snapshot.clients, &clients)
+        && !previous_client_snapshot
+            .window_title_by_client_pid
+            .is_empty()
+        && !previous_client_snapshot
+            .window_handle_by_client_pid
+            .is_empty()
+    {
+        (
+            Arc::clone(&previous_client_snapshot.window_title_by_client_pid),
+            Arc::clone(&previous_client_snapshot.window_handle_by_client_pid),
+        )
+    } else {
+        let (titles, handles) =
+            discover_local_client_windows(ctx, &clients, &pmap, &local_config.label).await;
+        (Arc::new(titles), Arc::new(handles))
+    };
     let client_snapshot = ClientSnapshot {
         clients: clients.clone(),
         parent_map: Arc::clone(&pmap),
+        window_title_by_client_pid: Arc::clone(&window_title_by_client_pid),
+        window_handle_by_client_pid: Arc::clone(&window_handle_by_client_pid),
     };
 
     let home = std::env::var("HOME").unwrap_or_default();
     let raw_line_count = raw.split('\n').filter(|line| !line.is_empty()).count();
-    let candidates =
-        build_candidates_from_window_list(&raw, &clients, &terminal_pid_by_session, &home);
+    let backend = CandidateBackend {
+        id: "local".to_string(),
+        label: local_config.label.clone(),
+        terminal_window_title: local_config.terminal_window_title.clone(),
+        ..CandidateBackend::default()
+    };
+    let candidates = build_candidates_from_window_list(
+        &raw,
+        &clients,
+        &terminal_pid_by_session,
+        &window_title_by_client_pid,
+        &window_handle_by_client_pid,
+        &home,
+        &backend,
+    );
     Some(CandidateBuild {
         candidates,
         client_snapshot,
+        client_count: clients.len(),
+        raw_line_count,
+    })
+}
+
+struct RemoteCandidateBuild {
+    candidates: Vec<Candidate>,
+    client_count: usize,
+    raw_line_count: usize,
+}
+
+async fn build_remote_candidates(
+    config: &RemoteTmuxConfig,
+    terminal_pid: Option<i64>,
+) -> Option<RemoteCandidateBuild> {
+    let client_format = format!(
+        "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
+    );
+    let window_format = format!(
+        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}"
+    );
+    let result = run_remote_tmux(
+        config,
+        &[
+            "list-clients",
+            "-F",
+            &client_format,
+            ";",
+            "list-windows",
+            "-a",
+            "-F",
+            &window_format,
+        ],
+        Duration::from_secs(7),
+    )
+    .await;
+    if !result.ok {
+        if is_absent_tmux_server(&result) {
+            return Some(RemoteCandidateBuild {
+                candidates: Vec::new(),
+                client_count: 0,
+                raw_line_count: 0,
+            });
+        }
+        return None;
+    }
+    let (clients, raw) = parse_candidate_inventory_for_backend(&result.stdout, &config.id);
+    let terminal_pid_by_session = clients
+        .iter()
+        .map(|client| (client.session.clone(), terminal_pid))
+        .collect();
+    let backend = CandidateBackend {
+        id: config.id.clone(),
+        label: config.label.clone(),
+        terminal_window_title: config.terminal_window_title.clone(),
+        terminal_window_handle: config.terminal_window_handle,
+        terminal_pid: Some(config.terminal_pid)
+            .filter(|pid| *pid > 0)
+            .or(terminal_pid),
+        remote: true,
+    };
+    let raw_line_count = raw.lines().filter(|line| !line.is_empty()).count();
+    let candidates = build_candidates_from_window_list(
+        &raw,
+        &clients,
+        &terminal_pid_by_session,
+        &HashMap::new(),
+        &HashMap::new(),
+        &config.home,
+        &backend,
+    );
+    Some(RemoteCandidateBuild {
+        candidates,
         client_count: clients.len(),
         raw_line_count,
     })
@@ -1493,6 +2538,18 @@ struct CandidateRefreshCoordinator {
     lock: tokio::sync::Mutex<()>,
 }
 
+#[derive(Default)]
+struct CandidatePartitions {
+    local: Vec<Candidate>,
+    remote: BTreeMap<String, Vec<Candidate>>,
+}
+
+#[derive(Clone)]
+enum CandidatePartition {
+    Local,
+    Remote(String),
+}
+
 impl CandidateRefreshCoordinator {
     async fn run<T>(&self, work: impl Future<Output = T>) -> T {
         let _guard = self.lock.lock().await;
@@ -1505,6 +2562,8 @@ async fn refresh_candidate_locations_for_path(
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
     client_snapshot: &Mutex<ClientSnapshot>,
+    partitions: &Mutex<CandidatePartitions>,
+    local_config: &LocalTmuxConfig,
     coordinator: &CandidateRefreshCoordinator,
 ) {
     let requested_at = Instant::now();
@@ -1516,12 +2575,21 @@ async fn refresh_candidate_locations_for_path(
                 ctx,
                 last_hash,
                 client_snapshot,
-                requested_at,
-                queue_wait_ms,
+                partitions,
+                local_config,
+                CandidateRefreshTiming {
+                    requested_at,
+                    queue_wait_ms,
+                },
             )
             .await;
         })
         .await;
+}
+
+struct CandidateRefreshTiming {
+    requested_at: Instant,
+    queue_wait_ms: u128,
 }
 
 async fn refresh_candidate_locations_for_path_inner(
@@ -1529,19 +2597,27 @@ async fn refresh_candidate_locations_for_path_inner(
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
     client_snapshot: &Mutex<ClientSnapshot>,
-    requested_at: Instant,
-    queue_wait_ms: u128,
+    partitions: &Mutex<CandidatePartitions>,
+    local_config: &LocalTmuxConfig,
+    timing: CandidateRefreshTiming,
 ) {
     let previous_client_snapshot = client_snapshot
         .lock()
         .map(|snapshot| snapshot.clone())
         .unwrap_or_default();
-    let build_result = build_candidates(tmux_path, &previous_client_snapshot).await;
-    let elapsed_ms = requested_at.elapsed().as_millis();
-    let work_ms = elapsed_ms.saturating_sub(queue_wait_ms);
+    let build_result =
+        build_candidates(tmux_path, ctx, &previous_client_snapshot, local_config).await;
+    let elapsed_ms = timing.requested_at.elapsed().as_millis();
+    let work_ms = elapsed_ms.saturating_sub(timing.queue_wait_ms);
     let Some(build) = build_result else {
-        let fields =
-            candidate_refresh_log_fields("failed", elapsed_ms, queue_wait_ms, work_ms, None, None);
+        let fields = candidate_refresh_log_fields(
+            "failed",
+            elapsed_ms,
+            timing.queue_wait_ms,
+            work_ms,
+            None,
+            None,
+        );
         ctx.log_fields(
             "debug",
             "[tmux] candidate refresh skipped — tmux transient failure",
@@ -1553,8 +2629,15 @@ async fn refresh_candidate_locations_for_path_inner(
     if let Ok(mut guard) = client_snapshot.lock() {
         *guard = build.client_snapshot.clone();
     }
-    let new_hash = hash_candidates(&build.candidates);
-    let unchanged = matches!(last_hash.lock(), Ok(guard) if *guard == Some(new_hash));
+    let local_candidate_count = build.candidates.len();
+    let (changed, aggregate_count) = replace_candidate_partition_and_publish(
+        CandidatePartition::Local,
+        build.candidates,
+        ctx,
+        partitions,
+        last_hash,
+    );
+    let unchanged = !changed;
     if unchanged {
         // Still useful to record that we refreshed — at trace level so a
         // healthy cache doesn't drown out other plugins. The warm
@@ -1563,9 +2646,9 @@ async fn refresh_candidate_locations_for_path_inner(
         let fields = candidate_refresh_log_fields(
             "ok",
             elapsed_ms,
-            queue_wait_ms,
+            timing.queue_wait_ms,
             work_ms,
-            Some(build.candidates.len()),
+            Some(aggregate_count),
             Some("unchanged"),
         );
         ctx.log_fields(
@@ -1576,26 +2659,89 @@ async fn refresh_candidate_locations_for_path_inner(
         warn_if_candidate_refresh_slow(ctx, fields, elapsed_ms);
         return;
     }
-    if let Ok(mut guard) = last_hash.lock() {
-        *guard = Some(new_hash);
-    }
     let mut fields = candidate_refresh_log_fields(
-        if build.candidates.is_empty() {
+        if local_candidate_count == 0 {
             "empty"
         } else {
             "ok"
         },
         elapsed_ms,
-        queue_wait_ms,
+        timing.queue_wait_ms,
         work_ms,
-        Some(build.candidates.len()),
+        Some(aggregate_count),
         Some("published"),
+    );
+    fields.insert(
+        "local_candidates".to_string(),
+        local_candidate_count.to_string(),
     );
     fields.insert("clients".to_string(), build.client_count.to_string());
     fields.insert("raw_lines".to_string(), build.raw_line_count.to_string());
     ctx.log_fields("debug", "[tmux] candidate refresh (emit)", fields.clone());
     warn_if_candidate_refresh_slow(ctx, fields, elapsed_ms);
-    ctx.set_locations(SOURCE_ID, build.candidates);
+}
+
+fn replace_candidate_partition_and_publish(
+    partition: CandidatePartition,
+    candidates: Vec<Candidate>,
+    ctx: &Context,
+    partitions: &Mutex<CandidatePartitions>,
+    last_hash: &Mutex<Option<u64>>,
+) -> (bool, usize) {
+    let Ok(mut state) = partitions.lock() else {
+        return (false, 0);
+    };
+    match partition {
+        CandidatePartition::Local => state.local = candidates,
+        CandidatePartition::Remote(backend_id) => {
+            state.remote.insert(backend_id, candidates);
+        }
+    }
+    publish_candidate_partitions(&state, ctx, last_hash)
+}
+
+fn publish_candidate_partitions(
+    state: &CandidatePartitions,
+    ctx: &Context,
+    last_hash: &Mutex<Option<u64>>,
+) -> (bool, usize) {
+    let remote_count = state.remote.values().map(Vec::len).sum::<usize>();
+    let mut aggregate = Vec::with_capacity(state.local.len() + remote_count);
+    aggregate.extend(state.local.iter().cloned());
+    for candidates in state.remote.values() {
+        aggregate.extend(candidates.iter().cloned());
+    }
+    let count = aggregate.len();
+    let new_hash = hash_candidates(&aggregate);
+    let Ok(mut previous_hash) = last_hash.lock() else {
+        return (false, count);
+    };
+    if *previous_hash == Some(new_hash) {
+        return (false, count);
+    }
+    *previous_hash = Some(new_hash);
+    ctx.set_locations(SOURCE_ID, aggregate);
+    (true, count)
+}
+
+fn retain_remote_candidate_partitions(
+    active_backend_ids: &BTreeSet<String>,
+    ctx: &Context,
+    partitions: &Mutex<CandidatePartitions>,
+    last_hash: &Mutex<Option<u64>>,
+) -> (bool, usize) {
+    let Ok(mut state) = partitions.lock() else {
+        return (false, 0);
+    };
+    let previous_len = state.remote.len();
+    state
+        .remote
+        .retain(|backend_id, _| active_backend_ids.contains(backend_id));
+    if state.remote.len() == previous_len {
+        let count = state.local.len() + state.remote.values().map(Vec::len).sum::<usize>();
+        return (false, count);
+    }
+    publish_candidate_partitions(&state, ctx, last_hash)
 }
 
 fn candidate_refresh_log_fields(
@@ -1631,14 +2777,98 @@ fn warn_if_candidate_refresh_slow(
 }
 
 async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
+    let local_config = plugin.local_config();
     refresh_candidate_locations_for_path(
         plugin.resolved_tmux_path().await,
         ctx,
         plugin.last_locations_hash(),
         plugin.client_snapshot(),
+        plugin.candidate_partitions(),
+        &local_config,
         plugin.candidate_refresh_coordinator(),
     )
     .await;
+}
+
+async fn refresh_remote_candidate_locations(
+    config: &RemoteTmuxConfig,
+    ctx: &Context,
+    partitions: &Mutex<CandidatePartitions>,
+    last_hash: &Mutex<Option<u64>>,
+) -> bool {
+    let started_at = Instant::now();
+    let Some(build) = build_remote_candidates(config, Some(config.terminal_pid)).await else {
+        ctx.log_fields(
+            "warn",
+            "[tmux] remote candidate refresh failed; preserving last good",
+            BTreeMap::from([
+                ("backend".to_string(), config.label.clone()),
+                (
+                    "elapsed_ms".to_string(),
+                    started_at.elapsed().as_millis().to_string(),
+                ),
+                ("outcome".to_string(), "failed".to_string()),
+            ]),
+        );
+        return false;
+    };
+    let remote_candidate_count = build.candidates.len();
+    let (changed, aggregate_count) = replace_candidate_partition_and_publish(
+        CandidatePartition::Remote(config.id.clone()),
+        build.candidates,
+        ctx,
+        partitions,
+        last_hash,
+    );
+    ctx.log_fields(
+        "debug",
+        "[tmux] remote candidate refresh",
+        BTreeMap::from([
+            ("backend".to_string(), config.label.clone()),
+            ("candidates".to_string(), aggregate_count.to_string()),
+            (
+                "remote_candidates".to_string(),
+                remote_candidate_count.to_string(),
+            ),
+            ("clients".to_string(), build.client_count.to_string()),
+            ("raw_lines".to_string(), build.raw_line_count.to_string()),
+            (
+                "change".to_string(),
+                if changed { "published" } else { "unchanged" }.to_string(),
+            ),
+            (
+                "elapsed_ms".to_string(),
+                started_at.elapsed().as_millis().to_string(),
+            ),
+            ("outcome".to_string(), "ok".to_string()),
+        ]),
+    );
+    true
+}
+
+async fn refresh_remote_backends(
+    configs: &BTreeMap<String, RemoteTmuxConfig>,
+    ctx: &Context,
+    partitions: Arc<Mutex<CandidatePartitions>>,
+    last_hash: Arc<Mutex<Option<u64>>>,
+) -> bool {
+    let active_backend_ids = configs.keys().cloned().collect::<BTreeSet<_>>();
+    retain_remote_candidate_partitions(&active_backend_ids, ctx, &partitions, &last_hash);
+    let mut refreshes = tokio::task::JoinSet::new();
+    for config in configs.values() {
+        let config = config.clone();
+        let ctx = ctx.clone();
+        let partitions = Arc::clone(&partitions);
+        let last_hash = Arc::clone(&last_hash);
+        refreshes.spawn(async move {
+            refresh_remote_candidate_locations(&config, &ctx, &partitions, &last_hash).await
+        });
+    }
+    let mut succeeded = true;
+    while let Some(result) = refreshes.join_next().await {
+        succeeded &= result.unwrap_or(false);
+    }
+    succeeded
 }
 
 const POLL_INTERVAL_SECS: u64 = 1;
@@ -1648,7 +2878,9 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
     let tmux_path = std::sync::Arc::clone(&plugin.tmux_path);
     let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
     let client_snapshot = std::sync::Arc::clone(&plugin.client_snapshot_arc);
+    let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
     let coordinator = std::sync::Arc::clone(&plugin.candidate_refresh_coordinator_arc);
+    let local_config = plugin.local_config();
     let ctx = ctx.clone();
     tokio::spawn(async move {
         let path = tmux_path.get_or_init(find_tmux).await.clone();
@@ -1658,6 +2890,8 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                 &ctx,
                 &last_hash,
                 &client_snapshot,
+                &partitions,
+                &local_config,
                 &coordinator,
             )
             .await;
@@ -1669,9 +2903,46 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                 &ctx,
                 &last_hash,
                 &client_snapshot,
+                &partitions,
+                &local_config,
                 &coordinator,
             )
             .await;
+        }
+    });
+}
+
+fn start_remote_candidate_poll(plugin: &Tmux, ctx: &Context, initial_succeeded: bool) {
+    let remote_configs = std::sync::Arc::clone(&plugin.remote_configs_arc);
+    let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
+    let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
+    let ctx = ctx.clone();
+    tokio::spawn(async move {
+        let mut failure_index = if initial_succeeded { 0 } else { 1 };
+        loop {
+            let delay = if failure_index == 0 {
+                REMOTE_POLL_INTERVAL_SECS
+            } else {
+                REMOTE_RETRY_DELAYS_SECS
+                    [(failure_index - 1).min(REMOTE_RETRY_DELAYS_SECS.len() - 1)]
+            };
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+            let discovered = discover_remote_tmux_configs(&ctx).await;
+            if let Ok(mut configured) = remote_configs.lock() {
+                *configured = discovered.clone();
+            }
+            if refresh_remote_backends(
+                &discovered,
+                &ctx,
+                Arc::clone(&partitions),
+                Arc::clone(&last_hash),
+            )
+            .await
+            {
+                failure_index = 0;
+            } else {
+                failure_index = (failure_index + 1).min(REMOTE_RETRY_DELAYS_SECS.len());
+            }
         }
     });
 }
@@ -1693,21 +2964,26 @@ fn target_for_ordinal(ordinal: i64, session: &str, indices: &[String]) -> Option
     Some(format!("{session}:{}", indices[(ordinal - 1) as usize]))
 }
 
-async fn switch_client(tmux_path: Option<&str>, tty: &str, target: &str) -> bool {
-    run_tmux_default(tmux_path, &["switch-client", "-c", tty, "-t", target])
-        .await
-        .is_some()
+async fn switch_client(plugin: &Tmux, client: &TmuxClient, target: &str) -> bool {
+    run_tmux_for_client(
+        plugin,
+        client,
+        &["switch-client", "-c", &client.tty, "-t", target],
+    )
+    .await
+    .is_some()
 }
 
-async fn tab_select(tmux_path: Option<&str>, client: &TmuxClient, index: Option<i64>) -> bool {
+async fn tab_select(plugin: &Tmux, client: &TmuxClient, index: Option<i64>) -> bool {
     let Some(idx) = index else {
         return false;
     };
     if idx <= 0 {
         return false;
     }
-    let Some(raw) = run_tmux_default(
-        tmux_path,
+    let Some(raw) = run_tmux_for_client(
+        plugin,
+        client,
         &[
             "list-windows",
             "-t",
@@ -1723,10 +2999,10 @@ async fn tab_select(tmux_path: Option<&str>, client: &TmuxClient, index: Option<
     let Some(target) = target_for_ordinal(idx, &client.session, &window_indices(&raw)) else {
         return false;
     };
-    switch_client(tmux_path, &client.tty, &target).await
+    switch_client(plugin, client, &target).await
 }
 
-async fn tab_adjacent(tmux_path: Option<&str>, client: &TmuxClient, direction: &str) -> bool {
+async fn tab_adjacent(plugin: &Tmux, client: &TmuxClient, direction: &str) -> bool {
     // Use tmux's native cycle commands instead of list-windows +
     // find-current + switch-client. `next-window` / `previous-window`
     // handle wrap-around natively, work uniformly across every client
@@ -1740,27 +3016,28 @@ async fn tab_adjacent(tmux_path: Option<&str>, client: &TmuxClient, direction: &
         "previous-window"
     };
     let session_target = format!("{}:", client.session);
-    run_tmux_default(tmux_path, &[cmd, "-t", &session_target])
+    run_tmux_for_client(plugin, client, &[cmd, "-t", &session_target])
         .await
         .is_some()
 }
 
-async fn tab_extreme(tmux_path: Option<&str>, client: &TmuxClient, end: &str) -> bool {
+async fn tab_extreme(plugin: &Tmux, client: &TmuxClient, end: &str) -> bool {
     // First/last via native window indexing: tmux accepts numeric
     // indices and the special `{start}`/`{end}` aliases. `{end}` is
     // exactly "the last window in the session" and `{start}` is the
     // first — no need to list and pick.
     let alias = if end == "first" { "{start}" } else { "{end}" };
     let session_target = format!("{}:{}", client.session, alias);
-    run_tmux_default(tmux_path, &["select-window", "-t", &session_target])
+    run_tmux_for_client(plugin, client, &["select-window", "-t", &session_target])
         .await
         .is_some()
 }
 
-async fn tab_new(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) -> bool {
+async fn tab_new(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
     let current_path = trimmed(
-        run_tmux_default(
-            tmux_path,
+        run_tmux_for_client(
+            plugin,
+            client,
             &[
                 "display-message",
                 "-c",
@@ -1788,8 +3065,9 @@ async fn tab_new(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) ->
         attempt.push("-c".into());
         attempt.push(path.clone());
     }
-    let created = match run_tmux_capture(
-        tmux_path,
+    let created = match run_tmux_for_client_capture(
+        plugin,
+        client,
         &attempt.iter().map(String::as_str).collect::<Vec<_>>(),
         Duration::from_secs(2),
     )
@@ -1816,7 +3094,7 @@ async fn tab_new(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) ->
                 "-t",
                 &session_target,
             ];
-            match run_tmux_capture(tmux_path, &bare, Duration::from_secs(2)).await {
+            match run_tmux_for_client_capture(plugin, client, &bare, Duration::from_secs(2)).await {
                 Ok(out) => trimmed(Some(out)),
                 Err(err) => {
                     ctx.log(
@@ -1832,23 +3110,14 @@ async fn tab_new(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) ->
         }
     };
     let Some(created) = created else { return false };
-    switch_client(
-        tmux_path,
-        &client.tty,
-        &format!("{}:{}", client.session, created),
-    )
-    .await
+    switch_client(plugin, client, &format!("{}:{}", client.session, created)).await
 }
 
-async fn pane_split(
-    tmux_path: Option<&str>,
-    ctx: &Context,
-    client: &TmuxClient,
-    vertical: bool,
-) -> bool {
+async fn pane_split(plugin: &Tmux, ctx: &Context, client: &TmuxClient, vertical: bool) -> bool {
     let Some(pane_target) = trimmed(
-        run_tmux_default(
-            tmux_path,
+        run_tmux_for_client(
+            plugin,
+            client,
             &["display-message", "-c", &client.tty, "-p", "#{pane_id}"],
         )
         .await,
@@ -1857,8 +3126,9 @@ async fn pane_split(
         return false;
     };
     let current_path = trimmed(
-        run_tmux_default(
-            tmux_path,
+        run_tmux_for_client(
+            plugin,
+            client,
             &[
                 "display-message",
                 "-c",
@@ -1887,8 +3157,9 @@ async fn pane_split(
         attempt.push("-c".into());
         attempt.push(path.clone());
     }
-    let created = match run_tmux_capture(
-        tmux_path,
+    let created = match run_tmux_for_client_capture(
+        plugin,
+        client,
         &attempt.iter().map(String::as_str).collect::<Vec<_>>(),
         Duration::from_secs(2),
     )
@@ -1914,7 +3185,7 @@ async fn pane_split(
                 "-t",
                 &pane_target,
             ];
-            match run_tmux_capture(tmux_path, &bare, Duration::from_secs(2)).await {
+            match run_tmux_for_client_capture(plugin, client, &bare, Duration::from_secs(2)).await {
                 Ok(out) => trimmed(Some(out)),
                 Err(err) => {
                     ctx.log(
@@ -1951,7 +3222,7 @@ async fn pane_split(
     true
 }
 
-async fn tab_close(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) -> bool {
+async fn tab_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
     // Pin the kill to the EXACT window the focused client displays, resolved
     // from its own tty, rather than the session's ambiguous "current window".
     // `kill-window -t <session>` is correct only when the session's
@@ -1965,14 +3236,15 @@ async fn tab_close(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) 
     // `display-message` error still closes *a* window rather than dropping to
     // the host's ⌘W fallback (which quits the whole terminal app).
     let window_id = trimmed(
-        run_tmux_default(
-            tmux_path,
+        run_tmux_for_client(
+            plugin,
+            client,
             &["display-message", "-c", &client.tty, "-p", "#{window_id}"],
         )
         .await,
     );
     let target = window_id.clone().unwrap_or_else(|| client.session.clone());
-    let ok = run_tmux_default(tmux_path, &["kill-window", "-t", &target])
+    let ok = run_tmux_for_client(plugin, client, &["kill-window", "-t", &target])
         .await
         .is_some();
     ctx.log_fields(
@@ -1989,10 +3261,11 @@ async fn tab_close(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) 
     ok
 }
 
-async fn pane_close(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient) -> bool {
+async fn pane_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
     let Some(pane_id) = trimmed(
-        run_tmux_default(
-            tmux_path,
+        run_tmux_for_client(
+            plugin,
+            client,
             &["display-message", "-c", &client.tty, "-p", "#{pane_id}"],
         )
         .await,
@@ -2000,7 +3273,7 @@ async fn pane_close(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient)
         ctx.log("warn", "[tmux] pane close could not resolve current pane");
         return false;
     };
-    let ok = run_tmux_default(tmux_path, &["kill-pane", "-t", &pane_id])
+    let ok = run_tmux_for_client(plugin, client, &["kill-pane", "-t", &pane_id])
         .await
         .is_some();
     ctx.log_fields(
@@ -2015,10 +3288,10 @@ async fn pane_close(tmux_path: Option<&str>, ctx: &Context, client: &TmuxClient)
 /// `:.+` / `:.-` are tmux's pane-relative selectors (the built-in `o`
 /// gesture), wrapping at the ends. Scoped to `<session>:` so the cycle
 /// targets the window this client is showing, mirroring `tab_adjacent`.
-async fn pane_select(tmux_path: Option<&str>, client: &TmuxClient, direction: &str) -> bool {
+async fn pane_select(plugin: &Tmux, client: &TmuxClient, direction: &str) -> bool {
     let selector = if direction == "next" { ".+" } else { ".-" };
     let target = format!("{}:{}", client.session, selector);
-    run_tmux_default(tmux_path, &["select-pane", "-t", &target])
+    run_tmux_for_client(plugin, client, &["select-pane", "-t", &target])
         .await
         .is_some()
 }
@@ -2027,16 +3300,16 @@ async fn pane_select(tmux_path: Option<&str>, client: &TmuxClient, direction: &s
 /// session. Tmux is happy to wrap (`-d` keeps the window selected at
 /// its new position), so the user can keep tapping `]m` to bubble a
 /// window to the end without rebinding.
-async fn tab_move(tmux_path: Option<&str>, client: &TmuxClient, direction: &str) -> bool {
+async fn tab_move(plugin: &Tmux, client: &TmuxClient, direction: &str) -> bool {
     let neighbour = if direction == "next" { "+1" } else { "-1" };
     let target = format!("{}:{}", client.session, neighbour);
-    run_tmux_default(tmux_path, &["swap-window", "-d", "-t", &target])
+    run_tmux_for_client(plugin, client, &["swap-window", "-d", "-t", &target])
         .await
         .is_some()
 }
 
-async fn reload_client(tmux_path: Option<&str>, client: &TmuxClient) -> bool {
-    run_tmux_default(tmux_path, &["refresh-client", "-t", &client.tty])
+async fn reload_client(plugin: &Tmux, client: &TmuxClient) -> bool {
+    run_tmux_for_client(plugin, client, &["refresh-client", "-t", &client.tty])
         .await
         .is_some()
 }
@@ -2057,7 +3330,7 @@ async fn perform_source_action(
         );
         return SourceActionResponse::unhandled();
     };
-    let Some(client) = client_hosted_by_fresh(plugin, pid).await else {
+    let Some(client) = focused_tmux_client(plugin, ctx, pid, true).await else {
         let clients = list_clients(tmux_path).await;
         let pmap = parent_pid_map().await;
         ctx.log(
@@ -2071,21 +3344,21 @@ async fn perform_source_action(
         return SourceActionResponse::unhandled();
     };
     let ok = match req.name.as_str() {
-        "tab_select" => tab_select(tmux_path, &client, req.index).await,
-        "tab_next" => tab_adjacent(tmux_path, &client, "next").await,
-        "tab_prev" => tab_adjacent(tmux_path, &client, "previous").await,
-        "tab_first" => tab_extreme(tmux_path, &client, "first").await,
-        "tab_last" => tab_extreme(tmux_path, &client, "last").await,
-        "tab_new" => tab_new(tmux_path, ctx, &client).await,
-        "tab_close" => tab_close(tmux_path, ctx, &client).await,
-        "tab_move_next" => tab_move(tmux_path, &client, "next").await,
-        "tab_move_previous" => tab_move(tmux_path, &client, "previous").await,
-        "pane_next" => pane_select(tmux_path, &client, "next").await,
-        "pane_previous" => pane_select(tmux_path, &client, "previous").await,
-        "pane_split_vertical" => pane_split(tmux_path, ctx, &client, true).await,
-        "pane_split_horizontal" => pane_split(tmux_path, ctx, &client, false).await,
-        "pane_close" => pane_close(tmux_path, ctx, &client).await,
-        "app_reload" => reload_client(tmux_path, &client).await,
+        "tab_select" => tab_select(plugin, &client, req.index).await,
+        "tab_next" => tab_adjacent(plugin, &client, "next").await,
+        "tab_prev" => tab_adjacent(plugin, &client, "previous").await,
+        "tab_first" => tab_extreme(plugin, &client, "first").await,
+        "tab_last" => tab_extreme(plugin, &client, "last").await,
+        "tab_new" => tab_new(plugin, ctx, &client).await,
+        "tab_close" => tab_close(plugin, ctx, &client).await,
+        "tab_move_next" => tab_move(plugin, &client, "next").await,
+        "tab_move_previous" => tab_move(plugin, &client, "previous").await,
+        "pane_next" => pane_select(plugin, &client, "next").await,
+        "pane_previous" => pane_select(plugin, &client, "previous").await,
+        "pane_split_vertical" => pane_split(plugin, ctx, &client, true).await,
+        "pane_split_horizontal" => pane_split(plugin, ctx, &client, false).await,
+        "pane_close" => pane_close(plugin, ctx, &client).await,
+        "app_reload" => reload_client(plugin, &client).await,
         _ => return SourceActionResponse::unhandled(),
     };
     ctx.log_fields(
@@ -2115,10 +3388,7 @@ async fn perform_source_action(
 ///   1. A client already attached to the target session. Switching it
 ///      between windows of its own session is the least-surprising
 ///      gesture — it keeps each terminal window pinned to "its"
-///      session instead of hijacking whichever window was last
-///      active. For Alacritty (multi-process, one client per
-///      window) this is what makes the flashlight pick land in the
-///      window the user mentally associates with the target session.
+///      session instead of hijacking whichever client was last active.
 ///   2. The most-recently-active client. Used when no client is on
 ///      the target session — single-process multi-window terminals
 ///      land here so the pick reaches the window the user was last
@@ -2137,55 +3407,145 @@ async fn select_client_for_target(tmux_path: Option<&str>, target: &str) -> Opti
         .or_else(|| clients.into_iter().next())
 }
 
-async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> ResolveResponse {
-    let tmux_path = plugin.resolved_tmux_path().await;
-    let payload = candidate.payload_as::<TmuxPayload>().unwrap_or_default();
-    let target = payload.tmux_target.as_str();
-    if target.is_empty() {
-        ctx.log("warn", "[tmux] resolve missing tmux_target");
-        return ResolveResponse::unresolved();
-    }
-
-    let chosen = select_client_for_target(tmux_path, target).await;
-    let tty = chosen
-        .as_ref()
-        .map(|c| c.tty.clone())
-        .unwrap_or_else(|| payload.tmux_client_tty.clone());
-
+async fn switch_routed_target(plugin: &Tmux, client: &TmuxClient, target: &str) -> bool {
     let mut args: Vec<&str> = vec!["switch-client"];
-    if !tty.is_empty() {
+    if !client.tty.is_empty() {
         args.push("-c");
-        args.push(&tty);
+        args.push(&client.tty);
     }
     args.push("-t");
     args.push(target);
-    // The captured tty may be stale — fall back to `switch-client` without
-    // `-c`, which tmux applies to its best-guess client.
-    let switched = run_tmux_default(tmux_path, &args).await.is_some()
-        || run_tmux_default(tmux_path, &["switch-client", "-t", target])
+    if run_tmux_for_client(plugin, client, &args).await.is_some() {
+        return true;
+    }
+    // A disappeared/replaced client can leave a stale tty in the one-second
+    // local or five-second remote snapshot. Retry without `-c` only in that
+    // uncommon case; a healthy jump is always exactly one tmux invocation.
+    !client.tty.is_empty()
+        && run_tmux_for_client(plugin, client, &["switch-client", "-t", target])
             .await
-            .is_some();
+            .is_some()
+}
+
+async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+    let started_at = Instant::now();
+    let payload = candidate.payload_as::<TmuxPayload>().unwrap_or_default();
+    let target = payload.tmux_target.as_str();
+    if target.is_empty() || payload.backend_id.is_empty() {
+        ctx.log("warn", "[tmux] resolve missing routed target");
+        return ResolveResponse::unresolved();
+    }
+
+    if payload.remote && plugin.remote_config(&payload.backend_id).is_none() {
+        ctx.log(
+            "warn",
+            "[tmux] resolve remote backend is no longer configured",
+        );
+        return ResolveResponse::unresolved();
+    }
+    if !payload.remote && payload.backend_id != "local" {
+        ctx.log("warn", "[tmux] resolve unknown local backend");
+        return ResolveResponse::unresolved();
+    }
+
+    // Candidate inventory already carries the exact client tty and terminal
+    // window. Use that warm route directly: a remote jump must not pay a fresh
+    // `list-clients` SSH round trip before the actual `switch-client`. Focus the
+    // terminal concurrently so the app/window transition starts immediately.
+    let mut route_client = routed_client_from_payload(&payload);
+    let mut terminal_pid = cached_terminal_pid(plugin, &payload);
+    let warm_route = route_client.is_some();
+    let focus_started = terminal_pid.is_some();
+    let switch = async {
+        match route_client.as_ref() {
+            Some(client) => switch_routed_target(plugin, client, target).await,
+            None => false,
+        }
+    };
+    let focus = async {
+        match terminal_pid {
+            Some(pid) => {
+                raise_terminal_window(
+                    ctx,
+                    pid,
+                    payload.terminal_window_handle,
+                    &payload.terminal_window_title,
+                )
+                .await
+            }
+            None => false,
+        }
+    };
+    let (mut switched, _) = tokio::join!(switch, focus);
+
+    // First-run or stale-payload fallback. Normal warm candidates never enter
+    // this branch; it keeps recovery correct after a client reconnect/race.
+    let mut fallback_used = false;
+    if !switched {
+        fallback_used = true;
+        route_client = if payload.remote {
+            match plugin.remote_config(&payload.backend_id) {
+                Some(config) => remote_client_for_target(&config, Some(target)).await,
+                None => None,
+            }
+        } else {
+            select_client_for_target(plugin.resolved_tmux_path().await, target).await
+        };
+        if let Some(client) = route_client.as_ref() {
+            switched = switch_routed_target(plugin, client, target).await;
+            if terminal_pid.is_none() && !client.remote {
+                let parent_map = parent_pid_map().await;
+                terminal_pid = find_top_level_ancestor(client.client_pid, &parent_map);
+            }
+        }
+    }
     if !switched {
         ctx.log("warn", "[tmux] resolve failed");
         return ResolveResponse::unresolved();
     }
 
-    // Recompute the terminal pid from the client we actually drove
-    // rather than the snapshot-time `terminal_pid` baked into the
-    // payload: that value goes stale (or was never resolved) when
-    // the client moves between snapshots, which silently strips the
-    // `target_pid` the host needs to raise the terminal window.
-    // Fall back to the payload value only if the live walk fails.
-    let terminal_pid = match chosen {
-        Some(ref c) => {
-            let pmap = parent_pid_map().await;
-            find_top_level_ancestor(c.client_pid, &pmap)
+    if terminal_pid.is_none() {
+        // Preserve the previous last-resort behavior for malformed legacy
+        // payloads while avoiding it on every healthy resolution.
+        if let Some(client) = route_client.as_ref().filter(|client| !client.remote) {
+            let parent_map = parent_pid_map().await;
+            terminal_pid = find_top_level_ancestor(client.client_pid, &parent_map);
         }
-        None => None,
     }
-    .or(payload.terminal_pid);
+    if !focus_started {
+        if let Some(pid) = terminal_pid {
+            let _ = raise_terminal_window(
+                ctx,
+                pid,
+                payload.terminal_window_handle,
+                &payload.terminal_window_title,
+            )
+            .await;
+        }
+    }
+    ctx.log_fields(
+        "debug",
+        "[tmux] candidate resolve latency",
+        BTreeMap::from([
+            ("backend".to_string(), payload.backend_id.clone()),
+            ("warm_route".to_string(), warm_route.to_string()),
+            ("fallback".to_string(), fallback_used.to_string()),
+            (
+                "elapsed_ms".to_string(),
+                started_at.elapsed().as_millis().to_string(),
+            ),
+        ]),
+    );
 
-    resolve_response(target, &tty, terminal_pid, ctx)
+    resolve_response(
+        &routed_tmux_target(&payload.backend_id, target),
+        route_client
+            .as_ref()
+            .map(|client| client.tty.as_str())
+            .unwrap_or(&payload.tmux_client_tty),
+        terminal_pid,
+        ctx,
+    )
 }
 
 fn resolve_response(
@@ -2294,7 +3654,14 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> C
     } else {
         "window"
     };
-    let response = CommandResponse::ok().navigation_url(tmux_navigation_url(route_kind, target));
+    if let Some(pid) = terminal_pid {
+        let _ = raise_terminal_window(ctx, pid, None, &plugin.local_config().terminal_window_title)
+            .await;
+    }
+    let response = CommandResponse::ok().navigation_url(tmux_navigation_url(
+        route_kind,
+        &routed_tmux_target("local", target),
+    ));
     match terminal_pid {
         Some(tp) => response.target_pid(tp),
         None => response,
@@ -2306,55 +3673,105 @@ async fn restore_navigation(
     ctx: &Context,
     request: &NavigationRequest,
 ) -> SourceActionResponse {
+    let started_at = Instant::now();
     let Some((kind, target)) = parse_tmux_navigation_url(&request.url) else {
         return SourceActionResponse::unhandled();
     };
-    let tmux_path = plugin.resolved_tmux_path().await;
-    let session = target.split(':').next().unwrap_or(&target);
-    let chosen = select_client_for_target(tmux_path, &target).await;
-    let tty = chosen.as_ref().map(|c| c.tty.clone()).unwrap_or_default();
+    let Some((backend_id, tmux_target)) = split_routed_tmux_target(&target) else {
+        return SourceActionResponse::unhandled();
+    };
+    let remote = backend_id != "local";
+    let remote_config = if remote {
+        let Some(config) = plugin.remote_config(backend_id) else {
+            return SourceActionResponse::unhandled();
+        };
+        Some(config)
+    } else {
+        None
+    };
+    let cached_payload = cached_payload_for_route(plugin, backend_id, tmux_target);
+    let mut route_client = cached_payload.as_ref().and_then(routed_client_from_payload);
+    let warm_route = route_client.is_some();
+    let terminal_window_title = cached_payload
+        .as_ref()
+        .map(|payload| payload.terminal_window_title.clone())
+        .filter(|title| !title.is_empty())
+        .or_else(|| {
+            remote_config
+                .as_ref()
+                .map(|config| config.terminal_window_title.clone())
+        })
+        .unwrap_or_else(|| plugin.local_config().terminal_window_title);
+    let terminal_window_handle = cached_payload
+        .as_ref()
+        .and_then(|payload| payload.terminal_window_handle)
+        .or_else(|| {
+            remote_config
+                .as_ref()
+                .and_then(|config| config.terminal_window_handle)
+        });
+    let mut terminal_pid = cached_payload
+        .as_ref()
+        .and_then(|payload| cached_terminal_pid(plugin, payload))
+        .or_else(|| remote_config.as_ref().map(|config| config.terminal_pid));
+    let focus_started = terminal_pid.is_some();
+    let switch = async {
+        match route_client.as_ref() {
+            Some(client) => switch_routed_target(plugin, client, tmux_target).await,
+            None => false,
+        }
+    };
+    let focus = async {
+        match terminal_pid {
+            Some(pid) => {
+                raise_terminal_window(ctx, pid, terminal_window_handle, &terminal_window_title)
+                    .await
+            }
+            None => false,
+        }
+    };
+    let (mut switched, _) = tokio::join!(switch, focus);
 
-    let mut args: Vec<&str> = vec!["switch-client"];
-    if !tty.is_empty() {
-        args.push("-c");
-        args.push(&tty);
+    let mut fallback_used = false;
+    if !switched {
+        fallback_used = true;
+        route_client = if let Some(config) = remote_config.as_ref() {
+            remote_client_for_target(config, Some(tmux_target)).await
+        } else {
+            select_client_for_target(plugin.resolved_tmux_path().await, tmux_target).await
+        };
+        if let Some(client) = route_client.as_ref() {
+            switched = switch_routed_target(plugin, client, tmux_target).await;
+        }
     }
-    args.push("-t");
-    args.push(&target);
-    let switched = run_tmux_default(tmux_path, &args).await.is_some()
-        || run_tmux_default(tmux_path, &["switch-client", "-t", &target])
-            .await
-            .is_some();
     if !switched {
         ctx.log("warn", "[tmux] navigation restore failed");
         return SourceActionResponse::failed(None).navigation_url(request.url.clone());
     }
 
-    let terminal_pid = match chosen {
-        Some(ref c) => {
+    if terminal_pid.is_none() {
+        if let Some(client) = route_client.as_ref().filter(|client| !client.remote) {
             let pmap = parent_pid_map().await;
-            find_top_level_ancestor(c.client_pid, &pmap)
+            terminal_pid = find_top_level_ancestor(client.client_pid, &pmap);
         }
-        None => {
-            let clients = list_clients(tmux_path).await;
-            let fallback = clients
-                .iter()
-                .find(|c| c.session == session)
-                .or_else(|| clients.first());
-            match fallback {
-                Some(c) => {
-                    let pmap = parent_pid_map().await;
-                    find_top_level_ancestor(c.client_pid, &pmap)
-                }
-                None => None,
-            }
+    }
+    if !focus_started {
+        if let Some(pid) = terminal_pid {
+            let _ = raise_terminal_window(ctx, pid, terminal_window_handle, &terminal_window_title)
+                .await;
         }
-    };
+    }
     ctx.log_fields(
         "debug",
         "[tmux] navigation restored",
         BTreeMap::from([
             ("kind".to_string(), kind),
+            ("warm_route".to_string(), warm_route.to_string()),
+            ("fallback".to_string(), fallback_used.to_string()),
+            (
+                "elapsed_ms".to_string(),
+                started_at.elapsed().as_millis().to_string(),
+            ),
             (
                 "target_pid".to_string(),
                 terminal_pid
@@ -2369,7 +3786,6 @@ async fn restore_navigation(
 // ---- Activation -------------------------------------------------------------
 
 async fn activate(plugin: &Tmux, ctx: &Context, req: &ActivateRequest) {
-    let tmux_path = plugin.resolved_tmux_path().await;
     let target_id = req.target_id.as_str();
     let entry = plugin
         .target_actions
@@ -2377,11 +3793,22 @@ async fn activate(plugin: &Tmux, ctx: &Context, req: &ActivateRequest) {
         .ok()
         .and_then(|g| g.get(target_id).cloned());
     let ok = match entry {
-        Some(TargetAction::Pane { pane_id }) => {
+        Some(TargetAction::Pane {
+            pane_id,
+            backend_id,
+        }) => {
             // `select-pane` doesn't take `-c <tty>`. The pane_id is global so
             // a bare `-t %NN` is enough — pane chips are only emitted for the
             // client's current window.
-            run_tmux_default(tmux_path, &["select-pane", "-t", &pane_id])
+            let client = TmuxClient {
+                tty: String::new(),
+                session: String::new(),
+                client_pid: 0,
+                activity: 0,
+                remote: backend_id != "local",
+                backend_id,
+            };
+            run_tmux_for_client(plugin, &client, &["select-pane", "-t", &pane_id])
                 .await
                 .is_some()
         }
@@ -2470,6 +3897,15 @@ mod tests {
             session: session.to_string(),
             client_pid,
             activity,
+            backend_id: "local".to_string(),
+            remote: false,
+        }
+    }
+
+    fn local_backend() -> CandidateBackend {
+        CandidateBackend {
+            id: "local".to_string(),
+            ..CandidateBackend::default()
         }
     }
 
@@ -2579,18 +4015,275 @@ mod tests {
 
     #[test]
     fn tmux_navigation_urls_round_trip_targets() {
-        let url = tmux_navigation_url("window", "scratch:2");
-        assert_eq!(url, "tmux://window/scratch:2");
+        let routed = routed_tmux_target("local", "scratch:2");
+        let url = tmux_navigation_url("window", &routed);
+        assert_eq!(url, "tmux://window/local%7Cscratch:2");
         assert_eq!(
             parse_tmux_navigation_url(&url),
-            Some(("window".to_string(), "scratch:2".to_string()))
+            Some(("window".to_string(), routed.clone()))
+        );
+        assert_eq!(
+            split_routed_tmux_target(&routed),
+            Some(("local", "scratch:2"))
         );
 
-        let encoded = tmux_navigation_url("session", "work/project one");
+        let encoded_target = routed_tmux_target("remote:moria", "work/project one");
+        let encoded = tmux_navigation_url("session", &encoded_target);
         assert_eq!(
             parse_tmux_navigation_url(&encoded),
-            Some(("session".to_string(), "work/project one".to_string()))
+            Some(("session".to_string(), encoded_target))
         );
+    }
+
+    #[test]
+    fn candidate_payload_rehydrates_the_warm_client_route_without_io() {
+        let payload = TmuxPayload {
+            backend_id: "remote:moria".to_string(),
+            tmux_target: "scratch:3".to_string(),
+            tmux_client_tty: "/dev/pts/1".to_string(),
+            client_pid: Some(2443),
+            terminal_pid: Some(1356),
+            terminal_window_handle: Some(22),
+            terminal_window_title: "scratch@moria.zone".to_string(),
+            remote: true,
+        };
+
+        let client = routed_client_from_payload(&payload).unwrap();
+
+        assert_eq!(client.backend_id, "remote:moria");
+        assert_eq!(client.session, "scratch");
+        assert_eq!(client.tty, "/dev/pts/1");
+        assert_eq!(client.client_pid, 2443);
+        assert!(client.remote);
+    }
+
+    #[test]
+    fn candidate_payload_without_a_client_tty_uses_the_recovery_path() {
+        let payload = TmuxPayload {
+            backend_id: "remote:moria".to_string(),
+            tmux_target: "scratch:3".to_string(),
+            remote: true,
+            ..TmuxPayload::default()
+        };
+
+        assert!(routed_client_from_payload(&payload).is_none());
+    }
+
+    #[test]
+    fn local_and_remote_candidates_with_the_same_tmux_target_remain_distinct() {
+        let local_clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
+        let remote_clients = vec![TmuxClient {
+            tty: "/dev/pts/1".to_string(),
+            session: "scratch".to_string(),
+            client_pid: 2443,
+            activity: 20,
+            backend_id: "remote:moria".to_string(),
+            remote: true,
+        }];
+        let raw = "scratch\t1\tcode\tzsh\t/home/ab/workspace\t1";
+        let local_backend = CandidateBackend {
+            id: "local".to_string(),
+            label: "macbook".to_string(),
+            terminal_window_title: "scratch@macbook".to_string(),
+            terminal_window_handle: Some(11),
+            terminal_pid: Some(1356),
+            remote: false,
+        };
+        let remote_backend = CandidateBackend {
+            id: "remote:moria".to_string(),
+            label: "moria".to_string(),
+            terminal_window_title: "scratch@moria.zone".to_string(),
+            terminal_window_handle: Some(22),
+            terminal_pid: Some(1356),
+            remote: true,
+        };
+
+        let local = build_candidates_from_window_list(
+            raw,
+            &local_clients,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            "/Users/ab",
+            &local_backend,
+        );
+        let remote = build_candidates_from_window_list(
+            raw,
+            &remote_clients,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            "/home/ab",
+            &remote_backend,
+        );
+
+        use flash_plugin::candidate_metadata as meta;
+        assert_eq!(local[0].title, "macbook · code");
+        assert_eq!(remote[0].title, "moria · code");
+        assert_eq!(
+            local[0].meta(meta::NAVIGATION_URL),
+            Some("tmux://window/local%7Cscratch:1")
+        );
+        assert_eq!(
+            remote[0].meta(meta::NAVIGATION_URL),
+            Some("tmux://window/remote:moria%7Cscratch:1")
+        );
+        let local_payload = local[0].payload_as::<TmuxPayload>().unwrap();
+        let remote_payload = remote[0].payload_as::<TmuxPayload>().unwrap();
+        assert_eq!(local_payload.backend_id, "local");
+        assert!(!local_payload.remote);
+        assert_eq!(local_payload.terminal_window_handle, Some(11));
+        assert_eq!(remote_payload.backend_id, "remote:moria");
+        assert!(remote_payload.remote);
+        assert_eq!(remote_payload.terminal_window_title, "scratch@moria.zone");
+        assert_eq!(remote_payload.terminal_window_handle, Some(22));
+    }
+
+    #[test]
+    fn remote_inventory_marks_clients_as_remote() {
+        let raw = [
+            "client|||/dev/pts/1|||scratch|||2443|||200",
+            "window|||scratch|||1|||code|||zsh|||/home/ab/workspace|||1",
+        ]
+        .join("\n");
+
+        let (clients, windows) = parse_candidate_inventory_for_backend(&raw, "remote:moria");
+
+        assert_eq!(clients.len(), 1);
+        assert!(clients[0].remote);
+        assert_eq!(windows, "scratch|||1|||code|||zsh|||/home/ab/workspace|||1");
+    }
+
+    #[test]
+    fn focused_and_named_terminal_windows_are_resolved_independently() {
+        let nodes = vec![
+            AxWindowNode {
+                handle: 11,
+                attrs: HashMap::from([
+                    ("AXTitle".to_string(), "scratch@macbook".to_string()),
+                    ("AXFocused".to_string(), "0".to_string()),
+                ]),
+            },
+            AxWindowNode {
+                handle: 22,
+                attrs: HashMap::from([
+                    ("AXTitle".to_string(), "scratch@moria.zone".to_string()),
+                    ("AXFocused".to_string(), "1".to_string()),
+                ]),
+            },
+        ];
+
+        assert_eq!(
+            focused_window_title_from_nodes(&nodes),
+            Some("scratch@moria.zone")
+        );
+        assert_eq!(window_handle_for_title(&nodes, "scratch@macbook"), Some(11));
+        assert_eq!(
+            window_handle_for_title(&nodes, "scratch@moria.zone"),
+            Some(22)
+        );
+    }
+
+    #[test]
+    fn remote_ssh_command_is_argument_safe_and_reuses_a_control_connection() {
+        let config = RemoteTmuxConfig {
+            id: "remote:moria".to_string(),
+            label: "moria".to_string(),
+            host: "ab@moria.zone".to_string(),
+            tmux_path: "/opt/tmux with space".to_string(),
+            terminal_window_title: "scratch@moria.zone".to_string(),
+            terminal_window_handle: Some(22),
+            terminal_pid: 1356,
+            transport_pid: 1443,
+            home: "/home/ab".to_string(),
+            control_path: Some(PathBuf::from("/tmp/flash-tmux/ssh-%C")),
+            ssh_options: vec!["-o".to_string(), "IdentitiesOnly=yes".to_string()],
+        };
+        let command = remote_tmux_command(&config, &["display-message", "it's safe"]);
+        let argv = remote_ssh_argv(&config, &command);
+
+        assert!(command.contains("'/opt/tmux with space'"));
+        assert!(command.contains("'it'\\''s safe'"));
+        assert!(argv.contains(&"ControlMaster=auto".to_string()));
+        assert!(argv.contains(&"ControlPersist=60".to_string()));
+        assert!(argv.contains(&"ControlPath=/tmp/flash-tmux/ssh-%C".to_string()));
+        assert_eq!(argv[argv.len() - 2], "ab@moria.zone");
+        assert_eq!(argv.last(), Some(&command));
+    }
+
+    #[test]
+    fn ssh_process_command_discovers_host_tmux_and_reusable_connection_options() {
+        let command = "ssh -tt -p 2222 -o BatchMode=yes -o IdentitiesOnly=yes \
+-o StrictHostKeyChecking=yes ab@moria.zone \
+/home/ab/.local/share/mise/shims/tmux new-session -A -s scratch -c /home/ab";
+
+        let transport = parse_remote_transport(command, "ssh").unwrap();
+
+        assert_eq!(transport.host, "ab@moria.zone");
+        assert_eq!(transport.tmux_path, "/home/ab/.local/share/mise/shims/tmux");
+        assert_eq!(transport.home, "/home/ab");
+        assert!(transport.ssh_options.contains(&"-p".to_string()));
+        assert!(transport.ssh_options.contains(&"2222".to_string()));
+        assert!(transport
+            .ssh_options
+            .contains(&"IdentitiesOnly=yes".to_string()));
+        assert!(!transport.ssh_options.contains(&"BatchMode=yes".to_string()));
+    }
+
+    #[test]
+    fn mosh_client_marker_discovers_original_remote_tmux_command() {
+        let command = "/opt/homebrew/bin/mosh-client -# --bind-server=ssh \
+--port=61000:61009 --server=/usr/bin/env MOSH_SERVER_NETWORK_TMOUT=86400 \
+/usr/bin/mosh-server --ssh=ssh -o BatchMode=yes -o ConnectTimeout=10 \
+ab@moria.zone -- /home/ab/.local/share/mise/shims/tmux new-session -A \
+-s scratch -c /home/ab | 82.65.243.222 61000";
+
+        let transport = parse_remote_transport(command, "mosh-client").unwrap();
+
+        assert_eq!(transport.host, "ab@moria.zone");
+        assert_eq!(transport.tmux_path, "/home/ab/.local/share/mise/shims/tmux");
+        assert_eq!(transport.home, "/home/ab");
+    }
+
+    #[test]
+    fn terminal_title_matching_uses_host_without_terminal_brand_assumptions() {
+        let nodes = vec![
+            AxWindowNode {
+                handle: 1,
+                attrs: HashMap::from([("AXTitle".to_string(), "scratch@macbook".to_string())]),
+            },
+            AxWindowNode {
+                handle: 2,
+                attrs: HashMap::from([("AXTitle".to_string(), "scratch@moria.zone".to_string())]),
+            },
+        ];
+
+        assert_eq!(
+            terminal_title_for_host(&nodes, "ab@moria.zone"),
+            "scratch@moria.zone"
+        );
+        assert!(
+            local_window_title_score("scratch@macbook", "scratch", "macbook")
+                > local_window_title_score("scratch@moria.zone", "scratch", "macbook")
+        );
+    }
+
+    #[test]
+    fn candidate_payload_uses_the_window_discovered_for_its_tmux_client() {
+        let clients = vec![client("/dev/ttys000", "scratch", 1443, 10)];
+        let candidates = build_candidates_from_window_list(
+            "scratch\t1\tcode\tzsh\t/Users/ab/work\t1",
+            &clients,
+            &HashMap::from([("scratch".to_string(), Some(1356))]),
+            &HashMap::from([(1443, "scratch@macbook".to_string())]),
+            &HashMap::from([(1443, 11)]),
+            "/Users/ab",
+            &local_backend(),
+        );
+
+        let payload = candidates[0].payload_as::<TmuxPayload>().unwrap();
+        assert_eq!(payload.terminal_window_title, "scratch@macbook");
+        assert_eq!(payload.terminal_window_handle, Some(11));
     }
 
     #[test]
@@ -2600,8 +4293,15 @@ mod tests {
         let raw = "beside\t1\tbeside-agentic\tclaude\t/Users/ab/workspace/beside\n\
 scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
 
-        let candidates =
-            build_candidates_from_window_list(raw, &clients, &terminal_pid_by_session, "/Users/ab");
+        let candidates = build_candidates_from_window_list(
+            raw,
+            &clients,
+            &terminal_pid_by_session,
+            &HashMap::new(),
+            &HashMap::new(),
+            "/Users/ab",
+            &local_backend(),
+        );
 
         use flash_plugin::candidate_metadata as meta;
         assert_eq!(candidates.len(), 2);
@@ -2619,7 +4319,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
         assert_eq!(candidates[1].meta(meta::SOURCE), Some("tmux.windows"));
         assert_eq!(
             candidates[1].meta(meta::NAVIGATION_URL),
-            Some("tmux://window/scratch:2")
+            Some("tmux://window/local%7Cscratch:2")
         );
         assert_eq!(candidates[1].pid_value(), Some(1356));
     }
@@ -2658,7 +4358,10 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             &merged,
             &clients,
             &terminal_pid_by_session,
+            &HashMap::new(),
+            &HashMap::new(),
             "/Users/ab",
+            &local_backend(),
         );
 
         use flash_plugin::candidate_metadata as meta;
@@ -2669,13 +4372,13 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             .iter()
             .map(|c| c.meta(meta::NAVIGATION_URL).unwrap_or(""))
             .collect();
-        assert!(sessions.contains(&"tmux://window/work:1"));
-        assert!(sessions.contains(&"tmux://window/play:1"));
+        assert!(sessions.contains(&"tmux://window/local%7Cwork:1"));
+        assert!(sessions.contains(&"tmux://window/local%7Cplay:1"));
         // The `play` session lives on the second socket — it would
         // have been entirely missing before the fix.
         let play = candidates
             .iter()
-            .find(|c| c.meta(meta::NAVIGATION_URL) == Some("tmux://window/play:1"))
+            .find(|c| c.meta(meta::NAVIGATION_URL) == Some("tmux://window/local%7Cplay:1"))
             .expect("play session candidate present");
         assert_eq!(play.pid_value(), Some(1444));
     }
@@ -2797,6 +4500,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
 
     fn fake_candidate(target: &str, name: &str, pid: i64) -> Candidate {
         let payload = TmuxPayload {
+            backend_id: "local".to_string(),
             tmux_target: target.to_string(),
             ..TmuxPayload::default()
         };
@@ -2806,7 +4510,10 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             .source_id(SOURCE_ID)
             .source("tmux.windows")
             .subtitle(format!("{target} · zsh · ~/work"))
-            .navigation_url(tmux_navigation_url("window", target))
+            .navigation_url(tmux_navigation_url(
+                "window",
+                &routed_tmux_target("local", target),
+            ))
             .payload_json(&payload)
             .pid(pid)
     }
@@ -2868,10 +4575,12 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
     fn hash_candidates_diverges_on_routing_payload_change() {
         let before = vec![fake_candidate("work:1", "editor", 1356)];
         let payload = TmuxPayload {
+            backend_id: "local".to_string(),
             tmux_target: "work:1".to_string(),
             tmux_client_tty: "/dev/ttys999".to_string(),
             client_pid: Some(42),
             terminal_pid: Some(1356),
+            ..TmuxPayload::default()
         };
         let after = vec![fake_candidate("work:1", "editor", 1356).payload_json(&payload)];
 
@@ -2884,6 +4593,8 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
 struct Tmux {
     tmux_path: std::sync::Arc<tokio::sync::OnceCell<Option<String>>>,
     target_actions: Mutex<HashMap<String, TargetAction>>,
+    local_config_arc: std::sync::Arc<Mutex<LocalTmuxConfig>>,
+    remote_configs_arc: std::sync::Arc<Mutex<BTreeMap<String, RemoteTmuxConfig>>>,
     /// Latest eager `list-clients` + process-tree sample. Source actions
     /// need the focused tmux client, but they should not fan out across
     /// every tmux socket on the hot key path when the poller already did
@@ -2893,6 +4604,7 @@ struct Tmux {
     /// and event-triggered refreshes so the dedup invariant has one source of
     /// truth.
     last_locations_hash_arc: std::sync::Arc<Mutex<Option<u64>>>,
+    candidate_partitions_arc: std::sync::Arc<Mutex<CandidatePartitions>>,
     /// Serializes the complete build → hash → publish cycle shared by startup,
     /// the one-second poll, and push events. Without it, an older slow refresh
     /// can finish after a newer one and overwrite the warm store with stale rows.
@@ -2900,12 +4612,37 @@ struct Tmux {
 }
 
 impl Tmux {
+    fn local_config(&self) -> LocalTmuxConfig {
+        self.local_config_arc
+            .lock()
+            .map(|config| config.clone())
+            .unwrap_or_default()
+    }
+
+    fn remote_configs(&self) -> BTreeMap<String, RemoteTmuxConfig> {
+        self.remote_configs_arc
+            .lock()
+            .map(|configs| configs.clone())
+            .unwrap_or_default()
+    }
+
+    fn remote_config(&self, backend_id: &str) -> Option<RemoteTmuxConfig> {
+        self.remote_configs_arc
+            .lock()
+            .ok()
+            .and_then(|configs| configs.get(backend_id).cloned())
+    }
+
     fn last_locations_hash(&self) -> &Mutex<Option<u64>> {
         &self.last_locations_hash_arc
     }
 
     fn client_snapshot(&self) -> &Mutex<ClientSnapshot> {
         &self.client_snapshot_arc
+    }
+
+    fn candidate_partitions(&self) -> &Mutex<CandidatePartitions> {
+        &self.candidate_partitions_arc
     }
 
     fn candidate_refresh_coordinator(&self) -> &CandidateRefreshCoordinator {
@@ -2923,11 +4660,49 @@ flash_plugin::plugin!(Tmux);
 
 impl FlashPlugin for Tmux {
     async fn on_start(&self, ctx: Context) {
+        let local_config = local_tmux_config().await;
+        if let Ok(mut local) = self.local_config_arc.lock() {
+            *local = local_config;
+        }
+        let remotes = discover_remote_tmux_configs(&ctx).await;
+        ctx.log_fields(
+            "debug",
+            "[tmux] process discovery",
+            BTreeMap::from([
+                ("remote_backends".to_string(), remotes.len().to_string()),
+                (
+                    "remote_transports".to_string(),
+                    remotes
+                        .values()
+                        .map(|config| config.transport_pid)
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        .to_string(),
+                ),
+            ]),
+        );
+        if let Ok(mut configured) = self.remote_configs_arc.lock() {
+            *configured = remotes.clone();
+        }
         let initial = tokio::time::timeout(STARTUP_WARM_BUDGET, async {
             if self.resolved_tmux_path().await.is_none() {
-                ctx.log("warn", "[tmux] tmux binary not found");
+                ctx.log(
+                    "debug",
+                    "[tmux] no local tmux binary; remote discovery remains active",
+                );
             }
-            refresh_candidate_locations(self, &ctx).await;
+            let remote_refresh = async {
+                refresh_remote_backends(
+                    &remotes,
+                    &ctx,
+                    Arc::clone(&self.candidate_partitions_arc),
+                    Arc::clone(&self.last_locations_hash_arc),
+                )
+                .await
+            };
+            let (_, remote_succeeded) =
+                tokio::join!(refresh_candidate_locations(self, &ctx), remote_refresh);
+            remote_succeeded
         })
         .await;
         if initial.is_err() {
@@ -2957,6 +4732,7 @@ impl FlashPlugin for Tmux {
             ctx.set_locations(SOURCE_ID, Vec::new());
         }
         start_candidate_poll(self, &ctx, degraded_initial);
+        start_remote_candidate_poll(self, &ctx, matches!(initial, Ok(true)));
     }
 
     /// Push events refresh the warm locations immediately. The poll keeps the
@@ -2971,8 +4747,7 @@ impl FlashPlugin for Tmux {
     }
 
     async fn discover_targets(&self, ctx: Context, request: DiscoverRequest) -> DiscoverResponse {
-        let _ = ctx;
-        discover_targets_for_context(self, &request).await
+        discover_targets_for_context(self, &ctx, &request).await
     }
 
     async fn source_action(
@@ -3008,8 +4783,11 @@ fn main() {
     let plugin = Tmux {
         tmux_path: std::sync::Arc::new(tokio::sync::OnceCell::new()),
         target_actions: Mutex::new(HashMap::new()),
+        local_config_arc: std::sync::Arc::new(Mutex::new(LocalTmuxConfig::default())),
+        remote_configs_arc: std::sync::Arc::new(Mutex::new(BTreeMap::new())),
         client_snapshot_arc: std::sync::Arc::new(Mutex::new(ClientSnapshot::default())),
         last_locations_hash_arc: std::sync::Arc::new(Mutex::new(None)),
+        candidate_partitions_arc: std::sync::Arc::new(Mutex::new(CandidatePartitions::default())),
         candidate_refresh_coordinator_arc: std::sync::Arc::new(
             CandidateRefreshCoordinator::default(),
         ),

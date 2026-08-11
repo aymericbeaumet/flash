@@ -261,31 +261,15 @@ leader = "\\"
 # the registration and macOS's Dock switcher takes over again.
 "cmd+tab" = ["flash", "app_next"]
 "cmd+shift+tab" = ["flash", "app_previous"]
-# Native macOS / browser navigation chords, shadowed in normal mode so the
-# keys you already know keep working without leaving the normal-mode loop.
-# Same scope-binding as cmd+tab: insert mode releases them so the focused
-# app sees the native chord again. Each maps to the same command as its
-# vim-style sibling.
-"cmd+1" = ["flash", "tab_select", "--index=1"]     # ⌘1–⌘9 ≈ g1–g9
-"cmd+2" = ["flash", "tab_select", "--index=2"]
-"cmd+3" = ["flash", "tab_select", "--index=3"]
-"cmd+4" = ["flash", "tab_select", "--index=4"]
-"cmd+5" = ["flash", "tab_select", "--index=5"]
-"cmd+6" = ["flash", "tab_select", "--index=6"]
-"cmd+7" = ["flash", "tab_select", "--index=7"]
-"cmd+8" = ["flash", "tab_select", "--index=8"]
-"cmd+9" = ["flash", "tab_select", "--index=9"]
+# Native terminal navigation chords deliberately stay unregistered: terminal
+# apps can route them directly to tmux without a Flash round trip, while
+# Flash's g1–g9, [t/]t, [h/]h, t, and x mappings remain available in normal
+# mode and keep working across every discovered terminal.
 "cmd+r" = ["flash", "app_reload"]                  # ≈ r
 "cmd+shift+r" = ["flash", "app_reload", "--force"] # ≈ R
-"cmd+<lbracket>" = ["flash", "history_back"]       # ⌘[ ≈ H
-"cmd+<rbracket>" = ["flash", "history_forward"]    # ⌘] ≈ L
-"cmd+shift+<lbracket>" = ["flash", "tab_previous"] # ⌘⇧[ ≈ [t / gT
-"cmd+shift+<rbracket>" = ["flash", "tab_next"]     # ⌘⇧] ≈ ]t / gt
-"cmd+t" = ["flash", "tab_new"]                     # ≈ t
-# The bundled tmux plugin additionally scopes cmd+d / cmd+shift+d / cmd+w to
-# supported terminal bundles for tmux pane split/close actions.
+# The bundled tmux source registers no mappings; terminals can send their
+# native tmux prefix bindings directly for zero-round-trip pane/window actions.
 "cmd+shift+t" = ["flash", "tab_reopen"]            # ≈ T
-"cmd+w" = ["flash", "tab_close"]                   # ≈ x
 "cmd+n" = ["flash", "window_new"]                  # ≈ n
 "cmd+f" = ["flash", "app_find"]                    # ≈ /
 "ctrl+tab" = ["flash", "tab_next"]                 # browser-native ≈ ]t

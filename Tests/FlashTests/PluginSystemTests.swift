@@ -47,30 +47,16 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(tmux.start, "exec ./flash-plugin-tmux")
     XCTAssertTrue(tmux.volatile)
     XCTAssertEqual(tmux.priority, 20)
-    XCTAssertTrue(tmux.onlyBundleIDs.contains("org.alacritty"))
+    // Discovery is process/PTY based, so the source must not require a static
+    // terminal bundle allowlist or own any terminal key mappings.
+    XCTAssertTrue(tmux.onlyBundleIDs.isEmpty)
     XCTAssertTrue(tmux.sourceActions.contains("tab_new"))
     XCTAssertTrue(tmux.sourceActions.contains("pane_split_vertical"))
     XCTAssertTrue(tmux.sourceActions.contains("pane_split_horizontal"))
     XCTAssertTrue(tmux.sourceActions.contains("pane_close"))
     XCTAssertTrue(tmux.sourceActions.contains("app_reload"))
     XCTAssertEqual(tmux.navigationSchemes, ["tmux"])
-    for index in 1...9 {
-      let mapping = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+\(index)" })
-      XCTAssertEqual(mapping.scope, .all)
-      XCTAssertEqual(mapping.command, ["flash", "tab_select", "--index=\(index)"])
-    }
-    let tmuxCommandT = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+t" })
-    XCTAssertEqual(tmuxCommandT.scope, .all)
-    XCTAssertEqual(tmuxCommandT.command, ["flash", "tab_new"])
-    let tmuxCommandD = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+d" })
-    XCTAssertEqual(tmuxCommandD.scope, .all)
-    XCTAssertEqual(tmuxCommandD.command, ["flash", "pane_split_vertical"])
-    let tmuxCommandShiftD = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+shift+d" })
-    XCTAssertEqual(tmuxCommandShiftD.scope, .all)
-    XCTAssertEqual(tmuxCommandShiftD.command, ["flash", "pane_split_horizontal"])
-    let tmuxCommandW = try XCTUnwrap(tmux.mappings.first { $0.key == "cmd+w" })
-    XCTAssertEqual(tmuxCommandW.scope, .all)
-    XCTAssertEqual(tmuxCommandW.command, ["flash", "pane_close"])
+    XCTAssertTrue(tmux.mappings.isEmpty)
     XCTAssertEqual(
       tmux.candidateSourceDescriptors,
       [CandidateSourceDescriptor(name: "tmux.windows", kind: .locations, priority: .high)])

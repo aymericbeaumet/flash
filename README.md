@@ -87,6 +87,16 @@ Normal mode includes familiar bindings such as `f` for hints, `F` for the mouse 
 
 Bare arithmetic, unit conversions, and currency conversions are answered inline. Use `:plugins` to inspect bundled integrations and their status.
 
+The bundled tmux source automatically merges every attached local server with
+remote tmux sessions launched through SSH or Mosh. It discovers terminal apps,
+PTYs, transports, hosts, tmux paths, and windows from the live process graph—no
+terminal- or host-specific configuration is required. Catalogs refresh in the
+background, keep their last good remote snapshot through disconnects, and label
+otherwise-identical windows by host. The tmux source registers no keyboard
+mappings: terminal-native shortcuts can send the user's normal tmux prefix
+bindings with zero Flash round trips. Flash still resolves any discovered local
+or remote window from the finder.
+
 ### Useful actions
 
 ```bash

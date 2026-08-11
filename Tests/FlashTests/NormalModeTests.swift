@@ -2727,10 +2727,11 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(help.contains("flash enter_normal_mode"))
   }
 
-  func testNormalModeHelpTopicMentionsTmuxSplitMappings() {
+  func testNormalModeHelpTopicOmitsTerminalOwnedMappings() {
     let topic = NormalModeDispatcher.helpTopic(config: .default, showModes: true)
-    XCTAssertTrue(topic.body.contains("cmd+d"))
-    XCTAssertTrue(topic.body.contains("cmd+shift+d"))
+    XCTAssertFalse(topic.body.contains("cmd+d"))
+    XCTAssertFalse(topic.body.contains("cmd+shift+d"))
+    XCTAssertFalse(topic.body.contains("cmd+w"))
   }
 
   func testHelpTextIsDerivedFromConfiguredMappings() {

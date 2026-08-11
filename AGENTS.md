@@ -216,7 +216,7 @@ Steps:
 4. Pick an activation policy. Use `.always` only for cheap universal sources, `.bundleIDs(...)` for app-scoped sources like browser tabs, and `.terminalBundles` for terminal-backed sources. `SourceRegistry` instantiates non-`.always` sources only while a matching app is running.
 5. Register a `SourceDescriptor` in `Sources/flash/App/SourceRegistry.swift`. Pick a numeric provider priority for overlapping jump-target providers — higher wins. Candidate source descriptors separately declare generalized source priority with `CandidateSourceDescriptor(name:kind:priority:)` or plugin manifest `sources[].priority`; keep those source priorities semantic (`low` … `urgent`) rather than plugin-specific.
    Existing jump-target provider scale:
-   - 20: the bundled `tmux` plugin (terminals with a tmux client in the process subtree)
+   - 20: the bundled `tmux` plugin (attached local clients plus SSH/Mosh-hosted remote tmux sessions discovered from the live process graph; no terminal bundle allowlist)
    - 10: generic `AccessibilityProvider` (universal AX walker; also handles browser in-page DOM via `AXWebArea` descendants)
 6. Add focused tests. At minimum cover source activation gating in `SourceRegistryTests` or the source's parsing/resolution helpers, then update README when user-facing behavior changes.
 
@@ -536,7 +536,8 @@ time, where there is no async runtime — they're excluded, not allow-listed.)
 Tests should pin these invariants in place — see
 `Plugins/tmux/src/main.rs` for the canonical pattern (`hash_candidates`,
 `refresh_candidate_locations_for_path` with `last_locations_hash` dedup,
-and `run_tmux_aggregate_inventory` parallel fan-out). `Scripts/check-guardrails.sh`
+`run_tmux_aggregate_inventory` parallel socket fan-out, and
+`refresh_remote_backends` parallel host fan-out). `Scripts/check-guardrails.sh`
 rejects any plugin `candidate_query` implementation and requires every manifest
 with `sources` to implement `on_start` and publish through `set_locations`; it
 also rejects async `query_evaluate` hooks and requires every `queries` provider
@@ -602,7 +603,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]
 
 App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, `alert_show message=... [duration=seconds style=standard|error]`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, and `quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
 
-**Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` run `switch-client` against the most-recently-active client and return the terminal pid hosting the target session. Bind them to a key with `["flash", "plugin_command", "--command=tmux", "--subcommand=window", "--args=main:1"]` (the `args` value is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
+**Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` route `switch-client` to the discovered local or remote backend, then return the exact terminal pid/window metadata hosting that backend. Bind them to a key with `["flash", "plugin_command", "--command=tmux", "--subcommand=window", "--args=main:1"]` (the `args` value is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
 
 **Command-line candidate contract.** Command and sub-command suggestions (`:help <topic>`, `:plugins <sub>`, `:<plugin> <subcommand>`, the top-level `:<tab>` list) are modelled by `CommandLineCompletion`. Every candidate has a **value** (`insertion`) and a **label** (`label`). The label is purely cosmetic — it is what shows in the suggestion list and never affects behaviour; when omitted, set it equal to the value so the value shows through. Selection semantics are uniform across built-in and plugin candidates: `<tab>` inserts the selected candidate's value into the buffer **without** sending the command (keep typing args), and `<CR>` inserts the value, then submits for terminal/plugin-subcommand completions or leaves the line open for `acceptsArgs`. Arrow keys (and `<shift-tab>`) cycle the selection. The candidate finder (`:flashlight` / `:emojis`) is a separate live-results mechanism with canonical command insertions; app, browser-tab, and tmux-window rows are final destinations and submit on `<tab>`/`<CR>`, `<CR>` may also open when the row is a finisher or exact enough, `<cmd+cr>` force-opens real candidates, and synthetic `[source] @...` rows only insert their source token. `:open` remains a direct `/usr/bin/open` forward and does not participate.
 
