@@ -38,7 +38,8 @@ final class AppMonitor {
   let mainThreadWatchdog = MainThreadWatchdog()
   var focusedElementDidChange: ((pid_t, String) -> Void)?
   var focusedElementMayHaveChanged: ((pid_t) -> Void)?
-  var activeWindowMayHaveChanged: ((pid_t, String) -> Void)?
+  var activeWindowMayHaveChanged: ((pid_t, String, AXUIElement?) -> Void)?
+  var focusedWindowDidResolve: ((pid_t, AXUIElement) -> Void)?
 
   // MARK: Config (shared between main + axQueue)
   //
@@ -237,11 +238,13 @@ final class AppMonitor {
     // source — we add it to the main run loop below, so we're already
     // on main here. Hop anyway to make the invariant explicit and
     // bullet-proof against future relocation of the source.
+    let isFocusedWindow = ctx.isFocusedWindow(element)
     MainThreadHopper.runOrAsync {
       monitor.onAXEvent(
         pid: pid,
         notification: notificationName,
-        observedElementIsFocusedWindow: ctx.isFocusedWindow(element))
+        observedElementIsFocusedWindow: isFocusedWindow,
+        observedWindow: isFocusedWindow ? element : nil)
     }
   }
 

@@ -3,6 +3,18 @@ import ApplicationServices
 import FlashCore
 import Foundation
 
+/// CoreFoundation equality for AX elements is stable across independently
+/// created handles for the same accessibility object. Keep traversal identity
+/// separate from broker handles so following both AXChildren variants does not
+/// visit and register the same browser subtree repeatedly.
+struct AXElementIdentitySet {
+  private var identities: Set<AnyHashable> = []
+
+  mutating func insert(_ element: AXUIElement) -> Bool {
+    identities.insert(AnyHashable(element)).inserted
+  }
+}
+
 /// Host-side Accessibility broker. The core holds the single TCC grant, so it
 /// is the only process that may touch AX trees; this class is the only place
 /// `AXUIElement` handles live. Plugins reach AX through the `ax.*` host RPCs
@@ -87,36 +99,41 @@ final class AXBroker {
       // the same basis. Only needed when geometry is requested.
       let screenH = geometry ? self.primaryScreenHeight() : 0
       let app = AXApp.make(pid: pid)
-      let roots: [AXUIElement]
-      switch rootsMode {
-      case "app":
-        roots = [app]
-      default:
-        roots = self.elementArray(app, kAXWindowsAttribute as String)
-      }
-      var nodes: [[String: Any]] = []
-      for (rootIndex, root) in roots.enumerated() {
-        var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
-        var index = 0
-        while index < bfs.count, nodes.count < maxNodes {
-          let item = bfs[index]
-          let element = item.element
-          index += 1
-          let handle = self.register(pid: pid, element: element)
-          let (attrs, children, frame) = self.readNode(
-            element, collect: collect, follow: follow,
-            geometry: geometry, screenH: screenH)
-          var node: [String: Any] = ["handle": handle, "root": rootIndex, "attrs": attrs]
-          if let parent = item.parent { node["parent"] = parent }
-          if let frame { node["frame"] = frame }
-          nodes.append(node)
-          if let role = attrs[kAXRoleAttribute as String], pruneRoles.contains(role) {
-            continue
-          }
-          bfs.append(contentsOf: children.map { ($0, handle) })
+      let response = self.withAccessibilityTree(pid: pid, app: app) { app -> [String: Any] in
+        let roots: [AXUIElement]
+        switch rootsMode {
+        case "app":
+          roots = [app]
+        default:
+          roots = self.elementArray(app, kAXWindowsAttribute as String)
         }
+        var nodes: [[String: Any]] = []
+        var seen = AXElementIdentitySet()
+        for (rootIndex, root) in roots.enumerated() {
+          var bfs: [(element: AXUIElement, parent: UInt64?)] = [(root, nil)]
+          var index = 0
+          while index < bfs.count, nodes.count < maxNodes {
+            let item = bfs[index]
+            let element = item.element
+            index += 1
+            guard seen.insert(element) else { continue }
+            let handle = self.register(pid: pid, element: element)
+            let (attrs, children, frame) = self.readNode(
+              element, collect: collect, follow: follow,
+              geometry: geometry, screenH: screenH)
+            var node: [String: Any] = ["handle": handle, "root": rootIndex, "attrs": attrs]
+            if let parent = item.parent { node["parent"] = parent }
+            if let frame { node["frame"] = frame }
+            nodes.append(node)
+            if let role = attrs[kAXRoleAttribute as String], pruneRoles.contains(role) {
+              continue
+            }
+            bfs.append(contentsOf: children.map { ($0, handle) })
+          }
+        }
+        return ["ok": true, "nodes": nodes]
       }
-      reply(["ok": true, "nodes": nodes])
+      reply(response)
     }
   }
 
@@ -129,11 +146,13 @@ final class AXBroker {
     }
     let action = params["action"] as? String ?? (kAXPressAction as String)
     queue.async { [weak self] in
-      guard let entry = self?.entries[handle] else {
+      guard let self, let entry = self.entries[handle] else {
         reply(["ok": false, "error": "stale ax handle"])
         return
       }
-      let status = AXUIElementPerformAction(entry.element, action as CFString)
+      let status = self.withAccessibilityTree(pid: entry.pid) { _ in
+        AXUIElementPerformAction(entry.element, action as CFString)
+      }
       reply(["ok": status == .success])
     }
   }
@@ -145,7 +164,7 @@ final class AXBroker {
     }
     let value = params["value"]
     queue.async { [weak self] in
-      guard let entry = self?.entries[handle] else {
+      guard let self, let entry = self.entries[handle] else {
         reply(["ok": false, "error": "stale ax handle"])
         return
       }
@@ -158,7 +177,9 @@ final class AXBroker {
         reply(["ok": false, "error": "ax.set value must be a bool or string"])
         return
       }
-      let status = AXUIElementSetAttributeValue(entry.element, attribute as CFString, cfValue)
+      let status = self.withAccessibilityTree(pid: entry.pid) { _ in
+        AXUIElementSetAttributeValue(entry.element, attribute as CFString, cfValue)
+      }
       reply(["ok": status == .success])
     }
   }
@@ -182,9 +203,11 @@ final class AXBroker {
         reply(["ok": false, "error": "ax handles belong to different processes"])
         return
       }
-      let value = [childEntry.element] as CFArray
-      let status = AXUIElementSetAttributeValue(
-        parentEntry.element, kAXSelectedChildrenAttribute as CFString, value)
+      let status = self.withAccessibilityTree(pid: parentEntry.pid) { _ in
+        let value = [childEntry.element] as CFArray
+        return AXUIElementSetAttributeValue(
+          parentEntry.element, kAXSelectedChildrenAttribute as CFString, value)
+      }
       reply(["ok": status == .success])
     }
   }
@@ -200,7 +223,10 @@ final class AXBroker {
         reply(["ok": false, "error": "stale ax handle"])
         return
       }
-      guard let frame = self.frameFromAX(entry.element, screenH: self.primaryScreenHeight()) else {
+      let frame = self.withAccessibilityTree(pid: entry.pid) { _ in
+        self.frameFromAX(entry.element, screenH: self.primaryScreenHeight())
+      }
+      guard let frame else {
         reply(["ok": false, "error": "ax.click could not read frame"])
         return
       }
@@ -229,6 +255,18 @@ final class AXBroker {
   }
 
   // MARK: - Registry
+
+  private func withAccessibilityTree<T>(
+    pid: pid_t,
+    app: AXUIElement? = nil,
+    _ operation: (AXUIElement) -> T
+  ) -> T {
+    FirefoxAccessibility.withTree(
+      pid: pid,
+      bundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+      app: app,
+      operation)
+  }
 
   /// Registers `element` and returns its handle. Caller runs on `queue`.
   private func register(pid: pid_t, element: AXUIElement) -> UInt64 {

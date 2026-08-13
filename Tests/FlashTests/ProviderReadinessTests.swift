@@ -25,6 +25,23 @@ final class ProviderReadinessTests: XCTestCase {
     XCTAssertFalse(AccessibilityProvider.webClickableRoles.contains("AXSlider"))
   }
 
+  func testAccessibilityWakeDoesNotPoisonFirefoxWindowManagement() {
+    XCTAssertFalse(
+      AccessibilityProvider.shouldExplicitlyWakeAccessibility(
+        bundleIdentifier: "org.mozilla.firefox"))
+    XCTAssertFalse(
+      AccessibilityProvider.shouldExplicitlyWakeAccessibility(
+        bundleIdentifier: "org.mozilla.firefoxdeveloperedition"))
+    XCTAssertFalse(
+      AccessibilityProvider.shouldExplicitlyWakeAccessibility(
+        bundleIdentifier: "org.mozilla.nightly"))
+    XCTAssertFalse(
+      AccessibilityProvider.shouldExplicitlyWakeAccessibility(bundleIdentifier: "com.apple.Notes"))
+    XCTAssertTrue(
+      AccessibilityProvider.shouldExplicitlyWakeAccessibility(
+        bundleIdentifier: "com.google.Chrome"))
+  }
+
   func testExtensionPopupRolesStayScopedToExtensionDocuments() {
     XCTAssertFalse(AccessibilityProvider.webClickableRoles.contains("AXGroup"))
     XCTAssertFalse(AccessibilityProvider.webClickableRoles.contains("AXOption"))

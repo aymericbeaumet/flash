@@ -147,8 +147,24 @@ extension AppDelegate {
     updateActiveWindowBorder(reason: reason)
   }
 
-  func activeWindowMayHaveChanged(pid: pid_t, notification: String) {
+  func activeWindowMayHaveChanged(
+    pid: pid_t,
+    notification: String,
+    observedWindow: AXUIElement?
+  ) {
     guard let context = currentNonFlashContext(), context.processID == pid else { return }
+    if let observedWindow,
+      notification == kAXWindowMovedNotification as String
+        || notification == kAXWindowResizedNotification as String
+        || notification == kAXUIElementDestroyedNotification as String
+    {
+      windowLayoutManager.observedWindowFrameChange(
+        pid: pid,
+        window: observedWindow,
+        frame: context.frontWindowFrame,
+        notification: notification,
+        statusBarReservesSpace: statusBarVisible)
+    }
     // A browser tab switch / navigation surfaces here (title/window AX changes)
     // without an app-focus change — re-resolve URL-scoped plugin mappings.
     scheduleURLContextMappingRefresh(pid: pid)

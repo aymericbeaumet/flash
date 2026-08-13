@@ -87,7 +87,8 @@ extension AppMonitor {
   func onAXEvent(
     pid: pid_t,
     notification: String,
-    observedElementIsFocusedWindow: Bool
+    observedElementIsFocusedWindow: Bool,
+    observedWindow: AXUIElement?
   ) {
     let eventStorming = noteAXEventForStormDetection(pid: pid, notification: notification)
     dirtyTokens[pid, default: 0] &+= 1
@@ -102,7 +103,7 @@ extension AppMonitor {
       notification,
       observedElementIsFocusedWindow: observedElementIsFocusedWindow)
     {
-      activeWindowMayHaveChanged?(pid, notification)
+      activeWindowMayHaveChanged?(pid, notification, observedWindow)
     }
     if Self.notificationMayChangeFocusedElement(notification) {
       focusedElementMayHaveChanged?(pid)
@@ -273,6 +274,9 @@ extension AppMonitor {
       for notification in Self.focusedWindowObservedNotifications {
         _ = AXObserverAddNotification(
           entry.observer, next, notification as CFString, refcon)
+      }
+      MainThreadHopper.runOrAsync { [weak self] in
+        self?.focusedWindowDidResolve?(entry.context.pid, next)
       }
     }
   }

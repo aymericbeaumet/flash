@@ -146,6 +146,14 @@ public final class AccessibilityProvider: FlashSource {
 
   public init() {}
 
+  /// Firefox uses a scoped role-read wake below. Leaving
+  /// `AXEnhancedUserInterface` enabled outside that scope makes Accessibility
+  /// window moves animate slowly and often land incorrectly.
+  public static func shouldExplicitlyWakeAccessibility(bundleIdentifier: String) -> Bool {
+    !bundleIdentifier.hasPrefix("com.apple.")
+      && !FirefoxAccessibility.matches(bundleIdentifier: bundleIdentifier)
+  }
+
   public func supports(_ context: AppContext) -> Bool { true }
 
   public static func prefersHostClick(
@@ -183,24 +191,24 @@ public final class AccessibilityProvider: FlashSource {
       return
     }
     let app = AXApp.make(pid: context.processID)
-    guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String) else {
-      DispatchQueue.main.async { completion(.unhandled) }
-      return
+    let selected = FirefoxAccessibility.withTree(
+      pid: context.processID,
+      bundleIdentifier: context.bundleIdentifier,
+      app: app
+    ) { app in
+      guard let focusedWindow = Self.elementAttribute(app, kAXFocusedWindowAttribute as String)
+      else { return false }
+      let tabs = Self.tabElements(in: focusedWindow)
+      guard index <= tabs.count else { return false }
+      if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
+        RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
+      }
+      let tab = tabs[index - 1]
+      let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
+      return pressed
+        || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+          == .success
     }
-    let tabs = Self.tabElements(in: focusedWindow)
-    guard index <= tabs.count else {
-      DispatchQueue.main.async { completion(.unhandled) }
-      return
-    }
-    if let runningApp = NSRunningApplication(processIdentifier: context.processID) {
-      RunningApplicationActivation.activate(runningApp, options: [.activateAllWindows])
-    }
-    let tab = tabs[index - 1]
-    let pressed = AXUIElementPerformAction(tab, kAXPressAction as CFString) == .success
-    let selected =
-      pressed
-      || AXUIElementSetAttributeValue(tab, kAXSelectedAttribute as CFString, kCFBooleanTrue)
-        == .success
     DispatchQueue.main.async {
       completion(selected ? .performed(pid: context.processID) : .unhandled)
     }
@@ -208,6 +216,16 @@ public final class AccessibilityProvider: FlashSource {
 
   public func documentURL(in context: AppContext) -> String? {
     let app = AXApp.make(pid: context.processID)
+    return FirefoxAccessibility.withTree(
+      pid: context.processID,
+      bundleIdentifier: context.bundleIdentifier,
+      app: app
+    ) { app in
+      Self.documentURL(in: app)
+    }
+  }
+
+  private static func documentURL(in app: AXUIElement) -> String? {
     var focusedRaw: CFTypeRef?
     if AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focusedRaw)
       == .success,
@@ -389,22 +407,31 @@ public final class AccessibilityProvider: FlashSource {
 
   public func discover(in context: AppContext) throws -> [JumpTarget] {
     let app = AXApp.make(pid: context.processID)
-    // Wake the target app's a11y engine. Some apps (notably Firefox and
-    // Chromium/Electron) run a lazy/idle accessibility service that only
-    // exposes the window-decoration buttons until an assistive technology
+    return try FirefoxAccessibility.withTree(
+      pid: context.processID,
+      bundleIdentifier: context.bundleIdentifier,
+      app: app
+    ) { app in
+      try discover(in: context, app: app)
+    }
+  }
+
+  private func discover(in context: AppContext, app: AXUIElement) throws -> [JumpTarget] {
+    // Wake the target app's a11y engine. Chromium/Electron apps run a lazy/idle
+    // accessibility service that only exposes the window-decoration buttons
+    // until an assistive technology
     // explicitly signals it's reading the tree. The undocumented but
     // widely-used `AXEnhancedUserInterface` and `AXManualAccessibility`
     // attributes are the standard signals — VoiceOver sets the same
     // ones. Best-effort: errors are ignored because most apps don't
     // recognise these attributes and that's fine.
     //
-    // Skipped for Apple's own apps: they're native AppKit/WebKit (WebKit
-    // self-enables its web-area tree on first AX access) and the flag is
-    // process-sticky — it survives until the app relaunches and tells it an
-    // assistive client is permanently watching. SwiftUI-heavy apps like
-    // Notes respond with eager accessibility bookkeeping on every UI
-    // update, measurably degrading them long after the walk that set it.
-    if !context.bundleIdentifier.hasPrefix("com.apple.") {
+    // Skipped for Apple's own apps and Firefox. The flag is process-sticky for
+    // these apps and tells them an assistive client is permanently watching.
+    // SwiftUI-heavy apps like Notes respond with eager accessibility
+    // bookkeeping; Firefox is instead activated and restored by the scoped
+    // `FirefoxAccessibility.withTree` call above.
+    if Self.shouldExplicitlyWakeAccessibility(bundleIdentifier: context.bundleIdentifier) {
       let trueRef = kCFBooleanTrue as CFTypeRef
       _ = AXUIElementSetAttributeValue(
         app, "AXEnhancedUserInterface" as CFString, trueRef)
@@ -452,6 +479,7 @@ public final class AccessibilityProvider: FlashSource {
       screenH: screenH,
       visible: clip,
       pid: context.processID,
+      bundleIdentifier: context.bundleIdentifier,
       insideClickable: false,
       insideWebArea: false,
       insideExtensionDocument: false,
@@ -520,6 +548,7 @@ public final class AccessibilityProvider: FlashSource {
     screenH: CGFloat,
     visible: CGRect,
     pid: pid_t,
+    bundleIdentifier: String,
     insideClickable: Bool,
     insideWebArea: Bool,
     insideExtensionDocument: Bool,
@@ -620,18 +649,23 @@ public final class AccessibilityProvider: FlashSource {
         if preferHostClick {
           return false
         }
-        switch action {
-        case .leftClick:
-          if JumpTarget.textInputRoles.contains(capturedRole),
-            AXClick.setFocus(captured)
-          {
-            return true
+        return FirefoxAccessibility.withTree(
+          pid: pid,
+          bundleIdentifier: bundleIdentifier
+        ) { _ in
+          switch action {
+          case .leftClick:
+            if JumpTarget.textInputRoles.contains(capturedRole),
+              AXClick.setFocus(captured)
+            {
+              return true
+            }
+            return AXClick.tryActions(captured, action: .leftClick)
+          case .rightClick:
+            return AXClick.tryActions(captured, action: .rightClick)
+          case .doubleClick:
+            return false
           }
-          return AXClick.tryActions(captured, action: .leftClick)
-        case .rightClick:
-          return AXClick.tryActions(captured, action: .rightClick)
-        case .doubleClick:
-          return false
         }
       }
       // Browser tab strips report their entries either as native `AXTab` or as
@@ -652,12 +686,17 @@ public final class AccessibilityProvider: FlashSource {
       let resolveClickPoint: (() -> CGPoint?)? =
         insideWebArea
         ? {
-          guard
-            let charRect = AXAttribute.boundsForRange(
-              captured, location: 0, length: 1, screenH: screenH),
-            frame.height > charRect.height * 1.5
-          else { return nil }
-          return CGPoint(x: charRect.midX, y: charRect.midY)
+          FirefoxAccessibility.withTree(
+            pid: pid,
+            bundleIdentifier: bundleIdentifier
+          ) { _ in
+            guard
+              let charRect = AXAttribute.boundsForRange(
+                captured, location: 0, length: 1, screenH: screenH),
+              frame.height > charRect.height * 1.5
+            else { return nil }
+            return CGPoint(x: charRect.midX, y: charRect.midY)
+          }
         }
         : nil
       let candidate = JumpTarget(
@@ -797,6 +836,7 @@ public final class AccessibilityProvider: FlashSource {
             screenH: captureScreenH,
             visible: captureVisible,
             pid: capturePid,
+            bundleIdentifier: bundleIdentifier,
             insideClickable: captureInsideClickable,
             insideWebArea: captureInsideWebArea,
             insideExtensionDocument: captureInsideExtensionDocument,
@@ -822,6 +862,7 @@ public final class AccessibilityProvider: FlashSource {
         screenH: screenH,
         visible: visible,
         pid: pid,
+        bundleIdentifier: bundleIdentifier,
         insideClickable: nowInsideClickable,
         insideWebArea: nowInsideWebArea,
         insideExtensionDocument: nowInsideExtensionDocument,

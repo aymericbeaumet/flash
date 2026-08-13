@@ -147,6 +147,8 @@ extension AppDelegate {
     statusBarVisible = cfg.statusBar.enabled
     overlay.statusBarMonitor = cfg.statusBar.monitor
     applySystemStatusBarSpaceReservation(enabled: statusBarVisible)
+    windowLayoutManager.screenParametersDidChange(
+      statusBarReservesSpace: statusBarVisible)
     if statusBarVisible {
       statusBarController?.start()
     } else {

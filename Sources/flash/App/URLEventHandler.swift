@@ -587,7 +587,7 @@ private func windowMoveCommand(_ a: VerbArgs) -> URLCommand? {
 /// `WindowPosition` is also referenced by `WindowMover`. Keep its
 /// declaration near `URLCommand`/`MoveWindowParams` so they live in one
 /// file.
-enum WindowPosition: String, Hashable {
+enum WindowPosition: String, CaseIterable, Hashable {
   case topLeft = "topleft"
   case topRight = "topright"
   case bottomLeft = "bottomleft"

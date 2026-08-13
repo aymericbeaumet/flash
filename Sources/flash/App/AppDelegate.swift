@@ -128,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var urlHandler: URLEventHandler!
   var configSources: [DispatchSourceFileSystemObject] = []
   let mappings = MappingsCoordinator()
+  let windowLayoutManager = WindowLayoutManager()
   /// Per-focused-app effective mapping tables (config + applicable plugin
   /// mappings), keyed by bundle id ("" for none/unknown). Cleared on config
   /// reload and when a plugin's mappings change.
@@ -478,8 +479,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     monitor.focusedElementMayHaveChanged = { [weak self] pid in
       self?.focusedInputMayHaveChanged(pid: pid)
     }
-    monitor.activeWindowMayHaveChanged = { [weak self] pid, notification in
-      self?.activeWindowMayHaveChanged(pid: pid, notification: notification)
+    monitor.activeWindowMayHaveChanged = { [weak self] pid, notification, window in
+      self?.activeWindowMayHaveChanged(
+        pid: pid, notification: notification, observedWindow: window)
+    }
+    monitor.focusedWindowDidResolve = { [weak self] pid, window in
+      guard let self, self.currentNonFlashContext()?.processID == pid else { return }
+      self.windowLayoutManager.observedFocusedWindow(
+        pid: pid,
+        window: window,
+        statusBarReservesSpace: self.statusBarVisible)
     }
     monitor.start()
     pluginManager.onStateChanged = { [weak self] in
@@ -627,7 +636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       // Flash itself, and the verb cheerfully maximises the status-bar
       // panel instead of the user's actual window.
       if let target = currentNonFlashContext() {
-        WindowMover.move(
+        windowLayoutManager.move(
           params, statusBarReservesSpace: statusBarVisible, targetPID: target.processID)
       } else {
         FlashLog.warn("[window_move] no non-flash frontmost app")
@@ -745,6 +754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       guard let self else { return }
       self.registry.refreshRunningApplications()
       if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        self.windowLayoutManager.appDidTerminate(pid: app.processIdentifier)
         if app.processIdentifier == self.observedFocusedAppPID {
           self.hideActiveWindowBorder(reason: "app_terminated")
           DispatchQueue.main.async {
@@ -834,10 +844,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       object: nil,
       queue: .main
     ) { [weak self] _ in
+      guard let self else { return }
+      self.windowLayoutManager.screenParametersDidChange(
+        statusBarReservesSpace: self.statusBarVisible)
       // OverlayPanel invalidates its screen snapshot from the same notification.
       // Redraw on the next main turn so the border path uses the rebuilt union.
       DispatchQueue.main.async {
-        guard let self else { return }
         self.updateActiveWindowBorder(reason: "screen_parameters")
         self.scheduleActiveWindowBorderReconciliation(
           delaysMs: Self.activeWindowBorderRecoveryDelaysMs,
