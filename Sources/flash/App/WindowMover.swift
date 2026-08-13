@@ -38,8 +38,12 @@ final class WindowLayoutManager {
   private var screenChangeActiveUntil = DispatchTime(uptimeNanoseconds: 0)
   private var selfAuthoredChangesUntil: [WindowKey: DispatchTime] = [:]
 
-  private static let screenRecoveryDelaysMs = [80, 250, 750]
+  private let screenRecoveryDelaysMs: [Int]
   private static let authoredChangeGraceMs = 300
+
+  init(screenRecoveryDelaysMs: [Int] = [80, 250, 750]) {
+    self.screenRecoveryDelaysMs = screenRecoveryDelaysMs
+  }
 
   func move(
     _ params: MoveWindowParams,
@@ -77,9 +81,23 @@ final class WindowLayoutManager {
   /// changes. Repeated bounded passes cover apps that perform their own delayed
   /// relocation after AppKit's screen notification; a newer notification
   /// cancels the older recovery generation.
-  func screenParametersDidChange(statusBarReservesSpace: Bool) {
+  func screenParametersDidChange(
+    statusBarReservesSpace: Bool,
+    afterRecoveryPass: (() -> Void)? = nil
+  ) {
     let screens = WindowMover.screenLayouts(
       statusBarReservesSpace: statusBarReservesSpace)
+    screenParametersDidChange(
+      screens: screens,
+      afterRecoveryPass: afterRecoveryPass)
+  }
+
+  /// Value-only entry point so display handoff scheduling can be exercised
+  /// without asking AppKit for the host's real screen topology.
+  func screenParametersDidChange(
+    screens: [WindowScreenLayout],
+    afterRecoveryPass: (() -> Void)? = nil
+  ) {
     queue.async { [weak self] in
       guard let self else { return }
       let previousPrimary = self.currentScreens.first
@@ -97,15 +115,18 @@ final class WindowLayoutManager {
           })
       }
       self.screenChangeActiveUntil =
-        now + .milliseconds((Self.screenRecoveryDelaysMs.last ?? 0) + Self.authoredChangeGraceMs)
+        now + .milliseconds((self.screenRecoveryDelaysMs.last ?? 0) + Self.authoredChangeGraceMs)
       self.screenChangeGeneration &+= 1
       let generation = self.screenChangeGeneration
-      let lastDelayMs = Self.screenRecoveryDelaysMs.last
+      let lastDelayMs = self.screenRecoveryDelaysMs.last
 
-      for delayMs in Self.screenRecoveryDelaysMs {
+      for delayMs in self.screenRecoveryDelaysMs {
         self.queue.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
           guard let self, self.screenChangeGeneration == generation else { return }
           self.restoreTrackedLayouts(to: nextPrimary)
+          if let afterRecoveryPass {
+            DispatchQueue.main.async(execute: afterRecoveryPass)
+          }
           if delayMs == lastDelayMs {
             self.screenChangeKeys.removeAll()
           }

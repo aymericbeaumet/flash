@@ -155,6 +155,28 @@ final class WindowMoverTests: XCTestCase {
       secondary)
   }
 
+  func testDisplayHandoffNotifiesAfterEveryLayoutRecoveryPass() {
+    let manager = WindowLayoutManager(screenRecoveryDelaysMs: [0, 1, 2])
+    let source = WindowScreenLayout(
+      id: 1,
+      frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+      usableFrame: CGRect(x: 0, y: 0, width: 1728, height: 1085))
+    let destination = WindowScreenLayout(
+      id: 2,
+      frame: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+      usableFrame: CGRect(x: 0, y: 0, width: 2560, height: 1408))
+    let recovered = expectation(description: "layout recovery repaints border")
+    recovered.expectedFulfillmentCount = 3
+
+    manager.screenParametersDidChange(screens: [source])
+    manager.screenParametersDidChange(screens: [destination]) {
+      XCTAssertTrue(Thread.isMainThread)
+      recovered.fulfill()
+    }
+
+    wait(for: [recovered], timeout: 1)
+  }
+
   func testEnhancedUserInterfaceAnimationToggleRequiresWritableTrueAttribute() {
     XCTAssertTrue(
       WindowMover.shouldTemporarilyDisableEnhancedUserInterface(
