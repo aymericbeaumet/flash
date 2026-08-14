@@ -76,6 +76,10 @@ const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
 const SLOW_CANDIDATE_REFRESH_MS: u128 = 1_000;
 const REMOTE_POLL_INTERVAL_SECS: u64 = 5;
 const REMOTE_RETRY_DELAYS_SECS: [u64; 3] = [15, 30, 60];
+// Keep the last good remote inventory through the complete retry ramp, but do
+// not present it as current forever when the SSH side channel behind an active
+// Mosh transport stays unavailable.
+const REMOTE_CANDIDATE_STALE_AFTER_SECS: u64 = 120;
 
 // ---- Link extraction --------------------------------------------------------
 
@@ -865,15 +869,22 @@ async fn run_tmux_default(tmux_path: Option<&str>, args: &[&str]) -> Option<Stri
 ///
 /// Identical lines are deduplicated so an alias between the default invocation
 /// and an explicit `-S <path>` for the same socket doesn't double-count rows.
-/// We distinguish a confirmed absent server from a timeout/unknown failure:
-/// absence authoritatively clears stale windows, while any transient failure
-/// preserves the complete last-good aggregate (we cannot safely identify which
-/// prior rows belonged to the failed socket after outputs are merged).
+/// Candidate inventory accepts only servers reporting an attached client, so a
+/// detached historical server cannot contribute stale windows. A healthy
+/// server's output remains authoritative when an unrelated socket is absent or
+/// transiently broken; the last-good aggregate is retained only when no server
+/// supplies usable output at all.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum TmuxAggregate {
     Output(String),
     Absent,
     TransientFailure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TmuxInventoryScope {
+    AnyServer,
+    AttachedServers,
 }
 
 async fn run_tmux_aggregate_inventory(
@@ -923,24 +934,43 @@ async fn run_tmux_aggregate_inventory(
             Err(_) => join_failed = true,
         }
     }
-    classify_tmux_aggregate(&results, join_failed)
+    let scope = if args.contains(&"list-windows") {
+        TmuxInventoryScope::AttachedServers
+    } else {
+        TmuxInventoryScope::AnyServer
+    };
+    classify_tmux_aggregate(&results, join_failed, scope)
 }
 
-fn classify_tmux_aggregate(results: &[CliResult], join_failed: bool) -> TmuxAggregate {
-    if join_failed || results.iter().any(is_transient_tmux_failure) {
-        return TmuxAggregate::TransientFailure;
-    }
+fn classify_tmux_aggregate(
+    results: &[CliResult],
+    join_failed: bool,
+    scope: TmuxInventoryScope,
+) -> TmuxAggregate {
     let merged = merge_socket_outputs(
         results
             .iter()
             .filter(|result| result.ok)
-            .map(|result| result.stdout.as_str()),
+            .map(|result| result.stdout.as_str())
+            .filter(|output| {
+                scope == TmuxInventoryScope::AnyServer
+                    || candidate_inventory_has_attached_client(output)
+            }),
     );
-    if merged.is_empty() {
-        TmuxAggregate::Absent
-    } else {
-        TmuxAggregate::Output(merged)
+    if !merged.is_empty() {
+        // A healthy attached server is authoritative for its own inventory.
+        // Unrelated stale/control sockets must not freeze every healthy server.
+        return TmuxAggregate::Output(merged);
     }
+    if join_failed || results.iter().any(is_transient_tmux_failure) {
+        return TmuxAggregate::TransientFailure;
+    }
+    TmuxAggregate::Absent
+}
+
+fn candidate_inventory_has_attached_client(output: &str) -> bool {
+    let prefix = format!("{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}");
+    output.lines().any(|line| line.starts_with(&prefix))
 }
 
 fn is_transient_tmux_failure(result: &CliResult) -> bool {
@@ -956,6 +986,7 @@ fn is_absent_tmux_server(result: &CliResult) -> bool {
         || (error.contains("error connecting to")
             && (error.contains("no such file") || error.contains("connection refused")))
         || error.contains("failed to connect to server")
+        || error.contains("server exited unexpectedly")
 }
 
 /// Concatenate the stdout of multiple tmux invocations (one per socket)
@@ -2078,7 +2109,7 @@ fn cached_payload_for_route(
     let candidates = if backend_id == "local" {
         &partitions.local
     } else {
-        partitions.remote.get(backend_id)?
+        &partitions.remote.get(backend_id)?.candidates
     };
     candidates.iter().find_map(|candidate| {
         let payload = candidate.payload_as::<TmuxPayload>()?;
@@ -2426,7 +2457,7 @@ struct RemoteCandidateBuild {
 async fn build_remote_candidates(
     config: &RemoteTmuxConfig,
     terminal_pid: Option<i64>,
-) -> Option<RemoteCandidateBuild> {
+) -> Result<RemoteCandidateBuild, CliResult> {
     let client_format = format!(
         "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
@@ -2450,13 +2481,13 @@ async fn build_remote_candidates(
     .await;
     if !result.ok {
         if is_absent_tmux_server(&result) {
-            return Some(RemoteCandidateBuild {
+            return Ok(RemoteCandidateBuild {
                 candidates: Vec::new(),
                 client_count: 0,
                 raw_line_count: 0,
             });
         }
-        return None;
+        return Err(result);
     }
     let (clients, raw) = parse_candidate_inventory_for_backend(&result.stdout, &config.id);
     let terminal_pid_by_session = clients
@@ -2483,7 +2514,7 @@ async fn build_remote_candidates(
         &config.home,
         &backend,
     );
-    Some(RemoteCandidateBuild {
+    Ok(RemoteCandidateBuild {
         candidates,
         client_count: clients.len(),
         raw_line_count,
@@ -2527,7 +2558,7 @@ fn hash_candidates(candidates: &[Candidate]) -> u64 {
 /// keeps unchanged refreshes as no-ops — see the module-level "Warm-location
 /// contract" docs.
 ///
-/// On a transient tmux failure (e.g. every socket invocation timed out)
+/// On a transient tmux failure (e.g. every usable socket invocation timed out)
 /// we leave the previous warm locations in place: the host keeps pulling
 /// them for synchronous reads, and the next successful refresh re-syncs. We
 /// do *not* store an empty set in this case — nuking the warm cache to `[]`
@@ -2541,7 +2572,12 @@ struct CandidateRefreshCoordinator {
 #[derive(Default)]
 struct CandidatePartitions {
     local: Vec<Candidate>,
-    remote: BTreeMap<String, Vec<Candidate>>,
+    remote: BTreeMap<String, RemoteCandidatePartition>,
+}
+
+struct RemoteCandidatePartition {
+    candidates: Vec<Candidate>,
+    refreshed_at: Instant,
 }
 
 #[derive(Clone)]
@@ -2694,7 +2730,13 @@ fn replace_candidate_partition_and_publish(
     match partition {
         CandidatePartition::Local => state.local = candidates,
         CandidatePartition::Remote(backend_id) => {
-            state.remote.insert(backend_id, candidates);
+            state.remote.insert(
+                backend_id,
+                RemoteCandidatePartition {
+                    candidates,
+                    refreshed_at: Instant::now(),
+                },
+            );
         }
     }
     publish_candidate_partitions(&state, ctx, last_hash)
@@ -2705,11 +2747,15 @@ fn publish_candidate_partitions(
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
 ) -> (bool, usize) {
-    let remote_count = state.remote.values().map(Vec::len).sum::<usize>();
+    let remote_count = state
+        .remote
+        .values()
+        .map(|partition| partition.candidates.len())
+        .sum::<usize>();
     let mut aggregate = Vec::with_capacity(state.local.len() + remote_count);
     aggregate.extend(state.local.iter().cloned());
-    for candidates in state.remote.values() {
-        aggregate.extend(candidates.iter().cloned());
+    for partition in state.remote.values() {
+        aggregate.extend(partition.candidates.iter().cloned());
     }
     let count = aggregate.len();
     let new_hash = hash_candidates(&aggregate);
@@ -2738,10 +2784,59 @@ fn retain_remote_candidate_partitions(
         .remote
         .retain(|backend_id, _| active_backend_ids.contains(backend_id));
     if state.remote.len() == previous_len {
-        let count = state.local.len() + state.remote.values().map(Vec::len).sum::<usize>();
+        let count = state.local.len()
+            + state
+                .remote
+                .values()
+                .map(|partition| partition.candidates.len())
+                .sum::<usize>();
         return (false, count);
     }
     publish_candidate_partitions(&state, ctx, last_hash)
+}
+
+fn expire_remote_candidate_partition_state(
+    state: &mut CandidatePartitions,
+    backend_id: &str,
+    now: Instant,
+    stale_after: Duration,
+) -> (bool, Option<Duration>) {
+    let age = state
+        .remote
+        .get(backend_id)
+        .map(|partition| now.saturating_duration_since(partition.refreshed_at));
+    let expired = age.is_some_and(|age| age >= stale_after);
+    if expired {
+        state.remote.remove(backend_id);
+    }
+    (expired, age)
+}
+
+fn expire_remote_candidate_partition_and_publish(
+    backend_id: &str,
+    now: Instant,
+    stale_after: Duration,
+    ctx: &Context,
+    partitions: &Mutex<CandidatePartitions>,
+    last_hash: &Mutex<Option<u64>>,
+) -> (bool, usize, Option<Duration>) {
+    let Ok(mut state) = partitions.lock() else {
+        return (false, 0, None);
+    };
+    let (expired, age) =
+        expire_remote_candidate_partition_state(&mut state, backend_id, now, stale_after);
+    if expired {
+        let (_, count) = publish_candidate_partitions(&state, ctx, last_hash);
+        (true, count, age)
+    } else {
+        let count = state.local.len()
+            + state
+                .remote
+                .values()
+                .map(|partition| partition.candidates.len())
+                .sum::<usize>();
+        (false, count, age)
+    }
 }
 
 fn candidate_refresh_log_fields(
@@ -2776,6 +2871,21 @@ fn warn_if_candidate_refresh_slow(
     }
 }
 
+fn cli_failure_detail(result: &CliResult) -> String {
+    let detail = result
+        .stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if detail.is_empty() {
+        format!("status={}", result.status)
+    } else {
+        detail.chars().take(240).collect()
+    }
+}
+
 async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
     let local_config = plugin.local_config();
     refresh_candidate_locations_for_path(
@@ -2797,20 +2907,52 @@ async fn refresh_remote_candidate_locations(
     last_hash: &Mutex<Option<u64>>,
 ) -> bool {
     let started_at = Instant::now();
-    let Some(build) = build_remote_candidates(config, Some(config.terminal_pid)).await else {
-        ctx.log_fields(
-            "warn",
-            "[tmux] remote candidate refresh failed; preserving last good",
-            BTreeMap::from([
+    let build = match build_remote_candidates(config, Some(config.terminal_pid)).await {
+        Ok(build) => build,
+        Err(result) => {
+            let (expired, aggregate_count, stale_age) =
+                expire_remote_candidate_partition_and_publish(
+                    &config.id,
+                    Instant::now(),
+                    Duration::from_secs(REMOTE_CANDIDATE_STALE_AFTER_SECS),
+                    ctx,
+                    partitions,
+                    last_hash,
+                );
+            let mut fields = BTreeMap::from([
                 ("backend".to_string(), config.label.clone()),
                 (
                     "elapsed_ms".to_string(),
                     started_at.elapsed().as_millis().to_string(),
                 ),
                 ("outcome".to_string(), "failed".to_string()),
-            ]),
-        );
-        return false;
+                ("error".to_string(), cli_failure_detail(&result)),
+                ("candidates".to_string(), aggregate_count.to_string()),
+            ]);
+            if let Some(age) = stale_age {
+                fields.insert("stale_ms".to_string(), age.as_millis().to_string());
+            }
+            fields.insert(
+                "change".to_string(),
+                if expired {
+                    "expired"
+                } else if stale_age.is_some() {
+                    "preserved"
+                } else {
+                    "none"
+                }
+                .to_string(),
+            );
+            let message = if expired {
+                "[tmux] remote candidate refresh failed; expired stale snapshot"
+            } else if stale_age.is_some() {
+                "[tmux] remote candidate refresh failed; preserving last good"
+            } else {
+                "[tmux] remote candidate refresh failed; no snapshot"
+            };
+            ctx.log_fields("warn", message, fields);
+            return false;
+        }
     };
     let remote_candidate_count = build.candidates.len();
     let (changed, aggregate_count) = replace_candidate_partition_and_publish(
@@ -4405,16 +4547,31 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             ..CliResult::default()
         };
         assert_eq!(
-            classify_tmux_aggregate(&[absent], false),
+            classify_tmux_aggregate(&[absent], false, TmuxInventoryScope::AnyServer),
             TmuxAggregate::Absent
         );
     }
 
     #[test]
-    fn aggregate_inventory_preserves_everything_on_any_transient_failure() {
+    fn aggregate_inventory_preserves_last_good_when_no_server_answers() {
+        let timeout = CliResult {
+            stderr: "timed out after 2000ms".to_string(),
+            status: 124,
+            ..CliResult::default()
+        };
+        assert_eq!(
+            classify_tmux_aggregate(&[timeout], false, TmuxInventoryScope::AnyServer),
+            TmuxAggregate::TransientFailure
+        );
+    }
+
+    #[test]
+    fn aggregate_inventory_uses_healthy_output_when_unrelated_socket_times_out() {
         let successful = CliResult {
             ok: true,
-            stdout: "work\t1\teditor".to_string(),
+            stdout: "client|||/dev/ttys000|||work|||1443|||30\n\
+window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
+                .to_string(),
             status: 0,
             ..CliResult::default()
         };
@@ -4424,8 +4581,39 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             ..CliResult::default()
         };
         assert_eq!(
-            classify_tmux_aggregate(&[successful, timeout], false),
-            TmuxAggregate::TransientFailure
+            classify_tmux_aggregate(
+                &[successful.clone(), timeout],
+                false,
+                TmuxInventoryScope::AttachedServers,
+            ),
+            TmuxAggregate::Output(successful.stdout)
+        );
+    }
+
+    #[test]
+    fn aggregate_inventory_excludes_detached_server_windows() {
+        let attached = CliResult {
+            ok: true,
+            stdout: "client|||/dev/ttys000|||work|||1443|||30\n\
+window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
+                .to_string(),
+            status: 0,
+            ..CliResult::default()
+        };
+        let detached = CliResult {
+            ok: true,
+            stdout: "window|||scratch|||1|||stale|||zsh|||/tmp|||1".to_string(),
+            status: 0,
+            ..CliResult::default()
+        };
+
+        assert_eq!(
+            classify_tmux_aggregate(
+                &[attached.clone(), detached],
+                false,
+                TmuxInventoryScope::AttachedServers,
+            ),
+            TmuxAggregate::Output(attached.stdout)
         );
     }
 
@@ -4443,9 +4631,57 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             ..CliResult::default()
         };
         assert_eq!(
-            classify_tmux_aggregate(&[successful, absent], false),
+            classify_tmux_aggregate(&[successful, absent], false, TmuxInventoryScope::AnyServer,),
             TmuxAggregate::Output("work\t1\teditor".to_string())
         );
+    }
+
+    #[test]
+    fn aggregate_inventory_treats_exited_control_server_as_absent() {
+        let exited = CliResult {
+            stderr: "server exited unexpectedly".to_string(),
+            status: 1,
+            ..CliResult::default()
+        };
+
+        assert_eq!(
+            classify_tmux_aggregate(&[exited], false, TmuxInventoryScope::AnyServer),
+            TmuxAggregate::Absent
+        );
+    }
+
+    #[test]
+    fn remote_candidate_partition_expires_only_after_stale_budget() {
+        let now = Instant::now();
+        let backend_id = "remote:moria";
+        let mut state = CandidatePartitions::default();
+        state.remote.insert(
+            backend_id.to_string(),
+            RemoteCandidatePartition {
+                candidates: vec![fake_candidate("scratch:1", "remote", 1356)],
+                refreshed_at: now - Duration::from_secs(119),
+            },
+        );
+
+        let (expired, age) = expire_remote_candidate_partition_state(
+            &mut state,
+            backend_id,
+            now,
+            Duration::from_secs(REMOTE_CANDIDATE_STALE_AFTER_SECS),
+        );
+        assert!(!expired);
+        assert_eq!(age, Some(Duration::from_secs(119)));
+        assert!(state.remote.contains_key(backend_id));
+
+        let (expired, age) = expire_remote_candidate_partition_state(
+            &mut state,
+            backend_id,
+            now + Duration::from_secs(1),
+            Duration::from_secs(REMOTE_CANDIDATE_STALE_AFTER_SECS),
+        );
+        assert!(expired);
+        assert_eq!(age, Some(Duration::from_secs(120)));
+        assert!(!state.remote.contains_key(backend_id));
     }
 
     // ---- Warm-location contract ------------------------------------------

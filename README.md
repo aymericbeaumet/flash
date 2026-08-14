@@ -91,11 +91,13 @@ The bundled tmux source automatically merges every attached local server with
 remote tmux sessions launched through SSH or Mosh. It discovers terminal apps,
 PTYs, transports, hosts, tmux paths, and windows from the live process graph—no
 terminal- or host-specific configuration is required. Catalogs refresh in the
-background, keep their last good remote snapshot through disconnects, and label
-otherwise-identical windows by host. The tmux source registers no keyboard
-mappings: terminal-native shortcuts can send the user's normal tmux prefix
-bindings with zero Flash round trips. Flash still resolves any discovered local
-or remote window from the finder.
+background, keep their last good remote snapshot through brief disconnects,
+then expire it after two minutes without a successful refresh. Mosh-attached
+catalogs use short noninteractive SSH calls for inventory; the interactive Mosh
+transport remains independent. Otherwise-identical windows are labelled by
+host. The tmux source registers no keyboard mappings: terminal-native shortcuts
+can send the user's normal tmux prefix bindings with zero Flash round trips.
+Flash still resolves any discovered local or remote window from the finder.
 
 ### Useful actions
 
