@@ -127,8 +127,12 @@ at priority `0`. Do not confuse those scheduling/collision numbers with
   Event payload filtering belongs to the core capability gate, not per-listener
   manifest objects.
 - **`hints`** — opts the plugin in as a hints provider. Hint selection is
-  exclusive: the highest-priority provider supporting the focused context owns
-  `f` for that context.
+  exclusive: the first non-empty provider result owns `f` for that context and
+  results never merge. By default, the highest-priority provider is
+  authoritative even when it returns no targets. Set `fallback_on_empty` to
+  `true` only when provider applicability is discovered dynamically (for
+  example from process/PTY ancestry) and an empty result means "not applicable";
+  Flash then tries the next lower-priority provider.
 - **`sources`** — root array of source descriptors the plugin owns for
   `@<source>` completion, source-scoped flashlight queries, and default source
   ranking. Each item is

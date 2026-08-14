@@ -177,14 +177,10 @@ extension AppMonitor {
         ])
       return
     }
-    if registry.anyVolatileSourceApplies(to: context) {
-      completion?(nil)
-      return
-    }
-    // Exclusive hints: prepare the model from the single winning provider.
-    // We only reach here when no volatile source applies (checked above), so
-    // the winner is guaranteed continuous and safe to cache.
-    let providers = registry.hintProvider(for: context).map { [$0] } ?? []
+    // Prepare only the continuous suffix of the exclusive provider plan. A
+    // dynamic volatile provider such as tmux is still probed on activation,
+    // but its explicit empty result can fall through to this warm AX model.
+    let providers = registry.hintProviderPlan(for: context).preparedProviders
     guard !providers.isEmpty else {
       completion?(nil)
       return

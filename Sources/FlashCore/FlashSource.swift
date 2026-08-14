@@ -448,6 +448,11 @@ public protocol FlashSource: AnyObject {
   /// changes from terminal output and async tmux activity that the
   /// host terminal doesn't expose to AX at all.
   var resultsAreVolatile: Bool { get }
+  /// When true, an empty discovery result means "this provider does not own
+  /// the focused context" and the next lower-priority hint provider may run.
+  /// Keep this false for authoritative providers where an empty result really
+  /// means that `f` should stay silent.
+  var fallsBackOnEmptyDiscovery: Bool { get }
   /// User-facing source labels this provider owns for `@<source>` completion
   /// and source-scoped candidate snapshots. Labels should be canonical dotted
   /// source names such as `firefox.tabs` or `tmux.windows`; short prefixes are
@@ -526,6 +531,7 @@ extension FlashSource {
   public var activationPolicy: FlashSourceActivationPolicy { .always }
   public var readinessPolicy: FlashSourceReadinessPolicy { .activationOnly }
   public var resultsAreVolatile: Bool { readinessPolicy == .volatile }
+  public var fallsBackOnEmptyDiscovery: Bool { false }
   public var candidateSourceLabels: [String] { [] }
   public var candidateSourceDescriptors: [CandidateSourceDescriptor] {
     candidateSourceLabels.map { CandidateSourceDescriptor(name: $0) }

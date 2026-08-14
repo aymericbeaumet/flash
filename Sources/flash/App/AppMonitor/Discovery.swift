@@ -2,14 +2,15 @@ import AppKit
 import ApplicationServices
 import FlashCore
 
-/// Activation discovery pipeline. Activation either serves a prepared
-/// model (instant) or runs the full provider chain on `axQueue`.
-/// Everything below routes between those two regimes.
+/// Activation discovery pipeline. Activation-time providers run first; when a
+/// dynamically scoped provider explicitly declines with an empty result, Flash
+/// falls through to the prepared continuous-provider model.
 extension AppMonitor {
   // MARK: Discovery
 
-  /// Activation hot path. Tries the prepared AX model first. Volatile
-  /// providers (tmux) bypass the model entirely.
+  /// Activation hot path. Dynamically scoped uncached providers (tmux) get the
+  /// first chance to claim the context. Their explicit empty-result fallback
+  /// can then use the prepared AX model without merging provider results.
   func discoverAsync(
     context: AppContext,
     targetFilter: ((JumpTarget) -> Bool)? = nil,
@@ -44,65 +45,81 @@ extension AppMonitor {
       installObserver(for: pid)
     }
 
-    if registry.anyVolatileSourceApplies(to: context) {
-      runActivationDiscovery(
-        context: context,
-        targetFilter: targetFilter,
-        completion: { hints in
-          complete(path: "activation_volatile", hints: hints)
-        })
-      return
-    }
+    let plan = registry.hintProviderPlan(for: context)
 
-    if let model = lookupPreparedModel(for: pid) {
-      if let targetFilter {
-        let cfg = snapshotConfig()
-        let targets = model.targets.filter(targetFilter)
-        complete(
-          path: "prepared_model_filter",
-          hints: assignTargets(targets, cfg: cfg),
-          extra: [
-            "model_targets": "\(model.targets.count)",
-            "targets": "\(targets.count)",
-          ])
-      } else {
-        complete(
-          path: "prepared_model",
-          hints: model.hints,
-          extra: ["targets": "\(model.targets.count)"])
+    func discoverPreparedFallback() {
+      guard !plan.preparedProviders.isEmpty else {
+        complete(path: "activation_no_fallback", hints: [])
+        return
       }
-      return
-    }
 
-    runModelRefresh(
-      pid: pid,
-      reason: "activation"
-    ) { [weak self] model in
-      guard let self else { return }
-      if let model {
+      if let model = lookupPreparedModel(for: pid) {
         if let targetFilter {
-          let cfg = self.snapshotConfig()
+          let cfg = snapshotConfig()
           let targets = model.targets.filter(targetFilter)
           complete(
-            path: "prepared_model_refresh_filter",
-            hints: self.assignTargets(targets, cfg: cfg),
+            path: "prepared_model_filter",
+            hints: assignTargets(targets, cfg: cfg),
             extra: [
               "model_targets": "\(model.targets.count)",
               "targets": "\(targets.count)",
             ])
         } else {
           complete(
-            path: "prepared_model_refresh",
+            path: "prepared_model",
             hints: model.hints,
             extra: ["targets": "\(model.targets.count)"])
         }
+        return
+      }
+
+      runModelRefresh(
+        pid: pid,
+        reason: "activation"
+      ) { [weak self] model in
+        guard let self else { return }
+        if let model {
+          if let targetFilter {
+            let cfg = self.snapshotConfig()
+            let targets = model.targets.filter(targetFilter)
+            complete(
+              path: "prepared_model_refresh_filter",
+              hints: self.assignTargets(targets, cfg: cfg),
+              extra: [
+                "model_targets": "\(model.targets.count)",
+                "targets": "\(targets.count)",
+              ])
+          } else {
+            complete(
+              path: "prepared_model_refresh",
+              hints: model.hints,
+              extra: ["targets": "\(model.targets.count)"])
+          }
+        } else {
+          self.runActivationDiscovery(
+            context: context,
+            providers: plan.preparedProviders,
+            targetFilter: targetFilter
+          ) { result in
+            complete(path: "activation_refresh_miss", hints: result.hints)
+          }
+        }
+      }
+    }
+
+    guard !plan.uncachedProviders.isEmpty else {
+      discoverPreparedFallback()
+      return
+    }
+    runActivationDiscovery(
+      context: context,
+      providers: plan.uncachedProviders,
+      targetFilter: targetFilter
+    ) { result in
+      if result.allowsFallback {
+        discoverPreparedFallback()
       } else {
-        self.runActivationDiscovery(
-          context: context,
-          targetFilter: targetFilter,
-          completion: { hints in
-            complete(path: "activation_refresh_miss", hints: hints)
-          })
+        complete(path: "activation_uncached", hints: result.hints)
       }
     }
   }
@@ -110,6 +127,7 @@ extension AppMonitor {
   private struct DiscoveryResult {
     let targets: [JumpTarget]
     let hints: [AssignedHint]
+    let allowsFallback: Bool
   }
 
   private struct DiscoveryFrame {
@@ -140,12 +158,11 @@ extension AppMonitor {
 
   private func runActivationDiscovery(
     context: AppContext,
+    providers: [FlashSource],
     targetFilter: ((JumpTarget) -> Bool)? = nil,
-    completion: @escaping ([AssignedHint]) -> Void
+    completion: @escaping (DiscoveryResult) -> Void
   ) {
     let cfg = snapshotConfig()
-    // Exclusive hints: run only the winning provider, never the whole chain.
-    let providers = registry.hintProvider(for: context).map { [$0] } ?? []
     axQueue.async { [weak self] in
       guard let self else { return }
       let result = self.runAndAssign(
@@ -155,7 +172,7 @@ extension AppMonitor {
         providers: providers,
         targetFilter: targetFilter)
       DispatchQueue.main.async {
-        completion(result.hints)
+        completion(result)
       }
     }
   }
@@ -193,16 +210,16 @@ extension AppMonitor {
         finalizeEndedAt: frameEndedAt,
         assignStartedAt: frameEndedAt,
         assignEndedAt: frameEndedAt)
-      return DiscoveryResult(targets: [], hints: [])
+      return DiscoveryResult(targets: [], hints: [], allowsFallback: false)
     }
     let collectStartedAt = DispatchTime.now()
-    let collected = collectFocusedTargets(
+    let collection = Self.collectFocusedTargets(
       context: frame.providerContext,
       providers: providers)
     let collectEndedAt = DispatchTime.now()
     let finalizeStartedAt = DispatchTime.now()
     let finalized = TargetFinalizer.finalizeWithStats(
-      collected,
+      collection.targets,
       visibleRegions: frame.visibleRegions)
     let finalizeEndedAt = DispatchTime.now()
     let targets = targetFilter.map { finalized.targets.filter($0) } ?? finalized.targets
@@ -212,7 +229,7 @@ extension AppMonitor {
     logDiscoveryPipeline(
       reason: reason,
       context: context,
-      providers: providers,
+      providers: collection.attemptedProviders,
       visibleRegionCount: frame.visibleRegions.count,
       targetFilterApplied: targetFilter != nil,
       rawCount: finalized.rawCount,
@@ -229,7 +246,10 @@ extension AppMonitor {
       finalizeEndedAt: finalizeEndedAt,
       assignStartedAt: assignStartedAt,
       assignEndedAt: assignEndedAt)
-    return DiscoveryResult(targets: targets, hints: hints)
+    return DiscoveryResult(
+      targets: targets,
+      hints: hints,
+      allowsFallback: collection.allowsFallback)
   }
 
   private func logDiscoveryPipeline(
@@ -312,13 +332,22 @@ extension AppMonitor {
       visibleRegions: visible)
   }
 
-  private func collectFocusedTargets(
+  struct FocusedTargetCollection {
+    let targets: [TargetCandidate]
+    let attemptedProviders: [FlashSource]
+    let allowsFallback: Bool
+  }
+
+  /// Run an exclusive provider chain. Results never merge: the first provider
+  /// returning any targets owns the context. Only an explicit empty-result
+  /// fallback advances to the next provider.
+  static func collectFocusedTargets(
     context focused: AppContext,
     providers: [FlashSource]
-  ) -> [TargetCandidate] {
-    var collected: [TargetCandidate] = []
-    collected.reserveCapacity(256)
+  ) -> FocusedTargetCollection {
+    var attemptedProviders: [FlashSource] = []
     for (providerOrder, provider) in providers.enumerated() {
+      attemptedProviders.append(provider)
       let results: [JumpTarget]
       do {
         results = try provider.discover(in: focused)
@@ -331,16 +360,30 @@ extension AppMonitor {
           fields: ["provider": provider.identifier, "error": String(describing: error)])
         results = []
       }
-      collected.append(
-        contentsOf: results.enumerated().map { ordinal, target in
+      if !results.isEmpty {
+        let targets = results.enumerated().map { ordinal, target in
           TargetCandidate(
             target: target,
-            priority: provider.priority,
+            priority: provider.priority(in: focused),
             providerOrder: providerOrder,
             ordinal: ordinal)
-        })
+        }
+        return FocusedTargetCollection(
+          targets: targets,
+          attemptedProviders: attemptedProviders,
+          allowsFallback: false)
+      }
+      if !provider.fallsBackOnEmptyDiscovery {
+        return FocusedTargetCollection(
+          targets: [],
+          attemptedProviders: attemptedProviders,
+          allowsFallback: false)
+      }
     }
-    return collected
+    return FocusedTargetCollection(
+      targets: [],
+      attemptedProviders: attemptedProviders,
+      allowsFallback: attemptedProviders.last?.fallsBackOnEmptyDiscovery == true)
   }
 
   private static func elapsedMilliseconds(since start: DispatchTime) -> String {

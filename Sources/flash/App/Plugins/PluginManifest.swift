@@ -662,17 +662,35 @@ struct PluginProviderGate: Codable, Equatable {
 
 struct PluginHintsProvider: Codable, Equatable {
   var gate: PluginProviderGate
+  /// Empty means the plugin does not own the focused context, so the host may
+  /// continue to the next lower-priority hints provider. This is for dynamic
+  /// providers such as tmux, whose applicability comes from live process/PTY
+  /// ancestry rather than a static bundle-id selector.
+  var fallbackOnEmpty: Bool
 
-  init(modes: [ProviderMode] = [], priority: Int? = nil) {
+  init(
+    modes: [ProviderMode] = [],
+    priority: Int? = nil,
+    fallbackOnEmpty: Bool = false
+  ) {
     self.gate = PluginProviderGate(modes: modes, priority: priority)
+    self.fallbackOnEmpty = fallbackOnEmpty
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case fallbackOnEmpty = "fallback_on_empty"
   }
 
   init(from decoder: Decoder) throws {
     self.gate = try PluginProviderGate(from: decoder)
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.fallbackOnEmpty = try c.decodeIfPresent(Bool.self, forKey: .fallbackOnEmpty) ?? false
   }
 
   func encode(to encoder: Encoder) throws {
     try gate.encode(to: encoder)
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if fallbackOnEmpty { try c.encode(true, forKey: .fallbackOnEmpty) }
   }
 }
 
@@ -1282,7 +1300,7 @@ struct PluginManifest: Codable, Equatable {
 
     try rejectObject(
       dictionary["hints"],
-      allowed: ["modes", "priority"],
+      allowed: ["modes", "priority", "fallback_on_empty"],
       path: "manifest.json hints")
     try rejectObject(
       dictionary["queries"],

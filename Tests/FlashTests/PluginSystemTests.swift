@@ -50,6 +50,7 @@ final class PluginSystemTests: XCTestCase {
     // Discovery is process/PTY based, so the source must not require a static
     // terminal bundle allowlist or own any terminal key mappings.
     XCTAssertTrue(tmux.onlyBundleIDs.isEmpty)
+    XCTAssertTrue(try XCTUnwrap(tmux.hintsProvider).fallbackOnEmpty)
     XCTAssertTrue(tmux.sourceActions.contains("tab_new"))
     XCTAssertTrue(tmux.sourceActions.contains("pane_split_vertical"))
     XCTAssertTrue(tmux.sourceActions.contains("pane_split_horizontal"))
@@ -942,7 +943,7 @@ final class PluginSystemTests: XCTestCase {
           "navigation": { "schemes": ["multi"] },
           "source_actions": ["resource_archive", "resource_next"],
           "status": { "segments": ["battery"] },
-          "hints": {},
+          "hints": { "fallback_on_empty": true },
           "commands": {
             "items": [
               { "command": "multi", "subcommand": "go", "description": "Go" }
@@ -959,6 +960,7 @@ final class PluginSystemTests: XCTestCase {
 
     let manifest = try PluginManifest.load(from: root)
     XCTAssertTrue(manifest.providesHints)
+    XCTAssertTrue(try XCTUnwrap(manifest.hintsProvider).fallbackOnEmpty)
     XCTAssertTrue(manifest.providesCandidates)
     XCTAssertEqual(manifest.candidateSources, ["multi.items"])
     XCTAssertEqual(manifest.navigationSchemes, ["multi"])
@@ -1167,6 +1169,11 @@ final class PluginSystemTests: XCTestCase {
     let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     XCTAssertNil(json["modes"], "empty modes is not encoded")
     XCTAssertNil(json["priority"], "nil priority is not encoded")
+
+    let hintsData = try JSONEncoder().encode(PluginHintsProvider())
+    let hintsJSON = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: hintsData) as? [String: Any])
+    XCTAssertNil(hintsJSON["fallback_on_empty"], "false fallback is not encoded")
   }
 
   func testNavigationProviderEncodesSchemesWhenSet() throws {

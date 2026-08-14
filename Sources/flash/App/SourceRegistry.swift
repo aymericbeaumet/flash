@@ -9,6 +9,15 @@ struct SourceDescriptor {
   let make: () -> FlashSource
 }
 
+struct HintProviderPlan {
+  /// Complete exclusive chain, ending at the first authoritative provider.
+  let activationProviders: [FlashSource]
+  /// Activation-time providers that cannot be represented by a prepared model.
+  let uncachedProviders: [FlashSource]
+  /// Continuous fallback providers safe to build and serve as one prepared model.
+  let preparedProviders: [FlashSource]
+}
+
 final class SourceRegistry {
   private struct PluginSnapshotReply {
     let source: FlashSource
@@ -123,24 +132,45 @@ final class SourceRegistry {
       }
   }
 
-  /// The single source that owns hints for `context`. Hint selection is
-  /// exclusive: only the highest-priority `.jumpTargets` provider runs, with
-  /// no additive merge and no fallback if it yields nothing. For a generic app
-  /// this is the core AX walk (`accessibility`, priority 10); when a plugin
-  /// opts in via `provides_hints` at a higher priority and supports the app,
-  /// it takes over `f` for that app alone. `chain(for:)` is already
-  /// priority-sorted, so the winner is its head.
-  func hintProvider(for context: AppContext) -> FlashSource? {
-    chain(for: context).first
+  /// Build the exclusive hint-provider plan for one focused context. Providers
+  /// do not merge: the first non-empty result wins. A provider is followed by
+  /// its lower-priority neighbor only when it explicitly declares that an empty
+  /// result means "not applicable". This lets process-scoped providers such as
+  /// tmux stay bundle-agnostic without swallowing AX hints in Firefox, Slack,
+  /// or other unrelated apps.
+  func hintProviderPlan(for context: AppContext) -> HintProviderPlan {
+    var activationProviders: [FlashSource] = []
+    for provider in chain(for: context) {
+      if let previous = activationProviders.last,
+        !previous.fallsBackOnEmptyDiscovery
+      {
+        break
+      }
+      activationProviders.append(provider)
+    }
+
+    guard
+      let firstPreparedIndex = activationProviders.firstIndex(where: Self.canPrepareHints)
+    else {
+      return HintProviderPlan(
+        activationProviders: activationProviders,
+        uncachedProviders: activationProviders,
+        preparedProviders: [])
+    }
+
+    var preparedProviders: [FlashSource] = []
+    for provider in activationProviders[firstPreparedIndex...] {
+      guard Self.canPrepareHints(provider) else { break }
+      preparedProviders.append(provider)
+    }
+    return HintProviderPlan(
+      activationProviders: activationProviders,
+      uncachedProviders: Array(activationProviders[..<firstPreparedIndex]),
+      preparedProviders: preparedProviders)
   }
 
-  func anyVolatileSourceApplies(to context: AppContext) -> Bool {
-    for source in sources where source.readinessPolicy == .volatile || source.resultsAreVolatile {
-      if source.capabilities.contains(.jumpTargets), source.supports(context) {
-        return true
-      }
-    }
-    return false
+  private static func canPrepareHints(_ source: FlashSource) -> Bool {
+    source.readinessPolicy == .continuous && !source.resultsAreVolatile
   }
 
   func coreAppCandidates(scope: CandidateScope) -> [Candidate] {

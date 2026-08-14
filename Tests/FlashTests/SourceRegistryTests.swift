@@ -299,6 +299,94 @@ final class SourceRegistryTests: XCTestCase {
       ])
   }
 
+  func testHintProviderPlanPreparesAXFallbackBehindDynamicVolatileProvider() throws {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    let bundleID = try XCTUnwrap(app.bundleIdentifier)
+    let context = AppContext(
+      bundleIdentifier: bundleID,
+      processID: app.processIdentifier,
+      runningApp: app,
+      frontWindowFrame: .zero,
+      allScreensFrame: .zero)
+    let tmux = StubSource(
+      identifier: "plugin:tmux",
+      priority: 20,
+      capabilities: [.jumpTargets],
+      readinessPolicy: .volatile,
+      fallsBackOnEmptyDiscovery: true,
+      supportsHandler: { _ in true })
+    let accessibility = StubSource(
+      identifier: "accessibility",
+      priority: 10,
+      capabilities: [.jumpTargets],
+      readinessPolicy: .continuous,
+      supportsHandler: { _ in true })
+    let registry = SourceRegistry(
+      descriptors: [],
+      terminalBundleIDs: [],
+      runningApplications: [app],
+      pluginSourcesProvider: { [tmux, accessibility] })
+
+    let plan = registry.hintProviderPlan(for: context)
+
+    XCTAssertEqual(plan.activationProviders.map(\.identifier), ["plugin:tmux", "accessibility"])
+    XCTAssertEqual(plan.uncachedProviders.map(\.identifier), ["plugin:tmux"])
+    XCTAssertEqual(plan.preparedProviders.map(\.identifier), ["accessibility"])
+  }
+
+  func testHintDiscoveryFallsBackAfterExplicitEmptyAndStopsAtFirstTargets() throws {
+    let app = try XCTUnwrap(
+      NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier != nil })
+    let bundleID = try XCTUnwrap(app.bundleIdentifier)
+    let context = AppContext(
+      bundleIdentifier: bundleID,
+      processID: app.processIdentifier,
+      runningApp: app,
+      frontWindowFrame: .zero,
+      allScreensFrame: .zero)
+    var tmuxCalls = 0
+    var accessibilityCalls = 0
+    let tmux = StubSource(
+      identifier: "plugin:tmux",
+      priority: 20,
+      capabilities: [.jumpTargets],
+      readinessPolicy: .volatile,
+      fallsBackOnEmptyDiscovery: true,
+      supportsHandler: { _ in true },
+      discoverHandler: { _ in
+        tmuxCalls += 1
+        return []
+      })
+    let accessibility = StubSource(
+      identifier: "accessibility",
+      priority: 10,
+      capabilities: [.jumpTargets],
+      readinessPolicy: .continuous,
+      supportsHandler: { _ in true },
+      discoverHandler: { context in
+        accessibilityCalls += 1
+        return [
+          JumpTarget(
+            id: "button",
+            frame: CGRect(x: 10, y: 10, width: 20, height: 20),
+            pid: context.processID,
+            providerID: "accessibility")
+        ]
+      })
+
+    let collection = AppMonitor.collectFocusedTargets(
+      context: context,
+      providers: [tmux, accessibility])
+
+    XCTAssertEqual(tmuxCalls, 1)
+    XCTAssertEqual(accessibilityCalls, 1)
+    XCTAssertEqual(
+      collection.attemptedProviders.map(\.identifier), ["plugin:tmux", "accessibility"])
+    XCTAssertEqual(collection.targets.map(\.target.id), ["button"])
+    XCTAssertFalse(collection.allowsFallback)
+  }
+
   func testCurrentLocationPrefersCurrentLocationCandidateForFocusedPID() throws {
     let resolved = expectation(description: "current plugin location")
     let app = try XCTUnwrap(
@@ -1022,11 +1110,14 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
   let priority: Int
   let capabilities: FlashSourceCapabilities
   let activationPolicy: FlashSourceActivationPolicy
+  let readinessPolicy: FlashSourceReadinessPolicy
+  let fallsBackOnEmptyDiscovery: Bool
   private let candidatesHandler: (CandidateScope) -> [Candidate]
   private let snapshotHandler: (@escaping ([Candidate]) -> Void) -> Void
   private let matchHandler: (String) -> Candidate?
   private let supportsHandler: (AppContext) -> Bool
   private let documentURLHandler: (AppContext) -> String?
+  private let discoverHandler: (AppContext) throws -> [JumpTarget]
   let navigationSchemes: Set<String>
   private let restoreHandler: (URL) -> SourceActionResult
   let candidateSourceLabels: [String]
@@ -1043,6 +1134,8 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
     priority: Int = 0,
     capabilities: FlashSourceCapabilities = [],
     activationPolicy: FlashSourceActivationPolicy = .always,
+    readinessPolicy: FlashSourceReadinessPolicy = .activationOnly,
+    fallsBackOnEmptyDiscovery: Bool = false,
     candidateSourceLabels: [String] = [],
     candidateSourceDescriptors: [CandidateSourceDescriptor] = [],
     queryEvaluationPriority: Int = 0,
@@ -1054,6 +1147,7 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
     matchHandler: @escaping (String) -> Candidate? = { _ in nil },
     supportsHandler: @escaping (AppContext) -> Bool = { _ in false },
     documentURLHandler: @escaping (AppContext) -> String? = { _ in nil },
+    discoverHandler: @escaping (AppContext) throws -> [JumpTarget] = { _ in [] },
     queryEvaluationHandler:
       @escaping (QueryEvaluationRequest, @escaping ([Candidate]) -> Void) -> Void =
       { _, done in done([]) },
@@ -1063,6 +1157,8 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
     self.priority = priority
     self.capabilities = capabilities
     self.activationPolicy = activationPolicy
+    self.readinessPolicy = readinessPolicy
+    self.fallsBackOnEmptyDiscovery = fallsBackOnEmptyDiscovery
     self.candidateSourceLabels = candidateSourceLabels
     self.candidateSourceDescriptors =
       candidateSourceDescriptors.isEmpty
@@ -1081,13 +1177,14 @@ private final class StubSource: FlashSource, FlashQueryEvaluator {
     self.matchHandler = matchHandler
     self.supportsHandler = supportsHandler
     self.documentURLHandler = documentURLHandler
+    self.discoverHandler = discoverHandler
     self.restoreHandler = restoreHandler
   }
 
   func supports(_ context: AppContext) -> Bool { supportsHandler(context) }
 
   func discover(in context: AppContext) throws -> [JumpTarget] {
-    []
+    try discoverHandler(context)
   }
 
   func candidates(

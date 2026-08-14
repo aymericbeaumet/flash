@@ -51,6 +51,9 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     plugin.manifest.volatile ? .volatile : .continuous
   }
   var resultsAreVolatile: Bool { plugin.manifest.volatile }
+  var fallsBackOnEmptyDiscovery: Bool {
+    plugin.manifest.hintsProvider?.fallbackOnEmpty ?? false
+  }
   var candidateSourceLabels: [String] { plugin.manifest.candidateSources }
   var candidateSourceDescriptors: [CandidateSourceDescriptor] {
     plugin.manifest.candidateSourceDescriptors

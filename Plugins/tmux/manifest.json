@@ -13,7 +13,9 @@
   "priority": 20,
   "volatile": true,
   "request_timeout_ms": 8000,
-  "hints": {},
+  "hints": {
+    "fallback_on_empty": true
+  },
   "commands": {
     "items": [
       {
