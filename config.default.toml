@@ -202,16 +202,19 @@ sequence_timeout_ms = 1000
 # "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @emojis.glyphs ", "--restore-mode"]
 
 [mode.normal]
+# Let an unmapped Command / Control / Option shortcut switch Flash to INSERT
+# and continue to the focused app or macOS unchanged. Explicit normal/all
+# mappings still win. Set false to keep NORMAL hermetic.
+unmapped_modifier_passthrough = true
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
 leader = "\\"
 
 [mode.normal.mappings]
 # Entries here extend the built-in normal-mode map. Reusing a key overrides
 # that one default mapping; unrelated defaults stay available.
-# While Flash owns normal-mode keyboard capture, normal mode is hermetic:
-# mapped keys dispatch Flash commands and unmapped keys are swallowed rather
-# than forwarded to the focused app. Use `i` / `I` or an insert-mode mapping
-# before typing into an app or terminal.
+# Mapped keys dispatch Flash commands and bare unmapped keys are swallowed.
+# With `unmapped_modifier_passthrough = true`, unmapped Command / Control /
+# Option shortcuts instead switch to INSERT and continue natively.
 # Example:
 # "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
 "h" = ["flash", "scroll_left"]

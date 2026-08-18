@@ -21,9 +21,11 @@ extension NormalModeDispatcher {
       body: """
         # Normal Mode
 
-        Normal mode captures keyboard input through the Flash overlay panel. It
-        does not install arbitrary global key capture; only configured modified
-        mappings use Carbon hotkeys.
+        Normal mode captures keyboard input through Flash's sanctioned session
+        tap, with the overlay panel as its no-permission fallback. Configured
+        modified mappings use Carbon hotkeys. By default, an unmapped Command,
+        Control, or Option shortcut enters INSERT and continues natively;
+        `mode.normal.unmapped_modifier_passthrough = false` disables that fallback.
 
         ## Core Motion
 

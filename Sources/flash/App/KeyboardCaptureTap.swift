@@ -29,19 +29,32 @@ final class KeyboardCaptureTap {
     self.handle = handle
   }
 
-  /// Pure swallow decision: given the coarse flash mode and the overlay's input
-  /// mode, should the tap consume this `keyDown`? NORMAL is a hermetic capture
-  /// surface — every key in `.normal`/`.hints` is swallowed so nothing (not even
-  /// ⌘W / ⌘Q / an app's own shortcut) leaks to the focused app. INSERT and the
-  /// key-window surfaces (command-line / modal / candidate-finder, which type
-  /// into their own fields) are left untouched.
+  /// Pure swallow decision. NORMAL captures bare keys and every hint key. An
+  /// explicitly mapped modified chord is also captured; when configured, an
+  /// unmapped Command / Control / Option chord instead passes through unchanged
+  /// and moves Flash to INSERT at the AppDelegate edge. INSERT and key-window
+  /// surfaces are left untouched.
   ///
   /// Extracted as a static, side-effect-free function so the tap's single most
   /// security-sensitive decision is unit-testable without a live `CGEventTap`.
-  static func shouldSwallow(flashMode: FlashMode, inputMode: OverlayInputMode) -> Bool {
+  static func shouldSwallow(
+    flashMode: FlashMode,
+    inputMode: OverlayInputMode,
+    modifierFlags: CGEventFlags = [],
+    hasMapping: Bool = false,
+    unmappedModifierPassthroughEnabled: Bool = false
+  ) -> Bool {
     guard flashMode == .normal else { return false }
     switch inputMode {
-    case .normal, .hints:
+    case .normal:
+      let isModifiedChord =
+        modifierFlags.contains(.maskCommand) || modifierFlags.contains(.maskControl)
+        || modifierFlags.contains(.maskAlternate)
+      if unmappedModifierPassthroughEnabled, isModifiedChord, !hasMapping {
+        return false
+      }
+      return true
+    case .hints:
       return true
     case .commandLine, .candidateFinder:
       return false

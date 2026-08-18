@@ -3,9 +3,9 @@ import Carbon.HIToolbox
 import CoreGraphics
 
 /// A keyboard modifier parsed from the tokens Flash accepts across config —
-/// hotkey chords (`cmd+t`), `[mode.normal] passthrough_modifiers`, click
-/// magic-modifiers. One place owns the accepted spellings and the mapping to
-/// every flag representation, so `cmd`/`ctrl`/`alt`/`shift` parse identically
+/// hotkey chords (`cmd+t`) and click magic-modifiers. One place owns the
+/// accepted spellings and the mapping to every flag representation, so
+/// `cmd`/`ctrl`/`alt`/`shift` parse identically
 /// everywhere instead of drifting per call site.
 enum KeyModifier: CaseIterable, Equatable {
   case command

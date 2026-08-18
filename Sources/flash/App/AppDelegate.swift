@@ -11,7 +11,7 @@ enum InsertModeTransitionReason: Equatable {
   case hintCommit
   case advancedModeDisabled
   case secureInput
-  case passthroughFocus
+  case modifierPassthrough
 
   var logValue: String {
     switch self {
@@ -29,8 +29,8 @@ enum InsertModeTransitionReason: Equatable {
       return "advanced_mode_disabled"
     case .secureInput:
       return "secure_input"
-    case .passthroughFocus:
-      return "passthrough_focus"
+    case .modifierPassthrough:
+      return "modifier_passthrough"
     }
   }
 
@@ -180,30 +180,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// from `[statusbar] enabled`, independent of `modeBadgeEnabled`.
   var statusBarVisible = false
   var normalModeTargetPID: pid_t?
-  /// Armed when an unmapped `passthrough_modifiers` chord flows to the focused
-  /// app in NORMAL. If the app answers by moving element focus to a text input
-  /// before the deadline, Flash follows into INSERT
-  /// (`followPassthroughChordFocus`) — the chord (⌘F find bar, ⌘K jump dialog,
-  /// ⌘L URL bar) was the user's "open something and type" intent, the keyboard
-  /// analogue of the hint-commit editable-focus probe. `pid` pins the follow to
-  /// the app that received the chord so an app switch keeps the mode sticky.
-  ///
-  /// `before` is the element that had focus when the chord was sent,
-  /// snapshotted asynchronously right after arming (never on the tap's
-  /// per-keystroke path). The follow fires only when focus lands on a
-  /// DIFFERENT editable element: without the identity check, an app whose
-  /// focused element is perpetually editable (Slack's composer) flipped to
-  /// INSERT on unrelated AX churn within the window — e.g. the deactivation
-  /// events of a status-bar link commit opening the browser, where the INSERT
-  /// entry's app re-activation then stole focus back from the browser.
-  struct PassthroughFocusFollow {
-    let pid: pid_t
-    let deadline: DispatchTime
-    var before: AXUIElement?
-    var beforeResolved = false
-  }
-  var passthroughFocusFollow: PassthroughFocusFollow?
-  static let passthroughFocusFollowWindowMs = 600
   /// Vim-style yank/paste registers. The unnamed register is the system
   /// clipboard; named registers (`a`–`z`, `0`–`9`) are in-process buffers.
   let registers = RegisterStore()
@@ -465,12 +441,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     monitor = AppMonitor(registry: registry, config: config)
     monitor.focusedElementDidChange = { [weak self] pid, notification in
       guard let self else { return }
-      // The passthrough focus follow keys off genuine element-focus changes
-      // only — never the window/main/activation churn the broader
-      // `focusedElementMayHaveChanged` collapses.
-      if notification == kAXFocusedUIElementChangedNotification as String {
-        self.followPassthroughChordFocus(pid: pid)
-      }
       guard self.pluginManager.hasListener(for: "core:ax.changed") else { return }
       self.pluginManager.emit(
         PluginEvent(
@@ -526,6 +496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
+    overlay.normalModeUnmappedModifierPassthrough = config.mode.normalUnmappedModifierPassthrough
     // Pay the layer-allocation cost at launch instead of on the first
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
@@ -1014,13 +985,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   /// Decide whether the keyboard tap should swallow a `keyDown`. Runs on the main
   /// thread. INSERT is never touched (keys flow straight to the focused app);
-  /// NORMAL mode is a fully hermetic capture surface (like Vim's normal mode) —
-  /// EVERY key is interpreted as a mapping or consumed, nothing reaches the
-  /// focused app. Modified chords are handled by the interpreter too:
+  /// NORMAL captures every bare key. Modified chords are handled by the
+  /// interpreter too:
   /// `normalModeMappings` carries the same compiled set the Carbon registry does,
   /// and the session tap swallows the event before Carbon dispatch, so there's no
-  /// double-fire. Command-line / modal / candidate-finder own the key window and
-  /// type into their own fields, so the tap leaves those alone.
+  /// double-fire. When configured, an unmapped Command / Control / Option chord
+  /// instead passes through unchanged and switches Flash to INSERT. Command-line /
+  /// modal / candidate-finder own the key window and type into their own fields,
+  /// so the tap leaves those alone.
   private func keyboardTapShouldSwallow(_ event: CGEvent) -> Bool {
     // A focused secure text field (password) turns on secure event input.
     // Never intercept keystrokes bound for it — they must reach the field, and
@@ -1055,14 +1027,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       return mappings.hasMapping(virtualKey: keyCode, cgFlags: flags)
     }
-    guard KeyboardCaptureTap.shouldSwallow(flashMode: flashMode, inputMode: overlay.inputMode)
-    else { return false }
-    // In NORMAL, an unmapped chord carrying a `passthrough_modifiers` modifier
-    // is NOT swallowed — it flows to the app / system natively. Not swallowing
-    // (rather than swallow + re-post) is what makes system-level chords like
-    // ⌘Tab work: a re-posted synthetic event goes to a single pid and never
-    // reaches the WindowServer's app switcher. A mapped chord is still
-    // swallowed (and fired by `routeTapCapturedKey`).
+    guard flashMode == .normal, overlay.inputMode == .normal else {
+      return KeyboardCaptureTap.shouldSwallow(
+        flashMode: flashMode,
+        inputMode: overlay.inputMode)
+    }
+    // In NORMAL, an enabled, unmapped Command / Control / Option chord is NOT
+    // swallowed — the original event flows to the app / system natively. Not
+    // swallowing (rather than swallow + re-post) is what makes system-level
+    // chords like ⌘Tab work. A mapped chord is still swallowed and fired by
+    // `routeTapCapturedKey`.
     //
     // Runs synchronously on every keystroke, so the decision reads raw CGEvent
     // fields — no `NSEvent(cgEvent:)`, which resolves the keyboard layout and
@@ -1070,69 +1044,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // than INSERT.
     guard overlay.inputMode == .normal else { return true }
     let flags = event.flags
-    // Cheap gate: only cmd/ctrl/alt chords can pass through.
-    guard
+    let isModifiedChord =
       flags.contains(.maskCommand) || flags.contains(.maskControl)
-        || flags.contains(.maskAlternate)
-    else { return true }
+      || flags.contains(.maskAlternate)
+    guard isModifiedChord else { return true }
     // The focused app can change through the system app switcher without a
     // workspace notification landing before the next keydown. Reconcile here
     // before deciding mapped-vs-passthrough so app-scoped plugin chords (tmux
     // `cmd+shift+[` / `cmd+shift+]`) are registered for the actual frontmost
     // app instead of leaking to the terminal as plain text.
     reconcileFrontmostApplication(reason: "key_down")
-    let passthroughMask = Self.passthroughModifierCGFlags(config.mode.normalPassthroughModifiers)
-    guard !passthroughMask.isEmpty, !flags.intersection(passthroughMask).isEmpty else {
-      return true
-    }
     let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-    // Mapped → swallow (fired by `routeTapCapturedKey`); unmapped → passthrough.
-    if mappings.hasMapping(virtualKey: keyCode, cgFlags: flags) { return true }
-    // The chord flows to the app; arm the focus follow so a text input the
-    // chord opens (⌘F find bar, ⌘K jump dialog) pulls Flash into INSERT. Arm
-    // only — the AX probes run off this per-keystroke path
-    // (`armPassthroughFocusFollow` hops to the next main-loop turn,
-    // `followPassthroughChordFocus` runs on the app's focus-change event).
-    if Self.passthroughChordMayArmFocusFollow(
-      virtualKey: keyCode,
-      flags: flags,
-      bundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-    {
-      armPassthroughFocusFollow()
+    let hasMapping = mappings.hasMapping(virtualKey: keyCode, cgFlags: flags)
+    let shouldSwallow = KeyboardCaptureTap.shouldSwallow(
+      flashMode: flashMode,
+      inputMode: overlay.inputMode,
+      modifierFlags: flags,
+      hasMapping: hasMapping,
+      unmappedModifierPassthroughEnabled: config.mode.normalUnmappedModifierPassthrough)
+    guard !shouldSwallow else { return true }
+
+    // Keep the NORMAL mapping scope installed until the original event has
+    // continued downstream. Switching synchronously would register INSERT-only
+    // Carbon mappings soon enough to steal this very chord. The next main-loop
+    // turn runs after the event has reached the app / WindowServer.
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.flashMode == .normal, self.overlay.inputMode == .normal else { return }
+      self.enterInsertMode(
+        reason: .modifierPassthrough,
+        targetPID: self.currentNonFlashContext()?.processID)
     }
     return false
-  }
-
-  static func passthroughChordMayArmFocusFollow(
-    virtualKey: UInt32,
-    flags: CGEventFlags,
-    bundleIdentifier: String?
-  ) -> Bool {
-    let strict = flags.intersection([
-      .maskCommand, .maskShift, .maskControl, .maskAlternate,
-    ])
-    if let bundleIdentifier,
-      messagesBundleIdentifiers.contains(bundleIdentifier),
-      strict == [.maskCommand, .maskShift],
-      virtualKey == UInt32(kVK_ANSI_LeftBracket) || virtualKey == UInt32(kVK_ANSI_RightBracket)
-    {
-      return false
-    }
-    return true
   }
 
   /// Dispatch a key the tap swallowed in NORMAL mode. Bare keys (and all hints
   /// keys) go to the overlay interpreter. Modified chords aren't in the
   /// interpreter's compiled set — they live in the Carbon matcher — so route
   /// those to `mappings.handle`: a configured chord fires, an unmatched one is
-  /// simply consumed, keeping NORMAL hermetic. (An unmapped chord with a
-  /// `passthrough_modifiers` modifier never reaches here — the tap doesn't
-  /// swallow it, so it flows to the app / system natively.)
+  /// consumed when `unmapped_modifier_passthrough` is disabled. Enabled
+  /// passthrough chords never reach here because the tap leaves them native.
   func routeTapCapturedKey(_ event: NSEvent) {
-    // Any key the tap swallows supersedes a pending passthrough-chord focus
-    // follow: the user kept command-driving, so a late focus event must not
-    // flip to INSERT under them.
-    passthroughFocusFollow = nil
     // A chord the tap swallowed in INSERT is an active mapping (see
     // `keyboardTapShouldSwallow`); fire it through the mapping matcher — the
     // same dispatch the Carbon hotkey used, minus the Carbon delivery latency.
@@ -1148,12 +1099,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
     }
     overlay.handleTapCapturedKey(event)
-  }
-
-  /// Map `passthrough_modifiers` names to a `CGEventFlags` mask. Unknown names
-  /// are ignored (the config loader diagnoses them).
-  static func passthroughModifierCGFlags(_ names: [String]) -> CGEventFlags {
-    KeyModifier.cgEventFlags(names)
   }
 
   func emitRunningApplicationsChanged(reason: String) {

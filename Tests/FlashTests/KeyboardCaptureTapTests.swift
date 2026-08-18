@@ -12,6 +12,47 @@ final class KeyboardCaptureTapTests: XCTestCase {
     XCTAssertTrue(KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .hints))
   }
 
+  func testNormalModePassesOnlyEnabledUnmappedModifierChords() {
+    XCTAssertFalse(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .normal,
+        inputMode: .normal,
+        modifierFlags: .maskCommand,
+        hasMapping: false,
+        unmappedModifierPassthroughEnabled: true))
+    XCTAssertTrue(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .normal,
+        inputMode: .normal,
+        modifierFlags: [.maskCommand, .maskShift],
+        hasMapping: true,
+        unmappedModifierPassthroughEnabled: true))
+    XCTAssertTrue(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .normal,
+        inputMode: .normal,
+        modifierFlags: .maskShift,
+        hasMapping: false,
+        unmappedModifierPassthroughEnabled: true))
+    XCTAssertTrue(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .normal,
+        inputMode: .normal,
+        modifierFlags: .maskAlternate,
+        hasMapping: false,
+        unmappedModifierPassthroughEnabled: false))
+  }
+
+  func testHintsAlwaysSwallowModifiedChords() {
+    XCTAssertTrue(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .normal,
+        inputMode: .hints,
+        modifierFlags: .maskControl,
+        hasMapping: false,
+        unmappedModifierPassthroughEnabled: true))
+  }
+
   func testNormalModeNeverSwallowsKeyWindowSurfaces() {
     // Command-line / candidate-finder own the key window and type into their
     // own fields — the tap must pass those through untouched.

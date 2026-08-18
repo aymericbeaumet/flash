@@ -125,8 +125,8 @@ final class MappingsCoordinator {
   /// Whether a chord matches an active mapping, without firing it — from raw
   /// CGEvent fields so the tap's swallow decision stays off the `NSEvent`
   /// (keyboard-layout-resolving) path on the hot per-keystroke route. Lets an
-  /// *unmapped* chord pass through (`passthrough_modifiers`) while a mapped one
-  /// is still captured.
+  /// *unmapped* chord pass through (`unmapped_modifier_passthrough`) while a
+  /// mapped one is still captured.
   func hasMapping(virtualKey: UInt32, cgFlags: CGEventFlags) -> Bool {
     activeMapping(virtualKey: virtualKey, modifiers: Self.carbonModifiers(fromCG: cgFlags)) != nil
   }

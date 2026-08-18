@@ -231,11 +231,20 @@ extension OverlayPanel {
   }
 
   private func handleNormalModeKeyEvent(_ event: NSEvent) -> Bool {
-    // Normal mode is hermetic once this panel owns the key event. Carbon
-    // receives explicit modified-key mappings first; anything unclaimed
-    // here is interpreted or swallowed by `NormalModeInterpreter`, never
-    // forwarded to the focused app. That keeps mode state deterministic
-    // across keyboard layouts that surface dead keys as modified chords.
+    guard let coordinator else { return false }
+    if coordinator.overlayDidHandleMapping(event) { return true }
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let isModifiedChord =
+      modifiers.contains(.command) || modifiers.contains(.control) || modifiers.contains(.option)
+    if normalModeUnmappedModifierPassthrough, isModifiedChord {
+      // The session tap normally leaves the original event in the native event
+      // stream. This path is only the no-tap key-window fallback, so the
+      // coordinator replays the chord to the focused pid before entering INSERT.
+      coordinator.overlayDidPassthroughUnmappedModifier(event)
+      return true
+    }
+    // With passthrough disabled, anything unclaimed is interpreted or consumed
+    // by `NormalModeInterpreter`, keeping NORMAL hermetic.
     processNormalModeKey(event)
     return true
   }

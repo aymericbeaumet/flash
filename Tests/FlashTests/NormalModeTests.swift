@@ -270,78 +270,13 @@ final class NormalModeTests: XCTestCase {
     // pass when they want the side-effect followed by a switch to
     // INSERT. They're user-driven, so the gate must let them through.
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .explicitCommand))
-    // `.passthroughFocus` only fires inside the window an explicit
-    // `passthrough_modifiers` chord armed, so it is user-driven too.
-    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .passthroughFocus))
+    // `.modifierPassthrough` is scheduled only by an explicit unmapped
+    // modified chord, so it is user-driven too.
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .modifierPassthrough))
     // `.advancedModeDisabled` stays out of the user-driven set — config
     // reload uses `force: true` to bypass the gate when it needs to
     // leave NORMAL because the user removed the normal-mode binding.
     XCTAssertFalse(AppDelegate.normalModeMayEnterInsert(reason: .advancedModeDisabled))
-  }
-
-  func testPassthroughFocusFollowFiresOnlyForTheArmedFrontmostAppInIdleNormal() {
-    func mayFire(
-      armedPID: pid_t = 7,
-      eventPID: pid_t = 7,
-      frontmostPID: pid_t? = 7,
-      mode: FlashMode = .normal,
-      overlayInputMode: OverlayInputMode = .normal,
-      hasHints: Bool = false,
-      activationInFlight: Bool = false,
-      bundleIdentifier: String? = "org.mozilla.firefox"
-    ) -> Bool {
-      AppDelegate.passthroughFocusFollowMayFire(
-        armedPID: armedPID,
-        eventPID: eventPID,
-        frontmostPID: frontmostPID,
-        mode: mode,
-        overlayInputMode: overlayInputMode,
-        hasHints: hasHints,
-        activationInFlight: activationInFlight,
-        bundleIdentifier: bundleIdentifier)
-    }
-
-    XCTAssertTrue(mayFire())
-    // The follow is pinned to the app that received the chord: an event from
-    // another pid, or a frontmost change (⌘Tab inside the window), keeps the
-    // mode sticky.
-    XCTAssertFalse(mayFire(eventPID: 8, frontmostPID: 8))
-    XCTAssertFalse(mayFire(frontmostPID: 8))
-    XCTAssertFalse(mayFire(frontmostPID: nil))
-    // Only idle NORMAL follows — INSERT, hints, surfaces, and in-flight
-    // activations own the keyboard story already.
-    XCTAssertFalse(mayFire(mode: .insert))
-    XCTAssertFalse(mayFire(overlayInputMode: .hints))
-    XCTAssertFalse(mayFire(overlayInputMode: .commandLine))
-    XCTAssertFalse(mayFire(hasHints: true))
-    XCTAssertFalse(mayFire(activationInFlight: true))
-    // Terminals report every focus as editable, so there is no signal.
-    XCTAssertFalse(mayFire(bundleIdentifier: "com.apple.Terminal"))
-    XCTAssertTrue(mayFire(bundleIdentifier: nil))
-  }
-
-  func testPassthroughFocusFollowDoesNotArmForMessagesConversationTraversal() {
-    XCTAssertFalse(
-      AppDelegate.passthroughChordMayArmFocusFollow(
-        virtualKey: UInt32(kVK_ANSI_LeftBracket),
-        flags: [.maskCommand, .maskShift],
-        bundleIdentifier: "com.apple.MobileSMS"))
-    XCTAssertFalse(
-      AppDelegate.passthroughChordMayArmFocusFollow(
-        virtualKey: UInt32(kVK_ANSI_RightBracket),
-        flags: [.maskCommand, .maskShift],
-        bundleIdentifier: "com.apple.Messages"))
-
-    XCTAssertTrue(
-      AppDelegate.passthroughChordMayArmFocusFollow(
-        virtualKey: UInt32(kVK_ANSI_F),
-        flags: .maskCommand,
-        bundleIdentifier: "com.apple.MobileSMS"))
-    XCTAssertTrue(
-      AppDelegate.passthroughChordMayArmFocusFollow(
-        virtualKey: UInt32(kVK_ANSI_LeftBracket),
-        flags: [.maskCommand, .maskShift],
-        bundleIdentifier: "org.mozilla.firefox"))
   }
 
   func testInsertModeExitsWhenFocusedElementStopsBeingEditable() {

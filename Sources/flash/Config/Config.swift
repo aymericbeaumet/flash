@@ -308,12 +308,10 @@ struct Config {
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
-    /// Modifiers (`cmd` / `ctrl` / `alt` / `shift`) that make an *unmapped*
-    /// modified chord in NORMAL mode fall through to the focused app instead of
-    /// being swallowed. Example: with `["cmd"]`, pressing ⌘T in NORMAL replicates
-    /// ⌘T to the app (a new tab opens) while Flash stays in NORMAL. An explicit
-    /// `[mode.normal.mappings]` binding for the chord still wins.
-    var normalPassthroughModifiers: [String] = []
+    /// Whether an unmapped Command / Control / Option chord in NORMAL switches
+    /// to INSERT and continues to the focused app or macOS unchanged. Explicit
+    /// `[mode.normal.mappings]` and `[mode.all.mappings]` bindings still win.
+    var normalUnmappedModifierPassthrough = true
     var labels = Labels()
     /// How long the interpreter waits for the next key in a pending
     /// sequence before resolving the longest matching prefix.
@@ -659,6 +657,7 @@ struct Config {
       ],
       "normal": mode.normal.map(Self.mappingJSONValue),
       "normal_leader": mode.normalLeader ?? NSNull(),
+      "normal_unmapped_modifier_passthrough": mode.normalUnmappedModifierPassthrough,
     ]
     return compactJSON([
       "debug": [

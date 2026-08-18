@@ -77,11 +77,8 @@ extension AppDelegate {
   /// Per-base-mode bookkeeping that must run before the surface is rendered.
   private func applyEnterBookkeeping(_ next: Mode) {
     // Any base-mode transition ends a transient native-surface suspension; clear
-    // it before the surface renders so capture isn't pinned off afterward. The
-    // same goes for a pending passthrough-chord focus follow — it belongs to
-    // the NORMAL session that armed it.
+    // it before the surface renders so capture isn't pinned off afterward.
     nativeSurfaceSuspended = false
-    passthroughFocusFollow = nil
     switch next {
     case .normal:
       if let context = normalModeContext() {
@@ -261,12 +258,11 @@ extension AppDelegate {
     // gate against `.explicitCommand` left those mappings stuck in
     // NORMAL after the side-effect fired, so typing went to the empty
     // search bar / new tab via the system, then nothing.
-    // `.passthroughFocus` is user-driven too: it fires only inside the short
-    // window a `passthrough_modifiers` chord armed, so the mode flip still
-    // traces to an explicit keystroke.
+    // `.modifierPassthrough` is user-driven too: it is scheduled only when the
+    // user presses an unmapped Command / Control / Option chord in NORMAL.
     reason == .hintCommit || reason == .normalModeInput || reason == .lockedNormalModeInput
       || reason == .pointerClick || reason == .explicitCommand
-      || reason == .passthroughFocus
+      || reason == .modifierPassthrough
   }
 
   func focusedInputMayHaveChanged(pid: pid_t) {
@@ -277,88 +273,6 @@ extension AppDelegate {
     // change (browser tab switch / in-page navigation), so re-resolve them here.
     scheduleURLContextMappingRefresh(pid: pid)
     completePointerInsertFocusHandoffIfReady(eventPID: pid)
-  }
-
-  /// Arm the passthrough focus follow for the NORMAL-mode target app, then
-  /// snapshot its currently focused element on the next main-loop turn. The
-  /// snapshot is what lets the fire path require that focus MOVED — an AX
-  /// read never runs on the tap's keystroke path, and a hung app can only
-  /// stall the deferred hop, not the swallow decision.
-  func armPassthroughFocusFollow() {
-    guard let pid = normalModeTargetPID else { return }
-    passthroughFocusFollow = PassthroughFocusFollow(
-      pid: pid,
-      deadline: .now() + .milliseconds(Self.passthroughFocusFollowWindowMs))
-    DispatchQueue.main.async { [weak self] in
-      guard let self, var armed = self.passthroughFocusFollow,
-        armed.pid == pid, !armed.beforeResolved
-      else { return }
-      armed.before = AXClick.focusedElement(pid: pid)
-      armed.beforeResolved = true
-      self.passthroughFocusFollow = armed
-    }
-  }
-
-  /// A `passthrough_modifiers` chord recently flowed to `pid` and the app just
-  /// fired a genuine element-focus change. If focus landed on a text input the
-  /// chord opened (⌘F find bar, ⌘K jump dialog, ⌘L URL bar), follow it into
-  /// INSERT so the next keystrokes reach the field instead of being eaten by
-  /// NORMAL capture. Focus must land on a DIFFERENT element than the arm-time
-  /// snapshot: apps like Slack keep an editable composer focused at all times,
-  /// and without the identity gate any AX churn inside the window flipped
-  /// INSERT (and its app re-activation stole focus from e.g. a browser the
-  /// user had just opened a link into). Non-qualifying events keep the window
-  /// armed; only the deadline, a swallowed key, or a mode transition disarm it.
-  func followPassthroughChordFocus(pid: pid_t) {
-    guard let armed = passthroughFocusFollow else { return }
-    guard DispatchTime.now() < armed.deadline else {
-      passthroughFocusFollow = nil
-      return
-    }
-    // Without the arm-time snapshot there is no way to tell "the chord opened
-    // this input" from "it was focused all along" — bias toward NORMAL.
-    guard armed.beforeResolved else { return }
-    guard
-      Self.passthroughFocusFollowMayFire(
-        armedPID: armed.pid,
-        eventPID: pid,
-        frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-        mode: flashMode,
-        overlayInputMode: overlay.inputMode,
-        hasHints: !currentHints.isEmpty,
-        activationInFlight: activationInFlight,
-        bundleIdentifier: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier),
-      let current = AXClick.focusedElement(pid: pid),
-      AXClick.isTextInput(current),
-      armed.before.map({ !CFEqual($0, current) }) ?? true
-    else { return }
-    passthroughFocusFollow = nil
-    FlashLog.trace("[mode] passthrough_focus_follow pid=\(pid)")
-    enterInsertMode(reason: .passthroughFocus, targetPID: pid)
-  }
-
-  /// Pure gate for the passthrough focus follow. The pid must match the app
-  /// the chord was sent to AND still be frontmost — an app switch inside the
-  /// window keeps the mode sticky (`.focusedAppChanged` never flips modes).
-  /// Terminals are excluded because `focusedIsTextInput` reports them as
-  /// always-editable, so a chord there carries no focus signal to follow.
-  static func passthroughFocusFollowMayFire(
-    armedPID: pid_t,
-    eventPID: pid_t,
-    frontmostPID: pid_t?,
-    mode: FlashMode,
-    overlayInputMode: OverlayInputMode,
-    hasHints: Bool,
-    activationInFlight: Bool,
-    bundleIdentifier: String?
-  ) -> Bool {
-    guard armedPID == eventPID, frontmostPID == eventPID else { return false }
-    guard mode == .normal, overlayInputMode == .normal, !hasHints, !activationInFlight
-    else { return false }
-    if let bundleIdentifier, TerminalBundles.identifiers.contains(bundleIdentifier) {
-      return false
-    }
-    return true
   }
 
   /// Re-resolve URL-scoped plugin mappings for `pid` (e.g. Gmail's `o`, which

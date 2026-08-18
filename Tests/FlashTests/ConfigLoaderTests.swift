@@ -27,6 +27,7 @@ final class ConfigLoaderTests: XCTestCase {
       keys: "up",
       keyCode: CGKeyCode(kVK_UpArrow))
     XCTAssertEqual(c.mode.normalLeader, "\\")
+    XCTAssertTrue(c.mode.normalUnmappedModifierPassthrough)
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("\\<space>") })?.action.command,
       .enterCommand(input: "flashlight ", restoreMode: false))
@@ -141,23 +142,25 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(command("ctrl+shift+tab"), .tabPrev)
   }
 
-  func testParsesPassthroughModifiers() {
-    XCTAssertEqual(ConfigLoader.parse("").mode.normalPassthroughModifiers, [])
+  func testParsesUnmappedModifierPassthrough() {
+    XCTAssertTrue(ConfigLoader.parse("").mode.normalUnmappedModifierPassthrough)
     let c = ConfigLoader.parse(
       """
       [mode.normal]
-      passthrough_modifiers = ["cmd", "ctrl"]
+      unmapped_modifier_passthrough = false
       """)
-    XCTAssertEqual(c.mode.normalPassthroughModifiers, ["cmd", "ctrl"])
-  }
+    XCTAssertFalse(c.mode.normalUnmappedModifierPassthrough)
 
-  func testPassthroughModifierMaskMapsKnownNamesAndIgnoresUnknown() {
-    XCTAssertEqual(AppDelegate.passthroughModifierCGFlags([]), [])
-    XCTAssertEqual(AppDelegate.passthroughModifierCGFlags(["cmd"]), .maskCommand)
-    XCTAssertEqual(AppDelegate.passthroughModifierCGFlags(["bogus"]), [])
-    XCTAssertEqual(
-      AppDelegate.passthroughModifierCGFlags(["command", "ctrl", "alt", "shift"]),
-      [.maskCommand, .maskControl, .maskAlternate, .maskShift])
+    let invalid = ConfigLoader.parse(
+      """
+      [mode.normal]
+      unmapped_modifier_passthrough = ["cmd"]
+      """)
+    XCTAssertTrue(invalid.mode.normalUnmappedModifierPassthrough)
+    XCTAssertTrue(
+      invalid.diagnostics.contains {
+        $0.message == "mode.normal.unmapped_modifier_passthrough must be true or false"
+      })
   }
 
   func testParsesStatusBarTemplate() {
@@ -668,6 +671,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(flashlight["suggestion_count"] as? Int, 10)
     XCTAssertEqual(flashlight["precedence_alive_bonus"] as? Int, 10)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
+    XCTAssertEqual(mode["normal_unmapped_modifier_passthrough"] as? Bool, true)
     XCTAssertEqual(
       allMappings.first?["action"] as? [String],
       ["sh", "~/.dotfiles/scripts/toggle-colors"])

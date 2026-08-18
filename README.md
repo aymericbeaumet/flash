@@ -139,6 +139,7 @@ third_party = []
 suggestion_count = 10
 
 [mode.normal]
+unmapped_modifier_passthrough = true
 leader = "\\"
 
 [mode.normal.mappings]
@@ -149,7 +150,7 @@ leader = "\\"
 "ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd"]
 ```
 
-Mapping values are argv arrays. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; those preset modifiers are combined with any magic modifiers held on the final hint key.
+Mapping values are argv arrays. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, an unmapped Command, Control, or Option shortcut switches to INSERT and continues to the app or macOS when `unmapped_modifier_passthrough` is enabled (the default). Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; those preset modifiers are combined with any magic modifiers held on the final hint key.
 
 ## Use your existing hotkey tool
 

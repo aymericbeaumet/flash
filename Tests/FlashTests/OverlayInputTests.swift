@@ -491,7 +491,7 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabNext])
   }
 
-  func testUnmappedCommandChordIsConsumedInNormalMode() throws {
+  func testKeyWindowFallbackPassesUnmappedModifierChordWhenEnabled() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
@@ -514,35 +514,34 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertTrue(panel.performKeyEquivalent(with: event))
     XCTAssertEqual(panel.normalModePending, "")
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
+    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_ANSI_Quote)])
   }
 
-  func testUnmappedOptionDeadKeyDoesNotPassThroughNextPlainKey() throws {
+  func testKeyWindowFallbackConsumesUnmappedModifierChordWhenDisabled() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
+    panel.normalModeUnmappedModifierPassthrough = false
 
-    let deadKey = try XCTUnwrap(
+    let event = try XCTUnwrap(
       NSEvent.keyEvent(
         with: .keyDown,
         location: .zero,
-        modifierFlags: [.option],
+        modifierFlags: [.command],
         timestamp: 0,
         windowNumber: panel.windowNumber,
         context: nil,
-        characters: "",
-        charactersIgnoringModifiers: "",
+        characters: "'",
+        charactersIgnoringModifiers: "'",
         isARepeat: false,
-        keyCode: UInt16(kVK_ANSI_E)))
+        keyCode: UInt16(kVK_ANSI_Quote)))
 
-    XCTAssertTrue(panel.performKeyEquivalent(with: deadKey))
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
     XCTAssertEqual(panel.normalModePending, "")
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
-
-    let next = try keyEvent(keyCode: kVK_ANSI_S, characters: "s")
-    XCTAssertTrue(panel.performKeyEquivalent(with: next))
-    XCTAssertEqual(panel.normalModePending, "s")
+    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
   }
 
   func testNormalModeConsumesDeadKeyEventWithoutCharacters() throws {
@@ -690,6 +689,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   var insertSelectionCount = 0
   var submittedCommands: [String] = []
   var mappingEventsToHandle = 0
+  var passthroughEvents: [NSEvent] = []
   var normalModeActions: [(MappingCommand?, Int)] = []
   var cancelCount = 0
   var commitCenterModifiers: [ClickModifiers] = []
@@ -715,6 +715,9 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     guard mappingEventsToHandle > 0 else { return false }
     mappingEventsToHandle -= 1
     return true
+  }
+  func overlayDidPassthroughUnmappedModifier(_ event: NSEvent) {
+    passthroughEvents.append(event)
   }
   func overlayDidCancelCommandLine() {}
   func overlayDidUpdateCommandLine(

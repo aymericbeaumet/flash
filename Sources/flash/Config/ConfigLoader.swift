@@ -678,20 +678,13 @@ enum ConfigLoader {
         assign: { value, config in
           config.mode.normalLeader = canonicalNormalModeKeyToken(value)
         })
-      applyStringArray(
-        normal["passthrough_modifiers"], path: ["mode", "normal", "passthrough_modifiers"],
-        message:
-          "mode.normal.passthrough_modifiers must be an array of "
-          + "\"cmd\"/\"ctrl\"/\"alt\"/\"shift\"",
+      applyBool(
+        normal["unmapped_modifier_passthrough"],
+        path: ["mode", "normal", "unmapped_modifier_passthrough"],
+        message: "mode.normal.unmapped_modifier_passthrough must be true or false",
         locations: locations, into: &config,
         assign: { value, config in
-          for token in KeyModifier.parseList(value).unknown {
-            config.addDiagnostic(
-              "mode.normal.passthrough_modifiers: unknown modifier \"\(token)\" "
-                + "(use cmd/ctrl/alt/shift)",
-              location: locations.location(for: ["mode", "normal", "passthrough_modifiers"]))
-          }
-          config.mode.normalPassthroughModifiers = value
+          config.mode.normalUnmappedModifierPassthrough = value
         })
       applyModeMappingTable(
         normal["mappings"]?.table,
@@ -703,10 +696,11 @@ enum ConfigLoader {
         into: &config)
 
       for (key, _) in normal
-      where key != "leader" && key != "passthrough_modifiers" && key != "mappings" {
+      where key != "leader" && key != "unmapped_modifier_passthrough" && key != "mappings" {
         config.addDiagnostic(
           "mode.normal: unknown key '\(key)' — mappings belong under "
-            + "[mode.normal.mappings]; valid keys are leader, passthrough_modifiers, mappings",
+            + "[mode.normal.mappings]; valid keys are leader, "
+            + "unmapped_modifier_passthrough, mappings",
           location: locations.location(for: ["mode", "normal", key]))
       }
     }

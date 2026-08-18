@@ -179,13 +179,10 @@ enum NormalModeInterpreter {
         charactersIgnoringModifiers: charactersIgnoringModifiers,
         mappings: mappings)
     }
-    // Hermetic normal mode: any Cmd/Opt-prefixed chord without an
-    // explicit mapping is swallowed. If the user wants Cmd+W to
-    // close a tab, Cmd+L to focus the URL bar, etc., they bind it
-    // in `[mode.normal.mappings]`. The previous "forward Cmd+letter
-    // to the focused app" path leaked OS shortcuts (Cmd+Tab,
-    // Cmd+Shift+T, Cmd+L) through normal mode and silently
-    // dropped capture into the underlying window.
+    // The interpreter's fallback is always consume. The keyboard tap decides
+    // before this point whether an unmapped modified chord should instead pass
+    // through and move Flash to INSERT; when that config is disabled, this
+    // keeps NORMAL hermetic.
     return .consume
   }
 
