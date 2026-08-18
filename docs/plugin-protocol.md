@@ -1,0 +1,209 @@
+# Plugin wire protocol
+
+This is the complete, language-agnostic contract between Flash and a plugin.
+Any executable that speaks it over stdio is a valid plugin — the Rust SDK
+(`docs/plugin-rust-sdk.md`) is the blessed implementation, not a wall.
+
+## Process model
+
+Plugins are Flash-owned child processes. Official plugins ship inside the app
+bundle; third-party plugins are listed in `[plugins] third_party` as
+`github:user/project@<commit-sha>` (full 40-character SHA, mandatory — the
+materializer fetches exactly that commit and refuses a mismatched checkout) or
+`file:<path>`. The manifest's `install` and `start` shell strings run as the
+user from the plugin root.
+
+Runtime children receive `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`,
+`FLASH_PLUGIN_DATA_DIR`, `FLASH_PLUGIN_PARENT_PID`, and the plugin's
+`[plugin.<id>]` settings as a JSON object in `FLASH_PLUGIN_CONFIG`. Flash
+builds a scrubbed environment containing only basic locale/path/process keys
+plus those values; ambient tokens, agent sockets, and login-shell secrets are
+not inherited — put credentials in the plugin's config table. Install CLI
+tools under `FLASH_PLUGIN_DATA_DIR`, never into global shell paths.
+
+Host-side lifecycle policy: 15-second `initialize` deadline, 5-second
+heartbeat with two misses before teardown and restart, linear restart backoff
+capped at 5 restarts within 300 seconds before the plugin parks in `.crashed`
+(cleared by `:plugins reload` or a file change). A plugin should exit when its
+declared parent pid dies.
+
+## Framing
+
+Length-prefixed MessagePack on stdin/stdout: a 4-byte big-endian payload
+length followed by one MessagePack-encoded value, JSON-RPC-2.0-shaped.
+Host requests go to plugin stdin; responses and plugin-initiated frames go to
+stdout. stderr is reserved for unexpected errors. Frames are capped at 10 MiB.
+Plugin log lines travel as `flash.log` notifications and are recorded with
+`source = "plugin:<id>"`.
+
+## Lifecycle methods
+
+- `initialize` — protocol handshake. The request carries
+  `{plugin_id, version, protocol_version: 2, running_applications}`; the reply
+  must echo protocol version 2 exactly. A manifest that declares `sources`
+  makes readiness conditional: the reply's `published_sources` must be exactly
+  `["plugin:<manifest-id>"]`, meaning the canonical warm catalog (possibly an
+  authoritative empty list) exists before the plugin is ready. Violations are
+  fatal startup errors with no compatibility translation.
+- `heartbeat` (id `-1`) — liveness probe; reply promptly.
+- `shutdown` — run cleanup, reply, exit.
+
+## Host → plugin methods
+
+- `event` — host events filtered by manifest `listen` globs:
+  `core:flash.started`, `core:apps.changed|launched|terminated`,
+  `core:focus.changed`, `core:window.focus.changed`, `core:ax.changed`,
+  `core:clipboard.changed` (requires the `clipboard` capability),
+  `core:config.changed`, `core:power.changed`, `core:space.changed`.
+- `sources.snapshot` — pull the complete warm catalog. Must answer from
+  memory in O(catalog) time with no I/O of any kind; 150 ms deadline, only
+  dispatched to warm processes.
+- `query.evaluate` — per-input evaluator; 50 ms hard deadline (the host warns
+  at 40 ms round-trip; a well-behaved evaluator body stays under 10 ms).
+  CPU-only over state prepared earlier — no I/O.
+- `hints.discover` / `hints.activate` — hint provider surface.
+- `candidate.resolve` — resolve a selected candidate to its effect/target.
+- `source.action` — source-owned actions (`tab_new`, `tab_close`, …) with the
+  `performed | failed | unhandled` disposition trichotomy: `unhandled` means
+  "not my context" (host may fall back), `failed` means "mine, but it broke"
+  (host must NOT fall back).
+- `command.invoke` — `:command subcommand` dispatch. The result may carry
+  `{"ok": true, "target_pid": <pid>}` to raise that app and record the jump
+  in movement history.
+- `navigation.restore` — restore a durable route for a declared scheme.
+
+Generic RPCs default to a 2-second deadline; manifest `request_timeout_ms`
+raises only that generic deadline, never the fixed ones above.
+
+## Plugin → host
+
+Notifications: `flash.log` (structured logging), `status.updated` (values for
+declared status segments, rendered as `#{plugin:<id>.<segment>}`),
+`discovery.invalidated` (hint context changed).
+
+Host RPCs, capability-gated default-deny (checked per process against the
+manifest):
+
+| RPC | Capability |
+| --- | --- |
+| `host.ping` | none |
+| `host.normal_mode_target`, `app.activate` | `app_control` |
+| `input.replace_text_and_submit`, `input.post_keys` | `accessibility` |
+| `ax.snapshot`, `ax.perform`, `ax.set`, `ax.select_child`, `ax.click`, `ax.click_point` | `accessibility` |
+
+The AX broker exists because `AXUIElement` cannot cross a process boundary:
+`ax.snapshot` BFS-walks a subtree (default cap 3000 nodes) and returns flat
+nodes with opaque handles; geometry is delivered in NSScreen coordinates.
+
+`capabilities` also includes `network` (opts out of the network-denying
+sandbox profile) and `subprocess` (permits helpers that cannot run inside
+that profile). Omitted capabilities are default-denied.
+
+## Payload shapes and quotas
+
+Catalog rows are `{ title, url?, metadata, effect? }`. `metadata.source` must
+match a manifest `sources[].name`; routing `source_id` is always host-owned.
+Catalogs are bounded to 10,000 rows / 4 MiB encoded; titles 4 KiB, URLs
+16 KiB, metadata 64 entries (256-byte keys, 64-KiB values), effect text
+64 KiB. Query responses use the deliberately narrower
+`{ answers: [{ title, subtitle?, effect }] }` — URLs, metadata, pids,
+priorities, routing fields, and unknown keys are rejected — bounded to
+16 answers / 256 KiB with 16-KiB fields. In both shapes `effect` is exactly
+`{ "type": "copy_text", "text": "..." }` and runs only after explicit
+selection. Every bound rejects the complete payload atomically; nothing is
+silently truncated. One malformed row rejects the whole snapshot and the host
+keeps the last-good one.
+
+Latency and failure logs are content-free: counts, stages, elapsed
+milliseconds, method names — never query text, candidate data, clipboard
+content, config values, or event payloads.
+
+## Manifest
+
+Required: `id`, `name`, `version`, `description`, `install`, `start`.
+Optional: `request_timeout_ms`, `capabilities`, `listen`, `only_bundle_ids`,
+`only_urls`, and the provider sections below. Loading is strict — unknown
+top-level or nested keys and malformed known fields are rejected outright.
+
+```json
+{
+  "id": "example",
+  "name": "Example",
+  "version": "0.1.0",
+  "description": "Example plugin",
+  "install": "true",
+  "start": "exec ./flash-plugin-example",
+  "listen": ["core:flash.started", "core:apps.*"],
+  "only_bundle_ids": ["org.mozilla.firefox"],
+  "only_urls": ["https://mail.google.com/*"],
+  "sources": [
+    { "name": "example.items", "kind": "locations", "priority": "normal" }
+  ],
+  "queries": {
+    "surfaces": ["flashlight"],
+    "source": "example.answers",
+    "priority": 25,
+    "exclusive_prefixes": ["="]
+  },
+  "source_actions": ["resource_archive"],
+  "hints": {},
+  "commands": {
+    "items": [
+      { "command": "example", "subcommand": "run", "description": "Run example" }
+    ]
+  },
+  "mappings": {
+    "items": [
+      {
+        "key": "R",
+        "command": ["flash", "send_key", "--keys=cmd+option+r"],
+        "only_bundle_ids": ["com.apple.Safari"]
+      }
+    ]
+  },
+  "shebangs": {
+    "command": "example",
+    "items": [
+      { "token": "ex", "description": "Search example" },
+      { "token": "*" }
+    ]
+  },
+  "navigation": { "schemes": ["example"] },
+  "status": { "segments": ["state"] },
+  "verbs": {
+    "items": [
+      { "name": "example_save", "inline_keystrokes": { "": "cmd+s" } }
+    ]
+  }
+}
+```
+
+Section semantics:
+
+- **`listen`** — event-name patterns; `*` wildcard.
+- **`sources`** — source descriptors for `@<source>` completion and ranking.
+  `kind` is `"default"` (default) or `"locations"`; `priority` is the
+  semantic salience enum `low | normal | high | important | urgent`.
+- **`queries`** — registers a per-input evaluator. `exclusive_prefixes` are
+  exact literal markers (never regexes) that route matching input only to
+  this evaluator; without one, evaluators are additive.
+- **`commands`** — `:command subcommand` registrations; subcommand `"*"`
+  consumes the remainder as args.
+- **`mappings`** — key bindings scoped `all | normal | insert` (default
+  `normal`); `command` is an argv array with config-mapping syntax.
+- **`shebangs`** — flashlight bangs; `token = "*"` is the catch-all.
+- **`source_actions`** — source-owned normal-mode actions.
+- **`hints`** — opts in as a hint provider. Selection is exclusive; set
+  `fallback_on_empty: true` only when applicability is discovered dynamically
+  and empty means "not applicable".
+- **`navigation`** — durable route schemes restorable from movement history.
+- **`status`** — status-bar segment names fed by `status.updated`.
+- **`verbs`** — CLI/mapping verbs; `inline_keystrokes` lets the host handle
+  fixed keystroke verbs without any plugin RPC.
+
+Selectors: `only_bundle_ids` / `only_urls` may appear at the root and on
+command/mapping/shebang/verb entries; root and entry selectors compound, every
+populated axis must match, and `only_urls` supports `*` wildcards. Specificity
+is CSS-like (scoped beats unscoped; bundle+URL beats bundle-only). The numeric
+manifest `priority` (default 25) is scheduling/collision arbitration — do not
+confuse it with the semantic `sources[].priority` salience enum.
