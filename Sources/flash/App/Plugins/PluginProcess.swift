@@ -838,6 +838,19 @@ final class PluginProcess {
       lines.append("(allow process-fork)")
       let literals = spec.exec.map { "(literal \(q($0)))" }.joined(separator: " ")
       lines.append("(allow process-exec \(literals))")
+      // The exec'd child's dyld must also map the tool executable.
+      lines.append("(allow file-map-executable \(literals))")
+    }
+    if spec.appleEvents {
+      // osascript-driven plugins: AppleEvents routing, LaunchServices app
+      // resolution, and the TCC daemon that mediates Automation consent.
+      lines.append(
+        "(allow mach-lookup (global-name \"com.apple.coreservices.appleevents\")"
+          + " (global-name \"com.apple.coreservices.launchservicesd\")"
+          + " (global-name \"com.apple.lsd.mapdb\")"
+          + " (global-name \"com.apple.tccd\")"
+          + " (global-name \"com.apple.tccd.system\"))")
+      lines.append("(allow appleevent-send)")
     }
     if !spec.read.isEmpty {
       let subpaths = spec.read.map { "(subpath \(q($0)))" }.joined(separator: " ")

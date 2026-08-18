@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Surface macOS Contacts entries in flashlight, plus `:contacts` open helper.",
   "install": "true",
+  "sandbox": {
+    "exec": ["/usr/bin/osascript", "/usr/bin/open"],
+    "appleevents": true
+  },
   "exec": ["./flash-plugin-contacts"],
   "priority": 12,
   "commands": {

@@ -968,11 +968,17 @@ struct PluginSandboxSpec: Codable, Equatable {
   var read: [String]
   /// Extra absolute or `~`-prefixed subpaths the plugin may read and write.
   var write: [String]
+  /// Allow sending AppleEvents (osascript-driven plugins): opens the
+  /// AppleEvents/LaunchServices/TCC mach services and appleevent-send.
+  var appleEvents: Bool
 
-  init(exec: [String] = [], read: [String] = [], write: [String] = []) {
+  init(
+    exec: [String] = [], read: [String] = [], write: [String] = [], appleEvents: Bool = false
+  ) {
     self.exec = exec
     self.read = read
     self.write = write
+    self.appleEvents = appleEvents
   }
 
   init(from decoder: Decoder) throws {
@@ -980,6 +986,7 @@ struct PluginSandboxSpec: Codable, Equatable {
     self.exec = try c.decodeIfPresent([String].self, forKey: .exec) ?? []
     self.read = try c.decodeIfPresent([String].self, forKey: .read) ?? []
     self.write = try c.decodeIfPresent([String].self, forKey: .write) ?? []
+    self.appleEvents = try c.decodeIfPresent(Bool.self, forKey: .appleevents) ?? false
   }
 
   func encode(to encoder: Encoder) throws {
@@ -987,10 +994,11 @@ struct PluginSandboxSpec: Codable, Equatable {
     if !exec.isEmpty { try c.encode(exec, forKey: .exec) }
     if !read.isEmpty { try c.encode(read, forKey: .read) }
     if !write.isEmpty { try c.encode(write, forKey: .write) }
+    if appleEvents { try c.encode(appleEvents, forKey: .appleevents) }
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case exec, read, write
+    case exec, read, write, appleevents
   }
 }
 
