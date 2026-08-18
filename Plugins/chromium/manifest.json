@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "description": "Surface tabs and tab actions for Chromium-family browsers (Chrome, Brave, Edge, Arc, Vivaldi, Opera) via AppleScript.",
   "install": "true",
+  "sandbox": {
+    "exec": ["/usr/bin/osascript", "/usr/bin/open"],
+    "appleevents": true
+  },
   "exec": ["./flash-plugin-chromium"],
   "capabilities": [
     "app_control"

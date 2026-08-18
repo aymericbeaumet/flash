@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Surface Firefox tabs in the flashlight (AX-backed) and handle Firefox source actions (tab_select).",
   "install": "true",
+  "sandbox": {},
   "exec": ["./flash-plugin-firefox"],
   "priority": 30,
   "capabilities": [
