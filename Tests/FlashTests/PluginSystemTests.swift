@@ -24,9 +24,13 @@ final class PluginSystemTests: XCTestCase {
     ]
     for manifest in manifests {
       // Bundled plugins are compiled Rust binaries: `install` is a no-op
-      // and `start` exec's the embedded binary. See Scripts/build-plugins.sh.
+      // and `start` exec's the embedded binary (manifest-only plugins such
+      // as `defaults` have no process and omit `start` entirely). See
+      // Scripts/build-plugins.sh.
       XCTAssertEqual(manifest.install, "true")
-      XCTAssertEqual(manifest.start, "exec ./flash-plugin-\(manifest.id)")
+      if let start = manifest.start {
+        XCTAssertEqual(start, "exec ./flash-plugin-\(manifest.id)")
+      }
       XCTAssertFalse(manifest.description.isEmpty)
       if runCommandRequired.contains(manifest.id) {
         XCTAssertTrue(
@@ -78,9 +82,15 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertTrue(slack.navigationSchemes.isEmpty)
     XCTAssertEqual(slack.capabilities, [.network])
     let defaults = try XCTUnwrap(manifests.first { $0.id == "defaults" })
+    // Manifest-only: no process, no binary — every verb resolves through
+    // the host's inline-keystroke path.
+    XCTAssertNil(defaults.start)
     XCTAssertEqual(
       Set(defaults.verbs.map(\.name)),
       ["app_save", "app_print", "document_open", "window_new"])
+    XCTAssertTrue(
+      defaults.verbs.allSatisfy { !($0.inlineKeystrokes[""] ?? "").isEmpty },
+      "manifest-only verbs must carry a default inline keystroke")
     let calculator = try XCTUnwrap(manifests.first { $0.id == "calculator" })
     XCTAssertTrue(calculator.providesQueryEvaluation)
     XCTAssertEqual(calculator.queriesProvider?.surfaces, [.flashlight])
@@ -169,6 +179,54 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains("manifest.json queries unknown field regex"))
+    }
+  }
+
+  func testManifestOnlyPluginRejectsProcessBoundSurfaces() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "no-process",
+          "name": "No process",
+          "version": "1.0.0",
+          "description": "fixture",
+          "install": "true",
+          "commands": {
+            "items": [
+              { "command": "no-process", "subcommand": "ping", "description": "x" }
+            ]
+          }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("without start cannot declare commands"))
+    }
+  }
+
+  func testManifestOnlyPluginRequiresInlineKeystrokeVerbs() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "no-process",
+          "name": "No process",
+          "version": "1.0.0",
+          "description": "fixture",
+          "install": "true",
+          "verbs": {
+            "items": [
+              { "name": "needs_rpc", "description": "no keystroke" }
+            ]
+          }
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("requires verb needs_rpc to declare a default"))
     }
   }
 
@@ -689,7 +747,7 @@ final class PluginSystemTests: XCTestCase {
     // reach for global install locations.
     for root in try officialPluginRoots() {
       let manifest = try PluginManifest.load(from: root)
-      for field in [manifest.install, manifest.start] {
+      for field in [manifest.install, manifest.start].compactMap({ $0 }) {
         for needle in banned {
           XCTAssertFalse(
             field.contains(needle), "\(root.lastPathComponent) manifest contains \(needle)")

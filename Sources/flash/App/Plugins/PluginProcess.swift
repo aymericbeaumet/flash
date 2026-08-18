@@ -680,6 +680,19 @@ final class PluginProcess {
   private func startOnQueue(reason: String) {
     stopOnQueue(reason: "pre_start")
     initializationCompleted = false
+    // Manifest-only plugin (no `start`): no child process exists — nothing to
+    // install, launch, or heartbeat. The host compiles its inline surfaces
+    // (inline-keystroke verbs, mappings, help) straight from the manifest.
+    // File watchers stay armed so manifest edits still hot-reload.
+    guard manifest.start != nil else {
+      setState(.ready)
+      if watchFiles {
+        installFileWatchers()
+      }
+      FlashLog.plugin(
+        .info, pluginID: manifest.id, message: "[plugin] manifest-only ready reason=\(reason)")
+      return
+    }
     setState(.installing)
     do {
       try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
@@ -764,6 +777,11 @@ final class PluginProcess {
   private static let sandboxExecPath = "/usr/bin/sandbox-exec"
 
   private func launch() throws {
+    // Unreachable for manifest-only plugins — startOnQueue returns before
+    // install/launch when the manifest has no start command.
+    guard let start = manifest.start else {
+      throw PluginError.invalidManifest("plugin \(manifest.id) has no start command to launch")
+    }
     let process = Process()
     let stdin = Pipe()
     let stdout = Pipe()
@@ -776,10 +794,10 @@ final class PluginProcess {
       profile != nil && FileManager.default.isExecutableFile(atPath: Self.sandboxExecPath)
     if sandboxed, let profile {
       process.executableURL = URL(fileURLWithPath: Self.sandboxExecPath)
-      process.arguments = ["-p", profile, "/bin/sh", "-lc", manifest.start]
+      process.arguments = ["-p", profile, "/bin/sh", "-lc", start]
     } else {
       process.executableURL = URL(fileURLWithPath: "/bin/sh")
-      process.arguments = ["-lc", manifest.start]
+      process.arguments = ["-lc", start]
     }
     FlashLog.info(
       "[plugin] \(manifest.id) launch network=\(sandboxed ? "denied (sandboxed)" : "allowed")",

@@ -105,13 +105,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flash-plugin-defaults"
-version = "0.1.0"
-dependencies = [
- "flash_plugin",
-]
-
-[[package]]
 name = "flash-plugin-emojis"
 version = "0.1.0"
 dependencies = [

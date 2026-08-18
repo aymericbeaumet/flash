@@ -8,7 +8,6 @@ members = [
   "chromium",
   "clipboard",
   "contacts",
-  "defaults",
   "emojis",
   "firefox",
   "marks",

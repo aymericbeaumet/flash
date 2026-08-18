@@ -288,15 +288,21 @@ Official bundled plugins under `Contents/Resources/Plugins` are enabled unless
 their id is listed in `plugins.disabled`; use `["defaults"]` for a raw host-only
 experience without built-in plugin-layer defaults. In the checkout they live under root
 `Plugins/` so `Scripts/install.sh --dev` can symlink them into the installed app. Every plugin root must contain
-`manifest.json` with `id`, `name`, `version`, `description`, `install`, `start`,
-optional `listen` event patterns, root selectors such as `only_bundle_ids` /
+`manifest.json` with `id`, `name`, `version`, `description`, `install`,
+optional `start`, optional `listen` event patterns, root selectors such as `only_bundle_ids` /
 `only_urls`, and provider registrations. Command providers expose one or more
 subcommands; status providers expose named segments through `segments`.
 There is no `manifest_version` field on master. The host rejects unknown
 top-level and nested provider/item manifest keys instead of accepting legacy
 aliases; malformed known fields are rejected instead of silently defaulted.
 Mapping items must use exactly `all`, `normal`, or `insert` scopes. `install` and
-`start` are shell strings run from the plugin root. Runtime children receive
+`start` are shell strings run from the plugin root. Omitting `start` declares a
+**manifest-only plugin**: no child process ever runs (no install, heartbeat, or
+watchdog), and validation restricts the manifest to host-served surfaces —
+`mappings`, `help`, and `verbs` whose every entry has a default inline
+keystroke. The bundled `defaults` plugin is manifest-only: its four keystroke
+verbs and help topic come straight from `Plugins/defaults/manifest.json` with
+no crate behind them. Runtime children receive
 `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`, `FLASH_PLUGIN_DATA_DIR`,
 `FLASH_PLUGIN_PARENT_PID`, and the plugin's `[plugin.<id>]` settings serialized
 as a JSON object in `FLASH_PLUGIN_CONFIG`. Flash does not inherit the complete

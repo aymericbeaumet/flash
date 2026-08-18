@@ -961,7 +961,11 @@ struct PluginManifest: Codable, Equatable {
   var version: String
   var description: String
   var install: String
-  var start: String
+  /// Shell string that starts the plugin child process. `nil` declares a
+  /// manifest-only plugin: no process ever runs, and `validate()` restricts
+  /// the manifest to surfaces the host can serve alone (mappings, help, and
+  /// verbs whose every dispatch resolves to an inline keystroke).
+  var start: String?
   /// Host event-name patterns this plugin listens to. `*` is the only wildcard.
   var listen: [String]
   var hintsProvider: PluginHintsProvider?
@@ -1143,7 +1147,7 @@ struct PluginManifest: Codable, Equatable {
 
   init(
     id: String, name: String, version: String, description: String,
-    install: String, start: String,
+    install: String, start: String? = nil,
     listen: [String] = [],
     hintsProvider: PluginHintsProvider? = nil,
     queriesProvider: PluginQueriesProvider? = nil,
@@ -1194,7 +1198,7 @@ struct PluginManifest: Codable, Equatable {
     self.version = try c.decode(String.self, forKey: .version)
     self.description = try c.decode(String.self, forKey: .description)
     self.install = try c.decode(String.self, forKey: .install)
-    self.start = try c.decode(String.self, forKey: .start)
+    self.start = try c.decodeIfPresent(String.self, forKey: .start)
     self.listen = Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .listen) ?? [])
     self.hintsProvider = try c.decodeIfPresent(PluginHintsProvider.self, forKey: .hints)
     self.queriesProvider = try c.decodeIfPresent(PluginQueriesProvider.self, forKey: .queries)
@@ -1228,7 +1232,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(version, forKey: .version)
     try c.encode(description, forKey: .description)
     try c.encode(install, forKey: .install)
-    try c.encode(start, forKey: .start)
+    if let start { try c.encode(start, forKey: .start) }
     if !listen.isEmpty { try c.encode(listen, forKey: .listen) }
     if let hintsProvider { try c.encode(hintsProvider, forKey: .hints) }
     if let queriesProvider { try c.encode(queriesProvider, forKey: .queries) }
@@ -1418,11 +1422,44 @@ struct PluginManifest: Codable, Equatable {
       ("version", version),
       ("description", description),
       ("install", install),
-      ("start", start),
     ]
     for (field, value) in required {
       if value.trimmed.isEmpty {
         throw PluginError.invalidManifest("manifest.json field \(field) must not be empty")
+      }
+    }
+    if let start {
+      if start.trimmed.isEmpty {
+        throw PluginError.invalidManifest("manifest.json field start must not be empty")
+      }
+    } else {
+      // Manifest-only plugin: no child process ever runs, so any surface
+      // that would need RPC into (or events delivered to) the plugin is
+      // invalid. Mappings, help topics, and verbs whose every dispatch
+      // resolves to a host-synthesized inline keystroke are the complete
+      // allowed surface.
+      let processBound: [(String, Bool)] = [
+        ("listen", !listen.isEmpty),
+        ("hints", hintsProvider != nil),
+        ("queries", queriesProvider != nil),
+        ("commands", commandProvider != nil),
+        ("status", statusProvider != nil),
+        ("shebangs", shebangProvider != nil),
+        ("navigation", navigationProvider != nil),
+        ("sources", !sources.isEmpty),
+        ("source_actions", !sourceActions.isEmpty),
+        ("capabilities", !capabilities.isEmpty),
+        ("request_timeout_ms", requestTimeoutMs != nil),
+        ("volatile", volatile),
+      ]
+      if let field = processBound.first(where: { $0.1 })?.0 {
+        throw PluginError.invalidManifest(
+          "manifest.json without start cannot declare \(field) — it requires a plugin process")
+      }
+      for verb in verbs where (verb.inlineKeystrokes[""] ?? "").trimmed.isEmpty {
+        throw PluginError.invalidManifest(
+          "manifest.json without start requires verb \(verb.name) to declare a default"
+            + " inline keystroke")
       }
     }
     let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")

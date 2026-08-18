@@ -238,14 +238,17 @@ assemble_app() {
       dir="$(dirname "$manifest")"
       id="$(basename "$dir")"
       bin="$dir/flash-plugin-$id"
-      if [[ ! -x "$bin" ]]; then
-        echo "ERROR: missing plugin binary $bin" >&2
-        exit 1
-      fi
       mkdir -p "$plugins_dest/$id"
       cp "$manifest" "$plugins_dest/$id/manifest.json"
-      cp "$bin" "$plugins_dest/$id/flash-plugin-$id"
-      chmod +x "$plugins_dest/$id/flash-plugin-$id"
+      # Manifest-only plugins (no crate, no `start`) ship just their manifest.
+      if [[ -f "$dir/Cargo.toml" ]]; then
+        if [[ ! -x "$bin" ]]; then
+          echo "ERROR: missing plugin binary $bin" >&2
+          exit 1
+        fi
+        cp "$bin" "$plugins_dest/$id/flash-plugin-$id"
+        chmod +x "$plugins_dest/$id/flash-plugin-$id"
+      fi
     done
   else
     if [[ -d "$PROJECT_DIR/Plugins" ]]; then

@@ -120,8 +120,14 @@ content, config values, or event payloads.
 
 ## Manifest
 
-Required: `id`, `name`, `version`, `description`, `install`, `start`.
-Optional: `request_timeout_ms`, `capabilities`, `listen`, `only_bundle_ids`,
+Required: `id`, `name`, `version`, `description`, `install`. `start` is
+required for any plugin that runs a process; omitting it declares a
+**manifest-only plugin** — no child process ever runs, and the manifest may
+only carry surfaces the host serves alone: `mappings`, `help`, and `verbs`
+whose every entry declares a default inline keystroke (the bundled
+`defaults` plugin is the exemplar). Anything process-bound (`sources`,
+`queries`, `commands`, `listen`, `capabilities`, …) is rejected. Optional:
+`request_timeout_ms`, `capabilities`, `listen`, `only_bundle_ids`,
 `only_urls`, and the provider sections below. Loading is strict — unknown
 top-level or nested keys and malformed known fields are rejected outright.
 

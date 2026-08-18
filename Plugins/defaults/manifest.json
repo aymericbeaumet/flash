@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "description": "Provides Flash's default plugin-layer behavior. Today this registers the canonical app keystroke verbs (app_save, app_print, document_open, window_new) with inline shortcuts so they bypass plugin RPC on the hot path.",
   "install": "true",
-  "start": "exec ./flash-plugin-defaults",
   "verbs": {
     "items": [
       {
