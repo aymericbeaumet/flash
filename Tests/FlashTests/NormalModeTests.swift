@@ -2641,13 +2641,13 @@ final class NormalModeTests: XCTestCase {
         bundleIdentifier: "org.mozilla.firefox"))
   }
 
-  func testTabTraversalFallbackEmitsNativeShortcutsForBrowsersAndMessages() throws {
+  func testNativeTabTraversalShortcutSupportsBrowsersAndMessages() throws {
     let firefoxPrevious = try XCTUnwrap(
-      AppDelegate.tabTraversalFallbackShortcut(
+      AppDelegate.nativeTabTraversalShortcut(
         direction: .back,
         bundleIdentifier: "org.mozilla.firefox"))
     let safariNext = try XCTUnwrap(
-      AppDelegate.tabTraversalFallbackShortcut(
+      AppDelegate.nativeTabTraversalShortcut(
         direction: .forward,
         bundleIdentifier: "com.apple.Safari"))
 
@@ -2656,11 +2656,11 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(safariNext.key, CGKeyCode(kVK_ANSI_RightBracket))
     XCTAssertEqual(safariNext.flags, [.maskCommand, .maskShift])
     let messagesPrevious = try XCTUnwrap(
-      AppDelegate.tabTraversalFallbackShortcut(
+      AppDelegate.nativeTabTraversalShortcut(
         direction: .back,
         bundleIdentifier: "com.apple.MobileSMS"))
     let messagesNext = try XCTUnwrap(
-      AppDelegate.tabTraversalFallbackShortcut(
+      AppDelegate.nativeTabTraversalShortcut(
         direction: .forward,
         bundleIdentifier: "com.apple.MobileSMS"))
     XCTAssertEqual(messagesPrevious.key, CGKeyCode(kVK_ANSI_LeftBracket))
@@ -2668,11 +2668,11 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(messagesNext.key, CGKeyCode(kVK_ANSI_RightBracket))
     XCTAssertEqual(messagesNext.flags, [.maskCommand, .maskShift])
     XCTAssertNil(
-      AppDelegate.tabTraversalFallbackShortcut(
+      AppDelegate.nativeTabTraversalShortcut(
         direction: .back,
         bundleIdentifier: "org.alacritty"))
     XCTAssertNil(
-      AppDelegate.tabTraversalFallbackShortcut(
+      AppDelegate.nativeTabTraversalShortcut(
         direction: .forward,
         bundleIdentifier: "com.example.TextEditor"))
   }

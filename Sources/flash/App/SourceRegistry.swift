@@ -807,30 +807,20 @@ final class SourceRegistry {
       @escaping (FlashSource, FlashSourceEnvironment, @escaping (SourceActionResult) -> Void)
       -> Void
   ) {
-    // Timing breakdown for the tab-action latency investigation: which source
-    // a tab key waits on, and for how long. `refresh_ms` is the synchronous
-    // running-apps refresh; each `source` line is one (possibly plugin-RPC)
-    // attempt; `total_ms` is wall time from entry to resolution.
+    // Hot-path timing for source actions. Keep this summary compact even at
+    // trace level: materializing a reason string for every excluded plugin was
+    // measurable on each repeated normal-mode mapping.
     let startedNs = DispatchTime.now().uptimeNanoseconds
     refreshRunningApplications()
     let refreshMs = Self.elapsedMs(since: startedNs)
     let env = environment
     let allSources = sources
-    var passingChain: [String] = []
-    var excluded: [String] = []
     var sourceSnapshot: [FlashSource] = []
     for source in allSources {
       let hasCap = source.capabilities.contains(capability)
       let supports = source.supports(context)
       if hasCap, supports {
         sourceSnapshot.append(source)
-        passingChain.append(source.identifier)
-      } else {
-        let reason =
-          !hasCap
-          ? "missing_cap[has=\(source.capabilities.traceDescription)]"
-          : "no_supports[bundle=\(context.bundleIdentifier)]"
-        excluded.append("\(source.identifier)(\(reason))")
       }
     }
     sourceSnapshot.sort { lhs, rhs in
@@ -838,12 +828,6 @@ final class SourceRegistry {
       let rhsPriority = rhs.priority(in: context)
       if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
       return lhs.identifier < rhs.identifier
-    }
-    passingChain = sourceSnapshot.map(\.identifier)
-    if !excluded.isEmpty {
-      FlashLog.trace(
-        "[source_action] action=\(capability.traceDescription) "
-          + "excluded=[\(excluded.joined(separator: ","))]")
     }
     guard !sourceSnapshot.isEmpty else {
       FlashLog.trace(
@@ -855,7 +839,8 @@ final class SourceRegistry {
     }
     FlashLog.trace(
       "[source_action] action=\(capability.traceDescription) "
-        + "chain=[\(passingChain.joined(separator: ","))] "
+        + "considered=\(allSources.count) passing=\(sourceSnapshot.count) "
+        + "chain=[\(sourceSnapshot.map(\.identifier).joined(separator: ","))] "
         + "refresh_ms=\(refreshMs)")
 
     func finish(_ result: SourceActionResult, handledBy: String) {

@@ -49,6 +49,14 @@ extension AppDelegate {
   }
 
   func tabNextInNormalMode(repeatCount: Int) {
+    if let bundleIdentifier = normalModeContext()?.bundleIdentifier,
+      let shortcut = Self.nativeTabTraversalShortcut(
+        direction: .forward,
+        bundleIdentifier: bundleIdentifier)
+    {
+      sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: repeatCount)
+      return
+    }
     performTabSourceAction(
       name: "tab_next",
       repeatCount: repeatCount,
@@ -58,7 +66,7 @@ extension AppDelegate {
       fallback: { [weak self] context, count in
         guard let self else { return }
         guard
-          let shortcut = Self.tabTraversalFallbackShortcut(
+          let shortcut = Self.nativeTabTraversalShortcut(
             direction: .forward,
             bundleIdentifier: context.bundleIdentifier)
         else {
@@ -72,6 +80,14 @@ extension AppDelegate {
   }
 
   func tabPrevInNormalMode(repeatCount: Int) {
+    if let bundleIdentifier = normalModeContext()?.bundleIdentifier,
+      let shortcut = Self.nativeTabTraversalShortcut(
+        direction: .back,
+        bundleIdentifier: bundleIdentifier)
+    {
+      sendNormalModeKey(shortcut.key, flags: shortcut.flags, repeatCount: repeatCount)
+      return
+    }
     performTabSourceAction(
       name: "tab_previous",
       repeatCount: repeatCount,
@@ -81,7 +97,7 @@ extension AppDelegate {
       fallback: { [weak self] context, count in
         guard let self else { return }
         guard
-          let shortcut = Self.tabTraversalFallbackShortcut(
+          let shortcut = Self.nativeTabTraversalShortcut(
             direction: .back,
             bundleIdentifier: context.bundleIdentifier)
         else {
@@ -433,7 +449,7 @@ extension AppDelegate {
     return tabIndexKeyCode(index)
   }
 
-  static func tabTraversalFallbackShortcut(
+  static func nativeTabTraversalShortcut(
     direction: NavigationDirection,
     bundleIdentifier: String
   ) -> (key: CGKeyCode, flags: CGEventFlags)? {

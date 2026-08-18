@@ -16,9 +16,10 @@
 //!      performs no tmux I/O on the flashlight hot path.
 //!   4. Each refresh also retains its `list-clients` + process tree
 //!      sample. The expensive host-wide process tree is reused while the tmux
-//!      client pid set is unchanged. Hint discovery and source actions consult
-//!      that warm cache first, so `[t` / `]t` do not rediscover every tmux
-//!      socket before running the single command that actually changes windows.
+//!      client pid set is unchanged. Hint discovery and repeatable source
+//!      actions consult that warm cache first; the actions validate only the
+//!      cached client's live session, so `[t` / `]t` avoid a host-wide `ps`
+//!      and all-socket rediscovery before changing windows.
 //!
 //! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) and
 //! per-host SSH inventory refreshes run concurrently so one slow socket or
@@ -1172,6 +1173,14 @@ struct ClientSnapshot {
 }
 
 impl ClientSnapshot {
+    fn ancestry_matches(&self, focused_pid: i64) -> Vec<TmuxClient> {
+        self.clients
+            .iter()
+            .filter(|client| is_ancestor(focused_pid, client.client_pid, &self.parent_map))
+            .cloned()
+            .collect()
+    }
+
     fn hosted_by(&self, focused_pid: i64) -> Option<TmuxClient> {
         if self.clients.is_empty() {
             return None;
@@ -1179,28 +1188,47 @@ impl ClientSnapshot {
         client_hosted_by_from_map(&self.clients, focused_pid, &self.parent_map)
     }
 
-    fn hosted_by_window(&self, focused_pid: i64, window_title: &str) -> Option<TmuxClient> {
-        if window_title.is_empty() {
-            return self.hosted_by(focused_pid);
+    /// Return without an AX lookup when process ancestry identifies exactly one
+    /// tmux client in the focused terminal application. This is the common
+    /// one-window case and is unambiguous even if the terminal title changes.
+    fn uniquely_hosted_by(&self, focused_pid: i64) -> Option<TmuxClient> {
+        let mut hosted = self.ancestry_matches(focused_pid);
+        if hosted.len() == 1 {
+            return hosted.pop();
         }
-        let mut hosted = self
+
+        let process_sample_can_evaluate_clients = self
             .clients
             .iter()
-            .filter(|client| is_ancestor(focused_pid, client.client_pid, &self.parent_map))
-            .cloned()
-            .collect::<Vec<_>>();
+            .any(|client| self.parent_map.contains_key(&client.client_pid));
+        if hosted.is_empty() && !process_sample_can_evaluate_clients && self.clients.len() == 1 {
+            return self.clients.first().cloned();
+        }
+        None
+    }
+
+    fn hosted_by_window(
+        &self,
+        focused_pid: i64,
+        focused_window_handle: Option<u64>,
+        window_title: &str,
+    ) -> Option<TmuxClient> {
+        let mut hosted = self.ancestry_matches(focused_pid);
         if hosted.is_empty() {
             return self.hosted_by(focused_pid);
         }
         let normalized_title = window_title.to_ascii_lowercase();
         hosted.sort_by_key(|client| {
+            let exact_handle = focused_window_handle.is_some_and(|handle| {
+                self.window_handle_by_client_pid.get(&client.client_pid) == Some(&handle)
+            }) as i64;
             let exact_window = self
                 .window_title_by_client_pid
                 .get(&client.client_pid)
                 .is_some_and(|title| title == window_title) as i64;
             let session_match =
                 normalized_title.contains(&client.session.to_ascii_lowercase()) as i64;
-            std::cmp::Reverse((exact_window, session_match, client.activity))
+            std::cmp::Reverse((exact_handle, exact_window, session_match, client.activity))
         });
         hosted.into_iter().next()
     }
@@ -1355,7 +1383,7 @@ fn ax_window_nodes(value: &Value) -> Vec<AxWindowNode> {
         .unwrap_or_default()
 }
 
-fn focused_window_title_from_nodes(nodes: &[AxWindowNode]) -> Option<&str> {
+fn focused_window_from_nodes(nodes: &[AxWindowNode]) -> Option<&AxWindowNode> {
     nodes
         .iter()
         .find(|node| {
@@ -1363,6 +1391,10 @@ fn focused_window_title_from_nodes(nodes: &[AxWindowNode]) -> Option<&str> {
                 || node.attrs.get("AXMain").map(String::as_str) == Some("1")
         })
         .or_else(|| nodes.first())
+}
+
+fn focused_window_title_from_nodes(nodes: &[AxWindowNode]) -> Option<&str> {
+    focused_window_from_nodes(nodes)
         .and_then(|node| node.attrs.get("AXTitle"))
         .map(String::as_str)
 }
@@ -1625,10 +1657,17 @@ async fn focused_tmux_client(
                     .ok()
                     .map(|snapshot| snapshot.clone())
             })?;
-            let title = focused_terminal_window_title(ctx, pid)
-                .await
+            if let Some(client) = snapshot.uniquely_hosted_by(pid) {
+                return Some(client);
+            }
+            let nodes = terminal_window_nodes(ctx, pid).await;
+            let focused_window = focused_window_from_nodes(&nodes);
+            let handle = focused_window.map(|window| window.handle);
+            let title = focused_window
+                .and_then(|window| window.attrs.get("AXTitle"))
+                .map(String::as_str)
                 .unwrap_or_default();
-            snapshot.hosted_by_window(pid, &title)
+            snapshot.hosted_by_window(pid, handle, title)
         }
         FocusedTmuxBackend::Remote(backend_id) => {
             remote_client_for_target(&plugin.remote_config(&backend_id)?, None).await
@@ -3456,12 +3495,70 @@ async fn reload_client(plugin: &Tmux, client: &TmuxClient) -> bool {
         .is_some()
 }
 
+/// These actions are safe to route from the continuously refreshed client
+/// snapshot once the cached client's current session has been checked through
+/// its tty. Destructive and one-shot actions continue to pay for a complete
+/// fresh client/process snapshot before they run.
+fn source_action_prefers_warm_client(name: &str) -> bool {
+    matches!(
+        name,
+        "tab_next"
+            | "tab_prev"
+            | "tab_move_next"
+            | "tab_move_previous"
+            | "pane_next"
+            | "pane_previous"
+    )
+}
+
+async fn warm_source_action_client(
+    plugin: &Tmux,
+    ctx: &Context,
+    pid: i64,
+) -> Option<(TmuxClient, &'static str)> {
+    let mut client = focused_tmux_client(plugin, ctx, pid, false).await?;
+    if client.remote {
+        // Remote focus resolution already fetched a current client inventory.
+        return Some((client, "remote"));
+    }
+    client.session = trimmed(
+        run_tmux_for_client(
+            plugin,
+            &client,
+            &[
+                "display-message",
+                "-c",
+                &client.tty,
+                "-p",
+                "#{session_name}",
+            ],
+        )
+        .await,
+    )?;
+    Some((client, "warm"))
+}
+
+async fn source_action_client(
+    plugin: &Tmux,
+    ctx: &Context,
+    pid: i64,
+    action: &str,
+) -> Option<(TmuxClient, &'static str)> {
+    if source_action_prefers_warm_client(action) {
+        if let Some(client) = warm_source_action_client(plugin, ctx, pid).await {
+            return Some(client);
+        }
+    }
+    focused_tmux_client(plugin, ctx, pid, true)
+        .await
+        .map(|client| (client, "fresh"))
+}
+
 async fn perform_source_action(
     plugin: &Tmux,
     ctx: &Context,
     req: &SourceActionRequest,
 ) -> SourceActionResponse {
-    let tmux_path = plugin.resolved_tmux_path().await;
     let Some(pid) = req.context.pid else {
         ctx.log(
             "debug",
@@ -3472,8 +3569,10 @@ async fn perform_source_action(
         );
         return SourceActionResponse::unhandled();
     };
-    let Some(client) = focused_tmux_client(plugin, ctx, pid, true).await else {
-        let clients = list_clients(tmux_path).await;
+    let resolution_started = Instant::now();
+    let Some((client, client_resolution)) = source_action_client(plugin, ctx, pid, &req.name).await
+    else {
+        let clients = list_clients(plugin.resolved_tmux_path().await).await;
         let pmap = parent_pid_map().await;
         ctx.log(
             "warn",
@@ -3485,6 +3584,8 @@ async fn perform_source_action(
         );
         return SourceActionResponse::unhandled();
     };
+    let resolution_ms = resolution_started.elapsed().as_millis();
+    let action_started = Instant::now();
     let ok = match req.name.as_str() {
         "tab_select" => tab_select(plugin, &client, req.index).await,
         "tab_next" => tab_adjacent(plugin, &client, "next").await,
@@ -3503,12 +3604,19 @@ async fn perform_source_action(
         "app_reload" => reload_client(plugin, &client).await,
         _ => return SourceActionResponse::unhandled(),
     };
+    let action_ms = action_started.elapsed().as_millis();
     ctx.log_fields(
         "debug",
         "[tmux] source action",
         BTreeMap::from([
             ("action".to_string(), req.name.clone()),
+            ("action_ms".to_string(), action_ms.to_string()),
+            (
+                "client_resolution".to_string(),
+                client_resolution.to_string(),
+            ),
             ("ok".to_string(), ok.to_string()),
+            ("resolution_ms".to_string(), resolution_ms.to_string()),
         ]),
     );
     // A tmux client hosts the focused terminal, so this source owns the
@@ -4068,6 +4176,57 @@ mod tests {
 
         assert!(same_client_processes(&previous, &same_processes_new_state));
         assert!(!same_client_processes(&previous, &replacement_process));
+    }
+
+    #[test]
+    fn repeatable_navigation_actions_prefer_the_warm_client_snapshot() {
+        for action in [
+            "tab_next",
+            "tab_prev",
+            "tab_move_next",
+            "tab_move_previous",
+            "pane_next",
+            "pane_previous",
+        ] {
+            assert!(source_action_prefers_warm_client(action), "{action}");
+        }
+        for action in ["tab_select", "tab_new", "tab_close", "pane_close"] {
+            assert!(!source_action_prefers_warm_client(action), "{action}");
+        }
+    }
+
+    #[test]
+    fn focused_window_handle_disambiguates_clients_in_one_terminal_process() {
+        let snapshot = ClientSnapshot {
+            clients: vec![
+                client("/dev/ttys000", "scratch", 1443, 100),
+                client("/dev/ttys001", "work", 2000, 20),
+            ],
+            parent_map: Arc::new(HashMap::from([(1443, 1356), (2000, 1356), (1356, 1)])),
+            window_title_by_client_pid: Arc::new(HashMap::from([
+                (1443, "shell".to_string()),
+                (2000, "shell".to_string()),
+            ])),
+            window_handle_by_client_pid: Arc::new(HashMap::from([(1443, 11), (2000, 22)])),
+        };
+
+        let picked = snapshot.hosted_by_window(1356, Some(22), "shell").unwrap();
+
+        assert_eq!(picked.session, "work");
+        assert_eq!(picked.tty, "/dev/ttys001");
+    }
+
+    #[test]
+    fn one_hosted_client_is_unambiguous_without_a_window_snapshot() {
+        let snapshot = ClientSnapshot {
+            clients: vec![client("/dev/ttys000", "scratch", 1443, 10)],
+            parent_map: Arc::new(HashMap::from([(1443, 1356), (1356, 1)])),
+            ..ClientSnapshot::default()
+        };
+
+        let picked = snapshot.uniquely_hosted_by(1356).unwrap();
+
+        assert_eq!(picked.session, "scratch");
     }
 
     #[test]
