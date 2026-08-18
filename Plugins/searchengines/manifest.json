@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "DuckDuckGo-style bangs in the flashlight: type !<bang> <query> to search, e.g. !r cat opens a Reddit search.",
   "install": "true",
-  "start": "exec ./flash-plugin-searchengines",
+  "exec": ["./flash-plugin-searchengines"],
   "shebangs": {
     "command": "searchengines",
     "items": [

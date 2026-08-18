@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Fuzzy-find emojis with `:emojis <query>` and insert the picked glyph.",
   "install": "true",
-  "start": "exec ./flash-plugin-emojis",
+  "exec": ["./flash-plugin-emojis"],
   "listen": [
     "core:flash.started"
   ],

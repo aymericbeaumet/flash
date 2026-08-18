@@ -9,7 +9,7 @@ final class PluginSandboxTests: XCTestCase {
   private func manifest(_ capabilities: Set<PluginCapability>) -> PluginManifest {
     PluginManifest(
       id: "test", name: "Test", version: "1", description: "",
-      install: "true", start: "exec ./flash-plugin-test", capabilities: capabilities)
+      install: "true", exec: ["./flash-plugin-test"], capabilities: capabilities)
   }
 
   func testPluginWithoutCapabilitiesIsNetworkDenied() {

@@ -10,8 +10,10 @@ Plugins are Flash-owned child processes. Official plugins ship inside the app
 bundle; third-party plugins are listed in `[plugins] third_party` as
 `github:user/project@<commit-sha>` (full 40-character SHA, mandatory — the
 materializer fetches exactly that commit and refuses a mismatched checkout) or
-`file:<path>`. The manifest's `install` and `start` shell strings run as the
-user from the plugin root.
+`file:<path>`. The manifest's `install` shell string runs as the user from
+the plugin root; `exec` is an argv array exec'd directly with the scrubbed
+plugin environment — no shell wrap, and a relative first element resolves
+against the plugin root.
 
 Runtime children receive `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`,
 `FLASH_PLUGIN_DATA_DIR`, `FLASH_PLUGIN_PARENT_PID`, and the plugin's
@@ -39,8 +41,8 @@ Plugin log lines travel as `flash.log` notifications and are recorded with
 ## Lifecycle methods
 
 - `initialize` — protocol handshake. The request carries
-  `{plugin_id, version, protocol_version: 2, running_applications}`; the reply
-  must echo protocol version 2 exactly. A manifest that declares `sources`
+  `{plugin_id, version, protocol_version: 3, running_applications}`; the reply
+  must echo protocol version 3 exactly. A manifest that declares `sources`
   makes readiness conditional: the reply's `published_sources` must be exactly
   `["plugin:<manifest-id>"]`, meaning the canonical warm catalog (possibly an
   authoritative empty list) exists before the plugin is ready. Violations are
@@ -120,11 +122,11 @@ content, config values, or event payloads.
 
 ## Manifest
 
-Required: `id`, `name`, `version`, `description`, `install`. `start` is
-required for any plugin that runs a process; omitting it declares a
-**manifest-only plugin** — no child process ever runs, and the manifest may
-only carry surfaces the host serves alone: `mappings`, `help`, and `verbs`
-whose every entry declares a default inline keystroke (the bundled
+Required: `id`, `name`, `version`, `description`, `install`. `exec` (argv
+array) is required for any plugin that runs a process; omitting it declares
+a **manifest-only plugin** — no child process ever runs, and the manifest
+may only carry surfaces the host serves alone: `mappings`, `help`, and
+`verbs` whose every entry declares a default inline keystroke (the bundled
 `defaults` plugin is the exemplar). Anything process-bound (`sources`,
 `queries`, `commands`, `listen`, `capabilities`, …) is rejected. Optional:
 `request_timeout_ms`, `capabilities`, `listen`, `only_bundle_ids`,
@@ -138,7 +140,7 @@ top-level or nested keys and malformed known fields are rejected outright.
   "version": "0.1.0",
   "description": "Example plugin",
   "install": "true",
-  "start": "exec ./flash-plugin-example",
+  "exec": ["./flash-plugin-example"],
   "listen": ["core:flash.started", "core:apps.*"],
   "only_bundle_ids": ["org.mozilla.firefox"],
   "only_urls": ["https://mail.google.com/*"],

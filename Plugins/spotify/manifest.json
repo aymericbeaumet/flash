@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Spotify playback controls backed by spotify_player.",
   "install": "true",
-  "start": "exec ./flash-plugin-spotify",
+  "exec": ["./flash-plugin-spotify"],
   "capabilities": [
     "network"
   ],

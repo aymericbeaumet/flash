@@ -961,11 +961,14 @@ struct PluginManifest: Codable, Equatable {
   var version: String
   var description: String
   var install: String
-  /// Shell string that starts the plugin child process. `nil` declares a
-  /// manifest-only plugin: no process ever runs, and `validate()` restricts
-  /// the manifest to surfaces the host can serve alone (mappings, help, and
-  /// verbs whose every dispatch resolves to an inline keystroke).
-  var start: String?
+  /// Argv array that starts the plugin child process, exec'd directly with
+  /// the scrubbed plugin environment — no shell wrap, so login-shell rc
+  /// files can never re-widen the env allowlist. A relative first element
+  /// resolves against the plugin root. `nil` declares a manifest-only
+  /// plugin: no process ever runs, and `validate()` restricts the manifest
+  /// to surfaces the host can serve alone (mappings, help, and verbs whose
+  /// every dispatch resolves to an inline keystroke).
+  var exec: [String]?
   /// Host event-name patterns this plugin listens to. `*` is the only wildcard.
   var listen: [String]
   var hintsProvider: PluginHintsProvider?
@@ -1133,7 +1136,7 @@ struct PluginManifest: Codable, Equatable {
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case id, name, version, description, install, start, listen, priority
+    case id, name, version, description, install, exec, listen, priority
     case volatile
     case onlyBundleIDs = "only_bundle_ids"
     case onlyURLs = "only_urls"
@@ -1147,7 +1150,7 @@ struct PluginManifest: Codable, Equatable {
 
   init(
     id: String, name: String, version: String, description: String,
-    install: String, start: String? = nil,
+    install: String, exec: [String]? = nil,
     listen: [String] = [],
     hintsProvider: PluginHintsProvider? = nil,
     queriesProvider: PluginQueriesProvider? = nil,
@@ -1171,7 +1174,7 @@ struct PluginManifest: Codable, Equatable {
     self.version = version
     self.description = description
     self.install = install
-    self.start = start
+    self.exec = exec
     self.listen = Self.uniqueTrimmed(listen)
     self.hintsProvider = hintsProvider
     self.queriesProvider = queriesProvider
@@ -1198,7 +1201,7 @@ struct PluginManifest: Codable, Equatable {
     self.version = try c.decode(String.self, forKey: .version)
     self.description = try c.decode(String.self, forKey: .description)
     self.install = try c.decode(String.self, forKey: .install)
-    self.start = try c.decodeIfPresent(String.self, forKey: .start)
+    self.exec = try c.decodeIfPresent([String].self, forKey: .exec)
     self.listen = Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .listen) ?? [])
     self.hintsProvider = try c.decodeIfPresent(PluginHintsProvider.self, forKey: .hints)
     self.queriesProvider = try c.decodeIfPresent(PluginQueriesProvider.self, forKey: .queries)
@@ -1232,7 +1235,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(version, forKey: .version)
     try c.encode(description, forKey: .description)
     try c.encode(install, forKey: .install)
-    if let start { try c.encode(start, forKey: .start) }
+    if let exec { try c.encode(exec, forKey: .exec) }
     if !listen.isEmpty { try c.encode(listen, forKey: .listen) }
     if let hintsProvider { try c.encode(hintsProvider, forKey: .hints) }
     if let queriesProvider { try c.encode(queriesProvider, forKey: .queries) }
@@ -1428,9 +1431,10 @@ struct PluginManifest: Codable, Equatable {
         throw PluginError.invalidManifest("manifest.json field \(field) must not be empty")
       }
     }
-    if let start {
-      if start.trimmed.isEmpty {
-        throw PluginError.invalidManifest("manifest.json field start must not be empty")
+    if let exec {
+      if exec.isEmpty || exec.contains(where: { $0.trimmed.isEmpty }) {
+        throw PluginError.invalidManifest(
+          "manifest.json field exec must be a non-empty argv array without empty elements")
       }
     } else {
       // Manifest-only plugin: no child process ever runs, so any surface
@@ -1454,11 +1458,11 @@ struct PluginManifest: Codable, Equatable {
       ]
       if let field = processBound.first(where: { $0.1 })?.0 {
         throw PluginError.invalidManifest(
-          "manifest.json without start cannot declare \(field) — it requires a plugin process")
+          "manifest.json without exec cannot declare \(field) — it requires a plugin process")
       }
       for verb in verbs where (verb.inlineKeystrokes[""] ?? "").trimmed.isEmpty {
         throw PluginError.invalidManifest(
-          "manifest.json without start requires verb \(verb.name) to declare a default"
+          "manifest.json without exec requires verb \(verb.name) to declare a default"
             + " inline keystroke")
       }
     }

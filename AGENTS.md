@@ -283,20 +283,24 @@ Logs are newline-delimited JSON written to stderr and
 `debug.log_level = "trace"` includes AX tree dumps. Accepted levels are
 `trace`, `debug`, `info`, `warn`, `error`, and `fatal`.
 
-`plugins.third_party` accepts only `github:user/project@<commit-sha>` and `file:<path>`. The `@<commit-sha>` pin is mandatory for `github:` references — it must be a full 40-character lowercase hex commit SHA, and the loader rejects anything else (branch names, tags, short SHAs). Third-party `install` / `start` scripts run as the user with full host privileges, so trusting a moving upstream ref would let a compromised plugin author drop arbitrary code on every config reload; the materializer fetches *exactly* the pinned commit and refuses to start a plugin whose checked-out HEAD doesn't match. Plugin manifests declare sensitive runtime surfaces through `capabilities`: `"clipboard"` gates `core:clipboard.changed`, `"accessibility"` gates the AX broker, `"network"` opts out of the default network-denying seatbelt profile, `"subprocess"` permits privileged helpers that cannot run under that profile, and `"app_control"` gates the `host.normal_mode_target` and `app.activate` host RPCs. Running-app and focus events are currently delivered according to `listen` independently of `"app_control"`; the capability does not gate observation. Omitted capabilities are default-denied.
+`plugins.third_party` accepts only `github:user/project@<commit-sha>` and `file:<path>`. The `@<commit-sha>` pin is mandatory for `github:` references — it must be a full 40-character lowercase hex commit SHA, and the loader rejects anything else (branch names, tags, short SHAs). Third-party `install` scripts and `exec` argvs run as the user with full host privileges, so trusting a moving upstream ref would let a compromised plugin author drop arbitrary code on every config reload; the materializer fetches *exactly* the pinned commit and refuses to start a plugin whose checked-out HEAD doesn't match. Plugin manifests declare sensitive runtime surfaces through `capabilities`: `"clipboard"` gates `core:clipboard.changed`, `"accessibility"` gates the AX broker, `"network"` opts out of the default network-denying seatbelt profile, `"subprocess"` permits privileged helpers that cannot run under that profile, and `"app_control"` gates the `host.normal_mode_target` and `app.activate` host RPCs. Running-app and focus events are currently delivered according to `listen` independently of `"app_control"`; the capability does not gate observation. Omitted capabilities are default-denied.
 Official bundled plugins under `Contents/Resources/Plugins` are enabled unless
 their id is listed in `plugins.disabled`; use `["defaults"]` for a raw host-only
 experience without built-in plugin-layer defaults. In the checkout they live under root
 `Plugins/` so `Scripts/install.sh --dev` can symlink them into the installed app. Every plugin root must contain
 `manifest.json` with `id`, `name`, `version`, `description`, `install`,
-optional `start`, optional `listen` event patterns, root selectors such as `only_bundle_ids` /
+optional `exec`, optional `listen` event patterns, root selectors such as `only_bundle_ids` /
 `only_urls`, and provider registrations. Command providers expose one or more
 subcommands; status providers expose named segments through `segments`.
 There is no `manifest_version` field on master. The host rejects unknown
 top-level and nested provider/item manifest keys instead of accepting legacy
 aliases; malformed known fields are rejected instead of silently defaulted.
-Mapping items must use exactly `all`, `normal`, or `insert` scopes. `install` and
-`start` are shell strings run from the plugin root. Omitting `start` declares a
+Mapping items must use exactly `all`, `normal`, or `insert` scopes. `install`
+is a shell string run from the plugin root; `exec` is an argv array the host
+execs directly with the scrubbed plugin environment (no shell wrap — a
+`/bin/sh -lc` here used to source login rc files and silently re-widen the
+env allowlist), resolving a relative first element against the plugin root.
+Omitting `exec` declares a
 **manifest-only plugin**: no child process ever runs (no install, heartbeat, or
 watchdog), and validation restricts the manifest to host-served surfaces —
 `mappings`, `help`, and `verbs` whose every entry has a default inline
@@ -314,7 +318,7 @@ Plugins speak length-prefixed MessagePack over stdin/stdout: a 4-byte
 big-endian payload length followed by a MessagePack value. Host input goes to
 stdin, successful or failed protocol results go to stdout, and unexpected
 errors go to stderr. Plugins can log through the Flash logger by sending
-`flash.log` protocol notifications. Protocol v2 uses namespaced method names:
+`flash.log` protocol notifications. Protocol v3 uses namespaced method names:
 `sources.snapshot`, `query.evaluate`, `hints.discover`, `hints.activate`,
 `candidate.resolve`, `source.action`, `command.invoke`, and
 `navigation.restore`; do not add camel-case aliases.
@@ -369,8 +373,8 @@ their locations warm in memory via `set_locations`, refresh from light host even
 and poll only when the underlying source cannot be watched. The host *pulls* each
 location source via the SDK-owned `sources.snapshot` RPC on flashlight open;
 plugins cannot override that O(memory) warm-store read or put I/O on the hot
-path. The manifest's `start` is
-`exec ./flash-plugin-<id>` and `install` is a no-op `true` — there is no cargo,
+path. The manifest's `exec` is
+`["./flash-plugin-<id>"]` and `install` is a no-op `true` — there is no cargo,
 Python, or interpreter at runtime. `Scripts/build.sh` / `Scripts/install.sh`
 invoke `build-plugins.sh` with the matching mode; dev symlinks the repo
 `Plugins/` into the app, while release stages only `manifest.json` + the binary

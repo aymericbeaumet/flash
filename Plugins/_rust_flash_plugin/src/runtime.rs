@@ -31,7 +31,7 @@ const EVENT_HANDLER_TIMEOUT: Duration = Duration::from_secs(15);
 /// host and plugin must agree on lifecycle and payload semantics before the
 /// plugin can become ready. Bump on any breaking wire change. MUST stay in sync
 /// with `PluginProcess.protocolVersion` on the host.
-const PROTOCOL_VERSION: u32 = 2;
+const PROTOCOL_VERSION: u32 = 3;
 
 struct QueuedEvent {
     event: Event,

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Surface macOS Reminders entries in flashlight, plus `:reminders` open helper.",
   "install": "true",
-  "start": "exec ./flash-plugin-reminders",
+  "exec": ["./flash-plugin-reminders"],
   "priority": 12,
   "commands": {
     "items": [

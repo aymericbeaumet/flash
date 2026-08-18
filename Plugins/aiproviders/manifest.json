@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Open AI chat providers from the flashlight: !chatgpt, !claude, !gemini, !perplexity, !copilot, !grok — optional query is pre-filled into the new chat.",
   "install": "true",
-  "start": "exec ./flash-plugin-aiproviders",
+  "exec": ["./flash-plugin-aiproviders"],
   "shebangs": {
     "command": "aiproviders",
     "items": [

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Control macOS native Screenshot shortcuts without capturing pixels inside Flash.",
   "install": "true",
-  "start": "exec ./flash-plugin-screenshot",
+  "exec": ["./flash-plugin-screenshot"],
   "commands": {
     "items": [
       {

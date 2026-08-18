@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Slack CLI actions.",
   "install": "true",
-  "start": "exec ./flash-plugin-slack",
+  "exec": ["./flash-plugin-slack"],
   "request_timeout_ms": 6500,
   "capabilities": [
     "network"

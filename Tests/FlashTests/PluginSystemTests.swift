@@ -24,12 +24,12 @@ final class PluginSystemTests: XCTestCase {
     ]
     for manifest in manifests {
       // Bundled plugins are compiled Rust binaries: `install` is a no-op
-      // and `start` exec's the embedded binary (manifest-only plugins such
-      // as `defaults` have no process and omit `start` entirely). See
-      // Scripts/build-plugins.sh.
+      // and `exec` argv-execs the embedded binary directly (manifest-only
+      // plugins such as `defaults` have no process and omit `exec`
+      // entirely). See Scripts/build-plugins.sh.
       XCTAssertEqual(manifest.install, "true")
-      if let start = manifest.start {
-        XCTAssertEqual(start, "exec ./flash-plugin-\(manifest.id)")
+      if let exec = manifest.exec {
+        XCTAssertEqual(exec, ["./flash-plugin-\(manifest.id)"])
       }
       XCTAssertFalse(manifest.description.isEmpty)
       if runCommandRequired.contains(manifest.id) {
@@ -50,7 +50,7 @@ final class PluginSystemTests: XCTestCase {
     }
     let tmux = try XCTUnwrap(manifests.first { $0.id == "tmux" })
     XCTAssertEqual(tmux.install, "true")
-    XCTAssertEqual(tmux.start, "exec ./flash-plugin-tmux")
+    XCTAssertEqual(tmux.exec, ["./flash-plugin-tmux"])
     XCTAssertTrue(tmux.volatile)
     XCTAssertEqual(tmux.priority, 20)
     // Discovery is process/PTY based, so the source must not require a static
@@ -84,7 +84,7 @@ final class PluginSystemTests: XCTestCase {
     let defaults = try XCTUnwrap(manifests.first { $0.id == "defaults" })
     // Manifest-only: no process, no binary — every verb resolves through
     // the host's inline-keystroke path.
-    XCTAssertNil(defaults.start)
+    XCTAssertNil(defaults.exec)
     XCTAssertEqual(
       Set(defaults.verbs.map(\.name)),
       ["app_save", "app_print", "document_open", "window_new"])
@@ -151,7 +151,7 @@ final class PluginSystemTests: XCTestCase {
         "version": "1.0.0",
         "description": "Pure query answers",
         "install": "true",
-        "start": "exec ./flash-plugin-answers",
+        "exec": ["./flash-plugin-answers"],
         "queries": {}
       }
       """.data(using: .utf8))
@@ -170,7 +170,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "1.0.0",
           "description": "fixture",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "queries": { "regex": "^.+$" }
         }
         """)
@@ -202,7 +202,7 @@ final class PluginSystemTests: XCTestCase {
 
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
-        String(describing: error).contains("without start cannot declare commands"))
+        String(describing: error).contains("without exec cannot declare commands"))
     }
   }
 
@@ -263,7 +263,7 @@ final class PluginSystemTests: XCTestCase {
             "version": "1.0.0",
             "description": "Nested schema fixture",
             "install": "true",
-            "start": "true",
+            "exec": ["/usr/bin/true"],
             \(provider)
           }
           """)
@@ -284,7 +284,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "1.0.0",
           "description": "Invalid mapping scope",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "mappings": {
             "items": [{ "key": "x", "mode": "command", "command": ["true"] }]
           }
@@ -315,7 +315,7 @@ final class PluginSystemTests: XCTestCase {
             "version": "1.0.0",
             "description": "Malformed field fixture",
             "install": "true",
-            "start": "true",
+            "exec": ["/usr/bin/true"],
             \(provider)
           }
           """)
@@ -353,14 +353,14 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testPluginProtocolVersionRequiresExactV2() {
-    XCTAssertEqual(PluginProcess.protocolVersion, 2)
+  func testPluginProtocolVersionRequiresExactV3() {
+    XCTAssertEqual(PluginProcess.protocolVersion, 3)
     XCTAssertTrue(
       PluginProcess.acceptsProtocolVersion([
         "ok": true,
-        "protocol_version": 2,
+        "protocol_version": 3,
       ]))
-    XCTAssertFalse(PluginProcess.acceptsProtocolVersion(["protocol_version": 1]))
+    XCTAssertFalse(PluginProcess.acceptsProtocolVersion(["protocol_version": 2]))
     XCTAssertFalse(PluginProcess.acceptsProtocolVersion(["ok": true]))
     XCTAssertFalse(PluginProcess.acceptsProtocolVersion(nil))
   }
@@ -436,7 +436,7 @@ final class PluginSystemTests: XCTestCase {
         "version": "1.0.0",
         "description": "fixture",
         "install": "true",
-        "start": "true",
+        "exec": ["/usr/bin/true"],
         "sources": [
           { "name": "cold.items", "kind": "locations", "priority": "normal" }
         ]
@@ -747,7 +747,7 @@ final class PluginSystemTests: XCTestCase {
     // reach for global install locations.
     for root in try officialPluginRoots() {
       let manifest = try PluginManifest.load(from: root)
-      for field in [manifest.install, manifest.start].compactMap({ $0 }) {
+      for field in [manifest.install] + (manifest.exec ?? []) {
         for needle in banned {
           XCTAssertFalse(
             field.contains(needle), "\(root.lastPathComponent) manifest contains \(needle)")
@@ -794,7 +794,7 @@ final class PluginSystemTests: XCTestCase {
       "version": "0.1.0",
       "description": "Sample plugin",
       "install": "./install.sh",
-      "start": "./start.sh"
+      "exec": ["./start.sh"]
     }
     """.write(
       to: pluginRoot.appendingPathComponent("manifest.json"),
@@ -823,7 +823,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "Spotify controls",
           "install": "npm install",
-          "start": "npm start",
+          "exec": ["npm", "start"],
           "listen": [
             "core:apps.*",
             "core:config.*"
@@ -842,7 +842,7 @@ final class PluginSystemTests: XCTestCase {
     let manifest = try PluginManifest.load(from: root)
     XCTAssertEqual(manifest.id, "spotify")
     XCTAssertEqual(manifest.install, "npm install")
-    XCTAssertEqual(manifest.start, "npm start")
+    XCTAssertEqual(manifest.exec, ["npm", "start"])
     XCTAssertEqual(manifest.listen, ["core:apps.*", "core:config.*"])
     XCTAssertEqual(manifest.onlyBundleIDs, ["com.spotify.client"])
     XCTAssertEqual(manifest.onlyURLs, ["https://open.spotify.com/*"])
@@ -875,7 +875,7 @@ final class PluginSystemTests: XCTestCase {
             "version": "0.1.0",
             "description": "Legacy key",
             "install": "true",
-            "start": "true",
+            "exec": ["/usr/bin/true"],
             "\(key)": \(value)
           }
           """)
@@ -897,7 +897,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "Slack",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "mappings": {
             "items": [
               { "key": "q", "command": ["flash", "plugin_command", "--command=slack", "--subcommand=run"] },
@@ -977,7 +977,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "Spotify controls",
           "install": "true",
-          "start": "true"
+          "exec": ["/usr/bin/true"]
         }
         """)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -995,7 +995,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "Every surface in split provider sections",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "only_bundle_ids": ["com.example.app"],
           "sources": [
             { "name": "multi.items" }
@@ -1040,7 +1040,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "Every surface in split provider sections",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "listen": ["core:apps.*", "core:config.*"],
           "capabilities": ["accessibility"],
           "sources": [
@@ -1108,7 +1108,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "No hints, no candidates",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "commands": {
             "items": [
               { "command": "x", "subcommand": "", "description": "X" }
@@ -1133,7 +1133,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "App-scoped commands",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "only_bundle_ids": ["com.example.app"],
           "commands": {
             "items": [
@@ -1169,7 +1169,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "Provider-level mode gate",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "mappings": {
             "modes": ["insert"],
             "items": [
@@ -1196,7 +1196,7 @@ final class PluginSystemTests: XCTestCase {
           "version": "0.1.0",
           "description": "Flashlight bangs",
           "install": "true",
-          "start": "true",
+          "exec": ["/usr/bin/true"],
           "only_bundle_ids": ["com.example.app"],
           "shebangs": {
             "command": "search",

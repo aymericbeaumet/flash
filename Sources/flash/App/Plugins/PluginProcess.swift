@@ -680,11 +680,11 @@ final class PluginProcess {
   private func startOnQueue(reason: String) {
     stopOnQueue(reason: "pre_start")
     initializationCompleted = false
-    // Manifest-only plugin (no `start`): no child process exists — nothing to
+    // Manifest-only plugin (no `exec`): no child process exists — nothing to
     // install, launch, or heartbeat. The host compiles its inline surfaces
     // (inline-keystroke verbs, mappings, help) straight from the manifest.
     // File watchers stay armed so manifest edits still hot-reload.
-    guard manifest.start != nil else {
+    guard manifest.exec != nil else {
       setState(.ready)
       if watchFiles {
         installFileWatchers()
@@ -778,10 +778,19 @@ final class PluginProcess {
 
   private func launch() throws {
     // Unreachable for manifest-only plugins — startOnQueue returns before
-    // install/launch when the manifest has no start command.
-    guard let start = manifest.start else {
-      throw PluginError.invalidManifest("plugin \(manifest.id) has no start command to launch")
+    // install/launch when the manifest has no exec argv.
+    guard let execArgv = manifest.exec, let executable = execArgv.first else {
+      throw PluginError.invalidManifest("plugin \(manifest.id) has no exec argv to launch")
     }
+    // Direct exec, no shell wrap: a `/bin/sh -lc` here used to source the
+    // user's login rc files inside the child, silently re-widening the
+    // scrubbed 11-key env allowlist. A relative executable resolves against
+    // the plugin root (bundled manifests use "./flash-plugin-<id>").
+    let executablePath =
+      executable.hasPrefix("/")
+      ? executable
+      : root.appendingPathComponent(executable).path
+    let execTail = Array(execArgv.dropFirst())
     let process = Process()
     let stdin = Pipe()
     let stdout = Pipe()
@@ -794,10 +803,10 @@ final class PluginProcess {
       profile != nil && FileManager.default.isExecutableFile(atPath: Self.sandboxExecPath)
     if sandboxed, let profile {
       process.executableURL = URL(fileURLWithPath: Self.sandboxExecPath)
-      process.arguments = ["-p", profile, "/bin/sh", "-lc", start]
+      process.arguments = ["-p", profile, executablePath] + execTail
     } else {
-      process.executableURL = URL(fileURLWithPath: "/bin/sh")
-      process.arguments = ["-lc", start]
+      process.executableURL = URL(fileURLWithPath: executablePath)
+      process.arguments = execTail
     }
     FlashLog.info(
       "[plugin] \(manifest.id) launch network=\(sandboxed ? "denied (sandboxed)" : "allowed")",
@@ -1022,7 +1031,10 @@ final class PluginProcess {
   /// Wire-protocol version the host speaks. Version agreement is a hard startup
   /// boundary because v2 makes readiness mean `on_start` and initial warm-source
   /// publication have completed.
-  static let protocolVersion = 2
+  // v3: manifest `start` shell string became the `exec` argv array (direct
+  // exec, no shell). The bump makes a stale binary built against the old
+  // schema fail the handshake diagnosably instead of decoding oddly.
+  static let protocolVersion = 3
   static let maxCatalogCandidates = 10_000
   static let maxCatalogEncodedBytes = 4 * 1024 * 1024
   static let maxQueryAnswersPerEvaluator = 16
