@@ -9,13 +9,15 @@ final class PluginSystemTests: XCTestCase {
     let roots = try officialPluginRoots()
     let manifests = try roots.map { try PluginManifest.load(from: $0) }
     let ids = Set(manifests.map(\.id))
+    // Plugins are discovered by globbing Plugins/*/manifest.json — a new
+    // plugin needs no test edit. Each manifest id must match its directory
+    // name, and the floor guards against a glob misfire silently passing
+    // an empty set.
     XCTAssertEqual(
-      ids,
-      [
-        "aiproviders", "calculator", "chromium", "clipboard", "contacts", "defaults",
-        "emojis", "firefox", "marks", "media", "notes", "processes", "reminders",
-        "safari", "screenshot", "searchengines", "slack", "spotify", "system", "tmux",
-      ])
+      ids, Set(roots.map(\.lastPathComponent)),
+      "every manifest id must match its plugin directory name")
+    XCTAssertGreaterThanOrEqual(
+      roots.count, 10, "official plugin discovery found implausibly few plugins")
 
     let runCommandRequired: Set<String> = [
       "media", "slack", "spotify",
