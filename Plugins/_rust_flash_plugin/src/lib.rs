@@ -21,8 +21,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::sync::{mpsc, oneshot, watch};
 
-#[path = "../../_bounded_process.rs"]
-mod bounded_process;
+pub mod process;
 
 /// Generate the typed plugin surface from `manifest.json` at compile time. See
 /// the `flash_plugin_macros` crate. Invoke as `flash_plugin::plugin!(MyPlugin);`
@@ -1094,7 +1093,7 @@ pub async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> C
                 std::env::var("PATH").unwrap_or_default()
             ),
         );
-    let output = match bounded_process::capture(
+    let output = match process::capture(
         &mut command,
         None,
         timeout,

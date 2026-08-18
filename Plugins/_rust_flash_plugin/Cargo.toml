@@ -6,7 +6,7 @@ license = "MIT"
 description = "Lightweight tokio length-prefixed MessagePack scaffolding for Flash plugins (macOS)."
 
 [dependencies]
-flash_plugin_macros = { path = "../_rust_flash_plugin_macros" }
+flash_plugin_macros = { path = "macros" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }

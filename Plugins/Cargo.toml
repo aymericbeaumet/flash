@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
   "_rust_flash_plugin",
-  "_rust_flash_plugin_macros",
+  "_rust_flash_plugin/macros",
   "aiproviders",
   "calculator",
   "chromium",

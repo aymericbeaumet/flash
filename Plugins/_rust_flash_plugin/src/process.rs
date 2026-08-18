@@ -1,6 +1,8 @@
-//! Bounded subprocess capture shared by plugins that cannot use the SDK
-//! runner (for example, tmux needs a deliberately unsandboxed environment and
-//! Slack's curl transport writes a generated config on stdin).
+//! Bounded subprocess capture: the low-level layer under the SDK's
+//! [`run_command`](crate::run_command), public for plugins whose invocation
+//! shape the high-level runner cannot express (for example, tmux builds its
+//! own `Command` with a deliberately unsandboxed environment and custom
+//! output budgets).
 //!
 //! Both output streams are drained concurrently. A timeout, a read failure, or
 //! either stream exceeding its byte budget kills the subprocess's entire

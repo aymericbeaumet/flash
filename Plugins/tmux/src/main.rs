@@ -56,8 +56,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-#[path = "../../_bounded_process.rs"]
-mod bounded_process;
+use flash_plugin::process as bounded_process;
 
 const SUBPROCESS_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const SUBPROCESS_STDERR_LIMIT: usize = 64 * 1024;
