@@ -139,6 +139,7 @@ third_party = []
 suggestion_count = 10
 
 [mode.normal]
+passthrough_keys = ["escape"]
 passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]
 leader = "\\"
 
@@ -151,7 +152,7 @@ leader = "\\"
 "ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
 ```
 
-Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, an unmapped shortcut carrying one of `passthrough_modifiers` switches to INSERT and continues to the app or macOS; the default list is Command, Control, Shift, and Option. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; those preset modifiers are combined with any magic modifiers held on the final hint key.
+Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` switches to INSERT and continues to the app or macOS; the defaults are Escape and Command, Control, Shift, and Option. Explicit mappings win. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; those preset modifiers are combined with any magic modifiers held on the final hint key.
 
 ## Use your existing hotkey tool
 

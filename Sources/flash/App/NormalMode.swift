@@ -103,7 +103,6 @@ enum NormalModeInterpreter {
     mappings: CompiledMappings
   ) -> NormalModeTransition {
     let independent = modifierFlags.intersection(.deviceIndependentFlagsMask)
-    if keyCode == 53 { return .consume }
 
     let hasControl = independent.contains(.control)
     let ignoredChar = firstCharacter(charactersIgnoringModifiers)?.lowercased().first
@@ -133,9 +132,8 @@ enum NormalModeInterpreter {
     }
 
     // A bare `"` parked us waiting for a register name. Consume this key as
-    // that name. An invalid name (escape is handled above; arrows, chords,
-    // …) abandons the register prefix and re-interprets the key from scratch
-    // so it isn't silently swallowed.
+    // that name. An invalid name abandons the register prefix and re-interprets
+    // the key from scratch so it isn't silently swallowed.
     if state.awaitingRegister {
       if let name = actualChar, isRegisterNameChar(name) {
         return .pending(PendingState(prefix: "", register: String(name)).encoded)
@@ -388,6 +386,8 @@ enum NormalModeInterpreter {
       keys.append(String(ignoredChar))
     }
     switch Int(keyCode) {
+    case kVK_Escape:
+      if !keys.contains("escape") { keys.append("escape") }
     case kVK_Space:
       if !keys.contains("space") { keys.append("space") }
     case kVK_Tab:

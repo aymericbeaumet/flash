@@ -27,6 +27,8 @@ final class ConfigLoaderTests: XCTestCase {
       keys: "up",
       keyCode: CGKeyCode(kVK_UpArrow))
     XCTAssertEqual(c.mode.normalLeader, "\\")
+    XCTAssertEqual(c.mode.normalPassthroughKeys, ["escape"])
+    XCTAssertEqual(c.mode.normalPassthroughKeyCodes, [UInt32(kVK_Escape)])
     XCTAssertEqual(c.mode.normalPassthroughModifiers, ["cmd", "ctrl", "shift", "alt"])
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("\\<space>") })?.action.command,
@@ -177,6 +179,37 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(
       invalid.diagnostics.contains {
         $0.message.contains("passthrough_modifiers: unknown modifier \"hyper\"")
+      })
+  }
+
+  func testParsesNormalPassthroughKeys() {
+    XCTAssertEqual(ConfigLoader.parse("").mode.normalPassthroughKeys, ["escape"])
+    let c = ConfigLoader.parse(
+      """
+      [mode.normal]
+      passthrough_keys = ["escape", "tab"]
+      """)
+    XCTAssertEqual(c.mode.normalPassthroughKeys, ["escape", "tab"])
+    XCTAssertEqual(c.mode.normalPassthroughKeyCodes, [UInt32(kVK_Escape), UInt32(kVK_Tab)])
+
+    let disabled = ConfigLoader.parse(
+      """
+      [mode.normal]
+      passthrough_keys = []
+      """)
+    XCTAssertTrue(disabled.mode.normalPassthroughKeys.isEmpty)
+    XCTAssertTrue(disabled.mode.normalPassthroughKeyCodes.isEmpty)
+
+    let invalid = ConfigLoader.parse(
+      """
+      [mode.normal]
+      passthrough_keys = ["escape", "hyper"]
+      """)
+    XCTAssertEqual(invalid.mode.normalPassthroughKeys, ["escape", "hyper"])
+    XCTAssertEqual(invalid.mode.normalPassthroughKeyCodes, [UInt32(kVK_Escape)])
+    XCTAssertTrue(
+      invalid.diagnostics.contains {
+        $0.message.contains("passthrough_keys: unknown key \"hyper\"")
       })
   }
 
@@ -688,6 +721,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(flashlight["suggestion_count"] as? Int, 10)
     XCTAssertEqual(flashlight["precedence_alive_bonus"] as? Int, 10)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
+    XCTAssertEqual(mode["normal_passthrough_keys"] as? [String], ["escape"])
     XCTAssertEqual(
       mode["normal_passthrough_modifiers"] as? [String],
       ["cmd", "ctrl", "shift", "alt"])

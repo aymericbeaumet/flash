@@ -319,9 +319,9 @@ final class NormalModeTests: XCTestCase {
     // pass when they want the side-effect followed by a switch to
     // INSERT. They're user-driven, so the gate must let them through.
     XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .explicitCommand))
-    // `.modifierPassthrough` is scheduled only by an explicit unmapped
-    // modified chord, so it is user-driven too.
-    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .modifierPassthrough))
+    // `.normalModePassthrough` is scheduled only by an explicit unmapped
+    // configured keypress, so it is user-driven too.
+    XCTAssertTrue(AppDelegate.normalModeMayEnterInsert(reason: .normalModePassthrough))
     // `.advancedModeDisabled` stays out of the user-driven set — config
     // reload uses `force: true` to bypass the gate when it needs to
     // leave NORMAL because the user removed the normal-mode binding.

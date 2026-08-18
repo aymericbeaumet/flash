@@ -23,9 +23,10 @@ extension NormalModeDispatcher {
 
         Normal mode captures keyboard input through Flash's sanctioned session
         tap, with the overlay panel as its no-permission fallback. Configured
-        modified mappings use Carbon hotkeys. By default, an unmapped Command,
-        Control, Shift, or Option shortcut enters INSERT and continues natively;
-        `mode.normal.passthrough_modifiers = []` disables that fallback.
+        modified mappings use Carbon hotkeys. By default, Escape and an unmapped
+        Command, Control, Shift, or Option shortcut enter INSERT and continue
+        natively. Set `mode.normal.passthrough_keys = []` or
+        `mode.normal.passthrough_modifiers = []` to disable either fallback.
 
         ## Core Motion
 

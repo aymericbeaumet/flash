@@ -209,6 +209,8 @@ final class OverlayPanel: NSPanel {
   var normalModeRepeatAnchorUpdatedAt: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
+  var normalModePassthroughKeyCodes = Set(
+    Config.Mode.defaultNormalPassthroughKeys.compactMap(HotkeySyntax.parseKey))
   var normalModePassthroughModifiers = Config.Mode.defaultNormalPassthroughModifiers
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
@@ -561,7 +563,7 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidUpdatePrefix(_ prefix: String)
   func overlayDidHandleNormalMode(_ action: MappingCommand?, repeatCount: Int)
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool
-  func overlayDidPassthroughUnmappedModifier(_ event: NSEvent)
+  func overlayDidPassthroughNormalModeKey(_ event: NSEvent)
   func overlayDidCancelCommandLine()
   func overlayDidUpdateCommandLine(_ command: String, cursorIndex: Int, resetSelection: Bool)
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool

@@ -126,6 +126,7 @@ extension AppDelegate {
     overlay.modeLabels = cfg.mode.labels
     overlay.magicModifiers = ClickModifiers(names: cfg.hints.magicModifiers)
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
+    overlay.normalModePassthroughKeyCodes = cfg.mode.normalPassthroughKeyCodes
     overlay.normalModePassthroughModifiers = cfg.mode.normalPassthroughModifiers
     statusBarController?.updateTemplate(cfg.statusBar.template)
     registry.updateOpenConfig(cfg.open)

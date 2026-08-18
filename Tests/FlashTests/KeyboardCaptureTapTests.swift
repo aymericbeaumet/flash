@@ -43,6 +43,21 @@ final class KeyboardCaptureTapTests: XCTestCase {
         passthroughModifierFlags: [.maskCommand]))
   }
 
+  func testNormalModePassesConfiguredUnmappedKeysButKeepsMappings() {
+    XCTAssertFalse(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .normal,
+        inputMode: .normal,
+        hasMapping: false,
+        isPassthroughKey: true))
+    XCTAssertTrue(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .normal,
+        inputMode: .normal,
+        hasMapping: true,
+        isPassthroughKey: true))
+  }
+
   func testHintsAlwaysSwallowModifiedChords() {
     XCTAssertTrue(
       KeyboardCaptureTap.shouldSwallow(
@@ -50,6 +65,7 @@ final class KeyboardCaptureTapTests: XCTestCase {
         inputMode: .hints,
         modifierFlags: .maskControl,
         hasMapping: false,
+        isPassthroughKey: true,
         passthroughModifierFlags: [.maskCommand, .maskControl, .maskShift, .maskAlternate]))
   }
 

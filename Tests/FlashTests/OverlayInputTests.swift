@@ -539,6 +539,51 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_ANSI_Quote)])
   }
 
+  func testKeyWindowFallbackPassesConfiguredEscapeKey() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
+    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_Escape)])
+    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
+  }
+
+  func testKeyWindowFallbackKeepsExplicitEscapeMappingInNormalMode() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = CompiledMappings([
+      ModeMapping(key: "escape", action: .flashCommand(.scroll(.top)))
+    ])
+
+    let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
+    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
+    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.scroll(.top)])
+  }
+
+  func testKeyWindowFallbackConsumesEscapeWhenPassthroughIsDisabled() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+    panel.normalModePassthroughKeyCodes = []
+
+    let event = try keyEvent(keyCode: kVK_Escape, characters: "\u{1b}")
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
+    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
+    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
+  }
+
   func testKeyWindowFallbackConsumesUnmappedModifierChordWhenDisabled() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
@@ -774,7 +819,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
     mappingEventsToHandle -= 1
     return true
   }
-  func overlayDidPassthroughUnmappedModifier(_ event: NSEvent) {
+  func overlayDidPassthroughNormalModeKey(_ event: NSEvent) {
     passthroughEvents.append(event)
   }
   func overlayDidCancelCommandLine() {}

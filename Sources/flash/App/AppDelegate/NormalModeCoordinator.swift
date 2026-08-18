@@ -259,11 +259,11 @@ extension AppDelegate {
     // gate against `.explicitCommand` left those mappings stuck in
     // NORMAL after the side-effect fired, so typing went to the empty
     // search bar / new tab via the system, then nothing.
-    // `.modifierPassthrough` is user-driven too: it is scheduled only when the
-    // user presses an unmapped Command / Control / Option chord in NORMAL.
+    // `.normalModePassthrough` is user-driven too: it is scheduled only when
+    // the user presses an unmapped configured key or modifier chord in NORMAL.
     reason == .hintCommit || reason == .normalModeInput || reason == .lockedNormalModeInput
       || reason == .pointerClick || reason == .explicitCommand
-      || reason == .modifierPassthrough
+      || reason == .normalModePassthrough
   }
 
   func focusedInputMayHaveChanged(pid: pid_t) {

@@ -262,11 +262,13 @@ extension OverlayPanel {
       virtualKey: UInt32(event.keyCode),
       modifierFlags: rawFlags,
       mappings: normalModeMappings)
-    if !modifiers.intersection(passthroughFlags).isEmpty, !recognized {
+    let isPassthroughKey = normalModePassthroughKeyCodes.contains(UInt32(event.keyCode))
+    let usesPassthroughModifier = !modifiers.intersection(passthroughFlags).isEmpty
+    if isPassthroughKey || usesPassthroughModifier, !recognized {
       // The session tap normally leaves the original event in the native event
       // stream. This path is only the no-tap key-window fallback, so the
-      // coordinator replays the chord to the focused pid before entering INSERT.
-      coordinator.overlayDidPassthroughUnmappedModifier(event)
+      // coordinator replays the keypress to the focused pid before entering INSERT.
+      coordinator.overlayDidPassthroughNormalModeKey(event)
       return true
     }
     // With passthrough disabled, anything unclaimed is interpreted or consumed

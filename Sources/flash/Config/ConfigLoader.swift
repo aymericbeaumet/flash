@@ -711,6 +711,18 @@ enum ConfigLoader {
           config.mode.normalLeader = canonicalNormalModeKeyToken(value)
         })
       applyStringArray(
+        normal["passthrough_keys"], path: ["mode", "normal", "passthrough_keys"],
+        message: "mode.normal.passthrough_keys must be an array of key names",
+        locations: locations, into: &config,
+        assign: { value, config in
+          for token in value where HotkeySyntax.parseKey(token) == nil {
+            config.addDiagnostic(
+              "mode.normal.passthrough_keys: unknown key \"\(token)\"",
+              location: locations.location(for: ["mode", "normal", "passthrough_keys"]))
+          }
+          config.mode.normalPassthroughKeys = value
+        })
+      applyStringArray(
         normal["passthrough_modifiers"], path: ["mode", "normal", "passthrough_modifiers"],
         message:
           "mode.normal.passthrough_modifiers must be an array of "
@@ -735,11 +747,13 @@ enum ConfigLoader {
         into: &config)
 
       for (key, _) in normal
-      where key != "leader" && key != "passthrough_modifiers" && key != "mappings" {
+      where key != "leader" && key != "passthrough_keys" && key != "passthrough_modifiers"
+        && key != "mappings"
+      {
         config.addDiagnostic(
           "mode.normal: unknown key '\(key)' — mappings belong under "
             + "[mode.normal.mappings]; valid keys are leader, "
-            + "passthrough_modifiers, mappings",
+            + "passthrough_keys, passthrough_modifiers, mappings",
           location: locations.location(for: ["mode", "normal", key]))
       }
     }

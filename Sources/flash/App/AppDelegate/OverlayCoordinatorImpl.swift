@@ -676,7 +676,7 @@ extension AppDelegate {
   /// app while NORMAL mappings are still registered, then enter INSERT on the
   /// following main-loop turn. The normal-scope matcher already rejected this
   /// chord before this method was called.
-  func overlayDidPassthroughUnmappedModifier(_ event: NSEvent) {
+  func overlayDidPassthroughNormalModeKey(_ event: NSEvent) {
     guard flashMode == .normal,
       let pid = currentNonFlashContext()?.processID ?? normalModeTargetPID
     else { return }
@@ -686,7 +686,7 @@ extension AppDelegate {
       _ = NormalModeDispatcher.sendKey(virtualKey: keyCode, flags: flags, to: pid)
       DispatchQueue.main.async { [weak self] in
         guard let self, self.flashMode == .normal, self.overlay.inputMode == .normal else { return }
-        self.enterInsertMode(reason: .modifierPassthrough, targetPID: pid)
+        self.enterInsertMode(reason: .normalModePassthrough, targetPID: pid)
       }
     }
   }
