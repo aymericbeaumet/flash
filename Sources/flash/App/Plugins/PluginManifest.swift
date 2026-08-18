@@ -955,6 +955,45 @@ struct PluginVerbsProvider: Codable, Equatable {
   }
 }
 
+/// Deny-default sandbox spec. Declaring `"sandbox": {}` (even empty) opts
+/// the plugin into the generated deny-default seatbelt profile — everything
+/// is denied except the plugin's own root/data dir, the system libraries it
+/// loads, and the allowances below plus capability composition. Absence
+/// keeps the legacy network-deny-only behavior until every bundled plugin
+/// has migrated.
+struct PluginSandboxSpec: Codable, Equatable {
+  /// Absolute executable paths the plugin may `process-exec`.
+  var exec: [String]
+  /// Extra absolute or `~`-prefixed subpaths the plugin may read.
+  var read: [String]
+  /// Extra absolute or `~`-prefixed subpaths the plugin may read and write.
+  var write: [String]
+
+  init(exec: [String] = [], read: [String] = [], write: [String] = []) {
+    self.exec = exec
+    self.read = read
+    self.write = write
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.exec = try c.decodeIfPresent([String].self, forKey: .exec) ?? []
+    self.read = try c.decodeIfPresent([String].self, forKey: .read) ?? []
+    self.write = try c.decodeIfPresent([String].self, forKey: .write) ?? []
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    if !exec.isEmpty { try c.encode(exec, forKey: .exec) }
+    if !read.isEmpty { try c.encode(read, forKey: .read) }
+    if !write.isEmpty { try c.encode(write, forKey: .write) }
+  }
+
+  enum CodingKeys: String, CodingKey, CaseIterable {
+    case exec, read, write
+  }
+}
+
 struct PluginManifest: Codable, Equatable {
   var id: String
   var name: String
@@ -969,6 +1008,8 @@ struct PluginManifest: Codable, Equatable {
   /// to surfaces the host can serve alone (mappings, help, and verbs whose
   /// every dispatch resolves to an inline keystroke).
   var exec: [String]?
+  /// Deny-default sandbox opt-in; see ``PluginSandboxSpec``.
+  var sandbox: PluginSandboxSpec?
   /// Host event-name patterns this plugin listens to. `*` is the only wildcard.
   var listen: [String]
   var hintsProvider: PluginHintsProvider?
@@ -1136,7 +1177,7 @@ struct PluginManifest: Codable, Equatable {
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case id, name, version, description, install, exec, listen, priority
+    case id, name, version, description, install, exec, sandbox, listen, priority
     case volatile
     case onlyBundleIDs = "only_bundle_ids"
     case onlyURLs = "only_urls"
@@ -1151,6 +1192,7 @@ struct PluginManifest: Codable, Equatable {
   init(
     id: String, name: String, version: String, description: String,
     install: String, exec: [String]? = nil,
+    sandbox: PluginSandboxSpec? = nil,
     listen: [String] = [],
     hintsProvider: PluginHintsProvider? = nil,
     queriesProvider: PluginQueriesProvider? = nil,
@@ -1175,6 +1217,7 @@ struct PluginManifest: Codable, Equatable {
     self.description = description
     self.install = install
     self.exec = exec
+    self.sandbox = sandbox
     self.listen = Self.uniqueTrimmed(listen)
     self.hintsProvider = hintsProvider
     self.queriesProvider = queriesProvider
@@ -1202,6 +1245,7 @@ struct PluginManifest: Codable, Equatable {
     self.description = try c.decode(String.self, forKey: .description)
     self.install = try c.decode(String.self, forKey: .install)
     self.exec = try c.decodeIfPresent([String].self, forKey: .exec)
+    self.sandbox = try c.decodeIfPresent(PluginSandboxSpec.self, forKey: .sandbox)
     self.listen = Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .listen) ?? [])
     self.hintsProvider = try c.decodeIfPresent(PluginHintsProvider.self, forKey: .hints)
     self.queriesProvider = try c.decodeIfPresent(PluginQueriesProvider.self, forKey: .queries)
@@ -1236,6 +1280,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(description, forKey: .description)
     try c.encode(install, forKey: .install)
     if let exec { try c.encode(exec, forKey: .exec) }
+    if let sandbox { try c.encode(sandbox, forKey: .sandbox) }
     if !listen.isEmpty { try c.encode(listen, forKey: .listen) }
     if let hintsProvider { try c.encode(hintsProvider, forKey: .hints) }
     if let queriesProvider { try c.encode(queriesProvider, forKey: .queries) }
@@ -1305,6 +1350,10 @@ struct PluginManifest: Codable, Equatable {
       allowed: Set(CodingKeys.allCases.map(\.stringValue)),
       path: "manifest.json")
 
+    try rejectObject(
+      dictionary["sandbox"],
+      allowed: Set(PluginSandboxSpec.CodingKeys.allCases.map(\.stringValue)),
+      path: "manifest.json sandbox")
     try rejectObject(
       dictionary["hints"],
       allowed: ["modes", "priority", "fallback_on_empty"],
@@ -1431,6 +1480,17 @@ struct PluginManifest: Codable, Equatable {
         throw PluginError.invalidManifest("manifest.json field \(field) must not be empty")
       }
     }
+    if let sandbox {
+      for path in sandbox.exec where !path.hasPrefix("/") {
+        throw PluginError.invalidManifest(
+          "manifest.json sandbox.exec paths must be absolute: \(path)")
+      }
+      for path in sandbox.read + sandbox.write
+      where !path.hasPrefix("/") && !path.hasPrefix("~/") {
+        throw PluginError.invalidManifest(
+          "manifest.json sandbox read/write paths must be absolute or ~-prefixed: \(path)")
+      }
+    }
     if let exec {
       if exec.isEmpty || exec.contains(where: { $0.trimmed.isEmpty }) {
         throw PluginError.invalidManifest(
@@ -1455,6 +1515,7 @@ struct PluginManifest: Codable, Equatable {
         ("capabilities", !capabilities.isEmpty),
         ("request_timeout_ms", requestTimeoutMs != nil),
         ("volatile", volatile),
+        ("sandbox", sandbox != nil),
       ]
       if let field = processBound.first(where: { $0.1 })?.0 {
         throw PluginError.invalidManifest(

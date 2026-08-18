@@ -774,6 +774,104 @@ final class PluginProcess {
     return "(version 1)\n(allow default)\n(deny network*)"
   }
 
+  /// Deny-default profile generated from the manifest's `sandbox` spec plus
+  /// capability composition: everything is denied except loading the binary
+  /// (plugin root + system libraries), the plugin's own data dir, declared
+  /// exec/read/write allowances, and network-outbound when the `network`
+  /// capability is declared.
+  static func denyDefaultSandboxProfile(
+    for manifest: PluginManifest, spec: PluginSandboxSpec, root: URL, dataDir: URL
+  ) -> String {
+    // Seatbelt string literals: expand ~, strip quotes (paths come from the
+    // strict manifest validator, so this is belt-and-suspenders).
+    func q(_ path: String) -> String {
+      "\"" + NSString(string: path).expandingTildeInPath.replacingOccurrences(of: "\"", with: "")
+        + "\""
+    }
+    let baseDataDir = dataDir.deletingLastPathComponent()
+    var lines = [
+      "(version 1)",
+      "(deny default)",
+      // sandbox-exec applies the profile and THEN execvp()s the plugin
+      // binary, so exec of the plugin's own root must stay allowed; dyld
+      // must map the binary, system libraries, and the shared-cache cryptex
+      // (seatbelt matches the real /private/preboot mount, not the
+      // /System/Volumes alias).
+      "(allow process-exec (subpath \(q(root.path))))",
+      "(allow file-map-executable (subpath \(q(root.path))) (subpath \"/usr/lib\")"
+        + " (subpath \"/System\") (subpath \"/Library/Frameworks\")"
+        + " (subpath \"/private/preboot/Cryptexes/OS\")"
+        + " (subpath \"/System/Cryptexes/OS\"))",
+      // Reads are broad — dyld's startup reads defeat a strict allowlist
+      // (it aborts, without a message, on cache paths that vary per OS
+      // release) — minus secrets a keyboard-productivity plugin has no
+      // business touching and the other plugins' data. Exfiltration is
+      // contained by the write/network/exec denials, and a per-plugin
+      // spec.read can re-open a denied subtree (rule order: later wins).
+      "(allow file-read*)",
+      "(deny file-read* (subpath \(q("~/.ssh"))) (subpath \(q("~/.aws")))"
+        + " (subpath \(q("~/.config/gh"))) (subpath \(q("~/Library/Keychains")))"
+        + " (subpath \(q(baseDataDir.path))))",
+      // The plugin's own writable data root, re-opened after the
+      // base-data-dir deny above.
+      "(allow file* (subpath \(q(dataDir.path))))",
+      "(allow file-write-data (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))",
+      "(allow file-read-metadata)",
+      "(allow process-info* (target self))",
+      "(allow sysctl-read)",
+      // Baseline mach services every process ends up touching (unified
+      // logging, notifications). Name-scoped on purpose — no wildcard.
+      "(allow mach-lookup (global-name \"com.apple.logd\")"
+        + " (global-name \"com.apple.diagnosticd\")"
+        + " (global-name \"com.apple.system.notification_center\")"
+        + " (global-name \"com.apple.system.logger\"))",
+    ]
+    if manifest.capabilities.contains(.network) {
+      lines.append("(allow network-outbound)")
+      lines.append("(allow system-socket)")
+      lines.append("(allow mach-lookup (global-name \"com.apple.dnssd.service\"))")
+      lines.append(
+        "(allow file-read* (literal \"/etc/hosts\") (literal \"/etc/resolv.conf\")"
+          + " (subpath \"/private/etc\"))")
+    }
+    if !spec.exec.isEmpty {
+      lines.append("(allow process-fork)")
+      let literals = spec.exec.map { "(literal \(q($0)))" }.joined(separator: " ")
+      lines.append("(allow process-exec \(literals))")
+    }
+    if !spec.read.isEmpty {
+      let subpaths = spec.read.map { "(subpath \(q($0)))" }.joined(separator: " ")
+      lines.append("(allow file-read* \(subpaths))")
+    }
+    if !spec.write.isEmpty {
+      let subpaths = spec.write.map { "(subpath \(q($0)))" }.joined(separator: " ")
+      lines.append("(allow file* \(subpaths))")
+    }
+    return lines.joined(separator: "\n")
+  }
+
+  /// Which profile a plugin launches under, in order: the per-plugin
+  /// `[plugin.<id>] sandbox = false` kill switch (fail-open, logged loudly by
+  /// the caller), a manifest `sandbox` spec (deny-default), else the legacy
+  /// network-deny transitional profile.
+  static func resolvedSandboxProfile(
+    manifest: PluginManifest, settings: [String: PluginConfigValue], root: URL, dataDir: URL
+  ) -> (profile: String?, mode: String) {
+    if case .bool(false) = settings["sandbox"] {
+      return (nil, "disabled_by_config")
+    }
+    if let spec = manifest.sandbox {
+      return (
+        denyDefaultSandboxProfile(for: manifest, spec: spec, root: root, dataDir: dataDir),
+        "deny_default"
+      )
+    }
+    if let legacy = networkSandboxProfile(for: manifest) {
+      return (legacy, "network_denied")
+    }
+    return (nil, "unsandboxed")
+  }
+
   private static let sandboxExecPath = "/usr/bin/sandbox-exec"
 
   private func launch() throws {
@@ -789,28 +887,35 @@ final class PluginProcess {
     let executablePath =
       executable.hasPrefix("/")
       ? executable
-      : root.appendingPathComponent(executable).path
+      : root.appendingPathComponent(executable).standardizedFileURL.path
     let execTail = Array(execArgv.dropFirst())
     let process = Process()
     let stdin = Pipe()
     let stdout = Pipe()
     let stderr = Pipe()
-    // Run the plugin under a network-denying seatbelt profile unless it declares
-    // it needs the network / privileged subprocess exec. sandbox-exec execs in
-    // place, so the pid we track and the child flash-plugin binary are unchanged.
-    let profile = Self.networkSandboxProfile(for: manifest)
+    // Run the plugin under its resolved seatbelt profile. sandbox-exec execs
+    // in place, so the pid we track and the child flash-plugin binary are
+    // unchanged.
+    let resolved = Self.resolvedSandboxProfile(
+      manifest: manifest, settings: settings, root: root, dataDir: dataDir)
     let sandboxed =
-      profile != nil && FileManager.default.isExecutableFile(atPath: Self.sandboxExecPath)
-    if sandboxed, let profile {
+      resolved.profile != nil
+      && FileManager.default.isExecutableFile(atPath: Self.sandboxExecPath)
+    if sandboxed, let profile = resolved.profile {
       process.executableURL = URL(fileURLWithPath: Self.sandboxExecPath)
       process.arguments = ["-p", profile, executablePath] + execTail
     } else {
       process.executableURL = URL(fileURLWithPath: executablePath)
       process.arguments = execTail
     }
+    if resolved.mode == "disabled_by_config" {
+      FlashLog.warn(
+        "[plugin] \(manifest.id) sandbox DISABLED by [plugin.\(manifest.id)] sandbox = false",
+        fields: ["plugin": manifest.id, "sandbox_mode": resolved.mode])
+    }
     FlashLog.info(
-      "[plugin] \(manifest.id) launch network=\(sandboxed ? "denied (sandboxed)" : "allowed")",
-      fields: ["plugin": manifest.id, "network_sandboxed": "\(sandboxed)"])
+      "[plugin] \(manifest.id) launch sandbox=\(sandboxed ? resolved.mode : "unsandboxed")",
+      fields: ["plugin": manifest.id, "sandbox_mode": sandboxed ? resolved.mode : "unsandboxed"])
     process.currentDirectoryURL = root
     process.environment = pluginEnvironment()
     process.standardInput = stdin

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Vim-style marks: `m<letter>` records the current Flash-target app; `` `<letter> `` reactivates it. State persists to disk so marks survive restarts.",
   "install": "true",
+  "sandbox": {},
   "exec": ["./flash-plugin-marks"],
   "capabilities": [
     "app_control"
