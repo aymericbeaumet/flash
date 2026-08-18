@@ -116,6 +116,7 @@ name = "flash-plugin-emojis"
 version = "0.1.0"
 dependencies = [
  "flash_plugin",
+ "tokio",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ mod context;
 mod limits;
 pub mod process;
 mod runtime;
+pub mod testing;
 mod types;
 mod wire;
 

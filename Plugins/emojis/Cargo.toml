@@ -10,3 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 flash_plugin = { path = "../_rust_flash_plugin" }
+
+[dev-dependencies]
+tokio = { workspace = true }

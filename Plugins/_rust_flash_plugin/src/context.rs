@@ -564,23 +564,43 @@ pub fn shorten(value: &str) -> String {
     format!("{head}...")
 }
 
+/// Assemble a [`Context`] from parts with fresh host-RPC and warm-store
+/// state. Shared by the crate-internal tests and the public
+/// [`crate::testing`] harness; the production path stays
+/// [`context_from_env`].
+pub(crate) fn assemble_context(
+    plugin_id: String,
+    version: String,
+    data_dir: PathBuf,
+    emit: Emitter,
+    config: Value,
+) -> Context {
+    Context {
+        plugin_id,
+        version,
+        data_dir,
+        emit,
+        config,
+        host_pending: Arc::new(Mutex::new(HashMap::new())),
+        host_counter: Arc::new(AtomicU64::new(0)),
+        locations: Arc::new(Mutex::new(HashMap::new())),
+        running_applications: Arc::new(Mutex::new(Vec::new())),
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_context() -> Context {
     use tokio::sync::mpsc;
 
     let (control_tx, _control_rx) = mpsc::channel(16);
     let (telemetry_tx, _telemetry_rx) = mpsc::channel(16);
-    Context {
-        plugin_id: "test".to_string(),
-        version: "0.0.0".to_string(),
-        data_dir: PathBuf::from("."),
-        emit: Emitter::new(control_tx, telemetry_tx),
-        config: json!({}),
-        host_pending: Arc::new(Mutex::new(HashMap::new())),
-        host_counter: Arc::new(AtomicU64::new(0)),
-        locations: Arc::new(Mutex::new(HashMap::new())),
-        running_applications: Arc::new(Mutex::new(Vec::new())),
-    }
+    assemble_context(
+        "test".to_string(),
+        "0.0.0".to_string(),
+        PathBuf::from("."),
+        Emitter::new(control_tx, telemetry_tx),
+        json!({}),
+    )
 }
 
 #[cfg(test)]

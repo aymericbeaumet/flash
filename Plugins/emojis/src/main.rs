@@ -88,3 +88,25 @@ impl FlashPlugin for Emojis {
 fn main() {
     run(Emojis);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flash_plugin::testing::Harness;
+
+    #[tokio::test]
+    async fn on_start_publishes_the_full_emoji_catalog() {
+        let harness = Harness::new("emojis");
+        let ctx = harness.context();
+
+        Emojis.on_start(ctx.clone()).await;
+
+        assert!(ctx.has_locations(SOURCE_ID));
+        let warm = ctx.warm_locations();
+        assert!(
+            warm.len() > 1_000,
+            "expected the full embedded dataset, got {} candidates",
+            warm.len()
+        );
+    }
+}
