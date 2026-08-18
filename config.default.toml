@@ -216,7 +216,8 @@ leader = "\\"
 # With `passthrough_modifiers`, matching unmapped shortcuts instead switch to
 # INSERT and continue natively.
 # Use an inline table when a mapping needs metadata. `repeat = true` lets each
-# additional press of the final key repeat the completed sequence (`[aaaa`).
+# additional press of the final key repeat the completed sequence (`[tttt`).
+# Every built-in [ / ] sequence below enables it.
 # Example:
 # "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
 "h" = ["flash", "scroll_left"]
@@ -238,23 +239,33 @@ leader = "\\"
 # [h/]h alias these, unimpaired-style.
 "H" = ["flash", "history_back"]
 "L" = ["flash", "history_forward"]
-"[h" = ["flash", "history_back"]
-"]h" = ["flash", "history_forward"]
-"[t" = ["flash", "tab_previous"]
-"]t" = ["flash", "tab_next"]
+"[h" = { action = ["flash", "history_back"], repeat = true }
+"]h" = { action = ["flash", "history_forward"], repeat = true }
+"[t" = { action = ["flash", "tab_previous"], repeat = true }
+"]t" = { action = ["flash", "tab_next"], repeat = true }
+# Vim buffer aliases map naturally onto desktop tabs.
+"[b" = { action = ["flash", "tab_previous"], repeat = true }
+"]b" = { action = ["flash", "tab_next"], repeat = true }
+"[B" = { action = ["flash", "tab_first"], repeat = true }
+"]B" = { action = ["flash", "tab_last"], repeat = true }
 # Vimium J/K — one tab left (previous) / right (next), capital siblings
 # of gT/gt.
 "J" = ["flash", "tab_previous"]
 "K" = ["flash", "tab_next"]
 # Vimium ]]/[[ — follow the next/previous resource (pagination links).
-"]]" = ["flash", "resource_next"]
-"[[" = ["flash", "resource_previous"]
+"]]" = { action = ["flash", "resource_next"], repeat = true }
+"[[" = { action = ["flash", "resource_previous"], repeat = true }
 # Reorder the current tab. In tmux this swap-windows; in browsers there
 # is no portable equivalent so the mapping is a no-op.
-"[m" = ["flash", "tab_move_previous"]
-"]m" = ["flash", "tab_move_next"]
+"[m" = { action = ["flash", "tab_move_previous"], repeat = true }
+"]m" = { action = ["flash", "tab_move_next"], repeat = true }
+"[e" = { action = ["flash", "tab_move_previous"], repeat = true }
+"]e" = { action = ["flash", "tab_move_next"], repeat = true }
 "[a" = { action = ["flash", "app_previous"], repeat = true }
 "]a" = { action = ["flash", "app_next"], repeat = true }
+# Cycle the focused app's windows with native macOS shortcuts.
+"[w" = { action = ["flash", "send_key", "--keys=cmd+shift+`"], repeat = true }
+"]w" = { action = ["flash", "send_key", "--keys=cmd+`"], repeat = true }
 # Restore the most recently closed tab. Vimium binds this to X; browsers
 # receive ⌘⇧T; tmux has no closed-window history so it returns "unhandled".
 "X" = ["flash", "tab_reopen"]
@@ -299,15 +310,15 @@ leader = "\\"
 "I" = ["flash", "enter_locked_insert_mode"]
 "o" = ["flash", "enter_insert_mode"]
 "O" = ["flash", "enter_insert_mode"]
-# Vimium-style target opening: Shift-F presets a Command-click so links open
-# in a new tab. Holding a configured hints.magic_modifiers key on the final
-# hint character still adds that modifier to either action.
+# Vimium-style target opening: Shift-F presets a Command-Shift-click so links
+# open in a focused new tab. Holding a configured hints.magic_modifiers key on
+# the final hint character still adds that modifier to either action.
 "f" = ["flash", "mouse_target"]
-"F" = ["flash", "mouse_target", "--modifiers=cmd"]
+"F" = ["flash", "mouse_target", "--modifiers=cmd+shift"]
 # Ctrl selects the precision grid; adding Shift preserves the current/new-tab
-# pairing above by presetting the same Command-click on the final grid point.
+# pairing above by presetting the same Command-Shift-click on the final grid point.
 "ctrl+f" = ["flash", "mouse_grid"]
-"ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd"]
+"ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
 "sf" = ["flash", "mouse_target", "--secondary"]
 # Double-click hints sit on the D ("Double") prefix, not d, so the bare
 # d half-page scroll above stays instant.

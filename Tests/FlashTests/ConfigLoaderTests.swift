@@ -42,13 +42,13 @@ final class ConfigLoaderTests: XCTestCase {
       .mouseTarget(.move))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "F" })?.action.command,
-      .mouseTarget(.click(.leftClick, modifiers: .command)))
+      .mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("ctrl+f") })?.action.command,
       .mouseGrid(.click(.leftClick, modifiers: [])))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("ctrl+shift+f") })?.action.command,
-      .mouseGrid(.click(.leftClick, modifiers: .command)))
+      .mouseGrid(.click(.leftClick, modifiers: [.command, .shift])))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mF") })?.action.command,
       .mouseGrid(.move))
@@ -107,14 +107,17 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == key("[a") })?.action.command,
       .appPrev)
     XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("[a") })?.repeatsOnFinalKey,
-      true)
-    XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("]a") })?.action.command,
       .appNext)
-    XCTAssertEqual(
-      c.mode.normal.first(where: { $0.key == key("]a") })?.repeatsOnFinalKey,
-      true)
+    for rawKey in [
+      "[t", "]t", "[h", "]h", "[b", "]b", "[B", "]B", "[m", "]m", "[e", "]e", "[a",
+      "]a", "[w", "]w", "[[", "]]",
+    ] {
+      XCTAssertEqual(
+        c.mode.normal.first(where: { $0.key == key(rawKey) })?.repeatsOnFinalKey,
+        true,
+        "expected default bracket mapping \(rawKey) to repeat")
+    }
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
     XCTAssertEqual(c.mode.labels.insert, "INSERT")
     XCTAssertEqual(c.mode.labels.command, "COMMAND")

@@ -148,9 +148,25 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(repeatedNext.repeatAnchor, key("]a"))
   }
 
+  func testBracketTabMappingsRepeatOnFinalKey() {
+    let cases: [(prefix: String, command: URLCommand)] = [
+      ("[", .tabPrev),
+      ("]", .tabNext),
+    ]
+    for testCase in cases {
+      let first = transition(pending: testCase.prefix, chars: "t")
+      XCTAssertEqual(first.command, testCase.command)
+      XCTAssertEqual(first.repeatAnchor, key("\(testCase.prefix)t"))
+
+      let repeated = transition(repeatAnchor: first.repeatAnchor, chars: "t")
+      XCTAssertEqual(repeated.command, testCase.command)
+      XCTAssertEqual(repeated.repeatAnchor, key("\(testCase.prefix)t"))
+    }
+  }
+
   func testNonRepeatableMappingDoesNotRetainFinalKey() {
-    let transition = transition(pending: "[", chars: "t")
-    XCTAssertEqual(transition.command, .tabPrev)
+    let transition = transition(pending: "g", chars: "g")
+    XCTAssertEqual(transition.command, .scroll(.top))
     XCTAssertNil(transition.repeatAnchor)
   }
 
@@ -195,13 +211,13 @@ final class NormalModeTests: XCTestCase {
       .mouseTarget(.click(.leftClick, modifiers: [])))
     XCTAssertEqual(
       command(chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseTarget(.click(.leftClick, modifiers: .command)))
+      .mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))
     XCTAssertEqual(
       command(keyCode: kVK_ANSI_F, chars: "f", flags: [.control]),
       .mouseGrid(.click(.leftClick, modifiers: [])))
     XCTAssertEqual(
       command(keyCode: kVK_ANSI_F, chars: "F", ignoring: "f", flags: [.control, .shift]),
-      .mouseGrid(.click(.leftClick, modifiers: .command)))
+      .mouseGrid(.click(.leftClick, modifiers: [.command, .shift])))
     // `s` is now the secondary-click prefix (`sf`/`sF`), so it leaves a
     // pending sequence rather than yielding `nil`.
     XCTAssertEqual(transition(chars: "s").pending, "s")
@@ -2696,7 +2712,7 @@ final class NormalModeTests: XCTestCase {
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <args>", ":flashlight <query>", "flash mouse_target",
-      "flash mouse_target --modifiers=cmd", "flash mouse_grid --modifiers=cmd",
+      "flash mouse_target --modifiers=cmd+shift", "flash mouse_grid --modifiers=cmd+shift",
       "flash enter_command_mode --input=flashlight ", "flash mouse_target --secondary",
       "flash mouse_target --double", "flash mouse_grid", "flash history_back",
       "flash history_forward", "flash resource_next", "flash resource_previous",

@@ -443,14 +443,17 @@ struct Config {
         ("o", .flashCommand(.insertMode)),
         ("O", .flashCommand(.insertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
-        // Vimium-style `F`: use the same discovered targets but preset Cmd on
-        // the eventual click so links open in a new tab.
-        ("F", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: .command)))),
+        // Vimium-style `F`: use the same discovered targets but preset Cmd+Shift
+        // on the eventual click so links open in a focused new tab.
+        (
+          "F",
+          .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))
+        ),
         // Ctrl moves the same current/new-tab pair onto the precision grid.
         ("ctrl+f", .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [])))),
         (
           "ctrl+shift+f",
-          .flashCommand(.mouseGrid(.click(.leftClick, modifiers: .command)))
+          .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [.command, .shift])))
         ),
         // `s` for "secondary click" (right-click). `r` was the old
         // prefix but it collided with the `r`→`R` reload pair: typing
@@ -514,7 +517,10 @@ struct Config {
             .flashCommand(.pluginVerb(name: "jump_to_mark", args: ["letter": l]))
           ))
       }
-      let repeatableKeys: Set<String> = ["[a", "]a"]
+      // Every built-in bracket-pair mapping follows vim-unimpaired repetition:
+      // after `[x` or `]x`, additional presses of `x` repeat the action.
+      let repeatableKeys = Set(
+        raw.lazy.map(\.0).filter { $0.hasPrefix("[") || $0.hasPrefix("]") })
       return raw.map { (key, action) in
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
           preconditionFailure("default mapping key \"\(key)\" failed canonicalization")
