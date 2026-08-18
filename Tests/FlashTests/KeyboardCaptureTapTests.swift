@@ -19,28 +19,28 @@ final class KeyboardCaptureTapTests: XCTestCase {
         inputMode: .normal,
         modifierFlags: .maskCommand,
         hasMapping: false,
-        unmappedModifierPassthroughEnabled: true))
+        passthroughModifierFlags: [.maskCommand, .maskControl, .maskShift, .maskAlternate]))
     XCTAssertTrue(
       KeyboardCaptureTap.shouldSwallow(
         flashMode: .normal,
         inputMode: .normal,
         modifierFlags: [.maskCommand, .maskShift],
         hasMapping: true,
-        unmappedModifierPassthroughEnabled: true))
-    XCTAssertTrue(
+        passthroughModifierFlags: [.maskCommand, .maskControl, .maskShift, .maskAlternate]))
+    XCTAssertFalse(
       KeyboardCaptureTap.shouldSwallow(
         flashMode: .normal,
         inputMode: .normal,
         modifierFlags: .maskShift,
         hasMapping: false,
-        unmappedModifierPassthroughEnabled: true))
+        passthroughModifierFlags: [.maskCommand, .maskControl, .maskShift, .maskAlternate]))
     XCTAssertTrue(
       KeyboardCaptureTap.shouldSwallow(
         flashMode: .normal,
         inputMode: .normal,
         modifierFlags: .maskAlternate,
         hasMapping: false,
-        unmappedModifierPassthroughEnabled: false))
+        passthroughModifierFlags: [.maskCommand]))
   }
 
   func testHintsAlwaysSwallowModifiedChords() {
@@ -50,7 +50,7 @@ final class KeyboardCaptureTapTests: XCTestCase {
         inputMode: .hints,
         modifierFlags: .maskControl,
         hasMapping: false,
-        unmappedModifierPassthroughEnabled: true))
+        passthroughModifierFlags: [.maskCommand, .maskControl, .maskShift, .maskAlternate]))
   }
 
   func testNormalModeNeverSwallowsKeyWindowSurfaces() {

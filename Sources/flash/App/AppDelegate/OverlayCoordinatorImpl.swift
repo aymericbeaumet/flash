@@ -174,6 +174,10 @@ extension AppDelegate {
       guard let self, self.normalModePendingCommandToken == token else { return }
       guard self.flashMode == .normal, self.overlay.normalModePending == pendingText else { return }
       self.overlay.normalModePending = ""
+      self.overlay.normalModeRepeatAnchor = pending.repeatAnchor
+      if pending.repeatAnchor != nil {
+        self.overlay.normalModeRepeatAnchorUpdatedAt = Date()
+      }
       self.normalModePendingCommandToken &+= 1
       self.dispatchNormalModeAction(
         pending.action,

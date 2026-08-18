@@ -496,7 +496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.modeLabels = config.mode.labels
     overlay.magicModifiers = ClickModifiers(names: config.hints.magicModifiers)
     overlay.normalModeSequenceTimeoutMs = config.mode.sequenceTimeoutMs
-    overlay.normalModeUnmappedModifierPassthrough = config.mode.normalUnmappedModifierPassthrough
+    overlay.normalModePassthroughModifiers = config.mode.normalPassthroughModifiers
     // Pay the layer-allocation cost at launch instead of on the first
     // activation. 256 covers the steady state for most apps; further
     // growth uses the regular dequeue/alloc fallback.
@@ -989,7 +989,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// interpreter too:
   /// `normalModeMappings` carries the same compiled set the Carbon registry does,
   /// and the session tap swallows the event before Carbon dispatch, so there's no
-  /// double-fire. When configured, an unmapped Command / Control / Option chord
+  /// double-fire. An unmapped chord carrying a configured passthrough modifier
   /// instead passes through unchanged and switches Flash to INSERT. Command-line /
   /// modal / candidate-finder own the key window and type into their own fields,
   /// so the tap leaves those alone.
@@ -1032,8 +1032,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         flashMode: flashMode,
         inputMode: overlay.inputMode)
     }
-    // In NORMAL, an enabled, unmapped Command / Control / Option chord is NOT
-    // swallowed — the original event flows to the app / system natively. Not
+    // In NORMAL, an unmapped chord carrying a configured passthrough modifier
+    // is NOT swallowed — the original event flows to the app / system natively. Not
     // swallowing (rather than swallow + re-post) is what makes system-level
     // chords like ⌘Tab work. A mapped chord is still swallowed and fired by
     // `routeTapCapturedKey`.
@@ -1044,10 +1044,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // than INSERT.
     guard overlay.inputMode == .normal else { return true }
     let flags = event.flags
-    let isModifiedChord =
-      flags.contains(.maskCommand) || flags.contains(.maskControl)
-      || flags.contains(.maskAlternate)
-    guard isModifiedChord else { return true }
+    let passthroughModifierFlags = KeyModifier.cgEventFlags(
+      config.mode.normalPassthroughModifiers)
+    guard !flags.intersection(passthroughModifierFlags).isEmpty else { return true }
     // The focused app can change through the system app switcher without a
     // workspace notification landing before the next keydown. Reconcile here
     // before deciding mapped-vs-passthrough so app-scoped plugin chords (tmux
@@ -1055,13 +1054,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // app instead of leaking to the terminal as plain text.
     reconcileFrontmostApplication(reason: "key_down")
     let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-    let hasMapping = mappings.hasMapping(virtualKey: keyCode, cgFlags: flags)
+    let hasMapping =
+      mappings.hasMapping(virtualKey: keyCode, cgFlags: flags)
+      || NormalModeInterpreter.recognizesPhysicalKey(
+        pending: overlay.normalModePending,
+        repeatAnchor: overlay.normalModeRepeatAnchor,
+        virtualKey: keyCode,
+        modifierFlags: flags,
+        mappings: overlay.normalModeMappings)
     let shouldSwallow = KeyboardCaptureTap.shouldSwallow(
       flashMode: flashMode,
       inputMode: overlay.inputMode,
       modifierFlags: flags,
       hasMapping: hasMapping,
-      unmappedModifierPassthroughEnabled: config.mode.normalUnmappedModifierPassthrough)
+      passthroughModifierFlags: passthroughModifierFlags)
     guard !shouldSwallow else { return true }
 
     // Keep the NORMAL mapping scope installed until the original event has
@@ -1079,10 +1085,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   /// Dispatch a key the tap swallowed in NORMAL mode. Bare keys (and all hints
   /// keys) go to the overlay interpreter. Modified chords aren't in the
-  /// interpreter's compiled set — they live in the Carbon matcher — so route
-  /// those to `mappings.handle`: a configured chord fires, an unmatched one is
-  /// consumed when `unmapped_modifier_passthrough` is disabled. Enabled
-  /// passthrough chords never reach here because the tap leaves them native.
+  /// interpreter's compiled set may live in the Carbon matcher or participate
+  /// in a multi-key sequence. Try Carbon first, then fall back to the normal
+  /// interpreter. Passthrough chords never reach here because the tap leaves
+  /// them native.
   func routeTapCapturedKey(_ event: NSEvent) {
     // A chord the tap swallowed in INSERT is an active mapping (see
     // `keyboardTapShouldSwallow`); fire it through the mapping matcher — the
@@ -1094,8 +1100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     if overlay.inputMode == .normal {
       let strict = event.modifierFlags.intersection([.command, .control, .option])
       if !strict.isEmpty {
-        _ = mappings.handle(event: event)
-        return
+        if mappings.handle(event: event) { return }
       }
     }
     overlay.handleTapCapturedKey(event)

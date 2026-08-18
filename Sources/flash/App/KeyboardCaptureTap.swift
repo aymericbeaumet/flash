@@ -30,8 +30,8 @@ final class KeyboardCaptureTap {
   }
 
   /// Pure swallow decision. NORMAL captures bare keys and every hint key. An
-  /// explicitly mapped modified chord is also captured; when configured, an
-  /// unmapped Command / Control / Option chord instead passes through unchanged
+  /// explicitly mapped modified chord is also captured; an unmapped chord that
+  /// carries any configured passthrough modifier instead continues unchanged
   /// and moves Flash to INSERT at the AppDelegate edge. INSERT and key-window
   /// surfaces are left untouched.
   ///
@@ -42,15 +42,12 @@ final class KeyboardCaptureTap {
     inputMode: OverlayInputMode,
     modifierFlags: CGEventFlags = [],
     hasMapping: Bool = false,
-    unmappedModifierPassthroughEnabled: Bool = false
+    passthroughModifierFlags: CGEventFlags = []
   ) -> Bool {
     guard flashMode == .normal else { return false }
     switch inputMode {
     case .normal:
-      let isModifiedChord =
-        modifierFlags.contains(.maskCommand) || modifierFlags.contains(.maskControl)
-        || modifierFlags.contains(.maskAlternate)
-      if unmappedModifierPassthroughEnabled, isModifiedChord, !hasMapping {
+      if !modifierFlags.intersection(passthroughModifierFlags).isEmpty, !hasMapping {
         return false
       }
       return true

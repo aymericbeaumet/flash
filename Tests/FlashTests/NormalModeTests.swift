@@ -123,6 +123,37 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(leadingZero.pending, "")
   }
 
+  func testRepeatableMappingRepeatsOnItsFinalKey() {
+    let first = transition(pending: "[", chars: "a")
+    XCTAssertEqual(first.command, .appPrev)
+    XCTAssertEqual(first.repeatAnchor, key("[a"))
+
+    var anchor = first.repeatAnchor
+    for _ in 0..<3 {
+      let repeated = transition(repeatAnchor: anchor, chars: "a")
+      XCTAssertEqual(repeated.command, .appPrev)
+      XCTAssertEqual(repeated.repeatAnchor, key("[a"))
+      anchor = repeated.repeatAnchor
+    }
+
+    let different = transition(repeatAnchor: anchor, chars: "i")
+    XCTAssertEqual(different.command, .insertMode)
+    XCTAssertNil(different.repeatAnchor)
+
+    let next = transition(pending: "]", chars: "a")
+    XCTAssertEqual(next.command, .appNext)
+    XCTAssertEqual(next.repeatAnchor, key("]a"))
+    let repeatedNext = transition(repeatAnchor: next.repeatAnchor, chars: "a")
+    XCTAssertEqual(repeatedNext.command, .appNext)
+    XCTAssertEqual(repeatedNext.repeatAnchor, key("]a"))
+  }
+
+  func testNonRepeatableMappingDoesNotRetainFinalKey() {
+    let transition = transition(pending: "[", chars: "t")
+    XCTAssertEqual(transition.command, .tabPrev)
+    XCTAssertNil(transition.repeatAnchor)
+  }
+
   func testPendingSequenceTimesOut() {
     let start = Date(timeIntervalSince1970: 1_000)
     XCTAssertEqual(NormalModeInterpreter.sequenceTimeoutMs, 1000)
@@ -206,8 +237,12 @@ final class NormalModeTests: XCTestCase {
   // terminal/input handoff check.
 
   func testHelpReloadCommandLineAndModifiedKeyConsumption() {
+    XCTAssertEqual(command(chars: "a"), .insertMode)
+    XCTAssertEqual(command(chars: "A", ignoring: "a", flags: [.shift]), .insertMode)
     XCTAssertEqual(command(chars: "i"), .insertMode)
     XCTAssertEqual(command(chars: "I", ignoring: "i", flags: [.shift]), .lockedInsertMode)
+    XCTAssertEqual(command(chars: "o"), .insertMode)
+    XCTAssertEqual(command(chars: "O", ignoring: "o", flags: [.shift]), .insertMode)
     XCTAssertEqual(command(chars: "?"), .showUsage(topic: nil))
     XCTAssertEqual(command(chars: "?", ignoring: "/", flags: [.shift]), .showUsage(topic: nil))
     XCTAssertNil(
@@ -230,12 +265,10 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(
       transition(pending: "\\", keyCode: kVK_Space, chars: " ").command,
       .enterCommand(input: "flashlight ", restoreMode: false))
-    XCTAssertNil(command(chars: "o"))
-    XCTAssertNil(command(chars: "O", ignoring: "o", flags: [.shift]))
     let modified = transition(chars: "r", flags: [.command])
     XCTAssertNil(modified.command)
-    // Hermetic normal mode: any Cmd/Opt chord without an explicit
-    // mapping is swallowed, never forwarded to the focused app.
+    // The interpreter consumes an unrecognized modified chord; the keyboard
+    // capture edge decides whether configured modifiers pass through instead.
     XCTAssertEqual(modified.pending, "")
   }
 
@@ -3145,6 +3178,7 @@ final class NormalModeTests: XCTestCase {
 
   private func command(
     pending: String = "",
+    repeatAnchor: String? = nil,
     keyCode: Int = 0,
     chars: String,
     ignoring: String? = nil,
@@ -3153,6 +3187,7 @@ final class NormalModeTests: XCTestCase {
   ) -> URLCommand? {
     transition(
       pending: pending,
+      repeatAnchor: repeatAnchor,
       keyCode: keyCode,
       chars: chars,
       ignoring: ignoring,
@@ -3164,6 +3199,7 @@ final class NormalModeTests: XCTestCase {
 
   private func transition(
     pending: String = "",
+    repeatAnchor: String? = nil,
     keyCode: Int = 0,
     chars: String,
     ignoring: String? = nil,
@@ -3172,6 +3208,7 @@ final class NormalModeTests: XCTestCase {
   ) -> NormalModeTransition {
     NormalModeInterpreter.interpret(
       pending: pending,
+      repeatAnchor: repeatAnchor,
       keyCode: UInt16(keyCode),
       modifierFlags: flags,
       characters: chars,

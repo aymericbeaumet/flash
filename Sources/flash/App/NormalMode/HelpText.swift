@@ -24,8 +24,8 @@ extension NormalModeDispatcher {
         Normal mode captures keyboard input through Flash's sanctioned session
         tap, with the overlay panel as its no-permission fallback. Configured
         modified mappings use Carbon hotkeys. By default, an unmapped Command,
-        Control, or Option shortcut enters INSERT and continues natively;
-        `mode.normal.unmapped_modifier_passthrough = false` disables that fallback.
+        Control, Shift, or Option shortcut enters INSERT and continues natively;
+        `mode.normal.passthrough_modifiers = []` disables that fallback.
 
         ## Core Motion
 
@@ -39,7 +39,8 @@ extension NormalModeDispatcher {
 
         - `[t` / `]t` moves to the previous or next tab.
         - `[h` / `]h` walks the focused target's page history.
-        - `[a` / `]a` cycles previous/next app in MRU order.
+        - `[a` / `]a` cycles previous/next app in MRU order; keep pressing `a`
+          to repeat (`[aaaa` / `]aaaa`).
         - `g1` ... `g9` select a numbered tab when the focused source supports it.
         - In browsers this maps to tab selection.
         - `n` opens a new window with Cmd-N.

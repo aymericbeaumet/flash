@@ -199,9 +199,17 @@ final class OverlayPanel: NSPanel {
     }
   }
   var normalModePendingUpdatedAt: Date?
+  var normalModeRepeatAnchor: String? {
+    didSet {
+      if normalModeRepeatAnchor == nil {
+        normalModeRepeatAnchorUpdatedAt = nil
+      }
+    }
+  }
+  var normalModeRepeatAnchorUpdatedAt: Date?
   var normalModeMappings: CompiledMappings = CompiledMappings(Config.Mode.defaultNormalMappings)
   var normalModeSequenceTimeoutMs: Int = Config.Mode.defaultSequenceTimeoutMs
-  var normalModeUnmappedModifierPassthrough = true
+  var normalModePassthroughModifiers = Config.Mode.defaultNormalPassthroughModifiers
   var commandLineText: String = "" {
     didSet { commandLineCursorIndex = min(commandLineCursorIndex, commandLineText.count) }
   }

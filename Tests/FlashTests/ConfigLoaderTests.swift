@@ -27,7 +27,7 @@ final class ConfigLoaderTests: XCTestCase {
       keys: "up",
       keyCode: CGKeyCode(kVK_UpArrow))
     XCTAssertEqual(c.mode.normalLeader, "\\")
-    XCTAssertTrue(c.mode.normalUnmappedModifierPassthrough)
+    XCTAssertEqual(c.mode.normalPassthroughModifiers, ["cmd", "ctrl", "shift", "alt"])
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("\\<space>") })?.action.command,
       .enterCommand(input: "flashlight ", restoreMode: false))
@@ -55,8 +55,14 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("yy") })?.action.command,
       .copyURL)
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == "o" }))
-    XCTAssertNil(c.mode.normal.first(where: { $0.key == "O" }))
+    for insertKey in ["a", "A", "i", "o", "O"] {
+      XCTAssertEqual(
+        c.mode.normal.first(where: { $0.key == insertKey })?.action.command,
+        .insertMode)
+    }
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == "I" })?.action.command,
+      .lockedInsertMode)
     XCTAssertNil(c.mode.normal.first(where: { $0.key == "cmd+space" }))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("g4") })?.action.command,
@@ -101,8 +107,14 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == key("[a") })?.action.command,
       .appPrev)
     XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("[a") })?.repeatsOnFinalKey,
+      true)
+    XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("]a") })?.action.command,
       .appNext)
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("]a") })?.repeatsOnFinalKey,
+      true)
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
     XCTAssertEqual(c.mode.labels.insert, "INSERT")
     XCTAssertEqual(c.mode.labels.command, "COMMAND")
@@ -142,24 +154,26 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(command("ctrl+shift+tab"), .tabPrev)
   }
 
-  func testParsesUnmappedModifierPassthrough() {
-    XCTAssertTrue(ConfigLoader.parse("").mode.normalUnmappedModifierPassthrough)
+  func testParsesNormalPassthroughModifiers() {
+    XCTAssertEqual(
+      ConfigLoader.parse("").mode.normalPassthroughModifiers,
+      ["cmd", "ctrl", "shift", "alt"])
     let c = ConfigLoader.parse(
       """
       [mode.normal]
-      unmapped_modifier_passthrough = false
+      passthrough_modifiers = ["cmd", "shift"]
       """)
-    XCTAssertFalse(c.mode.normalUnmappedModifierPassthrough)
+    XCTAssertEqual(c.mode.normalPassthroughModifiers, ["cmd", "shift"])
 
     let invalid = ConfigLoader.parse(
       """
       [mode.normal]
-      unmapped_modifier_passthrough = ["cmd"]
+      passthrough_modifiers = ["cmd", "hyper"]
       """)
-    XCTAssertTrue(invalid.mode.normalUnmappedModifierPassthrough)
+    XCTAssertEqual(invalid.mode.normalPassthroughModifiers, ["cmd", "hyper"])
     XCTAssertTrue(
       invalid.diagnostics.contains {
-        $0.message == "mode.normal.unmapped_modifier_passthrough must be true or false"
+        $0.message.contains("passthrough_modifiers: unknown modifier \"hyper\"")
       })
   }
 
@@ -671,10 +685,13 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(flashlight["suggestion_count"] as? Int, 10)
     XCTAssertEqual(flashlight["precedence_alive_bonus"] as? Int, 10)
     XCTAssertNotNil(mode["normal"] as? [[String: Any]])
-    XCTAssertEqual(mode["normal_unmapped_modifier_passthrough"] as? Bool, true)
+    XCTAssertEqual(
+      mode["normal_passthrough_modifiers"] as? [String],
+      ["cmd", "ctrl", "shift", "alt"])
     XCTAssertEqual(
       allMappings.first?["action"] as? [String],
       ["sh", "~/.dotfiles/scripts/toggle-colors"])
+    XCTAssertEqual(allMappings.first?["repeat"] as? Bool, false)
     XCTAssertEqual(open["ignored_apps"] as? [String], [])
     XCTAssertEqual(plugins["disabled"] as? [String], [])
     XCTAssertEqual(plugins["third_party"] as? [String], [])
@@ -968,6 +985,42 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.normal.first(where: { $0.key == "j" })?.action.command, .scroll(.up))
     XCTAssertTrue(c.mode.containsNormalModeMapping)
     XCTAssertFalse(c.mode.containsAdvancedModeMapping)
+  }
+
+  func testParsesRepeatableModeMappingInlineTable() {
+    let c = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "[a" = { action = ["flash", "app_previous"], repeat = true }
+      "zz" = { action = ["sh", "-c", "echo ok"] }
+      """)
+
+    let previous = c.mode.normal.first(where: { $0.key == key("[a") })
+    XCTAssertEqual(previous?.action.command, .appPrev)
+    XCTAssertEqual(previous?.repeatsOnFinalKey, true)
+    let shell = c.mode.normal.first(where: { $0.key == key("zz") })
+    XCTAssertEqual(shell?.action, .shellCommand(["sh", "-c", "echo ok"]))
+    XCTAssertEqual(shell?.repeatsOnFinalKey, false)
+    XCTAssertTrue(c.warnings.isEmpty)
+  }
+
+  func testRejectsInvalidRepeatableModeMappingMetadata() {
+    let invalidRepeat = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "[a" = { action = ["flash", "app_previous"], repeat = "yes" }
+      """)
+    XCTAssertTrue(invalidRepeat.warnings.contains { $0.contains(".repeat must be true or false") })
+
+    let unknownOption = ConfigLoader.parse(
+      """
+      [mode.normal.mappings]
+      "[a" = { action = ["flash", "app_previous"], repeats = true }
+      """)
+    XCTAssertTrue(
+      unknownOption.warnings.contains {
+        $0.contains("unknown option 'repeats'") && $0.contains("action and repeat")
+      })
   }
 
   func testAdvancedModeMappingIsDetectedOnlyFromAllScope() {

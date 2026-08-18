@@ -9,20 +9,30 @@ enum ModeScope: String, CaseIterable, Hashable {
 /// One entry from `[mode.all.mappings]`, `[mode.normal.mappings]`, or
 /// `[mode.insert.mappings]`.
 /// The key is the mapping lhs and the action is resolved at config load.
+/// `repeatsOnFinalKey` keeps a completed normal-mode sequence armed so each
+/// additional press of its final key dispatches the same mapping (`[aaaa`).
 struct ModeMapping: Equatable {
   let key: String
   let action: MappingCommand
+  let repeatsOnFinalKey: Bool
+
+  init(key: String, action: MappingCommand, repeatsOnFinalKey: Bool = false) {
+    self.key = key
+    self.action = action
+    self.repeatsOnFinalKey = repeatsOnFinalKey
+  }
 }
 
 /// What a mapping fires. Resolved at config load so Carbon callbacks
 /// and overlay key handling never re-parse on the hot path.
 ///
-/// The TOML form is *always* an array of strings. If `argv[0]` names Flash
-/// (`"flash"` or a path whose basename is `flash`), the remainder is parsed
-/// against the resident verb table
-/// (``URLEventHandler/parse(verb:args:)``) and dispatched in-process.
-/// Otherwise the array is executed as argv (no shell wrap, just env / `~`
-/// expansion on each element).
+/// The action's TOML form is always an array of strings, either directly as a
+/// compact mapping value or under `action` in an inline mapping table. If
+/// `argv[0]` names Flash (`"flash"` or a path whose basename is `flash`), the
+/// remainder is parsed against the resident verb table
+/// (``URLEventHandler/parse(verb:args:)``) and dispatched in-process. Otherwise
+/// the array is executed as argv (no shell wrap, just env / `~` expansion on
+/// each element).
 enum MappingCommand: Hashable {
   case flashCommand(URLCommand)
   case shellCommand([String])

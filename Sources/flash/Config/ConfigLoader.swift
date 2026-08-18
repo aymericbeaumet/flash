@@ -280,7 +280,39 @@ enum ConfigLoader {
     var rawKey: String
     var key: String
     var action: MappingCommand
+    var repeatsOnFinalKey: Bool
     var location: ConfigLocation
+  }
+
+  private struct ParsedModeMappingValue {
+    var action: MappingCommand
+    var repeatsOnFinalKey: Bool
+  }
+
+  private enum ModeMappingValueError: Error {
+    case invalidShape
+    case invalidAction
+    case invalidRepeat
+    case unknownOption(String)
+
+    func message(mappingKey: String) -> String {
+      switch self {
+      case .invalidShape:
+        return
+          "mapping \"\(mappingKey)\" must be a non-empty string array or "
+          + "{ action = [\"flash\", \"<verb>\", ...], repeat = true }"
+      case .invalidAction:
+        return
+          "mapping \"\(mappingKey)\".action must be a non-empty string array — "
+          + "[\"flash\", \"<verb>\", ...] or [<argv>...]"
+      case .invalidRepeat:
+        return "mapping \"\(mappingKey)\".repeat must be true or false"
+      case .unknownOption(let option):
+        return
+          "mapping \"\(mappingKey)\": unknown option '\(option)' — "
+          + "valid options are action and repeat"
+      }
+    }
   }
 
   private static func apply(
@@ -678,13 +710,20 @@ enum ConfigLoader {
         assign: { value, config in
           config.mode.normalLeader = canonicalNormalModeKeyToken(value)
         })
-      applyBool(
-        normal["unmapped_modifier_passthrough"],
-        path: ["mode", "normal", "unmapped_modifier_passthrough"],
-        message: "mode.normal.unmapped_modifier_passthrough must be true or false",
+      applyStringArray(
+        normal["passthrough_modifiers"], path: ["mode", "normal", "passthrough_modifiers"],
+        message:
+          "mode.normal.passthrough_modifiers must be an array of "
+          + "\"cmd\"/\"ctrl\"/\"shift\"/\"alt\"",
         locations: locations, into: &config,
         assign: { value, config in
-          config.mode.normalUnmappedModifierPassthrough = value
+          for token in KeyModifier.parseList(value).unknown {
+            config.addDiagnostic(
+              "mode.normal.passthrough_modifiers: unknown modifier \"\(token)\" "
+                + "(use cmd/ctrl/shift/alt)",
+              location: locations.location(for: ["mode", "normal", "passthrough_modifiers"]))
+          }
+          config.mode.normalPassthroughModifiers = value
         })
       applyModeMappingTable(
         normal["mappings"]?.table,
@@ -696,11 +735,11 @@ enum ConfigLoader {
         into: &config)
 
       for (key, _) in normal
-      where key != "leader" && key != "unmapped_modifier_passthrough" && key != "mappings" {
+      where key != "leader" && key != "passthrough_modifiers" && key != "mappings" {
         config.addDiagnostic(
           "mode.normal: unknown key '\(key)' — mappings belong under "
             + "[mode.normal.mappings]; valid keys are leader, "
-            + "unmapped_modifier_passthrough, mappings",
+            + "passthrough_modifiers, mappings",
           location: locations.location(for: ["mode", "normal", key]))
       }
     }
@@ -899,17 +938,19 @@ enum ConfigLoader {
           location: location)
         continue
       }
-      if let action = parseMappingValue(value, sourceURL: sourceURL) {
+      switch parseMappingValue(value, sourceURL: sourceURL) {
+      case .success(let parsed):
         pendingModeMappings.append(
           PendingModeMapping(
             scope: scope,
             rawKey: key,
             key: canonical,
-            action: action,
+            action: parsed.action,
+            repeatsOnFinalKey: parsed.repeatsOnFinalKey,
             location: location ?? ConfigLocation(line: 1, column: 1)))
-      } else {
+      case .failure(let error):
         config.addDiagnostic(
-          "mapping \"\(key)\" must be a non-empty string array — `[\"flash\", \"<verb>\", \"k=v\"...]` for in-process verbs or `[<argv>...]` for external commands",
+          error.message(mappingKey: key),
           location: location)
       }
     }
@@ -1054,9 +1095,13 @@ enum ConfigLoader {
     scope: ModeScope,
     key: String,
     action: MappingCommand,
+    repeatsOnFinalKey: Bool,
     into config: inout Config
   ) {
-    let mapping = ModeMapping(key: key, action: action)
+    let mapping = ModeMapping(
+      key: key,
+      action: action,
+      repeatsOnFinalKey: repeatsOnFinalKey)
     switch scope {
     case .all:
       config.mode.all.removeAll { $0.key == key }
@@ -1087,7 +1132,12 @@ enum ConfigLoader {
           location: mapping.location)
         continue
       }
-      setModeMapping(scope: mapping.scope, key: key, action: mapping.action, into: &config)
+      setModeMapping(
+        scope: mapping.scope,
+        key: key,
+        action: mapping.action,
+        repeatsOnFinalKey: mapping.repeatsOnFinalKey,
+        into: &config)
     }
   }
 
@@ -1279,11 +1329,36 @@ enum ConfigLoader {
   private static func parseMappingValue(
     _ value: any TOMLValueConvertible,
     sourceURL: URL?
+  ) -> Result<ParsedModeMappingValue, ModeMappingValueError> {
+    if let table = value.table {
+      if let unknown = table.keys.sorted().first(where: { $0 != "action" && $0 != "repeat" }) {
+        return .failure(.unknownOption(unknown))
+      }
+      guard let actionValue = table["action"],
+        let action = parseMappingActionValue(actionValue, sourceURL: sourceURL)
+      else {
+        return .failure(.invalidAction)
+      }
+      let repeatsOnFinalKey: Bool
+      if let repeatValue = table["repeat"] {
+        guard let parsed = repeatValue.bool else { return .failure(.invalidRepeat) }
+        repeatsOnFinalKey = parsed
+      } else {
+        repeatsOnFinalKey = false
+      }
+      return .success(
+        ParsedModeMappingValue(action: action, repeatsOnFinalKey: repeatsOnFinalKey))
+    }
+    guard let action = parseMappingActionValue(value, sourceURL: sourceURL) else {
+      return .failure(.invalidShape)
+    }
+    return .success(ParsedModeMappingValue(action: action, repeatsOnFinalKey: false))
+  }
+
+  private static func parseMappingActionValue(
+    _ value: any TOMLValueConvertible,
+    sourceURL: URL?
   ) -> MappingCommand? {
-    // Mappings are *always* arrays of strings. Plain TOML strings are
-    // rejected on purpose: the array form is the only way to express both
-    // in-process verbs (`["flash", "mouse_target"]`) and external argv
-    // (`["sh", "-c", "..."]`) in one shape.
     guard
       let argv = stringArrayValue(value),
       let head = argv.first,

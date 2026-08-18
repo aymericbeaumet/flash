@@ -140,8 +140,20 @@ extension OverlayPanel {
           + "timeout_ms=\(normalModeSequenceTimeoutMs)")
       normalModePending = ""
     }
+    if NormalModeInterpreter.pendingSequenceTimedOut(
+      pending: normalModeRepeatAnchor ?? "",
+      lastInputAt: normalModeRepeatAnchorUpdatedAt,
+      now: now,
+      timeoutMs: normalModeSequenceTimeoutMs)
+    {
+      FlashLog.trace(
+        "[input] normal repeat_timeout anchor=\(normalModeRepeatAnchor ?? "nil") "
+          + "timeout_ms=\(normalModeSequenceTimeoutMs)")
+      normalModeRepeatAnchor = nil
+    }
     let transition = NormalModeInterpreter.interpret(
       pending: normalModePending,
+      repeatAnchor: normalModeRepeatAnchor,
       keyCode: event.keyCode,
       modifierFlags: event.modifierFlags,
       characters: event.characters,
@@ -151,10 +163,14 @@ extension OverlayPanel {
       "[input] normal key=\(event.keyCode) chars=\(event.characters ?? "nil") "
         + "ignoring=\(event.charactersIgnoringModifiers ?? "nil") pending_before=\(pendingBeforeTimeout) "
         + "pending_after=\(transition.pending) action=\(transition.action?.diagnosticDescription ?? "nil") "
-        + "repeat=\(transition.repeatCount)")
+        + "repeat=\(transition.repeatCount) repeat_anchor=\(transition.repeatAnchor ?? "nil")")
     normalModePending = transition.pending
+    normalModeRepeatAnchor = transition.repeatAnchor
     if !transition.pending.isEmpty {
       normalModePendingUpdatedAt = now
+    }
+    if transition.repeatAnchor != nil {
+      normalModeRepeatAnchorUpdatedAt = now
     }
     coordinator.overlayDidHandleNormalMode(
       transition.action,
@@ -234,9 +250,19 @@ extension OverlayPanel {
     guard let coordinator else { return false }
     if coordinator.overlayDidHandleMapping(event) { return true }
     let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-    let isModifiedChord =
-      modifiers.contains(.command) || modifiers.contains(.control) || modifiers.contains(.option)
-    if normalModeUnmappedModifierPassthrough, isModifiedChord {
+    let passthroughFlags = KeyModifier.parseList(normalModePassthroughModifiers).modifiers.reduce(
+      into: NSEvent.ModifierFlags()
+    ) { flags, modifier in
+      flags.insert(modifier.nsEventFlag)
+    }
+    let rawFlags = Self.cgEventFlags(from: modifiers)
+    let recognized = NormalModeInterpreter.recognizesPhysicalKey(
+      pending: normalModePending,
+      repeatAnchor: normalModeRepeatAnchor,
+      virtualKey: UInt32(event.keyCode),
+      modifierFlags: rawFlags,
+      mappings: normalModeMappings)
+    if !modifiers.intersection(passthroughFlags).isEmpty, !recognized {
       // The session tap normally leaves the original event in the native event
       // stream. This path is only the no-tap key-window fallback, so the
       // coordinator replays the chord to the focused pid before entering INSERT.
@@ -247,6 +273,15 @@ extension OverlayPanel {
     // by `NormalModeInterpreter`, keeping NORMAL hermetic.
     processNormalModeKey(event)
     return true
+  }
+
+  private static func cgEventFlags(from modifiers: NSEvent.ModifierFlags) -> CGEventFlags {
+    var flags: CGEventFlags = []
+    if modifiers.contains(.command) { flags.insert(.maskCommand) }
+    if modifiers.contains(.control) { flags.insert(.maskControl) }
+    if modifiers.contains(.option) { flags.insert(.maskAlternate) }
+    if modifiers.contains(.shift) { flags.insert(.maskShift) }
+    return flags
   }
 
   /// Handles `⌘a` / `⌘c` / `⌘x` / `⌘v` / `⌘z` / `⌘⇧z` while the

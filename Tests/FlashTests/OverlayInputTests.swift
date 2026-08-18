@@ -491,6 +491,28 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.tabNext])
   }
 
+  func testRepeatableBracketAppMappingRepeatsOnFinalKey() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    panel.processNormalModeKey(
+      try keyEvent(keyCode: kVK_ANSI_LeftBracket, characters: "["))
+    for _ in 0..<4 {
+      panel.processNormalModeKey(
+        try keyEvent(keyCode: kVK_ANSI_A, characters: "a"))
+    }
+
+    XCTAssertEqual(
+      coordinator.normalModeActions.map(\.0?.command),
+      [.appPrev, .appPrev, .appPrev, .appPrev])
+    XCTAssertEqual(
+      panel.normalModeRepeatAnchor,
+      NormalModeInterpreter.canonicalizeMappingKey("[a"))
+  }
+
   func testKeyWindowFallbackPassesUnmappedModifierChordWhenEnabled() throws {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
@@ -523,7 +545,7 @@ final class OverlayInputTests: XCTestCase {
     panel.coordinator = coordinator
     panel.inputMode = .normal
     panel.normalModeMappings = Config.default.mode.compiledNormal
-    panel.normalModeUnmappedModifierPassthrough = false
+    panel.normalModePassthroughModifiers = []
 
     let event = try XCTUnwrap(
       NSEvent.keyEvent(
@@ -542,6 +564,42 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(panel.normalModePending, "")
     XCTAssertTrue(coordinator.normalModeActions.isEmpty)
     XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
+  }
+
+  func testKeyWindowFallbackKeepsExplicitShiftMappingInNormalMode() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let event = try keyEvent(
+      keyCode: kVK_ANSI_A,
+      characters: "A",
+      charactersIgnoringModifiers: "a",
+      modifierFlags: [.shift])
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
+    XCTAssertEqual(coordinator.normalModeActions.map(\.0?.command), [.insertMode])
+    XCTAssertTrue(coordinator.passthroughEvents.isEmpty)
+  }
+
+  func testKeyWindowFallbackPassesUnknownShiftShortcut() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .normal
+    panel.normalModeMappings = Config.default.mode.compiledNormal
+
+    let event = try keyEvent(
+      keyCode: kVK_ANSI_Q,
+      characters: "Q",
+      charactersIgnoringModifiers: "q",
+      modifierFlags: [.shift])
+
+    XCTAssertTrue(panel.performKeyEquivalent(with: event))
+    XCTAssertTrue(coordinator.normalModeActions.isEmpty)
+    XCTAssertEqual(coordinator.passthroughEvents.map(\.keyCode), [UInt16(kVK_ANSI_Q)])
   }
 
   func testNormalModeConsumesDeadKeyEventWithoutCharacters() throws {

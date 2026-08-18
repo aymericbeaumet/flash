@@ -308,10 +308,10 @@ struct Config {
     var normal: [ModeMapping] = Self.defaultNormalMappings
     var insert: [ModeMapping] = []
     var normalLeader: String? = Self.defaultNormalLeader
-    /// Whether an unmapped Command / Control / Option chord in NORMAL switches
-    /// to INSERT and continues to the focused app or macOS unchanged. Explicit
+    /// Modifiers that make an unmapped chord in NORMAL switch to INSERT and
+    /// continue to the focused app or macOS unchanged. Explicit
     /// `[mode.normal.mappings]` and `[mode.all.mappings]` bindings still win.
-    var normalUnmappedModifierPassthrough = true
+    var normalPassthroughModifiers = Self.defaultNormalPassthroughModifiers
     var labels = Labels()
     /// How long the interpreter waits for the next key in a pending
     /// sequence before resolving the longest matching prefix.
@@ -321,6 +321,7 @@ struct Config {
     /// Matches Neovim's `timeoutlen` default so multi-key sequences feel the
     /// same as in the editor users already have muscle memory for.
     static let defaultSequenceTimeoutMs = 1000
+    static let defaultNormalPassthroughModifiers = ["cmd", "ctrl", "shift", "alt"]
 
     /// Single-atom key form, parsed via `NormalModeInterpreter.parseKeySequence`.
     /// Use `\` bare or `<backslash>` — both resolve to the same key.
@@ -435,8 +436,12 @@ struct Config {
         // capital-letter siblings of `gT` / `gt`.
         ("J", .flashCommand(.tabPrev)),
         ("K", .flashCommand(.tabNext)),
+        ("a", .flashCommand(.insertMode)),
+        ("A", .flashCommand(.insertMode)),
         ("i", .flashCommand(.insertMode)),
         ("I", .flashCommand(.lockedInsertMode)),
+        ("o", .flashCommand(.insertMode)),
+        ("O", .flashCommand(.insertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
         // Vimium-style `F`: use the same discovered targets but preset Cmd on
         // the eventual click so links open in a new tab.
@@ -509,11 +514,15 @@ struct Config {
             .flashCommand(.pluginVerb(name: "jump_to_mark", args: ["letter": l]))
           ))
       }
+      let repeatableKeys: Set<String> = ["[a", "]a"]
       return raw.map { (key, action) in
         guard let canonical = NormalModeInterpreter.canonicalizeMappingKey(key) else {
           preconditionFailure("default mapping key \"\(key)\" failed canonicalization")
         }
-        return ModeMapping(key: canonical, action: action)
+        return ModeMapping(
+          key: canonical,
+          action: action,
+          repeatsOnFinalKey: repeatableKeys.contains(key))
       }
     }
 
@@ -549,7 +558,10 @@ struct Config {
       for index in normal.indices where normal[index].key.contains("<leader>") {
         let mapping = normal[index]
         let resolved = mapping.key.replacingOccurrences(of: "<leader>", with: leaderInternal)
-        normal[index] = ModeMapping(key: resolved, action: mapping.action)
+        normal[index] = ModeMapping(
+          key: resolved,
+          action: mapping.action,
+          repeatsOnFinalKey: mapping.repeatsOnFinalKey)
       }
     }
 
@@ -657,7 +669,7 @@ struct Config {
       ],
       "normal": mode.normal.map(Self.mappingJSONValue),
       "normal_leader": mode.normalLeader ?? NSNull(),
-      "normal_unmapped_modifier_passthrough": mode.normalUnmappedModifierPassthrough,
+      "normal_passthrough_modifiers": mode.normalPassthroughModifiers,
     ]
     return compactJSON([
       "debug": [
@@ -714,6 +726,7 @@ struct Config {
     [
       "action": mapping.action.configValue,
       "key": mapping.key,
+      "repeat": mapping.repeatsOnFinalKey,
     ]
   }
 

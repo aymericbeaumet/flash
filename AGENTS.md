@@ -6,7 +6,7 @@ This document orients an agent (Claude, etc.) editing the Flash codebase. Read t
 
 A headless, resident macOS app that, when triggered by `flash mouse_target` from the CLI or a configured mapping, overlays hint labels on clickable elements in the focused app and clicks or moves to one when the user types its hint. It also supports normal/insert/command modes, a persistent top status bar when advanced mode is enabled, managed stdio plugins, `mouse_grid` screen-position targeting, `alert_show message=...` / `alert_dismiss` for a temporary centered toast, and `help_show` / `plugins` modal views. No menu bar, no Dock icon, no preferences window.
 
-Activation comes either through the `flash` CLI (which AppleEvents the verb to the resident over a custom event class) or through Flash's `[mode.all.mappings]` / `[mode.normal.mappings]` / `[mode.insert.mappings]` Carbon registry. Mapping values are always argv arrays. Arrays whose head is `"flash"` resolve through the in-process verb table (the same one the AppleEvent handler consults); any other head is launched as argv with `~` and env expansion on each element. There is no `flash://` URL scheme and no separate `flashctl` binary — the `flash` Mach-O does both jobs.
+Activation comes either through the `flash` CLI (which AppleEvents the verb to the resident over a custom event class) or through Flash's `[mode.all.mappings]` / `[mode.normal.mappings]` / `[mode.insert.mappings]` Carbon registry. Mapping actions are argv arrays, either used directly as the mapping value or under `action` in an inline table with optional metadata such as `repeat = true`. Arrays whose head is `"flash"` resolve through the in-process verb table (the same one the AppleEvent handler consults); any other head is launched as argv with `~` and env expansion on each element. There is no `flash://` URL scheme and no separate `flashctl` binary — the `flash` Mach-O does both jobs.
 
 ## Hard rules (do not violate)
 
@@ -254,11 +254,11 @@ Keys:
 | `[flashlight.precedence]` entries  | int            | source-kind override |
 | `mode.labels`                      | inline string table | `{ normal = "NORMAL", insert = "INSERT", command = "COMMAND" }` |
 | `mode.sequence_timeout_ms`         | int (ms)       | `1000`               |
-| `[mode.all.mappings]` entries      | argv array mapping (`["flash", "<verb>"...]` or `[<argv>...]`) | none             |
+| `[mode.all.mappings]` entries      | argv array or `{ action = [...], repeat = bool }` | none             |
 | `mode.normal.leader`               | string         | `"\\"`             |
-| `mode.normal.unmapped_modifier_passthrough` | bool | `true`               |
-| `[mode.normal.mappings]` entries   | argv array mapping              | built-in normal map |
-| `[mode.insert.mappings]` entries   | argv array mapping              | none             |
+| `mode.normal.passthrough_modifiers` | string array | `["cmd", "ctrl", "shift", "alt"]` |
+| `[mode.normal.mappings]` entries   | argv array or `{ action = [...], repeat = bool }` | built-in normal map |
+| `[mode.insert.mappings]` entries   | argv array or `{ action = [...], repeat = bool }` | none             |
 | `debug.show_hints_bounds`                | bool           | `false`              |
 | `debug.hints_bounds_bg` / `hints_bounds_fg`    | hex string     | transparent / `"#FF3B9A"` |
 | `debug.log_level`                  | string         | `"info"`             |
@@ -559,7 +559,7 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
 
 ### Mode Mappings
 
-`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = ["flash", "<verb>", "--key=value"]` (in-process verb) or `"key" = ["<executable>", "<arg>", …]` (argv exec). `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`. `[mode.normal] unmapped_modifier_passthrough = true` makes an unmapped Command / Control / Option shortcut enter INSERT and continue natively; set it to `false` for hermetic NORMAL behavior.
+`[mode] labels = { normal = "...", insert = "...", command = "..." }` controls the left-side status-bar text. `[mode.all.mappings]`, `[mode.normal.mappings]`, and `[mode.insert.mappings]` map `"key" = ["flash", "<verb>", "--key=value"]` (in-process verb) or `"key" = ["<executable>", "<arg>", …]` (argv exec). A mapping that needs metadata uses `{ action = [...], repeat = true }`; `repeat` keeps the completed normal-mode mapping armed so additional presses of its final key dispatch it again. `[mode.normal] leader = "\\"` configures a normal-mode sequence prefix that can be referenced in `[mode.normal.mappings]` as `<leader>`. `[mode.normal] passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]` makes an unmapped shortcut carrying any listed modifier enter INSERT and continue natively; set it to `[]` for hermetic NORMAL behavior.
 
 - Modified-key entries in `[mode.all.mappings]` apply in every mode, including
   command-line and candidate-finder surfaces. Non-modified entries are available
@@ -567,7 +567,7 @@ There is intentionally **no** `per_app.*` table. The project's working assumptio
 - `[mode.normal.mappings]` applies only while the overlay is capturing normal-mode input.
 - `[mode.insert.mappings]` applies only in insert mode.
 
-Values must be non-empty string arrays. Bare strings, URLs, and any other shape are deliberately unsupported. Arrays whose head is `"flash"` are interpreted as in-process verb dispatches and resolve through `URLEventHandler.parse(verb:args:)`; any other head is executed directly as argv (no shell wrap) with leading `~` expanded in each element. Relative path arguments containing `/` are resolved from the config file location at load time, so `["../../scripts/toggle"]` works for dotfiles-managed configs.
+Actions must be non-empty string arrays. Use the array directly for a simple mapping or `{ action = [...], repeat = true }` when the final key should repeat a completed normal-mode sequence. Bare strings, URLs, and any other shape are deliberately unsupported. Arrays whose head is `"flash"` are interpreted as in-process verb dispatches and resolve through `URLEventHandler.parse(verb:args:)`; any other head is executed directly as argv (no shell wrap) with leading `~` expanded in each element. Relative path arguments containing `/` are resolved from the config file location at load time, so `["../../scripts/toggle"]` works for dotfiles-managed configs.
 
 Native modified-key mappings are registered through Carbon when the key contains `"+"`; unmodified normal-mode mappings are read only while the overlay panel owns keyboard input. `[mode.normal.mappings]` entries extend the built-in normal map and override only matching keys, so unrelated defaults stay available unless that exact key is remapped.
 
@@ -623,7 +623,7 @@ Three normal-mode keys carry a single semantic meaning regardless of focused-app
 
 Flash must never leave normal mode because focus changed on its own. Leaving normal mode must follow an auditable user-intent path, logged with a reason where practical. The **complete** set of valid insert transitions is:
 
-- A normal-mode `i` keypress (or its verb twin `enter_insert_mode` invoked by the user).
+- A normal-mode `a`, `A`, `i`, `I`, `o`, or `O` keypress (or its insert-mode verb twin invoked by the user).
 - A user-driven normal-mode command that intentionally opens a typing surface, currently `/` (`app_find`) and `t` (`tab_new`).
 - A physical pointer click while idle normal mode is capturing input; Flash enters insert mode and replays the click so it reaches the underlying app.
 - A committed `f` (mouse_target) click on a target whose owning provider set `JumpTarget.entersInsertMode = true`. Only true text-input surfaces qualify: `AccessibilityProvider` sets it on `AXTextField` / `AXSearchField` / `AXTextArea` / `AXComboBox`. Terminal-like targets (e.g. tmux panes) are NOT inputs in this sense and stay normal; the user types `i` after focusing one if they want to type.

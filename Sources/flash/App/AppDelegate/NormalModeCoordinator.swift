@@ -225,6 +225,7 @@ extension AppDelegate {
   private func resetModeInputState() {
     cancelCandidateFinderSessionWork()
     overlay.normalModePending = ""
+    overlay.normalModeRepeatAnchor = nil
     overlay.commandLineText = ""
     overlay.commandLineCursorIndex = 0
     overlay.candidateFinderQuery = ""
@@ -980,6 +981,7 @@ extension AppDelegate {
     let wasNormal = flashMode == .normal
     if wasNormal {
       overlay.normalModePending = ""
+      overlay.normalModeRepeatAnchor = nil
       normalModePendingCommandToken &+= 1
     }
     performMappingCommand(action)
@@ -1193,6 +1195,7 @@ extension AppDelegate {
     // value from a prior open doesn't leak.
     normalModePendingCommandToken &+= 1
     overlay.normalModePending = ""
+    overlay.normalModeRepeatAnchor = nil
     closeModalStateForModeExit(reason: "enter_command_mode")
     clearTransientHintState(reason: "enter_command_mode")
     resetCommandLineState()

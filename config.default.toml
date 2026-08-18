@@ -202,10 +202,10 @@ sequence_timeout_ms = 1000
 # "cmd+ctrl+space" = ["flash", "enter_command_mode", "--input=:flashlight @emojis.glyphs ", "--restore-mode"]
 
 [mode.normal]
-# Let an unmapped Command / Control / Option shortcut switch Flash to INSERT
+# Let an unmapped shortcut carrying any listed modifier switch Flash to INSERT
 # and continue to the focused app or macOS unchanged. Explicit normal/all
-# mappings still win. Set false to keep NORMAL hermetic.
-unmapped_modifier_passthrough = true
+# mappings still win. Use [] to keep NORMAL hermetic.
+passthrough_modifiers = ["cmd", "ctrl", "shift", "alt"]
 # Normal-mode sequence prefix. Use it in normal mappings as <leader>.
 leader = "\\"
 
@@ -213,8 +213,10 @@ leader = "\\"
 # Entries here extend the built-in normal-mode map. Reusing a key overrides
 # that one default mapping; unrelated defaults stay available.
 # Mapped keys dispatch Flash commands and bare unmapped keys are swallowed.
-# With `unmapped_modifier_passthrough = true`, unmapped Command / Control /
-# Option shortcuts instead switch to INSERT and continue natively.
+# With `passthrough_modifiers`, matching unmapped shortcuts instead switch to
+# INSERT and continue natively.
+# Use an inline table when a mapping needs metadata. `repeat = true` lets each
+# additional press of the final key repeat the completed sequence (`[aaaa`).
 # Example:
 # "<leader>c" = ["../../scripts/toggle_caffeinate.sh"]
 "h" = ["flash", "scroll_left"]
@@ -251,8 +253,8 @@ leader = "\\"
 # is no portable equivalent so the mapping is a no-op.
 "[m" = ["flash", "tab_move_previous"]
 "]m" = ["flash", "tab_move_next"]
-"[a" = ["flash", "app_previous"]
-"]a" = ["flash", "app_next"]
+"[a" = { action = ["flash", "app_previous"], repeat = true }
+"]a" = { action = ["flash", "app_next"], repeat = true }
 # Restore the most recently closed tab. Vimium binds this to X; browsers
 # receive ⌘⇧T; tmux has no closed-window history so it returns "unhandled".
 "X" = ["flash", "tab_reopen"]
@@ -291,8 +293,12 @@ leader = "\\"
 "g9" = ["flash", "tab_select", "--index=9"]
 "ctrl-o" = ["flash", "movement_back"]
 "ctrl-i" = ["flash", "movement_forward"]
+"a" = ["flash", "enter_insert_mode"]
+"A" = ["flash", "enter_insert_mode"]
 "i" = ["flash", "enter_insert_mode"]
 "I" = ["flash", "enter_locked_insert_mode"]
+"o" = ["flash", "enter_insert_mode"]
+"O" = ["flash", "enter_insert_mode"]
 # Vimium-style target opening: Shift-F presets a Command-click so links open
 # in a new tab. Holding a configured hints.magic_modifiers key on the final
 # hint character still adds that modifier to either action.

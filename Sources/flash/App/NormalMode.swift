@@ -13,25 +13,34 @@ struct NormalModeTransition: Equatable {
   var pending: String
   var action: MappingCommand?
   var repeatCount: Int
+  var repeatAnchor: String?
 
   var command: URLCommand? { action?.command }
 
-  static func action(_ action: MappingCommand, repeatCount: Int = 1) -> NormalModeTransition {
+  static func action(
+    _ action: MappingCommand,
+    repeatCount: Int = 1,
+    repeatAnchor: String? = nil
+  ) -> NormalModeTransition {
     NormalModeTransition(
-      pending: "", action: action, repeatCount: max(1, repeatCount))
+      pending: "",
+      action: action,
+      repeatCount: max(1, repeatCount),
+      repeatAnchor: repeatAnchor)
   }
 
   static func pending(_ pending: String) -> NormalModeTransition {
-    NormalModeTransition(pending: pending, action: nil, repeatCount: 1)
+    NormalModeTransition(pending: pending, action: nil, repeatCount: 1, repeatAnchor: nil)
   }
 
   static let consume = NormalModeTransition(
-    pending: "", action: nil, repeatCount: 1)
+    pending: "", action: nil, repeatCount: 1, repeatAnchor: nil)
 }
 
 struct PendingNormalModeCommand: Equatable {
   var action: MappingCommand
   var repeatCount: Int
+  var repeatAnchor: String?
 }
 
 enum NormalModeInterpreter {
@@ -86,6 +95,7 @@ enum NormalModeInterpreter {
 
   static func interpret(
     pending: String,
+    repeatAnchor: String? = nil,
     keyCode: UInt16,
     modifierFlags: NSEvent.ModifierFlags,
     characters: String?,
@@ -99,6 +109,28 @@ enum NormalModeInterpreter {
     let ignoredChar = firstCharacter(charactersIgnoringModifiers)?.lowercased().first
     let actualChar = firstCharacter(characters)
     let state = pendingState(pending)
+    let keys = mappingKeys(
+      keyCode: keyCode,
+      modifierFlags: independent,
+      hasControl: hasControl,
+      hasShift: independent.contains(.shift),
+      ignoredChar: ignoredChar,
+      actualChar: actualChar)
+
+    // A repeatable mapping keeps only its completed key sequence as an anchor.
+    // Pressing the same final atom dispatches it again; any other key drops the
+    // anchor and is interpreted normally from scratch. The overlay expires the
+    // anchor with `sequence_timeout_ms`, so a later standalone `a` remains the
+    // regular insert-mode mapping after `[a`.
+    if pending.isEmpty,
+      let repeatAnchor,
+      let mapping = mappings.mapping(for: repeatAnchor),
+      mapping.repeatsOnFinalKey,
+      let finalAtom = keyAtoms(from: repeatAnchor).last,
+      keys.contains(finalAtom)
+    {
+      return .action(mapping.action, repeatAnchor: repeatAnchor)
+    }
 
     // A bare `"` parked us waiting for a register name. Consume this key as
     // that name. An invalid name (escape is handled above; arrows, chords,
@@ -137,13 +169,6 @@ enum NormalModeInterpreter {
       return .pending(PendingState(prefix: "", awaitingRegister: true).encoded)
     }
 
-    let keys = mappingKeys(
-      keyCode: keyCode,
-      modifierFlags: independent,
-      hasControl: hasControl,
-      hasShift: independent.contains(.shift),
-      ignoredChar: ignoredChar,
-      actualChar: actualChar)
     guard !keys.isEmpty else {
       return .consume
     }
@@ -154,7 +179,8 @@ enum NormalModeInterpreter {
       if let mapping = exact, !hasLonger {
         return .action(
           applyingRegister(state.register, to: mapping.action),
-          repeatCount: state.repeatCount)
+          repeatCount: state.repeatCount,
+          repeatAnchor: mapping.repeatsOnFinalKey ? mapping.key : nil)
       }
       if exact != nil || hasLonger {
         return .pending(state.appendingPrefix(sequence))
@@ -173,6 +199,7 @@ enum NormalModeInterpreter {
     if !state.prefix.isEmpty {
       return interpret(
         pending: "",
+        repeatAnchor: nil,
         keyCode: keyCode,
         modifierFlags: modifierFlags,
         characters: characters,
@@ -201,7 +228,51 @@ enum NormalModeInterpreter {
     else { return nil }
     return PendingNormalModeCommand(
       action: applyingRegister(state.register, to: mapping.action),
-      repeatCount: state.repeatCount)
+      repeatCount: state.repeatCount,
+      repeatAnchor: mapping.repeatsOnFinalKey ? mapping.key : nil)
+  }
+
+  /// Fast raw-event recognition for the keyboard tap's passthrough decision.
+  /// `CompiledMappings` pre-indexes canonical atoms by physical hotkey, so this
+  /// remains layout-free and allocation-light for repeated system chords such
+  /// as Command-Tab while still preserving shifted mappings and modified
+  /// sequence prefixes.
+  static func recognizesPhysicalKey(
+    pending: String,
+    repeatAnchor: String?,
+    virtualKey: UInt32,
+    modifierFlags: CGEventFlags,
+    mappings: CompiledMappings
+  ) -> Bool {
+    let keys = mappings.physicalKeyAtoms(virtualKey: virtualKey, cgFlags: modifierFlags)
+    guard !keys.isEmpty else { return false }
+    let state = pendingState(pending)
+    if state.awaitingRegister {
+      return keys.contains { key in
+        key.count == 1 && key.first.map(isRegisterNameChar) == true
+      }
+    }
+    if pending.isEmpty,
+      let repeatAnchor,
+      let mapping = mappings.mapping(for: repeatAnchor),
+      mapping.repeatsOnFinalKey,
+      let finalAtom = keyAtoms(from: repeatAnchor).last,
+      keys.contains(finalAtom)
+    {
+      return true
+    }
+    for key in keys {
+      let sequence = appendKeyAtom(state.prefix, key)
+      if mappings.mapping(for: sequence) != nil || mappings.hasStrictPrefix(sequence) {
+        return true
+      }
+      if !state.prefix.isEmpty,
+        mappings.mapping(for: key) != nil || mappings.hasStrictPrefix(key)
+      {
+        return true
+      }
+    }
+    return false
   }
 
   /// Bake a captured register into a yank/paste action. The register only
