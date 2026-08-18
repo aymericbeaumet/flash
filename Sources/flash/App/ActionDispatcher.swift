@@ -101,8 +101,9 @@ enum ActionDispatcher {
     // right-click makes the app anchor its context menu at the cursor, whereas
     // the AX `AXShowMenu` action (the first step of `.accessibilityThenHostClick`)
     // opens the *correct* menu but at the element's own default spot — typically
-    // the top-left of the screen, never where the user aimed. The `F` mouse-grid
-    // already synthesizes; routing `f` here too keeps the two consistent.
+    // the top-left of the screen, never where the user aimed. Mouse-grid clicks
+    // already synthesize; routing target right-clicks here keeps the two
+    // consistent.
     if action == .rightClick || !modifiers.isEmpty || target.preferHostClick {
       return .hostClick
     }

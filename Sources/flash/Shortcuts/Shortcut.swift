@@ -31,6 +31,7 @@ enum MappingCommand: Hashable {
 /// Build a mapping action from a TOML array.
 ///
 ///     ["flash", "mouse_target"]                    → in-process mouseTarget
+///     ["flash", "mouse_target", "--modifiers=cmd"] → preset Command-click
 ///     ["flash", "mouse_grid", "--secondary"]       → in-process mouseGrid (bool flag)
 ///     ["flash", "app_open", "--name=Alacritty"]    → in-process openApp
 ///     ["sh", "-c", "echo hi"]                      → exec sh -c "echo hi"

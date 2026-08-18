@@ -160,6 +160,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     get { hintSession.commitBehavior }
     set { hintSession.commitBehavior = newValue }
   }
+  var pendingClickModifiers: ClickModifiers {
+    get { hintSession.presetClickModifiers }
+    set { hintSession.presetClickModifiers = newValue }
+  }
   /// The single source of truth for the app's mode. Every UI-facing fact
   /// (overlay input routing, status bar, badge, capture, mapping scope) is a
   /// projection of `modeStore.mode`; transitions go through `dispatchMode`.

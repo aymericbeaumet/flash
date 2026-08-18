@@ -12,7 +12,11 @@ extension AppDelegate {
 
   func activateMouseTarget(_ command: MouseCommand, contextOverride: AppContext?) {
     let behavior: HintCommitBehavior = command.isMove ? .moveMouse : .click
-    activate(action: command.action, commitBehavior: behavior, contextOverride: contextOverride)
+    activate(
+      action: command.action,
+      commitBehavior: behavior,
+      clickModifiers: command.modifiers,
+      contextOverride: contextOverride)
   }
 
   func activateMouseGrid(_ command: MouseCommand, contextOverride: AppContext?) {
@@ -29,6 +33,7 @@ extension AppDelegate {
     mouseGridDepth = 0
     sourceAppPID = context?.processID
     pendingAction = command.action
+    pendingClickModifiers = command.modifiers
     pendingHintCommitBehavior = command.isMove ? .mouseGridMove : .mouseGridClick
     currentPrefix = ""
     overlay.overlayConfig = config.overlay
@@ -72,6 +77,7 @@ extension AppDelegate {
   private func activate(
     action: JumpAction,
     commitBehavior: HintCommitBehavior = .click,
+    clickModifiers: ClickModifiers = [],
     targetFilter: ((JumpTarget) -> Bool)? = nil,
     contextOverride: AppContext? = nil
   ) {
@@ -107,6 +113,7 @@ extension AppDelegate {
     )
     sourceAppPID = context.processID
     pendingAction = action
+    pendingClickModifiers = clickModifiers
     pendingHintCommitBehavior = commitBehavior
 
     overlay.overlayConfig = config.overlay

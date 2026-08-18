@@ -439,20 +439,28 @@ struct Config {
         ("K", .flashCommand(.tabNext)),
         ("i", .flashCommand(.insertMode)),
         ("I", .flashCommand(.lockedInsertMode)),
-        ("f", .flashCommand(.mouseTarget(.click(.leftClick)))),
+        ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
+        // Vimium-style `F`: use the same discovered targets but preset Cmd on
+        // the eventual click so links open in a new tab.
+        ("F", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: .command)))),
+        // Ctrl moves the same current/new-tab pair onto the precision grid.
+        ("ctrl+f", .flashCommand(.mouseGrid(.click(.leftClick, modifiers: [])))),
+        (
+          "ctrl+shift+f",
+          .flashCommand(.mouseGrid(.click(.leftClick, modifiers: .command)))
+        ),
         // `s` for "secondary click" (right-click). `r` was the old
         // prefix but it collided with the `r`→`R` reload pair: typing
         // `r` waited the full sequence-timeout before resolving as
         // reload, because right-click hint sequences also began with `r`.
         // `s` has no such pair so the keystroke fires instantly.
-        ("sf", .flashCommand(.mouseTarget(.click(.rightClick)))),
+        ("sf", .flashCommand(.mouseTarget(.click(.rightClick, modifiers: [])))),
         // Double-click hints. `D` ("Double") rather than the natural `d`
         // prefix so the bare `d` half-page scroll above stays instant.
-        ("Df", .flashCommand(.mouseTarget(.click(.doubleClick)))),
+        ("Df", .flashCommand(.mouseTarget(.click(.doubleClick, modifiers: [])))),
         ("mf", .flashCommand(.mouseTarget(.move))),
-        ("F", .flashCommand(.mouseGrid(.click(.leftClick)))),
-        ("sF", .flashCommand(.mouseGrid(.click(.rightClick)))),
-        ("DF", .flashCommand(.mouseGrid(.click(.doubleClick)))),
+        ("sF", .flashCommand(.mouseGrid(.click(.rightClick, modifiers: [])))),
+        ("DF", .flashCommand(.mouseGrid(.click(.doubleClick, modifiers: [])))),
         ("mF", .flashCommand(.mouseGrid(.move))),
         // Undo lives on `u` in Vim, but Vimium reuses `u` for half-page
         // scroll-up (mapped above). Undo stays reachable via `:undo` /
@@ -884,17 +892,23 @@ extension URLCommand {
 extension MouseCommand {
   /// Arg tokens for `mouse_target` / `mouse_grid` in diagnostic form.
   /// Empty for a plain left-click, `["--secondary"]` for right-click,
-  /// `["--double"]` for double-click, `["--move"]` for cursor-only move.
+  /// `["--double"]` for double-click, `["--move"]` for cursor-only move,
+  /// with an optional `--modifiers=…` suffix for a preset modified click.
   var argTokens: [String] {
     switch self {
     case .move:
       return ["--move"]
-    case .click(let action):
+    case .click(let action, let modifiers):
+      var tokens: [String]
       switch action {
-      case .leftClick: return []
-      case .rightClick: return ["--secondary"]
-      case .doubleClick: return ["--double"]
+      case .leftClick: tokens = []
+      case .rightClick: tokens = ["--secondary"]
+      case .doubleClick: tokens = ["--double"]
       }
+      if !modifiers.isEmpty {
+        tokens.append("--modifiers=\(modifiers.argumentValue)")
+      }
+      return tokens
     }
   }
 }

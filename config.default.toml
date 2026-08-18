@@ -290,13 +290,20 @@ leader = "\\"
 "ctrl-i" = ["flash", "movement_forward"]
 "i" = ["flash", "enter_insert_mode"]
 "I" = ["flash", "enter_locked_insert_mode"]
+# Vimium-style target opening: Shift-F presets a Command-click so links open
+# in a new tab. Holding a configured hints.magic_modifiers key on the final
+# hint character still adds that modifier to either action.
 "f" = ["flash", "mouse_target"]
+"F" = ["flash", "mouse_target", "--modifiers=cmd"]
+# Ctrl selects the precision grid; adding Shift preserves the current/new-tab
+# pairing above by presetting the same Command-click on the final grid point.
+"ctrl+f" = ["flash", "mouse_grid"]
+"ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd"]
 "sf" = ["flash", "mouse_target", "--secondary"]
 # Double-click hints sit on the D ("Double") prefix, not d, so the bare
 # d half-page scroll above stays instant.
 "Df" = ["flash", "mouse_target", "--double"]
 "mf" = ["flash", "mouse_target", "--move"]
-"F" = ["flash", "mouse_grid"]
 "sF" = ["flash", "mouse_grid", "--secondary"]
 "DF" = ["flash", "mouse_grid", "--double"]
 "mF" = ["flash", "mouse_grid", "--move"]

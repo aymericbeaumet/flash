@@ -301,6 +301,7 @@ extension AppDelegate {
     }
 
     let action = pendingAction
+    let resolvedClickModifiers = pendingClickModifiers.union(clickModifiers)
     let wasNormalMode = flashMode == .normal
     let actionMayEnterInsert = Self.pointerActionMayEnterInsert(action)
     // The target carries its owning pid (always the focused app at
@@ -326,10 +327,10 @@ extension AppDelegate {
         + "provider=\(hint.target.providerID) "
         + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y))) "
         + "prefer_host_click=\(hint.target.preferHostClick) "
-        + "modifiers=cmd:\(clickModifiers.contains(.command)) "
-        + "shift:\(clickModifiers.contains(.shift)) "
-        + "ctrl:\(clickModifiers.contains(.control)) "
-        + "alt:\(clickModifiers.contains(.option)) "
+        + "modifiers=cmd:\(resolvedClickModifiers.contains(.command)) "
+        + "shift:\(resolvedClickModifiers.contains(.shift)) "
+        + "ctrl:\(resolvedClickModifiers.contains(.control)) "
+        + "alt:\(resolvedClickModifiers.contains(.option)) "
         + "enters_insert=\(hint.target.entersInsertMode) "
         + "transfers_focus=\(hint.target.transfersFocus)")
 
@@ -371,7 +372,8 @@ extension AppDelegate {
       // mode in the completion so it still happens *after* the click lands — the
       // insert probe below reads the target's focus, which the click changes.
       ActionDispatcher.perform(
-        action, on: hint.target, pid: pid, clickPoint: clickPoint, modifiers: clickModifiers,
+        action, on: hint.target, pid: pid, clickPoint: clickPoint,
+        modifiers: resolvedClickModifiers,
         leaveCursorAtClickPoint: true
       ) { [weak self] in
         guard let self else { return }
@@ -543,6 +545,7 @@ extension AppDelegate {
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
     let shouldMove = pendingHintCommitBehavior == .mouseGridMove
     let priorPID = sourceAppPID
+    let resolvedClickModifiers = pendingClickModifiers.union(clickModifiers)
     overlay.hide()
     clearHintSessionState()
     activationLifecycle.supersede()
@@ -561,7 +564,7 @@ extension AppDelegate {
     _ = ActionDispatcher.synthesizeClick(
       at: point,
       action: clickAction,
-      modifiers: clickModifiers)
+      modifiers: resolvedClickModifiers)
     if clickAction == .rightClick {
       // Right-click opened a context menu — same rule as `commit()`:
       // do not render or re-key the panel, or the menu loses its modal
@@ -605,9 +608,9 @@ extension AppDelegate {
   ///
   ///   - Physical left / double mouse click: always `true` — clicking with the
   ///     mouse unconditionally enters INSERT, no editability probe.
-  ///   - `f` (`mouse_target`) hint: the resolved target's own role
+  ///   - `f`/`F` (`mouse_target`) hint: the resolved target's own role
   ///     (`hint.target.entersInsertMode`), so a link/button stays in NORMAL.
-  ///   - `F`/`dF` mouse-grid: a point-based AX hit-test at the click site
+  ///   - `ctrl-f`/`ctrl-shift-f` mouse-grid: a point-based AX hit-test at the click site
   ///     (`AXClick.isTextInput(at:pid:)`), since it carries only a point.
   ///
   /// Right-click never reaches here — it opens a context menu and stays in

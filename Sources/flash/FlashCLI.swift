@@ -46,6 +46,7 @@ enum FlashCLI {
 
     Examples:
       flash mouse_target
+      flash mouse_target --modifiers=cmd
       flash mouse_target --double
       flash mouse_grid --move
       flash enter_normal_mode

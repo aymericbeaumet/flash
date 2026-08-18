@@ -15,6 +15,9 @@ struct HintSession {
   var hints: [AssignedHint] = []
   var prefix: String = ""
   var commitBehavior: AppDelegate.HintCommitBehavior = .click
+  /// Modifiers requested by the command that opened the hints. These are
+  /// unioned with any magic modifiers held on the final hint key.
+  var presetClickModifiers: ClickModifiers = []
   var sourceAppPID: pid_t?
   var mouseGridRegion: MouseGrid.Region?
   var mouseGridDepth: Int = 0

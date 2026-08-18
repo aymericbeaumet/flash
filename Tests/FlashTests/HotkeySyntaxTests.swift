@@ -157,18 +157,19 @@ final class HotkeySyntaxTests: XCTestCase {
     guard case .flashCommand(let cmd) = action else {
       return XCTFail("expected .flashCommand")
     }
-    if case .mouseTarget(.click(let hintAction)) = cmd {
+    if case .mouseTarget(.click(let hintAction, let modifiers)) = cmd {
       XCTAssertEqual(hintAction, .leftClick)
+      XCTAssertTrue(modifiers.isEmpty)
     } else {
       XCTFail("expected .mouseTarget, got \(cmd)")
     }
 
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--secondary"])?.command,
-      .mouseTarget(.click(.rightClick)))
+      .mouseTarget(.click(.rightClick, modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--double"])?.command,
-      .mouseTarget(.click(.doubleClick)))
+      .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--move"])?.command,
       .mouseTarget(.move))
@@ -180,7 +181,19 @@ final class HotkeySyntaxTests: XCTestCase {
       .mouseGrid(.move))
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_click"])?.command,
-      .mouseTarget(.click(.leftClick)))
+      .mouseTarget(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_target", "--modifiers=cmd"])?.command,
+      .mouseTarget(.click(.leftClick, modifiers: .command)))
+    XCTAssertEqual(
+      parseMappingCommand(
+        argv: ["flash", "mouse_grid", "--modifiers=shift+command+ctrl"]
+      )?.command,
+      .mouseGrid(.click(.leftClick, modifiers: [.command, .control, .shift])))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--modifiers=bogus"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--modifiers="]))
+    XCTAssertNil(
+      parseMappingCommand(argv: ["flash", "mouse_target", "--move", "--modifiers=cmd"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_move"]))
   }
 

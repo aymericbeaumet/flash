@@ -32,16 +32,22 @@ final class ConfigLoaderTests: XCTestCase {
       .enterCommand(input: "flashlight ", restoreMode: false))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("sf") })?.action.command,
-      .mouseTarget(.click(.rightClick)))
+      .mouseTarget(.click(.rightClick, modifiers: [])))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("Df") })?.action.command,
-      .mouseTarget(.click(.doubleClick)))
+      .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mf") })?.action.command,
       .mouseTarget(.move))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == "F" })?.action.command,
-      .mouseGrid(.click(.leftClick)))
+      .mouseTarget(.click(.leftClick, modifiers: .command)))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("ctrl+f") })?.action.command,
+      .mouseGrid(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      c.mode.normal.first(where: { $0.key == key("ctrl+shift+f") })?.action.command,
+      .mouseGrid(.click(.leftClick, modifiers: .command)))
     XCTAssertEqual(
       c.mode.normal.first(where: { $0.key == key("mF") })?.action.command,
       .mouseGrid(.move))

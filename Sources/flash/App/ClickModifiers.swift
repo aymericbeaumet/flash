@@ -1,7 +1,7 @@
 import AppKit
 import CoreGraphics
 
-struct ClickModifiers: OptionSet, Equatable {
+struct ClickModifiers: OptionSet, Hashable {
   let rawValue: UInt8
 
   static let command = ClickModifiers(rawValue: 1 << 0)
@@ -21,6 +21,17 @@ struct ClickModifiers: OptionSet, Equatable {
       out.insert(Self.from(modifier))
     }
     self = out
+  }
+
+  /// Canonical `+`-joined form used by the mouse verbs' `--modifiers` arg.
+  /// Keep the order aligned with normal-mode hotkey diagnostics.
+  var argumentValue: String {
+    var names: [String] = []
+    if contains(.command) { names.append("cmd") }
+    if contains(.control) { names.append("ctrl") }
+    if contains(.option) { names.append("alt") }
+    if contains(.shift) { names.append("shift") }
+    return names.joined(separator: "+")
   }
 
   static func from(_ modifier: KeyModifier) -> ClickModifiers {

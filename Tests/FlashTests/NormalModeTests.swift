@@ -158,10 +158,19 @@ final class NormalModeTests: XCTestCase {
       .pluginVerb(name: "jump_to_mark", args: ["letter": "x"]))
   }
 
-  func testFIsMouseTargetAndShiftFIsMouseGrid() {
-    XCTAssertEqual(command(chars: "f"), .mouseTarget(.click(.leftClick)))
+  func testMouseTargetAndGridCurrentAndNewTabMappings() {
     XCTAssertEqual(
-      command(chars: "F", ignoring: "f", flags: [.shift]), .mouseGrid(.click(.leftClick)))
+      command(chars: "f"),
+      .mouseTarget(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      command(chars: "F", ignoring: "f", flags: [.shift]),
+      .mouseTarget(.click(.leftClick, modifiers: .command)))
+    XCTAssertEqual(
+      command(keyCode: kVK_ANSI_F, chars: "f", flags: [.control]),
+      .mouseGrid(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      command(keyCode: kVK_ANSI_F, chars: "F", ignoring: "f", flags: [.control, .shift]),
+      .mouseGrid(.click(.leftClick, modifiers: .command)))
     // `s` is now the secondary-click prefix (`sf`/`sF`), so it leaves a
     // pending sequence rather than yielding `nil`.
     XCTAssertEqual(transition(chars: "s").pending, "s")
@@ -174,18 +183,22 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(chars: "r"), .reload(force: false))
     XCTAssertEqual(command(chars: "R", ignoring: "r", flags: [.shift]), .reload(force: true))
     XCTAssertEqual(transition(chars: "s").pending, "s")
-    XCTAssertEqual(command(pending: "s", chars: "f"), .mouseTarget(.click(.rightClick)))
+    XCTAssertEqual(
+      command(pending: "s", chars: "f"),
+      .mouseTarget(.click(.rightClick, modifiers: [])))
     XCTAssertEqual(
       command(pending: "s", chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseGrid(.click(.rightClick)))
+      .mouseGrid(.click(.rightClick, modifiers: [])))
     // Bare `d` is half-page scroll; double-click hints moved to the
     // `D` prefix so `d` fires instantly without a sequence-timeout wait.
     XCTAssertEqual(command(chars: "d"), .scroll(.halfPageDown))
     XCTAssertEqual(transition(chars: "D", ignoring: "d", flags: [.shift]).pending, "D")
-    XCTAssertEqual(command(pending: "D", chars: "f"), .mouseTarget(.click(.doubleClick)))
+    XCTAssertEqual(
+      command(pending: "D", chars: "f"),
+      .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
       command(pending: "D", chars: "F", ignoring: "f", flags: [.shift]),
-      .mouseGrid(.click(.doubleClick)))
+      .mouseGrid(.click(.doubleClick, modifiers: [])))
   }
 
   // `f` and `F` clicks no longer auto-enter insert from generic provider
@@ -2707,13 +2720,15 @@ final class NormalModeTests: XCTestCase {
     let help = NormalModeDispatcher.helpText(config: .default, showModes: true)
     for mapping in [
       "h", "j", "k", "l", "ctrl-e", "ctrl-y", "ctrl-d", "ctrl-u",
-      "gg", "G", "H", "L", "f", "sf", "Df", "mf", "F", "sF", "DF", "mF", "u", "ctrl-r", "x", "n",
+      "gg", "G", "H", "L", "f", "F", "ctrl-f", "ctrl+shift+f", "sf", "Df", "mf", "sF",
+      "DF", "mF", "u", "ctrl-r", "x", "n",
       "/", "\\<space>", "r", "R", "e", "t", "MAPPINGS",
       "ctrl-o", "ctrl-i", "ACTION", "NORMAL", "INSERT", "i", ":", "g^", "g$", "[t", "]t", "[a",
       "]a", "g1", "g9", "N{mapping}",
       ":q[uit]", ":q[uit]!", ":w[rite]", ":wq", ":x[it]", ":p[rint]", ":e[dit]", ":new", ":tabnew",
       ":bd[elete]", ":cl[ose]", ":find", ":u[ndo]", ":red[o]", ":y[ank]", ":pu[t]",
       ":open <args>", ":flashlight <query>", "flash mouse_target",
+      "flash mouse_target --modifiers=cmd", "flash mouse_grid --modifiers=cmd",
       "flash enter_command_mode --input=flashlight ", "flash mouse_target --secondary",
       "flash mouse_target --double", "flash mouse_grid", "flash history_back",
       "flash history_forward", "flash resource_next", "flash resource_previous",
@@ -2777,7 +2792,9 @@ final class NormalModeTests: XCTestCase {
       ModeMapping(key: "\\c", action: .shellCommand(["sh", "/tmp/toggle_caffeinate.sh"]))
     ]
     config.mode.insert = [
-      ModeMapping(key: "ctrl+space", action: .flashCommand(.mouseTarget(.click(.leftClick))))
+      ModeMapping(
+        key: "ctrl+space",
+        action: .flashCommand(.mouseTarget(.click(.leftClick, modifiers: []))))
     ]
     let text = NormalModeDispatcher.mappingsText(config: config)
     XCTAssertTrue(text.contains("# Mappings"))
@@ -3193,13 +3210,21 @@ final class NormalModeTests: XCTestCase {
 
   private func command(
     pending: String = "",
+    keyCode: Int = 0,
     chars: String,
     ignoring: String? = nil,
     flags: NSEvent.ModifierFlags = [],
     mappings: [ModeMapping] = Config.default.mode.normal
   ) -> URLCommand? {
-    transition(pending: pending, chars: chars, ignoring: ignoring, flags: flags, mappings: mappings)
-      .command
+    transition(
+      pending: pending,
+      keyCode: keyCode,
+      chars: chars,
+      ignoring: ignoring,
+      flags: flags,
+      mappings: mappings
+    )
+    .command
   }
 
   private func transition(

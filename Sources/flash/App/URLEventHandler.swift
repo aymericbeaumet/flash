@@ -128,13 +128,20 @@ struct AlertCommand: Hashable {
 }
 
 enum MouseCommand: Hashable {
-  case click(JumpAction)
+  case click(JumpAction, modifiers: ClickModifiers)
   case move
 
   var action: JumpAction {
     switch self {
-    case .click(let action): return action
+    case .click(let action, _): return action
     case .move: return .leftClick
+    }
+  }
+
+  var modifiers: ClickModifiers {
+    switch self {
+    case .click(_, let modifiers): return modifiers
+    case .move: return []
     }
   }
 
@@ -363,8 +370,8 @@ final class URLEventHandler: NSObject {
   ]
 
   static let usageText = """
-    flash mouse_target [--secondary|--double|--move]
-    flash mouse_grid [--secondary|--double|--move]
+    flash mouse_target [--secondary|--double|--move] [--modifiers=cmd+ctrl+alt+shift]
+    flash mouse_grid [--secondary|--double|--move] [--modifiers=cmd+ctrl+alt+shift]
     flash enter_normal_mode
     flash enter_insert_mode
     flash enter_locked_insert_mode
@@ -499,13 +506,24 @@ private func registerArg(_ a: VerbArgs) -> String? {
 }
 
 private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
-  if a.bool("move") { return .move }
+  let modifiers: ClickModifiers
+  if let raw = a.value("modifiers") {
+    let names = raw.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
+    let parsed = KeyModifier.parseList(names)
+    guard !names.isEmpty, names.allSatisfy({ !$0.isEmpty }), parsed.unknown.isEmpty else {
+      return nil
+    }
+    modifiers = ClickModifiers(names: names)
+  } else {
+    modifiers = []
+  }
+  if a.bool("move") { return modifiers.isEmpty ? .move : nil }
   let secondary = a.bool("secondary")
   let double = a.bool("double")
   if secondary && double { return nil }
-  if secondary { return .click(.rightClick) }
-  if double { return .click(.doubleClick) }
-  return .click(.leftClick)
+  if secondary { return .click(.rightClick, modifiers: modifiers) }
+  if double { return .click(.doubleClick, modifiers: modifiers) }
+  return .click(.leftClick, modifiers: modifiers)
 }
 
 /// `flash send_key keys=<hotkey>` synthesizes one modified keystroke to

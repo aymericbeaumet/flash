@@ -73,7 +73,7 @@ Bind `enter_normal_mode` to turn macOS into a keyboard-first environment:
 enabled = true
 ```
 
-Normal mode includes familiar bindings such as `f` for hints, `F` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. Press `i` to type normally or `I` for locked insert mode.
+Normal mode includes familiar bindings such as `f` for hints, `F` for Command-click hints, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. Press `i` to type normally or `I` for locked insert mode.
 
 ### flashlight
 
@@ -103,6 +103,7 @@ Flash still resolves any discovered local or remote window from the finder.
 
 ```bash
 flash mouse_target                       # left-click a hinted target
+flash mouse_target --modifiers=cmd       # Command-click a hinted target
 flash mouse_target --secondary           # right-click
 flash mouse_target --double              # double-click
 flash mouse_target --move                # move the pointer only
@@ -143,9 +144,12 @@ leader = "\\"
 [mode.normal.mappings]
 "<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight"]
 "f" = ["flash", "mouse_target"]
+"F" = ["flash", "mouse_target", "--modifiers=cmd"]
+"ctrl+f" = ["flash", "mouse_grid"]
+"ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd"]
 ```
 
-Mapping values are argv arrays. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument.
+Mapping values are argv arrays. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; those preset modifiers are combined with any magic modifiers held on the final hint key.
 
 ## Use your existing hotkey tool
 

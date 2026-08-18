@@ -48,11 +48,13 @@ extension NormalModeDispatcher {
         ## Mouse Targets
 
         - `f` targets clickable elements discovered from the focused app.
+        - `F` targets the same elements and sends Command-click (new tab for links).
+        - `ctrl-f` starts mouse grid mode for a precise screen position.
+        - `ctrl-shift-f` starts the grid and sends Command-click at the final point.
         - `sf` right-clicks a discovered target.
-        - `df` double-clicks a discovered target.
+        - `Df` double-clicks a discovered target.
         - `mf` moves the cursor to a discovered target.
-        - `F` starts mouse grid mode for a precise screen position.
-        - `sF` / `dF` right-click or double-click with mouse grid mode.
+        - `sF` / `DF` right-click or double-click with mouse grid mode.
         - `mF` moves the cursor with mouse grid mode.
 
         ## Command Line
