@@ -28,7 +28,7 @@ Activation comes either through the `flash` CLI (which AppleEvents the verb to t
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
 8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(action:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
 9. **No backward-compatibility shims on master.** Flash has one user — the maintainer. When a config field, action name, mapping syntax, internal API, or wire format is renamed, update every call site, the defaults, the user's `~/.config/flash/flash.toml`, the bundled plugins, and the tests in the same change. **Do not** add legacy aliases, dual-syntax parsers, dual-key JSON readers (`as? T ?? response?["camelCase"]` etc.), `typealias OldName = NewName`, `// removed` placeholders, deprecation comments, or transitional accept-both paths. Reject malformed input loudly rather than silently translating it. The goal is the smallest possible code per feature. When in doubt, delete the old name — the maintainer can recover from `git log` if needed.
-10. **Dev deploys go through `./Scripts/install.sh --dev`.** It owns the optimized current-arch build → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash.app` → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/install.sh --dev` (incremental, current-arch). Bare `./Scripts/install.sh` defaults to `--release`: a full, clean, universal build — slower, and its ad-hoc signature re-triggers the TCC grant, so reserve it for shipping.
+10. **Dev deploys go through `./Scripts/install.sh --dev`.** It owns the incremental current-arch dev build (debug Swift + `plugin-dev`-profile plugins) → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash.app` → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/install.sh --dev` (incremental, current-arch). Bare `./Scripts/install.sh` defaults to `--release`: a full, clean, universal build — slower, and its ad-hoc signature re-triggers the TCC grant, so reserve it for shipping.
 
 If a request would violate any of the above, surface it to the user instead of silently complying.
 
@@ -62,7 +62,6 @@ Sources/
       HintAssigner.swift             # Prefix-free label generator + memoised candidate cache
       ActionDispatcher.swift         # AXPress preferred; CGEvent click fallback
       SourceRegistry.swift           # Built-in source descriptors; activation-gated source loading + priority chain
-      PluginSystem.swift             # manifest.json, MessagePack plugin lifecycle facade
       Plugins/                       # Plugin manifest/process/manager, AX broker, and FlashSource adapter
       DebugServer.swift              # loopback-only dense HTTP/SSE debug page
       CandidateFinder.swift          # Flashlight candidate preparation, fuzzy matching, and answer merge
@@ -79,7 +78,7 @@ Tests/ElectronFixture/               # Pinned minimal Electron app used by Scrip
 Plugins/                             # Official bundled Rust plugins, members of the Plugins/Cargo.toml workspace, symlinked into the dev app
 Plugins/_rust_flash_plugin/          # Shared Rust plugin SDK crate (package flash_plugin); no Flash business concepts
 Resources/Info.plist                 # LSUIElement, AppleEvent usage description
-Scripts/build-plugins.sh                     # cargo build [dev|release] every Plugins/*/ crate → flash-plugin-<id> binary beside its manifest (dev = optimized current arch; release = universal lipo)
+Scripts/build-plugins.sh                     # one workspace cargo invocation for [dev|release] [id…] → flash-plugin-<id> binary beside its manifest (dev = plugin-dev profile, current arch; release = universal lipo; ids filter to the single-plugin hot loop)
 Scripts/_common.sh                           # Shared constants + helpers (signing identity, login agent, app assembly) sourced by build.sh / install.sh
 Scripts/build.sh                             # Build Flash.app into build/ without installing. Default --release = clean universal optimized + zip; --dev = fast incremental optimized current-arch
 Scripts/install.sh                           # build.sh then install to /Applications/Flash.app + restart. Default --release = clean universal; --dev = stable dev-signed, plugin symlinks
@@ -350,12 +349,15 @@ workspace root. A plugin's `main.rs` implements the `Plugin`
 trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
 must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
-need safely). `Scripts/build-plugins.sh [dev|release]` compiles every
-`Plugins/*/Cargo.toml` into a shared `CARGO_TARGET_DIR` (`build/plugin-target`,
-kept out of the watched plugin trees) and copies each `flash-plugin-<id>` binary
-next to its `manifest.json`. `dev` is an optimized current-arch release build
-(fast, incremental); `release` is an optimized universal binary (x86_64 + arm64)
-joined with `lipo`. Candidate providers declare manifest root `sources` descriptors, keep
+need safely). `Scripts/build-plugins.sh [dev|release] [id…]` builds the
+plugin crates through one workspace-aware cargo invocation into a shared
+`CARGO_TARGET_DIR` (`build/plugin-target`, kept out of the watched plugin
+trees) and copies each `flash-plugin-<id>` binary next to its
+`manifest.json`. `dev` uses the `plugin-dev` cargo profile (opt-level=1,
+line-tables-only debuginfo — mildly optimized, incremental, current arch);
+`release` is an optimized universal binary (x86_64 + arm64) joined with
+`lipo`. Trailing ids restrict the build to those plugins:
+`Scripts/build-plugins.sh dev tmux` is the single-plugin hot loop. Candidate providers declare manifest root `sources` descriptors, keep
 their locations warm in memory via `set_locations`, refresh from light host events such as
 `core:apps.changed`, `core:focus.changed`, and `core:ax.changed` when possible,
 and poll only when the underlying source cannot be watched. The host *pulls* each
@@ -688,11 +690,11 @@ swift test
 ./Scripts/install.sh --dev
 ```
 
-`--dev` is the fast inner loop: an incremental optimized current-arch release build (Swift + every plugin), then reinstall + restart. Because dev installs symlink `Contents/Resources/Plugins` to the live `Plugins/` tree and `PluginProcess` watches each plugin directory, rebuilding a plugin binary (the `mv -f` swap in `build-plugins.sh` lands as a `rename`) triggers `scheduleFileReload()` and restarts only that plugin — the resident Flash process and every other plugin keep running. If the watcher doesn't pick up a new plugin binary (e.g. `[plugins] watching_enabled = false`), run `:plugins reload` in Flash's command-line cell. Any change to Swift code, `Resources/Info.plist`, `config.default.toml`, or the bundle / signing flow requires a full `./Scripts/install.sh --dev`.
+`--dev` is the fast inner loop: an incremental current-arch build (debug Swift + `plugin-dev`-profile plugins), then reinstall + restart. Because dev installs symlink `Contents/Resources/Plugins` to the live `Plugins/` tree and `PluginProcess` watches each plugin directory, rebuilding a plugin binary (the `mv -f` swap in `build-plugins.sh` lands as a `rename`) triggers `scheduleFileReload()` and restarts only that plugin — the resident Flash process and every other plugin keep running. If the watcher doesn't pick up a new plugin binary (e.g. `[plugins] watching_enabled = false`), run `:plugins reload` in Flash's command-line cell. Any change to Swift code, `Resources/Info.plist`, `config.default.toml`, or the bundle / signing flow requires a full `./Scripts/install.sh --dev`.
 
 `install.sh --dev`:
 
-1. `swift build -c release --product flash` — the single Mach-O is both resident and CLI
+1. `swift build --product flash` (debug, incremental) in parallel with `build-plugins.sh dev` (plugin-dev profile) and `build-inspector.sh --dev` — the single flash Mach-O is both resident and CLI
 2. Assembles `build/Flash.app` from the resident binary and `Resources/Info.plist`
 3. Codesigns the staging bundle
 4. Quits any running Flash (`osascript`, `flash flash_quit`, `pkill` fallback)

@@ -7,10 +7,11 @@ set -euo pipefail
 #   --release  optimized universal build (x86_64 + arm64) for both the app
 #              and the bundled plugins, then zipped + checksummed. Always
 #              cleans first so every artifact is rebuilt from scratch.
-#   --dev      unoptimized debug build for the current arch only — no
-#              clean, no universal lipo, no `-c release`. Plugins are
-#              symlinked from the live tree and the bundle is signed with
-#              the dev identity. Optimised for fast incremental rebuilds.
+#   --dev      incremental build for the current arch only — debug Swift
+#              build, plugins under the `plugin-dev` cargo profile
+#              (opt-level=1, line-tables-only), no clean, no universal
+#              lipo. Plugins are symlinked from the live tree and the
+#              bundle is signed with the dev identity.
 #
 # The three independent toolchains — Rust plugins, the Swift app, and the
 # Svelte inspector — build in parallel to use every core. In dev all three are

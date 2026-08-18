@@ -7,9 +7,9 @@ set -euo pipefail
 # Usage: install.sh [--dev|--release]   (default: --release)
 #   --release  optimized universal build (x86_64 + arm64), always rebuilt
 #              from scratch.
-#   --dev      incremental optimized release build for the current arch,
-#              signed with the stable "Flash Dev" identity so TCC grants
-#              persist.
+#   --dev      fast incremental build for the current arch — debug Swift
+#              build + `plugin-dev`-profile plugins — signed with the
+#              stable "Flash Dev" identity so TCC grants persist.
 
 source "$(cd "$(dirname "$0")" && pwd)/_common.sh"
 parse_mode "$@"

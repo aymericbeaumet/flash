@@ -53,6 +53,16 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std"] }
 
+# Dev hot-loop profile used by Scripts/build-plugins.sh. Mild optimization
+# keeps runtime behaviour non-pathological (fully-unoptimized tokio/msgpack
+# is visibly slow under the 10ms/150ms latency contracts) while
+# line-tables-only debuginfo keeps the shared target dir small — full
+# debuginfo was the bulk of a 5 GB build/plugin-target.
+[profile.plugin-dev]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+
 # Plugin binaries optimize for size — the resident host loads each as a
 # long-lived child process, so faster cold start and lower memory beats a
 # few hundred ms of extra build time. Profiles are workspace-global; the
