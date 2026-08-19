@@ -122,9 +122,10 @@ enum PluginConfigValue: Equatable {
 
 struct Config {
   struct App {
-    /// macOS menu-bar (NSStatusItem) icon carrying About / Open
-    /// Configuration / Quit. `[app] menu_bar_icon = false` hides it —
-    /// Flash stays fully driveable through the CLI and mappings without it.
+    /// macOS menu-bar icon (see `StatusItemController.swift`, the single
+    /// sanctioned status item) carrying About / Open Configuration / Quit.
+    /// `[app] menu_bar_icon = false` hides it — Flash stays fully
+    /// driveable through the CLI and mappings without it.
     var menuBarIcon: Bool = true
     /// Login-item registration through SMAppService, reconciled on every
     /// launch and config reload. `[app] autostart = false` unregisters.
