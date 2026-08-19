@@ -91,7 +91,7 @@ final class StatusItemController: NSObject {
       styleMask: [.titled, .closable],
       backing: .buffered,
       defer: false)
-    panel.title = "About \(name)"
+    panel.title = "About"
     panel.contentView = stack
     panel.setContentSize(stack.fittingSize)
     panel.isReleasedWhenClosed = false
