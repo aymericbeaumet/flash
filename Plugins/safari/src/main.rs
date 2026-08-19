@@ -176,6 +176,9 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i6
                         .current_location(current);
                     if !url.is_empty() {
                         candidate = candidate.url(url);
+                        if let Some(aliases) = url_aliases(url) {
+                            candidate = candidate.aliases([aliases]);
+                        }
                     }
                     rows.push((key, candidate));
                 }
@@ -423,6 +426,16 @@ async fn activate_app(ctx: &Context, pid: i64) -> bool {
         .get("ok")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
+}
+
+/// Site aliases are per-app content the plugin owns — the host ranker has
+/// no per-site knowledge. Space-separated tokens land in the top-scoring
+/// alias tier.
+fn url_aliases(url: &str) -> Option<&'static str> {
+    if url.starts_with("https://mail.google.com") {
+        return Some("gmail gmail.com");
+    }
+    None
 }
 
 fn main() {

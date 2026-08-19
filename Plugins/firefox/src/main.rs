@@ -842,6 +842,9 @@ fn candidate(tab: &Tab, source: &str, pid: i64, payload: &TabPayload) -> Candida
         candidate = candidate
             .url(tab.url.clone())
             .navigation_url(firefox_navigation_url(pid, &tab.url, &tab.title));
+        if let Some(aliases) = url_aliases(&tab.url) {
+            candidate = candidate.aliases([aliases]);
+        }
     }
     candidate
 }
@@ -1352,6 +1355,16 @@ async fn ax_select_child(ctx: &Context, parent: u64, child: u64) -> bool {
     .get("ok")
     .and_then(Value::as_bool)
     .unwrap_or(false)
+}
+
+/// Site aliases are per-app content the plugin owns — the host ranker has
+/// no per-site knowledge. Space-separated tokens land in the top-scoring
+/// alias tier.
+fn url_aliases(url: &str) -> Option<&'static str> {
+    if url.starts_with("https://mail.google.com") {
+        return Some("gmail gmail.com");
+    }
+    None
 }
 
 fn main() {

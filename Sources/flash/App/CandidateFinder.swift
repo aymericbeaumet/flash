@@ -1085,7 +1085,7 @@ enum CandidateFinder {
   private static func secondarySearchText(_ candidate: Candidate) -> String {
     if candidate.kind == browserTabKind {
       return
-        "\(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate)) \(browserTabURLAliases(candidate))"
+        "\(urlSearchText(candidate)) \(browserTabTitleDomainAliases(candidate))"
     }
     return "\(candidate.subtitle) \(urlSearchText(candidate))"
   }
@@ -1116,19 +1116,6 @@ enum CandidateFinder {
       .map { $0.trimmed }
       .filter { !$0.isEmpty }
     return tokens.map { "\($0).\(suffix)" }.joined(separator: " ")
-  }
-
-  private static func browserTabURLAliases(_ candidate: Candidate) -> String {
-    guard
-      candidate.kind == browserTabKind,
-      let host = candidate.url?.host?.lowercased()
-    else { return "" }
-    switch host {
-    case "mail.google.com":
-      return "gmail gmail.com"
-    default:
-      return ""
-    }
   }
 
   /// Same scoring rules as `fieldScore`, but the caller has already
