@@ -3424,9 +3424,25 @@ async fn tab_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
         .await,
     );
     let target = window_id.clone().unwrap_or_else(|| client.session.clone());
-    let ok = run_tmux_for_client(plugin, client, &["kill-window", "-t", &target])
-        .await
-        .is_some();
+    // Destructive kills always go through `confirm-before` on the client the
+    // user is looking at — matching the user's own prefix bindings (`bind &
+    // confirm-before … kill-window`), so a Flash-initiated close is never
+    // more dangerous than a tmux-native one. The command returns once the
+    // prompt is posted; the kill itself only runs on `y`.
+    let ok = run_tmux_for_client(
+        plugin,
+        client,
+        &[
+            "confirm-before",
+            "-c",
+            &client.tty,
+            "-p",
+            "kill window \"#W\"? (y/n)",
+            &format!("kill-window -t {target}"),
+        ],
+    )
+    .await
+    .is_some();
     ctx.log_fields(
         "debug",
         "[tmux] tab close",
@@ -3453,9 +3469,22 @@ async fn pane_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
         ctx.log("warn", "[tmux] pane close could not resolve current pane");
         return false;
     };
-    let ok = run_tmux_for_client(plugin, client, &["kill-pane", "-t", &pane_id])
-        .await
-        .is_some();
+    // Same confirmation contract as tab_close: destructive, so prompt on
+    // the user's client first (their own `bind x` does exactly this).
+    let ok = run_tmux_for_client(
+        plugin,
+        client,
+        &[
+            "confirm-before",
+            "-c",
+            &client.tty,
+            "-p",
+            "kill pane #P \"#{pane_current_command}\"? (y/n)",
+            &format!("kill-pane -t {pane_id}"),
+        ],
+    )
+    .await
+    .is_some();
     ctx.log_fields(
         "debug",
         "[tmux] pane close",
