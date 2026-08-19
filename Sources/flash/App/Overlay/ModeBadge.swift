@@ -206,138 +206,248 @@ extension OverlayPanel {
     let labelFont = NSFont.monospacedSystemFont(ofSize: modeFontSize, weight: .bold)
     let rightFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
     let pillText = modeBadgeText
-    let leftTrailingRaw = statusLeftTrailingText
-    let leftWidth = Self.modeBadgeWidth(
+    let pillLabel = Self.statusLeftText(modeText: pillText)
+    let pillWidth = Self.modeBadgeWidth(
       labels: modeLabels,
       currentText: pillText,
       fontSize: modeFontSize)
+    let palette = modeBadgePalette()
+    let leftTrailingRaw = statusLeftTrailingText.trimmed
+    let centreRaw = statusAppText.trimmed
+    let rightRaw = Self.statusRightDisplayText(statusRightText)
+
     let snapshot = OverlayPanel.currentScreenSnapshot()
     let visible = snapshot.mainVisibleFrame
-    let screenFrame = snapshot.mainFrame ?? visible
-    let scale = snapshot.mainScale
+    let mainScreenFrame = snapshot.mainFrame ?? visible
+    let mainNotch =
+      snapshot.screens.first(where: { $0.frame == snapshot.mainFrame })?.notch ?? nil
+
+    // One layout function for every screen: the primary bar renders through
+    // the same code path as the secondaries (via `StatusBarSurface`), so the
+    // two can never drift again — and secondaries gain the cycle layer and
+    // clickable links the old copy silently lacked.
+    var linksByScreen: [(screenFrame: CGRect, links: [(rect: CGRect, url: URL)])] = []
+    let primaryLinks = configureStatusBarSurface(
+      PrimaryStatusBarSurface(panel: self),
+      screenFrame: mainScreenFrame,
+      visibleFrame: visible,
+      scale: snapshot.mainScale,
+      notch: mainNotch,
+      panelFrame: panelFrame,
+      fontSize: fontSize,
+      modeFontSize: modeFontSize,
+      labelFont: labelFont,
+      rightFont: rightFont,
+      palette: palette,
+      pillWidth: pillWidth,
+      pillLabel: pillLabel,
+      leftTrailingRaw: leftTrailingRaw,
+      centreRaw: centreRaw,
+      rightRaw: rightRaw)
+    linksByScreen.append((screenFrame: mainScreenFrame, links: primaryLinks))
+
+    // Same bar on every other screen, sized to that screen's own native
+    // top-band height so a 14"-MBP-with-notch + a square external monitor
+    // both see a bar that exactly covers the reserved menu-bar band on
+    // their own display. `monitor = "primary"` skips them (and an empty
+    // extras list tears down bars from a previous `all` render).
+    let extras =
+      statusBarMonitor == .primary
+      ? []
+      : snapshot.screens.filter { $0.frame != snapshot.mainFrame }
+    while secondaryStatusBars.count > extras.count {
+      let stale = secondaryStatusBars.removeLast()
+      stale.backgroundLayer.removeFromSuperlayer()
+    }
+    while secondaryStatusBars.count < extras.count {
+      secondaryStatusBars.append(SecondaryStatusBar())
+    }
+    for (bar, screen) in zip(secondaryStatusBars, extras) {
+      let links = configureStatusBarSurface(
+        bar,
+        screenFrame: screen.frame,
+        visibleFrame: screen.visibleFrame,
+        scale: screen.scale,
+        notch: screen.notch,
+        panelFrame: panelFrame,
+        fontSize: fontSize,
+        modeFontSize: modeFontSize,
+        labelFont: labelFont,
+        rightFont: rightFont,
+        palette: palette,
+        pillWidth: pillWidth,
+        pillLabel: pillLabel,
+        leftTrailingRaw: leftTrailingRaw,
+        centreRaw: centreRaw,
+        rightRaw: rightRaw)
+      linksByScreen.append((screenFrame: screen.frame, links: links))
+    }
+
+    if modeBadgeVisible {
+      statusBarLinkRectsByScreen = linksByScreen
+      // ONE sync carrying every screen's links: the click windows intersect
+      // the flat list per band, so secondary-bar links are mouse-clickable
+      // now (they used to be hint-only).
+      syncStatusBarClickWindows(
+        bandRects: statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize),
+        links: linksByScreen.flatMap(\.links))
+    } else {
+      statusBarLinkRectsByScreen = []
+      hideStatusBarClickWindows()
+    }
+  }
+
+  /// Extra points kept clear on each side of a notch (camera housing).
+  static let statusBarNotchMargin: CGFloat = 16
+
+  /// Lay out ONE screen's bar onto `surface`. This is the single source of
+  /// the bar's geometry — the primary bar (via `PrimaryStatusBarSurface`)
+  /// and every `SecondaryStatusBar` run through it with their own screen
+  /// frame, scale, and notch. Returns the screen-coordinate link rects for
+  /// the click windows and the `f`-hint path.
+  private func configureStatusBarSurface(
+    _ surface: StatusBarSurface,
+    screenFrame: CGRect,
+    visibleFrame: CGRect,
+    scale: CGFloat,
+    notch: CGRect?,
+    panelFrame: CGRect,
+    fontSize: CGFloat,
+    modeFontSize: CGFloat,
+    labelFont: NSFont,
+    rightFont: NSFont,
+    palette: ModeBadgePalette,
+    pillWidth: CGFloat,
+    pillLabel: String,
+    leftTrailingRaw: String,
+    centreRaw: String,
+    rightRaw: String
+  ) -> [(rect: CGRect, url: URL)] {
     let barFrame = Self.statusBarFrame(
       screenFrame: screenFrame,
-      visibleFrame: visible,
+      visibleFrame: visibleFrame,
       panelFrame: panelFrame,
       fontSize: fontSize)
-    modeBadgeLayer.frame = Self.snap(
-      barFrame,
-      scale: scale)
-    modeBadgeLayer.contentsScale = scale
-    modeBadgeLayer.opacity = 1
-    modeBadgeLayer.isHidden = false
-    modeBadgeLayer.cornerRadius = 0
-    modeBadgeLayer.borderWidth = 0
-    let palette = modeBadgePalette()
+    surface.backgroundLayer.frame = Self.snap(barFrame, scale: scale)
+    surface.backgroundLayer.contentsScale = scale
+    surface.backgroundLayer.opacity = 1
+    surface.backgroundLayer.isHidden = false
+    surface.backgroundLayer.cornerRadius = 0
+    surface.backgroundLayer.borderWidth = 0
     // The panel itself is `isOpaque = false` so the translucent native
     // menu bar above can bleed through any transparent pixels. Set an
     // explicit opaque `backgroundColor` (in addition to the gradient
     // stops) so every pixel of the bar is solid even when the
     // CAGradientLayer renderer does not.
-    modeBadgeLayer.backgroundColor = Self.nordPolarNight0CG
-    modeBadgeLayer.colors = [Self.nordPolarNight0CG, Self.nordPolarNight0CG]
-    modeBadgeLayer.borderColor = Self.nordPolarNight0CG
+    surface.backgroundLayer.backgroundColor = Self.nordPolarNight0CG
+    surface.backgroundLayer.colors = [Self.nordPolarNight0CG, Self.nordPolarNight0CG]
+    surface.backgroundLayer.borderColor = Self.nordPolarNight0CG
 
     let textHeight = fontSize + 4
     let textY = max(0, (barFrame.height - textHeight) / 2)
     let contentX = Self.statusBarEdgePadding
-    // `statusAppText` is whatever the template's `#[align=centre]` region
-    // produced. It can carry tmux-style style markers, so build the
-    // attributed string up front; the rendered width drives the
-    // centring math below.
-    let centreDisplay = statusAppText.trimmed
-    let centreAttributed = FlashStatusBarRenderer.attributedStatusString(
-      from: centreDisplay, font: rightFont)
-    let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)
-    let rightDisplayText = Self.statusRightDisplayText(statusRightText)
-    let rightReservedWidth =
-      rightDisplayText.isEmpty
-      ? 0
-      : min(
-        max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
-        barFrame.width * 0.52)
-    let modeX = contentX
-    let leftLabel = Self.statusLeftText(modeText: pillText)
-    modeBadgeButtonLayer.frame = CGRect(
-      x: modeX,
+    // The notch in bar-local coordinates (bar x spans the full screen
+    // width, so bar-local x = screen x - screenFrame.minX). The bar keeps
+    // `statusBarNotchMargin` clear on both sides of it.
+    let notchBar = notch.map { rect in
+      CGRect(
+        x: rect.minX - screenFrame.minX, y: 0, width: rect.width, height: barFrame.height)
+    }
+
+    // Pill.
+    surface.modeButtonLayer.frame = CGRect(
+      x: contentX,
       y: textY,
-      width: leftWidth,
+      width: pillWidth,
       height: textHeight)
-    modeBadgeButtonLayer.contentsScale = scale
-    modeBadgeButtonLayer.colors = [palette.bottomCG, palette.topCG]
+    surface.modeButtonLayer.contentsScale = scale
+    surface.modeButtonLayer.colors = [palette.bottomCG, palette.topCG]
     // NORMAL mode: a thin, faint hairline so the dark-on-dark pill reads as
     // a framed badge. Other modes have a contrasting fill, so no border.
     if modeBadgeStyle == .normal {
-      modeBadgeButtonLayer.borderWidth = 1
-      modeBadgeButtonLayer.borderColor = Self.statusModeNormalBorderCG
+      surface.modeButtonLayer.borderWidth = 1
+      surface.modeButtonLayer.borderColor = Self.statusModeNormalBorderCG
     } else {
-      modeBadgeButtonLayer.borderWidth = 0
-      modeBadgeButtonLayer.borderColor = palette.borderCG
+      surface.modeButtonLayer.borderWidth = 0
+      surface.modeButtonLayer.borderColor = palette.borderCG
     }
-
-    modeBadgeLabel.frame = CGRect(
-      x: 0,
-      y: 0,
-      width: max(1, leftWidth),
-      height: textHeight)
-    modeBadgeLabel.font = labelFont
-    modeBadgeLabel.fontSize = modeFontSize
-    modeBadgeLabel.foregroundColor = palette.foregroundCG
-    modeBadgeLabel.contentsScale = scale
-    modeBadgeLabel.alignmentMode = .center
-    if lastRenderedPill != leftLabel || lastRenderedPillStyle != modeBadgeStyle {
-      modeBadgeLabel.string = NSAttributedString(
-        string: leftLabel,
+    surface.modeLabel.frame = CGRect(
+      x: 0, y: 0, width: max(1, pillWidth), height: textHeight)
+    surface.modeLabel.font = labelFont
+    surface.modeLabel.fontSize = modeFontSize
+    surface.modeLabel.foregroundColor = palette.foregroundCG
+    surface.modeLabel.contentsScale = scale
+    surface.modeLabel.alignmentMode = .center
+    if surface.lastPill != pillLabel || surface.lastPillStyle != modeBadgeStyle {
+      surface.modeLabel.string = NSAttributedString(
+        string: pillLabel,
         attributes: [
           .font: labelFont,
           .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
         ])
-      lastRenderedPill = leftLabel
-      lastRenderedPillStyle = modeBadgeStyle
+      surface.lastPill = pillLabel
+      surface.lastPillStyle = modeBadgeStyle
     }
+
+    // The right reserve backs the right region off before anything else is
+    // placed; the notch (when present) additionally walls off the middle.
+    let rightReservedWidth =
+      rightRaw.isEmpty
+      ? 0
+      : min(
+        max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
+        barFrame.width * 0.52)
+    let rightSectionStart =
+      barFrame.width - Self.statusBarEdgePadding
+      - (rightReservedWidth > 0 ? rightReservedWidth + Self.statusBarMinimumGap : 0)
 
     // Anything after `#{mode}` in the left bucket renders as its own
     // tmux-styled run right of the pill — not as part of the bold mode
     // label — so per-segment `#[fg=…]` styling is honoured instead of
-    // leaking the pill palette into the trailing text.
-    let leftTrailingDisplay = leftTrailingRaw.trimmed
-    // A `#{cycle:…}` run arrives wrapped in `#[cyc]…#[nocyc]`. Pull it out so it
-    // renders in its own clipped layer that can slide vertically, while the
-    // static text around it (the pill, the "HN" label) stays in the base layer.
+    // leaking the pill palette into the trailing text. The run starts flush
+    // against the pill's right edge: the gap to whatever follows is driven
+    // entirely by the template's own spacing.
+    let leftTrailingX = surface.modeButtonLayer.frame.maxX
+    // Elastic fit: the `#[shrink]` span in the left run absorbs overflow so
+    // fixed content (the HN label, a story's domain and arrow) always keeps
+    // its full width. The limit stops at the right section, and never
+    // crosses a notch.
+    let leftLimit = min(
+      rightSectionStart,
+      notchBar.map { $0.minX - Self.statusBarNotchMargin } ?? .greatestFiniteMagnitude)
+    let leftTrailingDisplay = FlashStatusBarRenderer.fitToWidth(
+      leftTrailingRaw, font: rightFont,
+      available: leftLimit - Self.statusBarMinimumGap - leftTrailingX)
+    // A `#{cycle:…}` run arrives wrapped in `#[cyc]…#[nocyc]`. Pull it out
+    // so it renders in its own clipped layer that can slide vertically,
+    // while the static text around it stays in the base layer.
     let (cyclePrefix, cycleContent, cycleSuffix) = Self.splitCycleRun(leftTrailingDisplay)
     let baseDisplay = cyclePrefix + cycleSuffix
     let baseAttributed = FlashStatusBarRenderer.attributedStatusString(
       from: baseDisplay, font: rightFont)
     let baseWidth = baseDisplay.isEmpty ? 0 : ceil(baseAttributed.size().width)
-    // Start the trailing run flush against the pill's right edge so the gap
-    // to whatever follows is driven entirely by the template's own spacing
-    // (e.g. `#{mode} · …`), exactly like every other segment boundary on the
-    // bar. A hardcoded gap here would give the pill an inconsistent margin
-    // its neighbours don't have. The bar's screen-edge inset stays put: it's
-    // `statusBarEdgePadding` on `contentX`, not this gap.
-    let leftTrailingX = modeBadgeButtonLayer.frame.maxX
-    statusLeftTrailingLabel.frame = CGRect(
+    surface.leftTrailingLabel.frame = CGRect(
       x: leftTrailingX,
       y: textY,
       width: baseWidth,
       height: textHeight)
-    statusLeftTrailingLabel.font = rightFont
-    statusLeftTrailingLabel.fontSize = fontSize
-    statusLeftTrailingLabel.foregroundColor = Self.tmuxGrey245CG
-    statusLeftTrailingLabel.contentsScale = scale
-    statusLeftTrailingLabel.alignmentMode = .left
-    statusLeftTrailingLabel.isHidden = baseDisplay.isEmpty
-    lastRenderedLeftTrailing = applyStatusText(
-      to: statusLeftTrailingLabel,
+    surface.leftTrailingLabel.font = rightFont
+    surface.leftTrailingLabel.fontSize = fontSize
+    surface.leftTrailingLabel.foregroundColor = Self.tmuxGrey245CG
+    surface.leftTrailingLabel.contentsScale = scale
+    surface.leftTrailingLabel.alignmentMode = .left
+    surface.leftTrailingLabel.isHidden = baseDisplay.isEmpty
+    surface.lastLeftTrailing = applyStatusText(
+      to: surface.leftTrailingLabel,
       display: baseDisplay,
       attributed: baseAttributed,
-      previous: lastRenderedLeftTrailing)
+      previous: surface.lastLeftTrailing)
 
-    var leftTrailingMaxX = statusLeftTrailingLabel.frame.maxX
+    var leftTrailingMaxX = surface.leftTrailingLabel.frame.maxX
     if let cycleContent, !cycleContent.isEmpty {
-      // Position the cycle run just past the prefix ("· HN "). Clipped to one
-      // line height so a push transition slides the current line up and out and
-      // the next in from below.
+      // Position the cycle run just past the prefix ("· HN "). Clipped to
+      // one line height so a push transition slides the current line up and
+      // out and the next in from below.
       let prefixWidth =
         cyclePrefix.isEmpty
         ? 0
@@ -347,359 +457,141 @@ extension OverlayPanel {
       let cycleAttributed = FlashStatusBarRenderer.attributedStatusString(
         from: cycleContent, font: rightFont)
       let cycleWidth = ceil(cycleAttributed.size().width)
-      statusLeftTrailingCycleLayer.frame = CGRect(
+      surface.cycleLayer.frame = CGRect(
         x: leftTrailingX + prefixWidth, y: textY, width: cycleWidth, height: textHeight)
-      statusLeftTrailingCycleLayer.font = rightFont
-      statusLeftTrailingCycleLayer.fontSize = fontSize
-      statusLeftTrailingCycleLayer.foregroundColor = Self.tmuxGrey245CG
-      statusLeftTrailingCycleLayer.contentsScale = scale
-      statusLeftTrailingCycleLayer.alignmentMode = .left
-      statusLeftTrailingCycleLayer.isHidden = false
-      if cycleContent != lastRenderedLeftTrailingCycle {
-        // Animate only a genuine line change — not the first appearance, and not
-        // the effects/refresh re-renders that pass the same line.
-        if lastRenderedLeftTrailingCycle != nil {
+      surface.cycleLayer.font = rightFont
+      surface.cycleLayer.fontSize = fontSize
+      surface.cycleLayer.foregroundColor = Self.tmuxGrey245CG
+      surface.cycleLayer.contentsScale = scale
+      surface.cycleLayer.alignmentMode = .left
+      surface.cycleLayer.isHidden = false
+      if cycleContent != surface.lastCycle {
+        // Animate only a genuine line change — not the first appearance and
+        // not a re-render that passes the same line.
+        if surface.lastCycle != nil {
           let slide = CATransition()
           slide.type = .push
           slide.subtype = .fromBottom  // next enters from below, current exits up
           slide.duration = 0.42
           slide.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-          statusLeftTrailingCycleLayer.add(slide, forKey: "cycleSlide")
+          surface.cycleLayer.add(slide, forKey: "cycleSlide")
         }
-        statusLeftTrailingCycleLayer.string = cycleAttributed
-        statusLeftTrailingCycleLayer.setNeedsDisplay()
-        lastRenderedLeftTrailingCycle = cycleContent
+        surface.cycleLayer.string = cycleAttributed
+        surface.cycleLayer.setNeedsDisplay()
+        surface.lastCycle = cycleContent
       }
-      leftTrailingMaxX = statusLeftTrailingCycleLayer.frame.maxX
+      leftTrailingMaxX = surface.cycleLayer.frame.maxX
     } else {
-      statusLeftTrailingCycleLayer.isHidden = true
-      lastRenderedLeftTrailingCycle = nil
+      surface.cycleLayer.isHidden = true
+      surface.lastCycle = nil
     }
     let hasLeftTrailing = !baseDisplay.isEmpty || !(cycleContent ?? "").isEmpty
 
-    // Geometric centring for the `#[align=centre]` bucket. Position
-    // around `barFrame.width / 2`, clamped so the centre label never
-    // collides with the mode badge (and its trailing run) on its left or
-    // the reserved right section on its right. If the centre text doesn't
-    // fit between them, hide it rather than letting an overlap mangle the bar.
+    // Geometric centring for the `#[align=centre]` bucket. Position around
+    // `barFrame.width / 2`, clamped so the centre label never collides with
+    // the left run, the reserved right section, or a notch. If it doesn't
+    // fit, hide it rather than letting an overlap mangle the bar.
     let modeMaxX =
-      hasLeftTrailing ? leftTrailingMaxX : modeBadgeButtonLayer.frame.maxX
-    let rightSectionStart =
-      barFrame.width - Self.statusBarEdgePadding
-      - (rightReservedWidth > 0 ? rightReservedWidth + Self.statusBarMinimumGap : 0)
-    let centreAvailable = max(0, rightSectionStart - modeMaxX - Self.statusBarMinimumGap * 2)
+      hasLeftTrailing ? leftTrailingMaxX : surface.modeButtonLayer.frame.maxX
+    let centreLimitMaxX = min(
+      rightSectionStart,
+      notchBar.map { $0.minX - Self.statusBarNotchMargin } ?? .greatestFiniteMagnitude)
+    let centreAvailable = max(0, centreLimitMaxX - modeMaxX - Self.statusBarMinimumGap * 2)
+    let centreDisplay = FlashStatusBarRenderer.fitToWidth(
+      centreRaw, font: rightFont, available: centreAvailable)
+    let centreAttributed = FlashStatusBarRenderer.attributedStatusString(
+      from: centreDisplay, font: rightFont)
+    let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)
     let centreWidth = min(measuredCentreWidth, centreAvailable)
     let centreIdealX = (barFrame.width - centreWidth) / 2
     let centreMinX = modeMaxX + Self.statusBarMinimumGap
-    let centreMaxX = rightSectionStart - Self.statusBarMinimumGap - centreWidth
+    let centreMaxX = centreLimitMaxX - Self.statusBarMinimumGap - centreWidth
     let centreX = max(centreMinX, min(centreIdealX, centreMaxX))
-    statusAppLabel.frame = CGRect(
+    surface.appLabel.frame = CGRect(
       x: centreX,
       y: textY,
       width: centreWidth,
       height: textHeight)
-    statusAppLabel.font = rightFont
-    statusAppLabel.fontSize = fontSize
-    statusAppLabel.foregroundColor = Self.tmuxGrey245CG
-    statusAppLabel.contentsScale = scale
-    statusAppLabel.alignmentMode = .center
-    statusAppLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
-    lastRenderedCentre = applyStatusText(
-      to: statusAppLabel,
+    surface.appLabel.font = rightFont
+    surface.appLabel.fontSize = fontSize
+    surface.appLabel.foregroundColor = Self.tmuxGrey245CG
+    surface.appLabel.contentsScale = scale
+    surface.appLabel.alignmentMode = .center
+    surface.appLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
+    surface.lastCentre = applyStatusText(
+      to: surface.appLabel,
       display: centreDisplay,
       attributed: centreAttributed,
-      previous: lastRenderedCentre)
+      previous: surface.lastCentre)
 
-    // Right section is right-aligned: pin its `maxX` to the bar edge
-    // (minus padding) regardless of where the mode badge or the centre
-    // bucket end. This is what the user's "geometric centre" layout
-    // expects — the right text is anchored to the right margin, not
-    // pushed inward by the centre label's width.
-    let rightWidth = max(
+    // Right section is right-aligned: pin its `maxX` to the bar edge (minus
+    // padding) regardless of where the left run or the centre bucket end.
+    // On a notched screen the right region additionally never reaches past
+    // the notch's right edge (+ margin).
+    var rightWidth = max(
       0,
       barFrame.width - modeMaxX - Self.statusBarMinimumGap
         - (centreWidth > 0 ? centreWidth + Self.statusBarMinimumGap * 2 : 0)
         - Self.statusBarEdgePadding)
+    if let notchBar {
+      rightWidth = min(
+        rightWidth,
+        max(
+          0,
+          barFrame.width - Self.statusBarEdgePadding
+            - (notchBar.maxX + Self.statusBarNotchMargin)))
+    }
+    let rightDisplay = FlashStatusBarRenderer.fitToWidth(
+      rightRaw, font: rightFont, available: rightWidth)
     let rightX = barFrame.width - Self.statusBarEdgePadding - rightWidth
-    statusRightLabel.frame = CGRect(
+    surface.rightLabel.frame = CGRect(
       x: rightX,
       y: textY,
       width: rightWidth,
       height: textHeight)
-    statusRightLabel.font = rightFont
-    statusRightLabel.fontSize = fontSize
-    statusRightLabel.foregroundColor = Self.tmuxGrey245CG
-    statusRightLabel.contentsScale = scale
-    statusRightLabel.alignmentMode = .right
-    statusRightLabel.isHidden = rightDisplayText.isEmpty
-    // Only reassign + force a redraw when the right region actually changed
-    // (or is animated — breathing/blink need the per-tick alpha advance).
-    // CATextLayer otherwise auto-redraws on a genuine string change; the
-    // forced `setNeedsDisplay` inside `applyStatusText` covers the animated
-    // case where the glyphs are identical but the alpha moved.
-    lastRenderedRight = applyStatusText(
-      to: statusRightLabel,
-      display: rightDisplayText,
+    surface.rightLabel.font = rightFont
+    surface.rightLabel.fontSize = fontSize
+    surface.rightLabel.foregroundColor = Self.tmuxGrey245CG
+    surface.rightLabel.contentsScale = scale
+    surface.rightLabel.alignmentMode = .right
+    surface.rightLabel.isHidden = rightDisplay.isEmpty
+    surface.lastRight = applyStatusText(
+      to: surface.rightLabel,
+      display: rightDisplay,
       attributed: FlashStatusBarRenderer.attributedStatusString(
-        from: rightDisplayText, font: rightFont),
-      previous: lastRenderedRight)
+        from: rightDisplay, font: rightFont),
+      previous: surface.lastRight)
 
-    // Register clickable `#[link=…]` runs on the primary bar. The bar
-    // panel is click-through, so each link gets a transparent catcher
-    // window placed exactly over its rendered rect.
-    let linkBarFrame = modeBadgeLayer.frame
+    // Clickable `#[link=…]` / `#[range=user|…]` runs, in screen coordinates.
+    // Measured from the same fitted strings the layers render, so the rects
+    // land exactly on the glyphs the user sees (the rotating cycle line's
+    // rect tracks whichever line is showing).
+    guard modeBadgeVisible else { return [] }
+    let linkBarFrame = surface.backgroundLayer.frame
     var links: [(rect: CGRect, url: URL)] = []
-    if !statusLeftTrailingLabel.isHidden || !statusLeftTrailingCycleLayer.isHidden {
-      // Measured from the full `leftTrailingRaw` (cycle sentinels are
-      // zero-width markers), so the rotating title's link rect lands at
-      // `prefixWidth` — exactly where the cycle layer draws it. The link rect
-      // is recomputed each render, so it tracks whichever line is showing.
+    if !surface.leftTrailingLabel.isHidden || !surface.cycleLayer.isHidden {
       links += statusLinkRects(
-        raw: leftTrailingRaw, font: rightFont,
+        raw: leftTrailingDisplay, font: rightFont,
         labelFrame: CGRect(
-          x: modeBadgeButtonLayer.frame.maxX, y: statusLeftTrailingLabel.frame.minY,
-          width: leftTrailingMaxX - modeBadgeButtonLayer.frame.maxX,
-          height: statusLeftTrailingLabel.frame.height),
+          x: leftTrailingX, y: surface.leftTrailingLabel.frame.minY,
+          width: leftTrailingMaxX - leftTrailingX,
+          height: surface.leftTrailingLabel.frame.height),
         alignment: .left,
         barFrame: linkBarFrame, panelFrame: panelFrame)
     }
-    if !statusAppLabel.isHidden {
+    if !surface.appLabel.isHidden {
       links += statusLinkRects(
-        raw: statusAppText, font: rightFont,
-        labelFrame: statusAppLabel.frame, alignment: .center,
+        raw: centreDisplay, font: rightFont,
+        labelFrame: surface.appLabel.frame, alignment: .center,
         barFrame: linkBarFrame, panelFrame: panelFrame)
     }
-    if !statusRightLabel.isHidden {
+    if !surface.rightLabel.isHidden {
       links += statusLinkRects(
-        raw: statusRightText, font: rightFont,
-        labelFrame: statusRightLabel.frame, alignment: .right,
+        raw: rightDisplay, font: rightFont,
+        labelFrame: surface.rightLabel.frame, alignment: .right,
         barFrame: linkBarFrame, panelFrame: panelFrame)
     }
-    if modeBadgeVisible {
-      // Seed the per-screen link table with the primary bar; the secondary
-      // bars append their own screens below. `f` reads this to hint the links
-      // on the active window's screen only.
-      statusBarLinkRectsByScreen = [(screenFrame: screenFrame, links: links)]
-      syncStatusBarClickWindows(
-        bandRects: statusBarScreenRects(panelFrame: panelFrame, fontSize: fontSize),
-        links: links)
-    } else {
-      statusBarLinkRectsByScreen = []
-      hideStatusBarClickWindows()
-    }
-
-    // Same bar on every other screen, sized to that screen's own native
-    // top-band height so a 14"-MBP-with-notch + a square external monitor
-    // both see a bar that exactly covers the reserved menu-bar band on
-    // their own display.
-    configureSecondaryStatusBars(
-      panelFrame: panelFrame,
-      fontSize: fontSize,
-      modeFontSize: modeFontSize,
-      labelFont: labelFont,
-      rightFont: rightFont,
-      palette: palette,
-      leftWidth: leftWidth,
-      leftLabel: leftLabel,
-      leftTrailingDisplay: leftTrailingDisplay,
-      centreDisplay: centreDisplay,
-      rightDisplayText: rightDisplayText)
-  }
-
-  /// Mirror the primary bar onto every other `NSScreen`. Configures the
-  /// per-screen `SecondaryStatusBar` layer hierarchies; the caller owns
-  /// `contentLayer.sublayers` insertion (so this stays mode-agnostic and
-  /// can be re-used by the normal / insert / command renderers).
-  private func configureSecondaryStatusBars(
-    panelFrame: CGRect,
-    fontSize: CGFloat,
-    modeFontSize: CGFloat,
-    labelFont: NSFont,
-    rightFont: NSFont,
-    palette: ModeBadgePalette,
-    leftWidth: CGFloat,
-    leftLabel: String,
-    leftTrailingDisplay: String,
-    centreDisplay: String,
-    rightDisplayText: String
-  ) {
-    let snapshot = OverlayPanel.currentScreenSnapshot()
-    let mainFrame = snapshot.mainFrame
-    // Skip the main screen — its bar is the primary one rendered above. With
-    // `monitor = "primary"`, skip every other screen too (extras empty tears
-    // down any bars from a previous `all` render).
-    let extras =
-      statusBarMonitor == .primary
-      ? []
-      : snapshot.screens.filter { $0.frame != mainFrame }
-
-    // Shrink the cache before growing it: if a display disconnected the
-    // tail bars become orphans whose layers we want to detach.
-    while secondaryStatusBars.count > extras.count {
-      let stale = secondaryStatusBars.removeLast()
-      stale.backgroundLayer.removeFromSuperlayer()
-    }
-    while secondaryStatusBars.count < extras.count {
-      secondaryStatusBars.append(SecondaryStatusBar())
-    }
-
-    for (bar, screen) in zip(secondaryStatusBars, extras) {
-      let barFrame = Self.statusBarFrame(
-        screenFrame: screen.frame,
-        visibleFrame: screen.visibleFrame,
-        panelFrame: panelFrame,
-        fontSize: fontSize)
-      bar.backgroundLayer.frame = Self.snap(barFrame, scale: screen.scale)
-      bar.backgroundLayer.contentsScale = screen.scale
-      bar.backgroundLayer.backgroundColor = Self.nordPolarNight0CG
-      bar.backgroundLayer.colors = [Self.nordPolarNight0CG, Self.nordPolarNight0CG]
-      bar.backgroundLayer.borderColor = Self.nordPolarNight0CG
-
-      let textHeight = fontSize + 4
-      let textY = max(0, (barFrame.height - textHeight) / 2)
-      let contentX = Self.statusBarEdgePadding
-      let modeX = contentX
-
-      bar.modeButtonLayer.frame = CGRect(
-        x: modeX, y: textY, width: leftWidth, height: textHeight)
-      bar.modeButtonLayer.contentsScale = screen.scale
-      bar.modeButtonLayer.colors = [palette.bottomCG, palette.topCG]
-      if modeBadgeStyle == .normal {
-        bar.modeButtonLayer.borderWidth = 1
-        bar.modeButtonLayer.borderColor = Self.statusModeNormalBorderCG
-      } else {
-        bar.modeButtonLayer.borderWidth = 0
-        bar.modeButtonLayer.borderColor = palette.borderCG
-      }
-
-      bar.modeLabel.frame = CGRect(x: 0, y: 0, width: max(1, leftWidth), height: textHeight)
-      bar.modeLabel.font = labelFont
-      bar.modeLabel.fontSize = modeFontSize
-      bar.modeLabel.foregroundColor = palette.foregroundCG
-      bar.modeLabel.contentsScale = screen.scale
-      if bar.lastPill != leftLabel || bar.lastPillStyle != modeBadgeStyle {
-        bar.modeLabel.string = NSAttributedString(
-          string: leftLabel,
-          attributes: [
-            .font: labelFont,
-            .foregroundColor: NSColor(cgColor: palette.foregroundCG) ?? Self.nordSnowStorm2,
-          ])
-        bar.lastPill = leftLabel
-        bar.lastPillStyle = modeBadgeStyle
-      }
-
-      let leftTrailingAttributed = FlashStatusBarRenderer.attributedStatusString(
-        from: leftTrailingDisplay, font: rightFont)
-      let leftTrailingWidth =
-        leftTrailingDisplay.isEmpty ? 0 : ceil(leftTrailingAttributed.size().width)
-      // Flush against the pill's right edge, exactly like the primary bar
-      // (see `leftTrailingX` above). The gap to the trailing run is driven
-      // entirely by the template's own spacing (e.g. `#{mode} · …`); adding
-      // a `statusBarMinimumGap` here gave secondary screens a wider mode↔dot
-      // gap than the primary, which read as inconsistent across displays.
-      bar.leftTrailingLabel.frame = CGRect(
-        x: bar.modeButtonLayer.frame.maxX,
-        y: textY,
-        width: leftTrailingWidth,
-        height: textHeight)
-      bar.leftTrailingLabel.font = rightFont
-      bar.leftTrailingLabel.fontSize = fontSize
-      bar.leftTrailingLabel.foregroundColor = Self.tmuxGrey245CG
-      bar.leftTrailingLabel.contentsScale = screen.scale
-      bar.leftTrailingLabel.alignmentMode = .left
-      bar.leftTrailingLabel.isHidden = leftTrailingDisplay.isEmpty
-      bar.lastLeftTrailing = applyStatusText(
-        to: bar.leftTrailingLabel,
-        display: leftTrailingDisplay,
-        attributed: leftTrailingAttributed,
-        previous: bar.lastLeftTrailing)
-
-      let centreAttributed = FlashStatusBarRenderer.attributedStatusString(
-        from: centreDisplay, font: rightFont)
-      let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)
-      let rightReservedWidth =
-        rightDisplayText.isEmpty
-        ? 0
-        : min(
-          max(Self.statusBarMinimumRightTextWidth, barFrame.width * 0.32),
-          barFrame.width * 0.52)
-      let modeMaxX =
-        leftTrailingDisplay.isEmpty
-        ? bar.modeButtonLayer.frame.maxX
-        : bar.leftTrailingLabel.frame.maxX
-      let rightSectionStart =
-        barFrame.width - Self.statusBarEdgePadding
-        - (rightReservedWidth > 0 ? rightReservedWidth + Self.statusBarMinimumGap : 0)
-      let centreAvailable = max(0, rightSectionStart - modeMaxX - Self.statusBarMinimumGap * 2)
-      let centreWidth = min(measuredCentreWidth, centreAvailable)
-      let centreIdealX = (barFrame.width - centreWidth) / 2
-      let centreMinX = modeMaxX + Self.statusBarMinimumGap
-      let centreMaxX = rightSectionStart - Self.statusBarMinimumGap - centreWidth
-      let centreX = max(centreMinX, min(centreIdealX, centreMaxX))
-      bar.appLabel.frame = CGRect(x: centreX, y: textY, width: centreWidth, height: textHeight)
-      bar.appLabel.font = rightFont
-      bar.appLabel.fontSize = fontSize
-      bar.appLabel.foregroundColor = Self.tmuxGrey245CG
-      bar.appLabel.contentsScale = screen.scale
-      bar.appLabel.alignmentMode = .center
-      bar.appLabel.isHidden = centreDisplay.isEmpty || centreWidth <= 0
-      bar.lastCentre = applyStatusText(
-        to: bar.appLabel,
-        display: centreDisplay,
-        attributed: centreAttributed,
-        previous: bar.lastCentre)
-
-      let rightWidth = max(
-        0,
-        barFrame.width - modeMaxX - Self.statusBarMinimumGap
-          - (centreWidth > 0 ? centreWidth + Self.statusBarMinimumGap * 2 : 0)
-          - Self.statusBarEdgePadding)
-      let rightX = barFrame.width - Self.statusBarEdgePadding - rightWidth
-      bar.rightLabel.frame = CGRect(x: rightX, y: textY, width: rightWidth, height: textHeight)
-      bar.rightLabel.font = rightFont
-      bar.rightLabel.fontSize = fontSize
-      bar.rightLabel.foregroundColor = Self.tmuxGrey245CG
-      bar.rightLabel.contentsScale = screen.scale
-      bar.rightLabel.alignmentMode = .right
-      bar.rightLabel.isHidden = rightDisplayText.isEmpty
-      bar.lastRight = applyStatusText(
-        to: bar.rightLabel,
-        display: rightDisplayText,
-        attributed: FlashStatusBarRenderer.attributedStatusString(
-          from: rightDisplayText, font: rightFont),
-        previous: bar.lastRight)
-
-      // Record this screen's `#[link=…]` rects for the `f` hint path. The
-      // secondary bars are click-through (only the primary bar wires click
-      // windows), but a hint chip opens the URL directly, so we still want the
-      // rects here — computed against this screen's own bar + label frames so
-      // the chip lands on the link the user sees on that display. Each region's
-      // alignment matches the layer's `alignmentMode` set above (left / centre /
-      // right).
-      if modeBadgeVisible {
-        let secondaryBarFrame = bar.backgroundLayer.frame
-        var screenLinks: [(rect: CGRect, url: URL)] = []
-        if !bar.leftTrailingLabel.isHidden {
-          screenLinks += statusLinkRects(
-            raw: statusLeftTrailingText, font: rightFont,
-            labelFrame: bar.leftTrailingLabel.frame, alignment: .left,
-            barFrame: secondaryBarFrame, panelFrame: panelFrame)
-        }
-        if !bar.appLabel.isHidden {
-          screenLinks += statusLinkRects(
-            raw: statusAppText, font: rightFont,
-            labelFrame: bar.appLabel.frame, alignment: .center,
-            barFrame: secondaryBarFrame, panelFrame: panelFrame)
-        }
-        if !bar.rightLabel.isHidden {
-          screenLinks += statusLinkRects(
-            raw: statusRightText, font: rightFont,
-            labelFrame: bar.rightLabel.frame, alignment: .right,
-            barFrame: secondaryBarFrame, panelFrame: panelFrame)
-        }
-        statusBarLinkRectsByScreen.append((screenFrame: screen.frame, links: screenLinks))
-      }
-    }
+    return links
   }
 
   static func modeBadgeWidth(
@@ -778,11 +670,12 @@ extension OverlayPanel {
 /// own native top-band height. Each secondary bar holds its own CALayer
 /// set; the layout helper is the same `statusBarFrame` math the primary
 /// uses, just fed a different `(screenFrame, visibleFrame)`.
-final class SecondaryStatusBar {
+final class SecondaryStatusBar: StatusBarSurface {
   let backgroundLayer = CAGradientLayer()
   let modeButtonLayer = CAGradientLayer()
   let modeLabel = CATextLayer()
   let leftTrailingLabel = CATextLayer()
+  let cycleLayer = CATextLayer()
   let appLabel = CATextLayer()
   let rightLabel = CATextLayer()
 
@@ -791,6 +684,7 @@ final class SecondaryStatusBar {
   var lastPill: String?
   var lastPillStyle: OverlayModeBadgeStyle?
   var lastLeftTrailing: String?
+  var lastCycle: String?
   var lastCentre: String?
   var lastRight: String?
 
@@ -806,12 +700,79 @@ final class SecondaryStatusBar {
     modeLabel.actions = OverlayPanel.noActions
     leftTrailingLabel.alignmentMode = .left
     leftTrailingLabel.actions = OverlayPanel.noActions
+    cycleLayer.alignmentMode = .left
+    cycleLayer.actions = OverlayPanel.noActions
+    cycleLayer.masksToBounds = true
+    cycleLayer.isHidden = true
     appLabel.alignmentMode = .left
     appLabel.actions = OverlayPanel.noActions
     rightLabel.alignmentMode = .right
     rightLabel.actions = OverlayPanel.noActions
     modeButtonLayer.sublayers = [modeLabel]
-    backgroundLayer.sublayers = [appLabel, modeButtonLayer, leftTrailingLabel, rightLabel]
+    backgroundLayer.sublayers = [
+      appLabel, modeButtonLayer, leftTrailingLabel, cycleLayer, rightLabel,
+    ]
+  }
+}
+
+/// One screen's worth of status-bar layers + render caches. The primary bar
+/// (whose layers live directly on `OverlayPanel`) adapts via
+/// `PrimaryStatusBarSurface`; each `SecondaryStatusBar` IS one. All layout
+/// flows through `configureStatusBarSurface`, so every screen renders
+/// through identical code.
+protocol StatusBarSurface: AnyObject {
+  var backgroundLayer: CAGradientLayer { get }
+  var modeButtonLayer: CAGradientLayer { get }
+  var modeLabel: CATextLayer { get }
+  var leftTrailingLabel: CATextLayer { get }
+  var cycleLayer: CATextLayer { get }
+  var appLabel: CATextLayer { get }
+  var rightLabel: CATextLayer { get }
+  var lastPill: String? { get set }
+  var lastPillStyle: OverlayModeBadgeStyle? { get set }
+  var lastLeftTrailing: String? { get set }
+  var lastCycle: String? { get set }
+  var lastCentre: String? { get set }
+  var lastRight: String? { get set }
+}
+
+/// Adapter mapping the primary bar's loose `OverlayPanel` layers and caches
+/// onto the shared surface shape. Allocated per configure pass (it holds no
+/// state of its own).
+final class PrimaryStatusBarSurface: StatusBarSurface {
+  private unowned let panel: OverlayPanel
+  init(panel: OverlayPanel) { self.panel = panel }
+
+  var backgroundLayer: CAGradientLayer { panel.modeBadgeLayer }
+  var modeButtonLayer: CAGradientLayer { panel.modeBadgeButtonLayer }
+  var modeLabel: CATextLayer { panel.modeBadgeLabel }
+  var leftTrailingLabel: CATextLayer { panel.statusLeftTrailingLabel }
+  var cycleLayer: CATextLayer { panel.statusLeftTrailingCycleLayer }
+  var appLabel: CATextLayer { panel.statusAppLabel }
+  var rightLabel: CATextLayer { panel.statusRightLabel }
+  var lastPill: String? {
+    get { panel.lastRenderedPill }
+    set { panel.lastRenderedPill = newValue }
+  }
+  var lastPillStyle: OverlayModeBadgeStyle? {
+    get { panel.lastRenderedPillStyle }
+    set { panel.lastRenderedPillStyle = newValue }
+  }
+  var lastLeftTrailing: String? {
+    get { panel.lastRenderedLeftTrailing }
+    set { panel.lastRenderedLeftTrailing = newValue }
+  }
+  var lastCycle: String? {
+    get { panel.lastRenderedLeftTrailingCycle }
+    set { panel.lastRenderedLeftTrailingCycle = newValue }
+  }
+  var lastCentre: String? {
+    get { panel.lastRenderedCentre }
+    set { panel.lastRenderedCentre = newValue }
+  }
+  var lastRight: String? {
+    get { panel.lastRenderedRight }
+    set { panel.lastRenderedRight = newValue }
   }
 }
 
@@ -873,15 +834,20 @@ extension OverlayPanel {
       font: font,
       currentTime: currentTime)
 
-    // Secondary bars mirror the complete left run in one layer, so refresh
-    // that raw display directly instead of applying the primary bar's split
-    // cycle-layer representation.
+    // Secondary bars render the same base + cycle split as the primary now.
     for bar in secondaryStatusBars {
       refreshAnimatedStatusText(
         on: bar.leftTrailingLabel,
-        display: leftDisplay,
+        display: cyclePrefix + cycleSuffix,
         font: font,
         currentTime: currentTime)
+      if let cycleContent {
+        refreshAnimatedStatusText(
+          on: bar.cycleLayer,
+          display: cycleContent,
+          font: font,
+          currentTime: currentTime)
+      }
       refreshAnimatedStatusText(
         on: bar.appLabel,
         display: centreDisplay,

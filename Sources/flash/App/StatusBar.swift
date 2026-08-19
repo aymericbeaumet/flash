@@ -957,6 +957,44 @@ enum FlashStatusBarRenderer {
     }
   }
 
+  /// Elastic fit: shrink ONLY the `#[shrink]…#[noshrink]` span until `raw`
+  /// renders within `available` points. Fixed content (labels, domains,
+  /// arrows) keeps its full width; the elastic span absorbs all overflow
+  /// with a `…`, pixel-accurately (iterative measure-and-trim — the bar
+  /// font is monospaced, so the first estimate is nearly exact). A string
+  /// with no shrink span passes through untouched (legacy behaviour: the
+  /// region just runs long). Markers inside the span survive the cut, so
+  /// links/styles never bleed.
+  static func fitToWidth(_ raw: String, font: NSFont, available: CGFloat) -> String {
+    guard available > 0, raw.contains("#[shrink]") else { return raw }
+    var width = ceil(attributedStatusString(from: raw, font: font).size().width)
+    guard width > available else { return raw }
+    guard let open = raw.range(of: "#[shrink]"),
+      let close = raw.range(of: "#[noshrink]", range: open.upperBound..<raw.endIndex)
+    else { return raw }
+    let prefix = String(raw[..<open.upperBound])
+    let spanTokens = FlashStatusBarMarkup.tokenizeValue(String(raw[open.upperBound..<close.lowerBound]))
+    let suffix = String(raw[close.lowerBound...])
+    let charWidth = max(1, ceil(NSAttributedString(
+      string: "M", attributes: [.font: font]
+    ).size().width))
+    var limit = FlashStatusBarMarkup.visibleCount(spanTokens)
+    var current = raw
+    for _ in 0..<10 {
+      let overflow = width - available
+      if overflow <= 0.5 { break }
+      limit -= max(1, Int(ceil(overflow / charWidth)))
+      if limit < 1 { limit = 1 }
+      let trimmed = FlashStatusBarMarkup.serialize(
+        FlashStatusBarMarkup.truncate(
+          spanTokens, limit: limit, fromTail: false, ellipsis: true))
+      current = prefix + trimmed + suffix
+      width = ceil(attributedStatusString(from: current, font: font).size().width)
+      if limit == 1 { break }
+    }
+    return current
+  }
+
   /// Pseudo-scheme carrying a `#[range=user|<name>]` click span through the
   /// URL-typed rect plumbing (click windows + `f` hints). Consumers branch
   /// on the scheme and dispatch the named `[statusbar.click]` action instead

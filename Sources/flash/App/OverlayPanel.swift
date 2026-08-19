@@ -249,7 +249,10 @@ final class OverlayPanel: NSPanel {
   // invalidate on that notification (observed from `init` below).
 
   struct ScreenSnapshot {
-    var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect)]
+    /// `notch` is the camera-housing rect in screen coordinates (nil on
+    /// screens without one), derived from the auxiliary top areas — the
+    /// status bar keeps a safety margin around it.
+    var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)]
     var unionFrame: CGRect
     var mainFrame: CGRect?
     var mainScale: CGFloat
@@ -282,10 +285,22 @@ final class OverlayPanel: NSPanel {
 
   private static func buildScreenSnapshot() -> ScreenSnapshot {
     var union: NSRect = .null
-    var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect)] = []
+    var screens: [(scale: CGFloat, frame: CGRect, visibleFrame: CGRect, notch: CGRect?)] = []
     for s in NSScreen.screens {
       union = union.union(s.frame)
-      screens.append((s.backingScaleFactor, s.frame, s.visibleFrame))
+      // A notched display exposes the areas LEFT and RIGHT of the camera
+      // housing; the gap between them is the notch itself.
+      var notch: CGRect?
+      if let auxLeft = s.auxiliaryTopLeftArea, let auxRight = s.auxiliaryTopRightArea,
+        auxRight.minX > auxLeft.maxX
+      {
+        notch = CGRect(
+          x: auxLeft.maxX,
+          y: auxLeft.minY,
+          width: auxRight.minX - auxLeft.maxX,
+          height: s.frame.maxY - auxLeft.minY)
+      }
+      screens.append((s.backingScaleFactor, s.frame, s.visibleFrame, notch))
     }
     if union.isNull, let main = NSScreen.main { union = main.frame }
     let main = NSScreen.main ?? NSScreen.screens.first

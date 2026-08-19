@@ -668,6 +668,45 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(c.statusBar.template.cycleSections.count, 1)
   }
 
+  func testFitToWidthShrinksOnlyTheElasticSpan() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let raw =
+      "HN #[shrink]A very long story title that absolutely overflows the region#[noshrink]"
+      + " (domain.com) ↗"
+    // Room for the fixed parts plus ~10 title characters.
+    let fixedWidth = ceil(
+      FlashStatusBarRenderer.attributedStatusString(
+        from: "HN  (domain.com) ↗", font: font
+      ).size().width)
+    let available = fixedWidth + 80
+    let fitted = FlashStatusBarRenderer.fitToWidth(raw, font: font, available: available)
+    // The elastic span shrank with an ellipsis; the fixed label, domain, and
+    // arrow all survive at full width.
+    XCTAssertTrue(fitted.contains("…"), fitted)
+    XCTAssertTrue(fitted.hasPrefix("HN #[shrink]A"), fitted)
+    XCTAssertTrue(fitted.contains("#[noshrink] (domain.com) ↗"), fitted)
+    let fittedWidth = ceil(
+      FlashStatusBarRenderer.attributedStatusString(from: fitted, font: font).size().width)
+    XCTAssertLessThanOrEqual(fittedWidth, available)
+
+    // Already fits → untouched. No elastic span → untouched (legacy).
+    XCTAssertEqual(
+      FlashStatusBarRenderer.fitToWidth(raw, font: font, available: 100_000), raw)
+    XCTAssertEqual(
+      FlashStatusBarRenderer.fitToWidth("no span", font: font, available: 10), "no span")
+  }
+
+  func testFitToWidthPreservesMarkersInsideTheSpan() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let raw =
+      "#[link=https://x]#[shrink]abcdefghijklmnopqrstuvwxyz#[noshrink]#[nolink] tail"
+    let fitted = FlashStatusBarRenderer.fitToWidth(raw, font: font, available: 120)
+    // The closing markers survive the cut, so the link never bleeds into
+    // the fixed tail.
+    XCTAssertTrue(fitted.contains("#[nolink] tail"), fitted)
+    XCTAssertTrue(fitted.contains("…"), fitted)
+  }
+
   func testTruncatedCycleLineKeepsBothSlideSentinels() {
     // Regression: the user's `#{=80…:cycle:hn.sh}` — any line longer than
     // the cap used to lose the trailing `#[nocyc]` sentinel, so
