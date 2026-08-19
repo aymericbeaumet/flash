@@ -108,23 +108,26 @@ if [[ -d Plugins ]]; then
     "async fn query_evaluate" \
     Plugins
 
+  # The Rust-SDK contract greps apply only to Rust plugins (src/main.rs);
+  # non-Rust official plugins (python/ruby/bun/go/zig) satisfy the same
+  # warm-catalog and sync-evaluator contracts through host-side runtime
+  # enforcement (readiness gate, quotas, deadlines) instead of source greps.
   for manifest in Plugins/*/manifest.json; do
+    plugin_dir="${manifest%/manifest.json}"
+    source="$plugin_dir/src/main.rs"
+    [[ -f "$source" ]] || continue
     if rg -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest"; then
-      plugin_dir="${manifest%/manifest.json}"
-      source="$plugin_dir/src/main.rs"
-      if [[ ! -f "$source" ]] || ! rg -q 'async fn on_start' "$source"; then
+      if ! rg -q 'async fn on_start' "$source"; then
         echo "GUARDRAIL FAILED: candidate plugin must implement on_start: $plugin_dir" >&2
         fail=1
       fi
-      if [[ ! -f "$source" ]] || ! rg -q 'set_locations[[:space:]]*\(' "$source"; then
+      if ! rg -q 'set_locations[[:space:]]*\(' "$source"; then
         echo "GUARDRAIL FAILED: candidate plugin must publish warm locations: $plugin_dir" >&2
         fail=1
       fi
     fi
     if rg -q '^[[:space:]]*"queries"[[:space:]]*:' "$manifest"; then
-      plugin_dir="${manifest%/manifest.json}"
-      source="$plugin_dir/src/main.rs"
-      if [[ ! -f "$source" ]] || ! rg -q 'fn query_evaluate[[:space:]]*\(' "$source"; then
+      if ! rg -q 'fn query_evaluate[[:space:]]*\(' "$source"; then
         echo "GUARDRAIL FAILED: query plugin must implement synchronous query_evaluate: $plugin_dir" >&2
         fail=1
       fi

@@ -12,8 +12,12 @@ bundle; third-party plugins are listed in `[plugins] third_party` as
 materializer fetches exactly that commit and refuses a mismatched checkout) or
 `file:<path>`. The manifest's optional `install` shell string (third-party
 only) runs sandboxed from the plugin root; `exec` is an argv array exec'd
-directly with the scrubbed plugin environment — no shell wrap, and a
-relative first element resolves against the plugin root.
+directly with the scrubbed plugin environment — no shell wrap. Its first
+element resolves in order: absolute paths pass through, `./`-style paths
+resolve against the plugin root (compiled plugins), and bare names resolve
+through `mise which` (the repo's mise.toml pins interpreter versions) then
+a login-PATH walk — interpreted plugins declare `["python3", "main.py"]`
+without hardcoding machine paths.
 
 Runtime children receive `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`,
 `FLASH_PLUGIN_DATA_DIR`, `FLASH_PLUGIN_PARENT_PID`, and the plugin's

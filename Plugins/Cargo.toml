@@ -3,12 +3,10 @@ resolver = "2"
 members = [
   "_rust_flash_plugin",
   "_rust_flash_plugin/macros",
-  "aiproviders",
   "calculator",
   "chromium",
   "clipboard",
   "contacts",
-  "emojis",
   "firefox",
   "marks",
   "media",
@@ -16,10 +14,7 @@ members = [
   "processes",
   "reminders",
   "safari",
-  "screenshot",
-  "searchengines",
   "slack",
-  "spotify",
   "system",
   "tmux",
 ]

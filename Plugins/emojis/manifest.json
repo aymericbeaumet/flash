@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "description": "Fuzzy-find emojis with `:emojis <query>` and insert the picked glyph.",
   "sandbox": {},
-  "exec": ["./flash-plugin-emojis"],
+  "exec": [
+    "bun",
+    "run",
+    "main.ts"
+  ],
   "listen": [
     "core:flash.started"
   ],

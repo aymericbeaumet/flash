@@ -100,10 +100,10 @@ mod tests {
     use flash_plugin::testing::Harness;
 
     #[tokio::test]
-    async fn on_start_publishes_the_catalog() {
-        let harness = Harness::new("emojis");
+    async fn refresh_populates_the_warm_store() {
+        let harness = Harness::new("processes");
         let ctx = harness.context();
-        Emojis.on_start(ctx.clone()).await;
+        assert!(refresh_candidates(&ctx).await);
         assert!(ctx.has_locations(SOURCE_ID));
     }
 }

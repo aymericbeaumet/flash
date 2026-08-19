@@ -780,7 +780,8 @@ final class PluginProcess {
   /// exec/read/write allowances, and network-outbound when the `network`
   /// capability is declared.
   static func denyDefaultSandboxProfile(
-    for manifest: PluginManifest, spec: PluginSandboxSpec, root: URL, dataDir: URL
+    for manifest: PluginManifest, spec: PluginSandboxSpec, root: URL, dataDir: URL,
+    executablePath: String = ""
   ) -> String {
     // Seatbelt string literals: expand ~, strip quotes (paths come from the
     // strict manifest validator, so this is belt-and-suspenders).
@@ -852,6 +853,15 @@ final class PluginProcess {
     if spec.processInfo {
       lines.append("(allow process-info*)")
     }
+    // Interpreted plugins exec a runtime outside the plugin root (python3,
+    // bun): allow exec + dyld mapping of the resolved interpreter itself.
+    if !executablePath.isEmpty && !executablePath.hasPrefix(root.path) {
+      let resolved = URL(fileURLWithPath: executablePath).resolvingSymlinksInPath().path
+      let paths = resolved == executablePath ? [executablePath] : [executablePath, resolved]
+      let literals = paths.map { "(literal \(q($0)))" }.joined(separator: " ")
+      lines.append("(allow process-exec \(literals))")
+      lines.append("(allow file-map-executable \(literals))")
+    }
     if !spec.mach.isEmpty {
       let names = spec.mach.map { "(global-name \(q($0)))" }.joined(separator: " ")
       lines.append("(allow mach-lookup \(names))")
@@ -895,14 +905,15 @@ final class PluginProcess {
   /// fails as a clear seatbelt denial instead of silently widening the
   /// profile.
   static func expandedSandboxSpec(
-    _ spec: PluginSandboxSpec, settings: [String: PluginConfigValue], pluginID: String
+    _ spec: PluginSandboxSpec, settings: [String: PluginConfigValue], pluginID: String,
+    root: URL? = nil
   ) -> PluginSandboxSpec {
     var expanded = spec
     expanded.exec = spec.exec.flatMap { entry -> [String] in
       let candidates: [String]
       if entry.hasPrefix("/") {
         candidates = [entry]
-      } else if let resolved = resolveExecutable(named: entry) {
+      } else if let resolved = resolveExecutable(named: entry, from: root) {
         candidates = [resolved]
       } else {
         FlashLog.warn(
@@ -921,11 +932,20 @@ final class PluginProcess {
     return expanded
   }
 
-  private static func resolveExecutable(named name: String) -> String? {
+  /// Resolve a bare tool name to an absolute path. mise is the toolchain
+  /// authority (the repo mise.toml pins interpreter versions) and its
+  /// activation is interactive-shell-only — the login-shell PATH never
+  /// carries it — so ask `mise which` first (cwd-aware, so plugin roots
+  /// under the checkout pick up the repo pins) and only then fall back to
+  /// a login-PATH walk for non-mise tools.
+  static func resolveExecutable(named name: String, from directory: URL? = nil) -> String? {
+    if let resolved = miseWhich(name, from: directory) {
+      return resolved
+    }
     let path =
       FlashProcessEnvironment.shared.environment["PATH"] ?? FlashProcessEnvironment.fallbackPath
-    for directory in path.split(separator: ":") {
-      let candidate = "\(directory)/\(name)"
+    for entry in path.split(separator: ":") {
+      let candidate = "\(entry)/\(name)"
       if FileManager.default.isExecutableFile(atPath: candidate) {
         return candidate
       }
@@ -933,20 +953,54 @@ final class PluginProcess {
     return nil
   }
 
+  private static func miseWhich(_ name: String, from directory: URL?) -> String? {
+    let candidates = [
+      "\(NSHomeDirectory())/.local/bin/mise",
+      "/opt/homebrew/bin/mise",
+      "/usr/local/bin/mise",
+    ]
+    guard let mise = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+    else { return nil }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: mise)
+    process.arguments = ["which", name]
+    if let directory { process.currentDirectoryURL = directory }
+    let out = Pipe()
+    process.standardOutput = out
+    process.standardError = Pipe()
+    do { try process.run() } catch { return nil }
+    // Bound a wedged mise the same way installIfNeeded bounds installers —
+    // this runs on the plugin's serial queue.
+    let killWork = DispatchWorkItem { if process.isRunning { process.terminate() } }
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(10), execute: killWork)
+    process.waitUntilExit()
+    killWork.cancel()
+    guard process.terminationStatus == 0 else { return nil }
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    guard let path = String(data: data, encoding: .utf8)?.trimmed, !path.isEmpty,
+      FileManager.default.isExecutableFile(atPath: path)
+    else { return nil }
+    return path
+  }
+
   /// Which profile a plugin launches under, in order: the per-plugin
   /// `[plugin.<id>] sandbox = false` kill switch (fail-open, logged loudly by
   /// the caller), a manifest `sandbox` spec (deny-default), else the legacy
   /// network-deny transitional profile.
   static func resolvedSandboxProfile(
-    manifest: PluginManifest, settings: [String: PluginConfigValue], root: URL, dataDir: URL
+    manifest: PluginManifest, settings: [String: PluginConfigValue], root: URL, dataDir: URL,
+    executablePath: String = ""
   ) -> (profile: String?, mode: String) {
     if case .bool(false) = settings["sandbox"] {
       return (nil, "disabled_by_config")
     }
     if let spec = manifest.sandbox {
-      let expanded = expandedSandboxSpec(spec, settings: settings, pluginID: manifest.id)
+      let expanded = expandedSandboxSpec(
+        spec, settings: settings, pluginID: manifest.id, root: root)
       return (
-        denyDefaultSandboxProfile(for: manifest, spec: expanded, root: root, dataDir: dataDir),
+        denyDefaultSandboxProfile(
+          for: manifest, spec: expanded, root: root, dataDir: dataDir,
+          executablePath: executablePath),
         "deny_default"
       )
     }
@@ -966,12 +1020,25 @@ final class PluginProcess {
     }
     // Direct exec, no shell wrap: a `/bin/sh -lc` here used to source the
     // user's login rc files inside the child, silently re-widening the
-    // scrubbed 11-key env allowlist. A relative executable resolves against
-    // the plugin root (bundled manifests use "./flash-plugin-<id>").
-    let executablePath =
-      executable.hasPrefix("/")
-      ? executable
-      : root.appendingPathComponent(executable).standardizedFileURL.path
+    // scrubbed 11-key env allowlist. Resolution of argv[0]: absolute paths
+    // pass through, "./"-style paths resolve against the plugin root
+    // (compiled plugins use "./flash-plugin-<id>"), and bare names resolve
+    // through the login-shell PATH — interpreted official plugins declare
+    // "python3" / "bun" without hardcoding machine-specific install paths.
+    let executablePath: String
+    if executable.hasPrefix("/") {
+      executablePath = executable
+    } else if executable.contains("/") {
+      executablePath = root.appendingPathComponent(executable).standardizedFileURL.path
+    } else if let resolved = Self.resolveExecutable(named: executable, from: root) {
+      executablePath = resolved
+      FlashLog.plugin(
+        .info, pluginID: manifest.id,
+        message: "[plugin] runtime \(executable) -> \(resolved)")
+    } else {
+      throw PluginError.processLaunch(
+        "plugin \(manifest.id) exec runtime not found via mise or the login PATH: \(executable)")
+    }
     let execTail = Array(execArgv.dropFirst())
     let process = Process()
     let stdin = Pipe()
@@ -981,7 +1048,8 @@ final class PluginProcess {
     // in place, so the pid we track and the child flash-plugin binary are
     // unchanged.
     let resolved = Self.resolvedSandboxProfile(
-      manifest: manifest, settings: settings, root: root, dataDir: dataDir)
+      manifest: manifest, settings: settings, root: root, dataDir: dataDir,
+      executablePath: executablePath)
     let sandboxed =
       resolved.profile != nil
       && FileManager.default.isExecutableFile(atPath: Self.sandboxExecPath)
@@ -2051,6 +2119,9 @@ final class PluginProcess {
   }
 
   private func recordError(_ message: String) {
+    // Also log: a throwing launch() (e.g. an unresolvable interpreter)
+    // otherwise parks the plugin in .crashed with zero log evidence.
+    FlashLog.plugin(.warn, pluginID: manifest.id, message: message)
     lock.lock()
     lastError = message
     lock.unlock()

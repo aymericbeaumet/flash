@@ -16,8 +16,10 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "python-aiproviders"))
-from flashplugin import decode, encode  # reuse the example shim's codec
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "Plugins", "aiproviders")
+)
+from flashplugin import decode, encode  # reuse the Python plugin's codec
 
 
 def frame(obj):

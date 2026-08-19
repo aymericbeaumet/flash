@@ -240,14 +240,23 @@ assemble_app() {
       bin="$dir/flash-plugin-$id"
       mkdir -p "$plugins_dest/$id"
       cp "$manifest" "$plugins_dest/$id/manifest.json"
-      # Manifest-only plugins (no crate, no `start`) ship just their manifest.
-      if [[ -f "$dir/Cargo.toml" ]]; then
+      # Compiled plugins (Rust/Go/Zig) ship their built binary; interpreted
+      # plugins (python/ruby/bun) ship their runtime sources and data files;
+      # manifest-only plugins ship just the manifest. Build sources
+      # (src/, Cargo.toml, go.mod, *.go, *.zig) never ship.
+      if [[ -f "$dir/Cargo.toml" || -f "$dir/go.mod" || -f "$dir/main.zig" ]]; then
         if [[ ! -x "$bin" ]]; then
           echo "ERROR: missing plugin binary $bin" >&2
           exit 1
         fi
         cp "$bin" "$plugins_dest/$id/flash-plugin-$id"
         chmod +x "$plugins_dest/$id/flash-plugin-$id"
+      else
+        local runtime_file
+        for runtime_file in "$dir"/*.py "$dir"/*.rb "$dir"/*.ts "$dir"/*.txt; do
+          [[ -e "$runtime_file" ]] || continue
+          cp "$runtime_file" "$plugins_dest/$id/"
+        done
       fi
     done
   else

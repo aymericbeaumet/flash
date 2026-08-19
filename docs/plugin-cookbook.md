@@ -1,53 +1,65 @@
 # Plugin cookbook
 
 Graded, real exemplars — read them in order. Each one is bundled, small, and
-idiomatic; copy its shape.
+idiomatic; copy its shape. Rust is the default for new plugins; the polyglot
+section exists to keep the wire protocol honestly language-agnostic.
 
-## 1. Command wrapper — `Plugins/spotify` (~50 LOC)
+## Rust (the default path)
 
-The smallest useful plugin: manifest `commands.items` + one `on_command`
-mapping subcommands to a CLI via `run_command`, with per-plugin config/cache
-dirs under the sandboxed data dir. No state, no events.
+1. **Command wrapper — `Plugins/slack` (~40 LOC).** The smallest useful
+   plugin: manifest `commands.items` + one `on_command` mapping subcommands
+   to a CLI via `run_command`.
+2. **Verbs + host RPCs + persistence — `Plugins/marks` (~200 LOC).**
+   Vim-style marks: manifest `verbs`, `host.normal_mode_target` and
+   `app.activate` host RPCs (the `app_control` capability), JSON state
+   persisted under `share_dir()`, and `listen` events keeping it fresh.
+3. **Warm catalog via native APIs — `Plugins/processes` (~300 LOC).** A
+   `sources` plugin publishing with `set_locations` before `on_start`
+   returns (the readiness gate), refreshed by events + a poll, backed by
+   the SDK's libproc sampler — plus the golden-output test pattern.
+4. **Live catalog + source actions + mappings — `Plugins/safari`
+   (~440 LOC).** Browser tabs: polled osascript refreshes fanned out per
+   window, `source_actions` with the `performed | failed | unhandled`
+   trichotomy, and a manifest `mappings` entry scoped by
+   `only_bundle_ids`.
+5. **Query evaluator with background refresh — `Plugins/calculator`
+   (~630 LOC).** A synchronous, CPU-only `query_evaluate` over immutable
+   state; the ECB snapshot loads from disk before readiness and refreshes
+   in the background through `host.fetch` (the `network_fetch` capability),
+   atomically replacing state; `exclusive_prefixes = ["="]` routing.
 
-## 2. Warm catalog from embedded data — `Plugins/emojis` (~90 LOC + test)
+## Polyglot (the protocol is the boundary)
 
-A `sources` plugin: `include_str!` datasets parsed once in `on_start`,
-published with `set_locations` before returning (the readiness gate). Shows
-candidate builders (`kind`, `source`, `subtitle`, `payload`, `aliases`) and
-the harness-based test that drives `on_start` from `cargo test`.
+Five official plugins are deliberately non-Rust; each carries its own
+~150–200-line `flashplugin.*` shim (framing + MessagePack subset + v3
+lifecycle) beside logic comparable in size to a Rust original:
 
-## 3. Verbs + host RPCs + persistence — `Plugins/marks` (~200 LOC)
+- **`Plugins/aiproviders` — Python** (mise-pinned `python3`): `!chatgpt`-
+  style bangs, `command.invoke`, subprocess (`open`, osascript).
+- **`Plugins/screenshot` — Ruby**: osascript keystroke commands.
+- **`Plugins/emojis` — TypeScript/Bun**: the warm-catalog contract in an
+  interpreted language — dataset files read at startup, published before
+  initialize succeeds, served from memory on `sources.snapshot`.
+- **`Plugins/spotify` — Go**: compiled command wrapper, built by
+  `build-plugins.sh` alongside the Rust crates.
+- **`Plugins/searchengines` — Zig**: compiled warm catalog; `@embedFile`
+  replaces the old build.rs codegen for the vendored bangs.tsv.
 
-Vim-style marks: manifest `verbs`, `host.normal_mode_target` and
-`app.activate` host RPCs (the `app_control` capability), JSON state persisted
-under `share_dir()`, and `listen` events keeping it fresh.
-
-## 4. Live catalog + source actions + mappings — `Plugins/safari` (~440 LOC)
-
-Browser tabs: polled osascript refreshes fanned out per window, an
-aggregate warm catalog under the canonical `plugin:safari` key,
-`source_actions` (`tab_select`, `tab_new`, `tab_close`) with the
-`performed | failed | unhandled` trichotomy, and a manifest `mappings` entry
-scoped by `only_bundle_ids`.
-
-## 5. Query evaluator with background refresh — `Plugins/calculator` (~630 LOC)
-
-The `queries` pattern done right: a synchronous, CPU-only `query_evaluate`
-over immutable state; the ECB currency snapshot loads from disk before
-readiness and refreshes in the background, atomically replacing state without
-ever delaying evaluation; `exclusive_prefixes = ["="]` routing.
+`Scripts/plugin-protocol-smoke.py` drives any plugin binary/runtime through
+initialize → heartbeat → optional `sources.snapshot` → shutdown with a
+PASS/FAIL exit code — the conformance tool for new shims.
 
 ## The loop
 
 ```bash
-./Scripts/new-plugin.sh myplugin "My Plugin" "What it does"   # zero-edit scaffold
-./Scripts/build-plugins.sh dev myplugin                        # 2-4s hot build
+./Scripts/new-plugin.sh myplugin "My Plugin" "What it does"   # Rust scaffold, zero-edit green
+./Scripts/build-plugins.sh dev myplugin                        # per-id hot build (any compiled language)
 tail -f ~/Library/Logs/Flash/flash.log                         # watcher restart + plugin logs
 cargo test --manifest-path Plugins/Cargo.toml -p flash-plugin-myplugin
 ```
 
 Contracts you must not break — the full statements live in
 `docs/plugin-protocol.md` and AGENTS.md: publish the canonical warm catalog
-before `on_start` returns; never block the runtime (clippy enforces it);
-never put I/O on `sources.snapshot` or `query_evaluate`; authoritative-empty
-clears, transient failure keeps last-good; bound every refresh.
+before initialize succeeds; never block the runtime; never put I/O on
+`sources.snapshot` or `query_evaluate`; authoritative-empty clears,
+transient failure keeps last-good; bound every refresh.

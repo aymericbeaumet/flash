@@ -1,8 +1,14 @@
-// Go port of the bundled spotify plugin (Plugins/spotify): thin command
-// wrapper around the spotify_player CLI with per-plugin config/cache dirs
-// under FLASH_PLUGIN_DATA_DIR. Compiled by the manifest's sandboxed
-// third-party `install` step ("go build ..."), which is the point of this
-// example — the full compile-at-install pipeline for a compiled language.
+// Spotify playback controls backed by spotify_player, in Go (one of the
+// three deliberately non-Rust official plugins exercising the
+// language-agnostic wire protocol; see docs/plugin-protocol.md and
+// AGENTS.md — Rust stays the default).
+//
+// Compiled by Scripts/build-plugins.sh like the Rust crates (go build,
+// staged + signed with the same atomic-rename flow). Mirrors the Rust
+// implementation: per-plugin config/cache dirs under
+// FLASH_PLUGIN_DATA_DIR, and the plugin's bin/ dir prepended to PATH for
+// the spotify_player lookup — the same convention the Rust SDK's
+// run_command applies.
 package main
 
 import (
@@ -33,15 +39,9 @@ func onCommand(params map[string]any) map[string]any {
 	case "previous":
 		tail = []string{"playback", "previous"}
 	case "search":
-		var query []string
-		if args, ok := params["args"].([]any); ok {
-			for _, a := range args {
-				if s, ok := a.(string); ok {
-					query = append(query, s)
-				}
-			}
-		}
-		tail = []string{"search", strings.Join(query, " ")}
+		tail = []string{"search", strings.Join(stringArgs(params), " ")}
+	case "run":
+		tail = stringArgs(params)
 	default:
 		return map[string]any{"ok": false, "error": "unknown subcommand: " + subcommand}
 	}
@@ -57,6 +57,10 @@ func onCommand(params map[string]any) map[string]any {
 		tail...,
 	)
 	cmd := exec.Command("spotify_player", argv...)
+	// SDK run_command parity: the plugin's own bin/ dir wins the PATH
+	// lookup so a plugin-managed spotify_player beats a global one.
+	cmd.Env = append(os.Environ(),
+		"PATH="+filepath.Join(dataDir, "bin")+":"+os.Getenv("PATH"))
 	done := make(chan error, 1)
 	var output []byte
 	go func() {
@@ -80,6 +84,18 @@ func onCommand(params map[string]any) map[string]any {
 		}
 		return map[string]any{"ok": false, "error": "spotify_player timed out"}
 	}
+}
+
+func stringArgs(params map[string]any) []string {
+	var out []string
+	if args, ok := params["args"].([]any); ok {
+		for _, a := range args {
+			if s, ok := a.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 func main() {

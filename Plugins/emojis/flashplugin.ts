@@ -147,6 +147,10 @@ type Msg = { [key: string]: Value };
 
 export class Plugin {
   private warm = new Map<string, Candidate[]>();
+  // One writer for the process lifetime, flushed per frame: Bun's FileSink
+  // buffers, and a fresh writer per send can lose the final (shutdown)
+  // reply when the process exits before the sink drains.
+  private writer = Bun.stdout.writer();
 
   setLocations(sourceId: string, candidates: Candidate[]) {
     this.warm.set(sourceId, candidates);
@@ -157,7 +161,8 @@ export class Plugin {
     const framed = new Uint8Array(4 + payload.length);
     new DataView(framed.buffer).setUint32(0, payload.length);
     framed.set(payload, 4);
-    Bun.stdout.writer().write(framed);
+    this.writer.write(framed);
+    this.writer.flush();
   }
 
   private respond(id: Value, result: Value) {

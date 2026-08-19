@@ -22,14 +22,26 @@ final class PluginSystemTests: XCTestCase {
     let runCommandRequired: Set<String> = [
       "media", "slack", "spotify",
     ]
-    for manifest in manifests {
-      // Bundled plugins are compiled Rust binaries: no install step exists
-      // (`install` is third-party-only) and `exec` argv-execs the embedded
-      // binary directly (manifest-only plugins such as `defaults` have no
-      // process and omit `exec` entirely). See Scripts/build-plugins.sh.
+    for (root, manifest) in zip(roots, manifests) {
+      // Bundled plugins have no install step (`install` is
+      // third-party-only). Compiled plugins (Rust default, plus the Go/Zig
+      // polyglot exercisers) exec their built binary by convention;
+      // interpreted ones (python/ruby/bun) exec a mise-pinned runtime by
+      // bare name; manifest-only plugins such as `defaults` omit `exec`
+      // entirely. See Scripts/build-plugins.sh.
       XCTAssertNil(manifest.install, "\(manifest.id): official plugins declare no install step")
       if let exec = manifest.exec {
-        XCTAssertEqual(exec, ["./flash-plugin-\(manifest.id)"])
+        XCTAssertFalse(exec.isEmpty)
+        let compiled = ["Cargo.toml", "go.mod", "main.zig"].contains {
+          FileManager.default.fileExists(atPath: root.appendingPathComponent($0).path)
+        }
+        if compiled {
+          XCTAssertEqual(exec, ["./flash-plugin-\(manifest.id)"])
+        } else {
+          XCTAssertFalse(
+            exec[0].contains("/"),
+            "\(manifest.id): interpreted plugins resolve their runtime by bare name via PATH")
+        }
       }
       XCTAssertFalse(manifest.description.isEmpty)
       if runCommandRequired.contains(manifest.id) {
@@ -390,7 +402,13 @@ final class PluginSystemTests: XCTestCase {
       ])
 
     for root in roots where candidateIDs.contains(root.lastPathComponent) {
-      let body = try String(contentsOf: root.appendingPathComponent("src/main.rs"))
+      // Source-level greps apply to Rust plugins only; the non-Rust
+      // polyglot plugins (emojis/bun, searchengines/zig) satisfy the same
+      // warm-startup contract through the host's runtime readiness gate
+      // (initialize must report the canonical published_sources).
+      let mainRS = root.appendingPathComponent("src/main.rs")
+      guard FileManager.default.fileExists(atPath: mainRS.path) else { continue }
+      let body = try String(contentsOf: mainRS)
       XCTAssertTrue(
         body.contains("async fn on_start"),
         "\(root.lastPathComponent) must warm manifest sources during on_start")

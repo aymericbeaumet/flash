@@ -282,6 +282,15 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn refresh_populates_the_warm_store() {
+        let harness = flash_plugin::testing::Harness::new("processes");
+        let ctx = harness.context();
+        assert!(refresh_candidates(&ctx).await, "live refresh must succeed");
+        assert!(ctx.has_locations(SOURCE_ID));
+        assert!(!ctx.warm_locations().is_empty());
+    }
+
     #[test]
     fn terminate_reports_os_errors() {
         // pid 1 (launchd) is never signalable from a user test.

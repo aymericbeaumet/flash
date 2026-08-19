@@ -56,14 +56,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59b16d394a9991c9b0fee89855daafc7c6cd341be9528ac8b45f9b7aed3d8be8"
 
 [[package]]
-name = "flash-plugin-aiproviders"
-version = "0.1.0"
-dependencies = [
- "flash_plugin",
- "tokio",
-]
-
-[[package]]
 name = "flash-plugin-calculator"
 version = "0.1.0"
 dependencies = [
@@ -101,14 +93,6 @@ version = "0.1.0"
 dependencies = [
  "flash_plugin",
  "serde",
- "tokio",
-]
-
-[[package]]
-name = "flash-plugin-emojis"
-version = "0.1.0"
-dependencies = [
- "flash_plugin",
  "tokio",
 ]
 
@@ -180,34 +164,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "flash-plugin-screenshot"
-version = "0.1.0"
-dependencies = [
- "flash_plugin",
- "tokio",
-]
-
-[[package]]
-name = "flash-plugin-searchengines"
-version = "0.1.0"
-dependencies = [
- "flash_plugin",
- "tokio",
-]
-
-[[package]]
 name = "flash-plugin-slack"
 version = "0.1.0"
 dependencies = [
  "flash_plugin",
-]
-
-[[package]]
-name = "flash-plugin-spotify"
-version = "0.1.0"
-dependencies = [
- "flash_plugin",
- "tokio",
 ]
 
 [[package]]

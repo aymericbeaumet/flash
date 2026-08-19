@@ -3,11 +3,10 @@
   "name": "Screenshot",
   "version": "0.1.0",
   "description": "Control macOS native Screenshot shortcuts without capturing pixels inside Flash.",
-  "sandbox": {
-    "exec": ["/usr/bin/osascript"],
-    "appleevents": true
-  },
-  "exec": ["./flash-plugin-screenshot"],
+  "exec": [
+    "ruby",
+    "main.rb"
+  ],
   "commands": {
     "items": [
       {

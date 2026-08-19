@@ -343,9 +343,25 @@ status, and date changes re-render from their own change sources. Command/script
 sections are stale-while-refresh and are polled only when present: the previous
 successful value stays visible until a replacement is ready.
 
-**Bundled plugins are Rust, macOS-only, and ship as compiled binaries.**
-Every official plugin under `Plugins/<id>/` is a member of the
-`Plugins/Cargo.toml` virtual workspace and depends on the local `flash_plugin`
+**Bundled plugins default to Rust, macOS-only.** Five official plugins are
+deliberately non-Rust to keep the wire protocol honestly language-agnostic
+(`docs/plugin-protocol.md`): `aiproviders` (Python), `emojis`
+(TypeScript/Bun), `screenshot` (Ruby), `spotify` (Go), and `searchengines`
+(Zig, whose `@embedFile` replaces the old build.rs codegen). New plugins use
+Rust unless there is a deliberate reason not to. Every plugin — regardless
+of language — obeys the same manifest schema, warm-catalog contract,
+latency deadlines, and payload quotas: host-side enforcement IS the
+contract; the Rust SDK's compile-time enforcement is a Rust nicety.
+**mise is the toolchain authority** (repo `mise.toml` pins
+python/ruby/bun/go/zig — never system toolchains; rust stays
+rustup-managed for its multi-target universal builds). Interpreted plugins
+declare their runtime by bare name in `exec` (`["python3", "main.py"]`);
+the host resolves it at spawn via `mise which` first (cwd-aware, so repo
+pins apply in dev), then a login-PATH walk, and logs the resolved path as
+`[plugin] runtime <name> -> <path>`.
+
+Rust plugins under `Plugins/<id>/` are members of the `Plugins/Cargo.toml`
+virtual workspace and depend on the local `flash_plugin`
 SDK crate (`flash_plugin = { path = "../_rust_flash_plugin" }`), which owns
 all the generic MessagePack scaffolding (framing,
 `initialize`/`heartbeat`/`shutdown`, structured logging, a sandboxed `run_cli`,
@@ -360,14 +376,22 @@ workspace root. A plugin's `main.rs` implements the `Plugin`
 trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
 must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
-need safely). `Scripts/build-plugins.sh [dev|release] [id…]` builds the
-plugin crates through one workspace-aware cargo invocation into a shared
-`CARGO_TARGET_DIR` (`build/plugin-target`, kept out of the watched plugin
-trees) and copies each `flash-plugin-<id>` binary next to its
-`manifest.json`. `dev` uses the `plugin-dev` cargo profile (opt-level=1,
-line-tables-only debuginfo — mildly optimized, incremental, current arch);
-`release` is an optimized universal binary (x86_64 + arm64) joined with
-`lipo`. Trailing ids restrict the build to those plugins:
+need safely; the SDK confines its own unsafe to `process.rs`/`runtime.rs`).
+The non-Rust plugins carry their own ~150–200-line `flashplugin.*` protocol
+shim (framing + a MessagePack subset + the v3 lifecycle) beside their logic;
+`Scripts/plugin-protocol-smoke.py` drives any of them through
+initialize/heartbeat/snapshot/shutdown without a host.
+`Scripts/build-plugins.sh [dev|release] [id…]` builds every compiled plugin
+by per-dir convention — `Cargo.toml` → one workspace-aware cargo
+invocation, `go.mod` → `go build`, `main.zig` → `zig build-exe` (both via
+`mise exec`) — into a shared `build/plugin-target` (kept out of the watched
+plugin trees) and stages each `flash-plugin-<id>` binary next to its
+`manifest.json` through the same sign-then-atomic-rename flow; interpreted
+plugins need no build at all. `dev` uses the `plugin-dev` cargo profile
+(opt-level=1, line-tables-only debuginfo — mildly optimized, incremental,
+current arch) and native Go/Zig builds; `release` produces optimized
+universal binaries (x86_64 + arm64) joined with `lipo` for all three.
+Trailing ids restrict the build to those plugins:
 `Scripts/build-plugins.sh dev tmux` is the single-plugin hot loop. Candidate providers declare manifest root `sources` descriptors, keep
 their locations warm in memory via `set_locations`, refresh from light host events such as
 `core:apps.changed`, `core:focus.changed`, and `core:ax.changed` when possible,
@@ -540,12 +564,14 @@ build its own (`tokio::runtime::Builder`/`block_on`); do async startup work in
 
 ```
 cargo clippy --manifest-path Plugins/Cargo.toml --workspace --no-deps \
-  --exclude flash_plugin_macros --exclude flash-plugin-searchengines \
+  --exclude flash_plugin_macros \
   -- -D clippy::disallowed_methods -D clippy::disallowed_types
 ```
 
-(`flash_plugin_macros` and `searchengines`'s `build.rs` read files at *compile*
-time, where there is no async runtime — they're excluded, not allow-listed.)
+(`flash_plugin_macros` reads `manifest.json` at *compile* time, where there
+is no async runtime — it's excluded, not allow-listed. The lint regime is
+Rust-only by construction; non-Rust plugins answer to the host's runtime
+enforcement instead.)
 
 Tests should pin these invariants in place — see
 `Plugins/tmux/src/main.rs` for the canonical pattern (`hash_candidates`,
