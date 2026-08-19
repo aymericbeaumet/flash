@@ -819,7 +819,7 @@ extension AppDelegate {
   static let normalModeFocusChangingRecaptureDelaysMs = [
     0, 1, 4, 8, 16, 30, 60, 120, 250, 500, 900, 1_400,
   ]
-  static let normalModeKeyTargetActivationDelayMs = 35
+  static var normalModeKeyTargetActivationDelayMs: Int { FlashTunables.sendKeyIntervalMs }
 
   private static let normalModeKeyModifierMask: CGEventFlags = [
     .maskCommand, .maskControl, .maskAlternate, .maskShift,

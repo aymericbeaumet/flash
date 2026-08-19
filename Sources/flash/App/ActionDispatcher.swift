@@ -229,7 +229,7 @@ enum ActionDispatcher {
     // tmux/alacritty pipeline intermittently saw "press" then "click",
     // and shift-click would silently fall through to ExpandSelection.
     // 18ms is comfortably above the threshold without being perceptible.
-    let mouseDownHoldUs: useconds_t = 18_000
+    let mouseDownHoldUs = useconds_t(max(0, FlashTunables.clickHoldMs) * 1_000)
     for pair in pairs {
       pair.down.post(tap: .cghidEventTap)
       usleep(mouseDownHoldUs)

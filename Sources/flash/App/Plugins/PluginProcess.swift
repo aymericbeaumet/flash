@@ -1226,7 +1226,9 @@ final class PluginProcess {
     let killWork = DispatchWorkItem {
       if process.isRunning { process.terminate() }
     }
-    killer.asyncAfter(deadline: .now() + .seconds(120), execute: killWork)
+    killer.asyncAfter(
+      deadline: .now() + .seconds(FlashTunables.pluginInstallTimeoutSeconds),
+      execute: killWork)
     process.waitUntilExit()
     killWork.cancel()
     let stdoutData = out.fileHandleForReading.readDataToEndOfFile()
@@ -1350,7 +1352,7 @@ final class PluginProcess {
   static let maxCandidateMetadataValueBytes = 64 * 1024
   static let maxCandidateEffectBytes = 64 * 1024
   static let maxQueryFieldBytes = 16 * 1024
-  static let startupTimeoutSeconds = 15
+  static var startupTimeoutSeconds: Int { FlashTunables.pluginStartupTimeoutSeconds }
   private static let startupTimeout = DispatchTimeInterval.seconds(startupTimeoutSeconds)
 
   static func acceptsProtocolVersion(_ response: [String: Any]?) -> Bool {

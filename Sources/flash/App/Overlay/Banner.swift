@@ -10,7 +10,8 @@ extension OverlayPanel {
   /// Show a transient banner centered on the focused screen. Multi-line strings (with
   /// `\n`) are rendered as wrapped text. Used to signal edge cases (no targets,
   /// Accessibility denied) — staying within the "transparent hint overlay only" UI rule.
-  func displayBanner(_ text: String, durationMs: Int? = 700) {
+  func displayBanner(_ text: String, durationMs: Int? = nil) {
+    let durationMs = durationMs ?? FlashTunables.bannerDurationMs
     transientDisplayToken &+= 1
     let myToken = transientDisplayToken
 
@@ -75,7 +76,7 @@ extension OverlayPanel {
     hintLayers.append(chip)
     labelLayers.append(label)
 
-    if let durationMs {
+    if durationMs > 0 {
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(durationMs)) { [weak self] in
         // Only hide if a newer banner hasn't replaced us — otherwise we'd hide it early.
         guard let self, self.transientDisplayToken == myToken else { return }

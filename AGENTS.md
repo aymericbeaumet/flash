@@ -257,6 +257,20 @@ Keys:
 | `statusbar.template`               | string         | `"#[align=left]#{mode}#[align=right]#{date}"` |
 | `statusbar.monitor`                | string (`"all"` \| `"primary"`) | `"all"`  |
 | `statusbar.interval`               | int (seconds, `0` = poll off) | `5`     |
+| `statusbar.font_size`              | float (8..32)  | `13`                 |
+| `statusbar.command_timeout`        | float (1..60 s) | `6.0`               |
+| `statusbar.click.<name>`           | URL string or action array | battery pane |
+| `overlay.alert_duration`           | float (0.2..30 s) | `2.0`             |
+| `overlay.banner_duration_ms`       | int (100..10000) | `700`              |
+| `mode.scroll_step`                 | int (10..500 px) | `60`               |
+| `mode.scroll_page_fraction`        | float (0.05..1) | `0.5`               |
+| `mode.click_hold_ms`               | int (0..200)   | `18`                 |
+| `mode.send_key_interval_ms`        | int (0..500)   | `35`                 |
+| `flashlight.frecency_half_life_days` | float (0.5..365) | `14.0`           |
+| `flashlight.frecency_max_boost`    | int (0..10000, `0` = off) | `600`     |
+| `flashlight.snapshot_timeout_ms`   | int (20..2000) | `150`                |
+| `plugins.install_timeout`          | int (10..1800 s) | `120`              |
+| `plugins.startup_timeout`          | int (1..120 s) | `15`                 |
 | `flashlight.suggestion_count`      | int            | `10`                 |
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |

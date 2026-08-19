@@ -250,9 +250,11 @@ extension NormalModeDispatcher {
     case .down:
       return ScrollIntent(axis: .vertical, deltaFraction: 0.08, edge: nil)
     case .halfPageUp:
-      return ScrollIntent(axis: .vertical, deltaFraction: -0.5, edge: nil)
+      return ScrollIntent(
+        axis: .vertical, deltaFraction: -FlashTunables.scrollPageFraction, edge: nil)
     case .halfPageDown:
-      return ScrollIntent(axis: .vertical, deltaFraction: 0.5, edge: nil)
+      return ScrollIntent(
+        axis: .vertical, deltaFraction: FlashTunables.scrollPageFraction, edge: nil)
     case .top:
       return ScrollIntent(axis: .vertical, deltaFraction: nil, edge: .minimum)
     case .bottom:

@@ -434,7 +434,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       FlashProcessEnvironment.shared.refresh()
     }
     config = ConfigLoader.load()
-    frecencyStore = FrecencyStore()
+    FlashTunables.apply(config)
+    frecencyStore = FrecencyStore(
+      configuration: FrecencyStore.Configuration(
+        halfLifeDays: config.flashlight.frecencyHalfLifeDays,
+        maxBoost: config.flashlight.frecencyMaxBoost))
     let manager = pluginManager
     registry = SourceRegistry(
       openConfig: config.open,

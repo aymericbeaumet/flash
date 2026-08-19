@@ -712,7 +712,9 @@ extension OverlayPanel {
   }
 
   static func statusBarFontSize(overlayFontSize _: CGFloat) -> CGFloat {
-    13
+    // `[statusbar] font_size`; the overlay hint size never applied here
+    // (the parameter survives only for call-site stability).
+    CGFloat(FlashTunables.statusBarFontSize)
   }
 
   static func modeIndicatorFontSize(statusBarFontSize: CGFloat) -> CGFloat {

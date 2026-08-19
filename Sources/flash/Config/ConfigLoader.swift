@@ -434,15 +434,23 @@ enum ConfigLoader {
       "app": ["menu_bar_icon", "autostart"],
       "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
       "open": ["ignored_apps", "app_directories"],
-      "plugins": ["watching_enabled", "disabled", "third_party"],
-      "statusbar": ["enabled", "template", "monitor", "interval", "click"],
-      "flashlight": ["suggestion_count", "precedence_alive_bonus", "aliases", "precedence"],
-      "mode": ["labels", "sequence_timeout_ms", "normal", "all", "insert"],
+      "plugins": [
+        "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
+      ],
+      "statusbar": ["enabled", "template", "monitor", "interval", "click", "font_size", "command_timeout"],
+      "flashlight": [
+        "suggestion_count", "precedence_alive_bonus", "aliases", "precedence",
+        "frecency_half_life_days", "frecency_max_boost", "snapshot_timeout_ms",
+      ],
+      "mode": [
+        "labels", "sequence_timeout_ms", "normal", "all", "insert", "scroll_step",
+        "scroll_page_fraction", "click_hold_ms", "send_key_interval_ms",
+      ],
       "overlay": [
         "font_size", "hint_fg", "hint_bg_top", "hint_bg_bottom", "hint_border",
         "important_hint_fg", "important_hint_bg_top", "important_hint_bg_bottom",
         "important_hint_border", "window_border", "window_border_size",
-        "window_border_color",
+        "window_border_color", "alert_duration", "banner_duration_ms",
       ],
       "debug": [
         "show_hints_bounds", "hints_bounds_bg", "hints_bounds_fg", "log_level",
@@ -624,6 +632,20 @@ enum ConfigLoader {
     ) { value, config in
       config.plugins.watchingEnabled = value
     }
+    applyInt(
+      table["install_timeout"], path: ["plugins", "install_timeout"],
+      message: "plugins.install_timeout must be an integer between 10 and 1800 (seconds)",
+      locations: locations, into: &config, validate: { (10...1_800).contains($0) },
+      assign: { value, config in
+        config.plugins.installTimeoutSeconds = value
+      })
+    applyInt(
+      table["startup_timeout"], path: ["plugins", "startup_timeout"],
+      message: "plugins.startup_timeout must be an integer between 1 and 120 (seconds)",
+      locations: locations, into: &config, validate: { (1...120).contains($0) },
+      assign: { value, config in
+        config.plugins.startupTimeoutSeconds = value
+      })
 
     let disabledPath = ["plugins", "disabled"]
     // A malformed `disabled` must not abort the rest of the section (it
@@ -792,6 +814,20 @@ enum ConfigLoader {
       assign: { value, config in
         config.statusBar.refreshIntervalSeconds = Double(value)
       })
+    applyDouble(
+      table["font_size"], path: ["statusbar", "font_size"],
+      message: "statusbar.font_size must be a number between 8 and 32 (points)",
+      locations: locations, into: &config, validate: { (8.0...32.0).contains($0) },
+      assign: { value, config in
+        config.statusBar.fontSize = value
+      })
+    applyDouble(
+      table["command_timeout"], path: ["statusbar", "command_timeout"],
+      message: "statusbar.command_timeout must be a number between 1 and 60 (seconds)",
+      locations: locations, into: &config, validate: { (1.0...60.0).contains($0) },
+      assign: { value, config in
+        config.statusBar.commandTimeoutSeconds = value
+      })
     if let click = sectionTable(
       table["click"], name: "statusbar.click", locations: locations, into: &config)
     {
@@ -841,6 +877,27 @@ enum ConfigLoader {
       validate: { (0...Self.precedenceBound).contains($0) },
       assign: { value, config in
         config.flashlight.precedenceAliveBonus = value
+      })
+    applyDouble(
+      table["frecency_half_life_days"], path: ["flashlight", "frecency_half_life_days"],
+      message: "flashlight.frecency_half_life_days must be a number between 0.5 and 365",
+      locations: locations, into: &config, validate: { (0.5...365.0).contains($0) },
+      assign: { value, config in
+        config.flashlight.frecencyHalfLifeDays = value
+      })
+    applyInt(
+      table["frecency_max_boost"], path: ["flashlight", "frecency_max_boost"],
+      message: "flashlight.frecency_max_boost must be an integer between 0 and 10000 (0 = off)",
+      locations: locations, into: &config, validate: { (0...10_000).contains($0) },
+      assign: { value, config in
+        config.flashlight.frecencyMaxBoost = value
+      })
+    applyInt(
+      table["snapshot_timeout_ms"], path: ["flashlight", "snapshot_timeout_ms"],
+      message: "flashlight.snapshot_timeout_ms must be an integer between 20 and 2000 (ms)",
+      locations: locations, into: &config, validate: { (20...2_000).contains($0) },
+      assign: { value, config in
+        config.flashlight.snapshotTimeoutMs = value
       })
 
     if let aliases = sectionTable(
@@ -935,6 +992,34 @@ enum ConfigLoader {
       into: &config, validate: { (0...10_000).contains($0) },
       assign: { value, config in
         config.mode.sequenceTimeoutMs = value
+      })
+    applyInt(
+      table["scroll_step"], path: ["mode", "scroll_step"],
+      message: "mode.scroll_step must be an integer between 10 and 500 (pixels)",
+      locations: locations, into: &config, validate: { (10...500).contains($0) },
+      assign: { value, config in
+        config.mode.scrollStep = value
+      })
+    applyDouble(
+      table["scroll_page_fraction"], path: ["mode", "scroll_page_fraction"],
+      message: "mode.scroll_page_fraction must be a number between 0.05 and 1.0",
+      locations: locations, into: &config, validate: { (0.05...1.0).contains($0) },
+      assign: { value, config in
+        config.mode.scrollPageFraction = value
+      })
+    applyInt(
+      table["click_hold_ms"], path: ["mode", "click_hold_ms"],
+      message: "mode.click_hold_ms must be an integer between 0 and 200 (ms)",
+      locations: locations, into: &config, validate: { (0...200).contains($0) },
+      assign: { value, config in
+        config.mode.clickHoldMs = value
+      })
+    applyInt(
+      table["send_key_interval_ms"], path: ["mode", "send_key_interval_ms"],
+      message: "mode.send_key_interval_ms must be an integer between 0 and 500 (ms)",
+      locations: locations, into: &config, validate: { (0...500).contains($0) },
+      assign: { value, config in
+        config.mode.sendKeyIntervalMs = value
       })
 
     if let normal = sectionTable(
@@ -1134,6 +1219,20 @@ enum ConfigLoader {
       locations: locations, into: &config, validate: { $0.isEmpty || isValidHexColor($0) },
       assign: { value, config in
         config.overlay.windowBorderColor = value
+      })
+    applyDouble(
+      table["alert_duration"], path: ["overlay", "alert_duration"],
+      message: "overlay.alert_duration must be a number between 0.2 and 30 (seconds)",
+      locations: locations, into: &config, validate: { (0.2...30.0).contains($0) },
+      assign: { value, config in
+        config.overlay.alertDuration = value
+      })
+    applyInt(
+      table["banner_duration_ms"], path: ["overlay", "banner_duration_ms"],
+      message: "overlay.banner_duration_ms must be an integer between 100 and 10000 (ms)",
+      locations: locations, into: &config, validate: { (100...10_000).contains($0) },
+      assign: { value, config in
+        config.overlay.bannerDurationMs = value
       })
   }
 
@@ -1440,6 +1539,7 @@ enum ConfigLoader {
       normalizedTemplate,
       path: "template",
       sourceURL: sourceURL,
+      commandTimeout: config.statusBar.commandTimeoutSeconds,
       into: &config)
     config.statusBar.template = FlashStatusBarTemplate(
       template: normalizedTemplate,
@@ -1450,6 +1550,7 @@ enum ConfigLoader {
     _ raw: String,
     path: String,
     sourceURL: URL?,
+    commandTimeout: TimeInterval = 6,
     into config: inout Config
   ) -> [FlashStatusBarTemplateVariable] {
     var variables: [FlashStatusBarTemplateVariable] = []
@@ -1472,7 +1573,9 @@ enum ConfigLoader {
     // cycle sources must be discovered wherever they sit so their sections
     // get scheduled.
     func registerLeaf(_ token: String, rawBody: String) {
-      if let source = parseStatusBarTemplateSource(token, sourceURL: sourceURL) {
+      if let source = parseStatusBarTemplateSource(
+        token, sourceURL: sourceURL, commandTimeout: commandTimeout)
+      {
         appendToken(token, source: source)
       } else {
         config.addDiagnostic(
@@ -1587,7 +1690,8 @@ enum ConfigLoader {
         let aliasIndex = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
         aliasIndex < raw.endIndex,
         let token = FlashStatusBarTemplateEngine.tmuxShortFormatToken(for: raw[aliasIndex]),
-        let source = parseStatusBarTemplateSource(token, sourceURL: sourceURL)
+        let source = parseStatusBarTemplateSource(
+          token, sourceURL: sourceURL, commandTimeout: commandTimeout)
       {
         appendToken(token, source: source)
         index = raw.index(after: aliasIndex)
@@ -1605,7 +1709,8 @@ enum ConfigLoader {
 
   private static func parseStatusBarTemplateSource(
     _ token: String,
-    sourceURL: URL?
+    sourceURL: URL?,
+    commandTimeout: TimeInterval = 6
   ) -> FlashStatusBarSource? {
     let trimmed = token.trimmed
     guard !trimmed.isEmpty else { return nil }
@@ -1659,9 +1764,11 @@ enum ConfigLoader {
       let resolved = resolveCommandArgument(scriptPath, sourceURL: sourceURL)
       let args = Array(parts.dropFirst())
       if args.isEmpty {
-        return .script(resolved, refreshSeconds: refreshSeconds)
+        return .script(
+          resolved, timeoutSeconds: commandTimeout, refreshSeconds: refreshSeconds)
       }
-      return .scriptWithArgs(resolved, args: args, refreshSeconds: refreshSeconds)
+      return .scriptWithArgs(
+        resolved, args: args, timeoutSeconds: commandTimeout, refreshSeconds: refreshSeconds)
     }
 
     switch kindName {
@@ -1684,7 +1791,7 @@ enum ConfigLoader {
       return .command(command)
     case "command":
       guard let refresh = parsedRefreshSeconds(kindArg) else { return nil }
-      return .command(.shell(body, refreshSeconds: refresh))
+      return .command(.shell(body, timeoutSeconds: commandTimeout, refreshSeconds: refresh))
     case "cycle":
       // `#{cycle:path}` rotates its output lines every 60 s; `#{cycle=R:path}`
       // every R seconds. `#{cycle=R/N:path}` additionally re-runs the script

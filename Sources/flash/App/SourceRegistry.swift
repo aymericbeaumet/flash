@@ -205,7 +205,7 @@ final class SourceRegistry {
   /// bounded timeout expires. Completion always runs on the main queue.
   func snapshotCandidates(
     scope: CandidateScope,
-    timeoutMs: Int = 150,
+    timeoutMs: Int = FlashTunables.flashlightSnapshotTimeoutMs,
     completion: @escaping ([Candidate]) -> Void
   ) {
     guard Thread.isMainThread else {
@@ -237,7 +237,7 @@ final class SourceRegistry {
   /// change.
   func locationSnapshotCandidates(
     scope: CandidateScope,
-    timeoutMs: Int = 150,
+    timeoutMs: Int = FlashTunables.flashlightSnapshotTimeoutMs,
     completion: @escaping ([Candidate]) -> Void
   ) {
     guard Thread.isMainThread else {
@@ -544,7 +544,7 @@ final class SourceRegistry {
   func resolveCandidate(
     matching target: String,
     sourceID: String? = nil,
-    timeoutMs: Int = 150,
+    timeoutMs: Int = FlashTunables.flashlightSnapshotTimeoutMs,
     completion: @escaping (Candidate?) -> Void
   ) {
     guard Thread.isMainThread else {

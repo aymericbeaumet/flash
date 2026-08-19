@@ -27,7 +27,7 @@ extension OverlayPanel {
   private static let alertTextSize: CGFloat = 27
   private static let alertRadius: CGFloat = 27
   private static let alertStrokeWidth: CGFloat = 2
-  private static let alertDisplayDuration: TimeInterval = 2.0
+  private static var alertDisplayDuration: TimeInterval { FlashTunables.alertDuration }
   private static let alertTextGutter: CGFloat = 10
 
   /// Hammerspoon-style transient centered alert for the `alert_show` verb.

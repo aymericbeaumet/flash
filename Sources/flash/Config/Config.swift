@@ -174,12 +174,27 @@ struct Config {
     /// Stroke color (`#RRGGBB` / `#RRGGBBAA`), applied to every mode.
     /// Empty (default) keeps the per-mode Nord colors.
     var windowBorderColor: String = ""
+    /// Seconds an `alert_show` toast stays up when the call passes no
+    /// explicit --duration.
+    var alertDuration: Double = 2.0
+    /// Milliseconds a transient banner (command output, "Copied: …")
+    /// stays up.
+    var bannerDurationMs: Int = 700
   }
   /// Tunables for the `:flashlight` command-line surface.
   struct Flashlight {
     /// Number of command-bar suggestions shown for `:flashlight`,
     /// `:emojis`, source filters, bangs, and command completions.
     var suggestionCount: Int = 10
+    /// Half-life in days of the frecency decay — the sticky-vs-fresh dial.
+    /// Applied when the store is (re)constructed on load/reload.
+    var frecencyHalfLifeDays: Double = 14
+    /// Cap on the frecency boost added to the ranker score; 0 disables
+    /// frecency outright.
+    var frecencyMaxBoost: Int = 600
+    /// Deadline for the aggregate warm-plugin catalog snapshot feeding the
+    /// flashlight pool. A giant browser session may need more room.
+    var snapshotTimeoutMs: Int = 150
     /// Word-substitution aliases. The key is the exact whitespace-
     /// delimited token the user types (any leading sigil — `!`, `@`,
     /// or none — is part of the key, not implicit). The value is
@@ -279,6 +294,12 @@ struct Config {
     /// disable hot-reload — useful if a plugin keeps a noisy log
     /// somewhere in its tree that would otherwise restart-loop it.
     var watchingEnabled: Bool = true
+    /// Hard kill for a third-party plugin install script (a cold cargo
+    /// build on a slow machine can legitimately take minutes).
+    var installTimeoutSeconds: Int = 120
+    /// Handshake deadline: a plugin that warms a big catalog before
+    /// answering initialize may need more than the default.
+    var startupTimeoutSeconds: Int = 15
     /// Per-plugin user settings from `[plugin.<id>]` tables. Delivered to
     /// each plugin as a JSON object via `FLASH_PLUGIN_CONFIG`. Keyed by
     /// plugin id, then by setting name.
@@ -300,6 +321,11 @@ struct Config {
     /// Which monitors the bar renders on. `[statusbar] monitor = "primary"`
     /// limits it to the main display; `"all"` (default) covers every screen.
     var monitor: Monitor = .all
+    /// Bar text size in points (the mode pill uses the same size).
+    var fontSize: Double = 13
+    /// Timeout in seconds for one command/script/cycle subprocess run;
+    /// SIGTERM then SIGKILL past it, keeping the previous value.
+    var commandTimeoutSeconds: Double = 6
     /// Poll cadence in seconds for command/script/cycle template sections —
     /// tmux's `status-interval` analog (`[statusbar] interval`). A source
     /// can override it inline (`#{script=30:…}`, `#{cycle=60/300:…}`);
@@ -385,6 +411,16 @@ struct Config {
     /// Vim's `timeoutlen`. Lower → faster commits, more two-key
     /// collisions; higher → slower commits, fewer surprises.
     var sequenceTimeoutMs: Int = Self.defaultSequenceTimeoutMs
+    /// Pixels per h/j/k/l (and ctrl+e/ctrl+y) scroll step.
+    var scrollStep: Int = 60
+    /// Fraction of the scrollable range moved by d/u (Vim's `scroll`).
+    var scrollPageFraction: Double = 0.5
+    /// Mouse-down→up hold on synthesized clicks; some apps need a
+    /// non-zero press to register.
+    var clickHoldMs: Int = 18
+    /// Delay between chords of a multi-key send_key — terminals and
+    /// remote-desktop apps drop chords sent back-to-back.
+    var sendKeyIntervalMs: Int = 35
     /// Matches Neovim's `timeoutlen` default so multi-key sequences feel the
     /// same as in the editor users already have muscle memory for.
     static let defaultSequenceTimeoutMs = 1000

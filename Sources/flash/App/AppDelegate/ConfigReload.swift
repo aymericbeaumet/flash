@@ -105,7 +105,20 @@ extension AppDelegate {
       FlashProcessEnvironment.shared.refresh()
     }
     let cfg = ConfigLoader.load()
+    // Rebuild the frecency store only when its tuning actually changed —
+    // reconstruction reloads the on-disk snapshot, which is fine but not
+    // worth doing on every unrelated reload.
+    let frecencyTuningChanged =
+      cfg.flashlight.frecencyHalfLifeDays != config.flashlight.frecencyHalfLifeDays
+      || cfg.flashlight.frecencyMaxBoost != config.flashlight.frecencyMaxBoost
     config = cfg
+    FlashTunables.apply(cfg)
+    if frecencyTuningChanged {
+      frecencyStore = FrecencyStore(
+        configuration: FrecencyStore.Configuration(
+          halfLifeDays: cfg.flashlight.frecencyHalfLifeDays,
+          maxBoost: cfg.flashlight.frecencyMaxBoost))
+    }
     // Apply log settings immediately — they need to be live for
     // any warning the rest of `reloadConfig` might emit (e.g.
     // unparsable native mappings logged by `mappings.apply`).

@@ -73,6 +73,11 @@ window_border_size = 0
 # Stroke color (#RRGGBB or #RRGGBBAA), applied to every mode. Empty (the
 # default) keeps the per-mode colors above.
 window_border_color = ""
+# Seconds an alert_show toast stays up when the call passes no explicit
+# --duration.
+alert_duration = 2.0
+# Milliseconds a transient banner (command output, "Copied: ...") stays up.
+banner_duration_ms = 700
 
 [open]
 # App candidates hidden from :open and the `app_open name=...` verb.
@@ -113,6 +118,13 @@ third_party = []
 # hot-reload across every plugin.
 watching_enabled = true
 
+# Hard kill for a third-party plugin's install script — a cold cargo
+# build on a slow machine can legitimately take minutes.
+install_timeout = 120
+# Handshake deadline: a plugin that warms a big catalog before answering
+# initialize may need more room.
+startup_timeout = 15
+
 # Per-plugin settings live in [plugin.<id>] tables (ids are lowercase
 # [a-z0-9._-]). Values may be strings, numbers, booleans, or string
 # arrays; each plugin documents its own keys. Two keys are host-reserved:
@@ -144,6 +156,11 @@ monitor = "all"
 # faster is waste. 0 disables periodic re-runs (sections run once when the
 # template loads).
 interval = 5
+# Bar text size in points (the mode pill uses the same size).
+font_size = 13
+# Timeout in seconds for one command/script/cycle subprocess run; past it
+# the process gets SIGTERM then SIGKILL and the previous value is kept.
+command_timeout = 6.0
 # Single template string for the status bar. Use tmux-style alignment
 # markers to switch which region subsequent content lands in:
 #
@@ -249,6 +266,14 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
 
 [flashlight]
+# Frecency (recency-weighted frequency) ranking boost. half_life_days is
+# the sticky-vs-fresh dial: past opens fade with this half-life.
+# max_boost caps the score bonus (0 disables frecency outright).
+frecency_half_life_days = 14.0
+frecency_max_boost = 600
+# Deadline for the aggregate warm-plugin catalog snapshot feeding the
+# flashlight pool; a giant browser session may need more room.
+snapshot_timeout_ms = 150
 # Number of suggestion rows shown below the command bar.
 suggestion_count = 10
 # The default flashlight pool is intentionally location-only: apps, tabs,
@@ -282,6 +307,16 @@ labels = { normal = "NORMAL", insert = "INSERT", command = "COMMAND" }
 # higher = slower commit but fewer surprises. Matches Neovim's
 # `timeoutlen` default of 1000.
 sequence_timeout_ms = 1000
+# Pixels per h/j/k/l (and ctrl+e/ctrl+y) scroll step.
+scroll_step = 60
+# Fraction of the scrollable range moved by d/u (Vim's `scroll` option).
+scroll_page_fraction = 0.5
+# Mouse-down-to-up hold on synthesized clicks (ms); some apps need a
+# non-zero press to register.
+click_hold_ms = 18
+# Delay between chords of a multi-key send_key (ms) — terminals and
+# remote-desktop apps drop chords sent back-to-back.
+send_key_interval_ms = 35
 
 [mode.all.mappings]
 # Modified-key mappings available in every mode, including command-line and

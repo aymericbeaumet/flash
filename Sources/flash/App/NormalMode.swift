@@ -490,7 +490,7 @@ enum NormalModeInterpreter {
 }
 
 enum NormalModeDispatcher {
-  static let scrollStepPixels: Int32 = 60
+  static var scrollStepPixels: Int32 { FlashTunables.scrollStepPixels }
 
   enum ScrollKind: Hashable {
     case left
