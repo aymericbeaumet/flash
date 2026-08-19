@@ -36,9 +36,26 @@ final class StatusItemController: NSObject {
   }
 
   @objc private func showAbout() {
+    // Credits carry the assemble-time commit (FlashGitCommit, stamped by
+    // _common.sh; "-dirty" marks uncommitted dev builds) and a clickable
+    // repo link.
+    let commit =
+      Bundle.main.object(forInfoDictionaryKey: "FlashGitCommit") as? String ?? "unknown"
+    let credits = NSMutableAttributedString(
+      string: "commit \(commit)\n",
+      attributes: [
+        .font: NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+      ])
+    credits.append(
+      NSAttributedString(
+        string: "github.com/aymericbeaumet/flash",
+        attributes: [
+          .link: URL(string: "https://github.com/aymericbeaumet/flash")!,
+          .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+        ]))
     // LSUIElement apps don't front panels unless activated first.
     NSApp.activate(ignoringOtherApps: true)
-    NSApp.orderFrontStandardAboutPanel(nil)
+    NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
   }
 
   @objc private func openConfiguration() {

@@ -203,6 +203,17 @@ assemble_app() {
   fi
   cp "$PROJECT_DIR/Resources/Info.plist" "$STAGING_PATH/Contents/Info.plist"
   cp "$PROJECT_DIR/Resources/AppIcon.icns" "$STAGING_PATH/Contents/Resources/AppIcon.icns"
+  # Stamp the exact commit this bundle was assembled from (About panel
+  # reads FlashGitCommit); "-dirty" marks uncommitted work in dev builds.
+  local git_commit
+  git_commit="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  if ! git -C "$PROJECT_DIR" diff --quiet 2>/dev/null; then
+    git_commit="$git_commit-dirty"
+  fi
+  /usr/libexec/PlistBuddy -c "Delete :FlashGitCommit" \
+    "$STAGING_PATH/Contents/Info.plist" >/dev/null 2>&1 || true
+  /usr/libexec/PlistBuddy -c "Add :FlashGitCommit string $git_commit" \
+    "$STAGING_PATH/Contents/Info.plist"
   echo "APPL????" >"$STAGING_PATH/Contents/PkgInfo"
 
   if [[ "$mode" == "release" ]]; then
