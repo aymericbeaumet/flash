@@ -113,6 +113,21 @@ third_party = []
 # hot-reload across every plugin.
 watching_enabled = true
 
+# Per-plugin settings live in [plugin.<id>] tables (ids are lowercase
+# [a-z0-9._-]). Values may be strings, numbers, booleans, or string
+# arrays; each plugin documents its own keys. Two keys are host-reserved:
+#
+#   sandbox = false        # fail-open kill switch: run this plugin
+#                          # UNSANDBOXED (logged loudly; last resort)
+#   exec_paths = ["/opt/homebrew/bin/spotify_player"]
+#                          # extra absolute paths the plugin may exec,
+#                          # for user-installed tools the manifest can't
+#                          # know the location of
+#
+# Example:
+# [plugin.tmux]
+# ssh_hosts = ["dev.example.com"]
+
 [statusbar]
 # Show the persistent top status bar. This switch alone controls the bar's
 # visibility — it is independent of advanced mode (the enter_normal_mode

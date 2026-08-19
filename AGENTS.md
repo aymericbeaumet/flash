@@ -242,6 +242,9 @@ Keys:
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
 | `hints.mouse_grid_steps`           | int (2..6)     | `3`                  |
 | `hints.mouse_grid_opacity`         | float (0..1)   | `0.5`                |
+| `overlay.font_size`                | float (1..200) | `12`                 |
+| `overlay.hint_fg` / `hint_bg_top` / `hint_bg_bottom` / `hint_border` | hex color | chip yellows |
+| `overlay.important_hint_fg` / `…_bg_top` / `…_bg_bottom` / `…_border` | hex color | accent reds |
 | `overlay.window_border`            | bool           | `true`               |
 | `overlay.window_border_size`       | float (0..20, `0` = per-mode) | `0`   |
 | `overlay.window_border_color`      | hex color (`""` = per-mode) | `""`    |
