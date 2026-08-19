@@ -39,9 +39,10 @@ NDJSON on stdin/stdout: one JSON object per newline-terminated line, no
 envelope beyond `id`/`method`/`params`/`result` (`id`+`method` = request,
 `id` alone = response, `method` alone = notification; host and plugin id
 counters are independent and may overlap). Host requests go to plugin stdin;
-responses and plugin-initiated frames go to stdout. stderr is diagnostics only — lines are logged but never treated as
-plugin failure (interpreted runtimes emit warnings unprompted); use
-`flash.log` for structured logging. Frames are capped at 10 MiB.
+responses and plugin-initiated frames go to stdout. stderr is diagnostics
+only — lines are logged but never treated as plugin failure (interpreted
+runtimes emit warnings unprompted); use `flash.log` for structured logging.
+Lines are capped at 10 MiB.
 Plugin log lines travel as `flash.log` notifications and are recorded with
 `source = "plugin:<id>"`.
 
@@ -135,8 +136,9 @@ priorities, routing fields, and unknown keys are rejected — bounded to
 16 answers / 256 KiB with 16-KiB fields. In both shapes `effect` is exactly
 `{ "type": "copy_text", "text": "..." }` and runs only after explicit
 selection. Every bound rejects the complete payload atomically; nothing is
-silently truncated. One malformed row rejects the whole snapshot and the host
-keeps the last-good one.
+silently truncated. One malformed row rejects the whole snapshot: the host
+serves nothing for that pull (the Rust SDK preserves its last-good store
+locally, so the next pull can still answer).
 
 Latency and failure logs are content-free: counts, stages, elapsed
 milliseconds, method names — never query text, candidate data, clipboard

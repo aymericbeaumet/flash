@@ -417,10 +417,10 @@ pins apply in dev), then a login-PATH walk, and logs the resolved path as
 Rust plugins under `Plugins/<id>/` are members of the `Plugins/Cargo.toml`
 virtual workspace and depend on the local `flash_plugin`
 SDK crate (`flash_plugin = { path = "../_rust_flash_plugin" }`), which owns
-all the generic MessagePack scaffolding (framing,
+all the generic protocol scaffolding (JSON-lines framing,
 `initialize`/`heartbeat`/`shutdown`, structured logging, a sandboxed `run_cli`,
 background tasks/timers, and the tokio runtime) and carries **no Flash
-business concepts**. Shared dep versions (serde, tokio, rmp-serde, objc2,
+business concepts**. Shared dep versions (serde, tokio, objc2,
 …) live in `[workspace.dependencies]` and each crate inherits them via
 `{ workspace = true }`, so every plugin resolves the same transitive graph
 through a single `Plugins/Cargo.lock`. Per-crate Cargo.tomls keep only their
@@ -431,8 +431,9 @@ trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
 must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
 need safely; the SDK confines its own unsafe to `process.rs`/`runtime.rs`).
-The non-Rust plugins carry their own ~150–200-line `flashplugin.*` protocol
-shim (framing + a MessagePack subset + the v3 lifecycle) beside their logic;
+The non-Rust plugins carry their own ~100–200-line `flashplugin.*` protocol
+shim (JSON-lines framing + the v1 lifecycle, a call_host correlation map,
+and a FLASH_PLUGIN_CONFIG accessor) beside their logic;
 `Scripts/plugin-protocol-smoke.py` drives any of them through
 initialize/heartbeat/snapshot/shutdown without a host.
 `Scripts/build-plugins.sh [dev|release] [id…]` builds every compiled plugin
@@ -817,7 +818,7 @@ periphery scan --disable-update-check
 
 `periphery scan` builds the SPM package with an index store and reports unused functions / properties / initializers / types / enums / imports across every target (tests included, so test-only helpers are *not* flagged). `.periphery.yml` pins the config.
 
-It cannot see cross-language usage: **FlashCore / FlashProviders public API consumed by Rust plugins over the MessagePack IPC has no Swift call site and is reported as unused — it is not dead.** Review every `FlashCore` / `FlashProviders` finding against the plugin protocol before deleting. The app layer (`Sources/flash`) has no external consumers, so its findings are safe to remove.
+It cannot see cross-language usage: **FlashCore / FlashProviders public API consumed by Rust plugins over the plugin IPC has no Swift call site and is reported as unused — it is not dead.** Review every `FlashCore` / `FlashProviders` finding against the plugin protocol before deleting. The app layer (`Sources/flash`) has no external consumers, so its findings are safe to remove.
 
 ### Rust — built-in `dead_code` lint
 

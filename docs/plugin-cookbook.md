@@ -31,7 +31,7 @@ section exists to keep the wire protocol honestly language-agnostic.
 ## Polyglot (the protocol is the boundary)
 
 Six official plugins are deliberately non-Rust; each carries its own
-~150–200-line `flashplugin.*` shim (framing + MessagePack subset + v3
+~100–200-line `flashplugin.*` shim (JSON-lines framing + v1
 lifecycle) beside logic comparable in size to a Rust original:
 
 - **`Plugins/aiproviders` — Python** (mise-pinned `python3`): `!chatgpt`-

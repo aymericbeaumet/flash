@@ -110,7 +110,7 @@ mod tests {
 ```
 
 `Harness::with_config` injects a `[plugin.<id>]` settings object;
-`drain_control()` / `drain_telemetry()` return the emitted MessagePack frames
+`drain_control()` / `drain_telemetry()` return the emitted JSON frames
 decoded to JSON values; `set_running_applications` seeds the app snapshot.
 Add `tokio = { workspace = true }` to `[dev-dependencies]` for async tests.
 

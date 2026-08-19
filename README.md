@@ -185,7 +185,7 @@ Karabiner-Elements users can call `flash mouse_target` from a `shell_command` ma
 - The core never reads screen pixels, runs OCR, or stores or logs keystrokes.
 - Keyboard capture is active only while normal mode or a hint overlay owns input; modified global mappings use macOS hotkeys.
 - Hint coverage follows what an app exposes through Accessibility. The bundled tmux plugin fills the main gap for terminal panes.
-- Plugins are child processes owned by flash and communicate only through length-prefixed MessagePack over stdin/stdout.
+- Plugins are child processes owned by flash and communicate only through NDJSON over stdin/stdout (one JSON object per newline-terminated line).
 
 ## Develop
 
