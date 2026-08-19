@@ -1473,6 +1473,7 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.statusBar.refreshIntervalSeconds, d.statusBar.refreshIntervalSeconds)
     XCTAssertEqual(c.statusBar.fontSize, d.statusBar.fontSize)
     XCTAssertEqual(c.statusBar.commandTimeoutSeconds, d.statusBar.commandTimeoutSeconds)
+    XCTAssertEqual(c.statusBar.notchMargin, d.statusBar.notchMargin)
     XCTAssertEqual(c.statusBar.clickActions, d.statusBar.clickActions)
     XCTAssertEqual(c.overlay.alertDuration, d.overlay.alertDuration)
     XCTAssertEqual(c.overlay.bannerDurationMs, d.overlay.bannerDurationMs)

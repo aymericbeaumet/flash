@@ -161,6 +161,9 @@ font_size = 13
 # Timeout in seconds for one command/script/cycle subprocess run; past it
 # the process gets SIGTERM then SIGKILL and the previous value is kept.
 command_timeout = 6.0
+# Points kept clear on each side of a notch (camera housing). The centre
+# region hides entirely on notched screens.
+notch_margin = 0
 # Single template string for the status bar. Use tmux-style alignment
 # markers to switch which region subsequent content lands in:
 #

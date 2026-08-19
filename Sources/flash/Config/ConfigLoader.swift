@@ -437,7 +437,10 @@ enum ConfigLoader {
       "plugins": [
         "watching_enabled", "disabled", "third_party", "install_timeout", "startup_timeout",
       ],
-      "statusbar": ["enabled", "template", "monitor", "interval", "click", "font_size", "command_timeout"],
+      "statusbar": [
+        "enabled", "template", "monitor", "interval", "click", "font_size",
+        "command_timeout", "notch_margin",
+      ],
       "flashlight": [
         "suggestion_count", "precedence_alive_bonus", "aliases", "precedence",
         "frecency_half_life_days", "frecency_max_boost", "snapshot_timeout_ms",
@@ -827,6 +830,13 @@ enum ConfigLoader {
       locations: locations, into: &config, validate: { (1.0...60.0).contains($0) },
       assign: { value, config in
         config.statusBar.commandTimeoutSeconds = value
+      })
+    applyDouble(
+      table["notch_margin"], path: ["statusbar", "notch_margin"],
+      message: "statusbar.notch_margin must be a number between 0 and 64 (points)",
+      locations: locations, into: &config, validate: { (0.0...64.0).contains($0) },
+      assign: { value, config in
+        config.statusBar.notchMargin = value
       })
     if let click = sectionTable(
       table["click"], name: "statusbar.click", locations: locations, into: &config)

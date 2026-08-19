@@ -259,6 +259,7 @@ Keys:
 | `statusbar.interval`               | int (seconds, `0` = poll off) | `5`     |
 | `statusbar.font_size`              | float (8..32)  | `13`                 |
 | `statusbar.command_timeout`        | float (1..60 s) | `6.0`               |
+| `statusbar.notch_margin`           | float (0..64 pt) | `0`                |
 | `statusbar.click.<name>`           | URL string or action array | battery pane |
 | `overlay.alert_duration`           | float (0.2..30 s) | `2.0`             |
 | `overlay.banner_duration_ms`       | int (100..10000) | `700`              |

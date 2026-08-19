@@ -26,6 +26,8 @@ enum FlashTunables {
   static var flashlightSnapshotTimeoutMs: Int = 150
   /// `[statusbar] font_size` — bar text size in points.
   static var statusBarFontSize: Double = 13
+  /// `[statusbar] notch_margin` — points kept clear beside a notch.
+  static var statusBarNotchMargin: Double = 0
 
   static func apply(_ config: Config) {
     scrollStepPixels = Int32(config.mode.scrollStep)
@@ -38,5 +40,6 @@ enum FlashTunables {
     pluginStartupTimeoutSeconds = config.plugins.startupTimeoutSeconds
     flashlightSnapshotTimeoutMs = config.flashlight.snapshotTimeoutMs
     statusBarFontSize = config.statusBar.fontSize
+    statusBarNotchMargin = config.statusBar.notchMargin
   }
 }

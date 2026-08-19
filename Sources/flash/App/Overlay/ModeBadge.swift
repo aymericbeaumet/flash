@@ -298,7 +298,8 @@ extension OverlayPanel {
   }
 
   /// Extra points kept clear on each side of a notch (camera housing).
-  static let statusBarNotchMargin: CGFloat = 16
+  /// `[statusbar] notch_margin`.
+  static var statusBarNotchMargin: CGFloat { CGFloat(FlashTunables.statusBarNotchMargin) }
 
   /// Lay out ONE screen's bar onto `surface`. This is the single source of
   /// the bar's geometry — the primary bar (via `PrimaryStatusBarSurface`)
@@ -489,16 +490,20 @@ extension OverlayPanel {
 
     // Geometric centring for the `#[align=centre]` bucket. Position around
     // `barFrame.width / 2`, clamped so the centre label never collides with
-    // the left run, the reserved right section, or a notch. If it doesn't
-    // fit, hide it rather than letting an overlap mangle the bar.
+    // the left run or the reserved right section. If it doesn't fit, hide
+    // it rather than letting an overlap mangle the bar. A NOTCHED screen
+    // hides the centre outright: its honest position is under the camera
+    // housing, and shoving it off-centre beside the notch reads worse than
+    // not showing it.
     let modeMaxX =
       hasLeftTrailing ? leftTrailingMaxX : surface.modeButtonLayer.frame.maxX
-    let centreLimitMaxX = min(
-      rightSectionStart,
-      notchBar.map { $0.minX - Self.statusBarNotchMargin } ?? .greatestFiniteMagnitude)
+    let centreLimitMaxX = rightSectionStart
     let centreAvailable = max(0, centreLimitMaxX - modeMaxX - Self.statusBarMinimumGap * 2)
-    let centreDisplay = FlashStatusBarRenderer.fitToWidth(
-      centreRaw, font: rightFont, available: centreAvailable)
+    let centreDisplay =
+      notchBar == nil
+      ? FlashStatusBarRenderer.fitToWidth(
+        centreRaw, font: rightFont, available: centreAvailable)
+      : ""
     let centreAttributed = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
       from: centreDisplay, font: rightFont)
     let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)

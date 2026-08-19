@@ -326,6 +326,8 @@ struct Config {
     /// Timeout in seconds for one command/script/cycle subprocess run;
     /// SIGTERM then SIGKILL past it, keeping the previous value.
     var commandTimeoutSeconds: Double = 6
+    /// Points kept clear on each side of a notch (camera housing).
+    var notchMargin: Double = 0
     /// Poll cadence in seconds for command/script/cycle template sections —
     /// tmux's `status-interval` analog (`[statusbar] interval`). A source
     /// can override it inline (`#{script=30:…}`, `#{cycle=60/300:…}`);
