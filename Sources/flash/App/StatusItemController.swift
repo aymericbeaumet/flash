@@ -119,10 +119,20 @@ final class StatusItemController: NSObject {
     NotificationCenter.default.addObserver(
       self, selector: #selector(aboutPanelWillClose(_:)),
       name: NSWindow.willCloseNotification, object: panel)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(aboutPanelResignedKey(_:)),
+      name: NSWindow.didResignKeyNotification, object: panel)
     aboutPanel = panel
   }
 
+  @objc private func aboutPanelResignedKey(_ note: Notification) {
+    FlashLog.debug(
+      "[about] resigned_key visible=\(aboutPanel?.isVisible ?? false) "
+        + "occluded=\(!(aboutPanel?.occlusionState.contains(.visible) ?? true))")
+  }
+
   @objc private func aboutPanelWillClose(_ note: Notification) {
+    FlashLog.debug("[about] will_close")
     // Leave the app switcher again — Flash is headless outside the About
     // window's lifetime.
     NSApp.setActivationPolicy(.accessory)

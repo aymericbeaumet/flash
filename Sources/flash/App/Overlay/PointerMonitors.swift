@@ -39,13 +39,16 @@ extension OverlayPanel {
     {
       return
     }
-    // A click on Flash's own status-bar window (a `#[link=…]` run, or the
-    // click-through band) is Flash UI, not an app interaction — the local
-    // monitor sees it because the panel is in this process. Never treat it as a
-    // "clicked the app" intent (which would flip NORMAL → INSERT). This matters
-    // under an auto-hidden menu bar, where `pointIsInMenuBar` sees a zero-height
-    // reserved band and would otherwise route the click to the app decision.
-    if event.window is StatusBarClickPanel {
+    // A click on any of Flash's OWN windows (the status-bar click band, the
+    // About window, …) is Flash UI, not an app interaction — the local
+    // monitor sees it because the window is in this process. Never treat it
+    // as a "clicked the app" intent: that flipped NORMAL → INSERT and
+    // re-synthesized the click as a host-app click, which activated other
+    // windows over the About window (it looked "closed") and ate the
+    // button's click. Only the overlay panel itself stays in the dispatch
+    // path — its pointer decisions (scroll-dismiss of hints, …) are the
+    // reason this monitor exists.
+    if let window = event.window, !(window is OverlayPanel) {
       return
     }
     // A scroll wheel event only has a job when transient hint content is
