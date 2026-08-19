@@ -221,7 +221,10 @@ enum FlashStatusBarMarkup {
     // keeps adjacent whitespace (tmux doesn't trim).
     if let marker, !marker.isEmpty {
       if fromTail {
-        if let index = kept.firstIndex(where: { if case .text = $0 { return true }; return false }),
+        if let index = kept.firstIndex(where: {
+          if case .text = $0 { return true }
+          return false
+        }),
           case .text(let text) = kept[index]
         {
           kept[index] = .text(marker + text)
@@ -229,7 +232,10 @@ enum FlashStatusBarMarkup {
           kept.insert(.text(marker), at: 0)
         }
       } else {
-        if let index = kept.lastIndex(where: { if case .text = $0 { return true }; return false }),
+        if let index = kept.lastIndex(where: {
+          if case .text = $0 { return true }
+          return false
+        }),
           case .text(let text) = kept[index]
         {
           kept[index] = .text(text + marker)
@@ -244,7 +250,10 @@ enum FlashStatusBarMarkup {
     // so a truncation that lands on a space doesn't render "foo …".
     let glyph = FlashStatusBarTemplateEngine.truncationEllipsis
     if fromTail {
-      if let index = kept.firstIndex(where: { if case .text = $0 { return true }; return false }),
+      if let index = kept.firstIndex(where: {
+        if case .text = $0 { return true }
+        return false
+      }),
         case .text(var text) = kept[index]
       {
         while let first = text.first, first.isWhitespace { text.removeFirst() }
@@ -253,7 +262,10 @@ enum FlashStatusBarMarkup {
         kept.insert(.text(glyph), at: 0)
       }
     } else {
-      if let index = kept.lastIndex(where: { if case .text = $0 { return true }; return false }),
+      if let index = kept.lastIndex(where: {
+        if case .text = $0 { return true }
+        return false
+      }),
         case .text(var text) = kept[index]
       {
         while let last = text.last, last.isWhitespace { text.removeLast() }

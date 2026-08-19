@@ -882,7 +882,8 @@ final class PluginProcess {
     if sandboxed {
       process.executableURL = URL(fileURLWithPath: PluginSandbox.sandboxExecPath)
       process.arguments = [
-        "-p", PluginSandbox.installSandboxProfile(root: root, dataDir: dataDir), "/bin/sh", "-lc", install,
+        "-p", PluginSandbox.installSandboxProfile(root: root, dataDir: dataDir), "/bin/sh", "-lc",
+        install,
       ]
     } else {
       process.executableURL = URL(fileURLWithPath: "/bin/sh")

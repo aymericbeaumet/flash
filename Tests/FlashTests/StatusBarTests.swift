@@ -615,7 +615,8 @@ final class StatusBarTests: XCTestCase {
     ]
     XCTAssertEqual(
       renderLeft(
-        "#{s/a/o/:script:/tmp/x.sh}", dynamicValues: ["statusbar.template.script:/tmp/x.sh": "banana"],
+        "#{s/a/o/:script:/tmp/x.sh}",
+        dynamicValues: ["statusbar.template.script:/tmp/x.sh": "banana"],
         variables: vars),
       "bonono")
     XCTAssertEqual(
@@ -1390,7 +1391,6 @@ final class StatusBarTests: XCTestCase {
       1.0,
       accuracy: 0.001)
   }
-
 
   private func pluginStatus(
     id: String,

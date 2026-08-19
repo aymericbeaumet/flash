@@ -226,7 +226,8 @@ enum PluginSandbox {
     // Bound a wedged mise the same way installIfNeeded bounds installers —
     // this runs on the plugin's serial queue.
     let killWork = DispatchWorkItem { if process.isRunning { process.terminate() } }
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(10), execute: killWork)
+    DispatchQueue.global(qos: .utility).asyncAfter(
+      deadline: .now() + .seconds(10), execute: killWork)
     process.waitUntilExit()
     killWork.cancel()
     guard process.terminationStatus == 0 else { return nil }

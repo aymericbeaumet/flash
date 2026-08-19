@@ -973,11 +973,15 @@ enum FlashStatusBarRenderer {
       let close = raw.range(of: "#[noshrink]", range: open.upperBound..<raw.endIndex)
     else { return raw }
     let prefix = String(raw[..<open.upperBound])
-    let spanTokens = FlashStatusBarMarkup.tokenizeValue(String(raw[open.upperBound..<close.lowerBound]))
+    let spanTokens = FlashStatusBarMarkup.tokenizeValue(
+      String(raw[open.upperBound..<close.lowerBound]))
     let suffix = String(raw[close.lowerBound...])
-    let charWidth = max(1, ceil(NSAttributedString(
-      string: "M", attributes: [.font: font]
-    ).size().width))
+    let charWidth = max(
+      1,
+      ceil(
+        NSAttributedString(
+          string: "M", attributes: [.font: font]
+        ).size().width))
     var limit = FlashStatusBarMarkup.visibleCount(spanTokens)
     var current = raw
     for _ in 0..<10 {
@@ -1097,7 +1101,9 @@ enum FlashStatusBarRenderer {
     from raw: String,
     font: NSFont
   ) -> (
-    runs: [(xOffset: CGFloat, width: CGFloat, text: NSAttributedString, blink: Bool, breathing: Bool)],
+    runs: [(
+      xOffset: CGFloat, width: CGFloat, text: NSAttributedString, blink: Bool, breathing: Bool
+    )],
     totalWidth: CGFloat
   ) {
     var runs:
@@ -1125,8 +1131,10 @@ enum FlashStatusBarRenderer {
           runs[runs.count - 1] = last
         } else {
           runs.append(
-            (xOffset: x, width: width, text: piece, blink: segment.blink,
-             breathing: segment.breathing))
+            (
+              xOffset: x, width: width, text: piece, blink: segment.blink,
+              breathing: segment.breathing
+            ))
         }
       }
       x += width

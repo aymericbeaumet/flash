@@ -530,10 +530,10 @@ enum ConfigLoader {
       message:
         "hints.keys must be a layout selector like \"<qwerty_homerow+qwerty_toprow>\" or a string of ASCII letters",
       locations: locations, into: &config,
-      validate: { !$0.trimmed.isEmpty && Alphabet.resolve($0).warning == nil }
-    ) { value, config in
-      config.hints.keys = value
-    }
+      validate: { !$0.trimmed.isEmpty && Alphabet.resolve($0).warning == nil },
+      assign: { value, config in
+        config.hints.keys = value
+      })
     applyInt(
       table["min_length"], path: ["hints", "min_length"],
       message: "hints.min_length must be an integer between 1 and 8", locations: locations,
@@ -1217,7 +1217,8 @@ enum ConfigLoader {
     }
     applyDouble(
       table["window_border_size"], path: ["overlay", "window_border_size"],
-      message: "overlay.window_border_size must be a number between 0 and 20 (points; 0 keeps the per-mode defaults)",
+      message:
+        "overlay.window_border_size must be a number between 0 and 20 (points; 0 keeps the per-mode defaults)",
       locations: locations, into: &config, validate: { $0 >= 0 && $0 <= 20 },
       assign: { value, config in
         config.overlay.windowBorderSize = value
