@@ -7,6 +7,7 @@ set -euo pipefail
 #   Cargo.toml  → Rust   (one workspace-aware cargo invocation for all)
 #   go.mod      → Go     (mise-pinned toolchain)
 #   main.zig    → Zig    (mise-pinned toolchain)
+#   main.swift  → Swift  (Xcode toolchain, same as the host app)
 #   none        → interpreted (python3/ruby/bun via manifest exec; nothing
 #                 to build — sources run in place)
 #
@@ -85,7 +86,7 @@ for dir in "${plugin_dirs[@]}"; do
   if [[ -f "$dir/Cargo.toml" ]]; then
     rust_pkg_args+=(-p "flash-plugin-$(basename "$dir")")
     build_dirs+=("$dir")
-  elif [[ -f "$dir/go.mod" || -f "$dir/main.zig" ]]; then
+  elif [[ -f "$dir/go.mod" || -f "$dir/main.zig" || -f "$dir/main.swift" ]]; then
     build_dirs+=("$dir")
   fi
 done
@@ -115,6 +116,13 @@ build_other() {
       aarch64) goenv+=(GOOS=darwin GOARCH=arm64) ;;
     esac
     (cd "$dir" && env "${goenv[@]}" mise exec go -- go build -o "$out" .)
+  elif [[ -f "$dir/main.swift" ]]; then
+    local swiftargs=(-O)
+    case "$arch" in
+      x86_64) swiftargs+=(-target x86_64-apple-macos14.0) ;;
+      aarch64) swiftargs+=(-target arm64-apple-macos14.0) ;;
+    esac
+    (cd "$dir" && xcrun swiftc "${swiftargs[@]}" main.swift flashplugin.swift -o "$out")
   else
     local zigargs=(-O ReleaseSafe -lc -femit-bin="$out")
     case "$arch" in

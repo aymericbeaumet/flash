@@ -71,10 +71,14 @@ check_absent \
   "ScreenCaptureKit|VisionProvider|VNRecognize|NSScreenCaptureUsageDescription|CGWindowListCreateImage|CGDisplayStream" \
   Sources Resources
 
+# StatusItemController.swift is hard rule 1's single sanctioned
+# NSStatusItem (About / Open Configuration / Quit, gated by
+# [app] menu_bar_icon) — the whole file is exempt; everything else stays
+# banned.
 check_absent_except \
   "no production menu bar, Dock, status, or alert UI" \
   "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|NSMenu\\(|NSMenuItem|\\.mainMenu\\b|setActivationPolicy\\(\\.regular" \
-  'NSStatusBar\.system\.thickness|NSWindow\.Level = \.mainMenu|app\.mainMenu\?\.menuBarHeight|previousMenu = app\.mainMenu|app\.mainMenu = previousMenu|app\.mainMenu = measurementMenu|NSMenu\(title: "Flash"\)|NSMenuItem\(title: "Flash"' \
+  '^Sources/flash/App/StatusItemController\.swift:|NSStatusBar\.system\.thickness|NSWindow\.Level = \.mainMenu|app\.mainMenu\?\.menuBarHeight|previousMenu = app\.mainMenu|app\.mainMenu = previousMenu|app\.mainMenu = measurementMenu|NSMenu\(title: "Flash"\)|NSMenuItem\(title: "Flash"' \
   Sources/flash Resources/Info.plist
 
 check_absent \

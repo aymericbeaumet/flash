@@ -44,6 +44,10 @@ lifecycle) beside logic comparable in size to a Rust original:
   `build-plugins.sh` alongside the Rust crates.
 - **`Plugins/searchengines` — Zig**: compiled warm catalog; `@embedFile`
   replaces the old build.rs codegen for the vendored bangs.tsv.
+- **`Plugins/reminders` — Swift**: the full surface in one port — warm
+  catalog from an AppleScript listing, `candidate.resolve`, commands, and
+  lifecycle events; heartbeat/snapshot answer on the read thread while
+  handlers run on a worker queue.
 
 `Scripts/plugin-protocol-smoke.py` drives any plugin binary/runtime through
 initialize → heartbeat → optional `sources.snapshot` → shutdown with a

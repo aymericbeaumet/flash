@@ -218,8 +218,8 @@ assemble_app() {
       # Compiled plugins (Rust/Go/Zig) ship their built binary; interpreted
       # plugins (python/ruby/bun) ship their runtime sources and data files;
       # manifest-only plugins ship just the manifest. Build sources
-      # (src/, Cargo.toml, go.mod, *.go, *.zig) never ship.
-      if [[ -f "$dir/Cargo.toml" || -f "$dir/go.mod" || -f "$dir/main.zig" ]]; then
+      # (src/, Cargo.toml, go.mod, *.go, *.zig, *.swift) never ship.
+      if [[ -f "$dir/Cargo.toml" || -f "$dir/go.mod" || -f "$dir/main.zig" || -f "$dir/main.swift" ]]; then
         if [[ ! -x "$bin" ]]; then
           echo "ERROR: missing plugin binary $bin" >&2
           exit 1

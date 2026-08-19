@@ -345,11 +345,14 @@ status, and date changes re-render from their own change sources. Command/script
 sections are stale-while-refresh and are polled only when present: the previous
 successful value stays visible until a replacement is ready.
 
-**Bundled plugins default to Rust, macOS-only.** Five official plugins are
+**Bundled plugins default to Rust, macOS-only.** Six official plugins are
 deliberately non-Rust to keep the wire protocol honestly language-agnostic
 (`docs/plugin-protocol.md`): `aiproviders` (Python), `emojis`
-(TypeScript/Bun), `screenshot` (Ruby), `spotify` (Go), and `searchengines`
-(Zig, whose `@embedFile` replaces the old build.rs codegen). New plugins use
+(TypeScript/Bun), `screenshot` (Ruby), `spotify` (Go), `searchengines`
+(Zig, whose `@embedFile` replaces the old build.rs codegen), and
+`reminders` (Swift — its shim answers heartbeat/snapshot on the read
+thread and runs handlers on a worker queue, the same never-starve-the-
+heartbeat discipline the Rust SDK enforces). New plugins use
 Rust unless there is a deliberate reason not to. Every plugin — regardless
 of language — obeys the same manifest schema, warm-catalog contract,
 latency deadlines, and payload quotas: host-side enforcement IS the

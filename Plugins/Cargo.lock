@@ -145,15 +145,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flash-plugin-reminders"
-version = "0.1.0"
-dependencies = [
- "flash_plugin",
- "serde",
- "tokio",
-]
-
-[[package]]
 name = "flash-plugin-safari"
 version = "0.1.0"
 dependencies = [

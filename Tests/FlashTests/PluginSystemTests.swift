@@ -32,7 +32,7 @@ final class PluginSystemTests: XCTestCase {
       XCTAssertNil(manifest.install, "\(manifest.id): official plugins declare no install step")
       if let exec = manifest.exec {
         XCTAssertFalse(exec.isEmpty)
-        let compiled = ["Cargo.toml", "go.mod", "main.zig"].contains {
+        let compiled = ["Cargo.toml", "go.mod", "main.zig", "main.swift"].contains {
           FileManager.default.fileExists(atPath: root.appendingPathComponent($0).path)
         }
         if compiled {
