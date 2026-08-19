@@ -138,7 +138,32 @@ final class PluginManager {
     let mapping: ModeMapping
   }
 
+  /// Everything the main thread reads on a hot path (flashlight open,
+  /// focus-change mapping refresh, per-AX-notification listener checks, the
+  /// status-bar publish tick), captured immutably. Hot readers take this
+  /// behind a plain lock instead of `queue.sync` — the manager queue runs
+  /// reconciliation, which stops/starts child processes and must never gate
+  /// first paint.
+  private struct HotSnapshot {
+    var sourceAdapters: [PluginFlashSource] = []
+    var plugins: [PluginProcess] = []
+    var loadFailureInfos: [PluginStatusBarInfo] = []
+    var mappingIndex: [ResolvedPluginMapping] = []
+    var eventListenPatterns: [PluginPattern] = []
+    var selectorContextNeedsURL = false
+  }
+
   private let queue = DispatchQueue(label: "flash.plugins", qos: .utility)
+  /// Third-party materialization (git fetch, up to 60 s per call) runs here,
+  /// never on `queue`: dispatch paths sync onto `queue` from user actions.
+  private let materializeQueue = DispatchQueue(
+    label: "flash.plugins.materialize", qos: .utility)
+  private let hotSnapshotLock = NSLock()
+  private var hotSnapshot = HotSnapshot()
+  /// Monotonic config generation. A reload that finished materializing for a
+  /// superseded config (or after `stop()`) must not clobber newer state.
+  private let generationLock = NSLock()
+  private var configGeneration = 0
   private let baseDataDir: URL
   private let repository: PluginRepository
   /// Manifest load/validate failures from the last reconcile, surfaced as
@@ -241,8 +266,43 @@ final class PluginManager {
     return best?.target
   }
 
+  private func readHotSnapshot() -> HotSnapshot {
+    hotSnapshotLock.lock()
+    defer { hotSnapshotLock.unlock() }
+    return hotSnapshot
+  }
+
+  /// Runs on `queue` after any mutation of the plugin set or its indexes.
+  private func publishHotSnapshot() {
+    let snapshot = HotSnapshot(
+      sourceAdapters: Array(sourceAdaptersByID.values),
+      plugins: pluginsByID.values.sorted { $0.identifier < $1.identifier },
+      loadFailureInfos: loadFailureStatuses.map {
+        PluginStatusBarInfo(id: $0.id, state: $0.state, hasError: true, statusSegments: [:])
+      },
+      mappingIndex: mappingIndex,
+      eventListenPatterns: eventListenPatternsIndex,
+      selectorContextNeedsURL: selectorContextNeedsURL)
+    hotSnapshotLock.lock()
+    hotSnapshot = snapshot
+    hotSnapshotLock.unlock()
+  }
+
+  private func bumpGeneration() -> Int {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    configGeneration += 1
+    return configGeneration
+  }
+
+  private func isCurrentGeneration(_ generation: Int) -> Bool {
+    generationLock.lock()
+    defer { generationLock.unlock() }
+    return generation == configGeneration
+  }
+
   var sources: [FlashSource] {
-    queue.sync { Array(sourceAdaptersByID.values) }
+    readHotSnapshot().sourceAdapters
   }
 
   func start(config: Config) {
@@ -250,6 +310,9 @@ final class PluginManager {
   }
 
   func stop() {
+    // Invalidate any in-flight materialization so a late reload can't
+    // resurrect plugins after shutdown.
+    _ = bumpGeneration()
     let plugins = queue.sync { () -> [PluginProcess] in
       let snapshot = Array(pluginsByID.values)
       for plugin in pluginsByID.values {
@@ -270,6 +333,8 @@ final class PluginManager {
       latestRunningApplicationsSnapshot.removeAll()
       selectorContextNeedsURL = false
       sourceAdaptersByID.removeAll()
+      loadFailureStatuses.removeAll()
+      publishHotSnapshot()
       return snapshot
     }
     for plugin in plugins {
@@ -278,13 +343,11 @@ final class PluginManager {
   }
 
   func needsURLSelectorContext() -> Bool {
-    queue.sync { selectorContextNeedsURL }
+    readHotSnapshot().selectorContextNeedsURL
   }
 
   func hasListener(for eventName: String) -> Bool {
-    queue.sync {
-      eventListenPatternsIndex.contains { $0.matches(eventName) }
-    }
+    readHotSnapshot().eventListenPatterns.contains { $0.matches(eventName) }
   }
 
   func cacheRunningApplicationsSnapshot(_ applications: [[String: Any]]) {
@@ -318,8 +381,24 @@ final class PluginManager {
   }
 
   func updateConfig(_ config: Config) {
-    queue.async { [weak self] in
-      self?.reloadDesiredPlugins(config: config)
+    let generation = bumpGeneration()
+    // Materialize third-party checkouts (network, a 60 s git timeout per
+    // call) BEFORE entering the manager queue — dispatch paths sync onto
+    // that queue from user actions and must never wait behind a fetch. The
+    // serial materialize queue preserves config ordering; the generation
+    // guard drops a reload whose config was superseded while it fetched.
+    materializeQueue.async { [weak self] in
+      guard let self, self.isCurrentGeneration(generation) else { return }
+      var thirdParty: [(root: URL, origin: PluginOrigin)] = []
+      for ref in config.plugins.thirdParty {
+        if let materialized = self.repository.materialize(ref) {
+          thirdParty.append(materialized)
+        }
+      }
+      self.queue.async {
+        guard self.isCurrentGeneration(generation) else { return }
+        self.reloadDesiredPlugins(config: config, thirdParty: thirdParty)
+      }
     }
   }
 
@@ -719,13 +798,11 @@ final class PluginManager {
   func mappings(
     in context: PluginSelectorContext
   ) -> [(priority: Int, scope: ModeScope, mapping: ModeMapping)] {
-    queue.sync {
-      mappingIndex
-        .compactMap { item in
-          guard let specificity = item.selector.specificity(in: context) else { return nil }
-          return (item.priority + specificity, item.scope, item.mapping)
-        }
-    }
+    readHotSnapshot().mappingIndex
+      .compactMap { item in
+        guard let specificity = item.selector.specificity(in: context) else { return nil }
+        return (item.priority + specificity, item.scope, item.mapping)
+      }
   }
 
   /// Help topics every loaded plugin contributes via `manifest.help.topics`,
@@ -762,24 +839,18 @@ final class PluginManager {
   /// no rusage syscall, no commands copy. Fires on the clock tick and every
   /// focus change, so it must stay allocation-light.
   func statusBarInfos() -> [PluginStatusBarInfo] {
-    queue.sync {
-      pluginsByID.values.map { $0.statusBarInfo() }
-        + loadFailureStatuses.map {
-          PluginStatusBarInfo(
-            id: $0.id, state: $0.state, hasError: true, statusSegments: [:])
-        }
-    }
+    let snapshot = readHotSnapshot()
+    // statusBarInfo() reads each process's own lock — no manager queue hop.
+    return snapshot.plugins.map { $0.statusBarInfo() } + snapshot.loadFailureInfos
   }
 
-  private func reloadDesiredPlugins(config: Config) {
+  private func reloadDesiredPlugins(
+    config: Config, thirdParty: [(root: URL, origin: PluginOrigin)]
+  ) {
     var desired: [(root: URL, origin: PluginOrigin)] = PluginRepository.officialPluginRoots().map {
       ($0, .official)
     }
-    for ref in config.plugins.thirdParty {
-      if let materialized = repository.materialize(ref) {
-        desired.append(materialized)
-      }
-    }
+    desired.append(contentsOf: thirdParty)
 
     loadFailureStatuses.removeAll()
     var nextIDs = Set<String>()
@@ -886,6 +957,7 @@ final class PluginManager {
     rebuildMappingIndex()
     rebuildVerbIndex()
     rebuildManifestIndex()
+    publishHotSnapshot()
     notifyStateChanged()
   }
 
