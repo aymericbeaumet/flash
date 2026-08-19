@@ -3627,12 +3627,7 @@ async fn perform_source_action(
         "tab_first" => tab_extreme(plugin, &client, "first").await,
         "tab_last" => tab_extreme(plugin, &client, "last").await,
         "tab_new" => tab_new(plugin, ctx, &client).await,
-        // "Close the current thing" on a tmux client means the PANE the
-        // user is looking at — the finest unit, matching their own
-        // `bind x … kill-pane`. Killing the last pane kills the window
-        // anyway; whole-window kills stay reachable via tmux's own prefix
-        // bindings and `:tmux` commands.
-        "tab_close" => pane_close(plugin, ctx, &client).await,
+        "tab_close" => tab_close(plugin, ctx, &client).await,
         "tab_move_next" => tab_move(plugin, &client, "next").await,
         "tab_move_previous" => tab_move(plugin, &client, "previous").await,
         "pane_next" => pane_select(plugin, &client, "next").await,

@@ -579,7 +579,13 @@ struct Config {
         // `:u` and the app's native ⌘Z in insert mode.
         ("ctrl+r", .flashCommand(.redo)),
         ("e", .flashCommand(.archive)),
-        ("x", .flashCommand(.close)),
+        // `x` sends the app's own close chord instead of a Flash-side
+        // "smart close": every app already decides what ⌘W means (a
+        // browser closes the tab, a terminal's own keybinding can route
+        // it to a confirmed tmux kill-pane, …). Avoiding behavior
+        // overrides keeps Flash predictable — the user's per-app
+        // configuration stays the authority.
+        ("x", sendKeyMapping("cmd+w")),
         // Vimium `n` / `N` cycle find matches. Flash drives the focused
         // app's native find-again (⌘G / ⌘⇧G) after `/` opens find. New
         // windows stay on ⌘N (below) — `n` is needed for find parity.

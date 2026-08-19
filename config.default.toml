@@ -494,9 +494,10 @@ leader = "\\"
 # yy yanks the current URL/location (Vimium yy).
 "yy" = ["flash", "url_copy"]
 "e" = ["flash", "resource_archive"]
-# tmux-aware close: kills the current tmux window in the current session
-# when an attached tmux client is focused, otherwise falls back to ⌘W.
-"x" = ["flash", "window_close"]
+# x sends the app's own close chord — each app decides what ⌘W means (a
+# browser closes the tab; a terminal keybinding can route it to a
+# confirmed tmux kill-pane). No Flash-side "smart close" override.
+"x" = ["flash", "send_key", "--keys=cmd+w"]
 # Vimium n/N cycle find matches — Flash drives the focused app's native
 # find-again (⌘G / ⌘⇧G) after `/` opens find. New windows stay on ⌘N.
 "n" = ["flash", "send_key", "--keys=cmd+g"]
