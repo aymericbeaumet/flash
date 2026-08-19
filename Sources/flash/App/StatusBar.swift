@@ -85,16 +85,29 @@ enum FlashStatusBarPluginValue: Equatable {
 struct FlashStatusBarCommand: Equatable {
   var argv: [String]
   var timeoutSeconds: TimeInterval
+  /// Per-source poll cadence from `#{script=N:…}` / `#{command=N:…}` /
+  /// `#{cycle=R/N:…}`. `nil` falls back to the global `[statusbar]
+  /// interval` (cycles default to `max(rotation, interval)` so a rotating
+  /// source isn't re-fetched faster than it can even show a line).
+  var refreshSeconds: TimeInterval?
 
-  init(argv: [String], timeoutSeconds: TimeInterval = 6) {
+  init(
+    argv: [String],
+    timeoutSeconds: TimeInterval = 6,
+    refreshSeconds: TimeInterval? = nil
+  ) {
     self.argv = argv
     self.timeoutSeconds = timeoutSeconds
+    self.refreshSeconds = refreshSeconds
   }
 
-  static func script(_ path: String, timeoutSeconds: TimeInterval = 6)
-    -> FlashStatusBarCommand
-  {
-    FlashStatusBarCommand(argv: ["/bin/sh", path], timeoutSeconds: timeoutSeconds)
+  static func script(
+    _ path: String,
+    timeoutSeconds: TimeInterval = 6,
+    refreshSeconds: TimeInterval? = nil
+  ) -> FlashStatusBarCommand {
+    FlashStatusBarCommand(
+      argv: ["/bin/sh", path], timeoutSeconds: timeoutSeconds, refreshSeconds: refreshSeconds)
   }
 
   /// `#{script:path --arg1 --arg2}` form. The trailing whitespace-
@@ -106,17 +119,23 @@ struct FlashStatusBarCommand: Equatable {
   static func scriptWithArgs(
     _ path: String,
     args: [String],
-    timeoutSeconds: TimeInterval = 6
+    timeoutSeconds: TimeInterval = 6,
+    refreshSeconds: TimeInterval? = nil
   ) -> FlashStatusBarCommand {
     var argv: [String] = ["/bin/sh", path]
     argv.append(contentsOf: args)
-    return FlashStatusBarCommand(argv: argv, timeoutSeconds: timeoutSeconds)
+    return FlashStatusBarCommand(
+      argv: argv, timeoutSeconds: timeoutSeconds, refreshSeconds: refreshSeconds)
   }
 
-  static func shell(_ command: String, timeoutSeconds: TimeInterval = 6)
-    -> FlashStatusBarCommand
-  {
-    FlashStatusBarCommand(argv: ["/bin/sh", "-lc", command], timeoutSeconds: timeoutSeconds)
+  static func shell(
+    _ command: String,
+    timeoutSeconds: TimeInterval = 6,
+    refreshSeconds: TimeInterval? = nil
+  ) -> FlashStatusBarCommand {
+    FlashStatusBarCommand(
+      argv: ["/bin/sh", "-lc", command], timeoutSeconds: timeoutSeconds,
+      refreshSeconds: refreshSeconds)
   }
 
 }
@@ -596,12 +615,19 @@ enum FlashStatusBarTemplateEngine {
 }
 
 enum FlashStatusBarRenderer {
+  /// Shared formatter — allocating a DateFormatter per publish is the kind
+  /// of avoidable churn a once-a-minute clock doesn't deserve. Reconfigured
+  /// per call (cheap) because tests pass custom calendars/locales; safe
+  /// because every production caller sits on the controller's single serial
+  /// queue.
+  private static let dateFormatter = DateFormatter()
+
   static func dateText(
     now: Date,
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX")
   ) -> String {
-    let formatter = DateFormatter()
+    let formatter = Self.dateFormatter
     formatter.calendar = calendar
     formatter.locale = locale
     formatter.timeZone = calendar.timeZone
@@ -930,15 +956,21 @@ final class FlashStatusBarController {
 
   private weak var overlay: OverlayPanel?
   private let queue = DispatchQueue(label: "flash.status_bar", qos: .utility)
-  private let commandQueue = DispatchQueue(label: "flash.status_bar.commands", qos: .utility)
+  /// Concurrent so one slow section (a script waiting on the network) can't
+  /// starve the others' cadences. Concurrency is bounded: each section runs
+  /// at most one subprocess at a time (`inFlight`), and each blocked
+  /// semaphore wait is capped by the command timeout — so the worst case
+  /// parks #sections threads for a few seconds, never a growing pool.
+  private let commandQueue = DispatchQueue(
+    label: "flash.status_bar.commands", qos: .utility, attributes: .concurrent)
   private var template: FlashStatusBarTemplate
   private let pluginStatusesProvider: () -> [PluginStatus]
   private var refreshTimer: DispatchSourceTimer?
   private var effectsTimer: DispatchSourceTimer?
   private var cycleTimer: DispatchSourceTimer?
   /// Per-`#{cycle:…}` variable: its output lines, which one is showing, its
-  /// rotation period, and when it last rotated. Refreshed (re-run) on the
-  /// command cadence; rotated by `cycleTimer`.
+  /// rotation period, and when it last rotated. Refreshed (re-run) on its
+  /// own poll cadence; rotated by `cycleTimer`.
   private struct CycleState {
     var lines: [String]
     var index: Int
@@ -946,12 +978,18 @@ final class FlashStatusBarController {
     var lastRotate: Date
   }
   private var cycles: [String: CycleState] = [:]
+  /// Per command/cycle section: when it next runs and whether a run is in
+  /// flight. A section whose deadline passes while it's still in flight is
+  /// skipped (tick dropped, not queued) — but only that section's.
+  private struct CommandSchedule {
+    var nextDueAt: Date
+    var inFlight: Bool
+  }
+  private var commandSchedules: [String: CommandSchedule] = [:]
   private var started = false
   private var commandRefreshGeneration: UInt64 = 0
-  private var commandRefreshInFlight = false
-  private var nextCommandRefreshAt: Date?
   private var nextClockRefreshAt: Date?
-  private let refreshIntervalSeconds: TimeInterval
+  private var refreshIntervalSeconds: TimeInterval
   private var dynamicValues: [String: String] = [:]
   private var activeAppName = ""
   private var activeBundleIdentifier = ""
@@ -987,14 +1025,13 @@ final class FlashStatusBarController {
       guard let self else { return }
       self.refreshTimer?.cancel()
       self.refreshTimer = nil
-      self.nextCommandRefreshAt = nil
+      self.commandSchedules = [:]
       self.nextClockRefreshAt = nil
       self.effectsTimer?.cancel()
       self.effectsTimer = nil
       self.cycleTimer?.cancel()
       self.cycleTimer = nil
       self.commandRefreshGeneration &+= 1
-      self.commandRefreshInFlight = false
       self.started = false
     }
   }
@@ -1015,10 +1052,16 @@ final class FlashStatusBarController {
     }
   }
 
-  func updateTemplate(_ template: FlashStatusBarTemplate) {
+  func updateTemplate(
+    _ template: FlashStatusBarTemplate,
+    refreshIntervalSeconds: TimeInterval? = nil
+  ) {
     queue.async { [weak self] in
       guard let self else { return }
       self.template = template
+      if let refreshIntervalSeconds {
+        self.refreshIntervalSeconds = refreshIntervalSeconds
+      }
       let commandIDs = Set(template.commandSections.map(\.id))
       self.dynamicValues = self.dynamicValues.filter { commandIDs.contains($0.key) }
       self.refreshSourcesForCurrentTemplate()
@@ -1031,42 +1074,85 @@ final class FlashStatusBarController {
     }
   }
 
-  private func refreshCommandSections() {
-    let sections = template.commandSections
-    guard !sections.isEmpty else {
-      publishCurrentModel()
-      return
+  /// The effective poll cadence for a command/cycle section. `nil` means
+  /// "run once when the template loads, never re-poll" — either the global
+  /// interval is 0 (tmux's `status-interval 0` convention) and the source
+  /// has no explicit `=N`, or the source isn't command-backed at all.
+  static func effectiveRefreshSeconds(
+    source: FlashStatusBarSource,
+    globalSeconds: TimeInterval
+  ) -> TimeInterval? {
+    switch source {
+    case .command(let command):
+      if let explicit = command.refreshSeconds { return explicit }
+      return globalSeconds > 0 ? globalSeconds : nil
+    case .cycle(let command, let rotationSeconds):
+      if let explicit = command.refreshSeconds { return explicit }
+      // A cycle shows one line per rotation, so re-fetching faster than it
+      // rotates is pure waste — the user's HN feed was re-running its
+      // script every 5 s for a value rotated once a minute.
+      guard globalSeconds > 0 else { return nil }
+      return max(TimeInterval(rotationSeconds), globalSeconds)
+    default:
+      return nil
     }
-    guard !commandRefreshInFlight else { return }
-    commandRefreshInFlight = true
-    commandRefreshGeneration &+= 1
+  }
+
+  /// Kick off every command/cycle section whose deadline has passed and
+  /// that isn't already running. Each section runs as its own job on the
+  /// concurrent command queue, so cadences are independent.
+  private func runDueCommandSections(now: Date) {
     let generation = commandRefreshGeneration
+    for section in template.commandSections {
+      if let schedule = commandSchedules[section.id],
+        schedule.inFlight || schedule.nextDueAt > now
+      {
+        continue
+      }
+      let interval = Self.effectiveRefreshSeconds(
+        source: section.source, globalSeconds: refreshIntervalSeconds)
+      let nextDue = interval.map { now.addingTimeInterval(max(1, $0)) } ?? Date.distantFuture
+      commandSchedules[section.id] = CommandSchedule(nextDueAt: nextDue, inFlight: true)
+      runCommandSection(section, generation: generation)
+    }
+  }
+
+  private func runCommandSection(
+    _ section: FlashStatusBarTemplateVariable,
+    generation: UInt64
+  ) {
     commandQueue.async { [weak self] in
       guard let self else { return }
-      var updates: [String: String] = [:]
-      var cycleUpdates: [String: (lines: [String], period: Int)] = [:]
-      for section in sections {
-        switch section.source {
-        case .command(let command):
-          if let output = self.runCommand(command) { updates[section.id] = output }
-        case .cycle(let command, let period):
-          cycleUpdates[section.id] = (self.runCommandLines(command) ?? [], period)
-        default:
-          break
-        }
+      var update: String?
+      var cycleUpdate: (lines: [String], period: Int)?
+      switch section.source {
+      case .command(let command):
+        update = self.runCommand(command)
+      case .cycle(let command, let period):
+        // A failed/empty run keeps the previous lines (stale-while-refresh,
+        // same contract as plain command sections).
+        if let lines = self.runCommandLines(command) { cycleUpdate = (lines, period) }
+      default:
+        break
       }
       self.queue.async { [weak self] in
         guard let self else { return }
+        // A stale generation means the template changed (or the bar
+        // stopped) while this ran: the schedule map was rebuilt, so
+        // touching it here would clobber the replacement's state.
         guard generation == self.commandRefreshGeneration else { return }
-        for (id, output) in updates {
-          self.dynamicValues[id] = output
+        self.commandSchedules[section.id]?.inFlight = false
+        if let update { self.dynamicValues[section.id] = update }
+        if let cycleUpdate {
+          self.applyCycleRefresh(
+            id: section.id, lines: cycleUpdate.lines, period: cycleUpdate.period)
+          self.armCycleTimer()
         }
-        for (id, update) in cycleUpdates {
-          self.applyCycleRefresh(id: id, lines: update.lines, period: update.period)
-        }
-        self.commandRefreshInFlight = false
-        self.armCycleTimer()
         self.publishCurrentModel()
+        // The completed section's next deadline may now be the soonest —
+        // and if it already passed while the run was in flight, this
+        // re-arm fires it promptly instead of dropping the cadence.
+        self.armRefreshTimer()
       }
     }
   }
@@ -1101,6 +1187,15 @@ final class FlashStatusBarController {
   }
 
   private func tickCycles() {
+    // Park the 1 s ticker whenever no cycle actually has anything to rotate
+    // (single-line output, empty template, …) — otherwise it wakes 86,400×
+    // a day for nothing. `armCycleTimer` re-arms it after the next refresh
+    // that produces a rotatable cycle.
+    guard cycles.values.contains(where: { $0.lines.count > 1 }) else {
+      cycleTimer?.cancel()
+      cycleTimer = nil
+      return
+    }
     let now = Date()
     var changed = false
     for id in Array(cycles.keys) {
@@ -1124,29 +1219,14 @@ final class FlashStatusBarController {
     cycleTimer?.cancel()
     cycleTimer = nil
     cycles = cycles.filter { id, _ in template.cycleSections.contains { $0.id == id } }
-    nextCommandRefreshAt = nil
+    commandSchedules = [:]
     nextClockRefreshAt = nil
     commandRefreshGeneration &+= 1
-    commandRefreshInFlight = false
 
-    if template.commandSections.isEmpty {
-      publishCurrentModel()
-    } else {
-      publishCurrentModel()
-      refreshCommandSections()
-      scheduleNextCommandRefresh(from: Date())
-    }
+    publishCurrentModel()
+    runDueCommandSections(now: Date())
     scheduleNextClockRefresh(from: Date())
     armRefreshTimer()
-  }
-
-  private func scheduleNextCommandRefresh(from now: Date) {
-    guard !template.commandSections.isEmpty else {
-      nextCommandRefreshAt = nil
-      return
-    }
-    let intervalMs = max(250, Int(refreshIntervalSeconds * 1_000))
-    nextCommandRefreshAt = now.addingTimeInterval(TimeInterval(intervalMs) / 1_000)
   }
 
   private func scheduleNextClockRefresh(from now: Date) {
@@ -1161,7 +1241,14 @@ final class FlashStatusBarController {
   private func armRefreshTimer() {
     refreshTimer?.cancel()
     refreshTimer = nil
-    let dates = [nextCommandRefreshAt, nextClockRefreshAt].compactMap { $0 }
+    // In-flight sections are excluded: their (already-passed or upcoming)
+    // deadline can't be acted on until the run returns, and including it
+    // would spin the timer against the in-flight guard. The completion
+    // handler re-arms, which picks the deadline back up.
+    var dates = commandSchedules.values
+      .filter { !$0.inFlight && $0.nextDueAt != .distantFuture }
+      .map(\.nextDueAt)
+    if let clock = nextClockRefreshAt { dates.append(clock) }
     guard let next = dates.min() else { return }
     let delayMs = max(1, Int(next.timeIntervalSinceNow * 1_000))
     let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -1179,10 +1266,7 @@ final class FlashStatusBarController {
     refreshTimer?.cancel()
     refreshTimer = nil
     let now = Date()
-    if let due = nextCommandRefreshAt, due <= now {
-      refreshCommandSections()
-      scheduleNextCommandRefresh(from: now)
-    }
+    runDueCommandSections(now: now)
     if let due = nextClockRefreshAt, due <= now {
       publishCurrentModel()
       scheduleNextClockRefresh(from: now)

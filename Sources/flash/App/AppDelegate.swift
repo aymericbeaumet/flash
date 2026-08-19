@@ -506,6 +506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     statusBarController = FlashStatusBarController(
       overlay: overlay,
       template: config.statusBar.template,
+      refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
       pluginStatusesProvider: { [weak self] in
         self?.pluginManager.pluginStatuses() ?? []
       })

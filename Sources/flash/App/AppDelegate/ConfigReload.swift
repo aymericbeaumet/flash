@@ -133,7 +133,9 @@ extension AppDelegate {
     overlay.normalModeSequenceTimeoutMs = cfg.mode.sequenceTimeoutMs
     overlay.normalModePassthroughKeyCodes = cfg.mode.normalPassthroughKeyCodes
     overlay.normalModePassthroughModifiers = cfg.mode.normalPassthroughModifiers
-    statusBarController?.updateTemplate(cfg.statusBar.template)
+    statusBarController?.updateTemplate(
+      cfg.statusBar.template,
+      refreshIntervalSeconds: cfg.statusBar.refreshIntervalSeconds)
     registry.updateOpenConfig(cfg.open)
     pluginManager.updateConfig(cfg)
     pluginManager.emit(

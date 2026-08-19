@@ -196,6 +196,104 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(c.statusBar.template.cycleSections.count, 2)
   }
 
+  func testParsesStatusBarInterval() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      interval = 30
+      """)
+    XCTAssertEqual(c.statusBar.refreshIntervalSeconds, 30)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+
+    // tmux's `status-interval 0` convention: polling off entirely.
+    let off = ConfigLoader.parse(
+      """
+      [statusbar]
+      interval = 0
+      """)
+    XCTAssertEqual(off.statusBar.refreshIntervalSeconds, 0)
+
+    let invalid = ConfigLoader.parse(
+      """
+      [statusbar]
+      interval = -3
+      """)
+    XCTAssertEqual(invalid.statusBar.refreshIntervalSeconds, 5)
+    XCTAssertTrue(
+      invalid.loadingDiagnostics.contains { $0.message.contains("statusbar.interval") })
+  }
+
+  func testParsesPerSourceRefreshIntervals() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "#{script=30:~/bin/quota.sh --claude} #{command=10:date} #{cycle=45/300:~/bin/hn.sh}"
+      """)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+    let template = c.statusBar.template
+    XCTAssertEqual(
+      template.variables[0].source,
+      .command(
+        FlashStatusBarCommand(
+          argv: ["/bin/sh", "~/bin/quota.sh", "--claude"], refreshSeconds: 30)))
+    XCTAssertEqual(
+      template.variables[1].source,
+      .command(FlashStatusBarCommand(argv: ["/bin/sh", "-lc", "date"], refreshSeconds: 10)))
+    XCTAssertEqual(
+      template.variables[2].source,
+      .cycle(
+        command: FlashStatusBarCommand(argv: ["/bin/sh", "~/bin/hn.sh"], refreshSeconds: 300),
+        periodSeconds: 45))
+  }
+
+  func testInvalidPerSourceRefreshIntervalDiagnoses() {
+    for template in ["#{script=0:~/bin/x.sh}", "#{script=abc:~/bin/x.sh}", "#{cycle=45/0:~/x.sh}"] {
+      let c = ConfigLoader.parse(
+        """
+        [statusbar]
+        template = "\(template)"
+        """)
+      XCTAssertTrue(
+        c.loadingDiagnostics.contains { $0.message.contains("template variable") },
+        "expected a diagnostic for \(template)")
+    }
+  }
+
+  func testEffectiveRefreshSecondsResolution() {
+    // Command: global fallback, explicit override, global 0 = poll off
+    // (unless the source opted in explicitly).
+    XCTAssertEqual(
+      FlashStatusBarController.effectiveRefreshSeconds(
+        source: .command(.shell("date")), globalSeconds: 5),
+      5)
+    XCTAssertEqual(
+      FlashStatusBarController.effectiveRefreshSeconds(
+        source: .command(.shell("date", refreshSeconds: 30)), globalSeconds: 5),
+      30)
+    XCTAssertNil(
+      FlashStatusBarController.effectiveRefreshSeconds(
+        source: .command(.shell("date")), globalSeconds: 0))
+    XCTAssertEqual(
+      FlashStatusBarController.effectiveRefreshSeconds(
+        source: .command(.shell("date", refreshSeconds: 30)), globalSeconds: 0),
+      30)
+    // Cycle: never re-fetch faster than it rotates (max(rotation, global))
+    // unless an explicit `/N` says so.
+    XCTAssertEqual(
+      FlashStatusBarController.effectiveRefreshSeconds(
+        source: .cycle(command: .script("/tmp/x.sh"), periodSeconds: 60), globalSeconds: 5),
+      60)
+    XCTAssertEqual(
+      FlashStatusBarController.effectiveRefreshSeconds(
+        source: .cycle(
+          command: .script("/tmp/x.sh", refreshSeconds: 300), periodSeconds: 60),
+        globalSeconds: 5),
+      300)
+    // Non-command sources never poll.
+    XCTAssertNil(
+      FlashStatusBarController.effectiveRefreshSeconds(source: .sdk(.date), globalSeconds: 5))
+  }
+
   func testDefaultTemplateRendersModeAndRightSections() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!

@@ -250,6 +250,7 @@ Keys:
 | `statusbar.enabled`                | bool           | `false`              |
 | `statusbar.template`               | string         | `"#[align=left]#{mode}#[align=right]#{date}"` |
 | `statusbar.monitor`                | string (`"all"` \| `"primary"`) | `"all"`  |
+| `statusbar.interval`               | int (seconds, `0` = poll off) | `5`     |
 | `flashlight.suggestion_count`      | int            | `10`                 |
 | `flashlight.precedence_alive_bonus` | int            | `10`                 |
 | `[flashlight.aliases]` entries     | string         | none                 |
@@ -339,12 +340,21 @@ template variables are `#{mode}`, `#{active_app_name}`,
 tmux-compatible variables (`#H`, `#h`, `#S`, `#{host}`, `#{hostname}`,
 `#{host_short}`, `#{user}`, `#{uid}`, `#{pid}`, and other tmux status variables
 that render as empty when Flash has no equivalent), `#{plugin:<plugin>.<segment>}`,
-`#{script:<path>}`, and `#{command:<shell command>}`. For example, the bundled
-system plugin exposes the battery segment as `#{plugin:system.battery}`.
+`#{script:<path>}`, `#{command:<shell command>}`, and `#{cycle:<path>}` (rotate
+through the script's stdout lines). For example, the bundled system plugin
+exposes the battery segment as `#{plugin:system.battery}`.
 Template newlines are ignored before rendering. Mode, focused-app, plugin
 status, and date changes re-render from their own change sources. Command/script
 sections are stale-while-refresh and are polled only when present: the previous
-successful value stays visible until a replacement is ready.
+successful value stays visible until a replacement is ready. Poll cadence is
+`[statusbar] interval` (default 5 s, `0` = run once), overridable per source
+inline — `#{script=N:…}` / `#{command=N:…}` re-run every N seconds, and
+`#{cycle=R/N:…}` rotates every R while re-running every N (default
+`max(R, interval)`). Each section schedules and drops overrun ticks
+independently, so one slow script never starves the others. The menu-bar
+reveal probe behind the bar's click windows runs on a utility queue, armed
+only while the pointer is in the band — the status bar must do no periodic
+main-thread work beyond rendering actual model changes.
 
 **Bundled plugins default to Rust, macOS-only.** Six official plugins are
 deliberately non-Rust to keep the wire protocol honestly language-agnostic

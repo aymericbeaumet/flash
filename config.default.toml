@@ -92,6 +92,14 @@ enabled = false
 # Which displays show the bar: "all" (default, every screen's top band) or
 # "primary" (only the main / menu-bar display).
 monitor = "all"
+# Poll cadence in seconds for command/script/cycle sections — tmux's
+# status-interval analog. A source can override it inline: #{script=30:…}
+# re-runs that script every 30 s regardless of this value; #{cycle=R/N:…}
+# polls every N s. Cycles without an explicit N poll at max(rotation,
+# interval) — a cycle can't show lines faster than it rotates, so polling
+# faster is waste. 0 disables periodic re-runs (sections run once when the
+# template loads).
+interval = 5
 # Single template string for the status bar. Use tmux-style alignment
 # markers to switch which region subsequent content lands in:
 #
@@ -138,8 +146,13 @@ monitor = "all"
 #   #{plugin:ready_count}
 #   #{plugin:error_count}
 #   #{plugin:<plugin>.<segment>}     # e.g. #{plugin:system.battery}
-#   #{script:<path>}
-#   #{command:<shell command>}
+#   #{script:<path>}                 # run <path>, show its stdout
+#   #{script=N:<path>}               # …re-running every N seconds
+#   #{command:<shell command>}       # run via /bin/sh -lc
+#   #{command=N:<shell command>}     # …re-running every N seconds
+#   #{cycle:<path>}                  # rotate through stdout lines, 60 s/line
+#   #{cycle=R:<path>}                # …rotating every R seconds
+#   #{cycle=R/N:<path>}              # …and re-running the script every N s
 #
 # A triple-quoted multi-line string lets long templates breathe across
 # rows. Newlines in the template are ignored before rendering.

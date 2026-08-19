@@ -111,7 +111,14 @@ final class OverlayPanel: NSPanel {
   var statusBarLinkRectsByScreen: [(screenFrame: CGRect, links: [(rect: CGRect, url: URL)])] = []
   /// Repeating probe that flips the click windows to click-through while the
   /// native (auto-hidden) menu bar is revealed, so native wins those clicks.
+  /// Runs on a utility queue (never the main run loop, which owns the
+  /// keyboard tap) and only while the pointer is in the top band — armed by
+  /// the click view's `mouseEntered`, self-stopping when the pointer leaves.
   var menuBarRevealTimer: DispatchSourceTimer?
+  /// The probe's last observed reveal state. Written on the probe queue
+  /// between `resume()` and `cancel()`, reset on the main thread around
+  /// those edges — the timer lifecycle serializes the two.
+  var menuBarRevealedShadow = false
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()

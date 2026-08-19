@@ -358,7 +358,7 @@ enum ConfigLoader {
       "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
       "open": ["ignored_apps", "app_directories"],
       "plugins": ["watching_enabled", "disabled", "third_party"],
-      "statusbar": ["enabled", "template", "monitor"],
+      "statusbar": ["enabled", "template", "monitor", "interval"],
       "flashlight": ["suggestion_count", "precedence_alive_bonus", "aliases", "precedence"],
       "mode": ["labels", "sequence_timeout_ms", "normal", "all", "insert"],
       "overlay": [
@@ -642,6 +642,13 @@ enum ConfigLoader {
       into: &config, validate: { Config.StatusBar.Monitor(rawValue: $0.lowercased()) != nil },
       assign: { value, config in
         config.statusBar.monitor = Config.StatusBar.Monitor(rawValue: value.lowercased()) ?? .all
+      })
+    applyInt(
+      table["interval"], path: ["statusbar", "interval"],
+      message: "statusbar.interval must be a non-negative integer (seconds; 0 disables polling)",
+      locations: locations, into: &config, validate: { $0 >= 0 },
+      assign: { value, config in
+        config.statusBar.refreshIntervalSeconds = Double(value)
       })
   }
 
@@ -1306,8 +1313,48 @@ enum ConfigLoader {
     let body = String(trimmed[trimmed.index(after: colon)...])
       .trimmed
     guard !body.isEmpty else { return nil }
-    switch kind {
+
+    // Split an optional `=arg` off the kind: `script=30` → ("script", "30").
+    // The arg is a per-source poll cadence in seconds (`#{script=30:…}`,
+    // `#{command=30:…}`), except for cycle where it is `R` (rotation) or
+    // `R/N` (rotation / poll).
+    let kindName: String
+    let kindArg: String?
+    if let eq = kind.firstIndex(of: "=") {
+      kindName = String(kind[..<eq])
+      kindArg = String(kind[kind.index(after: eq)...])
+    } else {
+      kindName = kind
+      kindArg = nil
+    }
+
+    func parsedRefreshSeconds(_ raw: String?) -> TimeInterval?? {
+      // Returns .some(nil) for "no arg", .some(value) for a valid arg, and
+      // nil (outer) for an invalid arg so callers can reject the token.
+      guard let raw else { return .some(nil) }
+      guard let value = Int(raw), value > 0 else { return nil }
+      return .some(TimeInterval(value))
+    }
+
+    func scriptCommand(_ body: String, refreshSeconds: TimeInterval?) -> FlashStatusBarCommand? {
+      // `#{script:path}` runs the script with no args; `#{script:path --foo
+      // --bar}` passes the trailing whitespace-separated tokens through as
+      // positional argv. Splitting on whitespace is intentionally crude —
+      // the templates only pass simple option flags and the user wrote the
+      // string by hand.
+      let parts = body.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+      guard let scriptPath = parts.first else { return nil }
+      let resolved = resolveCommandArgument(scriptPath, sourceURL: sourceURL)
+      let args = Array(parts.dropFirst())
+      if args.isEmpty {
+        return .script(resolved, refreshSeconds: refreshSeconds)
+      }
+      return .scriptWithArgs(resolved, args: args, refreshSeconds: refreshSeconds)
+    }
+
+    switch kindName {
     case "plugin":
+      guard kindArg == nil else { return nil }
       switch body {
       case "loaded_count": return .plugin(.loadedCount)
       case "ready_count": return .plugin(.readyCount)
@@ -1320,44 +1367,33 @@ enum ConfigLoader {
         return .plugin(.statusSegment(pluginID: pluginID, name: segmentName))
       }
     case "script":
-      // `#{script:path}` runs the script with no args; `#{script:path --foo
-      // --bar}` passes the trailing whitespace-separated tokens through as
-      // positional argv. Splitting on whitespace is intentionally crude —
-      // the templates only pass simple option flags and the user wrote the
-      // string by hand.
-      let parts = body.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-      guard let scriptPath = parts.first else { return nil }
-      let resolved = resolveCommandArgument(scriptPath, sourceURL: sourceURL)
-      let args = Array(parts.dropFirst())
-      if args.isEmpty {
-        return .command(.script(resolved))
-      }
-      return .command(.scriptWithArgs(resolved, args: args))
+      guard let refresh = parsedRefreshSeconds(kindArg) else { return nil }
+      guard let command = scriptCommand(body, refreshSeconds: refresh) else { return nil }
+      return .command(command)
     case "command":
-      return .command(.shell(body))
-    default:
-      // `#{cycle:path}` (default 60s) or `#{cycle=N:path}` (rotate every N
-      // seconds): run `path`, then reel through its output lines. `body` is the
-      // script + optional argv, split like `script:`.
-      if kind == "cycle" || kind.hasPrefix("cycle=") {
-        let period: Int
-        if let eq = kind.firstIndex(of: "="),
-          let parsed = Int(kind[kind.index(after: eq)...]), parsed > 0
-        {
-          period = parsed
-        } else {
-          period = 60
+      guard let refresh = parsedRefreshSeconds(kindArg) else { return nil }
+      return .command(.shell(body, refreshSeconds: refresh))
+    case "cycle":
+      // `#{cycle:path}` rotates its output lines every 60 s; `#{cycle=R:path}`
+      // every R seconds. `#{cycle=R/N:path}` additionally re-runs the script
+      // every N seconds (default: max(R, [statusbar] interval) — a cycle can't
+      // show lines faster than it rotates, so polling faster is waste).
+      var period = 60
+      var refresh: TimeInterval?
+      if let kindArg {
+        let pieces = kindArg.split(separator: "/", omittingEmptySubsequences: false)
+        guard pieces.count <= 2, let parsedPeriod = Int(pieces[0]), parsedPeriod > 0 else {
+          return nil
         }
-        let parts = body.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-        guard let scriptPath = parts.first else { return nil }
-        let resolved = resolveCommandArgument(scriptPath, sourceURL: sourceURL)
-        let args = Array(parts.dropFirst())
-        let command =
-          args.isEmpty
-          ? FlashStatusBarCommand.script(resolved)
-          : FlashStatusBarCommand.scriptWithArgs(resolved, args: args)
-        return .cycle(command: command, periodSeconds: period)
+        period = parsedPeriod
+        if pieces.count == 2 {
+          guard let parsedRefresh = Int(pieces[1]), parsedRefresh > 0 else { return nil }
+          refresh = TimeInterval(parsedRefresh)
+        }
       }
+      guard let command = scriptCommand(body, refreshSeconds: refresh) else { return nil }
+      return .cycle(command: command, periodSeconds: period)
+    default:
       return nil
     }
   }

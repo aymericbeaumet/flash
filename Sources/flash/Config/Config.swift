@@ -289,6 +289,12 @@ struct Config {
     /// Which monitors the bar renders on. `[statusbar] monitor = "primary"`
     /// limits it to the main display; `"all"` (default) covers every screen.
     var monitor: Monitor = .all
+    /// Poll cadence in seconds for command/script/cycle template sections —
+    /// tmux's `status-interval` analog (`[statusbar] interval`). A source
+    /// can override it inline (`#{script=30:…}`, `#{cycle=60/300:…}`);
+    /// cycles default to `max(rotation, interval)`. `0` disables periodic
+    /// re-runs entirely (sections run once when the template loads).
+    var refreshIntervalSeconds: Double = 5
     /// Single-string status-bar template using tmux-style format markers:
     ///   #[align=left|centre|right]  — switches which alignment region
     ///                                 subsequent text/variables accumulate
