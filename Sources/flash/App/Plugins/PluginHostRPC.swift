@@ -79,7 +79,7 @@ final class PluginHostRPC {
         reply(["ok": false, "error": "missing accessibility capability"])
         return
       }
-      axBroker.handle(method: method, params: params, reply: reply)
+      axBroker.handle(method: method, params: params, pluginID: pluginID, reply: reply)
     case "host.fetch":
       guard capabilities.contains(.networkFetch) else {
         reply(["ok": false, "error": "missing network_fetch capability"])

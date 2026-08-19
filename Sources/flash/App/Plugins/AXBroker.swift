@@ -30,6 +30,11 @@ struct AXElementIdentitySet {
 /// resident between the snapshot and those follow-up calls.
 final class AXBroker {
   private struct Entry {
+    /// Owning plugin id. Handles are integers a plugin could guess; scoping
+    /// every lookup and purge to the owner keeps two accessibility-capable
+    /// plugins snapshotting the same app from invalidating (or acting on)
+    /// each other's handles.
+    let owner: String
     let pid: pid_t
     let element: AXUIElement
   }
@@ -52,17 +57,18 @@ final class AXBroker {
   func handle(
     method: String,
     params: [String: Any],
+    pluginID: String,
     reply: @escaping ([String: Any]) -> Void
   ) {
     switch method {
     case "ax.snapshot":
-      snapshot(params, reply: reply)
+      snapshot(params, owner: pluginID, reply: reply)
     case "ax.perform":
-      perform(params, reply: reply)
+      perform(params, owner: pluginID, reply: reply)
     case "ax.set":
-      setAttribute(params, reply: reply)
+      setAttribute(params, owner: pluginID, reply: reply)
     case "ax.select_child":
-      selectChild(params, reply: reply)
+      selectChild(params, owner: pluginID, reply: reply)
     default:
       reply(["ok": false, "error": "unknown ax method: \(method)"])
     }
@@ -70,7 +76,9 @@ final class AXBroker {
 
   // MARK: - Snapshot
 
-  private func snapshot(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+  private func snapshot(
+    _ params: [String: Any], owner: String, reply: @escaping ([String: Any]) -> Void
+  ) {
     guard let pid = pidParam(params, key: "pid") else {
       reply(["ok": false, "error": "ax.snapshot requires pid"])
       return
@@ -89,7 +97,7 @@ final class AXBroker {
         reply(["ok": false, "error": "broker released"])
         return
       }
-      self.purge(pid: pid)
+      self.purge(owner: owner, pid: pid)
       // Y-flip reference: AX reports top-left origins, NSScreen is
       // bottom-left. Resolved once per snapshot so every node's frame uses
       // the same basis. Only needed when geometry is requested.
@@ -113,7 +121,7 @@ final class AXBroker {
             let element = item.element
             index += 1
             guard seen.insert(element) else { continue }
-            let handle = self.register(pid: pid, element: element)
+            let handle = self.register(owner: owner, pid: pid, element: element)
             let (attrs, children, frame) = self.readNode(
               element, collect: collect, follow: follow,
               geometry: geometry, screenH: screenH)
@@ -135,14 +143,16 @@ final class AXBroker {
 
   // MARK: - Actions
 
-  private func perform(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+  private func perform(
+    _ params: [String: Any], owner: String, reply: @escaping ([String: Any]) -> Void
+  ) {
     guard let handle = handleParam(params) else {
       reply(["ok": false, "error": "ax.perform requires handle"])
       return
     }
     let action = params["action"] as? String ?? (kAXPressAction as String)
     queue.async { [weak self] in
-      guard let self, let entry = self.entries[handle] else {
+      guard let self, let entry = self.entries[handle], entry.owner == owner else {
         reply(["ok": false, "error": "stale ax handle"])
         return
       }
@@ -153,14 +163,16 @@ final class AXBroker {
     }
   }
 
-  private func setAttribute(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+  private func setAttribute(
+    _ params: [String: Any], owner: String, reply: @escaping ([String: Any]) -> Void
+  ) {
     guard let handle = handleParam(params), let attribute = params["attribute"] as? String else {
       reply(["ok": false, "error": "ax.set requires handle and attribute"])
       return
     }
     let value = params["value"]
     queue.async { [weak self] in
-      guard let self, let entry = self.entries[handle] else {
+      guard let self, let entry = self.entries[handle], entry.owner == owner else {
         reply(["ok": false, "error": "stale ax handle"])
         return
       }
@@ -180,7 +192,9 @@ final class AXBroker {
     }
   }
 
-  private func selectChild(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+  private func selectChild(
+    _ params: [String: Any], owner: String, reply: @escaping ([String: Any]) -> Void
+  ) {
     guard let parentHandle = uint64Param(params["parent"]),
       let childHandle = uint64Param(params["child"])
     else {
@@ -189,8 +203,8 @@ final class AXBroker {
     }
     queue.async { [weak self] in
       guard let self,
-        let parentEntry = self.entries[parentHandle],
-        let childEntry = self.entries[childHandle]
+        let parentEntry = self.entries[parentHandle], parentEntry.owner == owner,
+        let childEntry = self.entries[childHandle], childEntry.owner == owner
       else {
         reply(["ok": false, "error": "stale ax handle"])
         return
@@ -223,18 +237,20 @@ final class AXBroker {
   }
 
   /// Registers `element` and returns its handle. Caller runs on `queue`.
-  private func register(pid: pid_t, element: AXUIElement) -> UInt64 {
+  private func register(owner: String, pid: pid_t, element: AXUIElement) -> UInt64 {
     nextHandle += 1
     let handle = nextHandle
-    entries[handle] = Entry(pid: pid, element: element)
+    entries[handle] = Entry(owner: owner, pid: pid, element: element)
     return handle
   }
 
   /// Drops every handle owned by `pid`. A fresh snapshot supersedes the prior
   /// one, so the old handles can never be acted on again — this keeps the
   /// registry from growing without bound. Caller runs on `queue`.
-  private func purge(pid: pid_t) {
-    entries = entries.filter { $0.value.pid != pid }
+  private func purge(owner: String, pid: pid_t) {
+    // Scoped to (owner, pid): a fresh snapshot invalidates only the caller's
+    // own handles for that app, never another plugin's.
+    entries = entries.filter { !($0.value.owner == owner && $0.value.pid == pid) }
   }
 
   // MARK: - AX reads

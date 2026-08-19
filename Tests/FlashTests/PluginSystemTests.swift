@@ -586,14 +586,20 @@ final class PluginSystemTests: XCTestCase {
     wait(for: [settled], timeout: 1)
   }
 
-  func testWarmRequestsOnlyDispatchAfterCanonicalStartupPublication() {
-    XCTAssertTrue(PluginFlashSource.warmRequestIsDispatchable(state: .ready))
-    XCTAssertTrue(PluginFlashSource.warmRequestIsDispatchable(state: .degraded))
-    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .unloaded))
-    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .installing))
-    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .starting))
-    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .crashed))
-    XCTAssertFalse(PluginFlashSource.warmRequestIsDispatchable(state: .stopped))
+  func testWarmRequestsOnlyDispatchInReadyOrDegradedStates() {
+    // The one shared predicate: state factor isolated by holding the
+    // queue-confined factors true.
+    func dispatchable(_ state: PluginRuntimeState) -> Bool {
+      PluginProcess.warmRequestIsDispatchable(
+        state: state, initializationCompleted: true, processRunning: true)
+    }
+    XCTAssertTrue(dispatchable(.ready))
+    XCTAssertTrue(dispatchable(.degraded))
+    XCTAssertFalse(dispatchable(.unloaded))
+    XCTAssertFalse(dispatchable(.installing))
+    XCTAssertFalse(dispatchable(.starting))
+    XCTAssertFalse(dispatchable(.crashed))
+    XCTAssertFalse(dispatchable(.stopped))
   }
 
   func testPluginProcessRechecksWarmReadinessAtTheWireQueueBoundary() {

@@ -170,13 +170,14 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   /// Only a ready/degraded process owns a canonical warm store. Every other
   /// lifecycle state settles immediately so candidate gathering never waits
   /// for startup/restart work or consumes the first-paint budget.
-  static func warmRequestIsDispatchable(state: PluginRuntimeState) -> Bool {
-    state == .ready || state == .degraded
-  }
-
   private func canDispatchWarmRequest(operation: String) -> Bool {
+    // Advisory pre-flight over the one shared predicate (state is the only
+    // field readable off the plugin queue; the queue-confined factors are
+    // re-checked authoritatively — and logged — inside sendRequest).
     let state = plugin.runtimeStateSnapshot()
-    if Self.warmRequestIsDispatchable(state: state) {
+    if PluginProcess.warmRequestIsDispatchable(
+      state: state, initializationCompleted: true, processRunning: true)
+    {
       availabilityLogLock.lock()
       lastUnavailableState = nil
       availabilityLogLock.unlock()

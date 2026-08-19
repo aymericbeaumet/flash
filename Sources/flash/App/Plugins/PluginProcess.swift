@@ -65,7 +65,6 @@ final class PluginProcess {
   private var restartTimestamps: [Date] = []
   private static let restartWindowAttempts = 5
   private static let restartWindowSeconds: TimeInterval = 300
-  private var restartLoopExhausted = false
   private var requestID: Int = 0
   private var pending: [Int: PendingRequest] = [:]
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
@@ -147,8 +146,7 @@ final class PluginProcess {
   func reload(reason: String) {
     queue.async {
       // User-initiated reload re-arms the bounded restart loop so a previously
-      // exhausted plugin can recover without restarting the resident process.
-      self.restartLoopExhausted = false
+      // parked plugin can recover without restarting the resident process.
       self.restartTimestamps.removeAll()
       self.restartCount = 0
       self.stopOnQueue(reason: reason)
@@ -563,13 +561,19 @@ final class PluginProcess {
   }
 
   func statusSnapshot() -> PluginStatus {
+    // `process`/`startDate`/`lastHeartbeatAt`/`restartCount` are queue-
+    // confined; hop onto the queue (the same manager→process direction
+    // stopAndWait uses) instead of racing them under `lock`, which only
+    // guards discovery/state/lastError/lastLog.
+    let (pid, startDate, lastHeartbeatAt, restartCount) = queue.sync {
+      (
+        process?.processIdentifier, self.startDate, self.lastHeartbeatAt,
+        self.restartCount
+      )
+    }
     lock.lock()
     let snap = discovery
     let state = self.state
-    let pid = process?.processIdentifier
-    let startDate = self.startDate
-    let lastHeartbeatAt = self.lastHeartbeatAt
-    let restartCount = self.restartCount
     let lastError = self.lastError
     let lastLog = self.lastLog
     let commands = manifest.commands
@@ -1071,15 +1075,16 @@ final class PluginProcess {
   private func failStartup(_ message: String, fatal: Bool) {
     recordError(message)
     FlashLog.plugin(.error, pluginID: manifest.id, message: message)
-    if fatal {
-      // A wire mismatch or a source that violates the initial-publication
-      // contract will not recover by immediately launching the same binary.
-      // Explicit reload/file change resets this latch.
-      restartLoopExhausted = true
-    }
     stopOnQueue(reason: fatal ? "startup_rejected" : "startup_timeout")
     setState(.crashed)
-    if !fatal {
+    if fatal {
+      // A wire mismatch will not recover by relaunching the same binary —
+      // no auto-restart. Re-arm the file watchers stopOnQueue removed so a
+      // REBUILT binary (the dev hot loop) recovers without :plugins reload.
+      if watchFiles {
+        installFileWatchers()
+      }
+    } else {
       scheduleRestart()
     }
   }
@@ -1095,14 +1100,27 @@ final class PluginProcess {
     let startedAt = DispatchTime.now()
     queue.async { [weak self] in
       guard let self else { return }
-      if requiresWarmProcess,
-        !Self.warmRequestIsDispatchable(
-          state: self.runtimeStateSnapshot(),
+      if requiresWarmProcess {
+        let state = self.runtimeStateSnapshot()
+        let running = self.process?.isRunning == true
+        if !Self.warmRequestIsDispatchable(
+          state: state,
           initializationCompleted: self.initializationCompleted,
-          processRunning: self.process?.isRunning == true)
-      {
-        completion?(nil)
-        return
+          processRunning: running)
+        {
+          FlashLog.plugin(
+            .warn,
+            pluginID: self.manifest.id,
+            message: "[plugin] warm request dropped method=\(method) state=\(state.rawValue)",
+            fields: [
+              "method": method,
+              "state": state.rawValue,
+              "initialized": String(self.initializationCompleted),
+              "running": String(running),
+            ])
+          completion?(nil)
+          return
+        }
       }
       self.requestID += 1
       let id = self.requestID
@@ -1410,12 +1428,16 @@ final class PluginProcess {
     restartTimestamps.removeAll(where: { $0 < windowStart })
     restartTimestamps.append(now)
     if restartTimestamps.count > Self.restartWindowAttempts {
-      restartLoopExhausted = true
       recordError(
         "[plugin] restart loop exhausted: \(restartTimestamps.count) restarts "
           + "within \(Int(Self.restartWindowSeconds))s — parking in .crashed. "
-          + "Run :plugins reload to retry.")
+          + "Run :plugins reload (or change a plugin file) to retry.")
       setState(.crashed)
+      // Parked, not dead: a file change may fix the crash loop (heartbeat
+      // and write-error teardowns removed the watchers before this ran).
+      if watchFiles {
+        installFileWatchers()
+      }
       return
     }
     let delay = min(30, max(1, restartCount + 1))
