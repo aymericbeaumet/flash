@@ -175,6 +175,31 @@ interval = 5
 # trailing window) to cap its rendered length at N characters — useful
 # when an app name or plugin field could overflow the bar.
 #
+# tmux format modifiers (composable by nesting, e.g. #{=10:#{s/a/b/:mode}}):
+#   #{?cond,a,b}            — ternary: cond is a variable (or nested
+#                             #{…} format); truthy = non-empty and not
+#                             "0". Escape a literal comma as #,
+#   #{==:a,b} #{!=:a,b}     — comparisons; both sides are formats.
+#   #{<:a,b} #{>:a,b}         Numeric when both parse as numbers,
+#   #{<=:a,b} #{>=:a,b}       lexicographic otherwise. Yield "1"/"0".
+#   #{&&:a,b} #{||:a,b}     — logic over truthiness. Yield "1"/"0".
+#   #{s/re/repl/:var}       — regex substitution (all matches; \1
+#                             backrefs; trailing i flag for case-
+#                             insensitive: #{s/re/repl/i:var}).
+#   #{pN:var} / #{p-N:var}  — pad right / left to N visible cells.
+#   #{=/N/marker:var}       — tmux marker truncation: keep N visible
+#   #{=-/N/marker:var}        cells, append/prepend marker when trimmed
+#                             (marker doesn't count toward N).
+#   #[default]              — reset style to the current default;
+#   #[push-default]         — make the current style the default
+#   #[pop-default]            (saving the old one) / restore it.
+#
+# strftime literals: `%`-codes in the template (e.g. %H:%M, %a %d) expand
+# with the current time before formats, exactly like tmux status strings;
+# `%%` is a literal percent. `%` inside script/plugin OUTPUT is untouched.
+# Colours: the full numbered palette (colour0–colour255), #RRGGBB hex, and
+# ANSI names now render; colour0/178/196/245 keep their Nord-theme shades.
+#
 # Supported template variables (#{token}):
 #   #{mode}
 #   #{active_app_name}

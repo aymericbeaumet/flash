@@ -1440,6 +1440,96 @@ enum ConfigLoader {
           source: source))
     }
 
+    // Recursive registration: a `#{…}` body may be a plain variable, a
+    // modifier wrapping one (`=N:`, `s///:`, `pN:`), or a conditional /
+    // comparator whose arguments are themselves format strings. Command and
+    // cycle sources must be discovered wherever they sit so their sections
+    // get scheduled.
+    func registerLeaf(_ token: String, rawBody: String) {
+      if let source = parseStatusBarTemplateSource(token, sourceURL: sourceURL) {
+        appendToken(token, source: source)
+      } else {
+        config.addDiagnostic(
+          "statusbar.\(path) template variable \"\(rawBody)\" must be mode, active_app_name, active_bundle_identifier, date, a tmux variable, plugin:<name>, plugin:<plugin>.<segment>, script:<path>, or command:<shell> (optionally wrapped in a tmux modifier: #{=N:…}, #{?cond,a,b}, #{s/re/repl/:…}, #{pN:…})",
+          location: config.valueLocations["statusbar.\(path)"])
+      }
+    }
+
+    func registerOperand(_ operand: String, rawBody: String) {
+      let trimmed = operand.trimmed
+      guard !trimmed.isEmpty else { return }
+      if trimmed.contains("#{") {
+        registerFormatString(trimmed)
+      } else {
+        registerLeaf(trimmed, rawBody: rawBody)
+      }
+    }
+
+    func registerBody(_ body: String) {
+      if body.hasPrefix("?") {
+        let args = FlashStatusBarMarkup.splitFormatArguments(body.dropFirst())
+        guard args.count >= 2 else {
+          config.addDiagnostic(
+            "statusbar.\(path) conditional \"#{\(body)}\" must be #{?condition,true,false}",
+            location: config.valueLocations["statusbar.\(path)"])
+          return
+        }
+        registerOperand(args[0], rawBody: body)
+        for branch in args.dropFirst() { registerFormatString(branch) }
+        return
+      }
+      for op in FlashStatusBarTemplateEngine.FormatExpansion.comparators
+      where body.hasPrefix(op + ":") {
+        for arg in FlashStatusBarMarkup.splitFormatArguments(body.dropFirst(op.count + 1)) {
+          registerOperand(arg, rawBody: body)
+        }
+        return
+      }
+      if body.hasPrefix("s/") {
+        if let substitution =
+          FlashStatusBarTemplateEngine.FormatExpansion.parseSubstitution(body)
+        {
+          registerOperand(substitution.operand, rawBody: body)
+        } else {
+          config.addDiagnostic(
+            "statusbar.\(path) substitution \"#{\(body)}\" must be #{s/pattern/replacement/:variable}",
+            location: config.valueLocations["statusbar.\(path)"])
+        }
+        return
+      }
+      if let padding = FlashStatusBarTemplateEngine.FormatExpansion.parsePadding(body) {
+        registerOperand(padding.operand, rawBody: body)
+        return
+      }
+      let (token, _) = FlashStatusBarTemplateEngine.parseTokenTruncation(body)
+      registerOperand(token, rawBody: body)
+    }
+
+    func registerFormatString(_ format: String) {
+      var i = format.startIndex
+      while i < format.endIndex {
+        guard format[i] == "#",
+          let next = format.index(i, offsetBy: 1, limitedBy: format.endIndex),
+          next < format.endIndex
+        else {
+          i = format.index(after: i)
+          continue
+        }
+        if format[next] == "#" {
+          i = format.index(after: next)
+          continue
+        }
+        if format[next] == "{",
+          let close = FlashStatusBarMarkup.matchingBrace(in: format, openingAt: next)
+        {
+          registerBody(String(format[format.index(after: next)..<close]).trimmed)
+          i = format.index(after: close)
+          continue
+        }
+        i = format.index(after: i)
+      }
+    }
+
     while index < raw.endIndex {
       // `##` is a literal `#` per tmux's escape convention — skip both so
       // we don't trip on the second `#` looking like the start of a token.
@@ -1456,26 +1546,14 @@ enum ConfigLoader {
         open < raw.endIndex,
         raw[open] == "{"
       {
-        guard let close = raw[open...].firstIndex(of: "}") else {
+        guard let close = FlashStatusBarMarkup.matchingBrace(in: raw, openingAt: open) else {
           config.addDiagnostic(
             "statusbar.\(path) contains an unterminated template variable",
             location: config.valueLocations["statusbar.\(path)"])
           return variables
         }
         let bodyStart = raw.index(after: open)
-        let body = String(raw[bodyStart..<close]).trimmed
-        // `#{=N:token}` / `#{=-N:token}` (and the `#{=N…:token}` ellipsis
-        // variant) truncation operators carry the real token after the `:`.
-        // Resolve through the same helper the renderer uses so the two stay
-        // in sync.
-        let (token, _) = FlashStatusBarTemplateEngine.parseTokenTruncation(body)
-        if let source = parseStatusBarTemplateSource(token, sourceURL: sourceURL) {
-          appendToken(token, source: source)
-        } else {
-          config.addDiagnostic(
-            "statusbar.\(path) template variable \"\(body)\" must be mode, active_app_name, active_bundle_identifier, date, a tmux variable, plugin:<name>, plugin:<plugin>.<segment>, script:<path>, or command:<shell> (optionally wrapped in #{=N:…} / #{=N…:…} for length-limit)",
-            location: config.valueLocations["statusbar.\(path)"])
-        }
+        registerBody(String(raw[bodyStart..<close]).trimmed)
         index = raw.index(after: close)
         continue
       }

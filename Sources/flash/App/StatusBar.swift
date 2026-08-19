@@ -198,7 +198,10 @@ struct FlashStatusBarTemplate: Equatable {
   }
 
   var needsClockRefresh: Bool {
-    variables.contains {
+    // `%` literals are strftime-expanded per publish (tmux behaviour), so
+    // any percent in the template needs the minute clock too.
+    if template.contains("%") { return true }
+    return variables.contains {
       if case .sdk(.date) = $0.source { return true }
       return false
     }
@@ -301,7 +304,13 @@ enum FlashStatusBarTemplateEngine {
     context: FlashStatusBarContext,
     dynamicValues: [String: String]
   ) -> (left: String, centre: String, right: String) {
-    let raw = normalizedTemplate(raw)
+    var raw = normalizedTemplate(raw)
+    // tmux passes status strings through strftime(3) BEFORE format
+    // expansion, so literal `%H:%M` in the template works and `%` in
+    // resolved values survives untouched. `%%` escapes a literal percent.
+    if raw.contains("%") {
+      raw = strftimeExpanded(raw, now: context.now)
+    }
     var left = ""
     var centre = ""
     var right = ""
@@ -314,6 +323,9 @@ enum FlashStatusBarTemplateEngine {
       case .right: right += text
       }
     }
+
+    let expansion = FormatExpansion(
+      variableByToken: variableByToken, context: context, dynamicValues: dynamicValues)
 
     var index = raw.startIndex
     while index < raw.endIndex {
@@ -340,36 +352,16 @@ enum FlashStatusBarTemplateEngine {
           index = raw.index(after: close)
           continue
         }
-        if raw[after] == "{", let close = raw[after...].firstIndex(of: "}") {
+        if raw[after] == "{",
+          let close = FlashStatusBarMarkup.matchingBrace(in: raw, openingAt: after)
+        {
           let bodyStart = raw.index(after: after)
-          let body = String(raw[bodyStart..<close]).trimmed
-          let (token, truncation) = parseTokenTruncation(body)
-          let variable =
-            variableByToken[token]
-            ?? (isTmuxFormatVariable(token)
-              ? FlashStatusBarTemplateVariable(
-                id: "statusbar.template.\(token)",
-                token: token,
-                source: .tmux(token))
-              : nil)
-          if let variable {
-            var value = resolve(variable: variable, context: context, dynamicValues: dynamicValues)
-            if let truncation {
-              value = applyTruncation(value, truncation: truncation)
-            }
-            append(value)
-          }
+          append(expansion.expandBody(String(raw[bodyStart..<close]).trimmed))
           index = raw.index(after: close)
           continue
         }
         if let token = tmuxShortFormatToken(for: raw[after]) {
-          let variable =
-            variableByToken[token]
-            ?? FlashStatusBarTemplateVariable(
-              id: "statusbar.template.\(token)",
-              token: token,
-              source: .tmux(token))
-          append(resolve(variable: variable, context: context, dynamicValues: dynamicValues))
+          append(expansion.resolveLeaf(token))
           index = raw.index(after: after)
           continue
         }
@@ -379,6 +371,260 @@ enum FlashStatusBarTemplateEngine {
     }
 
     return (left, centre, right)
+  }
+
+  /// One publish's format-expansion state: resolves `#{…}` bodies including
+  /// the tmux modifier grammar — conditionals `#{?cond,a,b}`, comparators
+  /// (`==` `!=` `<` `>` `<=` `>=`) and logic (`&&` `||`), substitution
+  /// `s/re/repl/[i]`, padding `pN`/`p-N`, and both truncation spellings
+  /// (`=N`/`=-N` with optional ellipsis, `=/N/marker`). Modifiers chain by
+  /// nesting: `#{=10:#{s/a/b/:var}}`.
+  struct FormatExpansion {
+    var variableByToken: [String: FlashStatusBarTemplateVariable]
+    var context: FlashStatusBarContext
+    var dynamicValues: [String: String]
+
+    /// Depth cap so a pathological self-referencing template can't spin.
+    private static let maxDepth = 12
+    static let comparators = ["==", "!=", "<=", ">=", "<", ">", "&&", "||"]
+
+    func expandBody(_ body: String, depth: Int = 0) -> String {
+      guard depth < Self.maxDepth else { return "" }
+      if body.hasPrefix("?") {
+        let args = FlashStatusBarMarkup.splitFormatArguments(body.dropFirst())
+        guard args.count >= 2 else { return "" }
+        let condition = expandOperand(args[0].trimmed, depth: depth + 1)
+        let branch = Self.isTruthy(condition) ? args[1] : (args.count > 2 ? args[2] : "")
+        return expandFormatString(branch, depth: depth + 1)
+      }
+      for op in Self.comparators where body.hasPrefix(op + ":") {
+        let args = FlashStatusBarMarkup.splitFormatArguments(body.dropFirst(op.count + 1))
+        guard args.count == 2 else { return "" }
+        // Comparator arguments are FORMAT strings — literal text compares
+        // as itself (`#{==:#{mode},NORMAL}`), unlike a bare conditional
+        // condition which names a variable.
+        let a = Self.visibleText(expandFormatString(args[0].trimmed, depth: depth + 1))
+        let b = Self.visibleText(expandFormatString(args[1].trimmed, depth: depth + 1))
+        return Self.compare(op, a, b) ? "1" : "0"
+      }
+      if body.hasPrefix("s/"), let substitution = Self.parseSubstitution(body) {
+        let value = expandOperand(substitution.operand, depth: depth + 1)
+        return Self.applySubstitution(
+          value, pattern: substitution.pattern, replacement: substitution.replacement,
+          caseInsensitive: substitution.caseInsensitive)
+      }
+      if let padding = Self.parsePadding(body) {
+        let value = expandOperand(padding.operand, depth: depth + 1)
+        return Self.applyPadding(value, width: padding.width, leftPad: padding.leftPad)
+      }
+      let (token, truncation) = FlashStatusBarTemplateEngine.parseTokenTruncation(body)
+      let value = expandOperand(token, depth: depth + 1)
+      if let truncation {
+        return FlashStatusBarTemplateEngine.applyTruncation(value, truncation: truncation)
+      }
+      return value
+    }
+
+    /// A modifier argument: braced content is a mini format string, a bare
+    /// word is a leaf variable.
+    func expandOperand(_ operand: String, depth: Int) -> String {
+      guard depth < Self.maxDepth else { return "" }
+      if operand.contains("#{") || operand.contains("#[") {
+        return expandFormatString(operand, depth: depth)
+      }
+      return resolveLeaf(operand)
+    }
+
+    /// Expand a format string (conditional branch, comparator argument):
+    /// text and `#[…]` markers pass through, `##` unescapes, `#{…}` expands.
+    func expandFormatString(_ format: String, depth: Int) -> String {
+      guard depth < Self.maxDepth else { return "" }
+      var out = ""
+      var index = format.startIndex
+      while index < format.endIndex {
+        if format[index] == "#",
+          let after = format.index(index, offsetBy: 1, limitedBy: format.endIndex),
+          after < format.endIndex
+        {
+          if format[after] == "#" {
+            out += "#"
+            index = format.index(after: after)
+            continue
+          }
+          if format[after] == "{",
+            let close = FlashStatusBarMarkup.matchingBrace(in: format, openingAt: after)
+          {
+            out += expandBody(
+              String(format[format.index(after: after)..<close]).trimmed, depth: depth + 1)
+            index = format.index(after: close)
+            continue
+          }
+          if format[after] == "[", let close = format[after...].firstIndex(of: "]") {
+            out += String(format[index...close])
+            index = format.index(after: close)
+            continue
+          }
+        }
+        out.append(format[index])
+        index = format.index(after: index)
+      }
+      return out
+    }
+
+    func resolveLeaf(_ token: String) -> String {
+      let variable =
+        variableByToken[token]
+        ?? (FlashStatusBarTemplateEngine.isTmuxFormatVariable(token)
+          ? FlashStatusBarTemplateVariable(
+            id: "statusbar.template.\(token)",
+            token: token,
+            source: .tmux(token))
+          : nil)
+      guard let variable else { return "" }
+      return FlashStatusBarTemplateEngine.resolve(
+        variable: variable, context: context, dynamicValues: dynamicValues)
+    }
+
+    /// tmux truthiness: non-empty and not "0" (markers are zero-width).
+    static func isTruthy(_ value: String) -> Bool {
+      let visible = visibleText(value)
+      return !visible.isEmpty && visible != "0"
+    }
+
+    static func visibleText(_ value: String) -> String {
+      FlashStatusBarMarkup.tokenizeValue(value).reduce(into: "") { out, token in
+        if case .text(let text) = token { out += text }
+      }
+    }
+
+    static func compare(_ op: String, _ a: String, _ b: String) -> Bool {
+      switch op {
+      case "==": return a == b
+      case "!=": return a != b
+      case "&&": return isTruthy(a) && isTruthy(b)
+      case "||": return isTruthy(a) || isTruthy(b)
+      default:
+        // Numeric when both sides parse (tmux compares numbers as
+        // numbers), lexicographic otherwise.
+        if let na = Double(a), let nb = Double(b) {
+          switch op {
+          case "<": return na < nb
+          case ">": return na > nb
+          case "<=": return na <= nb
+          default: return na >= nb
+          }
+        }
+        switch op {
+        case "<": return a < b
+        case ">": return a > b
+        case "<=": return a <= b
+        default: return a >= b
+        }
+      }
+    }
+
+    static func parseSubstitution(_ body: String)
+      -> (pattern: String, replacement: String, caseInsensitive: Bool, operand: String)?
+    {
+      // s/pattern/replacement/[flags]:operand — '/' inside the pattern is
+      // escaped as `\/` (tmux convention).
+      var rest = Substring(body.dropFirst(2))
+      func take(until separator: Character) -> String? {
+        var out = ""
+        var index = rest.startIndex
+        while index < rest.endIndex {
+          let ch = rest[index]
+          if ch == "\\",
+            let next = rest.index(index, offsetBy: 1, limitedBy: rest.endIndex),
+            next < rest.endIndex, rest[next] == separator
+          {
+            out.append(separator)
+            index = rest.index(after: next)
+            continue
+          }
+          if ch == separator {
+            rest = rest[rest.index(after: index)...]
+            return out
+          }
+          out.append(ch)
+          index = rest.index(after: index)
+        }
+        return nil
+      }
+      guard let pattern = take(until: "/"), let replacement = take(until: "/") else {
+        return nil
+      }
+      guard let colon = rest.firstIndex(of: ":") else { return nil }
+      let flags = rest[..<colon]
+      let operand = String(rest[rest.index(after: colon)...]).trimmed
+      guard !operand.isEmpty else { return nil }
+      return (pattern, replacement, flags.contains("i"), operand)
+    }
+
+    static func applySubstitution(
+      _ value: String, pattern: String, replacement: String, caseInsensitive: Bool
+    ) -> String {
+      var options: NSRegularExpression.Options = []
+      if caseInsensitive { options.insert(.caseInsensitive) }
+      guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+        return value
+      }
+      // tmux backreferences are \1; NSRegularExpression templates use $1.
+      var template = ""
+      var index = replacement.startIndex
+      while index < replacement.endIndex {
+        let ch = replacement[index]
+        if ch == "\\",
+          let next = replacement.index(index, offsetBy: 1, limitedBy: replacement.endIndex),
+          next < replacement.endIndex, replacement[next].isNumber
+        {
+          template.append("$")
+          template.append(replacement[next])
+          index = replacement.index(after: next)
+          continue
+        }
+        if ch == "$" { template.append("\\$") } else { template.append(ch) }
+        index = replacement.index(after: index)
+      }
+      let range = NSRange(value.startIndex..., in: value)
+      return regex.stringByReplacingMatches(
+        in: value, options: [], range: range, withTemplate: template)
+    }
+
+    static func parsePadding(_ body: String)
+      -> (width: Int, leftPad: Bool, operand: String)?
+    {
+      guard body.hasPrefix("p") else { return nil }
+      var digits = Substring(body.dropFirst())
+      let leftPad = digits.hasPrefix("-")
+      if leftPad { digits = digits.dropFirst() }
+      guard let colon = digits.firstIndex(of: ":") else { return nil }
+      guard let width = Int(digits[..<colon]), width > 0 else { return nil }
+      let operand = String(digits[digits.index(after: colon)...]).trimmed
+      guard !operand.isEmpty else { return nil }
+      return (width, leftPad, operand)
+    }
+
+    static func applyPadding(_ value: String, width: Int, leftPad: Bool) -> String {
+      let visible = visibleText(value).count
+      guard visible < width else { return value }
+      let pad = String(repeating: " ", count: width - visible)
+      return leftPad ? pad + value : value + pad
+    }
+  }
+
+  /// strftime(3) over the template — tmux-compatible clock literals. The
+  /// buffer is generous; on overflow the template passes through unexpanded.
+  static func strftimeExpanded(_ raw: String, now: Date) -> String {
+    var time = time_t(now.timeIntervalSince1970)
+    var components = tm()
+    localtime_r(&time, &components)
+    var buffer = [CChar](repeating: 0, count: 8192)
+    let written = raw.withCString { format in
+      strftime(&buffer, buffer.count, format, &components)
+    }
+    guard written > 0 else { return raw }
+    return String(cString: buffer)
   }
 
   /// One Unicode ellipsis glyph stands in for the trimmed-away text. A
@@ -392,16 +638,37 @@ enum FlashStatusBarTemplateEngine {
     case head(Int, ellipsis: Bool)
     /// Keep the last `n` visible characters; `ellipsis` prepends `…`.
     case tail(Int, ellipsis: Bool)
+    /// tmux's `#{=/N/marker:…}` form: keep `n` visible characters and
+    /// append `marker` when trimmed. The marker does NOT count toward `n`
+    /// (tmux semantics — unlike the Flash `…` extension above).
+    case headMarker(Int, String)
+    /// `#{=-/N/marker:…}`: keep the LAST `n`, prepending `marker`.
+    case tailMarker(Int, String)
   }
 
   /// Split `#{=N:mode}` into (`"mode"`, `.head(N)`), `#{=-N:mode}` into
   /// (`"mode"`, `.tail(N)`), and plain `#{mode}` into (`"mode"`, nil).
-  /// Mirrors tmux's `=N:` / `=-N:` length-limit operators, plus a Flash
-  /// extension: a trailing `…` (or ASCII `...`) on the width — `#{=N…:…}`
-  /// / `#{=-N…:…}` — appends an ellipsis glyph when the value is trimmed.
+  /// Mirrors tmux's `=N:` / `=-N:` length-limit operators and its
+  /// `=/N/marker:` custom-marker form, plus a Flash extension: a trailing
+  /// `…` (or ASCII `...`) on the width — `#{=N…:…}` / `#{=-N…:…}` —
+  /// appends an ellipsis glyph when the value is trimmed.
   static func parseTokenTruncation(_ body: String) -> (token: String, truncation: Truncation?) {
     guard body.hasPrefix("=") else { return (body, nil) }
-    let afterEquals = body.dropFirst()
+    var afterEquals = body.dropFirst()
+    let isTail = afterEquals.first == "-"
+    if isTail { afterEquals = afterEquals.dropFirst() }
+    // tmux marker form: `=/N/marker:token` (tail: `=-/N/marker:token`).
+    if afterEquals.first == "/" {
+      let afterSlash = afterEquals.dropFirst()
+      guard let widthEnd = afterSlash.firstIndex(of: "/"),
+        let width = Int(afterSlash[..<widthEnd]), width > 0
+      else { return (body, nil) }
+      let rest = afterSlash[afterSlash.index(after: widthEnd)...]
+      guard let colon = rest.firstIndex(of: ":") else { return (body, nil) }
+      let marker = String(rest[..<colon])
+      let token = String(rest[rest.index(after: colon)...]).trimmed
+      return (token, isTail ? .tailMarker(width, marker) : .headMarker(width, marker))
+    }
     guard let colon = afterEquals.firstIndex(of: ":") else { return (body, nil) }
     var widthSlice = afterEquals[..<colon]
     let token = String(afterEquals[afterEquals.index(after: colon)...]).trimmed
@@ -413,9 +680,7 @@ enum FlashStatusBarTemplateEngine {
       ellipsis = true
       widthSlice = widthSlice.dropLast(3)
     }
-    let isTail = widthSlice.first == "-"
-    let digits = isTail ? widthSlice.dropFirst() : widthSlice
-    guard let width = Int(digits), width > 0 else { return (body, nil) }
+    guard let width = Int(widthSlice), width > 0 else { return (body, nil) }
     return (token, isTail ? .tail(width, ellipsis: ellipsis) : .head(width, ellipsis: ellipsis))
   }
 
@@ -454,16 +719,18 @@ enum FlashStatusBarTemplateEngine {
   /// trailing markers, which is how a >80-char cycle line lost its
   /// `#[nocyc]` sentinel and silently killed the slide animation.
   static func applyTruncation(_ value: String, truncation: Truncation) -> String {
-    let (limit, fromTail, ellipsis): (Int, Bool, Bool)
+    let (limit, fromTail, ellipsis, marker): (Int, Bool, Bool, String?)
     switch truncation {
-    case .head(let n, let e): (limit, fromTail, ellipsis) = (n, false, e)
-    case .tail(let n, let e): (limit, fromTail, ellipsis) = (n, true, e)
+    case .head(let n, let e): (limit, fromTail, ellipsis, marker) = (n, false, e, nil)
+    case .tail(let n, let e): (limit, fromTail, ellipsis, marker) = (n, true, e, nil)
+    case .headMarker(let n, let m): (limit, fromTail, ellipsis, marker) = (n, false, false, m)
+    case .tailMarker(let n, let m): (limit, fromTail, ellipsis, marker) = (n, true, false, m)
     }
     let tokens = FlashStatusBarMarkup.tokenizeValue(value)
     guard FlashStatusBarMarkup.visibleCount(tokens) > limit else { return value }
     return FlashStatusBarMarkup.serialize(
       FlashStatusBarMarkup.truncate(
-        tokens, limit: limit, fromTail: fromTail, ellipsis: ellipsis))
+        tokens, limit: limit, fromTail: fromTail, ellipsis: ellipsis, marker: marker))
   }
 
   /// Recognise an alignment marker body. Returns nil for style markers
@@ -480,7 +747,7 @@ enum FlashStatusBarTemplateEngine {
     }
   }
 
-  private static func resolve(
+  static func resolve(
     variable: FlashStatusBarTemplateVariable,
     context: FlashStatusBarContext,
     dynamicValues: [String: String]
@@ -613,6 +880,11 @@ enum FlashStatusBarRenderer {
 
   static func segments(from raw: String) -> [FlashStatusTextSegment] {
     var style = FlashStatusTextStyle()
+    // tmux style scoping: `#[default]` resets to the current default style,
+    // `#[push-default]` makes the current style the default (saving the old
+    // one), `#[pop-default]` restores it — the native answer to fg-bleed.
+    var baseStyle = FlashStatusTextStyle()
+    var defaultsStack: [FlashStatusTextStyle] = []
     var link: String?
     var segments: [FlashStatusTextSegment] = []
     var buffer = ""
@@ -642,7 +914,19 @@ enum FlashStatusBarRenderer {
       case .marker(let parts):
         flush()
         applyLinkMarker(parts, to: &link)
-        applyTmuxMarker(parts, to: &style)
+        // Tokens apply strictly left-to-right so `#[fg=colour196
+        // push-default]` sets the colour BEFORE pushing it as the default.
+        for part in parts {
+          switch part {
+          case "default": style = baseStyle
+          case "push-default":
+            defaultsStack.append(baseStyle)
+            baseStyle = style
+          case "pop-default":
+            baseStyle = defaultsStack.popLast() ?? FlashStatusTextStyle()
+          default: applyTmuxMarker([part], to: &style)
+          }
+        }
       case .variable(let body):
         // Values are never recursively expanded — a `#{…}` in dynamic
         // output is literal text.

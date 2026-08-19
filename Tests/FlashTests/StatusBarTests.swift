@@ -525,6 +525,146 @@ final class StatusBarTests: XCTestCase {
       .head(4, ellipsis: true))
   }
 
+  private func renderLeft(
+    _ template: String,
+    modeLabel: String = "NORMAL",
+    dynamicValues: [String: String] = [:],
+    variables: [FlashStatusBarTemplateVariable] = []
+  ) -> String {
+    var vars = variables
+    if !vars.contains(where: { $0.token == "mode" }) {
+      vars.append(
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.mode", token: "mode", source: .sdk(.modeLabel)))
+    }
+    let model = FlashStatusBarTemplateEngine.render(
+      template: FlashStatusBarTemplate(template: template, variables: vars),
+      context: FlashStatusBarContext(modeLabel: modeLabel),
+      dynamicValues: dynamicValues)
+    return model.modeText
+  }
+
+  func testConditionalExpandsTruthyAndFalsyBranches() {
+    // #{?cond,a,b} — tmux ternary. The mode label is non-empty → truthy.
+    XCTAssertEqual(renderLeft("#{?mode,on,off}"), "on")
+    // Unknown variables render empty → falsy.
+    XCTAssertEqual(renderLeft("#{?session_name,on,off}"), "off")
+    // Missing false-branch renders nothing.
+    XCTAssertEqual(renderLeft("#{?session_name,on}"), "")
+    // Branches are format strings: variables and style markers expand.
+    XCTAssertEqual(
+      renderLeft("#{?mode,mode=#{mode},-}"), "mode=#[pill]NORMAL#[nopill]")
+    XCTAssertEqual(renderLeft("#{?mode,#[fg=colour196]hot,-}"), "#[fg=colour196]hot")
+  }
+
+  func testComparatorsAndLogicOperators() {
+    XCTAssertEqual(renderLeft("#{==:#{mode},NORMAL}", modeLabel: "NORMAL"), "1")
+    XCTAssertEqual(renderLeft("#{==:#{mode},INSERT}", modeLabel: "NORMAL"), "0")
+    XCTAssertEqual(renderLeft("#{!=:#{mode},INSERT}", modeLabel: "NORMAL"), "1")
+    // Numeric comparison when both sides parse as numbers.
+    XCTAssertEqual(renderLeft("#{<:9,10}"), "1")
+    XCTAssertEqual(renderLeft("#{>:9,10}"), "0")
+    XCTAssertEqual(renderLeft("#{>=:10,10}"), "1")
+    XCTAssertEqual(renderLeft("#{&&:1,1}"), "1")
+    XCTAssertEqual(renderLeft("#{&&:1,0}"), "0")
+    XCTAssertEqual(renderLeft("#{||:0,1}"), "1")
+    // The canonical composition: ternary over a comparison.
+    XCTAssertEqual(
+      renderLeft("#{?#{==:#{mode},NORMAL},N,other}", modeLabel: "NORMAL"), "N")
+    XCTAssertEqual(
+      renderLeft("#{?#{==:#{mode},NORMAL},N,other}", modeLabel: "INSERT"), "other")
+  }
+
+  func testSubstitutionModifier() {
+    XCTAssertEqual(renderLeft("#{s/NOR/nor/:mode}"), "#[pill]norMAL#[nopill]")
+    // All occurrences replace; \1 backreferences work; /i flag.
+    let vars = [
+      FlashStatusBarTemplateVariable(
+        id: "statusbar.template.script:/tmp/x.sh",
+        token: "script:/tmp/x.sh",
+        source: .command(.script("/tmp/x.sh")))
+    ]
+    XCTAssertEqual(
+      renderLeft(
+        "#{s/a/o/:script:/tmp/x.sh}", dynamicValues: ["statusbar.template.script:/tmp/x.sh": "banana"],
+        variables: vars),
+      "bonono")
+    XCTAssertEqual(
+      renderLeft(
+        "#{s/(b)an/\\1un/:script:/tmp/x.sh}",
+        dynamicValues: ["statusbar.template.script:/tmp/x.sh": "banana"],
+        variables: vars),
+      "bunana")
+    XCTAssertEqual(
+      renderLeft(
+        "#{s/BAN/x/i:script:/tmp/x.sh}",
+        dynamicValues: ["statusbar.template.script:/tmp/x.sh": "banana"],
+        variables: vars),
+      "xana")
+  }
+
+  func testPaddingModifier() {
+    XCTAssertEqual(renderLeft("[#{p10:mode}]", modeLabel: "AB"), "[#[pill]AB#[nopill]        ]")
+    XCTAssertEqual(renderLeft("[#{p-10:mode}]", modeLabel: "AB"), "[        #[pill]AB#[nopill]]")
+    // Already-wide values pass through unpadded.
+    XCTAssertEqual(renderLeft("[#{p2:mode}]", modeLabel: "NORMAL"), "[#[pill]NORMAL#[nopill]]")
+  }
+
+  func testMarkerTruncationForm() {
+    // tmux `#{=/N/marker:…}`: marker appended when trimmed, NOT counted
+    // toward N (unlike the Flash `…` extension).
+    XCTAssertEqual(renderLeft("#{=/3/->:mode}", modeLabel: "COMMAND"), "#[pill]COM->#[nopill]")
+    XCTAssertEqual(renderLeft("#{=-/3/<-:mode}", modeLabel: "COMMAND"), "#[pill]<-AND#[nopill]")
+    XCTAssertEqual(renderLeft("#{=/9/->:mode}", modeLabel: "COMMAND"), "#[pill]COMMAND#[nopill]")
+  }
+
+  func testStrftimeExpandsTemplateLiteralsOnly() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone.current
+    let now = Date(timeIntervalSince1970: 1_750_000_000)
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]%Y and 100%% and #{mode}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.mode", token: "mode", source: .sdk(.modeLabel))
+      ])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(modeLabel: "NORMAL", now: now, calendar: calendar))
+    var tm = tm()
+    var time = time_t(now.timeIntervalSince1970)
+    localtime_r(&time, &tm)
+    XCTAssertEqual(
+      model.modeText, "\(1900 + tm.tm_year) and 100% and #[pill]NORMAL#[nopill]")
+    // `%` in a resolved value survives (strftime runs BEFORE expansion,
+    // tmux semantics), and templates with % refresh on the clock.
+    XCTAssertTrue(template.needsClockRefresh)
+  }
+
+  func testDefaultAndPushPopDefaultStyleScoping() {
+    let segments = FlashStatusBarRenderer.segments(
+      from: "#[fg=colour178]a#[default]b#[fg=colour196 push-default]c#[fg=colour31]d#[default]e")
+    XCTAssertEqual(segments[0].foreground, .palette(178))  // a
+    XCTAssertEqual(segments[1].foreground, .palette(245))  // b — reset to region default
+    XCTAssertEqual(segments[2].foreground, .palette(196))  // c — new default pushed
+    XCTAssertEqual(segments[3].foreground, .palette(31))  // d
+    XCTAssertEqual(segments[4].foreground, .palette(196))  // e — default = pushed style
+  }
+
+  func testConditionalRegistersNestedCommandSections() {
+    // A script buried in a conditional branch must still get scheduled.
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "#{?#{==:#{mode},NORMAL},#{script=30:~/bin/x.sh},#{cycle:~/bin/y.sh}}"
+      """)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    let tokens = c.statusBar.template.commandSections.map(\.token)
+    XCTAssertTrue(tokens.contains("script=30:~/bin/x.sh"), "\(tokens)")
+    XCTAssertTrue(tokens.contains("cycle:~/bin/y.sh"), "\(tokens)")
+    XCTAssertEqual(c.statusBar.template.cycleSections.count, 1)
+  }
+
   func testTruncatedCycleLineKeepsBothSlideSentinels() {
     // Regression: the user's `#{=80…:cycle:hn.sh}` — any line longer than
     // the cap used to lose the trailing `#[nocyc]` sentinel, so

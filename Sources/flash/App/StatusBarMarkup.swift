@@ -63,7 +63,7 @@ enum FlashStatusBarMarkup {
         index = raw.index(after: close)
         continue
       }
-      if template, mark == "{", let close = raw[next...].firstIndex(of: "}") {
+      if template, mark == "{", let close = matchingBrace(in: raw, openingAt: next) {
         flush()
         tokens.append(.variable(String(raw[raw.index(after: next)..<close]).trimmed))
         index = raw.index(after: close)
@@ -84,6 +84,80 @@ enum FlashStatusBarMarkup {
 
   static func splitMarkerBody(_ body: Substring) -> [String] {
     body.split { $0 == " " || $0 == "," }.map(String.init)
+  }
+
+  /// The `}` closing the `{` at `open`, balanced against nested `#{…}` so
+  /// tmux conditionals (`#{?cond,#{a},b}`) tokenize as ONE variable.
+  static func matchingBrace(in raw: String, openingAt open: String.Index) -> String.Index? {
+    var depth = 0
+    var index = open
+    while index < raw.endIndex {
+      let ch = raw[index]
+      if ch == "#",
+        let next = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
+        next < raw.endIndex, raw[next] == "{"
+      {
+        depth += 1
+        index = raw.index(after: next)
+        continue
+      }
+      if ch == "{" && index == open {
+        depth += 1
+        index = raw.index(after: index)
+        continue
+      }
+      if ch == "}" {
+        depth -= 1
+        if depth == 0 { return index }
+      }
+      index = raw.index(after: index)
+    }
+    return nil
+  }
+
+  /// Split a modifier's argument list on top-level commas — commas inside
+  /// nested `#{…}` belong to the inner format, and `#,` escapes a literal
+  /// comma (tmux's convention).
+  static func splitFormatArguments(_ body: Substring) -> [String] {
+    var args: [String] = []
+    var current = ""
+    var depth = 0
+    var index = body.startIndex
+    while index < body.endIndex {
+      let ch = body[index]
+      if ch == "#",
+        let next = body.index(index, offsetBy: 1, limitedBy: body.endIndex),
+        next < body.endIndex
+      {
+        if body[next] == "," {
+          current.append(",")
+          index = body.index(after: next)
+          continue
+        }
+        if body[next] == "{" {
+          depth += 1
+          current.append("#{")
+          index = body.index(after: next)
+          continue
+        }
+      }
+      if ch == "}" && depth > 0 {
+        depth -= 1
+        current.append("}")
+        index = body.index(after: index)
+        continue
+      }
+      if ch == "," && depth == 0 {
+        args.append(current)
+        current = ""
+        index = body.index(after: index)
+        continue
+      }
+      current.append(ch)
+      index = body.index(after: index)
+    }
+    args.append(current)
+    return args
   }
 
   /// Re-serialize tokens to the marker-bearing string form (the transitional
@@ -119,7 +193,8 @@ enum FlashStatusBarMarkup {
     _ tokens: [Token],
     limit: Int,
     fromTail: Bool,
-    ellipsis: Bool
+    ellipsis: Bool,
+    marker: String? = nil
   ) -> [Token] {
     let visible = visibleCount(tokens)
     guard visible > limit else { return tokens }
@@ -141,6 +216,29 @@ enum FlashStatusBarMarkup {
       if !slice.isEmpty { kept.append(.text(slice)) }
     }
     if fromTail { kept.reverse() }
+    // tmux's `#{=/N/marker:…}` form: the marker sits flush against the kept
+    // text (inside its style context), does NOT count toward the width, and
+    // keeps adjacent whitespace (tmux doesn't trim).
+    if let marker, !marker.isEmpty {
+      if fromTail {
+        if let index = kept.firstIndex(where: { if case .text = $0 { return true }; return false }),
+          case .text(let text) = kept[index]
+        {
+          kept[index] = .text(marker + text)
+        } else {
+          kept.insert(.text(marker), at: 0)
+        }
+      } else {
+        if let index = kept.lastIndex(where: { if case .text = $0 { return true }; return false }),
+          case .text(let text) = kept[index]
+        {
+          kept[index] = .text(text + marker)
+        } else {
+          kept.append(.text(marker))
+        }
+      }
+      return kept
+    }
     guard ellipsis else { return kept }
     // The glyph sits flush against the text: drop whitespace adjacent to it
     // so a truncation that lands on a space doesn't render "foo …".

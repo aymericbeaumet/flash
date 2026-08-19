@@ -349,6 +349,16 @@ that render as empty when Flash has no equivalent), `#{plugin:<plugin>.<segment>
 `#{script:<path>}`, `#{command:<shell command>}`, and `#{cycle:<path>}` (rotate
 through the script's stdout lines). For example, the bundled system plugin
 exposes the battery segment as `#{plugin:system.battery}`.
+The format grammar is a strict tmux superset: modifiers `#{?cond,a,b}`,
+`#{==:}`/`#{!=:}`/`#{<:}`/`#{>:}`/`#{<=:}`/`#{>=:}`/`#{&&:}`/`#{||:}`,
+`#{s/re/repl/[i]:var}`, `#{pN:}`/`#{p-N:}`, `#{=N:}`/`#{=-N:}` (Flash `…`
+ellipsis extension) and `#{=/N/marker:}`, nesting for chaining, `#,` comma
+escape; style scoping via `#[default]`/`#[push-default]`/`#[pop-default]`;
+strftime `%`-literals expand before formats (tmux semantics — `%%`
+escapes); colours are the full xterm-256 palette + `#RRGGBB` + ANSI names
+(colour0/178/196/245 keep Nord-theme shades). One tokenizer
+(`StatusBarMarkup.swift`) is the only scanner of the marker grammar —
+extend it, never hand-roll another `#[`-walk.
 Template newlines are ignored before rendering. Mode, focused-app, plugin
 status, and date changes re-render from their own change sources. Command/script
 sections are stale-while-refresh and are polled only when present: the previous
