@@ -223,7 +223,7 @@ pub(crate) fn validate_catalog_candidates(
     }
 
     let encoded = serde_json::to_vec(&CatalogCandidatesRef { candidates })
-        .map_err(|_| BoundaryViolation::new("catalog", "messagepack_encoding", None, 1, 0))?;
+        .map_err(|_| BoundaryViolation::new("catalog", "json_encoding", None, 1, 0))?;
     if encoded.len() > MAX_CATALOG_ENCODED_BYTES {
         return Err(BoundaryViolation::new(
             "catalog",
@@ -286,7 +286,7 @@ pub(crate) fn validate_query_answers(answers: &[QueryAnswer]) -> Result<(), Boun
     }
 
     let encoded = serde_json::to_vec(&QueryAnswersRef { answers })
-        .map_err(|_| BoundaryViolation::new("query", "messagepack_encoding", None, 1, 0))?;
+        .map_err(|_| BoundaryViolation::new("query", "json_encoding", None, 1, 0))?;
     if encoded.len() > MAX_QUERY_ENCODED_BYTES {
         return Err(BoundaryViolation::new(
             "query",

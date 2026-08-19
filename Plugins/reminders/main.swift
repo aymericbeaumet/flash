@@ -136,11 +136,16 @@ runtime.onEvent = { name, payload in
 runtime.onCommand = { params in
   switch params["subcommand"] as? String ?? "" {
   case "open":
-    let result = runCommand(
-      ["/usr/bin/open", "-b", "com.apple.reminders"], timeoutSeconds: 10)
-    return result.ok
-      ? ["ok": true]
-      : ["ok": false, "error": result.stderr.trimmingCharacters(in: .whitespaces)]
+    // Fork-free: the host launches the app (`host.open`).
+    let done = DispatchSemaphore(value: 0)
+    var opened = false
+    runtime.callHost(method: "host.open", params: ["bundle_id": "com.apple.reminders"]) {
+      result in
+      opened = result["ok"] as? Bool == true
+      done.signal()
+    }
+    _ = done.wait(timeout: .now() + 10)
+    return opened ? ["ok": true] : ["ok": false, "error": "host.open failed"]
   case "refresh":
     return refreshCandidates()
       ? ["ok": true, "stdout": "reminders refreshed"]

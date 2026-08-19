@@ -1,6 +1,6 @@
 use flash_plugin::{
-    applescript_quote, run, run_command, run_osascript, Candidate, CommandRequest, CommandResponse,
-    Context, Event, RefreshGate, ResolveResponse, RunningApplication,
+    applescript_quote, run, run_osascript, Candidate, CommandRequest, CommandResponse, Context,
+    Event, RefreshGate, ResolveResponse, RunningApplication,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -245,17 +245,13 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
 
 async fn invoke(ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
     match cmd.subcommand.as_str() {
-        "open" => run_command(
-            ctx,
-            &[
-                "/usr/bin/open".into(),
-                "-b".into(),
-                "com.apple.Notes".into(),
-            ],
-            Duration::from_secs(10),
-        )
-        .await
-        .into_command(),
+        "open" => {
+            if ctx.open_app("com.apple.Notes").await {
+                CommandResponse::ok()
+            } else {
+                CommandResponse::error("host.open com.apple.Notes failed")
+            }
+        }
         "refresh" => {
             if refresh_candidates(ctx).await.is_some() {
                 CommandResponse::toast("notes refreshed")

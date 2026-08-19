@@ -3,8 +3,8 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    applescript_quote, run, run_command, run_osascript, Candidate, CommandRequest, CommandResponse,
-    Context, Event, RefreshGate, ResolveResponse, RunningApplication,
+    applescript_quote, run, run_osascript, Candidate, CommandRequest, CommandResponse, Context,
+    Event, RefreshGate, ResolveResponse, RunningApplication,
 };
 use serde::{Deserialize, Serialize};
 
@@ -259,17 +259,13 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
 
 async fn invoke(ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
     match cmd.subcommand.as_str() {
-        "open" => run_command(
-            ctx,
-            &[
-                "/usr/bin/open".into(),
-                "-b".into(),
-                "com.apple.AddressBook".into(),
-            ],
-            Duration::from_secs(10),
-        )
-        .await
-        .into_command(),
+        "open" => {
+            if ctx.open_app("com.apple.AddressBook").await {
+                CommandResponse::ok()
+            } else {
+                CommandResponse::error("host.open com.apple.AddressBook failed")
+            }
+        }
         "refresh" => {
             if refresh_candidates(ctx).await {
                 CommandResponse::toast("contacts refreshed")

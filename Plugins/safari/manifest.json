@@ -4,10 +4,14 @@
   "version": "0.1.0",
   "description": "Surface Safari tabs in the flashlight (AppleScript-backed), handle tab actions, and rebind ⌘⇧R → ⌘⌥R (Safari's hard-refresh shortcut).",
   "sandbox": {
-    "exec": ["/usr/bin/osascript", "/usr/bin/open"],
+    "exec": [
+      "/usr/bin/osascript"
+    ],
     "appleevents": true
   },
-  "exec": ["./flash-plugin-safari"],
+  "exec": [
+    "./flash-plugin-safari"
+  ],
   "capabilities": [
     "app_control"
   ],

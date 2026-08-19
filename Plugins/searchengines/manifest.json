@@ -3,11 +3,10 @@
   "name": "Search Engines",
   "version": "0.1.0",
   "description": "DuckDuckGo-style bangs in the flashlight: type !<bang> <query> to search, e.g. !r cat opens a Reddit search.",
-  "sandbox": {
-    "exec": ["/usr/bin/open"],
-    "appleevents": true
-  },
-  "exec": ["./flash-plugin-searchengines"],
+  "sandbox": {},
+  "exec": [
+    "./flash-plugin-searchengines"
+  ],
   "shebangs": {
     "command": "searchengines",
     "items": [
@@ -22,5 +21,8 @@
       "name": "searchengines.bangs",
       "priority": "normal"
     }
+  ],
+  "capabilities": [
+    "open"
   ]
 }

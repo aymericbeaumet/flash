@@ -6,7 +6,6 @@
   "sandbox": {
     "exec": [
       "/usr/bin/osascript",
-      "/usr/bin/open",
       "/usr/bin/pmset",
       "/usr/bin/killall",
       "/usr/bin/caffeinate",
@@ -18,7 +17,9 @@
     ],
     "appleevents": true,
     "signal": true,
-    "mach": ["com.apple.PowerManagement.control"]
+    "mach": [
+      "com.apple.PowerManagement.control"
+    ]
   },
   "exec": [
     "./flash-plugin-system"
@@ -99,5 +100,8 @@
       "name": "system.actions",
       "priority": "normal"
     }
+  ],
+  "capabilities": [
+    "open"
   ]
 }

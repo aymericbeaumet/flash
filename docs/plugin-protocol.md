@@ -109,6 +109,9 @@ manifest):
 | `host.ping` | none |
 | `host.fetch` | `network_fetch` |
 | `host.normal_mode_target`, `app.activate` | `app_control` |
+| `host.open` | `open` |
+| `host.post_media_key` | `media_keys` |
+| `host.process_table`, `host.signal` | `process_control` |
 | `input.post_keys` | `accessibility` |
 | `ax.snapshot`, `ax.perform`, `ax.set`, `ax.select_child` | `accessibility` |
 
@@ -122,7 +125,11 @@ plugin's behalf via `host.fetch`, restricted to the manifest's `fetch_urls`
 prefixes with an 8 s timeout and 1 MiB UTF-8 response cap — the plugin keeps
 a fully network-denied sandbox), and `subprocess` (permits helpers that
 cannot run inside that profile). `network_fetch` and `fetch_urls` must be
-declared together. Omitted capabilities are default-denied.
+declared together. `open` hands URLs/bundle ids to LaunchServices
+host-side (no `/usr/bin/open` fork), `media_keys` posts NX_SYSTEM_DEFINED
+media keys host-side (no `hid` mach allowances), and `process_control`
+reads the process table and SIGTERMs pids host-side (no libproc access or
+`/bin/kill`). Omitted capabilities are default-denied.
 
 ## Payload shapes and quotas
 
@@ -221,7 +228,7 @@ Section semantics:
   `~/.aws`, keychains, other plugins' data), and writes inside the plugin's
   data dir. Allowances: `exec` (absolute paths or bare tool names resolved
   through the login-shell PATH at spawn), `read`/`write` extra subpaths,
-  `appleevents`, `signal`, `process_info`, `hid` booleans. The `network`
+  `appleevents`, `signal` booleans. The `network`
   capability composes `network-outbound`. `[plugin.<id>] sandbox = false`
   is the per-plugin fail-open kill switch; `[plugin.<id>] exec_paths`
   appends machine-specific tool paths. Spec-less plugins keep the legacy

@@ -7,8 +7,7 @@
     "exec": [
       "/usr/bin/osascript"
     ],
-    "appleevents": true,
-    "hid": true
+    "appleevents": true
   },
   "exec": [
     "./flash-plugin-media"
@@ -74,5 +73,8 @@
   },
   "listen": [
     "core:config.*"
+  ],
+  "capabilities": [
+    "media_keys"
   ]
 }

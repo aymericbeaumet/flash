@@ -124,6 +124,23 @@ impl Context {
             .await
     }
 
+    /// Open a URL through the host (`host.open`): LaunchServices runs
+    /// host-side, so the plugin keeps a fork-free profile. Requires the
+    /// `open` capability.
+    pub async fn open_url(&self, url: &str) -> bool {
+        let response = self.call_host("host.open", json!({ "url": url })).await;
+        response.get("ok").and_then(Value::as_bool) == Some(true)
+    }
+
+    /// Launch or raise an app by bundle id through the host (`host.open`).
+    /// Requires the `open` capability.
+    pub async fn open_app(&self, bundle_id: &str) -> bool {
+        let response = self
+            .call_host("host.open", json!({ "bundle_id": bundle_id }))
+            .await;
+        response.get("ok").and_then(Value::as_bool) == Some(true)
+    }
+
     /// Fetch an allowlisted HTTPS URL through the host (`host.fetch`). The
     /// host enforces the manifest's `fetch_urls` prefixes, an 8-second
     /// timeout, and a 1 MiB UTF-8 response cap — the plugin itself needs no

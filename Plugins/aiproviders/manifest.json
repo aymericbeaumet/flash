@@ -2,7 +2,7 @@
   "id": "aiproviders",
   "name": "AI Providers",
   "version": "0.1.0",
-  "description": "Open AI chat providers from the flashlight: !chatgpt, !claude, !gemini, !perplexity, !copilot, !grok \u2014 optional query is pre-filled into the new chat.",
+  "description": "Open AI chat providers from the flashlight: !chatgpt, !claude, !gemini, !perplexity, !copilot, !grok — optional query is pre-filled into the new chat.",
   "exec": [
     "python3",
     "main.py"
@@ -35,5 +35,14 @@
         "description": "Open Grok (xAI)"
       }
     ]
-  }
+  },
+  "sandbox": {
+    "exec": [
+      "/usr/bin/osascript"
+    ],
+    "appleevents": true
+  },
+  "capabilities": [
+    "open"
+  ]
 }

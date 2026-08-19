@@ -165,7 +165,15 @@ async fn applescript_command(ctx: &Context, command: &str) -> CliResult {
 }
 
 async fn media_action(ctx: &Context, key_code: i32, fallback: &str) -> CliResult {
-    if post_media_key(key_code) {
+    // The host posts the NX_SYSTEM_DEFINED event (`host.post_media_key`), so
+    // this plugin needs no WindowServer/IOHID mach allowances of its own.
+    let response = ctx
+        .call_host(
+            "host.post_media_key",
+            serde_json::json!({ "key_code": key_code }),
+        )
+        .await;
+    if response.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
         return CliResult {
             ok: true,
             stdout: String::new(),
@@ -228,36 +236,6 @@ async fn status(ctx: &Context) -> CommandResponse {
         ));
     }
     CommandResponse::toast(lines.join("\n"))
-}
-
-fn post_media_key(key_code: i32) -> bool {
-    use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
-    use objc2_core_graphics::{CGEvent, CGEventTapLocation};
-    use objc2_foundation::NSPoint;
-
-    // NX_KEYDOWN (0x0A) then NX_KEYUP (0x0B).
-    for state in [0x0A, 0x0B] {
-        let data1 = ((key_code as isize) << 16) | ((state as isize) << 8);
-        let event = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
-            NSEventType::SystemDefined,
-            NSPoint::new(0.0, 0.0),
-            NSEventModifierFlags(0xA00),
-            0.0,
-            0,
-            None,
-            8, // NX_SUBTYPE_AUX_CONTROL_BUTTONS
-            data1,
-            -1,
-        );
-        let Some(event) = event else {
-            return false;
-        };
-        let Some(cg_event) = event.CGEvent() else {
-            return false;
-        };
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&cg_event));
-    }
-    true
 }
 
 fn main() {

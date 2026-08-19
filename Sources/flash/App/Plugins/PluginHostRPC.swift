@@ -86,6 +86,30 @@ final class PluginHostRPC {
         return
       }
       hostFetch(params, allowlist: fetchURLs, pluginID: pluginID, reply: reply)
+    case "host.open":
+      guard capabilities.contains(.open) else {
+        reply(["ok": false, "error": "missing open capability"])
+        return
+      }
+      hostOpen(params, reply: reply)
+    case "host.post_media_key":
+      guard capabilities.contains(.mediaKeys) else {
+        reply(["ok": false, "error": "missing media_keys capability"])
+        return
+      }
+      postMediaKey(params, reply: reply)
+    case "host.process_table":
+      guard capabilities.contains(.processControl) else {
+        reply(["ok": false, "error": "missing process_control capability"])
+        return
+      }
+      processTable(params, reply: reply)
+    case "host.signal":
+      guard capabilities.contains(.processControl) else {
+        reply(["ok": false, "error": "missing process_control capability"])
+        return
+      }
+      signalProcess(params, reply: reply)
     default:
       FlashLog.warn(
         "[plugin] unknown host method \(method) from \(pluginID)",
@@ -157,6 +181,171 @@ final class PluginHostRPC {
         ])
       reply(["ok": true, "status": status, "body": body])
     }.resume()
+  }
+
+  /// `host.open`: hand a URL or bundle id to LaunchServices host-side, so
+  /// plugins never fork `/usr/bin/open` and keep fork-free profiles.
+  private func hostOpen(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    if let urlString = params["url"] as? String,
+      let url = URL(string: urlString), url.scheme != nil
+    {
+      DispatchQueue.main.async {
+        reply(["ok": NSWorkspace.shared.open(url)])
+      }
+      return
+    }
+    if let bundleID = params["bundle_id"] as? String {
+      DispatchQueue.main.async {
+        guard
+          let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        else {
+          reply(["ok": false, "error": "no app for bundle id \(bundleID)"])
+          return
+        }
+        NSWorkspace.shared.openApplication(
+          at: appURL, configuration: NSWorkspace.OpenConfiguration()
+        ) { _, error in
+          if let error {
+            reply(["ok": false, "error": String(describing: error)])
+          } else {
+            reply(["ok": true])
+          }
+        }
+      }
+      return
+    }
+    reply(["ok": false, "error": "host.open requires url or bundle_id"])
+  }
+
+  /// `host.post_media_key`: post an NX_SYSTEM_DEFINED key (play/pause 16,
+  /// next 17, previous 18, …) as down+up. Runs host-side so no plugin needs
+  /// the WindowServer/IOHID mach allowances (`hid`) — the widest seatbelt
+  /// grant any bundled plugin used to hold.
+  private func postMediaKey(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let keyCode = params["key_code"] as? Int, (0...31).contains(keyCode) else {
+      reply(["ok": false, "error": "host.post_media_key requires key_code 0-31"])
+      return
+    }
+    DispatchQueue.main.async {
+      // NX_KEYDOWN (0x0A) then NX_KEYUP (0x0B), subtype 8
+      // (NX_SUBTYPE_AUX_CONTROL_BUTTONS).
+      for state in [0x0A, 0x0B] {
+        let data1 = (keyCode << 16) | (state << 8)
+        guard
+          let event = NSEvent.otherEvent(
+            with: .systemDefined,
+            location: .zero,
+            modifierFlags: NSEvent.ModifierFlags(rawValue: 0xA00),
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            subtype: 8,
+            data1: data1,
+            data2: -1),
+          let cgEvent = event.cgEvent
+        else {
+          reply(["ok": false, "error": "media key event synthesis failed"])
+          return
+        }
+        cgEvent.post(tap: .cghidEventTap)
+      }
+      reply(["ok": true])
+    }
+  }
+
+  /// `host.process_table`: visible processes with an instantaneous CPU
+  /// measurement over `sample_window_ms` (two libproc rusage snapshots
+  /// bracketing a sleep). Host-side so process inspectors need no
+  /// `process_info` seatbelt allowance and no second process model.
+  private func processTable(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    let windowMs = min(max((params["sample_window_ms"] as? Int) ?? 150, 10), 2_000)
+    DispatchQueue.global(qos: .utility).async {
+      let first = Self.cpuTimeByPid()
+      Thread.sleep(forTimeInterval: Double(windowMs) / 1_000)
+      let windowNs = Double(windowMs) * 1_000_000
+      let totalMemory = Double(max(ProcessInfo.processInfo.physicalMemory, 1))
+      var rows: [[String: Any]] = []
+      for pid in Self.allPids() {
+        guard let usage = Self.pidUsage(pid), let comm = Self.executableBasename(pid) else {
+          continue
+        }
+        let cpuPercent = first[pid].map {
+          Double(usage.cpuNs &- min($0, usage.cpuNs)) / windowNs * 100
+        }
+        rows.append([
+          "pid": Int(pid),
+          "comm": comm,
+          "cpu_percent": cpuPercent ?? 0,
+          "mem_percent": Double(usage.residentBytes) / totalMemory * 100,
+        ])
+      }
+      reply(["ok": true, "processes": rows])
+    }
+  }
+
+  /// `host.signal`: SIGTERM a pid without a `/bin/kill` subprocess. Errors
+  /// carry the OS message (EPERM: not this uid's process; ESRCH: gone).
+  private func signalProcess(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let pid = params["pid"] as? Int, pid > 1 else {
+      reply(["ok": false, "error": "host.signal requires pid > 1"])
+      return
+    }
+    if kill(pid_t(pid), SIGTERM) == 0 {
+      reply(["ok": true])
+    } else {
+      reply(["ok": false, "error": String(cString: strerror(errno))])
+    }
+  }
+
+  private static func allPids() -> [pid_t] {
+    let count = proc_listallpids(nil, 0)
+    guard count > 0 else { return [] }
+    let capacity = Int(count) + 64
+    var pids = [pid_t](repeating: 0, count: capacity)
+    let filled = proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size))
+    guard filled > 0 else { return [] }
+    return Array(pids.prefix(Int(filled))).filter { $0 > 0 }
+  }
+
+  private static func cpuTimeByPid() -> [pid_t: UInt64] {
+    var out: [pid_t: UInt64] = [:]
+    for pid in allPids() {
+      if let usage = pidUsage(pid) {
+        out[pid] = usage.cpuNs
+      }
+    }
+    return out
+  }
+
+  private static func pidUsage(_ pid: pid_t) -> (cpuNs: UInt64, residentBytes: UInt64)? {
+    var info = rusage_info_current()
+    let ok = withUnsafeMutablePointer(to: &info) { pointer in
+      pointer.withMemoryRebound(to: (rusage_info_t?).self, capacity: 1) {
+        proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, $0) == 0
+      }
+    }
+    guard ok else { return nil }
+    return (info.ri_user_time &+ info.ri_system_time, info.ri_resident_size)
+  }
+
+  private static func executableBasename(_ pid: pid_t) -> String? {
+    var buffer = [CChar](repeating: 0, count: 4 * 1024)
+    guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+    let path = String(cString: buffer)
+    guard !path.isEmpty else { return nil }
+    return (path as NSString).lastPathComponent
   }
 
   private func activatePluginApp(

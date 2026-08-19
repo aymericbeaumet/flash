@@ -213,7 +213,13 @@ async fn run_system_action(ctx: &Context, subcommand: &str) -> CommandResponse {
         "dark" => run_osascript(ctx, DARK_TOGGLE, Duration::from_secs(10))
             .await
             .into_command(),
-        "screensaver" => sh(ctx, &["/usr/bin/open", "-a", "ScreenSaverEngine"], 10).await,
+        "screensaver" => {
+            if ctx.open_app("com.apple.ScreenSaverEngine").await {
+                CommandResponse::ok()
+            } else {
+                CommandResponse::error("host.open ScreenSaverEngine failed")
+            }
+        }
         // Spawn caffeinate detached so the command returns immediately and
         // the assertion outlives this short-lived invocation.
         "caffeinate" => {

@@ -8,7 +8,7 @@
 //! startup, so the warm catalog exists before `initialize` is answered.
 //! Every bang publishes as a kind="bang" candidate in the warm catalog (so
 //! a typed `!goo` prefix-matches `!google`), and the catch-all shebang
-//! routes `!<bang> <query>` to /usr/bin/open with the query
+//! routes `!<bang> <query>` to the host's `host.open` with the query
 //! percent-encoded into the URL template.
 
 const std = @import("std");
@@ -144,27 +144,16 @@ fn invoke(arena: std.mem.Allocator, id: i64, params: fp.Value) void {
         std.fmt.bufPrintZ(&url_buf, "{s}", .{template}) catch
             return fp.sendError(arena, id, "url too long");
 
-    if (openUrl(url)) {
+    // Fire-and-forget through the host (`host.open`): LaunchServices runs
+    // host-side, so this plugin needs no fork/exec allowance at all.
+    var open_params: fp.Value = .{ .object = .empty };
+    open_params.object.put(arena, "url", .{ .string = url }) catch
+        return fp.sendError(arena, id, "oom");
+    if (fp.callHost(arena, "host.open", open_params)) |_| {
         fp.sendOk(arena, id);
     } else {
-        fp.sendError(arena, id, "open failed");
+        fp.sendError(arena, id, "host.open pending table full");
     }
-}
-
-/// fork + execve of /usr/bin/open — Zig 0.16's std.process.Child needs the
-/// new std.Io plumbing, which is far more machinery than one blocking
-/// subprocess deserves.
-fn openUrl(url: [:0]const u8) bool {
-    const pid = std.c.fork();
-    if (pid < 0) return false;
-    if (pid == 0) {
-        const argv = [_:null]?[*:0]const u8{ "/usr/bin/open", url.ptr };
-        _ = std.c.execve("/usr/bin/open", &argv, std.c.environ);
-        std.c._exit(127);
-    }
-    var status: c_int = 0;
-    _ = std.c.waitpid(pid, &status, 0);
-    return status == 0;
 }
 
 pub fn main() void {

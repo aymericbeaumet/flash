@@ -28,6 +28,9 @@ PROVIDERS = {
 AUTOSEND_DELAY_SECONDS = 2.5
 
 
+plugin = Plugin()
+
+
 def on_command(params):
     bang = params.get("subcommand", "").lower()
     provider = PROVIDERS.get(bang)
@@ -36,12 +39,10 @@ def on_command(params):
     base, query_param = provider
     query = " ".join(params.get("args", [])).strip()
     url = f"{base}?{query_param}={urllib.parse.quote(query)}" if query else base
-    opened = subprocess.run(["/usr/bin/open", url], capture_output=True, timeout=10)
-    if opened.returncode != 0:
-        return {
-            "ok": False,
-            "error": opened.stderr.decode("utf-8", "replace").strip() or "open failed",
-        }
+    # Fork-free: the host opens the URL (`host.open`).
+    opened = plugin.call_host("host.open", {"url": url})
+    if not opened.get("ok"):
+        return {"ok": False, "error": opened.get("error") or "host.open failed"}
     if query:
         # Wait for the page's composer to take focus, then synthesize Return.
         time.sleep(AUTOSEND_DELAY_SECONDS)
@@ -58,4 +59,4 @@ def on_command(params):
 
 
 if __name__ == "__main__":
-    Plugin().serve(on_command)
+    plugin.serve(on_command)

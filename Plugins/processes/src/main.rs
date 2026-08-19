@@ -60,7 +60,7 @@ impl FlashPlugin for Processes {
         let Some(pid) = candidate.payload_str().and_then(|s| s.parse::<i32>().ok()) else {
             return ResolveResponse::unresolved();
         };
-        match send_term(pid) {
+        match send_term(&ctx, pid).await {
             Ok(()) => {
                 // Best effort: refresh so the row disappears immediately.
                 let refresh_ctx = ctx.clone();
@@ -167,26 +167,37 @@ fn candidate_for(row: &ProcessRow) -> Candidate {
 const CPU_SAMPLE_WINDOW: Duration = Duration::from_millis(150);
 
 async fn list_processes(ctx: &Context) -> Option<Vec<ProcessRow>> {
-    // libproc, not /bin/ps: no subprocess (ps is setgid, hostile to the
-    // deny-default seatbelt), and only this uid's visible processes — the
-    // only ones `!kill` could signal anyway. An empty table is impossible
-    // (this process exists), so empty means the listing failed.
-    let samples = flash_plugin::process::list_processes(CPU_SAMPLE_WINDOW).await;
-    if samples.is_empty() {
-        ctx.log("warn", "[processes] libproc listing returned no rows");
+    // host.process_table, not /bin/ps or in-process libproc: no subprocess,
+    // no process_info seatbelt allowance, and one process model (the
+    // host's). An empty table is impossible (the host exists), so empty
+    // means the call failed.
+    let response = ctx
+        .call_host(
+            "host.process_table",
+            serde_json::json!({ "sample_window_ms": CPU_SAMPLE_WINDOW.as_millis() as u64 }),
+        )
+        .await;
+    let rows: Vec<ProcessRow> = response
+        .get("processes")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    Some(ProcessRow {
+                        pid: row.get("pid")?.as_i64()? as i32,
+                        comm: row.get("comm")?.as_str()?.to_string(),
+                        cpu: row.get("cpu_percent")?.as_f64()? as f32,
+                        mem: row.get("mem_percent")?.as_f64()? as f32,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if rows.is_empty() {
+        ctx.log("warn", "[processes] host.process_table returned no rows");
         return None;
     }
-    Some(
-        samples
-            .into_iter()
-            .map(|sample| ProcessRow {
-                pid: sample.pid,
-                comm: sample.comm,
-                cpu: sample.cpu_percent,
-                mem: sample.mem_percent,
-            })
-            .collect(),
-    )
+    Some(rows)
 }
 
 async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
@@ -195,7 +206,7 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
     }
     // Pure-numeric query is treated as an exact PID — no fuzzy match.
     if let Ok(pid) = query.parse::<i32>() {
-        return match send_term(pid) {
+        return match send_term(ctx, pid).await {
             Ok(()) => CommandResponse::toast(format!("SIGTERM → pid {pid}")),
             Err(error) => CommandResponse::error(format!("kill pid {pid}: {error}")),
         };
@@ -213,7 +224,7 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
         [single] => {
             let pid = single.pid;
             let name = single.comm.clone();
-            match send_term(pid) {
+            match send_term(ctx, pid).await {
                 Ok(()) => CommandResponse::toast(format!("SIGTERM → {name} (pid {pid})")),
                 Err(error) => CommandResponse::error(format!("kill {name} (pid {pid}): {error}")),
             }
@@ -233,8 +244,18 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
     }
 }
 
-fn send_term(pid: i32) -> Result<(), String> {
-    flash_plugin::process::terminate_pid(pid).map_err(|error| error.to_string())
+async fn send_term(ctx: &Context, pid: i32) -> Result<(), String> {
+    let response = ctx
+        .call_host("host.signal", serde_json::json!({ "pid": pid }))
+        .await;
+    if response.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+    Err(response
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("host.signal failed")
+        .to_string())
 }
 
 fn main() {
@@ -244,57 +265,27 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
-    /// Golden-output gate for the libproc swap: the old implementation was
-    /// `/bin/ps -xo pid=`; every same-user pid ps reports must be visible
-    /// through libproc too, modulo process churn between the two snapshots.
-    #[tokio::test]
-    async fn libproc_listing_covers_the_ps_view() {
-        let samples = flash_plugin::process::list_processes(Duration::from_millis(50)).await;
-        let ours: HashSet<i32> = samples.iter().map(|sample| sample.pid).collect();
-        assert!(
-            ours.contains(&(std::process::id() as i32)),
-            "listing must include this test process"
-        );
-        assert!(
-            samples
-                .iter()
-                .all(|sample| !sample.comm.is_empty() && sample.pid > 0),
-            "every row carries a pid and a comm"
-        );
-
-        let ps = tokio::process::Command::new("/bin/ps")
-            .args(["-xo", "pid="])
-            .output()
-            .await
-            .expect("spawn ps");
-        let ps_pids: HashSet<i32> = String::from_utf8_lossy(&ps.stdout)
-            .lines()
-            .filter_map(|line| line.trim().parse().ok())
-            .collect();
-        assert!(!ps_pids.is_empty(), "ps golden reference produced no pids");
-        let overlap = ps_pids.intersection(&ours).count();
-        assert!(
-            overlap * 10 >= ps_pids.len() * 9,
-            "libproc covers only {overlap}/{} of ps's same-user view",
-            ps_pids.len()
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_populates_the_warm_store() {
-        let harness = flash_plugin::testing::Harness::new("processes");
-        let ctx = harness.context();
-        assert!(refresh_candidates(&ctx).await, "live refresh must succeed");
-        assert!(ctx.has_locations(SOURCE_ID));
-        assert!(!ctx.warm_locations().is_empty());
-    }
-
+    /// The libproc listing itself now lives host-side (host.process_table,
+    /// with a Swift golden-output test against /bin/ps); plugin-side the
+    /// contract is the row -> candidate mapping.
     #[test]
-    fn terminate_reports_os_errors() {
-        // pid 1 (launchd) is never signalable from a user test.
-        assert!(flash_plugin::process::terminate_pid(1).is_err());
+    fn candidate_carries_pid_payload_and_alias() {
+        let row = ProcessRow {
+            pid: 4242,
+            comm: "Safari".into(),
+            cpu: 12.5,
+            mem: 3.25,
+        };
+        let candidate = candidate_for(&row);
+        assert_eq!(candidate.title, "Safari");
+        assert_eq!(candidate.payload_str(), Some("4242"));
+        let subtitle = candidate
+            .metadata
+            .get(flash_plugin::candidate_metadata::SUBTITLE)
+            .expect("subtitle");
+        assert!(subtitle.contains("pid 4242"), "subtitle: {subtitle}");
+        assert!(subtitle.contains("12.5% CPU"), "subtitle: {subtitle}");
     }
 
     #[test]

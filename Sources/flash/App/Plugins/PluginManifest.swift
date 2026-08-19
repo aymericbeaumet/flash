@@ -37,6 +37,18 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// Running-app/focus event observation is controlled separately by manifest
   /// `listen` patterns and is not gated by this capability.
   case appControl = "app_control"
+  /// Open a URL or launch an app by bundle id through the host
+  /// (`host.open`): LaunchServices runs host-side, so the plugin needs no
+  /// fork/exec allowance for `/usr/bin/open` and keeps a fork-free profile.
+  case open
+  /// Post a media key (play/pause, next, …) as an NX_SYSTEM_DEFINED event
+  /// through the host (`host.post_media_key`), replacing the per-plugin
+  /// `hid` seatbelt allowance — the widest allowance any plugin held.
+  case mediaKeys = "media_keys"
+  /// Read the host's process table (`host.process_table`) and signal a pid
+  /// (`host.signal`), replacing per-plugin libproc access and the
+  /// `process_info`/`signal` seatbelt allowances.
+  case processControl = "process_control"
 }
 
 extension PluginCapability {
@@ -979,31 +991,24 @@ struct PluginSandboxSpec: Codable, Equatable {
   /// Allow sending AppleEvents (osascript-driven plugins): opens the
   /// AppleEvents/LaunchServices/TCC mach services and appleevent-send.
   var appleEvents: Bool
-  /// Allow signalling other processes (`!kill`-style plugins).
+  /// Allow signalling other processes — needed when an exec'd tool (e.g.
+  /// system's `killall`) signals beyond the plugin's own process group.
+  /// Plugin-side signalling itself goes through `host.signal`.
   var signal: Bool
-  /// Allow posting synthetic HID/CGEvents (media-key plugins): opens the
-  /// WindowServer and IOHID mach services.
-  var hid: Bool
   /// Extra mach service names the plugin's tools need — e.g. pmset requires
   /// powerd's com.apple.PowerManagement.control. Explicit per plugin; the
   /// generator never widens mach-lookup beyond named services.
   var mach: [String]
-  /// Allow reading other processes' info (libproc listing/rusage) beyond
-  /// the always-allowed `(target self)`.
-  var processInfo: Bool
 
   init(
     exec: [String] = [], read: [String] = [], write: [String] = [],
-    appleEvents: Bool = false, signal: Bool = false, processInfo: Bool = false,
-    hid: Bool = false, mach: [String] = []
+    appleEvents: Bool = false, signal: Bool = false, mach: [String] = []
   ) {
     self.exec = exec
     self.read = read
     self.write = write
     self.appleEvents = appleEvents
     self.signal = signal
-    self.processInfo = processInfo
-    self.hid = hid
     self.mach = mach
   }
 
@@ -1014,8 +1019,6 @@ struct PluginSandboxSpec: Codable, Equatable {
     self.write = try c.decodeIfPresent([String].self, forKey: .write) ?? []
     self.appleEvents = try c.decodeIfPresent(Bool.self, forKey: .appleevents) ?? false
     self.signal = try c.decodeIfPresent(Bool.self, forKey: .signal) ?? false
-    self.processInfo = try c.decodeIfPresent(Bool.self, forKey: .processInfo) ?? false
-    self.hid = try c.decodeIfPresent(Bool.self, forKey: .hid) ?? false
     self.mach = try c.decodeIfPresent([String].self, forKey: .mach) ?? []
   }
 
@@ -1026,14 +1029,11 @@ struct PluginSandboxSpec: Codable, Equatable {
     if !write.isEmpty { try c.encode(write, forKey: .write) }
     if appleEvents { try c.encode(appleEvents, forKey: .appleevents) }
     if signal { try c.encode(signal, forKey: .signal) }
-    if processInfo { try c.encode(processInfo, forKey: .processInfo) }
-    if hid { try c.encode(hid, forKey: .hid) }
     if !mach.isEmpty { try c.encode(mach, forKey: .mach) }
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case exec, read, write, appleevents, signal, hid, mach
-    case processInfo = "process_info"
+    case exec, read, write, appleevents, signal, mach
   }
 }
 

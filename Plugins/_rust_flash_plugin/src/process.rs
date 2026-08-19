@@ -2,188 +2,22 @@
 //! the SDK's [`run_command`](crate::run_command), public for plugins whose
 //! invocation shape the high-level runner cannot express — tmux builds its
 //! own `Command` with a deliberately unsandboxed environment and custom
-//! output budgets), plus a libproc-backed process-table sampler and signal
-//! sender so plugins never need `/bin/ps` or `/bin/kill` subprocesses (both
-//! hostile to a deny-default seatbelt profile; ps is setgid).
+//! output budgets). Process-table listing and signalling are host services
+//! (`host.process_table` / `host.signal`) — plugins never fork `/bin/ps`
+//! or `/bin/kill` and need no libproc access of their own.
 //!
 //! For capture, both output streams are drained concurrently. A timeout, a
 //! read failure, or either stream exceeding its byte budget kills the
 //! subprocess's entire process group so descendants cannot retain the pipes
 //! and strand the plugin.
 
-use std::collections::HashMap;
 use std::io;
 use std::process::ExitStatus;
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
-
-/// One row of the system process table, sampled via libproc. Processes the
-/// kernel hides from this uid are skipped — exactly the set the caller
-/// could neither inspect nor signal anyway.
-#[derive(Clone, Debug)]
-pub struct ProcessSample {
-    pub pid: i32,
-    /// Executable basename from `proc_pidpath` (e.g. "Google Chrome").
-    pub comm: String,
-    /// Instantaneous CPU percent over the sample window.
-    pub cpu_percent: f32,
-    /// Resident memory as a percent of physical RAM.
-    pub mem_percent: f32,
-}
-
-/// List visible processes with an instantaneous CPU measurement over
-/// `sample_window` (two libproc rusage snapshots bracketing an async
-/// sleep — the syscalls themselves are microseconds, so nothing blocks the
-/// runtime). Requires the `process_info` sandbox allowance.
-pub async fn list_processes(sample_window: Duration) -> Vec<ProcessSample> {
-    let first: HashMap<i32, u64> = all_pids()
-        .into_iter()
-        .filter_map(|pid| Some((pid, rusage(pid)?.cpu_ns)))
-        .collect();
-    tokio::time::sleep(sample_window).await;
-    let window_ns = sample_window.as_nanos().max(1) as f64;
-    let total_memory = physical_memory_bytes().max(1) as f64;
-    let mut rows = Vec::new();
-    for pid in all_pids() {
-        let Some(usage) = rusage(pid) else { continue };
-        let Some(comm) = executable_basename(pid) else {
-            continue;
-        };
-        let cpu_percent = first
-            .get(&pid)
-            .map(|&previous| {
-                let delta = usage.cpu_ns.saturating_sub(previous) as f64;
-                ((delta / window_ns) * 100.0) as f32
-            })
-            .unwrap_or(0.0);
-        rows.push(ProcessSample {
-            pid,
-            comm,
-            cpu_percent,
-            mem_percent: ((usage.resident_bytes as f64 / total_memory) * 100.0) as f32,
-        });
-    }
-    rows
-}
-
-/// Send SIGTERM without a `/bin/kill` subprocess. Errors carry the OS
-/// message (EPERM: not this uid's process; ESRCH: already gone). Requires
-/// the `signal` sandbox allowance.
-pub fn terminate_pid(pid: i32) -> io::Result<()> {
-    // Safety: kill(2) takes a plain pid + signal number; no memory crosses
-    // the boundary.
-    if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-struct PidUsage {
-    cpu_ns: u64,
-    resident_bytes: u64,
-}
-
-fn all_pids() -> Vec<i32> {
-    // Safety: first call sizes the table, second fills a buffer we own; the
-    // kernel may report more pids between the calls, so over-allocate.
-    unsafe {
-        let count = libc::proc_listallpids(std::ptr::null_mut(), 0);
-        if count <= 0 {
-            return Vec::new();
-        }
-        let capacity = (count as usize) + 64;
-        let mut pids = vec![0 as libc::c_int; capacity];
-        let filled = libc::proc_listallpids(
-            pids.as_mut_ptr().cast(),
-            (capacity * std::mem::size_of::<libc::c_int>()) as libc::c_int,
-        );
-        if filled <= 0 {
-            return Vec::new();
-        }
-        pids.truncate(filled as usize);
-        pids.retain(|&pid| pid > 0);
-        pids
-    }
-}
-
-fn rusage(pid: i32) -> Option<PidUsage> {
-    // Safety: proc_pid_rusage fills the struct we own; RUSAGE_INFO_V2 is the
-    // smallest flavor carrying both cpu times and resident size.
-    let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::uninit();
-    let rc = unsafe {
-        libc::proc_pid_rusage(
-            pid,
-            libc::RUSAGE_INFO_V2,
-            info.as_mut_ptr().cast::<libc::rusage_info_t>().cast(),
-        )
-    };
-    if rc != 0 {
-        return None;
-    }
-    let info = unsafe { info.assume_init() };
-    Some(PidUsage {
-        cpu_ns: mach_ticks_to_ns(info.ri_user_time.saturating_add(info.ri_system_time)),
-        resident_bytes: info.ri_resident_size,
-    })
-}
-
-fn executable_basename(pid: i32) -> Option<String> {
-    // Safety: proc_pidpath writes a NUL-terminated path into our buffer.
-    let mut buffer = [0u8; 4096];
-    let len = unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
-    if len <= 0 {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&buffer[..len as usize]).into_owned();
-    let comm = path.rsplit('/').next().unwrap_or(&path).to_string();
-    (!comm.is_empty()).then_some(comm)
-}
-
-// libc deprecates its mach_timebase_info in favor of the mach2 crate; one
-// struct + one call does not justify a new dependency.
-#[allow(deprecated)]
-static MACH_TIMEBASE: LazyLock<(u64, u64)> = LazyLock::new(|| {
-    // Safety: mach_timebase_info fills the struct we own; on failure fall
-    // back to 1/1 (already-nanoseconds).
-    let mut info = libc::mach_timebase_info { numer: 0, denom: 0 };
-    let rc = unsafe { libc::mach_timebase_info(&mut info) };
-    if rc == 0 && info.numer > 0 && info.denom > 0 {
-        (info.numer as u64, info.denom as u64)
-    } else {
-        (1, 1)
-    }
-});
-
-fn mach_ticks_to_ns(ticks: u64) -> u64 {
-    let (numer, denom) = *MACH_TIMEBASE;
-    (ticks as u128 * numer as u128 / denom as u128) as u64
-}
-
-fn physical_memory_bytes() -> u64 {
-    // Safety: sysctlbyname fills the u64 we own; hw.memsize is a stable key.
-    let mut bytes: u64 = 0;
-    let mut size = std::mem::size_of::<u64>();
-    let name = c"hw.memsize";
-    let rc = unsafe {
-        libc::sysctlbyname(
-            name.as_ptr(),
-            (&mut bytes as *mut u64).cast(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if rc == 0 {
-        bytes
-    } else {
-        0
-    }
-}
 
 pub const TIMEOUT_STATUS: i32 = 124;
 pub const OUTPUT_LIMIT_STATUS: i32 = 125;

@@ -3,11 +3,10 @@
   "name": "Processes",
   "version": "0.1.0",
   "description": "List running processes in flashlight; SIGTERM them with !kill <pid|name>.",
-  "exec": ["./flash-plugin-processes"],
-  "sandbox": {
-    "process_info": true,
-    "signal": true
-  },
+  "exec": [
+    "./flash-plugin-processes"
+  ],
+  "sandbox": {},
   "commands": {
     "items": [
       {
@@ -36,5 +35,8 @@
       "name": "processes.processes",
       "priority": "normal"
     }
+  ],
+  "capabilities": [
+    "process_control"
   ]
 }

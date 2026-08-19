@@ -4,10 +4,14 @@
   "version": "0.1.0",
   "description": "Surface macOS Reminders entries in flashlight, plus `:reminders` open helper.",
   "sandbox": {
-    "exec": ["/usr/bin/osascript", "/usr/bin/open"],
+    "exec": [
+      "/usr/bin/osascript"
+    ],
     "appleevents": true
   },
-  "exec": ["./flash-plugin-reminders"],
+  "exec": [
+    "./flash-plugin-reminders"
+  ],
   "priority": 12,
   "commands": {
     "items": [
@@ -32,5 +36,8 @@
       "name": "reminders.tasks",
       "priority": "normal"
     }
+  ],
+  "capabilities": [
+    "open"
   ]
 }

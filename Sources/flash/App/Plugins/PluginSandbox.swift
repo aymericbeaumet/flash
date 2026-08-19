@@ -104,9 +104,6 @@ enum PluginSandbox {
     if spec.signal {
       lines.append("(allow signal)")
     }
-    if spec.processInfo {
-      lines.append("(allow process-info*)")
-    }
     // Interpreted plugins exec a runtime outside the plugin root (python3,
     // bun): allow exec + dyld mapping of the resolved interpreter itself.
     if !executablePath.isEmpty && !executablePath.hasPrefix(root.path) {
@@ -119,15 +116,6 @@ enum PluginSandbox {
     if !spec.mach.isEmpty {
       let names = spec.mach.map { "(global-name \(q($0)))" }.joined(separator: " ")
       lines.append("(allow mach-lookup \(names))")
-    }
-    if spec.hid {
-      // Synthetic HID/CGEvent posting: the WindowServer session and IOHID
-      // event system.
-      lines.append(
-        "(allow mach-lookup (global-name \"com.apple.windowserver.active\")"
-          + " (global-name \"com.apple.iohideventsystem\")"
-          + " (global-name \"com.apple.CARenderServer\"))")
-      lines.append("(allow iokit-open)")
     }
     if spec.appleEvents {
       // osascript-driven plugins: AppleEvents routing and the TCC daemon
