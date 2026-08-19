@@ -11,10 +11,14 @@
       "/usr/bin/killall",
       "/usr/bin/caffeinate",
       "/bin/sh",
+      "/bin/bash",
+      "/bin/zsh",
+      "/bin/dash",
       "/usr/bin/nohup"
     ],
     "appleevents": true,
-    "signal": true
+    "signal": true,
+    "mach": ["com.apple.PowerManagement.control"]
   },
   "exec": [
     "./flash-plugin-system"

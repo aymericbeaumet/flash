@@ -852,6 +852,10 @@ final class PluginProcess {
     if spec.processInfo {
       lines.append("(allow process-info*)")
     }
+    if !spec.mach.isEmpty {
+      let names = spec.mach.map { "(global-name \(q($0)))" }.joined(separator: " ")
+      lines.append("(allow mach-lookup \(names))")
+    }
     if spec.hid {
       // Synthetic HID/CGEvent posting: the WindowServer session and IOHID
       // event system.

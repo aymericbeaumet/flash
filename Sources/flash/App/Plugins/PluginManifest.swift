@@ -981,6 +981,10 @@ struct PluginSandboxSpec: Codable, Equatable {
   /// Allow posting synthetic HID/CGEvents (media-key plugins): opens the
   /// WindowServer and IOHID mach services.
   var hid: Bool
+  /// Extra mach service names the plugin's tools need — e.g. pmset requires
+  /// powerd's com.apple.PowerManagement.control. Explicit per plugin; the
+  /// generator never widens mach-lookup beyond named services.
+  var mach: [String]
   /// Allow reading other processes' info (libproc listing/rusage) beyond
   /// the always-allowed `(target self)`.
   var processInfo: Bool
@@ -988,7 +992,7 @@ struct PluginSandboxSpec: Codable, Equatable {
   init(
     exec: [String] = [], read: [String] = [], write: [String] = [],
     appleEvents: Bool = false, signal: Bool = false, processInfo: Bool = false,
-    hid: Bool = false
+    hid: Bool = false, mach: [String] = []
   ) {
     self.exec = exec
     self.read = read
@@ -997,6 +1001,7 @@ struct PluginSandboxSpec: Codable, Equatable {
     self.signal = signal
     self.processInfo = processInfo
     self.hid = hid
+    self.mach = mach
   }
 
   init(from decoder: Decoder) throws {
@@ -1008,6 +1013,7 @@ struct PluginSandboxSpec: Codable, Equatable {
     self.signal = try c.decodeIfPresent(Bool.self, forKey: .signal) ?? false
     self.processInfo = try c.decodeIfPresent(Bool.self, forKey: .processInfo) ?? false
     self.hid = try c.decodeIfPresent(Bool.self, forKey: .hid) ?? false
+    self.mach = try c.decodeIfPresent([String].self, forKey: .mach) ?? []
   }
 
   func encode(to encoder: Encoder) throws {
@@ -1019,10 +1025,11 @@ struct PluginSandboxSpec: Codable, Equatable {
     if signal { try c.encode(signal, forKey: .signal) }
     if processInfo { try c.encode(processInfo, forKey: .processInfo) }
     if hid { try c.encode(hid, forKey: .hid) }
+    if !mach.isEmpty { try c.encode(mach, forKey: .mach) }
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case exec, read, write, appleevents, signal, hid
+    case exec, read, write, appleevents, signal, hid, mach
     case processInfo = "process_info"
   }
 }
