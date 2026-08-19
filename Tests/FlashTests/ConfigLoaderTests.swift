@@ -175,7 +175,8 @@ final class ConfigLoaderTests: XCTestCase {
       [mode.normal]
       passthrough_modifiers = ["cmd", "hyper"]
       """)
-    XCTAssertEqual(invalid.mode.normalPassthroughModifiers, ["cmd", "hyper"])
+    // Unknown tokens are diagnosed AND filtered out of the live config.
+    XCTAssertEqual(invalid.mode.normalPassthroughModifiers, ["cmd"])
     XCTAssertTrue(
       invalid.diagnostics.contains {
         $0.message.contains("passthrough_modifiers: unknown modifier \"hyper\"")
@@ -205,7 +206,8 @@ final class ConfigLoaderTests: XCTestCase {
       [mode.normal]
       passthrough_keys = ["escape", "hyper"]
       """)
-    XCTAssertEqual(invalid.mode.normalPassthroughKeys, ["escape", "hyper"])
+    // Unknown tokens are diagnosed AND filtered out of the live config.
+    XCTAssertEqual(invalid.mode.normalPassthroughKeys, ["escape"])
     XCTAssertEqual(invalid.mode.normalPassthroughKeyCodes, [UInt32(kVK_Escape)])
     XCTAssertTrue(
       invalid.diagnostics.contains {
@@ -537,15 +539,17 @@ final class ConfigLoaderTests: XCTestCase {
       })
     XCTAssertTrue(
       c.loadingDiagnostics.contains {
-        $0.message.contains("flashlight.precedence.firefox must be an integer")
+        $0.message.contains(
+          "flashlight.precedence.firefox must be an integer between -10000 and 10000")
       })
     XCTAssertTrue(
       c.loadingDiagnostics.contains {
-        $0.message.contains("flashlight.suggestion_count must be a positive integer")
+        $0.message.contains("flashlight.suggestion_count must be an integer between 1 and 100")
       })
     XCTAssertTrue(
       c.loadingDiagnostics.contains {
-        $0.message.contains("flashlight.precedence_alive_bonus must be a non-negative integer")
+        $0.message.contains(
+          "flashlight.precedence_alive_bonus must be an integer between 0 and 10000")
       })
   }
 
@@ -768,11 +772,17 @@ final class ConfigLoaderTests: XCTestCase {
   }
 
   func testParsesInvalidLayoutKeysIntoPreparedFallback() {
+    // An unresolvable selector is rejected at load with a located
+    // diagnostic; the default alphabet stays (previously the bad value was
+    // stored and Alphabet.resolve silently fell back).
     let c = ConfigLoader.parse("[hints]\nkeys = \"<colemak_homerow+qwerty_toprow>\"")
-    XCTAssertEqual(c.hints.keys, "<colemak_homerow+qwerty_toprow>")
+    XCTAssertEqual(c.hints.keys, Config().hints.keys)
     XCTAssertEqual(c.resolvedAlphabet.layoutName, "qwerty")
-    XCTAssertEqual(String(c.resolvedAlphabet.chars), "sdfjklagheruiwtyoqp")
-    XCTAssertNotNil(c.resolvedAlphabet.warning)
+    XCTAssertNil(c.resolvedAlphabet.warning)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("hints.keys must be a layout selector")
+      })
   }
 
   func testParsesValidLayoutCombinationIntoPreparedAlphabet() {
@@ -1270,14 +1280,16 @@ final class ConfigLoaderTests: XCTestCase {
   }
 
   func testLoadingErrorAlertIncludesResolvedAlphabetWarning() {
+    // Unresolvable selectors are now rejected by the loader itself, so the
+    // alert carries the located hints.keys diagnostic (the in-resolver
+    // fallback warning only survives for env/CLI overrides).
     let c = ConfigLoader.parse("[hints]\nkeys = \"<colemak_toprow|colemak_homerow>\"")
     let message = c.loadingErrorAlertMessage
     XCTAssertNotNil(message)
     XCTAssertEqual(message?.components(separatedBy: "\n").first, "[Flash]")
     XCTAssertTrue(message?.contains("\nConfig error\n") == true)
     XCTAssertTrue(message?.contains("line 2, col 8") == true)
-    XCTAssertTrue(message?.contains("Unknown hints.keys preset") == true)
-    XCTAssertTrue(message?.contains("colemak_toprow|colemak_homerow") == true)
+    XCTAssertTrue(message?.contains("hints.keys must be a layout selector") == true)
   }
 
   func testLoadingErrorAlertIncludesMappingWarnings() {
@@ -1494,6 +1506,178 @@ final class ConfigLoaderTests: XCTestCase {
     }
     let diagnostics = ConfigLoader.parse(toml).loadingDiagnostics.map(\.logMessage)
     XCTAssertTrue(diagnostics.isEmpty, "default config produced diagnostics: \(diagnostics)")
+  }
+
+  func testWrongTypedSectionDiagnosesInsteadOfSilentlyVanishing() {
+    // `hints = 5`: the section name is known, so warnUnknownConfigKeys can't
+    // catch it — the section gate must.
+    let c = ConfigLoader.parse(
+      """
+      hints = 5
+      [mode]
+      normal = "x"
+      """)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains { $0.message.contains("[hints] must be a table") },
+      "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains { $0.message.contains("[mode.normal] must be a table") })
+  }
+
+  func testMalformedDisabledDoesNotDropThirdParty() {
+    let sha = String(repeating: "a", count: 40)
+    let c = ConfigLoader.parse(
+      """
+      [plugins]
+      disabled = 5
+      third_party = ["github:user/project@\(sha)"]
+      """)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains { $0.message.contains("plugins.disabled") })
+    // The malformed sibling must not abort the section.
+    XCTAssertEqual(c.plugins.thirdParty.count, 1)
+  }
+
+  func testPrecedenceValuesAreBounded() {
+    let c = ConfigLoader.parse(
+      """
+      [flashlight]
+      precedence_alive_bonus = 999999999
+      [flashlight.precedence]
+      tmux = 9223372036854775807
+      ok = -500
+      """)
+    // Unbounded values used to overflow-trap in the ranking sum.
+    XCTAssertEqual(c.flashlight.precedenceAliveBonus, Config().flashlight.precedenceAliveBonus)
+    XCTAssertNil(c.flashlight.precedence["tmux"])
+    XCTAssertEqual(c.flashlight.precedence["ok"], -500)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("flashlight.precedence.tmux must be an integer between")
+      })
+  }
+
+  func testMagicModifiersDiagnoseAndFilterUnknownTokens() {
+    let c = ConfigLoader.parse(
+      """
+      [hints]
+      magic_modifiers = ["cmd", "hyper"]
+      """)
+    XCTAssertEqual(c.hints.magicModifiers, ["cmd"])
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("hints.magic_modifiers: unknown modifier(s) hyper")
+      })
+  }
+
+  func testLeaderRejectsMultiAtomStrings() {
+    let c = ConfigLoader.parse(
+      """
+      [mode.normal]
+      leader = "abc"
+      """)
+    XCTAssertEqual(c.mode.normalLeader, Config().mode.normalLeader)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("mode.normal.leader must be a single key")
+      })
+  }
+
+  func testModeLabelsRejectOversizeAndWarnUnknownKeys() {
+    let oversize = ConfigLoader.parse(
+      """
+      [mode]
+      labels = { normal = "\(String(repeating: "N", count: 40))", insert = "I", command = "C" }
+      """)
+    XCTAssertEqual(oversize.mode.labels, Config().mode.labels)
+    XCTAssertTrue(
+      oversize.loadingDiagnostics.contains { $0.message.contains("mode.labels") })
+
+    let unknown = ConfigLoader.parse(
+      """
+      [mode]
+      labels = { normal = "N", insert = "I", command = "C", foo = "X" }
+      """)
+    XCTAssertEqual(unknown.mode.labels.normal, "N")
+    XCTAssertTrue(
+      unknown.loadingDiagnostics.contains { $0.message.contains("mode.labels: unknown key 'foo'") })
+  }
+
+  func testEmptyHexColorRejectedExceptWindowBorder() {
+    let c = ConfigLoader.parse(
+      """
+      [overlay]
+      hint_fg = ""
+      window_border_color = ""
+      """)
+    // Empty is not a color — except where it explicitly means "default".
+    XCTAssertEqual(c.overlay.hintFG, Config().overlay.hintFG)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains { $0.message.contains("overlay.hint_fg") })
+    XCTAssertEqual(c.overlay.windowBorderColor, "")
+    XCTAssertFalse(
+      c.loadingDiagnostics.contains { $0.message.contains("window_border_color") })
+  }
+
+  func testAppDirectoriesRejectEmptyAndRoots() {
+    let empty = ConfigLoader.parse(
+      """
+      [open]
+      app_directories = []
+      """)
+    XCTAssertEqual(empty.open.appDirectories, Config().open.appDirectories)
+    XCTAssertTrue(
+      empty.loadingDiagnostics.contains {
+        $0.message.contains("open.app_directories must not be empty")
+      })
+
+    let root = ConfigLoader.parse(
+      """
+      [open]
+      app_directories = ["/"]
+      """)
+    XCTAssertEqual(root.open.appDirectories, Config().open.appDirectories)
+    XCTAssertTrue(
+      root.loadingDiagnostics.contains {
+        $0.message.contains("open.app_directories must not include a filesystem root")
+      })
+  }
+
+  func testIntKeysAcceptWholeDoubles() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      interval = 30.0
+      """)
+    XCTAssertEqual(c.statusBar.refreshIntervalSeconds, 30)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+
+    let fractional = ConfigLoader.parse(
+      """
+      [statusbar]
+      interval = 2.5
+      """)
+    XCTAssertEqual(fractional.statusBar.refreshIntervalSeconds, 5)
+    XCTAssertTrue(
+      fractional.loadingDiagnostics.contains { $0.message.contains("statusbar.interval") })
+  }
+
+  func testPluginSettingsDiagnoseBadIdsAndNonTables() {
+    let c = ConfigLoader.parse(
+      """
+      [plugin]
+      foo = 5
+      [plugin.BadId]
+      x = 1
+      [plugin.tmux]
+      socket = "/tmp/x"
+      """)
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains { $0.message.contains("plugin.foo must be a") },
+      "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains { $0.message.contains("plugin ids must be lowercase") })
+    XCTAssertNotNil(c.plugins.settings["tmux"]?["socket"])
   }
 
   func testLayeredParseLaterLayerOverridesEarlier() {

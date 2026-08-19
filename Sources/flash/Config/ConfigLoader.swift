@@ -374,23 +374,47 @@ enum ConfigLoader {
     pendingModeMappings: inout [PendingModeMapping],
     into config: inout Config
   ) {
-    applyApp(root["app"]?.table, locations: locations, into: &config)
-    applyHints(root["hints"]?.table, locations: locations, into: &config)
-    applyOpen(root["open"]?.table, locations: locations, into: &config)
-    applyPlugins(root["plugins"]?.table, locations: locations, sourceURL: sourceURL, into: &config)
-    applyPluginSettings(root["plugin"]?.table, locations: locations, into: &config)
+    // Route every section through `sectionTable` so a section present with a
+    // non-table value (`hints = 5`) diagnoses instead of silently vanishing —
+    // `warnUnknownConfigKeys` can't catch that case because the name IS known.
+    func section(_ name: String) -> TOMLTable? {
+      sectionTable(root[name], name: name, locations: locations, into: &config)
+    }
+    applyApp(section("app"), locations: locations, into: &config)
+    applyHints(section("hints"), locations: locations, into: &config)
+    applyOpen(section("open"), locations: locations, into: &config)
+    applyPlugins(section("plugins"), locations: locations, sourceURL: sourceURL, into: &config)
+    applyPluginSettings(section("plugin"), locations: locations, into: &config)
     applyStatusBar(
-      root["statusbar"]?.table, locations: locations, sourceURL: sourceURL, into: &config)
-    applyFlashlight(root["flashlight"]?.table, locations: locations, into: &config)
+      section("statusbar"), locations: locations, sourceURL: sourceURL, into: &config)
+    applyFlashlight(section("flashlight"), locations: locations, into: &config)
     applyMode(
-      root["mode"]?.table,
+      section("mode"),
       locations: locations,
       sourceURL: sourceURL,
       pendingModeMappings: &pendingModeMappings,
       into: &config)
-    applyOverlay(root["overlay"]?.table, locations: locations, into: &config)
-    applyDebug(root["debug"]?.table, locations: locations, into: &config)
+    applyOverlay(section("overlay"), locations: locations, into: &config)
+    applyDebug(section("debug"), locations: locations, into: &config)
     warnUnknownConfigKeys(root: root, locations: locations, into: &config)
+  }
+
+  /// A section's table, or a located diagnostic when the key exists with a
+  /// non-table value. nil when absent or invalid.
+  private static func sectionTable(
+    _ value: (any TOMLValueConvertible)?,
+    name: String,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) -> TOMLTable? {
+    guard let value else { return nil }
+    guard let table = value.table else {
+      config.addDiagnostic(
+        "[\(name)] must be a table of keys ([\(name)] on its own line), not a single value",
+        location: locations.location(for: [name]))
+      return nil
+    }
+    return table
   }
 
   /// After every known section is applied, warn on keys the loader doesn't
@@ -491,8 +515,11 @@ enum ConfigLoader {
   ) {
     guard let table else { return }
     applyString(
-      table["keys"], path: ["hints", "keys"], message: "hints.keys must be a quoted string",
-      locations: locations, into: &config
+      table["keys"], path: ["hints", "keys"],
+      message:
+        "hints.keys must be a layout selector like \"<qwerty_homerow+qwerty_toprow>\" or a string of ASCII letters",
+      locations: locations, into: &config,
+      validate: { !$0.trimmed.isEmpty && Alphabet.resolve($0).warning == nil }
     ) { value, config in
       config.hints.keys = value
     }
@@ -508,7 +535,18 @@ enum ConfigLoader {
       message: "hints.magic_modifiers must be an array of strings", locations: locations,
       into: &config
     ) { value, config in
-      config.hints.magicModifiers = value
+      // Diagnose unknown tokens instead of silently dropping them (the
+      // passthrough_modifiers list already diagnoses this exact typo class),
+      // and assign only the recognised ones.
+      let unknown = KeyModifier.parseList(value).unknown
+      if !unknown.isEmpty {
+        config.addDiagnostic(
+          "hints.magic_modifiers: unknown modifier(s) \(unknown.joined(separator: ", ")) "
+            + "(use cmd/ctrl/alt/shift)",
+          location: locations.location(for: ["hints", "magic_modifiers"]))
+      }
+      let unknownSet = Set(unknown)
+      config.hints.magicModifiers = value.filter { !unknownSet.contains($0) }
     }
     applyInt(
       table["mouse_grid_steps"], path: ["hints", "mouse_grid_steps"],
@@ -543,6 +581,32 @@ enum ConfigLoader {
       message: "open.app_directories must be an array of directory paths",
       locations: locations, into: &config
     ) { value, config in
+      let location = locations.location(for: ["open", "app_directories"])
+      // An empty list would silently kill the whole app catalog — keep the
+      // defaults and say so.
+      guard !value.isEmpty else {
+        config.addDiagnostic(
+          "open.app_directories must not be empty (remove the key to use the defaults)",
+          location: location)
+        return
+      }
+      // Scanning from a filesystem root would walk the entire volume on
+      // every reload; refuse those outright. Missing directories are only
+      // warned about — an entry may legitimately appear later.
+      let home = FileManager.default.homeDirectoryForCurrentUser.path
+      let roots = value.filter {
+        let expanded = ($0 as NSString).expandingTildeInPath
+        return expanded == "/" || expanded == home
+      }
+      guard roots.isEmpty else {
+        config.addDiagnostic(
+          "open.app_directories must not include a filesystem root or the bare home directory: "
+            + roots.joined(separator: ", "),
+          location: location)
+        return
+      }
+      // Missing directories are fine — the watcher picks them up if they
+      // appear later, so no existence check here.
       config.open.appDirectories = value
     }
   }
@@ -562,31 +626,33 @@ enum ConfigLoader {
     }
 
     let disabledPath = ["plugins", "disabled"]
+    // A malformed `disabled` must not abort the rest of the section (it
+    // used to `return`, silently dropping `third_party` with it).
     if let value = table["disabled"] {
       let location = locations.location(for: disabledPath)
-      guard let parsed = stringArrayValue(value) else {
-        config.addDiagnostic(
-          "plugins.disabled must be an array of plugin ids",
-          location: location)
-        return
-      }
-      let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
-      var disabled = Set<String>()
-      var invalid: [String] = []
-      for raw in parsed {
-        let id = raw.trimmed.lowercased()
-        if !id.isEmpty, id.unicodeScalars.allSatisfy({ allowed.contains($0) }) {
-          disabled.insert(id)
-        } else {
-          invalid.append(raw)
+      if let parsed = stringArrayValue(value) {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
+        var disabled = Set<String>()
+        var invalid: [String] = []
+        for raw in parsed {
+          let id = raw.trimmed.lowercased()
+          if !id.isEmpty, id.unicodeScalars.allSatisfy({ allowed.contains($0) }) {
+            disabled.insert(id)
+          } else {
+            invalid.append(raw)
+          }
         }
-      }
-      if invalid.isEmpty {
-        config.plugins.disabled = disabled
-        config.recordLocation(path: "plugins.disabled", location: location)
+        if invalid.isEmpty {
+          config.plugins.disabled = disabled
+          config.recordLocation(path: "plugins.disabled", location: location)
+        } else {
+          config.addDiagnostic(
+            "plugins.disabled entries must be lowercase [a-z0-9._-]: \(invalid.joined(separator: ", "))",
+            location: location)
+        }
       } else {
         config.addDiagnostic(
-          "plugins.disabled entries must be lowercase [a-z0-9._-]: \(invalid.joined(separator: ", "))",
+          "plugins.disabled must be an array of plugin ids",
           location: location)
       }
     }
@@ -626,8 +692,23 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     guard let table else { return }
+    let allowedIDChars = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
     for (pluginID, value) in table {
-      guard let settings = value.table, !pluginID.isEmpty else { continue }
+      guard
+        !pluginID.isEmpty,
+        pluginID.unicodeScalars.allSatisfy({ allowedIDChars.contains($0) })
+      else {
+        config.addDiagnostic(
+          "[plugin.\(pluginID)] plugin ids must be lowercase [a-z0-9._-]",
+          location: locations.location(for: ["plugin", pluginID]))
+        continue
+      }
+      guard let settings = value.table else {
+        config.addDiagnostic(
+          "plugin.\(pluginID) must be a [plugin.\(pluginID)] table of settings, not a single value",
+          location: locations.location(for: ["plugin", pluginID]))
+        continue
+      }
       for (key, settingValue) in settings where !key.isEmpty {
         let locationPath = ["plugin", pluginID, key]
         let location = locations.location(for: locationPath)
@@ -705,8 +786,9 @@ enum ConfigLoader {
       })
     applyInt(
       table["interval"], path: ["statusbar", "interval"],
-      message: "statusbar.interval must be a non-negative integer (seconds; 0 disables polling)",
-      locations: locations, into: &config, validate: { $0 >= 0 },
+      message:
+        "statusbar.interval must be an integer between 0 and 86400 (seconds; 0 disables polling)",
+      locations: locations, into: &config, validate: { (0...86_400).contains($0) },
       assign: { value, config in
         config.statusBar.refreshIntervalSeconds = Double(value)
       })
@@ -720,20 +802,24 @@ enum ConfigLoader {
     guard let table else { return }
     applyInt(
       table["suggestion_count"], path: ["flashlight", "suggestion_count"],
-      message: "flashlight.suggestion_count must be a positive integer", locations: locations,
-      into: &config, validate: { $0 > 0 },
+      message: "flashlight.suggestion_count must be an integer between 1 and 100",
+      locations: locations,
+      into: &config, validate: { (1...100).contains($0) },
       assign: { value, config in
         config.flashlight.suggestionCount = value
       })
     applyInt(
       table["precedence_alive_bonus"], path: ["flashlight", "precedence_alive_bonus"],
-      message: "flashlight.precedence_alive_bonus must be a non-negative integer",
-      locations: locations, into: &config, validate: { $0 >= 0 },
+      message: "flashlight.precedence_alive_bonus must be an integer between 0 and 10000",
+      locations: locations, into: &config,
+      validate: { (0...Self.precedenceBound).contains($0) },
       assign: { value, config in
         config.flashlight.precedenceAliveBonus = value
       })
 
-    if let aliases = table["aliases"]?.table {
+    if let aliases = sectionTable(
+      table["aliases"], name: "flashlight.aliases", locations: locations, into: &config)
+    {
       for (key, value) in aliases {
         let trimmedKey = key.trimmingCharacters(in: .whitespaces)
         let locationPath = ["flashlight", "aliases", key]
@@ -749,22 +835,32 @@ enum ConfigLoader {
       }
     }
 
-    if let precedence = table["precedence"]?.table {
+    if let precedence = sectionTable(
+      table["precedence"], name: "flashlight.precedence", locations: locations, into: &config)
+    {
       for (key, value) in precedence {
         let trimmedKey = key.trimmingCharacters(in: .whitespaces).lowercased()
         let locationPath = ["flashlight", "precedence", key]
         let location = locations.location(for: locationPath)
-        if let parsed = value.int, !trimmedKey.isEmpty {
+        // Bounded so the ranking sum (base + alive bonus) can never
+        // overflow Int and trap on the first flashlight query.
+        if let parsed = value.int, !trimmedKey.isEmpty,
+          (-Self.precedenceBound...Self.precedenceBound).contains(parsed)
+        {
           config.flashlight.precedence[trimmedKey] = parsed
           config.recordLocation(path: "flashlight.precedence.\(trimmedKey)", location: location)
         } else {
           config.addDiagnostic(
-            "flashlight.precedence.\(key) must be an integer",
+            "flashlight.precedence.\(key) must be an integer between -10000 and 10000",
             location: location)
         }
       }
     }
   }
+
+  /// Precedence values are user-tunable ranking weights, not magnitudes —
+  /// ±10k spans every sensible tier while keeping additions overflow-proof.
+  private static let precedenceBound = 10_000
 
   private static func applyMode(
     _ table: TOMLTable?,
@@ -778,14 +874,21 @@ enum ConfigLoader {
     let labelsPath = ["mode", "labels"]
     if let value = table["labels"] {
       let location = locations.location(for: labelsPath)
+      // Labels drive status-bar width math (`longestCount`), so bound their
+      // length; unknown sub-keys are typos worth naming.
       if let parsed = stringTableValue(value),
         let normal = parsed["normal"],
         let insert = parsed["insert"],
         let command = parsed["command"],
-        !normal.isEmpty,
-        !insert.isEmpty,
-        !command.isEmpty
+        (1...32).contains(normal.count),
+        (1...32).contains(insert.count),
+        (1...32).contains(command.count)
       {
+        for key in parsed.keys where !["normal", "insert", "command"].contains(key) {
+          config.addDiagnostic(
+            "mode.labels: unknown key '\(key)' (valid keys are normal, insert, command)",
+            location: location)
+        }
         config.mode.labels = Config.Mode.Labels(
           normal: normal,
           insert: insert,
@@ -793,24 +896,34 @@ enum ConfigLoader {
         config.recordLocation(path: "mode.labels", location: location)
       } else {
         config.addDiagnostic(
-          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\" }",
+          "mode.labels must be { normal = \"...\", insert = \"...\", command = \"...\" } "
+            + "with each label 1-32 characters",
           location: location)
       }
     }
 
     applyInt(
       table["sequence_timeout_ms"], path: ["mode", "sequence_timeout_ms"],
-      message: "mode.sequence_timeout_ms must be a non-negative integer", locations: locations,
-      into: &config, validate: { $0 >= 0 },
+      message: "mode.sequence_timeout_ms must be an integer between 0 and 10000 (ms)",
+      locations: locations,
+      into: &config, validate: { (0...10_000).contains($0) },
       assign: { value, config in
         config.mode.sequenceTimeoutMs = value
       })
 
-    if let normal = table["normal"]?.table {
+    if let normal = sectionTable(
+      table["normal"], name: "mode.normal", locations: locations, into: &config)
+    {
       applyString(
         normal["leader"], path: ["mode", "normal", "leader"],
-        message: "mode.normal.leader must be a non-empty quoted string", locations: locations,
-        into: &config, validate: { !$0.isEmpty },
+        message: "mode.normal.leader must be a single key (e.g. \"\\\\\" or \",\")",
+        locations: locations,
+        into: &config,
+        validate: {
+          // Reject multi-atom strings here — otherwise every <leader>
+          // mapping later fails with a misleading "leader is not set".
+          NormalModeInterpreter.translateLeader(canonicalNormalModeKeyToken($0)) != nil
+        },
         assign: { value, config in
           config.mode.normalLeader = canonicalNormalModeKeyToken(value)
         })
@@ -824,7 +937,9 @@ enum ConfigLoader {
               "mode.normal.passthrough_keys: unknown key \"\(token)\"",
               location: locations.location(for: ["mode", "normal", "passthrough_keys"]))
           }
-          config.mode.normalPassthroughKeys = value
+          // Keep only the tokens that parse — carrying known-invalid
+          // entries in the live config helps nobody.
+          config.mode.normalPassthroughKeys = value.filter { HotkeySyntax.parseKey($0) != nil }
         })
       applyStringArray(
         normal["passthrough_modifiers"], path: ["mode", "normal", "passthrough_modifiers"],
@@ -833,16 +948,19 @@ enum ConfigLoader {
           + "\"cmd\"/\"ctrl\"/\"shift\"/\"alt\"",
         locations: locations, into: &config,
         assign: { value, config in
-          for token in KeyModifier.parseList(value).unknown {
+          let unknown = KeyModifier.parseList(value).unknown
+          for token in unknown {
             config.addDiagnostic(
               "mode.normal.passthrough_modifiers: unknown modifier \"\(token)\" "
                 + "(use cmd/ctrl/shift/alt)",
               location: locations.location(for: ["mode", "normal", "passthrough_modifiers"]))
           }
-          config.mode.normalPassthroughModifiers = value
+          let unknownSet = Set(unknown)
+          config.mode.normalPassthroughModifiers = value.filter { !unknownSet.contains($0) }
         })
       applyModeMappingTable(
-        normal["mappings"]?.table,
+        sectionTable(
+          normal["mappings"], name: "mode.normal.mappings", locations: locations, into: &config),
         scope: .normal,
         path: ["mode", "normal", "mappings"],
         locations: locations,
@@ -862,9 +980,10 @@ enum ConfigLoader {
       }
     }
 
-    if let all = table["all"]?.table {
+    if let all = sectionTable(table["all"], name: "mode.all", locations: locations, into: &config) {
       applyModeMappingTable(
-        all["mappings"]?.table,
+        sectionTable(
+          all["mappings"], name: "mode.all.mappings", locations: locations, into: &config),
         scope: .all,
         path: ["mode", "all", "mappings"],
         locations: locations,
@@ -879,9 +998,12 @@ enum ConfigLoader {
       }
     }
 
-    if let insert = table["insert"]?.table {
+    if let insert = sectionTable(
+      table["insert"], name: "mode.insert", locations: locations, into: &config)
+    {
       applyModeMappingTable(
-        insert["mappings"]?.table,
+        sectionTable(
+          insert["mappings"], name: "mode.insert.mappings", locations: locations, into: &config),
         scope: .insert,
         path: ["mode", "insert", "mappings"],
         locations: locations,
@@ -1101,7 +1223,9 @@ enum ConfigLoader {
   /// rather than silently falling back to a default at draw time.
   static func isValidHexColor(_ raw: String) -> Bool {
     var s = raw.trimmingCharacters(in: .whitespaces)
-    if s.isEmpty { return true }
+    // Empty is NOT a color. Keys where empty means "use the default"
+    // (window_border_color) opt in explicitly at their call site.
+    if s.isEmpty { return false }
     if s.hasPrefix("#") { s.removeFirst() }
     guard s.count == 6 || s.count == 8 else { return false }
     return s.allSatisfy(\.isHexDigit)
@@ -1173,7 +1297,10 @@ enum ConfigLoader {
   ) {
     guard let value else { return }
     let location = locations.location(for: path)
-    guard let parsed = value.int, validate(parsed) else {
+    // Accept exactly-integral doubles (`interval = 5.0`) — rejecting them
+    // while `applyDouble` accepts ints would be a gratuitous asymmetry.
+    let parsed = value.int ?? value.double.flatMap { Int(exactly: $0) }
+    guard let parsed, validate(parsed) else {
       config.addDiagnostic(message, location: location)
       return
     }
