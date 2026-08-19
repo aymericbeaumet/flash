@@ -1,0 +1,368 @@
+import CoreGraphics
+import FlashCore
+import Foundation
+
+/// Wire-payload validation and (de)serialization for the plugin protocol:
+/// the protocol version handshake checks, the catalog/query/hint-target
+/// quota constants, and the strict decoders that reject a whole payload on
+/// the first malformed row. Pure functions over `[String: Any]` frames —
+/// no process state.
+enum PluginWireCodec {
+
+  /// Wire-protocol version the host speaks. Version agreement is a hard startup
+  /// boundary because v2 makes readiness mean `on_start` and initial warm-source
+  /// publication have completed.
+  // v3: manifest `start` shell string became the `exec` argv array (direct
+  // exec, no shell). The bump makes a stale binary built against the old
+  // schema fail the handshake diagnosably instead of decoding oddly.
+  static let protocolVersion = 3
+  static let maxCatalogCandidates = 10_000
+  static let maxCatalogEncodedBytes = 4 * 1024 * 1024
+  static let maxQueryAnswersPerEvaluator = 16
+  static let maxQueryEncodedBytes = 256 * 1024
+  static let maxCandidateTitleBytes = 4 * 1024
+  static let maxCandidateURLBytes = 16 * 1024
+  static let maxCandidateMetadataEntries = 64
+  static let maxCandidateMetadataKeyBytes = 256
+  static let maxCandidateMetadataValueBytes = 64 * 1024
+  static let maxCandidateEffectBytes = 64 * 1024
+  static let maxQueryFieldBytes = 16 * 1024
+
+  static func acceptsProtocolVersion(_ response: [String: Any]?) -> Bool {
+    protocolVersionValue(response) == protocolVersion
+  }
+
+  static func hasCanonicalInitialPublication(
+    _ response: [String: Any]?,
+    pluginID: String
+  ) -> Bool {
+    guard let values = response?["published_sources"] as? [Any] else { return false }
+    let sources = values.compactMap { $0 as? String }
+    return sources.count == values.count
+      && sources == ["plugin:\(pluginID)"]
+  }
+
+  static func protocolVersionValue(_ response: [String: Any]?) -> Int? {
+    if let value = response?["protocol_version"] as? Int { return value }
+    return (response?["protocol_version"] as? NSNumber)?.intValue
+  }
+
+  static func responsePayloadLimit(for method: String) -> Int? {
+    // Allow a small fixed envelope overhead above the SDK's encoded
+    // `{ candidates: ... }` / `{ answers: ... }` boundary. The response also
+    // carries JSON-RPC id/result keys that are outside those SDK-owned values.
+    switch method {
+    case "sources.snapshot":
+      return maxCatalogEncodedBytes + 1_024
+    case "query.evaluate":
+      return maxQueryEncodedBytes + 1_024
+    default:
+      return nil
+    }
+  }
+
+  static func target(from raw: [String: Any], sourceID: String) -> PluginWireTarget? {
+    guard let id = raw["id"] as? String else { return nil }
+    let frameRaw = raw["frame"] as? [String: Any] ?? raw
+    guard
+      let x = number(frameRaw["x"]),
+      let y = number(frameRaw["y"]),
+      let width = number(frameRaw["width"]),
+      let height = number(frameRaw["height"]),
+      width > 0, height > 0
+    else { return nil }
+    let role = raw["role"] as? String
+    // A plugin can state explicitly whether committing this target should
+    // enter insert mode. When it doesn't, fall back to the same AX-role
+    // heuristic the core walk uses so text-field hints still type.
+    let entersInsertMode =
+      raw["enters_insert_mode"] as? Bool
+      ?? JumpTarget.textInputRoles.contains(role ?? "")
+    let priority: FlashPriority
+    if let rawPriority = raw["priority"] as? String {
+      guard let parsed = FlashPriority(rawValue: rawPriority) else { return nil }
+      priority = parsed
+    } else {
+      priority = .normal
+    }
+    return PluginWireTarget(
+      id: id,
+      frame: CGRect(x: x, y: y, width: width, height: height),
+      role: role,
+      label: raw["label"] as? String,
+      url: raw["url"] as? String,
+      pid: (raw["pid"] as? Int).map(pid_t.init),
+      entersInsertMode: entersInsertMode,
+      sourceID: sourceID,
+      priority: priority)
+  }
+
+  static func catalogCandidates(
+    from raw: [[String: Any]],
+    sourceID: String,
+    allowedSources: Set<String>
+  ) -> [Candidate]? {
+    guard raw.count <= maxCatalogCandidates else { return nil }
+    var aggregateBytes = 0
+    var candidates: [Candidate] = []
+    candidates.reserveCapacity(raw.count)
+    for item in raw {
+      guard
+        let decoded = decodedCatalogCandidate(
+          from: item,
+          sourceID: sourceID,
+          allowedSources: allowedSources),
+        let nextBytes = addingBytes(
+          aggregateBytes,
+          decoded.stringBytes,
+          limit: maxCatalogEncodedBytes)
+      else {
+        // A source snapshot is atomic. Keeping the valid prefix would expose a
+        // deterministic but incomplete catalog and hide the plugin defect.
+        return nil
+      }
+      aggregateBytes = nextBytes
+      candidates.append(decoded.candidate)
+    }
+    return candidates
+  }
+
+  private static func decodedCatalogCandidate(
+    from raw: [String: Any],
+    sourceID: String,
+    allowedSources: Set<String>
+  ) -> (candidate: Candidate, stringBytes: Int)? {
+    let allowedKeys: Set<String> = ["title", "url", "metadata", "effect"]
+    guard Set(raw.keys).isSubset(of: allowedKeys),
+      let title = raw["title"] as? String,
+      !title.isEmpty,
+      title.utf8.count <= maxCandidateTitleBytes
+    else { return nil }
+
+    var stringBytes = title.utf8.count
+    let url: URL?
+    if let rawURL = raw["url"] {
+      guard
+        let value = rawURL as? String,
+        value.utf8.count <= maxCandidateURLBytes,
+        let parsed = URL(string: value),
+        parsed.scheme != nil,
+        let nextBytes = addingBytes(
+          stringBytes,
+          value.utf8.count,
+          limit: maxCatalogEncodedBytes)
+      else { return nil }
+      url = parsed
+      stringBytes = nextBytes
+    } else {
+      url = nil
+    }
+
+    var metadata: [String: String] = [:]
+    if let rawMetadata = raw["metadata"] {
+      guard
+        let dict = rawMetadata as? [String: Any],
+        dict.count <= maxCandidateMetadataEntries
+      else { return nil }
+      metadata.reserveCapacity(dict.count + 2)
+      for (key, rawValue) in dict {
+        guard
+          key.utf8.count <= maxCandidateMetadataKeyBytes,
+          let value = rawValue as? String,
+          value.utf8.count <= maxCandidateMetadataValueBytes,
+          let withKey = addingBytes(
+            stringBytes,
+            key.utf8.count,
+            limit: maxCatalogEncodedBytes),
+          let withValue = addingBytes(
+            withKey,
+            value.utf8.count,
+            limit: maxCatalogEncodedBytes)
+        else { return nil }
+        stringBytes = withValue
+        metadata[key] = value
+      }
+    }
+
+    let effect: CandidateEffect?
+    if let rawEffect = raw["effect"] {
+      guard
+        let decoded = candidateEffect(
+          from: rawEffect,
+          maxTextBytes: maxCandidateEffectBytes),
+        let nextBytes = addingBytes(
+          stringBytes,
+          decoded.textBytes,
+          limit: maxCatalogEncodedBytes)
+      else { return nil }
+      effect = decoded.effect
+      stringBytes = nextBytes
+    } else {
+      effect = nil
+    }
+
+    guard let source = metadata[CandidateMetadataKey.source],
+      allowedSources.contains(source)
+    else { return nil }
+    // Routing ownership is always host-stamped too.
+    metadata[CandidateMetadataKey.sourceID] = sourceID
+    if metadata[CandidateMetadataKey.kind] == nil {
+      metadata[CandidateMetadataKey.kind] = "plugin"
+    }
+    if let rawPriority = metadata[CandidateMetadataKey.priority],
+      FlashPriority(rawValue: rawPriority) == nil
+    {
+      return nil
+    }
+    return (
+      Candidate(title: title, url: url, metadata: metadata, effect: effect),
+      stringBytes
+    )
+  }
+
+  static func queryAnswers(
+    from raw: [[String: Any]],
+    sourceID: String,
+    source: String
+  ) -> [Candidate]? {
+    guard raw.count <= maxQueryAnswersPerEvaluator else { return nil }
+    var aggregateBytes = 0
+    var candidates: [Candidate] = []
+    candidates.reserveCapacity(raw.count)
+    for item in raw {
+      guard
+        let decoded = decodedQueryAnswer(
+          from: item,
+          sourceID: sourceID,
+          source: source),
+        let nextBytes = addingBytes(
+          aggregateBytes,
+          decoded.stringBytes,
+          limit: maxQueryEncodedBytes)
+      else { return nil }
+      aggregateBytes = nextBytes
+      candidates.append(decoded.candidate)
+    }
+    return candidates
+  }
+
+  private static func decodedQueryAnswer(
+    from raw: [String: Any],
+    sourceID: String,
+    source: String
+  ) -> (candidate: Candidate, stringBytes: Int)? {
+    let allowedKeys: Set<String> = ["title", "subtitle", "effect"]
+    guard Set(raw.keys).isSubset(of: allowedKeys),
+      let title = raw["title"] as? String,
+      !title.isEmpty,
+      title.utf8.count <= maxQueryFieldBytes,
+      let rawEffect = raw["effect"],
+      let decodedEffect = candidateEffect(
+        from: rawEffect,
+        maxTextBytes: maxQueryFieldBytes)
+    else { return nil }
+    var stringBytes = title.utf8.count
+    guard
+      let withEffect = addingBytes(
+        stringBytes,
+        decodedEffect.textBytes,
+        limit: maxQueryEncodedBytes)
+    else { return nil }
+    stringBytes = withEffect
+    let subtitle: String?
+    if let rawSubtitle = raw["subtitle"] {
+      guard
+        let value = rawSubtitle as? String,
+        value.utf8.count <= maxQueryFieldBytes,
+        let nextBytes = addingBytes(
+          stringBytes,
+          value.utf8.count,
+          limit: maxQueryEncodedBytes)
+      else { return nil }
+      subtitle = value
+      stringBytes = nextBytes
+    } else {
+      subtitle = nil
+    }
+    var metadata: [String: String] = [
+      CandidateMetadataKey.source: source,
+      CandidateMetadataKey.sourceID: sourceID,
+      CandidateMetadataKey.kind: "query_answer",
+      CandidateMetadataKey.priority: FlashPriority.urgent.rawValue,
+      CandidateMetadataKey.finishesCommand: "1",
+    ]
+    if let subtitle, !subtitle.isEmpty {
+      metadata[CandidateMetadataKey.subtitle] = subtitle
+    }
+    return (
+      Candidate(title: title, metadata: metadata, effect: decodedEffect.effect),
+      stringBytes
+    )
+  }
+
+  private static func candidateEffect(
+    from raw: Any,
+    maxTextBytes: Int
+  ) -> (effect: CandidateEffect, textBytes: Int)? {
+    guard let effect = raw as? [String: Any],
+      Set(effect.keys) == Set(["type", "text"]),
+      let type = effect["type"] as? String
+    else {
+      return nil
+    }
+    switch type {
+    case "copy_text":
+      guard
+        let text = effect["text"] as? String,
+        !text.isEmpty,
+        text.utf8.count <= maxTextBytes
+      else { return nil }
+      return (.copyText(text), text.utf8.count)
+    default:
+      return nil
+    }
+  }
+
+  private static func addingBytes(_ lhs: Int, _ rhs: Int, limit: Int) -> Int? {
+    let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+    guard !overflow, sum <= limit else { return nil }
+    return sum
+  }
+
+  private static func number(_ value: Any?) -> Double? {
+    if let value = value as? Double { return value }
+    if let value = value as? Int { return Double(value) }
+    if let value = value as? NSNumber { return value.doubleValue }
+    return nil
+  }
+
+  static func candidateJSON(_ candidate: Candidate) -> [String: Any] {
+    var dict: [String: Any] = [
+      "title": candidate.title,
+      "metadata": candidate.metadata,
+    ]
+    if let url = candidate.url {
+      dict["url"] = url.absoluteString
+    }
+    if case .copyText(let text) = candidate.effect {
+      dict["effect"] = [
+        "type": "copy_text",
+        "text": text,
+      ]
+    }
+    return dict
+  }
+
+  static func contextJSON(_ context: AppContext) -> [String: Any] {
+    [
+      "bundle_id": context.bundleIdentifier,
+      "front_window_frame": [
+        "height": context.frontWindowFrame.height,
+        "width": context.frontWindowFrame.width,
+        "x": context.frontWindowFrame.minX,
+        "y": context.frontWindowFrame.minY,
+      ],
+      "pid": Int(context.processID),
+    ]
+  }
+}

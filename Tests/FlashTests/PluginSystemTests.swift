@@ -5,6 +5,21 @@ import XCTest
 @testable import flash
 
 final class PluginSystemTests: XCTestCase {
+  /// Single-row conveniences over the atomic plural decoders — the wire only
+  /// ever carries arrays, so production has no singular path.
+  private func decodeCandidate(
+    from raw: [String: Any], sourceID: String, allowed: Set<String>
+  ) -> Candidate? {
+    PluginWireCodec.catalogCandidates(from: [raw], sourceID: sourceID, allowedSources: allowed)?
+      .first
+  }
+
+  private func decodeQueryAnswer(
+    from raw: [String: Any], sourceID: String, source: String
+  ) -> Candidate? {
+    PluginWireCodec.queryAnswers(from: [raw], sourceID: sourceID, source: source)?.first
+  }
+
   func testOfficialPluginManifestsLoadAndRegisterExpectedCommands() throws {
     let roots = try officialPluginRoots()
     let manifests = try roots.map { try PluginManifest.load(from: $0) }
@@ -425,32 +440,32 @@ final class PluginSystemTests: XCTestCase {
   }
 
   func testPluginProtocolVersionRequiresExactV3() {
-    XCTAssertEqual(PluginProcess.protocolVersion, 3)
+    XCTAssertEqual(PluginWireCodec.protocolVersion, 3)
     XCTAssertTrue(
-      PluginProcess.acceptsProtocolVersion([
+      PluginWireCodec.acceptsProtocolVersion([
         "ok": true,
         "protocol_version": 3,
       ]))
-    XCTAssertFalse(PluginProcess.acceptsProtocolVersion(["protocol_version": 2]))
-    XCTAssertFalse(PluginProcess.acceptsProtocolVersion(["ok": true]))
-    XCTAssertFalse(PluginProcess.acceptsProtocolVersion(nil))
+    XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["protocol_version": 2]))
+    XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["ok": true]))
+    XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(nil))
   }
 
   func testCandidatePluginReadinessRequiresExactlyItsCanonicalWarmPublication() {
     XCTAssertTrue(
-      PluginProcess.hasCanonicalInitialPublication(
+      PluginWireCodec.hasCanonicalInitialPublication(
         ["published_sources": ["plugin:notes"]],
         pluginID: "notes"))
     XCTAssertFalse(
-      PluginProcess.hasCanonicalInitialPublication(
+      PluginWireCodec.hasCanonicalInitialPublication(
         ["published_sources": []],
         pluginID: "notes"))
     XCTAssertFalse(
-      PluginProcess.hasCanonicalInitialPublication(
+      PluginWireCodec.hasCanonicalInitialPublication(
         ["published_sources": ["plugin:other"]],
         pluginID: "notes"))
     XCTAssertFalse(
-      PluginProcess.hasCanonicalInitialPublication(
+      PluginWireCodec.hasCanonicalInitialPublication(
         ["published_sources": ["plugin:notes", "plugin:extra"]],
         pluginID: "notes"))
   }
@@ -460,15 +475,15 @@ final class PluginSystemTests: XCTestCase {
       "title": "2",
       "effect": ["type": "copy_text", "text": "2"],
     ]
-    XCTAssertEqual(PluginProcess.maxQueryAnswersPerEvaluator, 16)
+    XCTAssertEqual(PluginWireCodec.maxQueryAnswersPerEvaluator, 16)
     XCTAssertEqual(
-      PluginProcess.queryAnswers(
+      PluginWireCodec.queryAnswers(
         from: Array(repeating: answer, count: 16),
         sourceID: "plugin:calculator",
         source: "calculator")?.count,
       16)
     XCTAssertNil(
-      PluginProcess.queryAnswers(
+      PluginWireCodec.queryAnswers(
         from: Array(repeating: answer, count: 17),
         sourceID: "plugin:calculator",
         source: "calculator"))
@@ -590,7 +605,7 @@ final class PluginSystemTests: XCTestCase {
 
   func testPluginCandidateCannotSpoofRoutingOwner() throws {
     let candidate = try XCTUnwrap(
-      PluginProcess.candidate(
+      decodeCandidate(
         from: [
           "title": "Owned result",
           "metadata": [
@@ -599,19 +614,19 @@ final class PluginSystemTests: XCTestCase {
           ],
         ],
         sourceID: "plugin:safe",
-        sourcePolicy: .catalog(allowed: ["safe.items"])))
+        allowed: ["safe.items"]))
 
     XCTAssertEqual(candidate.source, "safe.items")
     XCTAssertEqual(candidate.sourceID, "plugin:safe")
 
     XCTAssertNil(
-      PluginProcess.candidate(
+      decodeCandidate(
         from: [
           "title": "Impostor",
           "metadata": ["source": "other.items"],
         ],
         sourceID: "plugin:safe",
-        sourcePolicy: .catalog(allowed: ["safe.items"])))
+        allowed: ["safe.items"]))
   }
 
   func testPluginCatalogPayloadIsStrictBoundedAndAtomic() throws {
@@ -624,7 +639,7 @@ final class PluginSystemTests: XCTestCase {
       ],
     ]
     XCTAssertEqual(
-      PluginProcess.catalogCandidates(
+      PluginWireCodec.catalogCandidates(
         from: [valid],
         sourceID: "plugin:safe",
         allowedSources: ["safe.items"])?.count,
@@ -633,7 +648,7 @@ final class PluginSystemTests: XCTestCase {
     var unknownKey = valid
     unknownKey["command"] = "spoof"
     XCTAssertNil(
-      PluginProcess.catalogCandidates(
+      PluginWireCodec.catalogCandidates(
         from: [valid, unknownKey],
         sourceID: "plugin:safe",
         allowedSources: ["safe.items"]),
@@ -645,41 +660,41 @@ final class PluginSystemTests: XCTestCase {
       "pid": 123,
     ]
     XCTAssertNil(
-      PluginProcess.candidate(
+      decodeCandidate(
         from: nonStringMetadata,
         sourceID: "plugin:safe",
-        sourcePolicy: .catalog(allowed: ["safe.items"])))
+        allowed: ["safe.items"]))
 
     var relativeURL = valid
     relativeURL["url"] = "relative/path"
     XCTAssertNil(
-      PluginProcess.candidate(
+      decodeCandidate(
         from: relativeURL,
         sourceID: "plugin:safe",
-        sourcePolicy: .catalog(allowed: ["safe.items"])))
+        allowed: ["safe.items"]))
 
     var oversizedTitle = valid
     oversizedTitle["title"] = String(
       repeating: "x",
-      count: PluginProcess.maxCandidateTitleBytes + 1)
+      count: PluginWireCodec.maxCandidateTitleBytes + 1)
     XCTAssertNil(
-      PluginProcess.candidate(
+      decodeCandidate(
         from: oversizedTitle,
         sourceID: "plugin:safe",
-        sourcePolicy: .catalog(allowed: ["safe.items"])))
+        allowed: ["safe.items"]))
 
     XCTAssertNil(
-      PluginProcess.catalogCandidates(
+      PluginWireCodec.catalogCandidates(
         from: Array(
           repeating: valid,
-          count: PluginProcess.maxCatalogCandidates + 1),
+          count: PluginWireCodec.maxCatalogCandidates + 1),
         sourceID: "plugin:safe",
         allowedSources: ["safe.items"]))
   }
 
   func testPluginHintTargetCannotSpoofProviderOwnership() throws {
     let target = try XCTUnwrap(
-      PluginProcess.target(
+      PluginWireCodec.target(
         from: [
           "id": "hint",
           "frame": [
@@ -697,7 +712,7 @@ final class PluginSystemTests: XCTestCase {
 
   func testQueryAnswerHasANarrowShapeAndGetsHostOwnedSemantics() throws {
     let candidate = try XCTUnwrap(
-      PluginProcess.queryAnswer(
+      decodeQueryAnswer(
         from: [
           "title": "2",
           "subtitle": "1+1",
@@ -717,7 +732,7 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertNil(candidate.url)
 
     XCTAssertNil(
-      PluginProcess.queryAnswer(
+      decodeQueryAnswer(
         from: [
           "title": "unsafe",
           "effect": ["type": "unknown", "text": "unsafe"],
@@ -725,7 +740,7 @@ final class PluginSystemTests: XCTestCase {
         sourceID: "plugin:calculator",
         source: "calculator"))
     XCTAssertNil(
-      PluginProcess.queryAnswer(
+      decodeQueryAnswer(
         from: [
           "title": "empty",
           "effect": ["type": "copy_text", "text": ""],
@@ -733,7 +748,7 @@ final class PluginSystemTests: XCTestCase {
         sourceID: "plugin:calculator",
         source: "calculator"))
     XCTAssertNil(
-      PluginProcess.queryAnswer(
+      decodeQueryAnswer(
         from: [
           "title": "spoof",
           "url": "https://example.com",
@@ -742,7 +757,7 @@ final class PluginSystemTests: XCTestCase {
         sourceID: "plugin:calculator",
         source: "calculator"))
     XCTAssertNil(
-      PluginProcess.queryAnswer(
+      decodeQueryAnswer(
         from: [
           "title": "extra effect field",
           "effect": [
@@ -758,9 +773,9 @@ final class PluginSystemTests: XCTestCase {
   func testQueryAnswerFieldAndAggregateLimitsAreStrict() {
     let oversizedField = String(
       repeating: "x",
-      count: PluginProcess.maxQueryFieldBytes + 1)
+      count: PluginWireCodec.maxQueryFieldBytes + 1)
     XCTAssertNil(
-      PluginProcess.queryAnswer(
+      decodeQueryAnswer(
         from: [
           "title": oversizedField,
           "effect": ["type": "copy_text", "text": "x"],
@@ -769,18 +784,18 @@ final class PluginSystemTests: XCTestCase {
         source: "calculator"))
 
     let largeAnswer: [String: Any] = [
-      "title": String(repeating: "t", count: PluginProcess.maxQueryFieldBytes),
-      "subtitle": String(repeating: "s", count: PluginProcess.maxQueryFieldBytes),
+      "title": String(repeating: "t", count: PluginWireCodec.maxQueryFieldBytes),
+      "subtitle": String(repeating: "s", count: PluginWireCodec.maxQueryFieldBytes),
       "effect": [
         "type": "copy_text",
-        "text": String(repeating: "e", count: PluginProcess.maxQueryFieldBytes),
+        "text": String(repeating: "e", count: PluginWireCodec.maxQueryFieldBytes),
       ],
     ]
     XCTAssertNil(
-      PluginProcess.queryAnswers(
+      PluginWireCodec.queryAnswers(
         from: Array(
           repeating: largeAnswer,
-          count: PluginProcess.maxQueryAnswersPerEvaluator),
+          count: PluginWireCodec.maxQueryAnswersPerEvaluator),
         sourceID: "plugin:calculator",
         source: "calculator"),
       "individually valid answers must still fit the aggregate response budget")
@@ -1498,7 +1513,7 @@ final class PluginSystemTests: XCTestCase {
       "jsonrpc": "2.0",
       "method": "initialize",
       "params": [
-        "protocol_version": PluginProcess.protocolVersion,
+        "protocol_version": PluginWireCodec.protocolVersion,
         "running_applications": [
           [
             "bundle_id": "com.example.Test",
