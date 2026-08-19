@@ -31,3 +31,4 @@ karabiner.json.bak-*
 /cache/
 /bin/
 /config/
+examples/plugins/go-spotify/flash-plugin-go-spotify

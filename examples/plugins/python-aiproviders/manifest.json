@@ -1,0 +1,18 @@
+{
+  "id": "py-aiproviders",
+  "name": "AI Providers (Python)",
+  "version": "0.1.0",
+  "description": "Python port of the bundled aiproviders plugin: !pychatgpt, !pyclaude, ... open AI chats with the query pre-filled.",
+  "exec": ["/usr/bin/python3", "main.py"],
+  "shebangs": {
+    "command": "py-aiproviders",
+    "items": [
+      { "token": "pychatgpt", "description": "Open ChatGPT (Python example plugin)" },
+      { "token": "pyclaude", "description": "Open Claude (Python example plugin)" },
+      { "token": "pygemini", "description": "Open Gemini (Python example plugin)" },
+      { "token": "pyperplexity", "description": "Open Perplexity (Python example plugin)" },
+      { "token": "pycopilot", "description": "Open Copilot (Python example plugin)" },
+      { "token": "pygrok", "description": "Open Grok (Python example plugin)" }
+    ]
+  }
+}
