@@ -29,7 +29,9 @@ keys = "<qwerty_homerow+qwerty_toprow>"
 # Floor on label length. Force longer labels by raising this.
 min_length = 1
 
-# Modifiers that can be held on the final hint key and forwarded to the click.
+# Modifiers that can be held on the final hint key. Native-link and mouse-grid
+# clicks preserve them; Firefox links also add Command and terminal links add
+# Shift. Every non-link target still receives a plain click.
 # Supported names: "cmd", "ctrl", "alt", "shift".
 magic_modifiers = ["cmd", "ctrl", "alt", "shift"]
 
@@ -460,9 +462,10 @@ leader = "\\"
 "I" = ["flash", "enter_locked_insert_mode"]
 "o" = ["flash", "enter_insert_mode"]
 "O" = ["flash", "enter_insert_mode"]
-# Vimium-style target opening: Shift-F presets a Command-Shift-click so links
-# open in a focused new tab. Holding a configured hints.magic_modifiers key on
-# the final hint character still adds that modifier to either action.
+# `f` delegates the surface's primary link gesture: Command-click in Firefox,
+# plain for other native/browser links, and Shift-click for terminal links. `F`
+# delegates Command-Shift-click for a new context. Every non-link target gets a
+# plain click from either mapping. Tmux pane and link hints stay in NORMAL.
 "f" = ["flash", "mouse_target"]
 "F" = ["flash", "mouse_target", "--modifiers=cmd+shift"]
 # Ctrl selects the precision grid; adding Shift preserves the current/new-tab

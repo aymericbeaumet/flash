@@ -1699,7 +1699,7 @@ final class NormalModeTests: XCTestCase {
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: true,
-        probeForInsert: true,
+        enterInsert: true,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
@@ -1710,7 +1710,7 @@ final class NormalModeTests: XCTestCase {
         action: .doubleClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: true,
-        probeForInsert: true,
+        enterInsert: true,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     // Right-click never flips the mode: it suspends normal capture so the
@@ -1724,7 +1724,7 @@ final class NormalModeTests: XCTestCase {
         action: .rightClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
-        probeForInsert: false,
+        enterInsert: false,
         suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: true))
     XCTAssertEqual(
@@ -1735,7 +1735,7 @@ final class NormalModeTests: XCTestCase {
         action: .rightClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
-        probeForInsert: false,
+        enterInsert: false,
         suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
@@ -1746,7 +1746,7 @@ final class NormalModeTests: XCTestCase {
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
-        probeForInsert: false,
+        enterInsert: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
     XCTAssertEqual(
@@ -1757,19 +1757,34 @@ final class NormalModeTests: XCTestCase {
         action: .leftClick),
       NormalModePointerPolicy.AppClickDecision(
         releaseCapture: false,
-        probeForInsert: false,
+        enterInsert: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false))
   }
 
   func testPointerActionMayEnterInsertExcludesRightClick() {
-    // Left / double click can hand the keyboard to the app (subject to the
-    // editability probe at commit); right-click only ever opens a context menu
-    // and must keep the current mode, so it is excluded here. This is what keeps
-    // the `f`-hint right-click commit on the suspend path instead of insert.
+    // Left / double click can hand the keyboard to the app; right-click only
+    // ever opens a context menu and must keep the current mode, so it is
+    // excluded here. This keeps hint/grid right-click commits on the suspend
+    // path instead of insert.
     XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.leftClick))
     XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.doubleClick))
     XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.rightClick))
+  }
+
+  func testPointerInsertIntentSeparatesSemanticHintsFromMouseSimulation() {
+    // A provider's `false` is authoritative even when the host app (such as
+    // Alacritty) already exposes editable focus. This pins tmux pane/link hints
+    // to NORMAL while preserving INSERT for real text-input hints.
+    XCTAssertFalse(
+      PointerInsertIntent.hintTarget(entersInsertMode: false).shouldEnterInsertMode)
+    XCTAssertTrue(
+      PointerInsertIntent.hintTarget(entersInsertMode: true).shouldEnterInsertMode)
+
+    // The grid synthesizes a real pointer click, so it follows the same
+    // unconditional handoff rule as a physical primary click.
+    XCTAssertTrue(PointerInsertIntent.mouseGridClick.shouldEnterInsertMode)
+    XCTAssertTrue(PointerInsertIntent.physicalClick.shouldEnterInsertMode)
   }
 
   func testNormalAppRightClickSuspendsForContextMenuInsteadOfInsert() {
@@ -1793,7 +1808,7 @@ final class NormalModeTests: XCTestCase {
       .app(
         NormalModePointerPolicy.AppClickDecision(
           releaseCapture: false,
-          probeForInsert: false,
+          enterInsert: false,
           suspendForNativeSurface: true,
           dismissTransientHintsWithoutRekey: false)))
   }
@@ -1801,12 +1816,12 @@ final class NormalModeTests: XCTestCase {
   func testPhysicalPointerClickForwardingOnlyCoversActivationOnlyPrimaryClicks() {
     let released = NormalModePointerPolicy.AppClickDecision(
       releaseCapture: true,
-      probeForInsert: true,
+      enterInsert: true,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
     let notReleased = NormalModePointerPolicy.AppClickDecision(
       releaseCapture: false,
-      probeForInsert: false,
+      enterInsert: false,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
 

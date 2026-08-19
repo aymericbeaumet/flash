@@ -549,8 +549,8 @@ struct Config {
         ("o", .flashCommand(.insertMode)),
         ("O", .flashCommand(.insertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
-        // Vimium-style `F`: use the same discovered targets but preset Cmd+Shift
-        // on the eventual click so links open in a focused new tab.
+        // `F` requests the new-context link gesture. Firefox links add Command
+        // to `f`, terminal links add Shift, and non-link targets stay plain.
         (
           "F",
           .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))

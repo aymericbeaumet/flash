@@ -266,25 +266,12 @@ final class PluginProcess {
     }
   }
 
-  /// Materialise a wire-format target as a host `JumpTarget`. When the
-  /// plugin opts into `prefer_host_click`, the `activate` closure is
-  /// dropped AND the host-click flag is propagated so
-  /// `ActionDispatcher.perform` skips its AX hit-test fallback (which
-  /// for terminal surfaces silently "succeeds" via a useless AXPress on
-  /// the enclosing window without ever delivering the click) and goes
-  /// straight to the real synthesized click.
+  /// Materialise a wire-format target as host-owned geometry and semantics.
+  /// Hint activation is never delegated back to the plugin: the host posts a
+  /// real mouse event to the owning app for every committed target.
   private func hostJumpTarget(
     from wire: PluginWireTarget, contextPID: pid_t
   ) -> JumpTarget {
-    let activate: ((JumpAction) -> Bool)?
-    if wire.preferHostClick {
-      activate = nil
-    } else {
-      activate = { [weak self] action in
-        self?.activateTarget(wire.id, action: action)
-        return true
-      }
-    }
     return JumpTarget(
       id: wire.id,
       frame: wire.frame,
@@ -292,9 +279,7 @@ final class PluginProcess {
       accessibilityLabel: wire.label,
       url: wire.url,
       pid: wire.pid ?? contextPID,
-      activate: activate,
       entersInsertMode: wire.entersInsertMode,
-      preferHostClick: wire.preferHostClick,
       priority: wire.priority,
       providerID: wire.sourceID)
   }
@@ -1724,7 +1709,6 @@ final class PluginProcess {
       pid: (raw["pid"] as? Int).map(pid_t.init),
       entersInsertMode: entersInsertMode,
       sourceID: sourceID,
-      preferHostClick: raw["prefer_host_click"] as? Bool ?? false,
       priority: priority)
   }
 
@@ -2022,23 +2006,6 @@ final class PluginProcess {
       ],
       "pid": Int(context.processID),
     ]
-  }
-
-  private func activateTarget(_ targetID: String, action: JumpAction) {
-    sendNotification(
-      method: "hints.activate",
-      params: [
-        "action": actionName(action),
-        "target_id": targetID,
-      ])
-  }
-
-  private func actionName(_ action: JumpAction) -> String {
-    switch action {
-    case .leftClick: return "left_click"
-    case .rightClick: return "right_click"
-    case .doubleClick: return "double_click"
-    }
   }
 
   private func startHeartbeat() {

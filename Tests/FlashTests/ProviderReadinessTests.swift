@@ -56,47 +56,6 @@ final class ProviderReadinessTests: XCTestCase {
     XCTAssertFalse(AccessibilityProvider.isExtensionDocumentURL("https://example.com"))
   }
 
-  func testNonEditableWebControlsPreferHostClick() {
-    for role in [
-      "AXLink", "AXButton",
-      "AXCheckBox", "AXRadioButton",
-      "AXPopUpButton",
-      "AXTab",
-      "AXMenuItem",
-      "AXRow", "AXCell",
-    ] {
-      XCTAssertTrue(
-        AccessibilityProvider.prefersHostClick(insideWebArea: true, role: role),
-        "\(role) should use a trusted host click inside web content")
-    }
-  }
-
-  func testEditableWebControlsStayOnFocusPath() {
-    for role in JumpTarget.textInputRoles {
-      XCTAssertFalse(
-        AccessibilityProvider.prefersHostClick(insideWebArea: true, role: role),
-        "\(role) should stay on the AX focus path")
-    }
-  }
-
-  func testNativeControlsDoNotPreferHostClickByRoleAlone() {
-    XCTAssertFalse(AccessibilityProvider.prefersHostClick(insideWebArea: false, role: "AXLink"))
-    XCTAssertFalse(AccessibilityProvider.prefersHostClick(insideWebArea: false, role: "AXButton"))
-  }
-
-  func testExtensionPopupPressRolesPreferHostClickOnlyInsideWebArea() {
-    XCTAssertTrue(
-      AccessibilityProvider.prefersHostClick(
-        insideWebArea: true,
-        role: "AXOption",
-        isExtensionPopupPressRole: true))
-    XCTAssertFalse(
-      AccessibilityProvider.prefersHostClick(
-        insideWebArea: false,
-        role: "AXOption",
-        isExtensionPopupPressRole: true))
-  }
-
 }
 
 private final class StubProvider: FlashSource {

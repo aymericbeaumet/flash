@@ -114,9 +114,7 @@ pub trait Plugin: Send + Sync + 'static {
         async {}
     }
 
-    /// Dispatch a non-lifecycle [`Request`] and return a [`Response`]. For
-    /// [`Request::ActivateTarget`] (a notification) the returned value is
-    /// ignored — return [`Response::None`].
+    /// Dispatch a non-lifecycle [`Request`] and return a [`Response`].
     fn handle(&self, ctx: Context, request: Request) -> impl Future<Output = Response> + Send;
 
     /// Called on `shutdown` just before the process exits.
@@ -590,27 +588,6 @@ async fn serve<P: Plugin>(plugin: P) {
                             .await;
                     }
                 }
-            }
-            "hints.activate" => {
-                // Notification: dispatch through `handle`, never respond.
-                let request = match decode(params, "hints.activate") {
-                    Ok(request) => Request::ActivateTarget(request),
-                    Err(error) => {
-                        ctx.log(
-                            "warn",
-                            &format!("[plugin] dropped malformed hints.activate ({error})"),
-                        );
-                        continue;
-                    }
-                };
-                let plugin = plugin.clone();
-                let ctx = ctx.clone();
-                let startup_rx = startup_rx.clone();
-                tokio::spawn(async move {
-                    if startup_succeeded(startup_rx).await {
-                        plugin.handle(ctx, request).await;
-                    }
-                });
             }
             "sources.snapshot" => {
                 // Binding hot-path contract: clone the last complete atomically

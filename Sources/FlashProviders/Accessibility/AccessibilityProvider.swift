@@ -85,21 +85,6 @@ public final class AccessibilityProvider: FlashSource {
     "AXMenuItem",
   ]
 
-  /// Web controls that should receive a real host mouse click instead
-  /// of an AXPress/AXOpen action. Browser AX layers can report
-  /// AXPress success for these roles while the page's DOM click handler
-  /// never runs (Gmail message-body links are one concrete example).
-  /// Editable web controls are deliberately excluded so they keep the
-  /// direct AX focus path and enter insert mode predictably.
-  public static let webHostClickRoles: Set<String> = [
-    "AXLink", "AXButton",
-    "AXCheckBox", "AXRadioButton",
-    "AXPopUpButton",
-    "AXTab",
-    "AXMenuItem",
-    "AXRow", "AXCell",
-  ]
-
   /// Extra web roles accepted only inside browser-extension documents, and
   /// only after an `AXPress` action check. Password-manager popups expose
   /// vault rows/options this way; ordinary web pages still use the stricter
@@ -123,10 +108,6 @@ public final class AccessibilityProvider: FlashSource {
     "AXTab",
   ]
 
-  /// Roles for which "click" really means "focus the input". AXPress on a
-  /// search field is a no-op and a synthesized mouse click on top of an
-  /// already-keyed app may land in the wrong subview; setting
-  /// `kAXFocusedAttribute = true` is the unambiguous AX-level way.
   /// Runaway guards rather than real limits. Real AX trees rarely exceed
   /// ~30 levels of depth or a few thousand elements, but the previous
   /// caps (80 / 1500) hid genuine tree content from the dump on
@@ -155,22 +136,6 @@ public final class AccessibilityProvider: FlashSource {
   }
 
   public func supports(_ context: AppContext) -> Bool { true }
-
-  public static func prefersHostClick(
-    insideWebArea: Bool,
-    role: String?,
-    isExtensionPopupPressRole: Bool = false
-  ) -> Bool {
-    guard insideWebArea else { return false }
-    if let role, JumpTarget.textInputRoles.contains(role) {
-      return false
-    }
-    if isExtensionPopupPressRole {
-      return true
-    }
-    guard let role else { return false }
-    return webHostClickRoles.contains(role)
-  }
 
   public func performAction(
     _ action: SourceAction,
@@ -636,38 +601,6 @@ public final class AccessibilityProvider: FlashSource {
       state.idCounter += 1
       let captured = element
       let capturedRole = role ?? "AXUnknown"
-      // Web content frequently exposes AXPress on semantic controls even
-      // when the page's real click handler only observes trusted mouse
-      // events. Use the host-click path for non-editable web controls;
-      // text inputs keep the AX focus path below so insert-mode entry
-      // stays deterministic.
-      let preferHostClick = Self.prefersHostClick(
-        insideWebArea: insideWebArea,
-        role: capturedRole,
-        isExtensionPopupPressRole: isExtensionPopupPressRole)
-      let activate: ((JumpAction) -> Bool) = { action in
-        if preferHostClick {
-          return false
-        }
-        return FirefoxAccessibility.withTree(
-          pid: pid,
-          bundleIdentifier: bundleIdentifier
-        ) { _ in
-          switch action {
-          case .leftClick:
-            if JumpTarget.textInputRoles.contains(capturedRole),
-              AXClick.setFocus(captured)
-            {
-              return true
-            }
-            return AXClick.tryActions(captured, action: .leftClick)
-          case .rightClick:
-            return AXClick.tryActions(captured, action: .rightClick)
-          case .doubleClick:
-            return false
-          }
-        }
-      }
       // Browser tab strips report their entries either as native `AXTab` or as
       // `AXRadioButton` / `AXButton` with subrole `AXTabButton` (Firefox +
       // Chromium). Raising their priority signals the renderer to paint them in
@@ -706,10 +639,8 @@ public final class AccessibilityProvider: FlashSource {
         accessibilityLabel: label,
         url: url,
         pid: pid,
-        activate: activate,
         resolveClickPoint: resolveClickPoint,
         entersInsertMode: JumpTarget.textInputRoles.contains(capturedRole),
-        preferHostClick: preferHostClick,
         priority: isTabAnchor ? .urgent : .normal,
         providerID: identifier
       )

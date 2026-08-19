@@ -26,8 +26,8 @@ pub use context::{
 };
 pub use runtime::{run, Plugin};
 pub use types::{
-    candidate_metadata, ActionContext, ActivateRequest, Candidate, CandidateEffect, CommandRequest,
-    CommandResponse, DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget,
-    NavigationRequest, Priority, QueryAnswer, QueryEvaluateRequest, QueryEvaluateResponse, Request,
-    ResolveResponse, Response, RunningApplication, SourceActionRequest, SourceActionResponse,
+    candidate_metadata, ActionContext, Candidate, CandidateEffect, CommandRequest, CommandResponse,
+    DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, Priority,
+    QueryAnswer, QueryEvaluateRequest, QueryEvaluateResponse, Request, ResolveResponse, Response,
+    RunningApplication, SourceActionRequest, SourceActionResponse, TERMINAL_LINK_ROLE,
 };

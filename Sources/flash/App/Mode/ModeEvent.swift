@@ -26,9 +26,9 @@ enum ModeEvent: Equatable {
   /// Command-line submit or cancel — both close the surface to its `restoreTo`.
   case closeCommand(reason: String)
 
-  /// A click — real mouse OR an `f`/`F` hint — resolved by the shared editable
-  /// detector. `entersInsert` is the detector's verdict. From NORMAL an
-  /// editable target enters insert; from INSERT this never leaves insert.
+  /// A primary click resolved by its source: physical and mouse-grid clicks
+  /// enter INSERT, while semantic hints honor `JumpTarget.entersInsertMode`.
+  /// From INSERT this never leaves insert.
   case clickResolved(entersInsert: Bool, targetPID: pid_t?)
 
   // MARK: System

@@ -5,46 +5,77 @@ import XCTest
 @testable import flash
 
 final class ActionDispatcherTests: XCTestCase {
-  func testPlainTargetUsesAccessibilityBeforeHostClick() {
-    XCTAssertEqual(
-      ActionDispatcher.dispatchRoute(for: target(), action: .leftClick, modifiers: []),
-      .accessibilityThenHostClick)
+  func testCurrentContextNativeLinkHintIsAPlainClick() {
+    let modifiers = ActionDispatcher.hintClickModifiers(
+      for: target(role: "AXLink"),
+      bundleIdentifier: "com.apple.Safari",
+      requested: [])
+
+    XCTAssertEqual(modifiers, [])
   }
 
-  func testPreferHostClickTargetSkipsAccessibilityRoute() {
-    XCTAssertEqual(
-      ActionDispatcher.dispatchRoute(
-        for: target(preferHostClick: true), action: .leftClick, modifiers: []),
-      .hostClick)
+  func testNewContextNativeLinkHintCarriesCommandAndShift() {
+    let modifiers = ActionDispatcher.hintClickModifiers(
+      for: target(role: "AXLink"),
+      bundleIdentifier: "com.apple.Safari",
+      requested: [.command, .shift])
+
+    XCTAssertEqual(modifiers, [.command, .shift])
   }
 
-  func testModifiedClickUsesHostClickRoute() {
-    XCTAssertEqual(
-      ActionDispatcher.dispatchRoute(for: target(), action: .leftClick, modifiers: [.command]),
-      .hostClick)
+  func testCurrentContextFirefoxLinkHintAddsCommand() {
+    let modifiers = ActionDispatcher.hintClickModifiers(
+      for: target(role: "AXLink"),
+      bundleIdentifier: "org.mozilla.firefox",
+      requested: [])
+
+    XCTAssertEqual(modifiers, [.command])
   }
 
-  func testRightClickAlwaysUsesHostClickSoTheMenuOpensAtTheClickPoint() {
-    // A genuine right-mouse-down anchors the context menu at the cursor; the AX
-    // `AXShowMenu` fallback would open the same menu at the element's default
-    // (top-left) spot instead. Force the host-click route for every right-click,
-    // even an unmodified one on a plain accessibility target. Left / double keep
-    // the AX-first route.
-    XCTAssertEqual(
-      ActionDispatcher.dispatchRoute(for: target(), action: .rightClick, modifiers: []),
-      .hostClick)
-    XCTAssertEqual(
-      ActionDispatcher.dispatchRoute(for: target(), action: .doubleClick, modifiers: []),
-      .accessibilityThenHostClick)
+  func testNewContextFirefoxLinkHintCarriesCommandAndShift() {
+    let modifiers = ActionDispatcher.hintClickModifiers(
+      for: target(role: "AXLink"),
+      bundleIdentifier: "org.mozilla.firefox",
+      requested: [.command, .shift])
+
+    XCTAssertEqual(modifiers, [.command, .shift])
   }
 
-  private func target(preferHostClick: Bool = false) -> JumpTarget {
+  func testCurrentContextTerminalLinkHintAddsShift() {
+    let modifiers = ActionDispatcher.hintClickModifiers(
+      for: target(role: JumpTarget.terminalLinkRole),
+      bundleIdentifier: "org.alacritty",
+      requested: [])
+
+    XCTAssertEqual(modifiers, [.shift])
+  }
+
+  func testNewContextTerminalLinkHintCarriesCommandAndShift() {
+    let modifiers = ActionDispatcher.hintClickModifiers(
+      for: target(role: JumpTarget.terminalLinkRole),
+      bundleIdentifier: "org.alacritty",
+      requested: [.command, .shift])
+
+    XCTAssertEqual(modifiers, [.command, .shift])
+  }
+
+  func testEveryNonLinkHintIsAnUnmodifiedClick() {
+    for role in ["tmux-pane", "AXButton", "AXTextField", "AXTab"] {
+      let modifiers = ActionDispatcher.hintClickModifiers(
+        for: target(role: role),
+        bundleIdentifier: "org.mozilla.firefox",
+        requested: .all)
+
+      XCTAssertEqual(modifiers, [], "\(role) should receive a simple click")
+    }
+  }
+
+  private func target(role: String) -> JumpTarget {
     JumpTarget(
       id: "target",
       frame: CGRect(x: 10, y: 20, width: 30, height: 40),
-      role: "AXButton",
+      role: role,
       pid: 42,
-      preferHostClick: preferHostClick,
       providerID: "test")
   }
 }

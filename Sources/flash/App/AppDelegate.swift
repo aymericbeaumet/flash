@@ -39,13 +39,6 @@ enum InsertModeTransitionReason: Equatable {
   }
 }
 
-struct PointerInsertFocusHandoff {
-  let pid: pid_t?
-  let reason: InsertModeTransitionReason
-  let token: UInt64?
-  let completion: (Bool) -> Void
-}
-
 struct ModeOverlaySnapshot: Equatable {
   var text: String
   var visible: Bool
@@ -370,7 +363,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     set { recaptureSuppression.pointerInsertHandoffUntil = newValue }
   }
   var pointerInsertHandoffToken: UInt64 = 0
-  var pointerInsertFocusHandoff: PointerInsertFocusHandoff?
   /// True while a native surface (context menu / OS popup) owns the keyboard.
   /// The sole non-base-mode input to the capture projection — set by
   /// `suspendNormalCaptureForNativeSurface`, cleared when capture is

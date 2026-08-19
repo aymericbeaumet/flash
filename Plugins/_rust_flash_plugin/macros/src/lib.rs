@@ -91,16 +91,6 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                 async { ::flash_plugin::SourceActionResponse::unhandled() }
             }
 
-            /// Act on a hint target the plugin emitted (a notification; no reply).
-            fn activate_target(
-                &self,
-                ctx: ::flash_plugin::Context,
-                request: ::flash_plugin::ActivateRequest,
-            ) -> impl ::core::future::Future<Output = ()> + ::core::marker::Send {
-                let _ = (ctx, request);
-                async {}
-            }
-
             /// Clean up just before the process exits.
             fn on_shutdown(
                 &self,
@@ -169,10 +159,6 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                             ::flash_plugin::Response::SourceAction(
                                 <Self as FlashPlugin>::restore_navigation(self, ctx, request).await,
                             )
-                        }
-                        ::flash_plugin::Request::ActivateTarget(request) => {
-                            <Self as FlashPlugin>::activate_target(self, ctx, request).await;
-                            ::flash_plugin::Response::None
                         }
                         ::flash_plugin::Request::QueryEvaluate(request) => {
                             ::flash_plugin::Response::QueryEvaluate(

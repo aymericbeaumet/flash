@@ -1,12 +1,27 @@
 import AppKit
 import CoreGraphics
 import FlashCore
-import FlashProviders
 
 enum ActionDispatcher {
-  enum DispatchRoute: Equatable {
-    case accessibilityThenHostClick
-    case hostClick
+  /// Native links preserve the target command's requested modifiers. Firefox
+  /// links additionally require Command; terminal links require Shift so the
+  /// emulator handles the link instead of forwarding the click to tmux. Every
+  /// non-link target receives a plain click for both commands.
+  static func hintClickModifiers(
+    for target: JumpTarget,
+    bundleIdentifier: String?,
+    requested modifiers: ClickModifiers
+  ) -> ClickModifiers {
+    switch target.role {
+    case "AXLink" where FirefoxAccessibility.matches(bundleIdentifier: bundleIdentifier):
+      modifiers.union(.command)
+    case "AXLink":
+      modifiers
+    case JumpTarget.terminalLinkRole:
+      modifiers.union(.shift)
+    default:
+      []
+    }
   }
 
   /// Serial queue for the timed parts of click synthesis (the settle pause and
@@ -25,89 +40,32 @@ enum ActionDispatcher {
       ?? NSScreen.main?.frame.height ?? 1080
   }
 
-  /// Click pipeline. By default click actions do not move the visible cursor —
-  /// `synthesizeClick` hides, warps, clicks, then restores. Hint commits pass
-  /// `leaveCursorAtClickPoint: true` so the cursor lands, and stays, on the hint
-  /// the user picked (the click point is the hint chip). `mf`/`mF` remain the
-  /// explicit move-only commands.
+  /// Deliver a hint selection as one real mouse event to the underlying app.
+  /// There is deliberately no provider-owned activation or AXPress fallback:
+  /// Alacritty/tmux, browsers, native apps, and plugin targets all receive the
+  /// same real click and interpret it themselves. Semantic links apply the
+  /// `f` / `F` primary/new-context gesture appropriate to their surface;
+  /// every other target is plain.
   ///
-  /// Pipeline:
-  ///   1. Modified click → straight to `synthesizeClick`. AX activate
-  ///      can't carry a shift/cmd modifier, and most modifier-clicks
-  ///      (shift+click selection, opt+click in code editors, …) only
-  ///      mean anything when a real mouse event reaches the app.
-  ///      Targets marked `preferHostClick` take the same path: those
-  ///      surfaces expose AX actions that report success without
-  ///      delivering the click the host app expects.
-  ///   2. `target.activate(action)` — provider-owned best-known path.
-  ///      AccessibilityProvider tries focus-set (text inputs) +
-  ///      AXPress/AXOpen/AXConfirm.
-  ///   3. AX hit-test at the click point (`AXClick.clickAtPoint`) —
-  ///      recovers inert-wrapper cases where the chip's element
-  ///      exposes no AX action but the node under the point does.
-  ///   4. Synthesized `CGEvent` mouse click (`synthesizeClick`) — last
-  ///      resort.
-  ///
-  /// `clickPoint`, when supplied, is the screen-coord point we click in
-  /// steps 3 + 4. The expected value is the target's geometric centre
-  /// — the same point AX uses for its own press-to-click fallback.
-  ///
-  /// `completion` (if supplied) runs on the main thread once the click has been
-  /// delivered: synchronously for the AX paths, and after the off-main posting
-  /// for the synthesized-click paths. Hint-commit relies on this to probe the
-  /// target's focus *after* the click lands.
+  /// `completion` runs on the main thread after the off-main event posting.
   static func perform(
     _ action: JumpAction,
     on target: JumpTarget,
-    pid _: pid_t? = nil,
     clickPoint: CGPoint? = nil,
+    bundleIdentifier: String? = nil,
     modifiers: ClickModifiers = [],
     leaveCursorAtClickPoint: Bool = false,
     completion: (() -> Void)? = nil
   ) {
     let point = clickPoint ?? CGPoint(x: target.frame.midX, y: target.frame.midY)
-    if dispatchRoute(for: target, action: action, modifiers: modifiers) == .hostClick {
-      synthesizeClick(
-        at: point, action: action, modifiers: modifiers,
-        preserveCursor: !leaveCursorAtClickPoint, completion: completion)
-      return
-    }
-    if let activate = target.activate, activate(action) {
-      // The AX path never moved the pointer; place it on the hint so a hint
-      // commit leaves the cursor where the user aimed. AX activate is
-      // synchronous, so the caller's completion can run now.
-      if leaveCursorAtClickPoint { _ = moveCursor(to: point) }
-      completion?()
-      return
-    }
-    if let pid = target.pid,
-      AXClick.clickAtPoint(pid: pid, nsScreenPoint: point, action: action)
-    {
-      if leaveCursorAtClickPoint { _ = moveCursor(to: point) }
-      completion?()
-      return
-    }
     synthesizeClick(
-      at: point, action: action, preserveCursor: !leaveCursorAtClickPoint,
+      at: point, action: action,
+      modifiers: hintClickModifiers(
+        for: target,
+        bundleIdentifier: bundleIdentifier,
+        requested: modifiers),
+      preserveCursor: !leaveCursorAtClickPoint,
       completion: completion)
-  }
-
-  static func dispatchRoute(
-    for target: JumpTarget,
-    action: JumpAction,
-    modifiers: ClickModifiers
-  ) -> DispatchRoute {
-    // Right-click must land as a real mouse-down at the click point. A genuine
-    // right-click makes the app anchor its context menu at the cursor, whereas
-    // the AX `AXShowMenu` action (the first step of `.accessibilityThenHostClick`)
-    // opens the *correct* menu but at the element's own default spot — typically
-    // the top-left of the screen, never where the user aimed. Mouse-grid clicks
-    // already synthesize; routing target right-clicks here keeps the two
-    // consistent.
-    if action == .rightClick || !modifiers.isEmpty || target.preferHostClick {
-      return .hostClick
-    }
-    return .accessibilityThenHostClick
   }
 
   /// Synthesize a real mouse click at `screenPoint` (NSScreen, bottom-left

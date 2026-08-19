@@ -1,10 +1,10 @@
 import CoreGraphics
 import Darwin
 
-// @unchecked Sendable: `activate` is a non-`@Sendable` closure provided by the
-// owning source. Providers wire up activation on the AX queue and the host
-// invokes the closure on the main thread once committed; the target itself is
-// treated as immutable in between. Other fields are all value types.
+// @unchecked Sendable: `resolveClickPoint` is a non-`@Sendable` closure provided
+// by the owning source. The host invokes it on the main thread once committed;
+// the target itself is treated as immutable in between. Other fields are all
+// value types.
 public struct JumpTarget: @unchecked Sendable {
   public let id: String
   public let frame: CGRect
@@ -18,7 +18,6 @@ public struct JumpTarget: @unchecked Sendable {
   /// (Flash only walks the active window) but kept on the target so the
   /// commit path can re-activate by pid without re-querying NSWorkspace.
   public let pid: pid_t?
-  public let activate: ((JumpAction) -> Bool)?
   /// Resolves a point — in NSScreen bottom-left coords — that is guaranteed to
   /// sit on the target, computed lazily at commit so it costs nothing during
   /// the hint walk. Providers set this for surfaces whose `frame` is a union
@@ -29,25 +28,9 @@ public struct JumpTarget: @unchecked Sendable {
   public let providerID: String
   /// Whether committing a click on this target should switch Flash into
   /// insert mode. The owning provider decides: a typing surface (text
-  /// field, a tmux pane) sets this true so the user lands ready to type;
-  /// a link or button leaves it false so keyboard navigation continues.
+  /// field) sets this true so the user lands ready to type; links, buttons,
+  /// and tmux pane selectors leave it false so keyboard navigation continues.
   public let entersInsertMode: Bool
-  /// When true, `ActionDispatcher.perform` skips provider AX activation
-  /// and AX hit-test fallback, then goes straight to a synthesized
-  /// `CGEvent` click. Set by providers whose targets sit on top of a
-  /// surface that exposes an AX press action which does *not* mean
-  /// "click here" — e.g. a tmux pane chip over an alacritty terminal,
-  /// or a browser web link whose AXPress reports success while the DOM
-  /// click handler never runs. Without this flag the dispatcher would
-  /// treat the spurious AXPress as a successful click and never deliver
-  /// the real one.
-  public let preferHostClick: Bool
-  /// When true, activating this target hands focus to a DIFFERENT
-  /// application (e.g. a status-bar link opening in the default browser).
-  /// The commit path keeps the current mode, skips the opened-text-input
-  /// probe, and never re-activates the source app around the click — the
-  /// receiving app's own activation must win the focus handoff.
-  public let transfersFocus: Bool
   /// Source-declared salience for this target. The renderer currently paints
   /// `.important` and `.urgent` targets in the accent style; the commit path
   /// is unchanged.
@@ -60,11 +43,8 @@ public struct JumpTarget: @unchecked Sendable {
     accessibilityLabel: String? = nil,
     url: String? = nil,
     pid: pid_t? = nil,
-    activate: ((JumpAction) -> Bool)? = nil,
     resolveClickPoint: (() -> CGPoint?)? = nil,
     entersInsertMode: Bool = false,
-    preferHostClick: Bool = false,
-    transfersFocus: Bool = false,
     priority: FlashPriority = .normal,
     providerID: String
   ) {
@@ -74,11 +54,8 @@ public struct JumpTarget: @unchecked Sendable {
     self.accessibilityLabel = accessibilityLabel
     self.url = url
     self.pid = pid
-    self.activate = activate
     self.resolveClickPoint = resolveClickPoint
     self.entersInsertMode = entersInsertMode
-    self.preferHostClick = preferHostClick
-    self.transfersFocus = transfersFocus
     self.priority = priority
     self.providerID = providerID
   }
@@ -88,4 +65,10 @@ public struct JumpTarget: @unchecked Sendable {
   public static let textInputRoles: Set<String> = [
     "AXTextField", "AXSearchField", "AXTextArea", "AXComboBox",
   ]
+
+  /// Semantic role for links discovered inside terminal content. Terminal
+  /// emulators use Shift-click to bypass application mouse reporting and
+  /// activate their own link handling, so the host adds Shift when committing
+  /// one of these targets. Native accessibility links continue to use AXLink.
+  public static let terminalLinkRole = "FlashTerminalLink"
 }

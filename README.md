@@ -73,7 +73,7 @@ Bind `enter_normal_mode` to turn macOS into a keyboard-first environment:
 enabled = true
 ```
 
-Normal mode includes familiar bindings such as `f` for hints, `F` for Command-Shift-click hints, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). Vim's `a`, `A`, `i`, `I`, `o`, and `O` all enter insert mode; `I` keeps Flash's locked-insert behavior.
+Normal mode includes familiar bindings such as `f` for primary hint clicks, `F` for new-context link hints, `ctrl-f` for the mouse grid, `h/j/k/l` for movement, `gg` and `G` for top and bottom, `[` / `]` sequences for history, tabs, and apps, `:` for the command line, and `?` for help. Firefox links receive Command-click from `f`, other native/browser links receive a plain click, terminal links receive Shift-click, and `F` sends Command-Shift-click to every semantic link; non-link targets receive a plain click from both. Every built-in `[` / `]` sequence repeats when its final key is pressed again (`[tttt`, `]aaaa`, and so on). Vim's `a`, `A`, `i`, `I`, `o`, and `O` all enter insert mode; `I` keeps Flash's locked-insert behavior.
 
 ### flashlight
 
@@ -98,12 +98,19 @@ transport remains independent. Otherwise-identical windows are labelled by
 host. The tmux source registers no keyboard mappings: terminal-native shortcuts
 can send the user's normal tmux prefix bindings with zero Flash round trips.
 Flash still resolves any discovered local or remote window from the finder.
+Tmux hint discovery recognizes quoted absolute paths (including spaces and
+Unicode), slash-separated relative paths, URLs, and ordinary filenames while
+excluding dotted source identifiers such as `JumpTarget.entersInsertMode`.
+Committing a terminal link with `f` sends Shift-click; `F` sends Command-Shift
+so the terminal can open it in a new context. Flash does not open the value
+itself.
+Pane hints always send a plain click and stay in NORMAL mode.
 
 ### Useful actions
 
 ```bash
-flash mouse_target                       # left-click a hinted target
-flash mouse_target --modifiers=cmd       # Command-click a hinted target
+flash mouse_target                       # primary click (Firefox adds Command; terminal adds Shift)
+flash mouse_target --modifiers=cmd+shift # new-context click for links only
 flash mouse_target --secondary           # right-click
 flash mouse_target --double              # double-click
 flash mouse_target --move                # move the pointer only
@@ -152,7 +159,7 @@ leader = "\\"
 "ctrl+shift+f" = ["flash", "mouse_grid", "--modifiers=cmd+shift"]
 ```
 
-Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` switches to INSERT and continues to the app or macOS; the defaults are Escape and Command, Control, Shift, and Option. Explicit mappings win. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; those preset modifiers are combined with any magic modifiers held on the final hint key.
+Mapping values are argv arrays, or inline tables with an `action` argv array and optional metadata. `repeat = true` repeats a completed normal-mode sequence whenever its final key is pressed again. Arrays beginning with `"flash"` dispatch in-process; any other executable is launched directly, with `~` and environment variables expanded in each argument. In NORMAL, a named key in `passthrough_keys` or an unmapped shortcut carrying one of `passthrough_modifiers` switches to INSERT and continues to the app or macOS; the defaults are Escape and Command, Control, Shift, and Option. Explicit mappings win. Mouse verbs accept `--modifiers=cmd+ctrl+alt+shift`; presets combine with configured magic modifiers held on the final hint key. For `mouse_target`, native/browser links preserve those modifiers, Firefox links additionally require Command, terminal links require Shift, and every non-link target always receives a plain click. Thus `f` is Command-click in Firefox, plain on other native/browser links, and Shift-click in terminals, while `F` is Command-Shift-click for every semantic link.
 
 ## Use your existing hotkey tool
 

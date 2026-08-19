@@ -40,14 +40,14 @@ config.default.toml                  # Canonical user-facing config reference
 Sources/
   FlashCore/                         # Public SPI (source protocol + value types)
     AppContext.swift                 # Front-app context: bundle, pid, window frame
-    JumpTarget.swift                 # A clickable thing with a screen rect + optional activate closure
+    JumpTarget.swift                 # A clickable thing with a screen rect + semantic commit metadata
     JumpAction.swift                 # .leftClick | .rightClick | .doubleClick
     FlashSource.swift                # FlashSource protocol + readiness/activation policy + capability set
     QueryEvaluator.swift             # Typed additive per-input answer facet; separate from catalog sources
     TargetFinalizer.swift            # Shared visible-region filter + smaller-frame-wins dedup before label assignment
   FlashProviders/                    # Built-in jump-target sources (depend on FlashCore + AppKit)
     Accessibility/AccessibilityProvider.swift   # Generic AX walk. Open class.
-    Accessibility/AXClick.swift                 # AX-level click utilities (tryActions, setFocus, hasPressAction, clickAtPoint). Shared by AccessibilityProvider and ActionDispatcher.
+    Accessibility/AXClick.swift                 # AX action inspection for tentative target discovery; never the hint commit path.
   FlashBrowserTestSupport/           # Browser integration fixture catalog, Firefox harness, Marionette client, and reference-marker diff helpers.
   FlashIntegrationTestSupport/       # Shared GUI integration helpers: AX launch/wait/context, matching, timing, recorder.
   flash/                             # Resident app executable target — fat binary: argv-less = resident, argv = CLI
@@ -60,7 +60,7 @@ Sources/
       OverlayPanel.swift             # Reusable transparent NSPanel, CALayer pool, animations disabled
       OverlayInput.swift             # NSPanel.keyDown — the ONLY keyboard code in the project
       HintAssigner.swift             # Prefix-free label generator + memoised candidate cache
-      ActionDispatcher.swift         # AXPress preferred; CGEvent click fallback
+      ActionDispatcher.swift         # Uniform host CGEvent click dispatch for committed hints
       SourceRegistry.swift           # Built-in source descriptors; activation-gated source loading + priority chain
       Plugins/                       # Plugin manifest/process/manager, AX broker, and FlashSource adapter
       DebugServer.swift              # loopback-only dense HTTP/SSE debug page
@@ -101,7 +101,7 @@ AGENTS.md                            # This file
 8. Bounces back to main; if the activation generation still matches (no cancel / app switch / commit in flight), `OverlayPanel.display(hints:)` wraps all layer mutations in `CATransaction.setDisableActions(true)` → no implicit animation; chips appear in place.
 9. Panel becomes key (without activating Flash as app, because it's a `.nonactivatingPanel`).
 10. `OverlayPanel.keyDown(with:)` matches typed prefix against assigned labels; on a unique match, `AppDelegate.commit` reactivates the focused pid (via `hint.target.pid`) and runs `ActionDispatcher.perform` after a 20 ms delay. The activation gate stays closed across that delay so a rapid second ctrl+space can't race.
-11. `ActionDispatcher` runs the click through a three-step pipeline. (1) Call the provider-owned `target.activate` closure — AX targets try AXPress/AXOpen/AXConfirm (or focus-set for text inputs), and right click tries AXShowMenu. (2) On failure, AX-hit-test at the click point via `AXClick.clickAtPoint`, then try the press-style actions on that element + its ancestors. Cursor doesn't move and this often recovers inert-wrapper / handler-on-descendant cases (Firefox tab strip, React `role="tab"` widgets). (3) Final fallback: synthesized `CGEvent` click, including double-click — cursor warps to the point hidden, clicks, warps back, unhides. The dispatcher is the only place mouse synthesis lives; the providers themselves never synthesize.
+11. `ActionDispatcher` always synthesizes the committed mouse event into the owning app; providers and plugins never activate a target themselves. Native `AXLink` targets preserve requested modifiers; Firefox-owned links additionally add Command (`f` is Command-click; `F` remains Command-Shift), while `FlashTerminalLink` targets add Shift (`f` is Shift-click; `F` remains Command-Shift). Other native/browser links receive a plain `f`. Every non-link target receives an unmodified click from either command. The cursor lands on the committed chip. The dispatcher is the only place hint mouse synthesis lives.
 12. Overlay hides; process stays resident.
 
 ## Coordinate systems (subtle, get this right)
@@ -221,7 +221,8 @@ Steps:
 
 Flash deliberately uses **only two jump-target sources**: `AccessibilityProvider` as the universal default, and the bundled `tmux` plugin's hints provider for terminals whose visible content macOS Accessibility cannot see. App-specific sources may contribute `:flashlight` items or custom resolution when that data does not belong in the AX walker. There is no DOM bridge / `do JavaScript` provider — browser page content reaches us through `AXWebArea` descendants the same way every other web area does. If you find yourself reaching for AppleScript-based discovery, surface that to the user instead of adding it.
 
-A `JumpTarget.activate` closure overrides the default action. Use it when the underlying API has a cheaper / more reliable way to "click" than synthesizing a `CGEvent` (e.g. AX can call `kAXPressAction`).
+A `JumpTarget` describes geometry and semantics only. Providers never activate
+targets: `ActionDispatcher` owns the real host mouse event for every commit.
 
 ## Configuration
 
@@ -345,7 +346,7 @@ big-endian payload length followed by a MessagePack value. Host input goes to
 stdin, successful or failed protocol results go to stdout, and unexpected
 errors go to stderr. Plugins can log through the Flash logger by sending
 `flash.log` protocol notifications. Protocol v3 uses namespaced method names:
-`sources.snapshot`, `query.evaluate`, `hints.discover`, `hints.activate`,
+`sources.snapshot`, `query.evaluate`, `hints.discover`,
 `candidate.resolve`, `source.action`, `command.invoke`, and
 `navigation.restore`; do not add camel-case aliases.
 Official plugin installers must keep downloaded CLI binaries under their own
@@ -705,7 +706,7 @@ App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_comma
 
 Three normal-mode keys carry a single semantic meaning regardless of focused-app context. Plugins/sources own the context-specific dispatch; the host owns the uniform fallback. Adding a new source means deciding which of these you implement and which you let fall through.
 
-**`f` — the `mouse_target` verb (click a hinted target).** `F` invokes the same verb with `modifiers=cmd+shift`, giving focused-new-tab opening through a real Command-Shift-click; `ctrl-f` / `ctrl-shift-f` apply the same current/focused-new-tab pair to `mouse_grid`. Hint providers run through `SourceRegistry.hintProviderPlan(for:)` in descending priority: built-in `AccessibilityProvider` (priority 10) is the universal default; a plugin opts in via a `hints` provider at higher priority (e.g., `Plugins/tmux` at 20). There is no additive merge: the first non-empty result wins, and an empty result advances only when that provider explicitly declares `fallback_on_empty` because its applicability is discovered dynamically. Individual hint targets may still carry the shared `priority` enum; `.important` and `.urgent` use the accent hint style without changing commit behavior. Targets travel through `ActionDispatcher.perform` with one uniform pipeline: any non-empty `ClickModifiers` (cmd/ctrl/alt/shift, whether preset by the mouse verb or held on the final hint key and gated there by `hints.magic_modifiers`) bypasses the per-target `activate` closure and posts a real `CGEvent` mouse-down/up with the flags set. Insert-mode entry after commit is driven solely by `JumpTarget.entersInsertMode`, which providers set per target.
+**`f` — the `mouse_target` verb (click a hinted target).** `f` requests the owning surface's primary link gesture; `F` invokes the same target set with `modifiers=cmd+shift` for a new context. Native/browser links use role `AXLink`: Firefox-owned links add Command (`f` Command, `F` Command-Shift), while other apps keep `f` plain. Terminal-content links use role `FlashTerminalLink` (`f` Shift, `F` Command-Shift) so the emulator handles them instead of forwarding the click to tmux. Every non-link target discards modifiers and receives a plain click from either mapping. `ctrl-f` / `ctrl-shift-f` retain the same plain/Command-Shift pair for `mouse_grid`. Hint providers run through `SourceRegistry.hintProviderPlan(for:)` in descending priority: built-in `AccessibilityProvider` (priority 10) is the universal default; a plugin opts in via a `hints` provider at higher priority (e.g., `Plugins/tmux` at 20). There is no additive merge: the first non-empty result wins, and an empty result advances only when that provider explicitly declares `fallback_on_empty` because its applicability is discovered dynamically. Individual hint targets may still carry the shared `priority` enum; `.important` and `.urgent` use the accent hint style without changing commit behavior. Providers return geometry and semantics only; `ActionDispatcher.perform` posts the host `CGEvent` directly and never calls provider/plugin activation code. Insert-mode entry after commit is driven solely by `JumpTarget.entersInsertMode`, which providers set per target.
 
 **`t` — the `tab_new` verb (open a new tab/window in this context).** Routed through `SourceRegistry.tabNew` against every source advertising `.tabCreation`, in priority order. The first source whose disposition is not `.unhandled` wins; on `.failed` the host stops the chain (no keystroke fallback — see *Source action dispositions* below). On `.unhandled` from every source the host synthesizes a context-aware keystroke fallback via `AppDelegate.tabNewFallbackKey`: ⌘N for window-only terminal bundles (Alacritty), ⌘T elsewhere.
 
@@ -720,8 +721,8 @@ Flash must never leave normal mode because focus changed on its own. Leaving nor
 - A normal-mode `a`, `A`, `i`, `I`, `o`, or `O` keypress (or its insert-mode verb twin invoked by the user).
 - A user-driven normal-mode command that intentionally opens a typing surface, currently `/` (`app_find`) and `t` (`tab_new`).
 - A physical pointer click while idle normal mode is capturing input; Flash enters insert mode and replays the click so it reaches the underlying app.
-- A committed `f` (mouse_target) click on a target whose owning provider set `JumpTarget.entersInsertMode = true`. Only true text-input surfaces qualify: `AccessibilityProvider` sets it on `AXTextField` / `AXSearchField` / `AXTextArea` / `AXComboBox`. Terminal-like targets (e.g. tmux panes) are NOT inputs in this sense and stay normal; the user types `i` after focusing one if they want to type.
-- A committed `ctrl-f` / `ctrl-shift-f` (`mouse_grid`) click — **only** when a post-click AX query (`AppMonitor.focusedElementIsEditable`) reports the focused element under that click is a text-input role. Geometric clicks have no AX target up front, so the role check after the click is the only honest signal that the user landed on something typable. `mF` (cursor move) never enters insert.
+- A committed `f` / `F` (`mouse_target`) click on a target whose owning provider set `JumpTarget.entersInsertMode = true`. `AccessibilityProvider` sets it on `AXTextField` / `AXSearchField` / `AXTextArea` / `AXComboBox`. A target with `false` is authoritative and stays normal even when the app already has editable focus — notably, both tmux pane and link hints stay in NORMAL.
+- A committed `ctrl-f` / `ctrl-shift-f` (`mouse_grid`) left or double click. The grid is mouse simulation, so it enters insert unconditionally just like a physical pointer click. Grid move never enters insert, and grid right-click stays normal while its context menu owns the keyboard.
 
 Nothing else may auto-enter insert. Specifically: focused-element changes, app activation, and unrelated configured key sequences must leave the mode alone. Do not reintroduce passive focused-element observers that switch to insert merely because macOS reports an editable focus. While advanced normal mode is active, Flash must aggressively recapture the overlay after app activation, app launch, Space changes, and panel key-focus loss; this intentionally prioritizes keeping normal-mode keyboard capture over preserving native menus or popovers.
 
@@ -836,8 +837,8 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 - **Pure-unit** (`AlphabetTests`, `ConfigLoaderTests`, `HintAssignerTests`, `SourceCandidateTests`, …). Deterministic, run in milliseconds, no external state. Run on every `swift test`.
 - **tmux logic** (link extraction, cell geometry, status-bar parsing, client/process-tree resolution) lives in the Rust `Plugins/tmux` crate — cover changes there with crate tests, not Swift tests.
 - **Browser integration** (`Scripts/test-integration-browser.sh`). Provisions a Firefox profile template with a pinned reference extension, builds/codesigns the browser oracle runner, then runs every `Tests/BrowserSnapshots/snapshots/*.html` fixture through a parallel worker pool. `manifest.json`, when present, is only optional metadata/order; unlisted snapshots still run by default. Each worker gets its own Firefox profile and Marionette port. Per fixture, Marionette injects fiducials and captures reference marker DOM via WebDriver script execution; Flash walks Firefox's AX tree; the two sets are diffed under strict-ISO. Catches both undermatch and overmatch against the browser reference. Run order: build + sign once (`./Scripts/install.sh --dev` to create the `Flash Dev` identity), then `./Scripts/test-integration-browser.sh`. The script kills its oracle app and Firefox worker-profile processes on exit/interruption.
-- **Native AppKit integration** (`Scripts/test-integration-native.sh`). Builds/codesigns `flash-native-fixture` and `flash-native-oracle`, launches a deterministic AppKit window, compares generic AX targets against expected controls, verifies AXPress mutates a fixture state file, and records the open-NSMenu limitation under the no-key-capture production rule. It covers buttons, image-backed buttons, duplicate labels, checkboxes, radio buttons, popups, search/text areas, tabs, rows, and negative controls such as disabled/hidden/decorative/slider elements. It does not add production global key capture or private APIs, and the script kills its test apps on exit/interruption.
-- **Electron integration** (`Scripts/test-integration-electron.sh`). Runs `npm ci` for the pinned Electron fixture, builds/codesigns `flash-electron-oracle`, launches Electron with a deterministic DOM fixture, reads expected target JSON emitted by the fixture, compares it against Flash's generic AX provider output, and verifies AX activation mutates fixture state. The script kills its oracle app and fixture Electron process on exit/interruption.
+- **Native AppKit integration** (`Scripts/test-integration-native.sh`). Builds/codesigns `flash-native-fixture` and `flash-native-oracle`, launches a deterministic AppKit window, compares generic AX targets against expected controls, verifies a host mouse click mutates a fixture state file, and records the open-NSMenu limitation under the no-key-capture production rule. It covers buttons, image-backed buttons, duplicate labels, checkboxes, radio buttons, popups, search/text areas, tabs, rows, and negative controls such as disabled/hidden/decorative/slider elements. It does not add production global key capture or private APIs, and the script kills its test apps on exit/interruption.
+- **Electron integration** (`Scripts/test-integration-electron.sh`). Runs `npm ci` for the pinned Electron fixture, builds/codesigns `flash-electron-oracle`, launches Electron with a deterministic DOM fixture, reads expected target JSON emitted by the fixture, compares it against Flash's generic AX provider output, and verifies a host mouse click mutates fixture state. The script kills its oracle app and fixture Electron process on exit/interruption.
 
 Run order:
 
@@ -849,7 +850,7 @@ swift test                                           # unit
 ./Scripts/test-integration-electron.sh               # installs pinned Electron fixture and runs oracle
 ```
 
-Anything that requires the full overlay / commit pipeline (chip rendering, key handling, AXPress against a live focused app) is still **manually verified**: run `./Scripts/install.sh --dev`, grant permissions if needed, then exercise the app in real target apps.
+Anything that requires the full overlay / commit pipeline (chip rendering, key handling, host clicks against a live focused app) is still **manually verified**: run `./Scripts/install.sh --dev`, grant permissions if needed, then exercise the app in real target apps.
 
 Do not claim UI-level changes "work" based on the type-checker alone. State explicitly when you couldn't verify visually.
 
@@ -893,7 +894,7 @@ stays in the normal-mode map for users who've opted in.
 
 - **AX `AXUIElementPerformAction` requires Accessibility permission.** Without it, the call returns `.notImplemented` or `.cannotComplete` silently; the user sees nothing happen. `--doctor`-equivalent diagnostics live in `Permissions/PermissionCheck.swift` (currently only AX check; extend if adding more required perms).
 - **`AXObserver` callbacks run on the main run loop.** Don't do AX work inside them — schedule onto `refreshQueue`.
-- **`NSPanel(.nonactivatingPanel)` can become key without activating the app.** That is intentional: the overlay needs to receive keys, but stealing focus from the target app would break `AXPressAction` (the action must run *against* the original app, which is why we call `app.activate()` in `commit` before dispatching).
+- **`NSPanel(.nonactivatingPanel)` can become key without activating the app.** That is intentional: the overlay needs to receive keys without stealing the target app's frontmost status. `commit` reactivates the owning app before dispatching its host mouse event.
 - **`CGEventSource` `.combinedSessionState`** is the right choice for synthesizing input; it sees the current modifier state, so e.g. shift held during commit doesn't poison the click.
 
 ## When in doubt

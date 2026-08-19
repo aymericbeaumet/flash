@@ -70,9 +70,11 @@ impl Priority {
     }
 }
 
-/// A hint target a plugin emits for the `f` family. `id` is echoed back on
-/// [`Request::ActivateTarget`]; `frame` positions the hint label. Optional
-/// fields are omitted from the wire when unset.
+/// A hint target a plugin emits for the `f` family. `frame` positions the hint
+/// label and the host delivers committed clicks directly to the owning app.
+/// Optional fields are omitted from the wire when unset.
+pub const TERMINAL_LINK_ROLE: &str = "FlashTerminalLink";
+
 #[derive(Clone, Debug, Serialize)]
 pub struct JumpTarget {
     pub id: String,
@@ -87,15 +89,6 @@ pub struct JumpTarget {
     pub pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enters_insert_mode: Option<bool>,
-    /// When `true`, the host should drop the plugin-side `activate` path
-    /// (which fires a `target.action` RPC and races with subsequent
-    /// keystrokes — `tmux select-pane` for example is async by nature)
-    /// and instead synthesize a real mouse click at the target's frame.
-    /// The click propagates through the windowing system atomically,
-    /// reaches the underlying app (alacritty → tmux mouse mode for
-    /// panes), and is observed *before* Flash forwards anything else.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prefer_host_click: Option<bool>,
     /// Source-declared salience. `Important` and `Urgent` render with the
     /// host's accent hint style.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,7 +105,6 @@ impl JumpTarget {
             url: None,
             pid: None,
             enters_insert_mode: None,
-            prefer_host_click: None,
             priority: None,
         }
     }
@@ -139,11 +131,6 @@ impl JumpTarget {
 
     pub fn enters_insert_mode(mut self, enters: bool) -> Self {
         self.enters_insert_mode = Some(enters);
-        self
-    }
-
-    pub fn prefer_host_click(mut self, prefer: bool) -> Self {
-        self.prefer_host_click = Some(prefer);
         self
     }
 
@@ -557,16 +544,6 @@ pub struct NavigationRequest {
     pub url: String,
 }
 
-/// A `hints.activate` notification: act on the [`JumpTarget`] the plugin
-/// emitted earlier (matched by `target_id`) with the given click `action`.
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ActivateRequest {
-    #[serde(default)]
-    pub action: String,
-    #[serde(default)]
-    pub target_id: String,
-}
-
 /// One exact input sent to a pure query evaluator. Implementations must only
 /// parse/compute against immutable in-memory state.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -587,7 +564,6 @@ pub enum Request {
     ResolveCandidate(Candidate),
     SourceAction(SourceActionRequest),
     RestoreNavigation(NavigationRequest),
-    ActivateTarget(ActivateRequest),
     QueryEvaluate(QueryEvaluateRequest),
     /// Any other method name the host sent. Return a
     /// [`CommandResponse::error`] for these.
@@ -783,8 +759,7 @@ impl SourceSnapshotResponse {
 }
 
 /// What [`Plugin::handle`](crate::Plugin::handle) returns. Build one from the
-/// matching response type with `.into()`; return [`Response::None`] for
-/// [`Request::ActivateTarget`], which expects no reply.
+/// matching response type with `.into()`.
 #[derive(Clone, Debug)]
 pub enum Response {
     Command(CommandResponse),

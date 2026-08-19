@@ -72,7 +72,7 @@ private func parseArgs() -> Args {
                               [--expected-file <path>] [--state-file <path>]
 
         Launches the pinned Electron fixture, compares its expected DOM targets
-        against Flash's AX provider output, and verifies AX activation updates
+        against Flash's AX provider output, and verifies a host click updates
         fixture state.
         """)
       exit(0)
@@ -203,11 +203,30 @@ private func waitForState(path: String, key: String, value: Int, timeout: TimeIn
   throw OracleError.stateTimedOut("\(key)=\(value)")
 }
 
-private func performAXActivation(_ target: JumpTarget) -> Bool {
-  if target.activate?(.leftClick) == true { return true }
-  guard let pid = target.pid else { return false }
-  let point = CGPoint(x: target.frame.midX, y: target.frame.midY)
-  return AXClick.clickAtPoint(pid: pid, nsScreenPoint: point, action: .leftClick)
+private func performHostClick(_ target: JumpTarget) -> Bool {
+  let nsPoint = CGPoint(x: target.frame.midX, y: target.frame.midY)
+  let point = CGPoint(
+    x: nsPoint.x,
+    y: AXIntegrationHarness.primaryScreenHeight() - nsPoint.y)
+  let source = CGEventSource(stateID: .hidSystemState)
+  guard
+    let down = CGEvent(
+      mouseEventSource: source,
+      mouseType: .leftMouseDown,
+      mouseCursorPosition: point,
+      mouseButton: .left),
+    let up = CGEvent(
+      mouseEventSource: source,
+      mouseType: .leftMouseUp,
+      mouseCursorPosition: point,
+      mouseButton: .left)
+  else { return false }
+  CGWarpMouseCursorPosition(point)
+  Thread.sleep(forTimeInterval: 0.03)
+  down.post(tap: .cghidEventTap)
+  Thread.sleep(forTimeInterval: 0.05)
+  up.post(tap: .cghidEventTap)
+  return true
 }
 
 private func terminateElectronFixture(process: Process, app: NSRunningApplication) {
@@ -278,12 +297,12 @@ do {
   }
 
   if let primary = targets.first(where: { $0.accessibilityLabel == "Electron Primary" }),
-    performAXActivation(primary)
+    performHostClick(primary)
   {
     try waitForState(path: args.statePath, key: "primary", value: 1, timeout: 4)
-    recorder.pass("AX activation on Electron button updated fixture state")
+    recorder.pass("host click on Electron button updated fixture state")
   } else {
-    recorder.fail("could not activate Electron Primary target")
+    recorder.fail("could not click Electron Primary target")
   }
 
   if let timingsPath = args.timingsPath {

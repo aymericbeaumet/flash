@@ -1,11 +1,9 @@
 import AppKit
 import FlashCore
-import FlashProviders
 
 private enum PointerInsertHandoffOutcome {
   case enteredInsert
   case recaptureNormal
-  case suspendedNativeSurface
 }
 
 /// `OverlayCoordinator` protocol conformance: the callback surface the
@@ -88,7 +86,7 @@ extension AppDelegate {
       return
     }
     let handoffToken: UInt64?
-    if decision.probeForInsert {
+    if decision.enterInsert {
       handoffToken = notePointerInsertHandoff(reason: "physical_pointer_click")
     } else {
       handoffToken = nil
@@ -98,18 +96,17 @@ extension AppDelegate {
     } else {
       cancelOverlay()
     }
-    if decision.probeForInsert {
+    if decision.enterInsert {
       // A physical left / double click ALWAYS hands the keyboard to the app and
       // enters INSERT — no editability probe. The user clicked with the mouse to
       // work in that app, so that intent is unconditional (unlike the `f`/`F`
       // keyboard-driven commits, which still gate on the target's role).
       // Right-click never reaches here; it suspends above.
-      enterInsertModeIfClickedOnTextInput(
+      resolvePointerInsertMode(
         pid: targetPID,
-        clickPoint: click?.location,
         reason: .pointerClick,
         handoffToken: handoffToken,
-        hintTargetEntersInsert: true
+        intent: .physicalClick
       ) {
         [weak self] outcome in
         guard let self else { return }
@@ -132,18 +129,14 @@ extension AppDelegate {
             click: click,
             targetPID: targetPID)
         case .recaptureNormal:
-          self.clearPointerInsertHandoff(reason: "physical_pointer_probe_done", token: handoffToken)
+          self.clearPointerInsertHandoff(
+            reason: "physical_pointer_stayed_normal", token: handoffToken)
           self.forwardPhysicalPointerClickIfNeeded(
             decision: decision,
             click: click,
             targetPID: targetPID)
           guard self.flashMode == .normal else { return }
           self.scheduleNormalModeRecapture()
-        case .suspendedNativeSurface:
-          self.clearPointerInsertHandoff(
-            reason: "physical_pointer_native_surface",
-            token: handoffToken)
-          self.suspendNormalCaptureForNativeSurface(reason: "physical_pointer_native_surface")
         }
       }
     }
@@ -305,13 +298,18 @@ extension AppDelegate {
     }
 
     let action = pendingAction
-    let resolvedClickModifiers = pendingClickModifiers.union(clickModifiers)
+    // The target carries its owning pid (always the focused app at walk time).
+    // Fall back to the activation-time focused pid if the provider didn't set
+    // one, then resolve the owning bundle once for app-specific click gestures.
+    let pid = hint.target.pid ?? sourceAppPID
+    let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
+    let targetBundleIdentifier = targetApp?.bundleIdentifier
+    let resolvedClickModifiers = ActionDispatcher.hintClickModifiers(
+      for: hint.target,
+      bundleIdentifier: targetBundleIdentifier,
+      requested: pendingClickModifiers.union(clickModifiers))
     let wasNormalMode = flashMode == .normal
     let actionMayEnterInsert = Self.pointerActionMayEnterInsert(action)
-    // The target carries its owning pid (always the focused app at
-    // walk time). Fall back to the activation-time focused pid if the
-    // provider didn't set one.
-    let pid = hint.target.pid ?? sourceAppPID
     if let pid {
       recordMovement(.app(pid: pid), source: "hint_commit")
     }
@@ -330,24 +328,15 @@ extension AppDelegate {
       "[commit] action=\(action) role=\(hint.target.role ?? "?") "
         + "provider=\(hint.target.providerID) "
         + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y))) "
-        + "prefer_host_click=\(hint.target.preferHostClick) "
         + "modifiers=cmd:\(resolvedClickModifiers.contains(.command)) "
         + "shift:\(resolvedClickModifiers.contains(.shift)) "
         + "ctrl:\(resolvedClickModifiers.contains(.control)) "
         + "alt:\(resolvedClickModifiers.contains(.option)) "
-        + "enters_insert=\(hint.target.entersInsertMode) "
-        + "transfers_focus=\(hint.target.transfersFocus)")
+        + "enters_insert=\(hint.target.entersInsertMode)")
 
-    // A focus-transferring target (status-bar link → browser) never takes the
-    // insert-handoff / probe path: the source app's focused element is
-    // unrelated to the commit (a terminal even reports always-editable), and
-    // an INSERT entry's re-activation would steal focus back from the app the
-    // commit just opened. Its activation must also not be preceded by a
-    // source-app re-activate for the same reason.
-    let mayProbeInsert =
-      wasNormalMode && actionMayEnterInsert && !hint.target.transfersFocus
+    let mayResolveInsert = wasNormalMode && actionMayEnterInsert
     let handoffToken: UInt64?
-    if mayProbeInsert {
+    if mayResolveInsert {
       handoffToken = notePointerInsertHandoff(reason: "hint_commit")
     } else {
       handoffToken = nil
@@ -356,12 +345,10 @@ extension AppDelegate {
       applyModeOverlay(captureOverride: false)
     }
     overlay.hide()
-    // Restore focus to the target app before dispatching, so AXPress / the
-    // synthesized click both reach the intended window.
-    if let pid, !hint.target.transfersFocus,
-      let app = NSRunningApplication(processIdentifier: pid)
-    {
-      RunningApplicationActivation.activate(app, options: [])
+    // Restore focus to the target app before posting the mouse event so the
+    // underlying surface receives and interprets the click.
+    if let targetApp {
+      RunningApplicationActivation.activate(targetApp, options: [])
     }
     // Hold the activation gate closed across the click dispatch. Without
     // this, the 20-ms delay below opens a window where a fresh
@@ -373,25 +360,21 @@ extension AppDelegate {
     clearHintSessionState()
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
       // The click's blocking work now runs off the main run loop; settle Flash's
-      // mode in the completion so it still happens *after* the click lands — the
-      // insert probe below reads the target's focus, which the click changes.
+      // mode in the completion so it still happens *after* the click lands.
       ActionDispatcher.perform(
-        action, on: hint.target, pid: pid, clickPoint: clickPoint,
+        action, on: hint.target, clickPoint: clickPoint,
+        bundleIdentifier: targetBundleIdentifier,
         modifiers: resolvedClickModifiers,
         leaveCursorAtClickPoint: true
       ) { [weak self] in
         guard let self else { return }
         self.activationInFlight = false
-        if mayProbeInsert {
-          // Any pointer commit — including right-click — hands the keyboard to
-          // the app and enters insert (the context menu does its own key
-          // tracking, so releasing capture is correct there too).
-          self.enterInsertModeIfClickedOnTextInput(
+        if mayResolveInsert {
+          self.resolvePointerInsertMode(
             pid: pid,
-            clickPoint: clickPoint,
             reason: .hintCommit,
             handoffToken: handoffToken,
-            hintTargetEntersInsert: hint.target.entersInsertMode
+            intent: .hintTarget(entersInsertMode: hint.target.entersInsertMode)
           ) {
             [weak self] outcome in
             guard let self else { return }
@@ -401,14 +384,10 @@ extension AppDelegate {
                 reason: "hint_commit_entered_insert",
                 token: handoffToken)
             case .recaptureNormal:
-              self.clearPointerInsertHandoff(reason: "hint_commit_probe_done", token: handoffToken)
+              self.clearPointerInsertHandoff(
+                reason: "hint_commit_stayed_normal", token: handoffToken)
               guard self.flashMode == .normal else { return }
               self.restoreNormalModeAfterCommit(action: action)
-            case .suspendedNativeSurface:
-              self.clearPointerInsertHandoff(
-                reason: "hint_commit_native_surface",
-                token: handoffToken)
-              self.suspendNormalCaptureForNativeSurface(reason: "hint_commit_native_surface")
             }
           }
         } else if wasNormalMode {
@@ -576,16 +555,11 @@ extension AppDelegate {
       suspendNormalCaptureForNativeSurface(reason: "mouse_grid_right_click")
     } else {
       applyModeOverlay(captureOverride: false)
-      // Editability-aware like `f`: a grid click targets a bare point, so probe
-      // the AX element there to decide insert-vs-normal instead of always
-      // entering insert.
-      let gridTextInput = priorPID.map { AXClick.isTextInput(at: point, pid: $0) } ?? false
-      enterInsertModeIfClickedOnTextInput(
+      resolvePointerInsertMode(
         pid: priorPID,
-        clickPoint: point,
-        reason: .hintCommit,
+        reason: .pointerClick,
         handoffToken: handoffToken,
-        hintTargetEntersInsert: gridTextInput
+        intent: .mouseGridClick
       ) {
         [weak self] outcome in
         guard let self else { return }
@@ -595,39 +569,30 @@ extension AppDelegate {
             reason: "mouse_grid_entered_insert",
             token: handoffToken)
         case .recaptureNormal:
-          self.clearPointerInsertHandoff(reason: "mouse_grid_probe_done", token: handoffToken)
+          self.clearPointerInsertHandoff(reason: "mouse_grid_stayed_normal", token: handoffToken)
           guard self.flashMode == .normal else { return }
           self.scheduleNormalModeRecapture()
-        case .suspendedNativeSurface:
-          self.clearPointerInsertHandoff(reason: "mouse_grid_native_surface", token: handoffToken)
-          self.suspendNormalCaptureForNativeSurface(reason: "mouse_grid_native_surface")
         }
       }
     }
   }
 
-  /// Decide whether a committed pointer action hands the keyboard to the focused
-  /// app (INSERT) or keeps NORMAL. Each call site supplies the intent via
-  /// `hintTargetEntersInsert`:
+  /// Resolve whether a primary pointer commit hands the keyboard to the focused
+  /// app (INSERT) or keeps NORMAL:
   ///
-  ///   - Physical left / double mouse click: always `true` — clicking with the
-  ///     mouse unconditionally enters INSERT, no editability probe.
-  ///   - `f`/`F` (`mouse_target`) hint: the resolved target's own role
-  ///     (`hint.target.entersInsertMode`), so a link/button stays in NORMAL.
-  ///   - `ctrl-f`/`ctrl-shift-f` mouse-grid: a point-based AX hit-test at the click site
-  ///     (`AXClick.isTextInput(at:pid:)`), since it carries only a point.
+  ///   - Physical and `mouse_grid` clicks are pointer simulation, so they enter
+  ///     INSERT unconditionally.
+  ///   - `mouse_target` hints honor `JumpTarget.entersInsertMode`. A link hint
+  ///     stays in NORMAL even when its owning app (such as a terminal) already
+  ///     exposes an editable focused element.
   ///
   /// Right-click never reaches here — it opens a context menu and stays in
-  /// NORMAL via `suspendNormalCaptureForNativeSurface`. A nil
-  /// `hintTargetEntersInsert` defaults to "enter insert". `clickPoint` /
-  /// `attempt` are retained for call-site stability.
-  private func enterInsertModeIfClickedOnTextInput(
+  /// NORMAL via `suspendNormalCaptureForNativeSurface`.
+  private func resolvePointerInsertMode(
     pid: pid_t?,
-    clickPoint _: CGPoint? = nil,
     reason: InsertModeTransitionReason,
-    attempt _: Int = 0,
     handoffToken: UInt64? = nil,
-    hintTargetEntersInsert: Bool? = nil,
+    intent: PointerInsertIntent,
     completion: ((PointerInsertHandoffOutcome) -> Void)? = nil
   ) {
     guard pointerInsertHandoffIsCurrent(handoffToken) else { return }
@@ -635,37 +600,14 @@ extension AppDelegate {
       completion?(.recaptureNormal)
       return
     }
-    // The supplied editability is authoritative — including in a terminal. A
-    // tmux pane chip declares `true` (a typing surface, so commit enters
-    // INSERT); a tmux link chip declares `false` (it runs `open` and never
-    // touches the keyboard, so it stays in NORMAL). `f` passes the resolved
-    // target's `entersInsertMode`; the `F`/`dF` grid and physical clicks pass an
-    // AX hit-test of the click point (`AXClick.isTextInput`). All three stay in
-    // NORMAL when the click did not land on a text input — a button/link is
-    // clicked but keyboard navigation continues.
-    guard hintTargetEntersInsert ?? true else {
-      // The hinted target wasn't itself a text input, but the click may have
-      // *opened* one that now has focus — e.g. Slack's "Search" trigger opens
-      // the extended-search overlay and focuses its field. Let the existing AX
-      // focused-element observer complete the handoff; if no focus event arrives
-      // inside the short window, recapture normal once.
-      armPointerInsertFocusHandoff(pid: pid, reason: reason, token: handoffToken) { entered in
-        completion?(entered ? .enteredInsert : .recaptureNormal)
-      }
+    guard intent.shouldEnterInsertMode else {
+      completion?(.recaptureNormal)
       return
     }
     let targetPID = pid ?? currentNonFlashContext()?.processID
     enterInsertMode(reason: reason, targetPID: targetPID)
     completion?(.enteredInsert)
   }
-
-  // `mouseGridCommitShouldEnterInsertMode` removed: the `F`/`dF` grid commit
-  // probes the click point with `AXClick.isTextInput` and passes the result to
-  // `enterInsertModeIfClickedOnTextInput`, so it enters insert only on a text
-  // input — the same editability rule as the `f` hint's `entersInsertMode` flag.
-  // A physical mouse click always enters insert (no probe). Move (`mF`) was
-  // already a no-op for insert, and right-click never enters insert (it suspends
-  // for the context menu).
 
   func overlayDidHandleMapping(_ event: NSEvent) -> Bool {
     mappings.handle(event: event)

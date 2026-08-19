@@ -48,9 +48,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, ActivateRequest, Candidate, CandidateEffect, CommandRequest, CommandResponse, Context,
-    DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, Priority,
-    ResolveResponse, SourceActionRequest, SourceActionResponse,
+    run, Candidate, CandidateEffect, CommandRequest, CommandResponse, Context, DiscoverRequest,
+    DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, Priority, ResolveResponse,
+    SourceActionRequest, SourceActionResponse, TERMINAL_LINK_ROLE,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,8 @@ const SUBPROCESS_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const SUBPROCESS_STDERR_LIMIT: usize = 64 * 1024;
 const SOURCE_ID: &str = "plugin:tmux";
 const NAV_SCHEME: &str = "tmux";
+const PANE_TARGET_ROLE: &str = "tmux-pane";
+const TMUX_TARGET_ENTERS_INSERT_MODE: bool = false;
 
 const TMUX_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/usr"];
 const ENV_PATH: &str = "/usr/bin/env";
@@ -86,10 +88,11 @@ const REMOTE_CANDIDATE_STALE_AFTER_SECS: u64 = 120;
 fn link_pattern() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // URLs · $VAR / ${VAR} shell-style env-prefixed paths · ~/ and / paths ·
-        // ./ ../ relative paths · dotted host/path tokens · bare file.ext names ·
-        // E#### error codes (Rust/cargo, etc.). The trailing `:LINE[:COL]`
-        // editor-jump suffix is folded into the path-shaped alternatives.
+        // Quoted shell-style paths (which may contain spaces / Unicode) · URLs ·
+        // $VAR / ${VAR} shell-style env-prefixed paths · ~/ and / paths · ./ ../
+        // relative paths · dotted host/path tokens · bare file.ext names · E####
+        // error codes (Rust/cargo, etc.). The trailing `:LINE[:COL]` editor-jump
+        // suffix is folded into the unquoted path-shaped alternatives.
         //
         // The bare `host.ext` alternative requires the final segment to start
         // with a letter and be 2+ chars (`\.[a-zA-Z][\w-]+`) so noise tokens —
@@ -97,9 +100,28 @@ fn link_pattern() -> &'static Regex {
         // don't masquerade as links, while real filenames/domains (`Cargo.toml`,
         // `README.md`, `beside.com`, `t.io`) still match. URLs and slash-paths
         // are unaffected.
-        let pattern = r#"https?://[\w./\-?&=@%+:~#!$,;*()]+[\w/]|\$\{?\w+\}?(?:/[\w./\-]+)+|(?:~|/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|(?:\.{1,2}/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+(?:/[^\s\]\r\n][^\s\]\r\n]*)+\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+\.[a-zA-Z][\w-]+(?::\d+(?::\d+)?)?|(?-u:\b)E\d{4}(?-u:\b)"#;
+        let pattern = r#""(?:/|~/|\./|\.\./|\$\w+/|\$\{\w+\}/)[^"\r\n]+"|'(?:/|~/|\./|\.\./|\$\w+/|\$\{\w+\}/)[^'\r\n]+'|https?://[\w./\-?&=@%+:~#!$,;*()]+[\w/]|\$\{?\w+\}?(?:/[\w./\-]+)+|(?:~|/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|(?:\.{1,2}/)[^\s\]\r\n][^\s\]\r\n]*\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+(?:/[^\s\]\r\n][^\s\]\r\n]*)+\.[\w-]+(?:/[^\s\]\r\n]+)*(?::\d+(?::\d+)?)?|[\w.@\-]+\.[a-zA-Z][\w-]+(?::\d+(?::\d+)?)?|(?-u:\b)E\d{4}(?-u:\b)"#;
         Regex::new(pattern).expect("tmux link regex")
     })
+}
+
+/// A bare `Type.lowerCamelMember` is source syntax, not a file or host. Slash
+/// paths remain path-shaped regardless of their final component, and ordinary
+/// lowercase extensions (`.swift`, `.toml`, `.com`) are unaffected.
+fn is_dotted_code_identifier(text: &str) -> bool {
+    if text.contains('/') {
+        return false;
+    }
+    let Some((owner, member)) = text.rsplit_once('.') else {
+        return false;
+    };
+    if owner.is_empty() || member.is_empty() {
+        return false;
+    }
+
+    let mut chars = member.chars();
+    chars.next().is_some_and(|first| first.is_ascii_lowercase())
+        && chars.any(|character| character.is_ascii_uppercase())
 }
 
 /// A real clickable URL (vs. a path / dotted-host / error-code match). Used to
@@ -113,14 +135,26 @@ fn is_url(text: &str) -> bool {
 fn extract_links(line: &str, max_cols: usize) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     for m in link_pattern().find_iter(line) {
-        let col = line[..m.start()].chars().count();
+        let raw = m.as_str();
+        let (leading_quote_cols, raw) = if let Some(inner) = raw
+            .strip_prefix('"')
+            .and_then(|text| text.strip_suffix('"'))
+        {
+            (1, inner)
+        } else if let Some(inner) = raw
+            .strip_prefix('\'')
+            .and_then(|text| text.strip_suffix('\''))
+        {
+            (1, inner)
+        } else {
+            (0, raw)
+        };
+        let col = line[..m.start()].chars().count() + leading_quote_cols;
         if col >= max_cols {
             continue;
         }
-        let text = m
-            .as_str()
-            .trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>']);
-        if text.is_empty() {
+        let text = raw.trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '>']);
+        if text.is_empty() || is_dotted_code_identifier(text) {
             continue;
         }
         out.push((col, text.to_string()));
@@ -1800,13 +1834,7 @@ async fn resolve_geometry(
     (win_w / cols, win_h / rows, 0.0, 0.0)
 }
 
-// ---- Target actions ---------------------------------------------------------
-
-#[derive(Clone)]
-enum TargetAction {
-    Pane { pane_id: String, backend_id: String },
-    Link { text: String },
-}
+// ---- Hint targets -----------------------------------------------------------
 
 struct Pane {
     id: String,
@@ -1816,7 +1844,7 @@ struct Pane {
     rows: i64,
 }
 
-// Eleven positional args is on the high side, but `JumpTarget` itself is the
+// Ten positional args is on the high side, but `JumpTarget` itself is the
 // shape — collapsing this into a `BuildTargetArgs` struct would just rename
 // the same data without making the call sites clearer.
 #[allow(clippy::too_many_arguments)]
@@ -1830,7 +1858,6 @@ fn build_target(
     label: &str,
     pid: i64,
     enters_insert_mode: bool,
-    prefer_host_click: bool,
     priority: Priority,
 ) -> JumpTarget {
     JumpTarget::new(target_id, Frame::new(x, y, width, height))
@@ -1838,7 +1865,6 @@ fn build_target(
         .label(label)
         .enters_insert_mode(enters_insert_mode)
         .pid(pid)
-        .prefer_host_click(prefer_host_click)
         .priority(priority)
 }
 
@@ -1952,7 +1978,6 @@ async fn discover_targets_for_context(
     // pane center, chip extends 1 cell left and right.
     let pane_chip_cells: i64 = 3;
     let mut pane_targets: Vec<JumpTarget> = Vec::new();
-    let mut actions: HashMap<String, TargetAction> = HashMap::new();
 
     struct RawLink {
         screen_row: i64,
@@ -1967,42 +1992,24 @@ async fn discover_targets_for_context(
         let chip_x = min_x + pad_x + (center_col - pane_chip_cells / 2) as f64 * cell_w;
         let chip_y = min_y + win_h - pad_y - (center_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-p{i}");
-        // A tmux pane is a terminal typing surface, so committing its hint
-        // enters INSERT (`enters_insert_mode` below) — the click lands in the
-        // pane and the keyboard should be ready to type. Link chips, by
-        // contrast, run `open` and stay in NORMAL. shift+hint still delivers a
-        // raw shift+click; only the unmodified commit flips the mode.
+        // A pane target delegates a plain click to the terminal. It stays in
+        // NORMAL after the click; only mouse-grid and physical mouse clicks
+        // express the separate "start typing" intent.
         pane_targets.push(build_target(
             &target_id,
             chip_x,
             chip_y,
             pane_chip_cells as f64 * cell_w,
             cell_h,
-            "tmux-pane",
+            PANE_TARGET_ROLE,
             &pane.id,
             pid,
-            true,
-            // Synthesize a real mouse click on the pane center rather
-            // than firing the plugin's `select-pane` RPC. The RPC
-            // returns optimistically (the closure resolves before tmux
-            // actually finishes selecting), so a fast follow-up `i`
-            // landed in the *previous* active pane. A physical click
-            // is observed atomically by alacritty's mouse-mode
-            // forwarder, so tmux selects the pane before the next
-            // keystroke is delivered.
-            true,
+            TMUX_TARGET_ENTERS_INSERT_MODE,
             // Pane chips are the structural anchors of a tmux window, so the
             // renderer paints them in the accent style. Link chips below are
             // everyday clutter and stay in the default yellow.
             Priority::Urgent,
         ));
-        actions.insert(
-            target_id,
-            TargetAction::Pane {
-                pane_id: pane.id.clone(),
-                backend_id: client.backend_id.clone(),
-            },
-        );
 
         let Some(raw) =
             run_tmux_for_client(plugin, &client, &["capture-pane", "-t", &pane.id, "-p"]).await
@@ -2049,31 +2056,24 @@ async fn discover_targets_for_context(
         let x = min_x + pad_x + link.screen_col as f64 * cell_w;
         let y = min_y + win_h - pad_y - (link.screen_row + 1) as f64 * cell_h;
         let target_id = format!("tmux-{pid}-l{idx}");
-        // Opening a link runs `open` against the URL and never touches the
-        // terminal keyboard, so the hint stays in NORMAL — `enters_insert_mode`
-        // is false (the host honors it; only the pane chip above enters insert).
-        // The `activate` RPC path is the right answer here: the plugin runs
-        // `/usr/bin/open` against the URL, which is what the user wants. A
-        // synthesized click would just select text inside alacritty.
+        // Terminal links use a generic host-understood semantic role. The host
+        // sends `f` as Shift-click and `F` as Command-Shift-click so Alacritty
+        // handles the link instead of forwarding a pane click to tmux. Link
+        // commits stay in NORMAL.
         targets.push(build_target(
             &target_id,
             x,
             y,
             cell_w,
             cell_h,
-            "tmux-link",
+            TERMINAL_LINK_ROLE,
             &link.text,
             pid,
-            false,
-            false,
+            TMUX_TARGET_ENTERS_INSERT_MODE,
             Priority::Normal,
         ));
-        actions.insert(target_id, TargetAction::Link { text: link.text });
     }
 
-    if let Ok(mut guard) = plugin.target_actions.lock() {
-        *guard = actions;
-    }
     DiscoverResponse::targets(targets).context_pid(pid)
 }
 
@@ -4067,70 +4067,6 @@ async fn restore_navigation(
     SourceActionResponse::performed(terminal_pid).navigation_url(request.url.clone())
 }
 
-// ---- Activation -------------------------------------------------------------
-
-async fn activate(plugin: &Tmux, ctx: &Context, req: &ActivateRequest) {
-    let target_id = req.target_id.as_str();
-    let entry = plugin
-        .target_actions
-        .lock()
-        .ok()
-        .and_then(|g| g.get(target_id).cloned());
-    let ok = match entry {
-        Some(TargetAction::Pane {
-            pane_id,
-            backend_id,
-        }) => {
-            // `select-pane` doesn't take `-c <tty>`. The pane_id is global so
-            // a bare `-t %NN` is enough — pane chips are only emitted for the
-            // client's current window.
-            let client = TmuxClient {
-                tty: String::new(),
-                session: String::new(),
-                client_pid: 0,
-                activity: 0,
-                remote: backend_id != "local",
-                backend_id,
-            };
-            run_tmux_for_client(plugin, &client, &["select-pane", "-t", &pane_id])
-                .await
-                .is_some()
-        }
-        Some(TargetAction::Link { text }) => open_link(&text).await,
-        None => false,
-    };
-    if !ok {
-        ctx.log("debug", "[tmux] activate dropped");
-    }
-}
-
-async fn open_link(text: &str) -> bool {
-    if text.is_empty() {
-        return false;
-    }
-    // `open` doesn't expand `~`; strip the trailing `:LINE[:COL]` editor-jump
-    // suffix that Launch Services doesn't understand.
-    let expanded = expand_tilde(text);
-    let suffix = OnceLock::new();
-    let re: &Regex = suffix.get_or_init(|| Regex::new(r"(?::\d+){1,2}$").unwrap());
-    let target = re.replace(&expanded, "").into_owned();
-    let argv = ["/usr/bin/open".to_string(), target];
-    run_local(&argv, Duration::from_secs(5)).await.ok
-}
-
-fn expand_tilde(text: &str) -> String {
-    if let Some(rest) = text.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
-    } else if text == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return home;
-        }
-    }
-    text.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4150,6 +4086,77 @@ mod tests {
             only("open https://admin.test.com:1234/x?y=1 now").as_deref(),
             Some("https://admin.test.com:1234/x?y=1")
         );
+    }
+
+    #[test]
+    fn extract_links_keeps_quoted_unicode_and_relative_paths() {
+        assert_eq!(
+            extract_links(r#""/Applications/Flash 🧪.app""#, 1000),
+            vec![(1, "/Applications/Flash 🧪.app".to_string())]
+        );
+        assert_eq!(
+            extract_links(r#""/Applications/Flash 🧪.app/Contents/MacOS/flash""#, 1000),
+            vec![(
+                1,
+                "/Applications/Flash 🧪.app/Contents/MacOS/flash".to_string()
+            )]
+        );
+        assert_eq!(
+            extract_links("edit Sources/FlashCore/JumpTarget.swift", 1000),
+            vec![(5, "Sources/FlashCore/JumpTarget.swift".to_string())]
+        );
+        assert_eq!(
+            extract_links(r#""Sources/FlashCore/JumpTarget.swift""#, 1000),
+            vec![(1, "Sources/FlashCore/JumpTarget.swift".to_string())]
+        );
+        assert_eq!(
+            extract_links("open ~/.dotfiles/setup.sh", 1000),
+            vec![(5, "~/.dotfiles/setup.sh".to_string())]
+        );
+    }
+
+    #[test]
+    fn extract_links_drops_dotted_code_identifiers() {
+        assert!(extract_links("JumpTarget.entersInsertMode", 1000).is_empty());
+        assert!(extract_links("SomeType.someHTTPHandler", 1000).is_empty());
+
+        assert_eq!(
+            extract_links("JumpTarget.swift", 1000),
+            vec![(0, "JumpTarget.swift".to_string())]
+        );
+    }
+
+    #[test]
+    fn tmux_panes_and_links_stay_normal_and_only_links_use_link_semantics() {
+        let pane = build_target(
+            "pane",
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            PANE_TARGET_ROLE,
+            "%1",
+            42,
+            TMUX_TARGET_ENTERS_INSERT_MODE,
+            Priority::Urgent,
+        );
+        let link = build_target(
+            "link",
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            TERMINAL_LINK_ROLE,
+            "example.com",
+            42,
+            TMUX_TARGET_ENTERS_INSERT_MODE,
+            Priority::Normal,
+        );
+
+        assert_eq!(pane.role.as_deref(), Some("tmux-pane"));
+        assert_eq!(pane.enters_insert_mode, Some(false));
+        assert_eq!(link.role.as_deref(), Some("FlashTerminalLink"));
+        assert_eq!(link.enters_insert_mode, Some(false));
     }
 
     #[test]
@@ -5021,7 +5028,6 @@ window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
 
 struct Tmux {
     tmux_path: std::sync::Arc<tokio::sync::OnceCell<Option<String>>>,
-    target_actions: Mutex<HashMap<String, TargetAction>>,
     local_config_arc: std::sync::Arc<Mutex<LocalTmuxConfig>>,
     remote_configs_arc: std::sync::Arc<Mutex<BTreeMap<String, RemoteTmuxConfig>>>,
     /// Latest eager `list-clients` + process-tree sample. Source actions
@@ -5202,16 +5208,11 @@ impl FlashPlugin for Tmux {
     ) -> SourceActionResponse {
         restore_navigation(self, &ctx, &request).await
     }
-
-    async fn activate_target(&self, ctx: Context, request: ActivateRequest) {
-        activate(self, &ctx, &request).await;
-    }
 }
 
 fn main() {
     let plugin = Tmux {
         tmux_path: std::sync::Arc::new(tokio::sync::OnceCell::new()),
-        target_actions: Mutex::new(HashMap::new()),
         local_config_arc: std::sync::Arc::new(Mutex::new(LocalTmuxConfig::default())),
         remote_configs_arc: std::sync::Arc::new(Mutex::new(BTreeMap::new())),
         client_snapshot_arc: std::sync::Arc::new(Mutex::new(ClientSnapshot::default())),

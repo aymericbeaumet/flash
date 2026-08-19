@@ -67,7 +67,12 @@ Plugin log lines travel as `flash.log` notifications and are recorded with
 - `query.evaluate` — per-input evaluator; 50 ms hard deadline (the host warns
   at 40 ms round-trip; a well-behaved evaluator body stays under 10 ms).
   CPU-only over state prepared earlier — no I/O.
-- `hints.discover` / `hints.activate` — hint provider surface.
+- `hints.discover` — return target geometry and semantics. The host owns commit:
+  it posts the mouse event directly to the target app and never calls back into
+  the plugin to activate a target. Use role `AXLink` for native-style semantic
+  links (`f` plain except Firefox-owned targets add Command; `F` Command-Shift),
+  or `FlashTerminalLink` for links inside terminal content (`f` Shift, `F`
+  Command-Shift). Non-link targets always receive a plain click.
 - `candidate.resolve` — resolve a selected candidate to its effect/target.
 - `source.action` — source-owned actions (`tab_new`, `tab_close`, …) with the
   `performed | failed | unhandled` disposition trichotomy: `unhandled` means

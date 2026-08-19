@@ -1786,11 +1786,6 @@ struct PluginWireTarget {
   var pid: pid_t?
   var entersInsertMode: Bool
   var sourceID: String
-  /// Plugin opt-in: when true the host drops the `target.action` RPC
-  /// path (which returns optimistically) and synthesizes a real mouse
-  /// click instead. Used by the tmux plugin's pane targets so a fast
-  /// follow-up keystroke can't race a still-in-flight `select-pane`.
-  var preferHostClick: Bool
   /// Source-declared target salience. `.important` and `.urgent` render with
   /// the accent hint style.
   var priority: FlashPriority

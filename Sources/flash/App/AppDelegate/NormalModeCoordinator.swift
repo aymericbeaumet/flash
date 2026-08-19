@@ -273,7 +273,6 @@ extension AppDelegate {
     // must follow the focused document, which can change with no app-focus
     // change (browser tab switch / in-page navigation), so re-resolve them here.
     scheduleURLContextMappingRefresh(pid: pid)
-    completePointerInsertFocusHandoffIfReady(eventPID: pid)
   }
 
   /// Re-resolve URL-scoped plugin mappings for `pid` (e.g. Gmail's `o`, which
@@ -549,7 +548,6 @@ extension AppDelegate {
           + "current=\(pointerInsertHandoffToken)")
       return
     }
-    pointerInsertFocusHandoff = nil
     if pointerInsertHandoffRecaptureSuppressedUntil != nil {
       FlashLog.trace("[mode] pointer_insert_handoff_clear reason=\(reason)")
     }
@@ -559,59 +557,12 @@ extension AppDelegate {
 
   func cancelPointerInsertHandoff(reason: String) {
     let hadSuppression = pointerInsertHandoffRecaptureSuppressedUntil != nil
-    pointerInsertFocusHandoff = nil
     pointerInsertHandoffRecaptureSuppressedUntil = nil
     pointerInsertHandoffToken &+= 1
     if hadSuppression {
       normalModeRecaptureToken &+= 1
       FlashLog.trace("[mode] pointer_insert_handoff_cancel reason=\(reason)")
     }
-  }
-
-  func armPointerInsertFocusHandoff(
-    pid: pid_t?,
-    reason: InsertModeTransitionReason,
-    token: UInt64?,
-    completion: @escaping (Bool) -> Void
-  ) {
-    pointerInsertFocusHandoff = PointerInsertFocusHandoff(
-      pid: pid, reason: reason, token: token, completion: completion)
-    if completePointerInsertFocusHandoffIfReady(eventPID: pid) { return }
-
-    let generation = pointerInsertHandoffToken
-    DispatchQueue.main.asyncAfter(
-      deadline: .now() + .milliseconds(Self.pointerInsertFocusHandoffTimeoutMs)
-    ) { [weak self] in
-      guard let self, let pending = self.pointerInsertFocusHandoff else { return }
-      guard pending.token == token, self.pointerInsertHandoffToken == generation else { return }
-      self.pointerInsertFocusHandoff = nil
-      pending.completion(false)
-    }
-  }
-
-  @discardableResult
-  func completePointerInsertFocusHandoffIfReady(eventPID: pid_t?) -> Bool {
-    guard let pending = pointerInsertFocusHandoff else { return false }
-    guard flashMode == .normal else {
-      pointerInsertFocusHandoff = nil
-      return false
-    }
-    guard pointerInsertHandoffIsCurrent(pending.token) else {
-      pointerInsertFocusHandoff = nil
-      return false
-    }
-    if let expectedPID = pending.pid, let eventPID, expectedPID != eventPID {
-      return false
-    }
-    let targetPID = pending.pid ?? eventPID ?? currentNonFlashContext()?.processID
-    guard let targetPID, targetPID > 0, AXClick.focusedIsTextInput(pid: targetPID) else {
-      return false
-    }
-    pointerInsertFocusHandoff = nil
-    FlashLog.trace("[mode] pointer_insert_focus_handoff pid=\(targetPID)")
-    enterInsertMode(reason: pending.reason, targetPID: targetPID)
-    pending.completion(true)
-    return true
   }
 
   func pointerInsertHandoffIsCurrent(_ token: UInt64?, now: Date = Date()) -> Bool {
@@ -828,7 +779,6 @@ extension AppDelegate {
   static let menuBarInteractionRecaptureSuppressionMs = 1_500
   static let contextMenuInteractionRecaptureSuppressionMs = 1_500
   static let pointerInsertHandoffRecaptureSuppressionMs = 1_500
-  static let pointerInsertFocusHandoffTimeoutMs = 220
   // Brief: just long enough for the pointer monitor to turn a click into INSERT
   // before we reclaim key. Any longer and an app that spontaneously steals
   // focus would sit on it while the badge still reads NORMAL — the exact

@@ -1,9 +1,27 @@
 import FlashCore
 
+/// The user intent behind a primary pointer commit. Semantic hints honor the
+/// provider's target metadata; physical and grid clicks are pointer simulation
+/// and therefore hand the keyboard to the app unconditionally.
+enum PointerInsertIntent: Equatable {
+  case physicalClick
+  case mouseGridClick
+  case hintTarget(entersInsertMode: Bool)
+
+  var shouldEnterInsertMode: Bool {
+    switch self {
+    case .physicalClick, .mouseGridClick:
+      return true
+    case .hintTarget(let entersInsertMode):
+      return entersInsertMode
+    }
+  }
+}
+
 enum NormalModePointerPolicy {
   struct AppClickDecision: Equatable {
     var releaseCapture: Bool
-    var probeForInsert: Bool
+    var enterInsert: Bool
     var suspendForNativeSurface: Bool
     var dismissTransientHintsWithoutRekey: Bool
   }
@@ -56,7 +74,7 @@ enum NormalModePointerPolicy {
       wasCommandLine: overlayInputMode == .commandLine,
       hasHints: hasHints,
       action: click.action)
-    guard decision.releaseCapture || decision.probeForInsert || decision.suspendForNativeSurface
+    guard decision.releaseCapture || decision.enterInsert || decision.suspendForNativeSurface
     else { return .cancelOverlay }
     return .app(decision)
   }
@@ -70,7 +88,7 @@ enum NormalModePointerPolicy {
     guard mode == .normal, !wasCommandLine else {
       return AppClickDecision(
         releaseCapture: false,
-        probeForInsert: false,
+        enterInsert: false,
         suspendForNativeSurface: false,
         dismissTransientHintsWithoutRekey: false)
     }
@@ -82,18 +100,17 @@ enum NormalModePointerPolicy {
     if action == .rightClick {
       return AppClickDecision(
         releaseCapture: false,
-        probeForInsert: false,
+        enterInsert: false,
         suspendForNativeSurface: true,
         dismissTransientHintsWithoutRekey: hasHints)
     }
-    // Left / double click hands the keyboard to the app, but only enters INSERT
-    // when the click lands on a text input — the caller probes the click point
-    // (`AXClick.isTextInput`) so this matches the editability-aware `f` rule.
-    // On a button/link the click still goes through and NORMAL navigation
-    // continues.
+    // A physical left / double click always hands the keyboard to the app and
+    // enters INSERT. Semantic `mouse_target` hints make their own decision from
+    // `JumpTarget.entersInsertMode`; a `mouse_grid` click shares this physical
+    // pointer intent because it synthesizes the same mouse action.
     return AppClickDecision(
       releaseCapture: true,
-      probeForInsert: true,
+      enterInsert: true,
       suspendForNativeSurface: false,
       dismissTransientHintsWithoutRekey: false)
   }

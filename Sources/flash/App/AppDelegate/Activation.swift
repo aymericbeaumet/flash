@@ -225,7 +225,8 @@ extension AppDelegate {
   /// sits on the active window's screen. The rects are captured each render
   /// (`configureModeBadge`) in screen coordinates; here we pick the screen the
   /// focused window predominantly occupies and turn each link run into a
-  /// `JumpTarget` whose commit opens the URL (mirroring `StatusBarClickView`).
+  /// `JumpTarget`. Commit posts the same host click as every other hint, and
+  /// `StatusBarClickView` handles it through normal Cocoa hit-testing.
   /// Returns `[]` when the bar is hidden or the active window is on a screen
   /// without a bar.
   private func statusBarLinkTargets(forActiveWindowFrame windowFrame: CGRect) -> [JumpTarget] {
@@ -242,7 +243,6 @@ extension AppDelegate {
       overlapArea(best.screenFrame, windowFrame) > 0
     else { return [] }
     return best.links.enumerated().map { idx, link in
-      let url = link.url
       // A short, leading-edge chip: the 2pt-high frame makes `chipFrame` centre
       // the chip on the bar band's midline and anchor it to the run's leading
       // edge (the run is wider than a chip), so the label lands over the link.
@@ -252,27 +252,11 @@ extension AppDelegate {
         width: max(link.rect.width, 1),
         height: 2)
       return JumpTarget(
-        id: "statusbar_link_\(idx)_\(url.absoluteString)",
+        id: "statusbar_link_\(idx)_\(link.url.absoluteString)",
         frame: frame,
         role: "AXLink",
-        url: url.absoluteString,
-        activate: { [weak self] _ in
-          // Named `#[range=user|…]` spans dispatch their [statusbar.click]
-          // action; real URLs open with `activates = true` so the handling
-          // app comes forward and takes focus, matching the bar's own click
-          // handler (a background `open` would leave keyboard focus on the
-          // previously active app).
-          if let action = FlashStatusBarRenderer.rangeActionName(from: url) {
-            self?.performStatusBarClickAction(named: action)
-            return true
-          }
-          let configuration = NSWorkspace.OpenConfiguration()
-          configuration.activates = true
-          NSWorkspace.shared.open(url, configuration: configuration, completionHandler: nil)
-          return true
-        },
+        url: link.url.absoluteString,
         entersInsertMode: false,
-        transfersFocus: true,
         providerID: "statusbar")
     }
   }

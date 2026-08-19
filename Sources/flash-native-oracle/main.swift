@@ -399,7 +399,7 @@ private func assertAbsentLabels(
   }
 }
 
-private func activateTarget(
+private func clickTarget(
   label: String,
   targets: [JumpTarget],
   statePath: String,
@@ -410,10 +410,9 @@ private func activateTarget(
     recorder.fail("could not find native target label=\(label)")
     return
   }
-  guard target.activate?(.leftClick) == true else {
-    recorder.fail("native target activation returned false label=\(label)")
-    return
-  }
+  postMouseClick(
+    at: CGPoint(x: target.frame.midX, y: target.frame.midY),
+    action: .leftClick)
   if let expectedState {
     do {
       try waitForState(
@@ -421,12 +420,12 @@ private func activateTarget(
         key: expectedState.key,
         value: expectedState.value,
         timeout: 3)
-      recorder.pass("native activation updated state label=\(label)")
+      recorder.pass("native host click updated state label=\(label)")
     } catch {
-      recorder.fail("native activation state check failed label=\(label): \(error)")
+      recorder.fail("native host-click state check failed label=\(label): \(error)")
     }
   } else {
-    recorder.pass("native target accepted AX activation label=\(label)")
+    recorder.pass("native target accepted host click label=\(label)")
   }
 }
 
@@ -692,43 +691,43 @@ do {
     targets: targets,
     recorder: recorder)
 
-  activateTarget(
+  clickTarget(
     label: "Primary Action",
     targets: targets,
     statePath: args.statePath,
     expectedState: (key: "primary", value: 1),
     recorder: recorder)
-  activateTarget(
+  clickTarget(
     label: "Icon Action",
     targets: targets,
     statePath: args.statePath,
     expectedState: (key: "icon", value: 1),
     recorder: recorder)
-  activateTarget(
+  clickTarget(
     label: "Duplicate Action",
     targets: targets,
     statePath: args.statePath,
     expectedState: (key: "duplicate", value: 1),
     recorder: recorder)
-  activateTarget(
+  clickTarget(
     label: "Toggle Option",
     targets: targets,
     statePath: args.statePath,
     expectedState: (key: "toggle", value: 1),
     recorder: recorder)
-  activateTarget(
+  clickTarget(
     label: "Radio Choice",
     targets: targets,
     statePath: args.statePath,
     expectedState: (key: "radio", value: 1),
     recorder: recorder)
-  activateTarget(
+  clickTarget(
     label: "Native Search Field",
     targets: targets,
     statePath: args.statePath,
     expectedState: nil,
     recorder: recorder)
-  activateTarget(
+  clickTarget(
     label: "Native Notes Area",
     targets: targets,
     statePath: args.statePath,
