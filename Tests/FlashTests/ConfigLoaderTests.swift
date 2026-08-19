@@ -1429,7 +1429,10 @@ final class ConfigLoaderTests: XCTestCase {
     guard let toml = try? String(contentsOf: url, encoding: .utf8) else {
       return XCTFail("config.default.toml not found at \(url.path)")
     }
-    let d = Config()
+    // `Config.default` (not `Config()`) so `prepareDerivedValues` has run on
+    // both sides — it resolves `<leader>` placeholders in the built-in
+    // mapping keys the same way parsing resolves them for the file's.
+    let d = Config.default
     let c = ConfigLoader.parse(toml)
 
     XCTAssertEqual(c.hints.keys, d.hints.keys)
@@ -1450,5 +1453,140 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.debug.httpInspectorEnabled, d.debug.httpInspectorEnabled)
     XCTAssertEqual(c.debug.httpInspectorHost, d.debug.httpInspectorHost)
     XCTAssertEqual(c.debug.httpInspectorPort, d.debug.httpInspectorPort)
+    XCTAssertEqual(c.app.menuBarIcon, d.app.menuBarIcon)
+    XCTAssertEqual(c.app.autostart, d.app.autostart)
+    XCTAssertEqual(c.overlay.windowBorder, d.overlay.windowBorder)
+    XCTAssertEqual(c.overlay.windowBorderSize, d.overlay.windowBorderSize)
+    XCTAssertEqual(c.overlay.windowBorderColor, d.overlay.windowBorderColor)
+    XCTAssertEqual(c.statusBar.refreshIntervalSeconds, d.statusBar.refreshIntervalSeconds)
+    XCTAssertEqual(c.open.ignoredApps, d.open.ignoredApps)
+    XCTAssertEqual(c.open.appDirectories, d.open.appDirectories)
+    XCTAssertEqual(c.plugins.disabled, d.plugins.disabled)
+    XCTAssertEqual(c.plugins.watchingEnabled, d.plugins.watchingEnabled)
+    XCTAssertEqual(c.mode.normalLeader, d.mode.normalLeader)
+    XCTAssertEqual(c.mode.normalPassthroughKeys, d.mode.normalPassthroughKeys)
+    XCTAssertEqual(c.mode.normalPassthroughModifiers, d.mode.normalPassthroughModifiers)
+    // The mapping tables in config.default.toml are real values now that the
+    // file loads at runtime as the base layer, so the file must be a NO-OP
+    // over the built-ins: every mapping it defines must match the baked-in
+    // default for that key, and it must not add or lose any. Re-defining a
+    // key re-appends it (setModeMapping is remove+append), so compare as
+    // key-indexed maps — order across the parse boundary is meaningless.
+    XCTAssertEqual(Self.mappingsByKey(c.mode.all), Self.mappingsByKey(d.mode.all))
+    XCTAssertEqual(Self.mappingsByKey(c.mode.normal), Self.mappingsByKey(d.mode.normal))
+    XCTAssertEqual(Self.mappingsByKey(c.mode.insert), Self.mappingsByKey(d.mode.insert))
+  }
+
+  private static func mappingsByKey(_ mappings: [ModeMapping]) -> [String: ModeMapping] {
+    Dictionary(mappings.map { ($0.key, $0) }, uniquingKeysWith: { _, last in last })
+  }
+
+  /// The embedded default config is parsed on every launch as the base
+  /// layer; ANY diagnostic from it is a Flash bug, not user error.
+  func testDefaultConfigParsesWithZeroDiagnostics() {
+    let url = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()  // FlashTests
+      .deletingLastPathComponent()  // Tests
+      .deletingLastPathComponent()  // repo root
+      .appendingPathComponent("config.default.toml")
+    guard let toml = try? String(contentsOf: url, encoding: .utf8) else {
+      return XCTFail("config.default.toml not found at \(url.path)")
+    }
+    let diagnostics = ConfigLoader.parse(toml).loadingDiagnostics.map(\.logMessage)
+    XCTAssertTrue(diagnostics.isEmpty, "default config produced diagnostics: \(diagnostics)")
+  }
+
+  func testLayeredParseLaterLayerOverridesEarlier() {
+    let base = ConfigLoader.Layer(
+      text: """
+        [hints]
+        min_length = 2
+        [statusbar]
+        interval = 30
+        template = "#{mode}"
+        """,
+      diagnosticLabel: "config.default.toml")
+    let user = ConfigLoader.Layer(
+      text: """
+        [statusbar]
+        interval = 10
+        """)
+    let c = ConfigLoader.parseLayers([base, user])
+    // Overridden by the later layer:
+    XCTAssertEqual(c.statusBar.refreshIntervalSeconds, 10)
+    // Inherited from the earlier layer where the later one is silent:
+    XCTAssertEqual(c.hints.minLength, 2)
+    XCTAssertEqual(c.statusBar.template.template, "#{mode}")
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testLayeredParsePrefixesLabeledLayerDiagnostics() {
+    let broken = ConfigLoader.Layer(
+      text: """
+        [statusbar]
+        interval = -5
+        """,
+      diagnosticLabel: "config.default.toml")
+    let user = ConfigLoader.Layer(
+      text: """
+        [hints]
+        min_length = 0
+        """)
+    let c = ConfigLoader.parseLayers([broken, user])
+    // The labeled (embedded default) layer's diagnostics name the file; the
+    // primary layer's stay unprefixed, as before.
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.hasPrefix("config.default.toml: ") && $0.message.contains("statusbar.interval")
+      },
+      "expected a labeled diagnostic, got: \(c.loadingDiagnostics.map(\.message))")
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        !$0.message.hasPrefix("config.default.toml: ") && $0.message.contains("hints.min_length")
+      })
+  }
+
+  func testLayeredParseResolvesLeaderAcrossLayers() {
+    // A <leader> mapping in a later layer resolves against a leader defined
+    // in an earlier one (and vice versa: redefining the leader re-binds the
+    // earlier layers' <leader> mappings).
+    let base = ConfigLoader.Layer(
+      text: """
+        [mode.normal]
+        leader = "\\\\"
+        """,
+      diagnosticLabel: "config.default.toml")
+    let user = ConfigLoader.Layer(
+      text: """
+        [mode.normal.mappings]
+        "<leader>x" = ["flash", "help_show"]
+        """)
+    let c = ConfigLoader.parseLayers([base, user])
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertTrue(
+      c.mode.normal.contains { $0.key.hasPrefix("\\") && $0.key.hasSuffix("x") },
+      "expected a resolved <leader>x mapping, got keys: \(c.mode.normal.map(\.key))")
+  }
+
+  func testLayeredParseTemplateSourceFollowsDefiningLayer() {
+    // Relative #{script:…} paths must resolve against the file that DEFINED
+    // the template, not the last file parsed.
+    let definer = ConfigLoader.Layer(
+      text: """
+        [statusbar]
+        template = "#{mode}"
+        """,
+      sourceURL: URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"),
+      diagnosticLabel: "config.default.toml")
+    let silent = ConfigLoader.Layer(
+      text: """
+        [hints]
+        min_length = 2
+        """,
+      sourceURL: URL(fileURLWithPath: "/tmp/user/flash.toml"))
+    let c = ConfigLoader.parseLayers([definer, silent])
+    XCTAssertEqual(
+      c.statusBar.templateSourceURL,
+      URL(fileURLWithPath: "/tmp/flash-defaults/config.default.toml"))
   }
 }

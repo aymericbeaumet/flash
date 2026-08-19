@@ -274,10 +274,10 @@ leader = "\\"
 "j" = ["flash", "send_key", "--keys=down"]
 "k" = ["flash", "send_key", "--keys=up"]
 "l" = ["flash", "scroll_right"]
-"ctrl-e" = ["flash", "scroll_down"]
-"ctrl-y" = ["flash", "scroll_up"]
-"ctrl-d" = ["flash", "scroll_half_page_down"]
-"ctrl-u" = ["flash", "scroll_half_page_up"]
+"ctrl+e" = ["flash", "scroll_down"]
+"ctrl+y" = ["flash", "scroll_up"]
+"ctrl+d" = ["flash", "scroll_half_page_down"]
+"ctrl+u" = ["flash", "scroll_half_page_up"]
 # Vimium parity: bare d/u scroll a half page (ctrl-d/ctrl-u stay as
 # vim-style aliases). d is kept free of any hint-mode prefix — double-click
 # hints live on the D prefix below — so the bare keystroke fires instantly.
@@ -322,22 +322,18 @@ leader = "\\"
 # Vimium T searches open tabs — Flash opens the flashlight switcher
 # (its default pool is location-only: apps, tabs, tmux windows, …).
 "T" = ["flash", "enter_command_mode", "--input=:flashlight "]
-# cmd+tab / cmd+shift+tab shadow the system app switcher while in normal
-# mode. Carbon hotkeys are scope-bound, so entering insert mode releases
-# the registration and macOS's Dock switcher takes over again.
-"cmd+tab" = ["flash", "app_next"]
-"cmd+shift+tab" = ["flash", "app_previous"]
-# Native terminal navigation chords deliberately stay unregistered: terminal
-# apps can route them directly to tmux without a Flash round trip, while
-# Flash's g1–g9, [t/]t, [h/]h, t, and x mappings remain available in normal
-# mode and keep working across every discovered terminal.
-"cmd+r" = ["flash", "app_reload"]                  # ≈ r
-"cmd+shift+r" = ["flash", "app_reload", "--force"] # ≈ R
+# No default ⌘-based bindings: the system/browser ⌘ chords (⌘Tab, ⌘R,
+# ⌘⇧T, ⌘F, …) are left to the OS / focused app, and their vim-style
+# siblings above cover the same actions in normal mode. Uncomment to
+# shadow a native chord with Flash's version instead:
+# "cmd+tab" = ["flash", "app_next"]
+# "cmd+shift+tab" = ["flash", "app_previous"]
+# "cmd+r" = ["flash", "app_reload"]                  # ≈ r
+# "cmd+shift+r" = ["flash", "app_reload", "--force"] # ≈ R
+# "cmd+shift+t" = ["flash", "tab_reopen"]            # ≈ T
+# "cmd+f" = ["flash", "app_find"]                    # ≈ /
 # The bundled tmux source registers no mappings; terminals can send their
 # native tmux prefix bindings directly for zero-round-trip pane/window actions.
-"cmd+shift+t" = ["flash", "tab_reopen"]      # ≈ T
-"cmd+n" = ["flash", "window_new"]            # ≈ n
-"cmd+f" = ["flash", "app_find"]              # ≈ /
 "ctrl+tab" = ["flash", "tab_next"]           # browser-native ≈ ]t
 "ctrl+shift+tab" = ["flash", "tab_previous"] # browser-native ≈ [t
 "g^" = ["flash", "tab_first"]
@@ -352,8 +348,8 @@ leader = "\\"
 "g7" = ["flash", "tab_select", "--index=7"]
 "g8" = ["flash", "tab_select", "--index=8"]
 "g9" = ["flash", "tab_select", "--index=9"]
-"ctrl-o" = ["flash", "movement_back"]
-"ctrl-i" = ["flash", "movement_forward"]
+"ctrl+o" = ["flash", "movement_back"]
+"ctrl+i" = ["flash", "movement_forward"]
 "a" = ["flash", "enter_insert_mode"]
 "A" = ["flash", "enter_insert_mode"]
 "i" = ["flash", "enter_insert_mode"]
@@ -373,13 +369,16 @@ leader = "\\"
 # Double-click hints sit on the D ("Double") prefix, not d, so the bare
 # d half-page scroll above stays instant.
 "Df" = ["flash", "mouse_target", "--double"]
-"mf" = ["flash", "mouse_target", "--move"]
+# NOTE: `m<letter>` is the set-mark prefix (marks plugin), so `mf` is NOT
+# bound to hint-move by default — `set_mark f` owns it. Rebind hint-move
+# to a free key if you use it more than marks:
+# "gm" = ["flash", "mouse_target", "--move"]
 "sF" = ["flash", "mouse_grid", "--secondary"]
 "DF" = ["flash", "mouse_grid", "--double"]
 "mF" = ["flash", "mouse_grid", "--move"]
 # Undo is no longer on bare u (Vimium reuses it for half-page scroll-up);
 # reach it via the command line (:undo) or the app's native ⌘Z.
-"ctrl-r" = ["flash", "app_redo"]
+"ctrl+r" = ["flash", "app_redo"]
 # y yanks (copies) the current selection; p pastes it back. With no register
 # these use the system clipboard, so they interoperate with copy/paste in every
 # other app. A "<name> prefix routes through a register instead: "ay yanks into
@@ -393,7 +392,7 @@ leader = "\\"
 "e" = ["flash", "resource_archive"]
 # tmux-aware close: kills the current tmux window in the current session
 # when an attached tmux client is focused, otherwise falls back to ⌘W.
-"x" = ["flash", "tab_close"]
+"x" = ["flash", "window_close"]
 # Vimium n/N cycle find matches — Flash drives the focused app's native
 # find-again (⌘G / ⌘⇧G) after `/` opens find. New windows stay on ⌘N.
 "n" = ["flash", "send_key", "--keys=cmd+g"]
@@ -402,7 +401,7 @@ leader = "\\"
 # or a new browser tab in browsers. Other apps do nothing.
 "t" = ["flash", "tab_new"]
 "/" = ["flash", "app_find"]
-"<leader>space" = ["flash", "enter_command_mode", "--input=:flashlight "]
+"<leader><space>" = ["flash", "enter_command_mode", "--input=:flashlight "]
 # Context-aware reload: browsers reload the current page; tmux refreshes
 # the focused client. Other apps do nothing.
 "r" = ["flash", "app_reload"]

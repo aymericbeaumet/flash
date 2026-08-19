@@ -218,6 +218,10 @@ assemble_app() {
   fi
   cp "$PROJECT_DIR/Resources/Info.plist" "$STAGING_PATH/Contents/Info.plist"
   cp "$PROJECT_DIR/Resources/AppIcon.icns" "$STAGING_PATH/Contents/Resources/AppIcon.icns"
+  # The default config ships inside the bundle and is loaded at runtime as
+  # the base layer under the user's flash.toml (ConfigLoader.load), which
+  # also revalidates it on every launch.
+  cp "$PROJECT_DIR/config.default.toml" "$STAGING_PATH/Contents/Resources/config.default.toml"
   # Stamp the exact commit this bundle was assembled from (the About panel
   # reads FlashGitCommit).
   local git_commit

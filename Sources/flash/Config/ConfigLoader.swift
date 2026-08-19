@@ -43,27 +43,57 @@ enum ConfigLoader {
       .appendingPathComponent(".config/flash/flash.toml")
   }
 
-  /// Production entry point. Resolves the config path, reads the TOML
-  /// file (falling back to defaults if it doesn't exist), then layers
-  /// environment-variable overrides and command-line overrides on top.
-  /// **Precedence (high → low): CLI flag > env var > TOML > built-in default.**
+  /// One TOML document in an ordered layer stack. Later layers override
+  /// keys set by earlier ones; keys a layer doesn't mention are inherited.
+  struct Layer {
+    var text: String
+    var sourceURL: URL?
+    /// Short name prefixed onto this layer's diagnostics so a problem in a
+    /// non-primary layer (e.g. the embedded default config) names its file.
+    /// nil for the primary (user) config, whose diagnostics stay unprefixed.
+    var diagnosticLabel: String?
+
+    init(text: String, sourceURL: URL? = nil, diagnosticLabel: String? = nil) {
+      self.text = text
+      self.sourceURL = sourceURL
+      self.diagnosticLabel = diagnosticLabel
+    }
+  }
+
+  /// Production entry point. Layers, in override order (low → high):
+  /// the default config embedded in the app bundle, then the user's TOML
+  /// file, then environment-variable overrides and command-line overrides.
+  /// **Precedence (high → low): CLI flag > env var > user TOML > embedded
+  /// default TOML > built-in Swift default.** Parsing the embedded default
+  /// on every launch also revalidates it: any diagnostic it produces is a
+  /// Flash bug, and is logged with the file's name.
   static func load() -> Config {
     let args = CommandLine.arguments
     let env = ProcessInfo.processInfo.environment
+    var layers: [Layer] = []
+    if let defaults = embeddedDefaultLayer() { layers.append(defaults) }
     let url = resolvePath(arguments: args, environment: env)
-    let parsed = parseFile(at: url, environment: env)
+    if let data = try? Data(contentsOf: url),
+      let text = String(data: data, encoding: .utf8)
+    {
+      layers.append(Layer(text: text, sourceURL: url.resolvingSymlinksInPath()))
+    }
+    let parsed = parseLayers(layers, environment: env)
     return applyOverrides(to: parsed, arguments: args, environment: env)
   }
 
-  private static func parseFile(at url: URL, environment: [String: String]) -> Config {
-    guard let data = try? Data(contentsOf: url),
-      let text = String(data: data, encoding: .utf8)
-    else {
-      var config = Config.default
-      config.prepareDerivedValues()
-      return config
-    }
-    return parse(text, sourceURL: url.resolvingSymlinksInPath(), environment: environment)
+  /// The default config bundled into the app (`Resources/config.default.toml`
+  /// at build time). nil in unit tests and non-bundle contexts — the Swift
+  /// struct defaults then stand alone, as before.
+  static func embeddedDefaultLayer() -> Layer? {
+    guard
+      let url = Bundle.main.url(forResource: "config.default", withExtension: "toml"),
+      let text = try? String(contentsOf: url, encoding: .utf8)
+    else { return nil }
+    return Layer(
+      text: text,
+      sourceURL: url.resolvingSymlinksInPath(),
+      diagnosticLabel: "config.default.toml")
   }
 
   static func parse(
@@ -71,33 +101,55 @@ enum ConfigLoader {
     sourceURL: URL? = nil,
     environment: [String: String] = [:]
   ) -> Config {
+    parseLayers(
+      [Layer(text: text, sourceURL: sourceURL)],
+      environment: environment)
+  }
+
+  /// Parse an ordered layer stack into one Config. Each layer's tables are
+  /// applied onto the same accumulating value, so "later overrides earlier"
+  /// falls out of the assign-only-when-present loader design. Mode mappings
+  /// are collected across all layers and resolved once at the end (a
+  /// `<leader>` may be defined in a different layer than the mapping using
+  /// it); the status-bar template is compiled once from whichever layer
+  /// defined it last.
+  static func parseLayers(
+    _ layers: [Layer],
+    environment: [String: String] = [:]
+  ) -> Config {
     var config = Config()
     var pendingModeMappings: [PendingModeMapping] = []
-    let locations = ConfigSourceLocationIndex(text: text)
 
-    let root: TOMLTable
-    do {
-      root = try TOMLTable(string: text)
-    } catch let error as TOMLParseError {
-      config.addDiagnostic(
-        "TOML parse error: \(error.description)",
-        location: ConfigLocation(line: error.source.begin.line, column: error.source.begin.column))
-      config.prepareDerivedValues()
-      return config
-    } catch {
-      config.addDiagnostic("TOML parse error: \(error)")
-      config.prepareDerivedValues()
-      return config
+    for layer in layers {
+      let diagnosticsBefore = config.diagnostics.count
+      let locations = ConfigSourceLocationIndex(text: layer.text)
+      do {
+        let root = try TOMLTable(string: layer.text)
+        apply(
+          root: root,
+          locations: locations,
+          sourceURL: layer.sourceURL,
+          pendingModeMappings: &pendingModeMappings,
+          into: &config)
+      } catch let error as TOMLParseError {
+        config.addDiagnostic(
+          "TOML parse error: \(error.description)",
+          location: ConfigLocation(
+            line: error.source.begin.line, column: error.source.begin.column))
+      } catch {
+        config.addDiagnostic("TOML parse error: \(error)")
+      }
+      if let label = layer.diagnosticLabel {
+        for index in diagnosticsBefore..<config.diagnostics.count {
+          config.diagnostics[index] = ConfigDiagnostic(
+            message: "\(label): \(config.diagnostics[index].message)",
+            location: config.diagnostics[index].location)
+        }
+      }
     }
 
-    apply(
-      root: root,
-      locations: locations,
-      sourceURL: sourceURL,
-      pendingModeMappings: &pendingModeMappings,
-      into: &config)
     applyPendingModeMappings(pendingModeMappings, into: &config)
-    applyStatusBarTemplate(sourceURL: sourceURL, into: &config)
+    applyStatusBarTemplate(sourceURL: config.statusBar.templateSourceURL, into: &config)
     config.prepareDerivedValues()
     return config
   }
@@ -327,7 +379,8 @@ enum ConfigLoader {
     applyOpen(root["open"]?.table, locations: locations, into: &config)
     applyPlugins(root["plugins"]?.table, locations: locations, sourceURL: sourceURL, into: &config)
     applyPluginSettings(root["plugin"]?.table, locations: locations, into: &config)
-    applyStatusBar(root["statusbar"]?.table, locations: locations, into: &config)
+    applyStatusBar(
+      root["statusbar"]?.table, locations: locations, sourceURL: sourceURL, into: &config)
     applyFlashlight(root["flashlight"]?.table, locations: locations, into: &config)
     applyMode(
       root["mode"]?.table,
@@ -593,6 +646,7 @@ enum ConfigLoader {
   private static func applyStatusBar(
     _ table: TOMLTable?,
     locations: ConfigSourceLocationIndex,
+    sourceURL: URL?,
     into config: inout Config
   ) {
     guard let table else { return }
@@ -602,7 +656,7 @@ enum ConfigLoader {
     ) { value, config in
       config.statusBar.enabled = value
     }
-    return applyStatusBarTail(table, locations: locations, into: &config)
+    return applyStatusBarTail(table, locations: locations, sourceURL: sourceURL, into: &config)
   }
 
   private static func applyApp(
@@ -628,6 +682,7 @@ enum ConfigLoader {
   private static func applyStatusBarTail(
     _ table: TOMLTable,
     locations: ConfigSourceLocationIndex,
+    sourceURL: URL?,
     into config: inout Config
   ) {
     applyString(
@@ -636,6 +691,10 @@ enum ConfigLoader {
       into: &config
     ) { value, config in
       config.statusBar.template.template = value
+      // Relative `#{script:…}` paths resolve against the file that DEFINED
+      // the template — with layered configs that may be an earlier layer
+      // than the last one parsed, so remember it here.
+      config.statusBar.templateSourceURL = sourceURL
     }
     applyString(
       table["monitor"], path: ["statusbar", "monitor"],

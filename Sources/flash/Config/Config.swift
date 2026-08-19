@@ -322,6 +322,10 @@ struct Config {
     ///                                 script:<path>, command:<shell>).
     static let defaultTemplateString = "#[align=left]#{mode}#[align=right]#{date}"
     var template: FlashStatusBarTemplate = Self.defaultTemplate
+    /// The config file that defined `template`, for resolving relative
+    /// `#{script:…}` paths. With layered configs the defining layer may not
+    /// be the last file parsed. Not user-facing.
+    var templateSourceURL: URL?
     static let defaultTemplate = FlashStatusBarTemplate(
       template: Self.defaultTemplateString,
       variables: [
