@@ -35,7 +35,7 @@ final class StatusItemController: NSObject {
     }
   }
 
-  private var aboutPanel: NSPanel?
+  private var aboutPanel: NSWindow?
   private static let repoURL = URL(string: "https://github.com/aymericbeaumet/flash")!
 
   @objc private func showAbout() {
@@ -96,7 +96,10 @@ final class StatusItemController: NSObject {
     stack.spacing = 8
     stack.edgeInsets = NSEdgeInsets(top: 32, left: 56, bottom: 32, right: 56)
 
-    let panel = NSPanel(
+    // A real NSWindow, not an NSPanel: panels draw a compact title bar with
+    // a left-aligned title and hide on app deactivation — the About window
+    // wants a standard, centered title and normal persistence.
+    let panel = AboutWindow(
       contentRect: .zero,
       styleMask: [.titled, .closable],
       backing: .buffered,
@@ -145,5 +148,20 @@ final class StatusItemController: NSObject {
 
   @objc private func quit() {
     NSApp.terminate(nil)
+  }
+}
+
+/// The About window: close-window chords (⌘W/⌘Q and their ⌃ variants) close
+/// JUST this window — Flash itself is a resident app and must never quit
+/// from a keystroke that was aimed at a window.
+private final class AboutWindow: NSWindow {
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let key = event.charactersIgnoringModifiers?.lowercased()
+    if modifiers == .command || modifiers == .control, key == "w" || key == "q" {
+      close()
+      return true
+    }
+    return super.performKeyEquivalent(with: event)
   }
 }
