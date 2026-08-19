@@ -383,8 +383,15 @@ inline — `#{script=N:…}` / `#{command=N:…}` re-run every N seconds, and
 `max(R, interval)`). Each section schedules and drops overrun ticks
 independently, so one slow script never starves the others. The menu-bar
 reveal probe behind the bar's click windows runs on a utility queue, armed
-only while the pointer is in the band — the status bar must do no periodic
-main-thread work beyond rendering actual model changes.
+only while the pointer is in the band. `#[breathing]`/`#[blink]` spans
+animate via render-server CAKeyframeAnimations on pooled overlay layers
+(the base layer draws them at foreground alpha 0; `effectAlphaMultiplier`
+is the curve oracle) — the status bar does ZERO periodic work, main-thread
+or otherwise, beyond rendering actual model changes. All screens lay out
+through ONE function (`configureStatusBarSurface` + `StatusBarSurface`);
+never fork a per-screen layout copy. Overflow is handled by the elastic
+`#[shrink]…#[noshrink]` span (pixel-accurate ellipsis; fixed content keeps
+full width) and layout keeps a 16 pt margin around a notch.
 
 **Bundled plugins default to Rust, macOS-only.** Six official plugins are
 deliberately non-Rust to keep the wire protocol honestly language-agnostic

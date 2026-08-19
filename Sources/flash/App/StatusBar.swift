@@ -1050,13 +1050,127 @@ enum FlashStatusBarRenderer {
   static func attributedStatusString(
     from raw: String,
     font: NSFont,
-    currentTime: TimeInterval = CACurrentMediaTime()
+    currentTime: TimeInterval = 0
   ) -> NSAttributedString {
     let attributed = NSMutableAttributedString()
     for segment in segments(from: raw) {
       attributed.append(attributedSegment(segment, font: font, currentTime: currentTime))
     }
     return attributed
+  }
+
+  /// The static base-layer render: animated (`#[breathing]`/`#[blink]`)
+  /// spans keep their glyphs — so measurement and layout are identical —
+  /// but draw at foreground alpha 0. A pooled overlay layer paints those
+  /// spans at full colour with a render-server opacity animation, so the
+  /// process does zero periodic work. Backgrounds stay in the base at full
+  /// alpha (matching the old renderer, which never animated fills).
+  static func attributedStatusStringHidingAnimatedSpans(
+    from raw: String,
+    font: NSFont
+  ) -> NSAttributedString {
+    let attributed = NSMutableAttributedString()
+    for segment in segments(from: raw) {
+      let piece = attributedSegment(segment, font: font, currentTime: 0)
+      if segment.blink || segment.breathing {
+        let mutable = NSMutableAttributedString(attributedString: piece)
+        let range = NSRange(location: 0, length: mutable.length)
+        mutable.enumerateAttribute(.foregroundColor, in: range) { value, subrange, _ in
+          guard let color = value as? NSColor else { return }
+          mutable.addAttribute(
+            .foregroundColor, value: color.withAlphaComponent(0), range: subrange)
+        }
+        attributed.append(mutable)
+      } else {
+        attributed.append(piece)
+      }
+    }
+    return attributed
+  }
+
+  /// Measure the animated (`#[breathing]`/`#[blink]`) spans of `raw` the
+  /// same way `linkRuns` measures link spans: x-offsets from the text's
+  /// leading edge, widths, the ready-to-draw full-colour text, and the
+  /// effect flags. Adjacent segments sharing the same flags merge into one
+  /// run (a styled span stays one overlay layer).
+  static func effectRuns(
+    from raw: String,
+    font: NSFont
+  ) -> (
+    runs: [(xOffset: CGFloat, width: CGFloat, text: NSAttributedString, blink: Bool, breathing: Bool)],
+    totalWidth: CGFloat
+  ) {
+    var runs:
+      [(xOffset: CGFloat, width: CGFloat, text: NSAttributedString, blink: Bool, breathing: Bool)] =
+        []
+    var x: CGFloat = 0
+    for segment in segments(from: raw) {
+      let width = attributedSegment(segment, font: font, currentTime: 0).size().width
+      if segment.blink || segment.breathing {
+        // Render the overlay text effect-NEUTRAL (flags stripped): the
+        // layer's opacity animation is the single alpha source, so baking
+        // the curve's value here would apply it twice.
+        var flat = segment
+        flat.blink = false
+        flat.breathing = false
+        let piece = attributedSegment(flat, font: font, currentTime: 0)
+        if var last = runs.last, last.blink == segment.blink,
+          last.breathing == segment.breathing,
+          abs(last.xOffset + last.width - x) < 0.5
+        {
+          let merged = NSMutableAttributedString(attributedString: last.text)
+          merged.append(piece)
+          last.text = merged
+          last.width += width
+          runs[runs.count - 1] = last
+        } else {
+          runs.append(
+            (xOffset: x, width: width, text: piece, blink: segment.blink,
+             breathing: segment.breathing))
+        }
+      }
+      x += width
+    }
+    return (runs, x)
+  }
+
+  /// A repeating render-server opacity animation reproducing
+  /// `effectAlphaMultiplier`'s curve for the given flags — the pure
+  /// function stays the single oracle (the keyframes are sampled from it).
+  /// `beginTime` is anchored to the period grid of the shared layer clock,
+  /// so every span on every bar animates in phase no matter when it was
+  /// (re-)armed.
+  static func effectOpacityAnimation(
+    blink: Bool,
+    breathing: Bool,
+    anchoredTo layer: CALayer
+  ) -> CAKeyframeAnimation {
+    let animation = CAKeyframeAnimation(keyPath: "opacity")
+    let period: TimeInterval = breathing ? 10 : 1
+    if breathing {
+      // Sample the sinusoid (and the blink square wave when combined —
+      // 10 s is a whole multiple of blink's 1 s period) finely enough
+      // that linear interpolation is invisible.
+      let probe = FlashStatusTextSegment(
+        text: "", foreground: .defaultForeground, blink: blink, breathing: true)
+      let steps = blink ? 400 : 80
+      animation.values = (0...steps).map { step in
+        effectAlphaMultiplier(
+          segment: probe, currentTime: period * TimeInterval(step) / TimeInterval(steps))
+      }
+      animation.calculationMode = blink ? .discrete : .linear
+    } else {
+      // Pure blink: tmux's half-second square wave.
+      animation.values = [1.0, 0.15]
+      animation.keyTimes = [0, 0.5]
+      animation.calculationMode = .discrete
+    }
+    animation.duration = period
+    animation.repeatCount = .infinity
+    animation.isRemovedOnCompletion = false
+    let now = layer.convertTime(CACurrentMediaTime(), from: nil)
+    animation.beginTime = now - now.truncatingRemainder(dividingBy: period)
+    return animation
   }
 
   static func attributedSegment(
@@ -1190,12 +1304,6 @@ enum FlashStatusBarRenderer {
 }
 
 final class FlashStatusBarController {
-  /// 4 fps. The breathing curve has a 10-second period, so this still gives it
-  /// 40 tiny alpha steps per cycle; blink reacts within 250 ms. Redrawing a
-  /// CATextLayer requires real AppKit/WindowServer work even when geometry is
-  /// unchanged, so a display-rate timer would waste CPU for no visible gain.
-  static let effectsTickMilliseconds = 250
-
   private weak var overlay: OverlayPanel?
   private let queue = DispatchQueue(label: "flash.status_bar", qos: .utility)
   /// Concurrent so one slow section (a script waiting on the network) can't
@@ -1208,7 +1316,6 @@ final class FlashStatusBarController {
   private var template: FlashStatusBarTemplate
   private let pluginStatusesProvider: () -> [PluginStatus]
   private var refreshTimer: DispatchSourceTimer?
-  private var effectsTimer: DispatchSourceTimer?
   private var cycleTimer: DispatchSourceTimer?
   /// Per-`#{cycle:…}` variable: its output lines, which one is showing, its
   /// rotation period, and when it last rotated. Refreshed (re-run) on its
@@ -1269,8 +1376,6 @@ final class FlashStatusBarController {
       self.refreshTimer = nil
       self.commandSchedules = [:]
       self.nextClockRefreshAt = nil
-      self.effectsTimer?.cancel()
-      self.effectsTimer = nil
       self.cycleTimer?.cancel()
       self.cycleTimer = nil
       self.commandRefreshGeneration &+= 1
@@ -1539,70 +1644,6 @@ final class FlashStatusBarController {
         overlay?.setStatusBarModel(model)
       }
     }
-    // Always re-evaluate the effects timer — the same model can flip
-    // between "needs animation" and "doesn't" as plugins emit / clear
-    // `#[breathing]` markers (the system battery plugin wraps its
-    // percent only while charging).
-    refreshEffectsTimer(for: model)
-  }
-
-  /// Advances only the attributed strings carrying time-based effects. Text,
-  /// geometry, link targets, and screen layout are unchanged by an effect tick,
-  /// so re-publishing the complete model here would wastefully rebuild the
-  /// entire status bar at 20 fps.
-  private func tickEffects() {
-    guard lastPublishedModel != nil else { return }
-    DispatchQueue.main.async { [weak overlay] in
-      overlay?.refreshStatusBarEffects()
-    }
-  }
-
-  private func refreshEffectsTimer(for model: FlashStatusBarModel) {
-    let needsTick = Self.modelNeedsEffectsTick(model)
-    if needsTick {
-      startEffectsTimer()
-    } else {
-      stopEffectsTimer()
-    }
-  }
-
-  private func startEffectsTimer() {
-    guard effectsTimer == nil else { return }
-    let timer = DispatchSource.makeTimerSource(queue: queue)
-    let intervalMs = Self.effectsTickMilliseconds
-    timer.schedule(
-      deadline: .now() + .milliseconds(intervalMs),
-      repeating: .milliseconds(intervalMs),
-      leeway: .milliseconds(10))
-    timer.setEventHandler { [weak self] in
-      self?.tickEffects()
-    }
-    effectsTimer = timer
-    timer.resume()
-  }
-
-  private func stopEffectsTimer() {
-    guard effectsTimer != nil else { return }
-    effectsTimer?.cancel()
-    effectsTimer = nil
-  }
-
-  /// Cheap substring check on the rendered model. The actual marker
-  /// strings (`#[breathing]`, `#[blink]`) are kept verbatim in the
-  /// per-region buckets until `FlashStatusBarRenderer.segments` parses
-  /// them at attribute-string-build time — so a plain `contains` here
-  /// is enough and saves the cost of running the marker parser on every
-  /// publish just to discover "no, nothing to animate".
-  static func modelNeedsEffectsTick(_ model: FlashStatusBarModel) -> Bool {
-    return regionNeedsEffectsTick(model.appText)
-      || regionNeedsEffectsTick(model.modeText)
-      || regionNeedsEffectsTick(model.rightText)
-  }
-
-  private static func regionNeedsEffectsTick(_ raw: String) -> Bool {
-    return raw.contains("#[breathing")
-      || raw.contains("#[breathe")
-      || raw.contains("#[blink")
   }
 
   /// Single-line command value (stdout trimmed; nil if empty).

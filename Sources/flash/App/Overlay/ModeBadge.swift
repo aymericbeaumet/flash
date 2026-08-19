@@ -423,7 +423,7 @@ extension OverlayPanel {
     // while the static text around it stays in the base layer.
     let (cyclePrefix, cycleContent, cycleSuffix) = Self.splitCycleRun(leftTrailingDisplay)
     let baseDisplay = cyclePrefix + cycleSuffix
-    let baseAttributed = FlashStatusBarRenderer.attributedStatusString(
+    let baseAttributed = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
       from: baseDisplay, font: rightFont)
     let baseWidth = baseDisplay.isEmpty ? 0 : ceil(baseAttributed.size().width)
     surface.leftTrailingLabel.frame = CGRect(
@@ -454,7 +454,7 @@ extension OverlayPanel {
         : ceil(
           FlashStatusBarRenderer.attributedStatusString(from: cyclePrefix, font: rightFont)
             .size().width)
-      let cycleAttributed = FlashStatusBarRenderer.attributedStatusString(
+      let cycleAttributed = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
         from: cycleContent, font: rightFont)
       let cycleWidth = ceil(cycleAttributed.size().width)
       surface.cycleLayer.frame = CGRect(
@@ -499,7 +499,7 @@ extension OverlayPanel {
     let centreAvailable = max(0, centreLimitMaxX - modeMaxX - Self.statusBarMinimumGap * 2)
     let centreDisplay = FlashStatusBarRenderer.fitToWidth(
       centreRaw, font: rightFont, available: centreAvailable)
-    let centreAttributed = FlashStatusBarRenderer.attributedStatusString(
+    let centreAttributed = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
       from: centreDisplay, font: rightFont)
     let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)
     let centreWidth = min(measuredCentreWidth, centreAvailable)
@@ -558,9 +558,44 @@ extension OverlayPanel {
     surface.lastRight = applyStatusText(
       to: surface.rightLabel,
       display: rightDisplay,
-      attributed: FlashStatusBarRenderer.attributedStatusString(
+      attributed: FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
         from: rightDisplay, font: rightFont),
       previous: surface.lastRight)
+
+    // Animated spans: pooled overlay layers repaint them at full colour
+    // with a repeating render-server opacity animation — the process does
+    // ZERO periodic work, even while the battery chip breathes on AC.
+    var overlayIndex = 0
+    placeEffectOverlays(
+      on: surface, raw: baseDisplay, host: surface.backgroundLayer,
+      labelFrame: surface.leftTrailingLabel.frame, alignment: .left,
+      font: rightFont, scale: scale, nextIndex: &overlayIndex)
+    if let cycleContent, !surface.cycleLayer.isHidden {
+      placeEffectOverlays(
+        on: surface, raw: cycleContent, host: surface.cycleLayer,
+        labelFrame: surface.cycleLayer.bounds, alignment: .left,
+        font: rightFont, scale: scale, nextIndex: &overlayIndex)
+    }
+    if !surface.appLabel.isHidden {
+      placeEffectOverlays(
+        on: surface, raw: centreDisplay, host: surface.backgroundLayer,
+        labelFrame: surface.appLabel.frame, alignment: .center,
+        font: rightFont, scale: scale, nextIndex: &overlayIndex)
+    }
+    if !surface.rightLabel.isHidden {
+      placeEffectOverlays(
+        on: surface, raw: rightDisplay, host: surface.backgroundLayer,
+        labelFrame: surface.rightLabel.frame, alignment: .right,
+        font: rightFont, scale: scale, nextIndex: &overlayIndex)
+    }
+    // Park the unused tail of the pool.
+    while overlayIndex < surface.effectOverlays.count {
+      let layer = surface.effectOverlays[overlayIndex]
+      layer.isHidden = true
+      layer.removeAnimation(forKey: Self.effectAnimationKey)
+      layer.name = nil
+      overlayIndex += 1
+    }
 
     // Clickable `#[link=…]` / `#[range=user|…]` runs, in screen coordinates.
     // Measured from the same fitted strings the layers render, so the rects
@@ -592,6 +627,76 @@ extension OverlayPanel {
         barFrame: linkBarFrame, panelFrame: panelFrame)
     }
     return links
+  }
+
+  static let effectAnimationKey = "flashEffect"
+
+  /// Paint `raw`'s animated spans onto pooled overlay layers inside `host`.
+  /// Each overlay carries a repeating opacity animation built from the
+  /// effect-curve oracle; the base layer under it renders the same glyphs
+  /// at alpha 0, so geometry is identical and only the overlay pulses.
+  /// Re-arming is idempotent — layers dropped from the render tree (bar
+  /// hide/show, display changes) lose their animations, so every configure
+  /// pass re-attaches missing ones, phase-anchored to the shared clock.
+  private func placeEffectOverlays(
+    on surface: StatusBarSurface,
+    raw: String,
+    host: CALayer,
+    labelFrame: CGRect,
+    alignment: CATextLayerAlignmentMode,
+    font: NSFont,
+    scale: CGFloat,
+    nextIndex: inout Int
+  ) {
+    let (runs, totalWidth) = FlashStatusBarRenderer.effectRuns(from: raw, font: font)
+    guard !runs.isEmpty else { return }
+    let pad: CGFloat
+    switch alignment {
+    case .right:
+      pad = max(0, labelFrame.width - totalWidth)
+    case .center, .justified:
+      pad = max(0, (labelFrame.width - totalWidth) / 2)
+    default:
+      pad = 0
+    }
+    for run in runs {
+      let layer: CATextLayer
+      if nextIndex < surface.effectOverlays.count {
+        layer = surface.effectOverlays[nextIndex]
+      } else {
+        layer = CATextLayer()
+        layer.actions = OverlayPanel.noActions
+        layer.alignmentMode = .left
+        surface.effectOverlays.append(layer)
+      }
+      nextIndex += 1
+      if layer.superlayer !== host {
+        layer.removeFromSuperlayer()
+        host.addSublayer(layer)
+      }
+      // Cycle-hosted spans are positioned in the cycle layer's own bounds;
+      // bar-hosted spans offset from the region label's frame.
+      let originX = (host === surface.cycleLayer ? 0 : labelFrame.minX) + pad + run.xOffset
+      let originY = host === surface.cycleLayer ? 0 : labelFrame.minY
+      layer.frame = CGRect(
+        x: originX, y: originY, width: run.width, height: labelFrame.height)
+      layer.contentsScale = scale
+      layer.isHidden = false
+      let signature =
+        "\(run.blink ? "b" : "")\(run.breathing ? "r" : "")|\(run.text.string)"
+      if layer.name != signature {
+        layer.string = run.text
+        layer.setNeedsDisplay()
+        layer.name = signature
+        layer.removeAnimation(forKey: Self.effectAnimationKey)
+      }
+      if layer.animation(forKey: Self.effectAnimationKey) == nil {
+        layer.add(
+          FlashStatusBarRenderer.effectOpacityAnimation(
+            blink: run.blink, breathing: run.breathing, anchoredTo: layer),
+          forKey: Self.effectAnimationKey)
+      }
+    }
   }
 
   static func modeBadgeWidth(
@@ -687,6 +792,7 @@ final class SecondaryStatusBar: StatusBarSurface {
   var lastCycle: String?
   var lastCentre: String?
   var lastRight: String?
+  var effectOverlays: [CATextLayer] = []
 
   init() {
     backgroundLayer.cornerRadius = 0
@@ -734,6 +840,8 @@ protocol StatusBarSurface: AnyObject {
   var lastCycle: String? { get set }
   var lastCentre: String? { get set }
   var lastRight: String? { get set }
+  /// Pooled overlay layers for animated (`#[breathing]`/`#[blink]`) spans.
+  var effectOverlays: [CATextLayer] { get set }
 }
 
 /// Adapter mapping the primary bar's loose `OverlayPanel` layers and caches
@@ -774,105 +882,15 @@ final class PrimaryStatusBarSurface: StatusBarSurface {
     get { panel.lastRenderedRight }
     set { panel.lastRenderedRight = newValue }
   }
+  var effectOverlays: [CATextLayer] {
+    get { panel.statusEffectOverlays }
+    set { panel.statusEffectOverlays = newValue }
+  }
 }
 
 extension OverlayPanel {
   static func statusLeftText(modeText: String) -> String {
     modeText
-  }
-
-  /// True when a rendered region carries an effect marker whose appearance
-  /// advances every tick. Such regions must bypass the "skip if unchanged"
-  /// cache so the breathing/blink alpha keeps moving.
-  static func statusTextAnimated(_ display: String) -> Bool {
-    display.contains("#[breathing")
-      || display.contains("#[breathe")
-      || display.contains("#[blink")
-  }
-
-  /// Advance breathing/blink attributes without running status-bar layout.
-  ///
-  /// Effect ticks do not change text, geometry, link hit targets, screen
-  /// inventory, or command-field state. Re-entering `setStatusBarModel` for
-  /// every 20-fps tick used to recompute all of those and kept Flash plus
-  /// WindowServer busy while otherwise idle. This path rebuilds only the
-  /// attributed strings whose effect markers actually depend on time.
-  func refreshStatusBarEffects(currentTime: TimeInterval = CACurrentMediaTime()) {
-    guard modeBadgeVisible else { return }
-
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    defer { CATransaction.commit() }
-
-    let font = NSFont.monospacedSystemFont(
-      ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
-      weight: .medium)
-    let leftDisplay = statusLeftTrailingText.trimmed
-    let centreDisplay = statusAppText.trimmed
-    let rightDisplay = Self.statusRightDisplayText(statusRightText)
-    let (cyclePrefix, cycleContent, cycleSuffix) = Self.splitCycleRun(leftDisplay)
-    refreshAnimatedStatusText(
-      on: statusLeftTrailingLabel,
-      display: cyclePrefix + cycleSuffix,
-      font: font,
-      currentTime: currentTime)
-    if let cycleContent {
-      refreshAnimatedStatusText(
-        on: statusLeftTrailingCycleLayer,
-        display: cycleContent,
-        font: font,
-        currentTime: currentTime)
-    }
-    refreshAnimatedStatusText(
-      on: statusAppLabel,
-      display: centreDisplay,
-      font: font,
-      currentTime: currentTime)
-    refreshAnimatedStatusText(
-      on: statusRightLabel,
-      display: rightDisplay,
-      font: font,
-      currentTime: currentTime)
-
-    // Secondary bars render the same base + cycle split as the primary now.
-    for bar in secondaryStatusBars {
-      refreshAnimatedStatusText(
-        on: bar.leftTrailingLabel,
-        display: cyclePrefix + cycleSuffix,
-        font: font,
-        currentTime: currentTime)
-      if let cycleContent {
-        refreshAnimatedStatusText(
-          on: bar.cycleLayer,
-          display: cycleContent,
-          font: font,
-          currentTime: currentTime)
-      }
-      refreshAnimatedStatusText(
-        on: bar.appLabel,
-        display: centreDisplay,
-        font: font,
-        currentTime: currentTime)
-      refreshAnimatedStatusText(
-        on: bar.rightLabel,
-        display: rightDisplay,
-        font: font,
-        currentTime: currentTime)
-    }
-  }
-
-  private func refreshAnimatedStatusText(
-    on layer: CATextLayer,
-    display: String,
-    font: NSFont,
-    currentTime: TimeInterval
-  ) {
-    guard Self.statusTextAnimated(display) else { return }
-    layer.string = FlashStatusBarRenderer.attributedStatusString(
-      from: display,
-      font: font,
-      currentTime: currentTime)
-    layer.setNeedsDisplay()
   }
 
   /// Push `attributed` into `layer` only when the displayed content changed
@@ -887,7 +905,7 @@ extension OverlayPanel {
     attributed: @autoclosure () -> NSAttributedString,
     previous: String?
   ) -> String {
-    if previous != display || Self.statusTextAnimated(display) {
+    if previous != display {
       layer.string = attributed()
       layer.setNeedsDisplay()
     }

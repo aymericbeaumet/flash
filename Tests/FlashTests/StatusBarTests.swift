@@ -106,37 +106,63 @@ final class StatusBarTests: XCTestCase {
     XCTAssertGreaterThan(total, runs[0].width)  // total includes the prefix
   }
 
-  func testStatusTextAnimatedDetectsEffectMarkersOnly() {
-    XCTAssertFalse(OverlayPanel.statusTextAnimated("#[fg=colour178]82%"))
-    XCTAssertTrue(OverlayPanel.statusTextAnimated("#[breathing]82%#[nobreathing]"))
-    XCTAssertTrue(OverlayPanel.statusTextAnimated("#[blink]retry#[noblink]"))
-    XCTAssertTrue(OverlayPanel.statusTextAnimated("#[breathe]x"))
+  func testAnimatedSpansRenderHiddenInBaseAndFullInEffectRuns() {
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let raw = "ac #[breathing]82%#[nobreathing] rest"
+    // The base render keeps the glyphs (identical measurement) but paints
+    // the animated span at foreground alpha 0.
+    let base = FlashStatusBarRenderer.attributedStatusStringHidingAnimatedSpans(
+      from: raw, font: font)
+    XCTAssertEqual(base.string, "ac 82% rest")
+    let full = FlashStatusBarRenderer.attributedStatusString(from: raw, font: font)
+    XCTAssertEqual(base.size().width, full.size().width, accuracy: 0.001)
+    let spanColor =
+      base.attribute(.foregroundColor, at: 4, effectiveRange: nil) as? NSColor
+    XCTAssertEqual(spanColor?.alphaComponent ?? -1, 0, accuracy: 0.001)
+    let staticColor =
+      base.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    XCTAssertEqual(staticColor?.alphaComponent ?? -1, 1, accuracy: 0.001)
+
+    // The effect runs carry the same span at full colour, measured at the
+    // right offset, with the right flags.
+    let (runs, _) = FlashStatusBarRenderer.effectRuns(from: raw, font: font)
+    XCTAssertEqual(runs.count, 1)
+    XCTAssertEqual(runs[0].text.string, "82%")
+    XCTAssertTrue(runs[0].breathing)
+    XCTAssertFalse(runs[0].blink)
+    let prefixWidth = FlashStatusBarRenderer.attributedStatusString(
+      from: "ac ", font: font
+    ).size().width
+    XCTAssertEqual(runs[0].xOffset, prefixWidth, accuracy: 0.001)
+    let runColor =
+      runs[0].text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    XCTAssertEqual(runColor?.alphaComponent ?? -1, 1, accuracy: 0.001)
+
+    // A static string produces no runs and an untouched base.
+    XCTAssertTrue(FlashStatusBarRenderer.effectRuns(from: "plain", font: font).runs.isEmpty)
   }
 
-  func testEffectTickRefreshesAnimatedTextWithoutRecomputingStatusBarLayout() throws {
-    let panel = OverlayPanel()
-    panel.modeBadgeVisible = true
-    panel.statusRightText = "#[breathing]82%#[nobreathing]"
-    panel.statusRightLabel.frame = CGRect(x: 100, y: 4, width: 240, height: 17)
-    let originalFrame = panel.statusRightLabel.frame
-    let originalSublayers = panel.contentLayer.sublayers
-
-    panel.refreshStatusBarEffects(currentTime: 2.5)
-    let bright = try XCTUnwrap(panel.statusRightLabel.string as? NSAttributedString)
-    let brightColor = try XCTUnwrap(
-      bright.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
-
-    panel.refreshStatusBarEffects(currentTime: 7.5)
-    let dim = try XCTUnwrap(panel.statusRightLabel.string as? NSAttributedString)
-    let dimColor = try XCTUnwrap(
-      dim.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
-
-    XCTAssertEqual(brightColor.alphaComponent, 1.0, accuracy: 0.001)
-    XCTAssertEqual(dimColor.alphaComponent, 0.80, accuracy: 0.001)
-    XCTAssertEqual(panel.statusRightLabel.frame, originalFrame)
+  func testEffectOpacityAnimationSamplesTheCurveOracle() {
+    let layer = CALayer()
+    let breathing = FlashStatusBarRenderer.effectOpacityAnimation(
+      blink: false, breathing: true, anchoredTo: layer)
+    XCTAssertEqual(breathing.duration, 10, accuracy: 0.001)
+    XCTAssertEqual(breathing.repeatCount, .infinity)
+    let values = breathing.values as? [CGFloat] ?? []
+    XCTAssertFalse(values.isEmpty)
+    // The keyframes are samples of effectAlphaMultiplier — the pure curve
+    // stays the single oracle. Check the extremes the curve tests pin.
+    XCTAssertEqual(values.min() ?? -1, 0.80, accuracy: 0.01)
+    XCTAssertEqual(values.max() ?? -1, 1.0, accuracy: 0.01)
+    // Anchored to the period grid of the shared clock.
     XCTAssertEqual(
-      panel.contentLayer.sublayers?.map(ObjectIdentifier.init),
-      originalSublayers?.map(ObjectIdentifier.init))
+      breathing.beginTime.truncatingRemainder(dividingBy: 10), 0, accuracy: 0.001)
+
+    let blink = FlashStatusBarRenderer.effectOpacityAnimation(
+      blink: true, breathing: false, anchoredTo: layer)
+    XCTAssertEqual(blink.duration, 1, accuracy: 0.001)
+    XCTAssertEqual(blink.values as? [Double] ?? [], [1.0, 0.15])
+    XCTAssertEqual(blink.calculationMode, .discrete)
   }
 
   func testSplitLeftRegionKeepsModePillSeparateFromTrailingStyledRun() {
@@ -1365,25 +1391,6 @@ final class StatusBarTests: XCTestCase {
       accuracy: 0.001)
   }
 
-  func testModelNeedsEffectsTickDetectsBreathingOrBlinkInAnyRegion() {
-    XCTAssertFalse(
-      FlashStatusBarController.modelNeedsEffectsTick(
-        FlashStatusBarModel(appText: "Cdx 80%", modeText: "INSERT", rightText: "14:32")))
-
-    XCTAssertTrue(
-      FlashStatusBarController.modelNeedsEffectsTick(
-        FlashStatusBarModel(
-          appText: "",
-          modeText: "INSERT",
-          rightText: "#[breathing]82%#[nobreathing]")))
-
-    XCTAssertTrue(
-      FlashStatusBarController.modelNeedsEffectsTick(
-        FlashStatusBarModel(
-          appText: "#[blink]LOW#[noblink]",
-          modeText: "INSERT",
-          rightText: "")))
-  }
 
   private func pluginStatus(
     id: String,

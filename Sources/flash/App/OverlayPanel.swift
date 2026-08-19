@@ -85,6 +85,10 @@ final class OverlayPanel: NSPanel {
   /// around it — the mode pill, the "HN" label — stays put.
   let statusLeftTrailingCycleLayer = CATextLayer()
   var lastRenderedLeftTrailingCycle: String?
+  /// Pooled overlay layers painting the primary bar's animated spans (see
+  /// `placeEffectOverlays`) — their opacity runs on render-server
+  /// animations, never a process timer.
+  var statusEffectOverlays: [CATextLayer] = []
   let statusRightLabel = CATextLayer()
   /// Status bars rendered on every non-main screen. Allocated lazily by
   /// `configureSecondaryStatusBars` and pruned when displays disconnect.
