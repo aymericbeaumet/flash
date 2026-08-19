@@ -20,6 +20,22 @@ final class PluginSystemTests: XCTestCase {
     PluginWireCodec.queryAnswers(from: [raw], sourceID: sourceID, source: source)?.first
   }
 
+  func testFetchURLAllowlistMatchesAtComponentBoundaries() {
+    XCTAssertTrue(
+      PluginHostRPC.urlIsAllowed(
+        "https://api.example.com/v1/rates", byPrefix: "https://api.example.com/"))
+    XCTAssertTrue(
+      PluginHostRPC.urlIsAllowed("https://api.example.com", byPrefix: "https://api.example.com"))
+    XCTAssertTrue(
+      PluginHostRPC.urlIsAllowed(
+        "https://api.example.com?q=1", byPrefix: "https://api.example.com"))
+    // A prefix without a trailing slash must not admit a longer host.
+    XCTAssertFalse(
+      PluginHostRPC.urlIsAllowed(
+        "https://api.example.com.attacker.tld/x", byPrefix: "https://api.example.com"))
+    XCTAssertFalse(PluginHostRPC.urlIsAllowed("https://api.example.com/x", byPrefix: ""))
+  }
+
   func testOfficialPluginManifestsLoadAndRegisterExpectedCommands() throws {
     let roots = try officialPluginRoots()
     let manifests = try roots.map { try PluginManifest.load(from: $0) }

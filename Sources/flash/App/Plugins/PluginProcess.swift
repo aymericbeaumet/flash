@@ -1152,8 +1152,8 @@ final class PluginProcess {
         // The stdin pipe is broken: every subsequent RPC will fail too, so the
         // plugin is effectively unreachable even though it still "runs". Don't
         // wait ~10s for the heartbeat to notice — tear down and restart now
-        // (mirrors the heartbeat-miss recovery).
-        restartCount += 1
+        // (mirrors the heartbeat-miss recovery). scheduleRestart owns the
+        // restartCount bump; a second one here doubles the backoff.
         stopOnQueue(reason: "write_error")
         scheduleRestart()
       }
@@ -1207,8 +1207,10 @@ final class PluginProcess {
     else { return }
     queue.async { [weak self] in
       guard let self else { return }
-      self.recordError(message)
-      FlashLog.plugin(.error, pluginID: self.manifest.id, message: message)
+      // Diagnostics, not failure: interpreted runtimes (Python deprecation
+      // warnings, Ruby -W, Bun notices) write to stderr unprompted. lastError
+      // is reserved for abnormal exits and protocol failures.
+      FlashLog.plugin(.warn, pluginID: self.manifest.id, message: message)
     }
   }
 
@@ -1340,7 +1342,6 @@ final class PluginProcess {
       }
       if heartbeatMisses >= 2 {
         recordError("[plugin] heartbeat missed")
-        restartCount += 1
         stopOnQueue(reason: "heartbeat")
         scheduleRestart()
         return

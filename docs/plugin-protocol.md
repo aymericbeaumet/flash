@@ -28,17 +28,19 @@ not inherited — put credentials in the plugin's config table. Install CLI
 tools under `FLASH_PLUGIN_DATA_DIR`, never into global shell paths.
 
 Host-side lifecycle policy: 15-second `initialize` deadline, 5-second
-heartbeat with two misses before teardown and restart, linear restart backoff
-capped at 5 restarts within 300 seconds before the plugin parks in `.crashed`
-(cleared by `:plugins reload` or a file change). A plugin should exit when its
-declared parent pid dies.
+heartbeat with two misses before teardown and restart, linear restart backoff;
+more than 5 restarts within 300 seconds parks the plugin in `.crashed`
+(recover with `:plugins reload`). A plugin should exit when its declared
+parent pid dies.
 
 ## Framing
 
 Length-prefixed MessagePack on stdin/stdout: a 4-byte big-endian payload
 length followed by one MessagePack-encoded value, JSON-RPC-2.0-shaped.
 Host requests go to plugin stdin; responses and plugin-initiated frames go to
-stdout. stderr is reserved for unexpected errors. Frames are capped at 10 MiB.
+stdout. stderr is diagnostics only — lines are logged but never treated as
+plugin failure (interpreted runtimes emit warnings unprompted); use
+`flash.log` for structured logging. Frames are capped at 10 MiB.
 Plugin log lines travel as `flash.log` notifications and are recorded with
 `source = "plugin:<id>"`.
 

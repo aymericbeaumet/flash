@@ -107,6 +107,16 @@ final class PluginHostRPC {
   /// touch tap responsiveness. Telemetry stays content-free (no URL/body).
   private static let hostFetchBodyCap = 1_048_576
 
+  /// True when `url` sits inside the allowlisted `prefix` at a URL component
+  /// boundary. A raw hasPrefix would let "https://api.example.com" also admit
+  /// "https://api.example.com.attacker.tld/".
+  static func urlIsAllowed(_ url: String, byPrefix prefix: String) -> Bool {
+    guard !prefix.isEmpty, url.hasPrefix(prefix) else { return false }
+    if url.count == prefix.count || prefix.hasSuffix("/") { return true }
+    let next = url[url.index(url.startIndex, offsetBy: prefix.count)]
+    return next == "/" || next == "?" || next == "#"
+  }
+
   private func hostFetch(
     _ params: [String: Any], allowlist: [String], pluginID: String,
     reply: @escaping ([String: Any]) -> Void
@@ -118,7 +128,7 @@ final class PluginHostRPC {
       reply(["ok": false, "error": "host.fetch requires a valid https url param"])
       return
     }
-    guard allowlist.contains(where: { urlString.hasPrefix($0) }) else {
+    guard allowlist.contains(where: { Self.urlIsAllowed(urlString, byPrefix: $0) }) else {
       reply(["ok": false, "error": "url not in fetch_urls allowlist"])
       return
     }
