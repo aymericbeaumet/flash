@@ -1,4 +1,4 @@
-// Emoji finder, in TypeScript on Bun (one of the three deliberately
+// Emoji finder, in TypeScript on Bun (one of the six deliberately
 // non-Rust official plugins exercising the language-agnostic wire protocol;
 // see docs/plugin-protocol.md and AGENTS.md — Rust stays the default).
 //

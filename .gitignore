@@ -16,6 +16,10 @@ Plugins/target/
 # Bundled plugins are executable crates: pin their shared dependency graph.
 !Plugins/Cargo.lock
 
+## Python bytecode (interpreted plugins + Scripts tooling)
+__pycache__/
+*.pyc
+
 ## Editor / OS
 .DS_Store
 .vscode/

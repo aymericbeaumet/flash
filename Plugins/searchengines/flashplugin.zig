@@ -20,6 +20,7 @@ pub const Value = union(enum) {
     nil,
     boolean: bool,
     integer: i64,
+    float: f64,
     string: []const u8,
     array: []Value,
     map: []KV,
@@ -103,6 +104,11 @@ pub const Decoder = struct {
             0xd1 => return .{ .integer = @as(i16, @bitCast(try self.beInt(u16))) },
             0xd2 => return .{ .integer = @as(i32, @bitCast(try self.beInt(u32))) },
             0xd3 => return .{ .integer = @bitCast(try self.beInt(u64)) },
+            // The host sends doubles (window frames on focus events); an
+            // undecodable frame here would be dropped silently, leaving an
+            // id'd request hanging to its host-side deadline.
+            0xca => return .{ .float = @floatCast(@as(f32, @bitCast(try self.beInt(u32)))) },
+            0xcb => return .{ .float = @bitCast(try self.beInt(u64)) },
             else => {},
         }
         var count: usize = 0;

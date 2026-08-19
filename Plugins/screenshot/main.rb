@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-# Native screenshot shortcuts, in Ruby (one of the five deliberately
+# Native screenshot shortcuts, in Ruby (one of the six deliberately
 # non-Rust official plugins exercising the language-agnostic wire protocol;
 # see docs/plugin-protocol.md and AGENTS.md — Rust stays the default).
 #

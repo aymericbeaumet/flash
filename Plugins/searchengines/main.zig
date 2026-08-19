@@ -1,4 +1,4 @@
-//! DuckDuckGo-style search bangs, in Zig (one of the five deliberately
+//! DuckDuckGo-style search bangs, in Zig (one of the six deliberately
 //! non-Rust official plugins exercising the language-agnostic wire
 //! protocol; see docs/plugin-protocol.md and AGENTS.md — Rust stays the
 //! default).

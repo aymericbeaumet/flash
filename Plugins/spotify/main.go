@@ -1,5 +1,5 @@
 // Spotify playback controls backed by spotify_player, in Go (one of the
-// three deliberately non-Rust official plugins exercising the
+// six deliberately non-Rust official plugins exercising the
 // language-agnostic wire protocol; see docs/plugin-protocol.md and
 // AGENTS.md — Rust stays the default).
 //

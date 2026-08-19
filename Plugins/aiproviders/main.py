@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI provider bangs, in Python (one of the three deliberately non-Rust
+"""AI provider bangs, in Python (one of the six deliberately non-Rust
 official plugins exercising the language-agnostic wire protocol; see
 docs/plugin-protocol.md and AGENTS.md — Rust stays the default).
 

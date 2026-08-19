@@ -71,6 +71,35 @@ jobs:
         working-directory: Plugins
         run: cargo test --workspace
 
+  plugins-polyglot:
+    name: Plugins (polyglot smoke)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchains
+        uses: jdx/mise-action@v2
+      - name: Build compiled polyglot plugins
+        # Go/Zig/Swift plugins are outside the cargo workspace — without this
+        # job a compile break in any of them lands green.
+        run: ./Scripts/build-plugins.sh dev spotify reminders searchengines
+      - name: Protocol conformance smoke
+        # Self-contained driver (no plugin shim imports): lifecycle + the
+        # decoder probes (negative ids, doubles incl. negative origins in
+        # both a notification and an id'd request) + unknown-method reply +
+        # plugin→host NAK interleaving. --snapshot only where the catalog is
+        # embedded data; reminders runs lifecycle-only and is the first
+        # suspect if this job ever reds on a runner TCC denial.
+        run: |
+          set -euo pipefail
+          smoke="$PWD/Scripts/plugin-protocol-smoke.py"
+          run() { dir="$1"; shift; echo "== $dir"; (cd "Plugins/$dir" && FLASH_PLUGIN_ID="$dir" python3 "$smoke" "$@"); }
+          run emojis --snapshot -- bun run main.ts
+          run searchengines --snapshot -- ./flash-plugin-searchengines
+          run aiproviders -- python3 main.py
+          run screenshot -- ruby main.rb
+          run spotify -- ./flash-plugin-spotify
+          run reminders -- ./flash-plugin-reminders
+
   build:
     name: Build
     runs-on: macos-15

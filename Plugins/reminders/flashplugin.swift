@@ -108,7 +108,10 @@ enum MsgPack {
       let bits = UInt32(readInt(data, &position, width: 4))
       return Double(Float(bitPattern: bits))
     case 0xCB:
-      let bits = UInt64(readInt(data, &position, width: 8))
+      // readInt yields the raw bit pattern as a (possibly negative) Int;
+      // converting through UInt64(_:) traps on any double with the sign bit
+      // set — e.g. a window origin left of the primary display.
+      let bits = UInt64(bitPattern: Int64(readInt(data, &position, width: 8)))
       return Double(bitPattern: bits)
     default:
       return nil

@@ -30,7 +30,7 @@ section exists to keep the wire protocol honestly language-agnostic.
 
 ## Polyglot (the protocol is the boundary)
 
-Five official plugins are deliberately non-Rust; each carries its own
+Six official plugins are deliberately non-Rust; each carries its own
 ~150–200-line `flashplugin.*` shim (framing + MessagePack subset + v3
 lifecycle) beside logic comparable in size to a Rust original:
 

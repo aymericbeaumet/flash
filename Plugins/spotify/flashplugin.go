@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 )
 
@@ -140,6 +141,12 @@ func mpDecode(buf []byte, pos int) (any, int) {
 		return int64(binary.BigEndian.Uint32(buf[pos:])), pos + 4
 	case b == 0xcf, b == 0xd3:
 		return int64(binary.BigEndian.Uint64(buf[pos:])), pos + 8
+	case b == 0xca:
+		// The host sends doubles (window frames on focus events); a missing
+		// float case here is a process-killing panic one `listen:` line away.
+		return float64(math.Float32frombits(binary.BigEndian.Uint32(buf[pos:]))), pos + 4
+	case b == 0xcb:
+		return math.Float64frombits(binary.BigEndian.Uint64(buf[pos:])), pos + 8
 	}
 	panic(fmt.Sprintf("unhandled msgpack byte 0x%02x", b))
 }
