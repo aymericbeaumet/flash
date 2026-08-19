@@ -310,7 +310,7 @@ final class StatusBarTests: XCTestCase {
         calendar: calendar))
 
     XCTAssertEqual(model.appText, "")
-    XCTAssertEqual(model.modeText, "NORMAL")
+    XCTAssertEqual(model.modeText, "#[pill]NORMAL#[nopill]")
     XCTAssertEqual(model.rightText, "#[fg=colour178]Thu May 28 20:26")
     XCTAssertFalse(model.rightText.contains("ip-status"))
     XCTAssertFalse(model.rightText.contains("range=user"))
@@ -470,7 +470,7 @@ final class StatusBarTests: XCTestCase {
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
       context: FlashStatusBarContext(modeLabel: "COMMAND"))
-    XCTAssertEqual(model.modeText, "COMM")
+    XCTAssertEqual(model.modeText, "#[pill]COMM#[nopill]")
   }
 
   func testTokenTruncationTailKeepsLastNChars() {
@@ -485,7 +485,7 @@ final class StatusBarTests: XCTestCase {
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
       context: FlashStatusBarContext(modeLabel: "COMMAND"))
-    XCTAssertEqual(model.modeText, "MAND")
+    XCTAssertEqual(model.modeText, "#[pill]MAND#[nopill]")
   }
 
   func testTokenTruncationLeavesShortValueUntouched() {
@@ -500,7 +500,7 @@ final class StatusBarTests: XCTestCase {
     let model = FlashStatusBarTemplateEngine.render(
       template: template,
       context: FlashStatusBarContext(modeLabel: "NORMAL"))
-    XCTAssertEqual(model.modeText, "NORMAL")
+    XCTAssertEqual(model.modeText, "#[pill]NORMAL#[nopill]")
   }
 
   func testTokenTruncationEllipsisGlyphCountsTowardBudget() {
@@ -516,7 +516,7 @@ final class StatusBarTests: XCTestCase {
       ])
     let model = FlashStatusBarTemplateEngine.render(
       template: template, context: FlashStatusBarContext(modeLabel: "COMMAND"))
-    XCTAssertEqual(model.modeText, "COM…")
+    XCTAssertEqual(model.modeText, "#[pill]COM…#[nopill]")
   }
 
   func testTokenTruncationAsciiDotsAreAcceptedAsEllipsis() {
@@ -633,7 +633,8 @@ final class StatusBarTests: XCTestCase {
           "#[fg=colour178]HN#[fg=colour245] hello world"
       ])
     // "HN hello" = 8 visible cells → "HN hell" (7) + "…", markers intact.
-    XCTAssertEqual(model.modeText, "NORMAL · #[fg=colour178]HN#[fg=colour245] hell…")
+    XCTAssertEqual(
+      model.modeText, "#[pill]NORMAL#[nopill] · #[fg=colour178]HN#[fg=colour245] hell…")
   }
 
   func testStyleSegmentParserHonoursItalicsUnderlineDimReverseBackground() {

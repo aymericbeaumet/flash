@@ -164,8 +164,16 @@ extension OverlayPanel {
 
   /// Per-screen status-bar band rects in screen coordinates, matching the bar
   /// layout `configureModeBadge` / `configureSecondaryStatusBars` render into.
+  /// Honors `[statusbar] monitor`: with `primary`, only the main display gets
+  /// a click window — covering every screen used to swallow band clicks on
+  /// displays where no bar was drawn at all.
   func statusBarScreenRects(panelFrame: CGRect, fontSize: CGFloat) -> [CGRect] {
-    OverlayPanel.currentScreenSnapshot().screens.map { screen in
+    let snapshot = OverlayPanel.currentScreenSnapshot()
+    let screens =
+      statusBarMonitor == .primary
+      ? snapshot.screens.filter { $0.frame == snapshot.mainFrame }
+      : snapshot.screens
+    return screens.map { screen in
       let barFrame = OverlayPanel.statusBarFrame(
         screenFrame: screen.frame,
         visibleFrame: screen.visibleFrame,

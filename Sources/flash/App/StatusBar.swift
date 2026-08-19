@@ -520,7 +520,14 @@ enum FlashStatusBarTemplateEngine {
     case .activeBundleIdentifier:
       return context.activeBundleIdentifier.trimmed
     case .modeLabel:
-      return context.modeLabel.trimmed
+      // Wrapped in zero-width sentinels (the `#[cyc]` trick) so the
+      // renderer can pull the pill out of the left region no matter what
+      // markers surround it — the old first-`#[` split made
+      // `#[fg=…]#{mode}` render an EMPTY pill and `foo #{mode}` absorb
+      // "foo" into it. Elsewhere (centre/right) the sentinels are unknown
+      // style tokens and render as nothing.
+      let label = context.modeLabel.trimmed
+      return label.isEmpty ? "" : "#[pill]" + label + "#[nopill]"
     case .date:
       let date = FlashStatusBarRenderer.dateText(
         now: context.now,

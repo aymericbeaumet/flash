@@ -950,6 +950,20 @@ extension OverlayPanel {
   }
 
   static func splitLeftRegion(_ modeText: String) -> (pill: String, trailing: String) {
+    // The engine wraps the resolved `#{mode}` in `#[pill]…#[nopill]`
+    // sentinels, so the pill is exactly the mode label wherever it sits and
+    // whatever styling surrounds it. Text before/after the pill both render
+    // in the trailing label (which visually follows the badge).
+    if let open = modeText.range(of: "#[pill]"),
+      let close = modeText.range(of: "#[nopill]", range: open.upperBound..<modeText.endIndex)
+    {
+      let pill = String(modeText[open.upperBound..<close.lowerBound])
+      let trailing =
+        String(modeText[..<open.lowerBound]) + String(modeText[close.upperBound...])
+      return (pill, trailing)
+    }
+    // No `#{mode}` in the left region: legacy split — everything before the
+    // first marker is the pill (a marker-free region is all pill).
     guard let markerRange = modeText.range(of: "#[") else {
       return (modeText, "")
     }
