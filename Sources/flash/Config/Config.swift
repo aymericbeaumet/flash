@@ -240,6 +240,21 @@ struct Config {
   }
   struct Open {
     var ignoredApps: [String] = []
+    /// Directories scanned (recursively) and watched for `.app` bundles —
+    /// the flashlight's installed-app catalog and the `app_open` verb's
+    /// search roots. `~` expands to the user home. The defaults cover
+    /// every standard macOS install location, including the Sequoia+ app
+    /// cryptex where Safari really lives.
+    var appDirectories: [String] = Open.defaultAppDirectories
+
+    static let defaultAppDirectories = [
+      "/Applications",
+      "/System/Applications",
+      "/System/Applications/Utilities",
+      "/System/Library/CoreServices",
+      "/System/Cryptexes/App/System/Applications",
+      "~/Applications",
+    ]
   }
   struct Plugins {
     /// Third-party plugins explicitly requested by the user. Official

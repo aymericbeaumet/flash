@@ -21,22 +21,27 @@ final class ApplicationSource: FlashSource {
   private var installedIndexReady = false
   private var installedIndexWaiters: [() -> Void] = []
   private var ignoredAppMatcher: IgnoredAppMatcher
+  /// Configured `[open] app_directories` entries (unexpanded; `~` allowed).
+  /// Guarded by `cacheLock` like the ignore matcher.
+  private var appDirectories: [String]
   private var directoryWatcher: ApplicationDirectoryWatcher?
-  private let installedAppScanner: () -> [Candidate]
+  private let customInstalledAppScanner: (() -> [Candidate])?
+  private let watchesApplicationDirectories: Bool
   private let indexQueue = DispatchQueue(
     label: "com.flash.app.application-index",
     qos: .utility)
 
   init(
     ignoredApps: [String] = [],
+    appDirectories: [String] = Config.Open.defaultAppDirectories,
     installedAppScanner: (() -> [Candidate])? = nil,
     watchesApplicationDirectories: Bool = true,
     automaticallyPrewarms: Bool = true
   ) {
     self.ignoredAppMatcher = IgnoredAppMatcher(ignoredApps)
-    self.installedAppScanner =
-      installedAppScanner
-      ?? { Self.scanApplicationBundleCandidates(roots: Self.applicationSearchRoots()) }
+    self.appDirectories = appDirectories
+    self.customInstalledAppScanner = installedAppScanner
+    self.watchesApplicationDirectories = watchesApplicationDirectories
     if watchesApplicationDirectories {
       startDirectoryWatcher()
     }
@@ -45,18 +50,48 @@ final class ApplicationSource: FlashSource {
     }
   }
 
-  /// Watch the application roots so a freshly installed (or removed) app
-  /// shows up in flashlight without a Flash restart. The installed-apps
-  /// scan is otherwise cached for the process lifetime — see
-  /// `installedAppItems()`.
+  /// The configured directories as expanded, existing-or-not URLs.
+  private func searchRoots() -> [URL] {
+    cacheLock.lock()
+    let directories = appDirectories
+    cacheLock.unlock()
+    return directories.map {
+      URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
+    }
+  }
+
+  /// Watch the configured application directories so a freshly installed
+  /// (or removed) app shows up in flashlight without a Flash restart. The
+  /// installed-apps scan is otherwise cached for the process lifetime —
+  /// see `installedAppItems()`.
   private func startDirectoryWatcher() {
-    let paths = Self.applicationSearchRoots()
+    let paths =
+      searchRoots()
       .map(\.path)
       .filter { FileManager.default.fileExists(atPath: $0) }
-    guard !paths.isEmpty else { return }
+    guard !paths.isEmpty else {
+      directoryWatcher = nil
+      return
+    }
     directoryWatcher = ApplicationDirectoryWatcher(paths: paths) { [weak self] in
       self?.prewarmInstalledApps()
     }
+  }
+
+  /// Apply a changed `[open] app_directories`: swap the roots, re-point the
+  /// watcher, and queue a rescan. No-op when unchanged.
+  func updateAppDirectories(_ directories: [String]) {
+    cacheLock.lock()
+    guard appDirectories != directories else {
+      cacheLock.unlock()
+      return
+    }
+    appDirectories = directories
+    cacheLock.unlock()
+    if watchesApplicationDirectories {
+      startDirectoryWatcher()
+    }
+    prewarmInstalledApps()
   }
 
   /// Queue a complete installed-app index off the caller thread. The resident
@@ -79,8 +114,10 @@ final class ApplicationSource: FlashSource {
     let matcher = ignoredAppMatcher
     cacheLock.unlock()
 
-    let scanned = CandidateFinder.prepare(
-      installedAppScanner().filter { !matcher.contains($0) })
+    let scan =
+      customInstalledAppScanner?()
+      ?? Self.scanApplicationBundleCandidates(roots: searchRoots())
+    let scanned = CandidateFinder.prepare(scan.filter { !matcher.contains($0) })
 
     var waiters: [() -> Void] = []
     cacheLock.lock()
@@ -298,31 +335,13 @@ final class ApplicationSource: FlashSource {
       return url
     }
     let bundleName = target.hasSuffix(".app") ? target : "\(target).app"
-    for root in Self.applicationSearchRoots() {
+    for root in searchRoots() {
       let candidate = root.appendingPathComponent(bundleName)
       if FileManager.default.fileExists(atPath: candidate.path) {
         return candidate
       }
     }
     return nil
-  }
-
-  private static func applicationSearchRoots() -> [URL] {
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    return [
-      URL(fileURLWithPath: "/Applications"),
-      URL(fileURLWithPath: "/System/Applications"),
-      URL(fileURLWithPath: "/System/Applications/Utilities"),
-      URL(fileURLWithPath: "/System/Library/CoreServices"),
-      // Cryptex apps: macOS Sequoia+ moves Safari (and other system
-      // apps it ships separately from the base OS) into a sealed
-      // cryptographic vault. The `/Applications/Safari.app` symlink
-      // points here and itself carries `UF_HIDDEN`, so add the real
-      // path explicitly as a backstop for setups where the symlink
-      // is removed or unreadable.
-      URL(fileURLWithPath: "/System/Cryptexes/App/System/Applications"),
-      home.appendingPathComponent("Applications"),
-    ]
   }
 
   private static func scanApplicationBundleCandidates(roots: [URL]) -> [Candidate] {

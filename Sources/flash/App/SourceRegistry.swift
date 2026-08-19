@@ -58,7 +58,9 @@ final class SourceRegistry {
       descriptors
       ?? [
         SourceDescriptor(identifier: "core.apps", activationPolicy: .always) {
-          ApplicationSource(ignoredApps: openConfig.ignoredApps)
+          ApplicationSource(
+            ignoredApps: openConfig.ignoredApps,
+            appDirectories: openConfig.appDirectories)
         },
         SourceDescriptor(identifier: "accessibility", activationPolicy: .always) {
           AccessibilityProvider()
@@ -73,6 +75,7 @@ final class SourceRegistry {
     let appSource = activeSourcesByID["core.apps"] as? ApplicationSource
     lock.unlock()
     appSource?.updateIgnoredApps(openConfig.ignoredApps)
+    appSource?.updateAppDirectories(openConfig.appDirectories)
   }
 
   var sources: [FlashSource] {
@@ -113,6 +116,7 @@ final class SourceRegistry {
         let source = descriptor.make()
         if let appSource = source as? ApplicationSource {
           appSource.updateIgnoredApps(openConfig.ignoredApps)
+          appSource.updateAppDirectories(openConfig.appDirectories)
         }
         activeSourcesByID[descriptor.identifier] = source
       }

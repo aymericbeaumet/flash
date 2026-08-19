@@ -356,7 +356,7 @@ enum ConfigLoader {
     let sectionKeys: [String: Set<String>] = [
       "app": ["menu_bar_icon", "autostart"],
       "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
-      "open": ["ignored_apps"],
+      "open": ["ignored_apps", "app_directories"],
       "plugins": ["watching_enabled", "disabled", "third_party"],
       "statusbar": ["enabled", "template", "monitor"],
       "flashlight": ["suggestion_count", "precedence_alive_bonus", "aliases", "precedence"],
@@ -483,6 +483,13 @@ enum ConfigLoader {
       message: "open.ignored_apps must be an array of strings", locations: locations, into: &config
     ) { value, config in
       config.open.ignoredApps = value
+    }
+    applyStringArray(
+      table["app_directories"], path: ["open", "app_directories"],
+      message: "open.app_directories must be an array of directory paths",
+      locations: locations, into: &config
+    ) { value, config in
+      config.open.appDirectories = value
     }
   }
 

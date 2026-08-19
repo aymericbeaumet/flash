@@ -50,6 +50,18 @@ mouse_grid_opacity = 0.5
 # Entries match display name, bundle identifier, bundle path, .app filename,
 # or app filename without .app, case-insensitively.
 ignored_apps = []
+# Directories scanned (recursively) and watched for .app bundles — the
+# flashlight's installed-app catalog and the app_open search roots. `~`
+# expands to your home. Changes apply live: the watcher re-points and the
+# catalog rescans on config reload.
+app_directories = [
+  "/Applications",
+  "/System/Applications",
+  "/System/Applications/Utilities",
+  "/System/Library/CoreServices",
+  "/System/Cryptexes/App/System/Applications",
+  "~/Applications",
+]
 
 [plugins]
 # Official bundled plugins are enabled unless listed in `disabled`.

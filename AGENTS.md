@@ -243,6 +243,7 @@ Keys:
 | `hints.mouse_grid_steps`           | int (2..6)     | `3`                  |
 | `hints.mouse_grid_opacity`         | float (0..1)   | `0.5`                |
 | `open.ignored_apps`                | string array   | `[]`                 |
+| `open.app_directories`             | string array   | standard macOS app dirs |
 | `plugins.disabled`                 | string array   | `[]`                 |
 | `plugins.third_party`              | string array   | `[]`                 |
 | `plugins.watching_enabled`         | bool           | `true`               |
