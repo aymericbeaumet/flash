@@ -445,6 +445,30 @@ extension OverlayPanel {
         "[overlay] capture_keyboard key_before=\(keyBefore) key_after=\(isKeyWindow) "
           + "responder=\(responderDescription) active=\(NSApp.isActive) input=\(inputMode) "
           + "editor=\(commandTextField.currentEditor() != nil)")
+      // Activation is granted asynchronously on modern macOS, so a single
+      // makeKey() pass can land before we're active and leave the field
+      // caret dead — and the normal-mode recapture ladder deliberately
+      // skips while a modal is up, so nothing would ever retry. Run a
+      // short bounded ladder of our own until the panel actually holds
+      // key. Any newer capture pass supersedes it (generation).
+      if !isKeyWindow {
+        commandLineKeyRecoveryGeneration &+= 1
+        let generation = commandLineKeyRecoveryGeneration
+        for delayMs in [30, 80, 160, 320, 640] {
+          DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) {
+            [weak self] in
+            guard let self,
+              self.commandLineKeyRecoveryGeneration == generation,
+              self.inputMode == .commandLine,
+              !self.isKeyWindow
+            else { return }
+            FlashLog.trace("[overlay] capture_keyboard key_retry delay=\(delayMs)")
+            self.captureKeyboardInput()
+          }
+        }
+      } else {
+        commandLineKeyRecoveryGeneration &+= 1
+      }
       return
     }
     makeFirstResponder(self)

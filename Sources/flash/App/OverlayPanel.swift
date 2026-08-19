@@ -119,6 +119,10 @@ final class OverlayPanel: NSPanel {
   /// between `resume()` and `cancel()`, reset on the main thread around
   /// those edges — the timer lifecycle serializes the two.
   var menuBarRevealedShadow = false
+  /// Invalidation token for the command-line key-window recovery ladder
+  /// (`captureKeyboardInput`): each capture pass bumps it so stale retries
+  /// from a superseded pass die silently.
+  var commandLineKeyRecoveryGeneration: UInt64 = 0
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()
