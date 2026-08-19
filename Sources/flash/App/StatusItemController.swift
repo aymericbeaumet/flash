@@ -75,16 +75,20 @@ final class StatusItemController: NSObject {
       ofSize: NSFont.smallSystemFontSize, weight: .regular)
     commitLabel.textColor = .secondaryLabelColor
     commitLabel.isSelectable = true
+    // No focus ring: selecting the hash (or clicking the link below) should
+    // never draw a border around the control.
+    commitLabel.focusRingType = .none
 
     let repoButton = NSButton(
       title: "github.com/aymericbeaumet/flash", target: self, action: #selector(openRepo))
     repoButton.bezelStyle = .inline
+    repoButton.focusRingType = .none
 
     let stack = NSStackView(views: [icon, title, versionLabel, commitLabel, repoButton])
     stack.orientation = .vertical
     stack.alignment = .centerX
-    stack.spacing = 6
-    stack.edgeInsets = NSEdgeInsets(top: 20, left: 24, bottom: 20, right: 24)
+    stack.spacing = 8
+    stack.edgeInsets = NSEdgeInsets(top: 32, left: 56, bottom: 32, right: 56)
 
     let panel = NSPanel(
       contentRect: .zero,
@@ -93,7 +97,9 @@ final class StatusItemController: NSObject {
       defer: false)
     panel.title = "About"
     panel.contentView = stack
-    panel.setContentSize(stack.fittingSize)
+    var contentSize = stack.fittingSize
+    contentSize.width = max(contentSize.width, 340)
+    panel.setContentSize(contentSize)
     panel.isReleasedWhenClosed = false
     panel.center()
     panel.makeKeyAndOrderFront(nil)
