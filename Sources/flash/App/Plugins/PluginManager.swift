@@ -1008,8 +1008,8 @@ extension PluginManager {
       - `FLASH_PLUGIN_VERSION`
       - `FLASH_PLUGIN_DATA_DIR`
 
-      Protocol I/O is length-prefixed MessagePack on stdin/stdout: a 4-byte
-      big-endian payload length followed by a MessagePack value. Unexpected
+      Protocol I/O is NDJSON on stdin/stdout: one JSON object per
+      newline-terminated line (protocol v1). Unexpected
       plugin errors go to stderr. Plugins can log through the protocol and
       Flash records those messages with `source = "plugin:<id>"`.
 

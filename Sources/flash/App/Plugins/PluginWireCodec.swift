@@ -9,13 +9,14 @@ import Foundation
 /// no process state.
 enum PluginWireCodec {
 
-  /// Wire-protocol version the host speaks. Version agreement is a hard startup
-  /// boundary because v2 makes readiness mean `on_start` and initial warm-source
-  /// publication have completed.
-  // v3: manifest `start` shell string became the `exec` argv array (direct
-  // exec, no shell). The bump makes a stale binary built against the old
-  // schema fail the handshake diagnosably instead of decoding oddly.
-  static let protocolVersion = 3
+  /// Wire-protocol version the host speaks — the ONLY version it speaks.
+  /// The required echo in the initialize reply is the stale-binary
+  /// diagnostic: a plugin built against another protocol fails the
+  /// handshake with a version message instead of decoding oddly.
+  // v1: the protocol counter restarted at the NDJSON reset — one JSON
+  // object per newline-terminated line, no jsonrpc envelope, tri-state
+  // `outcome` on action replies, readiness by first-snapshot proof.
+  static let protocolVersion = 1
   static let maxCatalogCandidates = 10_000
   static let maxCatalogEncodedBytes = 4 * 1024 * 1024
   static let maxQueryAnswersPerEvaluator = 16
@@ -35,6 +36,22 @@ enum PluginWireCodec {
   static func protocolVersionValue(_ response: [String: Any]?) -> Int? {
     if let value = response?["protocol_version"] as? Int { return value }
     return (response?["protocol_version"] as? NSNumber)?.intValue
+  }
+
+  /// Serialize one frame as a newline-terminated JSON line.
+  /// JSONSerialization never emits raw newlines without .prettyPrinted, so
+  /// the delimiter is unambiguous.
+  static func encodeFrame(_ object: [String: Any]) throws -> Data {
+    var data = try JSONSerialization.data(withJSONObject: object)
+    data.append(0x0A)
+    return data
+  }
+
+  static func decodeFrame(_ line: Data) throws -> [String: Any] {
+    guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+      throw PluginError.invalidReference("non-object IPC frame")
+    }
+    return object
   }
 
   static func responsePayloadLimit(for method: String) -> Int? {
@@ -313,7 +330,7 @@ enum PluginWireCodec {
     }
   }
 
-  /// MessagePack nil decodes to NSNull, and `{"url": null}` is the natural
+  /// JSON null decodes to NSNull, and `{"url": null}` is the natural
   /// serialization of an absent optional in most languages. Treat it exactly
   /// like a missing key — punishing it used to atomically discard whole
   /// 10,000-row snapshots.

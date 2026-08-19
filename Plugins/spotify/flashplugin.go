@@ -1,218 +1,122 @@
 // Minimal Flash plugin protocol shim for Go (stdlib only).
 //
-// Speaks the wire contract from docs/plugin-protocol.md: length-prefixed
-// MessagePack over stdio (4-byte big-endian length + one value) and the
-// protocol v3 lifecycle. Hand-rolls the MessagePack subset the protocol
-// needs — nil/bool/int/str/array/map — so the module has zero dependencies
-// and `go build` inside the sandboxed third-party install just works.
+// Speaks the wire contract from docs/plugin-protocol.md: protocol v1, one
+// JSON object per newline-terminated line over stdio. No envelope beyond
+// id/method/params/result — id+method is a request, id alone a response,
+// method alone a notification. Host and plugin id counters are independent,
+// so CallHost replies are correlated through a local pending map.
 package main
 
 import (
 	"bufio"
-	"encoding/binary"
-	"fmt"
-	"io"
-	"math"
+	"encoding/json"
 	"os"
+	"sync"
 )
 
-const protocolVersion = 3
-
-func mpEncode(out *[]byte, v any) {
-	switch x := v.(type) {
-	case nil:
-		*out = append(*out, 0xc0)
-	case bool:
-		if x {
-			*out = append(*out, 0xc3)
-		} else {
-			*out = append(*out, 0xc2)
-		}
-	case int:
-		mpEncode(out, int64(x))
-	case int64:
-		if x >= 0 && x <= 127 {
-			*out = append(*out, byte(x))
-		} else if x < 0 && x >= -32 {
-			*out = append(*out, byte(x))
-		} else {
-			*out = append(*out, 0xd3)
-			*out = binary.BigEndian.AppendUint64(*out, uint64(x))
-		}
-	case string:
-		raw := []byte(x)
-		if len(raw) < 32 {
-			*out = append(*out, 0xa0|byte(len(raw)))
-		} else {
-			*out = append(*out, 0xdb)
-			*out = binary.BigEndian.AppendUint32(*out, uint32(len(raw)))
-		}
-		*out = append(*out, raw...)
-	case []any:
-		if len(x) < 16 {
-			*out = append(*out, 0x90|byte(len(x)))
-		} else {
-			*out = append(*out, 0xdc)
-			*out = binary.BigEndian.AppendUint16(*out, uint16(len(x)))
-		}
-		for _, e := range x {
-			mpEncode(out, e)
-		}
-	case map[string]any:
-		if len(x) < 16 {
-			*out = append(*out, 0x80|byte(len(x)))
-		} else {
-			*out = append(*out, 0xde)
-			*out = binary.BigEndian.AppendUint16(*out, uint16(len(x)))
-		}
-		for k, e := range x {
-			mpEncode(out, k)
-			mpEncode(out, e)
-		}
-	default:
-		panic(fmt.Sprintf("unencodable %T", v))
-	}
-}
-
-func mpDecode(buf []byte, pos int) (any, int) {
-	b := buf[pos]
-	pos++
-	switch {
-	case b == 0xc0:
-		return nil, pos
-	case b == 0xc2:
-		return false, pos
-	case b == 0xc3:
-		return true, pos
-	case b <= 0x7f:
-		return int64(b), pos
-	case b >= 0xe0:
-		return int64(int8(b)), pos
-	case b >= 0xa0 && b <= 0xbf:
-		n := int(b & 0x1f)
-		return string(buf[pos : pos+n]), pos + n
-	case b == 0xd9:
-		n := int(buf[pos])
-		return string(buf[pos+1 : pos+1+n]), pos + 1 + n
-	case b == 0xda:
-		n := int(binary.BigEndian.Uint16(buf[pos:]))
-		return string(buf[pos+2 : pos+2+n]), pos + 2 + n
-	case b == 0xdb:
-		n := int(binary.BigEndian.Uint32(buf[pos:]))
-		return string(buf[pos+4 : pos+4+n]), pos + 4 + n
-	case b >= 0x80 && b <= 0x8f, b == 0xde, b == 0xdf:
-		n := int(b & 0x0f)
-		if b == 0xde {
-			n = int(binary.BigEndian.Uint16(buf[pos:]))
-			pos += 2
-		} else if b == 0xdf {
-			n = int(binary.BigEndian.Uint32(buf[pos:]))
-			pos += 4
-		}
-		out := make(map[string]any, n)
-		for i := 0; i < n; i++ {
-			k, p := mpDecode(buf, pos)
-			v, p2 := mpDecode(buf, p)
-			out[fmt.Sprint(k)] = v
-			pos = p2
-		}
-		return out, pos
-	case b >= 0x90 && b <= 0x9f, b == 0xdc, b == 0xdd:
-		n := int(b & 0x0f)
-		if b == 0xdc {
-			n = int(binary.BigEndian.Uint16(buf[pos:]))
-			pos += 2
-		} else if b == 0xdd {
-			n = int(binary.BigEndian.Uint32(buf[pos:]))
-			pos += 4
-		}
-		out := make([]any, 0, n)
-		for i := 0; i < n; i++ {
-			var v any
-			v, pos = mpDecode(buf, pos)
-			out = append(out, v)
-		}
-		return out, pos
-	case b == 0xcc, b == 0xd0:
-		return int64(buf[pos]), pos + 1
-	case b == 0xcd, b == 0xd1:
-		return int64(binary.BigEndian.Uint16(buf[pos:])), pos + 2
-	case b == 0xce, b == 0xd2:
-		return int64(binary.BigEndian.Uint32(buf[pos:])), pos + 4
-	case b == 0xcf, b == 0xd3:
-		return int64(binary.BigEndian.Uint64(buf[pos:])), pos + 8
-	case b == 0xca:
-		// The host sends doubles (window frames on focus events); a missing
-		// float case here is a process-killing panic one `listen:` line away.
-		return float64(math.Float32frombits(binary.BigEndian.Uint32(buf[pos:]))), pos + 4
-	case b == 0xcb:
-		return math.Float64frombits(binary.BigEndian.Uint64(buf[pos:])), pos + 8
-	}
-	panic(fmt.Sprintf("unhandled msgpack byte 0x%02x", b))
-}
+const protocolVersion = 1
 
 type plugin struct {
-	out *bufio.Writer
+	mu      sync.Mutex // guards out, nextID, pending
+	out     *bufio.Writer
+	nextID  int
+	pending map[int]chan map[string]any
+	inbox   chan map[string]any
+	config  map[string]any
 }
 
 func newPlugin() *plugin {
-	return &plugin{out: bufio.NewWriter(os.Stdout)}
+	p := &plugin{
+		out:     bufio.NewWriter(os.Stdout),
+		pending: map[int]chan map[string]any{},
+		inbox:   make(chan map[string]any, 16),
+		config:  map[string]any{},
+	}
+	var parsed map[string]any
+	if raw := os.Getenv("FLASH_PLUGIN_CONFIG"); raw != "" {
+		if json.Unmarshal([]byte(raw), &parsed) == nil && parsed != nil {
+			p.config = parsed
+		}
+	}
+	go p.read()
+	return p
+}
+
+// Config returns the host-provided plugin configuration, parsed once from
+// the FLASH_PLUGIN_CONFIG env var (empty when unset or invalid).
+func (p *plugin) Config() map[string]any { return p.config }
+
+// read pumps stdin on its own goroutine: response frames (id, no method)
+// resolve pending CallHost waiters; everything else feeds serve's inbox.
+func (p *plugin) read() {
+	in := bufio.NewScanner(os.Stdin)
+	in.Buffer(make([]byte, 0, 64*1024), 10<<20)
+	for in.Scan() {
+		var msg map[string]any
+		if json.Unmarshal(in.Bytes(), &msg) != nil {
+			continue
+		}
+		if id, hasID := jsonInt(msg["id"]); hasID && msg["method"] == nil {
+			p.mu.Lock()
+			ch := p.pending[id]
+			delete(p.pending, id)
+			p.mu.Unlock()
+			if ch != nil {
+				result, _ := msg["result"].(map[string]any)
+				ch <- result
+			}
+			continue
+		}
+		p.inbox <- msg
+	}
+	p.mu.Lock() // host closed stdin: unblock any in-flight CallHost
+	for id, ch := range p.pending {
+		delete(p.pending, id)
+		ch <- map[string]any{"ok": false, "error": "host closed"}
+	}
+	p.mu.Unlock()
+	close(p.inbox)
 }
 
 func (p *plugin) send(v map[string]any) {
-	var payload []byte
-	mpEncode(&payload, any(v))
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
-	p.out.Write(header[:])
-	p.out.Write(payload)
+	raw, _ := json.Marshal(v)
+	p.mu.Lock()
+	p.out.Write(raw)
+	p.out.WriteByte('\n')
 	p.out.Flush()
+	p.mu.Unlock()
 }
 
-func (p *plugin) respond(id any, result map[string]any) {
-	p.send(map[string]any{"jsonrpc": "2.0", "id": id, "result": any(result)})
+func (p *plugin) respond(id int, result map[string]any) {
+	p.send(map[string]any{"id": id, "result": result})
 }
 
-func (p *plugin) logMessage(level, message string) {
-	p.send(map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "flash.log",
-		"params": any(map[string]any{
-			"level": level, "message": message, "fields": any(map[string]any{}),
-		}),
-	})
+// CallHost issues a plugin→host request and blocks until the host replies.
+// Safe from command handlers: the read goroutine keeps pumping while the
+// serve goroutine waits here.
+func (p *plugin) CallHost(method string, params map[string]any) map[string]any {
+	ch := make(chan map[string]any, 1)
+	p.mu.Lock()
+	p.nextID++
+	id := p.nextID
+	p.pending[id] = ch
+	p.mu.Unlock()
+	p.send(map[string]any{"id": id, "method": method, "params": params})
+	return <-ch
 }
 
 // serve runs the blocking dispatch loop until shutdown or host exit.
 func (p *plugin) serve(onCommand func(params map[string]any) map[string]any) {
-	in := bufio.NewReader(os.Stdin)
-	for {
-		var header [4]byte
-		if _, err := io.ReadFull(in, header[:]); err != nil {
-			return // host closed stdin
-		}
-		payload := make([]byte, binary.BigEndian.Uint32(header[:]))
-		if _, err := io.ReadFull(in, payload); err != nil {
-			return
-		}
-		raw, _ := mpDecode(payload, 0)
-		msg, _ := raw.(map[string]any)
+	for msg := range p.inbox {
 		method, _ := msg["method"].(string)
-		id := msg["id"]
+		id, hasID := jsonInt(msg["id"])
 		params, _ := msg["params"].(map[string]any)
+		if !hasID {
+			continue // notification (e.g. "event"): nothing to reply to
+		}
 		switch method {
 		case "initialize":
-			if v, _ := params["protocol_version"].(int64); v != protocolVersion {
-				p.respond(id, map[string]any{
-					"ok": false, "error": fmt.Sprintf("protocol %v != %d", v, protocolVersion),
-				})
-				return
-			}
-			p.respond(id, map[string]any{
-				"ok":                true,
-				"protocol_version":  protocolVersion,
-				"published_sources": any([]any{}),
-			})
+			p.respond(id, map[string]any{"ok": true, "protocol_version": protocolVersion})
 		case "heartbeat":
 			p.respond(id, map[string]any{"ok": true})
 		case "shutdown":
@@ -221,11 +125,14 @@ func (p *plugin) serve(onCommand func(params map[string]any) map[string]any) {
 		case "command.invoke":
 			p.respond(id, onCommand(params))
 		default:
-			if id != nil {
-				p.respond(id, map[string]any{
-					"ok": false, "error": "unsupported method " + method,
-				})
-			}
+			p.respond(id, map[string]any{"ok": false, "error": "unsupported method " + method})
 		}
 	}
+}
+
+// jsonInt narrows encoding/json's float64 numbers to the integer ids the
+// protocol uses (they can be negative: heartbeats arrive with id -1).
+func jsonInt(v any) (int, bool) {
+	f, ok := v.(float64)
+	return int(f), ok
 }

@@ -278,15 +278,6 @@ impl Context {
         format!("plugin:{}", self.plugin_id)
     }
 
-    pub(crate) fn published_location_source_ids(&self) -> Vec<String> {
-        let Ok(store) = self.locations.lock() else {
-            return Vec::new();
-        };
-        let mut ids = store.keys().cloned().collect::<Vec<_>>();
-        ids.sort();
-        ids
-    }
-
     pub(crate) fn set_running_applications(&self, applications: Vec<RunningApplication>) {
         if let Ok(mut current) = self.running_applications.lock() {
             *current = applications;
@@ -641,10 +632,6 @@ mod tests {
         ctx.set_locations("plugin:test", Vec::new());
 
         assert!(ctx.has_locations("plugin:test"));
-        assert_eq!(
-            ctx.published_location_source_ids(),
-            vec!["plugin:test".to_string()]
-        );
         assert!(ctx.warm_locations().is_empty());
     }
 

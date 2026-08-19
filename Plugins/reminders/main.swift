@@ -158,10 +158,10 @@ runtime.onResolve = { params in
     let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
     let reminderID = object["id"] as? String, !reminderID.isEmpty
   else {
-    return ["did_resolve": false]
+    return ["ok": false]
   }
   let result = runOsascript(selectScript(reminderID: reminderID), timeoutSeconds: 10)
-  return ["did_resolve": result.ok]
+  return ["ok": result.ok]
 }
 
 runtime.serve()

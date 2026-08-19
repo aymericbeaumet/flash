@@ -237,7 +237,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
     }
     let result = run_osascript(ctx, &select_script(&note_id), Duration::from_secs(10)).await;
     ResolveResponse {
-        did_resolve: result.ok,
+        ok: result.ok,
         target_pid: None,
         navigation_url: None,
     }

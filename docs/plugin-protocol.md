@@ -35,10 +35,11 @@ parent pid dies.
 
 ## Framing
 
-Length-prefixed MessagePack on stdin/stdout: a 4-byte big-endian payload
-length followed by one MessagePack-encoded value, JSON-RPC-2.0-shaped.
-Host requests go to plugin stdin; responses and plugin-initiated frames go to
-stdout. stderr is diagnostics only — lines are logged but never treated as
+NDJSON on stdin/stdout: one JSON object per newline-terminated line, no
+envelope beyond `id`/`method`/`params`/`result` (`id`+`method` = request,
+`id` alone = response, `method` alone = notification; host and plugin id
+counters are independent and may overlap). Host requests go to plugin stdin;
+responses and plugin-initiated frames go to stdout. stderr is diagnostics only — lines are logged but never treated as
 plugin failure (interpreted runtimes emit warnings unprompted); use
 `flash.log` for structured logging. Frames are capped at 10 MiB.
 Plugin log lines travel as `flash.log` notifications and are recorded with
@@ -47,8 +48,8 @@ Plugin log lines travel as `flash.log` notifications and are recorded with
 ## Lifecycle methods
 
 - `initialize` — protocol handshake. The request carries
-  `{plugin_id, version, protocol_version: 3, running_applications}`; the reply
-  must echo protocol version 3 exactly. A plugin that declares `sources` must
+  `{plugin_id, version, protocol_version: 1, running_applications}`; the reply
+  must echo protocol version 1 exactly (the stale-binary diagnostic). A plugin that declares `sources` must
   not reply until its canonical warm catalog (possibly an authoritative empty
   list) exists: the host proves readiness by pulling a first
   `sources.snapshot` right after the reply, and only a cleanly decoding pull

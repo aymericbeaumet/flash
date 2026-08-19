@@ -9,6 +9,5 @@ description = "Lightweight tokio length-prefixed MessagePack scaffolding for Fla
 flash_plugin_macros = { path = "macros" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rmp-serde = { workspace = true }
 tokio = { workspace = true }
 libc = { workspace = true }

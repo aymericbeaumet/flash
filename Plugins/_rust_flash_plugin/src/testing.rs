@@ -99,8 +99,7 @@ impl Harness {
 fn drain(rx: &mut mpsc::Receiver<Vec<u8>>) -> Vec<Value> {
     let mut frames = Vec::new();
     while let Ok(bytes) = rx.try_recv() {
-        frames
-            .push(rmp_serde::from_slice(&bytes).expect("harness frame must decode as MessagePack"));
+        frames.push(serde_json::from_slice(&bytes).expect("harness frame must decode as JSON"));
     }
     frames
 }

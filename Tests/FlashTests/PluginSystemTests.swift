@@ -492,14 +492,14 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testPluginProtocolVersionRequiresExactV3() {
-    XCTAssertEqual(PluginWireCodec.protocolVersion, 3)
+  func testPluginProtocolVersionRequiresExactV1() {
+    XCTAssertEqual(PluginWireCodec.protocolVersion, 1)
     XCTAssertTrue(
       PluginWireCodec.acceptsProtocolVersion([
         "ok": true,
-        "protocol_version": 3,
+        "protocol_version": 1,
       ]))
-    XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["protocol_version": 2]))
+    XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["protocol_version": 3]))
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["ok": true]))
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(nil))
   }
@@ -885,7 +885,7 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testOfficialPluginsRespondOverMessagePackWithMockedCLIs() throws {
+  func testOfficialPluginsRespondOverNDJSONWithMockedCLIs() throws {
     let cases = [
       ("slack", "slack"),
       ("spotify", "spotify_player"),
@@ -895,8 +895,8 @@ final class PluginSystemTests: XCTestCase {
     }
   }
 
-  func testRustPluginExitsWhenDeclaredParentProcessExits() throws {
-    try runPluginParentDeathSmoke(pluginID: "calculator")
+  func testRustPluginExitsWhenHostClosesStdin() throws {
+    try runPluginStdinEOFSmoke(pluginID: "calculator")
   }
 
   func testManifestRootDiscoveryFollowsSymlinkedBundleDirectory() throws {
@@ -1476,7 +1476,7 @@ final class PluginSystemTests: XCTestCase {
     let binaryURL = pluginRoot.appendingPathComponent("flash-plugin-\(pluginID)")
     guard FileManager.default.isExecutableFile(atPath: binaryURL.path) else {
       throw XCTSkip(
-        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the MessagePack smoke test"
+        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the protocol smoke test"
       )
     }
     let process = Process()
@@ -1501,20 +1501,14 @@ final class PluginSystemTests: XCTestCase {
     process.terminationHandler = { _ in finished.signal() }
     try process.run()
 
-    // The smoke test exercises only the managed MessagePack protocol. The
+    // The smoke test exercises only the managed NDJSON protocol. The
     // plugin owns subprocess execution now. Initialization does not respond
     // until on_start and any required warm-source publication complete.
-    let collector = MessagePackFrameCollector()
+    let collector = NDJSONLineCollectorForTests()
     let writeLock = NSLock()
     func send(_ object: [String: Any]) {
-      guard let payload = try? MessagePack.encode(object) else { return }
-      let count = UInt32(payload.count)
-      var frame = Data(capacity: 4 + payload.count)
-      frame.append(UInt8(truncatingIfNeeded: count >> 24))
-      frame.append(UInt8(truncatingIfNeeded: count >> 16))
-      frame.append(UInt8(truncatingIfNeeded: count >> 8))
-      frame.append(UInt8(truncatingIfNeeded: count))
-      frame.append(payload)
+      guard var frame = try? JSONSerialization.data(withJSONObject: object) else { return }
+      frame.append(0x0A)
       writeLock.lock()
       stdin.fileHandleForWriting.write(frame)
       writeLock.unlock()
@@ -1544,7 +1538,6 @@ final class PluginSystemTests: XCTestCase {
 
     send([
       "id": 1,
-      "jsonrpc": "2.0",
       "method": "initialize",
       "params": [
         "protocol_version": PluginWireCodec.protocolVersion,
@@ -1557,10 +1550,9 @@ final class PluginSystemTests: XCTestCase {
         ],
       ],
     ])
-    send(["id": -1, "jsonrpc": "2.0", "method": "heartbeat", "params": [:]])
+    send(["id": -1, "method": "heartbeat", "params": [:]])
     send([
       "id": 2,
-      "jsonrpc": "2.0",
       "method": "command.invoke",
       "params": [
         "args": ["--version"],
@@ -1582,7 +1574,7 @@ final class PluginSystemTests: XCTestCase {
       XCTFail("\(pluginID) plugin did not respond to command.invoke")
       return
     }
-    send(["jsonrpc": "2.0", "method": "shutdown", "params": ["reason": "test"]])
+    send(["method": "shutdown", "params": ["reason": "test"]])
     stdin.fileHandleForWriting.closeFile()
 
     if finished.wait(timeout: .now() + 5) != .success {
@@ -1605,12 +1597,12 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(responseOK(id: 2, messages: messages), true, collector.raw())
   }
 
-  private func runPluginParentDeathSmoke(pluginID: String) throws {
+  private func runPluginStdinEOFSmoke(pluginID: String) throws {
     let pluginRoot = repositoryRoot().appendingPathComponent("Plugins/\(pluginID)")
     let binaryURL = pluginRoot.appendingPathComponent("flash-plugin-\(pluginID)")
     guard FileManager.default.isExecutableFile(atPath: binaryURL.path) else {
       throw XCTSkip(
-        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the parent-death smoke test"
+        "\(pluginID) binary not built — run Scripts/build-plugins.sh before the stdin-EOF smoke test"
       )
     }
 
@@ -1620,16 +1612,6 @@ final class PluginSystemTests: XCTestCase {
     let dataDir = temp.appendingPathComponent("data")
     try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 
-    let parent = Process()
-    parent.executableURL = URL(fileURLWithPath: "/bin/sleep")
-    parent.arguments = ["0.2"]
-    try parent.run()
-    defer {
-      if parent.isRunning {
-        parent.terminate()
-      }
-    }
-
     let process = Process()
     process.executableURL = binaryURL
     process.currentDirectoryURL = pluginRoot
@@ -1637,7 +1619,6 @@ final class PluginSystemTests: XCTestCase {
     env["FLASH_PLUGIN_ID"] = pluginID
     env["FLASH_PLUGIN_VERSION"] = "0.1.0"
     env["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
-    env["FLASH_PLUGIN_PARENT_PID"] = String(parent.processIdentifier)
     process.environment = env
 
     let stdin = Pipe()
@@ -1654,12 +1635,13 @@ final class PluginSystemTests: XCTestCase {
       if process.isRunning {
         process.terminate()
       }
-      stdin.fileHandleForWriting.closeFile()
     }
 
-    parent.waitUntilExit()
+    // Parent liveness IS stdin EOF: the host owns the pipe, so closing it
+    // must end the serve loop and the process.
+    stdin.fileHandleForWriting.closeFile()
     if finished.wait(timeout: .now() + 3) != .success {
-      XCTFail("\(pluginID) plugin did not exit after declared parent exited")
+      XCTFail("\(pluginID) plugin did not exit after its stdin closed")
       return
     }
 
@@ -1681,10 +1663,10 @@ final class PluginSystemTests: XCTestCase {
   }
 }
 
-/// Thread-safe accumulator for length-prefixed MessagePack frames streamed from
-/// a plugin's stdout. `ingest` is called from the pipe's readability handler (a
-/// background queue); `messages`/`raw` are read from the test thread.
-private final class MessagePackFrameCollector {
+/// Thread-safe accumulator for NDJSON lines streamed from a plugin's stdout.
+/// `ingest` is called from the pipe's readability handler (a background
+/// queue); `messages`/`raw` are read from the test thread.
+private final class NDJSONLineCollectorForTests {
   private let lock = NSLock()
   private var buffer = Data()
   private var parsed: [[String: Any]] = []
@@ -1694,19 +1676,12 @@ private final class MessagePackFrameCollector {
     defer { lock.unlock() }
     buffer.append(data)
     var fresh: [[String: Any]] = []
-    while buffer.count >= 4 {
-      let base = buffer.startIndex
-      let length =
-        (Int(buffer[base]) << 24)
-        | (Int(buffer[base + 1]) << 16)
-        | (Int(buffer[base + 2]) << 8)
-        | Int(buffer[base + 3])
-      guard length >= 0, buffer.count >= 4 + length else { break }
-      let payloadStart = base + 4
-      let payloadEnd = payloadStart + length
-      let payload = buffer.subdata(in: payloadStart..<payloadEnd)
-      buffer.removeSubrange(base..<payloadEnd)
-      guard let object = try? MessagePack.decode(payload) as? [String: Any] else { continue }
+    while let newline = buffer.firstIndex(of: 0x0A) {
+      let line = Data(buffer[buffer.startIndex..<newline])
+      buffer = Data(buffer[buffer.index(after: newline)...])
+      guard !line.isEmpty,
+        let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any]
+      else { continue }
       parsed.append(object)
       fresh.append(object)
     }
@@ -1719,8 +1694,7 @@ private final class MessagePackFrameCollector {
     return parsed
   }
 
-  /// A rendering of the frames parsed so far, for failure diagnostics (the
-  /// wire is now binary, so there's no raw text to echo).
+  /// A rendering of the frames parsed so far, for failure diagnostics.
   func raw() -> String {
     lock.lock()
     defer { lock.unlock() }

@@ -1,163 +1,42 @@
 // Minimal Flash plugin protocol shim for Swift (Foundation only).
 //
-// Speaks the wire contract from docs/plugin-protocol.md: length-prefixed
-// MessagePack over stdio (4-byte big-endian length + one value) and the
-// protocol v3 lifecycle, including the warm-catalog side (publish before
-// ready, answer `sources.snapshot` from memory). Lifecycle and warm reads
-// answer synchronously on the read thread; commands, resolution, and
-// events run on a worker queue so a slow AppleScript can never starve the
-// host's 5-second heartbeat — the same discipline the Rust SDK enforces.
+// Speaks the wire contract from docs/plugin-protocol.md: protocol v1, one
+// JSON object per newline-terminated line over stdio. Three frame shapes
+// and nothing else: id+method = request, id only = response, method only =
+// notification. Host and plugin id counters are independent and may
+// overlap — replies to our own `callHost` requests are correlated through
+// our pending map, so any id+method frame from stdin is a host request.
+// Lifecycle and warm reads answer synchronously on the read thread;
+// commands, resolution, and events run on a worker queue so a slow
+// AppleScript can never starve the host's 5-second heartbeat — the same
+// discipline the Rust SDK enforces.
 
 import Foundation
 
-let protocolVersion = 3
+let protocolVersion = 1
 
-// MARK: - MessagePack (the subset the protocol needs)
+// MARK: - JSON plumbing
 
-enum MsgPack {
-  static func encode(_ value: Any?) -> Data {
-    var out = Data()
-    encodeInto(value, &out)
-    return out
-  }
-
-  private static func encodeInto(_ value: Any?, _ out: inout Data) {
-    switch value {
-    case nil, is NSNull:
-      out.append(0xC0)
-    case let bool as Bool:
-      out.append(bool ? 0xC3 : 0xC2)
-    case let int as Int:
-      if int >= 0 && int <= 127 {
-        out.append(UInt8(int))
-      } else if int < 0 && int >= -32 {
-        out.append(UInt8(bitPattern: Int8(int)))
-      } else {
-        out.append(0xD3)
-        appendBigEndian(UInt64(bitPattern: Int64(int)), &out)
-      }
-    case let string as String:
-      let raw = Data(string.utf8)
-      if raw.count < 32 {
-        out.append(0xA0 | UInt8(raw.count))
-      } else {
-        out.append(0xDB)
-        appendBigEndian(UInt32(raw.count), &out)
-      }
-      out.append(raw)
-    case let array as [Any?]:
-      if array.count < 16 {
-        out.append(0x90 | UInt8(array.count))
-      } else {
-        out.append(0xDC)
-        appendBigEndian(UInt16(array.count), &out)
-      }
-      for element in array { encodeInto(element, &out) }
-    case let map as [String: Any?]:
-      if map.count < 16 {
-        out.append(0x80 | UInt8(map.count))
-      } else {
-        out.append(0xDE)
-        appendBigEndian(UInt16(map.count), &out)
-      }
-      for (key, element) in map {
-        encodeInto(key, &out)
-        encodeInto(element, &out)
-      }
-    default:
-      fatalError("unencodable value: \(type(of: value))")
-    }
-  }
-
-  private static func appendBigEndian<T: FixedWidthInteger>(_ value: T, _ out: inout Data) {
-    withUnsafeBytes(of: value.bigEndian) { out.append(contentsOf: $0) }
-  }
-
-  static func decode(_ data: Data) -> Any? {
-    var position = data.startIndex
-    return decodeValue(data, &position)
-  }
-
-  private static func decodeValue(_ data: Data, _ position: inout Data.Index) -> Any? {
-    let byte = data[position]
-    position += 1
-    switch byte {
-    case 0xC0: return nil
-    case 0xC2: return false
-    case 0xC3: return true
-    case 0x00...0x7F: return Int(byte)
-    case 0xE0...0xFF: return Int(Int8(bitPattern: byte))
-    case 0xA0...0xBF: return decodeString(data, &position, count: Int(byte & 0x1F))
-    case 0xD9: return decodeString(data, &position, count: readInt(data, &position, width: 1))
-    case 0xDA: return decodeString(data, &position, count: readInt(data, &position, width: 2))
-    case 0xDB: return decodeString(data, &position, count: readInt(data, &position, width: 4))
-    case 0x80...0x8F: return decodeMap(data, &position, count: Int(byte & 0x0F))
-    case 0xDE: return decodeMap(data, &position, count: readInt(data, &position, width: 2))
-    case 0xDF: return decodeMap(data, &position, count: readInt(data, &position, width: 4))
-    case 0x90...0x9F: return decodeArray(data, &position, count: Int(byte & 0x0F))
-    case 0xDC: return decodeArray(data, &position, count: readInt(data, &position, width: 2))
-    case 0xDD: return decodeArray(data, &position, count: readInt(data, &position, width: 4))
-    case 0xCC: return readInt(data, &position, width: 1)
-    case 0xCD: return readInt(data, &position, width: 2)
-    case 0xCE: return readInt(data, &position, width: 4)
-    case 0xCF, 0xD3: return readInt(data, &position, width: 8)
-    case 0xD0: return Int(Int8(bitPattern: UInt8(readInt(data, &position, width: 1))))
-    case 0xD1: return Int(Int16(bitPattern: UInt16(readInt(data, &position, width: 2))))
-    case 0xD2: return Int(Int32(bitPattern: UInt32(readInt(data, &position, width: 4))))
-    case 0xCA:
-      let bits = UInt32(readInt(data, &position, width: 4))
-      return Double(Float(bitPattern: bits))
-    case 0xCB:
-      // readInt yields the raw bit pattern as a (possibly negative) Int;
-      // converting through UInt64(_:) traps on any double with the sign bit
-      // set — e.g. a window origin left of the primary display.
-      let bits = UInt64(bitPattern: Int64(readInt(data, &position, width: 8)))
-      return Double(bitPattern: bits)
-    default:
-      return nil
-    }
-  }
-
-  private static func readInt(_ data: Data, _ position: inout Data.Index, width: Int) -> Int {
-    var value = 0
-    for _ in 0..<width {
-      value = value << 8 | Int(data[position])
-      position += 1
-    }
-    return value
-  }
-
-  private static func decodeString(_ data: Data, _ position: inout Data.Index, count: Int)
-    -> String
-  {
-    let end = position + count
-    let string = String(data: data[position..<end], encoding: .utf8) ?? ""
-    position = end
-    return string
-  }
-
-  private static func decodeMap(_ data: Data, _ position: inout Data.Index, count: Int)
-    -> [String: Any?]
-  {
-    var out: [String: Any?] = [:]
-    for _ in 0..<count {
-      let key = decodeValue(data, &position) as? String ?? ""
-      out[key] = decodeValue(data, &position)
-    }
-    return out
-  }
-
-  private static func decodeArray(_ data: Data, _ position: inout Data.Index, count: Int)
-    -> [Any?]
-  {
-    var out: [Any?] = []
-    out.reserveCapacity(count)
-    for _ in 0..<count {
-      out.append(decodeValue(data, &position))
-    }
-    return out
-  }
+/// JSONSerialization rejects Swift optionals; unwrap recursively
+/// (nil → NSNull) so `[String: Any?]` payloads serialize.
+private func jsonSafe(_ value: Any?) -> Any {
+  guard let value else { return NSNull() }
+  if let map = value as? [String: Any?] { return map.mapValues(jsonSafe) }
+  if let array = value as? [Any?] { return array.map(jsonSafe) }
+  return value
 }
+
+/// Plugin configuration from the FLASH_PLUGIN_CONFIG env var, parsed once
+/// (JSON object; empty when unset or invalid).
+private let parsedConfig: [String: Any] = {
+  guard let raw = ProcessInfo.processInfo.environment["FLASH_PLUGIN_CONFIG"],
+    let data = raw.data(using: .utf8),
+    let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+  else { return [:] }
+  return object
+}()
+
+func config() -> [String: Any] { parsedConfig }
 
 // MARK: - Runtime
 
@@ -168,9 +47,12 @@ final class PluginRuntime {
   private let warmLock = NSLock()
   private var warm: [String: [[String: Any?]]] = [:]
   private let workers = DispatchQueue(label: "plugin.workers", attributes: .concurrent)
+  private let pendingLock = NSLock()
+  private var pending: [Int: ([String: Any?]) -> Void] = [:]
+  private var nextRequestID = 1
 
-  /// Runs once when initialize arrives, BEFORE the reply — publish the warm
-  /// catalog here so `published_sources` satisfies the readiness gate.
+  /// Runs once when initialize arrives, BEFORE the reply — load the warm
+  /// store here so the host never sees a ready plugin with a cold catalog.
   var onStart: (() -> Void)?
   var onEvent: ((_ name: String, _ payload: [String: Any?]) -> Void)?
   var onCommand: ((_ params: [String: Any?]) -> [String: Any?])?
@@ -190,24 +72,35 @@ final class PluginRuntime {
 
   func log(_ level: String, _ message: String, fields: [String: String] = [:]) {
     send([
-      "jsonrpc": "2.0",
       "method": "flash.log",
       "params": ["level": level, "message": message, "fields": fields] as [String: Any?],
     ])
   }
 
+  /// Plugin→host request on our own id counter; the completion runs on the
+  /// worker queue when the matching response frame arrives.
+  func callHost(
+    method: String, params: [String: Any?] = [:],
+    completion: @escaping ([String: Any?]) -> Void
+  ) {
+    pendingLock.lock()
+    let id = nextRequestID
+    nextRequestID += 1
+    pending[id] = completion
+    pendingLock.unlock()
+    send(["id": id, "method": method, "params": params])
+  }
+
   private func send(_ object: [String: Any?]) {
-    let payload = MsgPack.encode(object)
-    var frame = Data()
-    withUnsafeBytes(of: UInt32(payload.count).bigEndian) { frame.append(contentsOf: $0) }
-    frame.append(payload)
+    guard var frame = try? JSONSerialization.data(withJSONObject: jsonSafe(object)) else { return }
+    frame.append(0x0A)
     writeLock.lock()
     output.write(frame)
     writeLock.unlock()
   }
 
-  private func respond(_ id: Any?, _ result: [String: Any?]) {
-    send(["jsonrpc": "2.0", "id": id, "result": result])
+  private func respond(_ id: Int, _ result: [String: Any?]) {
+    send(["id": id, "result": result])
   }
 
   func serve() {
@@ -216,55 +109,59 @@ final class PluginRuntime {
       let chunk = input.availableData
       if chunk.isEmpty { return }  // host closed stdin
       buffer.append(chunk)
-      while buffer.count >= 4 {
-        let length = buffer.prefix(4).reduce(0) { $0 << 8 | Int($1) }
-        guard buffer.count >= 4 + length else { break }
-        let payload = buffer.subdata(in: buffer.startIndex + 4..<buffer.startIndex + 4 + length)
-        buffer.removeFirst(4 + length)
-        guard let message = MsgPack.decode(payload) as? [String: Any?] else { continue }
+      while let newline = buffer.firstIndex(of: 0x0A) {
+        let line = buffer.subdata(in: buffer.startIndex..<newline)
+        buffer.removeSubrange(buffer.startIndex...newline)
+        guard !line.isEmpty,
+          let message = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any]
+        else { continue }
         if !dispatch(message) { return }
       }
     }
   }
 
-  private func dispatch(_ message: [String: Any?]) -> Bool {
-    let method = message["method"] as? String
-    let id = message["id"] ?? nil
+  private func dispatch(_ message: [String: Any]) -> Bool {
+    let id = message["id"] as? Int
     let params = message["params"] as? [String: Any?] ?? [:]
+    guard let method = message["method"] as? String else {
+      // id without method: a host response — ours iff the id is pending.
+      if let id {
+        pendingLock.lock()
+        let completion = pending.removeValue(forKey: id)
+        pendingLock.unlock()
+        if let completion {
+          let result = message["result"] as? [String: Any?] ?? [:]
+          workers.async { completion(result) }
+        }
+      }
+      return true
+    }
     switch method {
     case "initialize":
       guard params["protocol_version"] as? Int == protocolVersion else {
-        respond(id, ["ok": false, "error": "protocol version mismatch"])
+        if let id { respond(id, ["ok": false, "error": "protocol version mismatch"]) }
         return false
       }
-      onStart?()
-      warmLock.lock()
-      let published = warm.keys.sorted()
-      warmLock.unlock()
-      respond(
-        id,
-        [
-          "ok": true, "protocol_version": protocolVersion,
-          "published_sources": published as [Any?],
-        ])
+      onStart?()  // blocks the reply until the warm store is loaded
+      if let id { respond(id, ["ok": true, "protocol_version": protocolVersion]) }
       return true
     case "heartbeat":
-      respond(id, ["ok": true])
+      if let id { respond(id, ["ok": true]) }
       return true
     case "shutdown":
-      respond(id, ["ok": true])
+      if let id { respond(id, ["ok": true]) }
       return false
     case "sources.snapshot":
       warmLock.lock()
       let candidates = warm.sorted { $0.key < $1.key }.flatMap(\.value)
       warmLock.unlock()
-      respond(id, ["candidates": candidates as [Any?]])
+      if let id { respond(id, ["candidates": candidates as [Any?]]) }
       return true
     case "command.invoke":
-      workers.async { [self] in respond(id, onCommand?(params) ?? ["ok": false]) }
+      if let id { workers.async { [self] in respond(id, onCommand?(params) ?? ["ok": false]) } }
       return true
     case "candidate.resolve":
-      workers.async { [self] in respond(id, onResolve?(params) ?? ["did_resolve": false]) }
+      if let id { workers.async { [self] in respond(id, onResolve?(params) ?? ["ok": false]) } }
       return true
     case "event":
       let name = params["name"] as? String ?? ""
@@ -272,9 +169,7 @@ final class PluginRuntime {
       workers.async { [self] in onEvent?(name, payload) }
       return true
     default:
-      if !(id is NSNull) && id != nil {
-        respond(id, ["ok": false, "error": "unsupported method \(method ?? "?")"])
-      }
+      if let id { respond(id, ["ok": false, "error": "unsupported method \(method)"]) }
       return true
     }
   }

@@ -36,8 +36,7 @@ let package = Package(
     .library(name: "FlashBrowserTestSupport", targets: ["FlashBrowserTestSupport"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0"),
-    .package(url: "https://github.com/a2/MessagePack.swift", from: "4.0.0"),
+    .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0")
   ],
   targets: [
     .executableTarget(
@@ -79,9 +78,6 @@ let package = Package(
     ),
     .target(
       name: "FlashCore",
-      dependencies: [
-        .product(name: "MessagePack", package: "MessagePack.swift")
-      ],
       path: "Sources/FlashCore",
       swiftSettings: strictSwiftSettings
     ),

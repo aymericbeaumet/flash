@@ -36,7 +36,7 @@ final class PluginProcess {
   private var initialRunningApplications: [[String: Any]]
   private var process: Process?
   private var stdinPipe: Pipe?
-  private var frameCollector = MessagePackFrameCollector(maxFrameBytes: PluginProcess.maxFrameBytes)
+  private var frameCollector = NDJSONFrameCollector(maxLineBytes: PluginProcess.maxFrameBytes)
   private let lock = NSLock()
   private var discovery = PluginDiscovery()
   private var state: PluginRuntimeState = .unloaded
@@ -442,7 +442,7 @@ final class PluginProcess {
       "candidate": PluginWireCodec.candidateJSON(candidate)
     ]
     sendRequest(method: "candidate.resolve", params: params) { response in
-      let didResolve = response?["did_resolve"] as? Bool ?? false
+      let didResolve = response?["ok"] as? Bool ?? false
       let pid = response?["target_pid"] as? Int
       let navigationURL = (response?["navigation_url"] as? String).flatMap(URL.init(string:))
       DispatchQueue.main.async {
@@ -545,20 +545,21 @@ final class PluginProcess {
   /// so the host must not double-fire a keystroke fallback.
   private static func sourceActionResult(from response: [String: Any]?) -> SourceActionResult {
     guard let response else { return .failed }
-    let didPerform = response["did_perform"] as? Bool ?? false
-    let handled = response["handled"] as? Bool ?? false
     let pid = (response["target_pid"] as? Int).map(pid_t.init)
     let navigationURL = (response["navigation_url"] as? String).flatMap(URL.init(string:))
-    if didPerform {
+    switch response["outcome"] as? String {
+    case "performed":
       return .performed(pid: pid, navigationURL: navigationURL)
-    }
-    if handled {
+    case "unhandled":
+      return .unhandled
+    default:
+      // "failed" and anything unrecognized: the plugin claimed the context,
+      // so the host must not double-fire a keystroke fallback.
       return SourceActionResult(
         targetPID: pid,
         disposition: .failed,
         navigationURL: navigationURL)
     }
-    return .unhandled
   }
 
   func statusSnapshot() -> PluginStatus {
@@ -703,7 +704,6 @@ final class PluginProcess {
     if let process, process.isRunning {
       isStopping = true
       writeFrame([
-        "jsonrpc": "2.0",
         "method": "shutdown",
         "params": ["reason": reason],
       ])
@@ -1128,7 +1128,6 @@ final class PluginProcess {
       }
       self.writeFrame([
         "id": id,
-        "jsonrpc": "2.0",
         "method": method,
         "params": params,
       ])
@@ -1138,7 +1137,6 @@ final class PluginProcess {
   private func sendNotification(method: String, params: [String: Any]) {
     queue.async { [weak self] in
       self?.writeFrame([
-        "jsonrpc": "2.0",
         "method": method,
         "params": params,
       ])
@@ -1159,7 +1157,6 @@ final class PluginProcess {
     queue.async { [weak self] in
       self?.writeFrame([
         "id": id,
-        "jsonrpc": "2.0",
         "result": result,
       ])
     }
@@ -1167,31 +1164,21 @@ final class PluginProcess {
 
   private func writeFrame(_ object: [String: Any]) {
     let label = object["method"] as? String ?? "response"
-    let payload: Data
+    let frame: Data
     do {
-      payload = try MessagePack.encode(object)
+      frame = try PluginWireCodec.encodeFrame(object)
     } catch {
       // A non-encodable message is a runtime bug that would otherwise vanish
       // silently and only show up as a timed-out RPC; surface it.
       recordError("[plugin] dropped non-encodable IPC message (method=\(label)): \(error)")
       return
     }
-    guard payload.count <= Self.maxFrameBytes else {
+    guard frame.count <= Self.maxFrameBytes else {
       recordError(
-        "[plugin] dropped oversized IPC message (method=\(label), bytes=\(payload.count), "
+        "[plugin] dropped oversized IPC message (method=\(label), bytes=\(frame.count), "
           + "max=\(Self.maxFrameBytes))")
       return
     }
-    // Length-prefixed MessagePack: a 4-byte big-endian payload length, then
-    // the payload itself. The plugin reads the prefix, then exactly that many
-    // bytes — no delimiter scanning and binary-safe.
-    let count = UInt32(payload.count)
-    var frame = Data(capacity: 4 + payload.count)
-    frame.append(UInt8(truncatingIfNeeded: count >> 24))
-    frame.append(UInt8(truncatingIfNeeded: count >> 16))
-    frame.append(UInt8(truncatingIfNeeded: count >> 8))
-    frame.append(UInt8(truncatingIfNeeded: count))
-    frame.append(payload)
     do {
       try stdinPipe?.fileHandleForWriting.write(contentsOf: frame)
     } catch {
@@ -1226,28 +1213,24 @@ final class PluginProcess {
       guard let self else { return }
       for output in self.frameCollector.append(data) {
         switch output {
-        case .frame(let payload):
-          self.handleFrame(payload)
-        case .desynced(let length):
-          self.recordError("[plugin] invalid frame length \(length); resetting stream")
+        case .frame(let line):
+          self.handleFrame(line)
+        case .oversized(let bytes):
+          self.recordError("[plugin] dropped oversized IPC line (bytes=\(bytes))")
         }
       }
     }
   }
 
-  private func handleFrame(_ payload: Data) {
+  private func handleFrame(_ line: Data) {
     let object: [String: Any]
     do {
-      guard let decoded = try MessagePack.decode(payload) as? [String: Any] else {
-        recordError("[plugin] non-object IPC frame")
-        return
-      }
-      object = decoded
+      object = try PluginWireCodec.decodeFrame(line)
     } catch {
       recordError("[plugin] undecodable IPC frame: \(error)")
       return
     }
-    handleProtocolMessage(object, payloadBytes: payload.count)
+    handleProtocolMessage(object, payloadBytes: line.count)
   }
 
   private func handleStderr(_ data: Data) {
@@ -1406,7 +1389,6 @@ final class PluginProcess {
     awaitingHeartbeat = true
     writeFrame([
       "id": -1,
-      "jsonrpc": "2.0",
       "method": "heartbeat",
       "params": ["time_unix_ms": Int64((Date().timeIntervalSince1970 * 1000).rounded())],
     ])

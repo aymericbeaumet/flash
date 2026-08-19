@@ -1,12 +1,11 @@
 //! The plugin runtime: the [`Plugin`] trait, [`run`] entry point, the serve
 //! loop speaking the `initialize`/`heartbeat`/`shutdown` lifecycle, the
-//! serialized event queue, startup-state gating, and the parent-liveness
-//! watch.
+//! serialized event queue, and startup-state gating. Parent liveness is
+//! stdin EOF: the host owns the pipe, so a dead host ends the loop.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::future::Future;
-use std::ptr;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -14,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{mpsc, watch};
 
 use crate::context::{context_from_env, Context, HostPending};
@@ -29,9 +28,11 @@ const EVENT_HANDLER_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Wire-protocol version negotiated in `initialize`. A mismatch is fatal: the
 /// host and plugin must agree on lifecycle and payload semantics before the
-/// plugin can become ready. Bump on any breaking wire change. MUST stay in sync
-/// with `PluginProcess.protocolVersion` on the host.
-const PROTOCOL_VERSION: u32 = 3;
+/// plugin can become ready. Bump on any breaking wire change. MUST stay in
+/// sync with `PluginWireCodec.protocolVersion` on the host.
+// v1: the counter restarted at the NDJSON reset (one JSON object per
+// newline-terminated line, no jsonrpc envelope, tri-state action outcome).
+const PROTOCOL_VERSION: u32 = 1;
 
 struct QueuedEvent {
     event: Event,
@@ -208,78 +209,6 @@ async fn run_event_worker<P: Plugin>(
     }
 }
 
-fn parent_pid_from_env() -> Option<i32> {
-    std::env::var("FLASH_PLUGIN_PARENT_PID")
-        .ok()
-        .and_then(|raw| raw.parse::<i32>().ok())
-        .filter(|pid| *pid > 1)
-}
-
-fn start_parent_liveness_watch() {
-    let Some(parent_pid) = parent_pid_from_env() else {
-        return;
-    };
-    let _ = std::thread::Builder::new()
-        .name("flash-plugin-parent-watch".to_string())
-        .spawn(move || {
-            wait_for_parent_exit(parent_pid);
-            std::process::exit(0);
-        });
-}
-
-#[cfg(target_os = "macos")]
-fn wait_for_parent_exit(parent_pid: i32) {
-    unsafe {
-        let kq = libc::kqueue();
-        if kq == -1 {
-            return;
-        }
-        let change = libc::kevent {
-            ident: parent_pid as libc::uintptr_t,
-            filter: libc::EVFILT_PROC as libc::c_short,
-            flags: (libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR) as libc::c_ushort,
-            fflags: libc::NOTE_EXIT as libc::c_uint,
-            data: 0,
-            udata: ptr::null_mut(),
-        };
-        let registered = libc::kevent(kq, &change, 1, ptr::null_mut(), 0, ptr::null());
-        if registered == -1 {
-            libc::close(kq);
-            return;
-        }
-        loop {
-            let mut event = libc::kevent {
-                ident: 0,
-                filter: 0,
-                flags: 0,
-                fflags: 0,
-                data: 0,
-                udata: ptr::null_mut(),
-            };
-            let rc = libc::kevent(kq, ptr::null(), 0, &mut event, 1, ptr::null());
-            if rc > 0 {
-                libc::close(kq);
-                return;
-            }
-            if rc == -1 {
-                let interrupted =
-                    std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR);
-                if !interrupted {
-                    libc::close(kq);
-                    return;
-                }
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn wait_for_parent_exit(_parent_pid: i32) {
-    loop {
-        std::thread::park();
-    }
-}
-
 /// Run the plugin: spin up a bounded multi-thread tokio runtime and serve the
 /// length-prefixed MessagePack protocol until `shutdown` or stdin closes. This
 /// is the single entry point a plugin's `main` calls.
@@ -337,15 +266,11 @@ async fn serve<P: Plugin>(plugin: P) {
     let (control_tx, control_rx) = mpsc::channel::<Vec<u8>>(CONTROL_QUEUE_CAPACITY);
     let (telemetry_tx, telemetry_rx) = mpsc::channel::<Vec<u8>>(TELEMETRY_QUEUE_CAPACITY);
     let writer = tokio::spawn(async move {
-        // 64 KiB buffer coalesces the 4-byte header and payload into one write
-        // syscall per frame; we flush every frame to keep latency low.
+        // Each payload is already one newline-terminated JSON line; we flush
+        // every frame to keep latency low.
         let mut out = BufWriter::with_capacity(64 * 1024, tokio::io::stdout());
         let mut outbound = OutboundReceiver::new(control_rx, telemetry_rx);
         while let Some(payload) = outbound.recv().await {
-            let len = (payload.len() as u32).to_be_bytes();
-            if out.write_all(&len).await.is_err() {
-                break;
-            }
             if out.write_all(&payload).await.is_err() {
                 break;
             }
@@ -361,11 +286,10 @@ async fn serve<P: Plugin>(plugin: P) {
         host_counter,
     );
     ctx.prepare_dirs().await;
-    start_parent_liveness_watch();
     ctx.log("info", "[plugin] process ready");
 
-    let mut stdin = tokio::io::stdin();
-    let mut len_buf = [0u8; 4];
+    let mut stdin = BufReader::new(tokio::io::stdin());
+    let mut line: Vec<u8> = Vec::new();
     let mut started = false;
     let (startup_tx, startup_rx) = watch::channel(StartupState::Pending);
     let (event_tx, event_rx) = mpsc::channel::<QueuedEvent>(EVENT_QUEUE_CAPACITY);
@@ -377,32 +301,31 @@ async fn serve<P: Plugin>(plugin: P) {
         EVENT_HANDLER_TIMEOUT,
     ));
     loop {
-        // Read the 4-byte big-endian length prefix. A clean EOF here means the
-        // host closed our stdin; anything mid-frame is an unexpected EOF — both
-        // end the serve loop and let the process exit.
-        if stdin.read_exact(&mut len_buf).await.is_err() {
-            break;
+        // One frame per newline-terminated line. EOF means the host closed
+        // our stdin (it owns the pipe) — end the serve loop and exit.
+        line.clear();
+        match stdin.read_until(b'\n', &mut line).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
         }
-        let len = u32::from_be_bytes(len_buf) as usize;
-        if len == 0 {
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if line.is_empty() {
             continue;
         }
-        if len > MAX_FRAME_BYTES {
+        if line.len() > MAX_FRAME_BYTES {
             ctx.log_fields(
                 "warn",
                 "[plugin] rejected oversized inbound frame",
                 BTreeMap::from([
-                    ("encoded_bytes".to_string(), len.to_string()),
+                    ("encoded_bytes".to_string(), line.len().to_string()),
                     ("limit_bytes".to_string(), MAX_FRAME_BYTES.to_string()),
                 ]),
             );
-            break;
+            continue;
         }
-        let mut payload = vec![0u8; len];
-        if stdin.read_exact(&mut payload).await.is_err() {
-            break;
-        }
-        let request = match rmp_serde::from_slice::<Value>(&payload) {
+        let request = match serde_json::from_slice::<Value>(&line) {
             Ok(request) => request,
             Err(err) => {
                 ctx.log(
@@ -496,7 +419,6 @@ async fn serve<P: Plugin>(plugin: P) {
                 let startup_tx = startup_tx.clone();
                 tokio::spawn(async move {
                     plugin.on_start(ctx.clone()).await;
-                    let published_sources = ctx.published_location_source_ids();
                     let canonical_source = ctx.canonical_location_source_id();
                     if plugin.requires_initial_locations() && !ctx.has_locations(&canonical_source)
                     {
@@ -524,7 +446,6 @@ async fn serve<P: Plugin>(plugin: P) {
                             json!({
                                 "ok": true,
                                 "protocol_version": PROTOCOL_VERSION,
-                                "published_sources": published_sources,
                             }),
                         )
                         .await;

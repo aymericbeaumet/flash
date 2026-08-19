@@ -1,220 +1,90 @@
 //! Minimal Flash plugin protocol shim for Zig (stdlib only).
 //!
-//! Speaks the wire contract from docs/plugin-protocol.md: length-prefixed
-//! MessagePack over stdio (4-byte big-endian length + one value) and the
-//! protocol v3 lifecycle, including the warm-catalog side (publish before
-//! ready, answer `sources.snapshot` from memory). Uses raw POSIX
-//! read/write on fds 0/1 and fixed buffers, so it stays insulated from
-//! std.Io churn across Zig releases. Decoded strings are zero-copy slices
-//! into the frame buffer, valid until the next frame.
+//! Speaks the wire contract from docs/plugin-protocol.md: protocol v1,
+//! newline-delimited JSON over stdio — one JSON object per `\n`-terminated
+//! line, no envelope beyond id/method/params/result. Frame shapes: id+method
+//! is a request, id alone is a response, method alone is a notification.
+//! Host and plugin id counters are independent and may overlap, so responses
+//! to plugin-initiated host RPCs are recognized through this shim's own
+//! pending map (`callHost`/`takePending`). Uses raw POSIX read/write on
+//! fds 0/1 and std.json both ways: inbound lines parse into `std.json.Value`
+//! backed by a caller-supplied per-frame arena, and replies are built as
+//! `std.json.Value` trees serialized with `std.json.Stringify` (values are
+//! copied into the arena — no zero-copy framing).
 
 const std = @import("std");
 
-pub const protocol_version: i64 = 3;
+pub const protocol_version: i64 = 1;
 
-pub const KV = struct { key: []const u8, value: Value };
+pub const Value = std.json.Value;
 
-pub const nil_value: Value = .nil;
+/// Object lookup that folds a miss to null — chainable:
+/// `fp.asString(fp.field(fp.field(msg, "params"), "subcommand"))`.
+pub fn field(v: Value, key: []const u8) Value {
+    return switch (v) {
+        .object => |entries| entries.get(key) orelse .null,
+        else => .null,
+    };
+}
 
-pub const Value = union(enum) {
-    nil,
-    boolean: bool,
-    integer: i64,
-    float: f64,
-    string: []const u8,
-    array: []Value,
-    map: []KV,
+pub fn asString(v: Value) ?[]const u8 {
+    return switch (v) {
+        .string => |s| s,
+        else => null,
+    };
+}
 
-    /// Map lookup that folds a miss to nil — chainable:
-    /// `msg.field("params").field("subcommand").asString()`.
-    pub fn field(self: Value, key: []const u8) Value {
-        return self.get(key) orelse nil_value;
-    }
+pub fn asInteger(v: Value) ?i64 {
+    return switch (v) {
+        .integer => |n| n,
+        else => null,
+    };
+}
 
-    pub fn get(self: Value, key: []const u8) ?Value {
-        switch (self) {
-            .map => |entries| {
-                for (entries) |entry| {
-                    if (std.mem.eql(u8, entry.key, key)) return entry.value;
-                }
-                return null;
-            },
-            else => return null,
+/// Parse one inbound line into a Value living in `arena` (reset it per
+/// frame); null when the line is not a JSON object.
+pub fn parseFrame(arena: std.mem.Allocator, line: []const u8) ?Value {
+    const v = std.json.parseFromSliceLeaky(Value, arena, line, .{}) catch return null;
+    return switch (v) {
+        .object => v,
+        else => null,
+    };
+}
+
+/// The plugin's `[plugin.<id>]` settings, delivered as a JSON object in
+/// FLASH_PLUGIN_CONFIG; empty when unset or malformed.
+pub fn config(arena: std.mem.Allocator) Value {
+    const empty: Value = .{ .object = .empty };
+    const raw = std.posix.getenv("FLASH_PLUGIN_CONFIG") orelse return empty;
+    return parseFrame(arena, raw) orelse empty;
+}
+
+var in_storage: [1 << 20]u8 = undefined;
+var in_len: usize = 0;
+var in_pos: usize = 0;
+
+/// Blocking read of the next `\n`-terminated line from stdin; null on EOF
+/// (host gone) or an over-long line. Valid until the next call.
+pub fn readLine() ?[]const u8 {
+    while (true) {
+        if (std.mem.indexOfScalarPos(u8, in_storage[0..in_len], in_pos, '\n')) |nl| {
+            const line = in_storage[in_pos..nl];
+            in_pos = nl + 1;
+            return line;
         }
-    }
-
-    pub fn asString(self: Value) ?[]const u8 {
-        return switch (self) {
-            .string => |s| s,
-            else => null,
-        };
-    }
-
-    pub fn asInteger(self: Value) ?i64 {
-        return switch (self) {
-            .integer => |n| n,
-            else => null,
-        };
-    }
-};
-
-pub const DecodeError = error{ Malformed, OutOfMemory };
-
-pub const Decoder = struct {
-    buf: []const u8,
-    pos: usize = 0,
-    arena: std.mem.Allocator,
-
-    fn byte(self: *Decoder) DecodeError!u8 {
-        if (self.pos >= self.buf.len) return error.Malformed;
-        const b = self.buf[self.pos];
-        self.pos += 1;
-        return b;
-    }
-
-    fn take(self: *Decoder, n: usize) DecodeError![]const u8 {
-        if (self.pos + n > self.buf.len) return error.Malformed;
-        const out = self.buf[self.pos .. self.pos + n];
-        self.pos += n;
-        return out;
-    }
-
-    fn beInt(self: *Decoder, comptime T: type) DecodeError!T {
-        const raw = try self.take(@sizeOf(T));
-        return std.mem.readInt(T, raw[0..@sizeOf(T)], .big);
-    }
-
-    pub fn decode(self: *Decoder) DecodeError!Value {
-        const b = try self.byte();
-        if (b == 0xc0) return .nil;
-        if (b == 0xc2) return .{ .boolean = false };
-        if (b == 0xc3) return .{ .boolean = true };
-        if (b <= 0x7f) return .{ .integer = b };
-        if (b >= 0xe0) return .{ .integer = @as(i64, @as(i8, @bitCast(b))) };
-        if (b >= 0xa0 and b <= 0xbf) return .{ .string = try self.take(b & 0x1f) };
-        switch (b) {
-            0xd9 => return .{ .string = try self.take(try self.byte()) },
-            0xda => return .{ .string = try self.take(try self.beInt(u16)) },
-            0xdb => return .{ .string = try self.take(try self.beInt(u32)) },
-            0xcc => return .{ .integer = try self.byte() },
-            0xcd => return .{ .integer = try self.beInt(u16) },
-            0xce => return .{ .integer = try self.beInt(u32) },
-            0xcf => return .{ .integer = @bitCast(try self.beInt(u64)) },
-            0xd0 => return .{ .integer = @as(i8, @bitCast(try self.byte())) },
-            0xd1 => return .{ .integer = @as(i16, @bitCast(try self.beInt(u16))) },
-            0xd2 => return .{ .integer = @as(i32, @bitCast(try self.beInt(u32))) },
-            0xd3 => return .{ .integer = @bitCast(try self.beInt(u64)) },
-            // The host sends doubles (window frames on focus events); an
-            // undecodable frame here would be dropped silently, leaving an
-            // id'd request hanging to its host-side deadline.
-            0xca => return .{ .float = @floatCast(@as(f32, @bitCast(try self.beInt(u32)))) },
-            0xcb => return .{ .float = @bitCast(try self.beInt(u64)) },
-            else => {},
+        if (in_pos > 0) {
+            std.mem.copyForwards(u8, in_storage[0 .. in_len - in_pos], in_storage[in_pos..in_len]);
+            in_len -= in_pos;
+            in_pos = 0;
         }
-        var count: usize = 0;
-        var is_map = false;
-        if (b >= 0x80 and b <= 0x8f) {
-            count = b & 0x0f;
-            is_map = true;
-        } else if (b == 0xde) {
-            count = try self.beInt(u16);
-            is_map = true;
-        } else if (b == 0xdf) {
-            count = try self.beInt(u32);
-            is_map = true;
-        } else if (b >= 0x90 and b <= 0x9f) {
-            count = b & 0x0f;
-        } else if (b == 0xdc) {
-            count = try self.beInt(u16);
-        } else if (b == 0xdd) {
-            count = try self.beInt(u32);
-        } else {
-            return error.Malformed;
-        }
-        if (is_map) {
-            const entries = try self.arena.alloc(KV, count);
-            for (entries) |*entry| {
-                const key = try self.decode();
-                entry.key = key.asString() orelse return error.Malformed;
-                entry.value = try self.decode();
-            }
-            return .{ .map = entries };
-        }
-        const items = try self.arena.alloc(Value, count);
-        for (items) |*item| item.* = try self.decode();
-        return .{ .array = items };
+        if (in_len == in_storage.len) return null;
+        const n = std.c.read(0, in_storage[in_len..].ptr, in_storage.len - in_len);
+        if (n <= 0) return null;
+        in_len += @intCast(n);
     }
-};
+}
 
-/// Growable encode buffer over a fixed allocator-free window: the caller
-/// supplies storage sized for the largest frame it will ever emit.
-pub const Encoder = struct {
-    buf: []u8,
-    len: usize = 0,
-
-    fn push(self: *Encoder, bytes: []const u8) void {
-        std.debug.assert(self.len + bytes.len <= self.buf.len);
-        @memcpy(self.buf[self.len .. self.len + bytes.len], bytes);
-        self.len += bytes.len;
-    }
-
-    fn pushByte(self: *Encoder, b: u8) void {
-        self.push(&[_]u8{b});
-    }
-
-    fn pushBe(self: *Encoder, comptime T: type, value: T) void {
-        var raw: [@sizeOf(T)]u8 = undefined;
-        std.mem.writeInt(T, &raw, value, .big);
-        self.push(&raw);
-    }
-
-    pub fn nil(self: *Encoder) void {
-        self.pushByte(0xc0);
-    }
-
-    pub fn boolean(self: *Encoder, value: bool) void {
-        self.pushByte(if (value) 0xc3 else 0xc2);
-    }
-
-    pub fn integer(self: *Encoder, value: i64) void {
-        if (value >= 0 and value <= 127) {
-            self.pushByte(@intCast(value));
-        } else if (value < 0 and value >= -32) {
-            self.pushByte(@bitCast(@as(i8, @intCast(value))));
-        } else {
-            self.pushByte(0xd3);
-            self.pushBe(u64, @bitCast(value));
-        }
-    }
-
-    pub fn string(self: *Encoder, value: []const u8) void {
-        if (value.len < 32) {
-            self.pushByte(0xa0 | @as(u8, @intCast(value.len)));
-        } else {
-            self.pushByte(0xdb);
-            self.pushBe(u32, @intCast(value.len));
-        }
-        self.push(value);
-    }
-
-    pub fn mapHead(self: *Encoder, count: usize) void {
-        if (count < 16) {
-            self.pushByte(0x80 | @as(u8, @intCast(count)));
-        } else {
-            self.pushByte(0xde);
-            self.pushBe(u16, @intCast(count));
-        }
-    }
-
-    pub fn arrayHead(self: *Encoder, count: usize) void {
-        if (count < 16) {
-            self.pushByte(0x90 | @as(u8, @intCast(count)));
-        } else {
-            self.pushByte(0xdc);
-            self.pushBe(u16, @intCast(count));
-        }
-    }
-};
+var out_storage: [1 << 20]u8 = undefined;
 
 fn writeAll(bytes: []const u8) void {
     var written: usize = 0;
@@ -225,82 +95,78 @@ fn writeAll(bytes: []const u8) void {
     }
 }
 
-pub fn sendFrame(encoder: *const Encoder) void {
-    var header: [4]u8 = undefined;
-    std.mem.writeInt(u32, &header, @intCast(encoder.len), .big);
-    writeAll(&header);
-    writeAll(encoder.buf[0..encoder.len]);
+/// Serialize one frame as a single minified JSON line onto stdout.
+pub fn sendValue(v: Value) void {
+    var writer: std.Io.Writer = .fixed(&out_storage);
+    std.json.Stringify.value(v, .{}, &writer) catch return; // over-long frame: drop
+    writer.writeByte('\n') catch return;
+    writeAll(writer.buffered());
 }
 
-/// Read one length-prefixed frame into `storage`; null on EOF (host gone).
-pub fn readFrame(storage: []u8) ?[]const u8 {
-    var header: [4]u8 = undefined;
-    if (!readExact(&header)) return null;
-    const n = std.mem.readInt(u32, &header, .big);
-    if (n > storage.len) return null;
-    const payload = storage[0..n];
-    if (!readExact(payload)) return null;
-    return payload;
+pub fn sendResult(arena: std.mem.Allocator, id: i64, result: Value) void {
+    var frame: Value = .{ .object = .empty };
+    frame.object.put(arena, "id", .{ .integer = id }) catch return;
+    frame.object.put(arena, "result", result) catch return;
+    sendValue(frame);
 }
 
-fn readExact(out: []u8) bool {
-    var got: usize = 0;
-    while (got < out.len) {
-        const n = std.c.read(0, out.ptr + got, out.len - got);
-        if (n <= 0) return false;
-        got += @intCast(n);
+pub fn sendOk(arena: std.mem.Allocator, id: i64) void {
+    var result: Value = .{ .object = .empty };
+    result.object.put(arena, "ok", .{ .bool = true }) catch return;
+    sendResult(arena, id, result);
+}
+
+pub fn sendError(arena: std.mem.Allocator, id: i64, message: []const u8) void {
+    var result: Value = .{ .object = .empty };
+    result.object.put(arena, "ok", .{ .bool = false }) catch return;
+    result.object.put(arena, "error", .{ .string = message }) catch return;
+    sendResult(arena, id, result);
+}
+
+pub fn sendNotification(arena: std.mem.Allocator, method: []const u8, params: Value) void {
+    var frame: Value = .{ .object = .empty };
+    frame.object.put(arena, "method", .{ .string = method }) catch return;
+    frame.object.put(arena, "params", params) catch return;
+    sendValue(frame);
+}
+
+pub fn sendLog(arena: std.mem.Allocator, level: []const u8, message: []const u8) void {
+    var params: Value = .{ .object = .empty };
+    params.object.put(arena, "level", .{ .string = level }) catch return;
+    params.object.put(arena, "message", .{ .string = message }) catch return;
+    params.object.put(arena, "fields", .{ .object = .empty }) catch return;
+    sendNotification(arena, "flash.log", params);
+}
+
+const max_pending = 16;
+var next_call_id: i64 = 1;
+var pending_calls: [max_pending]i64 = undefined;
+var pending_len: usize = 0;
+
+/// Send a plugin→host RPC; returns the id whose eventual id-only response
+/// frame `takePending` will claim, or null when the pending table is full.
+pub fn callHost(arena: std.mem.Allocator, method: []const u8, params: Value) ?i64 {
+    if (pending_len == max_pending) return null;
+    const id = next_call_id;
+    next_call_id += 1;
+    var frame: Value = .{ .object = .empty };
+    frame.object.put(arena, "id", .{ .integer = id }) catch return null;
+    frame.object.put(arena, "method", .{ .string = method }) catch return null;
+    frame.object.put(arena, "params", params) catch return null;
+    pending_calls[pending_len] = id;
+    pending_len += 1;
+    sendValue(frame);
+    return id;
+}
+
+/// Claim a response id if it belongs to one of our outstanding host calls.
+pub fn takePending(id: i64) bool {
+    for (pending_calls[0..pending_len], 0..) |pending_id, i| {
+        if (pending_id == id) {
+            pending_len -= 1;
+            pending_calls[i] = pending_calls[pending_len];
+            return true;
+        }
     }
-    return true;
-}
-
-/// Envelope helpers shared by every response the plugin sends.
-pub fn beginResponse(encoder: *Encoder, id: Value) void {
-    encoder.mapHead(3);
-    encoder.string("jsonrpc");
-    encoder.string("2.0");
-    encoder.string("id");
-    switch (id) {
-        .integer => |n| encoder.integer(n),
-        .string => |s| encoder.string(s),
-        else => encoder.nil(),
-    }
-    encoder.string("result");
-}
-
-pub fn sendOk(encoder: *Encoder, id: Value) void {
-    encoder.len = 0;
-    beginResponse(encoder, id);
-    encoder.mapHead(1);
-    encoder.string("ok");
-    encoder.boolean(true);
-    sendFrame(encoder);
-}
-
-pub fn sendError(encoder: *Encoder, id: Value, message: []const u8) void {
-    encoder.len = 0;
-    beginResponse(encoder, id);
-    encoder.mapHead(2);
-    encoder.string("ok");
-    encoder.boolean(false);
-    encoder.string("error");
-    encoder.string(message);
-    sendFrame(encoder);
-}
-
-pub fn sendLog(encoder: *Encoder, level: []const u8, message: []const u8) void {
-    encoder.len = 0;
-    encoder.mapHead(3);
-    encoder.string("jsonrpc");
-    encoder.string("2.0");
-    encoder.string("method");
-    encoder.string("flash.log");
-    encoder.string("params");
-    encoder.mapHead(3);
-    encoder.string("level");
-    encoder.string(level);
-    encoder.string("message");
-    encoder.string(message);
-    encoder.string("fields");
-    encoder.mapHead(0);
-    sendFrame(encoder);
+    return false;
 }

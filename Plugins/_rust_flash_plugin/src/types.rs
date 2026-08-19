@@ -656,7 +656,7 @@ impl DiscoverResponse {
 /// Response to `candidate.resolve`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ResolveResponse {
-    pub did_resolve: bool,
+    pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -670,7 +670,7 @@ impl ResolveResponse {
 
     pub fn resolved(target_pid: Option<i64>) -> Self {
         Self {
-            did_resolve: true,
+            ok: true,
             target_pid,
             navigation_url: None,
         }
@@ -682,15 +682,22 @@ impl ResolveResponse {
     }
 }
 
+/// Disposition of a `source.action` / `navigation.restore`. The host only
+/// falls back to a generic keystroke on `Unhandled`; a claimed-but-`Failed`
+/// action must not double-fire through a synthesized key.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionOutcome {
+    Performed,
+    Failed,
+    #[default]
+    Unhandled,
+}
+
 /// Response to `source.action`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SourceActionResponse {
-    pub did_perform: bool,
-    /// True when this source owns the action for the request's context —
-    /// even when the command itself failed. The host only falls back to a
-    /// generic keystroke when the action was *unhandled*; a claimed-but-
-    /// failed action must not double-fire through a synthesized key.
-    pub handled: bool,
+    pub outcome: ActionOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -704,8 +711,7 @@ impl SourceActionResponse {
 
     pub fn performed(target_pid: Option<i64>) -> Self {
         Self {
-            did_perform: true,
-            handled: true,
+            outcome: ActionOutcome::Performed,
             target_pid,
             navigation_url: None,
         }
@@ -713,8 +719,7 @@ impl SourceActionResponse {
 
     pub fn failed(target_pid: Option<i64>) -> Self {
         Self {
-            did_perform: false,
-            handled: true,
+            outcome: ActionOutcome::Failed,
             target_pid,
             navigation_url: None,
         }

@@ -1,5 +1,6 @@
-//! Length-prefixed MessagePack framing: the outbound control/telemetry lanes,
-//! their frame-size bounds, and the emitter/receiver pair the serve loop and
+//! NDJSON framing (protocol v1): one JSON object per newline-terminated
+//! line. Holds the outbound control/telemetry lanes, their frame-size
+//! bounds, and the emitter/receiver pair the serve loop and
 //! [`Context`](crate::Context) share.
 
 use std::collections::BTreeMap;
@@ -114,13 +115,15 @@ impl Emitter {
     }
 
     fn encode(value: &Value, limit_bytes: usize) -> Result<Vec<u8>, FrameEncodingError> {
-        let payload = rmp_serde::to_vec(value).map_err(|_| FrameEncodingError::Serialization)?;
+        let mut payload =
+            serde_json::to_vec(value).map_err(|_| FrameEncodingError::Serialization)?;
         if payload.len() > limit_bytes {
             return Err(FrameEncodingError::Oversized {
                 encoded_bytes: payload.len(),
                 limit_bytes,
             });
         }
+        payload.push(b'\n');
         Ok(payload)
     }
 
@@ -152,7 +155,6 @@ impl Emitter {
         // stderr is the last-resort diagnostic channel when the rejected frame
         // itself cannot traverse stdout. Never include the original payload.
         let diagnostic = json!({
-            "jsonrpc": "2.0",
             "method": "flash.log",
             "params": {
                 "level": "warn",
@@ -220,7 +222,7 @@ impl Emitter {
     }
 
     pub(crate) fn notify(&self, method: &str, params: Value) {
-        let value = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        let value = json!({ "method": method, "params": params });
         match Self::encode(&value, MAX_TELEMETRY_FRAME_BYTES) {
             Ok(payload) => self.try_send_telemetry(payload),
             Err(error) => self.report_frame_rejection("telemetry", error),
@@ -236,7 +238,6 @@ impl Emitter {
         self.send_control(
             "host_request",
             json!({
-                "jsonrpc": "2.0",
                 "id": id,
                 "method": method,
                 "params": params,
@@ -249,13 +250,12 @@ impl Emitter {
         if id.is_null() {
             return;
         }
-        let response = json!({ "jsonrpc": "2.0", "id": id.clone(), "result": result });
+        let response = json!({ "id": id.clone(), "result": result });
         if let Err(error) = self.send_control("response", response).await {
             let ControlSendError::Encoding(encoding_error) = error else {
                 return;
             };
             let fallback = json!({
-                "jsonrpc": "2.0",
                 "id": id,
                 "result": {
                     "ok": false,
@@ -291,11 +291,11 @@ mod tests {
         emitter.respond(json!(7), json!({ "ok": true })).await;
 
         let first = outbound.recv().await.unwrap();
-        let first: Value = rmp_serde::from_slice(&first).unwrap();
+        let first: Value = serde_json::from_slice(&first).unwrap();
         assert_eq!(first.get("id"), Some(&json!(7)));
 
         let second = outbound.recv().await.unwrap();
-        let second: Value = rmp_serde::from_slice(&second).unwrap();
+        let second: Value = serde_json::from_slice(&second).unwrap();
         assert_eq!(
             second.get("method").and_then(Value::as_str),
             Some("status.updated")
@@ -326,7 +326,7 @@ mod tests {
             .await;
 
         let payload = outbound.recv().await.unwrap();
-        let response: Value = rmp_serde::from_slice(&payload).unwrap();
+        let response: Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(response.get("id"), Some(&json!(9)));
         assert_eq!(
             response.pointer("/result/error").and_then(Value::as_str),
@@ -347,7 +347,7 @@ mod tests {
         );
 
         let payload = outbound.recv().await.unwrap();
-        let warning: Value = rmp_serde::from_slice(&payload).unwrap();
+        let warning: Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(
             warning.get("method").and_then(Value::as_str),
             Some("flash.log")
