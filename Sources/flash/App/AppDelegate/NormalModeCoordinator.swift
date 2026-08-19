@@ -1790,7 +1790,8 @@ extension AppDelegate {
           suggestions: nil,
           emptyText: "",
           cursorIndex: overlay.commandLineCursorIndex,
-          underlineRange: queryRange)
+          underlineRange: queryRange,
+          underlineInvalid: !confirmedBangIsKnown(bang.token))
         return
       }
       updateCandidateMatches(query: query)
@@ -2257,6 +2258,19 @@ extension AppDelegate {
   private func bangListCandidates() -> [Candidate] {
     pluginManager.shebangCandidates(in: pluginSelectorContext())
       + candidateFinderCandidates.filter { $0.kind == CandidateFinder.bangKind }
+  }
+
+  /// True when a confirmed `!token` is actually routable: an exact shebang
+  /// registration, or a bang its wildcard owner has published to the pool
+  /// (searchengines' curated table rows). A wildcard registration alone
+  /// doesn't count — the owner would just reject the token at dispatch.
+  /// Drives the lock-in underline color: purple for routable, red for a
+  /// token nothing will answer.
+  private func confirmedBangIsKnown(_ token: String) -> Bool {
+    let lc = token.lowercased()
+    return bangListCandidates().contains {
+      $0.sourcePayload?.lowercased() == lc
+    }
   }
 
   /// Pick the candidate pool and the text we score against. Three cases:

@@ -16,15 +16,18 @@ extension OverlayPanel {
     suggestions: [CandidateDisplayItem]? = nil,
     emptyText: String = "no matching app",
     cursorIndex: Int? = nil,
-    underlineRange: NSRange? = nil
+    underlineRange: NSRange? = nil,
+    underlineInvalid: Bool = false
   ) {
     FlashLog.trace(
       "[overlay] display_command_line text=\(text) cursor=\(cursorIndex ?? text.count) "
         + "suggestions=\(suggestions?.count ?? 0) "
-        + "underline=\(underlineRange.map(NSStringFromRange) ?? "nil")")
+        + "underline=\(underlineRange.map(NSStringFromRange) ?? "nil")"
+        + (underlineInvalid ? " invalid=true" : ""))
     inputMode = .commandLine
     setCommandTextFieldText(
-      text, cursorIndex: cursorIndex ?? text.count, underlineRange: underlineRange)
+      text, cursorIndex: cursorIndex ?? text.count, underlineRange: underlineRange,
+      underlineInvalid: underlineInvalid)
     commandPromptVisible = true
     commandPromptPrefix = ""
     if let suggestions {
@@ -209,7 +212,8 @@ extension OverlayPanel {
   }
 
   func setCommandTextFieldText(
-    _ text: String, cursorIndex: Int, underlineRange: NSRange? = nil
+    _ text: String, cursorIndex: Int, underlineRange: NSRange? = nil,
+    underlineInvalid: Bool = false
   ) {
     suppressCommandTextFieldChange = true
     commandLineText = text
@@ -223,9 +227,12 @@ extension OverlayPanel {
       // Render `!<token>` underlined in the COMMAND accent (the same
       // purple as the COMMAND mode badge) so the lock-in reads as part
       // of the command surface rather than a generic green highlight.
+      // A token no plugin will answer renders RED instead — the submit
+      // is going to fail, and the color says so before the user commits.
       // NSTextField flows `attributedStringValue` into the live field
       // editor (NSTextView); the editor preserves attributes during
       // typing because we re-apply on every refresh.
+      let accent = underlineInvalid ? Self.nordAuroraRed : Self.nordAuroraPurple
       let attributed = NSMutableAttributedString(string: text)
       attributed.addAttribute(
         .font, value: font,
@@ -236,8 +243,8 @@ extension OverlayPanel {
       attributed.addAttributes(
         [
           .underlineStyle: NSUnderlineStyle.single.rawValue,
-          .underlineColor: Self.nordAuroraPurple,
-          .foregroundColor: Self.nordAuroraPurple,
+          .underlineColor: accent,
+          .foregroundColor: accent,
         ],
         range: underline)
       if commandTextField.attributedStringValue != attributed {

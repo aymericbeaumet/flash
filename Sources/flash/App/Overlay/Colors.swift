@@ -26,6 +26,7 @@ extension OverlayPanel {
   static let nordAuroraGreen = NSColor(calibratedRed: 0.64, green: 0.75, blue: 0.55, alpha: 1)
   static let nordAuroraYellow = NSColor(calibratedRed: 0.92, green: 0.80, blue: 0.55, alpha: 1)
   static let nordAuroraPurple = NSColor(calibratedRed: 0.71, green: 0.56, blue: 0.68, alpha: 1)
+  static let nordAuroraRed = NSColor(calibratedRed: 0.75, green: 0.38, blue: 0.42, alpha: 1)
   static let tmuxGrey245 = NSColor(calibratedWhite: 0.54, alpha: 1)
   static let tmuxRed196 = NSColor(calibratedRed: 1.00, green: 0.00, blue: 0.00, alpha: 1)
 
