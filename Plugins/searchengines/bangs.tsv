@@ -91,6 +91,8 @@ ebay https://www.ebay.com/sch/i.html?_nkw={{{s}}}
 
 # Maps & translate
 maps https://www.google.com/maps/search/{{{s}}}
+gm https://www.google.com/maps/search/{{{s}}}
+gmaps https://www.google.com/maps/search/{{{s}}}
 googlemaps https://www.google.com/maps/search/{{{s}}}
 osm https://www.openstreetmap.org/search?query={{{s}}}
 openstreetmap https://www.openstreetmap.org/search?query={{{s}}}

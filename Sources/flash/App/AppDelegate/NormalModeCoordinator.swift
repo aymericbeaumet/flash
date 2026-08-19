@@ -2385,7 +2385,14 @@ extension AppDelegate {
       query: remainder,
       in: pluginSelectorContext()
     ) { [weak self] ok, pid, stdout, navigationURL in
-      guard ok, let self else { return }
+      guard let self else { return }
+      guard ok else {
+        // A failed bang (unknown token, blocked open, plugin error) must
+        // say so — a submit that does visibly nothing reads as Flash
+        // being broken.
+        self.overlay.displayBanner("!\(token) failed")
+        return
+      }
       self.activatePluginCommandTarget(pid, navigationURL: navigationURL)
       guard let stdout, !stdout.isEmpty else { return }
       self.overlay.displayBanner(stdout)

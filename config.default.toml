@@ -46,6 +46,22 @@ mouse_grid_steps = 3
 mouse_grid_opacity = 0.5
 
 [overlay]
+# Hint chip typography and colors. font_size drives the hint label size
+# (chip geometry derives from it); colors are #RRGGBB or #RRGGBBAA.
+font_size = 12
+# Regular `f` hint chips: text, vertical gradient (set both stops equal
+# for a flat fill), and the 1px chip border.
+hint_fg = "#302505"
+hint_bg_top = "#FFF785"
+hint_bg_bottom = "#FFC542"
+hint_border = "#E3BE23"
+# Chips whose target priority is `important`/`urgent` (tmux panes,
+# browser tabs, …) — a red accent against the yellow regular chips. Set
+# any field equal to its hint_* counterpart to opt out per surface.
+important_hint_fg = "#ECEFF4"
+important_hint_bg_top = "#BF616A"
+important_hint_bg_bottom = "#5C3940"
+important_hint_border = "#BF616A"
 # Colored stroke around the focused app's frontmost window while advanced
 # mode is on — green in normal, glowing blue in insert, purple in command —
 # so the active window is always identifiable (most useful for apps with
