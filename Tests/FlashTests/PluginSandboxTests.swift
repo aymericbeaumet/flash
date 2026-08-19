@@ -29,8 +29,9 @@ final class PluginSandboxTests: XCTestCase {
   }
 
   func testSubprocessCapabilityOptsOutOfTheSandbox() {
-    // processes/tmux exec setgid /bin/ps, which seatbelt refuses — so they must
-    // run unsandboxed.
+    // Legacy behavior for spec-less plugins (tmux execs setgid /bin/ps for
+    // its process tree): subprocess still opts out of the transitional
+    // profile until the plugin declares a deny-default spec.
     XCTAssertNil(PluginProcess.networkSandboxProfile(for: manifest([.subprocess])))
   }
 

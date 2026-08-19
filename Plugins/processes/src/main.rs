@@ -3,8 +3,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, run_command, Candidate, CommandOutput, CommandRequest, CommandResponse, Context, Event,
-    RefreshGate, ResolveResponse,
+    run, Candidate, CommandRequest, CommandResponse, Context, Event, RefreshGate, ResolveResponse,
 };
 
 const SOURCE_ID: &str = "plugin:processes";
@@ -61,20 +60,22 @@ impl FlashPlugin for Processes {
         let Some(pid) = candidate.payload_str().and_then(|s| s.parse::<i32>().ok()) else {
             return ResolveResponse::unresolved();
         };
-        let result = send_term(&ctx, pid).await;
-        if result.ok {
-            // Best effort: refresh so the row disappears immediately.
-            let refresh_ctx = ctx.clone();
-            tokio::spawn(async move {
-                refresh_candidates(&refresh_ctx).await;
-            });
-            ResolveResponse::resolved(None)
-        } else {
-            ctx.log(
-                "warn",
-                &format!("[processes] kill pid {} failed: {}", pid, result.stderr),
-            );
-            ResolveResponse::unresolved()
+        match send_term(pid) {
+            Ok(()) => {
+                // Best effort: refresh so the row disappears immediately.
+                let refresh_ctx = ctx.clone();
+                tokio::spawn(async move {
+                    refresh_candidates(&refresh_ctx).await;
+                });
+                ResolveResponse::resolved(None)
+            }
+            Err(error) => {
+                ctx.log(
+                    "warn",
+                    &format!("[processes] kill pid {pid} failed: {error}"),
+                );
+                ResolveResponse::unresolved()
+            }
         }
     }
 }
@@ -101,8 +102,9 @@ async fn refresh_candidates_inner(ctx: &Context) -> bool {
         log_refresh(ctx, "failed", ctx.warm_locations().len(), started_at);
         return false;
     };
-    // A successful empty `ps` response is authoritative. Only an execution
-    // failure preserves the previous snapshot.
+    // A libproc listing is never empty on success (this process exists), so
+    // list_processes treats empty as failure and the previous snapshot is
+    // preserved; a successful listing always replaces the store.
     let count = candidates.len();
     ctx.set_locations(SOURCE_ID, candidates);
     log_refresh(
@@ -160,41 +162,31 @@ fn candidate_for(row: &ProcessRow) -> Candidate {
         .payload(pid.to_string())
 }
 
+/// Sample window for the instantaneous CPU measurement — long enough to be
+/// meaningful, short enough that the 10s poll cadence dwarfs it.
+const CPU_SAMPLE_WINDOW: Duration = Duration::from_millis(150);
+
 async fn list_processes(ctx: &Context) -> Option<Vec<ProcessRow>> {
-    // Empty `=` headers omit the column titles, so output is rows only.
-    let argv = [
-        "/bin/ps".to_string(),
-        "-axo".to_string(),
-        "pid=,pcpu=,pmem=,comm=".to_string(),
-    ];
-    let result = run_command(ctx, &argv, Duration::from_secs(5)).await;
-    if !result.ok {
-        ctx.log("warn", &format!("[processes] ps failed: {}", result.stderr));
+    // libproc, not /bin/ps: no subprocess (ps is setgid, hostile to the
+    // deny-default seatbelt), and only this uid's visible processes — the
+    // only ones `!kill` could signal anyway. An empty table is impossible
+    // (this process exists), so empty means the listing failed.
+    let samples = flash_plugin::process::list_processes(CPU_SAMPLE_WINDOW).await;
+    if samples.is_empty() {
+        ctx.log("warn", "[processes] libproc listing returned no rows");
         return None;
     }
-    Some(result.stdout.lines().filter_map(parse_ps_row).collect())
-}
-
-fn parse_ps_row(line: &str) -> Option<ProcessRow> {
-    let mut parts = line.split_whitespace();
-    let pid: i32 = parts.next()?.parse().ok()?;
-    let cpu: f32 = parts.next()?.parse().ok().unwrap_or(0.0);
-    let mem: f32 = parts.next()?.parse().ok().unwrap_or(0.0);
-    let comm_path = parts.collect::<Vec<_>>().join(" ");
-    let comm = basename(comm_path.trim());
-    if comm.is_empty() {
-        return None;
-    }
-    Some(ProcessRow {
-        pid,
-        comm,
-        cpu,
-        mem,
-    })
-}
-
-fn basename(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).to_string()
+    Some(
+        samples
+            .into_iter()
+            .map(|sample| ProcessRow {
+                pid: sample.pid,
+                comm: sample.comm,
+                cpu: sample.cpu_percent,
+                mem: sample.mem_percent,
+            })
+            .collect(),
+    )
 }
 
 async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
@@ -203,11 +195,9 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
     }
     // Pure-numeric query is treated as an exact PID — no fuzzy match.
     if let Ok(pid) = query.parse::<i32>() {
-        let result = send_term(ctx, pid).await;
-        return if result.ok {
-            CommandResponse::toast(format!("SIGTERM → pid {pid}"))
-        } else {
-            CommandResponse::error(format!("kill pid {pid}: {}", result.stderr.trim()))
+        return match send_term(pid) {
+            Ok(()) => CommandResponse::toast(format!("SIGTERM → pid {pid}")),
+            Err(error) => CommandResponse::error(format!("kill pid {pid}: {error}")),
         };
     }
     let Some(rows) = list_processes(ctx).await else {
@@ -223,11 +213,9 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
         [single] => {
             let pid = single.pid;
             let name = single.comm.clone();
-            let result = send_term(ctx, pid).await;
-            if result.ok {
-                CommandResponse::toast(format!("SIGTERM → {name} (pid {pid})"))
-            } else {
-                CommandResponse::error(format!("kill {name} (pid {pid}): {}", result.stderr.trim()))
+            match send_term(pid) {
+                Ok(()) => CommandResponse::toast(format!("SIGTERM → {name} (pid {pid})")),
+                Err(error) => CommandResponse::error(format!("kill {name} (pid {pid}): {error}")),
             }
         }
         many => {
@@ -245,17 +233,8 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
     }
 }
 
-async fn send_term(ctx: &Context, pid: i32) -> CommandOutput {
-    run_command(
-        ctx,
-        &[
-            "/bin/kill".to_string(),
-            "-TERM".to_string(),
-            pid.to_string(),
-        ],
-        Duration::from_secs(5),
-    )
-    .await
+fn send_term(pid: i32) -> Result<(), String> {
+    flash_plugin::process::terminate_pid(pid).map_err(|error| error.to_string())
 }
 
 fn main() {
@@ -265,30 +244,48 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
-    #[test]
-    fn parses_ps_row_with_path_comm() {
-        let row = parse_ps_row(" 12345  1.2  0.4 /usr/bin/node").unwrap();
-        assert_eq!(row.pid, 12345);
-        assert_eq!(row.comm, "node");
-        assert!((row.cpu - 1.2).abs() < 0.001);
-        assert!((row.mem - 0.4).abs() < 0.001);
+    /// Golden-output gate for the libproc swap: the old implementation was
+    /// `/bin/ps -xo pid=`; every same-user pid ps reports must be visible
+    /// through libproc too, modulo process churn between the two snapshots.
+    #[tokio::test]
+    async fn libproc_listing_covers_the_ps_view() {
+        let samples = flash_plugin::process::list_processes(Duration::from_millis(50)).await;
+        let ours: HashSet<i32> = samples.iter().map(|sample| sample.pid).collect();
+        assert!(
+            ours.contains(&(std::process::id() as i32)),
+            "listing must include this test process"
+        );
+        assert!(
+            samples
+                .iter()
+                .all(|sample| !sample.comm.is_empty() && sample.pid > 0),
+            "every row carries a pid and a comm"
+        );
+
+        let ps = tokio::process::Command::new("/bin/ps")
+            .args(["-xo", "pid="])
+            .output()
+            .await
+            .expect("spawn ps");
+        let ps_pids: HashSet<i32> = String::from_utf8_lossy(&ps.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse().ok())
+            .collect();
+        assert!(!ps_pids.is_empty(), "ps golden reference produced no pids");
+        let overlap = ps_pids.intersection(&ours).count();
+        assert!(
+            overlap * 10 >= ps_pids.len() * 9,
+            "libproc covers only {overlap}/{} of ps's same-user view",
+            ps_pids.len()
+        );
     }
 
     #[test]
-    fn parses_ps_row_with_spaces_in_path() {
-        let row = parse_ps_row(
-            " 99  0.0  0.0 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        )
-        .unwrap();
-        assert_eq!(row.pid, 99);
-        assert_eq!(row.comm, "Google Chrome");
-    }
-
-    #[test]
-    fn rejects_empty_or_malformed_row() {
-        assert!(parse_ps_row("").is_none());
-        assert!(parse_ps_row("notapid 1 2 cmd").is_none());
+    fn terminate_reports_os_errors() {
+        // pid 1 (launchd) is never signalable from a user test.
+        assert!(flash_plugin::process::terminate_pid(1).is_err());
     }
 
     #[test]

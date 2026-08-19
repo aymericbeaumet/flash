@@ -976,14 +976,22 @@ struct PluginSandboxSpec: Codable, Equatable {
   /// Allow sending AppleEvents (osascript-driven plugins): opens the
   /// AppleEvents/LaunchServices/TCC mach services and appleevent-send.
   var appleEvents: Bool
+  /// Allow signalling other processes (`!kill`-style plugins).
+  var signal: Bool
+  /// Allow reading other processes' info (libproc listing/rusage) beyond
+  /// the always-allowed `(target self)`.
+  var processInfo: Bool
 
   init(
-    exec: [String] = [], read: [String] = [], write: [String] = [], appleEvents: Bool = false
+    exec: [String] = [], read: [String] = [], write: [String] = [],
+    appleEvents: Bool = false, signal: Bool = false, processInfo: Bool = false
   ) {
     self.exec = exec
     self.read = read
     self.write = write
     self.appleEvents = appleEvents
+    self.signal = signal
+    self.processInfo = processInfo
   }
 
   init(from decoder: Decoder) throws {
@@ -992,6 +1000,8 @@ struct PluginSandboxSpec: Codable, Equatable {
     self.read = try c.decodeIfPresent([String].self, forKey: .read) ?? []
     self.write = try c.decodeIfPresent([String].self, forKey: .write) ?? []
     self.appleEvents = try c.decodeIfPresent(Bool.self, forKey: .appleevents) ?? false
+    self.signal = try c.decodeIfPresent(Bool.self, forKey: .signal) ?? false
+    self.processInfo = try c.decodeIfPresent(Bool.self, forKey: .processInfo) ?? false
   }
 
   func encode(to encoder: Encoder) throws {
@@ -1000,10 +1010,13 @@ struct PluginSandboxSpec: Codable, Equatable {
     if !read.isEmpty { try c.encode(read, forKey: .read) }
     if !write.isEmpty { try c.encode(write, forKey: .write) }
     if appleEvents { try c.encode(appleEvents, forKey: .appleevents) }
+    if signal { try c.encode(signal, forKey: .signal) }
+    if processInfo { try c.encode(processInfo, forKey: .processInfo) }
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case exec, read, write, appleevents
+    case exec, read, write, appleevents, signal
+    case processInfo = "process_info"
   }
 }
 

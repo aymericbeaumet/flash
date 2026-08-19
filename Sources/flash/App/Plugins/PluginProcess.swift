@@ -846,6 +846,12 @@ final class PluginProcess {
         "(allow mach-lookup (global-name \"com.apple.coreservices.launchservicesd\")"
           + " (global-name \"com.apple.lsd.mapdb\"))")
     }
+    if spec.signal {
+      lines.append("(allow signal)")
+    }
+    if spec.processInfo {
+      lines.append("(allow process-info*)")
+    }
     if spec.appleEvents {
       // osascript-driven plugins: AppleEvents routing and the TCC daemon
       // that mediates Automation consent.

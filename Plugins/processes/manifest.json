@@ -5,9 +5,10 @@
   "description": "List running processes in flashlight; SIGTERM them with !kill <pid|name>.",
   "install": "true",
   "exec": ["./flash-plugin-processes"],
-  "capabilities": [
-    "subprocess"
-  ],
+  "sandbox": {
+    "process_info": true,
+    "signal": true
+  },
   "commands": {
     "items": [
       {
