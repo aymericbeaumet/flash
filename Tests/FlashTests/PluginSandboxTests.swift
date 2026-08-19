@@ -13,7 +13,7 @@ final class PluginSandboxTests: XCTestCase {
   }
 
   func testPluginWithoutCapabilitiesIsNetworkDenied() {
-    let profile = PluginProcess.networkSandboxProfile(for: manifest([]))
+    let profile = PluginSandbox.networkSandboxProfile(for: manifest([]))
     XCTAssertNotNil(profile)
     XCTAssertTrue(profile?.contains("(deny network*)") == true, profile ?? "nil")
     XCTAssertTrue(profile?.contains("(allow default)") == true, profile ?? "nil")
@@ -21,18 +21,18 @@ final class PluginSandboxTests: XCTestCase {
 
   func testUnrelatedCapabilityIsStillNetworkDenied() {
     // A non-network capability (accessibility) does not grant network access.
-    XCTAssertNotNil(PluginProcess.networkSandboxProfile(for: manifest([.accessibility])))
+    XCTAssertNotNil(PluginSandbox.networkSandboxProfile(for: manifest([.accessibility])))
   }
 
   func testNetworkCapabilityOptsOutOfTheSandbox() {
-    XCTAssertNil(PluginProcess.networkSandboxProfile(for: manifest([.network])))
+    XCTAssertNil(PluginSandbox.networkSandboxProfile(for: manifest([.network])))
   }
 
   func testSubprocessCapabilityOptsOutOfTheSandbox() {
     // Legacy behavior for spec-less plugins (tmux execs setgid /bin/ps for
     // its process tree): subprocess still opts out of the transitional
     // profile until the plugin declares a deny-default spec.
-    XCTAssertNil(PluginProcess.networkSandboxProfile(for: manifest([.subprocess])))
+    XCTAssertNil(PluginSandbox.networkSandboxProfile(for: manifest([.subprocess])))
   }
 
   private func specManifest(
@@ -48,7 +48,7 @@ final class PluginSandboxTests: XCTestCase {
   private let dataDir = URL(fileURLWithPath: "/tmp/plugin-data")
 
   func testSandboxSpecGeneratesDenyDefault() {
-    let resolved = PluginProcess.resolvedSandboxProfile(
+    let resolved = PluginSandbox.resolvedSandboxProfile(
       manifest: specManifest(), settings: [:], root: root, dataDir: dataDir)
     XCTAssertEqual(resolved.mode, "deny_default")
     let profile = try! XCTUnwrap(resolved.profile)
@@ -67,7 +67,7 @@ final class PluginSandboxTests: XCTestCase {
   }
 
   func testSandboxSpecComposesNetworkCapability() {
-    let resolved = PluginProcess.resolvedSandboxProfile(
+    let resolved = PluginSandbox.resolvedSandboxProfile(
       manifest: specManifest([.network]), settings: [:], root: root, dataDir: dataDir)
     XCTAssertTrue(resolved.profile?.contains("(allow network-outbound)") == true)
     XCTAssertTrue(resolved.profile?.contains("(deny default)") == true)
@@ -75,7 +75,7 @@ final class PluginSandboxTests: XCTestCase {
 
   func testSandboxSpecComposesExecAllowlist() {
     let spec = PluginSandboxSpec(exec: ["/usr/bin/osascript"], read: ["~/Library/Notes"])
-    let resolved = PluginProcess.resolvedSandboxProfile(
+    let resolved = PluginSandbox.resolvedSandboxProfile(
       manifest: specManifest(spec: spec), settings: [:], root: root, dataDir: dataDir)
     let profile = try! XCTUnwrap(resolved.profile)
     XCTAssertTrue(profile.contains("(allow process-exec (literal \"/usr/bin/osascript\"))"))
@@ -85,7 +85,7 @@ final class PluginSandboxTests: XCTestCase {
   }
 
   func testConfigKillSwitchDisablesSandboxLoudly() {
-    let resolved = PluginProcess.resolvedSandboxProfile(
+    let resolved = PluginSandbox.resolvedSandboxProfile(
       manifest: specManifest(), settings: ["sandbox": .bool(false)],
       root: root, dataDir: dataDir)
     XCTAssertNil(resolved.profile)
@@ -93,7 +93,7 @@ final class PluginSandboxTests: XCTestCase {
   }
 
   func testLegacyProfileStillAppliesWithoutSpec() {
-    let resolved = PluginProcess.resolvedSandboxProfile(
+    let resolved = PluginSandbox.resolvedSandboxProfile(
       manifest: manifest([]), settings: [:],
       root: root, dataDir: dataDir)
     XCTAssertEqual(resolved.mode, "network_denied")
