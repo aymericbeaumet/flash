@@ -867,23 +867,56 @@ final class PluginProcess {
         self.failStartup("[plugin] initialization failed: \(error)", fatal: true)
         return
       }
-      if !self.manifest.sources.isEmpty,
-        !PluginWireCodec.hasCanonicalInitialPublication(response, pluginID: self.manifest.id)
-      {
+      if self.manifest.sources.isEmpty {
+        self.completeStartup()
+      } else {
+        // Warm-catalog proof: a sources plugin must not reply to initialize
+        // until its canonical catalog exists, so the first pull decoding
+        // cleanly (an authoritative empty list included) IS readiness. This
+        // replaces the copy-paste-prone published_sources echo, which three
+        // shims used to hardcode wrong, turning any future `sources` block
+        // into a fatal park.
+        self.verifyInitialPublication(process: process)
+      }
+    }
+  }
+
+  /// First `sources.snapshot` pull after a successful initialize reply,
+  /// before the plugin is warm-eligible. Runs outside the warm gate on
+  /// purpose. A malformed catalog restarts (non-fatal): the plugin may
+  /// legitimately warm slower than it replied.
+  private func verifyInitialPublication(process: Process) {
+    sendRequest(
+      method: "sources.snapshot",
+      params: [:],
+      timeout: .milliseconds(1_000)
+    ) { [weak self, weak process] response in
+      guard let self, let process, self.process === process else { return }
+      let raw = response?["candidates"] as? [[String: Any]]
+      let items = raw.flatMap {
+        PluginWireCodec.catalogCandidates(
+          from: $0,
+          sourceID: "plugin:\(self.manifest.id)",
+          allowedSources: Set(self.manifest.candidateSources))
+      }
+      guard items != nil else {
         self.failStartup(
-          "[plugin] initialization failed: candidate source did not publish exactly "
-            + "\"plugin:\(self.manifest.id)\"",
-          fatal: true)
+          "[plugin] initialization failed: first sources.snapshot did not decode",
+          fatal: false)
         return
       }
-      self.clearError()
-      self.initializationCompleted = true
-      self.setState(.ready)
-      // Successful startup resets the backoff counter so a transient crash
-      // doesn't accumulate across hours of healthy operation.
-      self.restartCount = 0
-      self.restartTimestamps.removeAll()
+      self.completeStartup()
     }
+  }
+
+  private func completeStartup() {
+    clearError()
+    initializationCompleted = true
+    setState(.ready)
+    // Successful startup resets the backoff counter so a transient crash
+    // doesn't accumulate across hours of healthy operation.
+    restartCount = 0
+    restartTimestamps.removeAll()
   }
 
   private func installIfNeeded() throws {

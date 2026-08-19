@@ -48,11 +48,12 @@ Plugin log lines travel as `flash.log` notifications and are recorded with
 
 - `initialize` — protocol handshake. The request carries
   `{plugin_id, version, protocol_version: 3, running_applications}`; the reply
-  must echo protocol version 3 exactly. A manifest that declares `sources`
-  makes readiness conditional: the reply's `published_sources` must be exactly
-  `["plugin:<manifest-id>"]`, meaning the canonical warm catalog (possibly an
-  authoritative empty list) exists before the plugin is ready. Violations are
-  fatal startup errors with no compatibility translation.
+  must echo protocol version 3 exactly. A plugin that declares `sources` must
+  not reply until its canonical warm catalog (possibly an authoritative empty
+  list) exists: the host proves readiness by pulling a first
+  `sources.snapshot` right after the reply, and only a cleanly decoding pull
+  makes the plugin eligible for warm reads. A failed first pull restarts the
+  plugin (non-fatal).
 - `heartbeat` (id `-1`) — liveness probe; reply promptly.
 - `shutdown` — run cleanup, reply, exit.
 

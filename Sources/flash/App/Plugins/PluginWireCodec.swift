@@ -32,16 +32,6 @@ enum PluginWireCodec {
     protocolVersionValue(response) == protocolVersion
   }
 
-  static func hasCanonicalInitialPublication(
-    _ response: [String: Any]?,
-    pluginID: String
-  ) -> Bool {
-    guard let values = response?["published_sources"] as? [Any] else { return false }
-    let sources = values.compactMap { $0 as? String }
-    return sources.count == values.count
-      && sources == ["plugin:\(pluginID)"]
-  }
-
   static func protocolVersionValue(_ response: [String: Any]?) -> Int? {
     if let value = response?["protocol_version"] as? Int { return value }
     return (response?["protocol_version"] as? NSNumber)?.intValue

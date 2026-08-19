@@ -473,7 +473,7 @@ final class PluginSystemTests: XCTestCase {
       // Source-level greps apply to Rust plugins only; the non-Rust
       // polyglot plugins (emojis/bun, searchengines/zig) satisfy the same
       // warm-startup contract through the host's runtime readiness gate
-      // (initialize must report the canonical published_sources).
+      // (the first sources.snapshot pull must decode before warm reads).
       let mainRS = root.appendingPathComponent("src/main.rs")
       guard FileManager.default.fileExists(atPath: mainRS.path) else { continue }
       let body = try String(contentsOf: mainRS)
@@ -502,25 +502,6 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["protocol_version": 2]))
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(["ok": true]))
     XCTAssertFalse(PluginWireCodec.acceptsProtocolVersion(nil))
-  }
-
-  func testCandidatePluginReadinessRequiresExactlyItsCanonicalWarmPublication() {
-    XCTAssertTrue(
-      PluginWireCodec.hasCanonicalInitialPublication(
-        ["published_sources": ["plugin:notes"]],
-        pluginID: "notes"))
-    XCTAssertFalse(
-      PluginWireCodec.hasCanonicalInitialPublication(
-        ["published_sources": []],
-        pluginID: "notes"))
-    XCTAssertFalse(
-      PluginWireCodec.hasCanonicalInitialPublication(
-        ["published_sources": ["plugin:other"]],
-        pluginID: "notes"))
-    XCTAssertFalse(
-      PluginWireCodec.hasCanonicalInitialPublication(
-        ["published_sources": ["plugin:notes", "plugin:extra"]],
-        pluginID: "notes"))
   }
 
   func testQueryEvaluatorAnswerPayloadsAreRejectedAtomicallyAboveTheCap() {
