@@ -54,8 +54,11 @@ final class StatusItemController: NSObject {
       Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Flash"
     let version =
       Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-    let commit =
+    // Display the abbreviated hash; the full one is still in Info.plist for
+    // anyone who needs an exact ref.
+    let fullCommit =
       Bundle.main.object(forInfoDictionaryKey: "FlashGitCommit") as? String ?? "unknown"
+    let commit = fullCommit == "unknown" ? fullCommit : String(fullCommit.prefix(7))
 
     let icon = NSImageView(image: NSApp.applicationIconImage ?? NSImage())
     icon.setFrameSize(NSSize(width: 64, height: 64))
