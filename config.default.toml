@@ -227,16 +227,22 @@ notch_margin = 0
 #   #{active_app_name}
 #   #{active_bundle_identifier}
 #   #{date}
-#   #{host} / #{hostname} / #H
+#   #{host} / #H
 #   #{host_short} / #h
 #   #{user}
 #   #{uid}
 #   #{pid}
-#   any other tmux status variable       # accepted, renders as empty when Flash has no equivalent
 #   #{plugin:loaded_count}
 #   #{plugin:ready_count}
 #   #{plugin:error_count}
-#   #{plugin:<plugin>.<segment>}     # e.g. #{plugin:system.battery}
+#   #{plugin:<plugin>.<segment>}     # e.g. #{plugin:system.battery};
+#                                    # tmux state comes from the tmux plugin:
+#                                    # #{plugin:tmux.session} / #{plugin:tmux.window}
+#                                    # / #{plugin:tmux.pane}
+#
+# Any other bare #{token} is a config error — tmux-state names like
+# #{session_name} or #S no longer validate-and-render-empty; use the
+# #{plugin:tmux.<segment>} equivalents above.
 #   #{script:<path>}                 # run <path>, show its stdout
 #   #{script=N:<path>}               # …re-running every N seconds
 #   #{command:<shell command>}       # run via /bin/sh -lc

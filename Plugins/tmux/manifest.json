@@ -2,7 +2,7 @@
   "id": "tmux",
   "name": "tmux",
   "version": "0.1.0",
-  "description": "Hints tmux panes/links and exposes a tmux window finder.",
+  "description": "Hints tmux panes/links, exposes a tmux window finder, and publishes session/window/pane statusbar segments.",
   "exec": ["./flash-plugin-tmux"],
   "capabilities": [
     "subprocess",
@@ -32,6 +32,13 @@
   "navigation": {
     "schemes": [
       "tmux"
+    ]
+  },
+  "status": {
+    "segments": [
+      "session",
+      "window",
+      "pane"
     ]
   },
   "listen": [

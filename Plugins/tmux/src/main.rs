@@ -20,6 +20,10 @@
 //!      actions consult that warm cache first; the actions validate only the
 //!      cached client's live session, so `[t` / `]t` avoid a host-wide `ps`
 //!      and all-socket rediscovery before changing windows.
+//!   5. Each successful local refresh also derives the attached-client
+//!      session/window/pane statusbar segments (`#{plugin:tmux.session}` /
+//!      `.window` / `.pane`) from the same inventory and emits
+//!      `status.updated` only when the values change.
 //!
 //! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) and
 //! per-host SSH inventory refreshes run concurrently so one slow socket or
@@ -2242,7 +2246,7 @@ fn build_candidates_from_window_list(
         if line.is_empty() {
             continue;
         }
-        let parts = split_tmux_fields(line, 6);
+        let parts = split_tmux_fields(line, 7);
         if parts.len() < 3 {
             continue;
         }
@@ -2335,6 +2339,53 @@ struct CandidateBuild {
     client_snapshot: ClientSnapshot,
     client_count: usize,
     raw_line_count: usize,
+    status: TmuxStatusSegments,
+}
+
+/// Values for the manifest-declared statusbar segments
+/// (`#{plugin:tmux.session}` / `.window` / `.pane`). Empty strings clear
+/// the segments host-side.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TmuxStatusSegments {
+    session: String,
+    window: String,
+    pane: String,
+}
+
+/// Attached-client tmux state for the statusbar, derived from the same
+/// `list-clients ; list-windows -a` inventory the candidate build already
+/// fetched — no extra tmux I/O. The most recently active attached client
+/// wins (`client_activity`), then its session's active window supplies the
+/// window name (index when unnamed) and active-pane index.
+fn status_segments(clients: &[TmuxClient], raw_windows: &str) -> TmuxStatusSegments {
+    let Some(client) = clients.iter().max_by_key(|client| client.activity) else {
+        return TmuxStatusSegments::default();
+    };
+    let mut segments = TmuxStatusSegments {
+        session: client.session.clone(),
+        ..TmuxStatusSegments::default()
+    };
+    for line in raw_windows.lines() {
+        let parts = split_tmux_fields(line, 7);
+        if parts.len() < 3 || parts[0] != client.session {
+            continue;
+        }
+        if parts.get(5).map(|active| active.trim()) != Some("1") {
+            continue;
+        }
+        let name = parts[2].trim();
+        segments.window = if name.is_empty() {
+            parts[1].trim().to_string()
+        } else {
+            name.to_string()
+        };
+        segments.pane = parts
+            .get(6)
+            .map(|pane| pane.trim().to_string())
+            .unwrap_or_default();
+        break;
+    }
+    segments
 }
 
 const CANDIDATE_CLIENT_RECORD: &str = "client";
@@ -2382,13 +2433,17 @@ async fn build_candidates(
             client_snapshot: ClientSnapshot::default(),
             client_count: 0,
             raw_line_count: 0,
+            status: TmuxStatusSegments::default(),
         });
     }
     let client_format = format!(
         "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
+    // The trailing `pane_index` (the window's active pane, per tmux
+    // list-windows semantics) feeds the `#{plugin:tmux.pane}` status
+    // segment; candidates themselves ignore it.
     let window_format = format!(
-        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}"
+        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}"
     );
     // A single tmux process per socket emits both inventories. Polling the two
     // commands separately doubled process creation and socket discovery for
@@ -2415,6 +2470,7 @@ async fn build_candidates(
                 client_snapshot: ClientSnapshot::default(),
                 client_count: 0,
                 raw_line_count: 0,
+                status: TmuxStatusSegments::default(),
             });
         }
         TmuxAggregate::TransientFailure => return None,
@@ -2478,11 +2534,13 @@ async fn build_candidates(
         &home,
         &backend,
     );
+    let status = status_segments(&clients, &raw);
     Some(CandidateBuild {
         candidates,
         client_snapshot,
         client_count: clients.len(),
         raw_line_count,
+        status,
     })
 }
 
@@ -2500,7 +2558,7 @@ async fn build_remote_candidates(
         "{CANDIDATE_CLIENT_RECORD}{TMUX_FIELD_SEP}#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
     let window_format = format!(
-        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}"
+        "{CANDIDATE_WINDOW_RECORD}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{window_index}}{TMUX_FIELD_SEP}#{{window_name}}{TMUX_FIELD_SEP}#{{pane_current_command}}{TMUX_FIELD_SEP}#{{pane_current_path}}{TMUX_FIELD_SEP}#{{window_active}}{TMUX_FIELD_SEP}#{{pane_index}}"
     );
     let result = run_remote_tmux(
         config,
@@ -2631,12 +2689,14 @@ impl CandidateRefreshCoordinator {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn refresh_candidate_locations_for_path(
     tmux_path: Option<&str>,
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
     client_snapshot: &Mutex<ClientSnapshot>,
     partitions: &Mutex<CandidatePartitions>,
+    last_status: &Mutex<Option<TmuxStatusSegments>>,
     local_config: &LocalTmuxConfig,
     coordinator: &CandidateRefreshCoordinator,
 ) {
@@ -2650,6 +2710,7 @@ async fn refresh_candidate_locations_for_path(
                 last_hash,
                 client_snapshot,
                 partitions,
+                last_status,
                 local_config,
                 CandidateRefreshTiming {
                     requested_at,
@@ -2666,12 +2727,14 @@ struct CandidateRefreshTiming {
     queue_wait_ms: u128,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn refresh_candidate_locations_for_path_inner(
     tmux_path: Option<&str>,
     ctx: &Context,
     last_hash: &Mutex<Option<u64>>,
     client_snapshot: &Mutex<ClientSnapshot>,
     partitions: &Mutex<CandidatePartitions>,
+    last_status: &Mutex<Option<TmuxStatusSegments>>,
     local_config: &LocalTmuxConfig,
     timing: CandidateRefreshTiming,
 ) {
@@ -2703,6 +2766,10 @@ async fn refresh_candidate_locations_for_path_inner(
     if let Ok(mut guard) = client_snapshot.lock() {
         *guard = build.client_snapshot.clone();
     }
+    // Status segments piggyback on this refresh regardless of the candidate
+    // hash gate below: a client switching sessions changes the segments
+    // without changing the window list.
+    publish_status_segments(ctx, last_status, &build.status);
     let local_candidate_count = build.candidates.len();
     let (changed, aggregate_count) = replace_candidate_partition_and_publish(
         CandidatePartition::Local,
@@ -2753,6 +2820,31 @@ async fn refresh_candidate_locations_for_path_inner(
     fields.insert("raw_lines".to_string(), build.raw_line_count.to_string());
     ctx.log_fields("debug", "[tmux] candidate refresh (emit)", fields.clone());
     warn_if_candidate_refresh_slow(ctx, fields, elapsed_ms);
+}
+
+/// Emit the `session` / `window` / `pane` statusbar segments when their
+/// values changed since the last publish. Piggybacks on the candidate
+/// refresh cadence — no timer of its own — and stays quiet on unchanged
+/// state so the 1 s poll does not spam the host's telemetry lane. Empty
+/// values (no attached local client, no tmux server) clear the segments
+/// host-side per the wire contract.
+fn publish_status_segments(
+    ctx: &Context,
+    last_status: &Mutex<Option<TmuxStatusSegments>>,
+    current: &TmuxStatusSegments,
+) {
+    let Ok(mut guard) = last_status.lock() else {
+        return;
+    };
+    if guard.as_ref() == Some(current) {
+        return;
+    }
+    *guard = Some(current.clone());
+    ctx.emit_status_segments([
+        ("session", current.session.as_str()),
+        ("window", current.window.as_str()),
+        ("pane", current.pane.as_str()),
+    ]);
 }
 
 fn replace_candidate_partition_and_publish(
@@ -2932,6 +3024,7 @@ async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
         plugin.last_locations_hash(),
         plugin.client_snapshot(),
         plugin.candidate_partitions(),
+        plugin.last_status_segments(),
         &local_config,
         plugin.candidate_refresh_coordinator(),
     )
@@ -3059,6 +3152,7 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
     let last_hash = std::sync::Arc::clone(&plugin.last_locations_hash_arc);
     let client_snapshot = std::sync::Arc::clone(&plugin.client_snapshot_arc);
     let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
+    let last_status = std::sync::Arc::clone(&plugin.last_status_segments_arc);
     let coordinator = std::sync::Arc::clone(&plugin.candidate_refresh_coordinator_arc);
     let local_config = plugin.local_config();
     let ctx = ctx.clone();
@@ -3071,6 +3165,7 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                 &last_hash,
                 &client_snapshot,
                 &partitions,
+                &last_status,
                 &local_config,
                 &coordinator,
             )
@@ -3084,6 +3179,7 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                 &last_hash,
                 &client_snapshot,
                 &partitions,
+                &last_status,
                 &local_config,
                 &coordinator,
             )
@@ -5022,6 +5118,47 @@ window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
 
         assert_ne!(hash_candidates(&before), hash_candidates(&after));
     }
+
+    #[test]
+    fn status_segments_follow_the_most_recent_client_and_its_active_window() {
+        let clients = vec![
+            client("/dev/ttys000", "work", 100, 10),
+            client("/dev/ttys001", "play", 200, 99),
+        ];
+        let raw = "work\t1\teditor\tnvim\t/w\t1\t2\n\
+play\t1\tshell\tzsh\t/p\t0\t0\n\
+play\t3\tflash\tzsh\t/p\t1\t4\n";
+
+        assert_eq!(
+            status_segments(&clients, raw),
+            TmuxStatusSegments {
+                session: "play".to_string(),
+                window: "flash".to_string(),
+                pane: "4".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn status_segments_fall_back_to_the_window_index_when_unnamed() {
+        let clients = vec![client("/dev/ttys000", "work", 100, 10)];
+        let raw = "work\t2\t\tzsh\t/w\t1\t0\n";
+
+        let segments = status_segments(&clients, raw);
+        assert_eq!(segments.session, "work");
+        assert_eq!(segments.window, "2");
+        assert_eq!(segments.pane, "0");
+    }
+
+    #[test]
+    fn status_segments_clear_without_attached_clients() {
+        assert_eq!(
+            status_segments(&[], "work\t1\teditor\tnvim\t/w\t1\t0\n"),
+            TmuxStatusSegments::default(),
+            "no attached client publishes empty values, which clear the \
+             segments host-side"
+        );
+    }
 }
 
 // ---- Plugin glue ------------------------------------------------------------
@@ -5040,6 +5177,9 @@ struct Tmux {
     /// truth.
     last_locations_hash_arc: std::sync::Arc<Mutex<Option<u64>>>,
     candidate_partitions_arc: std::sync::Arc<Mutex<CandidatePartitions>>,
+    /// Last statusbar segment values emitted through `status.updated`, so
+    /// the 1 s refresh only notifies the host on actual changes.
+    last_status_segments_arc: std::sync::Arc<Mutex<Option<TmuxStatusSegments>>>,
     /// Serializes the complete build → hash → publish cycle shared by startup,
     /// the one-second poll, and push events. Without it, an older slow refresh
     /// can finish after a newer one and overwrite the warm store with stale rows.
@@ -5078,6 +5218,10 @@ impl Tmux {
 
     fn candidate_partitions(&self) -> &Mutex<CandidatePartitions> {
         &self.candidate_partitions_arc
+    }
+
+    fn last_status_segments(&self) -> &Mutex<Option<TmuxStatusSegments>> {
+        &self.last_status_segments_arc
     }
 
     fn candidate_refresh_coordinator(&self) -> &CandidateRefreshCoordinator {
@@ -5218,6 +5362,7 @@ fn main() {
         client_snapshot_arc: std::sync::Arc::new(Mutex::new(ClientSnapshot::default())),
         last_locations_hash_arc: std::sync::Arc::new(Mutex::new(None)),
         candidate_partitions_arc: std::sync::Arc::new(Mutex::new(CandidatePartitions::default())),
+        last_status_segments_arc: std::sync::Arc::new(Mutex::new(None)),
         candidate_refresh_coordinator_arc: std::sync::Arc::new(
             CandidateRefreshCoordinator::default(),
         ),

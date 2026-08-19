@@ -86,6 +86,11 @@ enum FlashStatusBarSDKValue: Equatable {
   case activeBundleIdentifier
   case modeLabel
   case date
+  case host
+  case hostShort
+  case user
+  case uid
+  case pid
 }
 
 enum FlashStatusBarPluginValue: Equatable {
@@ -156,7 +161,6 @@ struct FlashStatusBarCommand: Equatable {
 enum FlashStatusBarSource: Equatable {
   case sdk(FlashStatusBarSDKValue)
   case plugin(FlashStatusBarPluginValue)
-  case tmux(String)
   case command(FlashStatusBarCommand)
   /// Like `.command`, but the script's output is split into lines and shown one
   /// at a time, rotating (sliding up) every `periodSeconds`. The current line is
@@ -480,12 +484,12 @@ enum FlashStatusBarTemplateEngine {
     func resolveLeaf(_ token: String) -> String {
       let variable =
         variableByToken[token]
-        ?? (FlashStatusBarTemplateEngine.isTmuxFormatVariable(token)
-          ? FlashStatusBarTemplateVariable(
+        ?? FlashStatusBarTemplateEngine.sdkValue(for: token).map {
+          FlashStatusBarTemplateVariable(
             id: "statusbar.template.\(token)",
             token: token,
-            source: .tmux(token))
-          : nil)
+            source: .sdk($0))
+        }
       guard let variable else { return "" }
       return FlashStatusBarTemplateEngine.resolve(
         variable: variable, context: context, dynamicValues: dynamicValues)
@@ -697,27 +701,36 @@ enum FlashStatusBarTemplateEngine {
       .replacingOccurrences(of: "\r", with: "")
   }
 
+  /// The tmux one-letter aliases Flash can actually resolve. Only the host
+  /// pair survives: tmux-STATE aliases (`#S #W #I #P #D`) were removed with
+  /// the tmux-state dialect — that state lives in the tmux plugin and
+  /// renders through `#{plugin:tmux.<segment>}` status segments.
   static func tmuxShortFormatToken(for character: Character) -> String? {
     switch character {
     case "H": return "host"
     case "h": return "host_short"
-    case "S": return "session_name"
-    case "W": return "window_name"
-    case "I": return "window_index"
-    case "P": return "pane_index"
-    case "D": return "pane_id"
     default: return nil
     }
   }
 
-  static func isTmuxFormatVariable(_ token: String) -> Bool {
-    let trimmed = token.trimmed
-    guard let first = trimmed.first else { return false }
-    if first == "@" {
-      return trimmed.dropFirst().allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+  /// Bare `#{token}` names the engine resolves itself, shared by config
+  /// validation and the render-time leaf fallback. tmux-state names
+  /// (`session_name`, `window_name`, `window_index`, `pane_index`,
+  /// `pane_id`) are deliberately absent: unknown bare identifiers are a
+  /// config error, not silently-empty output.
+  static func sdkValue(for token: String) -> FlashStatusBarSDKValue? {
+    switch token {
+    case "mode": return .modeLabel
+    case "active_app_name": return .activeAppName
+    case "active_bundle_identifier": return .activeBundleIdentifier
+    case "date": return .date
+    case "host": return .host
+    case "host_short": return .hostShort
+    case "user": return .user
+    case "uid": return .uid
+    case "pid": return .pid
+    default: return nil
     }
-    guard first.isLetter || first == "_" else { return false }
-    return trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
   }
 
   /// Truncation walks the token stream, so `#[…]` markers are zero-width
@@ -763,8 +776,6 @@ enum FlashStatusBarTemplateEngine {
       return resolveSDK(value, context: context)
     case .plugin(let value):
       return resolvePlugin(value, statuses: context.pluginStatuses)
-    case .tmux(let name):
-      return resolveTmux(name, context: context)
     case .command:
       return dynamicValues[variable.id]?.trimmed ?? ""
     case .cycle:
@@ -805,6 +816,18 @@ enum FlashStatusBarTemplateEngine {
         calendar: context.calendar,
         locale: context.locale)
       return "#[fg=colour178]\(date)"
+    case .host:
+      return context.hostName.trimmed
+    case .hostShort:
+      let host = context.hostName.trimmed
+      guard let dot = host.firstIndex(of: ".") else { return host }
+      return String(host[..<dot])
+    case .user:
+      return context.userName.trimmed
+    case .uid:
+      return "\(context.userID)"
+    case .pid:
+      return "\(context.processID)"
     }
   }
 
@@ -829,26 +852,6 @@ enum FlashStatusBarTemplateEngine {
         !text.isEmpty
       else { return "" }
       return text
-    }
-  }
-
-  private static func resolveTmux(_ rawName: String, context: FlashStatusBarContext) -> String {
-    let name = rawName.trimmed.lowercased()
-    switch name {
-    case "host", "hostname":
-      return context.hostName.trimmed
-    case "host_short":
-      let host = context.hostName.trimmed
-      guard let dot = host.firstIndex(of: ".") else { return host }
-      return String(host[..<dot])
-    case "user":
-      return context.userName.trimmed
-    case "uid":
-      return "\(context.userID)"
-    case "pid":
-      return "\(context.processID)"
-    default:
-      return ""
     }
   }
 }

@@ -358,12 +358,15 @@ regions. Separators are literal inline text inside the template. Supported
 template variables are `#{mode}`, `#{active_app_name}`,
 `#{active_bundle_identifier}`, `#{date}`, `#{plugin:loaded_count}`,
 `#{plugin:ready_count}`, `#{plugin:error_count}`,
-tmux-compatible variables (`#H`, `#h`, `#S`, `#{host}`, `#{hostname}`,
-`#{host_short}`, `#{user}`, `#{uid}`, `#{pid}`, and other tmux status variables
-that render as empty when Flash has no equivalent), `#{plugin:<plugin>.<segment>}`,
+the OS primitives `#{host}` (`#H`), `#{host_short}` (`#h`), `#{user}`,
+`#{uid}`, `#{pid}`, `#{plugin:<plugin>.<segment>}`,
 `#{script:<path>}`, `#{command:<shell command>}`, and `#{cycle:<path>}` (rotate
-through the script's stdout lines). For example, the bundled system plugin
-exposes the battery segment as `#{plugin:system.battery}`.
+through the script's stdout lines). Any other bare `#{token}` is a config
+error — there is no silently-empty tmux dialect. tmux session/window/pane
+state comes from the bundled tmux plugin's status segments
+(`#{plugin:tmux.session}`, `#{plugin:tmux.window}`, `#{plugin:tmux.pane}`),
+and the bundled system plugin exposes the battery segment as
+`#{plugin:system.battery}`.
 The format grammar is a strict tmux superset: modifiers `#{?cond,a,b}`,
 `#{==:}`/`#{!=:}`/`#{<:}`/`#{>:}`/`#{<=:}`/`#{>=:}`/`#{&&:}`/`#{||:}`,
 `#{s/re/repl/[i]:var}`, `#{pN:}`/`#{p-N:}`, `#{=N:}`/`#{=-N:}` (Flash `…`

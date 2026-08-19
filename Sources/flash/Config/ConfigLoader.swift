@@ -1590,7 +1590,7 @@ enum ConfigLoader {
         appendToken(token, source: source)
       } else {
         config.addDiagnostic(
-          "statusbar.\(path) template variable \"\(rawBody)\" must be mode, active_app_name, active_bundle_identifier, date, a tmux variable, plugin:<name>, plugin:<plugin>.<segment>, script:<path>, or command:<shell> (optionally wrapped in a tmux modifier: #{=N:…}, #{?cond,a,b}, #{s/re/repl/:…}, #{pN:…})",
+          "statusbar.\(path) template variable \"\(rawBody)\" must be mode, active_app_name, active_bundle_identifier, date, host, host_short, user, uid, pid, plugin:<name>, plugin:<plugin>.<segment>, script:<path>, or command:<shell> (optionally wrapped in a tmux modifier: #{=N:…}, #{?cond,a,b}, #{s/re/repl/:…}, #{pN:…}); tmux session/window/pane state renders through #{plugin:tmux.<segment>}",
           location: config.valueLocations["statusbar.\(path)"])
       }
     }
@@ -1620,8 +1620,12 @@ enum ConfigLoader {
       }
       for op in FlashStatusBarTemplateEngine.FormatExpansion.comparators
       where body.hasPrefix(op + ":") {
+        // Comparator arguments are FORMAT strings at render time — literal
+        // text compares as itself (`#{==:#{mode},NORMAL}`). Only nested
+        // `#{…}` bodies name variables, so a bare literal like NORMAL must
+        // not be validated (and rejected) as a variable name.
         for arg in FlashStatusBarMarkup.splitFormatArguments(body.dropFirst(op.count + 1)) {
-          registerOperand(arg, rawBody: body)
+          registerFormatString(arg)
         }
         return
       }
@@ -1725,18 +1729,16 @@ enum ConfigLoader {
   ) -> FlashStatusBarSource? {
     let trimmed = token.trimmed
     guard !trimmed.isEmpty else { return nil }
-    switch trimmed {
-    case "mode": return .sdk(.modeLabel)
-    case "active_app_name": return .sdk(.activeAppName)
-    case "active_bundle_identifier": return .sdk(.activeBundleIdentifier)
-    case "date": return .sdk(.date)
-    default: break
+    if let sdkValue = FlashStatusBarTemplateEngine.sdkValue(for: trimmed) {
+      return .sdk(sdkValue)
     }
 
-    guard let colon = trimmed.firstIndex(of: ":") else {
-      guard FlashStatusBarTemplateEngine.isTmuxFormatVariable(trimmed) else { return nil }
-      return .tmux(trimmed)
-    }
+    // Any other bare identifier is a config error (the caller emits the
+    // diagnostic). The old dialect accepted every tmux-looking name and
+    // rendered it as "", which silently swallowed typos and the tmux-state
+    // names (`session_name`, `window_name`, …) that now render through
+    // `#{plugin:tmux.<segment>}`.
+    guard let colon = trimmed.firstIndex(of: ":") else { return nil }
     let kind = String(trimmed[..<colon]).lowercased()
     let body = String(trimmed[trimmed.index(after: colon)...])
       .trimmed

@@ -326,20 +326,68 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
-  func testParsesTmuxStatusBarVariables() {
+  func testParsesHostPrimitiveStatusBarVariables() {
     let c = ConfigLoader.parse(
       """
       [statusbar]
-      template = "#[align=left]#S@#H #{host_short} #{window_name}"
+      template = "#[align=left]#H#h #{host} #{host_short} #{user} #{uid} #{pid}"
       """)
 
     XCTAssertEqual(
       c.statusBar.template.variables.map(\.token),
-      ["session_name", "host", "host_short", "window_name"])
-    XCTAssertEqual(c.statusBar.template.variables[0].source, .tmux("session_name"))
-    XCTAssertEqual(c.statusBar.template.variables[1].source, .tmux("host"))
-    XCTAssertEqual(c.statusBar.template.variables[2].source, .tmux("host_short"))
-    XCTAssertEqual(c.statusBar.template.variables[3].source, .tmux("window_name"))
+      ["host", "host_short", "user", "uid", "pid"])
+    XCTAssertEqual(c.statusBar.template.variables[0].source, .sdk(.host))
+    XCTAssertEqual(c.statusBar.template.variables[1].source, .sdk(.hostShort))
+    XCTAssertEqual(c.statusBar.template.variables[2].source, .sdk(.user))
+    XCTAssertEqual(c.statusBar.template.variables[3].source, .sdk(.uid))
+    XCTAssertEqual(c.statusBar.template.variables[4].source, .sdk(.pid))
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+  }
+
+  func testTmuxStateStatusBarTokensAreConfigErrors() {
+    // The tmux-state dialect is gone: session/window/pane state renders
+    // through #{plugin:tmux.<segment>}, and the old names — like every
+    // other unknown bare identifier — are loud config errors instead of
+    // silently-empty output.
+    for token in ["session_name", "window_name", "window_index", "pane_index", "pane_id"] {
+      let c = ConfigLoader.parse(
+        """
+        [statusbar]
+        template = "#{\(token)}"
+        """)
+      XCTAssertTrue(
+        c.loadingDiagnostics.contains {
+          $0.message.contains("statusbar.template template variable \"\(token)\"")
+        }, "expected a diagnostic for #{\(token)}")
+      XCTAssertTrue(c.statusBar.template.variables.isEmpty)
+    }
+  }
+
+  func testUnknownBareStatusBarTokenIsAConfigError() {
+    // A typo like #{sesion_name} used to validate as "some tmux variable"
+    // and render as "" forever.
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "#{sesion_name}"
+      """)
+
+    XCTAssertTrue(
+      c.loadingDiagnostics.contains {
+        $0.message.contains("statusbar.template template variable \"sesion_name\"")
+      })
+  }
+
+  func testComparatorLiteralArgumentsAreNotValidatedAsVariables() {
+    // Comparator arguments are format strings — the literal NORMAL must
+    // not be rejected as an unknown variable name.
+    let c = ConfigLoader.parse(
+      """
+      [statusbar]
+      template = "#{?#{==:#{mode},NORMAL},N,-}"
+      """)
+
+    XCTAssertEqual(c.statusBar.template.variables.map(\.token), ["mode"])
     XCTAssertTrue(c.loadingDiagnostics.isEmpty)
   }
 
@@ -350,10 +398,10 @@ final class ConfigLoaderTests: XCTestCase {
       template = "#{nope}#[align=right]#{plugin:nope}"
       """)
 
-    XCTAssertTrue(
-      c.loadingDiagnostics.contains {
+    XCTAssertEqual(
+      c.loadingDiagnostics.filter {
         $0.message.contains("statusbar.template template variable")
-      })
+      }.count, 2)
   }
 
   func testParsesModeLabelsInlineTable() {

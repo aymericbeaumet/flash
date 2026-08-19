@@ -440,9 +440,14 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(model.rightText, "R")
   }
 
-  func testTmuxStatusVariablesRenderKnownHostValuesAndEmptyUnsupportedValues() {
+  func testHostPrimitiveVariablesRenderAndTmuxStateTokensDoNot() {
+    // #H/#h and the OS primitives resolve in the engine; the removed
+    // tmux-state dialect does not — an unregistered #{window_name} renders
+    // empty and #S is no longer a recognized alias, so it stays literal.
+    // (Config loading rejects both up front; this is the render-side
+    // behavior for hand-built templates.)
     let template = FlashStatusBarTemplate(
-      template: "#[align=left]#H #{host_short} #{hostname} #{user} #{uid} #{pid} #{window_name}#S",
+      template: "#[align=left]#H #{host_short} #{user} #{uid} #{pid} #{window_name}#S",
       variables: [])
 
     let model = FlashStatusBarTemplateEngine.render(
@@ -453,7 +458,7 @@ final class StatusBarTests: XCTestCase {
         userID: 501,
         processID: 4242))
 
-    XCTAssertEqual(model.modeText, "macbook.local macbook macbook.local ab 501 4242 ")
+    XCTAssertEqual(model.modeText, "macbook.local macbook ab 501 4242 #S")
   }
 
   func testAmericanCenterAliasMatchesBritishCentre() {
