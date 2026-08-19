@@ -151,14 +151,18 @@ final class StatusItemController: NSObject {
   }
 }
 
-/// The About window: close-window chords (⌘W/⌘Q and their ⌃ variants) close
-/// JUST this window — Flash itself is a resident app and must never quit
-/// from a keystroke that was aimed at a window.
+/// The About window: close-window chords — W or Q under any mix of ⌘/⌃
+/// (optionally with ⇧, e.g. ⌘⇧W / ⌘⇧Q) — close JUST this window. Flash
+/// itself is a resident app and must never quit from a keystroke that was
+/// aimed at a window.
 private final class AboutWindow: NSWindow {
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
     let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let closeChord =
+      !modifiers.isDisjoint(with: [.command, .control])
+      && modifiers.subtracting([.command, .control, .shift]).isEmpty
     let key = event.charactersIgnoringModifiers?.lowercased()
-    if modifiers == .command || modifiers == .control, key == "w" || key == "q" {
+    if closeChord, key == "w" || key == "q" {
       close()
       return true
     }
