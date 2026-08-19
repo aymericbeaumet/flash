@@ -766,7 +766,7 @@ final class PluginProcess {
   /// declare `network` (they legitimately reach the network) or `subprocess`
   /// (they exec privileged helpers like setgid `/bin/ps` that seatbelt forbids —
   /// no profile can run those without also letting children escape the network
-  /// deny). The install step is never sandboxed (it may fetch dependencies).
+  /// deny). Third-party install steps run under `installSandboxProfile`.
   static func networkSandboxProfile(for manifest: PluginManifest) -> String? {
     if manifest.capabilities.contains(.network) || manifest.capabilities.contains(.subprocess) {
       return nil
@@ -1084,15 +1084,62 @@ final class PluginProcess {
     }
   }
 
+  /// Seatbelt for third-party `install` scripts: network and exec stay open
+  /// (fetching and building dependencies is the point, and name-scoping an
+  /// arbitrary build toolchain is hopeless), so the containment is the
+  /// filesystem scope — writes confined to the plugin's own root, data dir,
+  /// and temp; secrets read-denied.
+  static func installSandboxProfile(root: URL, dataDir: URL) -> String {
+    func q(_ path: String) -> String {
+      "\"" + NSString(string: path).expandingTildeInPath.replacingOccurrences(of: "\"", with: "")
+        + "\""
+    }
+    let baseDataDir = dataDir.deletingLastPathComponent()
+    return [
+      "(version 1)",
+      "(deny default)",
+      "(allow process-exec)",
+      "(allow process-fork)",
+      "(allow file-map-executable)",
+      "(allow file-read*)",
+      "(deny file-read* (subpath \(q("~/.ssh"))) (subpath \(q("~/.aws")))"
+        + " (subpath \(q("~/.config/gh"))) (subpath \(q("~/Library/Keychains")))"
+        + " (subpath \(q(baseDataDir.path))))",
+      "(allow file* (subpath \(q(root.path))) (subpath \(q(dataDir.path)))"
+        + " (subpath \"/private/tmp\") (subpath \"/private/var/folders\"))",
+      "(allow file-write-data (literal \"/dev/null\"))",
+      "(allow file-read-metadata)",
+      "(allow process-info*)",
+      "(allow sysctl-read)",
+      "(allow mach-lookup)",
+      "(allow network-outbound)",
+      "(allow system-socket)",
+    ].joined(separator: "\n")
+  }
+
   private func installIfNeeded() throws {
+    // Official plugins ship prebuilt and declare no install step; only
+    // third-party manifests may, and theirs runs sandboxed.
+    guard let install = manifest.install else { return }
     let stampURL = dataDir.appendingPathComponent(".install-stamp")
-    let stamp = "\(manifest.version)\n\(manifest.install)\n"
+    let stamp = "\(manifest.version)\n\(install)\n"
     if let existing = try? String(contentsOf: stampURL), existing == stamp {
       return
     }
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/sh")
-    process.arguments = ["-lc", manifest.install]
+    let sandboxed = FileManager.default.isExecutableFile(atPath: Self.sandboxExecPath)
+    if sandboxed {
+      process.executableURL = URL(fileURLWithPath: Self.sandboxExecPath)
+      process.arguments = [
+        "-p", Self.installSandboxProfile(root: root, dataDir: dataDir), "/bin/sh", "-lc", install,
+      ]
+    } else {
+      process.executableURL = URL(fileURLWithPath: "/bin/sh")
+      process.arguments = ["-lc", install]
+    }
+    FlashLog.info(
+      "[plugin] \(manifest.id) install sandbox=\(sandboxed)",
+      fields: ["plugin": manifest.id, "install_sandboxed": "\(sandboxed)"])
     process.currentDirectoryURL = root
     process.environment = pluginEnvironment()
     let out = Pipe()
@@ -1145,7 +1192,7 @@ final class PluginProcess {
       .replacingOccurrences(of: ":", with: "-")
     let path = logsDir.appendingPathComponent("\(manifest.id)-\(timestamp).log")
     var body = "# plugin=\(manifest.id) version=\(manifest.version) status=\(status)\n"
-    body += "# install=\(manifest.install)\n"
+    body += "# install=\(manifest.install ?? "<none>")\n"
     body += "# root=\(root.path)\n\n"
     body += "## stdout\n"
     body += (String(data: stdout, encoding: .utf8) ?? "<non-utf8>") + "\n"

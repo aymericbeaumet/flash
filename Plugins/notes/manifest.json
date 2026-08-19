@@ -3,7 +3,6 @@
   "name": "Notes",
   "version": "0.1.0",
   "description": "Surface macOS Notes entries in flashlight, plus `:notes` open helper.",
-  "install": "true",
   "sandbox": {
     "exec": ["/usr/bin/osascript", "/usr/bin/open"],
     "appleevents": true

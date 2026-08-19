@@ -41,7 +41,6 @@ cat >"$DIR/manifest.json" <<JSON
   "name": "$NAME",
   "version": "0.1.0",
   "description": "$DESCRIPTION",
-  "install": "true",
   "exec": ["./flash-plugin-$ID"],
   "commands": {
     "items": [

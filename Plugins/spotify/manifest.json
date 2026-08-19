@@ -3,7 +3,6 @@
   "name": "Spotify",
   "version": "0.1.0",
   "description": "Spotify playback controls backed by spotify_player.",
-  "install": "true",
   "sandbox": {
     "exec": [
       "spotify_player"

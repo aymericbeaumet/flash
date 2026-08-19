@@ -23,11 +23,11 @@ final class PluginSystemTests: XCTestCase {
       "media", "slack", "spotify",
     ]
     for manifest in manifests {
-      // Bundled plugins are compiled Rust binaries: `install` is a no-op
-      // and `exec` argv-execs the embedded binary directly (manifest-only
-      // plugins such as `defaults` have no process and omit `exec`
-      // entirely). See Scripts/build-plugins.sh.
-      XCTAssertEqual(manifest.install, "true")
+      // Bundled plugins are compiled Rust binaries: no install step exists
+      // (`install` is third-party-only) and `exec` argv-execs the embedded
+      // binary directly (manifest-only plugins such as `defaults` have no
+      // process and omit `exec` entirely). See Scripts/build-plugins.sh.
+      XCTAssertNil(manifest.install, "\(manifest.id): official plugins declare no install step")
       if let exec = manifest.exec {
         XCTAssertEqual(exec, ["./flash-plugin-\(manifest.id)"])
       }
@@ -49,7 +49,7 @@ final class PluginSystemTests: XCTestCase {
       }
     }
     let tmux = try XCTUnwrap(manifests.first { $0.id == "tmux" })
-    XCTAssertEqual(tmux.install, "true")
+    XCTAssertNil(tmux.install)
     XCTAssertEqual(tmux.exec, ["./flash-plugin-tmux"])
     XCTAssertTrue(tmux.volatile)
     XCTAssertEqual(tmux.priority, 20)
@@ -800,7 +800,7 @@ final class PluginSystemTests: XCTestCase {
     // reach for global install locations.
     for root in try officialPluginRoots() {
       let manifest = try PluginManifest.load(from: root)
-      for field in [manifest.install] + (manifest.exec ?? []) {
+      for field in (manifest.install.map { [$0] } ?? []) + (manifest.exec ?? []) {
         for needle in banned {
           XCTAssertFalse(
             field.contains(needle), "\(root.lastPathComponent) manifest contains \(needle)")

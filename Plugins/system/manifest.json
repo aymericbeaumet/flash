@@ -3,7 +3,6 @@
   "name": "System",
   "version": "0.1.0",
   "description": "macOS system commands and status segments: lock, sleep, restart, shutdown, logout, battery, empty trash, toggle dark mode, screensaver, caffeinate.",
-  "install": "true",
   "sandbox": {
     "exec": [
       "/usr/bin/osascript",

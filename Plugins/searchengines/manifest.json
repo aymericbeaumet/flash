@@ -3,7 +3,6 @@
   "name": "Search Engines",
   "version": "0.1.0",
   "description": "DuckDuckGo-style bangs in the flashlight: type !<bang> <query> to search, e.g. !r cat opens a Reddit search.",
-  "install": "true",
   "sandbox": {
     "exec": ["/usr/bin/open"]
   },

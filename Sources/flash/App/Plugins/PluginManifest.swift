@@ -1032,7 +1032,9 @@ struct PluginManifest: Codable, Equatable {
   var name: String
   var version: String
   var description: String
-  var install: String
+  /// Shell string run sandboxed from the plugin root before first start.
+  /// Third-party-only: official plugins ship prebuilt and omit it.
+  var install: String?
   /// Argv array that starts the plugin child process, exec'd directly with
   /// the scrubbed plugin environment — no shell wrap, so login-shell rc
   /// files can never re-widen the env allowlist. A relative first element
@@ -1229,7 +1231,7 @@ struct PluginManifest: Codable, Equatable {
 
   init(
     id: String, name: String, version: String, description: String,
-    install: String, exec: [String]? = nil,
+    install: String? = nil, exec: [String]? = nil,
     sandbox: PluginSandboxSpec? = nil,
     fetchURLs: [String] = [],
     listen: [String] = [],
@@ -1283,7 +1285,7 @@ struct PluginManifest: Codable, Equatable {
     self.name = try c.decode(String.self, forKey: .name)
     self.version = try c.decode(String.self, forKey: .version)
     self.description = try c.decode(String.self, forKey: .description)
-    self.install = try c.decode(String.self, forKey: .install)
+    self.install = try c.decodeIfPresent(String.self, forKey: .install)
     self.exec = try c.decodeIfPresent([String].self, forKey: .exec)
     self.sandbox = try c.decodeIfPresent(PluginSandboxSpec.self, forKey: .sandbox)
     self.fetchURLs = Self.uniqueTrimmed(
@@ -1320,7 +1322,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(name, forKey: .name)
     try c.encode(version, forKey: .version)
     try c.encode(description, forKey: .description)
-    try c.encode(install, forKey: .install)
+    if let install { try c.encode(install, forKey: .install) }
     if let exec { try c.encode(exec, forKey: .exec) }
     if let sandbox { try c.encode(sandbox, forKey: .sandbox) }
     if !fetchURLs.isEmpty { try c.encode(fetchURLs, forKey: .fetchURLs) }
@@ -1516,12 +1518,14 @@ struct PluginManifest: Codable, Equatable {
       ("name", name),
       ("version", version),
       ("description", description),
-      ("install", install),
     ]
     for (field, value) in required {
       if value.trimmed.isEmpty {
         throw PluginError.invalidManifest("manifest.json field \(field) must not be empty")
       }
+    }
+    if let install, install.trimmed.isEmpty {
+      throw PluginError.invalidManifest("manifest.json field install must not be empty")
     }
     if capabilities.contains(.networkFetch) != !fetchURLs.isEmpty {
       throw PluginError.invalidManifest(

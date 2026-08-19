@@ -3,7 +3,6 @@
   "name": "Reminders",
   "version": "0.1.0",
   "description": "Surface macOS Reminders entries in flashlight, plus `:reminders` open helper.",
-  "install": "true",
   "sandbox": {
     "exec": ["/usr/bin/osascript", "/usr/bin/open"],
     "appleevents": true

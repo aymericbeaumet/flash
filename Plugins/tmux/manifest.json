@@ -3,7 +3,6 @@
   "name": "tmux",
   "version": "0.1.0",
   "description": "Hints tmux panes/links and exposes a tmux window finder.",
-  "install": "true",
   "exec": ["./flash-plugin-tmux"],
   "capabilities": [
     "subprocess",

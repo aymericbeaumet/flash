@@ -3,7 +3,6 @@
   "name": "Slack",
   "version": "0.1.0",
   "description": "Slack CLI actions.",
-  "install": "true",
   "sandbox": {
     "exec": [
       "slack"

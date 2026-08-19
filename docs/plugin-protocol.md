@@ -10,10 +10,10 @@ Plugins are Flash-owned child processes. Official plugins ship inside the app
 bundle; third-party plugins are listed in `[plugins] third_party` as
 `github:user/project@<commit-sha>` (full 40-character SHA, mandatory — the
 materializer fetches exactly that commit and refuses a mismatched checkout) or
-`file:<path>`. The manifest's `install` shell string runs as the user from
-the plugin root; `exec` is an argv array exec'd directly with the scrubbed
-plugin environment — no shell wrap, and a relative first element resolves
-against the plugin root.
+`file:<path>`. The manifest's optional `install` shell string (third-party
+only) runs sandboxed from the plugin root; `exec` is an argv array exec'd
+directly with the scrubbed plugin environment — no shell wrap, and a
+relative first element resolves against the plugin root.
 
 Runtime children receive `FLASH_PLUGIN_ID`, `FLASH_PLUGIN_VERSION`,
 `FLASH_PLUGIN_DATA_DIR`, `FLASH_PLUGIN_PARENT_PID`, and the plugin's
@@ -127,7 +127,11 @@ content, config values, or event payloads.
 
 ## Manifest
 
-Required: `id`, `name`, `version`, `description`, `install`. `exec` (argv
+Required: `id`, `name`, `version`, `description`. `install` is optional and
+third-party-only: a shell string run once per version from the plugin root,
+sandboxed (writes confined to the plugin root/data dir/temp, secrets
+read-denied, network and exec open — fetching dependencies is the point),
+with its full output persisted for forensics. `exec` (argv
 array) is required for any plugin that runs a process; omitting it declares
 a **manifest-only plugin** — no child process ever runs, and the manifest
 may only carry surfaces the host serves alone: `mappings`, `help`, and
@@ -144,8 +148,8 @@ top-level or nested keys and malformed known fields are rejected outright.
   "name": "Example",
   "version": "0.1.0",
   "description": "Example plugin",
-  "install": "true",
   "exec": ["./flash-plugin-example"],
+  "sandbox": { "exec": ["/usr/bin/osascript"], "appleevents": true },
   "listen": ["core:flash.started", "core:apps.*"],
   "only_bundle_ids": ["org.mozilla.firefox"],
   "only_urls": ["https://mail.google.com/*"],
@@ -193,6 +197,16 @@ top-level or nested keys and malformed known fields are rejected outright.
 
 Section semantics:
 
+- **`sandbox`** — deny-default seatbelt opt-in (even `{}`): everything is
+  denied except loading the binary, broad reads minus secrets (`~/.ssh`,
+  `~/.aws`, keychains, other plugins' data), and writes inside the plugin's
+  data dir. Allowances: `exec` (absolute paths or bare tool names resolved
+  through the login-shell PATH at spawn), `read`/`write` extra subpaths,
+  `appleevents`, `signal`, `process_info`, `hid` booleans. The `network`
+  capability composes `network-outbound`. `[plugin.<id>] sandbox = false`
+  is the per-plugin fail-open kill switch; `[plugin.<id>] exec_paths`
+  appends machine-specific tool paths. Spec-less plugins keep the legacy
+  network-deny-only profile until migrated.
 - **`listen`** — event-name patterns; `*` wildcard.
 - **`sources`** — source descriptors for `@<source>` completion and ranking.
   `kind` is `"default"` (default) or `"locations"`; `priority` is the

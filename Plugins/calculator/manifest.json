@@ -3,7 +3,6 @@
   "name": "Calculator",
   "version": "0.1.0",
   "description": "Inline arithmetic, unit, and currency answers for the flashlight.",
-  "install": "true",
   "exec": ["./flash-plugin-calculator"],
   "queries": { "exclusive_prefixes": ["="] },
   "capabilities": ["network_fetch"],
