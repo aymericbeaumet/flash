@@ -895,7 +895,7 @@ final class PluginSystemTests: XCTestCase {
       at: linkedPlugins,
       withDestinationURL: bundlePlugins)
 
-    let roots = PluginManager.manifestRoots(in: [linkedPlugins])
+    let roots = PluginRepository.manifestRoots(in: [linkedPlugins])
     XCTAssertEqual(roots.map(\.path), [pluginRoot.path])
   }
 
