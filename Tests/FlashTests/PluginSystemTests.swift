@@ -20,6 +20,43 @@ final class PluginSystemTests: XCTestCase {
     PluginWireCodec.queryAnswers(from: [raw], sourceID: sourceID, source: source)?.first
   }
 
+  func testNullOptionalFieldsDecodeAsAbsent() throws {
+    // `{"url": null}` is the natural serialization of an absent optional in
+    // most languages; it must decode like a missing key, not atomically
+    // reject the snapshot.
+    let candidate = try XCTUnwrap(
+      decodeCandidate(
+        from: [
+          "title": "Row",
+          "url": NSNull(),
+          "effect": NSNull(),
+          "metadata": ["source": "safe.items"],
+        ],
+        sourceID: "plugin:safe",
+        allowed: ["safe.items"]))
+    XCTAssertNil(candidate.url)
+    XCTAssertNil(candidate.effect)
+
+    let answer = try XCTUnwrap(
+      decodeQueryAnswer(
+        from: [
+          "title": "2",
+          "subtitle": NSNull(),
+          "effect": ["type": "copy_text", "text": "2"],
+        ],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+    XCTAssertEqual(answer.title, "2")
+
+    // Required fields stay required: null means absent, and an absent query
+    // effect is still a rejection.
+    XCTAssertNil(
+      decodeQueryAnswer(
+        from: ["title": "x", "effect": NSNull()],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+  }
+
   func testFetchURLAllowlistMatchesAtComponentBoundaries() {
     XCTAssertTrue(
       PluginHostRPC.urlIsAllowed(

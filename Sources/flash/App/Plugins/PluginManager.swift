@@ -56,6 +56,9 @@ final class PluginManager {
     let plugin: PluginProcess
     let selector: PluginSelectorStack
     let meta: [String: String]
+    /// The matched manifest entry's `timeout_ms`, forwarded to
+    /// `invokeCommand` so interactive commands outlive the generic deadline.
+    let timeoutMs: Int?
 
     func specificity(in context: PluginSelectorContext) -> Int? {
       selector.specificity(in: context)
@@ -376,7 +379,7 @@ final class PluginManager {
     guard let resolved else { return false }
     resolved.target.plugin.invokeCommand(
       command: command, subcommand: resolved.subcommand, args: resolved.args, raw: raw,
-      meta: resolved.target.meta
+      meta: resolved.target.meta, timeoutMs: resolved.target.timeoutMs
     ) {
       ok, pid, stdout, navigationURL in
       FlashLog.debug(
@@ -519,7 +522,8 @@ final class PluginManager {
         let target = CommandTarget(
           plugin: plugin,
           selector: selector,
-          meta: registration.meta)
+          meta: registration.meta,
+          timeoutMs: registration.timeoutMs)
         registrationRows.append(
           CommandRegistrationTarget(
             selector: selector,

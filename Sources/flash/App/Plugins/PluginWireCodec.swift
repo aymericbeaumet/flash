@@ -141,7 +141,7 @@ enum PluginWireCodec {
 
     var stringBytes = title.utf8.count
     let url: URL?
-    if let rawURL = raw["url"] {
+    if let rawURL = present(raw["url"]) {
       guard
         let value = rawURL as? String,
         value.utf8.count <= maxCandidateURLBytes,
@@ -159,7 +159,7 @@ enum PluginWireCodec {
     }
 
     var metadata: [String: String] = [:]
-    if let rawMetadata = raw["metadata"] {
+    if let rawMetadata = present(raw["metadata"]) {
       guard
         let dict = rawMetadata as? [String: Any],
         dict.count <= maxCandidateMetadataEntries
@@ -185,7 +185,7 @@ enum PluginWireCodec {
     }
 
     let effect: CandidateEffect?
-    if let rawEffect = raw["effect"] {
+    if let rawEffect = present(raw["effect"]) {
       guard
         let decoded = candidateEffect(
           from: rawEffect,
@@ -256,7 +256,7 @@ enum PluginWireCodec {
       let title = raw["title"] as? String,
       !title.isEmpty,
       title.utf8.count <= maxQueryFieldBytes,
-      let rawEffect = raw["effect"],
+      let rawEffect = present(raw["effect"]),
       let decodedEffect = candidateEffect(
         from: rawEffect,
         maxTextBytes: maxQueryFieldBytes)
@@ -270,7 +270,7 @@ enum PluginWireCodec {
     else { return nil }
     stringBytes = withEffect
     let subtitle: String?
-    if let rawSubtitle = raw["subtitle"] {
+    if let rawSubtitle = present(raw["subtitle"]) {
       guard
         let value = rawSubtitle as? String,
         value.utf8.count <= maxQueryFieldBytes,
@@ -321,6 +321,14 @@ enum PluginWireCodec {
     default:
       return nil
     }
+  }
+
+  /// MessagePack nil decodes to NSNull, and `{"url": null}` is the natural
+  /// serialization of an absent optional in most languages. Treat it exactly
+  /// like a missing key — punishing it used to atomically discard whole
+  /// 10,000-row snapshots.
+  private static func present(_ value: Any?) -> Any? {
+    value is NSNull ? nil : value
   }
 
   private static func addingBytes(_ lhs: Int, _ rhs: Int, limit: Int) -> Int? {

@@ -20,7 +20,8 @@
       {
         "command": "slack",
         "subcommand": "login",
-        "description": "Authenticate the Slack CLI"
+        "description": "Authenticate the Slack CLI",
+        "timeout_ms": 310000
       },
       {
         "command": "slack",

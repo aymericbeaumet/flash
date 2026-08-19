@@ -273,19 +273,25 @@ struct PluginCommandRegistration: Codable, Hashable {
   /// stores its URL template as `_url`) in the manifest instead of
   /// duplicating it in code.
   var meta: [String: String]
+  /// Per-command `command.invoke` deadline override in milliseconds.
+  /// Interactive commands (`spotify login` runs a 300 s device-auth flow)
+  /// declare it here; everything else inherits the generic 2 s deadline.
+  var timeoutMs: Int?
 
   init(
     command: String,
     subcommand: String,
     description: String,
     selector: PluginSelector = PluginSelector(),
-    meta: [String: String] = [:]
+    meta: [String: String] = [:],
+    timeoutMs: Int? = nil
   ) {
     self.command = command
     self.subcommand = subcommand
     self.description = description
     self.selector = selector
     self.meta = meta
+    self.timeoutMs = timeoutMs
   }
 
   private struct DynamicKey: CodingKey {
@@ -308,6 +314,8 @@ struct PluginCommandRegistration: Codable, Hashable {
         [String].self, forKey: DynamicKey(stringValue: "only_bundle_ids")) ?? [],
       onlyURLs: try c.decodeIfPresent(
         [String].self, forKey: DynamicKey(stringValue: "only_urls")) ?? [])
+    self.timeoutMs = try c.decodeIfPresent(
+      Int.self, forKey: DynamicKey(stringValue: "timeout_ms"))
     var meta: [String: String] = [:]
     for key in c.allKeys where key.stringValue.hasPrefix("_") {
       meta[key.stringValue] = try c.decode(String.self, forKey: key)
@@ -325,6 +333,9 @@ struct PluginCommandRegistration: Codable, Hashable {
     }
     if !selector.onlyURLs.isEmpty {
       try c.encode(selector.onlyURLs, forKey: DynamicKey(stringValue: "only_urls"))
+    }
+    if let timeoutMs {
+      try c.encode(timeoutMs, forKey: DynamicKey(stringValue: "timeout_ms"))
     }
     for (key, value) in meta.sorted(by: { $0.key < $1.key }) {
       try c.encode(value, forKey: DynamicKey(stringValue: key))
@@ -1396,7 +1407,9 @@ struct PluginManifest: Codable, Equatable {
     try rejectProviderItems(
       dictionary["commands"],
       providerKeys: ["modes", "priority", "items"],
-      itemKeys: ["command", "subcommand", "description", "only_bundle_ids", "only_urls"],
+      itemKeys: [
+        "command", "subcommand", "description", "only_bundle_ids", "only_urls", "timeout_ms",
+      ],
       allowPrivateItemKeys: true,
       path: "manifest.json commands")
     try rejectProviderItems(

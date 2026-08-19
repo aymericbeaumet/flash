@@ -86,7 +86,12 @@ Plugin log lines travel as `flash.log` notifications and are recorded with
 - `navigation.restore` — restore a durable route for a declared scheme.
 
 Generic RPCs default to a 2-second deadline; manifest `request_timeout_ms`
-raises only that generic deadline, never the fixed ones above.
+raises only that generic deadline, never the fixed ones above. A
+`commands.items[]` entry may declare its own `timeout_ms` for interactive
+commands (`spotify login` runs a 300 s device-auth flow). While any
+host-initiated request is in flight, heartbeat misses are not counted — a
+single-threaded plugin running a long command is busy, not dead; the
+request's own deadline bounds that suspension.
 
 ## Plugin → host
 

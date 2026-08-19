@@ -19,7 +19,8 @@
       {
         "command": "spotify",
         "subcommand": "login",
-        "description": "Authenticate spotify_player"
+        "description": "Authenticate spotify_player",
+        "timeout_ms": 310000
       },
       {
         "command": "spotify",

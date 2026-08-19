@@ -460,6 +460,7 @@ final class PluginProcess {
     args: [String],
     raw: String,
     meta: [String: String] = [:],
+    timeoutMs: Int? = nil,
     completion: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
   ) {
     var params: [String: Any] = [
@@ -475,7 +476,10 @@ final class PluginProcess {
     }
     sendRequest(
       method: "command.invoke",
-      params: params
+      params: params,
+      // A manifest entry may declare its own deadline (interactive commands
+      // like `spotify login` outlive the 2 s generic one by minutes).
+      timeout: timeoutMs.map { .milliseconds(max(1, $0)) }
     ) { response in
       let ok = response?["ok"] as? Bool ?? false
       // A command may name an app (by pid) for Flash to raise once it
@@ -1349,6 +1353,16 @@ final class PluginProcess {
 
   private func heartbeat() {
     guard initializationCompleted, process?.isRunning == true else { return }
+    if !pending.isEmpty {
+      // A host→plugin request is in flight: a single-threaded plugin running
+      // a long command is legitimately busy and cannot answer heartbeats.
+      // Suspend miss accounting — the request's own deadline (which clears
+      // its pending entry) bounds the suspension, so a truly wedged plugin
+      // is still torn down one tick after its slowest request expires.
+      awaitingHeartbeat = false
+      heartbeatMisses = 0
+      return
+    }
     if awaitingHeartbeat {
       heartbeatMisses += 1
       if runtimeStateSnapshot() == .ready {
