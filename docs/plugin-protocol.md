@@ -89,6 +89,7 @@ manifest):
 | RPC | Capability |
 | --- | --- |
 | `host.ping` | none |
+| `host.fetch` | `network_fetch` |
 | `host.normal_mode_target`, `app.activate` | `app_control` |
 | `input.replace_text_and_submit`, `input.post_keys` | `accessibility` |
 | `ax.snapshot`, `ax.perform`, `ax.set`, `ax.select_child`, `ax.click`, `ax.click_point` | `accessibility` |
@@ -97,9 +98,13 @@ The AX broker exists because `AXUIElement` cannot cross a process boundary:
 `ax.snapshot` BFS-walks a subtree (default cap 3000 nodes) and returns flat
 nodes with opaque handles; geometry is delivered in NSScreen coordinates.
 
-`capabilities` also includes `network` (opts out of the network-denying
-sandbox profile) and `subprocess` (permits helpers that cannot run inside
-that profile). Omitted capabilities are default-denied.
+`capabilities` also includes `network` (composes `network-outbound` into the
+sandbox profile), `network_fetch` (the host performs HTTPS GETs on the
+plugin's behalf via `host.fetch`, restricted to the manifest's `fetch_urls`
+prefixes with an 8 s timeout and 1 MiB UTF-8 response cap — the plugin keeps
+a fully network-denied sandbox), and `subprocess` (permits helpers that
+cannot run inside that profile). `network_fetch` and `fetch_urls` must be
+declared together. Omitted capabilities are default-denied.
 
 ## Payload shapes and quotas
 

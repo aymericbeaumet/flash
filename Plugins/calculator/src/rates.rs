@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use flash_plugin::{run_command, Context};
+use flash_plugin::Context;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
@@ -130,23 +130,17 @@ pub(crate) async fn seed_and_refresh(ctx: Context, store: RatesStore) {
 }
 
 async fn fetch_rates(ctx: &Context) -> Option<ExchangeRates> {
-    let argv = [
-        "/usr/bin/curl".to_string(),
-        "--fail".to_string(),
-        "--silent".to_string(),
-        "--show-error".to_string(),
-        "--location".to_string(),
-        "--max-time".to_string(),
-        "5".to_string(),
-        "--max-filesize".to_string(),
-        "1048576".to_string(),
-        ECB_DAILY_URL.to_string(),
-    ];
-    let output = run_command(ctx, &argv, Duration::from_secs(7)).await;
-    if !output.ok {
-        return None;
-    }
-    parse_ecb_xml(&output.stdout).ok()
+    // The host performs the request (`host.fetch`): the manifest's
+    // `fetch_urls` allowlists exactly the ECB endpoint, so the calculator
+    // keeps a fully network-denied sandbox with no curl subprocess.
+    let body = match ctx.fetch(ECB_DAILY_URL).await {
+        Ok(body) => body,
+        Err(error) => {
+            ctx.log("warn", &format!("[calculator] rates fetch failed: {error}"));
+            return None;
+        }
+    };
+    parse_ecb_xml(&body).ok()
 }
 
 async fn load_cached(path: &Path) -> Option<ExchangeRates> {

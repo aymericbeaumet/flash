@@ -94,7 +94,12 @@ final class PluginSystemTests: XCTestCase {
     let calculator = try XCTUnwrap(manifests.first { $0.id == "calculator" })
     XCTAssertTrue(calculator.providesQueryEvaluation)
     XCTAssertEqual(calculator.queriesProvider?.surfaces, [.flashlight])
-    XCTAssertEqual(calculator.capabilities, [.network])
+    // network_fetch, not network: the ECB refresh goes through host.fetch
+    // against the manifest fetch_urls allowlist, so the calculator keeps a
+    // fully network-denied deny-default sandbox.
+    XCTAssertEqual(calculator.capabilities, [.networkFetch])
+    XCTAssertEqual(calculator.fetchURLs, ["https://www.ecb.europa.eu/"])
+    XCTAssertNotNil(calculator.sandbox)
 
     XCTAssertTrue(
       commandNames(for: "spotify", manifests: manifests).isSuperset(of: [
@@ -227,6 +232,54 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
       XCTAssertTrue(
         String(describing: error).contains("requires verb needs_rpc to declare a default"))
+    }
+  }
+
+  func testFetchURLsAndNetworkFetchCapabilityMustPair() throws {
+    for manifest in [
+      // fetch_urls without the capability.
+      """
+      {
+        "id": "fetchy", "name": "Fetchy", "version": "1.0.0",
+        "description": "fixture", "install": "true",
+        "exec": ["/usr/bin/true"],
+        "fetch_urls": ["https://example.com/"]
+      }
+      """,
+      // Capability without fetch_urls.
+      """
+      {
+        "id": "fetchy", "name": "Fetchy", "version": "1.0.0",
+        "description": "fixture", "install": "true",
+        "exec": ["/usr/bin/true"],
+        "capabilities": ["network_fetch"]
+      }
+      """,
+    ] {
+      let root = try temporaryPluginRoot(manifest: manifest)
+      defer { try? FileManager.default.removeItem(at: root) }
+      XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+        XCTAssertTrue(
+          String(describing: error).contains("must be declared together"),
+          String(describing: error))
+      }
+    }
+  }
+
+  func testFetchURLsMustBeHTTPSPrefixes() throws {
+    let root = try temporaryPluginRoot(
+      manifest: """
+        {
+          "id": "fetchy", "name": "Fetchy", "version": "1.0.0",
+          "description": "fixture", "install": "true",
+          "exec": ["/usr/bin/true"],
+          "capabilities": ["network_fetch"],
+          "fetch_urls": ["http://example.com/"]
+        }
+        """)
+    defer { try? FileManager.default.removeItem(at: root) }
+    XCTAssertThrowsError(try PluginManifest.load(from: root)) { error in
+      XCTAssertTrue(String(describing: error).contains("https://"), String(describing: error))
     }
   }
 

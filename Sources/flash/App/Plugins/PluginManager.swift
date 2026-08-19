@@ -481,6 +481,7 @@ final class PluginManager {
     params: [String: Any],
     pluginID: String,
     capabilities: Set<PluginCapability>,
+    fetchURLs: [String] = [],
     reply: @escaping ([String: Any]) -> Void
   ) {
     switch method {
@@ -528,12 +529,73 @@ final class PluginManager {
         return
       }
       axBroker.handle(method: method, params: params, reply: reply)
+    case "host.fetch":
+      guard capabilities.contains(.networkFetch) else {
+        reply(["ok": false, "error": "missing network_fetch capability"])
+        return
+      }
+      hostFetch(params, allowlist: fetchURLs, pluginID: pluginID, reply: reply)
     default:
       FlashLog.warn(
         "[plugin] unknown host method \(method) from \(pluginID)",
         fields: ["method": method, "plugin": pluginID])
       reply(["ok": false, "error": "unknown host method: \(method)"])
     }
+  }
+
+  /// `host.fetch`: perform an HTTPS GET on the plugin's behalf. The manifest's
+  /// `fetch_urls` prefixes are the allowlist, the response is capped at 1 MiB
+  /// of UTF-8 text, and the request runs entirely off the main thread on
+  /// URLSession's delegate queue with a hard timeout — a slow remote can never
+  /// touch tap responsiveness. Telemetry stays content-free (no URL/body).
+  private static let hostFetchBodyCap = 1_048_576
+
+  private func hostFetch(
+    _ params: [String: Any], allowlist: [String], pluginID: String,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let urlString = params["url"] as? String,
+      let url = URL(string: urlString),
+      url.scheme == "https"
+    else {
+      reply(["ok": false, "error": "host.fetch requires a valid https url param"])
+      return
+    }
+    guard allowlist.contains(where: { urlString.hasPrefix($0) }) else {
+      reply(["ok": false, "error": "url not in fetch_urls allowlist"])
+      return
+    }
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 8
+    let startedAt = DispatchTime.now()
+    URLSession.shared.dataTask(with: request) { data, response, error in
+      let elapsedMs = Int(
+        Double(DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds) / 1_000_000)
+      if let error {
+        FlashLog.warn(
+          "[plugin] host.fetch failed elapsed_ms=\(elapsedMs)",
+          fields: ["plugin": pluginID, "elapsed_ms": "\(elapsedMs)"])
+        reply(["ok": false, "error": String(describing: error)])
+        return
+      }
+      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+      let data = data ?? Data()
+      guard data.count <= Self.hostFetchBodyCap else {
+        reply(["ok": false, "error": "response exceeds the 1 MiB host.fetch cap"])
+        return
+      }
+      guard let body = String(data: data, encoding: .utf8) else {
+        reply(["ok": false, "error": "response is not UTF-8 text"])
+        return
+      }
+      FlashLog.info(
+        "[plugin] host.fetch ok status=\(status) elapsed_ms=\(elapsedMs)",
+        fields: [
+          "plugin": pluginID, "status": "\(status)", "elapsed_ms": "\(elapsedMs)",
+          "bytes": "\(data.count)",
+        ])
+      reply(["ok": true, "status": status, "body": body])
+    }.resume()
   }
 
   private func activatePluginApp(
@@ -995,12 +1057,14 @@ final class PluginManager {
         // from there would invert the reload path
         // (manager queue -> stopAndWait -> process queue) and can deadlock.
         let capabilities = manifest.capabilities
+        let fetchURLs = manifest.fetchURLs
         plugin.onHostRequest = { [weak self] method, params, pluginID, reply in
           self?.handleHostRequest(
             method: method,
             params: params,
             pluginID: pluginID,
             capabilities: capabilities,
+            fetchURLs: fetchURLs,
             reply: reply)
         }
         pluginsByID[manifest.id] = plugin

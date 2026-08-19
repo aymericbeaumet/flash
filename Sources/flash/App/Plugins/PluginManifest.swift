@@ -22,6 +22,11 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// buggy plugin can't exfiltrate. Declare it when the plugin reaches the
   /// network directly or via a child process (e.g. `curl`, an API client).
   case network
+  /// Fetch specific URLs through the host (`host.fetch`): the host performs
+  /// the request itself against the manifest's `fetch_urls` allowlist with a
+  /// hard timeout and 1 MiB response cap, so the plugin needs no network
+  /// access of its own and keeps a fully network-denied sandbox.
+  case networkFetch = "network_fetch"
   /// Exec privileged helper binaries the network sandbox can't run — notably
   /// setgid `/bin/ps`, which seatbelt refuses (and which no profile can permit
   /// without also letting children escape the network deny). Implies the plugin
@@ -1018,6 +1023,10 @@ struct PluginManifest: Codable, Equatable {
   var exec: [String]?
   /// Deny-default sandbox opt-in; see ``PluginSandboxSpec``.
   var sandbox: PluginSandboxSpec?
+  /// HTTPS URL prefixes the plugin may request through `host.fetch`.
+  /// Requires the `network_fetch` capability; the host rejects any request
+  /// whose URL doesn't start with one of these.
+  var fetchURLs: [String]
   /// Host event-name patterns this plugin listens to. `*` is the only wildcard.
   var listen: [String]
   var hintsProvider: PluginHintsProvider?
@@ -1186,6 +1195,7 @@ struct PluginManifest: Codable, Equatable {
 
   enum CodingKeys: String, CodingKey, CaseIterable {
     case id, name, version, description, install, exec, sandbox, listen, priority
+    case fetchURLs = "fetch_urls"
     case volatile
     case onlyBundleIDs = "only_bundle_ids"
     case onlyURLs = "only_urls"
@@ -1201,6 +1211,7 @@ struct PluginManifest: Codable, Equatable {
     id: String, name: String, version: String, description: String,
     install: String, exec: [String]? = nil,
     sandbox: PluginSandboxSpec? = nil,
+    fetchURLs: [String] = [],
     listen: [String] = [],
     hintsProvider: PluginHintsProvider? = nil,
     queriesProvider: PluginQueriesProvider? = nil,
@@ -1226,6 +1237,7 @@ struct PluginManifest: Codable, Equatable {
     self.install = install
     self.exec = exec
     self.sandbox = sandbox
+    self.fetchURLs = Self.uniqueTrimmed(fetchURLs)
     self.listen = Self.uniqueTrimmed(listen)
     self.hintsProvider = hintsProvider
     self.queriesProvider = queriesProvider
@@ -1254,6 +1266,8 @@ struct PluginManifest: Codable, Equatable {
     self.install = try c.decode(String.self, forKey: .install)
     self.exec = try c.decodeIfPresent([String].self, forKey: .exec)
     self.sandbox = try c.decodeIfPresent(PluginSandboxSpec.self, forKey: .sandbox)
+    self.fetchURLs = Self.uniqueTrimmed(
+      try c.decodeIfPresent([String].self, forKey: .fetchURLs) ?? [])
     self.listen = Self.uniqueTrimmed(try c.decodeIfPresent([String].self, forKey: .listen) ?? [])
     self.hintsProvider = try c.decodeIfPresent(PluginHintsProvider.self, forKey: .hints)
     self.queriesProvider = try c.decodeIfPresent(PluginQueriesProvider.self, forKey: .queries)
@@ -1289,6 +1303,7 @@ struct PluginManifest: Codable, Equatable {
     try c.encode(install, forKey: .install)
     if let exec { try c.encode(exec, forKey: .exec) }
     if let sandbox { try c.encode(sandbox, forKey: .sandbox) }
+    if !fetchURLs.isEmpty { try c.encode(fetchURLs, forKey: .fetchURLs) }
     if !listen.isEmpty { try c.encode(listen, forKey: .listen) }
     if let hintsProvider { try c.encode(hintsProvider, forKey: .hints) }
     if let queriesProvider { try c.encode(queriesProvider, forKey: .queries) }
@@ -1488,6 +1503,14 @@ struct PluginManifest: Codable, Equatable {
         throw PluginError.invalidManifest("manifest.json field \(field) must not be empty")
       }
     }
+    if capabilities.contains(.networkFetch) != !fetchURLs.isEmpty {
+      throw PluginError.invalidManifest(
+        "manifest.json network_fetch capability and fetch_urls must be declared together")
+    }
+    for prefix in fetchURLs where !prefix.hasPrefix("https://") {
+      throw PluginError.invalidManifest(
+        "manifest.json fetch_urls entries must be https:// prefixes: \(prefix)")
+    }
     if let sandbox {
       for path in sandbox.exec where !path.hasPrefix("/") {
         throw PluginError.invalidManifest(
@@ -1524,6 +1547,7 @@ struct PluginManifest: Codable, Equatable {
         ("request_timeout_ms", requestTimeoutMs != nil),
         ("volatile", volatile),
         ("sandbox", sandbox != nil),
+        ("fetch_urls", !fetchURLs.isEmpty),
       ]
       if let field = processBound.first(where: { $0.1 })?.0 {
         throw PluginError.invalidManifest(

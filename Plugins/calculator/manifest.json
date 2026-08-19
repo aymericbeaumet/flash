@@ -6,5 +6,7 @@
   "install": "true",
   "exec": ["./flash-plugin-calculator"],
   "queries": { "exclusive_prefixes": ["="] },
-  "capabilities": ["network"]
+  "capabilities": ["network_fetch"],
+  "fetch_urls": ["https://www.ecb.europa.eu/"],
+  "sandbox": {}
 }

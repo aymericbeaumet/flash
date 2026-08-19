@@ -124,6 +124,28 @@ impl Context {
             .await
     }
 
+    /// Fetch an allowlisted HTTPS URL through the host (`host.fetch`). The
+    /// host enforces the manifest's `fetch_urls` prefixes, an 8-second
+    /// timeout, and a 1 MiB UTF-8 response cap — the plugin itself needs no
+    /// network access (declare the `network_fetch` capability instead of
+    /// `network` and keep a fully network-denied sandbox).
+    pub async fn fetch(&self, url: &str) -> Result<String, String> {
+        let response = self
+            .call_host_timeout("host.fetch", json!({ "url": url }), Duration::from_secs(10))
+            .await;
+        if response.get("ok").and_then(Value::as_bool) != Some(true) {
+            let error = response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("host.fetch failed");
+            return Err(error.to_string());
+        }
+        match response.get("body").and_then(Value::as_str) {
+            Some(body) => Ok(body.to_string()),
+            None => Err("host.fetch response missing body".to_string()),
+        }
+    }
+
     pub async fn call_host_timeout(&self, method: &str, params: Value, timeout: Duration) -> Value {
         let started_at = Instant::now();
         let id = self.host_counter.fetch_add(1, Ordering::Relaxed) + 1;
