@@ -69,7 +69,6 @@ final class PluginProcess {
   private var requestID: Int = 0
   private var pending: [Int: PendingRequest] = [:]
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
-  private var fileWatcherFDs: [Int32] = []
   private var reloadWork: DispatchWorkItem?
   private var lastError: String?
   private var lastLog: String?
@@ -504,29 +503,7 @@ final class PluginProcess {
     params["name"] = name
     params["context"] = PluginWireCodec.contextJSON(context)
     sendRequest(method: "source.action", params: params) { [weak self] response in
-      let result: SourceActionResult
-      if let response {
-        let didPerform = response["did_perform"] as? Bool ?? false
-        let handled = response["handled"] as? Bool ?? false
-        let pid = (response["target_pid"] as? Int).map(pid_t.init)
-        let navigationURL = (response["navigation_url"] as? String).flatMap(URL.init(string:))
-        if didPerform {
-          result = .performed(pid: pid, navigationURL: navigationURL)
-        } else if handled {
-          result = SourceActionResult(
-            targetPID: pid,
-            disposition: .failed,
-            navigationURL: navigationURL)
-        } else {
-          result = .unhandled
-        }
-      } else {
-        // No reply (RPC timeout, plugin crash mid-call): the plugin was
-        // consulted because it claims this context, and the action may
-        // still complete late — report failed, never unhandled, so the
-        // host can't double-fire a keystroke fallback.
-        result = .failed
-      }
+      let result = Self.sourceActionResult(from: response)
       FlashLog.trace(
         "[plugin] source_action plugin=\(self?.manifest.id ?? "?") name=\(name) "
           + "disposition=\(result.disposition) "
@@ -544,25 +521,7 @@ final class PluginProcess {
   ) {
     sendRequest(method: "navigation.restore", params: ["url": url.absoluteString]) {
       [weak self] response in
-      let result: SourceActionResult
-      if let response {
-        let didPerform = response["did_perform"] as? Bool ?? false
-        let handled = response["handled"] as? Bool ?? false
-        let pid = (response["target_pid"] as? Int).map(pid_t.init)
-        let navigationURL = (response["navigation_url"] as? String).flatMap(URL.init(string:))
-        if didPerform {
-          result = .performed(pid: pid, navigationURL: navigationURL)
-        } else if handled {
-          result = SourceActionResult(
-            targetPID: pid,
-            disposition: .failed,
-            navigationURL: navigationURL)
-        } else {
-          result = .unhandled
-        }
-      } else {
-        result = .failed
-      }
+      let result = Self.sourceActionResult(from: response)
       FlashLog.trace(
         "[plugin] navigation_restore plugin=\(self?.manifest.id ?? "?") "
           + "scheme=\(url.scheme ?? "nil") "
@@ -573,6 +532,29 @@ final class PluginProcess {
         completion(result)
       }
     }
+  }
+
+  /// Decode a `source.action` / `navigation.restore` reply into the
+  /// disposition tri-state. No reply (RPC timeout, plugin crash mid-call)
+  /// coerces to `.failed`, never `.unhandled` — the plugin was consulted
+  /// because it claims this context and the action may still complete late,
+  /// so the host must not double-fire a keystroke fallback.
+  private static func sourceActionResult(from response: [String: Any]?) -> SourceActionResult {
+    guard let response else { return .failed }
+    let didPerform = response["did_perform"] as? Bool ?? false
+    let handled = response["handled"] as? Bool ?? false
+    let pid = (response["target_pid"] as? Int).map(pid_t.init)
+    let navigationURL = (response["navigation_url"] as? String).flatMap(URL.init(string:))
+    if didPerform {
+      return .performed(pid: pid, navigationURL: navigationURL)
+    }
+    if handled {
+      return SourceActionResult(
+        targetPID: pid,
+        disposition: .failed,
+        navigationURL: navigationURL)
+    }
+    return .unhandled
   }
 
   func statusSnapshot() -> PluginStatus {
@@ -1495,7 +1477,6 @@ final class PluginProcess {
     }
     source.resume()
     fileWatchers.append(source)
-    fileWatcherFDs.append(fd)
   }
 
   private func removeFileWatchers() {
@@ -1503,7 +1484,6 @@ final class PluginProcess {
       watcher.cancel()
     }
     fileWatchers.removeAll()
-    fileWatcherFDs.removeAll()
   }
 
   private func scheduleFileReload() {

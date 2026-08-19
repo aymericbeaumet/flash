@@ -210,13 +210,6 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     plugin.resolveCandidate(candidate, completion: completion)
   }
 
-  func candidate(matching target: String, in environment: FlashSourceEnvironment) -> Candidate? {
-    candidates(in: environment, scope: .all).first {
-      $0.title.localizedCaseInsensitiveContains(target)
-        || $0.displayTitle.localizedCaseInsensitiveContains(target)
-    }
-  }
-
   func performAction(
     _ action: SourceAction,
     in context: AppContext,

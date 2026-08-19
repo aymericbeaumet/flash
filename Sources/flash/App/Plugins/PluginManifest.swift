@@ -655,14 +655,6 @@ struct PluginProviderGate: Codable, Equatable {
     if !modes.isEmpty { try c.encode(modes, forKey: .modes) }
     if let priority { try c.encode(priority, forKey: .priority) }
   }
-
-  var conditions: ProviderConditions {
-    ProviderConditions(modes: Set(modes))
-  }
-
-  func matches(mode: ProviderMode? = nil) -> Bool {
-    conditions.matches(bundleID: nil, mode: mode)
-  }
 }
 
 struct PluginHintsProvider: Codable, Equatable {
@@ -1207,19 +1199,6 @@ struct PluginManifest: Codable, Equatable {
     if shebangs.contains(where: { $0.selector.usesURL }) { return true }
     if verbs.contains(where: { $0.selector.usesURL }) { return true }
     return false
-  }
-
-  func providerSupports(context: PluginSelectorContext) -> Bool {
-    guard selector.matches(context) else { return false }
-    return hintsProvider != nil
-      || providesQueryEvaluation
-      || !sourceActions.isEmpty
-      || navigationProvider != nil
-      || !sources.isEmpty
-  }
-
-  func listens(to event: PluginEvent) -> Bool {
-    listen.contains { PluginPattern.matches($0, event.name) }
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
