@@ -129,6 +129,16 @@ struct PluginStatus {
   }
 }
 
+/// The four fields the status bar actually renders, published every clock
+/// tick and focus change. Unlike `PluginStatus` this carries no rusage
+/// sample and no commands copy — keep it allocation-light.
+struct PluginStatusBarInfo {
+  var id: String
+  var state: String
+  var hasError: Bool
+  var statusSegments: [String: String]
+}
+
 /// Per-plugin host-side state for the **hint** path (`f`) and status bar.
 /// Candidates are NOT here: flashlight rows are pulled live from warm plugins
 /// via `sources.snapshot`, never cached on the host (see `PluginFlashSource`).

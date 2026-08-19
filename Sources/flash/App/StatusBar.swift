@@ -222,7 +222,7 @@ struct FlashStatusBarContext {
   var now: Date
   var calendar: Calendar
   var locale: Locale
-  var pluginStatuses: [PluginStatus]
+  var pluginStatuses: [PluginStatusBarInfo]
   var hostName: String
   var userName: String
   var userID: UInt32
@@ -235,7 +235,7 @@ struct FlashStatusBarContext {
     now: Date = Date(),
     calendar: Calendar = .current,
     locale: Locale = Locale(identifier: "en_US_POSIX"),
-    pluginStatuses: [PluginStatus] = [],
+    pluginStatuses: [PluginStatusBarInfo] = [],
     hostName: String = ProcessInfo.processInfo.hostName,
     userName: String = NSUserName(),
     userID: UInt32 = getuid(),
@@ -810,15 +810,17 @@ enum FlashStatusBarTemplateEngine {
 
   private static func resolvePlugin(
     _ value: FlashStatusBarPluginValue,
-    statuses: [PluginStatus]
+    statuses: [PluginStatusBarInfo]
   ) -> String {
     switch value {
     case .loadedCount:
-      return "\(statuses.count)"
+      // Failed-to-load rows are surfaced through errorCount, not counted as
+      // loaded plugins.
+      return "\(statuses.filter { $0.state != "load_failed" }.count)"
     case .readyCount:
       return "\(statuses.filter { $0.state == "ready" }.count)"
     case .errorCount:
-      return "\(statuses.filter { ($0.lastError ?? "").isEmpty == false }.count)"
+      return "\(statuses.filter(\.hasError).count)"
     case .statusSegment(let pluginID, let name):
       guard
         let text = statuses.first(where: { $0.id == pluginID })?
@@ -1322,7 +1324,7 @@ final class FlashStatusBarController {
   private let commandQueue = DispatchQueue(
     label: "flash.status_bar.commands", qos: .utility, attributes: .concurrent)
   private var template: FlashStatusBarTemplate
-  private let pluginStatusesProvider: () -> [PluginStatus]
+  private let pluginStatusesProvider: () -> [PluginStatusBarInfo]
   private var refreshTimer: DispatchSourceTimer?
   private var cycleTimer: DispatchSourceTimer?
   /// Per-`#{cycle:…}` variable: its output lines, which one is showing, its
@@ -1357,7 +1359,7 @@ final class FlashStatusBarController {
     overlay: OverlayPanel,
     template: FlashStatusBarTemplate,
     refreshIntervalSeconds: TimeInterval = 5,
-    pluginStatusesProvider: @escaping () -> [PluginStatus] = { [] }
+    pluginStatusesProvider: @escaping () -> [PluginStatusBarInfo] = { [] }
   ) {
     self.overlay = overlay
     self.template = template

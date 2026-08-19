@@ -599,6 +599,20 @@ final class PluginProcess {
       statusSegments: snap.statusSegments)
   }
 
+  /// The status bar's per-publish read: no rusage syscall, no commands copy.
+  func statusBarInfo() -> PluginStatusBarInfo {
+    lock.lock()
+    let segments = discovery.statusSegments
+    let state = self.state
+    let hasError = !(lastError ?? "").isEmpty
+    lock.unlock()
+    return PluginStatusBarInfo(
+      id: manifest.id,
+      state: state.rawValue,
+      hasError: hasError,
+      statusSegments: segments)
+  }
+
   /// Cheap lifecycle read for hot-path adapters. Unlike `statusSnapshot`, this
   /// does not sample process CPU/memory or allocate the full diagnostics model.
   func runtimeStateSnapshot() -> PluginRuntimeState {

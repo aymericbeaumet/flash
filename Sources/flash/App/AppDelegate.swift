@@ -504,7 +504,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       template: config.statusBar.template,
       refreshIntervalSeconds: config.statusBar.refreshIntervalSeconds,
       pluginStatusesProvider: { [weak self] in
-        self?.pluginManager.pluginStatuses() ?? []
+        self?.pluginManager.statusBarInfos() ?? []
       })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
     overlay.statusBarActionHandler = { [weak self] name in

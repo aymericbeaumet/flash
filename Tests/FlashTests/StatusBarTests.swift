@@ -1397,32 +1397,11 @@ final class StatusBarTests: XCTestCase {
     state: String,
     lastError: String?,
     statusSegments: [String: String] = [:]
-  ) -> PluginStatus {
-    PluginStatus(
+  ) -> PluginStatusBarInfo {
+    PluginStatusBarInfo(
       id: id,
-      name: id,
-      version: "1.0.0",
-      description: "",
-      origin: "test",
-      root: "/tmp/\(id)",
       state: state,
-      pid: nil,
-      uptimeMs: nil,
-      heartbeatAgeMs: nil,
-      sourceCount: 0,
-      commandCount: 0,
-      targetCount: 0,
-      discoveryAgeMs: nil,
-      restartCount: 0,
-      lastError: lastError,
-      lastLog: nil,
-      cpuPercent: nil,
-      memoryBytes: nil,
-      onlyBundleIDs: [],
-      onlyURLs: [],
-      volatile: false,
-      priority: 0,
-      commands: [],
+      hasError: !(lastError ?? "").isEmpty,
       statusSegments: statusSegments)
   }
 

@@ -138,6 +138,10 @@ final class PluginManager {
   private let queue = DispatchQueue(label: "flash.plugins", qos: .utility)
   private let baseDataDir: URL
   private let repository: PluginRepository
+  /// Manifest load/validate failures from the last reconcile, surfaced as
+  /// `load_failed` rows in `:plugins`/the inspector/the status bar error
+  /// count instead of the plugin silently not existing.
+  private var loadFailureStatuses: [PluginStatus] = []
   private var pluginsByID: [String: PluginProcess] = [:]
   private var sourceAdaptersByID: [String: PluginFlashSource] = [:]
   /// Pre-computed command lookup index: `(command, subcommand)` →
@@ -745,7 +749,21 @@ final class PluginManager {
 
   func pluginStatuses() -> [PluginStatus] {
     queue.sync {
-      pluginsByID.values.map { $0.statusSnapshot() }.sorted { $0.id < $1.id }
+      (pluginsByID.values.map { $0.statusSnapshot() } + loadFailureStatuses)
+        .sorted { $0.id < $1.id }
+    }
+  }
+
+  /// The status bar's per-publish read: id/state/error flag/segments only —
+  /// no rusage syscall, no commands copy. Fires on the clock tick and every
+  /// focus change, so it must stay allocation-light.
+  func statusBarInfos() -> [PluginStatusBarInfo] {
+    queue.sync {
+      pluginsByID.values.map { $0.statusBarInfo() }
+        + loadFailureStatuses.map {
+          PluginStatusBarInfo(
+            id: $0.id, state: $0.state, hasError: true, statusSegments: [:])
+        }
     }
   }
 
@@ -759,6 +777,7 @@ final class PluginManager {
       }
     }
 
+    loadFailureStatuses.removeAll()
     var nextIDs = Set<String>()
     for item in desired {
       do {
@@ -821,6 +840,35 @@ final class PluginManager {
             "origin": String(describing: item.origin),
             "error": String(describing: error),
           ])
+        // A manifest typo must show up in `:plugins` and the inspector as a
+        // failed row — not as the plugin silently ceasing to exist.
+        loadFailureStatuses.append(
+          PluginStatus(
+            id: item.root.lastPathComponent,
+            name: item.root.lastPathComponent,
+            version: "-",
+            description: String(describing: error),
+            origin: item.origin.label,
+            root: item.root.path,
+            state: "load_failed",
+            pid: nil,
+            uptimeMs: nil,
+            heartbeatAgeMs: nil,
+            sourceCount: 0,
+            commandCount: 0,
+            targetCount: 0,
+            discoveryAgeMs: nil,
+            restartCount: 0,
+            lastError: String(describing: error),
+            lastLog: nil,
+            cpuPercent: nil,
+            memoryBytes: nil,
+            onlyBundleIDs: [],
+            onlyURLs: [],
+            volatile: false,
+            priority: 0,
+            commands: [],
+            statusSegments: [:]))
       }
     }
 
