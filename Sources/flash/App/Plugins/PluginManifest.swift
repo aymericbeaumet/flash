@@ -978,13 +978,17 @@ struct PluginSandboxSpec: Codable, Equatable {
   var appleEvents: Bool
   /// Allow signalling other processes (`!kill`-style plugins).
   var signal: Bool
+  /// Allow posting synthetic HID/CGEvents (media-key plugins): opens the
+  /// WindowServer and IOHID mach services.
+  var hid: Bool
   /// Allow reading other processes' info (libproc listing/rusage) beyond
   /// the always-allowed `(target self)`.
   var processInfo: Bool
 
   init(
     exec: [String] = [], read: [String] = [], write: [String] = [],
-    appleEvents: Bool = false, signal: Bool = false, processInfo: Bool = false
+    appleEvents: Bool = false, signal: Bool = false, processInfo: Bool = false,
+    hid: Bool = false
   ) {
     self.exec = exec
     self.read = read
@@ -992,6 +996,7 @@ struct PluginSandboxSpec: Codable, Equatable {
     self.appleEvents = appleEvents
     self.signal = signal
     self.processInfo = processInfo
+    self.hid = hid
   }
 
   init(from decoder: Decoder) throws {
@@ -1002,6 +1007,7 @@ struct PluginSandboxSpec: Codable, Equatable {
     self.appleEvents = try c.decodeIfPresent(Bool.self, forKey: .appleevents) ?? false
     self.signal = try c.decodeIfPresent(Bool.self, forKey: .signal) ?? false
     self.processInfo = try c.decodeIfPresent(Bool.self, forKey: .processInfo) ?? false
+    self.hid = try c.decodeIfPresent(Bool.self, forKey: .hid) ?? false
   }
 
   func encode(to encoder: Encoder) throws {
@@ -1012,10 +1018,11 @@ struct PluginSandboxSpec: Codable, Equatable {
     if appleEvents { try c.encode(appleEvents, forKey: .appleevents) }
     if signal { try c.encode(signal, forKey: .signal) }
     if processInfo { try c.encode(processInfo, forKey: .processInfo) }
+    if hid { try c.encode(hid, forKey: .hid) }
   }
 
   enum CodingKeys: String, CodingKey, CaseIterable {
-    case exec, read, write, appleevents, signal
+    case exec, read, write, appleevents, signal, hid
     case processInfo = "process_info"
   }
 }
@@ -1525,9 +1532,11 @@ struct PluginManifest: Codable, Equatable {
         "manifest.json fetch_urls entries must be https:// prefixes: \(prefix)")
     }
     if let sandbox {
-      for path in sandbox.exec where !path.hasPrefix("/") {
+      // Absolute paths pass through; bare tool names (no slash) resolve
+      // through the login-shell PATH at spawn. Relative paths are neither.
+      for path in sandbox.exec where !path.hasPrefix("/") && path.contains("/") {
         throw PluginError.invalidManifest(
-          "manifest.json sandbox.exec paths must be absolute: \(path)")
+          "manifest.json sandbox.exec entries must be absolute paths or bare tool names: \(path)")
       }
       for path in sandbox.read + sandbox.write
       where !path.hasPrefix("/") && !path.hasPrefix("~/") {

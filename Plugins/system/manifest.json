@@ -4,7 +4,22 @@
   "version": "0.1.0",
   "description": "macOS system commands and status segments: lock, sleep, restart, shutdown, logout, battery, empty trash, toggle dark mode, screensaver, caffeinate.",
   "install": "true",
-  "exec": ["./flash-plugin-system"],
+  "sandbox": {
+    "exec": [
+      "/usr/bin/osascript",
+      "/usr/bin/open",
+      "/usr/bin/pmset",
+      "/usr/bin/killall",
+      "/usr/bin/caffeinate",
+      "/bin/sh",
+      "/usr/bin/nohup"
+    ],
+    "appleevents": true,
+    "signal": true
+  },
+  "exec": [
+    "./flash-plugin-system"
+  ],
   "commands": {
     "items": [
       {

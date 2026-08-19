@@ -852,6 +852,15 @@ final class PluginProcess {
     if spec.processInfo {
       lines.append("(allow process-info*)")
     }
+    if spec.hid {
+      // Synthetic HID/CGEvent posting: the WindowServer session and IOHID
+      // event system.
+      lines.append(
+        "(allow mach-lookup (global-name \"com.apple.windowserver.active\")"
+          + " (global-name \"com.apple.iohideventsystem\")"
+          + " (global-name \"com.apple.CARenderServer\"))")
+      lines.append("(allow iokit-open)")
+    }
     if spec.appleEvents {
       // osascript-driven plugins: AppleEvents routing and the TCC daemon
       // that mediates Automation consent.
@@ -872,6 +881,54 @@ final class PluginProcess {
     return lines.joined(separator: "\n")
   }
 
+  /// Expand a manifest sandbox spec for this machine. Bare tool names in
+  /// spec.exec resolve through the login-shell PATH (the user's package
+  /// manager decides where spotify_player lives); both the PATH hit and its
+  /// symlink-resolved target land in the profile because seatbelt matches
+  /// canonical vnode paths (Homebrew bins are Cellar symlinks). Config
+  /// `[plugin.<id>] exec_paths` appends machine-specific absolute paths.
+  /// Unresolvable names are dropped with a loud log — the later exec then
+  /// fails as a clear seatbelt denial instead of silently widening the
+  /// profile.
+  static func expandedSandboxSpec(
+    _ spec: PluginSandboxSpec, settings: [String: PluginConfigValue], pluginID: String
+  ) -> PluginSandboxSpec {
+    var expanded = spec
+    expanded.exec = spec.exec.flatMap { entry -> [String] in
+      let candidates: [String]
+      if entry.hasPrefix("/") {
+        candidates = [entry]
+      } else if let resolved = resolveExecutable(named: entry) {
+        candidates = [resolved]
+      } else {
+        FlashLog.warn(
+          "[plugin] \(pluginID) sandbox exec tool not found on PATH: \(entry)",
+          fields: ["plugin": pluginID, "tool": entry])
+        return []
+      }
+      return candidates.flatMap { path -> [String] in
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return resolved == path ? [path] : [path, resolved]
+      }
+    }
+    if case .stringArray(let extra) = settings["exec_paths"] {
+      expanded.exec.append(contentsOf: extra.filter { $0.hasPrefix("/") })
+    }
+    return expanded
+  }
+
+  private static func resolveExecutable(named name: String) -> String? {
+    let path =
+      FlashProcessEnvironment.shared.environment["PATH"] ?? FlashProcessEnvironment.fallbackPath
+    for directory in path.split(separator: ":") {
+      let candidate = "\(directory)/\(name)"
+      if FileManager.default.isExecutableFile(atPath: candidate) {
+        return candidate
+      }
+    }
+    return nil
+  }
+
   /// Which profile a plugin launches under, in order: the per-plugin
   /// `[plugin.<id>] sandbox = false` kill switch (fail-open, logged loudly by
   /// the caller), a manifest `sandbox` spec (deny-default), else the legacy
@@ -883,8 +940,9 @@ final class PluginProcess {
       return (nil, "disabled_by_config")
     }
     if let spec = manifest.sandbox {
+      let expanded = expandedSandboxSpec(spec, settings: settings, pluginID: manifest.id)
       return (
-        denyDefaultSandboxProfile(for: manifest, spec: spec, root: root, dataDir: dataDir),
+        denyDefaultSandboxProfile(for: manifest, spec: expanded, root: root, dataDir: dataDir),
         "deny_default"
       )
     }

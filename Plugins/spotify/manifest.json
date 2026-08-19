@@ -4,7 +4,14 @@
   "version": "0.1.0",
   "description": "Spotify playback controls backed by spotify_player.",
   "install": "true",
-  "exec": ["./flash-plugin-spotify"],
+  "sandbox": {
+    "exec": [
+      "spotify_player"
+    ]
+  },
+  "exec": [
+    "./flash-plugin-spotify"
+  ],
   "capabilities": [
     "network"
   ],
