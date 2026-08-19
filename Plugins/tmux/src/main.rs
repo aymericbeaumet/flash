@@ -3429,12 +3429,16 @@ async fn tab_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
     // confirm-before … kill-window`), so a Flash-initiated close is never
     // more dangerous than a tmux-native one. The command returns once the
     // prompt is posted; the kill itself only runs on `y`.
+    // `-t` targets the client the user is looking at (`-c` is tmux's
+    // CONFIRM-KEY flag, not target-client); `-b` posts the prompt without
+    // blocking this invocation until the user answers.
     let ok = run_tmux_for_client(
         plugin,
         client,
         &[
             "confirm-before",
-            "-c",
+            "-b",
+            "-t",
             &client.tty,
             "-p",
             "kill window \"#W\"? (y/n)",
@@ -3471,12 +3475,14 @@ async fn pane_close(plugin: &Tmux, ctx: &Context, client: &TmuxClient) -> bool {
     };
     // Same confirmation contract as tab_close: destructive, so prompt on
     // the user's client first (their own `bind x` does exactly this).
+    // `-b` = non-blocking post, `-t` = target-client.
     let ok = run_tmux_for_client(
         plugin,
         client,
         &[
             "confirm-before",
-            "-c",
+            "-b",
+            "-t",
             &client.tty,
             "-p",
             "kill pane #P \"#{pane_current_command}\"? (y/n)",
@@ -3621,7 +3627,12 @@ async fn perform_source_action(
         "tab_first" => tab_extreme(plugin, &client, "first").await,
         "tab_last" => tab_extreme(plugin, &client, "last").await,
         "tab_new" => tab_new(plugin, ctx, &client).await,
-        "tab_close" => tab_close(plugin, ctx, &client).await,
+        // "Close the current thing" on a tmux client means the PANE the
+        // user is looking at — the finest unit, matching their own
+        // `bind x … kill-pane`. Killing the last pane kills the window
+        // anyway; whole-window kills stay reachable via tmux's own prefix
+        // bindings and `:tmux` commands.
+        "tab_close" => pane_close(plugin, ctx, &client).await,
         "tab_move_next" => tab_move(plugin, &client, "next").await,
         "tab_move_previous" => tab_move(plugin, &client, "previous").await,
         "pane_next" => pane_select(plugin, &client, "next").await,
