@@ -7,11 +7,18 @@ import QuartzCore
 enum FlashStatusTextColor: Equatable {
   case defaultForeground
   case defaultBackground
-  case colour0
-  case colour178
-  case colour245
-  case colour196
-  case red
+  /// A numbered xterm-256 palette entry (`colourNNN` / `colorNNN`).
+  case palette(UInt8)
+  /// A literal `#RRGGBB` value.
+  case rgb(UInt32)
+
+  // Historical spellings kept for tests and call sites that named the four
+  // colours the bar supported before the full palette existed.
+  static let colour0 = FlashStatusTextColor.palette(0)
+  static let colour178 = FlashStatusTextColor.palette(178)
+  static let colour245 = FlashStatusTextColor.palette(245)
+  static let colour196 = FlashStatusTextColor.palette(196)
+  static let red = FlashStatusTextColor.palette(196)
 }
 
 struct FlashStatusTextSegment: Equatable {
@@ -442,69 +449,21 @@ enum FlashStatusBarTemplateEngine {
     return trimmed.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
   }
 
-  /// Split a resolved value into atoms, treating `#[…]` style/link markers
-  /// as zero-width passthrough so truncation counts only what the user
-  /// actually sees. A bare `#` (e.g. "C# tips") is an ordinary visible
-  /// character — only `#[` opens a marker.
-  private static func truncationAtoms(_ value: String) -> [(text: Substring, visible: Bool)] {
-    var atoms: [(text: Substring, visible: Bool)] = []
-    var i = value.startIndex
-    while i < value.endIndex {
-      if value[i] == "#",
-        let open = value.index(i, offsetBy: 1, limitedBy: value.endIndex),
-        open < value.endIndex,
-        value[open] == "[",
-        let close = value[open...].firstIndex(of: "]")
-      {
-        atoms.append((value[i...close], false))
-        i = value.index(after: close)
-        continue
-      }
-      atoms.append((value[i...i], true))
-      i = value.index(after: i)
-    }
-    return atoms
-  }
-
+  /// Truncation walks the token stream, so `#[…]` markers are zero-width
+  /// AND survive the cut on either side — the old character walk dropped
+  /// trailing markers, which is how a >80-char cycle line lost its
+  /// `#[nocyc]` sentinel and silently killed the slide animation.
   static func applyTruncation(_ value: String, truncation: Truncation) -> String {
     let (limit, fromTail, ellipsis): (Int, Bool, Bool)
     switch truncation {
     case .head(let n, let e): (limit, fromTail, ellipsis) = (n, false, e)
     case .tail(let n, let e): (limit, fromTail, ellipsis) = (n, true, e)
     }
-
-    let atoms = truncationAtoms(value)
-    let visibleCount = atoms.reduce(0) { $0 + ($1.visible ? 1 : 0) }
-    if visibleCount <= limit { return value }
-
-    // Reserve one cell for the glyph so the trimmed run is exactly `limit`
-    // visible characters wide (or fewer when no ellipsis is requested).
-    let keep = ellipsis ? max(0, limit - 1) : limit
-    let ordered = fromTail ? Array(atoms.reversed()) : atoms
-    var kept: [Substring] = []
-    var seen = 0
-    for atom in ordered {
-      if seen >= keep { break }
-      if atom.visible { seen += 1 }
-      kept.append(atom.text)
-    }
-    if fromTail { kept.reverse() }
-
-    var out = kept.joined()
-    if ellipsis {
-      // The glyph sits flush against the text: drop whitespace adjacent to it
-      // so a truncation that lands on a space doesn't render "foo …". The width
-      // budget already reserved the glyph's cell (`keep = limit - 1`), so the
-      // trimmed run stays within `limit` visible characters.
-      if fromTail {
-        while let first = out.first, first.isWhitespace { out.removeFirst() }
-        out = truncationEllipsis + out
-      } else {
-        while let last = out.last, last.isWhitespace { out.removeLast() }
-        out += truncationEllipsis
-      }
-    }
-    return out
+    let tokens = FlashStatusBarMarkup.tokenizeValue(value)
+    guard FlashStatusBarMarkup.visibleCount(tokens) > limit else { return value }
+    return FlashStatusBarMarkup.serialize(
+      FlashStatusBarMarkup.truncate(
+        tokens, limit: limit, fromTail: fromTail, ellipsis: ellipsis))
   }
 
   /// Recognise an alignment marker body. Returns nil for style markers
@@ -636,45 +595,20 @@ enum FlashStatusBarRenderer {
   }
 
   static func stripClickRanges(from raw: String) -> String {
-    var result = ""
-    var index = raw.startIndex
-
-    while index < raw.endIndex {
-      if raw[index] == "#",
-        let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        open < raw.endIndex,
-        raw[open] == "[",
-        let close = raw[open...].firstIndex(of: "]")
-      {
-        let bodyStart = raw.index(after: open)
-        let marker = String(raw[bodyStart..<close])
-        let stripped =
-          marker
-          .split { $0 == " " || $0 == "," }
-          .map(String.init)
-          .filter { token in
-            token != "norange" && !token.hasPrefix("range=")
-          }
-        if !stripped.isEmpty {
-          result += "#[\(stripped.joined(separator: " "))]"
-        }
-        index = raw.index(after: close)
-        continue
-      }
-      result.append(raw[index])
-      index = raw.index(after: index)
+    let tokens = FlashStatusBarMarkup.tokenizeValue(raw).compactMap {
+      token -> FlashStatusBarMarkup.Token? in
+      guard case .marker(let parts) = token else { return token }
+      let stripped = parts.filter { $0 != "norange" && !$0.hasPrefix("range=") }
+      return stripped.isEmpty ? nil : .marker(stripped)
     }
-
-    return result
+    return FlashStatusBarMarkup.serialize(tokens)
   }
 
   static func segments(from raw: String) -> [FlashStatusTextSegment] {
-    let raw = stripClickRanges(from: raw)
     var style = FlashStatusTextStyle()
     var link: String?
     var segments: [FlashStatusTextSegment] = []
     var buffer = ""
-    var index = raw.startIndex
 
     func flush() {
       guard !buffer.isEmpty else { return }
@@ -694,32 +628,21 @@ enum FlashStatusBarRenderer {
       buffer = ""
     }
 
-    while index < raw.endIndex {
-      // `##` → literal `#`.
-      if raw[index] == "#",
-        let next = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        next < raw.endIndex, raw[next] == "#"
-      {
-        buffer.append("#")
-        index = raw.index(after: next)
-        continue
-      }
-      if raw[index] == "#",
-        let open = raw.index(index, offsetBy: 1, limitedBy: raw.endIndex),
-        open < raw.endIndex,
-        raw[open] == "[",
-        let close = raw[open...].firstIndex(of: "]")
-      {
+    for token in FlashStatusBarMarkup.tokenizeValue(raw) {
+      switch token {
+      case .text(let text):
+        buffer += text
+      case .marker(let parts):
         flush()
-        let bodyStart = raw.index(after: open)
-        let marker = String(raw[bodyStart..<close])
-        applyLinkMarker(marker, to: &link)
-        applyTmuxMarker(marker, to: &style)
-        index = raw.index(after: close)
-        continue
+        applyLinkMarker(parts, to: &link)
+        applyTmuxMarker(parts, to: &style)
+      case .variable(let body):
+        // Values are never recursively expanded — a `#{…}` in dynamic
+        // output is literal text.
+        buffer += "#{\(body)}"
+      case .alias(let ch):
+        buffer += "#\(ch)"
       }
-      buffer.append(raw[index])
-      index = raw.index(after: index)
     }
     flush()
     return segments
@@ -730,9 +653,8 @@ enum FlashStatusBarRenderer {
   /// the run. Other tokens are left to `applyTmuxMarker`. URLs must be
   /// whitespace/comma-free (the marker tokenizer splits on both) — fine
   /// for ordinary http(s) links.
-  static func applyLinkMarker(_ marker: String, to link: inout String?) {
-    for tokenSub in marker.split(whereSeparator: { $0 == " " || $0 == "," }) {
-      let token = String(tokenSub)
+  static func applyLinkMarker(_ parts: [String], to link: inout String?) {
+    for token in parts {
       if token == "nolink" || token == "norange" {
         link = nil
       } else if token.hasPrefix("link=") {
@@ -874,12 +796,8 @@ enum FlashStatusBarRenderer {
     return manager.convert(font, toHaveTrait: traits)
   }
 
-  private static func applyTmuxMarker(_ marker: String, to style: inout FlashStatusTextStyle) {
-    let tokens = marker.split { ch in
-      ch == " " || ch == ","
-    }
-    for tokenSub in tokens {
-      let token = String(tokenSub)
+  private static func applyTmuxMarker(_ parts: [String], to style: inout FlashStatusTextStyle) {
+    for token in parts {
       switch token {
       case "bold": style.bold = true
       case "nobold": style.bold = false
@@ -904,46 +822,17 @@ enum FlashStatusBarRenderer {
       case "nobreathing", "nobreathe": style.breathing = false
       default:
         if token.hasPrefix("fg=") {
-          style.foreground = tmuxColor(String(token.dropFirst(3)))
+          style.foreground = FlashStatusTextColor.parse(String(token.dropFirst(3)))
         } else if token.hasPrefix("bg=") {
-          style.background = tmuxColor(String(token.dropFirst(3)))
+          let parsed = FlashStatusTextColor.parse(String(token.dropFirst(3)))
+          style.background = parsed == .defaultForeground ? .defaultBackground : parsed
         }
       }
     }
   }
 
-  private static func tmuxColor(_ raw: String) -> FlashStatusTextColor {
-    switch raw {
-    case "colour0", "color0":
-      return .colour0
-    case "colour178", "color178":
-      return .colour178
-    case "colour245", "color245":
-      return .colour245
-    case "colour196", "color196":
-      return .colour196
-    case "red":
-      return .red
-    default:
-      return .defaultForeground
-    }
-  }
-
   private static func nsColor(for color: FlashStatusTextColor) -> NSColor {
-    switch color {
-    case .defaultForeground:
-      return OverlayPanel.tmuxGrey245
-    case .defaultBackground:
-      return OverlayPanel.nordPolarNight0
-    case .colour0:
-      return OverlayPanel.nordPolarNight0
-    case .colour178:
-      return OverlayPanel.nordAuroraYellow
-    case .colour245:
-      return OverlayPanel.tmuxGrey245
-    case .colour196, .red:
-      return OverlayPanel.tmuxRed196
-    }
+    FlashStatusTextColor.nsColor(color)
   }
 }
 

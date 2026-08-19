@@ -525,6 +525,42 @@ final class StatusBarTests: XCTestCase {
       .head(4, ellipsis: true))
   }
 
+  func testTruncatedCycleLineKeepsBothSlideSentinels() {
+    // Regression: the user's `#{=80…:cycle:hn.sh}` — any line longer than
+    // the cap used to lose the trailing `#[nocyc]` sentinel, so
+    // `splitCycleRun` failed and the slide animation silently died.
+    let template = FlashStatusBarTemplate(
+      template: "#[align=left]#{=10…:cycle:/tmp/hn.sh}",
+      variables: [
+        FlashStatusBarTemplateVariable(
+          id: "statusbar.template.cycle:/tmp/hn.sh",
+          token: "cycle:/tmp/hn.sh",
+          source: .cycle(command: .script("/tmp/hn.sh"), periodSeconds: 60))
+      ])
+    let model = FlashStatusBarTemplateEngine.render(
+      template: template,
+      context: FlashStatusBarContext(),
+      dynamicValues: [
+        "statusbar.template.cycle:/tmp/hn.sh":
+          "A headline much longer than the ten-character cap"
+      ])
+    XCTAssertTrue(model.modeText.contains("#[cyc]"), model.modeText)
+    XCTAssertTrue(model.modeText.contains("#[nocyc]"), model.modeText)
+    // Exactly 10 visible characters survive (9 + the ellipsis glyph).
+    XCTAssertTrue(model.modeText.contains("A headlin…"), model.modeText)
+  }
+
+  func testFullPaletteHexAndNamedColorsParse() {
+    let segments = FlashStatusBarRenderer.segments(
+      from: "#[fg=colour31]a#[fg=#5E81AC]b#[fg=green]c#[fg=default]d#[bg=nonsense]e")
+    XCTAssertEqual(segments[0].foreground, .palette(31))
+    XCTAssertEqual(segments[1].foreground, .rgb(0x5E81AC))
+    XCTAssertEqual(segments[2].foreground, .palette(2))
+    XCTAssertEqual(segments[3].foreground, .defaultForeground)
+    // An unknown bg word stays default-background (no phantom grey fill).
+    XCTAssertEqual(segments[4].background, .defaultBackground)
+  }
+
   func testTokenTruncationLeavesShortValueWithoutEllipsis() {
     XCTAssertEqual(
       FlashStatusBarTemplateEngine.applyTruncation(
@@ -534,11 +570,14 @@ final class StatusBarTests: XCTestCase {
 
   func testTokenTruncationCountsVisibleCharsNotStyleMarkers() {
     // Markers pass through without counting; the kept run keeps its
-    // formatting and the ellipsis inherits the still-open style.
+    // formatting and the ellipsis inherits the still-open style. Markers
+    // PAST the cut survive too — dropping them is how a trimmed cycle
+    // line used to lose its closing `#[nocyc]`/`#[noitalics]` and leak
+    // state into whatever rendered next.
     let styled = "#[fg=colour178]HN#[fg=colour245] #[italics]hello world#[noitalics]"
     XCTAssertEqual(
       FlashStatusBarTemplateEngine.applyTruncation(styled, truncation: .head(6, ellipsis: true)),
-      "#[fg=colour178]HN#[fg=colour245] #[italics]he…")
+      "#[fg=colour178]HN#[fg=colour245] #[italics]he…#[noitalics]")
     // A bare `#` (not `#[`) is an ordinary visible character.
     XCTAssertEqual(
       FlashStatusBarTemplateEngine.applyTruncation(
