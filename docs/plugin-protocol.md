@@ -96,8 +96,7 @@ request's own deadline bounds that suspension.
 ## Plugin → host
 
 Notifications: `flash.log` (structured logging), `status.updated` (values for
-declared status segments, rendered as `#{plugin:<id>.<segment>}`),
-`discovery.invalidated` (hint context changed).
+declared status segments, rendered as `#{plugin:<id>.<segment>}`).
 
 Host RPCs, capability-gated default-deny (checked per process against the
 manifest):
@@ -107,8 +106,8 @@ manifest):
 | `host.ping` | none |
 | `host.fetch` | `network_fetch` |
 | `host.normal_mode_target`, `app.activate` | `app_control` |
-| `input.replace_text_and_submit`, `input.post_keys` | `accessibility` |
-| `ax.snapshot`, `ax.perform`, `ax.set`, `ax.select_child`, `ax.click`, `ax.click_point` | `accessibility` |
+| `input.post_keys` | `accessibility` |
+| `ax.snapshot`, `ax.perform`, `ax.set`, `ax.select_child` | `accessibility` |
 
 The AX broker exists because `AXUIElement` cannot cross a process boundary:
 `ax.snapshot` BFS-walks a subtree (default cap 3000 nodes) and returns flat

@@ -63,10 +63,6 @@ final class AXBroker {
       setAttribute(params, reply: reply)
     case "ax.select_child":
       selectChild(params, reply: reply)
-    case "ax.click":
-      click(params, reply: reply)
-    case "ax.click_point":
-      clickPoint(params, reply: reply)
     default:
       reply(["ok": false, "error": "unknown ax method: \(method)"])
     }
@@ -209,48 +205,6 @@ final class AXBroker {
           parentEntry.element, kAXSelectedChildrenAttribute as CFString, value)
       }
       reply(["ok": status == .success])
-    }
-  }
-
-  private func click(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
-    guard let handle = handleParam(params) else {
-      reply(["ok": false, "error": "ax.click requires handle"])
-      return
-    }
-    let action = jumpAction(params["action"] as? String)
-    queue.async { [weak self] in
-      guard let self, let entry = self.entries[handle] else {
-        reply(["ok": false, "error": "stale ax handle"])
-        return
-      }
-      let frame = self.withAccessibilityTree(pid: entry.pid) { _ in
-        self.frameFromAX(entry.element, screenH: self.primaryScreenHeight())
-      }
-      guard let frame else {
-        reply(["ok": false, "error": "ax.click could not read frame"])
-        return
-      }
-      let point = CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + frame[3] / 2)
-      DispatchQueue.main.async {
-        // synthesizeClick reads NSScreen/NSWorkspace on this (main) thread, then
-        // posts off-main; reply once the click has actually landed.
-        ActionDispatcher.synthesizeClick(at: point, action: action) {
-          reply(["ok": true])
-        }
-      }
-    }
-  }
-
-  private func clickPoint(_ params: [String: Any], reply: @escaping ([String: Any]) -> Void) {
-    guard let point = pointParam(params) else {
-      reply(["ok": false, "error": "ax.click_point requires x and y"])
-      return
-    }
-    let action = jumpAction(params["action"] as? String)
-    DispatchQueue.main.async {
-      ActionDispatcher.synthesizeClick(at: point, action: action) {
-        reply(["ok": true])
-      }
     }
   }
 

@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::limits::{validate_catalog_candidates, validate_query_answers, BoundaryViolation};
+use crate::limits::{validate_query_answers, BoundaryViolation};
 
 // ---------------------------------------------------------------------------
 // Core value types
@@ -631,14 +631,10 @@ impl CommandResponse {
     }
 }
 
-/// Response to `hints.discover`. `targets` is always sent; `candidates` is
-/// omitted to preserve the host's previously emitted candidates (send
-/// `Some(vec)` — even empty — to replace them).
+/// Response to `hints.discover`.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct DiscoverResponse {
     pub targets: Vec<JumpTarget>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub candidates: Option<Vec<Candidate>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_pid: Option<i64>,
 }
@@ -773,13 +769,9 @@ pub enum Response {
 impl Response {
     pub(crate) fn validate_boundary(&self) -> Result<(), BoundaryViolation> {
         match self {
-            Response::Discover(response) => {
-                if let Some(candidates) = &response.candidates {
-                    validate_catalog_candidates(candidates)?;
-                }
-            }
             Response::QueryEvaluate(response) => validate_query_answers(&response.answers)?,
             Response::Command(_)
+            | Response::Discover(_)
             | Response::Resolve(_)
             | Response::SourceAction(_)
             | Response::None => {}

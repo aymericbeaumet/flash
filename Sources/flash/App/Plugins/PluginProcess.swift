@@ -1299,11 +1299,6 @@ final class PluginProcess {
       lastLog = message
       FlashLog.plugin(level, pluginID: manifest.id, message: message, fields: fields)
       notifyStatus()
-    case "discovery.invalidated":
-      lock.lock()
-      discovery = PluginDiscovery()
-      lock.unlock()
-      notifyStatus()
     case "status.updated":
       applyStatusSegments(params)
     default:

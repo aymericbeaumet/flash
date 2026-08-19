@@ -68,12 +68,6 @@ final class PluginHostRPC {
         return
       }
       activatePluginApp(params, reply: reply)
-    case "input.replace_text_and_submit":
-      guard capabilities.contains(.accessibility) else {
-        reply(["ok": false, "error": "missing accessibility capability"])
-        return
-      }
-      replaceTextAndSubmit(params, reply: reply)
     case "input.post_keys":
       guard capabilities.contains(.accessibility) else {
         reply(["ok": false, "error": "missing accessibility capability"])
@@ -237,60 +231,4 @@ final class PluginHostRPC {
     }
   }
 
-  private func replaceTextAndSubmit(
-    _ params: [String: Any],
-    reply: @escaping ([String: Any]) -> Void
-  ) {
-    guard let pid = (params["pid"] as? Int).map(pid_t.init),
-      let text = params["text"] as? String
-    else {
-      reply(["ok": false, "error": "input.replace_text_and_submit requires pid and text"])
-      return
-    }
-    DispatchQueue.main.async {
-      guard let app = NSRunningApplication(processIdentifier: pid) else {
-        reply(["ok": false, "error": "no running app for pid"])
-        return
-      }
-      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
-      if let requiredRole = params["require_focused_role"] as? String,
-        Self.focusedElementRole(pid: pid) != requiredRole
-      {
-        reply(["ok": false, "error": "focused element role mismatch"])
-        return
-      }
-      let selectOK = NormalModeDispatcher.sendKey(
-        virtualKey: CGKeyCode(kVK_ANSI_A),
-        flags: .maskCommand,
-        to: pid)
-      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) {
-        let typeOK = NormalModeDispatcher.typeText(text, to: pid)
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) {
-          let submitOK = NormalModeDispatcher.sendKey(
-            virtualKey: CGKeyCode(kVK_Return),
-            to: pid)
-          reply(["ok": selectOK && typeOK && submitOK])
-        }
-      }
-    }
-  }
-
-  private static func focusedElementRole(pid: pid_t) -> String? {
-    let app = AXApp.make(pid: pid)
-    var focusedRaw: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focusedRaw)
-        == .success,
-      let focusedRaw,
-      CFGetTypeID(focusedRaw) == AXUIElementGetTypeID()
-    else { return nil }
-    var roleRaw: CFTypeRef?
-    guard
-      AXUIElementCopyAttributeValue(
-        focusedRaw as! AXUIElement,
-        kAXRoleAttribute as CFString,
-        &roleRaw) == .success
-    else { return nil }
-    return roleRaw as? String
-  }
 }
