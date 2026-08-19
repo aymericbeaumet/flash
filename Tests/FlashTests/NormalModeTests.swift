@@ -275,7 +275,7 @@ final class NormalModeTests: XCTestCase {
     // sequence-timeout delay).
     XCTAssertEqual(command(chars: "r"), .reload(force: false))
     XCTAssertEqual(command(chars: ":"), .commandMode)
-    XCTAssertEqual(command(chars: "x"), .close)
+    assertSendKeyKeys(command(chars: "x"), "cmd+w")
     XCTAssertEqual(command(chars: "/"), .find)
     XCTAssertEqual(transition(chars: "\\").pending, "\\")
     XCTAssertEqual(
@@ -2810,7 +2810,6 @@ final class NormalModeTests: XCTestCase {
     let topic = NormalModeDispatcher.helpTopic(config: .default, showModes: true)
     XCTAssertFalse(topic.body.contains("cmd+d"))
     XCTAssertFalse(topic.body.contains("cmd+shift+d"))
-    XCTAssertFalse(topic.body.contains("cmd+w"))
   }
 
   func testHelpTextIsDerivedFromConfiguredMappings() {
