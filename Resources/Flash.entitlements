@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Hardened-runtime entitlements for Developer ID distribution (enabled by
+     FLASH_HARDENED_RUNTIME=1 at release signing; dev + ad-hoc builds skip
+     hardening entirely). Note the Mac App Store remains impossible for
+     Flash: the App Sandbox prohibits the Accessibility API, the session
+     CGEventTap, and plugin child processes — Flash's entire core. Developer
+     ID + notarization is the sanctioned distribution ceiling. -->
+<dict>
+    <!-- osascript-driven plugins and the app_open verb send AppleEvents. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>

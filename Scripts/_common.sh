@@ -180,32 +180,6 @@ ensure_signing_identity() {
   tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
 }
 
-install_login_agent() {
-  mkdir -p "$(dirname "$LOGIN_AGENT_PATH")"
-  cat >"$LOGIN_AGENT_PATH" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>$LOGIN_AGENT_LABEL</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/open</string>
-        <string>-g</string>
-        <string>$INSTALL_PATH</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-EOF
-  chmod 644 "$LOGIN_AGENT_PATH"
-  launchctl bootout "gui/$(id -u)" "$LOGIN_AGENT_PATH" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$LOGIN_AGENT_PATH" >/dev/null 2>&1 || true
-  launchctl enable "gui/$(id -u)/$LOGIN_AGENT_LABEL" >/dev/null 2>&1 || true
-}
-
 # assemble_app <mode> <bin_path> <sign_identity>
 # Builds build/Flash.app from an already-compiled swift bin dir.
 #   dev     — symlinks the live Plugins/ dir (binaries built in place).
@@ -228,6 +202,7 @@ assemble_app() {
     cp -R "$bin_path/Flash_flash.bundle" "$STAGING_PATH/Contents/Resources/Flash_flash.bundle"
   fi
   cp "$PROJECT_DIR/Resources/Info.plist" "$STAGING_PATH/Contents/Info.plist"
+  cp "$PROJECT_DIR/Resources/AppIcon.icns" "$STAGING_PATH/Contents/Resources/AppIcon.icns"
   echo "APPL????" >"$STAGING_PATH/Contents/PkgInfo"
 
   if [[ "$mode" == "release" ]]; then
@@ -277,16 +252,26 @@ assemble_app() {
 # traversal order --deep picks.
 sign_app() {
   local bundle="$1" identity="$2"
+  # FLASH_HARDENED_RUNTIME=1 signs with the hardened runtime + entitlements
+  # (Resources/Flash.entitlements) for Developer ID + notarization. Dev and
+  # ad-hoc builds skip hardening — it buys nothing without a real identity
+  # and the Mac App Store is out of reach regardless (the App Sandbox
+  # prohibits Flash's Accessibility/CGEventTap/subprocess core).
+  local harden=()
+  if [[ "${FLASH_HARDENED_RUNTIME:-0}" == "1" ]]; then
+    harden=(--options runtime --entitlements "$PROJECT_DIR/Resources/Flash.entitlements")
+  fi
   local plugins_dir="$bundle/Contents/Resources/Plugins"
   if [[ -d "$plugins_dir" && ! -L "$plugins_dir" ]]; then
     local bin
     for bin in "$plugins_dir"/*/flash-plugin-*; do
       [[ -x "$bin" ]] || continue
-      codesign --force --sign "$identity" "$bin"
+      codesign --force --sign "$identity" ${harden[@]+"${harden[@]}"} "$bin"
     done
   fi
   codesign --force \
     --sign "$identity" \
     --identifier "$BUNDLE_ID" \
+    ${harden[@]+"${harden[@]}"} \
     "$bundle"
 }

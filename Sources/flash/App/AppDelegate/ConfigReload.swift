@@ -121,6 +121,11 @@ extension AppDelegate {
         + "configured_plugins=\(cfg.plugins.settings.count)")
     FlashLog.debug("[config] resolved_hints_keys=\(cfg.resolvedHintsKeysJSON)")
     showConfigErrorAlertIfNeeded(for: cfg)
+    // Menu-bar icon and login-item registration both reconcile from the
+    // config on every load — the TOML file is the single source of truth
+    // for both (defaults: visible + autostart).
+    statusItemController.apply(enabled: cfg.app.menuBarIcon)
+    AutoLaunch.reconcile(enabled: cfg.app.autostart)
     overlay.overlayConfig = cfg.overlay
     overlay.debugConfig = cfg.debug
     overlay.modeLabels = cfg.mode.labels

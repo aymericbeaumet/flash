@@ -6,6 +6,15 @@
 #   $XDG_CONFIG_HOME/flash/flash.toml
 #   ~/.config/flash/flash.toml
 #
+
+# App-level integration with macOS. Both keys reconcile live on config
+# reload: the menu-bar bolt (About / Open Configuration / Quit) appears or
+# disappears immediately, and the login item (System Settings → General →
+# Login Items → "Flash", via SMAppService) registers or unregisters.
+[app]
+menu_bar_icon = true
+autostart = true
+
 # The active file is watched for live reload.
 
 [hints]
@@ -288,14 +297,14 @@ leader = "\\"
 "cmd+shift+r" = ["flash", "app_reload", "--force"] # ≈ R
 # The bundled tmux source registers no mappings; terminals can send their
 # native tmux prefix bindings directly for zero-round-trip pane/window actions.
-"cmd+shift+t" = ["flash", "tab_reopen"]            # ≈ T
-"cmd+n" = ["flash", "window_new"]                  # ≈ n
-"cmd+f" = ["flash", "app_find"]                    # ≈ /
-"ctrl+tab" = ["flash", "tab_next"]                 # browser-native ≈ ]t
-"ctrl+shift+tab" = ["flash", "tab_previous"]       # browser-native ≈ [t
+"cmd+shift+t" = ["flash", "tab_reopen"]      # ≈ T
+"cmd+n" = ["flash", "window_new"]            # ≈ n
+"cmd+f" = ["flash", "app_find"]              # ≈ /
+"ctrl+tab" = ["flash", "tab_next"]           # browser-native ≈ ]t
+"ctrl+shift+tab" = ["flash", "tab_previous"] # browser-native ≈ [t
 "g^" = ["flash", "tab_first"]
 "g$" = ["flash", "tab_last"]
-"g0" = ["flash", "tab_first"] # Vimium: first tab (alias of g^)
+"g0" = ["flash", "tab_first"]                # Vimium: first tab (alias of g^)
 "g1" = ["flash", "tab_select", "--index=1"]
 "g2" = ["flash", "tab_select", "--index=2"]
 "g3" = ["flash", "tab_select", "--index=3"]

@@ -110,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
 
   var config = Config.default
   let pluginManager = PluginManager()
+  let statusItemController = StatusItemController()
   /// Flat-JSON frecency persistence — keyed by stable item key
   /// (`app.bundle:…`, `url:…`, `command:…`), boost capped below the
   /// smallest `CandidateFinder` match-quality tier so it reorders

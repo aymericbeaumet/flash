@@ -41,8 +41,9 @@ sign_app "$INSTALL_PATH" "$SIGN_IDENTITY"
 echo "==> Killing again post-install (defensive)"
 kill_all_flash
 
-echo "==> Installing login autolaunch"
-install_login_agent
+echo "==> Removing legacy LaunchAgent (autostart now lives in-app via SMAppService)"
+launchctl bootout "gui/$(id -u)" "$LOGIN_AGENT_PATH" >/dev/null 2>&1 || true
+rm -f "$LOGIN_AGENT_PATH"
 
 echo "==> Installing CLI symlink"
 mkdir -p "$CLI_LINK_DIR"
@@ -60,7 +61,6 @@ echo "==> Verification"
 echo "  Installed PIDs: ${NEW_PIDS:-none}"
 echo "  All Flash PIDs: ${ALL_PIDS:-none}"
 echo "  Signed with:    $SIGN_IDENTITY"
-echo "  Login agent:    $LOGIN_AGENT_PATH"
 echo "  CLI:            $CLI_LINK_PATH"
 case "$TAP_STATUS" in
   ok) echo "  Accessibility:  ✓ keyboard-capture tap installed" ;;

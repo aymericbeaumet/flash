@@ -16,6 +16,12 @@
     <string>Flash</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© Aymeric Beaumet</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>

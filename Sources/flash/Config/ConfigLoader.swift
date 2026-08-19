@@ -322,6 +322,7 @@ enum ConfigLoader {
     pendingModeMappings: inout [PendingModeMapping],
     into config: inout Config
   ) {
+    applyApp(root["app"]?.table, locations: locations, into: &config)
     applyHints(root["hints"]?.table, locations: locations, into: &config)
     applyOpen(root["open"]?.table, locations: locations, into: &config)
     applyPlugins(root["plugins"]?.table, locations: locations, sourceURL: sourceURL, into: &config)
@@ -353,6 +354,7 @@ enum ConfigLoader {
     into config: inout Config
   ) {
     let sectionKeys: [String: Set<String>] = [
+      "app": ["menu_bar_icon", "autostart"],
       "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
       "open": ["ignored_apps"],
       "plugins": ["watching_enabled", "disabled", "third_party"],
@@ -592,6 +594,34 @@ enum ConfigLoader {
     ) { value, config in
       config.statusBar.enabled = value
     }
+    return applyStatusBarTail(table, locations: locations, into: &config)
+  }
+
+  private static func applyApp(
+    _ table: TOMLTable?,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
+    guard let table else { return }
+    applyBool(
+      table["menu_bar_icon"], path: ["app", "menu_bar_icon"],
+      message: "app.menu_bar_icon must be true or false", locations: locations, into: &config
+    ) { value, config in
+      config.app.menuBarIcon = value
+    }
+    applyBool(
+      table["autostart"], path: ["app", "autostart"],
+      message: "app.autostart must be true or false", locations: locations, into: &config
+    ) { value, config in
+      config.app.autostart = value
+    }
+  }
+
+  private static func applyStatusBarTail(
+    _ table: TOMLTable,
+    locations: ConfigSourceLocationIndex,
+    into config: inout Config
+  ) {
     applyString(
       table["template"], path: ["statusbar", "template"],
       message: "statusbar.template must be a quoted template string", locations: locations,
