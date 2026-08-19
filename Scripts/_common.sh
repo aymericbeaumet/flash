@@ -7,6 +7,10 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Flash"
 BUNDLE_ID="com.flash.app"
 STAGING_PATH="$PROJECT_DIR/build/$APP_NAME.app"
+# parse_mode refines these: release installs "/Applications/Flash.app",
+# dev installs "/Applications/Flash 🧪.app" (same bundle id — only one
+# runs at a time; kill_all_flash handles both).
+APP_PRODUCT_NAME="$APP_NAME"
 INSTALL_PATH="/Applications/$APP_NAME.app"
 
 # Dev installs use a stable self-signed identity so TCC grants persist
@@ -43,12 +47,23 @@ parse_mode() {
         ;;
     esac
   done
+  if [[ "$MODE" == "dev" ]]; then
+    APP_PRODUCT_NAME="$APP_NAME 🧪"
+  else
+    APP_PRODUCT_NAME="$APP_NAME"
+  fi
+  INSTALL_PATH="/Applications/$APP_PRODUCT_NAME.app"
 }
 
 kill_all_flash() {
+  # Both product flavors ("Flash" release, "Flash 🧪" dev) share the bundle
+  # id and must never run concurrently — quit and kill every variant.
   "$CLI_LINK_PATH" flash_quit >/dev/null 2>&1 ||
-    /Applications/$APP_NAME.app/Contents/MacOS/flash flash_quit >/dev/null 2>&1 ||
+    "/Applications/$APP_NAME.app/Contents/MacOS/flash" flash_quit >/dev/null 2>&1 ||
+    "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" flash_quit >/dev/null 2>&1 ||
     true
+  pkill -f "/Applications/$APP_NAME 🧪.app/Contents/MacOS/flash" 2>/dev/null || true
+  killall "$APP_NAME 🧪" 2>/dev/null || true
   osascript -e 'tell application "Flash" to quit' >/dev/null 2>&1 &
   local quit_pid=$!
   for _ in {1..20}; do
@@ -69,7 +84,7 @@ kill_all_flash() {
   killall "$APP_NAME" 2>/dev/null || true
   sleep 0.4
   local stragglers
-  stragglers=$(pgrep -f "$APP_NAME.app/Contents/MacOS/flash" 2>/dev/null || true)
+  stragglers=$(pgrep -f "$APP_NAME( 🧪)?\\.app/Contents/MacOS/flash" 2>/dev/null || true)
   if [[ -n "$stragglers" ]]; then
     echo "  ... forcing SIGKILL on stragglers: $stragglers"
     for pid in $stragglers; do kill -9 "$pid" 2>/dev/null || true; done
@@ -203,17 +218,22 @@ assemble_app() {
   fi
   cp "$PROJECT_DIR/Resources/Info.plist" "$STAGING_PATH/Contents/Info.plist"
   cp "$PROJECT_DIR/Resources/AppIcon.icns" "$STAGING_PATH/Contents/Resources/AppIcon.icns"
-  # Stamp the exact commit this bundle was assembled from (About panel
-  # reads FlashGitCommit); "-dirty" marks uncommitted work in dev builds.
+  # Stamp the exact commit this bundle was assembled from (the About panel
+  # reads FlashGitCommit).
   local git_commit
-  git_commit="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  if ! git -C "$PROJECT_DIR" diff --quiet 2>/dev/null; then
-    git_commit="$git_commit-dirty"
-  fi
+  git_commit="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
   /usr/libexec/PlistBuddy -c "Delete :FlashGitCommit" \
     "$STAGING_PATH/Contents/Info.plist" >/dev/null 2>&1 || true
   /usr/libexec/PlistBuddy -c "Add :FlashGitCommit string $git_commit" \
     "$STAGING_PATH/Contents/Info.plist"
+  # Dev bundles are visibly distinct: "Flash 🧪" in Finder, the menu bar,
+  # and Login Items, while a release "Flash.app" can coexist untouched.
+  if [[ "$mode" == "dev" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleName $APP_PRODUCT_NAME" \
+      "$STAGING_PATH/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_PRODUCT_NAME" \
+      "$STAGING_PATH/Contents/Info.plist"
+  fi
   echo "APPL????" >"$STAGING_PATH/Contents/PkgInfo"
 
   if [[ "$mode" == "release" ]]; then

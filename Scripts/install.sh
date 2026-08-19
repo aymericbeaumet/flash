@@ -29,6 +29,18 @@ echo "==> Installing to $INSTALL_PATH"
 if [[ -d "$INSTALL_PATH" ]]; then
   rm -rf "$INSTALL_PATH"
 fi
+# One-time migration: dev installs used to live at /Applications/Flash.app;
+# a dev-signed copy there is a stale artifact that would double-autostart
+# alongside the new "Flash 🧪.app". A release copy (any other signature)
+# stays untouched.
+# (Plain grep, not -q: under pipefail, grep -q's early exit SIGPIPEs
+# codesign and fails the whole condition.)
+if [[ "$MODE" == "dev" && -d "/Applications/$APP_NAME.app" ]] &&
+  codesign -dvv "/Applications/$APP_NAME.app" 2>&1 |
+  grep "Authority=$DEV_SIGN_IDENTITY" >/dev/null; then
+  echo "==> Removing stale dev-signed /Applications/$APP_NAME.app (dev now installs as $APP_PRODUCT_NAME)"
+  rm -rf "/Applications/$APP_NAME.app"
+fi
 cp -R "$STAGING_PATH" "$INSTALL_PATH"
 
 # Re-sign the installed copy so the on-disk signature is unambiguous.
@@ -56,7 +68,7 @@ echo "==> Starting fresh resident process"
 TAP_STATUS=$(launch_flash_and_check_tap)
 
 NEW_PIDS=$(pgrep -f "$INSTALL_PATH/Contents/MacOS/flash" 2>/dev/null || true)
-ALL_PIDS=$(pgrep -f "$APP_NAME.app/Contents/MacOS/flash" 2>/dev/null || true)
+ALL_PIDS=$(pgrep -f "$APP_NAME( 🧪)?\\.app/Contents/MacOS/flash" 2>/dev/null || true)
 echo "==> Verification"
 echo "  Installed PIDs: ${NEW_PIDS:-none}"
 echo "  All Flash PIDs: ${ALL_PIDS:-none}"
@@ -83,7 +95,7 @@ if [[ "$TAP_STATUS" != "ok" && -n "${NEW_PIDS:-}" ]]; then
   echo
   echo "    Opening System Settings ▸ Privacy & Security ▸ Accessibility…"
   open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" >/dev/null 2>&1 || true
-  echo "    → Enable \"$APP_NAME\". If it's already listed from an older signature,"
+  echo "    → Enable \"$APP_PRODUCT_NAME\". If it's already listed from an older signature,"
   echo "      toggle it OFF then ON — or: tccutil reset Accessibility $BUNDLE_ID"
   if [[ -t 0 ]]; then
     read -r -t 180 -p "    Press Enter once enabled to restart Flash and verify… " _ || true

@@ -28,7 +28,7 @@ Activation comes either through the `flash` CLI (which AppleEvents the verb to t
 7. **No OCR / no Screen Recording.** Don't reintroduce `VisionProvider`, `ScreenCaptureKit`, screenshots, or pixel capture. WindowServer metadata via `CGWindowListCopyWindowInfo` is allowed only for window geometry / occlusion filtering and must not touch the screen recording permission. If a request requires capturing pixels, surface it instead of silently adding it back.
 8. **Silent on no-targets.** If the discovery pipeline returns no `JumpTarget`s, `activate(action:)` returns without rendering anything. No "no targets" banner, no error chip. The only banners the user should ever see are the Accessibility-permission walkthrough.
 9. **No backward-compatibility shims on master.** Flash has one user — the maintainer. When a config field, action name, mapping syntax, internal API, or wire format is renamed, update every call site, the defaults, the user's `~/.config/flash/flash.toml`, the bundled plugins, and the tests in the same change. **Do not** add legacy aliases, dual-syntax parsers, dual-key JSON readers (`as? T ?? response?["camelCase"]` etc.), `typealias OldName = NewName`, `// removed` placeholders, deprecation comments, or transitional accept-both paths. Reject malformed input loudly rather than silently translating it. The goal is the smallest possible code per feature. When in doubt, delete the old name — the maintainer can recover from `git log` if needed.
-10. **Dev deploys go through `./Scripts/install.sh --dev`.** It owns the incremental current-arch dev build (debug Swift + `plugin-dev`-profile plugins) → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash.app` → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/install.sh --dev` (incremental, current-arch). Bare `./Scripts/install.sh` defaults to `--release`: a full, clean, universal build — slower, and its ad-hoc signature re-triggers the TCC grant, so reserve it for shipping.
+10. **Dev deploys go through `./Scripts/install.sh --dev`.** It owns the incremental current-arch dev build (debug Swift + `plugin-dev`-profile plugins) → codesign with the stable `Flash Dev` identity → kill running instances → reinstall to `/Applications/Flash 🧪.app` (release: `/Applications/Flash.app`) → launch flow. **Do not** hand-roll `cp build/flash /Applications/Flash.app/Contents/MacOS/flash && codesign … && pkill && open …` in agent sessions — TCC/permissions, plugin install stamps, and the launch agent all depend on the script's exact ordering. If you need a one-step "build and verify", run `./Scripts/install.sh --dev` (incremental, current-arch). Bare `./Scripts/install.sh` defaults to `--release`: a full, clean, universal build — slower, and its ad-hoc signature re-triggers the TCC grant, so reserve it for shipping.
 
 If a request would violate any of the above, surface it to the user instead of silently complying.
 
@@ -81,7 +81,7 @@ Resources/Info.plist                 # LSUIElement, AppleEvent usage description
 Scripts/build-plugins.sh                     # one workspace cargo invocation for [dev|release] [id…] → flash-plugin-<id> binary beside its manifest (dev = plugin-dev profile, current arch; release = universal lipo; ids filter to the single-plugin hot loop)
 Scripts/_common.sh                           # Shared constants + helpers (signing identity, login agent, app assembly) sourced by build.sh / install.sh
 Scripts/build.sh                             # Build Flash.app into build/ without installing. Default --release = clean universal optimized + zip; --dev = fast incremental optimized current-arch
-Scripts/install.sh                           # build.sh then install to /Applications/Flash.app + restart. Default --release = clean universal; --dev = stable dev-signed, plugin symlinks
+Scripts/install.sh                           # build.sh then install to /Applications (dev: "Flash 🧪.app", release: "Flash.app") + restart. Default --release = clean universal; --dev = stable dev-signed, plugin symlinks
 Scripts/test-integration-native.sh           # Build/sign/run native AppKit integration fixture + oracle
 Scripts/test-integration-electron.sh         # Install pinned Electron fixture deps, build/sign/run Electron oracle
 Scripts/check-guardrails.sh                  # CI hard-rule scanner for banned production APIs / stale config references
@@ -690,7 +690,7 @@ One structural exception: when a config reload removes the last `["flash", "ente
 
 Required:
 
-- **Accessibility** — required for AX walks and `AXUIElementPerformAction`. Granted in *System Settings → Privacy & Security → Accessibility*. The bundle identifier is `com.flash.app`; the path must be `/Applications/Flash.app`.
+- **Accessibility** — required for AX walks and `AXUIElementPerformAction`. Granted in *System Settings → Privacy & Security → Accessibility*. The bundle identifier is `com.flash.app`; release installs live at `/Applications/Flash.app`, dev installs at `/Applications/Flash 🧪.app` (moving between them re-prompts the grant once).
 
 Declared / conditional:
 
@@ -707,7 +707,7 @@ Not required:
 
 ## Build / install / verify
 
-**Every app-code change requires reinstalling** to see it in action. Flash is a resident background process launched out of `/Applications/Flash.app`; there is no app-code live-reload, dev server, or attached debugger flow. Plugin files can live-reload through `PluginManager` when bundled plugins are symlinked by `Scripts/install.sh --dev`. `swift build` produces a binary in `.build/` that the resident process is *not* using — only the copy under `/Applications/Flash.app/Contents/MacOS/flash` matters. So the developer loop is:
+**Every app-code change requires reinstalling** to see it in action. Flash is a resident background process launched out of the installed bundle (dev: `/Applications/Flash 🧪.app`); there is no app-code live-reload, dev server, or attached debugger flow. Plugin files can live-reload through `PluginManager` when bundled plugins are symlinked by `Scripts/install.sh --dev`. `swift build` produces a binary in `.build/` that the resident process is *not* using — only the installed copy matters. So the developer loop is:
 
 ```bash
 # Make code change → run install (NOT just `swift build`)

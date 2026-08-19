@@ -35,27 +35,70 @@ final class StatusItemController: NSObject {
     }
   }
 
+  private var aboutPanel: NSPanel?
+  private static let repoURL = URL(string: "https://github.com/aymericbeaumet/flash")!
+
   @objc private func showAbout() {
-    // Credits carry the assemble-time commit (FlashGitCommit, stamped by
-    // _common.sh; "-dirty" marks uncommitted dev builds) and a clickable
-    // repo link.
+    // A small custom About panel instead of orderFrontStandardAboutPanel:
+    // the standard panel's credit links don't reliably open in an
+    // LSUIElement app, and a real button through NSWorkspace always does.
+    // LSUIElement apps also don't front panels unless activated first.
+    NSApp.activate(ignoringOtherApps: true)
+    if let panel = aboutPanel {
+      panel.center()
+      panel.makeKeyAndOrderFront(nil)
+      return
+    }
+
+    let name =
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Flash"
+    let version =
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
     let commit =
       Bundle.main.object(forInfoDictionaryKey: "FlashGitCommit") as? String ?? "unknown"
-    let credits = NSMutableAttributedString(
-      string: "commit \(commit)\n",
-      attributes: [
-        .font: NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-      ])
-    credits.append(
-      NSAttributedString(
-        string: "github.com/aymericbeaumet/flash",
-        attributes: [
-          .link: URL(string: "https://github.com/aymericbeaumet/flash")!,
-          .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
-        ]))
-    // LSUIElement apps don't front panels unless activated first.
-    NSApp.activate(ignoringOtherApps: true)
-    NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+
+    let icon = NSImageView(image: NSApp.applicationIconImage ?? NSImage())
+    icon.setFrameSize(NSSize(width: 64, height: 64))
+
+    let title = NSTextField(labelWithString: name)
+    title.font = .boldSystemFont(ofSize: 15)
+
+    let versionLabel = NSTextField(labelWithString: "Version \(version)")
+    versionLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    versionLabel.textColor = .secondaryLabelColor
+
+    let commitLabel = NSTextField(labelWithString: commit)
+    commitLabel.font = .monospacedSystemFont(
+      ofSize: NSFont.smallSystemFontSize, weight: .regular)
+    commitLabel.textColor = .secondaryLabelColor
+    commitLabel.isSelectable = true
+
+    let repoButton = NSButton(
+      title: "github.com/aymericbeaumet/flash", target: self, action: #selector(openRepo))
+    repoButton.bezelStyle = .inline
+
+    let stack = NSStackView(views: [icon, title, versionLabel, commitLabel, repoButton])
+    stack.orientation = .vertical
+    stack.alignment = .centerX
+    stack.spacing = 6
+    stack.edgeInsets = NSEdgeInsets(top: 20, left: 24, bottom: 20, right: 24)
+
+    let panel = NSPanel(
+      contentRect: .zero,
+      styleMask: [.titled, .closable],
+      backing: .buffered,
+      defer: false)
+    panel.title = "About \(name)"
+    panel.contentView = stack
+    panel.setContentSize(stack.fittingSize)
+    panel.isReleasedWhenClosed = false
+    panel.center()
+    panel.makeKeyAndOrderFront(nil)
+    aboutPanel = panel
+  }
+
+  @objc private func openRepo() {
+    NSWorkspace.shared.open(Self.repoURL)
   }
 
   @objc private func openConfiguration() {
