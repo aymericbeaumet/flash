@@ -183,7 +183,7 @@ struct PluginSelectorContext: Equatable {
   }
 }
 
-struct PluginSelector: Codable, Hashable, Equatable {
+struct PluginSelector: Decodable, Hashable, Equatable {
   var onlyBundleIDs: [String]
   var onlyURLs: [String]
 
@@ -234,12 +234,6 @@ struct PluginSelector: Codable, Hashable, Equatable {
     }
     return score
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !onlyBundleIDs.isEmpty { try c.encode(onlyBundleIDs, forKey: .onlyBundleIDs) }
-    if !onlyURLs.isEmpty { try c.encode(onlyURLs, forKey: .onlyURLs) }
-  }
 }
 
 struct PluginSelectorStack: Hashable, Equatable {
@@ -272,7 +266,7 @@ struct PluginSelectorStack: Hashable, Equatable {
 /// and each command has one or more **subcommands** (e.g. `play`). This
 /// row is the denormalized (command, subcommand) pair the command-line
 /// completion engine and the dispatch index are built from.
-struct PluginCommandRegistration: Codable, Hashable {
+struct PluginCommandRegistration: Decodable, Hashable {
   var command: String
   var subcommand: String
   var description: String
@@ -334,25 +328,6 @@ struct PluginCommandRegistration: Codable, Hashable {
     }
     self.meta = meta
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: DynamicKey.self)
-    try c.encode(command, forKey: DynamicKey(stringValue: "command"))
-    try c.encode(subcommand, forKey: DynamicKey(stringValue: "subcommand"))
-    try c.encode(description, forKey: DynamicKey(stringValue: "description"))
-    if !selector.onlyBundleIDs.isEmpty {
-      try c.encode(selector.onlyBundleIDs, forKey: DynamicKey(stringValue: "only_bundle_ids"))
-    }
-    if !selector.onlyURLs.isEmpty {
-      try c.encode(selector.onlyURLs, forKey: DynamicKey(stringValue: "only_urls"))
-    }
-    if let timeoutMs {
-      try c.encode(timeoutMs, forKey: DynamicKey(stringValue: "timeout_ms"))
-    }
-    for (key, value) in meta.sorted(by: { $0.key < $1.key }) {
-      try c.encode(value, forKey: DynamicKey(stringValue: key))
-    }
-  }
 }
 
 /// One flashlight bang a plugin registers. When a flashlight submission
@@ -361,7 +336,7 @@ struct PluginCommandRegistration: Codable, Hashable {
 /// the plugin claims every otherwise-unclaimed bang and resolves it itself —
 /// how `searchengines` serves the full DuckDuckGo bang table without
 /// enumerating thousands of entries in the manifest.
-struct PluginShebangRegistration: Codable, Hashable {
+struct PluginShebangRegistration: Decodable, Hashable {
   var token: String
   /// The plugin command this bang invokes. Normally inherited from the owning
   /// `shebang` provider's `command` (folded in by ``PluginManifest/shebangs``);
@@ -425,27 +400,6 @@ struct PluginShebangRegistration: Codable, Hashable {
     }
     self.meta = meta
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: DynamicKey.self)
-    try c.encode(token, forKey: DynamicKey(stringValue: "token"))
-    if !command.isEmpty { try c.encode(command, forKey: DynamicKey(stringValue: "command")) }
-    if !description.isEmpty {
-      try c.encode(description, forKey: DynamicKey(stringValue: "description"))
-    }
-    if !selector.onlyBundleIDs.isEmpty {
-      try c.encode(selector.onlyBundleIDs, forKey: DynamicKey(stringValue: "only_bundle_ids"))
-    }
-    if !selector.onlyURLs.isEmpty {
-      try c.encode(selector.onlyURLs, forKey: DynamicKey(stringValue: "only_urls"))
-    }
-    if let candidateSource, !candidateSource.isEmpty {
-      try c.encode(candidateSource, forKey: DynamicKey(stringValue: "candidate_source"))
-    }
-    for (key, value) in meta.sorted(by: { $0.key < $1.key }) {
-      try c.encode(value, forKey: DynamicKey(stringValue: key))
-    }
-  }
 }
 
 /// One verb a plugin registers. `name` is the verb users type in mappings or
@@ -454,7 +408,7 @@ struct PluginShebangRegistration: Codable, Hashable {
 /// and the verb's args. When `inlineKeystrokes` is populated, the host short-
 /// circuits the round-trip and synthesizes the per-bundle keystroke directly —
 /// keeps `app_save`-class verbs latency-flat.
-struct PluginVerbRegistration: Codable, Equatable {
+struct PluginVerbRegistration: Decodable, Equatable {
   var name: String
   var command: String
   var subcommand: String
@@ -504,21 +458,6 @@ struct PluginVerbRegistration: Codable, Equatable {
       onlyBundleIDs: try c.decodeIfPresent([String].self, forKey: .onlyBundleIDs) ?? [],
       onlyURLs: try c.decodeIfPresent([String].self, forKey: .onlyURLs) ?? [])
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    try c.encode(name, forKey: .name)
-    if !command.isEmpty { try c.encode(command, forKey: .command) }
-    if !subcommand.isEmpty { try c.encode(subcommand, forKey: .subcommand) }
-    if !description.isEmpty { try c.encode(description, forKey: .description) }
-    if !inlineKeystrokes.isEmpty {
-      try c.encode(inlineKeystrokes, forKey: .inlineKeystrokes)
-    }
-    if !selector.onlyBundleIDs.isEmpty {
-      try c.encode(selector.onlyBundleIDs, forKey: .onlyBundleIDs)
-    }
-    if !selector.onlyURLs.isEmpty { try c.encode(selector.onlyURLs, forKey: .onlyURLs) }
-  }
 }
 
 /// One key mapping a plugin registers. Mirrors a `[mode.<scope>.mappings]`
@@ -529,7 +468,7 @@ struct PluginVerbRegistration: Codable, Equatable {
 /// array matching the mapping syntax:
 /// `["flash", "<verb>", "k=v" ...]` for in-process verbs, anything else for
 /// argv exec.
-struct PluginMappingRegistration: Codable, Hashable {
+struct PluginMappingRegistration: Decodable, Hashable {
   var key: String
   var mode: String
   var command: [String]
@@ -568,18 +507,6 @@ struct PluginMappingRegistration: Codable, Hashable {
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
   }
 
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    try c.encode(key, forKey: .key)
-    if mode != "normal" { try c.encode(mode, forKey: .mode) }
-    try c.encode(command, forKey: .command)
-    if !selector.onlyBundleIDs.isEmpty {
-      try c.encode(selector.onlyBundleIDs, forKey: .onlyBundleIDs)
-    }
-    if !selector.onlyURLs.isEmpty { try c.encode(selector.onlyURLs, forKey: .onlyURLs) }
-    if let priority { try c.encode(priority, forKey: .priority) }
-  }
-
   /// `mode` string → `ModeScope`. Loaded manifests validate the value before
   /// registrations are exposed; the fallback only protects programmatic test
   /// construction from trapping.
@@ -589,7 +516,7 @@ struct PluginMappingRegistration: Codable, Hashable {
 /// One help topic a plugin contributes to `:help`. Surfaces via
 /// ``PluginManifest/help`` and is aggregated by `HelpDocs.allTopics`
 /// alongside the host's own topics. The body is rendered as Markdown.
-struct PluginHelpTopic: Codable, Equatable {
+struct PluginHelpTopic: Decodable, Equatable {
   var name: String
   var title: String
   var summary: String
@@ -616,20 +543,11 @@ struct PluginHelpTopic: Codable, Equatable {
     self.body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
     self.aliases = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    try c.encode(name, forKey: .name)
-    try c.encode(title, forKey: .title)
-    if !summary.isEmpty { try c.encode(summary, forKey: .summary) }
-    if !body.isEmpty { try c.encode(body, forKey: .body) }
-    if !aliases.isEmpty { try c.encode(aliases, forKey: .aliases) }
-  }
 }
 
 /// Plugin-declared help block. Each entry shows up in `:help` next to the
 /// host's built-in topics.
-struct PluginHelp: Codable, Equatable {
+struct PluginHelp: Decodable, Equatable {
   var topics: [PluginHelpTopic]
 
   init(topics: [PluginHelpTopic] = []) {
@@ -644,15 +562,10 @@ struct PluginHelp: Codable, Equatable {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     self.topics = try c.decodeIfPresent([PluginHelpTopic].self, forKey: .topics) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !topics.isEmpty { try c.encode(topics, forKey: .topics) }
-  }
 }
 
 /// Shared optional gates for a top-level manifest provider section.
-struct PluginProviderGate: Codable, Equatable {
+struct PluginProviderGate: Decodable, Equatable {
   /// Editor modes this provider section is gated to (empty = every mode).
   var modes: [ProviderMode]
   /// Scheduling priority override; `nil` inherits the manifest priority.
@@ -672,15 +585,9 @@ struct PluginProviderGate: Codable, Equatable {
     self.modes = try c.decodeIfPresent([ProviderMode].self, forKey: .modes) ?? []
     self.priority = try c.decodeIfPresent(Int.self, forKey: .priority)
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !modes.isEmpty { try c.encode(modes, forKey: .modes) }
-    if let priority { try c.encode(priority, forKey: .priority) }
-  }
 }
 
-struct PluginHintsProvider: Codable, Equatable {
+struct PluginHintsProvider: Decodable, Equatable {
   var gate: PluginProviderGate
   /// Empty means the plugin does not own the focused context, so the host may
   /// continue to the next lower-priority hints provider. This is for dynamic
@@ -706,18 +613,12 @@ struct PluginHintsProvider: Codable, Equatable {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     self.fallbackOnEmpty = try c.decodeIfPresent(Bool.self, forKey: .fallbackOnEmpty) ?? false
   }
-
-  func encode(to encoder: Encoder) throws {
-    try gate.encode(to: encoder)
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if fallbackOnEmpty { try c.encode(true, forKey: .fallbackOnEmpty) }
-  }
 }
 
 /// Declares pure, per-input candidate evaluation. This is intentionally only
 /// a surface registration: the plugin owns parsing and decides whether an
 /// input matches. The host never executes plugin-supplied regular expressions.
-struct PluginQueriesProvider: Codable, Equatable {
+struct PluginQueriesProvider: Decodable, Equatable {
   var surfaces: [QueryEvaluationSurface]
   var priority: Int?
   /// Host-owned provenance label stamped onto every evaluator answer. When
@@ -753,21 +654,9 @@ struct PluginQueriesProvider: Codable, Equatable {
     self.source = try c.decodeIfPresent(String.self, forKey: .source)
     self.exclusivePrefixes = try c.decodeIfPresent([String].self, forKey: .exclusivePrefixes) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if surfaces != [.flashlight] {
-      try c.encode(surfaces, forKey: .surfaces)
-    }
-    if let priority { try c.encode(priority, forKey: .priority) }
-    if let source { try c.encode(source, forKey: .source) }
-    if !exclusivePrefixes.isEmpty {
-      try c.encode(exclusivePrefixes, forKey: .exclusivePrefixes)
-    }
-  }
 }
 
-struct PluginCommandsProvider: Codable, Equatable {
+struct PluginCommandsProvider: Decodable, Equatable {
   var gate: PluginProviderGate
   var items: [PluginCommandRegistration]
 
@@ -791,16 +680,9 @@ struct PluginCommandsProvider: Codable, Equatable {
     self.gate = PluginProviderGate(modes: modes, priority: priority)
     self.items = try c.decodeIfPresent([PluginCommandRegistration].self, forKey: .items) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
-    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
-    if !items.isEmpty { try c.encode(items, forKey: .items) }
-  }
 }
 
-struct PluginMappingsProvider: Codable, Equatable {
+struct PluginMappingsProvider: Decodable, Equatable {
   var gate: PluginProviderGate
   var items: [PluginMappingRegistration]
 
@@ -824,16 +706,9 @@ struct PluginMappingsProvider: Codable, Equatable {
     self.gate = PluginProviderGate(modes: modes, priority: priority)
     self.items = try c.decodeIfPresent([PluginMappingRegistration].self, forKey: .items) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
-    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
-    if !items.isEmpty { try c.encode(items, forKey: .items) }
-  }
 }
 
-struct PluginShebangProvider: Codable, Equatable {
+struct PluginShebangProvider: Decodable, Equatable {
   var gate: PluginProviderGate
   var command: String
   var items: [PluginShebangRegistration]
@@ -861,17 +736,9 @@ struct PluginShebangProvider: Codable, Equatable {
     self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
     self.items = try c.decodeIfPresent([PluginShebangRegistration].self, forKey: .items) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
-    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
-    if !command.isEmpty { try c.encode(command, forKey: .command) }
-    if !items.isEmpty { try c.encode(items, forKey: .items) }
-  }
 }
 
-struct PluginNavigationProvider: Codable, Equatable {
+struct PluginNavigationProvider: Decodable, Equatable {
   var gate: PluginProviderGate
   var schemes: [String]
 
@@ -895,16 +762,9 @@ struct PluginNavigationProvider: Codable, Equatable {
     self.gate = PluginProviderGate(modes: modes, priority: priority)
     self.schemes = try c.decodeIfPresent([String].self, forKey: .schemes) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
-    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
-    if !schemes.isEmpty { try c.encode(schemes, forKey: .schemes) }
-  }
 }
 
-struct PluginStatusProvider: Codable, Equatable {
+struct PluginStatusProvider: Decodable, Equatable {
   var gate: PluginProviderGate
   var segments: [String]
 
@@ -928,16 +788,9 @@ struct PluginStatusProvider: Codable, Equatable {
     self.gate = PluginProviderGate(modes: modes, priority: priority)
     self.segments = try c.decodeIfPresent([String].self, forKey: .segments) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
-    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
-    if !segments.isEmpty { try c.encode(segments, forKey: .segments) }
-  }
 }
 
-struct PluginVerbsProvider: Codable, Equatable {
+struct PluginVerbsProvider: Decodable, Equatable {
   var gate: PluginProviderGate
   var command: String
   var items: [PluginVerbRegistration]
@@ -965,14 +818,6 @@ struct PluginVerbsProvider: Codable, Equatable {
     self.command = try c.decodeIfPresent(String.self, forKey: .command) ?? ""
     self.items = try c.decodeIfPresent([PluginVerbRegistration].self, forKey: .items) ?? []
   }
-
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !gate.modes.isEmpty { try c.encode(gate.modes, forKey: .modes) }
-    if let priority = gate.priority { try c.encode(priority, forKey: .priority) }
-    if !command.isEmpty { try c.encode(command, forKey: .command) }
-    if !items.isEmpty { try c.encode(items, forKey: .items) }
-  }
 }
 
 /// Deny-default sandbox spec. Declaring `"sandbox": {}` (even empty) opts
@@ -981,7 +826,7 @@ struct PluginVerbsProvider: Codable, Equatable {
 /// loads, and the allowances below plus capability composition. Absence
 /// keeps the legacy network-deny-only behavior until every bundled plugin
 /// has migrated.
-struct PluginSandboxSpec: Codable, Equatable {
+struct PluginSandboxSpec: Decodable, Equatable {
   /// Absolute executable paths the plugin may `process-exec`.
   var exec: [String]
   /// Extra absolute or `~`-prefixed subpaths the plugin may read.
@@ -1022,22 +867,12 @@ struct PluginSandboxSpec: Codable, Equatable {
     self.mach = try c.decodeIfPresent([String].self, forKey: .mach) ?? []
   }
 
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    if !exec.isEmpty { try c.encode(exec, forKey: .exec) }
-    if !read.isEmpty { try c.encode(read, forKey: .read) }
-    if !write.isEmpty { try c.encode(write, forKey: .write) }
-    if appleEvents { try c.encode(appleEvents, forKey: .appleevents) }
-    if signal { try c.encode(signal, forKey: .signal) }
-    if !mach.isEmpty { try c.encode(mach, forKey: .mach) }
-  }
-
   enum CodingKeys: String, CodingKey, CaseIterable {
     case exec, read, write, appleevents, signal, mach
   }
 }
 
-struct PluginManifest: Codable, Equatable {
+struct PluginManifest: Decodable, Equatable {
   var id: String
   var name: String
   var version: String
@@ -1313,42 +1148,6 @@ struct PluginManifest: Codable, Equatable {
     self.help = try c.decodeIfPresent(PluginHelp.self, forKey: .help) ?? PluginHelp()
   }
 
-  func encode(to encoder: Encoder) throws {
-    var c = encoder.container(keyedBy: CodingKeys.self)
-    try c.encode(id, forKey: .id)
-    try c.encode(name, forKey: .name)
-    try c.encode(version, forKey: .version)
-    try c.encode(description, forKey: .description)
-    if let install { try c.encode(install, forKey: .install) }
-    if let exec { try c.encode(exec, forKey: .exec) }
-    if let sandbox { try c.encode(sandbox, forKey: .sandbox) }
-    if !fetchURLs.isEmpty { try c.encode(fetchURLs, forKey: .fetchURLs) }
-    if !listen.isEmpty { try c.encode(listen, forKey: .listen) }
-    if let hintsProvider { try c.encode(hintsProvider, forKey: .hints) }
-    if let queriesProvider { try c.encode(queriesProvider, forKey: .queries) }
-    if !sources.isEmpty { try c.encode(sources, forKey: .sources) }
-    if let commandProvider { try c.encode(commandProvider, forKey: .commands) }
-    if let mappingProvider { try c.encode(mappingProvider, forKey: .mappings) }
-    if let statusProvider { try c.encode(statusProvider, forKey: .status) }
-    if let shebangProvider { try c.encode(shebangProvider, forKey: .shebangs) }
-    if !sourceActions.isEmpty { try c.encode(sourceActions, forKey: .sourceActions) }
-    if let navigationProvider { try c.encode(navigationProvider, forKey: .navigation) }
-    if let verbsProvider { try c.encode(verbsProvider, forKey: .verbs) }
-    try c.encode(priority, forKey: .priority)
-    if volatile { try c.encode(volatile, forKey: .volatile) }
-    if !selector.onlyBundleIDs.isEmpty {
-      try c.encode(selector.onlyBundleIDs, forKey: .onlyBundleIDs)
-    }
-    if !selector.onlyURLs.isEmpty { try c.encode(selector.onlyURLs, forKey: .onlyURLs) }
-    if let requestTimeoutMs { try c.encode(requestTimeoutMs, forKey: .requestTimeoutMs) }
-    if !capabilities.isEmpty {
-      try c.encode(capabilities.sorted(by: { $0.rawValue < $1.rawValue }), forKey: .capabilities)
-    }
-    if !help.topics.isEmpty {
-      try c.encode(help, forKey: .help)
-    }
-  }
-
   private static func uniqueTrimmed(_ values: [String]) -> [String] {
     var seen = Set<String>()
     var out: [String] = []
@@ -1505,9 +1304,12 @@ struct PluginManifest: Codable, Equatable {
   ) throws {
     let unknown = object.keys.filter {
       !allowed.contains($0) && !(allowPrivateKeys && $0.hasPrefix("_"))
-    }
-    if let key = unknown.sorted().first {
-      throw PluginError.invalidManifest("\(path) unknown field \(key)")
+    }.sorted()
+    if !unknown.isEmpty {
+      // All of them at once — an author with three typos fixes three typos,
+      // not one per load attempt.
+      throw PluginError.invalidManifest(
+        "\(path) unknown field\(unknown.count == 1 ? "" : "s") \(unknown.joined(separator: ", "))")
     }
   }
 

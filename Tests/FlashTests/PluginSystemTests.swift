@@ -1053,20 +1053,6 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(second.priority, 40)
   }
 
-  func testMappingRegistrationEncodeOmitsDefaults() throws {
-    let mapping = PluginMappingRegistration(
-      key: "q", command: ["flash", "hints_dismiss"])
-    let data = try JSONEncoder().encode(mapping)
-    let json = try XCTUnwrap(
-      try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["key"] as? String, "q")
-    XCTAssertEqual(json["command"] as? [String], ["flash", "hints_dismiss"])
-    XCTAssertNil(json["mode"], "default \"normal\" mode is not encoded")
-    XCTAssertNil(json["only_bundle_ids"], "empty only_bundle_ids is not encoded")
-    XCTAssertNil(json["only_urls"], "empty only_urls is not encoded")
-    XCTAssertNil(json["priority"], "nil priority is not encoded")
-  }
-
   func testSafariPluginOverridesHardRefreshBinding() throws {
     let root = try XCTUnwrap(
       try officialPluginRoots().first { $0.lastPathComponent == "safari" })
@@ -1341,54 +1327,6 @@ final class PluginSystemTests: XCTestCase {
     let github = try XCTUnwrap(manifest.shebangs.first { $0.token == "gh" })
     XCTAssertEqual(github.command, "github", "entry's own command wins")
     XCTAssertEqual(github.selector.onlyBundleIDs, ["com.other.app"])
-  }
-
-  func testProviderSectionEncodeOmitsEmptyFields() throws {
-    let provider = PluginProviderGate()
-    let data = try JSONEncoder().encode(provider)
-    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertNil(json["modes"], "empty modes is not encoded")
-    XCTAssertNil(json["priority"], "nil priority is not encoded")
-
-    let hintsData = try JSONEncoder().encode(PluginHintsProvider())
-    let hintsJSON = try XCTUnwrap(
-      try JSONSerialization.jsonObject(with: hintsData) as? [String: Any])
-    XCTAssertNil(hintsJSON["fallback_on_empty"], "false fallback is not encoded")
-  }
-
-  func testNavigationProviderEncodesSchemesWhenSet() throws {
-    let provider = PluginNavigationProvider(schemes: ["tmux"])
-    let data = try JSONEncoder().encode(provider)
-    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["schemes"] as? [String], ["tmux"])
-  }
-
-  func testStatusProviderEncodesSegmentsWhenSet() throws {
-    let provider = PluginStatusProvider(segments: ["battery"])
-    let data = try JSONEncoder().encode(provider)
-    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["segments"] as? [String], ["battery"])
-  }
-
-  func testCommandRegistrationEncodesSelectorWhenSet() throws {
-    let registration = PluginCommandRegistration(
-      command: "scoped",
-      subcommand: "here",
-      description: "X",
-      selector: PluginSelector(
-        onlyBundleIDs: ["com.example.app"],
-        onlyURLs: ["https://example.com/*"]))
-    let data = try JSONEncoder().encode(registration)
-    let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    XCTAssertEqual(json["only_bundle_ids"] as? [String], ["com.example.app"])
-    XCTAssertEqual(json["only_urls"] as? [String], ["https://example.com/*"])
-
-    let bare = PluginCommandRegistration(command: "x", subcommand: "", description: "X")
-    let bareData = try JSONEncoder().encode(bare)
-    let bareJSON = try XCTUnwrap(
-      try JSONSerialization.jsonObject(with: bareData) as? [String: Any])
-    XCTAssertNil(bareJSON["only_bundle_ids"], "empty only_bundle_ids is not encoded")
-    XCTAssertNil(bareJSON["only_urls"], "empty only_urls is not encoded")
   }
 
   func testSelectorPatternMatchingAndSpecificity() {
