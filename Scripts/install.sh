@@ -32,10 +32,7 @@ fi
 cp -R "$STAGING_PATH" "$INSTALL_PATH"
 
 # Re-sign the installed copy so the on-disk signature is unambiguous.
-codesign --force --deep \
-  --sign "$SIGN_IDENTITY" \
-  --identifier "$BUNDLE_ID" \
-  "$INSTALL_PATH"
+sign_app "$INSTALL_PATH" "$SIGN_IDENTITY"
 
 # Force Launch Services to refresh routing for the URL scheme + bundle id.
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \

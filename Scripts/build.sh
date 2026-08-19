@@ -99,10 +99,7 @@ if [[ "$MODE" == "dev" ]]; then
   if [[ -f "$inspector_html" ]]; then
     cp "$PROJECT_DIR/Inspector/dist/index.html" "$inspector_html"
     # The resource changed after assemble_app signed the bundle, so re-sign.
-    codesign --force --deep \
-      --sign "$SIGN_IDENTITY" \
-      --identifier "$BUNDLE_ID" \
-      "$STAGING_PATH"
+    sign_app "$STAGING_PATH" "$SIGN_IDENTITY"
   else
     echo "WARNING: $inspector_html missing; inspector not refreshed" >&2
   fi
@@ -122,10 +119,7 @@ if [[ "$MODE" == "release" ]]; then
       "$STAGING_PATH/Contents/Info.plist"
   fi
   # Re-sign after editing the plist so the signature stays valid.
-  codesign --force --deep \
-    --sign "$SIGN_IDENTITY" \
-    --identifier "$BUNDLE_ID" \
-    "$STAGING_PATH"
+  sign_app "$STAGING_PATH" "$SIGN_IDENTITY"
 
   ZIP_PATH="${FLASH_ZIP_PATH:-$PROJECT_DIR/build/$APP_NAME.zip}"
   rm -f "$ZIP_PATH" "$ZIP_PATH.sha256"

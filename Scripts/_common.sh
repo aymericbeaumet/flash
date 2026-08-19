@@ -257,8 +257,27 @@ assemble_app() {
   fi
 
   echo "==> Codesigning with identity: $sign_identity"
-  codesign --force --deep \
-    --sign "$sign_identity" \
+  sign_app "$STAGING_PATH" "$sign_identity"
+}
+
+# Sign a bundle inside-out: nested plugin Mach-Os first (release copies them
+# into Contents/Resources/Plugins; dev symlinks binaries build-plugins.sh
+# already signed, so the symlink case is skipped), then the bundle itself
+# WITHOUT --deep — Apple deprecates --deep for signing, and one explicit
+# pass per nested binary keeps signing deterministic instead of whatever
+# traversal order --deep picks.
+sign_app() {
+  local bundle="$1" identity="$2"
+  local plugins_dir="$bundle/Contents/Resources/Plugins"
+  if [[ -d "$plugins_dir" && ! -L "$plugins_dir" ]]; then
+    local bin
+    for bin in "$plugins_dir"/*/flash-plugin-*; do
+      [[ -x "$bin" ]] || continue
+      codesign --force --sign "$identity" "$bin"
+    done
+  fi
+  codesign --force \
+    --sign "$identity" \
     --identifier "$BUNDLE_ID" \
-    "$STAGING_PATH"
+    "$bundle"
 }
