@@ -227,7 +227,7 @@ A `JumpTarget.activate` closure overrides the default action. Use it when the un
 
 `~/.config/flash/flash.toml`. Hot-reloaded via `DispatchSource.makeFileSystemObjectSource`. `$XDG_CONFIG_HOME/flash/flash.toml` takes precedence when `XDG_CONFIG_HOME` is set. There is no legacy `~/.flash.toml` fallback. TOML syntax is parsed with the Swift package `TOMLKit`; `Sources/flash/Config/ConfigLoader.swift` owns only Flash's typed schema, validation, source-location indexing for known values, and command-path resolution.
 
-The user-facing top-level sections are exactly `[app]`, `[hints]`, `[open]`, `[plugins]`, `[statusbar]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
+The user-facing top-level sections are exactly `[app]`, `[hints]`, `[overlay]`, `[open]`, `[plugins]`, `[statusbar]`, `[flashlight]`, `[flashlight.aliases]`, `[flashlight.precedence]`, `[mode]`, `[mode.all.mappings]`, `[mode.normal]`, `[mode.normal.mappings]`, `[mode.insert.mappings]`, and `[debug]`, in that order in `config.default.toml`.
 
 **`config.default.toml` at the repo root is the canonical user-facing reference.** When you change a default or add a mapping/action, update `Config.swift`, `ConfigLoader.swift`, `URLEventHandler.swift` when needed, `config.default.toml`, `README.md`, this section, and tests in the same commit.
 
@@ -242,6 +242,9 @@ Keys:
 | `hints.magic_modifiers`            | string array   | `["cmd", "ctrl", "alt", "shift"]` |
 | `hints.mouse_grid_steps`           | int (2..6)     | `3`                  |
 | `hints.mouse_grid_opacity`         | float (0..1)   | `0.5`                |
+| `overlay.window_border`            | bool           | `true`               |
+| `overlay.window_border_size`       | float (0..20, `0` = per-mode) | `0`   |
+| `overlay.window_border_color`      | hex color (`""` = per-mode) | `""`    |
 | `open.ignored_apps`                | string array   | `[]`                 |
 | `open.app_directories`             | string array   | standard macOS app dirs |
 | `plugins.disabled`                 | string array   | `[]`                 |

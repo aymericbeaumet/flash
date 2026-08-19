@@ -22,6 +22,7 @@ extension AppDelegate {
   func updateActiveWindowBorder(reason: String) {
     guard
       Self.activeWindowBorderShouldBeVisible(
+        configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
         hasHints: !currentHints.isEmpty,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
@@ -31,7 +32,7 @@ extension AppDelegate {
     }
     let frame = activeWindowBorderContext()?.frontWindowFrame
     FlashLog.trace("[mode] active_border_update reason=\(reason) mode=\(flashMode)")
-    let style = Self.activeWindowBorderStyle(for: modeStore.mode.badgeStyle)
+    let style = resolvedActiveWindowBorderStyle()
     overlay.setActiveWindowBorder(
       around: frame, color: style.color, lineWidth: style.lineWidth,
       glow: style.glow)
@@ -52,6 +53,7 @@ extension AppDelegate {
   func scheduleActiveWindowBorderReconciliation(delaysMs: [Int], reason: String) {
     guard !delaysMs.isEmpty,
       Self.activeWindowBorderShouldBeVisible(
+        configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
         hasHints: !currentHints.isEmpty,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
@@ -71,6 +73,7 @@ extension AppDelegate {
   func reconcileActiveWindowBorder(reason: String) {
     guard
       Self.activeWindowBorderShouldBeVisible(
+        configEnabled: overlay.overlayConfig.windowBorder,
         modeBadgeEnabled: modeBadgeEnabled,
         hasHints: !currentHints.isEmpty,
         sessionActive: activeWindowBorderSessionSuspensions.isEmpty)
@@ -94,7 +97,7 @@ extension AppDelegate {
     case .redraw:
       FlashLog.trace("[mode] active_border_reconcile action=redraw reason=\(reason)")
       activeWindowBorderTrackedFrame = frame
-      let style = Self.activeWindowBorderStyle(for: modeStore.mode.badgeStyle)
+      let style = resolvedActiveWindowBorderStyle()
       overlay.setActiveWindowBorder(
         around: frame, color: style.color, lineWidth: style.lineWidth, glow: style.glow)
     }
@@ -123,17 +126,20 @@ extension AppDelegate {
   }
 
   static func activeWindowBorderShouldBeVisible(
+    configEnabled: Bool,
     modeBadgeEnabled: Bool,
     hasHints: Bool,
     sessionActive: Bool
   ) -> Bool {
     // The active window carries a frame in BOTH modes — a thin green stroke in
     // normal, a thicker blue one in insert — so the focused window stays
-    // identifiable (most useful for apps with several windows). Advanced mode
+    // identifiable (most useful for apps with several windows). The user can
+    // opt out wholesale (`[overlay] window_border = false`). Advanced mode
     // (`["flash", "enter_normal_mode"]` bound somewhere) is the gate: without it
     // there's no normal/insert distinction to visualise. Suspended while hints
     // are up (chips aren't double-framed) and whenever the user session or
     // displays are inactive, so Flash never survives over the lock surface.
+    guard configEnabled else { return false }
     guard modeBadgeEnabled else { return false }
     if hasHints { return false }
     if !sessionActive { return false }
@@ -166,14 +172,37 @@ extension AppDelegate {
   /// purple one in command (the mode-badge accents), and a thicker,
   /// softly-glowing blue one in insert. Normal and command share insert's outer
   /// edge — only insert grows inward (see `activeWindowBorderLocalRect`).
-  static func activeWindowBorderStyle(for badgeStyle: OverlayModeBadgeStyle)
+  static func activeWindowBorderStyle(
+    for badgeStyle: OverlayModeBadgeStyle,
+    sizeOverride: Double = 0,
+    colorOverride: CGColor? = nil
+  )
     -> (color: CGColor, lineWidth: CGFloat, glow: Bool)
   {
+    var style: (color: CGColor, lineWidth: CGFloat, glow: Bool)
     switch badgeStyle {
-    case .normal: return (OverlayPanel.nordAuroraGreenCG, 1, false)
-    case .insert: return (OverlayPanel.nordFrost2CG, 2, true)
-    case .command: return (OverlayPanel.nordAuroraPurpleCG, 1, false)
+    case .normal: style = (OverlayPanel.nordAuroraGreenCG, 1, false)
+    case .insert: style = (OverlayPanel.nordFrost2CG, 2, true)
+    case .command: style = (OverlayPanel.nordAuroraPurpleCG, 1, false)
     }
+    // `[overlay] window_border_size` / `window_border_color` apply across
+    // every mode; the defaults (0 / nil) keep the per-mode identity above.
+    if sizeOverride > 0 { style.lineWidth = sizeOverride }
+    if let colorOverride { style.color = colorOverride }
+    return style
+  }
+
+  /// The configured style for the current mode: the per-mode defaults with
+  /// `[overlay]` size/color overrides applied.
+  func resolvedActiveWindowBorderStyle() -> (color: CGColor, lineWidth: CGFloat, glow: Bool) {
+    let cfg = overlay.overlayConfig
+    let colorOverride =
+      cfg.windowBorderColor.isEmpty
+      ? nil : overlay.nsColor(fromHex: cfg.windowBorderColor)?.cgColor
+    return Self.activeWindowBorderStyle(
+      for: modeStore.mode.badgeStyle,
+      sizeOverride: cfg.windowBorderSize,
+      colorOverride: colorOverride)
   }
 
   static func activeWindowBorderFramesApproximatelyEqual(

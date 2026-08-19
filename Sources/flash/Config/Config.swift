@@ -163,6 +163,17 @@ struct Config {
     var importantHintBGTop: String = "#BF616A"
     var importantHintBGBottom: String = "#5C3940"
     var importantHintBorder: String = "#BF616A"
+    /// Colored stroke around the focused app's frontmost window while
+    /// advanced mode is on — green in normal, glowing blue in insert,
+    /// purple in command — so the active window is always identifiable.
+    /// `[overlay] window_border = false` turns it off entirely.
+    var windowBorder: Bool = true
+    /// Stroke width in points, applied to every mode. `0` (default) keeps
+    /// the per-mode widths: 1 in normal/command, 2 in insert.
+    var windowBorderSize: Double = 0
+    /// Stroke color (`#RRGGBB` / `#RRGGBBAA`), applied to every mode.
+    /// Empty (default) keeps the per-mode Nord colors.
+    var windowBorderColor: String = ""
   }
   /// Tunables for the `:flashlight` command-line surface.
   struct Flashlight {

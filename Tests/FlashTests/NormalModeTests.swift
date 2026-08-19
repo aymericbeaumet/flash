@@ -1255,24 +1255,35 @@ final class NormalModeTests: XCTestCase {
     // active — so the active window is always identifiable.
     XCTAssertTrue(
       AppDelegate.activeWindowBorderShouldBeVisible(
+        configEnabled: true,
+        modeBadgeEnabled: true,
+        hasHints: false,
+        sessionActive: true))
+    // `[overlay] window_border = false` opts out wholesale.
+    XCTAssertFalse(
+      AppDelegate.activeWindowBorderShouldBeVisible(
+        configEnabled: false,
         modeBadgeEnabled: true,
         hasHints: false,
         sessionActive: true))
     // No advanced mode → no normal/insert distinction to draw.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
+        configEnabled: true,
         modeBadgeEnabled: false,
         hasHints: false,
         sessionActive: true))
     // Lock/session switch/sleep hides the border immediately.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
+        configEnabled: true,
         modeBadgeEnabled: true,
         hasHints: false,
         sessionActive: false))
     // Hints suppress the border so chips aren't double-framed.
     XCTAssertFalse(
       AppDelegate.activeWindowBorderShouldBeVisible(
+        configEnabled: true,
         modeBadgeEnabled: true,
         hasHints: true,
         sessionActive: true))
@@ -1296,6 +1307,60 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command.color, OverlayPanel.nordAuroraPurpleCG)
     XCTAssertEqual(command.lineWidth, 1)
     XCTAssertFalse(command.glow)
+  }
+
+  func testActiveWindowBorderStyleConfigOverrides() {
+    // `[overlay] window_border_size` / `window_border_color` apply across
+    // every mode; glow (insert's identity) is untouched.
+    let red = NSColor.systemRed.cgColor
+    let normal = AppDelegate.activeWindowBorderStyle(
+      for: .normal, sizeOverride: 4, colorOverride: red)
+    XCTAssertEqual(normal.color, red)
+    XCTAssertEqual(normal.lineWidth, 4)
+    XCTAssertFalse(normal.glow)
+    let insert = AppDelegate.activeWindowBorderStyle(
+      for: .insert, sizeOverride: 4, colorOverride: red)
+    XCTAssertEqual(insert.color, red)
+    XCTAssertEqual(insert.lineWidth, 4)
+    XCTAssertTrue(insert.glow)
+    // Zero size / nil color = keep the per-mode defaults.
+    let untouched = AppDelegate.activeWindowBorderStyle(
+      for: .insert, sizeOverride: 0, colorOverride: nil)
+    XCTAssertEqual(untouched.color, OverlayPanel.nordFrost2CG)
+    XCTAssertEqual(untouched.lineWidth, 2)
+  }
+
+  func testWindowBorderConfigKeysParse() {
+    let c = ConfigLoader.parse(
+      """
+      [overlay]
+      window_border = false
+      window_border_size = 3.5
+      window_border_color = "#BF616A"
+      """)
+    XCTAssertFalse(c.overlay.windowBorder)
+    XCTAssertEqual(c.overlay.windowBorderSize, 3.5)
+    XCTAssertEqual(c.overlay.windowBorderColor, "#BF616A")
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty)
+
+    // Defaults: on, per-mode size/color.
+    let defaults = ConfigLoader.parse("")
+    XCTAssertTrue(defaults.overlay.windowBorder)
+    XCTAssertEqual(defaults.overlay.windowBorderSize, 0)
+    XCTAssertEqual(defaults.overlay.windowBorderColor, "")
+
+    let invalid = ConfigLoader.parse(
+      """
+      [overlay]
+      window_border_size = -1
+      window_border_color = "salmon"
+      """)
+    XCTAssertEqual(invalid.overlay.windowBorderSize, 0)
+    XCTAssertEqual(invalid.overlay.windowBorderColor, "")
+    XCTAssertTrue(
+      invalid.loadingDiagnostics.contains { $0.message.contains("window_border_size") })
+    XCTAssertTrue(
+      invalid.loadingDiagnostics.contains { $0.message.contains("window_border_color") })
   }
 
   func testActiveWindowBorderFrameComparisonIgnoresTinyJitter() {

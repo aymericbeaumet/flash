@@ -364,7 +364,8 @@ enum ConfigLoader {
       "overlay": [
         "font_size", "hint_fg", "hint_bg_top", "hint_bg_bottom", "hint_border",
         "important_hint_fg", "important_hint_bg_top", "important_hint_bg_bottom",
-        "important_hint_border",
+        "important_hint_border", "window_border", "window_border_size",
+        "window_border_color",
       ],
       "debug": [
         "show_hints_bounds", "hints_bounds_bg", "hints_bounds_fg", "log_level",
@@ -905,6 +906,27 @@ enum ConfigLoader {
       locations: locations, into: &config, validate: { isValidHexColor($0) },
       assign: { value, config in
         config.overlay.importantHintBorder = value
+      })
+    applyBool(
+      table["window_border"], path: ["overlay", "window_border"],
+      message: "overlay.window_border must be true or false", locations: locations, into: &config
+    ) { value, config in
+      config.overlay.windowBorder = value
+    }
+    applyDouble(
+      table["window_border_size"], path: ["overlay", "window_border_size"],
+      message: "overlay.window_border_size must be a number between 0 and 20 (points; 0 keeps the per-mode defaults)",
+      locations: locations, into: &config, validate: { $0 >= 0 && $0 <= 20 },
+      assign: { value, config in
+        config.overlay.windowBorderSize = value
+      })
+    applyString(
+      table["window_border_color"], path: ["overlay", "window_border_color"],
+      message:
+        "overlay.window_border_color must be a hex color like #RRGGBB or #RRGGBBAA (empty keeps the per-mode colors)",
+      locations: locations, into: &config, validate: { $0.isEmpty || isValidHexColor($0) },
+      assign: { value, config in
+        config.overlay.windowBorderColor = value
       })
   }
 

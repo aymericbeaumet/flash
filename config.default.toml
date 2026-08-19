@@ -45,6 +45,19 @@ mouse_grid_steps = 3
 # click, so a slight translucency keeps the underlying app visible.
 mouse_grid_opacity = 0.5
 
+[overlay]
+# Colored stroke around the focused app's frontmost window while advanced
+# mode is on — green in normal, glowing blue in insert, purple in command —
+# so the active window is always identifiable (most useful for apps with
+# several windows). Set to false to turn it off entirely.
+window_border = true
+# Stroke width in points, applied to every mode. 0 (the default) keeps the
+# per-mode widths: 1 in normal/command, 2 in insert.
+window_border_size = 0
+# Stroke color (#RRGGBB or #RRGGBBAA), applied to every mode. Empty (the
+# default) keeps the per-mode colors above.
+window_border_color = ""
+
 [open]
 # App candidates hidden from :open and the `app_open name=...` verb.
 # Entries match display name, bundle identifier, bundle path, .app filename,
