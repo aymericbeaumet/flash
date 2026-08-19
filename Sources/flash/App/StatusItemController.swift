@@ -43,6 +43,12 @@ final class StatusItemController: NSObject {
     // the standard panel's credit links don't reliably open in an
     // LSUIElement app, and a real button through NSWorkspace always does.
     // LSUIElement apps also don't front panels unless activated first.
+    //
+    // While the About window is open Flash joins the app switcher (policy
+    // .regular) so the user can Cmd-Tab back to it; the moment it closes
+    // Flash returns to its headless accessory policy. This transient flip
+    // is the sanctioned exception to the no-Dock-presence rule.
+    NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
     if let panel = aboutPanel {
       panel.center()
@@ -101,9 +107,22 @@ final class StatusItemController: NSObject {
     contentSize.width = max(contentSize.width, 340)
     panel.setContentSize(contentSize)
     panel.isReleasedWhenClosed = false
+    // NSPanel hides itself when the app deactivates by default — clicking
+    // anywhere else made the About window vanish. It should stay up until
+    // explicitly closed.
+    panel.hidesOnDeactivate = false
     panel.center()
     panel.makeKeyAndOrderFront(nil)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(aboutPanelWillClose(_:)),
+      name: NSWindow.willCloseNotification, object: panel)
     aboutPanel = panel
+  }
+
+  @objc private func aboutPanelWillClose(_ note: Notification) {
+    // Leave the app switcher again — Flash is headless outside the About
+    // window's lifetime.
+    NSApp.setActivationPolicy(.accessory)
   }
 
   @objc private func openRepo() {
