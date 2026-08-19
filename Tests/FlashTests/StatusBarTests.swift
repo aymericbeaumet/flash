@@ -364,7 +364,10 @@ final class StatusBarTests: XCTestCase {
             ])
         ]))
 
-    XCTAssertEqual(model.rightText, "#[fg=colour178]82%")
+    // Ranges ride through the model — the renderer turns them into
+    // actionable spans instead of stripping them.
+    XCTAssertEqual(
+      model.rightText, "#[range=user|bat-prefs fg=colour178]82%#[norange]")
   }
 
   func testMissingPluginStatusSegmentRendersEmpty() {
@@ -1167,18 +1170,59 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(
       text,
       "#[fg=colour178]Cdx#[fg=colour245] 90%↻3h#[fg=colour245] · "
-        + "#[fg=colour178]82%#[fg=colour245] · "
+        + "#[range=user|bat-prefs fg=colour178]82%#[norange]#[fg=colour245] · "
         + "#[fg=colour178]Sat Jun 13 07:08")
   }
 
-  func testClickRangeMarkersAreStrippedBeforeRendering() {
-    XCTAssertEqual(
-      FlashStatusBarRenderer.stripClickRanges(
-        from: "#[range=user|bat-prefs fg=colour178]82%#[norange]"),
-      "#[fg=colour178]82%")
+  func testClickRangesBecomeActionableSegments() {
+    // tmux's status-line mouse model, made real: the span names an action
+    // (resolved via [statusbar.click]); the markers render zero glyphs.
+    let segments = FlashStatusBarRenderer.segments(
+      from: "#[range=user|bat-prefs fg=colour178]82%#[norange] rest")
+    XCTAssertEqual(segments[0].text, "82%")
+    XCTAssertEqual(segments[0].range, "bat-prefs")
+    XCTAssertEqual(segments[0].foreground, .palette(178))
+    XCTAssertEqual(segments[1].text, " rest")
+    XCTAssertNil(segments[1].range)
+
+    // The clickable run rides the URL plumbing as a sentinel scheme.
+    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    let (runs, _) = FlashStatusBarRenderer.linkRuns(
+      from: "#[range=user|bat-prefs]82%#[norange]", font: font)
+    XCTAssertEqual(runs.count, 1)
+    let url = URL(string: runs[0].url)
+    XCTAssertEqual(url.flatMap(FlashStatusBarRenderer.rangeActionName(from:)), "bat-prefs")
   }
 
-  func testTmuxStatusSegmentsParseForegroundAndBoldMarkersWithoutClickRanges() {
+  func testStatusBarClickActionsParse() {
+    let c = ConfigLoader.parse(
+      """
+      [statusbar.click]
+      "bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
+      "quota" = ["flash", "help_show"]
+      """)
+    XCTAssertTrue(c.loadingDiagnostics.isEmpty, "\(c.loadingDiagnostics.map(\.message))")
+    XCTAssertEqual(
+      c.statusBar.clickActions["bat-prefs"],
+      .url("x-apple.systempreferences:com.apple.preference.battery"))
+    guard case .command = c.statusBar.clickActions["quota"] else {
+      return XCTFail("expected a command action")
+    }
+    // Defaults ship the battery binding (the system plugin emits the span).
+    XCTAssertEqual(
+      ConfigLoader.parse("").statusBar.clickActions["bat-prefs"],
+      .url("x-apple.systempreferences:com.apple.preference.battery"))
+
+    let invalid = ConfigLoader.parse(
+      """
+      [statusbar.click]
+      "x" = 5
+      """)
+    XCTAssertTrue(
+      invalid.loadingDiagnostics.contains { $0.message.contains("statusbar.click.x") })
+  }
+
+  func testTmuxStatusSegmentsParseForegroundBoldAndClickRanges() {
     let segments = FlashStatusBarRenderer.segments(
       from: "#[fg=colour178 bold]Cdx#[fg=colour245 nobold] 80% "
         + "#[fg=colour196]12%↻1h#[fg=colour245] · "
@@ -1191,7 +1235,8 @@ final class StatusBarTests: XCTestCase {
         FlashStatusTextSegment(text: " 80% ", foreground: .colour245, bold: false),
         FlashStatusTextSegment(text: "12%↻1h", foreground: .colour196, bold: false),
         FlashStatusTextSegment(text: " · ", foreground: .colour245, bold: false),
-        FlashStatusTextSegment(text: "Sat Jun 13 09:08", foreground: .colour178, bold: false),
+        FlashStatusTextSegment(
+          text: "Sat Jun 13 09:08", foreground: .colour178, bold: false, range: "cal"),
       ])
   }
 

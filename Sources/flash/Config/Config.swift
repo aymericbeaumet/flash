@@ -326,6 +326,21 @@ struct Config {
     /// `#{script:…}` paths. With layered configs the defining layer may not
     /// be the last file parsed. Not user-facing.
     var templateSourceURL: URL?
+    /// What a click on a `#[range=user|<name>]…#[norange]` span does —
+    /// tmux's status-line mouse model: the span names an action, the
+    /// binding lives outside the string. `[statusbar.click]` values are a
+    /// URL string or a `["flash", "<verb>", …]` action array.
+    enum ClickAction: Equatable {
+      case url(String)
+      case command(MappingCommand)
+    }
+    var clickActions: [String: ClickAction] = Self.defaultClickActions
+    /// The bundled system plugin wraps its battery chip in
+    /// `#[range=user|bat-prefs]`, so the default map makes that span open
+    /// the Battery pane out of the box.
+    static let defaultClickActions: [String: ClickAction] = [
+      "bat-prefs": .url("x-apple.systempreferences:com.apple.preference.battery")
+    ]
     static let defaultTemplate = FlashStatusBarTemplate(
       template: Self.defaultTemplateString,
       variables: [

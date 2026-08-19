@@ -351,6 +351,9 @@ impl Context {
     /// Publish status-bar segment values declared by this plugin's
     /// `status` manifest section. The host exposes each value as
     /// `#{plugin:<plugin-id>.<segment>}` in `[statusbar].template`.
+    /// An EMPTY value clears the segment host-side (the wire contract) —
+    /// dropping empties here used to make Rust the only SDK that could
+    /// never clear a segment it had published.
     pub fn emit_status_segments<I, K, V>(&self, segments: I)
     where
         I: IntoIterator<Item = (K, V)>,
@@ -361,7 +364,7 @@ impl Context {
         for (name, value) in segments {
             let name = name.as_ref().trim();
             let value = value.as_ref().trim();
-            if !name.is_empty() && !value.is_empty() {
+            if !name.is_empty() {
                 object.insert(name.to_string(), json!(value));
             }
         }

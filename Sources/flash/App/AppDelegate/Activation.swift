@@ -256,10 +256,16 @@ extension AppDelegate {
         frame: frame,
         role: "AXLink",
         url: url.absoluteString,
-        activate: { _ in
-          // `activates = true` brings the handling app forward and focuses it,
-          // matching the bar's own click handler; a background `open` would
-          // leave keyboard focus on the previously active app.
+        activate: { [weak self] _ in
+          // Named `#[range=user|…]` spans dispatch their [statusbar.click]
+          // action; real URLs open with `activates = true` so the handling
+          // app comes forward and takes focus, matching the bar's own click
+          // handler (a background `open` would leave keyboard focus on the
+          // previously active app).
+          if let action = FlashStatusBarRenderer.rangeActionName(from: url) {
+            self?.performStatusBarClickAction(named: action)
+            return true
+          }
           let configuration = NSWorkspace.OpenConfiguration()
           configuration.activates = true
           NSWorkspace.shared.open(url, configuration: configuration, completionHandler: nil)

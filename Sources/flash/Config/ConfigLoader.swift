@@ -435,7 +435,7 @@ enum ConfigLoader {
       "hints": ["keys", "min_length", "magic_modifiers", "mouse_grid_steps", "mouse_grid_opacity"],
       "open": ["ignored_apps", "app_directories"],
       "plugins": ["watching_enabled", "disabled", "third_party"],
-      "statusbar": ["enabled", "template", "monitor", "interval"],
+      "statusbar": ["enabled", "template", "monitor", "interval", "click"],
       "flashlight": ["suggestion_count", "precedence_alive_bonus", "aliases", "precedence"],
       "mode": ["labels", "sequence_timeout_ms", "normal", "all", "insert"],
       "overlay": [
@@ -792,6 +792,32 @@ enum ConfigLoader {
       assign: { value, config in
         config.statusBar.refreshIntervalSeconds = Double(value)
       })
+    if let click = sectionTable(
+      table["click"], name: "statusbar.click", locations: locations, into: &config)
+    {
+      for (name, value) in click {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let location = locations.location(for: ["statusbar", "click", name])
+        guard !trimmedName.isEmpty else { continue }
+        if let url = value.string {
+          if URL(string: url) != nil, !url.isEmpty {
+            config.statusBar.clickActions[trimmedName] = .url(url)
+            config.recordLocation(path: "statusbar.click.\(trimmedName)", location: location)
+          } else {
+            config.addDiagnostic(
+              "statusbar.click.\(name) must be a valid URL or a [\"flash\", \"<verb>\", …] action array",
+              location: location)
+          }
+        } else if let action = parseMappingActionValue(value, sourceURL: sourceURL) {
+          config.statusBar.clickActions[trimmedName] = .command(action)
+          config.recordLocation(path: "statusbar.click.\(trimmedName)", location: location)
+        } else {
+          config.addDiagnostic(
+            "statusbar.click.\(name) must be a URL string or a [\"flash\", \"<verb>\", …] action array",
+            location: location)
+        }
+      }
+    }
   }
 
   private static func applyFlashlight(

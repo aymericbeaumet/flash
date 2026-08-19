@@ -29,6 +29,10 @@ final class StatusBarClickView: NSView {
   /// probe costs nothing in the steady state.
   var onPointerEntered: (() -> Void)?
 
+  /// Dispatches a named `#[range=user|<name>]` click (the `[statusbar.click]`
+  /// action map). Set by the overlay from the AppDelegate's handler.
+  var onStatusBarAction: ((String) -> Void)?
+
   /// Window-space location of the in-flight `mouseDown`, used to tell a click
   /// from a drag: a link opens only if the pointer comes back up within
   /// `dragSlop` of where it went down. A drag (window-drag, selection sweep,
@@ -56,6 +60,10 @@ final class StatusBarClickView: NSView {
     else { return }
     let local = convert(event.locationInWindow, from: nil)
     if let url = links.first(where: { $0.rect.contains(local) })?.url {
+      if let action = FlashStatusBarRenderer.rangeActionName(from: url) {
+        onStatusBarAction?(action)
+        return
+      }
       // `activates = true` brings the handling browser to the front and gives
       // it keyboard focus. The plain `open(url)` opens the tab in the
       // background (the click panel is non-activating, so the previously
@@ -224,6 +232,7 @@ extension OverlayPanel {
         return (rect: local, url: link.url)
       }
       view.onPointerEntered = { [weak self] in self?.startMenuBarRevealTracking() }
+      view.onStatusBarAction = statusBarActionHandler
       window.orderFrontRegardless()
     }
     // The probe normally arms on hover, but if the pointer is already parked

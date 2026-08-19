@@ -245,7 +245,7 @@ extension OverlayPanel {
     // produced. It can carry tmux-style style markers, so build the
     // attributed string up front; the rendered width drives the
     // centring math below.
-    let centreDisplay = FlashStatusBarRenderer.stripClickRanges(from: statusAppText.trimmed)
+    let centreDisplay = statusAppText.trimmed
     let centreAttributed = FlashStatusBarRenderer.attributedStatusString(
       from: centreDisplay, font: rightFont)
     let measuredCentreWidth = centreDisplay.isEmpty ? 0 : ceil(centreAttributed.size().width)
@@ -300,7 +300,7 @@ extension OverlayPanel {
     // tmux-styled run right of the pill — not as part of the bold mode
     // label — so per-segment `#[fg=…]` styling is honoured instead of
     // leaking the pill palette into the trailing text.
-    let leftTrailingDisplay = FlashStatusBarRenderer.stripClickRanges(from: leftTrailingRaw.trimmed)
+    let leftTrailingDisplay = leftTrailingRaw.trimmed
     // A `#{cycle:…}` run arrives wrapped in `#[cyc]…#[nocyc]`. Pull it out so it
     // renders in its own clipped layer that can slide vertically, while the
     // static text around it (the pill, the "HN" label) stays in the base layer.
@@ -844,9 +844,8 @@ extension OverlayPanel {
     let font = NSFont.monospacedSystemFont(
       ofSize: Self.statusBarFontSize(overlayFontSize: CGFloat(overlayConfig.fontSize)),
       weight: .medium)
-    let leftDisplay = FlashStatusBarRenderer.stripClickRanges(
-      from: statusLeftTrailingText.trimmed)
-    let centreDisplay = FlashStatusBarRenderer.stripClickRanges(from: statusAppText.trimmed)
+    let leftDisplay = statusLeftTrailingText.trimmed
+    let centreDisplay = statusAppText.trimmed
     let rightDisplay = Self.statusRightDisplayText(statusRightText)
     let (cyclePrefix, cycleContent, cycleSuffix) = Self.splitCycleRun(leftDisplay)
     refreshAnimatedStatusText(
@@ -973,8 +972,7 @@ extension OverlayPanel {
   }
 
   static func statusRightDisplayText(_ statusRightText: String) -> String {
-    FlashStatusBarRenderer.stripClickRanges(
-      from: statusRightText.trimmed)
+    statusRightText.trimmed
   }
 
   func refreshWindowLevelForCurrentContent() {

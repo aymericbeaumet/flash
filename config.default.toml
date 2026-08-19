@@ -238,6 +238,16 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 #   #[fg=colour245] · #{date}
 #   """
 
+# tmux status-line mouse model: a `#[range=user|<name>]…#[norange]` span in
+# the template (or in plugin/script output) names an action; this table
+# binds the name. Values are a URL string (opened activating) or a
+# ["flash", "<verb>", …] action array (same power as a keybinding).
+# `#[link=URL]…#[nolink]` remains the shorthand for plain URL spans.
+[statusbar.click]
+# The bundled system plugin wraps its battery chip in
+# #[range=user|bat-prefs], so a click opens the Battery pane.
+"bat-prefs" = "x-apple.systempreferences:com.apple.preference.battery"
+
 [flashlight]
 # Number of suggestion rows shown below the command bar.
 suggestion_count = 10

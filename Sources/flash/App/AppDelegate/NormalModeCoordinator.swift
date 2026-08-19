@@ -2260,6 +2260,30 @@ extension AppDelegate {
       + candidateFinderCandidates.filter { $0.kind == CandidateFinder.bangKind }
   }
 
+  /// Dispatch a named `#[range=user|<name>]` status-bar click through the
+  /// `[statusbar.click]` action map — tmux's status-line mouse model: the
+  /// span names the action, the binding lives in config. URLs open
+  /// activating; action arrays run through the mapping-command dispatcher
+  /// (same power as a keybinding, e.g. ["flash", "plugin_command", …]).
+  func performStatusBarClickAction(named name: String) {
+    guard let action = config.statusBar.clickActions[name] else {
+      FlashLog.warn(
+        "[statusbar] click range \"\(name)\" has no [statusbar.click] action configured")
+      overlay.displayBanner("no [statusbar.click] action for \"\(name)\"")
+      return
+    }
+    FlashLog.debug("[statusbar] click_action name=\(name)")
+    switch action {
+    case .url(let raw):
+      guard let url = URL(string: raw) else { return }
+      let configuration = NSWorkspace.OpenConfiguration()
+      configuration.activates = true
+      NSWorkspace.shared.open(url, configuration: configuration, completionHandler: nil)
+    case .command(let command):
+      performMappingCommand(command)
+    }
+  }
+
   /// True when a confirmed `!token` is actually routable: an exact shebang
   /// registration, or a bang its wildcard owner has published to the pool
   /// (searchengines' curated table rows). A wildcard registration alone

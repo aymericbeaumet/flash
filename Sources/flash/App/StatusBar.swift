@@ -35,6 +35,10 @@ struct FlashStatusTextSegment: Equatable {
   /// Target opened when this run is clicked. Populated from
   /// `#[link=URL]…#[nolink]` markers; nil for non-interactive text.
   var link: String?
+  /// Named click range from `#[range=user|<name>]…#[norange]` — tmux's
+  /// status-line mouse model. The name resolves through the
+  /// `[statusbar.click]` action map at click time.
+  var range: String?
 
   init(
     text: String,
@@ -47,7 +51,8 @@ struct FlashStatusTextSegment: Equatable {
     reverse: Bool = false,
     blink: Bool = false,
     breathing: Bool = false,
-    link: String? = nil
+    link: String? = nil,
+    range: String? = nil
   ) {
     self.text = text
     self.foreground = foreground
@@ -60,6 +65,7 @@ struct FlashStatusTextSegment: Equatable {
     self.blink = blink
     self.breathing = breathing
     self.link = link
+    self.range = range
   }
 }
 
@@ -760,8 +766,7 @@ enum FlashStatusBarTemplateEngine {
     case .tmux(let name):
       return resolveTmux(name, context: context)
     case .command:
-      return FlashStatusBarRenderer.stripClickRanges(
-        from: dynamicValues[variable.id]?.trimmed ?? "")
+      return dynamicValues[variable.id]?.trimmed ?? ""
     case .cycle:
       // A cycle publishes its current line into `dynamicValues[id]` (with its
       // own `#[link=…]` marker), so it reads back like a command — but wrapped
@@ -769,8 +774,7 @@ enum FlashStatusBarTemplateEngine {
       // into its own clipped layer and slide it. The sentinels are zero-width
       // `#[…]` markers, so truncation/measurement ignore them, and an
       // unhandled region renders them as nothing.
-      let line = FlashStatusBarRenderer.stripClickRanges(
-        from: dynamicValues[variable.id]?.trimmed ?? "")
+      let line = dynamicValues[variable.id]?.trimmed ?? ""
       return line.isEmpty ? "" : "#[cyc]" + line + "#[nocyc]"
     }
   }
@@ -822,7 +826,7 @@ enum FlashStatusBarTemplateEngine {
           .trimmed,
         !text.isEmpty
       else { return "" }
-      return FlashStatusBarRenderer.stripClickRanges(from: text)
+      return text
     }
   }
 
@@ -868,16 +872,6 @@ enum FlashStatusBarRenderer {
     return formatter.string(from: now)
   }
 
-  static func stripClickRanges(from raw: String) -> String {
-    let tokens = FlashStatusBarMarkup.tokenizeValue(raw).compactMap {
-      token -> FlashStatusBarMarkup.Token? in
-      guard case .marker(let parts) = token else { return token }
-      let stripped = parts.filter { $0 != "norange" && !$0.hasPrefix("range=") }
-      return stripped.isEmpty ? nil : .marker(stripped)
-    }
-    return FlashStatusBarMarkup.serialize(tokens)
-  }
-
   static func segments(from raw: String) -> [FlashStatusTextSegment] {
     var style = FlashStatusTextStyle()
     // tmux style scoping: `#[default]` resets to the current default style,
@@ -886,6 +880,7 @@ enum FlashStatusBarRenderer {
     var baseStyle = FlashStatusTextStyle()
     var defaultsStack: [FlashStatusTextStyle] = []
     var link: String?
+    var range: String?
     var segments: [FlashStatusTextSegment] = []
     var buffer = ""
 
@@ -903,7 +898,8 @@ enum FlashStatusBarRenderer {
           reverse: style.reverse,
           blink: style.blink,
           breathing: style.breathing,
-          link: link))
+          link: link,
+          range: range))
       buffer = ""
     }
 
@@ -924,6 +920,12 @@ enum FlashStatusBarRenderer {
             baseStyle = style
           case "pop-default":
             baseStyle = defaultsStack.popLast() ?? FlashStatusTextStyle()
+          case "norange": range = nil
+          case let part where part.hasPrefix("range="):
+            // Only `range=user|<name>` spans are actionable (tmux's
+            // window/session ranges have no Flash analogue).
+            let spec = part.dropFirst("range=".count)
+            range = spec.hasPrefix("user|") ? String(spec.dropFirst("user|".count)) : nil
           default: applyTmuxMarker([part], to: &style)
           }
         }
@@ -955,8 +957,27 @@ enum FlashStatusBarRenderer {
     }
   }
 
-  /// Measure the clickable runs in `raw` against `font`. Returns each
-  /// linked run's x-offset (from the text's leading edge, before any
+  /// Pseudo-scheme carrying a `#[range=user|<name>]` click span through the
+  /// URL-typed rect plumbing (click windows + `f` hints). Consumers branch
+  /// on the scheme and dispatch the named `[statusbar.click]` action instead
+  /// of opening it.
+  static let rangeActionScheme = "flash-statusbar-action"
+
+  static func rangeActionURL(name: String) -> URL? {
+    var components = URLComponents()
+    components.scheme = rangeActionScheme
+    components.host = name.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed)
+    return components.url
+  }
+
+  static func rangeActionName(from url: URL) -> String? {
+    guard url.scheme == rangeActionScheme else { return nil }
+    return url.host?.removingPercentEncoding ?? url.host
+  }
+
+  /// Measure the clickable runs in `raw` against `font`: `#[link=…]` spans
+  /// and named `#[range=user|…]` spans (carried as `rangeActionURL`s).
+  /// Returns each run's x-offset (from the text's leading edge, before any
   /// alignment padding) and width, plus the total rendered width so the
   /// caller can offset for centre/right alignment. Widths are measured the
   /// same way the renderer lays the text out, so the rects line up exactly.
@@ -968,16 +989,19 @@ enum FlashStatusBarRenderer {
     var x: CGFloat = 0
     for segment in segments(from: raw) {
       let width = FlashStatusBarRenderer.attributedSegment(segment, font: font).size().width
-      if let url = segment.link {
+      let target =
+        segment.link
+        ?? segment.range.flatMap { Self.rangeActionURL(name: $0)?.absoluteString }
+      if let target {
         // Merge directly-adjacent runs that share a target so a styled
         // link (e.g. coloured + bold spans) registers one rect.
-        if var last = runs.last, last.url == url,
+        if var last = runs.last, last.url == target,
           abs(last.xOffset + last.width - x) < 0.5
         {
           last.width += width
           runs[runs.count - 1] = last
         } else {
-          runs.append((xOffset: x, width: width, url: url))
+          runs.append((xOffset: x, width: width, url: target))
         }
       }
       x += width

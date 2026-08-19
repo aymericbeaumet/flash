@@ -123,6 +123,10 @@ final class OverlayPanel: NSPanel {
   /// (`captureKeyboardInput`): each capture pass bumps it so stale retries
   /// from a superseded pass die silently.
   var commandLineKeyRecoveryGeneration: UInt64 = 0
+  /// Dispatches a named `#[range=user|<name>]` status-bar click through the
+  /// `[statusbar.click]` action map. Set by the AppDelegate at startup;
+  /// consumed by the click windows and the `f`-hint activation path.
+  var statusBarActionHandler: ((String) -> Void)?
   let commandPromptLayer = CAGradientLayer()
   let commandPromptLabel = CATextLayer()
   let commandCaretLayer = CALayer()

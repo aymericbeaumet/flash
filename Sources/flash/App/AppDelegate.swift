@@ -511,6 +511,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         self?.pluginManager.pluginStatuses() ?? []
       })
     statusBarController?.updateFocusedApplication(NSWorkspace.shared.frontmostApplication)
+    overlay.statusBarActionHandler = { [weak self] name in
+      self?.performStatusBarClickAction(named: name)
+    }
 
     let dispatch: (URLCommand) -> Void = { [weak self] cmd in
       self?.handleURLCommand(cmd)
