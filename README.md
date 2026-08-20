@@ -126,6 +126,7 @@ flash mouse_target --adjust              # refine the click point before committ
 flash mouse_target --search              # type visible text to pick the target (seek & click)
 flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
 flash scroll_target                      # pick which scroll area the scroll keys drive
+# In the flashlight, "@menus print" finds and runs the frontmost app's menu items.
 flash mouse_grid                         # target any screen position
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window

@@ -62,6 +62,9 @@ final class SourceRegistry {
             ignoredApps: openConfig.ignoredApps,
             appDirectories: openConfig.appDirectories)
         },
+        SourceDescriptor(identifier: "core.menus", activationPolicy: .always) {
+          MenuBarSource()
+        },
         SourceDescriptor(identifier: "accessibility", activationPolicy: .always) {
           AccessibilityProvider()
         },
@@ -304,12 +307,14 @@ final class SourceRegistry {
     }
   }
 
-  /// Plugin adapters whose sources declare `mode = "live"` and match the
-  /// explicit scope filter. Live sources answer per-keystroke
-  /// `sources.query` pulls; they never join the warm snapshot fan-outs or
-  /// the first-paint barrier.
+  /// Sources (built-in and plugin) that serve live candidates and match the
+  /// explicit scope filter. Live sources answer per-keystroke pulls; they
+  /// never join the warm snapshot fan-outs or the first-paint barrier.
   func liveCandidateSources(matching sourceFilter: String) -> [FlashSource] {
-    return activePluginSources().filter { source in
+    lock.lock()
+    let builtIn = Array(activeSourcesByID.values)
+    lock.unlock()
+    return (builtIn + activePluginSources()).filter { source in
       Self.isLiveCandidateSource(source)
         && source.candidateSourceDescriptors.contains { descriptor in
           CandidateFinder.sourceLabel(descriptor.name, matchesFilter: sourceFilter)
@@ -318,7 +323,7 @@ final class SourceRegistry {
   }
 
   static func isLiveCandidateSource(_ source: FlashSource) -> Bool {
-    (source as? PluginFlashSource)?.servesLiveCandidates ?? false
+    source.servesLiveCandidates
   }
 
   /// Plugin adapters may stay resident while their owning applications are

@@ -516,6 +516,10 @@ public protocol FlashSource: AnyObject {
     scope: CandidateScope,
     completion: @escaping ([Candidate]) -> Void
   )
+  /// Whether this source answers per-query `liveCandidates` pulls instead of
+  /// keeping a warm catalog. Live sources are excluded from the default pool,
+  /// the warm fan-outs, and the first-paint barrier.
+  var servesLiveCandidates: Bool { get }
   /// Fetch candidates for one explicit query against this source's `live`
   /// descriptors. Called per flashlight keystroke, only when the query is
   /// scoped to this source (`@source` / bang `candidate_source`) and only
@@ -588,6 +592,7 @@ extension FlashSource {
   ) {
     completion(candidates(in: environment, scope: scope))
   }
+  public var servesLiveCandidates: Bool { false }
   public func liveCandidates(
     matching text: String,
     in environment: FlashSourceEnvironment,
