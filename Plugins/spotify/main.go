@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"flashplugin"
 )
 
 func onCommand(params map[string]any) map[string]any {
@@ -99,5 +101,5 @@ func stringArgs(params map[string]any) []string {
 }
 
 func main() {
-	newPlugin().serve(onCommand)
+	flashplugin.New().Serve(flashplugin.Handlers{OnCommand: onCommand})
 }

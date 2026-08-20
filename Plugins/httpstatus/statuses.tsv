@@ -1,0 +1,63 @@
+# IANA HTTP status code registry (RFC 9110 + registered extensions).
+# code<TAB>reason phrase<TAB>category
+100	Continue	informational
+101	Switching Protocols	informational
+102	Processing	informational
+103	Early Hints	informational
+200	OK	success
+201	Created	success
+202	Accepted	success
+203	Non-Authoritative Information	success
+204	No Content	success
+205	Reset Content	success
+206	Partial Content	success
+207	Multi-Status	success
+208	Already Reported	success
+226	IM Used	success
+300	Multiple Choices	redirection
+301	Moved Permanently	redirection
+302	Found	redirection
+303	See Other	redirection
+304	Not Modified	redirection
+307	Temporary Redirect	redirection
+308	Permanent Redirect	redirection
+400	Bad Request	client error
+401	Unauthorized	client error
+402	Payment Required	client error
+403	Forbidden	client error
+404	Not Found	client error
+405	Method Not Allowed	client error
+406	Not Acceptable	client error
+407	Proxy Authentication Required	client error
+408	Request Timeout	client error
+409	Conflict	client error
+410	Gone	client error
+411	Length Required	client error
+412	Precondition Failed	client error
+413	Content Too Large	client error
+414	URI Too Long	client error
+415	Unsupported Media Type	client error
+416	Range Not Satisfiable	client error
+417	Expectation Failed	client error
+418	I'm a teapot	client error
+421	Misdirected Request	client error
+422	Unprocessable Content	client error
+423	Locked	client error
+424	Failed Dependency	client error
+425	Too Early	client error
+426	Upgrade Required	client error
+428	Precondition Required	client error
+429	Too Many Requests	client error
+431	Request Header Fields Too Large	client error
+451	Unavailable For Legal Reasons	client error
+500	Internal Server Error	server error
+501	Not Implemented	server error
+502	Bad Gateway	server error
+503	Service Unavailable	server error
+504	Gateway Timeout	server error
+505	HTTP Version Not Supported	server error
+506	Variant Also Negotiates	server error
+507	Insufficient Storage	server error
+508	Loop Detected	server error
+510	Not Extended	server error
+511	Network Authentication Required	server error

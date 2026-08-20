@@ -8,7 +8,7 @@
 # control variants copy to the clipboard, and the window flavors follow
 # cmd+shift+4 with Space to enter the window picker.
 
-require_relative "flashplugin"
+require_relative "../_ruby_flash_plugin/flashplugin"
 
 SETTLE_DELAY_SECONDS = "0.20"
 WINDOW_PICKER_DELAY_SECONDS = "0.12"

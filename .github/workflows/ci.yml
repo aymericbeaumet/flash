@@ -72,33 +72,58 @@ jobs:
         run: cargo test --workspace
 
   plugins-polyglot:
-    name: Plugins (polyglot smoke)
+    name: Plugins (protocol conformance)
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned toolchains
         uses: jdx/mise-action@v2
-      - name: Build compiled polyglot plugins
+      - name: Cache Cargo registry + plugin target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/plugin-target
+          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-plugin-cargo-
+      - name: Build compiled plugins
         # Go/Zig/Swift plugins are outside the cargo workspace — without this
-        # job a compile break in any of them lands green.
-        run: ./Scripts/build-plugins.sh dev spotify reminders searchengines
-      - name: Protocol conformance smoke
-        # Self-contained driver (no plugin shim imports): lifecycle + the
-        # decoder probes (negative ids, doubles incl. negative origins in
-        # both a notification and an id'd request) + unknown-method reply +
-        # plugin→host NAK interleaving. --snapshot only where the catalog is
-        # embedded data; reminders runs lifecycle-only and is the first
-        # suspect if this job ever reds on a runner TCC denial.
+        # job a compile break in any of them lands green. calculator and
+        # snippets are the Rust-SDK representatives in the spec run below.
+        run: >
+          ./Scripts/build-plugins.sh dev
+          spotify netinfo searchengines httpstatus reminders shortcuts
+          calculator snippets
+      - name: Protocol conformance specs
+        # One language-agnostic JSON spec suite (Plugins/_specs, driven by
+        # Scripts/plugin-protocol-spec.py) runs against every plugin SDK —
+        # Rust included — so a conformance gap fails identically no matter
+        # the language. lifecycle + robustness always; snapshot/query where
+        # the manifest declares sources/queries. --skip snapshot where the
+        # warm catalog needs a TCC grant the runner lacks (reminders,
+        # shortcuts) — those two are the first suspects if this job ever
+        # reds on a runner TCC change. snippets gets an inline config so
+        # its snapshot is non-empty.
         run: |
           set -euo pipefail
-          smoke="$PWD/Scripts/plugin-protocol-smoke.py"
-          run() { dir="$1"; shift; echo "== $dir"; (cd "Plugins/$dir" && FLASH_PLUGIN_ID="$dir" python3 "$smoke" "$@"); }
-          run emojis --snapshot -- bun run main.ts
-          run searchengines --snapshot -- ./flash-plugin-searchengines
+          spec="$PWD/Scripts/plugin-protocol-spec.py"
+          run() { dir="$1"; shift; echo "== $dir"; (cd "Plugins/$dir" && FLASH_PLUGIN_ID="$dir" FLASH_PLUGIN_DATA_DIR="$RUNNER_TEMP/$dir" python3 "$spec" "$@"); }
           run aiproviders -- python3 main.py
+          run timezones -- python3 main.py
+          run emojis -- bun run main.ts
+          run colors -- bun run main.ts
           run screenshot -- ruby main.rb
+          run caffeinate -- ruby main.rb
           run spotify -- ./flash-plugin-spotify
-          run reminders -- ./flash-plugin-reminders
+          run netinfo -- ./flash-plugin-netinfo
+          run searchengines -- ./flash-plugin-searchengines
+          run httpstatus -- ./flash-plugin-httpstatus
+          run reminders --skip snapshot -- ./flash-plugin-reminders
+          run shortcuts --skip snapshot -- ./flash-plugin-shortcuts
+          run calculator -- ./flash-plugin-calculator
+          FLASH_PLUGIN_CONFIG='{"snippets":{"spec":"probe"}}' run snippets -- ./flash-plugin-snippets
 
   build:
     name: Build

@@ -1,0 +1,42 @@
+{
+  "name": "snapshot",
+  "when": "sources",
+  "description": "The warm-catalog contract: a sources plugin replies to initialize only once its canonical catalog exists, so the first sources.snapshot answers from memory — non-empty for the deterministic catalogs this spec runs against — with titled rows whose metadata.source is set. Runs only for manifests declaring sources; skip it (--skip snapshot) where the catalog needs a TCC grant the environment lacks.",
+  "steps": [
+    {
+      "send": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "plugin_id": "${plugin_id}",
+          "version": "0.1.0",
+          "protocol_version": 1,
+          "running_applications": []
+        }
+      }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 15000
+    },
+    { "send": { "id": 2, "method": "sources.snapshot", "params": {} } },
+    {
+      "expect": {
+        "id": 2,
+        "result": {
+          "candidates": {
+            "$type": "array",
+            "$min_len": 1,
+            "$each": {
+              "title": { "$type": "string", "$min_len": 1 },
+              "metadata": { "source": { "$type": "string", "$min_len": 1 } }
+            }
+          }
+        }
+      },
+      "within_ms": 1500
+    },
+    { "send": { "id": 3, "method": "shutdown", "params": {} } },
+    { "expect": { "id": 3, "result": { "ok": true } }, "within_ms": 5000 }
+  ]
+}

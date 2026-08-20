@@ -1,4 +1,7 @@
-// Minimal Flash plugin protocol shim for Swift (Foundation only).
+// Shared Flash plugin SDK for Swift (Foundation only) — no Flash business
+// concepts, mirroring the Rust `flash_plugin` crate's role for Swift
+// plugins. Scripts/build-plugins.sh compiles this file alongside each Swift
+// plugin's main.swift.
 //
 // Speaks the wire contract from docs/plugin-protocol.md: protocol v1, one
 // JSON object per newline-terminated line over stdio. Three frame shapes

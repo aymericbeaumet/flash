@@ -30,28 +30,41 @@ section exists to keep the wire protocol honestly language-agnostic.
 
 ## Polyglot (the protocol is the boundary)
 
-Six official plugins are deliberately non-Rust; each carries its own
-~100–200-line `flashplugin.*` shim (JSON-lines framing + v1
-lifecycle) beside logic comparable in size to a Rust original:
+Twelve official plugins are deliberately non-Rust — two per language, so
+each language's shared SDK (`Plugins/_<language>_flash_plugin/`, a single
+`flashplugin.*` with JSON-lines framing + v1 lifecycle and no Flash
+business concepts) has real consumers:
 
-- **`Plugins/aiproviders` — Python** (mise-pinned `python3`): `!chatgpt`-
-  style bangs, `command.invoke`, subprocess (`open`, osascript).
-- **`Plugins/screenshot` — Ruby**: osascript keystroke commands.
-- **`Plugins/emojis` — TypeScript/Bun**: the warm-catalog contract in an
-  interpreted language — dataset files read at startup, published before
-  initialize succeeds, served from memory on `sources.snapshot`.
-- **`Plugins/spotify` — Go**: compiled command wrapper, built by
-  `build-plugins.sh` alongside the Rust crates.
-- **`Plugins/searchengines` — Zig**: compiled warm catalog; `@embedFile`
-  replaces the old build.rs codegen for the vendored bangs.tsv.
-- **`Plugins/reminders` — Swift**: the full surface in one port — warm
+- **Python** (mise-pinned `python3`): `Plugins/aiproviders` — `!chatgpt`-
+  style bangs, `command.invoke`, subprocess (`open`, osascript);
+  `Plugins/timezones` — a pure `query.evaluate` evaluator over a
+  startup-warmed zone index.
+- **Ruby**: `Plugins/screenshot` — osascript keystroke commands;
+  `Plugins/caffeinate` — a managed `/usr/bin/caffeinate` child plus a
+  `status.updated` segment.
+- **TypeScript/Bun**: `Plugins/emojis` — the warm-catalog contract in an
+  interpreted language (dataset files read at startup, published before
+  initialize succeeds, served from memory on `sources.snapshot`);
+  `Plugins/colors` — a pure hex/rgb/hsl query evaluator.
+- **Go**: `Plugins/spotify` — compiled command wrapper, built by
+  `build-plugins.sh` alongside the Rust crates; `Plugins/netinfo` — a
+  polled warm catalog of interface addresses with
+  `sources.invalidated` on change.
+- **Zig**: `Plugins/searchengines` — compiled warm catalog; `@embedFile`
+  replaces the old build.rs codegen for the vendored bangs.tsv;
+  `Plugins/httpstatus` — the same embedded-data shape with openable MDN
+  URLs.
+- **Swift**: `Plugins/reminders` — the full surface in one port — warm
   catalog from an AppleScript listing, `candidate.resolve`, commands, and
   lifecycle events; heartbeat/snapshot answer on the read thread while
-  handlers run on a worker queue.
+  handlers run on a worker queue; `Plugins/shortcuts` — the same shape
+  against the faceless "Shortcuts Events" service.
 
-`Scripts/plugin-protocol-smoke.py` drives any plugin binary/runtime through
-initialize → heartbeat → optional `sources.snapshot` → shutdown with a
-PASS/FAIL exit code — the conformance tool for new shims.
+`Scripts/plugin-protocol-spec.py` drives any plugin binary/runtime through
+the language-agnostic JSON specs in `Plugins/_specs/` (lifecycle +
+wire-noise robustness always; snapshot/query gated on the manifest) with a
+PASS/FAIL exit code — the conformance suite for every SDK, Rust included,
+and CI runs it across all of them.
 
 ## The loop
 

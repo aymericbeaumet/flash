@@ -1,4 +1,11 @@
-"""Minimal Flash plugin protocol shim for Python (stdlib only).
+"""Shared Flash plugin SDK for Python (stdlib only) — no Flash business
+concepts, mirroring the Rust `flash_plugin` crate's role for Python plugins.
+Plugins bootstrap it with a two-line path insert (the directory sits beside
+every plugin in both the checkout and the staged release bundle):
+
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "_python_flash_plugin"))
+    from flashplugin import Plugin
 
 Speaks the wire contract from docs/plugin-protocol.md: protocol v1, one JSON
 object per newline-terminated line over stdio. Three frame shapes: id+method
@@ -34,7 +41,7 @@ def data_dir():
 
 
 class Plugin:
-    """Blocking single-threaded serve loop for command-style plugins."""
+    """Blocking single-threaded serve loop for command/evaluator plugins."""
 
     def __init__(self):
         self._in = sys.stdin.buffer
@@ -42,6 +49,7 @@ class Plugin:
         self._next_id = 0
         self._pending = {}  # our request id -> _PENDING | host result
         self._on_command = None
+        self._on_query = None
         self._done = False
 
     def send(self, obj):
@@ -79,15 +87,19 @@ class Plugin:
         try:
             msg = json.loads(raw)
         except ValueError:
-            return
+            return  # wire noise is dropped, never fatal
         method, mid = msg.get("method"), msg.get("id")
         if method is None:  # response frame — resolve one of our call_host ids
             if self._pending.get(mid) is _PENDING:
                 self._pending[mid] = msg.get("result")
             return
-        if mid is None:  # notification — this shim subscribes to none
+        if mid is None:  # notification — this SDK subscribes to none
             return
         if method == "initialize":
+            if (msg.get("params") or {}).get("protocol_version") != PROTOCOL_VERSION:
+                self.respond(mid, {"ok": False, "error": "protocol version mismatch"})
+                self._done = True
+                return
             self.respond(mid, {"ok": True, "protocol_version": PROTOCOL_VERSION})
         elif method == "heartbeat":
             self.respond(mid, {"ok": True})
@@ -96,11 +108,16 @@ class Plugin:
             self._done = True
         elif method == "command.invoke" and self._on_command is not None:
             self.respond(mid, self._on_command(msg.get("params") or {}))
+        elif method == "query.evaluate" and self._on_query is not None:
+            # Synchronous CPU-only evaluator: the hook returns the answer
+            # list (possibly empty — additive parsers decline, never error).
+            self.respond(mid, {"answers": self._on_query(msg.get("params") or {})})
         else:
             self.respond(mid, {"ok": False, "error": f"unsupported method {method}"})
 
-    def serve(self, on_command):
+    def serve(self, on_command=None, on_query=None):
         self._on_command = on_command
+        self._on_query = on_query
         while not self._done:
             line = self._in.readline()
             if not line:  # host closed stdin — clean exit

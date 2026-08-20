@@ -1,0 +1,47 @@
+{
+  "id": "caffeinate",
+  "name": "Caffeinate",
+  "version": "0.1.0",
+  "description": "Keep the Mac awake through /usr/bin/caffeinate: `:caffeinate on [minutes]`, `:caffeinate off`, `:caffeinate toggle`, with a status-bar segment.",
+  "exec": [
+    "ruby",
+    "main.rb"
+  ],
+  "capabilities": [
+    "subprocess"
+  ],
+  "commands": {
+    "items": [
+      {
+        "command": "caffeinate",
+        "subcommand": "",
+        "description": "Show whether a caffeinate assertion is active"
+      },
+      {
+        "command": "caffeinate",
+        "subcommand": "status",
+        "description": "Show whether a caffeinate assertion is active"
+      },
+      {
+        "command": "caffeinate",
+        "subcommand": "on",
+        "description": "Keep the Mac awake (optional minutes argument bounds it)"
+      },
+      {
+        "command": "caffeinate",
+        "subcommand": "off",
+        "description": "Release the caffeinate assertion"
+      },
+      {
+        "command": "caffeinate",
+        "subcommand": "toggle",
+        "description": "Toggle the caffeinate assertion"
+      }
+    ]
+  },
+  "status": {
+    "segments": [
+      "state"
+    ]
+  }
+}

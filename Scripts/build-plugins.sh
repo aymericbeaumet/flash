@@ -11,6 +11,13 @@ set -euo pipefail
 #   none        → interpreted (python3/ruby/bun via manifest exec; nothing
 #                 to build — sources run in place)
 #
+# Every language links its shared per-language SDK from the sibling
+# Plugins/_<language>_flash_plugin directory: Rust via the workspace path
+# dep, Go via a go.mod replace, Zig via the flashplugin module below, Swift
+# by compiling the SDK source alongside main.swift. Interpreted SDKs
+# (python/ruby/typescript) are imported relatively at runtime and staged
+# into the release bundle by Scripts/_common.sh.
+#
 # All build artifacts land under build/plugin-target (never inside the
 # watched plugin trees, so the dev file-watcher never sees intermediate
 # files). Toolchains come from mise (repo mise.toml pins them); rust stays
@@ -122,14 +129,17 @@ build_other() {
       x86_64) swiftargs+=(-target x86_64-apple-macos14.0) ;;
       aarch64) swiftargs+=(-target arm64-apple-macos14.0) ;;
     esac
-    (cd "$dir" && xcrun swiftc "${swiftargs[@]}" main.swift flashplugin.swift -o "$out")
+    (cd "$dir" && xcrun swiftc "${swiftargs[@]}" \
+      main.swift ../_swift_flash_plugin/flashplugin.swift -o "$out")
   else
     local zigargs=(-O ReleaseSafe -lc -femit-bin="$out")
     case "$arch" in
       x86_64) zigargs+=(-target x86_64-macos) ;;
       aarch64) zigargs+=(-target aarch64-macos) ;;
     esac
-    (cd "$dir" && mise exec zig -- zig build-exe main.zig "${zigargs[@]}")
+    (cd "$dir" && mise exec zig -- zig build-exe \
+      --dep flashplugin -Mroot=main.zig \
+      -Mflashplugin=../_zig_flash_plugin/flashplugin.zig "${zigargs[@]}")
   fi
 }
 

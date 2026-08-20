@@ -1,0 +1,59 @@
+{
+  "name": "lifecycle",
+  "when": "always",
+  "description": "The v1 lifecycle every plugin must speak: initialize echoes protocol version 1, heartbeat decodes a negative id, an event notification full of doubles (incl. a negative window origin, exactly what the host emits for a display left of the primary) is absorbed, an unknown id'd request is never silently dropped, and shutdown replies before exit.",
+  "steps": [
+    {
+      "send": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "plugin_id": "${plugin_id}",
+          "version": "0.1.0",
+          "protocol_version": 1,
+          "running_applications": []
+        }
+      }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 15000
+    },
+    { "send": { "id": -1, "method": "heartbeat" } },
+    { "expect": { "id": -1, "result": { "ok": true } }, "within_ms": 5000 },
+    {
+      "send": {
+        "method": "event",
+        "params": {
+          "name": "core:window.focus.changed",
+          "payload": {
+            "bundle_id": "dev.flash.spec",
+            "pid": 999,
+            "front_window_frame": {
+              "x": -1912.5,
+              "y": -140.25,
+              "width": 1512.0,
+              "height": 982.0
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "id": 7,
+        "method": "driver.unknown",
+        "params": { "x": -1912.5, "y": 982.0 }
+      }
+    },
+    {
+      "expect": {
+        "id": 7,
+        "result": { "ok": false, "error": { "$type": "string" } }
+      },
+      "within_ms": 5000
+    },
+    { "send": { "id": 3, "method": "shutdown", "params": {} } },
+    { "expect": { "id": 3, "result": { "ok": true } }, "within_ms": 5000 }
+  ]
+}

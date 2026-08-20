@@ -1,0 +1,32 @@
+{
+  "name": "robustness",
+  "when": "always",
+  "description": "Wire noise must never kill a plugin: blank lines and undecodable lines are ignored, an unknown notification is absorbed, and a response frame whose id the plugin never issued is dropped (host and plugin id counters are independent and may overlap). A follow-up heartbeat proves the process survived it all.",
+  "steps": [
+    {
+      "send": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "plugin_id": "${plugin_id}",
+          "version": "0.1.0",
+          "protocol_version": 1,
+          "running_applications": []
+        }
+      }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 15000
+    },
+    { "send_raw": "\n" },
+    { "send_raw": "this is not json\n" },
+    { "send_raw": "{\"truncated\": \n" },
+    { "send": { "method": "driver.mystery", "params": { "noise": true } } },
+    { "send": { "id": 424242, "result": { "ok": true } } },
+    { "send": { "id": -2, "method": "heartbeat" } },
+    { "expect": { "id": -2, "result": { "ok": true } }, "within_ms": 5000 },
+    { "send": { "id": 3, "method": "shutdown", "params": {} } },
+    { "expect": { "id": 3, "result": { "ok": true } }, "within_ms": 5000 }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "id": "httpstatus",
+  "name": "HTTP Status Codes",
+  "version": "0.1.0",
+  "description": "HTTP status code reference in the flashlight: `@httpstatus 418` shows the reason phrase; selecting opens the MDN page.",
+  "sandbox": {},
+  "exec": [
+    "./flash-plugin-httpstatus"
+  ],
+  "sources": [
+    {
+      "name": "httpstatus.codes",
+      "priority": "low"
+    }
+  ]
+}

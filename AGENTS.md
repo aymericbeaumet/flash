@@ -76,6 +76,8 @@ Tests/BrowserSnapshots/              # Browser integration offline HTML snapshot
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
 Plugins/                             # Official bundled Rust plugins, members of the Plugins/Cargo.toml workspace, symlinked into the dev app
 Plugins/_rust_flash_plugin/          # Shared Rust plugin SDK crate (package flash_plugin); no Flash business concepts
+Plugins/_<language>_flash_plugin/    # Shared per-language plugin SDKs (python/typescript/ruby/go/zig/swift), same no-business-concepts rule
+Plugins/_specs/                      # Language-agnostic JSON protocol-conformance specs, run by Scripts/plugin-protocol-spec.py
 Resources/Info.plist                 # LSUIElement, AppleEvent usage description
 Scripts/build-plugins.sh                     # one workspace cargo invocation for [dev|release] [id…] → flash-plugin-<id> binary beside its manifest (dev = plugin-dev profile, current arch; release = universal lipo; ids filter to the single-plugin hot loop)
 Scripts/_common.sh                           # Shared constants + helpers (signing identity, login agent, app assembly) sourced by build.sh / install.sh
@@ -397,12 +399,14 @@ never fork a per-screen layout copy. Overflow is handled by the elastic
 `#[shrink]…#[noshrink]` span (pixel-accurate ellipsis; fixed content keeps
 full width) and layout keeps a 16 pt margin around a notch.
 
-**Bundled plugins default to Rust, macOS-only.** Six official plugins are
-deliberately non-Rust to keep the wire protocol honestly language-agnostic
-(`docs/plugin-protocol.md`): `aiproviders` (Python), `emojis`
-(TypeScript/Bun), `screenshot` (Ruby), `spotify` (Go), `searchengines`
-(Zig, whose `@embedFile` replaces the old build.rs codegen), and
-`reminders` (Swift — its shim answers heartbeat/snapshot on the read
+**Bundled plugins default to Rust, macOS-only.** Twelve official plugins
+are deliberately non-Rust — two per language, so each language's shared SDK
+has real consumers — to keep the wire protocol honestly language-agnostic
+(`docs/plugin-protocol.md`): `aiproviders` + `timezones` (Python),
+`emojis` + `colors` (TypeScript/Bun), `screenshot` + `caffeinate` (Ruby),
+`spotify` + `netinfo` (Go), `searchengines` + `httpstatus` (Zig, whose
+`@embedFile` replaces the old build.rs codegen), and `reminders` +
+`shortcuts` (Swift — its SDK answers heartbeat/snapshot on the read
 thread and runs handlers on a worker queue, the same never-starve-the-
 heartbeat discipline the Rust SDK enforces). New plugins use
 Rust unless there is a deliberate reason not to. Every plugin — regardless
@@ -434,11 +438,20 @@ trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
 must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
 need safely; the SDK confines its own unsafe to `process.rs`/`runtime.rs`).
-The non-Rust plugins carry their own ~100–200-line `flashplugin.*` protocol
-shim (JSON-lines framing + the v1 lifecycle, a call_host correlation map,
-and a FLASH_PLUGIN_CONFIG accessor) beside their logic;
-`Scripts/plugin-protocol-smoke.py` drives any of them through
-initialize/heartbeat/snapshot/shutdown without a host.
+Each non-Rust language has its own shared SDK under
+`Plugins/_<language>_flash_plugin/` (a single ~100–250-line `flashplugin.*`:
+JSON-lines framing + the v1 lifecycle, a call_host correlation map, and a
+FLASH_PLUGIN_CONFIG accessor — no Flash business concepts, mirroring the
+Rust crate's role). Compiled languages link it at build time
+(go.mod `replace`, the Zig `flashplugin` module, Swift source compiled
+alongside `main.swift`); interpreted plugins import it relatively and
+`Scripts/_common.sh` stages the python/ruby/typescript SDK dirs into the
+release bundle. `Plugins/_specs/*.json` is the language-agnostic
+conformance suite (lifecycle + wire-noise robustness always;
+snapshot/query gated on the manifest's provider sections);
+`Scripts/plugin-protocol-spec.py` drives any plugin binary/runtime through
+it without a host, and CI runs it against every SDK — Rust included
+(calculator + snippets).
 `Scripts/build-plugins.sh [dev|release] [id…]` builds every compiled plugin
 by per-dir convention — `Cargo.toml` → one workspace-aware cargo
 invocation, `go.mod` → `go build`, `main.zig` → `zig build-exe` (both via

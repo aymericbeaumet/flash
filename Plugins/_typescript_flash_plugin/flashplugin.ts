@@ -1,11 +1,16 @@
-// Minimal Flash plugin protocol shim for TypeScript on Bun.
+// Shared Flash plugin SDK for TypeScript on Bun — no Flash business
+// concepts, mirroring the Rust `flash_plugin` crate's role for TS plugins.
+// Plugins import it relatively (the directory sits beside every plugin in
+// both the checkout and the staged release bundle):
+//
+//   import { Plugin } from "../_typescript_flash_plugin/flashplugin";
 //
 // Speaks the wire contract from docs/plugin-protocol.md: protocol v1 —
 // newline-delimited JSON over stdio, one object per line, no envelope
 // beyond id/method/params/result. Frame shapes: id+method = request,
 // id alone = response, method alone = notification. Host and plugin id
 // counters are independent and may overlap; replies to plugin-issued
-// requests are correlated through the shim's own pending map. A sources
+// requests are correlated through the SDK's own pending map. A sources
 // plugin must have its warm store populated before initialize is answered.
 
 export type Value =
@@ -22,6 +27,13 @@ export interface Candidate {
   title: string;
   url?: string;
   metadata: { [key: string]: string };
+  effect?: Value;
+}
+
+export interface Answer {
+  title: string;
+  subtitle?: string;
+  effect: { type: string; text: string };
 }
 
 type Msg = { [key: string]: Value };
@@ -31,6 +43,9 @@ export class Plugin {
   private nextId = 1;
   private pending = new Map<number, (result: Value) => void>();
   private cachedConfig?: { [key: string]: Value };
+  // Synchronous CPU-only evaluator hook: return the (possibly empty) answer
+  // list — additive parsers decline unclaimed input, never error.
+  onQuery?: (params: Msg) => Answer[];
   // One writer for the process lifetime, flushed per frame: Bun's FileSink
   // buffers, and a fresh writer per send can lose the final (shutdown)
   // reply when the process exits before the sink drains.
@@ -53,7 +68,7 @@ export class Plugin {
     this.send({ method: "flash.log", params: { level, message, fields: {} } });
   }
 
-  // Plugin→host RPC on the shim's own id counter; resolves with the host's
+  // Plugin→host RPC on the SDK's own id counter; resolves with the host's
   // result as-is, including capability NAKs shaped {ok: false, error}.
   callHost(method: string, params: Value): Promise<Value> {
     const id = this.nextId++;
@@ -89,7 +104,13 @@ export class Plugin {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
         if (!line.trim()) continue;
-        if (!this.dispatch(JSON.parse(line) as Msg)) return;
+        let msg: Msg;
+        try {
+          msg = JSON.parse(line) as Msg;
+        } catch {
+          continue; // wire noise is dropped, never fatal
+        }
+        if (!this.dispatch(msg)) return;
       }
     }
   }
@@ -109,8 +130,13 @@ export class Plugin {
     }
     // method without id: a notification (e.g. "event") — ignore silently.
     if (id === undefined || id === null) return true;
+    const params = (msg.params ?? {}) as Msg;
     switch (method) {
       case "initialize":
+        if (params.protocol_version !== PROTOCOL_VERSION) {
+          this.respond(id, { ok: false, error: "protocol version mismatch" });
+          return false;
+        }
         // The warm store is already populated (readiness gate).
         this.respond(id, { ok: true, protocol_version: PROTOCOL_VERSION });
         return true;
@@ -127,9 +153,15 @@ export class Plugin {
         this.respond(id, { candidates: candidates as unknown as Value });
         return true;
       }
-      default:
-        this.respond(id, { ok: false, error: `unsupported method ${method}` });
+      case "query.evaluate": {
+        if (!this.onQuery) break;
+        this.respond(id, {
+          answers: this.onQuery(params) as unknown as Value,
+        });
         return true;
+      }
     }
+    this.respond(id, { ok: false, error: `unsupported method ${method}` });
+    return true;
   }
 }

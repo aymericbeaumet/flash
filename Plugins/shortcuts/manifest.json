@@ -1,0 +1,37 @@
+{
+  "id": "shortcuts",
+  "name": "Shortcuts",
+  "version": "0.1.0",
+  "description": "Run macOS Shortcuts from the flashlight: `@shortcuts <name>` runs the picked shortcut, plus `:shortcuts` open/refresh helpers.",
+  "exec": [
+    "./flash-plugin-shortcuts"
+  ],
+  "priority": 12,
+  "commands": {
+    "items": [
+      {
+        "command": "shortcuts",
+        "subcommand": "open",
+        "description": "Open Shortcuts.app"
+      },
+      {
+        "command": "shortcuts",
+        "subcommand": "refresh",
+        "description": "Refresh the cached shortcut list"
+      }
+    ]
+  },
+  "listen": [
+    "core:config.*"
+  ],
+  "sources": [
+    {
+      "name": "shortcuts.entries",
+      "priority": "normal"
+    }
+  ],
+  "capabilities": [
+    "open",
+    "subprocess"
+  ]
+}

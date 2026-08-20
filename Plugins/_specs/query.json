@@ -1,0 +1,51 @@
+{
+  "name": "query",
+  "when": "queries",
+  "description": "The evaluator contract's wire half: query.evaluate always answers with an answers array (empty for input the evaluator does not claim — evaluators are additive parsers, never error paths), and every answer stays inside the closed {title, subtitle?, effect} shape. Latency budgets are host-enforced; this spec asserts shape, not the 50 ms deadline.",
+  "steps": [
+    {
+      "send": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "plugin_id": "${plugin_id}",
+          "version": "0.1.0",
+          "protocol_version": 1,
+          "running_applications": []
+        }
+      }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 15000
+    },
+    {
+      "send": {
+        "id": 4,
+        "method": "query.evaluate",
+        "params": {
+          "surface": "flashlight",
+          "scope": "",
+          "query": "zzzz@@@@spec-probe"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 4,
+        "result": {
+          "answers": {
+            "$type": "array",
+            "$each": {
+              "title": { "$type": "string" },
+              "effect": { "type": { "$type": "string" } }
+            }
+          }
+        }
+      },
+      "within_ms": 2000
+    },
+    { "send": { "id": 3, "method": "shutdown", "params": {} } },
+    { "expect": { "id": 3, "result": { "ok": true } }, "within_ms": 5000 }
+  ]
+}

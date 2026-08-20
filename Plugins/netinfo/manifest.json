@@ -1,0 +1,16 @@
+{
+  "id": "netinfo",
+  "name": "Network Info",
+  "version": "0.1.0",
+  "description": "Local network addresses in the flashlight: `@netinfo.addresses` lists every interface IP and the hostname, each copyable.",
+  "sandbox": {},
+  "exec": [
+    "./flash-plugin-netinfo"
+  ],
+  "sources": [
+    {
+      "name": "netinfo.addresses",
+      "priority": "low"
+    }
+  ]
+}

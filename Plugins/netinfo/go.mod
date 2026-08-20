@@ -1,4 +1,4 @@
-module flash-plugin-spotify
+module flash-plugin-netinfo
 
 go 1.25
 

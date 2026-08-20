@@ -1,0 +1,13 @@
+{
+  "id": "colors",
+  "name": "Colors",
+  "version": "0.1.0",
+  "description": "Color conversion answers in the flashlight: type `#ff8800`, `rgb(255, 136, 0)`, or `hsl(32, 100%, 50%)` to copy any of the hex/rgb/hsl forms.",
+  "sandbox": {},
+  "exec": [
+    "bun",
+    "run",
+    "main.ts"
+  ],
+  "queries": {}
+}

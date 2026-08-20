@@ -12,7 +12,7 @@
 //! percent-encoded into the URL template.
 
 const std = @import("std");
-const fp = @import("flashplugin.zig");
+const fp = @import("flashplugin");
 
 const bangs_tsv = @embedFile("bangs.tsv");
 const max_bangs = 4096;

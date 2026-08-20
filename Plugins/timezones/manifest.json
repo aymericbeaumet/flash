@@ -1,0 +1,12 @@
+{
+  "id": "timezones",
+  "name": "Timezones",
+  "version": "0.1.0",
+  "description": "World-clock answers in the flashlight: `time in tokyo`, `time new york`, or plain `time` show the current time there, copyable.",
+  "sandbox": {},
+  "exec": [
+    "python3",
+    "main.py"
+  ],
+  "queries": {}
+}

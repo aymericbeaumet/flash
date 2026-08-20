@@ -10,7 +10,7 @@
 // contract the Rust SDK enforces. The dataset never changes at runtime, so
 // there is nothing to refresh on events.
 
-import { Plugin, type Candidate } from "./flashplugin";
+import { Plugin, type Candidate } from "../_typescript_flash_plugin/flashplugin";
 
 const SOURCE_ID = "plugin:emojis";
 

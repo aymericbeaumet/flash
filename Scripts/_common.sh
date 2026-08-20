@@ -269,6 +269,20 @@ assemble_app() {
         done
       fi
     done
+    # Interpreted plugins import their shared per-language SDK relatively
+    # (../_<language>_flash_plugin/flashplugin.*), so those SDK sources ship
+    # beside the plugin dirs. Compiled-language SDKs (rust/go/zig/swift) are
+    # linked at build time and never ship.
+    local sdk_dir sdk_file
+    for sdk_dir in _python_flash_plugin _ruby_flash_plugin _typescript_flash_plugin; do
+      mkdir -p "$plugins_dest/$sdk_dir"
+      for sdk_file in "$PROJECT_DIR/Plugins/$sdk_dir"/*.py \
+        "$PROJECT_DIR/Plugins/$sdk_dir"/*.rb \
+        "$PROJECT_DIR/Plugins/$sdk_dir"/*.ts; do
+        [[ -e "$sdk_file" ]] || continue
+        cp "$sdk_file" "$plugins_dest/$sdk_dir/"
+      done
+    done
   else
     if [[ -d "$PROJECT_DIR/Plugins" ]]; then
       ln -sfn "$PROJECT_DIR/Plugins" "$STAGING_PATH/Contents/Resources/Plugins"
