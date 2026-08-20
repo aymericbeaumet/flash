@@ -124,6 +124,87 @@ extension AppMonitor {
     }
   }
 
+  /// `--scope=screen`: the explicit slower path. Walks the front-most
+  /// interaction surface of every app on the focused window's screen —
+  /// front-to-back z-order, capped at `maxApps` — through the same provider
+  /// chains, the multi-surface visible-region finalizer, and one shared
+  /// prefix-free assignment. Never deadline-truncated: each app's walk either
+  /// completes or that app is dropped whole, so the complete-or-discard
+  /// determinism contract holds per surface. The prepared model stays
+  /// focused-app-only; this path always walks fresh.
+  func discoverScreenAsync(
+    focusedContext: AppContext,
+    maxApps: Int = 6,
+    completion: @escaping ([AssignedHint]) -> Void
+  ) {
+    let cfg = snapshotConfig()
+    let primaryH = primaryScreenHeight()
+    // Screen + per-app contexts resolve on the calling (main) thread —
+    // NSScreen and NSRunningApplication are main-affine.
+    let screenFrame =
+      NSScreen.screens.first { $0.frame.intersects(focusedContext.frontWindowFrame) }?.frame
+      ?? NSScreen.main?.frame ?? .zero
+    let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+    let entries = WindowSnapshot.entries(from: info, primaryH: primaryH)
+      .filter { $0.pid != getpid() }
+    var orderedPids: [pid_t] = []
+    for entry in entries
+    where entry.layer == 0 && entry.nsBounds.intersects(screenFrame)
+      && !orderedPids.contains(entry.pid)
+    {
+      orderedPids.append(entry.pid)
+      if orderedPids.count >= maxApps { break }
+    }
+    var contexts: [AppContext] = []
+    for pid in orderedPids {
+      guard let app = NSRunningApplication(processIdentifier: pid),
+        app.activationPolicy == .regular || pid == focusedContext.processID,
+        let surface = WindowSnapshot.topApplicationWindowFrame(entries: entries, focusedPid: pid)
+      else { continue }
+      contexts.append(
+        AppContext(
+          bundleIdentifier: app.bundleIdentifier ?? "",
+          processID: pid,
+          runningApp: app,
+          frontWindowFrame: surface,
+          allScreensFrame: focusedContext.allScreensFrame))
+    }
+    guard !contexts.isEmpty else {
+      completion([])
+      return
+    }
+    let visibleByPid = WindowSnapshot.buildMultiSurfaceVisibleRegions(
+      entries: entries, focusedPids: Set(contexts.map(\.processID)))
+    axQueue.async { [weak self] in
+      guard let self else { return }
+      self.configureRuntime(for: cfg)
+      var merged: [JumpTarget] = []
+      var walked = 0
+      for context in contexts {
+        guard let regions = visibleByPid[context.processID], !regions.isEmpty else { continue }
+        let plan = self.registry.hintProviderPlan(for: context)
+        let providers = plan.uncachedProviders + plan.preparedProviders
+        guard !providers.isEmpty else { continue }
+        let collection = Self.collectFocusedTargets(context: context, providers: providers)
+        let finalized = TargetFinalizer.finalizeWithStats(
+          collection.targets, visibleRegions: regions)
+        merged.append(contentsOf: finalized.targets)
+        walked += 1
+      }
+      let hints = self.assignTargets(merged, cfg: cfg)
+      FlashLog.debug(
+        "[discover] screen_scope complete",
+        fields: [
+          "apps": "\(walked)",
+          "candidate_apps": "\(contexts.count)",
+          "targets": "\(merged.count)",
+          "hints": "\(hints.count)",
+        ])
+      DispatchQueue.main.async { completion(hints) }
+    }
+  }
+
   private struct DiscoveryResult {
     let targets: [JumpTarget]
     let hints: [AssignedHint]

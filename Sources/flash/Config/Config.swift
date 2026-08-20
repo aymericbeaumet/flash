@@ -918,6 +918,8 @@ extension URLCommand {
     switch self {
     case .mouseTarget(let command):
       return verb("mouse_target", command.argTokens)
+    case .mouseTargetScreen(let command):
+      return verb("mouse_target", ["--scope=screen"] + command.argTokens)
     case .mouseGrid(let command):
       return verb("mouse_grid", command.argTokens)
     case .mouseRepeat: return verb("mouse_repeat")

@@ -20,6 +20,9 @@ import FlashCore
 
 enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
+  /// `mouse_target --scope=screen`: hints across the front-most surface of
+  /// every app on the focused window's screen (click variants only).
+  case mouseTargetScreen(MouseCommand)
   case mouseGrid(MouseCommand)
   /// Re-click the last Flash-committed click point (sticky click). Repeats
   /// honour normal-mode counts (`3` + mapped key clicks three times).
@@ -348,7 +351,19 @@ final class URLEventHandler: NSObject {
   /// `AppDelegate` switches exhaustively over `URLCommand` so the compiler
   /// flags any missed wiring.
   private static let commands: [String: (VerbArgs) -> URLCommand?] = [
-    "mouse_target": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
+    "mouse_target": { a in
+      switch a.value("scope") {
+      case nil, "app":
+        return mouseCommand(a).map(URLCommand.mouseTarget)
+      case "screen":
+        // Screen scope is click-only: session flags (drag/select/multi/…)
+        // assume a single-app session.
+        guard let command = mouseCommand(a), case .click = command else { return nil }
+        return .mouseTargetScreen(command)
+      default:
+        return nil
+      }
+    },
     // The grid IS the precision surface, so `--adjust` is a config error there.
     "mouse_grid": { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) },
     "mouse_snipe": { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) },

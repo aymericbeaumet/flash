@@ -606,6 +606,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     switch cmd {
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: nil)
+    case .mouseTargetScreen(let command):
+      activateScreenScopeHints(command)
     case .mouseGrid(let command):
       activateMouseGrid(command, contextOverride: nil)
     case .mouseRepeat:

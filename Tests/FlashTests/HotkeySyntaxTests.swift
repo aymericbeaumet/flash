@@ -274,6 +274,20 @@ final class HotkeySyntaxTests: XCTestCase {
       .mouseTarget(.search(.doubleClick, modifiers: [])))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--search"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--search", "--multi"]))
+    // Screen scope: click variants only, unknown scopes rejected.
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_target", "--scope=screen"])?.command,
+      .mouseTargetScreen(.click(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      parseMappingCommand(
+        argv: ["flash", "mouse_target", "--scope=screen", "--secondary"])?.command,
+      .mouseTargetScreen(.click(.rightClick, modifiers: [])))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--scope=screen", "--drag"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--scope=window"]))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_dock"])?.command, .mouseDock)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_statusbar"])?.command, .mouseStatusBar)
   }
 
   func testParseEnterCommandRestoreMode() {

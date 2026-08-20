@@ -143,6 +143,27 @@ final class DragSynthesisTests: XCTestCase {
     XCTAssertTrue(HintSearchInterpreter.filter(hints, query: "zzz").isEmpty)
   }
 
+  func testMultiSurfaceVisibleRegionsCoverEachPidsFrontSurface() {
+    // Front-to-back: pid 2's window partially covers pid 1's; pid 3 is fully
+    // hidden behind pid 1. Multi-surface regions must expose pid 1 minus the
+    // overlap, pid 2 whole, and pid 3 not at all.
+    let entries = [
+      WindowSnapshot.Entry(pid: 2, layer: 0, nsBounds: CGRect(x: 0, y: 0, width: 50, height: 100)),
+      WindowSnapshot.Entry(
+        pid: 1, layer: 0, nsBounds: CGRect(x: 0, y: 0, width: 100, height: 100)),
+      WindowSnapshot.Entry(
+        pid: 3, layer: 0, nsBounds: CGRect(x: 10, y: 10, width: 20, height: 20)),
+    ]
+    let regions = WindowSnapshot.buildMultiSurfaceVisibleRegions(
+      entries: entries, focusedPids: [1, 2, 3])
+    XCTAssertEqual(regions[2], [CGRect(x: 0, y: 0, width: 50, height: 100)])
+    XCTAssertEqual(regions[1], [CGRect(x: 50, y: 0, width: 50, height: 100)])
+    XCTAssertNil(regions[3])
+    // The single-pid build agrees on the focused surface.
+    let single = WindowSnapshot.build(entries: entries, focusedPid: 1)
+    XCTAssertEqual(single.visibleRegions[1], regions[1])
+  }
+
   func testAdjustmentApplySnapsClampsAndInterpolates() {
     let frame = CGRect(x: 100, y: 200, width: 200, height: 50)
     let center = CGPoint(x: 200, y: 225)

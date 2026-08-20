@@ -1063,6 +1063,8 @@ extension AppDelegate {
         restoreMode: restoreMode)
     case .mouseTarget(let command):
       activateMouseTarget(command, contextOverride: normalModeContext())
+    case .mouseTargetScreen(let command):
+      activateScreenScopeHints(command)
     case .mouseGrid(let command):
       activateMouseGrid(command, contextOverride: normalModeContext())
     case .mouseRepeat:

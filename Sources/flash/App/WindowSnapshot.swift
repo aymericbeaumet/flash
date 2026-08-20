@@ -141,6 +141,55 @@ struct WindowSnapshot {
       activeWindowFrame: activeWindowFrame)
   }
 
+  /// Multi-surface variant for screen-scope hints: the front-most interaction
+  /// surface of EVERY pid in `focusedPids` is hintable (occluded by all
+  /// higher-z windows); everything else purely occludes. Same painter's
+  /// algorithm, anchored-card promotion, and fragmentation guard as the
+  /// single-pid build.
+  static func buildMultiSurfaceVisibleRegions(
+    entries: [Entry],
+    focusedPids: Set<pid_t>
+  ) -> [pid_t: [CGRect]] {
+    var activeIndexes = Set<Int>()
+    for pid in focusedPids {
+      let layer0App = entries.filter { $0.pid == pid && $0.layer == 0 }.map(\.nsBounds)
+      for (idx, entry) in entries.enumerated()
+      where entry.pid == pid && isInteractionSurfaceLayer(entry.layer) {
+        if entry.layer == 0, isAnchoredCard(entry.nsBounds, amongLayer0App: layer0App) {
+          continue
+        }
+        activeIndexes.insert(idx)
+        break
+      }
+    }
+    var byPid: [pid_t: [CGRect]] = [:]
+    var occluders: [CGRect] = []
+    occluders.reserveCapacity(entries.count)
+    for (idx, entry) in entries.enumerated() {
+      if activeIndexes.contains(idx) {
+        var fragments: [CGRect] = [entry.nsBounds]
+        for occluder in occluders {
+          if fragments.isEmpty { break }
+          var next: [CGRect] = []
+          next.reserveCapacity(fragments.count * 2)
+          for frag in fragments {
+            subtract(frag, hole: occluder, into: &next)
+          }
+          if next.count > 32 {
+            fragments = next
+            break
+          }
+          fragments = next
+        }
+        if !fragments.isEmpty {
+          byPid[entry.pid, default: []].append(contentsOf: fragments)
+        }
+      }
+      occluders.append(entry.nsBounds)
+    }
+    return byPid
+  }
+
   static func topApplicationWindowFrame(entries: [Entry], focusedPid: pid_t) -> CGRect? {
     let layer0App = entries.filter { $0.pid == focusedPid && $0.layer == 0 }.map(\.nsBounds)
     return entries.first {

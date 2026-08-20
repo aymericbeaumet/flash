@@ -285,6 +285,49 @@ extension AppDelegate {
     }
   }
 
+  /// `mouse_target --scope=screen`: hints across the front-most surface of
+  /// every app on the focused window's screen. Runs the explicit slower path
+  /// (`discoverScreenAsync`) — the focused-app prepared model is never used,
+  /// and each app's walk completes whole or is dropped whole.
+  func activateScreenScopeHints(_ command: MouseCommand) {
+    if activationInFlight || !currentHints.isEmpty {
+      cancelOverlay()
+    }
+    guard let context = currentNonFlashContext() ?? normalModeContext() else {
+      FlashLog.debug("[screen_scope] no target app")
+      applyModeOverlay()
+      return
+    }
+    sourceAppPID = context.processID
+    pendingAction = command.action
+    pendingClickModifiers = command.modifiers
+    pendingHintCommitBehavior = .click
+    currentPrefix = ""
+    overlay.overlayConfig = config.overlay
+    overlay.debugConfig = config.debug
+    if !isAccessibilityTrusted() {
+      promptForAccessibility()
+      applyModeOverlay()
+      return
+    }
+    let myGen = activationLifecycle.begin()
+    applyModeOverlay()
+    monitor.discoverScreenAsync(focusedContext: context) { [weak self] hints in
+      guard let self else { return }
+      self.activationLifecycle.complete(token: myGen)
+      guard self.activationLifecycle.isCurrent(myGen) else { return }
+      guard !hints.isEmpty else {
+        FlashLog.debug("[screen_scope] no_targets")
+        self.applyModeOverlay()
+        return
+      }
+      self.currentHints = hints
+      self.currentPrefix = ""
+      self.overlay.display(hints: hints)
+      FlashLog.debug("[screen_scope] displayed hints=\(hints.count)")
+    }
+  }
+
   /// `scroll_target`: hint-label the focused window's scroll areas.
   /// Committing runs the `.moveMouse` behavior — the pointer lands inside the
   /// chosen area, and `Scroller.scrollWheelPoint` already prefers the cursor's
