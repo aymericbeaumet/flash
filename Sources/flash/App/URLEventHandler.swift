@@ -24,6 +24,8 @@ enum URLCommand: Hashable {
   /// Re-click the last Flash-committed click point (sticky click). Repeats
   /// honour normal-mode counts (`3` + mapped key clicks three times).
   case mouseRepeat
+  /// Freestyle keyboard cursor control (pointer mode).
+  case mousePointer
   case normalMode
   case insertMode
   case lockedInsertMode
@@ -332,6 +334,7 @@ final class URLEventHandler: NSObject {
     "mouse_snipe": { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) },
     "mouse_click": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
     "mouse_repeat": { a in a.args.isEmpty ? .mouseRepeat : nil },
+    "mouse_pointer": { a in a.args.isEmpty ? .mousePointer : nil },
     "enter_normal_mode": { _ in .normalMode },
     "enter_insert_mode": { _ in .insertMode },
     "enter_locked_insert_mode": { _ in .lockedInsertMode },

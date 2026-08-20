@@ -386,6 +386,31 @@ extension OverlayPanel {
     adjustmentMarkerLayer.isHidden = true
   }
 
+  /// Present pointer mode: frame + order the panel (so tap capture stays
+  /// active — `keyboardCaptureIsActive` requires visibility), then draw the
+  /// cursor ring. Subsequent moves go through `movePointerMarker`.
+  func presentPointerMode(at point: CGPoint) {
+    pointerModeActive = true
+    applyPanelFrame(OverlayPanel.unionScreenFrame())
+    transientContentVisible = true
+    movePointerMarker(to: point)
+    captureKeyboardInput()
+  }
+
+  /// Pointer-mode feedback: a ring around the cursor, on the adjustment
+  /// marker layer (the two states are mutually exclusive).
+  func movePointerMarker(to point: CGPoint) {
+    let origin = frame.origin
+    let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+    let path = CGMutablePath()
+    path.addEllipse(in: CGRect(x: local.x - 11, y: local.y - 11, width: 22, height: 22))
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    adjustmentMarkerLayer.path = path
+    adjustmentMarkerLayer.isHidden = false
+    CATransaction.commit()
+  }
+
   func hide() {
     FlashLog.trace(
       "[overlay] hide transient=\(transientContentVisible) mode_badge=\(modeBadgeVisible) "
@@ -393,6 +418,7 @@ extension OverlayPanel {
     // Belt-and-suspenders: never leave the cursor hidden once the overlay is gone.
     showHintCursor()
     hideAdjustment()
+    pointerModeActive = false
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"

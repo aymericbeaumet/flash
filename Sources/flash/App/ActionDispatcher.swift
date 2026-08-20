@@ -343,6 +343,65 @@ enum ActionDispatcher {
     return true
   }
 
+  /// Pointer-mode movement: a visible cursor move that becomes a
+  /// `leftMouseDragged` while the drag toggle holds the button, so drop
+  /// targets track the gesture like a hardware drag.
+  @discardableResult
+  static func movePointer(to screenPoint: CGPoint, dragging: Bool) -> Bool {
+    guard dragging else { return moveCursor(to: screenPoint) }
+    let screenH = primaryScreenHeight()
+    let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
+    clickQueue.async {
+      let source = CGEventSource(stateID: .combinedSessionState)
+      let previous = CGEvent(source: source)?.location ?? cgPoint
+      CGWarpMouseCursorPosition(cgPoint)
+      CGAssociateMouseAndMouseCursorPosition(1)
+      guard
+        let event = CGEvent(
+          mouseEventSource: source, mouseType: .leftMouseDragged,
+          mouseCursorPosition: cgPoint, mouseButton: .left)
+      else { return }
+      event.setIntegerValueField(
+        .mouseEventDeltaX, value: Int64((cgPoint.x - previous.x).rounded()))
+      event.setIntegerValueField(
+        .mouseEventDeltaY, value: Int64((cgPoint.y - previous.y).rounded()))
+      event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
+      event.post(tap: .cghidEventTap)
+    }
+    return true
+  }
+
+  /// Press / release the primary button without its paired counterpart —
+  /// pointer mode's drag toggle. Tagged synthetic like every other event.
+  @discardableResult
+  static func pressPrimaryButton(at screenPoint: CGPoint) -> Bool {
+    postSingleButtonEvent(.leftMouseDown, at: screenPoint)
+  }
+
+  @discardableResult
+  static func releasePrimaryButton(at screenPoint: CGPoint) -> Bool {
+    postSingleButtonEvent(.leftMouseUp, at: screenPoint)
+  }
+
+  private static func postSingleButtonEvent(
+    _ type: CGEventType, at screenPoint: CGPoint
+  ) -> Bool {
+    let screenH = primaryScreenHeight()
+    let cgPoint = CGPoint(x: screenPoint.x, y: screenH - screenPoint.y)
+    clickQueue.async {
+      let source = CGEventSource(stateID: .combinedSessionState)
+      guard
+        let event = CGEvent(
+          mouseEventSource: source, mouseType: type, mouseCursorPosition: cgPoint,
+          mouseButton: .left)
+      else { return }
+      event.setIntegerValueField(.mouseEventClickState, value: 1)
+      event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
+      event.post(tap: .cghidEventTap)
+    }
+    return true
+  }
+
   /// Interpolated waypoints for a synthesized drag, excluding the start point
   /// and ending exactly on `to`. Roughly one waypoint per 40pt of travel,
   /// clamped to 2…`maxSteps` so short drags still produce a recognisable

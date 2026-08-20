@@ -257,6 +257,10 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--adjust"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--adjust", "--multi"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--adjust", "--drag"]))
+    // Pointer mode takes no arguments.
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_pointer"])?.command, .mousePointer)
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_pointer", "--secondary"]))
   }
 
   func testParseEnterCommandRestoreMode() {

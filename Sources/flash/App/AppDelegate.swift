@@ -593,6 +593,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateMouseGrid(command, contextOverride: nil)
     case .mouseRepeat:
       performMouseRepeat()
+    case .mousePointer:
+      enterPointerMode()
     case .normalMode:
       enterNormalMode()
     case .insertMode:

@@ -1,6 +1,7 @@
 import CoreGraphics
 import Darwin
 import FlashCore
+import Foundation
 
 /// The transient "hints are showing / mouse-grid in progress" content. Grouping
 /// these into one value means the session reset is a single assignment
@@ -33,6 +34,12 @@ struct HintSession {
   /// refined, and the current point the commit key will click.
   var adjustingHint: AssignedHint?
   var adjustPoint: CGPoint?
+  /// Pointer mode (`mouse_pointer`): freestyle cursor control session with
+  /// autorepeat acceleration bookkeeping and the drag-toggle button state.
+  var pointerModeActive = false
+  var pointerDragActive = false
+  var pointerMoveStreak = 0
+  var pointerLastMoveAt: Date?
 }
 
 /// The activation generation-token machine: the async-cancellation core that

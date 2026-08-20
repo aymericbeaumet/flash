@@ -431,7 +431,9 @@ extension AppDelegate {
 
   func applyModeOverlay(captureOverride: Bool? = nil) {
     let mode = modeStore.mode
-    let hasHints = !currentHints.isEmpty
+    // A pointer-mode session behaves exactly like a hint set being up: the
+    // transient overlay owns input (`.hints`) and NORMAL's own capture is off.
+    let hasHints = !currentHints.isEmpty || hintSession.pointerModeActive
     let inFlight = activationInFlight
     let suspended = nativeSurfaceSuspended || aboutWindowVisible
     let inputMode = mode.overlayInputMode(
@@ -1065,6 +1067,8 @@ extension AppDelegate {
       activateMouseGrid(command, contextOverride: normalModeContext())
     case .mouseRepeat:
       performMouseRepeat(repeatCount: repeatCount)
+    case .mousePointer:
+      enterPointerMode()
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()

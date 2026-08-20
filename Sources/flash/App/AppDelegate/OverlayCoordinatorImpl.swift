@@ -732,6 +732,29 @@ extension AppDelegate {
     }
   }
 
+  /// Insert-handoff tail for a pointer-mode committing click — identical to
+  /// the mouse-grid commit outcome handling.
+  func resolvePointerModeInsert(pid: pid_t?, handoffToken: UInt64?) {
+    resolvePointerInsertMode(
+      pid: pid,
+      reason: .pointerClick,
+      handoffToken: handoffToken,
+      intent: .mouseGridClick
+    ) { [weak self] outcome in
+      guard let self else { return }
+      switch outcome {
+      case .enteredInsert:
+        self.clearPointerInsertHandoff(
+          reason: "pointer_mode_entered_insert", token: handoffToken)
+      case .recaptureNormal:
+        self.clearPointerInsertHandoff(
+          reason: "pointer_mode_stayed_normal", token: handoffToken)
+        guard self.flashMode == .normal else { return }
+        self.scheduleNormalModeRecapture()
+      }
+    }
+  }
+
   /// Replay the last Flash-committed click (`mouse_repeat`). Re-raises the
   /// owning app first so the click is interpreted, then posts `repeatCount`
   /// identical clicks. Stays in the current mode — repeating a click is

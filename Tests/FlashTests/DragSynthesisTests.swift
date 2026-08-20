@@ -69,6 +69,40 @@ final class DragSynthesisTests: XCTestCase {
     XCTAssertNil(cmd(0, "a"))
   }
 
+  func testPointerModeInterpreterKeymap() {
+    func cmd(
+      _ keyCode: UInt16, _ chars: String? = nil,
+      flags: NSEvent.ModifierFlags = []
+    ) -> PointerModeCommand? {
+      PointerModeInterpreter.command(
+        keyCode: keyCode, charactersIgnoringModifiers: chars, modifierFlags: flags)
+    }
+    XCTAssertEqual(cmd(53), .exit)
+    XCTAssertEqual(cmd(12, "q"), .exit)
+    XCTAssertEqual(cmd(36), .commitClick)
+    XCTAssertEqual(cmd(49), .commitClick)
+    XCTAssertEqual(cmd(4, "h"), .move(dx: -1, dy: 0, fine: false))
+    XCTAssertEqual(cmd(38, "j"), .move(dx: 0, dy: -1, fine: false))
+    XCTAssertEqual(cmd(40, "k"), .move(dx: 0, dy: 1, fine: false))
+    XCTAssertEqual(cmd(37, "l", flags: .shift), .move(dx: 1, dy: 0, fine: true))
+    XCTAssertEqual(cmd(126), .move(dx: 0, dy: 1, fine: false))
+    XCTAssertEqual(cmd(46, "m"), .clickLeft)
+    XCTAssertEqual(cmd(43, ","), .clickMiddle)
+    XCTAssertEqual(cmd(47, "."), .clickRight)
+    XCTAssertEqual(cmd(9, "v"), .toggleDrag)
+    XCTAssertNil(cmd(0, "a"))
+  }
+
+  func testPointerModeStepAcceleratesAndClamps() {
+    XCTAssertEqual(PointerModeInterpreter.step(streak: 0, fine: false), 12)
+    XCTAssertEqual(PointerModeInterpreter.step(streak: 3, fine: false), 30)
+    XCTAssertEqual(PointerModeInterpreter.step(streak: 100, fine: false), 90)
+    XCTAssertEqual(PointerModeInterpreter.step(streak: 100, fine: true), 2)
+    XCTAssertEqual(PointerModeInterpreter.nextStreak(previous: 4, sinceLastMoveMs: 80), 5)
+    XCTAssertEqual(PointerModeInterpreter.nextStreak(previous: 4, sinceLastMoveMs: 500), 0)
+    XCTAssertEqual(PointerModeInterpreter.nextStreak(previous: 4, sinceLastMoveMs: nil), 0)
+  }
+
   func testAdjustmentApplySnapsClampsAndInterpolates() {
     let frame = CGRect(x: 100, y: 200, width: 200, height: 50)
     let center = CGPoint(x: 200, y: 225)

@@ -290,10 +290,15 @@ extension AppDelegate {
       finishCommandLineInteraction(reason: "cancel_overlay")
       return
     }
+    // A cancelled pointer-mode drag must never leave the primary button held.
+    if hintSession.pointerDragActive {
+      _ = ActionDispatcher.releasePrimaryButton(at: NSEvent.mouseLocation)
+      hintSession.pointerDragActive = false
+    }
     // Dismissal observers fire on every app switch, including when no
     // transient overlay is up. Even then, re-render the mode badge so
     // normal mode can immediately recapture keyboard input.
-    if currentHints.isEmpty && !activationInFlight {
+    if currentHints.isEmpty && !activationInFlight && !hintSession.pointerModeActive {
       overlay.hide()
       let captureOverride =
         Self.pointerInsertHandoffRecaptureSuppressionIsActive(

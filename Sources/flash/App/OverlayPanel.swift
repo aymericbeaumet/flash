@@ -145,6 +145,9 @@ final class OverlayPanel: NSPanel {
   /// True while an `--adjust` hint session is in its post-match phase; routes
   /// hints-mode keys to `HintAdjustmentInterpreter` instead of prefix typing.
   var adjustmentActive = false
+  /// True while a `mouse_pointer` session owns the keyboard; routes hints-mode
+  /// keys to `PointerModeInterpreter`.
+  var pointerModeActive = false
   var modeBadgeVisible = false
   var statusAppText = ""
   var modeBadgeText = "INSERT"
@@ -605,6 +608,8 @@ protocol OverlayCoordinator: AnyObject {
   /// One keystroke of the `--adjust` sub-state (edge snap, interpolation,
   /// commit, cancel). Only called while `adjustmentActive` is set.
   func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers)
+  /// One keystroke of pointer mode. Only called while `pointerModeActive`.
+  func overlayDidPointer(_ command: PointerModeCommand)
   /// `<space>` in the hints surface. Commits the mouse grid's centre cell
   /// and returns `true` when mouse-grid mode is active; returns `false`
   /// otherwise so the panel falls back to cancelling the overlay.

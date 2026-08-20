@@ -35,6 +35,73 @@ enum HintAdjustmentCommand: Equatable {
   case cancel
 }
 
+/// One keystroke of pointer mode (`mouse_pointer`): freestyle cursor control
+/// with vim movement, in-place clicks, a drag toggle, and a committing click.
+enum PointerModeCommand: Equatable {
+  /// Unit direction in NSScreen coordinates (+y is up); `fine` (shift held)
+  /// moves by the 2px precision step regardless of acceleration.
+  case move(dx: Int, dy: Int, fine: Bool)
+  case clickLeft
+  case clickMiddle
+  case clickRight
+  /// Return / space: left click, then exit pointer mode with the same INSERT
+  /// handoff as a mouse-grid commit.
+  case commitClick
+  /// `v`: press the primary button in place; the next toggle releases it —
+  /// movement in between is a drag.
+  case toggleDrag
+  case exit
+}
+
+enum PointerModeInterpreter {
+  static func command(
+    keyCode: UInt16,
+    charactersIgnoringModifiers: String?,
+    modifierFlags: NSEvent.ModifierFlags
+  ) -> PointerModeCommand? {
+    let fine = modifierFlags.contains(.shift)
+    switch keyCode {
+    case 53:  // escape
+      return .exit
+    case 36, 76, 49:  // return / keypad enter / space
+      return .commitClick
+    case 123: return .move(dx: -1, dy: 0, fine: fine)
+    case 124: return .move(dx: 1, dy: 0, fine: fine)
+    case 125: return .move(dx: 0, dy: -1, fine: fine)
+    case 126: return .move(dx: 0, dy: 1, fine: fine)
+    default:
+      break
+    }
+    guard let char = charactersIgnoringModifiers?.lowercased().first else { return nil }
+    switch char {
+    case "h": return .move(dx: -1, dy: 0, fine: fine)
+    case "l": return .move(dx: 1, dy: 0, fine: fine)
+    case "j": return .move(dx: 0, dy: -1, fine: fine)
+    case "k": return .move(dx: 0, dy: 1, fine: fine)
+    case "m": return .clickLeft
+    case ",": return .clickMiddle
+    case ".": return .clickRight
+    case "v": return .toggleDrag
+    case "q": return .exit
+    default: return nil
+    }
+  }
+
+  /// Pixels for one movement keystroke. Sustained autorepeat accelerates from
+  /// the base step toward the cap; shift always moves by the 2px fine step.
+  static func step(streak: Int, fine: Bool) -> CGFloat {
+    if fine { return 2 }
+    return min(12 + CGFloat(max(0, streak)) * 6, 90)
+  }
+
+  /// A movement within `windowMs` of the previous one (autorepeat cadence)
+  /// extends the acceleration streak; a pause resets it.
+  static func nextStreak(previous: Int, sinceLastMoveMs: Int?, windowMs: Int = 120) -> Int {
+    guard let ms = sinceLastMoveMs, ms <= windowMs else { return 0 }
+    return previous + 1
+  }
+}
+
 enum HintAdjustmentInterpreter {
   /// Key → adjustment command. Nil for keys the sub-state ignores (they are
   /// still swallowed — the adjustment session owns the keyboard like hints
@@ -290,6 +357,19 @@ extension OverlayPanel {
     if inputMode == .commandLine { return false }
     if inputMode == .candidateFinder {
       return handleCandidateFinderKeyEvent(event)
+    }
+
+    // Pointer mode owns every key while active — same total-ownership rule as
+    // the adjustment sub-state below.
+    if pointerModeActive {
+      if let command = PointerModeInterpreter.command(
+        keyCode: event.keyCode,
+        charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+      {
+        coordinator.overlayDidPointer(command)
+      }
+      return true
     }
 
     // The `--adjust` sub-state owns every key once a hint has matched —
