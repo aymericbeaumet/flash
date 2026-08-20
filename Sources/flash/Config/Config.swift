@@ -1022,6 +1022,12 @@ extension MouseCommand {
     switch self {
     case .move:
       return ["--move"]
+    case .drag(let modifiers):
+      var tokens = ["--drag"]
+      if !modifiers.isEmpty {
+        tokens.append("--modifiers=\(modifiers.argumentValue)")
+      }
+      return tokens
     case .click(let action, let modifiers):
       var tokens: [String]
       switch action {

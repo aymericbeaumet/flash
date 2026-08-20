@@ -21,6 +21,14 @@ struct HintSession {
   var sourceAppPID: pid_t?
   var mouseGridRegion: MouseGrid.Region?
   var mouseGridDepth: Int = 0
+  /// Two-phase gestures (`--drag`): the point the first commit selected,
+  /// nil while the session is still choosing it. Cleared with the session,
+  /// so Escape mid-gesture can't leak a grab point into the next activation.
+  var dragSourcePoint: CGPoint?
+  /// The full-extent grid region captured at activation, so a grid drag can
+  /// restart the destination phase from the top instead of the drilled-down
+  /// cell the source phase ended on.
+  var mouseGridInitialRegion: MouseGrid.Region?
 }
 
 /// The activation generation-token machine: the async-cancellation core that

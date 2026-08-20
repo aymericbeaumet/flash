@@ -11,7 +11,8 @@ extension AppDelegate {
   // MARK: Activation
 
   func activateMouseTarget(_ command: MouseCommand, contextOverride: AppContext?) {
-    let behavior: HintCommitBehavior = command.isMove ? .moveMouse : .click
+    let behavior: HintCommitBehavior =
+      command.isDrag ? .drag : command.isMove ? .moveMouse : .click
     activate(
       action: command.action,
       commitBehavior: behavior,
@@ -30,11 +31,13 @@ extension AppDelegate {
       alphabet: config.resolvedAlphabet.chars,
       steps: steps)
     mouseGridRegion = region
+    mouseGridInitialRegion = region
     mouseGridDepth = 0
     sourceAppPID = context?.processID
     pendingAction = command.action
     pendingClickModifiers = command.modifiers
-    pendingHintCommitBehavior = command.isMove ? .mouseGridMove : .mouseGridClick
+    pendingHintCommitBehavior =
+      command.isDrag ? .mouseGridDrag : command.isMove ? .mouseGridMove : .mouseGridClick
     currentPrefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug

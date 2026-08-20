@@ -229,6 +229,103 @@ enum ActionDispatcher {
   /// and drop them instead of recursing.
   static let syntheticMouseEventTag: Int64 = 0x46_4C_53_44  // "FLSD"
 
+  /// Synthesize a continuous left-button drag from `from` to `to` (both
+  /// NSScreen, bottom-left origin). Unlike clicks, the cursor stays visible
+  /// for the whole gesture — drop targets light up from the interpolated
+  /// `leftMouseDragged` stream exactly as they do for a hardware drag — and it
+  /// is left at the drop point. `modifiers` are held on every event so
+  /// option-drag copy / cmd-drag semantics reach the receiving app.
+  ///
+  /// `completion` runs on the main thread after the gesture has been posted.
+  @discardableResult
+  static func synthesizeDrag(
+    from: CGPoint,
+    to: CGPoint,
+    modifiers: ClickModifiers = [],
+    completion: (() -> Void)? = nil
+  ) -> Bool {
+    let screenH = primaryScreenHeight()
+    clickQueue.async {
+      postSynthesizedDrag(from: from, to: to, screenH: screenH, modifiers: modifiers)
+      if let completion { DispatchQueue.main.async(execute: completion) }
+    }
+    return true
+  }
+
+  /// The blocking body of `synthesizeDrag`, run on `clickQueue`.
+  private static func postSynthesizedDrag(
+    from: CGPoint,
+    to: CGPoint,
+    screenH: CGFloat,
+    modifiers: ClickModifiers
+  ) {
+    let start = CGPoint(x: from.x, y: screenH - from.y)
+    let end = CGPoint(x: to.x, y: screenH - to.y)
+    let source = CGEventSource(stateID: .combinedSessionState)
+    let flags = modifiers.cgEventFlags
+    let previous = CGEvent(source: source)?.location ?? start
+
+    func post(_ type: CGEventType, at point: CGPoint, deltaFrom: CGPoint? = nil) {
+      guard
+        let event = CGEvent(
+          mouseEventSource: source, mouseType: type, mouseCursorPosition: point,
+          mouseButton: .left)
+      else {
+        FlashLog.warn("[drag] could not create CGEvent for synthesized drag")
+        return
+      }
+      event.flags = flags
+      if let deltaFrom {
+        event.setIntegerValueField(
+          .mouseEventDeltaX, value: Int64((point.x - deltaFrom.x).rounded()))
+        event.setIntegerValueField(
+          .mouseEventDeltaY, value: Int64((point.y - deltaFrom.y).rounded()))
+      }
+      event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMouseEventTag)
+      event.post(tap: .cghidEventTap)
+    }
+
+    CGWarpMouseCursorPosition(start)
+    CGAssociateMouseAndMouseCursorPosition(1)
+    post(.mouseMoved, at: start, deltaFrom: previous)
+    usleep(20_000)
+    post(.leftMouseDown, at: start)
+    // Dwell before the first movement: apps distinguish a drag from a sloppy
+    // click by press duration + movement threshold, and Finder-style
+    // spring-loading arms on the initial hold.
+    usleep(60_000)
+    var last = start
+    for waypoint in dragWaypoints(from: start, to: end) {
+      post(.leftMouseDragged, at: waypoint, deltaFrom: last)
+      last = waypoint
+      usleep(12_000)
+    }
+    // Dwell at the destination so hover-sensitive drop targets register the
+    // pointer before the release commits the drop.
+    usleep(60_000)
+    post(.leftMouseUp, at: end)
+    FlashLog.trace(
+      "[drag] synthesize from=(\(Int(from.x)),\(Int(from.y))) "
+        + "to=(\(Int(to.x)),\(Int(to.y))) flags=\(flags.rawValue)")
+  }
+
+  /// Interpolated waypoints for a synthesized drag, excluding the start point
+  /// and ending exactly on `to`. Roughly one waypoint per 40pt of travel,
+  /// clamped to 2…`maxSteps` so short drags still produce a recognisable
+  /// movement stream and long ones stay under ~200ms of dragged events.
+  /// Pure and orientation-agnostic — operates on whatever coordinate space
+  /// its inputs share.
+  static func dragWaypoints(from: CGPoint, to: CGPoint, maxSteps: Int = 16) -> [CGPoint] {
+    let dx = to.x - from.x
+    let dy = to.y - from.y
+    let distance = (dx * dx + dy * dy).squareRoot()
+    let steps = max(2, min(maxSteps, Int(distance / 40)))
+    return (1...steps).map { step in
+      let fraction = CGFloat(step) / CGFloat(steps)
+      return CGPoint(x: from.x + dx * fraction, y: from.y + dy * fraction)
+    }
+  }
+
   /// Move the visible pointer to `screenPoint` without clicking.
   ///
   /// A warp alone is invisible to the app under the pointer, so the

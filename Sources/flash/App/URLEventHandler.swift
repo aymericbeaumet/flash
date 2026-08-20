@@ -131,23 +131,34 @@ struct AlertCommand: Hashable {
 enum MouseCommand: Hashable {
   case click(JumpAction, modifiers: ClickModifiers)
   case move
+  /// Two-phase drag: the first commit picks the grab point, the second picks
+  /// the drop point, then the dispatcher synthesizes one continuous
+  /// down→dragged…→up gesture. Modifiers are held for the whole gesture
+  /// (option-drag copy, cmd-drag move, …).
+  case drag(modifiers: ClickModifiers)
 
   var action: JumpAction {
     switch self {
     case .click(let action, _): return action
-    case .move: return .leftClick
+    case .move, .drag: return .leftClick
     }
   }
 
   var modifiers: ClickModifiers {
     switch self {
     case .click(_, let modifiers): return modifiers
+    case .drag(let modifiers): return modifiers
     case .move: return []
     }
   }
 
   var isMove: Bool {
     if case .move = self { return true }
+    return false
+  }
+
+  var isDrag: Bool {
+    if case .drag = self { return true }
     return false
   }
 }
@@ -372,8 +383,8 @@ final class URLEventHandler: NSObject {
   ]
 
   static let usageText = """
-    flash mouse_target [--secondary|--double|--middle|--triple|--move] [--modifiers=cmd+ctrl+alt+shift]
-    flash mouse_grid [--secondary|--double|--middle|--triple|--move] [--modifiers=cmd+ctrl+alt+shift]
+    flash mouse_target [--secondary|--double|--middle|--triple|--move|--drag] [--modifiers=cmd+ctrl+alt+shift]
+    flash mouse_grid [--secondary|--double|--middle|--triple|--move|--drag] [--modifiers=cmd+ctrl+alt+shift]
     flash enter_normal_mode
     flash enter_insert_mode
     flash enter_locked_insert_mode
@@ -520,13 +531,15 @@ private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
   } else {
     modifiers = []
   }
-  if a.bool("move") { return modifiers.isEmpty ? .move : nil }
+  let drag = a.bool("drag")
+  if a.bool("move") { return (modifiers.isEmpty && !drag) ? .move : nil }
   let variants: [JumpAction] = [
     a.bool("secondary") ? .rightClick : nil,
     a.bool("double") ? .doubleClick : nil,
     a.bool("middle") ? .middleClick : nil,
     a.bool("triple") ? .tripleClick : nil,
   ].compactMap { $0 }
+  if drag { return variants.isEmpty ? .drag(modifiers: modifiers) : nil }
   if variants.count > 1 { return nil }
   return .click(variants.first ?? .leftClick, modifiers: modifiers)
 }

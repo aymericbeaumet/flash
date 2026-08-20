@@ -52,8 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case click
     case copyURL
     case moveMouse
+    case drag
     case mouseGridClick
     case mouseGridMove
+    case mouseGridDrag
   }
 
   struct MovementEntry {
@@ -326,6 +328,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var mouseGridDepth: Int {
     get { hintSession.mouseGridDepth }
     set { hintSession.mouseGridDepth = newValue }
+  }
+  var dragSourcePoint: CGPoint? {
+    get { hintSession.dragSourcePoint }
+    set { hintSession.dragSourcePoint = newValue }
+  }
+  var mouseGridInitialRegion: MouseGrid.Region? {
+    get { hintSession.mouseGridInitialRegion }
+    set { hintSession.mouseGridInitialRegion = newValue }
   }
   var movementCurrent: MovementEntry?
   var movementBackStack: [MovementEntry] = []

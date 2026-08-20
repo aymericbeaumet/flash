@@ -116,6 +116,8 @@ flash mouse_target --double              # double-click
 flash mouse_target --middle              # middle-click
 flash mouse_target --triple              # triple-click
 flash mouse_target --move                # move the pointer only
+flash mouse_target --drag                # pick a grab point, then a drop point
+flash mouse_grid --drag                  # drag between two grid positions
 flash mouse_grid                         # target any screen position
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window

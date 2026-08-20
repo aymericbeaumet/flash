@@ -247,7 +247,8 @@ extension AppDelegate {
   func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
     guard
       pendingHintCommitBehavior == .mouseGridClick
-        || pendingHintCommitBehavior == .mouseGridMove,
+        || pendingHintCommitBehavior == .mouseGridMove
+        || pendingHintCommitBehavior == .mouseGridDrag,
       let grid = mouseGridRegion?.grid
     else {
       return false
@@ -271,9 +272,12 @@ extension AppDelegate {
   }
 
   private func commit(hint: AssignedHint, clickModifiers: ClickModifiers) {
-    if pendingHintCommitBehavior == .mouseGridClick || pendingHintCommitBehavior == .mouseGridMove {
+    switch pendingHintCommitBehavior {
+    case .mouseGridClick, .mouseGridMove, .mouseGridDrag:
       commitMouseGridCell(hint: hint, clickModifiers: clickModifiers)
       return
+    case .click, .copyURL, .moveMouse, .drag:
+      break
     }
     if pendingHintCommitBehavior == .copyURL {
       if let url = hint.target.url {
@@ -294,6 +298,24 @@ extension AppDelegate {
       clearHintSessionState()
       activationLifecycle.supersede()
       applyModeOverlay()
+      return
+    }
+    if pendingHintCommitBehavior == .drag {
+      let chipRect = OverlayPanel.chipFrame(
+        for: hint, fontSize: CGFloat(config.overlay.fontSize))
+      let point =
+        hint.target.resolveClickPoint?() ?? CGPoint(x: chipRect.midX, y: chipRect.midY)
+      if let source = dragSourcePoint {
+        performDragCommit(from: source, to: point, clickModifiers: clickModifiers)
+      } else {
+        // Phase 1: remember the grab point and keep the same hint set up for
+        // the drop point — no re-walk, no overlay teardown, just an un-filter.
+        dragSourcePoint = point
+        currentPrefix = ""
+        overlay.filter(prefix: "", hints: currentHints)
+        FlashLog.trace(
+          "[commit] drag_source=(\(Int(point.x)),\(Int(point.y))) awaiting_destination")
+      }
       return
     }
 
@@ -526,6 +548,24 @@ extension AppDelegate {
     }
 
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
+    if pendingHintCommitBehavior == .mouseGridDrag {
+      if let source = dragSourcePoint {
+        performDragCommit(from: source, to: point, clickModifiers: clickModifiers)
+      } else if let initial = mouseGridInitialRegion {
+        // Phase 1: remember the grab point and restart the grid from its full
+        // extent so the drop point can land anywhere, not only inside the
+        // drilled-down source cell.
+        dragSourcePoint = point
+        mouseGridDepth = 0
+        currentPrefix = ""
+        displayMouseGridRegion(initial, depth: 0)
+        FlashLog.trace(
+          "[commit] grid_drag_source=(\(Int(point.x)),\(Int(point.y))) awaiting_destination")
+      } else {
+        cancelOverlay()
+      }
+      return
+    }
     let shouldMove = pendingHintCommitBehavior == .mouseGridMove
     let priorPID = sourceAppPID
     let resolvedClickModifiers = pendingClickModifiers.union(clickModifiers)
@@ -571,6 +611,49 @@ extension AppDelegate {
         case .recaptureNormal:
           self.clearPointerInsertHandoff(reason: "mouse_grid_stayed_normal", token: handoffToken)
           guard self.flashMode == .normal else { return }
+          self.scheduleNormalModeRecapture()
+        }
+      }
+    }
+  }
+
+  /// Phase 2 of a `--drag` commit: both points are known, so tear the session
+  /// down and synthesize the continuous drag gesture. A drag manipulates the
+  /// pointer without typing intent, so it never enters INSERT — NORMAL just
+  /// recaptures once the gesture has been posted.
+  private func performDragCommit(
+    from source: CGPoint,
+    to destination: CGPoint,
+    clickModifiers: ClickModifiers
+  ) {
+    let modifiers = pendingClickModifiers.union(clickModifiers)
+    let wasNormalMode = flashMode == .normal
+    let targetApp = sourceAppPID.flatMap { NSRunningApplication(processIdentifier: $0) }
+    FlashLog.trace(
+      "[commit] drag from=(\(Int(source.x)),\(Int(source.y))) "
+        + "to=(\(Int(destination.x)),\(Int(destination.y))) "
+        + "modifiers=cmd:\(modifiers.contains(.command)) "
+        + "shift:\(modifiers.contains(.shift)) ctrl:\(modifiers.contains(.control)) "
+        + "alt:\(modifiers.contains(.option))")
+    if wasNormalMode {
+      applyModeOverlay(captureOverride: false)
+    }
+    overlay.hide()
+    if let targetApp {
+      RunningApplicationActivation.activate(targetApp, options: [])
+    }
+    // Same re-entry gate as a click commit: hold activation closed across the
+    // gesture so a fresh hotkey can't start a walk mid-drag.
+    activationInFlight = true
+    activationLifecycle.supersede()
+    clearHintSessionState()
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
+      ActionDispatcher.synthesizeDrag(
+        from: source, to: destination, modifiers: modifiers
+      ) { [weak self] in
+        guard let self else { return }
+        self.activationInFlight = false
+        if wasNormalMode, self.flashMode == .normal {
           self.scheduleNormalModeRecapture()
         }
       }
