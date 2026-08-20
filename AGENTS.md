@@ -646,7 +646,9 @@ debug server with live logs, resolved config, focused app state, and plugin
 state, bound to `debug.http_inspector_host` (`localhost` / `127.0.0.1` / `::1`)
 and `debug.http_inspector_port`. Resolved plugin setting keys may be shown, but
 their values stay redacted. Keep it dense and diagnostic-focused; do not turn
-it into a preference UI.
+it into a preference UI. Inspector mapping rows are diagnostic output and may
+be identical across contributing mapping sources; render them unkeyed (or key
+by occurrence), never by a supposedly unique scope/key/action tuple.
 
 Performance behaviours are **not configurable.** The prepared AX model,
 the concurrent subtree walk, and the parallel deferred action-name
@@ -675,6 +677,11 @@ When any `[mode.all.mappings]` mapping resolves to `["flash", "enter_normal_mode
 - always displays the status bar using configured `mode.labels`, including in the help view;
 - extends the `help_show` modal with ACTION / NORMAL / INSERT columns.
 
+`app_previous` / `app_next` traverse one circular app ring. Observed app
+activations own its MRU order; when a fresh resident has no usable history, the
+ring is seeded deterministically from regular running apps. A failed macOS
+activation must leave the ring at its prior position so the next key can retry.
+
 The status bar is rendered from `FlashStatusBarTemplate`: one template string can read Flash SDK state (`mode`, `active_app_name`, `active_bundle_identifier`, `date`), tmux-compatible variables, plugin state (`PluginStatusSnapshot` counts and `status.updated` segment values), or command/script output. The default template shows the mode cell on the left and the date on the right. Command-backed sections are stale-while-refresh: keep the previous successful value until a replacement is available, and do not blank a section during refresh. The controller is source-driven where possible: mode, focused-app, plugin, and clock changes publish directly; command/script sections get their own poll only when the template contains them. The top bar content is inset from the screen edges for rounded display corners. When the Flash status bar is enabled, Flash keeps the macOS top-band reservation in place, uses each screen's native reserved top-band height, falls back to the measured native menu-bar reveal height when macOS reports no top-band reservation, stays below the native menu/status bar reveal, and the `window_move` verb computes slots/remaps inside that reserved usable frame. Reading `NSStatusBar.system.thickness` and temporarily measuring `NSMenu.menuBarHeight` are allowed only for this geometry fallback; do not create additional persistent `NSStatusItem`s (the single sanctioned one lives in `StatusItemController.swift`; see hard rule 1), menu extras, app menus, or any other native menu/status UI.
 
 `["flash", "enter_normal_mode"]` is the only accepted normal-mode entry. `[mode.normal.mappings]` and `[mode.insert.mappings]` mappings to it do not enable advanced mode by themselves. When no `[mode.all.mappings]` advanced-mode mapping is configured, the status bar is hidden and help stays simple while still listing the normal map.
@@ -699,7 +706,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|move=1]
 
 **Flashlight source narrowing.** `:flashlight @<source> <query>` restricts the pool to one source — `@<source>` is the only structured filter, no `@<field>:<pattern>` form. `NormalModeDispatcher.candidateFinderSourceFilter` parses the first `@<token>` in the query; `CandidateFinder.candidateMatchesSourceFilter` matches it against `candidate.source` by exact name or prefix on dotted labels (`@firefox` matches `firefox.tabs`). A confirmed `@<source> ` with no residual text lists every candidate from that source — `:flashlight @emojis.glyphs ` enumerates the whole emoji set, otherwise excluded from the default pool. The flag is ignored in `:emojis` mode.
 
-App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, `alert_show message=... [duration=seconds style=standard|error]`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, and `quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
+App/system verbs include: `enter_normal_mode`, `enter_insert_mode`, `enter_command_mode`, `alert_show message=... [duration=seconds style=standard|error]`, `alert_dismiss`, `hints_dismiss`, `app_open name=...`, `window_move ...`, `help_show`, `plugins`, `about`, and `quit`. Plugin actions also become command-line commands through their registered `command` field, e.g. `:spotify pause`.
 
 **Plugin commands can raise a window.** A plugin's `command.invoke` result may include `{ "ok": true, "target_pid": <pid> }`. When present, Flash activates that app (raising its window) after the command succeeds and records the jump into the movement history, so `ctrl-o` / `ctrl-i` replay it like any other navigation. This is how the tmux plugin's jump commands work: `:tmux session <name>` and `:tmux window <session:index>` route `switch-client` to the discovered local or remote backend, then return the exact terminal pid/window metadata hosting that backend. Bind them to a key with `["flash", "plugin_command", "--command=tmux", "--subcommand=window", "--args=main:1"]` (the `args` value is split on spaces). `target_pid` is optional — commands that don't move focus omit it.
 

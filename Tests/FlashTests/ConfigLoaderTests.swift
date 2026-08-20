@@ -112,13 +112,18 @@ final class ConfigLoaderTests: XCTestCase {
       c.mode.normal.first(where: { $0.key == key("]a") })?.action.command,
       .appNext)
     for rawKey in [
-      "[t", "]t", "[h", "]h", "[b", "]b", "[B", "]B", "[m", "]m", "[e", "]e", "[a",
-      "]a", "[w", "]w", "[[", "]]",
+      "[t", "]t", "[h", "]h", "]b", "[B", "]B", "[m", "]m", "[e", "]e", "[a", "]a",
+      "[w", "]w",
     ] {
       XCTAssertEqual(
         c.mode.normal.first(where: { $0.key == key(rawKey) })?.repeatsOnFinalKey,
         true,
         "expected default bracket mapping \(rawKey) to repeat")
+    }
+    for rawKey in ["[[", "]]", "[b", "T"] {
+      XCTAssertNil(
+        c.mode.normal.first(where: { $0.key == key(rawKey) }),
+        "expected removed default mapping \(rawKey) to stay unbound")
     }
     XCTAssertEqual(c.mode.labels.normal, "NORMAL")
     XCTAssertEqual(c.mode.labels.insert, "INSERT")

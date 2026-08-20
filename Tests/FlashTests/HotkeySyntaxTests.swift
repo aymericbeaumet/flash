@@ -329,6 +329,7 @@ final class HotkeySyntaxTests: XCTestCase {
 
   func testParseFlashPlugins() {
     XCTAssertEqual(parseMappingCommand(argv: ["flash", "plugins"])?.command, .showPlugins)
+    XCTAssertEqual(parseMappingCommand(argv: ["flash", "about"])?.command, .showAbout)
     let action = parseMappingCommand(argv: [
       "flash", "plugin_command", "--command=spotify", "--subcommand=pause", "--args=quiet",
     ])

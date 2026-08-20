@@ -473,10 +473,8 @@ struct Config {
         // `H`/`L`.
         ("[h", .flashCommand(.historyBack)),
         ("]h", .flashCommand(.historyForward)),
-        // `[b`/`]b` — Vim "buffer" prev/next. In a desktop context the
-        // closest analogue is a browser/terminal tab, so this aliases
-        // `[t`/`]t` directly.
-        ("[b", .flashCommand(.tabPrev)),
+        // `]b` — Vim "buffer next". In a desktop context the closest
+        // analogue is the next browser/terminal tab, so this aliases `]t`.
         ("]b", .flashCommand(.tabNext)),
         // `[B`/`]B` — Vim first/last buffer. Aliases `g^`/`g$` (tab
         // first/last).
@@ -501,10 +499,6 @@ struct Config {
         // keystroke fallback delivers for any non-terminal app, and
         // terminals (no close-tab history) return `.unhandled`.
         ("X", .flashCommand(.tabReopen)),
-        // Vimium `T` searches open tabs. Flash's nearest analogue is the
-        // flashlight switcher (its default pool is location-only: apps,
-        // tabs, tmux windows, …), so `T` opens it pre-seeded.
-        ("T", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
         // No default ⌘-based bindings: the system/browser ⌘ chords
         // (⌘tab, ⌘1–9, ⌘R, ⌘[ / ⌘], ⌘⇧[ / ⌘⇧], ⌘T, ⌘W, ⌘N, ⌘F) are left to the
         // OS / focused app. Their vim-style siblings cover the same actions in
@@ -601,10 +595,6 @@ struct Config {
         ("p", .flashCommand(.paste(register: nil))),
         // `yy` yanks the current URL/location (Vimium `yy`).
         ("yy", .flashCommand(.copyURL)),
-        // Follow the next / previous resource — Vimium's `]]` / `[[`
-        // pagination-link follow, generalized to plugin resources.
-        ("]]", .flashCommand(.resourceNext)),
-        ("[[", .flashCommand(.resourcePrevious)),
         ("t", .flashCommand(.tabNew)),
         ("/", .flashCommand(.find)),
         ("<leader><space>", .flashCommand(.enterCommand(input: "flashlight ", restoreMode: false))),
@@ -994,6 +984,7 @@ extension URLCommand {
       if let topic, !topic.isEmpty { return verb("help_show", [kv("topic", topic)]) }
       return verb("help_show")
     case .showPlugins: return verb("plugins")
+    case .showAbout: return verb("about")
     case .dismissHints: return verb("hints_dismiss")
     case .quit: return verb("quit")
     case .openApp(let name): return verb("app_open", [kv("name", name)])

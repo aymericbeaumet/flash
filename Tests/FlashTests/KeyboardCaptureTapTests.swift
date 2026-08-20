@@ -77,6 +77,16 @@ final class KeyboardCaptureTapTests: XCTestCase {
       KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .candidateFinder))
   }
 
+  func testNativeSurfaceAlwaysOwnsKeyboard() {
+    for inputMode: OverlayInputMode in [.normal, .hints, .commandLine, .candidateFinder] {
+      XCTAssertFalse(
+        KeyboardCaptureTap.shouldSwallow(
+          flashMode: .normal,
+          inputMode: inputMode,
+          nativeSurfaceOwnsKeyboard: true))
+    }
+  }
+
   func testInsertModeNeverSwallows() {
     // INSERT is invisible to the tap regardless of overlay input mode — keys
     // flow straight to the focused app.

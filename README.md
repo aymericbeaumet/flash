@@ -85,7 +85,7 @@ Normal mode includes familiar bindings such as `f` for primary hint clicks, `F` 
 :flashlight @system.actions
 ```
 
-Bare arithmetic, unit conversions, and currency conversions are answered inline. Use `:plugins` to inspect bundled integrations and their status.
+Bare arithmetic, unit conversions, and currency conversions are answered inline. Use `:plugins` to inspect bundled integrations and their status, or `:about` to open the About Flash window.
 
 The bundled tmux source automatically merges every attached local server with
 remote tmux sessions launched through SSH or Mosh. It discovers terminal apps,
@@ -120,6 +120,7 @@ flash window_move --position=lefthalf    # tile the focused window
 flash enter_command_mode                 # open the command line
 flash help_show                          # show built-in help
 flash plugins                            # inspect plugins
+flash about                              # open the About Flash window
 flash quit                               # stop the resident app
 ```
 

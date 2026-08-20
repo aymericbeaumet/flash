@@ -428,7 +428,7 @@ extension AppDelegate {
     let mode = modeStore.mode
     let hasHints = !currentHints.isEmpty
     let inFlight = activationInFlight
-    let suspended = nativeSurfaceSuspended
+    let suspended = nativeSurfaceSuspended || aboutWindowVisible
     let inputMode = mode.overlayInputMode(
       hasHints: hasHints, activationInFlight: inFlight, nativeSurfaceSuspended: suspended)
     // A native-surface suspension forces capture off even when a caller passes
@@ -460,6 +460,10 @@ extension AppDelegate {
   }
 
   func scheduleNormalModeRecapture(delaysMs: [Int] = AppDelegate.normalModeRecaptureDelaysMs) {
+    guard !aboutWindowVisible else {
+      FlashLog.trace("[mode] recapture_skip reason=about_window")
+      return
+    }
     if Self.contextMenuInteractionRecaptureSuppressionIsActive(
       until: contextMenuInteractionRecaptureSuppressedUntil)
     {
@@ -509,6 +513,17 @@ extension AppDelegate {
         FlashLog.trace("[mode] recapture_apply token=\(token) delay=\(delayMs)")
         self.applyModeOverlay(captureOverride: true)
       }
+    }
+  }
+
+  func aboutWindowVisibilityDidChange(_ visible: Bool) {
+    guard aboutWindowVisible != visible else { return }
+    aboutWindowVisible = visible
+    normalModeRecaptureToken &+= 1
+    cancelNormalModeCaptureRecovery(reason: "about_window")
+    applyModeOverlay()
+    if !visible, flashMode == .normal {
+      scheduleNormalModeRecapture()
     }
   }
 
@@ -956,7 +971,7 @@ extension AppDelegate {
 
   static func normalModeCommandMayChangeKeyboardFocus(_ command: URLCommand) -> Bool {
     switch command {
-    case .openApp, .pluginCommand, .pluginVerb, .appPrev, .appNext,
+    case .openApp, .pluginCommand, .pluginVerb, .appPrev, .appNext, .showAbout,
       .movementBack, .movementForward, .quitApp, .saveAndQuit:
       return true
     case .sendKey(_, _, let flagsRawValue):
@@ -1104,6 +1119,8 @@ extension AppDelegate {
       showHelp(topic: topic)
     case .showPlugins:
       openDebugDashboard(tab: "plugins")
+    case .showAbout:
+      handleURLCommand(command)
     case .showAlert, .dismissAlert, .dismissHints, .quit, .openApp, .pluginCommand, .moveWindow,
       .pluginVerb:
       handleURLCommand(command)
@@ -2580,6 +2597,8 @@ extension AppDelegate {
       openDebugDashboard(tab: "logs")
     case .commands:
       openDebugDashboard(tab: "commands")
+    case .about:
+      handleURLCommand(.showAbout)
     }
   }
 
@@ -3236,11 +3255,14 @@ extension AppDelegate {
       return
     }
     if let current = appCurrent, current == pid { return }
+    var ordered = appBackStack
     if let current = appCurrent {
-      if appBackStack.last != current {
-        appBackStack.append(current)
-      }
+      ordered.append(current)
     }
+    ordered.append(contentsOf: appForwardStack.reversed())
+    ordered.removeAll { $0 == pid }
+    ordered.append(pid)
+    appBackStack = Array(ordered.dropLast())
     appCurrent = pid
     appForwardStack.removeAll(keepingCapacity: true)
   }

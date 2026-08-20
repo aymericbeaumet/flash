@@ -37,6 +37,16 @@
 <div class="plugins" class:has-detail={selected}>
   <div class="list">
     <table>
+      <colgroup>
+        <col class="id-column" />
+        <col class="state-column" />
+        <col class="cpu-column" />
+        <col class="ram-column" />
+        <col class="pid-column" />
+        <col class="heartbeat-column" />
+        <col class="commands-column" />
+        <col class="origin-column" />
+      </colgroup>
       <thead>
         <tr>
           <th>ID</th>
@@ -55,14 +65,14 @@
             class:selected={p.id === selectedID}
             onclick={() => (selectedID = p.id === selectedID ? null : p.id)}
           >
-            <td>{p.id} <span class="dim">{p.version}</span></td>
+            <td title={`${p.id} ${p.version}`}>{p.id} <span class="dim">{p.version}</span></td>
             <td><span class="badge {stateClass(p.state)}">{p.state}</span></td>
             <td>{percent(p.cpu_percent)}</td>
             <td>{bytes(p.memory_bytes)}</td>
             <td>{p.pid ?? "—"}</td>
             <td>{p.heartbeat_age_ms != null ? `${p.heartbeat_age_ms}ms` : "—"}</td>
             <td>{p.command_count ?? 0}</td>
-            <td>{p.origin ?? "—"}</td>
+            <td title={p.origin ?? "—"}>{p.origin ?? "—"}</td>
           </tr>
         {/each}
         {#if plugins.length === 0}
@@ -127,13 +137,24 @@
   table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
   }
+  .id-column { width: 25%; }
+  .state-column { width: 12%; }
+  .cpu-column { width: 8%; }
+  .ram-column { width: 10%; }
+  .pid-column { width: 8%; }
+  .heartbeat-column { width: 10%; }
+  .commands-column { width: 7%; }
+  .origin-column { width: 20%; }
   th,
   td {
     padding: 3px 8px;
     border-bottom: 1px solid var(--border-soft);
     text-align: left;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   th {
     color: var(--accent);

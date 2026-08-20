@@ -405,8 +405,7 @@ leader = "\\"
 "]h" = { action = ["flash", "history_forward"], repeat = true }
 "[t" = { action = ["flash", "tab_previous"], repeat = true }
 "]t" = { action = ["flash", "tab_next"], repeat = true }
-# Vim buffer aliases map naturally onto desktop tabs.
-"[b" = { action = ["flash", "tab_previous"], repeat = true }
+# Vim's next-buffer alias maps naturally onto desktop tabs.
 "]b" = { action = ["flash", "tab_next"], repeat = true }
 "[B" = { action = ["flash", "tab_first"], repeat = true }
 "]B" = { action = ["flash", "tab_last"], repeat = true }
@@ -414,9 +413,6 @@ leader = "\\"
 # of gT/gt.
 "J" = ["flash", "tab_previous"]
 "K" = ["flash", "tab_next"]
-# Vimium ]]/[[ — follow the next/previous resource (pagination links).
-"]]" = { action = ["flash", "resource_next"], repeat = true }
-"[[" = { action = ["flash", "resource_previous"], repeat = true }
 # Reorder the current tab. In tmux this swap-windows; in browsers there
 # is no portable equivalent so the mapping is a no-op.
 "[m" = { action = ["flash", "tab_move_previous"], repeat = true }
@@ -431,9 +427,6 @@ leader = "\\"
 # Restore the most recently closed tab. Vimium binds this to X; browsers
 # receive ⌘⇧T; tmux has no closed-window history so it returns "unhandled".
 "X" = ["flash", "tab_reopen"]
-# Vimium T searches open tabs — Flash opens the flashlight switcher
-# (its default pool is location-only: apps, tabs, tmux windows, …).
-"T" = ["flash", "enter_command_mode", "--input=:flashlight "]
 # No default ⌘-based bindings: the system/browser ⌘ chords (⌘Tab, ⌘R,
 # ⌘⇧T, ⌘F, …) are left to the OS / focused app, and their vim-style
 # siblings above cover the same actions in normal mode. Uncomment to
@@ -442,7 +435,7 @@ leader = "\\"
 # "cmd+shift+tab" = ["flash", "app_previous"]
 # "cmd+r" = ["flash", "app_reload"]                  # ≈ r
 # "cmd+shift+r" = ["flash", "app_reload", "--force"] # ≈ R
-# "cmd+shift+t" = ["flash", "tab_reopen"]            # ≈ T
+# "cmd+shift+t" = ["flash", "tab_reopen"]            # ≈ X
 # "cmd+f" = ["flash", "app_find"]                    # ≈ /
 # The bundled tmux source registers no mappings; terminals can send their
 # native tmux prefix bindings directly for zero-round-trip pane/window actions.

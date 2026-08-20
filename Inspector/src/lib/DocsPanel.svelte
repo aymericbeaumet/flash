@@ -137,6 +137,7 @@
   }
   .topics {
     min-height: 0;
+    min-width: 0;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     border-right: 1px solid var(--border);
@@ -160,6 +161,10 @@
     align-items: flex-start;
     gap: 1px;
     text-align: left;
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    min-height: 38px;
     padding: 5px 8px;
     border-radius: 5px;
     border: 1px solid transparent;
@@ -174,6 +179,7 @@
   }
   .t-title {
     color: var(--text);
+    overflow-wrap: anywhere;
   }
   .topics button.active .t-title {
     color: var(--accent);
@@ -181,10 +187,12 @@
   .t-name {
     font-size: 10px;
     color: var(--muted);
+    overflow-wrap: anywhere;
   }
   .content {
     overflow: auto;
     min-height: 0;
+    min-width: 0;
     padding: 18px 26px 60px;
   }
   .doc-body {

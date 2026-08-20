@@ -90,6 +90,7 @@ enum URLCommand: Hashable {
   case dismissAlert
   case showUsage(topic: String?)
   case showPlugins
+  case showAbout
   case dismissHints
   case quit
   case openApp(name: String)
@@ -348,6 +349,7 @@ final class URLEventHandler: NSObject {
     "alert_dismiss": { _ in .dismissAlert },
     "help_show": { a in .showUsage(topic: a.value("topic")) },
     "plugins": { _ in .showPlugins },
+    "about": { _ in .showAbout },
     "hints_dismiss": { _ in .dismissHints },
     "quit": { _ in .quit },
     "app_open": { a in
@@ -422,6 +424,7 @@ final class URLEventHandler: NSObject {
     flash tab_new
     flash alert_show --message=<text> [--duration=<seconds>] [--style=standard|error]
     flash alert_dismiss
+    flash about
     flash hints_dismiss
     flash app_open --name=<app>
     flash window_move --position=<slot> --screen=<n>

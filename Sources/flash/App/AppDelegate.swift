@@ -369,6 +369,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// re-established (recapture or any mode transition). Keeps `overlay.inputMode`
   /// and the badge's capture flag from drifting away from the mode.
   var nativeSurfaceSuspended = false
+  var aboutWindowVisible = false
   var normalModePendingCommandToken: UInt64 = 0
   var clipboardMonitor: ClipboardMonitor?
   var powerSourceMonitor: PowerSourceMonitor?
@@ -510,6 +511,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     overlay.statusBarActionHandler = { [weak self] name in
       self?.performStatusBarClickAction(named: name)
     }
+    statusItemController.aboutVisibilityDidChange = { [weak self] visible in
+      self?.aboutWindowVisibilityDidChange(visible)
+    }
 
     let dispatch: (URLCommand) -> Void = { [weak self] cmd in
       self?.handleURLCommand(cmd)
@@ -588,6 +592,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       showHelp(topic: topic)
     case .showPlugins:
       openDebugDashboard(tab: "plugins")
+    case .showAbout:
+      statusItemController.showAbout()
     case .dismissHints:
       cancelOverlay()
     case .quit:
@@ -1008,6 +1014,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         enterInsertMode(reason: .secureInput, targetPID: currentNonFlashContext()?.processID)
       }
       return false
+    }
+    if nativeSurfaceSuspended || aboutWindowVisible {
+      return KeyboardCaptureTap.shouldSwallow(
+        flashMode: flashMode,
+        inputMode: overlay.inputMode,
+        nativeSurfaceOwnsKeyboard: true)
     }
     // INSERT is otherwise transparent so typing flows to the focused app. But a
     // modified chord bound to an active mapping (`[mode.all]` / `[mode.insert]`)

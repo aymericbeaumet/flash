@@ -43,8 +43,10 @@ final class KeyboardCaptureTap {
     modifierFlags: CGEventFlags = [],
     hasMapping: Bool = false,
     isPassthroughKey: Bool = false,
-    passthroughModifierFlags: CGEventFlags = []
+    passthroughModifierFlags: CGEventFlags = [],
+    nativeSurfaceOwnsKeyboard: Bool = false
   ) -> Bool {
+    guard !nativeSurfaceOwnsKeyboard else { return false }
     guard flashMode == .normal else { return false }
     switch inputMode {
     case .normal:

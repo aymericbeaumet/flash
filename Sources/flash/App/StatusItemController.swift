@@ -9,6 +9,7 @@ import AppKit
 /// status bar APIs require it.
 final class StatusItemController: NSObject {
   private var statusItem: NSStatusItem?
+  var aboutVisibilityDidChange: ((Bool) -> Void)?
 
   func apply(enabled: Bool) {
     if enabled {
@@ -38,7 +39,7 @@ final class StatusItemController: NSObject {
   private var aboutPanel: NSWindow?
   private static let repoURL = URL(string: "https://github.com/aymericbeaumet/flash")!
 
-  @objc private func showAbout() {
+  @objc func showAbout() {
     // A small custom About panel instead of orderFrontStandardAboutPanel:
     // the standard panel's credit links don't reliably open in an
     // LSUIElement app, and a real button through NSWorkspace always does.
@@ -48,11 +49,9 @@ final class StatusItemController: NSObject {
     // .regular) so the user can Cmd-Tab back to it; the moment it closes
     // Flash returns to its headless accessory policy. This transient flip
     // is the sanctioned exception to the no-Dock-presence rule.
-    NSApp.setActivationPolicy(.regular)
-    NSApp.activate(ignoringOtherApps: true)
+    aboutVisibilityDidChange?(true)
     if let panel = aboutPanel {
-      panel.center()
-      panel.makeKeyAndOrderFront(nil)
+      presentAboutPanel(panel)
       return
     }
 
@@ -114,8 +113,6 @@ final class StatusItemController: NSObject {
     // anywhere else made the About window vanish. It should stay up until
     // explicitly closed.
     panel.hidesOnDeactivate = false
-    panel.center()
-    panel.makeKeyAndOrderFront(nil)
     NotificationCenter.default.addObserver(
       self, selector: #selector(aboutPanelWillClose(_:)),
       name: NSWindow.willCloseNotification, object: panel)
@@ -123,6 +120,20 @@ final class StatusItemController: NSObject {
       self, selector: #selector(aboutPanelResignedKey(_:)),
       name: NSWindow.didResignKeyNotification, object: panel)
     aboutPanel = panel
+    presentAboutPanel(panel)
+  }
+
+  private func presentAboutPanel(_ panel: NSWindow) {
+    NSApp.setActivationPolicy(.regular)
+    panel.center()
+    panel.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    panel.makeKeyAndOrderFront(nil)
+    DispatchQueue.main.async { [weak panel] in
+      guard let panel, panel.isVisible else { return }
+      NSApp.activate(ignoringOtherApps: true)
+      panel.makeKeyAndOrderFront(nil)
+    }
   }
 
   @objc private func aboutPanelResignedKey(_ note: Notification) {
@@ -136,6 +147,7 @@ final class StatusItemController: NSObject {
     // Leave the app switcher again — Flash is headless outside the About
     // window's lifetime.
     NSApp.setActivationPolicy(.accessory)
+    aboutVisibilityDidChange?(false)
   }
 
   @objc private func openRepo() {

@@ -10,45 +10,104 @@ import FlashCore
 
 extension AppDelegate {
   func navigateAppMRU(direction: NavigationDirection) {
-    var source: [pid_t]
-    var destination: [pid_t]
-    switch direction {
-    case .back:
-      source = appBackStack
-      destination = appForwardStack
-    case .forward:
-      source = appForwardStack
-      destination = appBackStack
-    }
     let flashBundleID = Bundle.main.bundleIdentifier
-    while let candidate = source.popLast() {
-      guard let app = NSRunningApplication(processIdentifier: candidate),
-        !app.isTerminated,
-        app.bundleIdentifier != flashBundleID
-      else { continue }
-      if let current = appCurrent, current != candidate {
-        destination.append(current)
-      }
-      switch direction {
-      case .back:
-        appBackStack = source
-        appForwardStack = destination
-      case .forward:
-        appForwardStack = source
-        appBackStack = destination
-      }
-      appNavigationTargetPID = candidate
-      appCurrent = candidate
-      preparePendingApplicationActivation(app, reason: "app_navigation")
-      RunningApplicationActivation.activate(app, options: [.activateAllWindows])
+    let available: (pid_t) -> Bool = { pid in
+      guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
+      return !app.isTerminated && app.bundleIdentifier != flashBundleID
+    }
+    let initialNavigation = Self.appMRUNavigation(
+      direction: direction,
+      current: appCurrent,
+      back: appBackStack,
+      forward: appForwardStack,
+      isAvailable: available)
+    if initialNavigation == nil, let current = appCurrent {
+      appBackStack = NSWorkspace.shared.runningApplications
+        .filter {
+          $0.processIdentifier != current
+            && !$0.isTerminated
+            && $0.activationPolicy == .regular
+            && $0.bundleIdentifier != flashBundleID
+        }
+        .sorted {
+          let lhsDate = $0.launchDate ?? .distantPast
+          let rhsDate = $1.launchDate ?? .distantPast
+          if lhsDate != rhsDate { return lhsDate < rhsDate }
+          return $0.processIdentifier < $1.processIdentifier
+        }
+        .map(\.processIdentifier)
+      appForwardStack.removeAll(keepingCapacity: true)
+      FlashLog.debug("[app_navigation] seeded running_apps=\(appBackStack.count)")
+    }
+
+    guard
+      let navigation = initialNavigation ?? Self.appMRUNavigation(
+        direction: direction,
+        current: appCurrent,
+        back: appBackStack,
+        forward: appForwardStack,
+        isAvailable: available),
+      let app = NSRunningApplication(processIdentifier: navigation.target)
+    else {
+      FlashLog.debug("[app_navigation] no target direction=\(direction)")
       return
     }
+
+    let previous = (
+      back: appBackStack,
+      forward: appForwardStack,
+      target: appNavigationTargetPID,
+      current: appCurrent)
+    appBackStack = navigation.back
+    appForwardStack = navigation.forward
+    appNavigationTargetPID = navigation.target
+    appCurrent = navigation.target
+    guard RunningApplicationActivation.activate(app, options: [.activateAllWindows]) else {
+      appBackStack = previous.back
+      appForwardStack = previous.forward
+      appNavigationTargetPID = previous.target
+      appCurrent = previous.current
+      FlashLog.warn(
+        "[app_navigation] activation failed direction=\(direction) pid=\(navigation.target)")
+      return
+    }
+    preparePendingApplicationActivation(app, reason: "app_navigation")
+  }
+
+  /// Treat the observed activation history as a ring. A normal activation
+  /// appends to `back`; navigation partitions that same ring around its target,
+  /// so either direction always has somewhere to go once two apps were seen.
+  static func appMRUNavigation(
+    direction: NavigationDirection,
+    current: pid_t?,
+    back: [pid_t],
+    forward: [pid_t],
+    isAvailable: (pid_t) -> Bool
+  ) -> (target: pid_t, back: [pid_t], forward: [pid_t])? {
+    guard let current else { return nil }
+
+    var ordered: [pid_t] = []
+    var seen = Set<pid_t>()
+    for pid in back + [current] + forward.reversed()
+    where isAvailable(pid) && seen.insert(pid).inserted
+    {
+      ordered.append(pid)
+    }
+    guard ordered.count > 1, let currentIndex = ordered.firstIndex(of: current) else {
+      return nil
+    }
+
+    let targetIndex: Int
     switch direction {
     case .back:
-      appBackStack = source
+      targetIndex = (currentIndex - 1 + ordered.count) % ordered.count
     case .forward:
-      appForwardStack = source
+      targetIndex = (currentIndex + 1) % ordered.count
     }
+    return (
+      target: ordered[targetIndex],
+      back: Array(ordered[..<targetIndex]),
+      forward: Array(ordered[ordered.index(after: targetIndex)...].reversed()))
   }
 
   func recordMovement(_ entry: MovementEntry, source: String) {

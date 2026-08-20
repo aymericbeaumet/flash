@@ -148,6 +148,50 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(repeatedNext.repeatAnchor, key("]a"))
   }
 
+  func testAppMRUNavigationSwitchesInEitherDirectionWithBackHistoryOnly() throws {
+    let available: Set<pid_t> = [10, 20]
+    let previous = try XCTUnwrap(
+      AppDelegate.appMRUNavigation(
+        direction: .back,
+        current: 20,
+        back: [10],
+        forward: [],
+        isAvailable: available.contains))
+    XCTAssertEqual(previous.target, 10)
+
+    let next = try XCTUnwrap(
+      AppDelegate.appMRUNavigation(
+        direction: .forward,
+        current: 20,
+        back: [10],
+        forward: [],
+        isAvailable: available.contains))
+    XCTAssertEqual(next.target, 10)
+  }
+
+  func testAppMRUNavigationCyclesAndSkipsUnavailableApps() throws {
+    let available: Set<pid_t> = [10, 30]
+    let previous = try XCTUnwrap(
+      AppDelegate.appMRUNavigation(
+        direction: .back,
+        current: 30,
+        back: [10, 20],
+        forward: [],
+        isAvailable: available.contains))
+    XCTAssertEqual(previous.target, 10)
+    XCTAssertEqual(previous.back, [])
+    XCTAssertEqual(previous.forward, [30])
+
+    let wrapped = try XCTUnwrap(
+      AppDelegate.appMRUNavigation(
+        direction: .back,
+        current: previous.target,
+        back: previous.back,
+        forward: previous.forward,
+        isAvailable: available.contains))
+    XCTAssertEqual(wrapped.target, 30)
+  }
+
   func testBracketTabMappingsRepeatOnFinalKey() {
     let cases: [(prefix: String, command: URLCommand)] = [
       ("[", .tabPrev),
@@ -2057,6 +2101,7 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCommand(":plugins reload extra"))
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":mappings"), .mappings)
     XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":map"), .mappings)
+    XCTAssertEqual(NormalModeDispatcher.commandLineCommand(":about"), .about)
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("q!!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("p!"))
     XCTAssertNil(NormalModeDispatcher.commandLineCommand("qu!it"))
@@ -2450,6 +2495,7 @@ final class NormalModeTests: XCTestCase {
     let plugins = try XCTUnwrap(context.items.first { $0.label == "plugins" })
     XCTAssertEqual(plugins.insertion, "plugins ")
     XCTAssertEqual(plugins.kind, .acceptsArgs)
+    XCTAssertTrue(context.items.contains { $0.label == "about" })
   }
 
   func testCommandLineCandidateQueryAcceptsFlashlight() {
@@ -2795,7 +2841,7 @@ final class NormalModeTests: XCTestCase {
       "flash mouse_target --modifiers=cmd+shift", "flash mouse_grid --modifiers=cmd+shift",
       "flash enter_command_mode --input=flashlight ", "flash mouse_target --secondary",
       "flash mouse_target --double", "flash mouse_grid", "flash history_back",
-      "flash history_forward", "flash resource_next", "flash resource_previous",
+      "flash history_forward",
       "flash app_previous", "flash app_next",
       "flash app_reload --force", "flash tab_select --index=1", "flash tab_new", "?",
     ] {

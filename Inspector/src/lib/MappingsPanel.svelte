@@ -37,11 +37,16 @@
   </div>
   <div class="list">
     <table>
+      <colgroup>
+        <col class="scope-column" />
+        <col class="key-column" />
+        <col />
+      </colgroup>
       <thead>
         <tr><th>Scope</th><th>Key</th><th>Action</th></tr>
       </thead>
       <tbody>
-        {#each filtered as r (r.scope + r.key + r.action)}
+        {#each filtered as r}
           <tr>
             <td><span class="scope {r.scope}">{r.scope}</span></td>
             <td><code>{r.key}</code></td>
@@ -72,7 +77,10 @@
     background: var(--panel);
   }
   .toolbar input {
+    flex: 1 1 360px;
     width: min(360px, 36vw);
+    min-width: 0;
+    max-width: 360px;
   }
   .leader {
     color: var(--muted);
@@ -92,6 +100,13 @@
   table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
+  }
+  .scope-column {
+    width: 90px;
+  }
+  .key-column {
+    width: 150px;
   }
   th,
   td {
@@ -132,6 +147,7 @@
   }
   .action {
     color: var(--muted);
+    overflow-wrap: anywhere;
   }
   .dim {
     color: var(--muted);
