@@ -136,11 +136,16 @@ enum MouseCommand: Hashable {
   /// down→dragged…→up gesture. Modifiers are held for the whole gesture
   /// (option-drag copy, cmd-drag move, …).
   case drag(modifiers: ClickModifiers)
+  /// Two-phase text selection: the first commit clicks to set the caret, the
+  /// second shift-clicks to extend the selection to that point — the standard
+  /// macOS gesture, so it works across line wraps and never turns into an
+  /// accidental drag of an existing selection.
+  case select(modifiers: ClickModifiers)
 
   var action: JumpAction {
     switch self {
     case .click(let action, _): return action
-    case .move, .drag: return .leftClick
+    case .move, .drag, .select: return .leftClick
     }
   }
 
@@ -148,6 +153,7 @@ enum MouseCommand: Hashable {
     switch self {
     case .click(_, let modifiers): return modifiers
     case .drag(let modifiers): return modifiers
+    case .select(let modifiers): return modifiers
     case .move: return []
     }
   }
@@ -159,6 +165,11 @@ enum MouseCommand: Hashable {
 
   var isDrag: Bool {
     if case .drag = self { return true }
+    return false
+  }
+
+  var isSelect: Bool {
+    if case .select = self { return true }
     return false
   }
 }
@@ -383,8 +394,8 @@ final class URLEventHandler: NSObject {
   ]
 
   static let usageText = """
-    flash mouse_target [--secondary|--double|--middle|--triple|--move|--drag] [--modifiers=cmd+ctrl+alt+shift]
-    flash mouse_grid [--secondary|--double|--middle|--triple|--move|--drag] [--modifiers=cmd+ctrl+alt+shift]
+    flash mouse_target [--secondary|--double|--middle|--triple|--move|--drag|--select] [--modifiers=cmd+ctrl+alt+shift]
+    flash mouse_grid [--secondary|--double|--middle|--triple|--move|--drag|--select] [--modifiers=cmd+ctrl+alt+shift]
     flash enter_normal_mode
     flash enter_insert_mode
     flash enter_locked_insert_mode
@@ -532,7 +543,9 @@ private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
     modifiers = []
   }
   let drag = a.bool("drag")
-  if a.bool("move") { return (modifiers.isEmpty && !drag) ? .move : nil }
+  let select = a.bool("select")
+  if drag && select { return nil }
+  if a.bool("move") { return (modifiers.isEmpty && !drag && !select) ? .move : nil }
   let variants: [JumpAction] = [
     a.bool("secondary") ? .rightClick : nil,
     a.bool("double") ? .doubleClick : nil,
@@ -540,6 +553,7 @@ private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
     a.bool("triple") ? .tripleClick : nil,
   ].compactMap { $0 }
   if drag { return variants.isEmpty ? .drag(modifiers: modifiers) : nil }
+  if select { return variants.isEmpty ? .select(modifiers: modifiers) : nil }
   if variants.count > 1 { return nil }
   return .click(variants.first ?? .leftClick, modifiers: modifiers)
 }

@@ -309,6 +309,40 @@ enum ActionDispatcher {
         + "to=(\(Int(to.x)),\(Int(to.y))) flags=\(flags.rawValue)")
   }
 
+  /// Synthesize a two-click text selection: a plain click at `from` sets the
+  /// caret, then a shift-click at `to` extends the selection — the standard
+  /// macOS gesture, so it survives line wraps and never turns into an
+  /// accidental drag of an already-selected range (which a down→dragged→up
+  /// stream starting on a selection would). `modifiers` are applied to both
+  /// clicks; shift is forced onto the second. The cursor is left at `to`.
+  ///
+  /// `completion` runs on the main thread after both clicks have been posted.
+  @discardableResult
+  static func synthesizeSelection(
+    from: CGPoint,
+    to: CGPoint,
+    modifiers: ClickModifiers = [],
+    completion: (() -> Void)? = nil
+  ) -> Bool {
+    let screenH = primaryScreenHeight()
+    let frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "nil"
+    clickQueue.async {
+      postSynthesizedClick(
+        screenPoint: from, screenH: screenH, action: .leftClick, modifiers: modifiers,
+        preserveCursor: false, frontmostBundleID: frontmostBundleID)
+      // Let the caret placement settle before extending — text views that are
+      // still processing the first click interpret an instant shift-click as
+      // one sloppy gesture instead of an extension.
+      usleep(120_000)
+      postSynthesizedClick(
+        screenPoint: to, screenH: screenH, action: .leftClick,
+        modifiers: modifiers.union(.shift),
+        preserveCursor: false, frontmostBundleID: frontmostBundleID)
+      if let completion { DispatchQueue.main.async(execute: completion) }
+    }
+    return true
+  }
+
   /// Interpolated waypoints for a synthesized drag, excluding the start point
   /// and ending exactly on `to`. Roughly one waypoint per 40pt of travel,
   /// clamped to 2…`maxSteps` so short drags still produce a recognisable

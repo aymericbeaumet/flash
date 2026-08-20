@@ -189,6 +189,12 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(argv: ["flash", "mouse_target", "--drag", "--modifiers=alt"])?.command,
       .mouseTarget(.drag(modifiers: .option)))
     XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_target", "--select"])?.command,
+      .mouseTarget(.select(modifiers: [])))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_grid", "--select"])?.command,
+      .mouseGrid(.select(modifiers: [])))
+    XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--move"])?.command,
       .mouseTarget(.move))
     XCTAssertEqual(
@@ -218,10 +224,14 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--middle", "--secondary"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--triple", "--double"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--middle", "--triple"]))
-    // Drag composes with modifiers only — not with move or click variants.
+    // Drag/select compose with modifiers only — not with move, click
+    // variants, or each other.
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--drag", "--move"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--drag", "--double"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--drag", "--secondary"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--select", "--move"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--select", "--triple"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--drag", "--select"]))
   }
 
   func testParseEnterCommandRestoreMode() {

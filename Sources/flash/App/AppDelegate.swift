@@ -53,9 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case copyURL
     case moveMouse
     case drag
+    case select
     case mouseGridClick
     case mouseGridMove
     case mouseGridDrag
+    case mouseGridSelect
   }
 
   struct MovementEntry {

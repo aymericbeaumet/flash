@@ -1028,6 +1028,12 @@ extension MouseCommand {
         tokens.append("--modifiers=\(modifiers.argumentValue)")
       }
       return tokens
+    case .select(let modifiers):
+      var tokens = ["--select"]
+      if !modifiers.isEmpty {
+        tokens.append("--modifiers=\(modifiers.argumentValue)")
+      }
+      return tokens
     case .click(let action, let modifiers):
       var tokens: [String]
       switch action {

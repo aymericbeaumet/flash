@@ -273,10 +273,10 @@ extension AppDelegate {
 
   private func commit(hint: AssignedHint, clickModifiers: ClickModifiers) {
     switch pendingHintCommitBehavior {
-    case .mouseGridClick, .mouseGridMove, .mouseGridDrag:
+    case .mouseGridClick, .mouseGridMove, .mouseGridDrag, .mouseGridSelect:
       commitMouseGridCell(hint: hint, clickModifiers: clickModifiers)
       return
-    case .click, .copyURL, .moveMouse, .drag:
+    case .click, .copyURL, .moveMouse, .drag, .select:
       break
     }
     if pendingHintCommitBehavior == .copyURL {
@@ -300,21 +300,22 @@ extension AppDelegate {
       applyModeOverlay()
       return
     }
-    if pendingHintCommitBehavior == .drag {
+    if pendingHintCommitBehavior == .drag || pendingHintCommitBehavior == .select {
       let chipRect = OverlayPanel.chipFrame(
         for: hint, fontSize: CGFloat(config.overlay.fontSize))
       let point =
         hint.target.resolveClickPoint?() ?? CGPoint(x: chipRect.midX, y: chipRect.midY)
       if let source = dragSourcePoint {
-        performDragCommit(from: source, to: point, clickModifiers: clickModifiers)
+        performTwoPhaseCommit(from: source, to: point, clickModifiers: clickModifiers)
       } else {
-        // Phase 1: remember the grab point and keep the same hint set up for
-        // the drop point — no re-walk, no overlay teardown, just an un-filter.
+        // Phase 1: remember the anchor point and keep the same hint set up for
+        // the second point — no re-walk, no overlay teardown, just an un-filter.
         dragSourcePoint = point
         currentPrefix = ""
         overlay.filter(prefix: "", hints: currentHints)
         FlashLog.trace(
-          "[commit] drag_source=(\(Int(point.x)),\(Int(point.y))) awaiting_destination")
+          "[commit] two_phase_anchor=(\(Int(point.x)),\(Int(point.y))) "
+            + "behavior=\(pendingHintCommitBehavior) awaiting_second_point")
       }
       return
     }
@@ -548,19 +549,21 @@ extension AppDelegate {
     }
 
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
-    if pendingHintCommitBehavior == .mouseGridDrag {
+    if pendingHintCommitBehavior == .mouseGridDrag || pendingHintCommitBehavior == .mouseGridSelect
+    {
       if let source = dragSourcePoint {
-        performDragCommit(from: source, to: point, clickModifiers: clickModifiers)
+        performTwoPhaseCommit(from: source, to: point, clickModifiers: clickModifiers)
       } else if let initial = mouseGridInitialRegion {
-        // Phase 1: remember the grab point and restart the grid from its full
-        // extent so the drop point can land anywhere, not only inside the
+        // Phase 1: remember the anchor point and restart the grid from its full
+        // extent so the second point can land anywhere, not only inside the
         // drilled-down source cell.
         dragSourcePoint = point
         mouseGridDepth = 0
         currentPrefix = ""
         displayMouseGridRegion(initial, depth: 0)
         FlashLog.trace(
-          "[commit] grid_drag_source=(\(Int(point.x)),\(Int(point.y))) awaiting_destination")
+          "[commit] grid_two_phase_anchor=(\(Int(point.x)),\(Int(point.y))) "
+            + "behavior=\(pendingHintCommitBehavior) awaiting_second_point")
       } else {
         cancelOverlay()
       }
@@ -617,20 +620,24 @@ extension AppDelegate {
     }
   }
 
-  /// Phase 2 of a `--drag` commit: both points are known, so tear the session
-  /// down and synthesize the continuous drag gesture. A drag manipulates the
-  /// pointer without typing intent, so it never enters INSERT — NORMAL just
-  /// recaptures once the gesture has been posted.
-  private func performDragCommit(
+  /// Phase 2 of a `--drag` / `--select` commit: both points are known, so tear
+  /// the session down and synthesize the gesture — a continuous drag, or a
+  /// click + shift-click selection. Both manipulate the pointer without typing
+  /// intent, so they never enter INSERT — NORMAL just recaptures once the
+  /// gesture has been posted.
+  private func performTwoPhaseCommit(
     from source: CGPoint,
     to destination: CGPoint,
     clickModifiers: ClickModifiers
   ) {
+    let isSelect =
+      pendingHintCommitBehavior == .select || pendingHintCommitBehavior == .mouseGridSelect
     let modifiers = pendingClickModifiers.union(clickModifiers)
     let wasNormalMode = flashMode == .normal
     let targetApp = sourceAppPID.flatMap { NSRunningApplication(processIdentifier: $0) }
     FlashLog.trace(
-      "[commit] drag from=(\(Int(source.x)),\(Int(source.y))) "
+      "[commit] two_phase kind=\(isSelect ? "select" : "drag") "
+        + "from=(\(Int(source.x)),\(Int(source.y))) "
         + "to=(\(Int(destination.x)),\(Int(destination.y))) "
         + "modifiers=cmd:\(modifiers.contains(.command)) "
         + "shift:\(modifiers.contains(.shift)) ctrl:\(modifiers.contains(.control)) "
@@ -643,19 +650,24 @@ extension AppDelegate {
       RunningApplicationActivation.activate(targetApp, options: [])
     }
     // Same re-entry gate as a click commit: hold activation closed across the
-    // gesture so a fresh hotkey can't start a walk mid-drag.
+    // gesture so a fresh hotkey can't start a walk mid-gesture.
     activationInFlight = true
     activationLifecycle.supersede()
     clearHintSessionState()
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
-      ActionDispatcher.synthesizeDrag(
-        from: source, to: destination, modifiers: modifiers
-      ) { [weak self] in
-        guard let self else { return }
-        self.activationInFlight = false
-        if wasNormalMode, self.flashMode == .normal {
-          self.scheduleNormalModeRecapture()
-        }
+    let finish: () -> Void = { [weak self] in
+      guard let self else { return }
+      self.activationInFlight = false
+      if wasNormalMode, self.flashMode == .normal {
+        self.scheduleNormalModeRecapture()
+      }
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
+      if isSelect {
+        ActionDispatcher.synthesizeSelection(
+          from: source, to: destination, modifiers: modifiers, completion: finish)
+      } else {
+        ActionDispatcher.synthesizeDrag(
+          from: source, to: destination, modifiers: modifiers, completion: finish)
       }
     }
   }
