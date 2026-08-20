@@ -14,7 +14,9 @@ extension AppDelegate {
     let behavior: HintCommitBehavior =
       command.isDrag
       ? .drag
-      : command.isSelect ? .select : command.isMove ? .moveMouse : .click
+      : command.isSelect
+        ? .select
+        : command.isMulti ? .multiClick : command.isMove ? .moveMouse : .click
     activate(
       action: command.action,
       commitBehavior: behavior,
@@ -41,7 +43,10 @@ extension AppDelegate {
     pendingHintCommitBehavior =
       command.isDrag
       ? .mouseGridDrag
-      : command.isSelect ? .mouseGridSelect : command.isMove ? .mouseGridMove : .mouseGridClick
+      : command.isSelect
+        ? .mouseGridSelect
+        : command.isMulti
+          ? .mouseGridMulti : command.isMove ? .mouseGridMove : .mouseGridClick
     currentPrefix = ""
     overlay.overlayConfig = config.overlay
     overlay.debugConfig = config.debug

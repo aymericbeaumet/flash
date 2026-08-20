@@ -248,7 +248,9 @@ extension AppDelegate {
     guard
       pendingHintCommitBehavior == .mouseGridClick
         || pendingHintCommitBehavior == .mouseGridMove
-        || pendingHintCommitBehavior == .mouseGridDrag,
+        || pendingHintCommitBehavior == .mouseGridDrag
+        || pendingHintCommitBehavior == .mouseGridSelect
+        || pendingHintCommitBehavior == .mouseGridMulti,
       let grid = mouseGridRegion?.grid
     else {
       return false
@@ -273,10 +275,10 @@ extension AppDelegate {
 
   private func commit(hint: AssignedHint, clickModifiers: ClickModifiers) {
     switch pendingHintCommitBehavior {
-    case .mouseGridClick, .mouseGridMove, .mouseGridDrag, .mouseGridSelect:
+    case .mouseGridClick, .mouseGridMove, .mouseGridDrag, .mouseGridSelect, .mouseGridMulti:
       commitMouseGridCell(hint: hint, clickModifiers: clickModifiers)
       return
-    case .click, .copyURL, .moveMouse, .drag, .select:
+    case .click, .copyURL, .moveMouse, .drag, .select, .multiClick:
       break
     }
     if pendingHintCommitBehavior == .copyURL {
@@ -298,6 +300,10 @@ extension AppDelegate {
       clearHintSessionState()
       activationLifecycle.supersede()
       applyModeOverlay()
+      return
+    }
+    if pendingHintCommitBehavior == .multiClick {
+      commitMultiClick(hint: hint, clickModifiers: clickModifiers)
       return
     }
     if pendingHintCommitBehavior == .drag || pendingHintCommitBehavior == .select {
@@ -549,6 +555,21 @@ extension AppDelegate {
     }
 
     let point = CGPoint(x: nextRegion.frame.midX, y: nextRegion.frame.midY)
+    if pendingHintCommitBehavior == .mouseGridMulti {
+      _ = ActionDispatcher.synthesizeClick(
+        at: point,
+        action: pendingAction,
+        modifiers: pendingClickModifiers.union(clickModifiers),
+        preserveCursor: false)
+      if let initial = mouseGridInitialRegion {
+        mouseGridDepth = 0
+        currentPrefix = ""
+        displayMouseGridRegion(initial, depth: 0)
+      } else {
+        cancelOverlay()
+      }
+      return
+    }
     if pendingHintCommitBehavior == .mouseGridDrag || pendingHintCommitBehavior == .mouseGridSelect
     {
       if let source = dragSourcePoint {
@@ -617,6 +638,46 @@ extension AppDelegate {
           self.scheduleNormalModeRecapture()
         }
       }
+    }
+  }
+
+  /// One commit of a `--multi` session: perform the pending action on the
+  /// selected target, then re-arm the same hint set for the next selection
+  /// instead of tearing the session down. The session never enters INSERT —
+  /// multi-clicking is target manipulation, and a mode flip would end it.
+  /// Escape (cancelOverlay) finishes the session.
+  private func commitMultiClick(hint: AssignedHint, clickModifiers: ClickModifiers) {
+    let action = pendingAction
+    let pid = hint.target.pid ?? sourceAppPID
+    let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
+    let targetBundleIdentifier = targetApp?.bundleIdentifier
+    let resolvedClickModifiers = ActionDispatcher.hintClickModifiers(
+      for: hint.target,
+      bundleIdentifier: targetBundleIdentifier,
+      requested: pendingClickModifiers.union(clickModifiers))
+    let chipRect = OverlayPanel.chipFrame(
+      for: hint, fontSize: CGFloat(config.overlay.fontSize))
+    let clickPoint =
+      hint.target.resolveClickPoint?() ?? CGPoint(x: chipRect.midX, y: chipRect.midY)
+    FlashLog.trace(
+      "[commit] multi action=\(action) role=\(hint.target.role ?? "?") "
+        + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y)))")
+    if let targetApp {
+      RunningApplicationActivation.activate(targetApp, options: [])
+    }
+    currentPrefix = ""
+    overlay.filter(prefix: "", hints: currentHints)
+    ActionDispatcher.perform(
+      action, on: hint.target, clickPoint: clickPoint,
+      bundleIdentifier: targetBundleIdentifier,
+      modifiers: resolvedClickModifiers,
+      leaveCursorAtClickPoint: true
+    ) { [weak self] in
+      guard let self, !self.currentHints.isEmpty else { return }
+      // Re-present the surviving hint set so the panel re-keys: in
+      // non-advanced mode capture rides on panel key status, and the app
+      // activation above may have taken it.
+      self.overlay.display(hints: self.currentHints)
     }
   }
 

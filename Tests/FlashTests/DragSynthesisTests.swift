@@ -45,5 +45,7 @@ final class DragSynthesisTests: XCTestCase {
     XCTAssertEqual(
       MouseCommand.drag(modifiers: .option).argTokens, ["--drag", "--modifiers=alt"])
     XCTAssertEqual(MouseCommand.select(modifiers: []).argTokens, ["--select"])
+    XCTAssertEqual(
+      MouseCommand.multi(.rightClick, modifiers: []).argTokens, ["--multi", "--secondary"])
   }
 }

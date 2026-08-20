@@ -1034,6 +1034,19 @@ extension MouseCommand {
         tokens.append("--modifiers=\(modifiers.argumentValue)")
       }
       return tokens
+    case .multi(let action, let modifiers):
+      var tokens: [String]
+      switch action {
+      case .leftClick: tokens = ["--multi"]
+      case .rightClick: tokens = ["--multi", "--secondary"]
+      case .middleClick: tokens = ["--multi", "--middle"]
+      case .doubleClick: tokens = ["--multi", "--double"]
+      case .tripleClick: tokens = ["--multi", "--triple"]
+      }
+      if !modifiers.isEmpty {
+        tokens.append("--modifiers=\(modifiers.argumentValue)")
+      }
+      return tokens
     case .click(let action, let modifiers):
       var tokens: [String]
       switch action {
