@@ -320,6 +320,13 @@ final class NormalModeTests: XCTestCase {
     XCTAssertEqual(command(chars: "r"), .reload(force: false))
     XCTAssertEqual(command(chars: ":"), .commandMode)
     assertSendKeyKeys(command(chars: "x"), "cmd+w")
+    XCTAssertTrue(
+      NormalModeInterpreter.recognizesPhysicalKey(
+        pending: "",
+        repeatAnchor: nil,
+        virtualKey: UInt32(kVK_ANSI_X),
+        modifierFlags: [],
+        mappings: defaultMappings))
     XCTAssertEqual(command(chars: "/"), .find)
     XCTAssertEqual(transition(chars: "\\").pending, "\\")
     XCTAssertEqual(
@@ -3187,6 +3194,21 @@ final class NormalModeTests: XCTestCase {
     XCTAssertFalse(AppDelegate.normalModeKeyDispatchNeedsTargetActivation(flags: .maskControl))
     XCTAssertFalse(AppDelegate.normalModeKeyDispatchNeedsTargetActivation(flags: .maskAlternate))
     XCTAssertFalse(AppDelegate.normalModeKeyDispatchNeedsTargetActivation(flags: .maskShift))
+  }
+
+  func testNormalModeKeyDispatchPrefersActiveVisibleNativeWindow() {
+    XCTAssertTrue(
+      AppDelegate.normalModeKeyDispatchUsesCurrentProcess(
+        applicationIsActive: true,
+        hasVisibleNonOverlayKeyWindow: true))
+    XCTAssertFalse(
+      AppDelegate.normalModeKeyDispatchUsesCurrentProcess(
+        applicationIsActive: false,
+        hasVisibleNonOverlayKeyWindow: true))
+    XCTAssertFalse(
+      AppDelegate.normalModeKeyDispatchUsesCurrentProcess(
+        applicationIsActive: true,
+        hasVisibleNonOverlayKeyWindow: false))
   }
 
   func testNormalModeActionDispatchRecapturesOnlyForIdleNormalSurfaces() {

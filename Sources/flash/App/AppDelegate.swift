@@ -1029,17 +1029,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       return false
     }
-    if aboutWindowVisible {
+    if aboutWindowVisible || nativeSurfaceSuspended {
       let flags = event.flags
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+      let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
       let passthroughModifierFlags = KeyModifier.cgEventFlags(
         config.mode.normalPassthroughModifiers)
-      let shouldEnterInsert = KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
-        flashMode: flashMode,
-        modifierFlags: flags,
-        hasMapping: mappings.hasMapping(virtualKey: keyCode, cgFlags: flags),
-        isPassthroughKey: overlay.normalModePassthroughKeyCodes.contains(keyCode),
-        passthroughModifierFlags: passthroughModifierFlags)
+      let shouldEnterInsert = aboutWindowVisible
+        && KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
+          flashMode: flashMode,
+          modifierFlags: flags,
+          hasMapping: hasMapping,
+          isPassthroughKey: overlay.normalModePassthroughKeyCodes.contains(keyCode),
+          passthroughModifierFlags: passthroughModifierFlags)
       if shouldEnterInsert {
         let targetPID = normalModeTargetPID
         DispatchQueue.main.async { [weak self] in
@@ -1052,12 +1054,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       return KeyboardCaptureTap.shouldSwallow(
         flashMode: flashMode,
         inputMode: overlay.inputMode,
-        nativeSurfaceOwnsKeyboard: true)
-    }
-    if nativeSurfaceSuspended {
-      return KeyboardCaptureTap.shouldSwallow(
-        flashMode: flashMode,
-        inputMode: overlay.inputMode,
+        hasMapping: hasMapping,
         nativeSurfaceOwnsKeyboard: true)
     }
     // INSERT is otherwise transparent so typing flows to the focused app. But a
@@ -1110,14 +1107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     // `cmd+shift+[` / `cmd+shift+]`) are registered for the actual frontmost
     // app instead of leaking to the terminal as plain text.
     reconcileFrontmostApplication(reason: "key_down")
-    let hasMapping =
-      mappings.hasMapping(virtualKey: keyCode, cgFlags: flags)
-      || NormalModeInterpreter.recognizesPhysicalKey(
-        pending: overlay.normalModePending,
-        repeatAnchor: overlay.normalModeRepeatAnchor,
-        virtualKey: keyCode,
-        modifierFlags: flags,
-        mappings: overlay.normalModeMappings)
+    let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
     let shouldSwallow = KeyboardCaptureTap.shouldSwallow(
       flashMode: flashMode,
       inputMode: overlay.inputMode,
@@ -1138,6 +1128,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         targetPID: self.currentNonFlashContext()?.processID)
     }
     return false
+  }
+
+  private func keyboardTapHasActiveMapping(keyCode: UInt32, flags: CGEventFlags) -> Bool {
+    mappings.hasMapping(virtualKey: keyCode, cgFlags: flags)
+      || (flashMode == .normal && overlay.inputMode == .normal
+        && NormalModeInterpreter.recognizesPhysicalKey(
+          pending: overlay.normalModePending,
+          repeatAnchor: overlay.normalModeRepeatAnchor,
+          virtualKey: keyCode,
+          modifierFlags: flags,
+          mappings: overlay.normalModeMappings))
   }
 
   /// Dispatch a key the tap swallowed in NORMAL mode. Bare keys (and all hints

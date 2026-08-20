@@ -12,6 +12,11 @@ struct ClipboardModalEntry: Decodable {
   let value: String
 }
 
+private struct NormalModeKeyDispatchTarget {
+  let processID: pid_t
+  let bundleIdentifier: String
+}
+
 /// Normal-mode coordination — the big one. Handles mode transitions,
 /// the normal-mode interpreter's callbacks, command-line entry, help
 /// rendering, plugin invocation, scroll suppression, the per-app
@@ -2926,7 +2931,7 @@ extension AppDelegate {
     repeatCount: Int = 1,
     suppressInTerminalFor command: URLCommand? = nil
   ) {
-    guard let context = normalModeContext() else {
+    guard let target = normalModeKeyDispatchTarget() else {
       FlashLog.debug("[normal_mode] no target app for key \(key)")
       applyModeOverlay()
       return
@@ -2934,18 +2939,18 @@ extension AppDelegate {
     if let command,
       Self.normalModeCommandKeyShortcutIsUnsafeInTerminal(
         command,
-        bundleIdentifier: context.bundleIdentifier)
+        bundleIdentifier: target.bundleIdentifier)
     {
       FlashLog.debug(
         "[normal_mode] suppress terminal shortcut command=\(command.diagnosticDescription) "
-          + "bundle=\(context.bundleIdentifier)")
+          + "bundle=\(target.bundleIdentifier)")
       applyModeOverlay()
       return
     }
     let count = normalizedRepeatCount(repeatCount)
     let activationDelayMs =
       activateNormalModeKeyTargetIfNeeded(
-        context, flags: flags)
+        target.processID, flags: flags)
       ? Self.normalModeKeyTargetActivationDelayMs : 0
     for index in 0..<count {
       let delay = DispatchTimeInterval.milliseconds(activationDelayMs + index * 35)
@@ -2954,7 +2959,7 @@ extension AppDelegate {
         // through the Carbon dispatcher can't re-trigger our own hotkey for
         // the same combo (e.g. the `⌘⇧]` Messages tab-traversal fallback).
         self?.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
-        NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: context.processID)
+        NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: target.processID)
       }
     }
     let finalDelay = DispatchTimeInterval.milliseconds(activationDelayMs + (count - 1) * 35 + 35)
@@ -3004,7 +3009,7 @@ extension AppDelegate {
     _ keys: [(CGKeyCode, CGEventFlags)],
     repeatCount: Int = 1
   ) {
-    guard let context = normalModeContext() else {
+    guard let target = normalModeKeyDispatchTarget() else {
       FlashLog.debug("[normal_mode] no target app for key sequence")
       applyModeOverlay()
       return
@@ -3015,14 +3020,14 @@ extension AppDelegate {
     }
     let count = normalizedRepeatCount(repeatCount)
     var offsetMs =
-      activateNormalModeKeyTargetIfNeeded(context, keys: keys)
+      activateNormalModeKeyTargetIfNeeded(target.processID, keys: keys)
       ? Self.normalModeKeyTargetActivationDelayMs : 0
     for _ in 0..<count {
       for (key, flags) in keys {
         let delay = DispatchTimeInterval.milliseconds(offsetMs)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
           self?.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
-          NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: context.processID)
+          NormalModeDispatcher.sendKey(virtualKey: key, flags: flags, to: target.processID)
         }
         offsetMs += 35
       }
@@ -3034,31 +3039,57 @@ extension AppDelegate {
 
   @discardableResult
   private func activateNormalModeKeyTargetIfNeeded(
-    _ context: AppContext,
+    _ processID: pid_t,
     flags: CGEventFlags
   ) -> Bool {
     guard Self.normalModeKeyDispatchNeedsTargetActivation(flags: flags) else { return false }
-    return activateNormalModeKeyTarget(context)
+    return activateNormalModeKeyTarget(processID)
   }
 
   @discardableResult
   private func activateNormalModeKeyTargetIfNeeded(
-    _ context: AppContext,
+    _ processID: pid_t,
     keys: [(CGKeyCode, CGEventFlags)]
   ) -> Bool {
     guard keys.contains(where: { Self.normalModeKeyDispatchNeedsTargetActivation(flags: $0.1) })
     else { return false }
-    return activateNormalModeKeyTarget(context)
+    return activateNormalModeKeyTarget(processID)
   }
 
   @discardableResult
-  private func activateNormalModeKeyTarget(_ context: AppContext) -> Bool {
+  private func activateNormalModeKeyTarget(_ processID: pid_t) -> Bool {
+    guard processID != ProcessInfo.processInfo.processIdentifier else { return false }
     guard
-      let app = NSRunningApplication(processIdentifier: context.processID),
+      let app = NSRunningApplication(processIdentifier: processID),
       !app.isTerminated
     else { return false }
     RunningApplicationActivation.activate(app, options: [])
     return true
+  }
+
+  private func normalModeKeyDispatchTarget() -> NormalModeKeyDispatchTarget? {
+    let hasVisibleNonOverlayKeyWindow = NSApp.keyWindow.map {
+      $0 !== overlay && $0.isVisible
+    } ?? false
+    if Self.normalModeKeyDispatchUsesCurrentProcess(
+      applicationIsActive: NSApp.isActive,
+      hasVisibleNonOverlayKeyWindow: hasVisibleNonOverlayKeyWindow)
+    {
+      return NormalModeKeyDispatchTarget(
+        processID: ProcessInfo.processInfo.processIdentifier,
+        bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.flash.app")
+    }
+    guard let context = normalModeContext() else { return nil }
+    return NormalModeKeyDispatchTarget(
+      processID: context.processID,
+      bundleIdentifier: context.bundleIdentifier)
+  }
+
+  static func normalModeKeyDispatchUsesCurrentProcess(
+    applicationIsActive: Bool,
+    hasVisibleNonOverlayKeyWindow: Bool
+  ) -> Bool {
+    applicationIsActive && hasVisibleNonOverlayKeyWindow
   }
 
   static func normalModeCommandKeyShortcutIsUnsafeInTerminal(

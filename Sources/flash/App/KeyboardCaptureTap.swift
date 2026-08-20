@@ -33,7 +33,7 @@ final class KeyboardCaptureTap {
   /// matches a configured passthrough key or carries a configured passthrough
   /// modifier. Passthrough input continues unchanged and moves Flash to INSERT
   /// at the AppDelegate edge. Every hint key is captured; INSERT and key-window
-  /// surfaces are left untouched.
+  /// surfaces are left untouched unless an explicit mapping owns the key.
   ///
   /// Extracted as a static, side-effect-free function so the tap's single most
   /// security-sensitive decision is unit-testable without a live `CGEventTap`.
@@ -46,7 +46,7 @@ final class KeyboardCaptureTap {
     passthroughModifierFlags: CGEventFlags = [],
     nativeSurfaceOwnsKeyboard: Bool = false
   ) -> Bool {
-    guard !nativeSurfaceOwnsKeyboard else { return false }
+    if nativeSurfaceOwnsKeyboard { return hasMapping }
     guard flashMode == .normal else { return false }
     switch inputMode {
     case .normal:

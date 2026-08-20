@@ -77,7 +77,7 @@ final class KeyboardCaptureTapTests: XCTestCase {
       KeyboardCaptureTap.shouldSwallow(flashMode: .normal, inputMode: .candidateFinder))
   }
 
-  func testNativeSurfaceAlwaysOwnsKeyboard() {
+  func testNativeSurfacePassesUnmappedInputButSwallowsMappings() {
     for inputMode: OverlayInputMode in [.normal, .hints, .commandLine, .candidateFinder] {
       XCTAssertFalse(
         KeyboardCaptureTap.shouldSwallow(
@@ -85,6 +85,18 @@ final class KeyboardCaptureTapTests: XCTestCase {
           inputMode: inputMode,
           nativeSurfaceOwnsKeyboard: true))
     }
+    XCTAssertTrue(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .normal,
+        inputMode: .normal,
+        hasMapping: true,
+        nativeSurfaceOwnsKeyboard: true))
+    XCTAssertTrue(
+      KeyboardCaptureTap.shouldSwallow(
+        flashMode: .insert,
+        inputMode: .normal,
+        hasMapping: true,
+        nativeSurfaceOwnsKeyboard: true))
   }
 
   func testNativeSurfacePassthroughEntersInsertUnlessMapped() {
