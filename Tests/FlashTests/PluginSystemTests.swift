@@ -190,6 +190,7 @@ final class PluginSystemTests: XCTestCase {
         "login", "version", "run",
       ]))
     let system = try XCTUnwrap(manifests.first { $0.id == "system" })
+    XCTAssertEqual(system.capabilities, [.accessibility, .open])
     XCTAssertEqual(system.listen, ["core:power.changed"])
     XCTAssertEqual(system.statusSegments, ["battery"])
     XCTAssertEqual(

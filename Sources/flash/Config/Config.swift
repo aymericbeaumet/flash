@@ -923,6 +923,7 @@ extension URLCommand {
     case .mouseRepeat: return verb("mouse_repeat")
     case .mousePointer: return verb("mouse_pointer")
     case .focusInput: return verb("focus_input")
+    case .scrollTarget: return verb("scroll_target")
     case .normalMode: return verb("enter_normal_mode")
     case .insertMode: return verb("enter_insert_mode")
     case .lockedInsertMode: return verb("enter_locked_insert_mode")

@@ -529,6 +529,19 @@ final class PluginProcess {
       timeout: timeoutMs.map { .milliseconds(max(1, $0)) }
     ) { response in
       let ok = response?["ok"] as? Bool ?? false
+      if !ok {
+        let error = (response?["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+          ?? (response == nil ? "no response" : "unspecified error")
+        FlashLog.plugin(
+          .warn,
+          pluginID: self.manifest.id,
+          message: "[plugin] command failed command=\(command) subcommand=\(subcommand)",
+          fields: [
+            "command": command,
+            "subcommand": subcommand,
+            "error": error,
+          ])
+      }
       // A command may name an app (by pid) for Flash to raise once it
       // succeeds — e.g. the tmux plugin returns the terminal hosting the
       // session it just switched to, so a `:tmux window …` mapping brings

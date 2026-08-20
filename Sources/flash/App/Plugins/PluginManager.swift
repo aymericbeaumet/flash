@@ -249,6 +249,11 @@ final class PluginManager {
     get { hostRPC.onSyntheticKeysRequested }
     set { hostRPC.onSyntheticKeysRequested = newValue }
   }
+  /// See `PluginHostRPC.onGlobalSyntheticKeyRequested`; forwarded likewise.
+  var onGlobalSyntheticKeyRequested: ((CGKeyCode, CGEventFlags) -> Bool)? {
+    get { hostRPC.onGlobalSyntheticKeyRequested }
+    set { hostRPC.onGlobalSyntheticKeyRequested = newValue }
+  }
 
   init(baseDataDir: URL = PluginRepository.defaultDataDir()) {
     self.baseDataDir = baseDataDir

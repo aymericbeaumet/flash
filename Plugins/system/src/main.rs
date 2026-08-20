@@ -4,15 +4,12 @@ use flash_plugin::{
     run, run_command, run_osascript, Candidate, CommandRequest, CommandResponse, Context, Event,
     ResolveResponse,
 };
+use serde_json::{json, Value};
 
 const SOURCE_ID: &str = "plugin:system";
 const SOURCE_LABEL: &str = "system.actions";
 
-/// Lock the screen via the modern macOS `⌃⌘Q` shortcut. The classic
-/// `…/Menu Extras/User.menu/…/CGSession -suspend` binary was removed from
-/// recent macOS, so drive the system shortcut through System Events instead.
-const LOCK_SCREEN: &str =
-    "tell application \"System Events\" to keystroke \"q\" using {command down, control down}";
+const LOCK_KEY_CODE: i64 = 12; // kVK_ANSI_Q
 
 const DARK_TOGGLE: &str =
     "tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode";
@@ -177,9 +174,7 @@ fn system_usage() -> String {
 
 async fn run_system_action(ctx: &Context, subcommand: &str) -> CommandResponse {
     match subcommand {
-        "lock" => run_osascript(ctx, LOCK_SCREEN, Duration::from_secs(10))
-            .await
-            .into_command(),
+        "lock" => lock_screen(ctx).await,
         "sleep" => sh(ctx, &["/usr/bin/pmset", "sleepnow"], 10).await,
         "displaysleep" => sh(ctx, &["/usr/bin/pmset", "displaysleepnow"], 10).await,
         "restart" => run_osascript(
@@ -232,6 +227,29 @@ async fn run_system_action(ctx: &Context, subcommand: &str) -> CommandResponse {
         }
         "decaffeinate" => sh(ctx, &["/usr/bin/killall", "caffeinate"], 10).await,
         other => CommandResponse::error(format!("unknown subcommand: {other}")),
+    }
+}
+
+fn lock_request() -> Value {
+    json!({
+        "key_code": LOCK_KEY_CODE,
+        "modifiers": ["command", "control"],
+    })
+}
+
+async fn lock_screen(ctx: &Context) -> CommandResponse {
+    let response = ctx
+        .call_host("input.post_global_key", lock_request())
+        .await;
+    if response.get("ok").and_then(Value::as_bool) == Some(true) {
+        CommandResponse::ok()
+    } else {
+        CommandResponse::error(
+            response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("input.post_global_key failed"),
+        )
     }
 }
 
@@ -393,6 +411,13 @@ mod tests {
         assert!(usage.contains("restart"));
         assert!(usage.contains("shutdown"));
         assert!(usage.contains(":flashlight @system.actions"));
+    }
+
+    #[test]
+    fn lock_posts_the_global_control_command_q_chord() {
+        let request = lock_request();
+        assert_eq!(request["key_code"], LOCK_KEY_CODE);
+        assert_eq!(request["modifiers"], json!(["command", "control"]));
     }
 
     #[test]

@@ -527,6 +527,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         }
       }
     }
+    pluginManager.onGlobalSyntheticKeyRequested = { [weak self] key, flags in
+      guard let self else { return false }
+      self.mappings.noteSyntheticKey(virtualKey: UInt32(key), flags: flags)
+      return NormalModeDispatcher.sendGlobalKey(virtualKey: key, flags: flags)
+    }
     pluginManager.cacheRunningApplicationsSnapshot(runningApplicationsSnapshot())
     pluginManager.start(config: config)
     configureDebugServer(for: config)
@@ -608,6 +613,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       enterPointerMode()
     case .focusInput:
       focusTextInputInNormalMode(index: 1)
+    case .scrollTarget:
+      activateScrollTargetHints()
     case .normalMode:
       enterNormalMode()
     case .insertMode:

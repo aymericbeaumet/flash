@@ -129,7 +129,7 @@ manifest):
 | `host.clipboard_write` | `clipboard` |
 | `host.notify` | `notify` |
 | `host.storage_get`, `host.storage_set` | none (plugin-data-dir scoped) |
-| `input.post_keys` | `accessibility` |
+| `input.post_keys`, `input.post_global_key` | `accessibility` |
 | `ax.snapshot`, `ax.perform`, `ax.set`, `ax.select_child` | `accessibility` |
 
 `host.clipboard_write` replaces the clipboard with `{ "text" }` (≤ 1 MiB).
@@ -140,6 +140,11 @@ host-managed KV store persisted to `storage.json` inside the plugin's data
 directory (`{ "key" }` / `{ "key", "value" | null }`; keys ≤ 128 B, values
 ≤ 64 KiB, 256 entries; null deletes) so interpreted-language plugins stop
 hand-rolling persistence.
+
+`input.post_global_key` accepts one `{ "key_code", "modifiers" }` chord and
+posts it through the host's session event stream for macOS-owned shortcuts.
+It rejects unmodified input and is capability-gated like targeted
+`input.post_keys`.
 
 The AX broker exists because `AXUIElement` cannot cross a process boundary:
 `ax.snapshot` BFS-walks a subtree (default cap 3000 nodes) and returns flat

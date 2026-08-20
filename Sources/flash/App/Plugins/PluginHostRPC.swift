@@ -27,6 +27,9 @@ final class PluginHostRPC {
   /// (`noteSyntheticKey`) — a `postToPid` event can loop back through the
   /// Carbon hotkey path and re-trigger the user's own binding for the combo.
   var onSyntheticKeysRequested: ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)?
+  /// Executor for a single global modifier chord. Unlike `input.post_keys`,
+  /// this enters the session event stream so macOS can own the shortcut.
+  var onGlobalSyntheticKeyRequested: ((CGKeyCode, CGEventFlags) -> Bool)?
   /// Executor for the `host.notify` RPC: shows a transient banner with the
   /// given message and duration. Set by AppDelegate (routes to the overlay's
   /// banner surface).
@@ -82,6 +85,12 @@ final class PluginHostRPC {
         return
       }
       postSyntheticKeys(params, reply: reply)
+    case "input.post_global_key":
+      guard capabilities.contains(.accessibility) else {
+        reply(["ok": false, "error": "missing accessibility capability"])
+        return
+      }
+      postGlobalSyntheticKey(params, reply: reply)
     case let method where method.hasPrefix("ax."):
       guard capabilities.contains(.accessibility) else {
         reply(["ok": false, "error": "missing accessibility capability"])
@@ -554,6 +563,44 @@ final class PluginHostRPC {
     "option": .maskAlternate,
     "shift": .maskShift,
   ]
+
+  static func globalSyntheticKeyChord(
+    from params: [String: Any]
+  ) -> (key: CGKeyCode, flags: CGEventFlags)? {
+    guard let rawCode = params["key_code"] as? Int, rawCode >= 0, rawCode < 0x80,
+      let names = params["modifiers"] as? [String], !names.isEmpty
+    else { return nil }
+    var flags: CGEventFlags = []
+    for name in names {
+      guard let flag = syntheticKeyModifierNames[name.lowercased()] else { return nil }
+      flags.insert(flag)
+    }
+    return (CGKeyCode(rawCode), flags)
+  }
+
+  private func postGlobalSyntheticKey(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let chord = Self.globalSyntheticKeyChord(from: params) else {
+      reply([
+        "ok": false,
+        "error": "input.post_global_key requires key_code and valid non-empty modifiers",
+      ])
+      return
+    }
+    guard let post = onGlobalSyntheticKeyRequested else {
+      reply(["ok": false, "error": "global key posting unavailable"])
+      return
+    }
+    DispatchQueue.main.async {
+      if post(chord.key, chord.flags) {
+        reply(["ok": true])
+      } else {
+        reply(["ok": false, "error": "global key event synthesis failed"])
+      }
+    }
+  }
 
   /// `input.post_keys`: post a short synthesized chord sequence to a pid
   /// (plugin fast paths like the firefox tab jump: ⌘8 + n×ctrl+PgDn).

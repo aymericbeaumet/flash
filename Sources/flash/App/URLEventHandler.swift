@@ -29,6 +29,9 @@ enum URLCommand: Hashable {
   /// Focus the first (or count-th) editable text input in the focused window
   /// and enter INSERT — Vimium's `gi`.
   case focusInput
+  /// Hint-label the focused window's scroll areas; committing moves the
+  /// pointer into the chosen one so subsequent scroll verbs land there.
+  case scrollTarget
   case normalMode
   case insertMode
   case lockedInsertMode
@@ -339,6 +342,7 @@ final class URLEventHandler: NSObject {
     "mouse_repeat": { a in a.args.isEmpty ? .mouseRepeat : nil },
     "mouse_pointer": { a in a.args.isEmpty ? .mousePointer : nil },
     "focus_input": { a in a.args.isEmpty ? .focusInput : nil },
+    "scroll_target": { a in a.args.isEmpty ? .scrollTarget : nil },
     "enter_normal_mode": { _ in .normalMode },
     "enter_insert_mode": { _ in .insertMode },
     "enter_locked_insert_mode": { _ in .lockedInsertMode },

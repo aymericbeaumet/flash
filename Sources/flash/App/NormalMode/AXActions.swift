@@ -46,6 +46,27 @@ extension NormalModeDispatcher {
     return true
   }
 
+  /// Post one modifier chord to the session event stream so macOS can handle
+  /// system shortcuts that do not belong to a target application.
+  @discardableResult
+  static func sendGlobalKey(
+    virtualKey: CGKeyCode,
+    flags: CGEventFlags
+  ) -> Bool {
+    let source = CGEventSource(stateID: .combinedSessionState)
+    guard
+      let down = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
+      let up = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
+    else { return false }
+    down.flags = flags
+    up.flags = flags
+    down.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+    up.setIntegerValueField(.eventSourceUserData, value: syntheticKeyEventTag)
+    down.post(tap: .cghidEventTap)
+    up.post(tap: .cghidEventTap)
+    return true
+  }
+
   @discardableResult
   static func typeText(_ text: String, to pid: pid_t) -> Bool {
     let source = CGEventSource(stateID: .combinedSessionState)
@@ -314,4 +335,35 @@ extension NormalModeDispatcher {
   private static let focusableInputRoles: Set<String> = [
     "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox",
   ]
+
+  /// Frames (AX top-left coordinates) of the focused window's scroll areas in
+  /// BFS order — nested scrollers are all reported so the user can hint the
+  /// inner one. Tiny decorative scrollers are skipped.
+  static func scrollAreaFrames(pid: pid_t, maxNodes: Int = 2000) -> [CGRect] {
+    let app = AXApp.make(pid: pid)
+    guard
+      let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
+        ?? elementAttribute(app, kAXMainWindowAttribute as String)
+    else { return [] }
+    var queue = [window]
+    var cursor = 0
+    var frames: [CGRect] = []
+    while cursor < queue.count, cursor < maxNodes {
+      let element = queue[cursor]
+      cursor += 1
+      if role(of: element) == "AXScrollArea", let frame = frame(of: element),
+        frame.width >= 40, frame.height >= 40
+      {
+        frames.append(frame)
+      }
+      var raw: CFTypeRef?
+      if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
+        == .success,
+        let children = raw as? [AXUIElement]
+      {
+        queue.append(contentsOf: children)
+      }
+    }
+    return frames
+  }
 }

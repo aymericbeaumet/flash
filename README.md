@@ -124,6 +124,7 @@ flash mouse_target --multi               # click several targets; Escape ends th
 flash mouse_repeat                       # re-click the last committed point
 flash mouse_target --adjust              # refine the click point before committing
 flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
+flash scroll_target                      # pick which scroll area the scroll keys drive
 flash mouse_grid                         # target any screen position
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window

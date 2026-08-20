@@ -225,7 +225,7 @@ extension AppDelegate {
   /// Assign prefix-free hint labels over `targets` using the active alphabet —
   /// the same policy `AppMonitor` uses, so a re-assembled hint set (app targets
   /// + status-bar links) stays consistent with a plain discovery result.
-  private func assignHints(_ targets: [JumpTarget]) -> [AssignedHint] {
+  func assignHints(_ targets: [JumpTarget]) -> [AssignedHint] {
     let resolved = config.resolvedAlphabet
     return HintAssigner.assign(
       targets: targets,
@@ -272,6 +272,67 @@ extension AppDelegate {
         url: link.url.absoluteString,
         entersInsertMode: false,
         providerID: "statusbar")
+    }
+  }
+
+  /// `scroll_target`: hint-label the focused window's scroll areas.
+  /// Committing runs the `.moveMouse` behavior — the pointer lands inside the
+  /// chosen area, and `Scroller.scrollWheelPoint` already prefers the cursor's
+  /// position, so every subsequent scroll verb targets that area with no
+  /// Scroller state at all. A single area short-circuits to a direct move.
+  func activateScrollTargetHints() {
+    guard let context = currentNonFlashContext() ?? normalModeContext() else {
+      applyModeOverlay()
+      return
+    }
+    if activationInFlight || !currentHints.isEmpty {
+      cancelOverlay()
+    }
+    let pid = context.processID
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let axFrames = NormalModeDispatcher.scrollAreaFrames(pid: pid)
+      DispatchQueue.main.async {
+        guard let self else { return }
+        let screenH = ActionDispatcher.primaryScreenHeight()
+        let frames = axFrames.map { frame in
+          CGRect(
+            x: frame.minX, y: screenH - frame.maxY,
+            width: frame.width, height: frame.height)
+        }
+        guard !frames.isEmpty else {
+          FlashLog.debug("[scroll_target] no_scroll_areas pid=\(pid)")
+          self.applyModeOverlay()
+          return
+        }
+        if frames.count == 1 {
+          _ = ActionDispatcher.moveCursor(
+            to: CGPoint(x: frames[0].midX, y: frames[0].midY))
+          self.applyModeOverlay()
+          return
+        }
+        let targets = frames.enumerated().map { index, frame in
+          JumpTarget(
+            id: "scroll_area_\(index)",
+            frame: frame,
+            role: "FlashScrollArea",
+            url: nil,
+            entersInsertMode: false,
+            providerID: "scroll_target")
+        }
+        self.sourceAppPID = pid
+        self.pendingAction = .leftClick
+        self.pendingClickModifiers = []
+        self.pendingHintCommitBehavior = .moveMouse
+        self.currentPrefix = ""
+        self.overlay.overlayConfig = self.config.overlay
+        self.overlay.debugConfig = self.config.debug
+        let hints = self.assignHints(targets)
+        self.activationLifecycle.invalidate()
+        self.currentHints = hints
+        self.applyModeOverlay()
+        self.overlay.display(hints: hints)
+        FlashLog.debug("[scroll_target] displayed pid=\(pid) areas=\(hints.count)")
+      }
     }
   }
 

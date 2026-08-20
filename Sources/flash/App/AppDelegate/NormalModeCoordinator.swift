@@ -1071,6 +1071,8 @@ extension AppDelegate {
       enterPointerMode()
     case .focusInput:
       focusTextInputInNormalMode(index: repeatCount)
+    case .scrollTarget:
+      activateScrollTargetHints()
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()

@@ -261,6 +261,10 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_pointer"])?.command, .mousePointer)
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_pointer", "--secondary"]))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "scroll_target"])?.command, .scrollTarget)
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "focus_input"])?.command, .focusInput)
   }
 
   func testParseEnterCommandRestoreMode() {
