@@ -29,6 +29,10 @@ struct HintSession {
   /// restart the destination phase from the top instead of the drilled-down
   /// cell the source phase ended on.
   var mouseGridInitialRegion: MouseGrid.Region?
+  /// `--adjust` sub-state: the matched hint whose click point is being
+  /// refined, and the current point the commit key will click.
+  var adjustingHint: AssignedHint?
+  var adjustPoint: CGPoint?
 }
 
 /// The activation generation-token machine: the async-cancellation core that

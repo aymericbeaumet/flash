@@ -122,6 +122,7 @@ flash mouse_target --select              # click a start point, shift-click an e
 flash mouse_grid --select                # select text between two grid positions
 flash mouse_target --multi               # click several targets; Escape ends the session
 flash mouse_repeat                       # re-click the last committed point
+flash mouse_target --adjust              # refine the click point before committing
 flash mouse_grid                         # target any screen position
 flash app_open --name=Firefox            # open or focus an app
 flash window_move --position=lefthalf    # tile the focused window

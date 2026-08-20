@@ -25,6 +25,7 @@ extension OverlayPanel {
     applyPanelFrame(frame)
 
     recycleAll()
+    hideAdjustment()
     transientContentVisible = true
     commandPromptVisible = false
 
@@ -354,12 +355,44 @@ extension OverlayPanel {
     "colors": NSNull(),
   ]
 
+  /// Render (or move) the `--adjust` marker: the matched target's outline plus
+  /// a crosshair at the exact point the commit key will click. Coordinates are
+  /// NSScreen (bottom-left); layers live in panel-local space.
+  func showAdjustment(markerAt point: CGPoint, targetFrame: CGRect) {
+    adjustmentActive = true
+    let origin = frame.origin
+    let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+    let localFrame = CGRect(
+      x: targetFrame.minX - origin.x,
+      y: targetFrame.minY - origin.y,
+      width: targetFrame.width,
+      height: targetFrame.height)
+    let path = CGMutablePath()
+    path.addRect(localFrame)
+    path.addEllipse(in: CGRect(x: local.x - 4, y: local.y - 4, width: 8, height: 8))
+    path.move(to: CGPoint(x: local.x - 12, y: local.y))
+    path.addLine(to: CGPoint(x: local.x + 12, y: local.y))
+    path.move(to: CGPoint(x: local.x, y: local.y - 12))
+    path.addLine(to: CGPoint(x: local.x, y: local.y + 12))
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    adjustmentMarkerLayer.path = path
+    adjustmentMarkerLayer.isHidden = false
+    CATransaction.commit()
+  }
+
+  func hideAdjustment() {
+    adjustmentActive = false
+    adjustmentMarkerLayer.isHidden = true
+  }
+
   func hide() {
     FlashLog.trace(
       "[overlay] hide transient=\(transientContentVisible) mode_badge=\(modeBadgeVisible) "
         + "capture=\(modeBadgeCapturesInput) input=\(inputMode)")
     // Belt-and-suspenders: never leave the cursor hidden once the overlay is gone.
     showHintCursor()
+    hideAdjustment()
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"

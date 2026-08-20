@@ -278,7 +278,7 @@ extension AppDelegate {
     case .mouseGridClick, .mouseGridMove, .mouseGridDrag, .mouseGridSelect, .mouseGridMulti:
       commitMouseGridCell(hint: hint, clickModifiers: clickModifiers)
       return
-    case .click, .copyURL, .moveMouse, .drag, .select, .multiClick:
+    case .click, .copyURL, .moveMouse, .drag, .select, .multiClick, .adjustClick:
       break
     }
     if pendingHintCommitBehavior == .copyURL {
@@ -304,6 +304,20 @@ extension AppDelegate {
     }
     if pendingHintCommitBehavior == .multiClick {
       commitMultiClick(hint: hint, clickModifiers: clickModifiers)
+      return
+    }
+    if pendingHintCommitBehavior == .adjustClick {
+      guard adjustingHint == nil else { return }
+      let chipRect = OverlayPanel.chipFrame(
+        for: hint, fontSize: CGFloat(config.overlay.fontSize))
+      let start =
+        hint.target.resolveClickPoint?() ?? CGPoint(x: chipRect.midX, y: chipRect.midY)
+      adjustingHint = hint
+      adjustPoint = start
+      overlay.showAdjustment(markerAt: start, targetFrame: hint.target.frame)
+      FlashLog.trace(
+        "[commit] adjust_enter point=(\(Int(start.x)),\(Int(start.y))) "
+          + "frame=\(hint.target.frame.debugDescription)")
       return
     }
     if pendingHintCommitBehavior == .drag || pendingHintCommitBehavior == .select {
@@ -638,6 +652,79 @@ extension AppDelegate {
             token: handoffToken)
         case .recaptureNormal:
           self.clearPointerInsertHandoff(reason: "mouse_grid_stayed_normal", token: handoffToken)
+          guard self.flashMode == .normal else { return }
+          self.scheduleNormalModeRecapture()
+        }
+      }
+    }
+  }
+
+  /// One keystroke of the `--adjust` sub-state, forwarded by the panel while
+  /// `adjustmentActive` is set: move/snap keys update the marker; the commit
+  /// key fires the pending action at the refined point.
+  func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {
+    guard let hint = adjustingHint, let point = adjustPoint else {
+      cancelOverlay()
+      return
+    }
+    switch command {
+    case .cancel:
+      cancelOverlay()
+    case .commit:
+      performAdjustedCommit(hint: hint, at: point, clickModifiers: clickModifiers)
+    case .snapLeft, .snapRight, .snapTop, .snapBottom, .interpolate, .reset:
+      let updated = HintAdjustmentInterpreter.apply(command, to: point, in: hint.target.frame)
+      adjustPoint = updated
+      overlay.showAdjustment(markerAt: updated, targetFrame: hint.target.frame)
+    }
+  }
+
+  /// Fire the adjusted click. Mirrors the mouse-grid commit tail: the refined
+  /// point is pointer simulation, so a primary click enters INSERT
+  /// unconditionally and a right-click suspends for the context menu.
+  private func performAdjustedCommit(
+    hint: AssignedHint,
+    at point: CGPoint,
+    clickModifiers: ClickModifiers
+  ) {
+    let action = pendingAction
+    let pid = hint.target.pid ?? sourceAppPID
+    let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
+    let modifiers = pendingClickModifiers.union(clickModifiers)
+    lastCommittedClick = LastCommittedClick(
+      point: point, action: action, modifiers: modifiers, pid: pid)
+    FlashLog.trace(
+      "[commit] adjust action=\(action) point=(\(Int(point.x)),\(Int(point.y)))")
+    overlay.hide()
+    clearHintSessionState()
+    activationLifecycle.supersede()
+    if let targetApp {
+      RunningApplicationActivation.activate(targetApp, options: [])
+    }
+    let handoffToken: UInt64?
+    if action != .rightClick {
+      handoffToken = notePointerInsertHandoff(reason: "adjust_commit")
+    } else {
+      handoffToken = nil
+    }
+    _ = ActionDispatcher.synthesizeClick(
+      at: point, action: action, modifiers: modifiers, preserveCursor: false)
+    if action == .rightClick {
+      suspendNormalCaptureForNativeSurface(reason: "adjust_right_click")
+    } else {
+      applyModeOverlay(captureOverride: false)
+      resolvePointerInsertMode(
+        pid: pid,
+        reason: .pointerClick,
+        handoffToken: handoffToken,
+        intent: .mouseGridClick
+      ) { [weak self] outcome in
+        guard let self else { return }
+        switch outcome {
+        case .enteredInsert:
+          self.clearPointerInsertHandoff(reason: "adjust_entered_insert", token: handoffToken)
+        case .recaptureNormal:
+          self.clearPointerInsertHandoff(reason: "adjust_stayed_normal", token: handoffToken)
           guard self.flashMode == .normal else { return }
           self.scheduleNormalModeRecapture()
         }

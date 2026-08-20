@@ -18,6 +18,90 @@ enum OverlayInputMode: Equatable {
   case candidateFinder
 }
 
+/// One keystroke inside the `--adjust` sub-state: after a hint label matches,
+/// the click point can be snapped to the target's bounding-box edges,
+/// interpolated across its width, or nudged back to centre before the commit
+/// key fires the click.
+enum HintAdjustmentCommand: Equatable {
+  case snapLeft
+  case snapRight
+  case snapTop
+  case snapBottom
+  /// `1`–`9`: place the point at n/10 of the target's width.
+  case interpolate(Int)
+  /// `0`: back to the initial point (the target centre).
+  case reset
+  case commit
+  case cancel
+}
+
+enum HintAdjustmentInterpreter {
+  /// Key → adjustment command. Nil for keys the sub-state ignores (they are
+  /// still swallowed — the adjustment session owns the keyboard like hints
+  /// do). Pure so the whole adjustment keymap is unit-testable.
+  static func command(
+    keyCode: UInt16,
+    charactersIgnoringModifiers: String?
+  ) -> HintAdjustmentCommand? {
+    switch keyCode {
+    case 53:  // escape
+      return .cancel
+    case 36, 76, 49:  // return / keypad enter / space
+      return .commit
+    case 123:  // arrow_left
+      return .snapLeft
+    case 124:  // arrow_right
+      return .snapRight
+    case 125:  // arrow_down
+      return .snapBottom
+    case 126:  // arrow_up
+      return .snapTop
+    default:
+      break
+    }
+    guard let char = charactersIgnoringModifiers?.lowercased().first else { return nil }
+    switch char {
+    case "h": return .snapLeft
+    case "l": return .snapRight
+    case "k": return .snapTop
+    case "j": return .snapBottom
+    case "0": return .reset
+    case "1"..."9": return .interpolate(char.wholeNumberValue ?? 5)
+    default: return nil
+    }
+  }
+
+  /// Apply a movement command to `point` inside `frame` (NSScreen bottom-left
+  /// coordinates: "top" is `maxY`). `commit`/`cancel` leave the point
+  /// untouched. The result is clamped to the frame so repeated snaps can
+  /// never escape the target.
+  static func apply(
+    _ command: HintAdjustmentCommand,
+    to point: CGPoint,
+    in frame: CGRect,
+    inset: CGFloat = 2
+  ) -> CGPoint {
+    let edgeInsetX = min(inset, frame.width / 2)
+    let edgeInsetY = min(inset, frame.height / 2)
+    var p = point
+    switch command {
+    case .snapLeft: p.x = frame.minX + edgeInsetX
+    case .snapRight: p.x = frame.maxX - edgeInsetX
+    case .snapTop: p.y = frame.maxY - edgeInsetY
+    case .snapBottom: p.y = frame.minY + edgeInsetY
+    case .interpolate(let tenths):
+      p.x = frame.minX + frame.width * CGFloat(min(max(tenths, 1), 9)) / 10
+    case .reset:
+      p = CGPoint(x: frame.midX, y: frame.midY)
+    case .commit, .cancel:
+      break
+    }
+    p.x = min(max(p.x, frame.minX), frame.maxX)
+    p.y = min(max(p.y, frame.minY), frame.maxY)
+    return p
+  }
+}
+
 enum OverlayInputInterpreter {
   static func action(
     keyCode: UInt16,
@@ -206,6 +290,23 @@ extension OverlayPanel {
     if inputMode == .commandLine { return false }
     if inputMode == .candidateFinder {
       return handleCandidateFinderKeyEvent(event)
+    }
+
+    // The `--adjust` sub-state owns every key once a hint has matched —
+    // including chords that would otherwise hit the Carbon mapping registry —
+    // so a stray mapping can't fire mid-adjustment.
+    if adjustmentActive {
+      if let command = HintAdjustmentInterpreter.command(
+        keyCode: event.keyCode,
+        charactersIgnoringModifiers: event.charactersIgnoringModifiers)
+      {
+        let clickAllowed = magicModifiers.union(.shift)
+        let clickModifiers = ClickModifiers(
+          eventFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+          allowed: clickAllowed)
+        coordinator.overlayDidAdjust(command, clickModifiers: clickModifiers)
+      }
+      return true
     }
 
     if coordinator.overlayDidHandleMapping(event) {

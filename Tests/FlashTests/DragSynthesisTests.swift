@@ -47,5 +47,58 @@ final class DragSynthesisTests: XCTestCase {
     XCTAssertEqual(MouseCommand.select(modifiers: []).argTokens, ["--select"])
     XCTAssertEqual(
       MouseCommand.multi(.rightClick, modifiers: []).argTokens, ["--multi", "--secondary"])
+    XCTAssertEqual(
+      MouseCommand.adjust(.doubleClick, modifiers: []).argTokens, ["--adjust", "--double"])
+  }
+
+  func testAdjustmentInterpreterKeymap() {
+    func cmd(_ keyCode: UInt16, _ chars: String? = nil) -> HintAdjustmentCommand? {
+      HintAdjustmentInterpreter.command(keyCode: keyCode, charactersIgnoringModifiers: chars)
+    }
+    XCTAssertEqual(cmd(53), .cancel)
+    XCTAssertEqual(cmd(36), .commit)
+    XCTAssertEqual(cmd(49), .commit)
+    XCTAssertEqual(cmd(123), .snapLeft)
+    XCTAssertEqual(cmd(126), .snapTop)
+    XCTAssertEqual(cmd(4, "h"), .snapLeft)
+    XCTAssertEqual(cmd(37, "l"), .snapRight)
+    XCTAssertEqual(cmd(40, "k"), .snapTop)
+    XCTAssertEqual(cmd(38, "j"), .snapBottom)
+    XCTAssertEqual(cmd(29, "0"), .reset)
+    XCTAssertEqual(cmd(22, "6"), .interpolate(6))
+    XCTAssertNil(cmd(0, "a"))
+  }
+
+  func testAdjustmentApplySnapsClampsAndInterpolates() {
+    let frame = CGRect(x: 100, y: 200, width: 200, height: 50)
+    let center = CGPoint(x: 200, y: 225)
+    XCTAssertEqual(
+      HintAdjustmentInterpreter.apply(.snapLeft, to: center, in: frame),
+      CGPoint(x: 102, y: 225))
+    XCTAssertEqual(
+      HintAdjustmentInterpreter.apply(.snapRight, to: center, in: frame),
+      CGPoint(x: 298, y: 225))
+    // NSScreen coordinates: top is maxY.
+    XCTAssertEqual(
+      HintAdjustmentInterpreter.apply(.snapTop, to: center, in: frame),
+      CGPoint(x: 200, y: 248))
+    XCTAssertEqual(
+      HintAdjustmentInterpreter.apply(.snapBottom, to: center, in: frame),
+      CGPoint(x: 200, y: 202))
+    XCTAssertEqual(
+      HintAdjustmentInterpreter.apply(.interpolate(3), to: center, in: frame),
+      CGPoint(x: 160, y: 225))
+    XCTAssertEqual(
+      HintAdjustmentInterpreter.apply(.reset, to: CGPoint(x: 298, y: 248), in: frame),
+      center)
+    // A point outside the frame is clamped back in.
+    XCTAssertEqual(
+      HintAdjustmentInterpreter.apply(.snapLeft, to: CGPoint(x: 0, y: 0), in: frame),
+      CGPoint(x: 102, y: 200))
+    // Degenerate frames don't cross their own edges.
+    let thin = CGRect(x: 10, y: 10, width: 2, height: 2)
+    let snapped = HintAdjustmentInterpreter.apply(.snapLeft, to: .zero, in: thin)
+    XCTAssertGreaterThanOrEqual(snapped.x, thin.minX)
+    XCTAssertLessThanOrEqual(snapped.x, thin.maxX)
   }
 }

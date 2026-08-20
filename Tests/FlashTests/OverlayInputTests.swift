@@ -804,6 +804,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   func overlayDidCancel() { cancelCount += 1 }
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent) {}
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {}
+  func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {}
   func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
     commitCenterModifiers.append(clickModifiers)
     return commitCenterHandled

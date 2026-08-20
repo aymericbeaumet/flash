@@ -55,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case drag
     case select
     case multiClick
+    case adjustClick
     case mouseGridClick
     case mouseGridMove
     case mouseGridDrag
@@ -340,6 +341,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var mouseGridInitialRegion: MouseGrid.Region? {
     get { hintSession.mouseGridInitialRegion }
     set { hintSession.mouseGridInitialRegion = newValue }
+  }
+  var adjustingHint: AssignedHint? {
+    get { hintSession.adjustingHint }
+    set { hintSession.adjustingHint = newValue }
+  }
+  var adjustPoint: CGPoint? {
+    get { hintSession.adjustPoint }
+    set { hintSession.adjustPoint = newValue }
   }
   /// The last click Flash committed (hints, grid, or multi session), replayed
   /// by `mouse_repeat`. Deliberately outside `hintSession`: it must survive

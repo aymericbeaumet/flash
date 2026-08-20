@@ -16,7 +16,9 @@ extension AppDelegate {
       ? .drag
       : command.isSelect
         ? .select
-        : command.isMulti ? .multiClick : command.isMove ? .moveMouse : .click
+        : command.isMulti
+          ? .multiClick
+          : command.isAdjust ? .adjustClick : command.isMove ? .moveMouse : .click
     activate(
       action: command.action,
       commitBehavior: behavior,

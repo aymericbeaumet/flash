@@ -147,11 +147,16 @@ enum MouseCommand: Hashable {
   /// Multi-click session: each commit performs `action` and keeps the hint set
   /// (or restarted grid) up for the next target; Escape ends the session.
   case multi(JumpAction, modifiers: ClickModifiers)
+  /// Precision session (`mouse_target` only): the matched hint enters an
+  /// adjustment sub-state — snap the click point to the target's bounding-box
+  /// edges or interpolate across its width — before the commit key clicks.
+  case adjust(JumpAction, modifiers: ClickModifiers)
 
   var action: JumpAction {
     switch self {
     case .click(let action, _): return action
     case .multi(let action, _): return action
+    case .adjust(let action, _): return action
     case .move, .drag, .select: return .leftClick
     }
   }
@@ -162,6 +167,7 @@ enum MouseCommand: Hashable {
     case .drag(let modifiers): return modifiers
     case .select(let modifiers): return modifiers
     case .multi(_, let modifiers): return modifiers
+    case .adjust(_, let modifiers): return modifiers
     case .move: return []
     }
   }
@@ -183,6 +189,11 @@ enum MouseCommand: Hashable {
 
   var isMulti: Bool {
     if case .multi = self { return true }
+    return false
+  }
+
+  var isAdjust: Bool {
+    if case .adjust = self { return true }
     return false
   }
 }
@@ -316,8 +327,9 @@ final class URLEventHandler: NSObject {
   /// flags any missed wiring.
   private static let commands: [String: (VerbArgs) -> URLCommand?] = [
     "mouse_target": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
-    "mouse_grid": { a in mouseCommand(a).map(URLCommand.mouseGrid) },
-    "mouse_snipe": { a in mouseCommand(a).map(URLCommand.mouseGrid) },
+    // The grid IS the precision surface, so `--adjust` is a config error there.
+    "mouse_grid": { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) },
+    "mouse_snipe": { a in mouseCommand(a, allowAdjust: false).map(URLCommand.mouseGrid) },
     "mouse_click": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
     "mouse_repeat": { a in a.args.isEmpty ? .mouseRepeat : nil },
     "enter_normal_mode": { _ in .normalMode },
@@ -408,7 +420,7 @@ final class URLEventHandler: NSObject {
   ]
 
   static let usageText = """
-    flash mouse_target [--secondary|--double|--middle|--triple|--move|--drag|--select] [--multi] [--modifiers=cmd+ctrl+alt+shift]
+    flash mouse_target [--secondary|--double|--middle|--triple|--move|--drag|--select] [--multi|--adjust] [--modifiers=cmd+ctrl+alt+shift]
     flash mouse_grid [--secondary|--double|--middle|--triple|--move|--drag|--select] [--multi] [--modifiers=cmd+ctrl+alt+shift]
     flash enter_normal_mode
     flash enter_insert_mode
@@ -544,7 +556,7 @@ private func registerArg(_ a: VerbArgs) -> String? {
   return raw
 }
 
-private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
+private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseCommand? {
   let modifiers: ClickModifiers
   if let raw = a.value("modifiers") {
     let names = raw.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
@@ -559,8 +571,12 @@ private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
   let drag = a.bool("drag")
   let select = a.bool("select")
   let multi = a.bool("multi")
-  if [drag, select, multi].filter({ $0 }).count > 1 { return nil }
-  if a.bool("move") { return (modifiers.isEmpty && !drag && !select && !multi) ? .move : nil }
+  let adjust = a.bool("adjust")
+  if adjust && !allowAdjust { return nil }
+  if [drag, select, multi, adjust].filter({ $0 }).count > 1 { return nil }
+  if a.bool("move") {
+    return (modifiers.isEmpty && !drag && !select && !multi && !adjust) ? .move : nil
+  }
   let variants: [JumpAction] = [
     a.bool("secondary") ? .rightClick : nil,
     a.bool("double") ? .doubleClick : nil,
@@ -571,6 +587,7 @@ private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
   if select { return variants.isEmpty ? .select(modifiers: modifiers) : nil }
   if variants.count > 1 { return nil }
   if multi { return .multi(variants.first ?? .leftClick, modifiers: modifiers) }
+  if adjust { return .adjust(variants.first ?? .leftClick, modifiers: modifiers) }
   return .click(variants.first ?? .leftClick, modifiers: modifiers)
 }
 

@@ -139,6 +139,12 @@ final class OverlayPanel: NSPanel {
   let candidateFinderResultsLabel = CATextLayer()
   var candidateFinderResultRowLayers: [CATextLayer] = []
   let activeWindowBorderLayer = CAShapeLayer()
+  /// Bounding box + crosshair for the `--adjust` sub-state: outlines the
+  /// matched target and marks the exact point the commit key will click.
+  let adjustmentMarkerLayer = CAShapeLayer()
+  /// True while an `--adjust` hint session is in its post-match phase; routes
+  /// hints-mode keys to `HintAdjustmentInterpreter` instead of prefix typing.
+  var adjustmentActive = false
   var modeBadgeVisible = false
   var statusAppText = ""
   var modeBadgeText = "INSERT"
@@ -444,6 +450,12 @@ final class OverlayPanel: NSPanel {
     activeWindowBorderLayer.strokeColor = Self.nordFrost2CG
     activeWindowBorderLayer.lineWidth = 2
     activeWindowBorderLayer.actions = OverlayPanel.noActions
+    adjustmentMarkerLayer.fillColor = NSColor.clear.cgColor
+    adjustmentMarkerLayer.strokeColor = Self.nordFrost2CG
+    adjustmentMarkerLayer.lineWidth = 1.5
+    adjustmentMarkerLayer.isHidden = true
+    adjustmentMarkerLayer.actions = OverlayPanel.noActions
+    contentLayer.addSublayer(adjustmentMarkerLayer)
 
     self.contentView = view
     configureCommandTextField()
@@ -590,6 +602,9 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidCancel()
   func overlayDidCancelByPointer(_ intent: OverlayPointerIntent)
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers)
+  /// One keystroke of the `--adjust` sub-state (edge snap, interpolation,
+  /// commit, cancel). Only called while `adjustmentActive` is set.
+  func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers)
   /// `<space>` in the hints surface. Commits the mouse grid's centre cell
   /// and returns `true` when mouse-grid mode is active; returns `false`
   /// otherwise so the panel falls back to cancelling the overlay.
