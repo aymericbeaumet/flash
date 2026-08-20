@@ -493,7 +493,7 @@ extension AppDelegate {
     switch click.action {
     case .rightClick:
       return false
-    case .leftClick, .doubleClick:
+    case .leftClick, .middleClick, .doubleClick, .tripleClick:
       break
     }
     // Forward (re-synthesise) the click whenever the original physical click

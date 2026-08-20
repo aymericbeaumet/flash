@@ -1015,8 +1015,9 @@ extension URLCommand {
 extension MouseCommand {
   /// Arg tokens for `mouse_target` / `mouse_grid` in diagnostic form.
   /// Empty for a plain left-click, `["--secondary"]` for right-click,
-  /// `["--double"]` for double-click, `["--move"]` for cursor-only move,
-  /// with an optional `--modifiers=…` suffix for a preset modified click.
+  /// `["--middle"]` for middle-click, `["--double"]` / `["--triple"]` for
+  /// multi-clicks, `["--move"]` for cursor-only move, with an optional
+  /// `--modifiers=…` suffix for a preset modified click.
   var argTokens: [String] {
     switch self {
     case .move:
@@ -1026,7 +1027,9 @@ extension MouseCommand {
       switch action {
       case .leftClick: tokens = []
       case .rightClick: tokens = ["--secondary"]
+      case .middleClick: tokens = ["--middle"]
       case .doubleClick: tokens = ["--double"]
+      case .tripleClick: tokens = ["--triple"]
       }
       if !modifiers.isEmpty {
         tokens.append("--modifiers=\(modifiers.argumentValue)")

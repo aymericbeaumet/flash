@@ -428,8 +428,12 @@ final class AXBroker {
     switch raw {
     case "right_click":
       return .rightClick
+    case "middle_click":
+      return .middleClick
     case "double_click":
       return .doubleClick
+    case "triple_click":
+      return .tripleClick
     default:
       return .leftClick
     }

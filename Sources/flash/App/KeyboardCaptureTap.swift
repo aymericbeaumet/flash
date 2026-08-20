@@ -63,6 +63,18 @@ final class KeyboardCaptureTap {
     }
   }
 
+  static func shouldEnterInsertAfterNativeSurfacePassthrough(
+    flashMode: FlashMode,
+    modifierFlags: CGEventFlags,
+    hasMapping: Bool,
+    isPassthroughKey: Bool,
+    passthroughModifierFlags: CGEventFlags
+  ) -> Bool {
+    guard flashMode == .normal, !hasMapping else { return false }
+    return isPassthroughKey
+      || !modifierFlags.intersection(passthroughModifierFlags).isEmpty
+  }
+
   /// Create + install the tap. Returns false if the OS refused it (no
   /// Accessibility grant), so the caller can fall back to key-window capture.
   @discardableResult

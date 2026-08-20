@@ -112,11 +112,30 @@ enum ActionDispatcher {
     let source = CGEventSource(stateID: .combinedSessionState)
     let originalCursor = CGEvent(source: source)?.location ?? cgPoint
 
-    let button: CGMouseButton = action == .rightClick ? .right : .left
-    let downType: CGEventType = action == .rightClick ? .rightMouseDown : .leftMouseDown
-    let upType: CGEventType = action == .rightClick ? .rightMouseUp : .leftMouseUp
+    let button: CGMouseButton
+    let downType: CGEventType
+    let upType: CGEventType
+    switch action {
+    case .rightClick:
+      button = .right
+      downType = .rightMouseDown
+      upType = .rightMouseUp
+    case .middleClick:
+      button = .center
+      downType = .otherMouseDown
+      upType = .otherMouseUp
+    case .leftClick, .doubleClick, .tripleClick:
+      button = .left
+      downType = .leftMouseDown
+      upType = .leftMouseUp
+    }
 
-    let clickCount = action == .doubleClick ? 2 : 1
+    let clickCount: Int
+    switch action {
+    case .doubleClick: clickCount = 2
+    case .tripleClick: clickCount = 3
+    case .leftClick, .rightClick, .middleClick: clickCount = 1
+    }
     struct ClickPair {
       let down: CGEvent
       let up: CGEvent

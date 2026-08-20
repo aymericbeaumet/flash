@@ -336,8 +336,13 @@ private func postMouseClick(at nsScreenPoint: CGPoint, action: JumpAction) {
     post(.rightMouseDown, button: .right)
     Thread.sleep(forTimeInterval: 0.05)
     post(.rightMouseUp, button: .right)
-  case .doubleClick:
-    for click in 1...2 {
+  case .middleClick:
+    post(.otherMouseDown, button: .center)
+    Thread.sleep(forTimeInterval: 0.05)
+    post(.otherMouseUp, button: .center)
+  case .doubleClick, .tripleClick:
+    let clickCount = action == .tripleClick ? 3 : 2
+    for click in 1...clickCount {
       let down = CGEvent(
         mouseEventSource: source,
         mouseType: .leftMouseDown,

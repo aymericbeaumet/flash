@@ -171,6 +171,15 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(argv: ["flash", "mouse_target", "--double"])?.command,
       .mouseTarget(.click(.doubleClick, modifiers: [])))
     XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_target", "--middle"])?.command,
+      .mouseTarget(.click(.middleClick, modifiers: [])))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_target", "--triple"])?.command,
+      .mouseTarget(.click(.tripleClick, modifiers: [])))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_grid", "--middle"])?.command,
+      .mouseGrid(.click(.middleClick, modifiers: [])))
+    XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "mouse_target", "--move"])?.command,
       .mouseTarget(.move))
     XCTAssertEqual(
@@ -195,6 +204,11 @@ final class HotkeySyntaxTests: XCTestCase {
     XCTAssertNil(
       parseMappingCommand(argv: ["flash", "mouse_target", "--move", "--modifiers=cmd"]))
     XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_move"]))
+    // Click variants are mutually exclusive.
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--secondary", "--double"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--middle", "--secondary"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--triple", "--double"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--middle", "--triple"]))
   }
 
   func testParseEnterCommandRestoreMode() {

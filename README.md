@@ -113,6 +113,8 @@ flash mouse_target                       # primary click (Firefox adds Command; 
 flash mouse_target --modifiers=cmd+shift # new-context click for links only
 flash mouse_target --secondary           # right-click
 flash mouse_target --double              # double-click
+flash mouse_target --middle              # middle-click
+flash mouse_target --triple              # triple-click
 flash mouse_target --move                # move the pointer only
 flash mouse_grid                         # target any screen position
 flash app_open --name=Firefox            # open or focus an app

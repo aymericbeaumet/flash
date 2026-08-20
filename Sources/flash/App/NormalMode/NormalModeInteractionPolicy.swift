@@ -117,12 +117,16 @@ enum NormalModePointerPolicy {
 
   static func pointerActionMayEnterInsert(_ action: JumpAction) -> Bool {
     switch action {
-    case .leftClick, .doubleClick:
+    case .leftClick, .doubleClick, .tripleClick:
       return true
     case .rightClick:
       // Right-click only ever opens a context menu; it never hands the keyboard
       // to the app, so a committed right-click stays in NORMAL (the menu takes
       // its own modal session via `suspendNormalCaptureForNativeSurface`).
+      return false
+    case .middleClick:
+      // Middle-click gestures (open-in-background-tab, close-tab, autoscroll)
+      // act on the target without moving keyboard focus into a text surface.
       return false
     }
   }

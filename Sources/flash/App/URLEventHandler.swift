@@ -372,8 +372,8 @@ final class URLEventHandler: NSObject {
   ]
 
   static let usageText = """
-    flash mouse_target [--secondary|--double|--move] [--modifiers=cmd+ctrl+alt+shift]
-    flash mouse_grid [--secondary|--double|--move] [--modifiers=cmd+ctrl+alt+shift]
+    flash mouse_target [--secondary|--double|--middle|--triple|--move] [--modifiers=cmd+ctrl+alt+shift]
+    flash mouse_grid [--secondary|--double|--middle|--triple|--move] [--modifiers=cmd+ctrl+alt+shift]
     flash enter_normal_mode
     flash enter_insert_mode
     flash enter_locked_insert_mode
@@ -521,12 +521,14 @@ private func mouseCommand(_ a: VerbArgs) -> MouseCommand? {
     modifiers = []
   }
   if a.bool("move") { return modifiers.isEmpty ? .move : nil }
-  let secondary = a.bool("secondary")
-  let double = a.bool("double")
-  if secondary && double { return nil }
-  if secondary { return .click(.rightClick, modifiers: modifiers) }
-  if double { return .click(.doubleClick, modifiers: modifiers) }
-  return .click(.leftClick, modifiers: modifiers)
+  let variants: [JumpAction] = [
+    a.bool("secondary") ? .rightClick : nil,
+    a.bool("double") ? .doubleClick : nil,
+    a.bool("middle") ? .middleClick : nil,
+    a.bool("triple") ? .tripleClick : nil,
+  ].compactMap { $0 }
+  if variants.count > 1 { return nil }
+  return .click(variants.first ?? .leftClick, modifiers: modifiers)
 }
 
 /// `flash send_key keys=<hotkey>` synthesizes one modified keystroke to

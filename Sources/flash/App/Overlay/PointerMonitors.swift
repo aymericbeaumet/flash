@@ -110,6 +110,8 @@ extension OverlayPanel {
     let action: JumpAction
     if event?.type == .rightMouseDown {
       action = .rightClick
+    } else if (event?.clickCount ?? 1) >= 3 {
+      action = .tripleClick
     } else if (event?.clickCount ?? 1) >= 2 {
       action = .doubleClick
     } else {

@@ -1813,7 +1813,11 @@ final class NormalModeTests: XCTestCase {
     // path instead of insert.
     XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.leftClick))
     XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.doubleClick))
+    XCTAssertTrue(NormalModePointerPolicy.pointerActionMayEnterInsert(.tripleClick))
     XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.rightClick))
+    // Middle-click gestures act on the target without moving keyboard focus
+    // into a text surface, so they stay in NORMAL like right-click.
+    XCTAssertFalse(NormalModePointerPolicy.pointerActionMayEnterInsert(.middleClick))
   }
 
   func testPointerInsertIntentSeparatesSemanticHintsFromMouseSimulation() {

@@ -1015,7 +1015,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       return false
     }
-    if nativeSurfaceSuspended || aboutWindowVisible {
+    if aboutWindowVisible {
+      let flags = event.flags
+      let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+      let passthroughModifierFlags = KeyModifier.cgEventFlags(
+        config.mode.normalPassthroughModifiers)
+      let shouldEnterInsert = KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
+        flashMode: flashMode,
+        modifierFlags: flags,
+        hasMapping: mappings.hasMapping(virtualKey: keyCode, cgFlags: flags),
+        isPassthroughKey: overlay.normalModePassthroughKeyCodes.contains(keyCode),
+        passthroughModifierFlags: passthroughModifierFlags)
+      if shouldEnterInsert {
+        let targetPID = normalModeTargetPID
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.flashMode == .normal else { return }
+          self.enterInsertMode(
+            reason: .normalModePassthrough,
+            targetPID: targetPID)
+        }
+      }
+      return KeyboardCaptureTap.shouldSwallow(
+        flashMode: flashMode,
+        inputMode: overlay.inputMode,
+        nativeSurfaceOwnsKeyboard: true)
+    }
+    if nativeSurfaceSuspended {
       return KeyboardCaptureTap.shouldSwallow(
         flashMode: flashMode,
         inputMode: overlay.inputMode,
