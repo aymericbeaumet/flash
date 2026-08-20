@@ -148,6 +148,9 @@ final class OverlayPanel: NSPanel {
   /// True while a `mouse_pointer` session owns the keyboard; routes hints-mode
   /// keys to `PointerModeInterpreter`.
   var pointerModeActive = false
+  /// True while a `--search` (seek & click) session owns the keyboard; routes
+  /// hints-mode keys to `HintSearchInterpreter`.
+  var searchModeActive = false
   var modeBadgeVisible = false
   var statusAppText = ""
   var modeBadgeText = "INSERT"
@@ -610,6 +613,9 @@ protocol OverlayCoordinator: AnyObject {
   func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers)
   /// One keystroke of pointer mode. Only called while `pointerModeActive`.
   func overlayDidPointer(_ command: PointerModeCommand)
+  /// One keystroke of the `--search` sub-state. Only called while
+  /// `searchModeActive`.
+  func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers)
   /// `<space>` in the hints surface. Commits the mouse grid's centre cell
   /// and returns `true` when mouse-grid mode is active; returns `false`
   /// otherwise so the panel falls back to cancelling the overlay.

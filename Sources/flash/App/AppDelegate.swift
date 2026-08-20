@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     case select
     case multiClick
     case adjustClick
+    case searchClick
     case mouseGridClick
     case mouseGridMove
     case mouseGridDrag

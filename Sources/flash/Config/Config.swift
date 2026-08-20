@@ -1044,9 +1044,14 @@ extension MouseCommand {
         tokens.append("--modifiers=\(modifiers.argumentValue)")
       }
       return tokens
-    case .multi(let action, let modifiers), .adjust(let action, let modifiers):
+    case .multi(let action, let modifiers), .adjust(let action, let modifiers),
+      .search(let action, let modifiers):
       let session: String
-      if case .multi = self { session = "--multi" } else { session = "--adjust" }
+      switch self {
+      case .multi: session = "--multi"
+      case .adjust: session = "--adjust"
+      default: session = "--search"
+      }
       var tokens = [session]
       switch action {
       case .leftClick: break

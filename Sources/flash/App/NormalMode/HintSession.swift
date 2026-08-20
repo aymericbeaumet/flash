@@ -40,6 +40,13 @@ struct HintSession {
   var pointerDragActive = false
   var pointerMoveStreak = 0
   var pointerLastMoveAt: Date?
+  /// `--search` (seek & click): the typed filter, the current selection
+  /// index into the filtered set, and the unfiltered master hint set so
+  /// backspace can widen again.
+  var searchActive = false
+  var searchQuery = ""
+  var searchSelectionIndex = 0
+  var searchAllHints: [AssignedHint] = []
 }
 
 /// The activation generation-token machine: the async-cancellation core that

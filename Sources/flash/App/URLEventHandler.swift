@@ -159,12 +159,16 @@ enum MouseCommand: Hashable {
   /// adjustment sub-state — snap the click point to the target's bounding-box
   /// edges or interpolate across its width — before the commit key clicks.
   case adjust(JumpAction, modifiers: ClickModifiers)
+  /// Seek & click (`mouse_target` only): type visible label text to filter
+  /// the targets, Tab cycles, Return commits the selection with `action`.
+  case search(JumpAction, modifiers: ClickModifiers)
 
   var action: JumpAction {
     switch self {
     case .click(let action, _): return action
     case .multi(let action, _): return action
     case .adjust(let action, _): return action
+    case .search(let action, _): return action
     case .move, .drag, .select: return .leftClick
     }
   }
@@ -176,6 +180,7 @@ enum MouseCommand: Hashable {
     case .select(let modifiers): return modifiers
     case .multi(_, let modifiers): return modifiers
     case .adjust(_, let modifiers): return modifiers
+    case .search(_, let modifiers): return modifiers
     case .move: return []
     }
   }
@@ -202,6 +207,11 @@ enum MouseCommand: Hashable {
 
   var isAdjust: Bool {
     if case .adjust = self { return true }
+    return false
+  }
+
+  var isSearch: Bool {
+    if case .search = self { return true }
     return false
   }
 }
@@ -583,10 +593,12 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
   let select = a.bool("select")
   let multi = a.bool("multi")
   let adjust = a.bool("adjust")
-  if adjust && !allowAdjust { return nil }
-  if [drag, select, multi, adjust].filter({ $0 }).count > 1 { return nil }
+  let search = a.bool("search")
+  if (adjust || search) && !allowAdjust { return nil }
+  if [drag, select, multi, adjust, search].filter({ $0 }).count > 1 { return nil }
   if a.bool("move") {
-    return (modifiers.isEmpty && !drag && !select && !multi && !adjust) ? .move : nil
+    return (modifiers.isEmpty && !drag && !select && !multi && !adjust && !search)
+      ? .move : nil
   }
   let variants: [JumpAction] = [
     a.bool("secondary") ? .rightClick : nil,
@@ -599,6 +611,7 @@ private func mouseCommand(_ a: VerbArgs, allowAdjust: Bool = true) -> MouseComma
   if variants.count > 1 { return nil }
   if multi { return .multi(variants.first ?? .leftClick, modifiers: modifiers) }
   if adjust { return .adjust(variants.first ?? .leftClick, modifiers: modifiers) }
+  if search { return .search(variants.first ?? .leftClick, modifiers: modifiers) }
   return .click(variants.first ?? .leftClick, modifiers: modifiers)
 }
 

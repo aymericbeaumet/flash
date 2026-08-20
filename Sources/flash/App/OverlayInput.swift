@@ -35,6 +35,74 @@ enum HintAdjustmentCommand: Equatable {
   case cancel
 }
 
+/// One keystroke of the `--search` sub-state (seek & click): type visible
+/// label text to filter the discovered targets, Tab cycles the selection,
+/// Return commits it with the pending click action.
+enum HintSearchCommand: Equatable {
+  case append(Character)
+  case backspace
+  case cycle
+  case commit
+  case cancel
+}
+
+enum HintSearchInterpreter {
+  static func command(
+    keyCode: UInt16,
+    charactersIgnoringModifiers: String?,
+    modifierFlags: NSEvent.ModifierFlags
+  ) -> HintSearchCommand? {
+    switch keyCode {
+    case 53:  // escape
+      return .cancel
+    case 36, 76:  // return / keypad enter
+      return .commit
+    case 48:  // tab
+      return .cycle
+    case 51:  // delete
+      return .backspace
+    default:
+      break
+    }
+    guard modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+      return nil
+    }
+    guard let char = charactersIgnoringModifiers?.first else { return nil }
+    if char == " " { return .append(" ") }
+    guard !char.isWhitespace, !char.isNewline else { return nil }
+    return .append(char)
+  }
+
+  /// Filter targets by their visible text: case-insensitive substring first,
+  /// then an in-order character subsequence fallback so `sbm` still finds
+  /// "Submit". An empty query keeps everything.
+  static func filter(_ hints: [AssignedHint], query: String) -> [AssignedHint] {
+    let needle = query.lowercased()
+    guard !needle.isEmpty else { return hints }
+    let substring = hints.filter { searchText($0).contains(needle) }
+    if !substring.isEmpty { return substring }
+    return hints.filter { subsequenceMatch(searchText($0), needle) }
+  }
+
+  static func searchText(_ hint: AssignedHint) -> String {
+    [hint.target.accessibilityLabel, hint.target.url]
+      .compactMap { $0 }
+      .joined(separator: " ")
+      .lowercased()
+  }
+
+  static func subsequenceMatch(_ text: String, _ query: String) -> Bool {
+    var cursor = query.startIndex
+    for char in text {
+      guard cursor < query.endIndex else { return true }
+      if char == query[cursor] {
+        cursor = query.index(after: cursor)
+      }
+    }
+    return cursor >= query.endIndex
+  }
+}
+
 /// One keystroke of pointer mode (`mouse_pointer`): freestyle cursor control
 /// with vim movement, in-place clicks, a drag toggle, and a committing click.
 enum PointerModeCommand: Equatable {
@@ -357,6 +425,23 @@ extension OverlayPanel {
     if inputMode == .commandLine { return false }
     if inputMode == .candidateFinder {
       return handleCandidateFinderKeyEvent(event)
+    }
+
+    // The `--search` sub-state owns every key while active — same rule as the
+    // pointer and adjustment sub-states below (all mutually exclusive).
+    if searchModeActive {
+      if let command = HintSearchInterpreter.command(
+        keyCode: event.keyCode,
+        charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+        modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+      {
+        let clickAllowed = magicModifiers.union(.shift)
+        let clickModifiers = ClickModifiers(
+          eventFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
+          allowed: clickAllowed)
+        coordinator.overlayDidSearch(command, clickModifiers: clickModifiers)
+      }
+      return true
     }
 
     // Pointer mode owns every key while active — same total-ownership rule as

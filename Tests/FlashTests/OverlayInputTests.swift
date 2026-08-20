@@ -806,6 +806,7 @@ private final class SpyOverlayCoordinator: OverlayCoordinator {
   func overlayDidCommit(prefix: String, clickModifiers: ClickModifiers) {}
   func overlayDidAdjust(_ command: HintAdjustmentCommand, clickModifiers: ClickModifiers) {}
   func overlayDidPointer(_ command: PointerModeCommand) {}
+  func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {}
   func overlayDidCommitCenter(clickModifiers: ClickModifiers) -> Bool {
     commitCenterModifiers.append(clickModifiers)
     return commitCenterHandled

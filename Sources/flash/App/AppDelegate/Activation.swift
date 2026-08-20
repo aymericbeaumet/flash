@@ -18,7 +18,9 @@ extension AppDelegate {
         ? .select
         : command.isMulti
           ? .multiClick
-          : command.isAdjust ? .adjustClick : command.isMove ? .moveMouse : .click
+          : command.isAdjust
+            ? .adjustClick
+            : command.isSearch ? .searchClick : command.isMove ? .moveMouse : .click
     activate(
       action: command.action,
       commitBehavior: behavior,
@@ -214,6 +216,14 @@ extension AppDelegate {
       self.currentHints = displayHints
       self.currentPrefix = ""
       self.overlay.display(hints: displayHints)
+      if commitBehavior == .searchClick {
+        // Seek & click: the panel routes subsequent keys to the search
+        // interpreter instead of hint-prefix typing.
+        self.hintSession.searchActive = true
+        self.hintSession.searchAllHints = displayHints
+        self.overlay.searchModeActive = true
+        self.updateSearchSelectionMarker()
+      }
       FlashLog.debug(
         "[activation] displayed pid=\(context.processID) "
           + "bundle=\(context.bundleIdentifier) hints=\(displayHints.count) "

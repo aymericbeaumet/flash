@@ -1,3 +1,4 @@
+import FlashCore
 import XCTest
 
 @testable import flash
@@ -101,6 +102,45 @@ final class DragSynthesisTests: XCTestCase {
     XCTAssertEqual(PointerModeInterpreter.nextStreak(previous: 4, sinceLastMoveMs: 80), 5)
     XCTAssertEqual(PointerModeInterpreter.nextStreak(previous: 4, sinceLastMoveMs: 500), 0)
     XCTAssertEqual(PointerModeInterpreter.nextStreak(previous: 4, sinceLastMoveMs: nil), 0)
+  }
+
+  func testSearchInterpreterKeymapAndFilter() {
+    func cmd(
+      _ keyCode: UInt16, _ chars: String? = nil,
+      flags: NSEvent.ModifierFlags = []
+    ) -> HintSearchCommand? {
+      HintSearchInterpreter.command(
+        keyCode: keyCode, charactersIgnoringModifiers: chars, modifierFlags: flags)
+    }
+    XCTAssertEqual(cmd(53), .cancel)
+    XCTAssertEqual(cmd(36), .commit)
+    XCTAssertEqual(cmd(48), .cycle)
+    XCTAssertEqual(cmd(51), .backspace)
+    XCTAssertEqual(cmd(0, "a"), .append("a"))
+    XCTAssertEqual(cmd(49, " "), .append(" "))
+    // Modified chords are swallowed, not appended.
+    XCTAssertNil(cmd(0, "a", flags: .command))
+
+    func hint(_ label: String, url: String? = nil) -> AssignedHint {
+      AssignedHint(
+        target: JumpTarget(
+          id: label, frame: CGRect(x: 0, y: 0, width: 10, height: 10), role: "AXButton",
+          accessibilityLabel: label, url: url, providerID: "test"),
+        label: "a")
+    }
+    let hints = [hint("Submit form"), hint("Cancel"), hint("Send by mail")]
+    XCTAssertEqual(
+      HintSearchInterpreter.filter(hints, query: "sub").map(\.target.id), ["Submit form"])
+    // Substring beats subsequence when both exist.
+    XCTAssertEqual(
+      HintSearchInterpreter.filter(hints, query: "can").map(\.target.id), ["Cancel"])
+    // Subsequence fallback: "sbm" has no substring match but matches Submit.
+    XCTAssertEqual(
+      HintSearchInterpreter.filter(hints, query: "sbm").map(\.target.id),
+      ["Submit form", "Send by mail"])
+    // Empty query keeps everything.
+    XCTAssertEqual(HintSearchInterpreter.filter(hints, query: "").count, 3)
+    XCTAssertTrue(HintSearchInterpreter.filter(hints, query: "zzz").isEmpty)
   }
 
   func testAdjustmentApplySnapsClampsAndInterpolates() {

@@ -123,6 +123,7 @@ flash mouse_grid --select                # select text between two grid position
 flash mouse_target --multi               # click several targets; Escape ends the session
 flash mouse_repeat                       # re-click the last committed point
 flash mouse_target --adjust              # refine the click point before committing
+flash mouse_target --search              # type visible text to pick the target (seek & click)
 flash mouse_pointer                      # freestyle cursor control (hjkl, m/,/. click, v drag)
 flash scroll_target                      # pick which scroll area the scroll keys drive
 flash mouse_grid                         # target any screen position

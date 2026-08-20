@@ -265,6 +265,15 @@ final class HotkeySyntaxTests: XCTestCase {
       parseMappingCommand(argv: ["flash", "scroll_target"])?.command, .scrollTarget)
     XCTAssertEqual(
       parseMappingCommand(argv: ["flash", "focus_input"])?.command, .focusInput)
+    // Search: mouse_target only, exclusive with the other session flags.
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_target", "--search"])?.command,
+      .mouseTarget(.search(.leftClick, modifiers: [])))
+    XCTAssertEqual(
+      parseMappingCommand(argv: ["flash", "mouse_target", "--search", "--double"])?.command,
+      .mouseTarget(.search(.doubleClick, modifiers: [])))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_grid", "--search"]))
+    XCTAssertNil(parseMappingCommand(argv: ["flash", "mouse_target", "--search", "--multi"]))
   }
 
   func testParseEnterCommandRestoreMode() {

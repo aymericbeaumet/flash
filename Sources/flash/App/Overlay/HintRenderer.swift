@@ -360,6 +360,12 @@ extension OverlayPanel {
   /// NSScreen (bottom-left); layers live in panel-local space.
   func showAdjustment(markerAt point: CGPoint, targetFrame: CGRect) {
     adjustmentActive = true
+    showSelectionMarker(at: point, targetFrame: targetFrame)
+  }
+
+  /// The marker drawing alone, without entering the adjustment sub-state —
+  /// the `--search` selection highlight reuses it.
+  func showSelectionMarker(at point: CGPoint, targetFrame: CGRect) {
     let origin = frame.origin
     let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
     let localFrame = CGRect(
@@ -419,6 +425,7 @@ extension OverlayPanel {
     showHintCursor()
     hideAdjustment()
     pointerModeActive = false
+    searchModeActive = false
     transientContentVisible = false
     commandPromptVisible = false
     commandPromptPrefix = ":"

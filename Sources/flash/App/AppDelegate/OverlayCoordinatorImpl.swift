@@ -278,7 +278,7 @@ extension AppDelegate {
     case .mouseGridClick, .mouseGridMove, .mouseGridDrag, .mouseGridSelect, .mouseGridMulti:
       commitMouseGridCell(hint: hint, clickModifiers: clickModifiers)
       return
-    case .click, .copyURL, .moveMouse, .drag, .select, .multiClick, .adjustClick:
+    case .click, .copyURL, .moveMouse, .drag, .select, .multiClick, .adjustClick, .searchClick:
       break
     }
     if pendingHintCommitBehavior == .copyURL {
@@ -657,6 +657,68 @@ extension AppDelegate {
         }
       }
     }
+  }
+
+  /// One keystroke of the `--search` sub-state (seek & click), forwarded by
+  /// the panel while `searchModeActive` is set: printable characters filter
+  /// the target set by visible text, Tab cycles the selection, Return commits
+  /// it through the standard click path.
+  func overlayDidSearch(_ command: HintSearchCommand, clickModifiers: ClickModifiers) {
+    guard hintSession.searchActive else {
+      cancelOverlay()
+      return
+    }
+    switch command {
+    case .cancel:
+      cancelOverlay()
+    case .append(let char):
+      hintSession.searchQuery.append(char)
+      refreshSearchMatches()
+    case .backspace:
+      guard !hintSession.searchQuery.isEmpty else { return }
+      hintSession.searchQuery.removeLast()
+      refreshSearchMatches()
+    case .cycle:
+      guard !currentHints.isEmpty else { return }
+      hintSession.searchSelectionIndex =
+        (hintSession.searchSelectionIndex + 1) % currentHints.count
+      updateSearchSelectionMarker()
+    case .commit:
+      guard !currentHints.isEmpty else { return }
+      let index = min(hintSession.searchSelectionIndex, currentHints.count - 1)
+      let selected = currentHints[index]
+      hintSession.searchActive = false
+      overlay.searchModeActive = false
+      overlay.hideAdjustment()
+      commit(hint: selected, clickModifiers: clickModifiers)
+    }
+  }
+
+  private func refreshSearchMatches() {
+    let matches = HintSearchInterpreter.filter(
+      hintSession.searchAllHints, query: hintSession.searchQuery)
+    hintSession.searchSelectionIndex = 0
+    currentHints = matches
+    overlay.display(hints: matches)
+    // display() re-arms hint-prefix routing state on the panel; restore the
+    // search flag it does not know about.
+    overlay.searchModeActive = true
+    updateSearchSelectionMarker()
+    FlashLog.trace(
+      "[search] query_len=\(hintSession.searchQuery.count) matches=\(matches.count)")
+  }
+
+  func updateSearchSelectionMarker() {
+    guard hintSession.searchActive || pendingHintCommitBehavior == .searchClick,
+      !currentHints.isEmpty
+    else {
+      overlay.hideAdjustment()
+      return
+    }
+    let index = min(hintSession.searchSelectionIndex, currentHints.count - 1)
+    let frame = currentHints[index].target.frame
+    overlay.showSelectionMarker(
+      at: CGPoint(x: frame.midX, y: frame.midY), targetFrame: frame)
   }
 
   /// One keystroke of the `--adjust` sub-state, forwarded by the panel while
