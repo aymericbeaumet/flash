@@ -110,7 +110,10 @@ request's own deadline bounds that suspension.
 ## Plugin → host
 
 Notifications: `flash.log` (structured logging), `status.updated` (values for
-declared status segments, rendered as `#{plugin:<id>.<segment>}`).
+declared status segments, rendered as `#{plugin:<id>.<segment>}`), and
+`sources.invalidated` (the warm catalog changed; an open flashlight session
+re-pulls this plugin's snapshot, a closed one ignores it — rate-limited
+host-side to one accepted notification per second).
 
 Host RPCs, capability-gated default-deny (checked per process against the
 manifest):

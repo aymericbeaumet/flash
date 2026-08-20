@@ -1572,6 +1572,34 @@ extension AppDelegate {
     }
   }
 
+  /// A plugin declared its warm catalog stale (`sources.invalidated`). With
+  /// no flashlight session open this is a no-op — the next open pulls fresh
+  /// stores anyway. With one open, re-pull just that plugin's catalog and
+  /// merge it through the per-source pool swap; live plugins instead get
+  /// their (filter, text) dedup key cleared so the next keystroke refires.
+  func handlePluginSourcesInvalidated(_ pluginID: String) {
+    switch overlay.inputMode {
+    case .commandLine, .candidateFinder: break
+    default: return
+    }
+    let sourceID = "plugin:\(pluginID)"
+    guard let source = pluginManager.sources.first(where: { $0.identifier == sourceID }) else {
+      return
+    }
+    if SourceRegistry.isLiveCandidateSource(source) {
+      candidateFinderLiveQueryKey = nil
+      return
+    }
+    // Only re-pull catalogs this session already surfaced: an initial
+    // (location) source, or a non-location one the user opted into.
+    let alreadySurfaced =
+      candidateFinderFetchedNonLocationSourceIDs.contains(sourceID)
+      || registry.initialCandidateSnapshotSources().contains { $0.identifier == sourceID }
+    guard alreadySurfaced else { return }
+    FlashLog.trace("[candidate_finder] invalidated_repull source=\(sourceID)")
+    fanOutCandidateSnapshots([source], generation: candidateFinderSessionGeneration)
+  }
+
   /// Fire per-keystroke `sources.query` pulls at live plugin sources when —
   /// and only when — the query is explicitly scoped to them: an `@source`
   /// filter, or a confirmed bang bound to a `candidate_source`. The default

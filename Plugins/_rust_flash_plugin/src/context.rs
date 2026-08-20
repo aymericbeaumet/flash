@@ -424,6 +424,14 @@ impl Context {
             .notify("status.updated", json!({ "segments": object }));
     }
 
+    /// Declare this plugin's warm catalog stale (`sources.invalidated`): an
+    /// open flashlight session re-pulls it, a closed one ignores the signal
+    /// (the next open pulls fresh stores anyway). Host-side rate limit: one
+    /// accepted notification per second.
+    pub fn invalidate_sources(&self) {
+        self.emit.notify("sources.invalidated", json!({}));
+    }
+
     pub fn log(&self, level: &str, message: &str) {
         self.emit.log(level, message, BTreeMap::new());
     }

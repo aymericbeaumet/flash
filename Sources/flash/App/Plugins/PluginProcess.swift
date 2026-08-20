@@ -84,6 +84,12 @@ final class PluginProcess {
   /// tell whether this plugin's settings changed.
   let settings: [String: PluginConfigValue]
   var onStatusChanged: (() -> Void)?
+  /// Fired (rate-limited to 1/s) when the plugin sends a
+  /// `sources.invalidated` notification: its warm catalog changed and an
+  /// open flashlight session may want a re-pull. Closed sessions ignore it —
+  /// the next open pulls fresh stores anyway.
+  var onSourcesInvalidated: (() -> Void)?
+  private var lastSourcesInvalidatedAt: Date?
   /// Handles a plugin→host RPC request (`call_host` on the plugin side):
   /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
   /// installs this; `reply` is invoked with the JSON result, possibly async
@@ -1378,6 +1384,16 @@ final class PluginProcess {
       notifyStatus()
     case "status.updated":
       applyStatusSegments(params)
+    case "sources.invalidated":
+      let now = Date()
+      if let last = lastSourcesInvalidatedAt, now.timeIntervalSince(last) < 1 {
+        FlashLog.plugin(
+          .trace, pluginID: manifest.id,
+          message: "[plugin] sources.invalidated rate-limited", fields: [:])
+      } else {
+        lastSourcesInvalidatedAt = now
+        onSourcesInvalidated?()
+      }
     default:
       break
     }

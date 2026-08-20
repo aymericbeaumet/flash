@@ -239,6 +239,11 @@ final class PluginManager {
     get { hostRPC.onNotifyRequested }
     set { hostRPC.onNotifyRequested = newValue }
   }
+
+  /// Fired with a plugin id when that plugin declares its warm catalog stale
+  /// (`sources.invalidated`). Delivery thread is the plugin's own queue;
+  /// consumers hop to main.
+  var onSourcesInvalidated: ((String) -> Void)?
   /// See `PluginHostRPC.onSyntheticKeysRequested`; forwarded likewise.
   var onSyntheticKeysRequested: ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)? {
     get { hostRPC.onSyntheticKeysRequested }
@@ -894,6 +899,9 @@ final class PluginManager {
           initialRunningApplications: latestRunningApplicationsSnapshot)
         plugin.onStatusChanged = { [weak self] in
           self?.notifyStateChanged()
+        }
+        plugin.onSourcesInvalidated = { [weak self, id = manifest.id] in
+          self?.onSourcesInvalidated?(id)
         }
         // Capture immutable authorization with the process. A host RPC arrives
         // on PluginProcess.queue; consulting PluginManager.queue synchronously
