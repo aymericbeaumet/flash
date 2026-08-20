@@ -616,6 +616,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       focusTextInputInNormalMode(index: 1)
     case .scrollTarget:
       activateScrollTargetHints()
+    case .mouseDock:
+      activateDockHints()
+    case .mouseStatusBar:
+      activateStatusItemHints()
     case .normalMode:
       enterNormalMode()
     case .insertMode:

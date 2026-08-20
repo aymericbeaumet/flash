@@ -32,6 +32,10 @@ enum URLCommand: Hashable {
   /// Hint-label the focused window's scroll areas; committing moves the
   /// pointer into the chosen one so subsequent scroll verbs land there.
   case scrollTarget
+  /// Hint-label the Dock's items (apps, minimized windows, trash).
+  case mouseDock
+  /// Hint-label the menu-bar status items (WindowServer geometry only).
+  case mouseStatusBar
   case normalMode
   case insertMode
   case lockedInsertMode
@@ -353,6 +357,8 @@ final class URLEventHandler: NSObject {
     "mouse_pointer": { a in a.args.isEmpty ? .mousePointer : nil },
     "focus_input": { a in a.args.isEmpty ? .focusInput : nil },
     "scroll_target": { a in a.args.isEmpty ? .scrollTarget : nil },
+    "mouse_dock": { a in a.args.isEmpty ? .mouseDock : nil },
+    "mouse_statusbar": { a in a.args.isEmpty ? .mouseStatusBar : nil },
     "enter_normal_mode": { _ in .normalMode },
     "enter_insert_mode": { _ in .insertMode },
     "enter_locked_insert_mode": { _ in .lockedInsertMode },

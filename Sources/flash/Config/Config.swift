@@ -924,6 +924,8 @@ extension URLCommand {
     case .mousePointer: return verb("mouse_pointer")
     case .focusInput: return verb("focus_input")
     case .scrollTarget: return verb("scroll_target")
+    case .mouseDock: return verb("mouse_dock")
+    case .mouseStatusBar: return verb("mouse_statusbar")
     case .normalMode: return verb("enter_normal_mode")
     case .insertMode: return verb("enter_insert_mode")
     case .lockedInsertMode: return verb("enter_locked_insert_mode")

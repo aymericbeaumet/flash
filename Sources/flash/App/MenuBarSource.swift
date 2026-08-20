@@ -111,7 +111,7 @@ final class MenuBarSource: FlashSource {
   private static func walkMenuBar(
     pid: pid_t
   ) -> ([Candidate], [String: AXUIElement]) {
-    let app = AXUIElementCreateApplication(pid)
+    let app = AXApp.make(pid: pid)
     var menuBarRaw: CFTypeRef?
     guard
       AXUIElementCopyAttributeValue(app, kAXMenuBarAttribute as CFString, &menuBarRaw)

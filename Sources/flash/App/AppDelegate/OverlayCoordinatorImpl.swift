@@ -436,7 +436,13 @@ extension AppDelegate {
             }
           }
         } else if wasNormalMode {
-          self.restoreNormalModeAfterCommit(action: action)
+          if hint.target.role == AppDelegate.statusItemHintRole {
+            // The click just opened a status-item menu — a modal native
+            // surface, same rule as right-click context menus.
+            self.suspendNormalCaptureForNativeSurface(reason: "status_item_menu")
+          } else {
+            self.restoreNormalModeAfterCommit(action: action)
+          }
         }
       }
     }

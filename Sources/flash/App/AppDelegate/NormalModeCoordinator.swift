@@ -1073,6 +1073,10 @@ extension AppDelegate {
       focusTextInputInNormalMode(index: repeatCount)
     case .scrollTarget:
       activateScrollTargetHints()
+    case .mouseDock:
+      activateDockHints()
+    case .mouseStatusBar:
+      activateStatusItemHints()
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()
