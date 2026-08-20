@@ -196,7 +196,8 @@ enum PluginWireCodec {
       guard
         let decoded = candidateEffect(
           from: rawEffect,
-          maxTextBytes: maxCandidateEffectBytes),
+          maxTextBytes: maxCandidateEffectBytes,
+          allowOpen: true),
         let nextBytes = addingBytes(
           stringBytes,
           decoded.textBytes,
@@ -266,7 +267,8 @@ enum PluginWireCodec {
       let rawEffect = present(raw["effect"]),
       let decodedEffect = candidateEffect(
         from: rawEffect,
-        maxTextBytes: maxQueryFieldBytes)
+        maxTextBytes: maxQueryFieldBytes,
+        allowOpen: false)
     else { return nil }
     var stringBytes = title.utf8.count
     guard
@@ -307,24 +309,47 @@ enum PluginWireCodec {
     )
   }
 
+  /// `allowOpen` gates the `open` effect to catalog rows: query evaluators
+  /// are deliberately unable to manufacture navigation (the same reason they
+  /// can't return URLs), so an `open` effect in a query answer rejects it.
   private static func candidateEffect(
     from raw: Any,
-    maxTextBytes: Int
+    maxTextBytes: Int,
+    allowOpen: Bool
   ) -> (effect: CandidateEffect, textBytes: Int)? {
     guard let effect = raw as? [String: Any],
-      Set(effect.keys) == Set(["type", "text"]),
       let type = effect["type"] as? String
     else {
       return nil
     }
     switch type {
-    case "copy_text":
+    case "copy_text", "insert_text":
       guard
+        Set(effect.keys) == Set(["type", "text"]),
         let text = effect["text"] as? String,
         !text.isEmpty,
         text.utf8.count <= maxTextBytes
       else { return nil }
-      return (.copyText(text), text.utf8.count)
+      return (type == "copy_text" ? .copyText(text) : .insertText(text), text.utf8.count)
+    case "open" where allowOpen:
+      if Set(effect.keys) == Set(["type", "url"]) {
+        guard
+          let value = effect["url"] as? String,
+          value.utf8.count <= maxTextBytes,
+          let parsed = URL(string: value),
+          parsed.scheme != nil
+        else { return nil }
+        return (.openURL(value), value.utf8.count)
+      }
+      if Set(effect.keys) == Set(["type", "bundle_id"]) {
+        guard
+          let value = effect["bundle_id"] as? String,
+          !value.isEmpty,
+          value.utf8.count <= maxTextBytes
+        else { return nil }
+        return (.openApplication(value), value.utf8.count)
+      }
+      return nil
     default:
       return nil
     }
@@ -359,11 +384,17 @@ enum PluginWireCodec {
     if let url = candidate.url {
       dict["url"] = url.absoluteString
     }
-    if case .copyText(let text) = candidate.effect {
-      dict["effect"] = [
-        "type": "copy_text",
-        "text": text,
-      ]
+    switch candidate.effect {
+    case .copyText(let text):
+      dict["effect"] = ["type": "copy_text", "text": text]
+    case .insertText(let text):
+      dict["effect"] = ["type": "insert_text", "text": text]
+    case .openURL(let url):
+      dict["effect"] = ["type": "open", "url": url]
+    case .openApplication(let bundleID):
+      dict["effect"] = ["type": "open", "bundle_id": bundleID]
+    case nil:
+      break
     }
     return dict
   }

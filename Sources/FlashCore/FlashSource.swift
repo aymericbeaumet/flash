@@ -230,6 +230,14 @@ public struct Candidate: @unchecked Sendable {
 public enum CandidateEffect: Sendable, Equatable {
   /// Replace the system clipboard with `text`.
   case copyText(String)
+  /// Type `text` into the focused app after selection. The host performs the
+  /// insertion; the plugin never posts keystrokes.
+  case insertText(String)
+  /// Hand a URL to LaunchServices after selection.
+  case openURL(String)
+  /// Launch/activate the application with this bundle identifier after
+  /// selection.
+  case openApplication(String)
 }
 
 public struct NormalizedScoringFields: Sendable {

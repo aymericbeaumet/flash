@@ -174,7 +174,21 @@ pub struct Candidate {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CandidateEffect {
-    CopyText { text: String },
+    CopyText {
+        text: String,
+    },
+    InsertText {
+        text: String,
+    },
+    /// Exactly one of `url` / `bundle_id`. Catalog rows only — the host
+    /// rejects `open` effects in query answers (evaluators cannot
+    /// manufacture navigation).
+    Open {
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        bundle_id: Option<String>,
+    },
 }
 
 /// Narrow output from a pure query evaluator. Evaluators cannot manufacture
@@ -194,6 +208,20 @@ impl QueryAnswer {
         let title = title.into();
         Self {
             effect: CandidateEffect::CopyText {
+                text: title.clone(),
+            },
+            title,
+            subtitle: subtitle.map(Into::into),
+        }
+    }
+
+    /// Answer that types its title into the focused app on selection.
+    /// (`open` effects are rejected in query answers — evaluators cannot
+    /// manufacture navigation.)
+    pub fn insert_text(title: impl Into<String>, subtitle: Option<impl Into<String>>) -> Self {
+        let title = title.into();
+        Self {
+            effect: CandidateEffect::InsertText {
                 text: title.clone(),
             },
             title,
@@ -353,6 +381,32 @@ impl Candidate {
     /// pasteboard access; the plugin performs no clipboard I/O.
     pub fn copy_text(mut self, text: impl Into<String>) -> Self {
         self.effect = Some(CandidateEffect::CopyText { text: text.into() });
+        self
+    }
+
+    /// Type `text` into the focused app after the user selects this
+    /// candidate. The host owns the keystroke synthesis.
+    pub fn insert_text(mut self, text: impl Into<String>) -> Self {
+        self.effect = Some(CandidateEffect::InsertText { text: text.into() });
+        self
+    }
+
+    /// Open `url` via LaunchServices after the user selects this candidate.
+    pub fn open_url_effect(mut self, url: impl Into<String>) -> Self {
+        self.effect = Some(CandidateEffect::Open {
+            url: Some(url.into()),
+            bundle_id: None,
+        });
+        self
+    }
+
+    /// Launch/activate the app with `bundle_id` after the user selects this
+    /// candidate.
+    pub fn open_app_effect(mut self, bundle_id: impl Into<String>) -> Self {
+        self.effect = Some(CandidateEffect::Open {
+            url: None,
+            bundle_id: Some(bundle_id.into()),
+        });
         self
     }
 

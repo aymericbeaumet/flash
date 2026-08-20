@@ -140,9 +140,16 @@ Catalogs are bounded to 10,000 rows / 4 MiB encoded; titles 4 KiB, URLs
 64 KiB. Query responses use the deliberately narrower
 `{ answers: [{ title, subtitle?, effect }] }` — URLs, metadata, pids,
 priorities, routing fields, and unknown keys are rejected — bounded to
-16 answers / 256 KiB with 16-KiB fields. In both shapes `effect` is exactly
-`{ "type": "copy_text", "text": "..." }` and runs only after explicit
-selection. Every bound rejects the complete payload atomically; nothing is
+16 answers / 256 KiB with 16-KiB fields. `effect` runs only after explicit
+selection and takes one of three shapes: `{ "type": "copy_text", "text" }`
+(host replaces the clipboard), `{ "type": "insert_text", "text" }` (host
+types the text into the focused app), or — **catalog rows only** —
+`{ "type": "open", "url" }` / `{ "type": "open", "bundle_id" }` (host hands
+the target to LaunchServices). Query answers reject `open` for the same
+reason they reject URLs: evaluators cannot manufacture navigation. There is
+deliberately no `run` effect — a host-executed argv would escape the
+plugin's sandbox profile; side effects that run commands belong in
+`candidate.resolve` / `source.action`, inside the sandbox. Every bound rejects the complete payload atomically; nothing is
 silently truncated. One malformed row rejects the whole snapshot: the host
 serves nothing for that pull (the Rust SDK preserves its last-good store
 locally, so the next pull can still answer).

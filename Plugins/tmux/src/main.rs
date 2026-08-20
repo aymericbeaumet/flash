@@ -2643,6 +2643,15 @@ fn hash_candidates(candidates: &[Candidate]) -> u64 {
                 1u8.hash(&mut hasher);
                 text.hash(&mut hasher);
             }
+            Some(CandidateEffect::InsertText { text }) => {
+                2u8.hash(&mut hasher);
+                text.hash(&mut hasher);
+            }
+            Some(CandidateEffect::Open { url, bundle_id }) => {
+                3u8.hash(&mut hasher);
+                url.hash(&mut hasher);
+                bundle_id.hash(&mut hasher);
+            }
             None => 0u8.hash(&mut hasher),
         }
     }

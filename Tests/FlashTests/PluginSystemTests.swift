@@ -810,6 +810,78 @@ final class PluginSystemTests: XCTestCase {
         source: "calculator"))
   }
 
+  func testEffectVariantsDecodeAndOpenIsGatedToCatalogRows() throws {
+    // insert_text decodes in both shapes.
+    let insertAnswer = try XCTUnwrap(
+      decodeQueryAnswer(
+        from: [
+          "title": "shrug",
+          "effect": ["type": "insert_text", "text": "¯\\_(ツ)_/¯"],
+        ],
+        sourceID: "plugin:snippets",
+        source: "snippets"))
+    guard case .insertText(let inserted) = insertAnswer.effect else {
+      return XCTFail("expected insert_text effect")
+    }
+    XCTAssertEqual(inserted, "¯\\_(ツ)_/¯")
+
+    // Catalog rows accept open effects — url or bundle_id, exactly one.
+    let openURLRow = try XCTUnwrap(
+      decodeCandidate(
+        from: [
+          "title": "Docs",
+          "effect": ["type": "open", "url": "https://example.com/docs"],
+          "metadata": ["source": "safe.items"],
+        ],
+        sourceID: "plugin:safe",
+        allowed: ["safe.items"]))
+    XCTAssertEqual(openURLRow.effect, .openURL("https://example.com/docs"))
+    let openAppRow = try XCTUnwrap(
+      decodeCandidate(
+        from: [
+          "title": "Calculator",
+          "effect": ["type": "open", "bundle_id": "com.apple.calculator"],
+          "metadata": ["source": "safe.items"],
+        ],
+        sourceID: "plugin:safe",
+        allowed: ["safe.items"]))
+    XCTAssertEqual(openAppRow.effect, .openApplication("com.apple.calculator"))
+
+    // Schemeless URLs, both-keys, and neither-key forms are rejected.
+    XCTAssertNil(
+      decodeCandidate(
+        from: [
+          "title": "bad",
+          "effect": ["type": "open", "url": "not a url"],
+          "metadata": ["source": "safe.items"],
+        ],
+        sourceID: "plugin:safe",
+        allowed: ["safe.items"]))
+    XCTAssertNil(
+      decodeCandidate(
+        from: [
+          "title": "bad",
+          "effect": [
+            "type": "open",
+            "url": "https://example.com",
+            "bundle_id": "com.example",
+          ],
+          "metadata": ["source": "safe.items"],
+        ],
+        sourceID: "plugin:safe",
+        allowed: ["safe.items"]))
+
+    // Query answers reject open — evaluators cannot manufacture navigation.
+    XCTAssertNil(
+      decodeQueryAnswer(
+        from: [
+          "title": "nav",
+          "effect": ["type": "open", "url": "https://example.com"],
+        ],
+        sourceID: "plugin:calculator",
+        source: "calculator"))
+  }
+
   func testQueryAnswerFieldAndAggregateLimitsAreStrict() {
     let oversizedField = String(
       repeating: "x",

@@ -1160,12 +1160,37 @@ extension AppDelegate {
   }
 
   func openSourceItem(_ candidate: Candidate, recordMovement shouldRecordMovement: Bool = true) {
-    if case .copyText(let text) = candidate.effect {
+    switch candidate.effect {
+    case .copyText(let text):
       overlay.hide()
       resetCommandLineState()
       applyModeOverlay(captureOverride: true)
       NormalModeDispatcher.copy(text)
       return
+    case .insertText(let text):
+      insertText(text, viaClipboard: true)
+      return
+    case .openURL(let raw):
+      overlay.hide()
+      resetCommandLineState()
+      applyModeOverlay(captureOverride: true)
+      if let url = URL(string: raw), url.scheme != nil {
+        NSWorkspace.shared.open(url)
+      }
+      return
+    case .openApplication(let bundleID):
+      overlay.hide()
+      resetCommandLineState()
+      applyModeOverlay(captureOverride: true)
+      if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+        NSWorkspace.shared.openApplication(
+          at: appURL, configuration: NSWorkspace.OpenConfiguration())
+      } else {
+        FlashLog.warn("[candidate_finder] open effect: no app for bundle id \(bundleID)")
+      }
+      return
+    case nil:
+      break
     }
     if CandidateFinder.insertsText(candidate) {
       // Emoji type directly (no clipboard); other inserted values (e.g. a
