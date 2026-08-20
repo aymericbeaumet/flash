@@ -21,6 +21,9 @@ import FlashCore
 enum URLCommand: Hashable {
   case mouseTarget(MouseCommand)
   case mouseGrid(MouseCommand)
+  /// Re-click the last Flash-committed click point (sticky click). Repeats
+  /// honour normal-mode counts (`3` + mapped key clicks three times).
+  case mouseRepeat
   case normalMode
   case insertMode
   case lockedInsertMode
@@ -316,6 +319,7 @@ final class URLEventHandler: NSObject {
     "mouse_grid": { a in mouseCommand(a).map(URLCommand.mouseGrid) },
     "mouse_snipe": { a in mouseCommand(a).map(URLCommand.mouseGrid) },
     "mouse_click": { a in mouseCommand(a).map(URLCommand.mouseTarget) },
+    "mouse_repeat": { a in a.args.isEmpty ? .mouseRepeat : nil },
     "enter_normal_mode": { _ in .normalMode },
     "enter_insert_mode": { _ in .insertMode },
     "enter_locked_insert_mode": { _ in .lockedInsertMode },

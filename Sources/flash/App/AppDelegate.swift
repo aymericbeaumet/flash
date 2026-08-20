@@ -341,6 +341,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     get { hintSession.mouseGridInitialRegion }
     set { hintSession.mouseGridInitialRegion = newValue }
   }
+  /// The last click Flash committed (hints, grid, or multi session), replayed
+  /// by `mouse_repeat`. Deliberately outside `hintSession`: it must survive
+  /// the session reset so a repeat works after the overlay is gone.
+  struct LastCommittedClick {
+    var point: CGPoint
+    var action: JumpAction
+    var modifiers: ClickModifiers
+    var pid: pid_t?
+  }
+  var lastCommittedClick: LastCommittedClick?
   var movementCurrent: MovementEntry?
   var movementBackStack: [MovementEntry] = []
   var movementForwardStack: [MovementEntry] = []
@@ -572,6 +582,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       activateMouseTarget(command, contextOverride: nil)
     case .mouseGrid(let command):
       activateMouseGrid(command, contextOverride: nil)
+    case .mouseRepeat:
+      performMouseRepeat()
     case .normalMode:
       enterNormalMode()
     case .insertMode:

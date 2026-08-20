@@ -353,6 +353,8 @@ extension AppDelegate {
       for: hint, fontSize: CGFloat(config.overlay.fontSize))
     let chipCenter = CGPoint(x: chipRect.midX, y: chipRect.midY)
     let clickPoint = hint.target.resolveClickPoint?() ?? chipCenter
+    lastCommittedClick = LastCommittedClick(
+      point: clickPoint, action: action, modifiers: resolvedClickModifiers, pid: pid)
     FlashLog.trace(
       "[commit] action=\(action) role=\(hint.target.role ?? "?") "
         + "provider=\(hint.target.providerID) "
@@ -602,6 +604,8 @@ extension AppDelegate {
       return
     }
     let clickAction = pendingAction
+    lastCommittedClick = LastCommittedClick(
+      point: point, action: clickAction, modifiers: resolvedClickModifiers, pid: priorPID)
     let handoffToken: UInt64?
     if clickAction != .rightClick {
       handoffToken = notePointerInsertHandoff(reason: "mouse_grid_commit")
@@ -641,6 +645,45 @@ extension AppDelegate {
     }
   }
 
+  /// Replay the last Flash-committed click (`mouse_repeat`). Re-raises the
+  /// owning app first so the click is interpreted, then posts `repeatCount`
+  /// identical clicks. Stays in the current mode — repeating a click is
+  /// manipulation, not typing intent.
+  func performMouseRepeat(repeatCount: Int = 1) {
+    guard let last = lastCommittedClick else {
+      FlashLog.debug("[mouse_repeat] no_previous_click")
+      applyModeOverlay()
+      return
+    }
+    let wasNormalMode = flashMode == .normal
+    if let pid = last.pid,
+      let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated
+    {
+      RunningApplicationActivation.activate(app, options: [])
+    }
+    FlashLog.trace(
+      "[mouse_repeat] point=(\(Int(last.point.x)),\(Int(last.point.y))) "
+        + "action=\(last.action) count=\(max(1, repeatCount))")
+    // The click queue is serial, so posting the repeats back-to-back keeps
+    // them ordered; only the final one carries the recapture completion.
+    let count = max(1, repeatCount)
+    for index in 1...count {
+      _ = ActionDispatcher.synthesizeClick(
+        at: last.point,
+        action: last.action,
+        modifiers: last.modifiers,
+        preserveCursor: false,
+        completion: index < count
+          ? nil
+          : { [weak self] in
+            guard let self else { return }
+            if wasNormalMode, self.flashMode == .normal {
+              self.scheduleNormalModeRecapture()
+            }
+          })
+    }
+  }
+
   /// One commit of a `--multi` session: perform the pending action on the
   /// selected target, then re-arm the same hint set for the next selection
   /// instead of tearing the session down. The session never enters INSERT —
@@ -662,6 +705,8 @@ extension AppDelegate {
     FlashLog.trace(
       "[commit] multi action=\(action) role=\(hint.target.role ?? "?") "
         + "click=(\(Int(clickPoint.x)),\(Int(clickPoint.y)))")
+    lastCommittedClick = LastCommittedClick(
+      point: clickPoint, action: action, modifiers: resolvedClickModifiers, pid: pid)
     if let targetApp {
       RunningApplicationActivation.activate(targetApp, options: [])
     }

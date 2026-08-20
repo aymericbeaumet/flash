@@ -1063,6 +1063,8 @@ extension AppDelegate {
       activateMouseTarget(command, contextOverride: normalModeContext())
     case .mouseGrid(let command):
       activateMouseGrid(command, contextOverride: normalModeContext())
+    case .mouseRepeat:
+      performMouseRepeat(repeatCount: repeatCount)
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()
