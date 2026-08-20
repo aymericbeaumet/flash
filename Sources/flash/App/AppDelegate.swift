@@ -598,6 +598,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       performMouseRepeat()
     case .mousePointer:
       enterPointerMode()
+    case .focusInput:
+      focusTextInputInNormalMode(index: 1)
     case .normalMode:
       enterNormalMode()
     case .insertMode:

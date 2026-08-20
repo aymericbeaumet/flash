@@ -123,4 +123,31 @@ extension AppDelegate {
       x: min(max(point.x, frame.minX), frame.maxX - 1),
       y: min(max(point.y, frame.minY), frame.maxY - 1))
   }
+
+  /// `focus_input` (Vimium `gi`): focus the count-th editable text input of
+  /// the focused window via the AX focused attribute, then enter INSERT so
+  /// typing flows immediately. The bounded AX walk runs off the main thread.
+  func focusTextInputInNormalMode(index: Int) {
+    guard let context = normalModeContext() ?? currentNonFlashContext() else {
+      applyModeOverlay()
+      return
+    }
+    let pid = context.processID
+    let normalized = max(1, index)
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let focused = NormalModeDispatcher.focusTextInput(pid: pid, index: normalized)
+      DispatchQueue.main.async {
+        guard let self else { return }
+        if focused {
+          FlashLog.trace("[focus_input] focused index=\(normalized) pid=\(pid)")
+          if self.flashMode == .normal {
+            self.enterInsertMode(reason: .explicitCommand, targetPID: pid)
+          }
+        } else {
+          FlashLog.debug("[focus_input] no_text_input pid=\(pid)")
+          self.applyModeOverlay()
+        }
+      }
+    }
+  }
 }

@@ -259,4 +259,59 @@ extension NormalModeDispatcher {
   private static let editableFocusRepairRoles: Set<String> = [
     "AXTextField", "AXTextArea",
   ]
+
+  /// `focus_input` (Vimium `gi`): focus the `index`-th (1-based) editable
+  /// text input of the focused window, in reading order (top-to-bottom, then
+  /// left-to-right — AX frames are top-left-origin, so ascending y is
+  /// downwards). Returns false when no input exists in the walk budget.
+  static func focusTextInput(pid: pid_t, index: Int, maxNodes: Int = 2000) -> Bool {
+    let app = AXApp.make(pid: pid)
+    guard
+      let window = elementAttribute(app, kAXFocusedWindowAttribute as String)
+        ?? elementAttribute(app, kAXMainWindowAttribute as String)
+    else { return false }
+    var queue = [window]
+    var cursor = 0
+    var inputs: [(element: AXUIElement, frame: CGRect)] = []
+    while cursor < queue.count, cursor < maxNodes {
+      let element = queue[cursor]
+      cursor += 1
+      if let role = role(of: element), focusableInputRoles.contains(role),
+        let frame = frame(of: element), frame.width >= 10, frame.height >= 8
+      {
+        inputs.append((element, frame))
+      }
+      var raw: CFTypeRef?
+      if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &raw)
+        == .success,
+        let children = raw as? [AXUIElement]
+      {
+        queue.append(contentsOf: children)
+      }
+    }
+    guard !inputs.isEmpty else { return false }
+    inputs.sort { lhs, rhs in
+      if abs(lhs.frame.minY - rhs.frame.minY) > 8 { return lhs.frame.minY < rhs.frame.minY }
+      return lhs.frame.minX < rhs.frame.minX
+    }
+    let target = inputs[min(max(index, 1), inputs.count) - 1]
+    return AXUIElementSetAttributeValue(
+      target.element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+  }
+
+  private static func frame(of element: AXUIElement) -> CGRect? {
+    var raw: CFTypeRef?
+    guard
+      AXUIElementCopyAttributeValue(element, "AXFrame" as CFString, &raw) == .success,
+      let value = raw,
+      CFGetTypeID(value) == AXValueGetTypeID()
+    else { return nil }
+    var rect = CGRect.zero
+    guard AXValueGetValue((value as! AXValue), .cgRect, &rect) else { return nil }
+    return rect
+  }
+
+  private static let focusableInputRoles: Set<String> = [
+    "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox",
+  ]
 }

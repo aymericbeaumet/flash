@@ -453,6 +453,7 @@ leader = "\\"
 "g7" = ["flash", "tab_select", "--index=7"]
 "g8" = ["flash", "tab_select", "--index=8"]
 "g9" = ["flash", "tab_select", "--index=9"]
+"gi" = ["flash", "focus_input"]              # Vimium: focus the first text input
 "ctrl+o" = ["flash", "movement_back"]
 "ctrl+i" = ["flash", "movement_forward"]
 "a" = ["flash", "enter_insert_mode"]

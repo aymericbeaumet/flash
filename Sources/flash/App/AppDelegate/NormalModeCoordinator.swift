@@ -1069,6 +1069,8 @@ extension AppDelegate {
       performMouseRepeat(repeatCount: repeatCount)
     case .mousePointer:
       enterPointerMode()
+    case .focusInput:
+      focusTextInputInNormalMode(index: repeatCount)
     case .copyURL:
       copyFocusedDocumentURL()
       applyModeOverlay()

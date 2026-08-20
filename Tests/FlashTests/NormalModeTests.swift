@@ -340,12 +340,13 @@ final class NormalModeTests: XCTestCase {
   }
 
   func testPendingPrefixBrokenByUnmappableKeyFallsBackToFreshInterpretation() {
-    // `g` is a prefix (gg/gt/g1…) but `gi` is unmapped — falling back
+    // `[` / `]` are prefixes but `[i` / `]i` are unmapped — falling back
     // to interpreting `i` from scratch lands on insert mode instead of
-    // silently swallowing the keystroke. Same for any other prefix.
-    XCTAssertEqual(command(pending: "g", chars: "i"), .insertMode)
+    // silently swallowing the keystroke.
     XCTAssertEqual(command(pending: "[", chars: "i"), .insertMode)
     XCTAssertEqual(command(pending: "]", chars: "i"), .insertMode)
+    // `gi` is a real mapping (Vimium: focus the first text input).
+    XCTAssertEqual(command(pending: "g", chars: "i"), .focusInput)
     assertSendKeyKeys(command(pending: "g", chars: "n"), "cmd+g")
     XCTAssertEqual(command(pending: "g", chars: "r"), .reload(force: false))
     // Valid sequence continuations still resolve to the mapped action.

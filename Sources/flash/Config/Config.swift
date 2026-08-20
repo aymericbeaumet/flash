@@ -528,6 +528,8 @@ struct Config {
         ("g7", .flashCommand(.tabSelect(index: 7))),
         ("g8", .flashCommand(.tabSelect(index: 8))),
         ("g9", .flashCommand(.tabSelect(index: 9))),
+        // Vimium `gi` — focus the first text input and enter INSERT.
+        ("gi", .flashCommand(.focusInput)),
         ("ctrl+o", .flashCommand(.movementBack)),
         ("ctrl+i", .flashCommand(.movementForward)),
         ("gt", .flashCommand(.tabNext)),
@@ -916,6 +918,7 @@ extension URLCommand {
       return verb("mouse_grid", command.argTokens)
     case .mouseRepeat: return verb("mouse_repeat")
     case .mousePointer: return verb("mouse_pointer")
+    case .focusInput: return verb("focus_input")
     case .normalMode: return verb("enter_normal_mode")
     case .insertMode: return verb("enter_insert_mode")
     case .lockedInsertMode: return verb("enter_locked_insert_mode")
