@@ -1,0 +1,22 @@
+{
+  "id": "history",
+  "name": "History",
+  "version": "0.1.0",
+  "description": "Browser history and bookmarks (Firefox, Chrome) in the flashlight via @history.",
+  "sandbox": {},
+  "exec": [
+    "./flash-plugin-history"
+  ],
+  "sources": [
+    {
+      "name": "history.urls",
+      "kind": "default",
+      "priority": "normal"
+    },
+    {
+      "name": "history.bookmarks",
+      "kind": "default",
+      "priority": "normal"
+    }
+  ]
+}

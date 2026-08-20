@@ -8,6 +8,7 @@ members = [
   "clipboard",
   "contacts",
   "firefox",
+  "history",
   "marks",
   "media",
   "notes",
