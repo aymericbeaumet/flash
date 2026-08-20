@@ -810,6 +810,30 @@ final class PluginSystemTests: XCTestCase {
         source: "calculator"))
   }
 
+  func testStorageEntryMergeEnforcesBounds() {
+    XCTAssertEqual(
+      PluginHostRPC.applyingStorageEntry(key: "a", value: "1", to: [:]), ["a": "1"])
+    XCTAssertEqual(
+      PluginHostRPC.applyingStorageEntry(key: "a", value: nil, to: ["a": "1", "b": "2"]),
+      ["b": "2"])
+    // Deleting an absent key is a no-op, not an error.
+    XCTAssertEqual(PluginHostRPC.applyingStorageEntry(key: "x", value: nil, to: [:]), [:])
+    // Oversized values are rejected.
+    XCTAssertNil(
+      PluginHostRPC.applyingStorageEntry(
+        key: "a",
+        value: String(repeating: "x", count: PluginHostRPC.maxStorageValueBytes + 1),
+        to: [:]))
+    // A full table rejects new keys but still allows updates and deletes.
+    var full: [String: String] = [:]
+    for index in 0..<PluginHostRPC.maxStorageEntries { full["k\(index)"] = "v" }
+    XCTAssertNil(PluginHostRPC.applyingStorageEntry(key: "new", value: "v", to: full))
+    XCTAssertNotNil(PluginHostRPC.applyingStorageEntry(key: "k0", value: "updated", to: full))
+    XCTAssertEqual(
+      PluginHostRPC.applyingStorageEntry(key: "k0", value: nil, to: full)?.count,
+      PluginHostRPC.maxStorageEntries - 1)
+  }
+
   func testEffectVariantsDecodeAndOpenIsGatedToCatalogRows() throws {
     // insert_text decodes in both shapes.
     let insertAnswer = try XCTUnwrap(

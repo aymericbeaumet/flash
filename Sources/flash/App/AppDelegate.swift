@@ -505,6 +505,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       return (pid: context.processID, bundleID: context.bundleIdentifier)
     }
+    pluginManager.onNotifyRequested = { [weak self] message, durationMs in
+      self?.overlay.displayBanner(message, durationMs: durationMs)
+    }
     pluginManager.onSyntheticKeysRequested = { [weak self] pid, chords, intervalMs in
       for (index, chord) in chords.enumerated() {
         DispatchQueue.main.asyncAfter(

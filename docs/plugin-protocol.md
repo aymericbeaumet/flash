@@ -112,8 +112,20 @@ manifest):
 | `host.open` | `open` |
 | `host.post_media_key` | `media_keys` |
 | `host.process_table`, `host.signal` | `process_control` |
+| `host.clipboard_write` | `clipboard` |
+| `host.notify` | `notify` |
+| `host.storage_get`, `host.storage_set` | none (plugin-data-dir scoped) |
 | `input.post_keys` | `accessibility` |
 | `ax.snapshot`, `ax.perform`, `ax.set`, `ax.select_child` | `accessibility` |
+
+`host.clipboard_write` replaces the clipboard with `{ "text" }` (≤ 1 MiB).
+`host.notify` shows a transient banner from `{ "message", "duration_ms"? }`
+(message ≤ 1 KiB, duration clamped 500–10000 ms, at most one accepted call
+per plugin per second). `host.storage_get` / `host.storage_set` are a
+host-managed KV store persisted to `storage.json` inside the plugin's data
+directory (`{ "key" }` / `{ "key", "value" | null }`; keys ≤ 128 B, values
+≤ 64 KiB, 256 entries; null deletes) so interpreted-language plugins stop
+hand-rolling persistence.
 
 The AX broker exists because `AXUIElement` cannot cross a process boundary:
 `ax.snapshot` BFS-walks a subtree (default cap 3000 nodes) and returns flat

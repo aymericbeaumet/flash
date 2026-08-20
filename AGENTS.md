@@ -490,12 +490,14 @@ an explicit `@source`/`!`bang filter.
      `ctx.set_locations("plugin:<manifest-id>", candidates)` before returning.
      This is the plugin's canonical aggregate catalog even when its candidates
      carry several user-facing source labels. Publish an authoritative `[]` when
-     no rows exist: the SDK withholds initialize success until that key exists,
-     returns its publication inventory, and the host accepts readiness only when
-     `published_sources` is exactly `["plugin:<manifest-id>"]`. Missing, extra,
-     differently named, or malformed publications are fatal startup violations;
-     there is no compatibility translation. After startup, keep replacing that
-     same canonical `plugin:<manifest-id>` entry with the complete aggregate;
+     no rows exist: the SDK withholds initialize success until that key exists.
+     Readiness is proven by the first snapshot, not an echo: after `initialize`
+     replies, the host pulls one `sources.snapshot` and only a cleanly decoding
+     result (authoritative empty included) marks the plugin initialized
+     (`PluginProcess.verifyInitialPublication`). A failed first pull restarts
+     the plugin; there is no compatibility translation. After startup, keep
+     replacing that same canonical `plugin:<manifest-id>` entry with the
+     complete aggregate;
      user-facing `sources[].name` labels belong inside candidate metadata, not
      in additional warm-store keys. The SDK queues events until startup
      completes, then runs

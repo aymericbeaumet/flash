@@ -233,6 +233,12 @@ final class PluginManager {
     get { hostRPC.onNormalModeTargetRequested }
     set { hostRPC.onNormalModeTargetRequested = newValue }
   }
+
+  /// See `PluginHostRPC.onNotifyRequested`; forwarded the same way.
+  var onNotifyRequested: ((String, Int) -> Void)? {
+    get { hostRPC.onNotifyRequested }
+    set { hostRPC.onNotifyRequested = newValue }
+  }
   /// See `PluginHostRPC.onSyntheticKeysRequested`; forwarded likewise.
   var onSyntheticKeysRequested: ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)? {
     get { hostRPC.onSyntheticKeysRequested }
@@ -895,6 +901,7 @@ final class PluginManager {
         // (manager queue -> stopAndWait -> process queue) and can deadlock.
         let capabilities = manifest.capabilities
         let fetchURLs = manifest.fetchURLs
+        let dataDir = baseDataDir.appendingPathComponent(manifest.id)
         plugin.onHostRequest = { [weak self] method, params, pluginID, reply in
           self?.hostRPC.handleHostRequest(
             method: method,
@@ -902,6 +909,7 @@ final class PluginManager {
             pluginID: pluginID,
             capabilities: capabilities,
             fetchURLs: fetchURLs,
+            dataDir: dataDir,
             reply: reply)
         }
         pluginsByID[manifest.id] = plugin

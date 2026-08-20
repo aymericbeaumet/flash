@@ -49,6 +49,9 @@ enum PluginCapability: String, Codable, CaseIterable, Equatable {
   /// (`host.signal`), replacing per-plugin libproc access and the
   /// `process_info`/`signal` seatbelt allowances.
   case processControl = "process_control"
+  /// Show a transient host banner (`host.notify`). Capability-gated (and
+  /// rate-limited host-side) so an arbitrary plugin cannot spam UI.
+  case notify
 }
 
 extension PluginCapability {

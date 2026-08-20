@@ -27,6 +27,13 @@ final class PluginHostRPC {
   /// (`noteSyntheticKey`) — a `postToPid` event can loop back through the
   /// Carbon hotkey path and re-trigger the user's own binding for the combo.
   var onSyntheticKeysRequested: ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)?
+  /// Executor for the `host.notify` RPC: shows a transient banner with the
+  /// given message and duration. Set by AppDelegate (routes to the overlay's
+  /// banner surface).
+  var onNotifyRequested: ((String, Int) -> Void)?
+  /// Per-plugin timestamp of the last accepted `host.notify`, enforcing the
+  /// 1-per-second rate limit. Main-thread only (notify hops to main).
+  private var lastNotifyAt: [String: Date] = [:]
 
   /// Routes a plugin→host RPC request to the matching core capability and
   /// delivers the JSON result via `reply`. This is the single entry point
@@ -39,6 +46,7 @@ final class PluginHostRPC {
     pluginID: String,
     capabilities: Set<PluginCapability>,
     fetchURLs: [String] = [],
+    dataDir: URL? = nil,
     reply: @escaping ([String: Any]) -> Void
   ) {
     switch method {
@@ -110,6 +118,22 @@ final class PluginHostRPC {
         return
       }
       signalProcess(params, reply: reply)
+    case "host.clipboard_write":
+      guard capabilities.contains(.clipboard) else {
+        reply(["ok": false, "error": "missing clipboard capability"])
+        return
+      }
+      hostClipboardWrite(params, reply: reply)
+    case "host.notify":
+      guard capabilities.contains(.notify) else {
+        reply(["ok": false, "error": "missing notify capability"])
+        return
+      }
+      hostNotify(params, pluginID: pluginID, reply: reply)
+    case "host.storage_get":
+      hostStorageGet(params, dataDir: dataDir, reply: reply)
+    case "host.storage_set":
+      hostStorageSet(params, dataDir: dataDir, reply: reply)
     default:
       FlashLog.warn(
         "[plugin] unknown host method \(method) from \(pluginID)",
@@ -181,6 +205,164 @@ final class PluginHostRPC {
         ])
       reply(["ok": true, "status": status, "body": body])
     }.resume()
+  }
+
+  /// `host.clipboard_write`: replace the system clipboard with `text`. The
+  /// host owns pasteboard access, so a sandboxed plugin needs no pasteboard
+  /// entitlement of its own.
+  static let maxClipboardWriteBytes = 1_048_576
+
+  private func hostClipboardWrite(
+    _ params: [String: Any],
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let text = params["text"] as? String,
+      text.utf8.count <= Self.maxClipboardWriteBytes
+    else {
+      reply(["ok": false, "error": "host.clipboard_write requires text under 1 MiB"])
+      return
+    }
+    DispatchQueue.main.async {
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(text, forType: .string)
+      reply(["ok": true])
+    }
+  }
+
+  /// `host.notify`: transient banner. Message capped at 1 KiB, duration
+  /// clamped to 0.5–10 s, at most one accepted notify per plugin per second.
+  static let maxNotifyMessageBytes = 1024
+
+  private func hostNotify(
+    _ params: [String: Any],
+    pluginID: String,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let message = params["message"] as? String,
+      !message.isEmpty,
+      message.utf8.count <= Self.maxNotifyMessageBytes
+    else {
+      reply(["ok": false, "error": "host.notify requires a message under 1 KiB"])
+      return
+    }
+    let durationMs = min(max((params["duration_ms"] as? Int) ?? 3000, 500), 10_000)
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      let now = Date()
+      if let last = self.lastNotifyAt[pluginID], now.timeIntervalSince(last) < 1 {
+        reply(["ok": false, "error": "host.notify rate limit: 1 per second"])
+        return
+      }
+      self.lastNotifyAt[pluginID] = now
+      self.onNotifyRequested?(message, durationMs)
+      reply(["ok": true])
+    }
+  }
+
+  /// `host.storage_get` / `host.storage_set`: a tiny host-managed KV store in
+  /// the plugin's own data directory (`storage.json`), so non-Rust plugins
+  /// stop hand-rolling persistence. No capability: the file lives inside the
+  /// directory the plugin's sandbox already grants it.
+  static let maxStorageKeyBytes = 128
+  static let maxStorageValueBytes = 65_536
+  static let maxStorageEntries = 256
+  private static let storageQueue = DispatchQueue(label: "flash.plugin.storage", qos: .utility)
+
+  static func readStorage(at url: URL) -> [String: String] {
+    guard let data = try? Data(contentsOf: url),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: String]
+    else { return [:] }
+    return object
+  }
+
+  /// Pure merge step for `host.storage_set`: nil `value` deletes. Returns nil
+  /// when the write would violate a bound (oversized value, table full).
+  static func applyingStorageEntry(
+    key: String,
+    value: String?,
+    to store: [String: String]
+  ) -> [String: String]? {
+    var next = store
+    guard let value else {
+      next.removeValue(forKey: key)
+      return next
+    }
+    guard value.utf8.count <= maxStorageValueBytes else { return nil }
+    if next[key] == nil, next.count >= maxStorageEntries { return nil }
+    next[key] = value
+    return next
+  }
+
+  private func hostStorageGet(
+    _ params: [String: Any],
+    dataDir: URL?,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let dataDir else {
+      reply(["ok": false, "error": "storage unavailable"])
+      return
+    }
+    guard let key = params["key"] as? String,
+      !key.isEmpty, key.utf8.count <= Self.maxStorageKeyBytes
+    else {
+      reply(["ok": false, "error": "host.storage_get requires a key under 128 bytes"])
+      return
+    }
+    let url = dataDir.appendingPathComponent("storage.json")
+    Self.storageQueue.async {
+      let store = Self.readStorage(at: url)
+      if let value = store[key] {
+        reply(["ok": true, "present": true, "value": value])
+      } else {
+        reply(["ok": true, "present": false])
+      }
+    }
+  }
+
+  private func hostStorageSet(
+    _ params: [String: Any],
+    dataDir: URL?,
+    reply: @escaping ([String: Any]) -> Void
+  ) {
+    guard let dataDir else {
+      reply(["ok": false, "error": "storage unavailable"])
+      return
+    }
+    guard let key = params["key"] as? String,
+      !key.isEmpty, key.utf8.count <= Self.maxStorageKeyBytes
+    else {
+      reply(["ok": false, "error": "host.storage_set requires a key under 128 bytes"])
+      return
+    }
+    let value: String?
+    if params["value"] == nil || params["value"] is NSNull {
+      value = nil
+    } else if let string = params["value"] as? String {
+      value = string
+    } else {
+      reply(["ok": false, "error": "host.storage_set value must be a string or null"])
+      return
+    }
+    let url = dataDir.appendingPathComponent("storage.json")
+    Self.storageQueue.async {
+      let store = Self.readStorage(at: url)
+      guard let next = Self.applyingStorageEntry(key: key, value: value, to: store) else {
+        reply([
+          "ok": false,
+          "error": "storage bound exceeded (64 KiB value, \(Self.maxStorageEntries) entries)",
+        ])
+        return
+      }
+      do {
+        try FileManager.default.createDirectory(
+          at: dataDir, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: next, options: [.sortedKeys])
+        try data.write(to: url, options: .atomic)
+        reply(["ok": true])
+      } catch {
+        reply(["ok": false, "error": String(describing: error)])
+      }
+    }
   }
 
   /// `host.open`: hand a URL or bundle id to LaunchServices host-side, so

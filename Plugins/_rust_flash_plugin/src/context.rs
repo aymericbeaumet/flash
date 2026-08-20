@@ -141,6 +141,50 @@ impl Context {
         response.get("ok").and_then(Value::as_bool) == Some(true)
     }
 
+    /// Replace the system clipboard through the host (`host.clipboard_write`).
+    /// Requires the `clipboard` capability.
+    pub async fn clipboard_write(&self, text: &str) -> bool {
+        let response = self
+            .call_host("host.clipboard_write", json!({ "text": text }))
+            .await;
+        response.get("ok").and_then(Value::as_bool) == Some(true)
+    }
+
+    /// Show a transient host banner (`host.notify`). Requires the `notify`
+    /// capability; the host rate-limits to one banner per plugin per second.
+    pub async fn notify(&self, message: &str, duration_ms: Option<u64>) -> bool {
+        let mut params = json!({ "message": message });
+        if let Some(duration_ms) = duration_ms {
+            params["duration_ms"] = json!(duration_ms);
+        }
+        let response = self.call_host("host.notify", params).await;
+        response.get("ok").and_then(Value::as_bool) == Some(true)
+    }
+
+    /// Read one key from the host-managed KV store in the plugin's data dir
+    /// (`host.storage_get`). No capability required.
+    pub async fn storage_get(&self, key: &str) -> Option<String> {
+        let response = self
+            .call_host("host.storage_get", json!({ "key": key }))
+            .await;
+        if response.get("ok").and_then(Value::as_bool) != Some(true) {
+            return None;
+        }
+        response
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
+    /// Write (or, with `None`, delete) one key in the host-managed KV store
+    /// (`host.storage_set`). Values are capped at 64 KiB, tables at 256 keys.
+    pub async fn storage_set(&self, key: &str, value: Option<&str>) -> bool {
+        let response = self
+            .call_host("host.storage_set", json!({ "key": key, "value": value }))
+            .await;
+        response.get("ok").and_then(Value::as_bool) == Some(true)
+    }
+
     /// Fetch an allowlisted HTTPS URL through the host (`host.fetch`). The
     /// host enforces the manifest's `fetch_urls` prefixes, an 8-second
     /// timeout, and a 1 MiB UTF-8 response cap — the plugin itself needs no
