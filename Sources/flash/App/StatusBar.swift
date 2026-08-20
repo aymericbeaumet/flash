@@ -1235,26 +1235,18 @@ enum FlashStatusBarRenderer {
     segment: FlashStatusTextSegment,
     currentTime: TimeInterval
   ) -> CGFloat {
-    // Sinusoidal breathing on a 6 s period — roughly the cadence of a
-    // calm meditation breath (~10 breaths/min). The alpha rides a
-    // **very subtle** [0.88, 1.0] band: a 12 % dim at the trough,
-    // imperceptible enough that the chip never reads as "broken" or
-    // "loading", yet alive enough that the user can spot at a glance
-    // that the battery is plugged. The slowest motion happens at the
-    // peak and trough (sine has zero derivative there), matching the
-    // pause between inhale and exhale.
+    // The slowest motion happens at the peak and trough (sine has zero
+    // derivative there), matching the pause between inhale and exhale.
     var alpha: CGFloat = 1.0
     if segment.breathing {
       // 10 s cycle — well under a baseline meditation breath (~6 s) so
       // the chip never feels like it's *signalling*, just sitting
-      // there alive. Alpha rides [0.80, 1.0] — 20 % swing, ~13 %
-      // luminance drop on the dark Nord chip, the smallest band that
-      // still registers as motion in the user's periphery without
-      // pulling attention. Knobs tunable here in one place.
+      // there alive. Alpha rides [0.76, 1.0] — a slightly stronger 24 %
+      // swing that remains peripheral. Knobs tunable here in one place.
       let period: TimeInterval = 10.0
       let phase = (currentTime.truncatingRemainder(dividingBy: period)) / period
       let sine = sin(phase * 2 * .pi)
-      let low: CGFloat = 0.80
+      let low: CGFloat = 0.76
       let high: CGFloat = 1.0
       let mid = (low + high) / 2
       let halfRange = (high - low) / 2

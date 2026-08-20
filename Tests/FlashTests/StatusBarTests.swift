@@ -152,7 +152,7 @@ final class StatusBarTests: XCTestCase {
     XCTAssertFalse(values.isEmpty)
     // The keyframes are samples of effectAlphaMultiplier — the pure curve
     // stays the single oracle. Check the extremes the curve tests pin.
-    XCTAssertEqual(values.min() ?? -1, 0.80, accuracy: 0.01)
+    XCTAssertEqual(values.min() ?? -1, 0.76, accuracy: 0.01)
     XCTAssertEqual(values.max() ?? -1, 1.0, accuracy: 0.01)
     // Anchored to the period grid of the shared clock.
     XCTAssertEqual(
@@ -1327,13 +1327,13 @@ final class StatusBarTests: XCTestCase {
       ])
   }
 
-  func testBreathingEffectAlphaRidesSubtleSinusoidBetween80And100Percent() {
+  func testBreathingEffectAlphaRidesSubtleSinusoidBetween76And100Percent() {
     let breathing = FlashStatusTextSegment(text: "82%", foreground: .colour178, breathing: true)
     // 0.0 s — sine starts at 0, alpha lands at the midpoint of the
-    // [0.80, 1.0] band: (0.80 + 1.0) / 2 = 0.90.
+    // [0.76, 1.0] band: (0.76 + 1.0) / 2 = 0.88.
     XCTAssertEqual(
       FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 0.0),
-      0.90,
+      0.88,
       accuracy: 0.001)
     // 2.5 s — quarter cycle in (period 10 s), sine peaks at 1, alpha
     // at 1.0 (full opacity, like the end of an inhale).
@@ -1342,17 +1342,17 @@ final class StatusBarTests: XCTestCase {
       1.0,
       accuracy: 0.001)
     // 7.5 s — three-quarter cycle, sine bottoms at -1, alpha at the
-    // dim trough (0.80).
+    // dim trough (0.76).
     XCTAssertEqual(
       FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 7.5),
-      0.80,
+      0.76,
       accuracy: 0.001)
     // Two full cycles in (20 s) — phase wraps back to 0, alpha back to
     // the midpoint. Confirms the modulo-period math keeps the curve
     // stationary over time.
     XCTAssertEqual(
       FlashStatusBarRenderer.effectAlphaMultiplier(segment: breathing, currentTime: 20.0),
-      0.90,
+      0.88,
       accuracy: 0.001)
   }
 
@@ -1365,7 +1365,7 @@ final class StatusBarTests: XCTestCase {
     while sample < 20.0 {
       let alpha = FlashStatusBarRenderer.effectAlphaMultiplier(
         segment: breathing, currentTime: sample)
-      XCTAssertGreaterThanOrEqual(alpha, 0.80 - 0.0001)
+      XCTAssertGreaterThanOrEqual(alpha, 0.76 - 0.0001)
       XCTAssertLessThanOrEqual(alpha, 1.0 + 0.0001)
       sample += 1.0 / 60.0
     }
