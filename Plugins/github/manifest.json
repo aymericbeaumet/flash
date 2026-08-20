@@ -1,0 +1,24 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "version": "0.1.0",
+  "description": "GitHub repositories and your open pull requests in the flashlight via the gh CLI.",
+  "exec": [
+    "./flash-plugin-github"
+  ],
+  "capabilities": [
+    "subprocess"
+  ],
+  "sources": [
+    {
+      "name": "github.repos",
+      "kind": "default",
+      "priority": "normal"
+    },
+    {
+      "name": "github.prs",
+      "kind": "default",
+      "priority": "normal"
+    }
+  ]
+}

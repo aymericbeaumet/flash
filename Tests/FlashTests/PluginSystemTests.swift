@@ -466,8 +466,9 @@ final class PluginSystemTests: XCTestCase {
     XCTAssertEqual(
       candidateIDs,
       [
-        "chromium", "contacts", "emojis", "files", "firefox", "history", "notes", "processes",
-        "reminders", "safari", "searchengines", "snippets", "system", "tmux",
+        "chromium", "contacts", "emojis", "files", "firefox", "github", "history", "kitty",
+        "notes", "processes", "reminders", "safari", "searchengines", "snippets", "system",
+        "tmux", "windows",
       ])
 
     for root in roots where candidateIDs.contains(root.lastPathComponent) {

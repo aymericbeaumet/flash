@@ -1,0 +1,26 @@
+{
+  "id": "windows",
+  "name": "Windows",
+  "version": "0.1.0",
+  "description": "Cross-app window switcher rows in the flashlight via @windows.",
+  "sandbox": {},
+  "exec": [
+    "./flash-plugin-windows"
+  ],
+  "capabilities": [
+    "accessibility",
+    "app_control"
+  ],
+  "listen": [
+    "core:apps.changed",
+    "core:window.focus.changed",
+    "core:focus.changed"
+  ],
+  "sources": [
+    {
+      "name": "windows.items",
+      "kind": "default",
+      "priority": "normal"
+    }
+  ]
+}

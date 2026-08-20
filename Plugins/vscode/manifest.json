@@ -1,0 +1,20 @@
+{
+  "id": "vscode",
+  "name": "VS Code",
+  "version": "0.1.0",
+  "description": "Accessibility hint targets inside Visual Studio Code (buttons, links, menu items, tabs).",
+  "sandbox": {},
+  "exec": [
+    "./flash-plugin-vscode"
+  ],
+  "only_bundle_ids": [
+    "com.microsoft.VSCode"
+  ],
+  "priority": 20,
+  "capabilities": [
+    "accessibility"
+  ],
+  "hints": {
+    "fallback_on_empty": true
+  }
+}

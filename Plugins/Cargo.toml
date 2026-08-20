@@ -9,7 +9,9 @@ members = [
   "contacts",
   "files",
   "firefox",
+  "github",
   "history",
+  "kitty",
   "marks",
   "media",
   "notes",
@@ -19,6 +21,8 @@ members = [
   "snippets",
   "system",
   "tmux",
+  "vscode",
+  "windows",
 ]
 
 # Shared dependency versions. Each plugin opts in via

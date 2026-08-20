@@ -143,11 +143,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "flash-plugin-github"
+version = "0.1.0"
+dependencies = [
+ "flash_plugin",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "flash-plugin-history"
 version = "0.1.0"
 dependencies = [
  "flash_plugin",
  "rusqlite",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "flash-plugin-kitty"
+version = "0.1.0"
+dependencies = [
+ "flash_plugin",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -234,6 +254,26 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "flash-plugin-vscode"
+version = "0.1.0"
+dependencies = [
+ "flash_plugin",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "flash-plugin-windows"
+version = "0.1.0"
+dependencies = [
+ "flash_plugin",
  "serde",
  "serde_json",
  "tokio",

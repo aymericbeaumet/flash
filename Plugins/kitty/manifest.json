@@ -1,0 +1,48 @@
+{
+  "id": "kitty",
+  "name": "kitty",
+  "version": "0.1.0",
+  "description": "Kitty terminal tab/window catalog and focus commands via kitten remote control.",
+  "sandbox": {
+    "exec": [
+      "/Applications/kitty.app/Contents/MacOS/kitten",
+      "kitten"
+    ]
+  },
+  "exec": [
+    "./flash-plugin-kitty"
+  ],
+  "only_bundle_ids": [
+    "net.kovidgoyal.kitty"
+  ],
+  "volatile": true,
+  "capabilities": [
+    "subprocess",
+    "network"
+  ],
+  "listen": [
+    "core:apps.changed",
+    "core:focus.changed"
+  ],
+  "commands": {
+    "items": [
+      {
+        "command": "kitty",
+        "subcommand": "focus-tab",
+        "description": "Focus a kitty tab by 1-based index: :kitty focus-tab <n>"
+      },
+      {
+        "command": "kitty",
+        "subcommand": "focus-window",
+        "description": "Focus a kitty window (pane) by id: :kitty focus-window <id>"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "name": "kitty.windows",
+      "kind": "locations",
+      "priority": "high"
+    }
+  ]
+}
