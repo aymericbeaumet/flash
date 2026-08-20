@@ -488,6 +488,18 @@ leader = "\\"
 "sF" = ["flash", "mouse_grid", "--secondary"]
 "DF" = ["flash", "mouse_grid", "--double"]
 "mF" = ["flash", "mouse_grid", "--move"]
+# Composed-click sessions and wider scopes ship unbound — pick free keys:
+# "gd" = ["flash", "mouse_target", "--drag"]           # grab point, then drop point
+# "gs" = ["flash", "mouse_target", "--select"]         # click A, shift-click B
+# "gm" = ["flash", "mouse_target", "--multi"]          # click several; Escape ends
+# "ga" = ["flash", "mouse_target", "--adjust"]         # refine the point, Return clicks
+# "g/" = ["flash", "mouse_target", "--search"]         # type visible text; Tab/Return
+# "gf" = ["flash", "mouse_target", "--scope=screen"]   # hints across every app
+# "g." = ["flash", "mouse_repeat"]                     # re-click the last point
+# "gp" = ["flash", "mouse_pointer"]                    # freestyle hjkl cursor mode
+# "gD" = ["flash", "mouse_dock"]                       # hint the Dock
+# "gS" = ["flash", "mouse_statusbar"]                  # hint the menu-bar extras
+# "gz" = ["flash", "scroll_target"]                    # pick the scroll area
 # Undo is no longer on bare u (Vimium reuses it for half-page scroll-up);
 # reach it via the command line (:undo) or the app's native ⌘Z.
 "ctrl+r" = ["flash", "app_redo"]
