@@ -919,6 +919,10 @@ stays in the normal-mode map for users who've opted in.
 - **`AXObserver` callbacks run on the main run loop.** Don't do AX work inside them — schedule onto `refreshQueue`.
 - **`NSPanel(.nonactivatingPanel)` can become key without activating the app.** That is intentional: the overlay needs to receive keys without stealing the target app's frontmost status. `commit` reactivates the owning app before dispatching its host mouse event.
 - **`CGEventSource` `.combinedSessionState`** is the right choice for synthesizing input; it sees the current modifier state, so e.g. shift held during commit doesn't poison the click.
+- **New keyboard-owned interaction surfaces are hints sub-states, not `OverlayInputMode` cases.** Follow the `--adjust` / `--search` / pointer-mode pattern: a panel flag routes `.hints` keys to a pure, unit-tested interpreter and one coordinator callback, with sub-state fields living in `HintSession` so the single-assignment reset covers them. Adding an `OverlayInputMode` case instead ripples through the mode projection, `shouldSwallow`, and capture policy for no benefit.
+- **The deny-default seatbelt profile cannot host networked CLIs.** TLS needs trustd mach allowances and credential reads hit the hard-coded secrets deny list (verified empirically with `gh`, whose token lives in the keychain). Wrappers around such tools use the unsandboxed `subprocess` shape like tmux; do not try to widen the profile instead.
+- **Seatbelt counts unix-domain-socket connects as `network-outbound`.** A sandboxed plugin that talks to a local socket (kitty remote control) must declare the `network` capability or every connect is silently denied.
+- **Stage commits with explicit paths, never `git add -A`.** The maintainer edits this checkout concurrently; a blanket add sweeps their in-flight work into your commit.
 
 ## When in doubt
 
