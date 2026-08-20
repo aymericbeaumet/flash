@@ -1,0 +1,35 @@
+{
+  "id": "files",
+  "name": "Files",
+  "version": "0.1.0",
+  "description": "Spotlight-backed file search in flashlight via !f or @files.results.",
+  "sandbox": {
+    "exec": [
+      "/usr/bin/mdfind"
+    ]
+  },
+  "exec": [
+    "./flash-plugin-files"
+  ],
+  "shebangs": {
+    "command": "files",
+    "items": [
+      {
+        "token": "f",
+        "description": "Find files by name: !f <name>",
+        "candidate_source": "files.results"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "name": "files.results",
+      "kind": "default",
+      "priority": "normal",
+      "mode": "live"
+    }
+  ],
+  "capabilities": [
+    "subprocess"
+  ]
+}

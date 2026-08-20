@@ -28,7 +28,7 @@ enum FlashTunables {
   /// `mode = "live"` plugin sources. Never joins the first-paint barrier, so
   /// raising it cannot regress first paint — it only delays that source's
   /// own merge into an explicitly scoped pool.
-  static var flashlightLiveQueryTimeoutMs: Int = 300
+  static var flashlightLiveQueryTimeoutMs: Int = 1000
   /// `[statusbar] font_size` — bar text size in points.
   static var statusBarFontSize: Double = 13
   /// `[statusbar] notch_margin` — points kept clear beside a notch.

@@ -7,6 +7,7 @@ members = [
   "chromium",
   "clipboard",
   "contacts",
+  "files",
   "firefox",
   "history",
   "marks",
@@ -15,6 +16,7 @@ members = [
   "processes",
   "safari",
   "slack",
+  "snippets",
   "system",
   "tmux",
 ]

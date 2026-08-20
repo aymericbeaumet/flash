@@ -198,7 +198,9 @@ struct Config {
     /// Per-keystroke deadline for `mode = "live"` plugin sources
     /// (`sources.query`). Live sources never join the first-paint barrier,
     /// so this can exceed `snapshot_timeout_ms` without regressing paint.
-    var liveQueryTimeoutMs: Int = 300
+    /// A full second by default: Spotlight's first output byte alone
+    /// routinely takes 500–700 ms.
+    var liveQueryTimeoutMs: Int = 1000
     /// Word-substitution aliases. The key is the exact whitespace-
     /// delimited token the user types (any leading sigil — `!`, `@`,
     /// or none — is part of the key, not implicit). The value is

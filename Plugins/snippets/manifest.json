@@ -1,0 +1,20 @@
+{
+  "id": "snippets",
+  "name": "Snippets",
+  "version": "0.1.0",
+  "description": "User-defined text snippets typed into the focused app via @snippets.items.",
+  "sandbox": {},
+  "exec": [
+    "./flash-plugin-snippets"
+  ],
+  "listen": [
+    "core:config.changed"
+  ],
+  "sources": [
+    {
+      "name": "snippets.items",
+      "kind": "default",
+      "priority": "normal"
+    }
+  ]
+}

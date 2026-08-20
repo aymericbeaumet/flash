@@ -288,7 +288,8 @@ snapshot_timeout_ms = 150
 # Per-keystroke deadline for mode = "live" plugin sources (file search and
 # other catalogs that cannot be kept warm). Live sources never join the
 # first-paint barrier, so raising this cannot slow the flashlight open.
-live_query_timeout_ms = 300
+# Spotlight's first output byte alone routinely takes 500-700 ms.
+live_query_timeout_ms = 1000
 # Number of suggestion rows shown below the command bar.
 suggestion_count = 10
 # The default flashlight pool is intentionally location-only: apps, tabs,
