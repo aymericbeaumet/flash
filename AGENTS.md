@@ -478,10 +478,20 @@ ignored until the next open. Non-default source snapshots (emojis, notes, …)
 remain warm too; the host simply waits to read/filter them until the user types
 an explicit `@source`/`!`bang filter.
 
-  1. **Catalog gathering is SDK-owned and O(memory).** There is no plugin
-     `candidate_query` hook. The SDK runtime answers `sources.snapshot` directly
-     from `ctx.warm_locations()`, so a catalog provider cannot accidentally run
-     RPC, subprocess, AppleScript, or other I/O on the flashlight hot path.
+The one sanctioned exception is `sources[].mode = "live"` (file search and
+other catalogs that are structurally impossible to keep warm): a live plugin
+serves per-keystroke `sources.query` pulls through the SDK's `live_query`
+hook, is excluded from the default pool, every warm fan-out, and the
+first-paint barrier, and only participates when the query explicitly scopes
+to it (`@source` or a bang's `candidate_source`) under the drop-late
+`[flashlight] live_query_timeout_ms` deadline. One plugin's sources are
+all-warm or all-live, and live cannot combine with `kind = "locations"`.
+
+  1. **Warm catalog gathering is SDK-owned and O(memory).** There is no plugin
+     `candidate_query` hook for warm sources. The SDK runtime answers
+     `sources.snapshot` directly from `ctx.warm_locations()`, so a catalog
+     provider cannot accidentally run RPC, subprocess, AppleScript, or other
+     I/O on the flashlight hot path.
 
   2. **Publish before ready, then keep the store warm.** A manifest with `sources`
      makes `on_start` compile-required. The host passes its initial running-app
