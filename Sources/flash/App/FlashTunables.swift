@@ -24,6 +24,11 @@ enum FlashTunables {
   static var pluginStartupTimeoutSeconds: Int = 15
   /// `[flashlight] snapshot_timeout_ms` — warm-catalog aggregate deadline.
   static var flashlightSnapshotTimeoutMs: Int = 150
+  /// `[flashlight] live_query_timeout_ms` — per-keystroke deadline for
+  /// `mode = "live"` plugin sources. Never joins the first-paint barrier, so
+  /// raising it cannot regress first paint — it only delays that source's
+  /// own merge into an explicitly scoped pool.
+  static var flashlightLiveQueryTimeoutMs: Int = 300
   /// `[statusbar] font_size` — bar text size in points.
   static var statusBarFontSize: Double = 13
   /// `[statusbar] notch_margin` — points kept clear beside a notch.
@@ -39,6 +44,7 @@ enum FlashTunables {
     pluginInstallTimeoutSeconds = config.plugins.installTimeoutSeconds
     pluginStartupTimeoutSeconds = config.plugins.startupTimeoutSeconds
     flashlightSnapshotTimeoutMs = config.flashlight.snapshotTimeoutMs
+    flashlightLiveQueryTimeoutMs = config.flashlight.liveQueryTimeoutMs
     statusBarFontSize = config.statusBar.fontSize
     statusBarNotchMargin = config.statusBar.notchMargin
   }

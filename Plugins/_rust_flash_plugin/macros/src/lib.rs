@@ -24,6 +24,7 @@ pub fn plugin(input: TokenStream) -> TokenStream {
     let on_start_decl = on_start_decl(has_candidate_sources);
     let on_command_decl = on_command_decl(manifest_has_command(&manifest));
     let query_evaluate_decl = query_evaluate_decl(manifest_has_query_evaluator(&manifest));
+    let live_query_decl = live_query_decl(manifest_has_live_sources(&manifest));
     let expanded = quote! {
         /// The plugin contract for this crate, specialized to its `manifest.json`.
         /// Implement the required methods (`sources` makes `on_start` required;
@@ -46,6 +47,8 @@ pub fn plugin(input: TokenStream) -> TokenStream {
             #on_command_decl
 
             #query_evaluate_decl
+
+            #live_query_decl
 
             /// Resolve a flashlight candidate the plugin emitted.
             fn resolve_candidate(
@@ -163,6 +166,11 @@ pub fn plugin(input: TokenStream) -> TokenStream {
                         ::flash_plugin::Request::QueryEvaluate(request) => {
                             ::flash_plugin::Response::QueryEvaluate(
                                 <Self as FlashPlugin>::query_evaluate(self, request),
+                            )
+                        }
+                        ::flash_plugin::Request::LiveQuery(request) => {
+                            ::flash_plugin::Response::LiveQuery(
+                                <Self as FlashPlugin>::live_query(self, ctx, request).await,
                             )
                         }
                         ::flash_plugin::Request::Unknown { method } => ::flash_plugin::Response::Command(
@@ -286,6 +294,44 @@ fn query_evaluate_decl(required: bool) -> TokenStream2 {
             #signature {
                 let _ = request;
                 ::flash_plugin::QueryEvaluateResponse::default()
+            }
+        }
+    }
+}
+
+fn manifest_has_live_sources(manifest: &Value) -> bool {
+    manifest
+        .get("sources")
+        .and_then(Value::as_array)
+        .map(|sources| {
+            sources
+                .iter()
+                .any(|source| source.get("mode").and_then(Value::as_str) == Some("live"))
+        })
+        .unwrap_or(false)
+}
+
+/// `live_query` is required when the manifest declares any `mode = "live"`
+/// source, and defaulted otherwise. Unlike `query_evaluate` it is async —
+/// live sources exist precisely because their work can't be precomputed.
+fn live_query_decl(required: bool) -> TokenStream2 {
+    let signature = quote! {
+        /// Answer one explicitly scoped query against this plugin's
+        /// `mode = "live"` sources (`sources.query`). The host drops
+        /// late replies; return complete catalog-shaped rows.
+        fn live_query(
+            &self,
+            ctx: ::flash_plugin::Context,
+            request: ::flash_plugin::LiveQueryRequest,
+        ) -> impl ::core::future::Future<Output = ::flash_plugin::LiveQueryResponse> + ::core::marker::Send
+    };
+    if required {
+        quote! { #signature; }
+    } else {
+        quote! {
+            #signature {
+                let _ = (ctx, request);
+                async { ::flash_plugin::LiveQueryResponse::default() }
             }
         }
     }

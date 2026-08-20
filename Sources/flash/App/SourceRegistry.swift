@@ -295,12 +295,30 @@ final class SourceRegistry {
   func nonLocationCandidateSources(matching sourceFilter: String? = nil) -> [FlashSource] {
     return activePluginSources().filter { source in
       source.capabilities.contains(.candidates) && !Self.isLocationCandidateSource(source)
+        && !Self.isLiveCandidateSource(source)
         && sourceFilter.map { filter in
           source.candidateSourceDescriptors.contains { descriptor in
             CandidateFinder.sourceLabel(descriptor.name, matchesFilter: filter)
           }
         } != false
     }
+  }
+
+  /// Plugin adapters whose sources declare `mode = "live"` and match the
+  /// explicit scope filter. Live sources answer per-keystroke
+  /// `sources.query` pulls; they never join the warm snapshot fan-outs or
+  /// the first-paint barrier.
+  func liveCandidateSources(matching sourceFilter: String) -> [FlashSource] {
+    return activePluginSources().filter { source in
+      Self.isLiveCandidateSource(source)
+        && source.candidateSourceDescriptors.contains { descriptor in
+          CandidateFinder.sourceLabel(descriptor.name, matchesFilter: sourceFilter)
+        }
+    }
+  }
+
+  static func isLiveCandidateSource(_ source: FlashSource) -> Bool {
+    (source as? PluginFlashSource)?.servesLiveCandidates ?? false
   }
 
   /// Plugin adapters may stay resident while their owning applications are

@@ -72,6 +72,17 @@ Plugin log lines travel as `flash.log` notifications and are recorded with
 - `query.evaluate` — per-input evaluator; 50 ms hard deadline (the host warns
   at 40 ms round-trip; a well-behaved evaluator body stays under 10 ms).
   CPU-only over state prepared earlier — no I/O.
+- `sources.query` — live-source pull for manifests whose `sources[]` declare
+  `mode: "live"`. Called per flashlight keystroke, but ONLY when the query is
+  explicitly scoped to the source (`@source` filter or a bang's
+  `candidate_source`) — live sources never join the default pool or the
+  150 ms first-paint barrier. Params `{ query, scope }`; response
+  `{ candidates: [...] }` in full catalog row shape (same codec and limits as
+  `sources.snapshot`). The handler may do real work (subprocess, disk); the
+  deadline is `[flashlight] live_query_timeout_ms` (default 300 ms) and late
+  replies are dropped, not fatal. Constraints: `mode: "live"` cannot combine
+  with `kind: "locations"`, and one plugin's sources are all-warm or
+  all-live.
 - `hints.discover` — return target geometry and semantics. The host owns commit:
   it posts the mouse event directly to the target app and never calls back into
   the plugin to activate a target. Use role `AXLink` for native-style semantic

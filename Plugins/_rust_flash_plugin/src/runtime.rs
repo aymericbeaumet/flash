@@ -552,6 +552,34 @@ async fn serve<P: Plugin>(plugin: P) {
                     });
                 ctx.emit.respond(id, result).await;
             }
+            "sources.query" => {
+                // Live-source pull: unlike `query.evaluate` the handler may do
+                // real work (subprocess, disk). The host enforces its own
+                // drop-late deadline, so a slow reply is ignored, not fatal.
+                if !startup_is_ready(&startup_rx) {
+                    ctx.emit
+                        .respond(
+                            id,
+                            json!({ "ok": false, "error": "plugin startup incomplete" }),
+                        )
+                        .await;
+                    continue;
+                }
+                let request = match decode(params, "sources.query") {
+                    Ok(request) => Request::LiveQuery(request),
+                    Err(error) => {
+                        reject_request(&ctx, id, error).await;
+                        continue;
+                    }
+                };
+                let plugin = plugin.clone();
+                let ctx = ctx.clone();
+                tokio::spawn(async move {
+                    let response = plugin.handle(ctx.clone(), request).await;
+                    let result = validated_response_value(&ctx, &response);
+                    ctx.emit.respond(id, result).await;
+                });
+            }
             "query.evaluate" => {
                 // Query evaluators may depend on immutable state established by
                 // `on_start` (calculator exchange rates, local indexes, …). The

@@ -260,6 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// occupy a fixed lane above fuzzy matches without polluting later queries.
   var candidateFinderQueryAnswers: [Candidate] = []
   var candidateFinderQueryEvaluationText = ""
+  /// Dedup key for live-source pulls: `session\u{1F}filter\u{1F}text`. A
+  /// re-render at an unchanged scoped query never refires `sources.query`.
+  var candidateFinderLiveQueryKey: String?
   /// Independent from the flashlight-session generation: every bare query
   /// supersedes the prior evaluator fan-out even within one open surface.
   var candidateFinderQueryEvaluationGeneration: UInt64 = 0

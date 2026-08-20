@@ -285,6 +285,10 @@ frecency_max_boost = 600
 # Deadline for the aggregate warm-plugin catalog snapshot feeding the
 # flashlight pool; a giant browser session may need more room.
 snapshot_timeout_ms = 150
+# Per-keystroke deadline for mode = "live" plugin sources (file search and
+# other catalogs that cannot be kept warm). Live sources never join the
+# first-paint barrier, so raising this cannot slow the flashlight open.
+live_query_timeout_ms = 300
 # Number of suggestion rows shown below the command bar.
 suggestion_count = 10
 # The default flashlight pool is intentionally location-only: apps, tabs,

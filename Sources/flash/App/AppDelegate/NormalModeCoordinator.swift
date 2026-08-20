@@ -1572,6 +1572,46 @@ extension AppDelegate {
     }
   }
 
+  /// Fire per-keystroke `sources.query` pulls at live plugin sources when —
+  /// and only when — the query is explicitly scoped to them: an `@source`
+  /// filter, or a confirmed bang bound to a `candidate_source`. The default
+  /// pool and the first-paint barrier never see live sources. Late replies
+  /// drop via the session generation; an unchanged (filter, text) pair does
+  /// not refire, so a merge-triggered re-render can't loop.
+  private func beginLiveSourceQueriesIfNeeded(forCandidateQuery query: String) {
+    guard CandidateFinder.sourceCompletionState(query: query) == nil else { return }
+    let parsed = NormalModeDispatcher.candidateFinderSourceFilter(query)
+    let filter: String
+    let text: String
+    if let sourceFilter = parsed.sourceFilter {
+      filter = sourceFilter
+      text = parsed.text.trimmed
+    } else if let bang = CandidateFinder.parseBangState(parsed.text.trimmed),
+      bang.confirmed,
+      let candidateSource = pluginManager.shebangCandidateSource(
+        token: bang.token,
+        in: pluginSelectorContext())
+    {
+      filter = candidateSource
+      text = bang.remainder
+    } else {
+      return
+    }
+    let sources = registry.liveCandidateSources(matching: filter)
+    guard !sources.isEmpty else { return }
+    let generation = candidateFinderSessionGeneration
+    let key = "\(generation)\u{1F}\(filter)\u{1F}\(text)"
+    guard key != candidateFinderLiveQueryKey else { return }
+    candidateFinderLiveQueryKey = key
+    let env = registry.snapshotEnvironment
+    for source in sources {
+      source.liveCandidates(matching: text, in: env, scope: candidateFinderScope) {
+        [weak self] candidates in
+        self?.mergeCandidateSnapshotResults(candidates, from: source, generation: generation)
+      }
+    }
+  }
+
   /// Fan user-requested non-location snapshots out in parallel. Initial location
   /// sources use the one-publish barrier above; this merge path is only reached
   /// after an explicit `@source` / `!` opt-in.
@@ -1980,6 +2020,7 @@ extension AppDelegate {
     // stores needed for that intent. Source-completion rows come from manifest
     // declarations, so partial `@em...` input performs no catalog snapshots.
     prefetchNonLocationSources(forCandidateQuery: query)
+    beginLiveSourceQueriesIfNeeded(forCandidateQuery: query)
 
     let (pool, scoringText) = buildCandidateFinderPool(
       trimmed: trimmed,

@@ -58,6 +58,12 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   var candidateSourceDescriptors: [CandidateSourceDescriptor] {
     plugin.manifest.candidateSourceDescriptors
   }
+  /// Manifest validation guarantees all-warm or all-live, so the adapter
+  /// classifies whole: a live plugin never serves warm snapshots and only
+  /// participates in explicitly scoped queries.
+  var servesLiveCandidates: Bool {
+    plugin.manifest.sources.contains { $0.mode == .live }
+  }
   var navigationSchemes: Set<String> { Set(plugin.manifest.navigationSchemes) }
   var queryEvaluatorIdentifier: String { identifier }
   var queryEvaluationPriority: Int {
@@ -96,6 +102,32 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     []
   }
 
+  func liveCandidates(
+    matching text: String,
+    in environment: FlashSourceEnvironment,
+    scope: CandidateScope,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    _ = environment
+    guard servesLiveCandidates, canDispatchWarmRequest(operation: "sources.query") else {
+      DispatchQueue.main.async { completion([]) }
+      return
+    }
+    let startedNs = DispatchTime.now().uptimeNanoseconds
+    plugin.queryCandidates(
+      matching: text,
+      scope: scope,
+      timeoutMs: FlashTunables.flashlightLiveQueryTimeoutMs
+    ) { [identifier = identifier] candidates in
+      let elapsedMs = Int(
+        (DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
+      FlashLog.trace(
+        "[candidate_finder] plugin_live_query source=\(identifier) "
+          + "ms=\(elapsedMs) count=\(candidates?.count ?? -1)")
+      completion(candidates ?? [])
+    }
+  }
+
   func snapshotCandidates(
     in environment: FlashSourceEnvironment,
     scope: CandidateScope,
@@ -103,6 +135,12 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
   ) {
     _ = environment
     _ = scope
+    guard !servesLiveCandidates else {
+      // A live plugin has no warm catalog; settle instantly so it costs the
+      // barrier and warm fan-outs nothing.
+      completion([])
+      return
+    }
     guard canDispatchWarmRequest(operation: "sources.snapshot") else {
       // A cold/dead plugin has no warm store to query. Settle synchronously so
       // the first-paint barrier spends zero scheduling budget on it.

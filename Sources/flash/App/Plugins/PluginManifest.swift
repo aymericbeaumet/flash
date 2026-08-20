@@ -1246,7 +1246,7 @@ struct PluginManifest: Decodable, Equatable {
       path: "manifest.json verbs")
     try rejectArrayObjects(
       dictionary["sources"],
-      allowed: ["name", "kind", "priority"],
+      allowed: ["name", "kind", "priority", "mode"],
       path: "manifest.json sources")
 
     if let help = dictionary["help"] as? [String: Any] {
@@ -1338,6 +1338,21 @@ struct PluginManifest: Decodable, Equatable {
     for prefix in fetchURLs where !prefix.hasPrefix("https://") {
       throw PluginError.invalidManifest(
         "manifest.json fetch_urls entries must be https:// prefixes: \(prefix)")
+    }
+    // Live sources never join the default pool or the first-paint barrier, so
+    // they cannot be `locations`. And because one plugin serves one adapter
+    // (one snapshot RPC, one classification), its sources are all-warm or
+    // all-live — mixing has no wire representation.
+    for descriptor in sources where descriptor.mode == .live && descriptor.kind == .locations {
+      throw PluginError.invalidManifest(
+        "manifest.json sources entry \(descriptor.name): mode \"live\" cannot combine with "
+          + "kind \"locations\"")
+    }
+    let liveCount = sources.filter { $0.mode == .live }.count
+    if liveCount > 0 && liveCount != sources.count {
+      throw PluginError.invalidManifest(
+        "manifest.json sources must be all-warm or all-live; mixing modes in one plugin "
+          + "is not supported")
     }
     if let sandbox {
       // Absolute paths pass through; bare tool names (no slash) resolve

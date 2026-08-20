@@ -138,23 +138,38 @@ public enum CandidateSourceKind: String, Codable, Sendable, Equatable, Hashable 
   case locations
 }
 
+public enum CandidateSourceMode: String, Codable, Sendable, Equatable, Hashable {
+  /// Complete in-memory catalog pulled when the flashlight opens; the plugin
+  /// can never put I/O on the hot path. The default and only pre-live mode.
+  case warm
+  /// Queried per flashlight keystroke (`sources.query`) under a drop-late
+  /// deadline, and ONLY when the query is explicitly scoped to the source
+  /// (`@source` filter or a bang's `candidate_source`) — the default pool's
+  /// first-paint contract is untouched. For catalogs that are structurally
+  /// impossible to keep warm (file search, live process/window lists).
+  case live
+}
+
 public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
   public var name: String
   public var kind: CandidateSourceKind
   public var priority: FlashPriority
+  public var mode: CandidateSourceMode
 
   public init(
     name: String,
     kind: CandidateSourceKind = .standard,
-    priority: FlashPriority = .normal
+    priority: FlashPriority = .normal,
+    mode: CandidateSourceMode = .warm
   ) {
     self.name = name
     self.kind = kind
     self.priority = priority
+    self.mode = mode
   }
 
   enum CodingKeys: String, CodingKey {
-    case name, kind, priority
+    case name, kind, priority, mode
   }
 
   public init(from decoder: Decoder) throws {
@@ -162,6 +177,7 @@ public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
     self.name = try c.decode(String.self, forKey: .name)
     self.kind = try c.decodeIfPresent(CandidateSourceKind.self, forKey: .kind) ?? .standard
     self.priority = try c.decodeIfPresent(FlashPriority.self, forKey: .priority) ?? .normal
+    self.mode = try c.decodeIfPresent(CandidateSourceMode.self, forKey: .mode) ?? .warm
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -172,6 +188,9 @@ public struct CandidateSourceDescriptor: Codable, Hashable, Sendable {
     }
     if priority != .normal {
       try c.encode(priority, forKey: .priority)
+    }
+    if mode != .warm {
+      try c.encode(mode, forKey: .mode)
     }
   }
 }
@@ -497,6 +516,17 @@ public protocol FlashSource: AnyObject {
     scope: CandidateScope,
     completion: @escaping ([Candidate]) -> Void
   )
+  /// Fetch candidates for one explicit query against this source's `live`
+  /// descriptors. Called per flashlight keystroke, only when the query is
+  /// scoped to this source (`@source` / bang `candidate_source`) and only
+  /// for descriptors declaring `mode: "live"`. The aggregator drops late
+  /// replies; implementations complete on the main queue.
+  func liveCandidates(
+    matching text: String,
+    in environment: FlashSourceEnvironment,
+    scope: CandidateScope,
+    completion: @escaping ([Candidate]) -> Void
+  )
   /// Resolve a previously returned candidate. The completion must be
   /// called on the main queue.
   func resolveCandidate(
@@ -557,6 +587,14 @@ extension FlashSource {
     completion: @escaping ([Candidate]) -> Void
   ) {
     completion(candidates(in: environment, scope: scope))
+  }
+  public func liveCandidates(
+    matching text: String,
+    in environment: FlashSourceEnvironment,
+    scope: CandidateScope,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    DispatchQueue.main.async { completion([]) }
   }
   public func resolveCandidate(
     _ candidate: Candidate,

@@ -195,6 +195,10 @@ struct Config {
     /// Deadline for the aggregate warm-plugin catalog snapshot feeding the
     /// flashlight pool. A giant browser session may need more room.
     var snapshotTimeoutMs: Int = 150
+    /// Per-keystroke deadline for `mode = "live"` plugin sources
+    /// (`sources.query`). Live sources never join the first-paint barrier,
+    /// so this can exceed `snapshot_timeout_ms` without regressing paint.
+    var liveQueryTimeoutMs: Int = 300
     /// Word-substitution aliases. The key is the exact whitespace-
     /// delimited token the user types (any leading sigil — `!`, `@`,
     /// or none — is part of the key, not implicit). The value is

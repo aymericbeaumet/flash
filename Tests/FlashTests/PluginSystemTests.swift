@@ -810,6 +810,58 @@ final class PluginSystemTests: XCTestCase {
         source: "calculator"))
   }
 
+  func testLiveSourceModeDecodesAndValidates() throws {
+    let live = try JSONDecoder().decode(
+      CandidateSourceDescriptor.self,
+      from: Data(#"{"name": "files.results", "mode": "live"}"#.utf8))
+    XCTAssertEqual(live.mode, .live)
+    XCTAssertEqual(live.kind, .standard)
+    let warm = try JSONDecoder().decode(
+      CandidateSourceDescriptor.self,
+      from: Data(#"{"name": "notes.notes"}"#.utf8))
+    XCTAssertEqual(warm.mode, .warm)
+    // Unknown mode strings are rejected, not defaulted.
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(
+        CandidateSourceDescriptor.self,
+        from: Data(#"{"name": "x", "mode": "lazy"}"#.utf8)))
+    // Encoding omits the default mode, mirroring kind/priority.
+    let encoded = try JSONSerialization.jsonObject(
+      with: JSONEncoder().encode(warm)) as? [String: Any]
+    XCTAssertNil(encoded?["mode"])
+    let encodedLive = try JSONSerialization.jsonObject(
+      with: JSONEncoder().encode(live)) as? [String: Any]
+    XCTAssertEqual(encodedLive?["mode"] as? String, "live")
+  }
+
+  func testManifestRejectsLiveLocationAndMixedModeSources() throws {
+    func loadManifest(sources: String) throws -> PluginManifest {
+      let root = try temporaryPluginRoot(
+        manifest: """
+          {
+            "id": "livetest",
+            "name": "Live",
+            "version": "1.0.0",
+            "description": "fixture",
+            "exec": ["/usr/bin/true"],
+            "sources": \(sources)
+          }
+          """)
+      defer { try? FileManager.default.removeItem(at: root) }
+      return try PluginManifest.load(from: root)
+    }
+    // live + locations is invalid.
+    XCTAssertThrowsError(
+      try loadManifest(sources: #"[{"name": "a.b", "kind": "locations", "mode": "live"}]"#))
+    // Mixed warm/live in one plugin is invalid.
+    XCTAssertThrowsError(
+      try loadManifest(sources: #"[{"name": "a.b", "mode": "live"}, {"name": "a.c"}]"#))
+    // All-live is valid.
+    let manifest = try loadManifest(
+      sources: #"[{"name": "a.b", "mode": "live"}, {"name": "a.c", "mode": "live"}]"#)
+    XCTAssertTrue(manifest.sources.allSatisfy { $0.mode == .live })
+  }
+
   func testStorageEntryMergeEnforcesBounds() {
     XCTAssertEqual(
       PluginHostRPC.applyingStorageEntry(key: "a", value: "1", to: [:]), ["a": "1"])

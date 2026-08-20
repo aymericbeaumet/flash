@@ -610,6 +610,18 @@ pub struct QueryEvaluateRequest {
     pub query: String,
 }
 
+/// One explicitly scoped query against a `mode = "live"` source
+/// (`sources.query`). Unlike `query.evaluate`, the handler may do real work
+/// (subprocess, disk); the host enforces its own drop-late deadline and
+/// simply ignores replies that miss it.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct LiveQueryRequest {
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub query: String,
+}
+
 /// A non-lifecycle request dispatched to [`Plugin::handle`](crate::Plugin::handle).
 #[derive(Clone, Debug)]
 pub enum Request {
@@ -619,6 +631,7 @@ pub enum Request {
     SourceAction(SourceActionRequest),
     RestoreNavigation(NavigationRequest),
     QueryEvaluate(QueryEvaluateRequest),
+    LiveQuery(LiveQueryRequest),
     /// Any other method name the host sent. Return a
     /// [`CommandResponse::error`] for these.
     Unknown {
@@ -805,6 +818,19 @@ impl QueryEvaluateResponse {
     }
 }
 
+/// Response to `sources.query` — full catalog-shaped rows (they decode
+/// through the same codec and limits as warm snapshots host-side).
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct LiveQueryResponse {
+    pub candidates: Vec<Candidate>,
+}
+
+impl LiveQueryResponse {
+    pub fn candidates(candidates: Vec<Candidate>) -> Self {
+        Self { candidates }
+    }
+}
+
 impl SourceSnapshotResponse {
     pub(crate) fn candidates(candidates: Vec<Candidate>) -> Self {
         Self {
@@ -822,6 +848,7 @@ pub enum Response {
     Resolve(ResolveResponse),
     SourceAction(SourceActionResponse),
     QueryEvaluate(QueryEvaluateResponse),
+    LiveQuery(LiveQueryResponse),
     None,
 }
 
@@ -829,6 +856,9 @@ impl Response {
     pub(crate) fn validate_boundary(&self) -> Result<(), BoundaryViolation> {
         match self {
             Response::QueryEvaluate(response) => validate_query_answers(&response.answers)?,
+            Response::LiveQuery(response) => {
+                crate::limits::validate_catalog_candidates(&response.candidates)?
+            }
             Response::Command(_)
             | Response::Discover(_)
             | Response::Resolve(_)
@@ -845,6 +875,7 @@ impl Response {
             Response::Resolve(response) => serde_json::to_value(response),
             Response::SourceAction(response) => serde_json::to_value(response),
             Response::QueryEvaluate(response) => serde_json::to_value(response),
+            Response::LiveQuery(response) => serde_json::to_value(response),
             Response::None => return Ok(Value::Null),
         };
         value.map_err(|_| "plugin response could not be encoded")
@@ -878,5 +909,11 @@ impl From<SourceActionResponse> for Response {
 impl From<QueryEvaluateResponse> for Response {
     fn from(value: QueryEvaluateResponse) -> Self {
         Response::QueryEvaluate(value)
+    }
+}
+
+impl From<LiveQueryResponse> for Response {
+    fn from(value: LiveQueryResponse) -> Self {
+        Response::LiveQuery(value)
     }
 }

@@ -352,6 +352,49 @@ final class PluginProcess {
     }
   }
 
+  /// `sources.query`: fetch live candidates for one explicitly scoped query.
+  /// Unlike `query.evaluate` (50 ms, CPU-only), a live source may do real
+  /// work (mdfind, window enumeration), so it gets its own deadline; the
+  /// caller's aggregator drops late replies. Rows decode through the same
+  /// catalog codec as warm snapshots — manifest-declared source labels only.
+  func queryCandidates(
+    matching text: String,
+    scope: CandidateScope,
+    timeoutMs: Int,
+    completion: @escaping ([Candidate]?) -> Void
+  ) {
+    let scopeName: String
+    switch scope {
+    case .running: scopeName = "running"
+    case .all: scopeName = "all"
+    }
+    sendRequest(
+      method: "sources.query",
+      params: ["query": text, "scope": scopeName],
+      timeout: .milliseconds(timeoutMs),
+      requiresWarmProcess: true
+    ) { [weak self] response in
+      guard let self, let response else {
+        DispatchQueue.main.async { completion(nil) }
+        return
+      }
+      guard let raw = response["candidates"] as? [[String: Any]] else {
+        FlashLog.plugin(
+          .warn,
+          pluginID: self.manifest.id,
+          message: "[plugin] malformed sources.query envelope",
+          fields: ["method": "sources.query"])
+        DispatchQueue.main.async { completion(nil) }
+        return
+      }
+      let items = PluginWireCodec.catalogCandidates(
+        from: raw,
+        sourceID: "plugin:\(self.manifest.id)",
+        allowedSources: Set(self.manifest.candidateSources))
+      DispatchQueue.main.async { completion(items) }
+    }
+  }
+
   func evaluateQuery(
     _ request: QueryEvaluationRequest,
     environment: FlashSourceEnvironment,

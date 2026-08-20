@@ -254,8 +254,9 @@ pub(crate) fn validate_query_answers(answers: &[QueryAnswer]) -> Result<(), Boun
             (
                 "effect_text_bytes",
                 match &answer.effect {
-                    CandidateEffect::CopyText { text }
-                    | CandidateEffect::InsertText { text } => text.as_str(),
+                    CandidateEffect::CopyText { text } | CandidateEffect::InsertText { text } => {
+                        text.as_str()
+                    }
                     // Query answers cannot carry open effects (the host
                     // rejects them); size their fields as empty here so the
                     // host-side rejection stays the single authority.

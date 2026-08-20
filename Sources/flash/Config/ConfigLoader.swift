@@ -444,6 +444,7 @@ enum ConfigLoader {
       "flashlight": [
         "suggestion_count", "precedence_alive_bonus", "aliases", "precedence",
         "frecency_half_life_days", "frecency_max_boost", "snapshot_timeout_ms",
+        "live_query_timeout_ms",
       ],
       "mode": [
         "labels", "sequence_timeout_ms", "normal", "all", "insert", "scroll_step",
@@ -908,6 +909,13 @@ enum ConfigLoader {
       locations: locations, into: &config, validate: { (20...2_000).contains($0) },
       assign: { value, config in
         config.flashlight.snapshotTimeoutMs = value
+      })
+    applyInt(
+      table["live_query_timeout_ms"], path: ["flashlight", "live_query_timeout_ms"],
+      message: "flashlight.live_query_timeout_ms must be an integer between 50 and 5000 (ms)",
+      locations: locations, into: &config, validate: { (50...5_000).contains($0) },
+      assign: { value, config in
+        config.flashlight.liveQueryTimeoutMs = value
       })
 
     if let aliases = sectionTable(

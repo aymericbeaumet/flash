@@ -59,7 +59,7 @@ enum PluginWireCodec {
     // `{ candidates: ... }` / `{ answers: ... }` boundary. The response also
     // carries JSON-RPC id/result keys that are outside those SDK-owned values.
     switch method {
-    case "sources.snapshot":
+    case "sources.snapshot", "sources.query":
       return maxCatalogEncodedBytes + 1_024
     case "query.evaluate":
       return maxQueryEncodedBytes + 1_024
