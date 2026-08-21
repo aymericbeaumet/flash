@@ -1,6 +1,5 @@
 {
-  "name": "lifecycle",
-  "when": "always",
+  "contract": "docs/plugin-protocol.md#lifecycle-methods",
   "description": "The v1 lifecycle every plugin must speak: initialize echoes protocol version 1, heartbeat decodes a negative id, an event notification full of doubles (incl. a negative window origin, exactly what the host emits for a display left of the primary) is absorbed, an unknown id'd request is never silently dropped, and shutdown replies before exit.",
   "steps": [
     {

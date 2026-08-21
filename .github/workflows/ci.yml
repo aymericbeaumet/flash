@@ -107,12 +107,12 @@ jobs:
         # One language-agnostic JSON spec suite (Plugins/_flash_plugin_specs,
         # driven by Scripts/plugin-protocol-spec.py) runs against every SDK —
         # Rust included — so a conformance gap fails identically no matter
-        # the language. lifecycle + robustness always; snapshot/query where
-        # the manifest declares sources/queries. --skip snapshot where the
-        # warm catalog needs a TCC grant the runner lacks (reminders,
-        # shortcuts) — those two are the first suspects if this job ever
-        # reds on a runner TCC change. snippets gets an inline config so
-        # its snapshot is non-empty.
+        # the language. lifecycle + wire noise always; sources/queries specs
+        # where the manifest declares them. TCC-dependent skips live in
+        # Plugins/_flash_plugin_specs/overrides.json (reminders, shortcuts) —
+        # those two are the first suspects if this job ever reds on a runner
+        # TCC change. snippets gets an inline config so its snapshot is
+        # non-empty.
         run: |
           set -euo pipefail
           spec="$PWD/Scripts/plugin-protocol-spec.py"
@@ -127,8 +127,8 @@ jobs:
           run netinfo -- ./flash-plugin-netinfo
           run searchengines -- ./flash-plugin-searchengines
           run httpstatus -- ./flash-plugin-httpstatus
-          run reminders --skip snapshot -- ./flash-plugin-reminders
-          run shortcuts --skip snapshot -- ./flash-plugin-shortcuts
+          run reminders -- ./flash-plugin-reminders
+          run shortcuts -- ./flash-plugin-shortcuts
           run calculator -- ./flash-plugin-calculator
           FLASH_PLUGIN_CONFIG='{"snippets":{"spec":"probe"}}' run snippets -- ./flash-plugin-snippets
 

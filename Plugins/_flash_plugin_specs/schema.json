@@ -1,0 +1,49 @@
+{
+  "$comment": "Author-facing reference for Flash plugin conformance specs. The runner (Scripts/flash_spec_runner/schema.py) validates every spec file against these rules at load time; a malformed spec is one failed result row, never a crashed run. This file is documentation-shaped JSON, not a JSON-Schema document.",
+  "spec": {
+    "name": "optional; defaults to the file path relative to this directory, sans .json — the id used by --only/--skip globs and overrides.json",
+    "description": "one paragraph of intent",
+    "contract": "REQUIRED. The contract clause this spec pins, e.g. docs/plugin-protocol.md#framing — every spec traces to the written contract",
+    "issue": "regressions/ only: the bug link this spec reproduces",
+    "requires": "array of manifest predicates; ALL must hold for the spec to run against a plugin. Vocabulary: exec, sources, sources_warm, sources_live, queries, commands, hints, source_actions, navigation, status, listen, capability:<name>. Empty/omitted = every plugin",
+    "timeout_ms": "whole-spec wall clock, default 30000 (hard-killed)",
+    "env": "extra vars layered onto the scrubbed default environment",
+    "env_unset": "vars to remove (e.g. FLASH_PLUGIN_CONFIG for the config-absent probe)",
+    "config": "object serialized to FLASH_PLUGIN_CONFIG (wins over ambient)",
+    "data_dir": "files pre-created in the fresh per-spec temp data dir; string value = raw text, object value = JSON-encoded",
+    "parent": "\"ephemeral\" spawns a runner-owned sleeper whose pid becomes FLASH_PLUGIN_PARENT_PID (kill it with the kill_parent step)",
+    "host": "{\"replies\": {\"<method>\": reply | [replies], \"*\": default}} — scripted host replies for plugin->host RPCs; a reply of \"drop\" answers nothing; the built-in default is the capability NAK",
+    "steps": "the scenario; see steps below"
+  },
+  "steps": {
+    "send": "write one frame; ${plugin_id}/${data_dir}/${parent_pid} substitute in strings; generators expand",
+    "send_raw": "write raw bytes; string or {\"$hex\": \"ff fe 0a\"}",
+    "send_batch": "array of frames written in one flush (guaranteed overlap for concurrency probes)",
+    "expect": "await the response frame with the given id; subset match; modifiers within_ms (default 5000) and not_before_ms (latency FLOOR, measured send->arrival)",
+    "expect_notification": "await a method-only frame matching the matcher; within_ms; each notification satisfies at most one step",
+    "expect_all": "array of id-carrying matchers satisfied in ANY order inside one within_ms window",
+    "expect_none": "assert NO frame matching the matcher arrives within for_ms (default 500; also fails on an already-buffered match)",
+    "expect_host_rpc": "await a plugin->host request matching {method, params?}; reply from the step's `reply`, the host.replies table, or the default NAK; `\"reply\": \"manual\"` + `capture` defers the answer to a later reply_host_rpc",
+    "reply_host_rpc": "{\"to\": <capture>, \"result\": {...}} answers a captured RPC (interleaving probes)",
+    "sleep_ms": "wall-clock pause (frames keep draining)",
+    "close_stdin": "half-close the plugin's stdin (EOF-shutdown probes)",
+    "kill_parent": "SIGKILL the ephemeral parent (parent-death probes)",
+    "expect_exit": "{\"code\": N} within within_ms (default 3000)",
+    "expect_stderr": "{\"contains\": s} and/or {\"absent\": s} against cumulative stderr"
+  },
+  "matchers": {
+    "$type": "string | number | int | bool | array | object | null (number/int reject booleans)",
+    "$min_len": "length floor (strings and arrays)",
+    "$max_len": "length ceiling",
+    "$len": "exact length",
+    "$each": "matcher applied to every array element",
+    "$absent": "the key must not exist in the parent object",
+    "$any": "key must exist, any value",
+    "$contains": "substring (strings)",
+    "$one_of": "value equals one of the listed literals"
+  },
+  "generators": {
+    "$repeat": "{\"value\": X, \"count\": N, \"join\"?: \"\"} — string X repeats into one string; non-string X repeats into an array",
+    "$hex": "raw bytes (send_raw only)"
+  }
+}

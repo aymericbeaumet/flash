@@ -1,0 +1,10 @@
+{
+  "reminders": {
+    "skip": ["sources/*"],
+    "reason": "warm catalog lists Reminders.app via AppleScript — needs a TCC grant headless runs lack"
+  },
+  "shortcuts": {
+    "skip": ["sources/*"],
+    "reason": "warm catalog lists Shortcuts via the faceless Shortcuts Events service — needs a TCC grant headless runs lack"
+  }
+}

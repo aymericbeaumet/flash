@@ -1,6 +1,5 @@
 {
-  "name": "robustness",
-  "when": "always",
+  "contract": "docs/plugin-protocol.md#framing",
   "description": "Wire noise must never kill a plugin: blank lines and undecodable lines are ignored, an unknown notification is absorbed, and a response frame whose id the plugin never issued is dropped (host and plugin id counters are independent and may overlap). A follow-up heartbeat proves the process survived it all.",
   "steps": [
     {
