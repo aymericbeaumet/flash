@@ -98,9 +98,9 @@ check_absent \
 
 if [[ -d Plugins ]]; then
   check_absent \
-    "plugin wire methods use namespaced protocol-v2 names" \
+    "plugin wire methods use namespaced protocol names" \
     '"(discoverTargets|activateTarget|resolveCandidate|sourceAction)"' \
-    Sources/flash Plugins/_rust_flash_plugin
+    Sources/flash Plugins/_flash_plugin_rust
 
   check_absent \
     "candidate catalog gathering is SDK-owned; plugins cannot define candidate_query" \
@@ -118,6 +118,23 @@ if [[ -d Plugins ]]; then
   # enforcement (readiness gate, quotas, deadlines) instead of source greps.
   for manifest in Plugins/*/manifest.json; do
     plugin_dir="${manifest%/manifest.json}"
+    # Hermetic-crate invariants: every Rust plugin is a standalone crate with
+    # a committed lock and a byte-identical copy of the canonical clippy
+    # config (Plugins/_flash_plugin_rust/clippy.toml) — no workspace anywhere.
+    if [[ -f "$plugin_dir/Cargo.toml" ]]; then
+      if rg -q 'workspace' "$plugin_dir/Cargo.toml"; then
+        echo "GUARDRAIL FAILED: hermetic plugin crates must not reference a cargo workspace: $plugin_dir" >&2
+        fail=1
+      fi
+      if ! cmp -s "$plugin_dir/clippy.toml" Plugins/_flash_plugin_rust/clippy.toml; then
+        echo "GUARDRAIL FAILED: Rust plugin must carry the canonical clippy.toml: $plugin_dir" >&2
+        fail=1
+      fi
+      if [[ ! -f "$plugin_dir/Cargo.lock" ]]; then
+        echo "GUARDRAIL FAILED: hermetic plugin crate must commit its Cargo.lock: $plugin_dir" >&2
+        fail=1
+      fi
+    fi
     source="$plugin_dir/src/main.rs"
     [[ -f "$source" ]] || continue
     if rg -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest"; then

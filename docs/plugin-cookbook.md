@@ -31,9 +31,12 @@ section exists to keep the wire protocol honestly language-agnostic.
 ## Polyglot (the protocol is the boundary)
 
 Twelve official plugins are deliberately non-Rust — two per language, so
-each language's shared SDK (`Plugins/_<language>_flash_plugin/`, a single
+each language's shared SDK (`Plugins/_flash_plugin_<language>/`, a single
 `flashplugin.*` with JSON-lines framing + v1 lifecycle and no Flash
-business concepts) has real consumers:
+business concepts) has real consumers. Interpreted plugins import their SDK
+by bare module name via host-injected PYTHONPATH/RUBYLIB/NODE_PATH; compiled
+languages link at build time (third-party compiled plugins vendor the single
+SDK file):
 
 - **Python** (mise-pinned `python3`): `Plugins/aiproviders` — `!chatgpt`-
   style bangs, `command.invoke`, subprocess (`open`, osascript);
@@ -61,7 +64,7 @@ business concepts) has real consumers:
   against the faceless "Shortcuts Events" service.
 
 `Scripts/plugin-protocol-spec.py` drives any plugin binary/runtime through
-the language-agnostic JSON specs in `Plugins/_specs/` (lifecycle +
+the language-agnostic JSON specs in `Plugins/_flash_plugin_specs/` (lifecycle +
 wire-noise robustness always; snapshot/query gated on the manifest) with a
 PASS/FAIL exit code — the conformance suite for every SDK, Rust included,
 and CI runs it across all of them.
@@ -72,7 +75,7 @@ and CI runs it across all of them.
 ./Scripts/new-plugin.sh myplugin "My Plugin" "What it does"   # Rust scaffold, zero-edit green
 ./Scripts/build-plugins.sh dev myplugin                        # per-id hot build (any compiled language)
 tail -f ~/Library/Logs/Flash/flash.log                         # watcher restart + plugin logs
-cargo test --manifest-path Plugins/Cargo.toml -p flash-plugin-myplugin
+CARGO_TARGET_DIR=build/plugin-target cargo test --manifest-path Plugins/myplugin/Cargo.toml
 ```
 
 Contracts you must not break — the full statements live in

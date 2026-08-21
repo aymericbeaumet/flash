@@ -1,9 +1,10 @@
 # Shared Flash plugin SDK for Ruby (stdlib only) — no Flash business
 # concepts, mirroring the Rust `flash_plugin` crate's role for Ruby plugins.
-# Plugins require it relatively (the directory sits beside every plugin in
-# both the checkout and the staged release bundle):
+# Plugins require it by bare module name — the host (and the spec runner)
+# inject RUBYLIB pointing at this directory at spawn, so the same require
+# works from the checkout, the staged release bundle, and third-party roots:
 #
-#   require_relative "../_ruby_flash_plugin/flashplugin"
+#   require "flashplugin"
 #
 # Speaks the wire contract from docs/plugin-protocol.md: protocol v1,
 # newline-delimited JSON over stdio — one JSON object per line, nothing

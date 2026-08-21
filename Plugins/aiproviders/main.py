@@ -9,18 +9,13 @@ Return keystroke is synthesized after a load delay so the prompt actually
 sends. Best-effort — if focus lands elsewhere the keystroke goes there,
 the same tradeoff the Rust implementation made.
 """
-import os
 import subprocess
 import sys
 import time
 import urllib.parse
 
 sys.dont_write_bytecode = True  # never litter the (signed) bundle with .pyc
-sys.path.insert(
-    0,
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "_python_flash_plugin"),
-)
-from flashplugin import Plugin
+from flashplugin import Plugin  # resolved via host-injected PYTHONPATH
 
 # (base_url, prefill_query_param) keyed by bang token.
 PROVIDERS = {

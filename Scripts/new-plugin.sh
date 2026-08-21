@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Scaffold a new bundled Rust plugin under Plugins/<id>/ with a manifest,
-# Cargo.toml, and a minimal command-handling main.rs, and register it in the
-# workspace members list. The generated plugin exposes a single `:<id> ping`
-# command so it builds, loads, and answers immediately; edit src/main.rs to
-# add real behavior. No other files need touching — the Swift plugin tests
-# discover plugins by globbing Plugins/*/manifest.json.
+# Scaffold a new bundled Rust plugin under Plugins/<id>/ as a hermetic
+# standalone crate: manifest, Cargo.toml (path dep on the shared SDK +
+# per-crate build profiles), the canonical clippy.toml copy, a committed
+# Cargo.lock, and a minimal command-handling main.rs. The generated plugin
+# exposes a single `:<id> ping` command so it builds, loads, and answers
+# immediately; edit src/main.rs to add real behavior. No other files need
+# touching — every consumer (build-plugins.sh, the host, the Swift plugin
+# tests) discovers plugins by globbing Plugins/*/manifest.json.
 #
 # Usage: new-plugin.sh <id> "<Display Name>" "<one-line description>"
 #   <id>  lowercase [a-z0-9._-], also the binary name suffix.
@@ -54,8 +56,6 @@ cat >"$DIR/manifest.json" <<JSON
 }
 JSON
 
-# Profiles are workspace-global (Plugins/Cargo.toml); per-crate Cargo.tomls
-# carry only their own dependencies.
 cat >"$DIR/Cargo.toml" <<TOML
 [package]
 name = "flash-plugin-$ID"
@@ -68,8 +68,29 @@ name = "flash-plugin-$ID"
 path = "src/main.rs"
 
 [dependencies]
-flash_plugin = { path = "../_rust_flash_plugin" }
+flash_plugin = { path = "../_flash_plugin_rust" }
+
+# Dev hot-loop profile used by Scripts/build-plugins.sh: mild optimization
+# (fully-unoptimized tokio is visibly slow under the plugin latency contracts),
+# line-tables-only debuginfo keeps the shared target dir small.
+[profile.plugin-dev]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+
+# Long-lived resident child process: optimize for size and cold start.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
 TOML
+
+# Every Rust plugin carries a byte-identical copy of the canonical clippy
+# config (clippy discovers config by walking up from the invocation cwd);
+# check-guardrails.sh fails if a copy drifts from the canonical one.
+cp "$PROJECT_DIR/Plugins/_flash_plugin_rust/clippy.toml" "$DIR/clippy.toml"
 
 cat >"$DIR/src/main.rs" <<'RUST'
 use flash_plugin::{run, CommandRequest, CommandResponse, Context};
@@ -92,28 +113,10 @@ fn main() {
 }
 RUST
 
-# Register the crate in the explicit workspace members list (sorted
-# insertion among the non-underscore entries) — an unlisted crate is
-# invisible to build-plugins.sh's `-p` package selection.
-awk -v id="$ID" '
-  /^members = \[/ { in_members = 1 }
-  in_members && /^\]/ {
-    if (!inserted) { printf "  \"%s\",\n", id; inserted = 1 }
-    in_members = 0
-  }
-  in_members && $0 ~ /^  "/ {
-    member = $0
-    gsub(/[" ,]/, "", member)
-    if (!inserted && member !~ /^_/ && member > id) {
-      printf "  \"%s\",\n", id
-      inserted = 1
-    }
-  }
-  { print }
-' "$PROJECT_DIR/Plugins/Cargo.toml" >"$PROJECT_DIR/Plugins/Cargo.toml.new"
-mv "$PROJECT_DIR/Plugins/Cargo.toml.new" "$PROJECT_DIR/Plugins/Cargo.toml"
+CARGO_TARGET_DIR="$PROJECT_DIR/build/plugin-target" \
+  cargo generate-lockfile --manifest-path "$DIR/Cargo.toml"
 
-echo "Created Plugins/$ID and registered it in Plugins/Cargo.toml"
+echo "Created hermetic plugin crate Plugins/$ID (commit its Cargo.lock)"
 echo
 echo "Iterate with:"
 echo "  ./Scripts/build-plugins.sh dev $ID   # build + stage just this plugin"

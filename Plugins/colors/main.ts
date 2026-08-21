@@ -7,7 +7,7 @@
 // else is declined with an empty answer list — pure in-memory arithmetic,
 // nothing warmed, no I/O anywhere.
 
-import { Plugin, type Answer } from "../_typescript_flash_plugin/flashplugin";
+import { Plugin, type Answer } from "flashplugin"; // resolved via host-injected NODE_PATH
 
 type RGB = { r: number; g: number; b: number };
 

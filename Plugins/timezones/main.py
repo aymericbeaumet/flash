@@ -9,17 +9,12 @@ IANA zone names (`tokyo`, `new york`, `america/new_york`, …). Every ZoneInfo
 is constructed once at startup so query evaluation is pure in-memory
 arithmetic — the evaluator contract bans I/O on the query path.
 """
-import os
 import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, available_timezones
 
 sys.dont_write_bytecode = True  # never litter the (signed) bundle with .pyc
-sys.path.insert(
-    0,
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "_python_flash_plugin"),
-)
-from flashplugin import Plugin
+from flashplugin import Plugin  # resolved via host-injected PYTHONPATH
 
 MAX_ANSWERS = 4
 

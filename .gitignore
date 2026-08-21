@@ -9,12 +9,14 @@ DerivedData/
 *.xcodeproj
 *.xcworkspace
 
-## Rust plugin build output
+## Rust plugin build output. Plugins are hermetic standalone crates whose
+## committed Cargo.lock lives at Plugins/<id>/Cargo.lock (not ignored); a
+## bare cargo run without CARGO_TARGET_DIR=build/plugin-target creates a
+## watched Plugins/<id>/target/ — keep it out of the index.
 Plugins/*/target/
 Plugins/*/flash-plugin-*
-Plugins/target/
-# Bundled plugins are executable crates: pin their shared dependency graph.
-!Plugins/Cargo.lock
+# The global gitignore drops *.lock; hermetic plugin crates commit theirs.
+!Plugins/*/Cargo.lock
 
 ## Python bytecode (interpreted plugins + Scripts tooling)
 __pycache__/
@@ -35,4 +37,13 @@ karabiner.json.bak-*
 /cache/
 /bin/
 /config/
+/share/
+
+## Per-plugin data-dir litter: running a plugin binary by hand without
+## FLASH_PLUGIN_DATA_DIR historically mkdir'd these inside the source tree.
+Plugins/*/home/
+Plugins/*/config/
+Plugins/*/cache/
+Plugins/*/share/
+Plugins/*/bin/
 examples/plugins/go-spotify/flash-plugin-go-spotify

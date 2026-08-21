@@ -167,6 +167,35 @@ struct PluginRepository {
     return manifestRoots(in: candidates)
   }
 
+  /// Env the host injects at plugin spawn so interpreted plugins import their
+  /// shared SDK by bare module name (`import flashplugin`) from anywhere —
+  /// repo checkout, release bundle, or a third-party root. Set for every
+  /// plugin (harmless for compiled ones). Same candidate order as
+  /// `officialPluginRoots()`: the staged bundle wins over a cwd checkout.
+  static func interpreterSDKEnvironment() -> [String: String] {
+    let bases = [
+      Bundle.main.resourceURL?.appendingPathComponent("Plugins"),
+      URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(
+        "Plugins"),
+    ].compactMap { $0 }
+    let sdkDirs = [
+      ("PYTHONPATH", "_flash_plugin_python"),
+      ("RUBYLIB", "_flash_plugin_ruby"),
+      ("NODE_PATH", "_flash_plugin_typescript"),
+    ]
+    var env: [String: String] = [:]
+    for (variable, directory) in sdkDirs {
+      for base in bases {
+        let dir = base.appendingPathComponent(directory)
+        if FileManager.default.fileExists(atPath: dir.path) {
+          env[variable] = dir.resolvingSymlinksInPath().path
+          break
+        }
+      }
+    }
+    return env
+  }
+
   static func defaultDataDir() -> URL {
     FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Application Support/Flash/Plugins")

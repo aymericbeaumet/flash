@@ -4,7 +4,7 @@ The blessed way to write a Flash plugin. One crate, one dependency line:
 
 ```toml
 # Bundled plugins (in this repo):
-flash_plugin = { path = "../_rust_flash_plugin" }
+flash_plugin = { path = "../_flash_plugin_rust" }
 
 # External plugins — pin a rev, same as every third-party surface in Flash:
 flash_plugin = { git = "https://github.com/aymericbeaumet/flash", rev = "<sha>" }
@@ -13,8 +13,9 @@ flash_plugin = { git = "https://github.com/aymericbeaumet/flash", rev = "<sha>" 
 The proc-macro crate and the bounded-subprocess layer are internal details of
 `flash_plugin`; never name them. Scaffold a new bundled plugin with
 `Scripts/new-plugin.sh <id> "<Name>" "<description>"` — it generates the
-manifest, crate, and a working `:<id> ping` command, registers the workspace
-member, and requires zero manual edits to reach green.
+manifest, a hermetic standalone crate (path dep on the SDK, per-crate build
+profiles, the canonical `clippy.toml` copy, a committed `Cargo.lock`), and a
+working `:<id> ping` command, requiring zero manual edits to reach green.
 
 ## Authoring shape
 
@@ -112,7 +113,7 @@ mod tests {
 `Harness::with_config` injects a `[plugin.<id>]` settings object;
 `drain_control()` / `drain_telemetry()` return the emitted JSON frames
 decoded to JSON values; `set_running_applications` seeds the app snapshot.
-Add `tokio = { workspace = true }` to `[dev-dependencies]` for async tests.
+Add tokio to `[dev-dependencies]` for async tests.
 
 ## Iteration loop
 
@@ -122,6 +123,8 @@ Add `tokio = { workspace = true }` to `[dev-dependencies]` for async tests.
 
 The staged `mv -f` lands as a rename; the host's file watcher restarts only
 that plugin (~300 ms debounce) while the other plugins keep their warm
-catalogs. If watching is disabled, run `:plugins reload`. `cargo test
---manifest-path Plugins/Cargo.toml -p flash-plugin-<id>` needs no built
-binaries at all.
+catalogs. If watching is disabled, run `:plugins reload`.
+`CARGO_TARGET_DIR=build/plugin-target cargo test --manifest-path
+Plugins/<id>/Cargo.toml` needs no built binaries at all (always set
+`CARGO_TARGET_DIR` for manual cargo runs — a bare run creates a watched
+`Plugins/<id>/target/`).

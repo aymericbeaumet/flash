@@ -9,12 +9,15 @@
 # `std::process::Command`. (`tokio::fs` offloads to its own blocking pool
 # internally, so plugin code stays fully async and never names `std::fs`.)
 #
-# Enforced over the plugin crates with
-# `cargo clippy --manifest-path Plugins/Cargo.toml -- -D clippy::disallowed_methods`
-# (see AGENTS.md "Plugins must never block the async runtime"). The proc-macro
-# crate `flash_plugin_macros` reads `manifest.json` at *compile* time, which is
-# inherently synchronous and not on any async runtime — exclude it from the lint
-# run rather than allow-listing it.
+# This file is the CANONICAL copy; every Rust plugin crate carries a
+# byte-identical `clippy.toml` (clippy discovers config by walking up from the
+# invocation cwd, so hermetic per-crate runs need a local copy) and
+# `Scripts/check-guardrails.sh` fails if any copy drifts. Enforced per crate
+# with `(cd Plugins/<id> && cargo clippy --all-targets -- -D warnings)` — see
+# AGENTS.md "Plugins must never block the async runtime". The proc-macro crate
+# `flash_plugin_macros` reads `manifest.json` at *compile* time, which is
+# inherently synchronous and not on any async runtime — its single read site
+# carries a scoped `#[allow(clippy::disallowed_methods)]`.
 disallowed-methods = [
   { path = "std::fs::read", reason = "blocking I/O on the async runtime — use tokio::fs::read" },
   { path = "std::fs::read_to_string", reason = "blocking I/O on the async runtime — use tokio::fs::read_to_string" },

@@ -1,10 +1,9 @@
 """Shared Flash plugin SDK for Python (stdlib only) — no Flash business
 concepts, mirroring the Rust `flash_plugin` crate's role for Python plugins.
-Plugins bootstrap it with a two-line path insert (the directory sits beside
-every plugin in both the checkout and the staged release bundle):
+Plugins import it by bare module name — the host (and the spec runner) inject
+PYTHONPATH pointing at this directory at spawn, so the same import works from
+the repo checkout, the staged release bundle, and third-party roots:
 
-    sys.path.insert(0, os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "_python_flash_plugin"))
     from flashplugin import Plugin
 
 Speaks the wire contract from docs/plugin-protocol.md: protocol v1, one JSON

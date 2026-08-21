@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Spec-driven protocol conformance runner for Flash plugins, any language.
 
-Drives one plugin process through the JSON scenarios in Plugins/_specs/,
-speaking the v1 wire contract from docs/plugin-protocol.md (one JSON object
-per newline-terminated line over stdio). The specs are the shared test suite
-for every plugin SDK/library — Rust, Python, TypeScript, Ruby, Go, Zig,
-Swift — so a conformance gap fails identically no matter the language.
+Drives one plugin process through the JSON scenarios in
+Plugins/_flash_plugin_specs/, speaking the v1 wire contract from
+docs/plugin-protocol.md (one JSON object per newline-terminated line over
+stdio). The specs are the shared test suite for every plugin SDK/library —
+Rust, Python, TypeScript, Ruby, Go, Zig, Swift — so a conformance gap fails
+identically no matter the language.
 
 Spec files are objects:
 
@@ -43,7 +44,8 @@ import subprocess
 import sys
 import time
 
-SPECS_DIR = pathlib.Path(__file__).resolve().parent.parent / "Plugins" / "_specs"
+PLUGINS_DIR = pathlib.Path(__file__).resolve().parent.parent / "Plugins"
+SPECS_DIR = PLUGINS_DIR / "_flash_plugin_specs"
 
 
 def frame(obj):
@@ -235,6 +237,19 @@ def main():
 
     variables = {"plugin_id": manifest.get("id", "spec-test")}
     os.environ.setdefault("FLASH_PLUGIN_ID", variables["plugin_id"])
+    # Mirror the host's spawn env: interpreted plugins import their shared SDK
+    # by bare module name. PREPEND to any ambient value (all three are
+    # colon-separated search paths) — unrelated tooling exporting NODE_PATH
+    # etc. must not break conformance runs, and a vendored SDK in the plugin
+    # root still wins via relative resolution.
+    for variable, sdk_dir in (
+        ("PYTHONPATH", "_flash_plugin_python"),
+        ("RUBYLIB", "_flash_plugin_ruby"),
+        ("NODE_PATH", "_flash_plugin_typescript"),
+    ):
+        sdk_path = str(PLUGINS_DIR / sdk_dir)
+        ambient = os.environ.get(variable)
+        os.environ[variable] = f"{sdk_path}:{ambient}" if ambient else sdk_path
 
     specs = []
     for path in sorted(SPECS_DIR.glob("*.json")):

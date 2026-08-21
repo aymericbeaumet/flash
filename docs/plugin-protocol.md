@@ -3,7 +3,7 @@
 This is the complete, language-agnostic contract between Flash and a plugin.
 Any executable that speaks it over stdio is a valid plugin — the Rust SDK
 (`docs/plugin-rust-sdk.md`) is the blessed implementation, not a wall.
-The executable half of this document lives in `Plugins/_specs/`: JSON
+The executable half of this document lives in `Plugins/_flash_plugin_specs/`: JSON
 conformance scenarios `Scripts/plugin-protocol-spec.py` runs against any
 plugin process, host-free (CI runs them against every bundled SDK).
 

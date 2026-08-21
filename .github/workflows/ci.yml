@@ -44,32 +44,39 @@ jobs:
   plugins:
     name: Plugins (cargo)
     runs-on: macos-15
+    env:
+      # Shared across every hermetic crate: cargo keys artifacts by
+      # package-id + metadata hash, so the SDK compiles once, not 21 times.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
       - uses: actions/checkout@v4
-      - name: Cache Cargo registry + workspace target
+      - name: Cache Cargo registry + shared plugin target
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            Plugins/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Plugins/Cargo.lock') }}
+            build/plugin-target
+          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
-      - name: cargo fmt --check
-        working-directory: Plugins
-        run: cargo fmt --all --check
-      - name: cargo clippy
-        working-directory: Plugins
-        # `-D warnings` makes clippy a hard gate so warnings can't accumulate
-        # quietly across the 17-crate workspace.
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: cargo build (release)
-        working-directory: Plugins
-        run: cargo build --workspace --release
-      - name: cargo test
-        working-directory: Plugins
-        run: cargo test --workspace
+            ${{ runner.os }}-plugin-cargo-
+      - name: fmt + clippy + build + test per hermetic crate
+        # One fail-fast loop over the SDK workspace and the 20 standalone
+        # plugin crates. `cd` (not --manifest-path) is load-bearing: clippy
+        # discovers each crate's clippy.toml by walking up from the cwd.
+        # `--locked` doubles as the committed-Cargo.lock freshness gate, and
+        # `-D warnings` keeps clippy a hard gate so warnings can't accumulate.
+        run: |
+          set -euo pipefail
+          for dir in Plugins/_flash_plugin_rust Plugins/[!_]*/; do
+            [[ -f "$dir/Cargo.toml" ]] || continue
+            echo "== $dir"
+            (cd "$dir" &&
+              cargo fmt --all --check &&
+              cargo clippy --workspace --all-targets --locked -- -D warnings &&
+              cargo build --workspace --release --locked &&
+              cargo test --workspace --locked)
+          done
 
   plugins-polyglot:
     name: Plugins (protocol conformance)
@@ -85,7 +92,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             build/plugin-target
-          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/Cargo.lock') }}
+          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
       - name: Build compiled plugins
@@ -97,8 +104,8 @@ jobs:
           spotify netinfo searchengines httpstatus reminders shortcuts
           calculator snippets
       - name: Protocol conformance specs
-        # One language-agnostic JSON spec suite (Plugins/_specs, driven by
-        # Scripts/plugin-protocol-spec.py) runs against every plugin SDK —
+        # One language-agnostic JSON spec suite (Plugins/_flash_plugin_specs,
+        # driven by Scripts/plugin-protocol-spec.py) runs against every SDK —
         # Rust included — so a conformance gap fails identically no matter
         # the language. lifecycle + robustness always; snapshot/query where
         # the manifest declares sources/queries. --skip snapshot where the

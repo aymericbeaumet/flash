@@ -1,9 +1,10 @@
 // Shared Flash plugin SDK for TypeScript on Bun — no Flash business
 // concepts, mirroring the Rust `flash_plugin` crate's role for TS plugins.
-// Plugins import it relatively (the directory sits beside every plugin in
-// both the checkout and the staged release bundle):
+// Plugins import it by bare module name — the host (and the spec runner)
+// inject NODE_PATH pointing at this directory at spawn, so the same import
+// works from the checkout, the staged release bundle, and third-party roots:
 //
-//   import { Plugin } from "../_typescript_flash_plugin/flashplugin";
+//   import { Plugin } from "flashplugin";
 //
 // Speaks the wire contract from docs/plugin-protocol.md: protocol v1 —
 // newline-delimited JSON over stdio, one object per line, no envelope

@@ -1086,16 +1086,16 @@ final class PluginProcess {
   }
 
   private func pluginEnvironment() -> [String: String] {
-    Self.sanitizedPluginEnvironment(
+    var overrides = PluginRepository.interpreterSDKEnvironment()
+    overrides["FLASH_PLUGIN_ID"] = manifest.id
+    overrides["FLASH_PLUGIN_VERSION"] = manifest.version
+    overrides["FLASH_PLUGIN_DATA_DIR"] = dataDir.path
+    overrides["FLASH_PLUGIN_CONFIG"] = settingsJSON
+    overrides["FLASH_PLUGIN_PARENT_PID"] = String(getpid())
+    overrides["PYTHONDONTWRITEBYTECODE"] = "1"
+    return Self.sanitizedPluginEnvironment(
       base: FlashProcessEnvironment.shared.environment,
-      overrides: [
-        "FLASH_PLUGIN_ID": manifest.id,
-        "FLASH_PLUGIN_VERSION": manifest.version,
-        "FLASH_PLUGIN_DATA_DIR": dataDir.path,
-        "FLASH_PLUGIN_CONFIG": settingsJSON,
-        "FLASH_PLUGIN_PARENT_PID": String(getpid()),
-        "PYTHONDONTWRITEBYTECODE": "1",
-      ])
+      overrides: overrides)
   }
 
   static func sanitizedPluginEnvironment(

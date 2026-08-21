@@ -4,7 +4,7 @@ set -euo pipefail
 # Build every compiled bundled plugin and drop each binary next to its
 # manifest.json as `flash-plugin-<id>`. Language is detected per plugin dir
 # by convention — Rust is the default for new plugins:
-#   Cargo.toml  → Rust   (one workspace-aware cargo invocation for all)
+#   Cargo.toml  → Rust   (hermetic standalone crate, one cargo run per dir)
 #   go.mod      → Go     (mise-pinned toolchain)
 #   main.zig    → Zig    (mise-pinned toolchain)
 #   main.swift  → Swift  (Xcode toolchain, same as the host app)
@@ -12,11 +12,12 @@ set -euo pipefail
 #                 to build — sources run in place)
 #
 # Every language links its shared per-language SDK from the sibling
-# Plugins/_<language>_flash_plugin directory: Rust via the workspace path
-# dep, Go via a go.mod replace, Zig via the flashplugin module below, Swift
-# by compiling the SDK source alongside main.swift. Interpreted SDKs
-# (python/ruby/typescript) are imported relatively at runtime and staged
-# into the release bundle by Scripts/_common.sh.
+# Plugins/_flash_plugin_<language> directory: Rust via a path dep in the
+# plugin's own Cargo.toml, Go via a go.mod replace, Zig via the flashplugin
+# module below, Swift by compiling the SDK source alongside main.swift.
+# Interpreted SDKs (python/ruby/typescript) are imported by bare module name
+# via host-injected PYTHONPATH/RUBYLIB/NODE_PATH and staged into the release
+# bundle by Scripts/_common.sh.
 #
 # All build artifacts land under build/plugin-target (never inside the
 # watched plugin trees, so the dev file-watcher never sees intermediate
@@ -48,7 +49,7 @@ if [[ "$MODE" == "release" ]]; then
 fi
 
 # A real plugin is defined by its manifest.json; support crates such as the
-# shared SDK at Plugins/_rust_flash_plugin have none and are built only as
+# shared SDK at Plugins/_flash_plugin_rust have none and are built only as
 # dependencies.
 plugin_dirs=()
 for manifest in Plugins/*/manifest.json; do
@@ -87,30 +88,30 @@ if ((${#plugin_dirs[@]} == 0)); then
   exit 1
 fi
 
-rust_pkg_args=()
 build_dirs=()
 for dir in "${plugin_dirs[@]}"; do
-  if [[ -f "$dir/Cargo.toml" ]]; then
-    rust_pkg_args+=(-p "flash-plugin-$(basename "$dir")")
-    build_dirs+=("$dir")
-  elif [[ -f "$dir/go.mod" || -f "$dir/main.zig" || -f "$dir/main.swift" ]]; then
+  if [[ -f "$dir/Cargo.toml" || -f "$dir/go.mod" || -f "$dir/main.zig" || -f "$dir/main.swift" ]]; then
     build_dirs+=("$dir")
   fi
 done
 
 echo "==> Building ${#build_dirs[@]} compiled plugin(s) of ${#plugin_dirs[@]} selected ($MODE)"
 
-if ((${#rust_pkg_args[@]})); then
+# Rust plugins are hermetic standalone crates — one cargo invocation per dir.
+# The shared CARGO_TARGET_DIR still dedupes SDK/dep artifacts across crates
+# (cargo keys compiled artifacts by package-id + metadata hash). Release
+# builds run --locked so a stale or missing committed Cargo.lock fails
+# loudly; dev builds may refresh a lock during the hot loop (commit it).
+for dir in "${build_dirs[@]}"; do
+  [[ -f "$dir/Cargo.toml" ]] || continue
   if [[ "$MODE" == "release" ]]; then
-    cargo build --manifest-path Plugins/Cargo.toml --release \
+    cargo build --manifest-path "$dir/Cargo.toml" --release --locked \
       --target x86_64-apple-darwin \
-      --target aarch64-apple-darwin \
-      "${rust_pkg_args[@]}"
+      --target aarch64-apple-darwin
   else
-    cargo build --manifest-path Plugins/Cargo.toml --profile plugin-dev \
-      "${rust_pkg_args[@]}"
+    cargo build --manifest-path "$dir/Cargo.toml" --profile plugin-dev
   fi
-fi
+done
 
 # Build a Go or Zig plugin into $TARGET_DIR/other/<name>; echoes nothing,
 # artifacts stay out of the watched plugin trees.
@@ -130,16 +131,19 @@ build_other() {
       aarch64) swiftargs+=(-target arm64-apple-macos14.0) ;;
     esac
     (cd "$dir" && xcrun swiftc "${swiftargs[@]}" \
-      main.swift ../_swift_flash_plugin/flashplugin.swift -o "$out")
+      main.swift ../_flash_plugin_swift/flashplugin.swift -o "$out")
   else
+    # -target (and every global flag) must precede the -M module args: the
+    # Zig CLI applies flags positionally, and a trailing -target is silently
+    # ignored — both "cross" outputs come out native and lipo refuses them.
     local zigargs=(-O ReleaseSafe -lc -femit-bin="$out")
     case "$arch" in
       x86_64) zigargs+=(-target x86_64-macos) ;;
       aarch64) zigargs+=(-target aarch64-macos) ;;
     esac
-    (cd "$dir" && mise exec zig -- zig build-exe \
+    (cd "$dir" && mise exec zig -- zig build-exe "${zigargs[@]}" \
       --dep flashplugin -Mroot=main.zig \
-      -Mflashplugin=../_zig_flash_plugin/flashplugin.zig "${zigargs[@]}")
+      -Mflashplugin=../_flash_plugin_zig/flashplugin.zig)
   fi
 }
 

@@ -3,7 +3,7 @@
 // for Go plugins. Plugins depend on it through a go.mod replace directive:
 //
 //	require flashplugin v0.0.0
-//	replace flashplugin => ../_go_flash_plugin
+//	replace flashplugin => ../_flash_plugin_go
 //
 // Speaks the wire contract from docs/plugin-protocol.md: protocol v1, one
 // JSON object per newline-terminated line over stdio. No envelope beyond

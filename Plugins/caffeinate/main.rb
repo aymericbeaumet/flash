@@ -11,7 +11,7 @@
 # segment renders through `#{plugin:caffeinate.state}` ("on"/"" so templates
 # decorate it themselves).
 
-require_relative "../_ruby_flash_plugin/flashplugin"
+require "flashplugin" # resolved via host-injected RUBYLIB
 
 CAFFEINATE = "/usr/bin/caffeinate".freeze
 

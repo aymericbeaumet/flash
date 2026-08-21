@@ -74,12 +74,12 @@ Sources/
 Tests/FlashTests/                    # XCTest: Alphabet, ConfigLoader, HintAssigner, TargetFinalizer, WindowSnapshot, plugin system, source candidates, browser fixture catalog, shared integration support.
 Tests/BrowserSnapshots/              # Browser integration offline HTML snapshots discovered by Scripts/test-integration-browser.sh.
 Tests/ElectronFixture/               # Pinned minimal Electron app used by Scripts/test-integration-electron.sh.
-Plugins/                             # Official bundled Rust plugins, members of the Plugins/Cargo.toml workspace, symlinked into the dev app
-Plugins/_rust_flash_plugin/          # Shared Rust plugin SDK crate (package flash_plugin); no Flash business concepts
-Plugins/_<language>_flash_plugin/    # Shared per-language plugin SDKs (python/typescript/ruby/go/zig/swift), same no-business-concepts rule
-Plugins/_specs/                      # Language-agnostic JSON protocol-conformance specs, run by Scripts/plugin-protocol-spec.py
+Plugins/                             # Official bundled plugins, each a hermetic standalone build (no shared cargo workspace), symlinked into the dev app
+Plugins/_flash_plugin_rust/          # Shared Rust plugin SDK crate (package flash_plugin, own 2-member workspace + lock + canonical clippy.toml); no Flash business concepts
+Plugins/_flash_plugin_<language>/    # Shared per-language plugin SDKs (python/typescript/ruby/go/zig/swift), same no-business-concepts rule
+Plugins/_flash_plugin_specs/         # Language-agnostic JSON protocol-conformance specs, run by Scripts/plugin-protocol-spec.py
 Resources/Info.plist                 # LSUIElement, AppleEvent usage description
-Scripts/build-plugins.sh                     # one workspace cargo invocation for [dev|release] [id…] → flash-plugin-<id> binary beside its manifest (dev = plugin-dev profile, current arch; release = universal lipo; ids filter to the single-plugin hot loop)
+Scripts/build-plugins.sh                     # per-crate hermetic cargo builds for [dev|release] [id…] → flash-plugin-<id> binary beside its manifest (dev = plugin-dev profile, current arch; release = universal lipo; ids filter to the single-plugin hot loop)
 Scripts/_common.sh                           # Shared constants + helpers (signing identity, login agent, app assembly) sourced by build.sh / install.sh
 Scripts/build.sh                             # Build Flash.app into build/ without installing. Default --release = clean universal optimized + zip; --dev = fast incremental optimized current-arch
 Scripts/install.sh                           # build.sh then install to /Applications (dev: "Flash 🧪.app", release: "Flash.app") + restart. Default --release = clean universal; --dev = stable dev-signed, plugin symlinks
@@ -421,40 +421,46 @@ the host resolves it at spawn via `mise which` first (cwd-aware, so repo
 pins apply in dev), then a login-PATH walk, and logs the resolved path as
 `[plugin] runtime <name> -> <path>`.
 
-Rust plugins under `Plugins/<id>/` are members of the `Plugins/Cargo.toml`
-virtual workspace and depend on the local `flash_plugin`
-SDK crate (`flash_plugin = { path = "../_rust_flash_plugin" }`), which owns
-all the generic protocol scaffolding (JSON-lines framing,
-`initialize`/`heartbeat`/`shutdown`, structured logging, a sandboxed `run_cli`,
-background tasks/timers, and the tokio runtime) and carries **no Flash
-business concepts**. Shared dep versions (serde, tokio, objc2,
-…) live in `[workspace.dependencies]` and each crate inherits them via
-`{ workspace = true }`, so every plugin resolves the same transitive graph
-through a single `Plugins/Cargo.lock`. Per-crate Cargo.tomls keep only their
-own plugin-specific deps (`fend-core` / `quick-xml` in calculator, etc.) and no
-`[profile.release]` — the size-optimized release profile lives once at the
-workspace root. A plugin's `main.rs` implements the `Plugin`
+Rust plugins under `Plugins/<id>/` are **hermetic standalone crates** — there
+is no cargo workspace under `Plugins/` (the SDK dir's own two-member
+workspace is the single exception). Each plugin's `Cargo.toml` path-depends
+on the local SDK crate (`flash_plugin = { path = "../_flash_plugin_rust" }`),
+which owns all the generic protocol scaffolding (JSON-lines framing,
+`initialize`/`heartbeat`/`shutdown`, structured logging, a sandboxed
+`run_command`, background tasks/timers, and the tokio runtime) and carries
+**no Flash business concepts**. Every plugin crate inlines its own dependency
+versions, carries its own `[profile.plugin-dev]`/`[profile.release]` blocks,
+commits its own `Cargo.lock` (kept honest by `--locked` in CI and release
+builds; version skew between plugins is allowed by design), and carries a
+byte-identical copy of the canonical clippy config
+(`Plugins/_flash_plugin_rust/clippy.toml`; `check-guardrails.sh` fails on
+drift) — a bundled plugin's build files are exactly what a third-party author
+would write. Always set `CARGO_TARGET_DIR=build/plugin-target` for manual
+cargo runs: it dedupes SDK builds across crates, and a bare run creates a
+watched `Plugins/<id>/target/`. A plugin's `main.rs` implements the `Plugin`
 trait; everything domain-specific lives there, never in the template. The crate
 hardcodes `edition = "2021"` and `license = "MIT"`. Plugins may assume macOS and
 must **not** use `unsafe` Rust (objc2 0.6 exposes the AppKit/Foundation calls we
 need safely; the SDK confines its own unsafe to `process.rs`/`runtime.rs`).
 Each non-Rust language has its own shared SDK under
-`Plugins/_<language>_flash_plugin/` (a single ~100–250-line `flashplugin.*`:
+`Plugins/_flash_plugin_<language>/` (a single ~100–250-line `flashplugin.*`:
 JSON-lines framing + the v1 lifecycle, a call_host correlation map, and a
 FLASH_PLUGIN_CONFIG accessor — no Flash business concepts, mirroring the
 Rust crate's role). Compiled languages link it at build time
 (go.mod `replace`, the Zig `flashplugin` module, Swift source compiled
-alongside `main.swift`); interpreted plugins import it relatively and
-`Scripts/_common.sh` stages the python/ruby/typescript SDK dirs into the
-release bundle. `Plugins/_specs/*.json` is the language-agnostic
+alongside `main.swift`); interpreted plugins import it by bare module name
+via host-injected `PYTHONPATH`/`RUBYLIB`/`NODE_PATH`
+(`PluginRepository.interpreterSDKEnvironment`, mirrored by the spec runner),
+and `Scripts/_common.sh` stages the python/ruby/typescript SDK dirs into the
+release bundle. `Plugins/_flash_plugin_specs/*.json` is the language-agnostic
 conformance suite (lifecycle + wire-noise robustness always;
 snapshot/query gated on the manifest's provider sections);
 `Scripts/plugin-protocol-spec.py` drives any plugin binary/runtime through
 it without a host, and CI runs it against every SDK — Rust included
 (calculator + snippets).
 `Scripts/build-plugins.sh [dev|release] [id…]` builds every compiled plugin
-by per-dir convention — `Cargo.toml` → one workspace-aware cargo
-invocation, `go.mod` → `go build`, `main.zig` → `zig build-exe` (both via
+by per-dir convention — `Cargo.toml` → one cargo invocation per hermetic
+crate, `go.mod` → `go build`, `main.zig` → `zig build-exe` (both via
 `mise exec`) — into a shared `build/plugin-target` (kept out of the watched
 plugin trees) and stages each `flash-plugin-<id>` binary next to its
 `manifest.json` through the same sign-then-atomic-rename flow; interpreted
@@ -642,17 +648,19 @@ make the enclosing helper `async` and `await` it up the call chain. The tokio
 runtime itself is built once by the SDK's `run()` — a plugin's `main` must never
 build its own (`tokio::runtime::Builder`/`block_on`); do async startup work in
 `on_start`, or resolve lazily with a `tokio::sync::OnceCell` (see
-`Plugins/tmux/src/main.rs` `resolved_tmux_path`). Enforced by `Plugins/clippy.toml`
-(`disallowed-methods`/`disallowed-types`):
+`Plugins/tmux/src/main.rs` `resolved_tmux_path`). Enforced by each crate's
+`clippy.toml` (byte-identical copies of
+`Plugins/_flash_plugin_rust/clippy.toml`, guardrail-checked;
+`disallowed-methods`/`disallowed-types`):
 
 ```
-cargo clippy --manifest-path Plugins/Cargo.toml --workspace --no-deps \
-  --exclude flash_plugin_macros \
-  -- -D clippy::disallowed_methods -D clippy::disallowed_types
+(cd Plugins/<id> && CARGO_TARGET_DIR=../../build/plugin-target \
+  cargo clippy --all-targets -- -D clippy::disallowed_methods -D clippy::disallowed_types)
 ```
 
 (`flash_plugin_macros` reads `manifest.json` at *compile* time, where there
-is no async runtime — it's excluded, not allow-listed. The lint regime is
+is no async runtime — its single read site carries a scoped
+`#[allow(clippy::disallowed_methods)]`. The lint regime is
 Rust-only by construction; non-Rust plugins answer to the host's runtime
 enforcement instead.)
 
@@ -721,7 +729,7 @@ Normal-mode verbs currently include: `mouse_target [secondary=1|double=1|middle=
 
 **Flashlight loading sequence.** On panel open the host renders and focuses the command prompt immediately with no result rows. Every default location source — including `core.apps` — joins `CandidateSnapshotBarrier`; ready/degraded plugin sources answer immediately from SDK-owned warm stores and `ApplicationSource` answers from its atomic installed-bundle cache. `ApplicationSource` starts that index asynchronously during resident startup. If the first open races it, the snapshot callback only awaits the already-running prewarm; activation never initiates filesystem I/O. The list is revealed exactly once, in deterministic source-id order, when every source settles or the 150-ms end-to-end first-paint budget expires. Every plugin lifecycle state other than ready/degraded settles immediately instead of consuming the paint budget. Late replies, including a late initial app index, are logged and ignored for that session; the next open reads the completed warm state. A `candidateFinderSessionGeneration` token and deadline cancellation drop work from closed or superseded sessions. The host keeps no persistent plugin candidate cache. Non-default source catalogs remain plugin-warm but are read/filtered only after the first explicit `@source`/`!`bang query.
 
-**Candidate schemas.** Catalog rows use `{ title: String, url: URL?, metadata: [String: String], effect: CandidateEffect? }`. `title` is the primary searchable string and the highest-precedence ranking field. `url` is the typed openable destination — apps point to their `.app` bundle file URL; browser tabs point to the page URL; sources without an openable destination omit it. `effect` is a closed, host-validated action union; only `copy_text` exists, and rendering never executes it. `metadata` is opaque to FlashCore and the matcher indexes its values at a low tier, but plugin-process ownership is not: the host always overwrites `source_id` with `plugin:<manifest-id>` before routing. Catalog candidates may choose `source` only from their manifest-declared descriptors. The bundled host conventions (defined in `Sources/flash/App/CandidateMetadata.swift` and mirrored as `candidate_metadata::*` constants in `Plugins/_rust_flash_plugin/src/lib.rs`) are: `source`, `source_id`, `kind`, `entity`, `pid`, `navigation_url`, `bundle_id`, `subtitle`, `payload`, `aliases`, `finishes_command`, `current_location`, `priority`. `priority` must be one shared enum value (`low`, `normal`, `high`, `important`, `urgent`), not a source-local number. Catalogs are bounded to 10,000 candidates / 4 MiB encoded; titles to 4 KiB, URLs to 16 KiB, metadata to 64 entries with 256-byte keys and 64-KiB values, and effect text to 64 KiB. A catalog snapshot is atomic: one malformed or oversized row rejects the complete snapshot, never a valid-looking prefix. Query evaluators have the narrower `{ answers: [{ title, subtitle?, effect }] }` response described above: they cannot emit URLs or metadata, and the host stamps their registered source, `query_answer` kind, plugin ownership, urgency, and finisher behavior. Query responses are bounded to 16 answers / 256 KiB with 16-KiB title, subtitle, and effect-text fields. For both shapes, the only accepted effect is exactly `{ type: "copy_text", text: String }`; unknown keys or malformed effects reject the complete catalog/query response.
+**Candidate schemas.** Catalog rows use `{ title: String, url: URL?, metadata: [String: String], effect: CandidateEffect? }`. `title` is the primary searchable string and the highest-precedence ranking field. `url` is the typed openable destination — apps point to their `.app` bundle file URL; browser tabs point to the page URL; sources without an openable destination omit it. `effect` is a closed, host-validated action union; only `copy_text` exists, and rendering never executes it. `metadata` is opaque to FlashCore and the matcher indexes its values at a low tier, but plugin-process ownership is not: the host always overwrites `source_id` with `plugin:<manifest-id>` before routing. Catalog candidates may choose `source` only from their manifest-declared descriptors. The bundled host conventions (defined in `Sources/flash/App/CandidateMetadata.swift` and mirrored as `candidate_metadata::*` constants in `Plugins/_flash_plugin_rust/src/lib.rs`) are: `source`, `source_id`, `kind`, `entity`, `pid`, `navigation_url`, `bundle_id`, `subtitle`, `payload`, `aliases`, `finishes_command`, `current_location`, `priority`. `priority` must be one shared enum value (`low`, `normal`, `high`, `important`, `urgent`), not a source-local number. Catalogs are bounded to 10,000 candidates / 4 MiB encoded; titles to 4 KiB, URLs to 16 KiB, metadata to 64 entries with 256-byte keys and 64-KiB values, and effect text to 64 KiB. A catalog snapshot is atomic: one malformed or oversized row rejects the complete snapshot, never a valid-looking prefix. Query evaluators have the narrower `{ answers: [{ title, subtitle?, effect }] }` response described above: they cannot emit URLs or metadata, and the host stamps their registered source, `query_answer` kind, plugin ownership, urgency, and finisher behavior. Query responses are bounded to 16 answers / 256 KiB with 16-KiB title, subtitle, and effect-text fields. For both shapes, the only accepted effect is exactly `{ type: "copy_text", text: String }`; unknown keys or malformed effects reject the complete catalog/query response.
 
 **Flashlight source ordering.** Explicit `!<bang>` / `@source` intent owns the surface and does not run bare query evaluators. For bare text, ephemeral query answers occupy a fixed prepended lane and are never fuzzy-filtered by their answer title; the frozen catalog below them is ordered by `CandidateFinder.sortedMatches`. A deliberate exact/title-prefix/alias hit is promoted first. Default location rows then follow the strict category ladder `tmux window > running app > installed app > browser tab > remaining location`; match quality (the field-aware exact/prefix/word-prefix/substring/fuzzy ladder in `fieldScoreNormalized`) is authoritative only within one category. Defaults come from native source descriptors and plugin manifest `sources[].kind` values (`locations` vs. `default`) plus the shared source `priority` enum. Once match scores tie, source weight (including `precedence_alive_bonus` for pid-backed candidates), candidate priority, alive state, and stable identity break the tie in that order. `[flashlight.precedence]` overrides the source weight for specific source labels or parent prefixes; it does not change source kind or the category ladder.
 
@@ -859,9 +867,13 @@ It cannot see cross-language usage: **FlashCore / FlashProviders public API cons
 ### Rust — built-in `dead_code` lint
 
 ```bash
-cd Plugins
-find . -name '*.rs' -not -path './target/*' -exec touch {} +   # force cached crates to re-emit
-cargo clippy --workspace --all-targets 2>&1 | grep -iE 'never used|never read|never constructed'
+find Plugins -name '*.rs' -not -path '*/target/*' -exec touch {} +   # force cached crates to re-emit
+export CARGO_TARGET_DIR="$PWD/build/plugin-target"
+for dir in Plugins/_flash_plugin_rust Plugins/[!_]*/; do
+  [ -f "$dir/Cargo.toml" ] || continue
+  (cd "$dir" && cargo clippy --workspace --all-targets 2>&1) |
+    grep -iE 'never used|never read|never constructed'
+done
 ```
 
 The plugins are binary crates, so rustc's `dead_code` lint flags unused items (including `pub`) with no extra tooling — touch the sources first, since incremental builds suppress warnings for unchanged crates.
