@@ -210,10 +210,7 @@ Run the unit and guardrail suites, then install the real app before manual UI ve
 
 ```bash
 swift test
-export CARGO_TARGET_DIR="$PWD/build/plugin-target"
-for dir in Plugins/_flash_plugin_rust Plugins/[!_]*/; do
-  [ -f "$dir/Cargo.toml" ] && (cd "$dir" && cargo test --workspace --locked)
-done
+./Scripts/test-plugins.sh --lane all   # plugin lint + units + builds + conformance matrix
 ./Scripts/check-guardrails.sh
 ./Scripts/install.sh --dev
 ```

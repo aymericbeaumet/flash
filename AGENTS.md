@@ -843,12 +843,19 @@ Tests in `Tests/FlashTests/` are stratified by what they exercise:
 Run order:
 
 ```bash
-swift test                                           # unit
+swift test                                           # unit (incl. plugin engine + host RPC suites)
+./Scripts/test-plugins.sh --lane all                 # spec validation, lint, cargo units, builds, and the full conformance matrix (plugins + probes + sandbox lane)
 ./Scripts/install.sh --dev                           # one-time: creates the Flash Dev signing identity
 ./Scripts/test-integration-browser.sh                # builds + signs + runs the browser corpus
 ./Scripts/test-integration-native.sh                 # builds + signs + runs native AppKit fixture
 ./Scripts/test-integration-electron.sh               # installs pinned Electron fixture and runs oracle
 ```
+
+A plugin/protocol change is not done until `Scripts/test-plugins.sh --lane
+all` is green, and a protocol bug found in any SDK lands its repro spec in
+`Plugins/_flash_plugin_specs/regressions/` BEFORE the fix (see the README
+there): the shared suite is the cross-stack ISO-behavior guarantee, and it
+only grows. `:plugins doctor` is the in-app checkhealth.
 
 Anything that requires the full overlay / commit pipeline (chip rendering, key handling, host clicks against a live focused app) is still **manually verified**: run `./Scripts/install.sh --dev`, grant permissions if needed, then exercise the app in real target apps.
 

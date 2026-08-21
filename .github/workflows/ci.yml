@@ -2,10 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # plugin-system-v2 rides CI while the branch is active (no PR yet);
+    # drop it from this list at merge.
+    branches: [main, plugin-system-v2]
     tags:
       - "*.*.*"
   pull_request:
+  workflow_dispatch:
 
 jobs:
   format:
@@ -78,9 +81,11 @@ jobs:
               cargo test --workspace --locked)
           done
 
-  plugins-polyglot:
-    name: Plugins (protocol conformance)
+  conformance:
+    name: Plugins (conformance)
     runs-on: macos-15
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned toolchains
@@ -95,42 +100,34 @@ jobs:
           key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-plugin-cargo-
-      - name: Build compiled plugins
-        # Go/Zig/Swift plugins are outside the cargo workspace — without this
-        # job a compile break in any of them lands green. calculator and
-        # snippets are the Rust-SDK representatives in the spec run below.
-        run: >
-          ./Scripts/build-plugins.sh dev
-          spotify netinfo searchengines httpstatus reminders shortcuts
-          calculator snippets
-      - name: Protocol conformance specs
-        # One language-agnostic JSON spec suite (Plugins/_flash_plugin_specs,
-        # driven by Scripts/plugin-protocol-spec.py) runs against every SDK —
-        # Rust included — so a conformance gap fails identically no matter
-        # the language. lifecycle + wire noise always; sources/queries specs
-        # where the manifest declares them. TCC-dependent skips live in
-        # Plugins/_flash_plugin_specs/overrides.json (reminders, shortcuts) —
-        # those two are the first suspects if this job ever reds on a runner
-        # TCC change. snippets gets an inline config so its snapshot is
-        # non-empty.
-        run: |
-          set -euo pipefail
-          spec="$PWD/Scripts/plugin-protocol-spec.py"
-          run() { dir="$1"; shift; echo "== $dir"; (cd "Plugins/$dir" && FLASH_PLUGIN_ID="$dir" FLASH_PLUGIN_DATA_DIR="$RUNNER_TEMP/$dir" python3 "$spec" "$@"); }
-          run aiproviders -- python3 main.py
-          run timezones -- python3 main.py
-          run emojis -- bun run main.ts
-          run colors -- bun run main.ts
-          run screenshot -- ruby main.rb
-          run caffeinate -- ruby main.rb
-          run spotify -- ./flash-plugin-spotify
-          run netinfo -- ./flash-plugin-netinfo
-          run searchengines -- ./flash-plugin-searchengines
-          run httpstatus -- ./flash-plugin-httpstatus
-          run reminders -- ./flash-plugin-reminders
-          run shortcuts -- ./flash-plugin-shortcuts
-          run calculator -- ./flash-plugin-calculator
-          FLASH_PLUGIN_CONFIG='{"snippets":{"spec":"probe"}}' run snippets -- ./flash-plugin-snippets
+      - name: Cache SwiftPM build (sandbox-profile verb)
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-build-
+      - name: Full plugin pipeline
+        # Scripts/test-plugins.sh runs everything: spec-schema validation,
+        # the minimal per-language lint set, per-crate cargo unit tests,
+        # dev builds of all compiled plugins + the 7 conformance probes,
+        # then the conformance matrix — every bundled plugin × every
+        # applicable spec, every probe × the full suite, and the sandbox
+        # lane booting each sandboxed plugin under its REAL generated
+        # seatbelt profile. Coverage is by manifest glob: a new plugin or
+        # spec is exercised by construction, never by editing this file.
+        # TCC-dependent skips live in Plugins/_flash_plugin_specs/
+        # overrides.json (reminders, shortcuts — the first suspects if this
+        # job reds on a runner TCC change); an xfail that PASSES fails the
+        # run, so parity debt can only shrink.
+        run: ./Scripts/test-plugins.sh --lane all --jobs 8 --report conformance-report.json --github-annotations
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report
+          path: conformance-report.json
+          if-no-files-found: ignore
 
   build:
     name: Build
@@ -163,6 +160,25 @@ jobs:
           key: ${{ runner.os }}-spm-test-${{ hashFiles('Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-test-
+      - name: Cache Cargo registry + plugin target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/plugin-target
+          key: ${{ runner.os }}-plugin-cargo-${{ hashFiles('Plugins/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-plugin-cargo-
+      - name: Install pinned toolchains
+        # spotify is Go — its smoke binary needs the mise-pinned toolchain.
+        uses: jdx/mise-action@v2
+      - name: Build smoke-test plugin binaries
+        # The two end-to-end subprocess smoke tests XCTSkip without these
+        # three binaries — building them turns silent skips into real runs.
+        run: ./Scripts/build-plugins.sh dev slack spotify calculator
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
       - name: Test
         run: swift test
 
@@ -195,7 +211,9 @@ jobs:
   homebrew:
     name: Homebrew
     runs-on: macos-15
-    needs: [format, lint, guardrails, build, test, inspector]
+    # plugins + conformance are REQUIRED: a red plugin build or a failed
+    # conformance matrix must never ship a release.
+    needs: [format, lint, guardrails, build, test, inspector, plugins, conformance]
     if: github.event_name == 'push'
     permissions:
       contents: write

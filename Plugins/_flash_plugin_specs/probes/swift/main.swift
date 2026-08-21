@@ -90,7 +90,9 @@ func hostArm(_ subcommand: String, _ args: [String]) -> [String: Any?]? {
   case "ps": call = ("host.process_table", [:])
   case "signal": call = ("host.signal", ["pid": intArg(args, 0, targetPID)])
   case "keys":
-    call = ("host.post_keys", ["pid": targetPID, "keys": [["key_code": 4, "modifiers": ["command"]]]])
+    call = (
+      "host.post_keys", ["pid": targetPID, "keys": [["key_code": 4, "modifiers": ["command"]]]]
+    )
   case "global-key": call = ("host.post_global_key", ["key_code": 4, "modifiers": ["command"]])
   case "ax-snapshot": call = ("host.ax_snapshot", ["pid": targetPID, "roots": "app"])
   case "activate": call = ("host.activate", ["pid": targetPID])

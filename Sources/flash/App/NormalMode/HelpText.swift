@@ -284,7 +284,7 @@ extension NormalModeDispatcher {
     lines.append(":help [topic]")
     lines.append(":open <args>")
     lines.append(":flashlight <query>")
-    lines.append(":plugins list / :plugins ls / :plugins reload")
+    lines.append(":plugins list / :plugins ls / :plugins reload / :plugins doctor")
     return lines
   }
 

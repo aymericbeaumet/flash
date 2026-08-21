@@ -1260,6 +1260,23 @@ extension AppDelegate {
       // The plugins tab shows live runtime state, so the reload's progress and
       // result land there instead of a one-shot modal.
       openDebugDashboard(tab: "plugins")
+    case .doctor:
+      let statuses = pluginManager.pluginStatuses()
+      // Off-main: the profile compile check execs sandbox-exec per
+      // sandboxed plugin (~2s across the bundled set).
+      DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        let report = PluginDoctor.run(statuses: statuses)
+        for line in report.lines {
+          FlashLog.info("[doctor] \(line)")
+        }
+        let summary =
+          report.issues == 0
+          ? "plugins doctor: \(statuses.count) ok"
+          : "plugins doctor: \(report.issues) issue(s) — see flash.log"
+        DispatchQueue.main.async {
+          self?.overlay.displayBanner(summary, durationMs: 4000)
+        }
+      }
     }
   }
 

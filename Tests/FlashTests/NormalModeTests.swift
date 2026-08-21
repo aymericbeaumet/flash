@@ -2506,7 +2506,7 @@ final class NormalModeTests: XCTestCase {
         pluginSubcommands: [:]))
     XCTAssertEqual(context.prefix, ":plugins ")
     XCTAssertEqual(context.query, "")
-    XCTAssertEqual(Set(context.items.map(\.label)), ["reload"])
+    XCTAssertEqual(Set(context.items.map(\.label)), ["doctor", "reload"])
     XCTAssertTrue(context.items.allSatisfy { $0.kind == .pluginSubcommand })
   }
 
