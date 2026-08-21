@@ -79,7 +79,7 @@
       "priority": "high"
     }
   ],
-  "source_actions": [
+  "actions": [
     "tab_select",
     "tab_new",
     "tab_close"

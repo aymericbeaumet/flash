@@ -7,7 +7,7 @@
     "python3",
     "main.py"
   ],
-  "shebangs": {
+  "bangs": {
     "command": "aiproviders",
     "items": [
       {

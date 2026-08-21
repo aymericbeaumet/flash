@@ -15,7 +15,6 @@
   "only_bundle_ids": [
     "net.kovidgoyal.kitty"
   ],
-  "volatile": true,
   "capabilities": [
     "subprocess",
     "network"
@@ -24,20 +23,18 @@
     "core:apps.changed",
     "core:focus.changed"
   ],
-  "commands": {
-    "items": [
-      {
-        "command": "kitty",
-        "subcommand": "focus-tab",
-        "description": "Focus a kitty tab by 1-based index: :kitty focus-tab <n>"
-      },
-      {
-        "command": "kitty",
-        "subcommand": "focus-window",
-        "description": "Focus a kitty window (pane) by id: :kitty focus-window <id>"
-      }
-    ]
-  },
+  "commands": [
+    {
+      "command": "kitty",
+      "subcommand": "focus-tab",
+      "description": "Focus a kitty tab by 1-based index: :kitty focus-tab <n>"
+    },
+    {
+      "command": "kitty",
+      "subcommand": "focus-window",
+      "description": "Focus a kitty window (pane) by id: :kitty focus-window <id>"
+    }
+  ],
   "sources": [
     {
       "name": "kitty.windows",

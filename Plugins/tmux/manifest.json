@@ -3,44 +3,38 @@
   "name": "tmux",
   "version": "0.1.0",
   "description": "Hints tmux panes/links, exposes a tmux window finder, and publishes session/window/pane statusbar segments.",
-  "exec": ["./flash-plugin-tmux"],
+  "exec": [
+    "./flash-plugin-tmux"
+  ],
   "capabilities": [
     "subprocess",
     "accessibility",
     "app_control"
   ],
   "priority": 20,
-  "volatile": true,
-  "request_timeout_ms": 8000,
   "hints": {
     "fallback_on_empty": true
   },
-  "commands": {
-    "items": [
-      {
-        "command": "tmux",
-        "subcommand": "session",
-        "description": "Switch the active tmux client to a session by name and raise its terminal."
-      },
-      {
-        "command": "tmux",
-        "subcommand": "window",
-        "description": "Switch the active tmux client to a session:window target and raise its terminal."
-      }
-    ]
-  },
-  "navigation": {
-    "schemes": [
-      "tmux"
-    ]
-  },
-  "status": {
-    "segments": [
-      "session",
-      "window",
-      "pane"
-    ]
-  },
+  "commands": [
+    {
+      "command": "tmux",
+      "subcommand": "session",
+      "description": "Switch the active tmux client to a session by name and raise its terminal."
+    },
+    {
+      "command": "tmux",
+      "subcommand": "window",
+      "description": "Switch the active tmux client to a session:window target and raise its terminal."
+    }
+  ],
+  "navigation": [
+    "tmux"
+  ],
+  "status": [
+    "session",
+    "window",
+    "pane"
+  ],
   "listen": [
     "core:focus.changed",
     "core:window.focus.changed",
@@ -53,7 +47,7 @@
       "priority": "high"
     }
   ],
-  "source_actions": [
+  "actions": [
     "tab_select",
     "tab_next",
     "tab_prev",

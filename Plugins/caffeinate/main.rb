@@ -4,7 +4,8 @@
 # docs/plugin-protocol.md and AGENTS.md — Rust stays the default).
 #
 # Owns at most one `/usr/bin/caffeinate -di` child (display + idle-sleep
-# assertions); `on <minutes>` bounds it with `-t`, `off`/shutdown kill it.
+# assertions); `on <minutes>` bounds it with `-t`, `off` (or stdin EOF —
+# the shutdown signal, handled by the on_shutdown hook) kills it.
 # caffeinate takes its power assertion through powerd, which the
 # deny-default seatbelt profile cannot host — hence the unsandboxed
 # `subprocess` capability shape (same as tmux/spotify). The `state` status
@@ -40,34 +41,35 @@ start = lambda do |minutes|
 end
 
 emit_state = lambda do
-  plugin.emit_status_segments("state" => alive.call ? "on" : "")
+  plugin.status("state" => alive.call ? "on" : "")
 end
 
-status_result = lambda do
-  { "ok" => true, "stdout" => alive.call ? "caffeinate on (pid #{child_pid})" : "caffeinate off" }
+performed = lambda do
+  FlashPlugin.ok(message: alive.call ? "caffeinate on (pid #{child_pid})" : "caffeinate off")
 end
 
-plugin.serve do |params|
-  minutes = Integer(params["args"]&.first || "", exception: false)
-  case params["subcommand"].to_s
-  when "", "status"
-    status_result.call
-  when "on"
-    start.call(minutes)
-    emit_state.call
-    status_result.call
-  when "off"
-    stop.call
-    emit_state.call
-    status_result.call
-  when "toggle"
-    alive.call ? stop.call : start.call(minutes)
-    emit_state.call
-    status_result.call
-  else
-    { "ok" => false, "error" => "unknown subcommand: #{params["subcommand"]}" }
-  end
-end
-
-# serve returned: host shutdown or stdin EOF — never orphan the assertion.
-stop.call
+plugin.serve(
+  on_command: lambda do |params|
+    minutes = Integer(params["args"]&.first || "", exception: false)
+    case params["subcommand"].to_s
+    when "", "status"
+      performed.call
+    when "on"
+      start.call(minutes)
+      emit_state.call
+      performed.call
+    when "off"
+      stop.call
+      emit_state.call
+      performed.call
+    when "toggle"
+      alive.call ? stop.call : start.call(minutes)
+      emit_state.call
+      performed.call
+    else
+      FlashPlugin.fail("unknown subcommand: #{params["subcommand"]}")
+    end
+  end,
+  # stdin EOF is the shutdown signal — never orphan the assertion.
+  on_shutdown: -> { stop.call },
+)

@@ -97,9 +97,12 @@ check_absent \
   Sources README.md
 
 if [[ -d Plugins ]]; then
+  # The protocol-v1 redefinition retired these wire names outright (repo
+  # rule 9: no compatibility shims) — none may reappear as wire strings in
+  # the host or the Rust SDK.
   check_absent \
-    "plugin wire methods use namespaced protocol names" \
-    '"(discoverTargets|activateTarget|resolveCandidate|sourceAction)"' \
+    "retired protocol wire names must not reappear" \
+    '"(sources\.snapshot|sources\.query|query\.evaluate|hints\.discover|candidate\.resolve|source\.action|command\.invoke|navigation\.restore|heartbeat|sources\.invalidated|status\.updated|flash\.log)"' \
     Sources/flash Plugins/_flash_plugin_rust
 
   check_absent \
@@ -107,15 +110,43 @@ if [[ -d Plugins ]]; then
     "candidate_query" \
     Plugins
 
+  # Query evaluators stay synchronous CPU-only hooks — an async evaluate in
+  # a plugin or SDK would put I/O on the 50 ms per-keystroke path.
   check_absent \
     "query evaluators are synchronous CPU-only hooks" \
-    "async fn query_evaluate" \
+    "async fn evaluate\\(" \
     Plugins
 
+  # Every SDK (and the host) hardcodes the one protocol version; a drift
+  # here means a stale SDK shipping against a redefined wire. Pattern-based
+  # on purpose — the SDKs are rewritten wholesale and only the constant is
+  # contractual (naming varies per language convention).
+  for sdk in \
+    Plugins/_flash_plugin_rust/src/runtime.rs \
+    Plugins/_flash_plugin_python/flashplugin.py \
+    Plugins/_flash_plugin_ruby/flashplugin.rb \
+    Plugins/_flash_plugin_typescript/flashplugin.ts \
+    Plugins/_flash_plugin_go/flashplugin.go \
+    Plugins/_flash_plugin_zig/flashplugin.zig \
+    Plugins/_flash_plugin_swift/flashplugin.swift; do
+    [[ -f "$sdk" ]] || {
+      echo "GUARDRAIL FAILED: missing SDK file: $sdk" >&2
+      fail=1
+      continue
+    }
+    if ! rg -qi 'protocol_?version(:\s*\w+)?\s*=\s*1\b' "$sdk"; then
+      echo "GUARDRAIL FAILED: $sdk must pin PROTOCOL_VERSION = 1" >&2
+      fail=1
+    fi
+  done
+  if ! rg -q 'static let version = 1\b' Sources/flash/App/Plugins/PluginProtocol.swift; then
+    echo "GUARDRAIL FAILED: PluginProtocol.swift must pin protocol version 1" >&2
+    fail=1
+  fi
+
   # The Rust-SDK contract greps apply only to Rust plugins (src/main.rs);
-  # non-Rust official plugins (python/ruby/bun/go/zig) satisfy the same
-  # warm-catalog and sync-evaluator contracts through host-side runtime
-  # enforcement (readiness gate, quotas, deadlines) instead of source greps.
+  # non-Rust official plugins satisfy the same push-catalog contract through
+  # host-side runtime enforcement (quotas, deadlines) instead of source greps.
   for manifest in Plugins/*/manifest.json; do
     plugin_dir="${manifest%/manifest.json}"
     # Hermetic-crate invariants: every Rust plugin is a standalone crate with
@@ -138,18 +169,15 @@ if [[ -d Plugins ]]; then
     source="$plugin_dir/src/main.rs"
     [[ -f "$source" ]] || continue
     if rg -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest"; then
-      if ! rg -q 'async fn on_start' "$source"; then
-        echo "GUARDRAIL FAILED: candidate plugin must implement on_start: $plugin_dir" >&2
-        fail=1
-      fi
-      if ! rg -q 'set_locations[[:space:]]*\(' "$source"; then
-        echo "GUARDRAIL FAILED: candidate plugin must publish warm locations: $plugin_dir" >&2
-        fail=1
-      fi
-    fi
-    if rg -q '^[[:space:]]*"queries"[[:space:]]*:' "$manifest"; then
-      if ! rg -q 'fn query_evaluate[[:space:]]*\(' "$source"; then
-        echo "GUARDRAIL FAILED: query plugin must implement synchronous query_evaluate: $plugin_dir" >&2
+      # Warm sources push their catalog; live sources (all-or-nothing per
+      # plugin) serve per-keystroke search instead and never publish.
+      if rg -q '"live"[[:space:]]*:[[:space:]]*true' "$manifest"; then
+        if ! rg -q 'fn on_search' "$source"; then
+          echo "GUARDRAIL FAILED: live-sources plugin must implement on_search: $plugin_dir" >&2
+          fail=1
+        fi
+      elif ! rg -q 'publish[[:space:]]*\(' "$source"; then
+        echo "GUARDRAIL FAILED: sources plugin must push-publish its catalog: $plugin_dir" >&2
         fail=1
       fi
     fi

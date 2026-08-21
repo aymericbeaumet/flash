@@ -443,7 +443,7 @@ enum ConfigLoader {
       ],
       "flashlight": [
         "suggestion_count", "precedence_alive_bonus", "aliases", "precedence",
-        "frecency_half_life_days", "frecency_max_boost", "snapshot_timeout_ms",
+        "frecency_half_life_days", "frecency_max_boost",
         "live_query_timeout_ms",
       ],
       "mode": [
@@ -902,13 +902,6 @@ enum ConfigLoader {
       locations: locations, into: &config, validate: { (0...10_000).contains($0) },
       assign: { value, config in
         config.flashlight.frecencyMaxBoost = value
-      })
-    applyInt(
-      table["snapshot_timeout_ms"], path: ["flashlight", "snapshot_timeout_ms"],
-      message: "flashlight.snapshot_timeout_ms must be an integer between 20 and 2000 (ms)",
-      locations: locations, into: &config, validate: { (20...2_000).contains($0) },
-      assign: { value, config in
-        config.flashlight.snapshotTimeoutMs = value
       })
     applyInt(
       table["live_query_timeout_ms"], path: ["flashlight", "live_query_timeout_ms"],

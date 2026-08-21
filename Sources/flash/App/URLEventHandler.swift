@@ -120,7 +120,7 @@ enum URLCommand: Hashable {
   /// The host doesn't know the verb's semantics — it just forwards the call
   /// to ``PluginManager/invokeVerb(name:args:in:onResult:)`` (which
   /// may shortcut directly for inline-keystrokes verbs, or fan
-  /// out to the owning plugin's `command.invoke`).
+  /// out to the owning plugin's command `perform`).
   case pluginVerb(name: String, args: [String: String])
 }
 

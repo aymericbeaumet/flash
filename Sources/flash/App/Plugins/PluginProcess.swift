@@ -3,6 +3,14 @@ import Darwin
 import FlashCore
 import Foundation
 
+/// One managed plugin child process speaking the NDJSON wire protocol
+/// (protocol v1 — see Plugins/_flash_plugin_specs/protocol.json).
+///
+/// Lifecycle: stopped → installing → launching → running → stopped, with
+/// `failed` the parked terminal state (no auto-restart; file watchers stay
+/// armed so a rebuilt binary recovers). Resident plugins spawn at startup;
+/// on-demand plugins spawn on their first `perform`; manifest-only plugins
+/// never spawn.
 final class PluginProcess {
   typealias RequestCompletion = ([String: Any]?) -> Void
   struct PendingRequest {
@@ -24,6 +32,19 @@ final class PluginProcess {
     }
   }
 
+  /// A `perform` accepted while the child is still spawning/initializing.
+  /// Dispatched when the plugin reaches `running`; settled `.unhandled` if
+  /// that never happens before its deadline — nothing was dispatched, so
+  /// fallback is safe.
+  private struct DeferredPerform {
+    let id: Int
+    let kind: String
+    let params: [String: Any]
+    let timeoutMs: Int
+    let startedAt: DispatchTime
+    let completion: (PluginPerformOutcome) -> Void
+  }
+
   let root: URL
   let manifest: PluginManifest
   let origin: PluginOrigin
@@ -31,48 +52,41 @@ final class PluginProcess {
 
   private let queue: DispatchQueue
   private let dataDir: URL
-  /// Latest host-owned app snapshot. Each child launch receives the value once
-  /// in `initialize`, including automatic restarts of this PluginProcess.
-  private var initialRunningApplications: [[String: Any]]
   private var process: Process?
   private var stdinPipe: Pipe?
-  private var frameCollector = NDJSONFrameCollector(maxLineBytes: PluginProcess.maxFrameBytes)
+  private var frameCollector = NDJSONFrameCollector(maxLineBytes: PluginProtocol.maxFrameBytes)
   private let lock = NSLock()
-  private var discovery = PluginDiscovery()
-  private var state: PluginRuntimeState = .unloaded
+  private var state: PluginRuntimeState = .stopped
+  /// Runtime status-bar segments, merged under `lock` on every `status`
+  /// notification so concurrent updates can never lose each other.
+  private var statusSegments: [String: String] = [:]
   private var startDate: Date?
-  private var lastHeartbeatAt: Date?
-  private var awaitingHeartbeat = false
-  private var heartbeatMisses = 0
-  private var heartbeatTimer: DispatchSourceTimer?
-  /// Queue-confined proof that the current child generation completed the
-  /// protocol-v2 initialize/on_start publication boundary. Runtime state alone
-  /// is insufficient: heartbeat degradation must never make a starting child
-  /// eligible for warm reads.
-  private var initializationCompleted = false
   private var restartCount = 0
-  /// Set only while `stopOnQueue` is sending its `shutdown` frame, so the
-  /// write-error recovery in `writeFrame` doesn't recurse back into stop.
-  private var isStopping = false
   /// Guards `notifyStatus` so a burst of status changes collapses to one
   /// main-thread callback per runloop turn instead of one hop per change.
   private var statusNotificationPending = false
   private let statusNotifyLock = NSLock()
   /// Timestamps of recent restart attempts. Bounded restart loop: if
   /// `restartWindowAttempts` restarts happen within `restartWindowSeconds`,
-  /// the plugin is parked in `.crashed` and stops auto-restarting. The user
+  /// the plugin is parked in `.failed` and stops auto-restarting. The user
   /// can recover with `:plugins reload`.
   private var restartTimestamps: [Date] = []
   // Testability seams: production values, overridden (and restored) by the
-  // lifecycle tests so restart parking and heartbeat teardown run in
+  // lifecycle tests so restart parking and idle-ping teardown run in
   // milliseconds instead of minutes. `var` + internal on purpose.
   static var restartWindowAttempts = 5
   static var restartWindowSeconds: TimeInterval = 300
-  static var heartbeatIntervalMs = 5000
-  static var heartbeatMissLimit = 2
+  static var idleBeforePingMs = PluginProtocol.idleBeforePingMs
+  static var pingTimeoutMs = PluginProtocol.pingDeadlineMs
   static var restartDelaySeconds: (Int) -> Int = { min(30, max(1, $0 + 1)) }
   private var requestID: Int = 0
   private var pending: [Int: PendingRequest] = [:]
+  private var deferredPerforms: [DeferredPerform] = []
+  private var deferredPerformID = 0
+  /// Uptime of the most recent inbound frame — any frame resets the idle
+  /// clock, so a plugin that publishes or logs is never pinged.
+  private var lastInboundFrameAt = DispatchTime.now()
+  private var idlePingWork: DispatchWorkItem?
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
   private var reloadWork: DispatchWorkItem?
   private var lastError: String?
@@ -90,12 +104,14 @@ final class PluginProcess {
   /// tell whether this plugin's settings changed.
   let settings: [String: PluginConfigValue]
   var onStatusChanged: (() -> Void)?
-  /// Fired (rate-limited to 1/s) when the plugin sends a
-  /// `sources.invalidated` notification: its warm catalog changed and an
-  /// open flashlight session may want a re-pull. Closed sessions ignore it —
-  /// the next open pulls fresh stores anyway.
-  var onSourcesInvalidated: (() -> Void)?
-  private var lastSourcesInvalidatedAt: Date?
+  /// Host-owned catalog store validated `publish` notifications land in.
+  /// Set by PluginManager; entries are dropped on `failed` park and unload,
+  /// never on plain restarts.
+  var catalogStore: PluginCatalogStore?
+  /// Supplies the host's current running-applications snapshot for the one
+  /// `core:apps.changed` event delivered right after initialize (the
+  /// snapshot no longer rides initialize itself).
+  var runningApplicationsProvider: (() -> [[String: Any]])?
   /// Handles a plugin→host RPC request (`call_host` on the plugin side):
   /// `(method, params, pluginID, reply)`. The host RPC router (PluginManager)
   /// installs this; `reply` is invoked with the JSON result, possibly async
@@ -108,8 +124,7 @@ final class PluginProcess {
     origin: PluginOrigin,
     baseDataDir: URL,
     watchFiles: Bool = true,
-    settings: [String: PluginConfigValue] = [:],
-    initialRunningApplications: [[String: Any]] = []
+    settings: [String: PluginConfigValue] = [:]
   ) {
     self.root = root
     self.manifest = manifest
@@ -119,38 +134,34 @@ final class PluginProcess {
     self.queue = DispatchQueue(label: "flash.plugin.\(manifest.id)", qos: .utility)
     self.watchFiles = watchFiles
     self.settings = settings
-    self.initialRunningApplications = initialRunningApplications
   }
 
   var identifier: String { manifest.id }
 
-  var commands: [PluginCommandRegistration] {
-    manifest.commands
-  }
-
-  var mappings: [PluginMappingRegistration] {
-    manifest.mappings
-  }
-
-  /// Flashlight bang registrations. Static from the manifest (no runtime
-  /// update RPC), so this reads straight through rather than caching a
-  /// `dynamic` copy the way commands/mappings do.
-  var shebangs: [PluginShebangRegistration] { manifest.shebangs }
+  // MARK: - Lifecycle
 
   func start() {
     queue.async {
-      self.startOnQueue(reason: "start")
-    }
-  }
-
-  func updateRunningApplicationsSnapshot(_ applications: [[String: Any]]) {
-    queue.async {
-      self.initialRunningApplications = applications
+      switch self.manifest.activation {
+      case .resident:
+        self.startOnQueue(reason: "start")
+      case .onDemand, .manifestOnly:
+        // No child yet: on-demand plugins spawn on their first perform;
+        // manifest-only plugins never spawn. File watchers still arm so
+        // manifest/binary edits hot-reload.
+        if self.watchFiles {
+          self.installFileWatchers()
+        }
+        FlashLog.plugin(
+          .info, pluginID: self.manifest.id,
+          message: "[plugin] \(self.manifest.activation.rawValue) registered")
+      }
     }
   }
 
   func stopAndWait(reason: String = "stop") {
     queue.sync {
+      self.settleDeferredPerforms(as: .unhandled)
       self.stopOnQueue(reason: reason)
     }
   }
@@ -162,626 +173,51 @@ final class PluginProcess {
       self.restartTimestamps.removeAll()
       self.restartCount = 0
       self.stopOnQueue(reason: reason)
-      self.startOnQueue(reason: reason)
-    }
-  }
-
-  func sendEvent(_ event: PluginEvent) {
-    guard listenPatterns.contains(where: { $0.matches(event.name) }) else { return }
-    // Default-deny capability gate. Events that carry sensitive data
-    // (clipboard text, etc.) reach a plugin only when its manifest
-    // explicitly opts in via `capabilities`. A plugin that drops or
-    // logs this event would otherwise have unsupervised access to the
-    // contents.
-    if let required = PluginCapability.required(for: event.name),
-      !manifest.capabilities.contains(required)
-    {
-      return
-    }
-    var payload = event.payload
-    if let bundleID = event.bundleID, payload["bundle_id"] == nil {
-      payload["bundle_id"] = bundleID
-    }
-    if let pid = event.pid, payload["pid"] == nil {
-      payload["pid"] = Int(pid)
-    }
-    if let frame = event.frontWindowFrame, !frame.isNull,
-      payload["front_window_frame"] == nil
-    {
-      payload["front_window_frame"] = [
-        "x": frame.minX,
-        "y": frame.minY,
-        "width": frame.width,
-        "height": frame.height,
-      ]
-    }
-    sendNotification(
-      method: "event",
-      params: [
-        "name": event.name,
-        "payload": payload,
-      ])
-  }
-
-  /// Synchronous-style discover for volatile plugins. Sends a
-  /// `hints.discover` RPC and waits up to `timeout` for the plugin to
-  /// return a fresh set of jump targets for the given context. Used on
-  /// each activation when the manifest declares `volatile: true`.
-  func discoverTargets(context: AppContext, timeout: TimeInterval) -> [JumpTarget] {
-    let startedAt = DispatchTime.now()
-    let semaphore = DispatchSemaphore(value: 0)
-    var discovery: PluginDiscovery?
-    let frame: [String: Any] = [
-      "x": context.frontWindowFrame.minX,
-      "y": context.frontWindowFrame.minY,
-      "width": context.frontWindowFrame.width,
-      "height": context.frontWindowFrame.height,
-    ]
-    let params: [String: Any] = [
-      "bundle_id": context.bundleIdentifier,
-      "pid": Int(context.processID),
-      "front_window_frame": frame,
-    ]
-    sendRequest(method: "hints.discover", params: params) { [weak self] response in
-      guard let self else {
-        semaphore.signal()
-        return
-      }
-      if let response {
-        discovery = self.applyDiscoveryResponse(response, defaultPID: context.processID)
-      }
-      semaphore.signal()
-    }
-    let waitResult = semaphore.wait(timeout: .now() + timeout)
-    let snap =
-      discovery
-      ?? {
-        lock.lock()
-        let s = self.discovery
-        lock.unlock()
-        return s
-      }()
-    let contextMismatch = snap.contextPID.map { $0 != context.processID } ?? false
-    if FlashLog.wouldEmit(.debug) {
-      var fields: [String: String] = [
-        "plugin": manifest.id,
-        "pid": "\(context.processID)",
-        "bundle": context.bundleIdentifier,
-        "discovery_targets": "\(snap.targets.count)",
-        "targets": "\(contextMismatch ? 0 : snap.targets.count)",
-        "timed_out": "\(waitResult == .timedOut)",
-        "discovery_fallback": "\(discovery == nil)",
-        "context_mismatch": "\(contextMismatch)",
-        "timeout_ms": "\(Int((timeout * 1000).rounded()))",
-        "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
-      ]
-      if let contextPID = snap.contextPID {
-        fields["discovery_pid"] = "\(contextPID)"
-      }
-      FlashLog.debug(
-        "[plugin] discover_targets",
-        fields: fields,
-        source: "plugin:\(manifest.id)")
-    }
-    if let contextPID = snap.contextPID, contextPID != context.processID {
-      return []
-    }
-    return snap.targets.map { wire in
-      hostJumpTarget(from: wire, contextPID: context.processID)
-    }
-  }
-
-  /// Materialise a wire-format target as host-owned geometry and semantics.
-  /// Hint activation is never delegated back to the plugin: the host posts a
-  /// real mouse event to the owning app for every committed target.
-  private func hostJumpTarget(
-    from wire: PluginWireTarget, contextPID: pid_t
-  ) -> JumpTarget {
-    return JumpTarget(
-      id: wire.id,
-      frame: wire.frame,
-      role: wire.role,
-      accessibilityLabel: wire.label,
-      url: wire.url,
-      pid: wire.pid ?? contextPID,
-      entersInsertMode: wire.entersInsertMode,
-      priority: wire.priority,
-      providerID: wire.sourceID)
-  }
-
-  private func applyDiscoveryResponse(_ params: [String: Any], defaultPID: pid_t) -> PluginDiscovery
-  {
-    let sourceID = "plugin:\(manifest.id)"
-    let contextPID = (params["context_pid"] as? Int).map(pid_t.init) ?? defaultPID
-    let targetItems = (params["targets"] as? [[String: Any]] ?? [])
-      .compactMap { PluginWireCodec.target(from: $0, sourceID: sourceID) }
-    let previousStatusSegments: [String: String]
-    lock.lock()
-    previousStatusSegments = discovery.statusSegments
-    lock.unlock()
-    let snap = PluginDiscovery(
-      targets: targetItems,
-      statusSegments: previousStatusSegments,
-      contextPID: contextPID,
-      updatedAt: Date())
-    lock.lock()
-    discovery = snap
-    lock.unlock()
-    notifyStatus()
-    return snap
-  }
-
-  func snapshotCandidates(completion: @escaping ([Candidate]) -> Void) {
-    // Catalog snapshots are complete warm-store reads. Filtering is host-owned,
-    // and running-app state is seeded by initialize then refreshed by
-    // `core:apps.changed`, so this wire request intentionally carries no data.
-    sendRequest(
-      method: "sources.snapshot",
-      params: [:],
-      timeout: .milliseconds(150),
-      requiresWarmProcess: true
-    ) { [weak self] response in
-      guard let self else {
-        DispatchQueue.main.async { completion([]) }
-        return
-      }
-      guard let response else {
-        DispatchQueue.main.async { completion([]) }
-        return
-      }
-      guard let raw = response["candidates"] as? [[String: Any]] else {
-        FlashLog.plugin(
-          .warn,
-          pluginID: self.manifest.id,
-          message: "[plugin] malformed sources.snapshot envelope",
-          fields: ["method": "sources.snapshot"])
-        DispatchQueue.main.async { completion([]) }
-        return
-      }
-      let sourceID = "plugin:\(self.manifest.id)"
-      let allowedSources = Set(self.manifest.candidateSources)
-      guard
-        let items = PluginWireCodec.catalogCandidates(
-          from: raw,
-          sourceID: sourceID,
-          allowedSources: allowedSources)
-      else {
-        FlashLog.plugin(
-          .warn,
-          pluginID: self.manifest.id,
-          message: "[plugin] rejected malformed or oversized catalog snapshot",
-          fields: [
-            "received": String(raw.count),
-            "candidate_limit": String(PluginWireCodec.maxCatalogCandidates),
-            "string_bytes_limit": String(PluginWireCodec.maxCatalogEncodedBytes),
-          ])
-        DispatchQueue.main.async { completion([]) }
-        return
-      }
-      DispatchQueue.main.async {
-        completion(items)
+      switch self.manifest.activation {
+      case .resident:
+        self.startOnQueue(reason: reason)
+      case .onDemand, .manifestOnly:
+        if self.watchFiles {
+          self.installFileWatchers()
+        }
       }
     }
-  }
-
-  /// `sources.query`: fetch live candidates for one explicitly scoped query.
-  /// Unlike `query.evaluate` (50 ms, CPU-only), a live source may do real
-  /// work (mdfind, window enumeration), so it gets its own deadline; the
-  /// caller's aggregator drops late replies. Rows decode through the same
-  /// catalog codec as warm snapshots — manifest-declared source labels only.
-  func queryCandidates(
-    matching text: String,
-    scope: CandidateScope,
-    timeoutMs: Int,
-    completion: @escaping ([Candidate]?) -> Void
-  ) {
-    let scopeName: String
-    switch scope {
-    case .running: scopeName = "running"
-    case .all: scopeName = "all"
-    }
-    sendRequest(
-      method: "sources.query",
-      params: ["query": text, "scope": scopeName],
-      timeout: .milliseconds(timeoutMs),
-      requiresWarmProcess: true
-    ) { [weak self] response in
-      guard let self, let response else {
-        DispatchQueue.main.async { completion(nil) }
-        return
-      }
-      guard let raw = response["candidates"] as? [[String: Any]] else {
-        FlashLog.plugin(
-          .warn,
-          pluginID: self.manifest.id,
-          message: "[plugin] malformed sources.query envelope",
-          fields: ["method": "sources.query"])
-        DispatchQueue.main.async { completion(nil) }
-        return
-      }
-      let items = PluginWireCodec.catalogCandidates(
-        from: raw,
-        sourceID: "plugin:\(self.manifest.id)",
-        allowedSources: Set(self.manifest.candidateSources))
-      DispatchQueue.main.async { completion(items) }
-    }
-  }
-
-  func evaluateQuery(
-    _ request: QueryEvaluationRequest,
-    environment: FlashSourceEnvironment,
-    completion: @escaping ([Candidate]) -> Void
-  ) {
-    // Query evaluation is an O(memory), CPU-only hot path. App/external state
-    // reaches plugins through initialize + events and must already be warm.
-    _ = environment
-    let scopeName: String
-    switch request.scope {
-    case .running: scopeName = "running"
-    case .all: scopeName = "all"
-    }
-    let params: [String: Any] = [
-      "surface": request.surface.rawValue,
-      "scope": scopeName,
-      "query": request.text,
-    ]
-    sendRequest(
-      method: "query.evaluate",
-      params: params,
-      timeout: .milliseconds(50),
-      requiresWarmProcess: true
-    ) { [weak self] response in
-      guard let self else {
-        DispatchQueue.main.async { completion([]) }
-        return
-      }
-      guard let response else {
-        DispatchQueue.main.async { completion([]) }
-        return
-      }
-      guard let raw = response["answers"] as? [[String: Any]] else {
-        FlashLog.plugin(
-          .warn,
-          pluginID: self.manifest.id,
-          message: "[plugin] malformed query.evaluate envelope",
-          fields: ["method": "query.evaluate"])
-        DispatchQueue.main.async { completion([]) }
-        return
-      }
-      let sourceID = "plugin:\(self.manifest.id)"
-      let declaredSource = self.manifest.queriesProvider?.source?.trimmed ?? ""
-      let querySource = declaredSource.isEmpty ? self.manifest.id : declaredSource
-      guard
-        let items = PluginWireCodec.queryAnswers(
-          from: raw,
-          sourceID: sourceID,
-          source: querySource)
-      else {
-        FlashLog.plugin(
-          .warn,
-          pluginID: self.manifest.id,
-          message: "[plugin] rejected malformed or oversized query answers",
-          fields: [
-            "received": String(raw.count),
-            "answer_limit": String(PluginWireCodec.maxQueryAnswersPerEvaluator),
-            "string_bytes_limit": String(PluginWireCodec.maxQueryEncodedBytes),
-          ])
-        DispatchQueue.main.async { completion([]) }
-        return
-      }
-      DispatchQueue.main.async {
-        completion(items)
-      }
-    }
-  }
-
-  func targets(for context: AppContext) -> [JumpTarget] {
-    lock.lock()
-    let snap = discovery
-    lock.unlock()
-    if let contextPID = snap.contextPID, contextPID != context.processID {
-      return []
-    }
-    return snap.targets.map { wire in
-      hostJumpTarget(from: wire, contextPID: context.processID)
-    }
-  }
-
-  func resolveCandidate(
-    _ candidate: Candidate,
-    completion: @escaping (CandidateResolution) -> Void
-  ) {
-    let params: [String: Any] = [
-      "candidate": PluginWireCodec.candidateJSON(candidate)
-    ]
-    sendRequest(method: "candidate.resolve", params: params) { response in
-      let didResolve = response?["ok"] as? Bool ?? false
-      let pid = response?["target_pid"] as? Int
-      let navigationURL = (response?["navigation_url"] as? String).flatMap(URL.init(string:))
-      DispatchQueue.main.async {
-        completion(
-          didResolve
-            ? .resolved(pid: pid.map(pid_t.init), navigationURL: navigationURL)
-            : .unresolved)
-      }
-    }
-  }
-
-  func invokeCommand(
-    command: String,
-    subcommand: String,
-    args: [String],
-    raw: String,
-    meta: [String: String] = [:],
-    timeoutMs: Int? = nil,
-    completion: ((Bool, pid_t?, String?, URL?) -> Void)? = nil
-  ) {
-    var params: [String: Any] = [
-      "args": args,
-      "command": command,
-      "subcommand": subcommand,
-      "raw": raw,
-    ]
-    // Forward the matched manifest entry's `_`-prefixed metadata verbatim so
-    // the plugin can read e.g. `_url` without re-deriving it.
-    for (key, value) in meta {
-      params[key] = value
-    }
-    sendRequest(
-      method: "command.invoke",
-      params: params,
-      // A manifest entry may declare its own deadline (interactive commands
-      // like `spotify login` outlive the 2 s generic one by minutes).
-      timeout: timeoutMs.map { .milliseconds(max(1, $0)) }
-    ) { response in
-      let ok = response?["ok"] as? Bool ?? false
-      if !ok {
-        let error = (response?["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-          ?? (response == nil ? "no response" : "unspecified error")
-        FlashLog.plugin(
-          .warn,
-          pluginID: self.manifest.id,
-          message: "[plugin] command failed command=\(command) subcommand=\(subcommand)",
-          fields: [
-            "command": command,
-            "subcommand": subcommand,
-            "error": error,
-          ])
-      }
-      // A command may name an app (by pid) for Flash to raise once it
-      // succeeds — e.g. the tmux plugin returns the terminal hosting the
-      // session it just switched to, so a `:tmux window …` mapping brings
-      // that window forward. Optional; most commands omit it.
-      let pid = response?["target_pid"] as? Int
-      let navigationURL = (response?["navigation_url"] as? String).flatMap(URL.init(string:))
-      // A command may also return `stdout` for Flash to surface as a toast
-      // (e.g. the calculator returns "2 + 2 = 4"). Optional.
-      let stdout = (response?["stdout"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-      DispatchQueue.main.async {
-        completion?(ok, pid.map(pid_t.init), stdout, navigationURL)
-      }
-    }
-  }
-
-  func invokeSourceAction(
-    name: String,
-    context: AppContext,
-    extra: [String: Any],
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    var params = extra
-    params["name"] = name
-    params["context"] = PluginWireCodec.contextJSON(context)
-    sendRequest(method: "source.action", params: params) { [weak self] response in
-      let result = Self.sourceActionResult(from: response)
-      FlashLog.trace(
-        "[plugin] source_action plugin=\(self?.manifest.id ?? "?") name=\(name) "
-          + "disposition=\(result.disposition) "
-          + "target_pid=\(result.targetPID.map(String.init) ?? "nil")",
-        source: "plugin:\(self?.manifest.id ?? "?")")
-      DispatchQueue.main.async {
-        completion(result)
-      }
-    }
-  }
-
-  func restoreNavigation(
-    to url: URL,
-    completion: @escaping (SourceActionResult) -> Void
-  ) {
-    sendRequest(method: "navigation.restore", params: ["url": url.absoluteString]) {
-      [weak self] response in
-      let result = Self.sourceActionResult(from: response)
-      FlashLog.trace(
-        "[plugin] navigation_restore plugin=\(self?.manifest.id ?? "?") "
-          + "scheme=\(url.scheme ?? "nil") "
-          + "disposition=\(result.disposition) "
-          + "target_pid=\(result.targetPID.map(String.init) ?? "nil")",
-        source: "plugin:\(self?.manifest.id ?? "?")")
-      DispatchQueue.main.async {
-        completion(result)
-      }
-    }
-  }
-
-  /// Decode a `source.action` / `navigation.restore` reply into the
-  /// disposition tri-state. No reply (RPC timeout, plugin crash mid-call)
-  /// coerces to `.failed`, never `.unhandled` — the plugin was consulted
-  /// because it claims this context and the action may still complete late,
-  /// so the host must not double-fire a keystroke fallback.
-  private static func sourceActionResult(from response: [String: Any]?) -> SourceActionResult {
-    guard let response else { return .failed }
-    let pid = (response["target_pid"] as? Int).map(pid_t.init)
-    let navigationURL = (response["navigation_url"] as? String).flatMap(URL.init(string:))
-    switch response["outcome"] as? String {
-    case "performed":
-      return .performed(pid: pid, navigationURL: navigationURL)
-    case "unhandled":
-      return .unhandled
-    default:
-      // "failed" and anything unrecognized: the plugin claimed the context,
-      // so the host must not double-fire a keystroke fallback.
-      return SourceActionResult(
-        targetPID: pid,
-        disposition: .failed,
-        navigationURL: navigationURL)
-    }
-  }
-
-  func statusSnapshot() -> PluginStatus {
-    // `process`/`startDate`/`lastHeartbeatAt`/`restartCount` are queue-
-    // confined; hop onto the queue (the same manager→process direction
-    // stopAndWait uses) instead of racing them under `lock`, which only
-    // guards discovery/state/lastError/lastLog.
-    let (pid, startDate, lastHeartbeatAt, restartCount) = queue.sync {
-      (
-        process?.processIdentifier, self.startDate, self.lastHeartbeatAt,
-        self.restartCount
-      )
-    }
-    lock.lock()
-    let snap = discovery
-    let state = self.state
-    let lastError = self.lastError
-    let lastLog = self.lastLog
-    let commands = manifest.commands
-    let now = Date()
-    let usage = pid.map { sampleResourceUsageLocked(pid: $0, now: now) }
-    lock.unlock()
-    return PluginStatus(
-      id: manifest.id,
-      name: manifest.name,
-      version: manifest.version,
-      description: manifest.description,
-      origin: origin.label,
-      root: root.path,
-      state: state.rawValue,
-      pid: pid.map(Int.init),
-      uptimeMs: startDate.map { Int(now.timeIntervalSince($0) * 1000) },
-      heartbeatAgeMs: lastHeartbeatAt.map { Int(now.timeIntervalSince($0) * 1000) },
-      sourceCount: snap.targets.isEmpty ? 0 : 1,
-      commandCount: commands.count,
-      targetCount: snap.targets.count,
-      discoveryAgeMs: snap.updatedAt.map { Int(now.timeIntervalSince($0) * 1000) },
-      restartCount: restartCount,
-      lastError: lastError,
-      lastLog: lastLog,
-      cpuPercent: usage?.cpuPercent ?? nil,
-      memoryBytes: usage?.memoryBytes ?? nil,
-      onlyBundleIDs: manifest.onlyBundleIDs,
-      onlyURLs: manifest.onlyURLs,
-      volatile: manifest.volatile,
-      priority: manifest.priority,
-      commands: commands,
-      statusSegments: snap.statusSegments)
-  }
-
-  /// The status bar's per-publish read: no rusage syscall, no commands copy.
-  func statusBarInfo() -> PluginStatusBarInfo {
-    lock.lock()
-    let segments = discovery.statusSegments
-    let state = self.state
-    let hasError = !(lastError ?? "").isEmpty
-    lock.unlock()
-    return PluginStatusBarInfo(
-      id: manifest.id,
-      state: state.rawValue,
-      hasError: hasError,
-      statusSegments: segments)
-  }
-
-  /// Cheap lifecycle read for hot-path adapters. Unlike `statusSnapshot`, this
-  /// does not sample process CPU/memory or allocate the full diagnostics model.
-  func runtimeStateSnapshot() -> PluginRuntimeState {
-    lock.lock()
-    let state = self.state
-    lock.unlock()
-    return state
-  }
-
-  /// Read the plugin subprocess's resident memory and CPU time via
-  /// `proc_pid_rusage`, deriving an instantaneous CPU percentage from the
-  /// delta against the previous sample. Mutates `lastCPUSample`, so the
-  /// caller must already hold `lock`. macOS-only by design (the whole
-  /// plugin runtime is).
-  private func sampleResourceUsageLocked(
-    pid: pid_t, now: Date
-  ) -> (cpuPercent: Double?, memoryBytes: Int?) {
-    var info = rusage_info_v4()
-    let rc = withUnsafeMutablePointer(to: &info) { ptr -> Int32 in
-      ptr.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
-        proc_pid_rusage(pid, RUSAGE_INFO_V4, rebound)
-      }
-    }
-    guard rc == 0 else {
-      lastCPUSample = nil
-      return (nil, nil)
-    }
-    let memoryBytes = Int(info.ri_resident_size)
-    let totalNs = info.ri_user_time &+ info.ri_system_time
-    var cpuPercent: Double?
-    if let previous = lastCPUSample {
-      let elapsed = now.timeIntervalSince(previous.at)
-      if elapsed > 0, totalNs >= previous.totalNs {
-        let busyNs = Double(totalNs - previous.totalNs)
-        cpuPercent = (busyNs / (elapsed * 1_000_000_000)) * 100
-      }
-    }
-    lastCPUSample = (totalNs, now)
-    return (cpuPercent, memoryBytes)
   }
 
   private func startOnQueue(reason: String) {
     stopOnQueue(reason: "pre_start")
-    initializationCompleted = false
-    // Manifest-only plugin (no `exec`): no child process exists — nothing to
-    // install, launch, or heartbeat. The host compiles its inline surfaces
-    // (inline-keystroke verbs, mappings, help) straight from the manifest.
-    // File watchers stay armed so manifest edits still hot-reload.
-    guard manifest.exec != nil else {
-      setState(.ready)
-      if watchFiles {
-        installFileWatchers()
-      }
-      FlashLog.plugin(
-        .info, pluginID: manifest.id, message: "[plugin] manifest-only ready reason=\(reason)")
-      return
-    }
+    guard manifest.exec != nil else { return }
     setState(.installing)
     do {
       try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
       try installIfNeeded()
-      setState(.starting)
+      setState(.launching)
       try launch()
       if watchFiles {
         installFileWatchers()
       }
-      startHeartbeat()
       FlashLog.plugin(.info, pluginID: manifest.id, message: "[plugin] started reason=\(reason)")
     } catch {
       recordError("[plugin] start failed: \(error)")
-      setState(.crashed)
+      setState(.stopped)
       scheduleRestart()
     }
   }
 
+  /// Shutdown contract: there is no shutdown method. Closing stdin IS the
+  /// signal — the plugin runs cleanup and exits 0. `shutdown_grace` later
+  /// comes SIGTERM, and +0.5 s after that SIGKILL.
   private func stopOnQueue(reason: String) {
     // Remove every callback before invoking any of them. A completion can
     // enqueue another plugin request, so iterating the live dictionary would
     // be reentrant and could strand or double-complete work.
     let abandonedCallbacks = Self.takePendingCallbacks(&pending)
-    heartbeatTimer?.cancel()
-    heartbeatTimer = nil
+    idlePingWork?.cancel()
+    idlePingWork = nil
     removeFileWatchers()
     if let process, process.isRunning {
-      isStopping = true
-      writeFrame([
-        "method": "shutdown",
-        "params": ["reason": reason],
-      ])
-      isStopping = false
       stdinPipe?.fileHandleForWriting.closeFile()
-      waitForExit(process, timeout: 1.0)
+      waitForExit(process, timeout: Double(PluginProtocol.shutdownGraceMs) / 1_000)
       if process.isRunning {
         process.terminate()
         waitForExit(process, timeout: 0.5)
@@ -794,9 +230,11 @@ final class PluginProcess {
     (process?.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
     process = nil
     stdinPipe = nil
-    initializationCompleted = false
-    awaitingHeartbeat = false
-    heartbeatMisses = 0
+    startDate = nil
+    // Segments are live state (unlike catalogs): cleared on any teardown.
+    lock.lock()
+    statusSegments.removeAll()
+    lock.unlock()
     setState(.stopped)
     for callback in abandonedCallbacks {
       callback(nil)
@@ -818,15 +256,15 @@ final class PluginProcess {
     // Unreachable for manifest-only plugins — startOnQueue returns before
     // install/launch when the manifest has no exec argv.
     guard let execArgv = manifest.exec, let executable = execArgv.first else {
-      throw PluginError.invalidManifest("plugin \(manifest.id) has no exec argv to launch")
+      throw PluginError.failure("plugin \(manifest.id) has no exec argv to launch")
     }
     // Direct exec, no shell wrap: a `/bin/sh -lc` here used to source the
     // user's login rc files inside the child, silently re-widening the
     // scrubbed 11-key env allowlist. Resolution of argv[0]: absolute paths
     // pass through, "./"-style paths resolve against the plugin root
     // (compiled plugins use "./flash-plugin-<id>"), and bare names resolve
-    // through the login-shell PATH — interpreted official plugins declare
-    // "python3" / "bun" without hardcoding machine-specific install paths.
+    // through mise/the login-shell PATH — interpreted official plugins
+    // declare "python3" / "bun" without hardcoding machine-specific paths.
     let executablePath: String
     if executable.hasPrefix("/") {
       executablePath = executable
@@ -838,7 +276,7 @@ final class PluginProcess {
         .info, pluginID: manifest.id,
         message: "[plugin] runtime \(executable) -> \(resolved)")
     } else {
-      throw PluginError.processLaunch(
+      throw PluginError.failure(
         "plugin \(manifest.id) exec runtime not found via mise or the login PATH: \(executable)")
     }
     let execTail = Array(execArgv.dropFirst())
@@ -885,28 +323,26 @@ final class PluginProcess {
       self?.queue.async {
         guard let self, self.process === p else { return }
         self.recordError("[plugin] exited status=\(p.terminationStatus)")
-        self.setState(.crashed)
+        self.stopOnQueue(reason: "exit")
         self.scheduleRestart()
       }
     }
     do {
       try process.run()
     } catch {
-      throw PluginError.processLaunch("\(error)")
+      throw PluginError.failure("\(error)")
     }
     self.process = process
     self.stdinPipe = stdin
     self.startDate = Date()
-    self.lastHeartbeatAt = Date()
+    self.lastInboundFrameAt = .now()
     let initializationStartedAt = DispatchTime.now()
+    // initialize carries the protocol version and nothing else; the reply
+    // must be immediate (no warm-catalog wait — on_start hooks run after it
+    // and publish when ready).
     sendRequest(
       method: "initialize",
-      params: [
-        "plugin_id": manifest.id,
-        "version": manifest.version,
-        "protocol_version": PluginWireCodec.protocolVersion,
-        "running_applications": initialRunningApplications,
-      ],
+      params: ["protocol_version": PluginProtocol.version],
       timeout: Self.startupTimeout,
       settleOnStop: false
     ) { [weak self, weak process] response in
@@ -914,82 +350,571 @@ final class PluginProcess {
       let elapsedMs = Int(
         (DispatchTime.now().uptimeNanoseconds
           &- initializationStartedAt.uptimeNanoseconds) / 1_000_000)
-      if response != nil {
-        FlashLog.plugin(
-          elapsedMs > 1_000 ? .warn : .info,
-          pluginID: self.manifest.id,
-          message: "[plugin] initialization settled elapsed_ms=\(elapsedMs)",
-          fields: ["elapsed_ms": String(elapsedMs)])
-      }
       guard let response else {
-        self.failStartup(
-          "[plugin] initialization timed out after \(Self.startupTimeoutSeconds)s",
-          fatal: false)
+        // No reply within the startup deadline: teardown + backoff restart —
+        // unlike a version NAK, a hung binary may recover on relaunch.
+        self.recordError(
+          "[plugin] initialize timed out after \(Self.startupTimeoutSeconds)s")
+        self.stopOnQueue(reason: "startup_timeout")
+        self.scheduleRestart()
         return
       }
       guard PluginWireCodec.acceptsProtocolVersion(response) else {
         let reported = PluginWireCodec.protocolVersionValue(response).map(String.init) ?? "missing"
-        self.failStartup(
-          "[plugin] protocol_version \(reported) != host v\(PluginWireCodec.protocolVersion)",
-          fatal: true)
+        self.parkFailed(
+          "[plugin] protocol_version \(reported) != host v\(PluginProtocol.version)")
         return
       }
       guard response["ok"] as? Bool == true else {
-        let error = response["error"] as? String ?? "plugin rejected initialization"
-        self.failStartup("[plugin] initialization failed: \(error)", fatal: true)
+        let error = response["error"] as? String ?? "plugin rejected initialize"
+        self.parkFailed("[plugin] initialize failed: \(error)")
         return
       }
-      if self.manifest.sources.isEmpty {
-        self.completeStartup()
-      } else {
-        // Warm-catalog proof: a sources plugin must not reply to initialize
-        // until its canonical catalog exists, so the first pull decoding
-        // cleanly (an authoritative empty list included) IS readiness. This
-        // replaces the copy-paste-prone published_sources echo, which three
-        // shims used to hardcode wrong, turning any future `sources` block
-        // into a fatal park.
-        self.verifyInitialPublication(process: process)
-      }
-    }
-  }
-
-  /// First `sources.snapshot` pull after a successful initialize reply,
-  /// before the plugin is warm-eligible. Runs outside the warm gate on
-  /// purpose. A malformed catalog restarts (non-fatal): the plugin may
-  /// legitimately warm slower than it replied.
-  private func verifyInitialPublication(process: Process) {
-    sendRequest(
-      method: "sources.snapshot",
-      params: [:],
-      timeout: .milliseconds(1_000)
-    ) { [weak self, weak process] response in
-      guard let self, let process, self.process === process else { return }
-      let raw = response?["candidates"] as? [[String: Any]]
-      let items = raw.flatMap {
-        PluginWireCodec.catalogCandidates(
-          from: $0,
-          sourceID: "plugin:\(self.manifest.id)",
-          allowedSources: Set(self.manifest.candidateSources))
-      }
-      guard items != nil else {
-        self.failStartup(
-          "[plugin] initialization failed: first sources.snapshot did not decode",
-          fatal: false)
-        return
-      }
+      FlashLog.plugin(
+        elapsedMs > 1_000 ? .warn : .info,
+        pluginID: self.manifest.id,
+        message: "[plugin] initialized elapsed_ms=\(elapsedMs)",
+        fields: ["elapsed_ms": String(elapsedMs)])
       self.completeStartup()
     }
   }
 
   private func completeStartup() {
     clearError()
-    initializationCompleted = true
-    setState(.ready)
+    setState(.running)
     // Successful startup resets the backoff counter so a transient crash
     // doesn't accumulate across hours of healthy operation.
     restartCount = 0
     restartTimestamps.removeAll()
+    // The running-applications snapshot no longer rides initialize: plugins
+    // whose `listen` matches get exactly one core:apps.changed with the full
+    // snapshot, then live updates through the normal event stream.
+    if let snapshot = runningApplicationsProvider?() {
+      deliverEventOnQueue(
+        PluginEvent(
+          name: "core:apps.changed",
+          payload: [
+            "reason": "initialize",
+            "running_applications": snapshot,
+          ],
+          bundleID: nil))
+    }
+    armIdlePing()
+    let deferred = deferredPerforms
+    deferredPerforms.removeAll()
+    for item in deferred {
+      let elapsedMs = Int(Self.elapsedMillisecondsValue(since: item.startedAt))
+      dispatchPerform(
+        kind: item.kind,
+        params: item.params,
+        timeoutMs: max(1, item.timeoutMs - elapsedMs),
+        completion: item.completion)
+    }
   }
+
+  /// Terminal park: no auto-restart. Used for initialize NAKs and protocol
+  /// mismatches — relaunching the same binary cannot recover. File watchers
+  /// re-arm so a REBUILT binary (the dev hot loop) recovers without
+  /// `:plugins reload`; the published catalog is dropped (a failed plugin
+  /// could never serve its rows' effects).
+  private func parkFailed(_ message: String) {
+    recordError(message)
+    FlashLog.plugin(.error, pluginID: manifest.id, message: message)
+    settleDeferredPerforms(as: .unhandled)
+    stopOnQueue(reason: "park")
+    setState(.failed)
+    catalogStore?.drop(pluginID: manifest.id)
+    if watchFiles {
+      installFileWatchers()
+    }
+  }
+
+  private func scheduleRestart() {
+    let now = Date()
+    let windowStart = now.addingTimeInterval(-Self.restartWindowSeconds)
+    restartTimestamps.removeAll(where: { $0 < windowStart })
+    restartTimestamps.append(now)
+    if restartTimestamps.count > Self.restartWindowAttempts {
+      parkFailed(
+        "[plugin] restart loop exhausted: \(restartTimestamps.count) restarts "
+          + "within \(Int(Self.restartWindowSeconds))s — parking in .failed. "
+          + "Run :plugins reload (or change a plugin file) to retry.")
+      return
+    }
+    let delay = Self.restartDelaySeconds(restartCount)
+    restartCount += 1
+    queue.asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
+      guard let self, self.runtimeStateSnapshot() != .failed else { return }
+      self.startOnQueue(reason: "restart")
+    }
+  }
+
+  // MARK: - Idle ping
+
+  /// The one residual liveness probe: after `idleBeforePingMs` of inbound
+  /// silence with nothing in flight, send `ping`; one missed reply tears
+  /// down and restarts. Any inbound frame resets the clock, and pending
+  /// requests suppress it — a blocking single-threaded plugin is fully
+  /// conformant.
+  private func armIdlePing(afterMs: Int? = nil) {
+    idlePingWork?.cancel()
+    let work = DispatchWorkItem { [weak self] in
+      self?.idlePingTick()
+    }
+    idlePingWork = work
+    queue.asyncAfter(
+      deadline: .now() + .milliseconds(afterMs ?? Self.idleBeforePingMs), execute: work)
+  }
+
+  private func idlePingTick() {
+    guard runtimeStateSnapshot() == .running, process?.isRunning == true else { return }
+    let idleMs = Int(Self.elapsedMillisecondsValue(since: lastInboundFrameAt))
+    guard pending.isEmpty, idleMs >= Self.idleBeforePingMs else {
+      armIdlePing(afterMs: max(1, Self.idleBeforePingMs - idleMs))
+      return
+    }
+    sendRequest(
+      method: "ping",
+      params: [:],
+      timeout: .milliseconds(Self.pingTimeoutMs),
+      settleOnStop: false
+    ) { [weak self] response in
+      guard let self, self.runtimeStateSnapshot() == .running else { return }
+      guard PluginWireCodec.okPayload(response) != nil else {
+        self.recordError("[plugin] ping missed — restarting")
+        self.stopOnQueue(reason: "ping")
+        self.scheduleRestart()
+        return
+      }
+      self.armIdlePing()
+    }
+  }
+
+  // MARK: - Events
+
+  func sendEvent(_ event: PluginEvent) {
+    guard listenPatterns.contains(where: { $0.matches(event.name) }) else { return }
+    // Default-deny capability gate. Events that carry sensitive data
+    // (clipboard text, etc.) reach a plugin only when its manifest
+    // explicitly opts in via `capabilities`.
+    if let required = PluginCapability.required(for: event.name),
+      !manifest.capabilities.contains(required)
+    {
+      return
+    }
+    queue.async { [weak self] in
+      guard let self, self.runtimeStateSnapshot() == .running else { return }
+      self.deliverEventOnQueue(event)
+    }
+  }
+
+  private func deliverEventOnQueue(_ event: PluginEvent) {
+    var payload = event.payload
+    if let bundleID = event.bundleID, payload["bundle_id"] == nil {
+      payload["bundle_id"] = bundleID
+    }
+    if let pid = event.pid, payload["pid"] == nil {
+      payload["pid"] = Int(pid)
+    }
+    if let frame = event.frontWindowFrame, !frame.isNull,
+      payload["front_window_frame"] == nil
+    {
+      payload["front_window_frame"] = [
+        "x": frame.minX,
+        "y": frame.minY,
+        "width": frame.width,
+        "height": frame.height,
+      ]
+    }
+    writeFrame([
+      "method": "event",
+      "params": [
+        "name": event.name,
+        "payload": payload,
+      ],
+    ])
+  }
+
+  // MARK: - Host → plugin requests
+
+  /// Live hint pull (`hints`). Always a fresh request — there is no cached
+  /// discovery. Blocks the caller up to `timeout` and returns `[]` for a
+  /// missing/rejected/mismatched reply.
+  func discoverTargets(context: AppContext, timeout: TimeInterval) -> [JumpTarget] {
+    guard runtimeStateSnapshot() == .running else { return [] }
+    let startedAt = DispatchTime.now()
+    let semaphore = DispatchSemaphore(value: 0)
+    var targets: [JumpTarget] = []
+    let params: [String: Any] = [
+      "bundle_id": context.bundleIdentifier,
+      "pid": Int(context.processID),
+      "front_window_frame": [
+        "x": context.frontWindowFrame.minX,
+        "y": context.frontWindowFrame.minY,
+        "width": context.frontWindowFrame.width,
+        "height": context.frontWindowFrame.height,
+      ],
+    ]
+    sendRequest(
+      method: "hints",
+      params: params,
+      timeout: .milliseconds(Int((timeout * 1_000).rounded()))
+    ) { [weak self] response in
+      defer { semaphore.signal() }
+      guard let self, let payload = PluginWireCodec.okPayload(response) else { return }
+      let contextPID = (payload["context_pid"] as? Int).map(pid_t.init) ?? context.processID
+      guard contextPID == context.processID else { return }
+      let sourceID = "plugin:\(self.manifest.id)"
+      targets = (payload["targets"] as? [[String: Any]] ?? [])
+        .compactMap { PluginWireCodec.target(from: $0, sourceID: sourceID) }
+        .map { self.hostJumpTarget(from: $0, contextPID: context.processID) }
+    }
+    let waitResult = semaphore.wait(timeout: .now() + timeout)
+    if FlashLog.wouldEmit(.debug) {
+      FlashLog.debug(
+        "[plugin] hints",
+        fields: [
+          "plugin": manifest.id,
+          "pid": "\(context.processID)",
+          "bundle": context.bundleIdentifier,
+          "targets": "\(targets.count)",
+          "timed_out": "\(waitResult == .timedOut)",
+          "elapsed_ms": Self.elapsedMilliseconds(since: startedAt),
+        ],
+        source: "plugin:\(manifest.id)")
+    }
+    return targets
+  }
+
+  /// Materialise a wire-format target as host-owned geometry and semantics.
+  /// Hint activation is never delegated back to the plugin: the host posts a
+  /// real mouse event to the owning app for every committed target.
+  private func hostJumpTarget(
+    from wire: PluginWireTarget, contextPID: pid_t
+  ) -> JumpTarget {
+    return JumpTarget(
+      id: wire.id,
+      frame: wire.frame,
+      role: wire.role,
+      accessibilityLabel: wire.label,
+      url: wire.url,
+      pid: wire.pid ?? contextPID,
+      entersInsertMode: wire.entersInsertMode,
+      priority: wire.priority,
+      providerID: wire.sourceID)
+  }
+
+  /// `search`: fetch live rows for one explicitly scoped query. Unlike
+  /// `evaluate` (50 ms, CPU-only), a live source may do real work (mdfind,
+  /// window enumeration); the caller's aggregator drops late replies. Rows
+  /// decode through the same catalog codec as `publish`.
+  func search(
+    matching text: String,
+    scope: CandidateScope,
+    timeoutMs: Int,
+    completion: @escaping ([Candidate]?) -> Void
+  ) {
+    guard runtimeStateSnapshot() == .running else {
+      DispatchQueue.main.async { completion(nil) }
+      return
+    }
+    sendRequest(
+      method: "search",
+      params: ["query": text, "scope": Self.scopeName(scope)],
+      timeout: .milliseconds(timeoutMs)
+    ) { [weak self] response in
+      guard let self, let payload = PluginWireCodec.okPayload(response) else {
+        DispatchQueue.main.async { completion(nil) }
+        return
+      }
+      guard let raw = payload["rows"] as? [[String: Any]] else {
+        FlashLog.plugin(
+          .warn,
+          pluginID: self.manifest.id,
+          message: "[plugin] malformed search reply",
+          fields: ["method": "search"])
+        DispatchQueue.main.async { completion(nil) }
+        return
+      }
+      let rows = PluginWireCodec.catalogRows(
+        from: raw,
+        sourceID: "plugin:\(self.manifest.id)",
+        allowedSources: Set(self.manifest.candidateSources))?.rows
+      if rows == nil {
+        FlashLog.plugin(
+          .warn,
+          pluginID: self.manifest.id,
+          message: "[plugin] rejected malformed or oversized search rows",
+          fields: ["received": String(raw.count)])
+      }
+      DispatchQueue.main.async { completion(rows) }
+    }
+  }
+
+  func evaluate(
+    _ request: QueryEvaluationRequest,
+    completion: @escaping ([Candidate]) -> Void
+  ) {
+    // Query evaluation is an O(memory), CPU-only hot path. App/external state
+    // reaches plugins through events and must already be warm.
+    guard runtimeStateSnapshot() == .running else {
+      DispatchQueue.main.async { completion([]) }
+      return
+    }
+    let params: [String: Any] = [
+      "query": request.text,
+      "scope": Self.scopeName(request.scope),
+      "surface": request.surface.rawValue,
+    ]
+    sendRequest(
+      method: "evaluate",
+      params: params,
+      timeout: .milliseconds(PluginProtocol.queryDeadlineMs)
+    ) { [weak self] response in
+      guard let self, let payload = PluginWireCodec.okPayload(response),
+        let raw = payload["answers"] as? [[String: Any]]
+      else {
+        DispatchQueue.main.async { completion([]) }
+        return
+      }
+      let sourceID = "plugin:\(self.manifest.id)"
+      guard
+        let items = PluginWireCodec.queryAnswers(
+          from: raw,
+          sourceID: sourceID,
+          source: self.manifest.id)
+      else {
+        FlashLog.plugin(
+          .warn,
+          pluginID: self.manifest.id,
+          message: "[plugin] rejected malformed or oversized answers",
+          fields: [
+            "received": String(raw.count),
+            "answer_limit": String(PluginProtocol.maxAnswers),
+          ])
+        DispatchQueue.main.async { completion([]) }
+        return
+      }
+      DispatchQueue.main.async { completion(items) }
+    }
+  }
+
+  // MARK: - Perform (the single effect method)
+
+  /// Dispatch one `perform`. `kind` is one of resolve/command/action/
+  /// navigate; the completion delivers the universal trichotomy on the main
+  /// queue. Never dispatched to a failed or unspawnable plugin — that
+  /// settles `.unhandled` immediately without burning the deadline (nothing
+  /// could have started). On-demand plugins lazily spawn here; the perform
+  /// deadline absorbs the startup budget.
+  func perform(
+    kind: String,
+    params: [String: Any],
+    timeoutMs: Int? = nil,
+    completion: @escaping (PluginPerformOutcome) -> Void
+  ) {
+    let mainCompletion: (PluginPerformOutcome) -> Void = { outcome in
+      DispatchQueue.main.async { completion(outcome) }
+    }
+    guard manifest.exec != nil else {
+      mainCompletion(.unhandled)
+      return
+    }
+    queue.async { [weak self] in
+      guard let self else {
+        mainCompletion(.unhandled)
+        return
+      }
+      let timeoutMs = timeoutMs ?? PluginProtocol.performDeadlineMs
+      switch self.runtimeStateSnapshot() {
+      case .failed:
+        mainCompletion(.unhandled)
+      case .running:
+        self.dispatchPerform(
+          kind: kind, params: params, timeoutMs: timeoutMs, completion: mainCompletion)
+      case .stopped where self.manifest.activation == .onDemand && self.process == nil:
+        self.enqueueDeferredPerform(
+          kind: kind, params: params, timeoutMs: timeoutMs, completion: mainCompletion)
+        self.startOnQueue(reason: "on_demand")
+      case .stopped, .installing, .launching:
+        // A resident plugin still starting (or between restarts): dispatch
+        // once running; the deferral deadline settles `.unhandled` if that
+        // never happens.
+        self.enqueueDeferredPerform(
+          kind: kind, params: params, timeoutMs: timeoutMs, completion: mainCompletion)
+      }
+    }
+  }
+
+  private func dispatchPerform(
+    kind: String,
+    params: [String: Any],
+    timeoutMs: Int,
+    completion: @escaping (PluginPerformOutcome) -> Void
+  ) {
+    var wireParams = params
+    wireParams["kind"] = kind
+    sendRequest(
+      method: "perform",
+      params: wireParams,
+      timeout: .milliseconds(max(1, timeoutMs))
+    ) { response in
+      completion(PluginWireCodec.performOutcome(from: response))
+    }
+  }
+
+  private func enqueueDeferredPerform(
+    kind: String,
+    params: [String: Any],
+    timeoutMs: Int,
+    completion: @escaping (PluginPerformOutcome) -> Void
+  ) {
+    deferredPerformID += 1
+    let id = deferredPerformID
+    deferredPerforms.append(
+      DeferredPerform(
+        id: id,
+        kind: kind,
+        params: params,
+        timeoutMs: timeoutMs,
+        startedAt: .now(),
+        completion: completion))
+    queue.asyncAfter(deadline: .now() + .milliseconds(max(1, timeoutMs))) { [weak self] in
+      guard let self,
+        let index = self.deferredPerforms.firstIndex(where: { $0.id == id })
+      else { return }
+      // Still deferred at the deadline: nothing was ever dispatched, so
+      // fallback is safe.
+      let item = self.deferredPerforms.remove(at: index)
+      item.completion(.unhandled)
+    }
+  }
+
+  /// Runs on `queue`. Settles every not-yet-dispatched perform (park,
+  /// unload) — never called on plain restarts, whose deferrals stay queued
+  /// for the relaunch.
+  private func settleDeferredPerforms(as outcome: PluginPerformOutcome) {
+    let deferred = deferredPerforms
+    deferredPerforms.removeAll()
+    for item in deferred {
+      item.completion(outcome)
+    }
+  }
+
+  private static func scopeName(_ scope: CandidateScope) -> String {
+    switch scope {
+    case .running: return "running"
+    case .all: return "all"
+    }
+  }
+
+  // MARK: - Status reads
+
+  func statusSnapshot() -> PluginStatus {
+    // `process`/`startDate`/`restartCount` are queue-confined; hop onto the
+    // queue (the same manager→process direction stopAndWait uses) instead of
+    // racing them under `lock`, which guards state/segments/lastError/lastLog.
+    let (pid, startDate, restartCount) = queue.sync {
+      (process?.processIdentifier, self.startDate, self.restartCount)
+    }
+    lock.lock()
+    let segments = statusSegments
+    let state = self.state
+    let lastError = self.lastError
+    let lastLog = self.lastLog
+    let now = Date()
+    let usage = pid.map { sampleResourceUsageLocked(pid: $0, now: now) }
+    lock.unlock()
+    let activation = manifest.activation
+    return PluginStatus(
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      description: manifest.description,
+      origin: origin.label,
+      root: root.path,
+      state: Self.stateLabel(state: state, activation: activation),
+      activation: activation.rawValue,
+      pid: pid.map(Int.init),
+      uptimeMs: startDate.map { Int(now.timeIntervalSince($0) * 1000) },
+      sourceCount: manifest.sources.count,
+      commandCount: manifest.commands.count,
+      restartCount: restartCount,
+      lastError: lastError,
+      lastLog: lastLog,
+      cpuPercent: usage?.cpuPercent ?? nil,
+      memoryBytes: usage?.memoryBytes ?? nil,
+      onlyBundleIDs: manifest.onlyBundleIDs,
+      priority: manifest.priority,
+      commands: manifest.commands,
+      statusSegments: segments)
+  }
+
+  /// The status bar's per-publish read: no rusage syscall, no commands copy.
+  func statusBarInfo() -> PluginStatusBarInfo {
+    lock.lock()
+    let segments = statusSegments
+    let state = self.state
+    let hasError = !(lastError ?? "").isEmpty
+    lock.unlock()
+    return PluginStatusBarInfo(
+      id: manifest.id,
+      state: Self.stateLabel(state: state, activation: manifest.activation),
+      hasError: hasError,
+      statusSegments: segments)
+  }
+
+  /// A manifest-only plugin never enters the process state machine; it
+  /// reports its activation as a static state instead of a misleading
+  /// "stopped".
+  private static func stateLabel(
+    state: PluginRuntimeState, activation: PluginActivation
+  ) -> String {
+    activation == .manifestOnly ? PluginActivation.manifestOnly.rawValue : state.rawValue
+  }
+
+  /// Cheap lifecycle read for hot-path adapters. Unlike `statusSnapshot`, this
+  /// does not sample process CPU/memory or allocate the full diagnostics model.
+  func runtimeStateSnapshot() -> PluginRuntimeState {
+    lock.lock()
+    let state = self.state
+    lock.unlock()
+    return state
+  }
+
+  /// Read the plugin subprocess's resident memory and CPU time via
+  /// `proc_pid_rusage`, deriving an instantaneous CPU percentage from the
+  /// delta against the previous sample. Mutates `lastCPUSample`, so the
+  /// caller must already hold `lock`. macOS-only by design (the whole
+  /// plugin runtime is).
+  private func sampleResourceUsageLocked(
+    pid: pid_t, now: Date
+  ) -> (cpuPercent: Double?, memoryBytes: Int?) {
+    var info = rusage_info_v4()
+    let rc = withUnsafeMutablePointer(to: &info) { ptr -> Int32 in
+      ptr.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
+        proc_pid_rusage(pid, RUSAGE_INFO_V4, rebound)
+      }
+    }
+    guard rc == 0 else {
+      lastCPUSample = nil
+      return (nil, nil)
+    }
+    let memoryBytes = Int(info.ri_resident_size)
+    let totalNs = info.ri_user_time &+ info.ri_system_time
+    var cpuPercent: Double?
+    if let previous = lastCPUSample {
+      let elapsed = now.timeIntervalSince(previous.at)
+      if elapsed > 0, totalNs >= previous.totalNs {
+        let busyNs = Double(totalNs - previous.totalNs)
+        cpuPercent = (busyNs / (elapsed * 1_000_000_000)) * 100
+      }
+    }
+    lastCPUSample = (totalNs, now)
+    return (cpuPercent, memoryBytes)
+  }
+
+  // MARK: - Install
 
   private func installIfNeeded() throws {
     // Official plugins ship prebuilt and declare no install step; only
@@ -1023,8 +948,8 @@ final class PluginProcess {
     process.standardError = err
     try process.run()
     // Bound a hung install script (network stall, interactive `read`, a wedged
-    // build) so it can't pin this plugin's serial queue forever — heartbeat and
-    // stop both run on that queue. Mirrors PluginManager.runGit's kill pattern.
+    // build) so it can't pin this plugin's serial queue forever — stop runs on
+    // that queue. Mirrors PluginManager.runGit's kill pattern.
     let killer = DispatchQueue.global(qos: .utility)
     let killWork = DispatchWorkItem {
       if process.isRunning { process.terminate() }
@@ -1048,7 +973,7 @@ final class PluginProcess {
     if process.terminationStatus != 0 {
       let message = String(data: stderrData, encoding: .utf8)?
         .trimmed
-      throw PluginError.processLaunch(
+      throw PluginError.failure(
         "install failed status=\(process.terminationStatus) \(message ?? "")")
     }
     try stamp.write(to: stampURL, atomically: true, encoding: .utf8)
@@ -1077,6 +1002,8 @@ final class PluginProcess {
     body += (String(data: stderr, encoding: .utf8) ?? "<non-utf8>") + "\n"
     try? body.write(to: path, atomically: true, encoding: .utf8)
   }
+
+  // MARK: - Environment
 
   /// `settings` serialized to a JSON object string for the plugin's
   /// `FLASH_PLUGIN_CONFIG`. `{}` when there are no settings.
@@ -1143,56 +1070,18 @@ final class PluginProcess {
   // that read would silently see the stale value.
   private static var startupTimeout: DispatchTimeInterval { .seconds(startupTimeoutSeconds) }
 
-  private func failStartup(_ message: String, fatal: Bool) {
-    recordError(message)
-    FlashLog.plugin(.error, pluginID: manifest.id, message: message)
-    stopOnQueue(reason: fatal ? "startup_rejected" : "startup_timeout")
-    setState(.crashed)
-    if fatal {
-      // A wire mismatch will not recover by relaunching the same binary —
-      // no auto-restart. Re-arm the file watchers stopOnQueue removed so a
-      // REBUILT binary (the dev hot loop) recovers without :plugins reload.
-      if watchFiles {
-        installFileWatchers()
-      }
-    } else {
-      scheduleRestart()
-    }
-  }
+  // MARK: - Wire plumbing
 
   private func sendRequest(
     method: String,
     params: [String: Any],
-    timeout: DispatchTimeInterval? = nil,
+    timeout: DispatchTimeInterval,
     settleOnStop: Bool = true,
-    requiresWarmProcess: Bool = false,
     completion: (([String: Any]?) -> Void)? = nil
   ) {
     let startedAt = DispatchTime.now()
     queue.async { [weak self] in
       guard let self else { return }
-      if requiresWarmProcess {
-        let state = self.runtimeStateSnapshot()
-        let running = self.process?.isRunning == true
-        if !Self.warmRequestIsDispatchable(
-          state: state,
-          initializationCompleted: self.initializationCompleted,
-          processRunning: running)
-        {
-          FlashLog.plugin(
-            .warn,
-            pluginID: self.manifest.id,
-            message: "[plugin] warm request dropped method=\(method) state=\(state.rawValue)",
-            fields: [
-              "method": method,
-              "state": state.rawValue,
-              "initialized": String(self.initializationCompleted),
-              "running": String(running),
-            ])
-          completion?(nil)
-          return
-        }
-      }
       self.requestID += 1
       let id = self.requestID
       if let completion {
@@ -1201,7 +1090,7 @@ final class PluginProcess {
           settleOnStop: settleOnStop,
           method: method,
           startedAt: startedAt)
-        self.queue.asyncAfter(deadline: .now() + (timeout ?? self.requestTimeout)) { [weak self] in
+        self.queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
           guard let self, let request = self.pending.removeValue(forKey: id) else { return }
           let elapsedMs = Self.elapsedMilliseconds(since: startedAt)
           FlashLog.plugin(
@@ -1223,18 +1112,11 @@ final class PluginProcess {
     }
   }
 
-  private func sendNotification(method: String, params: [String: Any]) {
-    queue.async { [weak self] in
-      self?.writeFrame([
-        "method": method,
-        "params": params,
-      ])
-    }
-  }
-
   private func routeHostRequest(id: Int, method: String, params: [String: Any]) {
     guard let onHostRequest else {
-      sendResponse(id: id, result: ["ok": false, "error": "host requests unsupported"])
+      sendResponse(
+        id: id,
+        result: ["ok": false, "error": PluginProtocol.unknownMethodError(method)])
       return
     }
     onHostRequest(method, params, manifest.id) { [weak self] result in
@@ -1259,42 +1141,43 @@ final class PluginProcess {
     } catch {
       // A non-encodable message is a runtime bug that would otherwise vanish
       // silently and only show up as a timed-out RPC; surface it.
-      recordError("[plugin] dropped non-encodable IPC message (method=\(label)): \(error)")
+      FlashLog.plugin(
+        .warn, pluginID: manifest.id,
+        message: "[plugin] dropped non-encodable IPC message (method=\(label)): \(error)")
       return
     }
-    guard frame.count <= Self.maxFrameBytes else {
-      recordError(
-        "[plugin] dropped oversized IPC message (method=\(label), bytes=\(frame.count), "
-          + "max=\(Self.maxFrameBytes))")
+    guard frame.count <= PluginProtocol.maxFrameBytes else {
+      // An outbound response above the frame cap is replaced by the
+      // canonical overflow error under the same id, so the plugin's own
+      // pending call settles instead of timing out.
+      if let id = object["id"], object["result"] != nil {
+        writeFrame([
+          "id": id,
+          "result": ["ok": false, "error": PluginProtocol.frameOverflowError],
+        ])
+      } else {
+        FlashLog.plugin(
+          .warn, pluginID: manifest.id,
+          message: "[plugin] dropped oversized IPC message (method=\(label), "
+            + "bytes=\(frame.count), max=\(PluginProtocol.maxFrameBytes))")
+      }
       return
     }
     do {
       try stdinPipe?.fileHandleForWriting.write(contentsOf: frame)
     } catch {
       // A broken pipe during teardown is expected, so only act while the
-      // subprocess is supposed to be alive (and not while we're already sending
-      // the shutdown frame from `stopOnQueue`).
-      if process?.isRunning == true, !isStopping {
+      // subprocess is supposed to be alive.
+      if process?.isRunning == true {
         recordError("[plugin] failed to write IPC message (method=\(label)): \(error)")
-        // The stdin pipe is broken: every subsequent RPC will fail too, so the
-        // plugin is effectively unreachable even though it still "runs". Don't
-        // wait ~10s for the heartbeat to notice — tear down and restart now
-        // (mirrors the heartbeat-miss recovery). scheduleRestart owns the
-        // restartCount bump; a second one here doubles the backoff.
+        // The stdin pipe is broken: every subsequent RPC will fail too, so
+        // the plugin is effectively unreachable even though it still "runs".
+        // Tear down and restart now.
         stopOnQueue(reason: "write_error")
         scheduleRestart()
       }
     }
   }
-
-  /// Sanity ceiling on a single frame's payload. Real frames are a few KB at
-  /// most; anything larger means the stream desynced and the "length" is
-  /// really payload bytes misread as a prefix.
-  // Real payloads (candidate snapshots, query answers, command responses) sit well under
-  // 1 MiB. The previous 64 MiB ceiling let a misbehaving plugin starve the
-  // host on every frame; 10 MiB still covers any sensible payload while
-  // bounding the worst-case allocation.
-  private static let maxFrameBytes = 10 * 1024 * 1024
 
   private func handleStdout(_ data: Data) {
     guard !data.isEmpty else { return }
@@ -1305,18 +1188,23 @@ final class PluginProcess {
         case .frame(let line):
           self.handleFrame(line)
         case .oversized(let bytes):
-          self.recordError("[plugin] dropped oversized IPC line (bytes=\(bytes))")
+          FlashLog.plugin(
+            .warn, pluginID: self.manifest.id,
+            message: "[plugin] dropped oversized IPC line (bytes=\(bytes))")
         }
       }
     }
   }
 
   private func handleFrame(_ line: Data) {
+    lastInboundFrameAt = .now()
     let object: [String: Any]
     do {
       object = try PluginWireCodec.decodeFrame(line)
     } catch {
-      recordError("[plugin] undecodable IPC frame: \(error)")
+      FlashLog.plugin(
+        .warn, pluginID: manifest.id,
+        message: "[plugin] undecodable IPC frame: \(error)")
       return
     }
     handleProtocolMessage(object, payloadBytes: line.count)
@@ -1332,201 +1220,137 @@ final class PluginProcess {
       guard let self else { return }
       // Diagnostics, not failure: interpreted runtimes (Python deprecation
       // warnings, Ruby -W, Bun notices) write to stderr unprompted. lastError
-      // is reserved for abnormal exits and protocol failures.
+      // is reserved for lifecycle failures.
       FlashLog.plugin(.warn, pluginID: self.manifest.id, message: message)
     }
   }
 
   private func handleProtocolMessage(_ object: [String: Any], payloadBytes: Int) {
+    // An inbound id-without-method frame is always a response to one of our
+    // requests; an id+method frame is a plugin→host request; a bare method
+    // is a notification.
     if let responseID = object["id"] as? Int,
       object["method"] == nil
     {
-      if let error = object["error"] {
-        recordError("[plugin] response error id=\(responseID) \(error)")
-      }
       let result = object["result"] as? [String: Any]
-      if responseID == -1 {
-        lastHeartbeatAt = Date()
-        awaitingHeartbeat = false
-        heartbeatMisses = 0
-        if initializationCompleted, runtimeStateSnapshot() == .degraded {
-          setState(.ready)
-        }
+      guard let request = pending.removeValue(forKey: responseID) else {
+        // Responses to unknown ids are dropped silently (late replies after
+        // their deadline already settled the caller).
+        return
       }
-      if let request = pending.removeValue(forKey: responseID) {
-        let elapsedMsValue = Self.elapsedMillisecondsValue(since: request.startedAt)
-        let elapsedMs = Self.elapsedMilliseconds(since: request.startedAt)
-        if let limit = PluginWireCodec.responsePayloadLimit(for: request.method),
-          payloadBytes > limit
-        {
-          FlashLog.plugin(
-            .warn,
-            pluginID: manifest.id,
-            message: "[plugin] rejected oversized response",
-            fields: [
-              "method": request.method,
-              "bytes": String(payloadBytes),
-              "limit": String(limit),
-              "elapsed_ms": elapsedMs,
-            ])
-          request.completion(nil)
-          return
-        }
-        if elapsedMsValue > 1_000, request.method != "initialize" {
-          FlashLog.plugin(
-            .warn,
-            pluginID: manifest.id,
-            message: "[plugin] slow request method=\(request.method) elapsed_ms=\(elapsedMs)",
-            fields: [
-              "method": request.method,
-              "elapsed_ms": elapsedMs,
-            ])
-        }
-        request.completion(result)
+      let elapsedMsValue = Self.elapsedMillisecondsValue(since: request.startedAt)
+      let elapsedMs = Self.elapsedMilliseconds(since: request.startedAt)
+      if let limit = PluginWireCodec.responsePayloadLimit(for: request.method),
+        payloadBytes > limit
+      {
+        FlashLog.plugin(
+          .warn,
+          pluginID: manifest.id,
+          message: "[plugin] rejected oversized response",
+          fields: [
+            "method": request.method,
+            "bytes": String(payloadBytes),
+            "limit": String(limit),
+            "elapsed_ms": elapsedMs,
+          ])
+        request.completion(nil)
+        return
       }
+      if elapsedMsValue > 1_000, request.method != "initialize", request.method != "perform" {
+        FlashLog.plugin(
+          .warn,
+          pluginID: manifest.id,
+          message: "[plugin] slow request method=\(request.method) elapsed_ms=\(elapsedMs)",
+          fields: [
+            "method": request.method,
+            "elapsed_ms": elapsedMs,
+          ])
+      }
+      request.completion(result)
       return
     }
     guard let method = object["method"] as? String else { return }
     let params = object["params"] as? [String: Any] ?? [:]
-    // A frame carrying both an id and a method is a plugin→host request:
-    // route it to the host RPC router and reply with a response frame. (Host
-    // responses carry an id but no method and were handled above; plugin
-    // notifications carry a method but no id and fall through to the switch.)
     if let requestID = object["id"] as? Int {
       routeHostRequest(id: requestID, method: method, params: params)
       return
     }
     switch method {
-    case "flash.log":
+    case "publish":
+      applyPublish(params)
+    case "status":
+      applyStatusSegments(params)
+    case "log":
       let level = FlashLog.Level.parse(params["level"] as? String ?? "info") ?? .info
       let message = params["message"] as? String ?? ""
       let fields = params["fields"] as? [String: String] ?? [:]
+      lock.lock()
       lastLog = message
+      lock.unlock()
       FlashLog.plugin(level, pluginID: manifest.id, message: message, fields: fields)
       notifyStatus()
-    case "status.updated":
-      applyStatusSegments(params)
-    case "sources.invalidated":
-      let now = Date()
-      if let last = lastSourcesInvalidatedAt, now.timeIntervalSince(last) < 1 {
-        FlashLog.plugin(
-          .trace, pluginID: manifest.id,
-          message: "[plugin] sources.invalidated rate-limited", fields: [:])
-      } else {
-        lastSourcesInvalidatedAt = now
-        onSourcesInvalidated?()
-      }
     default:
-      break
+      FlashLog.plugin(
+        .warn, pluginID: manifest.id,
+        message: "[plugin] unknown notification method=\(method)",
+        fields: ["method": method])
     }
   }
 
-  private func applyStatusSegments(_ params: [String: Any]) {
+  /// One `publish` notification: validate at receipt (on this plugin's own
+  /// reader queue) and hand the full-replacement catalog to the host store.
+  /// A malformed or over-quota payload is rejected whole — content-free log
+  /// — and the store keeps the previous catalog by construction.
+  private func applyPublish(_ params: [String: Any]) {
+    guard let raw = params["rows"] as? [[String: Any]] else {
+      FlashLog.plugin(
+        .warn, pluginID: manifest.id,
+        message: "[plugin] malformed publish payload (rows missing)")
+      return
+    }
+    guard
+      let decoded = PluginWireCodec.catalogRows(
+        from: raw,
+        sourceID: "plugin:\(manifest.id)",
+        allowedSources: Set(manifest.candidateSources))
+    else {
+      FlashLog.plugin(
+        .warn,
+        pluginID: manifest.id,
+        message: "[plugin] rejected malformed or oversized publish",
+        fields: [
+          "received": String(raw.count),
+          "row_limit": String(PluginProtocol.maxCatalogRows),
+          "byte_limit": String(PluginProtocol.maxCatalogBytes),
+        ])
+      return
+    }
+    catalogStore?.publish(
+      pluginID: manifest.id, rows: decoded.rows, encodedBytes: decoded.encodedBytes)
+  }
+
+  /// One `status` notification. The read-modify-write runs entirely under
+  /// `lock`, so two concurrent segment updates can never lose each other.
+  /// Internal (not private) so the lost-update regression test can drive it
+  /// without a live child process.
+  func applyStatusSegments(_ params: [String: Any]) {
     guard let raw = params["segments"] as? [String: Any] else { return }
     let declared = Set(manifest.statusSegments)
     guard !declared.isEmpty else { return }
     lock.lock()
-    let previous = discovery
-    var next = previous.statusSegments
-    lock.unlock()
     for (name, value) in raw {
       let key = name.trimmed
       guard declared.contains(key) else { continue }
       guard let text = value as? String else { continue }
       let trimmed = text.trimmed
       if trimmed.isEmpty {
-        next.removeValue(forKey: key)
+        statusSegments.removeValue(forKey: key)
       } else {
-        next[key] = trimmed
+        statusSegments[key] = trimmed
       }
     }
-    lock.lock()
-    discovery = PluginDiscovery(
-      targets: previous.targets,
-      statusSegments: next,
-      contextPID: previous.contextPID,
-      updatedAt: previous.updatedAt)
     lock.unlock()
     notifyStatus()
-  }
-
-  private func startHeartbeat() {
-    heartbeatTimer?.cancel()
-    let timer = DispatchSource.makeTimerSource(queue: queue)
-    let interval = DispatchTimeInterval.milliseconds(Self.heartbeatIntervalMs)
-    timer.schedule(deadline: .now() + interval, repeating: interval)
-    timer.setEventHandler { [weak self] in
-      self?.heartbeat()
-    }
-    timer.resume()
-    heartbeatTimer = timer
-  }
-
-  private func heartbeat() {
-    guard initializationCompleted, process?.isRunning == true else { return }
-    if !pending.isEmpty {
-      // A host→plugin request is in flight: a single-threaded plugin running
-      // a long command is legitimately busy and cannot answer heartbeats.
-      // Suspend miss accounting — the request's own deadline (which clears
-      // its pending entry) bounds the suspension, so a truly wedged plugin
-      // is still torn down one tick after its slowest request expires.
-      awaitingHeartbeat = false
-      heartbeatMisses = 0
-      return
-    }
-    if awaitingHeartbeat {
-      heartbeatMisses += 1
-      if runtimeStateSnapshot() == .ready {
-        setState(.degraded)
-      }
-      if heartbeatMisses >= Self.heartbeatMissLimit {
-        recordError("[plugin] heartbeat missed")
-        stopOnQueue(reason: "heartbeat")
-        scheduleRestart()
-        return
-      }
-    }
-    awaitingHeartbeat = true
-    writeFrame([
-      "id": -1,
-      "method": "heartbeat",
-      "params": ["time_unix_ms": Int64((Date().timeIntervalSince1970 * 1000).rounded())],
-    ])
-  }
-
-  static func warmRequestIsDispatchable(
-    state: PluginRuntimeState,
-    initializationCompleted: Bool,
-    processRunning: Bool
-  ) -> Bool {
-    initializationCompleted
-      && processRunning
-      && (state == .ready || state == .degraded)
-  }
-
-  private func scheduleRestart() {
-    let now = Date()
-    let windowStart = now.addingTimeInterval(-Self.restartWindowSeconds)
-    restartTimestamps.removeAll(where: { $0 < windowStart })
-    restartTimestamps.append(now)
-    if restartTimestamps.count > Self.restartWindowAttempts {
-      recordError(
-        "[plugin] restart loop exhausted: \(restartTimestamps.count) restarts "
-          + "within \(Int(Self.restartWindowSeconds))s — parking in .crashed. "
-          + "Run :plugins reload (or change a plugin file) to retry.")
-      setState(.crashed)
-      // Parked, not dead: a file change may fix the crash loop (heartbeat
-      // and write-error teardowns removed the watchers before this ran).
-      if watchFiles {
-        installFileWatchers()
-      }
-      return
-    }
-    let delay = Self.restartDelaySeconds(restartCount)
-    restartCount += 1
-    queue.asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
-      self?.startOnQueue(reason: "restart")
-    }
   }
 
   private func setState(_ state: PluginRuntimeState) {
@@ -1536,15 +1360,13 @@ final class PluginProcess {
     notifyStatus()
   }
 
-  /// Per-request RPC deadline. Defaults to 2s; a plugin can raise it via
-  /// `request_timeout_ms` in its manifest for slow, network-backed work.
-  private var requestTimeout: DispatchTimeInterval {
-    .milliseconds(max(1, manifest.requestTimeoutMs ?? 2000))
-  }
-
+  /// Lifecycle failures only (launch, abnormal exit, ping teardown,
+  /// initialize failures, write errors, park). Per-request anomalies are
+  /// warn-logs, never lastError — a single slow reply must not paint the
+  /// plugin red in `:plugins`.
   private func recordError(_ message: String) {
     // Also log: a throwing launch() (e.g. an unresolvable interpreter)
-    // otherwise parks the plugin in .crashed with zero log evidence.
+    // otherwise parks the plugin with zero log evidence.
     FlashLog.plugin(.warn, pluginID: manifest.id, message: message)
     lock.lock()
     lastError = message
@@ -1560,12 +1382,13 @@ final class PluginProcess {
   }
 
   private func notifyStatus() {
-    // Coalesce: a chatty plugin spamming `flash.log` / `status.updated` would
-    // otherwise schedule an unbounded number of main-thread callbacks (the
-    // tap-starvation class). Collapse bursts to one main hop per runloop turn;
-    // `onStatusChanged` re-reads the latest state, so nothing is lost.
-    // A dedicated lock (not the state `lock`) so this can never deadlock with a
-    // caller that holds `lock` while changing state and then notifies.
+    // Coalesce: a chatty plugin spamming `log` / `status` would otherwise
+    // schedule an unbounded number of main-thread callbacks (the
+    // tap-starvation class). Collapse bursts to one main hop per runloop
+    // turn; `onStatusChanged` re-reads the latest state, so nothing is lost.
+    // A dedicated lock (not the state `lock`) so this can never deadlock
+    // with a caller that holds `lock` while changing state and then
+    // notifies.
     statusNotifyLock.lock()
     if statusNotificationPending {
       statusNotifyLock.unlock()
@@ -1581,6 +1404,8 @@ final class PluginProcess {
       self.onStatusChanged?()
     }
   }
+
+  // MARK: - File watchers
 
   private func installFileWatchers() {
     removeFileWatchers()

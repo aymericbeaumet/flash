@@ -19,24 +19,23 @@ export interface PluginInfo {
   description?: string;
   origin?: string;
   root?: string;
+  /** stopped | installing | launching | running | failed | manifest_only */
   state: string;
+  /** resident | on_demand | manifest_only */
+  activation?: string;
   pid?: number | null;
   uptime_ms?: number | null;
-  heartbeat_age_ms?: number | null;
-  discovery_age_ms?: number | null;
   source_count?: number;
   command_count?: number;
-  target_count?: number;
-  candidate_count?: number;
   restart_count?: number;
   last_error?: string | null;
   last_log?: string | null;
   cpu_percent?: number | null;
   memory_bytes?: number | null;
-  bundle_ids?: string[];
-  volatile?: boolean;
+  only_bundle_ids?: string[];
   priority?: number;
   commands?: PluginCommand[];
+  status_segments?: Record<string, string>;
   [key: string]: unknown;
 }
 

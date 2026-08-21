@@ -1,13 +1,11 @@
-//! Core value types crossing the plugin↔host wire: candidates, hint targets,
-//! inbound request/event payloads, outbound responses, and their builders.
+//! Core value types crossing the plugin↔host wire: catalog rows, hint
+//! targets, inbound request payloads, and outbound response builders.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use crate::limits::{validate_query_answers, BoundaryViolation};
 
 // ---------------------------------------------------------------------------
 // Core value types
@@ -45,8 +43,8 @@ impl From<[f64; 4]> for Frame {
     }
 }
 
-/// Shared source salience used by candidate rows, candidate source
-/// declarations, and hint targets.
+/// Shared source salience used by catalog rows, source declarations, and hint
+/// targets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
@@ -144,16 +142,21 @@ impl JumpTarget {
     }
 }
 
-/// A flashlight candidate. Outbound (emitted via
-/// [`Context::set_locations`](crate::Context::set_locations)) only `title` is
-/// required. Inbound (on [`Request::ResolveCandidate`]) the host echoes back
-/// the candidate with the same shape — read structured payload via
-/// [`payload_str`](Candidate::payload_str) /
-/// [`payload_as`](Candidate::payload_as).
+/// A catalog row. Outbound (via [`Context::publish`](crate::Context::publish)
+/// or a `search` reply) `source` must name one of this plugin's manifest
+/// `sources[].name` entries and `title` is the searchable string. Inbound (on
+/// `perform {kind: "resolve"}`) the host echoes the row back with the same
+/// shape — read structured payload via [`payload_str`](Candidate::payload_str)
+/// / [`payload_as`](Candidate::payload_as).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Candidate {
+    /// The manifest `sources[].name` this row belongs to — first-class on the
+    /// wire; the host stamps its own routing `source_id`.
+    #[serde(default)]
+    pub source: String,
     /// Primary searchable string the host scores against and shows in the
     /// candidate bar — also the highest-precedence ranking field.
+    #[serde(default)]
     pub title: String,
     /// Openable destination when one exists. Apps use the bundle file URL;
     /// browser tabs and other resources use their canonical URL.
@@ -163,7 +166,7 @@ pub struct Candidate {
     /// what's inside — plugins may stash arbitrary routing/state, other plugins
     /// can read it, and the matcher indexes the values at a low tier for fuzzy
     /// search.
-    #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub metadata: HashMap<String, String>,
     /// Explicit user-triggered effect the host validates and performs when this
     /// row is selected. Evaluation/rendering never executes it.
@@ -233,10 +236,9 @@ impl QueryAnswer {
 /// Conventional metadata keys used by Flash's bundled host. Plugins can stash
 /// arbitrary keys in `metadata`; these constants exist so plugins can speak the
 /// same vocabulary as the host without re-typing the string literals. The
-/// canonical `url` is a typed field on `Candidate` — not in this map.
+/// canonical `url` and `source` are typed fields on `Candidate` — not in this
+/// map.
 pub mod candidate_metadata {
-    pub const SOURCE: &str = "source";
-    pub const SOURCE_ID: &str = "source_id";
     pub const KIND: &str = "kind";
     pub const ENTITY: &str = "entity";
     pub const PID: &str = "pid";
@@ -251,8 +253,9 @@ pub mod candidate_metadata {
 }
 
 impl Candidate {
-    pub fn new(title: impl Into<String>) -> Self {
+    pub fn new(source: impl Into<String>, title: impl Into<String>) -> Self {
         Self {
+            source: source.into(),
             title: title.into(),
             url: None,
             metadata: HashMap::new(),
@@ -304,14 +307,6 @@ impl Candidate {
         } else {
             self.set(candidate_metadata::PRIORITY, priority.as_str())
         }
-    }
-
-    pub fn source(self, source: impl Into<String>) -> Self {
-        self.set(candidate_metadata::SOURCE, source)
-    }
-
-    pub fn source_id(self, source_id: impl Into<String>) -> Self {
-        self.set(candidate_metadata::SOURCE_ID, source_id)
     }
 
     pub fn subtitle(self, subtitle: impl Into<String>) -> Self {
@@ -442,7 +437,7 @@ impl Candidate {
 
     /// Read a typed metadata value. Returns `None` when the key is absent.
     /// Plugins use this in resolve handlers to read back values they set with
-    /// the builders (e.g. `meta(candidate_metadata::URL)`).
+    /// the builders.
     pub fn meta(&self, key: &str) -> Option<&str> {
         self.metadata.get(key).map(String::as_str)
     }
@@ -464,27 +459,8 @@ impl Candidate {
     }
 }
 
-impl From<&str> for Candidate {
-    fn from(title: &str) -> Self {
-        Candidate::new(title)
-    }
-}
-
-impl From<String> for Candidate {
-    fn from(title: String) -> Self {
-        Candidate::new(title)
-    }
-}
-
 impl AsRef<str> for Candidate {
     fn as_ref(&self) -> &str {
-        &self.title
-    }
-}
-
-impl std::ops::Deref for Candidate {
-    type Target = str;
-    fn deref(&self) -> &str {
         &self.title
     }
 }
@@ -499,9 +475,9 @@ impl std::fmt::Display for Candidate {
 // Inbound requests / events
 // ---------------------------------------------------------------------------
 
-/// One running regular app visible to Flash. The SDK owns one current snapshot:
-/// it is initialized by the handshake and replaced atomically before each
-/// serialized `core:apps.changed` callback.
+/// One running regular app visible to Flash. The SDK owns one current
+/// snapshot, replaced atomically before each serialized `core:apps.changed`
+/// callback (the host delivers the first one right after initialize).
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RunningApplication {
     #[serde(default)]
@@ -525,9 +501,9 @@ pub struct Event {
     pub text: Option<String>,
 }
 
-/// A `command.invoke` request: the matched `:`-command, its subcommand, the
-/// trailing args, and the raw URL. Manifest `_`-prefixed metadata is in
-/// [`meta`](CommandRequest::meta).
+/// A `perform {kind: "command"}` request: the matched `:`-command or verb, its
+/// subcommand, the trailing args, and the raw input. Bang dispatch arrives
+/// with the bang token as `subcommand`.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct CommandRequest {
     #[serde(default)]
@@ -538,27 +514,19 @@ pub struct CommandRequest {
     pub args: Vec<String>,
     #[serde(default)]
     pub raw: String,
-    #[serde(flatten, default)]
-    pub meta: BTreeMap<String, String>,
 }
 
 impl CommandRequest {
-    /// Read a manifest metadata field (e.g. `_url`), forwarded verbatim by the
-    /// host from the matched manifest entry.
-    pub fn meta(&self, key: &str) -> Option<&str> {
-        self.meta.get(key).map(String::as_str)
-    }
-
     /// The args joined by a single space, trimmed.
     pub fn query(&self) -> String {
         self.args.join(" ").trim().to_string()
     }
 }
 
-/// A `hints.discover` request, carrying the focused app's identity and front
-/// window geometry.
+/// A `hints` request, carrying the focused app's identity and front window
+/// geometry. Always live — there is no cached-discovery path.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct DiscoverRequest {
+pub struct HintsRequest {
     #[serde(default)]
     pub bundle_id: Option<String>,
     #[serde(default)]
@@ -567,7 +535,7 @@ pub struct DiscoverRequest {
     pub front_window_frame: Option<Frame>,
 }
 
-/// The focused-app context attached to a [`SourceActionRequest`].
+/// The focused-app context attached to a [`ActionRequest`].
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ActionContext {
     #[serde(default)]
@@ -578,30 +546,49 @@ pub struct ActionContext {
     pub front_window_frame: Option<Frame>,
 }
 
-/// A `source.action` request (e.g. `tab_select`). `index` is set for the
-/// numbered-tab actions.
+/// A `perform {kind: "action"}` request (e.g. `tab_select`). Extra arguments
+/// arrive in `args` (`index` for the numbered-tab actions).
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct SourceActionRequest {
+pub struct ActionRequest {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub context: ActionContext,
     #[serde(default)]
-    pub index: Option<i64>,
+    pub args: serde_json::Map<String, Value>,
 }
 
-/// A `navigation.restore` request. `url` is the route the host is trying to
-/// restore from movement history.
+impl ActionRequest {
+    /// The `args.index` payload for numbered actions, when well-formed.
+    pub fn index(&self) -> Option<i64> {
+        self.arg_i64("index")
+    }
+
+    pub fn arg_i64(&self, key: &str) -> Option<i64> {
+        match self.args.get(key)? {
+            Value::Number(number) => number.as_i64(),
+            Value::String(raw) => raw.parse().ok(),
+            _ => None,
+        }
+    }
+
+    pub fn arg_str(&self, key: &str) -> Option<&str> {
+        self.args.get(key).and_then(Value::as_str)
+    }
+}
+
+/// A `perform {kind: "navigate"}` request. `url` is the durable route the host
+/// is restoring from movement history.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct NavigationRequest {
+pub struct NavigateRequest {
     #[serde(default)]
     pub url: String,
 }
 
-/// One exact input sent to a pure query evaluator. Implementations must only
-/// parse/compute against immutable in-memory state.
+/// One exact input sent to a pure query evaluator (`evaluate`). Handlers must
+/// only parse/compute against immutable in-memory state.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct QueryEvaluateRequest {
+pub struct EvaluateRequest {
     #[serde(default)]
     pub surface: String,
     #[serde(default)]
@@ -610,103 +597,184 @@ pub struct QueryEvaluateRequest {
     pub query: String,
 }
 
-/// One explicitly scoped query against a `mode = "live"` source
-/// (`sources.query`). Unlike `query.evaluate`, the handler may do real work
-/// (subprocess, disk); the host enforces its own drop-late deadline and
-/// simply ignores replies that miss it.
+/// One explicitly scoped query against a `live: true` source (`search`).
+/// Unlike `evaluate`, the handler may do real work (subprocess, disk); the
+/// host enforces its own drop-late deadline and simply ignores replies that
+/// miss it.
 #[derive(Clone, Debug, Default, Deserialize)]
-pub struct LiveQueryRequest {
+pub struct SearchRequest {
     #[serde(default)]
     pub scope: String,
     #[serde(default)]
     pub query: String,
 }
 
-/// A non-lifecycle request dispatched to [`Plugin::handle`](crate::Plugin::handle).
+/// A decoded `perform` request, one variant per wire `kind`.
 #[derive(Clone, Debug)]
-pub enum Request {
+pub enum Perform {
+    /// `kind: "resolve"` — the host echoes back a row this plugin published.
+    Resolve(Candidate),
+    /// `kind: "command"` — `:`-commands, verbs, and bang dispatch.
     Command(CommandRequest),
-    DiscoverTargets(DiscoverRequest),
-    ResolveCandidate(Candidate),
-    SourceAction(SourceActionRequest),
-    RestoreNavigation(NavigationRequest),
-    QueryEvaluate(QueryEvaluateRequest),
-    LiveQuery(LiveQueryRequest),
-    /// Any other method name the host sent. Return a
-    /// [`CommandResponse::error`] for these.
-    Unknown {
-        method: String,
-    },
+    /// `kind: "action"` — source-owned normal-mode actions.
+    Action(ActionRequest),
+    /// `kind: "navigate"` — movement-history route restoration.
+    Navigate(NavigateRequest),
 }
 
 // ---------------------------------------------------------------------------
 // Outbound responses
 // ---------------------------------------------------------------------------
 
-/// Response to a `command.invoke`.
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct CommandResponse {
-    pub ok: bool,
-    /// An app to raise once the command succeeds (e.g. the terminal hosting a
-    /// switched-to tmux session).
+/// The uniform `perform` reply — the universal trichotomy. `ok` = performed
+/// (`target_pid` raises that app and records the jump in movement history;
+/// `message` shows as a toast). `unhandled` = "not my context"; the host MAY
+/// fall back. `fail` = "mine, but it broke"; the host MUST NOT fall back
+/// (double-fire protection).
+#[derive(Clone, Debug, Serialize)]
+pub struct PerformResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    unhandled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_pid: Option<i64>,
-    /// Durable route to record into Flash movement history.
+    error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub navigation_url: Option<String>,
-    /// Text for Flash to surface as a toast.
+    target_pid: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stdout: Option<String>,
+    navigation_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    message: Option<String>,
 }
 
-impl CommandResponse {
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+impl PerformResponse {
+    /// The action was performed.
     pub fn ok() -> Self {
         Self {
             ok: true,
-            ..Self::default()
+            unhandled: false,
+            error: None,
+            target_pid: None,
+            navigation_url: None,
+            message: None,
         }
     }
 
-    /// A successful command whose `message` Flash shows as a toast.
-    pub fn toast(message: impl Into<String>) -> Self {
-        Self {
-            ok: true,
-            stdout: Some(message.into()),
-            ..Self::default()
-        }
-    }
-
-    /// A failed command. The `message` is logged; the host shows no toast.
-    pub fn error(message: impl Into<String>) -> Self {
+    /// "Not my context" — the host may fall back (e.g. to a keystroke
+    /// mapping).
+    pub fn unhandled() -> Self {
         Self {
             ok: false,
-            error: Some(message.into()),
-            ..Self::default()
+            unhandled: true,
+            error: None,
+            target_pid: None,
+            navigation_url: None,
+            message: None,
         }
     }
 
+    /// "Mine, but it broke" — the host must not fall back. The message is
+    /// logged host-side; keep it content-free.
+    pub fn fail(message: impl Into<String>) -> Self {
+        let message = message.into();
+        Self {
+            ok: false,
+            unhandled: false,
+            // The response law: ok:false always carries a non-empty error.
+            error: Some(if message.is_empty() {
+                "perform failed".to_string()
+            } else {
+                message
+            }),
+            target_pid: None,
+            navigation_url: None,
+            message: None,
+        }
+    }
+
+    /// An app to raise once the action succeeds (also records the jump in
+    /// movement history).
     pub fn target_pid(mut self, pid: i64) -> Self {
         self.target_pid = Some(pid);
         self
     }
 
+    /// Durable route to record into Flash movement history.
     pub fn navigation_url(mut self, url: impl Into<String>) -> Self {
         self.navigation_url = Some(url.into());
         self
     }
+
+    /// Text for Flash to surface as a toast.
+    pub fn message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    /// Whether this response reports success.
+    pub fn is_ok(&self) -> bool {
+        self.ok
+    }
+
+    /// Whether this response declines the request as "not mine".
+    pub fn is_unhandled(&self) -> bool {
+        self.unhandled
+    }
+
+    /// The failure text, when this response is a `fail`.
+    pub fn error_message(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    pub(crate) fn to_value(&self) -> Value {
+        if self.unhandled {
+            // The one sanctioned errorless ok:false — subsetting keeps the
+            // wire shape canonical whatever builders were chained.
+            return serde_json::json!({ "ok": false, "unhandled": true });
+        }
+        serde_json::to_value(self).unwrap_or_else(|_| {
+            serde_json::json!({ "ok": false, "error": "perform response could not be encoded" })
+        })
+    }
 }
 
-/// Response to `hints.discover`.
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct DiscoverResponse {
+/// Answers for one `evaluate` request. Unclaimed input returns the default
+/// (empty) response — evaluators are additive parsers, never error paths.
+#[derive(Clone, Debug, Default)]
+pub struct EvaluateResponse {
+    pub answers: Vec<QueryAnswer>,
+}
+
+impl EvaluateResponse {
+    pub fn answers(answers: Vec<QueryAnswer>) -> Self {
+        Self { answers }
+    }
+}
+
+/// Catalog-shaped rows answering one `search` request against this plugin's
+/// `live: true` sources.
+#[derive(Clone, Debug, Default)]
+pub struct SearchResponse {
+    pub rows: Vec<Candidate>,
+}
+
+impl SearchResponse {
+    pub fn rows(rows: Vec<Candidate>) -> Self {
+        Self { rows }
+    }
+}
+
+/// Hint targets answering one `hints` request.
+#[derive(Clone, Debug, Default)]
+pub struct HintsResponse {
     pub targets: Vec<JumpTarget>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub context_pid: Option<i64>,
 }
 
-impl DiscoverResponse {
+impl HintsResponse {
     pub fn targets(targets: Vec<JumpTarget>) -> Self {
         Self {
             targets,
@@ -720,200 +788,79 @@ impl DiscoverResponse {
     }
 }
 
-/// Response to `candidate.resolve`.
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct ResolveResponse {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_pid: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub navigation_url: Option<String>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
 
-impl ResolveResponse {
-    pub fn unresolved() -> Self {
-        Self::default()
+    #[test]
+    fn rows_serialize_with_first_class_source_and_lean_optionals() {
+        let row = Candidate::new("example.items", "Example");
+        let encoded = serde_json::to_value(&row).unwrap();
+        assert_eq!(
+            encoded,
+            json!({ "source": "example.items", "title": "Example" })
+        );
+
+        let rich = Candidate::new("example.items", "Rich")
+            .url("https://example.com")
+            .subtitle("sub")
+            .copy_text("text");
+        let encoded = serde_json::to_value(&rich).unwrap();
+        assert_eq!(encoded["source"], "example.items");
+        assert_eq!(encoded["metadata"]["subtitle"], "sub");
+        assert_eq!(encoded["effect"]["type"], "copy_text");
     }
 
-    pub fn resolved(target_pid: Option<i64>) -> Self {
-        Self {
-            ok: true,
-            target_pid,
-            navigation_url: None,
-        }
+    #[test]
+    fn inbound_rows_decode_leniently_with_defaults() {
+        let row: Candidate =
+            serde_json::from_value(json!({ "source": "s", "title": "t" })).unwrap();
+        assert_eq!(row.source, "s");
+        assert!(row.metadata.is_empty());
+        assert!(row.effect.is_none());
     }
 
-    pub fn navigation_url(mut self, url: impl Into<String>) -> Self {
-        self.navigation_url = Some(url.into());
-        self
-    }
-}
-
-/// Disposition of a `source.action` / `navigation.restore`. The host only
-/// falls back to a generic keystroke on `Unhandled`; a claimed-but-`Failed`
-/// action must not double-fire through a synthesized key.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ActionOutcome {
-    Performed,
-    Failed,
-    #[default]
-    Unhandled,
-}
-
-/// Response to `source.action`.
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct SourceActionResponse {
-    pub outcome: ActionOutcome,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_pid: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub navigation_url: Option<String>,
-}
-
-impl SourceActionResponse {
-    pub fn unhandled() -> Self {
-        Self::default()
+    #[test]
+    fn perform_response_wire_shapes_follow_the_trichotomy() {
+        assert_eq!(
+            PerformResponse::ok()
+                .target_pid(7)
+                .message("done")
+                .to_value(),
+            json!({ "ok": true, "target_pid": 7, "message": "done" })
+        );
+        assert_eq!(
+            PerformResponse::unhandled().to_value(),
+            json!({ "ok": false, "unhandled": true })
+        );
+        assert_eq!(
+            PerformResponse::fail("broke").to_value(),
+            json!({ "ok": false, "error": "broke" })
+        );
+        // The response law: ok:false always carries a non-empty error.
+        assert_eq!(
+            PerformResponse::fail("").to_value(),
+            json!({ "ok": false, "error": "perform failed" })
+        );
     }
 
-    pub fn performed(target_pid: Option<i64>) -> Self {
-        Self {
-            outcome: ActionOutcome::Performed,
-            target_pid,
-            navigation_url: None,
-        }
-    }
+    #[test]
+    fn action_args_read_numbers_and_numeric_strings() {
+        let request: ActionRequest = serde_json::from_value(json!({
+            "name": "tab_select",
+            "context": { "pid": 7 },
+            "args": { "index": "3" },
+        }))
+        .unwrap();
+        assert_eq!(request.index(), Some(3));
 
-    pub fn failed(target_pid: Option<i64>) -> Self {
-        Self {
-            outcome: ActionOutcome::Failed,
-            target_pid,
-            navigation_url: None,
-        }
-    }
-
-    pub fn navigation_url(mut self, url: impl Into<String>) -> Self {
-        self.navigation_url = Some(url.into());
-        self
-    }
-}
-
-/// Runtime-owned response to `sources.snapshot`. Plugins publish into
-/// [`Context`](crate::Context) during lifecycle callbacks; they cannot
-/// override snapshot gathering or put I/O on this path.
-#[derive(Clone, Debug, Default, Serialize)]
-pub(crate) struct SourceSnapshotResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub candidates: Option<Vec<Candidate>>,
-}
-
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct QueryEvaluateResponse {
-    pub answers: Vec<QueryAnswer>,
-}
-
-impl QueryEvaluateResponse {
-    pub fn answers(answers: Vec<QueryAnswer>) -> Self {
-        Self { answers }
-    }
-}
-
-/// Response to `sources.query` — full catalog-shaped rows (they decode
-/// through the same codec and limits as warm snapshots host-side).
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct LiveQueryResponse {
-    pub candidates: Vec<Candidate>,
-}
-
-impl LiveQueryResponse {
-    pub fn candidates(candidates: Vec<Candidate>) -> Self {
-        Self { candidates }
-    }
-}
-
-impl SourceSnapshotResponse {
-    pub(crate) fn candidates(candidates: Vec<Candidate>) -> Self {
-        Self {
-            candidates: Some(candidates),
-        }
-    }
-}
-
-/// What [`Plugin::handle`](crate::Plugin::handle) returns. Build one from the
-/// matching response type with `.into()`.
-#[derive(Clone, Debug)]
-pub enum Response {
-    Command(CommandResponse),
-    Discover(DiscoverResponse),
-    Resolve(ResolveResponse),
-    SourceAction(SourceActionResponse),
-    QueryEvaluate(QueryEvaluateResponse),
-    LiveQuery(LiveQueryResponse),
-    None,
-}
-
-impl Response {
-    pub(crate) fn validate_boundary(&self) -> Result<(), BoundaryViolation> {
-        match self {
-            Response::QueryEvaluate(response) => validate_query_answers(&response.answers)?,
-            Response::LiveQuery(response) => {
-                crate::limits::validate_catalog_candidates(&response.candidates)?
-            }
-            Response::Command(_)
-            | Response::Discover(_)
-            | Response::Resolve(_)
-            | Response::SourceAction(_)
-            | Response::None => {}
-        }
-        Ok(())
-    }
-
-    pub(crate) fn to_value(&self) -> Result<Value, &'static str> {
-        let value = match self {
-            Response::Command(response) => serde_json::to_value(response),
-            Response::Discover(response) => serde_json::to_value(response),
-            Response::Resolve(response) => serde_json::to_value(response),
-            Response::SourceAction(response) => serde_json::to_value(response),
-            Response::QueryEvaluate(response) => serde_json::to_value(response),
-            Response::LiveQuery(response) => serde_json::to_value(response),
-            Response::None => return Ok(Value::Null),
-        };
-        value.map_err(|_| "plugin response could not be encoded")
-    }
-}
-
-impl From<CommandResponse> for Response {
-    fn from(value: CommandResponse) -> Self {
-        Response::Command(value)
-    }
-}
-
-impl From<DiscoverResponse> for Response {
-    fn from(value: DiscoverResponse) -> Self {
-        Response::Discover(value)
-    }
-}
-
-impl From<ResolveResponse> for Response {
-    fn from(value: ResolveResponse) -> Self {
-        Response::Resolve(value)
-    }
-}
-
-impl From<SourceActionResponse> for Response {
-    fn from(value: SourceActionResponse) -> Self {
-        Response::SourceAction(value)
-    }
-}
-
-impl From<QueryEvaluateResponse> for Response {
-    fn from(value: QueryEvaluateResponse) -> Self {
-        Response::QueryEvaluate(value)
-    }
-}
-
-impl From<LiveQueryResponse> for Response {
-    fn from(value: LiveQueryResponse) -> Self {
-        Response::LiveQuery(value)
+        let request: ActionRequest = serde_json::from_value(json!({
+            "name": "tab_select",
+            "args": { "index": 4 },
+        }))
+        .unwrap();
+        assert_eq!(request.index(), Some(4));
+        assert_eq!(request.arg_str("index"), None);
     }
 }

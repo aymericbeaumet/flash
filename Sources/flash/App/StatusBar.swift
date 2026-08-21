@@ -837,11 +837,12 @@ enum FlashStatusBarTemplateEngine {
   ) -> String {
     switch value {
     case .loadedCount:
-      // Failed-to-load rows are surfaced through errorCount, not counted as
-      // loaded plugins.
-      return "\(statuses.filter { $0.state != "load_failed" }.count)"
+      // Failed rows (load failures and parked plugins) surface through
+      // errorCount, not counted as loaded plugins.
+      return "\(statuses.filter { $0.state != "failed" }.count)"
     case .readyCount:
-      return "\(statuses.filter { $0.state == "ready" }.count)"
+      // Manifest-only plugins are fully serviceable without a process.
+      return "\(statuses.filter { $0.state == "running" || $0.state == "manifest_only" }.count)"
     case .errorCount:
       return "\(statuses.filter(\.hasError).count)"
     case .statusSegment(let pluginID, let name):

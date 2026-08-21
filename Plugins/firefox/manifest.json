@@ -4,17 +4,17 @@
   "version": "0.1.0",
   "description": "Surface Firefox tabs in the flashlight (AX-backed) and handle Firefox source actions (tab_select).",
   "sandbox": {},
-  "exec": ["./flash-plugin-firefox"],
+  "exec": [
+    "./flash-plugin-firefox"
+  ],
   "priority": 30,
   "capabilities": [
     "accessibility",
     "app_control"
   ],
-  "navigation": {
-    "schemes": [
-      "flash-firefox"
-    ]
-  },
+  "navigation": [
+    "flash-firefox"
+  ],
   "only_bundle_ids": [
     "org.mozilla.firefox",
     "org.mozilla.firefoxdeveloperedition"
@@ -31,7 +31,7 @@
       "priority": "high"
     }
   ],
-  "source_actions": [
+  "actions": [
     "tab_select"
   ]
 }

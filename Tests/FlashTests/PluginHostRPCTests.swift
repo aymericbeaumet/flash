@@ -24,7 +24,7 @@ final class PluginHostRPCTests: XCTestCase {
     let rpc = PluginHostRPC()
     let replied = expectation(description: "host reply")
     rpc.handleHostRequest(
-      method: "input.post_global_key",
+      method: "host.post_global_key",
       params: [
         "key_code": Int(kVK_ANSI_Q),
         "modifiers": ["command", "control"],
@@ -48,7 +48,7 @@ final class PluginHostRPCTests: XCTestCase {
       return true
     }
     rpc.handleHostRequest(
-      method: "input.post_global_key",
+      method: "host.post_global_key",
       params: [
         "key_code": Int(kVK_ANSI_Q),
         "modifiers": ["command", "control"],

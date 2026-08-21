@@ -2,7 +2,7 @@
 //!
 //! The core AX walk already hints generic apps. This plugin exists to show
 //! the enhancement pattern: a `hints` provider scoped by `only_bundle_ids`
-//! at a priority above the core walk, whose `hints.discover` snapshots the
+//! at a priority above the core walk, whose `hints` handler snapshots the
 //! focused app through the host AX broker and applies a *small, documented*
 //! app-specific mapping from AX nodes to hint targets. `fallback_on_empty`
 //! is true because applicability is dynamic — an empty result (broker
@@ -30,7 +30,7 @@
 //! (bottom-left origin), the exact space `JumpTarget.frame` expects, so no
 //! conversion happens here.
 
-use flash_plugin::{run, Context, DiscoverRequest, DiscoverResponse, Frame, JumpTarget};
+use flash_plugin::{run, Context, Frame, HintsRequest, HintsResponse, JumpTarget};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -66,7 +66,7 @@ const STATIC_TEXT_CONTAINER_ROLES: [&str; 2] = ["AXTabGroup", "AXToolbar"];
 /// How far up the parent chain the static-text containment check walks.
 const ANCESTOR_WALK_LIMIT: usize = 12;
 
-/// One flat node from an `ax.snapshot` reply.
+/// One flat node from a `host.ax_snapshot` reply.
 #[derive(Clone, Debug, Deserialize)]
 struct AxNode {
     handle: u64,
@@ -94,14 +94,13 @@ struct Vscode;
 flash_plugin::plugin!(Vscode);
 
 impl FlashPlugin for Vscode {
-    async fn discover_targets(&self, ctx: Context, request: DiscoverRequest) -> DiscoverResponse {
+    async fn on_hints(&self, ctx: Context, request: HintsRequest) -> HintsResponse {
         let Some(pid) = request.pid else {
-            return DiscoverResponse::default();
+            return HintsResponse::default();
         };
         let started_at = Instant::now();
         let value = ctx
-            .call_host_timeout(
-                "ax.snapshot",
+            .ax_snapshot_timeout(
                 json!({
                     "pid": pid,
                     "roots": "windows",
@@ -120,11 +119,11 @@ impl FlashPlugin for Vscode {
             // Broker degraded: empty + fallback_on_empty hands the surface to
             // the core AX walk.
             log_discover(&ctx, "broker_failed", 0, started_at);
-            return DiscoverResponse::default().context_pid(pid);
+            return HintsResponse::default().context_pid(pid);
         };
         let targets = targets_from_nodes(&nodes, pid, request.front_window_frame);
         log_discover(&ctx, "ok", targets.len(), started_at);
-        DiscoverResponse::targets(targets).context_pid(pid)
+        HintsResponse::targets(targets).context_pid(pid)
     }
 }
 
@@ -276,8 +275,8 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// Canned broker snapshot: the shape `ax.snapshot` returns for a VS Code
-    /// window (flat nodes, `parent` handles, NSScreen frames).
+    /// Canned broker snapshot: the shape `host.ax_snapshot` returns for a
+    /// VS Code window (flat nodes, `parent` handles, NSScreen frames).
     fn fixture_nodes() -> Vec<AxNode> {
         serde_json::from_value(json!([
             { "handle": 1, "attrs": { "AXRole": "AXWindow", "AXTitle": "main.rs — flash" },

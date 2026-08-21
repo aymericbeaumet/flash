@@ -1,19 +1,19 @@
 //! Tmux plugin — ports the former Python tmux plugin to Rust.
 //!
-//! ## Warm-location contract
+//! ## Warm-catalog contract
 //!
 //! Tmux exposes no native host event stream for window-list changes (no
 //! `core:focus.changed`-style ping fires when the user creates/renames/
 //! closes a window inside an attached client). The plugin therefore keeps
-//! locations warm with a background refresh loop:
+//! the catalog warm with a background refresh loop:
 //!
-//!   1. `on_start` seeds the in-memory locations, then a 1 s background poll
-//!      keeps them current. The candidate hash gates writes, so unchanged
-//!      refreshes are true no-ops.
+//!   1. `on_start` builds and publishes the initial rows, then a 1 s
+//!      background poll keeps them current. The candidate hash gates
+//!      publishes, so unchanged refreshes are true no-ops.
 //!   2. Host events (`core:focus.changed`, `core:apps.terminated`) trigger an
 //!      additional refresh at explicit interaction boundaries.
-//!   3. `sources.snapshot` is served directly from the SDK's warm store and
-//!      performs no tmux I/O on the flashlight hot path.
+//!   3. The flashlight reads the host-owned store fed by `publish`; no tmux
+//!      I/O ever rides the hot path.
 //!   4. Each refresh also retains its `list-clients` + process tree
 //!      sample. The expensive host-wide process tree is reused while the tmux
 //!      client pid set is unchanged. Hint discovery and repeatable source
@@ -22,8 +22,8 @@
 //!      and all-socket rediscovery before changing windows.
 //!   5. Each successful local refresh also derives the attached-client
 //!      session/window/pane statusbar segments (`#{plugin:tmux.session}` /
-//!      `.window` / `.pane`) from the same inventory and emits
-//!      `status.updated` only when the values change.
+//!      `.window` / `.pane`) from the same inventory and emits the `status`
+//!      notification only when the values change.
 //!
 //! Per-socket subprocess fan-out (`list-clients`, `list-windows -a`) and
 //! per-host SSH inventory refreshes run concurrently so one slow socket or
@@ -31,9 +31,9 @@
 //!
 //! ## Hint discovery
 //!
-//! On each activation Flash calls `hints.discover` with the focused
-//! app's pid + window frame; the plugin returns pane-chip and link-chip
-//! targets in screen coordinates.
+//! On each activation Flash calls `hints` with the focused app's pid +
+//! window frame; the plugin returns pane-chip and link-chip targets in
+//! screen coordinates.
 //!
 //! Geometry mirrors the previous implementation:
 //!   - cell size = window / cells (fallback) OR alacritty-style font
@@ -52,9 +52,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    run, Candidate, CandidateEffect, CommandRequest, CommandResponse, Context, DiscoverRequest,
-    DiscoverResponse, Event, Frame, JumpTarget, NavigationRequest, Priority, ResolveResponse,
-    SourceActionRequest, SourceActionResponse, TERMINAL_LINK_ROLE,
+    run, ActionRequest, Candidate, CandidateEffect, CommandRequest, Context, Event, Frame,
+    HintsRequest, HintsResponse, JumpTarget, NavigateRequest, PerformResponse, Priority,
+    TERMINAL_LINK_ROLE,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -64,7 +64,7 @@ use flash_plugin::process as bounded_process;
 
 const SUBPROCESS_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const SUBPROCESS_STDERR_LIMIT: usize = 64 * 1024;
-const SOURCE_ID: &str = "plugin:tmux";
+const SOURCE_WINDOWS: &str = "tmux.windows";
 const NAV_SCHEME: &str = "tmux";
 const PANE_TARGET_ROLE: &str = "tmux-pane";
 const TMUX_TARGET_ENTERS_INSERT_MODE: bool = false;
@@ -1445,17 +1445,14 @@ fn window_handle_for_title(nodes: &[AxWindowNode], title: &str) -> Option<u64> {
 
 async fn terminal_window_nodes(ctx: &Context, pid: i64) -> Vec<AxWindowNode> {
     let value = ctx
-        .call_host(
-            "ax.snapshot",
-            json!({
-                "pid": pid,
-                "roots": "windows",
-                "follow": ["AXFlashNoChildren"],
-                "collect": ["AXTitle", "AXFocused", "AXMain"],
-                "max_nodes": 64,
-                "geometry": false,
-            }),
-        )
+        .ax_snapshot(json!({
+            "pid": pid,
+            "roots": "windows",
+            "follow": ["AXFlashNoChildren"],
+            "collect": ["AXTitle", "AXFocused", "AXMain"],
+            "max_nodes": 64,
+            "geometry": false,
+        }))
         .await;
     ax_window_nodes(&value)
 }
@@ -1469,28 +1466,12 @@ async fn raise_terminal_window_handle(ctx: &Context, pid: i64, handle: u64) -> b
     // Discovery already resolved the exact AX window. Activating the app and
     // raising/focusing that cached handle in one host wave keeps a warm remote
     // jump off the AX snapshot path entirely.
-    let (activation, raised, main, focused) = tokio::join!(
-        ctx.call_host("app.activate", json!({ "pid": pid })),
-        ctx.call_host(
-            "ax.perform",
-            json!({ "handle": handle, "action": "AXRaise" }),
-        ),
-        ctx.call_host(
-            "ax.set",
-            json!({ "handle": handle, "attribute": "AXMain", "value": true }),
-        ),
-        ctx.call_host(
-            "ax.set",
-            json!({ "handle": handle, "attribute": "AXFocused", "value": true }),
-        )
+    let (activated, raised, main, focused) = tokio::join!(
+        ctx.activate(pid),
+        ctx.ax_perform(handle, "AXRaise"),
+        ctx.ax_set(handle, "AXMain", true),
+        ctx.ax_set(handle, "AXFocused", true),
     );
-    let activated = activation
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let raised = raised.get("ok").and_then(Value::as_bool).unwrap_or(false);
-    let main = main.get("ok").and_then(Value::as_bool).unwrap_or(false);
-    let focused = focused.get("ok").and_then(Value::as_bool).unwrap_or(false);
     activated && (raised || main || focused)
 }
 
@@ -1511,45 +1492,21 @@ async fn raise_terminal_window(
         // to the title lookup once so stale discovery heals transparently.
     }
     if title.is_empty() {
-        return ctx
-            .call_host("app.activate", json!({ "pid": pid }))
-            .await
-            .get("ok")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        return ctx.activate(pid).await;
     }
     // App activation and the AX lookup are independent. This is the cold/stale
     // fallback; warm candidates use the cached handle above.
-    let (activation, nodes) = tokio::join!(
-        ctx.call_host("app.activate", json!({ "pid": pid })),
-        terminal_window_nodes(ctx, pid)
-    );
-    let activated = activation
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let (activated, nodes) = tokio::join!(ctx.activate(pid), terminal_window_nodes(ctx, pid));
     let Some(handle) = window_handle_for_title(&nodes, title) else {
         return activated;
     };
     // Raising, making main, and making focused are likewise independent AX
     // mutations on the same already-resolved window.
     let (raised, main, focused) = tokio::join!(
-        ctx.call_host(
-            "ax.perform",
-            json!({ "handle": handle, "action": "AXRaise" }),
-        ),
-        ctx.call_host(
-            "ax.set",
-            json!({ "handle": handle, "attribute": "AXMain", "value": true }),
-        ),
-        ctx.call_host(
-            "ax.set",
-            json!({ "handle": handle, "attribute": "AXFocused", "value": true }),
-        )
+        ctx.ax_perform(handle, "AXRaise"),
+        ctx.ax_set(handle, "AXMain", true),
+        ctx.ax_set(handle, "AXFocused", true),
     );
-    let raised = raised.get("ok").and_then(Value::as_bool).unwrap_or(false);
-    let main = main.get("ok").and_then(Value::as_bool).unwrap_or(false);
-    let focused = focused.get("ok").and_then(Value::as_bool).unwrap_or(false);
     activated && (raised || main || focused)
 }
 
@@ -1872,13 +1829,9 @@ fn build_target(
         .priority(priority)
 }
 
-async fn discover_targets_for_context(
-    plugin: &Tmux,
-    ctx: &Context,
-    req: &DiscoverRequest,
-) -> DiscoverResponse {
+async fn hints_for_context(plugin: &Tmux, ctx: &Context, req: &HintsRequest) -> HintsResponse {
     let Some(pid) = req.pid else {
-        return DiscoverResponse::targets(vec![]);
+        return HintsResponse::targets(vec![]);
     };
     let bundle_id = req.bundle_id.as_deref().unwrap_or("");
     let frame = req.front_window_frame.unwrap_or_default();
@@ -1887,11 +1840,11 @@ async fn discover_targets_for_context(
     let min_x = frame.x;
     let min_y = frame.y;
     if win_w <= 0.0 || win_h <= 0.0 {
-        return DiscoverResponse::targets(vec![]).context_pid(pid);
+        return HintsResponse::targets(vec![]).context_pid(pid);
     }
 
     let Some(client) = focused_tmux_client(plugin, ctx, pid, false).await else {
-        return DiscoverResponse::targets(vec![]).context_pid(pid);
+        return HintsResponse::targets(vec![]).context_pid(pid);
     };
 
     // Pack client geometry and status onto one line separated by the literal
@@ -1913,17 +1866,17 @@ async fn discover_targets_for_context(
     )
     .await;
     let Some(combined) = combined else {
-        return DiscoverResponse::targets(vec![]).context_pid(pid);
+        return HintsResponse::targets(vec![]).context_pid(pid);
     };
     let combined_lines: Vec<&str> = combined.split(TMUX_FIELD_SEP).collect();
     if combined_lines.len() < 2 {
-        return DiscoverResponse::targets(vec![]).context_pid(pid);
+        return HintsResponse::targets(vec![]).context_pid(pid);
     }
     let Some((client_cols, client_rows)) = parse_two_ints(combined_lines[0]) else {
-        return DiscoverResponse::targets(vec![]).context_pid(pid);
+        return HintsResponse::targets(vec![]).context_pid(pid);
     };
     if client_cols <= 0 || client_rows <= 0 {
-        return DiscoverResponse::targets(vec![]).context_pid(pid);
+        return HintsResponse::targets(vec![]).context_pid(pid);
     }
 
     let (cell_w, cell_h, pad_x, pad_y) = resolve_geometry(
@@ -1948,7 +1901,7 @@ async fn discover_targets_for_context(
     )
     .await;
     let Some(pane_list) = pane_list else {
-        return DiscoverResponse::targets(vec![]).context_pid(pid);
+        return HintsResponse::targets(vec![]).context_pid(pid);
     };
 
     let mut panes: Vec<Pane> = Vec::new();
@@ -1973,7 +1926,7 @@ async fn discover_targets_for_context(
         }
     }
     if panes.is_empty() {
-        return DiscoverResponse::targets(vec![]).context_pid(pid);
+        return HintsResponse::targets(vec![]).context_pid(pid);
     }
 
     let top_offset = parse_status_top_offset(combined_lines[1]);
@@ -2078,7 +2031,7 @@ async fn discover_targets_for_context(
         ));
     }
 
-    DiscoverResponse::targets(targets).context_pid(pid)
+    HintsResponse::targets(targets).context_pid(pid)
 }
 
 // ---- Candidate (tmux window finder) -----------------------------------------
@@ -2315,11 +2268,9 @@ fn build_candidates_from_window_list(
             terminal_window_title,
             remote: backend.remote,
         };
-        let mut candidate = Candidate::new(primary)
+        let mut candidate = Candidate::new(SOURCE_WINDOWS, primary)
             .kind("tmux_window")
             .location()
-            .source_id(SOURCE_ID)
-            .source("tmux.windows")
             .subtitle(subtitle)
             .navigation_url(navigation_url)
             .current_location(active)
@@ -2617,15 +2568,14 @@ async fn build_remote_candidates(
     })
 }
 
-/// Identity hash of the complete host-visible and routing location set. Used by
-/// [`refresh_candidate_locations_for_path`] to skip `set_locations` only when
+/// Identity hash of the complete host-visible and routing row set. Used by
+/// [`refresh_candidate_locations_for_path`] to skip the `publish` only when
 /// every field is unchanged — including current-location state and the payload
 /// that identifies the tmux client.
 ///
-/// Without this gate, event-triggered refreshes would rewrite the warm cache
-/// even when tmux state was identical. The visible flashlight surface pulls the
-/// warm locations once at open time, so unchanged refreshes should not churn
-/// the warm cache or future-session bookkeeping.
+/// Without this gate, event-triggered refreshes would push a full catalog
+/// replacement across the wire every second even when tmux state was
+/// identical.
 fn hash_candidates(candidates: &[Candidate]) -> u64 {
     let mut hasher = DefaultHasher::new();
     candidates.len().hash(&mut hasher);
@@ -2849,7 +2799,7 @@ fn publish_status_segments(
         return;
     }
     *guard = Some(current.clone());
-    ctx.emit_status_segments([
+    ctx.status([
         ("session", current.session.as_str()),
         ("window", current.window.as_str()),
         ("pane", current.pane.as_str()),
@@ -2905,7 +2855,7 @@ fn publish_candidate_partitions(
         return (false, count);
     }
     *previous_hash = Some(new_hash);
-    ctx.set_locations(SOURCE_ID, aggregate);
+    ctx.publish(aggregate);
     (true, count)
 }
 
@@ -3693,11 +3643,7 @@ async fn source_action_client(
         .map(|client| (client, "fresh"))
 }
 
-async fn perform_source_action(
-    plugin: &Tmux,
-    ctx: &Context,
-    req: &SourceActionRequest,
-) -> SourceActionResponse {
+async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> PerformResponse {
     let Some(pid) = req.context.pid else {
         ctx.log(
             "debug",
@@ -3706,7 +3652,7 @@ async fn perform_source_action(
                 req.name
             ),
         );
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     };
     let resolution_started = Instant::now();
     let Some((client, client_resolution)) = source_action_client(plugin, ctx, pid, &req.name).await
@@ -3721,12 +3667,12 @@ async fn perform_source_action(
                 client_resolution_diag(pid, &clients, &pmap)
             ),
         );
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     };
     let resolution_ms = resolution_started.elapsed().as_millis();
     let action_started = Instant::now();
     let ok = match req.name.as_str() {
-        "tab_select" => tab_select(plugin, &client, req.index).await,
+        "tab_select" => tab_select(plugin, &client, req.index()).await,
         "tab_next" => tab_adjacent(plugin, &client, "next").await,
         "tab_prev" => tab_adjacent(plugin, &client, "previous").await,
         "tab_first" => tab_extreme(plugin, &client, "first").await,
@@ -3741,7 +3687,7 @@ async fn perform_source_action(
         "pane_split_horizontal" => pane_split(plugin, ctx, &client, false).await,
         "pane_close" => pane_close(plugin, ctx, &client).await,
         "app_reload" => reload_client(plugin, &client).await,
-        _ => return SourceActionResponse::unhandled(),
+        _ => return PerformResponse::unhandled(),
     };
     let action_ms = action_started.elapsed().as_millis();
     ctx.log_fields(
@@ -3759,13 +3705,13 @@ async fn perform_source_action(
         ]),
     );
     // A tmux client hosts the focused terminal, so this source owns the
-    // action either way: a failed tmux command must report `failed` (not
+    // action either way: a failed tmux command must report an error (not
     // `unhandled`) or the host would fall back to a ⌘-keystroke that
     // doesn't mean "tab" in a terminal.
     if ok {
-        SourceActionResponse::performed(Some(pid))
+        PerformResponse::ok().target_pid(pid)
     } else {
-        SourceActionResponse::failed(Some(pid))
+        PerformResponse::fail("tmux action failed")
     }
 }
 
@@ -3816,13 +3762,13 @@ async fn switch_routed_target(plugin: &Tmux, client: &TmuxClient, target: &str) 
             .is_some()
 }
 
-async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> ResolveResponse {
+async fn resolve(plugin: &Tmux, ctx: &Context, row: &Candidate) -> PerformResponse {
     let started_at = Instant::now();
-    let payload = candidate.payload_as::<TmuxPayload>().unwrap_or_default();
+    let payload = row.payload_as::<TmuxPayload>().unwrap_or_default();
     let target = payload.tmux_target.as_str();
     if target.is_empty() || payload.backend_id.is_empty() {
         ctx.log("warn", "[tmux] resolve missing routed target");
-        return ResolveResponse::unresolved();
+        return PerformResponse::fail("resolve missing routed target");
     }
 
     if payload.remote && plugin.remote_config(&payload.backend_id).is_none() {
@@ -3830,11 +3776,11 @@ async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> Resolve
             "warn",
             "[tmux] resolve remote backend is no longer configured",
         );
-        return ResolveResponse::unresolved();
+        return PerformResponse::fail("remote backend no longer configured");
     }
     if !payload.remote && payload.backend_id != "local" {
         ctx.log("warn", "[tmux] resolve unknown local backend");
-        return ResolveResponse::unresolved();
+        return PerformResponse::fail("unknown local backend");
     }
 
     // Candidate inventory already carries the exact client tty and terminal
@@ -3890,7 +3836,7 @@ async fn resolve(plugin: &Tmux, ctx: &Context, candidate: &Candidate) -> Resolve
     }
     if !switched {
         ctx.log("warn", "[tmux] resolve failed");
-        return ResolveResponse::unresolved();
+        return PerformResponse::fail("switch-client failed");
     }
 
     if terminal_pid.is_none() {
@@ -3942,7 +3888,7 @@ fn resolve_response(
     tty: &str,
     terminal_pid: Option<i64>,
     ctx: &Context,
-) -> ResolveResponse {
+) -> PerformResponse {
     let mut fields = BTreeMap::new();
     fields.insert("used_client".to_string(), (!tty.is_empty()).to_string());
     match terminal_pid {
@@ -3958,31 +3904,35 @@ fn resolve_response(
             );
         }
     }
-    ResolveResponse::resolved(terminal_pid).navigation_url(tmux_navigation_url("window", target))
+    let mut response = PerformResponse::ok().navigation_url(tmux_navigation_url("window", target));
+    if let Some(pid) = terminal_pid {
+        response = response.target_pid(pid);
+    }
+    response
 }
 
 // ---- Commands (`:tmux …` jump-to mappings) ----------------------------------
 
-/// `command.invoke` for `:tmux session <name>` and `:tmux window
+/// `perform {kind: "command"}` for `:tmux session <name>` and `:tmux window
 /// <session:index>`. Both switch the user's active tmux client to the
 /// requested target and return the terminal pid hosting it so Flash can
 /// raise that window. The target argument is taken verbatim from the
 /// first command arg, so a mapping like
 /// `["flash", "plugin_command", "command=tmux", "subcommand=window", "args=main:1"]`
 /// jumps straight to `main:1`.
-async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
+async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> PerformResponse {
     let tmux_path = plugin.resolved_tmux_path().await;
     match cmd.subcommand.as_str() {
         "session" | "window" => {}
         other => {
-            return CommandResponse::error(format!("unknown subcommand: {other}"));
+            return PerformResponse::fail(format!("unknown subcommand: {other}"));
         }
     }
 
     let target = cmd.args.first().map(|s| s.trim()).filter(|s| !s.is_empty());
     let Some(target) = target else {
         ctx.log("warn", "[tmux] command missing target argument");
-        return CommandResponse::error("missing target argument");
+        return PerformResponse::fail("missing target argument");
     };
 
     // `session:index` → session is the part before the first colon; a bare
@@ -4010,7 +3960,7 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> C
             .is_some();
     if !switched {
         ctx.log("warn", "[tmux] command switch-client failed");
-        return CommandResponse::error("switch-client failed");
+        return PerformResponse::fail("switch-client failed");
     }
 
     // Terminal pid hosting the client we actually drove. Falls
@@ -4047,7 +3997,7 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> C
         let _ = raise_terminal_window(ctx, pid, None, &plugin.local_config().terminal_window_title)
             .await;
     }
-    let response = CommandResponse::ok().navigation_url(tmux_navigation_url(
+    let response = PerformResponse::ok().navigation_url(tmux_navigation_url(
         route_kind,
         &routed_tmux_target("local", target),
     ));
@@ -4060,19 +4010,19 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> C
 async fn restore_navigation(
     plugin: &Tmux,
     ctx: &Context,
-    request: &NavigationRequest,
-) -> SourceActionResponse {
+    request: &NavigateRequest,
+) -> PerformResponse {
     let started_at = Instant::now();
     let Some((kind, target)) = parse_tmux_navigation_url(&request.url) else {
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     };
     let Some((backend_id, tmux_target)) = split_routed_tmux_target(&target) else {
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     };
     let remote = backend_id != "local";
     let remote_config = if remote {
         let Some(config) = plugin.remote_config(backend_id) else {
-            return SourceActionResponse::unhandled();
+            return PerformResponse::unhandled();
         };
         Some(config)
     } else {
@@ -4135,7 +4085,7 @@ async fn restore_navigation(
     }
     if !switched {
         ctx.log("warn", "[tmux] navigation restore failed");
-        return SourceActionResponse::failed(None).navigation_url(request.url.clone());
+        return PerformResponse::fail("navigation restore failed");
     }
 
     if terminal_pid.is_none() {
@@ -4169,7 +4119,11 @@ async fn restore_navigation(
             ),
         ]),
     );
-    SourceActionResponse::performed(terminal_pid).navigation_url(request.url.clone())
+    let mut response = PerformResponse::ok().navigation_url(request.url.clone());
+    if let Some(pid) = terminal_pid {
+        response = response.target_pid(pid);
+    }
+    response
 }
 
 #[cfg(test)]
@@ -4762,8 +4716,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             candidates[1].meta(meta::SUBTITLE),
             Some("scratch:2 · zsh · ~/workspace/aymericbeaumet/flash")
         );
-        assert_eq!(candidates[1].meta(meta::SOURCE_ID), Some(SOURCE_ID));
-        assert_eq!(candidates[1].meta(meta::SOURCE), Some("tmux.windows"));
+        assert_eq!(candidates[1].source, SOURCE_WINDOWS);
         assert_eq!(
             candidates[1].meta(meta::NAVIGATION_URL),
             Some("tmux://window/local%7Cscratch:2")
@@ -5045,11 +4998,9 @@ window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
             tmux_target: target.to_string(),
             ..TmuxPayload::default()
         };
-        Candidate::new(name)
+        Candidate::new(SOURCE_WINDOWS, name)
             .kind("tmux_window")
             .location()
-            .source_id(SOURCE_ID)
-            .source("tmux.windows")
             .subtitle(format!("{target} · zsh · ~/work"))
             .navigation_url(tmux_navigation_url(
                 "window",
@@ -5186,12 +5137,13 @@ struct Tmux {
     /// truth.
     last_locations_hash_arc: std::sync::Arc<Mutex<Option<u64>>>,
     candidate_partitions_arc: std::sync::Arc<Mutex<CandidatePartitions>>,
-    /// Last statusbar segment values emitted through `status.updated`, so
-    /// the 1 s refresh only notifies the host on actual changes.
+    /// Last statusbar segment values emitted through the `status`
+    /// notification, so the 1 s refresh only notifies on actual changes.
     last_status_segments_arc: std::sync::Arc<Mutex<Option<TmuxStatusSegments>>>,
     /// Serializes the complete build → hash → publish cycle shared by startup,
     /// the one-second poll, and push events. Without it, an older slow refresh
-    /// can finish after a newer one and overwrite the warm store with stale rows.
+    /// can finish after a newer one and publish stale rows over the host's
+    /// current catalog.
     candidate_refresh_coordinator_arc: std::sync::Arc<CandidateRefreshCoordinator>,
 }
 
@@ -5293,7 +5245,11 @@ impl FlashPlugin for Tmux {
             remote_succeeded
         })
         .await;
-        if initial.is_err() {
+        // A timed-out first cycle publishes nothing (the host keeps its
+        // last-good catalog, which survives restarts); the poll retries
+        // immediately.
+        let degraded_initial = initial.is_err();
+        if degraded_initial {
             ctx.log_fields(
                 "warn",
                 "[tmux] initial warm catalog timed out",
@@ -5305,19 +5261,6 @@ impl FlashPlugin for Tmux {
                     ("retry".to_string(), "immediate_background".to_string()),
                 ]),
             );
-        }
-        let degraded_initial = !ctx.has_locations(SOURCE_ID);
-        if degraded_initial {
-            ctx.log_fields(
-                "warn",
-                "[tmux] initial warm catalog degraded",
-                BTreeMap::from([
-                    ("outcome".to_string(), "empty_without_last_good".to_string()),
-                    ("candidates".to_string(), "0".to_string()),
-                    ("retry".to_string(), "immediate_background".to_string()),
-                ]),
-            );
-            ctx.set_locations(SOURCE_ID, Vec::new());
         }
         start_candidate_poll(self, &ctx, degraded_initial);
         start_remote_candidate_poll(self, &ctx, matches!(initial, Ok(true)));
@@ -5334,31 +5277,23 @@ impl FlashPlugin for Tmux {
         }
     }
 
-    async fn discover_targets(&self, ctx: Context, request: DiscoverRequest) -> DiscoverResponse {
-        discover_targets_for_context(self, &ctx, &request).await
+    async fn on_hints(&self, ctx: Context, request: HintsRequest) -> HintsResponse {
+        hints_for_context(self, &ctx, &request).await
     }
 
-    async fn source_action(
-        &self,
-        ctx: Context,
-        request: SourceActionRequest,
-    ) -> SourceActionResponse {
-        perform_source_action(self, &ctx, &request).await
+    async fn on_action(&self, ctx: Context, action: ActionRequest) -> PerformResponse {
+        perform_action(self, &ctx, &action).await
     }
 
-    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
-        resolve(self, &ctx, &candidate).await
+    async fn on_resolve(&self, ctx: Context, row: Candidate) -> PerformResponse {
+        resolve(self, &ctx, &row).await
     }
 
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         invoke_command(self, &ctx, &command).await
     }
 
-    async fn restore_navigation(
-        &self,
-        ctx: Context,
-        request: NavigationRequest,
-    ) -> SourceActionResponse {
+    async fn on_navigate(&self, ctx: Context, request: NavigateRequest) -> PerformResponse {
         restore_navigation(self, &ctx, &request).await
     }
 }

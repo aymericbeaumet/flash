@@ -11,25 +11,25 @@
   "exec": [
     "./flash-plugin-files"
   ],
-  "shebangs": {
-    "command": "files",
-    "items": [
-      {
-        "token": "f",
-        "description": "Find files by name: !f <name>",
-        "candidate_source": "files.results"
-      }
-    ]
-  },
   "sources": [
     {
       "name": "files.results",
       "kind": "default",
       "priority": "normal",
-      "mode": "live"
+      "live": true
     }
   ],
   "capabilities": [
     "subprocess"
-  ]
+  ],
+  "bangs": {
+    "command": "files",
+    "items": [
+      {
+        "token": "f",
+        "description": "Find files by name: !f <name>",
+        "source": "files.results"
+      }
+    ]
+  }
 }

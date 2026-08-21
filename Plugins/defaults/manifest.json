@@ -2,46 +2,44 @@
   "id": "defaults",
   "name": "Defaults",
   "version": "0.1.0",
-  "description": "Provides Flash's default plugin-layer behavior. Today this registers the canonical app keystroke verbs (app_save, app_print, document_open, window_new) with inline shortcuts so they bypass plugin RPC on the hot path.",
-  "verbs": {
-    "items": [
-      {
-        "name": "app_save",
-        "description": "Synthesize the focused app's save shortcut (defaults to Cmd-S).",
-        "inline_keystrokes": {
-          "": "cmd+s"
-        }
-      },
-      {
-        "name": "app_print",
-        "description": "Synthesize the focused app's print shortcut (defaults to Cmd-P).",
-        "inline_keystrokes": {
-          "": "cmd+p"
-        }
-      },
-      {
-        "name": "document_open",
-        "description": "Synthesize the focused app's open-document shortcut (defaults to Cmd-O).",
-        "inline_keystrokes": {
-          "": "cmd+o"
-        }
-      },
-      {
-        "name": "window_new",
-        "description": "Synthesize the focused app's new-window shortcut (defaults to Cmd-N).",
-        "inline_keystrokes": {
-          "": "cmd+n"
-        }
+  "description": "Provides Flash's default plugin-layer behavior. Today this registers the canonical app keystroke verbs (app_save, app_print, document_open, window_new) with keystroke shortcuts so they bypass plugin RPC on the hot path.",
+  "verbs": [
+    {
+      "name": "app_save",
+      "description": "Synthesize the focused app's save shortcut (defaults to Cmd-S).",
+      "keystrokes": {
+        "": "cmd+s"
       }
-    ]
-  },
+    },
+    {
+      "name": "app_print",
+      "description": "Synthesize the focused app's print shortcut (defaults to Cmd-P).",
+      "keystrokes": {
+        "": "cmd+p"
+      }
+    },
+    {
+      "name": "document_open",
+      "description": "Synthesize the focused app's open-document shortcut (defaults to Cmd-O).",
+      "keystrokes": {
+        "": "cmd+o"
+      }
+    },
+    {
+      "name": "window_new",
+      "description": "Synthesize the focused app's new-window shortcut (defaults to Cmd-N).",
+      "keystrokes": {
+        "": "cmd+n"
+      }
+    }
+  ],
   "help": {
     "topics": [
       {
         "name": "defaults",
         "title": "Defaults",
         "summary": "Bundled plugin-layer defaults, including canonical app shortcut verbs.",
-        "body": "# Defaults\n\nThis bundled plugin owns Flash's default plugin-layer behavior. Today it registers the canonical app-shortcut verbs:\n\n- `flash app_save` - Cmd-S\n- `flash app_print` - Cmd-P\n- `flash document_open` - Cmd-O\n- `flash window_new` - Cmd-N\n\nEach verb uses the manifest's `inline_keystrokes` table, so the host translates it directly into a core keystroke action without round-tripping through the plugin process. Users who want a raw host-only experience can disable this plugin with `[plugins] disabled = [\"defaults\"]`.\n"
+        "body": "# Defaults\n\nThis bundled plugin owns Flash's default plugin-layer behavior. Today it registers the canonical app-shortcut verbs:\n\n- `flash app_save` - Cmd-S\n- `flash app_print` - Cmd-P\n- `flash document_open` - Cmd-O\n- `flash window_new` - Cmd-N\n\nEach verb uses the manifest's `keystrokes` table, so the host translates it directly into a core keystroke action without round-tripping through the plugin process. Users who want a raw host-only experience can disable this plugin with `[plugins] disabled = [\"defaults\"]`.\n"
       }
     ]
   }

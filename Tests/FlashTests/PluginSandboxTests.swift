@@ -74,13 +74,12 @@ final class PluginSandboxTests: XCTestCase {
   }
 
   func testSandboxSpecComposesExecAllowlist() {
-    let spec = PluginSandboxSpec(exec: ["/usr/bin/osascript"], read: ["~/Library/Notes"])
+    let spec = PluginSandboxSpec(exec: ["/usr/bin/osascript"])
     let resolved = PluginSandbox.resolvedSandboxProfile(
       manifest: specManifest(spec: spec), settings: [:], root: root, dataDir: dataDir)
     let profile = try! XCTUnwrap(resolved.profile)
     XCTAssertTrue(profile.contains("(allow process-exec (literal \"/usr/bin/osascript\"))"))
     XCTAssertTrue(profile.contains("(allow process-fork)"))
-    XCTAssertTrue(profile.contains("Library/Notes"))
     XCTAssertFalse(profile.contains("~"), "tilde must be expanded in profile paths")
   }
 

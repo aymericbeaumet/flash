@@ -31,9 +31,9 @@ from .run import run_spec
 from .schema import SpecError
 
 # The sandbox lane boots each sandboxed plugin under its real generated
-# profile and proves the handshake + warm pull still work — a too-tight
+# profile and proves the handshake + first publish still work — a too-tight
 # profile fails here instead of at user runtime.
-SANDBOX_LANE_SPECS = ("lifecycle/handshake", "sources/warm-readiness")
+SANDBOX_LANE_SPECS = ("lifecycle/handshake", "sources/publish")
 
 
 def parse_args(argv=None):

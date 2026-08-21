@@ -1,5 +1,5 @@
 use flash_plugin::{
-    run, Candidate, CommandRequest, CommandResponse, Context, LiveQueryRequest, LiveQueryResponse,
+    run, Candidate, CommandRequest, Context, PerformResponse, SearchRequest, SearchResponse,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -7,11 +7,10 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncBufReadExt;
 
-const SOURCE_ID: &str = "plugin:files";
 const SOURCE_RESULTS: &str = "files.results";
 const MDFIND: &str = "/usr/bin/mdfind";
 
-/// Internal mdfind budget. The host drops `sources.query` replies after
+/// Internal mdfind budget. The host drops `search` replies after
 /// `live_query_timeout_ms` (default 1000 ms); finishing inside 900 ms leaves
 /// headroom for wire + decode so a slow Spotlight never produces work the
 /// host must throw away. Spotlight's first stdout byte alone routinely takes
@@ -35,49 +34,42 @@ struct Files;
 flash_plugin::plugin!(Files);
 
 impl FlashPlugin for Files {
-    async fn on_start(&self, ctx: Context) {
-        // Live source: rows exist only per explicitly scoped query. The
-        // canonical warm catalog is still required before initialize may
-        // succeed, so publish an authoritative empty snapshot.
-        ctx.set_locations(SOURCE_ID, Vec::new());
-    }
-
-    /// One `sources.query` pull (`@files.results <name>` or a confirmed
-    /// `!f <name>`). Real work is allowed here — this never joins the warm
-    /// default pool or the 150 ms first-paint barrier.
-    async fn live_query(&self, ctx: Context, request: LiveQueryRequest) -> LiveQueryResponse {
+    /// One `search` pull (`@files.results <name>` or a confirmed
+    /// `!f <name>`). Real work is allowed here — live sources never join the
+    /// warm default pool or the first paint.
+    async fn on_search(&self, ctx: Context, request: SearchRequest) -> SearchResponse {
         let query = request.query.trim();
         if query.is_empty() {
-            return LiveQueryResponse::default();
+            return SearchResponse::default();
         }
-        LiveQueryResponse::candidates(search(&ctx, query).await)
+        SearchResponse::rows(search(&ctx, query).await)
     }
 
     /// The `!f` bang's submit path (Command-Return, or Return before any live
     /// row arrived). Selection of a live row never lands here — rows carry
     /// `file://` URLs and open natively.
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
             "f" => find_command(&ctx, command.query().trim()).await,
-            other => CommandResponse::error(format!("unknown subcommand: {other}")),
+            other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
     }
 }
 
-async fn find_command(ctx: &Context, query: &str) -> CommandResponse {
+async fn find_command(ctx: &Context, query: &str) -> PerformResponse {
     if query.is_empty() {
-        return CommandResponse::error("usage: !f <name>");
+        return PerformResponse::fail("usage: !f <name>");
     }
     let results = search(ctx, query).await;
     match results.first().and_then(Candidate::url_value) {
         // The plugin has no `open` capability (nor a LaunchServices fork in
         // its sandbox), so the submit path reports instead of opening; the
         // candidate list is the opening surface.
-        Some(top) => CommandResponse::toast(format!(
+        Some(top) => PerformResponse::ok().message(format!(
             "{} file(s) match; top: {top} — pick a row to open",
             results.len()
         )),
-        None => CommandResponse::toast(format!("no files match {query:?}")),
+        None => PerformResponse::ok().message(format!("no files match {query:?}")),
     }
 }
 
@@ -171,11 +163,9 @@ fn candidate_for_path(path: &str) -> Option<Candidate> {
     }
     let name = Path::new(path).file_name()?.to_str()?;
     Some(
-        Candidate::new(name)
+        Candidate::new(SOURCE_RESULTS, name)
             .url(file_url(path))
             .kind("file")
-            .source_id(SOURCE_ID)
-            .source(SOURCE_RESULTS)
             .subtitle(path),
     )
 }
@@ -231,8 +221,7 @@ mod tests {
             candidate.url_value(),
             Some("file:///Users/me/Notes/read%20me.md")
         );
-        assert_eq!(candidate.meta("source"), Some(SOURCE_RESULTS));
-        assert_eq!(candidate.meta("source_id"), Some(SOURCE_ID));
+        assert_eq!(candidate.source, SOURCE_RESULTS);
         assert_eq!(candidate.meta("kind"), Some("file"));
         assert_eq!(
             candidate.meta("subtitle"),
@@ -258,25 +247,16 @@ mod tests {
         let ctx = harness.context();
         for query in ["", "   ", "\t\n"] {
             let response = Files
-                .live_query(
+                .on_search(
                     ctx.clone(),
-                    LiveQueryRequest {
+                    SearchRequest {
                         scope: "all".to_string(),
                         query: query.to_string(),
                     },
                 )
                 .await;
-            assert!(response.candidates.is_empty(), "query {query:?}");
+            assert!(response.rows.is_empty(), "query {query:?}");
         }
-    }
-
-    #[tokio::test]
-    async fn on_start_publishes_the_authoritative_empty_live_catalog() {
-        let harness = Harness::new("files");
-        let ctx = harness.context();
-        Files.on_start(ctx.clone()).await;
-        assert!(ctx.has_locations(SOURCE_ID));
-        assert!(ctx.warm_locations().is_empty());
     }
 
     #[tokio::test]
@@ -284,6 +264,6 @@ mod tests {
         let harness = Harness::new("files");
         let ctx = harness.context();
         let response = find_command(&ctx, "").await;
-        assert!(!response.ok);
+        assert!(!response.is_ok());
     }
 }

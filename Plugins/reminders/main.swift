@@ -2,18 +2,18 @@
 // non-Rust official plugins exercising the language-agnostic wire protocol;
 // see docs/plugin-protocol.md and AGENTS.md — Rust stays the default).
 //
-// Faithful port of the Rust implementation: an AppleScript listing keeps
-// the `plugin:reminders` warm catalog fresh (60s poll + app lifecycle
-// events), `candidate.resolve` re-opens the picked reminder by id, and
-// `:reminders open|refresh` are the two commands. The listing script
+// Faithful port of the Rust implementation: initialize is answered
+// immediately and an AppleScript listing publishes the catalog whenever it
+// lands (60s poll + app lifecycle events; a Reminders.app termination is an
+// authoritative empty published without a round trip). perform {kind:
+// "resolve"} re-opens the picked reminder by id, and `:reminders
+// open|refresh` arrive as perform {kind: "command"}. The listing script
 // itself guards on Reminders.app running, so a stopped app yields an
 // authoritative empty catalog.
 
 import Foundation
 
-let sourceID = "plugin:reminders"
 let pollSeconds: Double = 60
-let startupRefreshBudget: Double = 8
 
 let listScript = """
   if application "Reminders" is not running then return ""
@@ -44,7 +44,7 @@ func selectScript(reminderID: String) -> String {
 
 let runtime = PluginRuntime()
 
-func candidates(fromListing output: String) -> [[String: Any?]] {
+func rows(fromListing output: String) -> [[String: Any?]] {
   var seen = Set<String>()
   var rows: [[String: Any?]] = []
   for line in output.split(separator: "\n") {
@@ -58,10 +58,9 @@ func candidates(fromListing output: String) -> [[String: Any?]] {
     let payload = try? JSONSerialization.data(
       withJSONObject: ["id": id, "list": list, "title": title])
     rows.append([
+      "source": "reminders.tasks",
       "title": title,
       "metadata": [
-        "source": "reminders.tasks",
-        "source_id": sourceID,
         "kind": "reminder",
         "subtitle": "Reminder — \(list)",
         "payload": String(data: payload ?? Data(), encoding: .utf8) ?? "",
@@ -71,54 +70,47 @@ func candidates(fromListing output: String) -> [[String: Any?]] {
   return rows
 }
 
+// Serialized so poll ticks, events, and `:reminders refresh` never overlap.
+let refreshQueue = DispatchQueue(label: "reminders.refresh")
+
+/// List and publish. On failure, don't publish — the host keeps the
+/// last-good catalog; a successful empty listing IS published (Reminders
+/// stopped or emptied is an authoritative empty).
 @discardableResult
-func refreshCandidates() -> Bool {
-  let startedAt = Date()
-  let result = runOsascript(listScript, timeoutSeconds: 30)
-  let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
-  guard result.ok else {
+func refresh() -> Bool {
+  refreshQueue.sync {
+    let startedAt = Date()
+    let result = runOsascript(listScript, timeoutSeconds: 30)
+    let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+    guard result.ok else {
+      runtime.log(
+        "warn", "[reminders] list failed: \(result.stderr.trimmingCharacters(in: .whitespaces))")
+      runtime.log(
+        "debug", "[reminders] refresh",
+        fields: ["outcome": "failed", "rows": "0", "elapsed_ms": "\(elapsedMs)"])
+      return false
+    }
+    let catalog = rows(fromListing: result.stdout)
+    runtime.publish(catalog)
     runtime.log(
-      "warn", "[reminders] list failed: \(result.stderr.trimmingCharacters(in: .whitespaces))")
-    runtime.log(
-      "debug", "[reminders] warm refresh",
-      fields: ["outcome": "failed", "candidates": "0", "elapsed_ms": "\(elapsedMs)"])
-    return false
+      "debug", "[reminders] refresh",
+      fields: [
+        "outcome": catalog.isEmpty ? "empty" : "ok",
+        "rows": "\(catalog.count)",
+        "elapsed_ms": "\(elapsedMs)",
+      ])
+    return true
   }
-  let rows = candidates(fromListing: result.stdout)
-  runtime.setLocations(sourceID, rows)
-  runtime.log(
-    "debug", "[reminders] warm refresh",
-    fields: [
-      "outcome": rows.isEmpty ? "empty" : "ok",
-      "candidates": "\(rows.count)",
-      "elapsed_ms": "\(elapsedMs)",
-    ])
-  return true
 }
 
 runtime.onStart = {
-  // Bounded startup: refresh on a worker with an 8s budget; on timeout or
-  // failure publish a logged degraded-empty baseline (never overwriting a
-  // last-good store — there is none at startup) and retry in the background.
-  let done = DispatchSemaphore(value: 0)
-  var succeeded = false
-  DispatchQueue.global(qos: .userInitiated).async {
-    succeeded = refreshCandidates()
-    done.signal()
-  }
-  if done.wait(timeout: .now() + startupRefreshBudget) == .timedOut || !succeeded {
-    if !runtime.hasLocations(sourceID) {
-      runtime.log(
-        "warn", "[reminders] initial warm catalog degraded",
-        fields: ["outcome": "empty_without_last_good", "retry": "immediate_background"])
-      runtime.setLocations(sourceID, [])
-    }
-    DispatchQueue.global(qos: .utility).async { refreshCandidates() }
-  }
-  // 60s poll, non-overlapping by construction (serial utility queue work).
+  // initialize was already answered; the first publish lands whenever the
+  // AppleScript listing does.
+  refresh()
+  // 60s poll; refreshes are serialized on refreshQueue, never overlapping.
   let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
   timer.schedule(deadline: .now() + pollSeconds, repeating: pollSeconds)
-  timer.setEventHandler { refreshCandidates() }
+  timer.setEventHandler { refresh() }
   timer.activate()
   _ = Unmanaged.passRetained(timer as AnyObject)  // keep the source alive for the process lifetime
 }
@@ -127,46 +119,38 @@ runtime.onEvent = { name, payload in
   let isReminders = payload["bundle_id"] as? String == "com.apple.reminders"
   if name == "core:apps.terminated" && isReminders {
     // Termination is authoritative and needs no AppleScript round trip.
-    runtime.setLocations(sourceID, [])
+    runtime.publish([])
   } else if (name == "core:apps.launched" && isReminders) || name == "core:config.changed" {
-    refreshCandidates()
+    refresh()
   }
 }
 
 runtime.onCommand = { params in
   switch params["subcommand"] as? String ?? "" {
   case "open":
-    // Fork-free: the host launches the app (`host.open`).
-    let done = DispatchSemaphore(value: 0)
-    var opened = false
-    runtime.callHost(method: "host.open", params: ["bundle_id": "com.apple.reminders"]) {
-      result in
-      opened = result["ok"] as? Bool == true
-      done.signal()
-    }
-    _ = done.wait(timeout: .now() + 10)
-    return opened ? ["ok": true] : ["ok": false, "error": "host.open failed"]
+    // Fork-free: the host launches the app; reply only after its verdict.
+    let result = runtime.callHost(
+      method: "host.open", params: ["bundle_id": "com.apple.reminders"])
+    return result["ok"] as? Bool == true ? ok() : fail("host.open failed")
   case "refresh":
-    return refreshCandidates()
-      ? ["ok": true, "stdout": "reminders refreshed"]
-      : ["ok": false, "error": "reminders refresh failed"]
+    return refresh() ? ok(["message": "reminders refreshed"]) : fail("reminders refresh failed")
   case let other:
-    return ["ok": false, "error": "unknown subcommand: \(other)"]
+    return fail("unknown subcommand: \(other)")
   }
 }
 
 runtime.onResolve = { params in
-  let candidate = params["candidate"] as? [String: Any?] ?? params
-  let metadata = candidate["metadata"] as? [String: Any?] ?? [:]
+  let row = params["row"] as? [String: Any?] ?? [:]
+  let metadata = row["metadata"] as? [String: Any?] ?? [:]
   guard
     let payload = (metadata["payload"] as? String)?.data(using: .utf8),
     let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
     let reminderID = object["id"] as? String, !reminderID.isEmpty
   else {
-    return ["ok": false]
+    return fail("row payload carries no reminder id")
   }
   let result = runOsascript(selectScript(reminderID: reminderID), timeoutSeconds: 10)
-  return ["ok": result.ok]
+  return result.ok ? ok() : fail("reminder selection failed")
 }
 
 runtime.serve()

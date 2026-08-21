@@ -1536,7 +1536,6 @@ final class ConfigLoaderTests: XCTestCase {
     XCTAssertEqual(c.mode.sendKeyIntervalMs, d.mode.sendKeyIntervalMs)
     XCTAssertEqual(c.flashlight.frecencyHalfLifeDays, d.flashlight.frecencyHalfLifeDays)
     XCTAssertEqual(c.flashlight.frecencyMaxBoost, d.flashlight.frecencyMaxBoost)
-    XCTAssertEqual(c.flashlight.snapshotTimeoutMs, d.flashlight.snapshotTimeoutMs)
     XCTAssertEqual(c.plugins.installTimeoutSeconds, d.plugins.installTimeoutSeconds)
     XCTAssertEqual(c.plugins.startupTimeoutSeconds, d.plugins.startupTimeoutSeconds)
     XCTAssertEqual(c.open.ignoredApps, d.open.ignoredApps)

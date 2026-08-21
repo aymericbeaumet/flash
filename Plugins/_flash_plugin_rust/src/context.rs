@@ -1,7 +1,7 @@
-//! The per-process [`Context`] handed to every plugin callback: warm location
-//! stores, host RPC client, config accessors, interval timers, sandboxed data
-//! dirs, structured logging — plus the audited subprocess helpers
-//! [`run_command`] / [`run_osascript`].
+//! The per-process [`Context`] handed to every plugin callback: the
+//! `publish`/`status`/`log` emitters, the typed host RPC client, config
+//! accessors, interval timers, sandboxed data dirs — plus the audited
+//! subprocess helpers [`run_command`] / [`run_osascript`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -14,28 +14,25 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
-use crate::limits::{
-    validate_catalog_candidates, BoundaryViolation, MAX_CANDIDATE_METADATA_KEY_BYTES,
-};
+use crate::emit::Emitter;
 use crate::process;
-use crate::types::{Candidate, CommandResponse, RunningApplication};
-use crate::wire::{ControlSendError, Emitter};
+use crate::types::{Candidate, PerformResponse, RunningApplication};
 
 /// Shared registry of in-flight plugin→host calls, keyed by the request id the
 /// plugin assigned. The serve loop fulfils each entry when the matching host
-/// response arrives. Cloned into [`Context`] so any handler can call the host.
+/// response arrives and drains the registry at teardown so every waiter gets
+/// the `host closed stdin` sentinel. Cloned into [`Context`] so any handler
+/// can call the host.
 pub(crate) type HostPending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
-
-/// Warm in-memory location store, keyed by `source_id`. Plugins keep their
-/// locations here via [`Context::set_locations`]; the SDK runtime serves the
-/// union directly for `sources.snapshot`, so plugin code cannot put I/O on the
-/// catalog-gathering path. This is the pull model — the host holds no candidate
-/// cache of its own. Cloned into [`Context`] (an `Arc`), so an `on_event` write
-/// is visible to the next `sources.snapshot`.
-pub(crate) type WarmLocations = Arc<Mutex<HashMap<String, Arc<Vec<Candidate>>>>>;
 
 const COMMAND_STDOUT_LIMIT: usize = 4 * 1024 * 1024;
 const COMMAND_STDERR_LIMIT: usize = 256 * 1024;
+
+/// Canonical `call_host` sentinels (spec-pinned): `call_host` never errors and
+/// never returns nil — host death and the call timeout arrive as these result
+/// objects instead.
+const HOST_CLOSED_ERROR: &str = "host closed stdin";
+const HOST_TIMEOUT_ERROR: &str = "host call timed out";
 
 /// Focused non-Flash app context returned by
 /// [`Context::normal_mode_target`]. Mirrors the host-side notion of
@@ -53,14 +50,15 @@ pub struct NormalModeTarget {
 pub struct Context {
     pub plugin_id: String,
     pub version: String,
-    pub data_dir: PathBuf,
+    /// `None` when `FLASH_PLUGIN_DATA_DIR` is unset — dir accessors then fail
+    /// loudly instead of quietly littering the current directory.
+    data_dir: Option<PathBuf>,
     pub(crate) emit: Emitter,
     /// User-supplied settings from the `[plugin.<id>]` table of
     /// `~/.config/flash`, delivered as a JSON object (empty when unset).
     config: Value,
     host_pending: HostPending,
     host_counter: Arc<AtomicU64>,
-    locations: WarmLocations,
     running_applications: Arc<Mutex<Vec<RunningApplication>>>,
 }
 
@@ -85,20 +83,29 @@ impl RefreshGate {
 }
 
 impl Context {
+    /// The plugin's sandboxed data directory (`FLASH_PLUGIN_DATA_DIR`).
+    /// Panics when the variable is unset — running outside the host, export
+    /// it explicitly rather than letting state litter a source tree.
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir
+            .clone()
+            .expect("flash-plugin: FLASH_PLUGIN_DATA_DIR is not set (export it to run outside the Flash host)")
+    }
+
     pub fn home_dir(&self) -> PathBuf {
-        self.data_dir.join("home")
+        self.data_dir().join("home")
     }
     pub fn config_dir(&self) -> PathBuf {
-        self.data_dir.join("config")
+        self.data_dir().join("config")
     }
     pub fn cache_dir(&self) -> PathBuf {
-        self.data_dir.join("cache")
+        self.data_dir().join("cache")
     }
     pub fn share_dir(&self) -> PathBuf {
-        self.data_dir.join("share")
+        self.data_dir().join("share")
     }
     pub fn bin_dir(&self) -> PathBuf {
-        self.data_dir.join("bin")
+        self.data_dir().join("bin")
     }
 
     /// Read a string setting from the plugin's `[plugin.<id>]` config,
@@ -116,95 +123,60 @@ impl Context {
         serde_json::from_value(self.config.get(key)?.clone()).ok()
     }
 
+    // -- Notifications ------------------------------------------------------
+
+    /// Publish this plugin's complete catalog (the `publish` notification): a
+    /// full replacement of every row across all of the plugin's sources, each
+    /// row carrying its manifest `sources[].name` in
+    /// [`Candidate::source`]. An empty vector is an authoritative empty. On a
+    /// transient refresh failure simply don't publish — the host keeps the
+    /// last-good catalog, across crashes and restarts. The host validates
+    /// quotas at receipt and rejects a violating publish whole.
+    pub fn publish(&self, rows: Vec<Candidate>) {
+        self.emit.notify("publish", json!({ "rows": rows }));
+    }
+
+    /// Publish status-bar segment values declared by this plugin's
+    /// `status` manifest section (the `status` notification). The host
+    /// exposes each value as `#{plugin:<plugin-id>.<segment>}` in
+    /// `[statusbar].template`. An EMPTY value clears the segment host-side.
+    pub fn status<I, K, V>(&self, segments: I)
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let mut object = serde_json::Map::new();
+        for (name, value) in segments {
+            let name = name.as_ref().trim();
+            let value = value.as_ref().trim();
+            if !name.is_empty() {
+                object.insert(name.to_string(), json!(value));
+            }
+        }
+        self.emit.notify("status", json!({ "segments": object }));
+    }
+
+    /// Structured, content-free logging (the `log` notification): counts,
+    /// stages, elapsed ms, method names — never query text, candidate data,
+    /// clipboard content, or config values.
+    pub fn log(&self, level: &str, message: &str) {
+        self.emit.log(level, message, BTreeMap::new());
+    }
+
+    pub fn log_fields(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
+        self.emit.log(level, message, fields);
+    }
+
+    // -- Host RPC -----------------------------------------------------------
+
     /// Call a host RPC method and await its JSON result. This is the channel
     /// plugins use to reach native capabilities the core explicitly exposes.
-    /// Returns a JSON error object if the host doesn't answer in time.
+    /// Never errors and never returns nil: host death and the 5 s default
+    /// timeout arrive as `{"ok": false, "error": …}` sentinel objects.
     pub async fn call_host(&self, method: &str, params: Value) -> Value {
         self.call_host_timeout(method, params, Duration::from_secs(5))
             .await
-    }
-
-    /// Open a URL through the host (`host.open`): LaunchServices runs
-    /// host-side, so the plugin keeps a fork-free profile. Requires the
-    /// `open` capability.
-    pub async fn open_url(&self, url: &str) -> bool {
-        let response = self.call_host("host.open", json!({ "url": url })).await;
-        response.get("ok").and_then(Value::as_bool) == Some(true)
-    }
-
-    /// Launch or raise an app by bundle id through the host (`host.open`).
-    /// Requires the `open` capability.
-    pub async fn open_app(&self, bundle_id: &str) -> bool {
-        let response = self
-            .call_host("host.open", json!({ "bundle_id": bundle_id }))
-            .await;
-        response.get("ok").and_then(Value::as_bool) == Some(true)
-    }
-
-    /// Replace the system clipboard through the host (`host.clipboard_write`).
-    /// Requires the `clipboard` capability.
-    pub async fn clipboard_write(&self, text: &str) -> bool {
-        let response = self
-            .call_host("host.clipboard_write", json!({ "text": text }))
-            .await;
-        response.get("ok").and_then(Value::as_bool) == Some(true)
-    }
-
-    /// Show a transient host banner (`host.notify`). Requires the `notify`
-    /// capability; the host rate-limits to one banner per plugin per second.
-    pub async fn notify(&self, message: &str, duration_ms: Option<u64>) -> bool {
-        let mut params = json!({ "message": message });
-        if let Some(duration_ms) = duration_ms {
-            params["duration_ms"] = json!(duration_ms);
-        }
-        let response = self.call_host("host.notify", params).await;
-        response.get("ok").and_then(Value::as_bool) == Some(true)
-    }
-
-    /// Read one key from the host-managed KV store in the plugin's data dir
-    /// (`host.storage_get`). No capability required.
-    pub async fn storage_get(&self, key: &str) -> Option<String> {
-        let response = self
-            .call_host("host.storage_get", json!({ "key": key }))
-            .await;
-        if response.get("ok").and_then(Value::as_bool) != Some(true) {
-            return None;
-        }
-        response
-            .get("value")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    }
-
-    /// Write (or, with `None`, delete) one key in the host-managed KV store
-    /// (`host.storage_set`). Values are capped at 64 KiB, tables at 256 keys.
-    pub async fn storage_set(&self, key: &str, value: Option<&str>) -> bool {
-        let response = self
-            .call_host("host.storage_set", json!({ "key": key, "value": value }))
-            .await;
-        response.get("ok").and_then(Value::as_bool) == Some(true)
-    }
-
-    /// Fetch an allowlisted HTTPS URL through the host (`host.fetch`). The
-    /// host enforces the manifest's `fetch_urls` prefixes, an 8-second
-    /// timeout, and a 1 MiB UTF-8 response cap — the plugin itself needs no
-    /// network access (declare the `network_fetch` capability instead of
-    /// `network` and keep a fully network-denied sandbox).
-    pub async fn fetch(&self, url: &str) -> Result<String, String> {
-        let response = self
-            .call_host_timeout("host.fetch", json!({ "url": url }), Duration::from_secs(10))
-            .await;
-        if response.get("ok").and_then(Value::as_bool) != Some(true) {
-            let error = response
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("host.fetch failed");
-            return Err(error.to_string());
-        }
-        match response.get("body").and_then(Value::as_str) {
-            Some(body) => Ok(body.to_string()),
-            None => Err("host.fetch response missing body".to_string()),
-        }
     }
 
     pub async fn call_host_timeout(&self, method: &str, params: Value, timeout: Duration) -> Value {
@@ -216,27 +188,25 @@ impl Context {
         }
         let outcome = tokio::time::timeout(timeout, async {
             self.emit.request(id, method, params).await?;
-            rx.await.map_err(|_| ControlSendError::Closed)
+            rx.await.map_err(|_| crate::emit::EmitError::Closed)
         })
         .await;
+        if !matches!(outcome, Ok(Ok(_))) {
+            if let Ok(mut pending) = self.host_pending.lock() {
+                pending.remove(&id);
+            }
+        }
         match outcome {
             Ok(Ok(value)) => value,
-            Ok(Err(ControlSendError::Encoding(_))) => {
-                if let Ok(mut pending) = self.host_pending.lock() {
-                    pending.remove(&id);
-                }
+            // An outbound request above the frame cap is a plugin bug; the
+            // free-form diagnostic stays content-free.
+            Ok(Err(crate::emit::EmitError::Rejected)) => {
                 json!({ "ok": false, "error": "host call exceeded outbound frame limit" })
             }
-            Ok(Err(ControlSendError::Closed)) => {
-                if let Ok(mut pending) = self.host_pending.lock() {
-                    pending.remove(&id);
-                }
-                json!({ "ok": false, "error": "host call output closed" })
+            Ok(Err(crate::emit::EmitError::Closed)) => {
+                json!({ "ok": false, "error": HOST_CLOSED_ERROR })
             }
             Err(_) => {
-                if let Ok(mut pending) = self.host_pending.lock() {
-                    pending.remove(&id);
-                }
                 self.log_fields(
                     "warn",
                     "[plugin] host RPC timed out",
@@ -249,17 +219,45 @@ impl Context {
                         ("timeout_ms".to_string(), timeout.as_millis().to_string()),
                     ]),
                 );
-                json!({ "ok": false, "error": "host call timed out" })
+                json!({ "ok": false, "error": HOST_TIMEOUT_ERROR })
             }
         }
     }
 
+    // -- Typed host RPC wrappers (one per registry method) ------------------
+
+    /// Probe host liveness (`host.ping`).
+    pub async fn ping_host(&self) -> bool {
+        ok(&self.call_host("host.ping", json!({})).await)
+    }
+
+    /// Fetch an allowlisted HTTPS URL through the host (`host.fetch`). The
+    /// host enforces the manifest's `fetch_urls` prefixes, an 8-second
+    /// timeout, and a 1 MiB UTF-8 response cap — the plugin itself needs no
+    /// network access (declare the `network_fetch` capability instead of
+    /// `network` and keep a fully network-denied sandbox).
+    pub async fn fetch(&self, url: &str) -> Result<String, String> {
+        let response = self
+            .call_host_timeout("host.fetch", json!({ "url": url }), Duration::from_secs(10))
+            .await;
+        if !ok(&response) {
+            let error = response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("host.fetch failed");
+            return Err(error.to_string());
+        }
+        match response.get("body").and_then(Value::as_str) {
+            Some(body) => Ok(body.to_string()),
+            None => Err("host.fetch response missing body".to_string()),
+        }
+    }
+
     /// Query the host for the focused non-Flash app context — the same value
-    /// the host treats as the "normal-mode target". Returns `None` when no
-    /// such app is focused. Plugins use this when they need to capture or
-    /// reactivate the user's working context across mode transitions: the
-    /// `core:focus.changed` stream is insufficient because Flash itself is the
-    /// focused process while normal mode is active.
+    /// the host treats as the "normal-mode target" (`host.normal_mode_target`).
+    /// Returns `None` when no such app is focused. The `core:focus.changed`
+    /// stream is insufficient because Flash itself is the focused process
+    /// while normal mode is active.
     pub async fn normal_mode_target(&self) -> Option<NormalModeTarget> {
         let result = self.call_host("host.normal_mode_target", json!({})).await;
         if !result
@@ -281,63 +279,168 @@ impl Context {
         Some(NormalModeTarget { pid, bundle_id })
     }
 
-    /// Store this plugin's warm locations for `source_id`, replacing any
-    /// previous set. Nothing is sent to the host — the plugin owns its
-    /// locations in memory and the SDK runtime serves them directly when the
-    /// host requests `sources.snapshot`. Call it whenever the plugin's locations
-    /// change (`on_start`, `on_event`, polls).
-    ///
-    /// Passing an empty vector is an authoritative successful clear. Refresh
-    /// code must model source failure separately (for example
-    /// `Result<Vec<Candidate>, Failure>`): publish every `Ok`, including
-    /// `Ok([])`, and preserve the last-good vector only for `Err`. Publications
-    /// outside the SDK's count, field, or encoded-byte limits are rejected
-    /// atomically with a content-free warning and also preserve the last-good
-    /// vector.
-    ///
-    /// [`warm_locations`]: Context::warm_locations
-    pub fn set_locations(&self, source_id: &str, candidates: Vec<Candidate>) {
-        if source_id.len() > MAX_CANDIDATE_METADATA_KEY_BYTES {
-            self.log_fields(
-                "warn",
-                "[plugin] rejected catalog publication",
-                BoundaryViolation::new(
-                    "catalog",
-                    "source_id_bytes",
-                    None,
-                    source_id.len(),
-                    MAX_CANDIDATE_METADATA_KEY_BYTES,
-                )
-                .log_fields(),
-            );
-            return;
-        }
-        if let Err(violation) = validate_catalog_candidates(&candidates) {
-            self.log_fields(
-                "warn",
-                "[plugin] rejected catalog publication",
-                violation.log_fields(),
-            );
-            return;
-        }
-        let candidates = Arc::new(candidates);
-        if let Ok(mut store) = self.locations.lock() {
-            store.insert(source_id.to_string(), candidates);
-        }
+    /// Activate (raise) the app owning `pid` (`host.activate`). Requires the
+    /// `app_control` capability.
+    pub async fn activate(&self, pid: i64) -> bool {
+        ok(&self.call_host("host.activate", json!({ "pid": pid })).await)
     }
 
-    /// Whether this source has published an initial warm snapshot. An
-    /// authoritative empty vector counts as published.
-    pub fn has_locations(&self, source_id: &str) -> bool {
-        self.locations
-            .lock()
-            .map(|store| store.contains_key(source_id))
-            .unwrap_or(false)
+    /// Open a URL through the host (`host.open`): LaunchServices runs
+    /// host-side, so the plugin keeps a fork-free profile. Requires the
+    /// `open` capability.
+    pub async fn open_url(&self, url: &str) -> bool {
+        ok(&self.call_host("host.open", json!({ "url": url })).await)
     }
 
-    pub(crate) fn canonical_location_source_id(&self) -> String {
-        format!("plugin:{}", self.plugin_id)
+    /// Launch or raise an app by bundle id through the host (`host.open`).
+    /// Requires the `open` capability.
+    pub async fn open_app(&self, bundle_id: &str) -> bool {
+        ok(&self
+            .call_host("host.open", json!({ "bundle_id": bundle_id }))
+            .await)
     }
+
+    /// Post an NX_SYSTEM_DEFINED media key host-side (`host.post_media_key`).
+    /// Requires the `media_keys` capability.
+    pub async fn post_media_key(&self, key_code: i64) -> bool {
+        ok(&self
+            .call_host("host.post_media_key", json!({ "key_code": key_code }))
+            .await)
+    }
+
+    /// Read the host's process table (`host.process_table`), optionally
+    /// sampling CPU over `sample_window_ms`. Returns the raw result object
+    /// (rows under `"processes"`). Requires the `process_control` capability.
+    pub async fn process_table(&self, sample_window_ms: Option<u64>) -> Value {
+        let mut params = json!({});
+        if let Some(window) = sample_window_ms {
+            params["sample_window_ms"] = json!(window);
+        }
+        self.call_host("host.process_table", params).await
+    }
+
+    /// SIGTERM `pid` host-side (`host.signal`). Requires the
+    /// `process_control` capability.
+    pub async fn signal(&self, pid: i64) -> Result<(), String> {
+        let response = self.call_host("host.signal", json!({ "pid": pid })).await;
+        if ok(&response) {
+            return Ok(());
+        }
+        Err(response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("host.signal failed")
+            .to_string())
+    }
+
+    /// Replace the system clipboard through the host (`host.clipboard_write`).
+    /// Requires the `clipboard` capability.
+    pub async fn clipboard_write(&self, text: &str) -> bool {
+        ok(&self
+            .call_host("host.clipboard_write", json!({ "text": text }))
+            .await)
+    }
+
+    /// Show a transient host banner (`host.notify`). Requires the `notify`
+    /// capability; the host rate-limits to one banner per plugin per second.
+    pub async fn notify(&self, message: &str, duration_ms: Option<u64>) -> bool {
+        let mut params = json!({ "message": message });
+        if let Some(duration_ms) = duration_ms {
+            params["duration_ms"] = json!(duration_ms);
+        }
+        ok(&self.call_host("host.notify", params).await)
+    }
+
+    /// Read one key from the host-managed KV store in the plugin's data dir
+    /// (`host.storage_get`). No capability required.
+    pub async fn storage_get(&self, key: &str) -> Option<String> {
+        let response = self
+            .call_host("host.storage_get", json!({ "key": key }))
+            .await;
+        if !ok(&response) {
+            return None;
+        }
+        response
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
+    /// Write (or, with `None`, delete) one key in the host-managed KV store
+    /// (`host.storage_set`). Values are capped at 64 KiB, tables at 256 keys.
+    pub async fn storage_set(&self, key: &str, value: Option<&str>) -> bool {
+        ok(&self
+            .call_host("host.storage_set", json!({ "key": key, "value": value }))
+            .await)
+    }
+
+    /// Post a keystroke plan to a target app (`host.post_keys`), e.g.
+    /// `{"pid": …, "keys": [{"key_code": …, "modifiers": […]}], "interval_ms": …}`.
+    /// Requires the `accessibility` capability.
+    pub async fn post_keys(&self, params: Value) -> bool {
+        ok(&self.call_host("host.post_keys", params).await)
+    }
+
+    /// Post one modified chord through the host's session event stream for
+    /// macOS-owned shortcuts (`host.post_global_key`). Returns the raw result
+    /// object. Requires the `accessibility` capability.
+    pub async fn post_global_key(&self, key_code: i64, modifiers: &[&str]) -> Value {
+        self.call_host(
+            "host.post_global_key",
+            json!({ "key_code": key_code, "modifiers": modifiers }),
+        )
+        .await
+    }
+
+    /// BFS-walk an app's AX subtree through the host broker
+    /// (`host.ax_snapshot`); nodes come back flat with opaque handles,
+    /// geometry in NSScreen coordinates. Returns the raw result object.
+    /// Requires the `accessibility` capability.
+    pub async fn ax_snapshot(&self, params: Value) -> Value {
+        self.call_host("host.ax_snapshot", params).await
+    }
+
+    /// [`ax_snapshot`](Context::ax_snapshot) with an explicit deadline for
+    /// hint-discovery paths tighter than the 5 s default.
+    pub async fn ax_snapshot_timeout(&self, params: Value, timeout: Duration) -> Value {
+        self.call_host_timeout("host.ax_snapshot", params, timeout)
+            .await
+    }
+
+    /// Perform an AX action on a broker handle (`host.ax_perform`). Requires
+    /// the `accessibility` capability.
+    pub async fn ax_perform(&self, handle: u64, action: &str) -> bool {
+        ok(&self
+            .call_host(
+                "host.ax_perform",
+                json!({ "handle": handle, "action": action }),
+            )
+            .await)
+    }
+
+    /// Set a boolean AX attribute on a broker handle (`host.ax_set`).
+    /// Requires the `accessibility` capability.
+    pub async fn ax_set(&self, handle: u64, attribute: &str, value: bool) -> bool {
+        ok(&self
+            .call_host(
+                "host.ax_set",
+                json!({ "handle": handle, "attribute": attribute, "value": value }),
+            )
+            .await)
+    }
+
+    /// Select `child` within `parent` through the AX broker
+    /// (`host.ax_select_child`). Requires the `accessibility` capability.
+    pub async fn ax_select_child(&self, parent: u64, child: u64) -> bool {
+        ok(&self
+            .call_host(
+                "host.ax_select_child",
+                json!({ "parent": parent, "child": child }),
+            )
+            .await)
+    }
+
+    // -- Runtime state ------------------------------------------------------
 
     pub(crate) fn set_running_applications(&self, applications: Vec<RunningApplication>) {
         if let Ok(mut current) = self.running_applications.lock() {
@@ -345,9 +448,9 @@ impl Context {
         }
     }
 
-    /// Current host-owned running-app snapshot. It is available during
-    /// `on_start` from the initialize handshake, then replaced atomically by
-    /// the SDK before each serialized `core:apps.changed` callback.
+    /// Current host-owned running-app snapshot, fed by `core:apps.changed`
+    /// events (the host delivers the first one right after initialize) and
+    /// replaced atomically by the SDK before each serialized callback.
     pub fn running_applications(&self) -> Vec<RunningApplication> {
         self.running_applications
             .lock()
@@ -373,74 +476,10 @@ impl Context {
         })
     }
 
-    /// The union of every warm location set this plugin has published, ordered
-    /// by `source_id` for determinism. The SDK runtime returns this directly;
-    /// the host applies its own fuzzy narrowing against the query.
-    pub fn warm_locations(&self) -> Vec<Candidate> {
-        let entries = {
-            let Ok(store) = self.locations.lock() else {
-                return Vec::new();
-            };
-            let mut entries = store
-                .iter()
-                .map(|(source_id, candidates)| (source_id.clone(), Arc::clone(candidates)))
-                .collect::<Vec<_>>();
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            entries
-        };
-        entries
-            .into_iter()
-            .flat_map(|(_, candidates)| candidates.as_ref().clone())
-            .collect()
-    }
-
-    pub(crate) fn validated_warm_locations(&self) -> Result<Vec<Candidate>, BoundaryViolation> {
-        let candidates = self.warm_locations();
-        validate_catalog_candidates(&candidates)?;
-        Ok(candidates)
-    }
-
-    /// Publish status-bar segment values declared by this plugin's
-    /// `status` manifest section. The host exposes each value as
-    /// `#{plugin:<plugin-id>.<segment>}` in `[statusbar].template`.
-    /// An EMPTY value clears the segment host-side (the wire contract) —
-    /// dropping empties here used to make Rust the only SDK that could
-    /// never clear a segment it had published.
-    pub fn emit_status_segments<I, K, V>(&self, segments: I)
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str>,
-        V: AsRef<str>,
-    {
-        let mut object = serde_json::Map::new();
-        for (name, value) in segments {
-            let name = name.as_ref().trim();
-            let value = value.as_ref().trim();
-            if !name.is_empty() {
-                object.insert(name.to_string(), json!(value));
-            }
-        }
-        self.emit
-            .notify("status.updated", json!({ "segments": object }));
-    }
-
-    /// Declare this plugin's warm catalog stale (`sources.invalidated`): an
-    /// open flashlight session re-pulls it, a closed one ignores the signal
-    /// (the next open pulls fresh stores anyway). Host-side rate limit: one
-    /// accepted notification per second.
-    pub fn invalidate_sources(&self) {
-        self.emit.notify("sources.invalidated", json!({}));
-    }
-
-    pub fn log(&self, level: &str, message: &str) {
-        self.emit.log(level, message, BTreeMap::new());
-    }
-
-    pub fn log_fields(&self, level: &str, message: &str, fields: BTreeMap<String, String>) {
-        self.emit.log(level, message, fields);
-    }
-
     pub(crate) async fn prepare_dirs(&self) {
+        if self.data_dir.is_none() {
+            return;
+        }
         for dir in [
             self.home_dir(),
             self.config_dir(),
@@ -453,6 +492,10 @@ impl Context {
     }
 }
 
+fn ok(response: &Value) -> bool {
+    response.get("ok").and_then(Value::as_bool) == Some(true)
+}
+
 fn env_or(name: &str, fallback: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| fallback.to_string())
 }
@@ -463,10 +506,10 @@ pub(crate) fn context_from_env(
     host_pending: HostPending,
     host_counter: Arc<AtomicU64>,
 ) -> Context {
-    let data_dir = PathBuf::from(env_or(
-        "FLASH_PLUGIN_DATA_DIR",
-        Path::new(".").to_str().unwrap_or("."),
-    ));
+    let data_dir = std::env::var("FLASH_PLUGIN_DATA_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
     let config = std::env::var("FLASH_PLUGIN_CONFIG")
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
@@ -480,7 +523,6 @@ pub(crate) fn context_from_env(
         config,
         host_pending,
         host_counter,
-        locations: Arc::new(Mutex::new(HashMap::new())),
         running_applications: Arc::new(Mutex::new(Vec::new())),
     }
 }
@@ -490,8 +532,8 @@ pub(crate) fn context_from_env(
 // ---------------------------------------------------------------------------
 
 /// The result of running a subprocess via `run_command` / `run_osascript`:
-/// exit success plus captured stdout/stderr. `into_command` folds it into a
-/// `CommandResponse` (trimmed + length-capped). This lives in the SDK so the
+/// exit success plus captured stdout/stderr. `into_perform` folds it into a
+/// `PerformResponse` (trimmed + length-capped). This lives in the SDK so the
 /// subprocess sandbox policy has exactly one audited home instead of being
 /// copy-pasted into every plugin.
 #[derive(Default)]
@@ -503,12 +545,17 @@ pub struct CommandOutput {
 }
 
 impl CommandOutput {
-    pub fn into_command(self) -> CommandResponse {
-        CommandResponse {
-            ok: self.ok,
-            stdout: (!self.stdout.trim().is_empty()).then(|| shorten(&self.stdout)),
-            error: (!self.ok && !self.stderr.trim().is_empty()).then(|| shorten(&self.stderr)),
-            ..Default::default()
+    pub fn into_perform(self) -> PerformResponse {
+        if self.ok {
+            let mut response = PerformResponse::ok();
+            if !self.stdout.trim().is_empty() {
+                response = response.message(shorten(&self.stdout));
+            }
+            response
+        } else if self.stderr.trim().is_empty() {
+            PerformResponse::fail(format!("command exited with status {}", self.status))
+        } else {
+            PerformResponse::fail(shorten(&self.stderr))
         }
     }
 }
@@ -552,7 +599,7 @@ pub async fn run_command(ctx: &Context, argv: &[String], timeout: Duration) -> C
     let mut command = tokio::process::Command::new(program);
     command
         .args(args)
-        .current_dir(&ctx.data_dir)
+        .current_dir(ctx.data_dir())
         .env("HOME", ctx.home_dir())
         .env("XDG_CONFIG_HOME", ctx.config_dir())
         .env("XDG_CACHE_HOME", ctx.cache_dir())
@@ -649,10 +696,9 @@ pub fn shorten(value: &str) -> String {
     format!("{head}...")
 }
 
-/// Assemble a [`Context`] from parts with fresh host-RPC and warm-store
-/// state. Shared by the crate-internal tests and the public
-/// [`crate::testing`] harness; the production path stays
-/// [`context_from_env`].
+/// Assemble a [`Context`] from parts with fresh host-RPC state. Shared by the
+/// crate-internal tests and the public [`crate::testing`] harness; the
+/// production path stays [`context_from_env`].
 pub(crate) fn assemble_context(
     plugin_id: String,
     version: String,
@@ -663,46 +709,36 @@ pub(crate) fn assemble_context(
     Context {
         plugin_id,
         version,
-        data_dir,
+        data_dir: Some(data_dir),
         emit,
         config,
         host_pending: Arc::new(Mutex::new(HashMap::new())),
         host_counter: Arc::new(AtomicU64::new(0)),
-        locations: Arc::new(Mutex::new(HashMap::new())),
         running_applications: Arc::new(Mutex::new(Vec::new())),
     }
 }
 
 #[cfg(test)]
-pub(crate) fn test_context() -> Context {
-    use tokio::sync::mpsc;
-
-    let (control_tx, _control_rx) = mpsc::channel(16);
-    let (telemetry_tx, _telemetry_rx) = mpsc::channel(16);
-    assemble_context(
+pub(crate) fn test_context_with_rx() -> (Context, tokio::sync::mpsc::Receiver<Vec<u8>>) {
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    let ctx = assemble_context(
         "test".to_string(),
         "0.0.0".to_string(),
         PathBuf::from("."),
-        Emitter::new(control_tx, telemetry_tx),
+        Emitter::new(tx),
         json!({}),
-    )
+    );
+    (ctx, rx)
+}
+
+#[cfg(test)]
+pub(crate) fn test_context() -> Context {
+    test_context_with_rx().0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::limits::MAX_CANDIDATE_TITLE_BYTES;
-
-    #[test]
-    fn authoritative_empty_locations_count_as_initialized() {
-        let ctx = test_context();
-        assert!(!ctx.has_locations("plugin:test"));
-
-        ctx.set_locations("plugin:test", Vec::new());
-
-        assert!(ctx.has_locations("plugin:test"));
-        assert!(ctx.warm_locations().is_empty());
-    }
 
     #[test]
     fn running_applications_snapshot_is_clone_isolated() {
@@ -722,19 +758,29 @@ mod tests {
         assert_eq!(second_read[0].pid, 42);
     }
 
-    #[test]
-    fn invalid_catalog_publication_preserves_last_good_snapshot() {
+    #[tokio::test]
+    async fn call_host_returns_the_closed_sentinel_when_the_writer_is_gone() {
         let ctx = test_context();
-        ctx.set_locations("plugin:test", vec![Candidate::new("last good")]);
+        ctx.emit.close();
 
-        ctx.set_locations(
-            "plugin:test",
-            vec![Candidate::new("x".repeat(MAX_CANDIDATE_TITLE_BYTES + 1))],
-        );
+        let result = ctx.call_host("host.ping", json!({})).await;
 
-        let candidates = ctx.warm_locations();
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].title, "last good");
+        assert_eq!(result["ok"], json!(false));
+        assert_eq!(result["error"], json!(HOST_CLOSED_ERROR));
+    }
+
+    #[tokio::test]
+    async fn call_host_returns_the_timeout_sentinel_when_no_reply_arrives() {
+        // Keep the outbound receiver alive so the request is written and the
+        // failure is genuinely the missing reply, not a closed channel.
+        let (ctx, _rx) = test_context_with_rx();
+
+        let result = ctx
+            .call_host_timeout("host.ping", json!({}), Duration::from_millis(10))
+            .await;
+
+        assert_eq!(result["error"], json!(HOST_TIMEOUT_ERROR));
+        assert!(ctx.host_pending.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -771,6 +817,29 @@ mod tests {
             &expected_probe_failure,
             Duration::from_millis(1)
         ));
+    }
+
+    #[test]
+    fn command_output_folds_into_the_perform_trichotomy() {
+        let ok = CommandOutput {
+            ok: true,
+            stdout: " done \n".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            ok.into_perform().to_value(),
+            serde_json::json!({ "ok": true, "message": "done" })
+        );
+
+        let failed = CommandOutput {
+            ok: false,
+            status: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            failed.into_perform().to_value(),
+            serde_json::json!({ "ok": false, "error": "command exited with status 2" })
+        );
     }
 
     #[tokio::test]

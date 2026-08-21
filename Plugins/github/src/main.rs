@@ -7,9 +7,9 @@
 //!     --json title,url,repository`
 //!
 //! Rows carry real `https://` URLs, so selection opens natively through
-//! LaunchServices — no resolver. The refresh runs in `on_start` under an 8 s
-//! budget (authoritative empty on timeout, history-style) and then every
-//! 600 s.
+//! LaunchServices — no resolver. The refresh runs in `on_start` (after the
+//! initialize reply) and then every 600 s; each healthy cycle pushes one
+//! full-replacement `publish` carrying both sources' rows.
 //!
 //! ## Degradation
 //!
@@ -17,8 +17,9 @@
 //! empty catalogs and logs once at info — no crash, no retry spin; one
 //! delayed retry is scheduled after a degraded startup (gh may still be
 //! signing in / the network may still be coming up), then the 600 s interval
-//! is the only cadence. Transient failures (network blip, GitHub 5xx) keep
-//! the last-good snapshot instead.
+//! is the only cadence. Transient failures (network blip, GitHub 5xx) skip
+//! the publish while any source is still unknown, so the host keeps its
+//! last-good catalog.
 //!
 //! ## Sandbox posture (deliberate)
 //!
@@ -37,15 +38,13 @@ use flash_plugin::{run, Candidate, Context, RefreshGate};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::OnceCell;
 
-const SOURCE_ID: &str = "plugin:github";
 const SOURCE_REPOS: &str = "github.repos";
 const SOURCE_PRS: &str = "github.prs";
 
-const STARTUP_REFRESH_BUDGET: Duration = Duration::from_secs(8);
 const REFRESH_SECONDS: u64 = 600;
 /// One delayed retry after a degraded startup; afterwards only the interval.
 const RETRY_DELAY: Duration = Duration::from_secs(60);
@@ -66,12 +65,22 @@ const GH_PREFIXES: [&str; 4] = ["/opt/homebrew", "/usr/local", "/opt/local", "/u
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static GH_PATH: LazyLock<OnceCell<Option<String>>> = LazyLock::new(OnceCell::new);
-/// Fingerprint of the last published union: `sources.invalidated` fires only
-/// when a refresh actually changed content.
-static LAST_FINGERPRINT: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+/// Per-source last-known rows. `publish` is a full replacement across every
+/// source, so a cycle only ships once each source has a known state — a
+/// transient failure before then skips the publish and the host keeps its
+/// last-good catalog.
+static CATALOG: Mutex<Catalog> = Mutex::new(Catalog {
+    repos: None,
+    prs: None,
+});
 /// One info-level degradation log per process, not one per cycle.
 static DEGRADED_LOGGED: AtomicBool = AtomicBool::new(false);
 static RETRY_SCHEDULED: AtomicBool = AtomicBool::new(false);
+
+struct Catalog {
+    repos: Option<Vec<Candidate>>,
+    prs: Option<Vec<Candidate>>,
+}
 
 struct Github;
 
@@ -79,30 +88,9 @@ flash_plugin::plugin!(Github);
 
 impl FlashPlugin for Github {
     async fn on_start(&self, ctx: Context) {
-        let healthy =
-            match tokio::time::timeout(STARTUP_REFRESH_BUDGET, refresh_catalogs(&ctx)).await {
-                Ok(healthy) => healthy,
-                Err(_) => {
-                    ctx.log_fields(
-                        "warn",
-                        "[github] initial warm refresh timed out",
-                        BTreeMap::from([
-                            (
-                                "budget_ms".to_string(),
-                                STARTUP_REFRESH_BUDGET.as_millis().to_string(),
-                            ),
-                            ("outcome".to_string(), "timed_out_delayed_retry".to_string()),
-                        ]),
-                    );
-                    false
-                }
-            };
-        // The readiness gate: both sources publish under the canonical key —
-        // authoritative empty when gh gave us nothing.
-        if !ctx.has_locations(SOURCE_ID) {
-            publish_empty(&ctx);
-        }
-        if !healthy {
+        // Runs after the initialize reply, so a slow gh never delays the
+        // handshake; the flashlight reads the host store meanwhile.
+        if !refresh_catalogs(&ctx).await {
             schedule_single_retry(&ctx);
         }
         drop(
@@ -155,33 +143,24 @@ async fn refresh_catalogs(ctx: &Context) -> bool {
             let prs = fetch_prs(&ctx, &gh);
             let (repos, prs) = tokio::join!(repos, prs);
             let mut healthy = true;
-            let mut count = 0usize;
             for (source, outcome) in [(SOURCE_REPOS, repos), (SOURCE_PRS, prs)] {
                 match outcome {
-                    FetchOutcome::Rows(rows) => {
-                        count += rows.len();
-                        ctx.set_locations(source_key(source), rows);
-                    }
+                    FetchOutcome::Rows(rows) => store_rows(source, rows),
                     FetchOutcome::Unusable(reason) => {
                         healthy = false;
-                        ctx.set_locations(source_key(source), Vec::new());
+                        store_rows(source, Vec::new());
                         log_degraded_once(&ctx, reason);
                     }
-                    FetchOutcome::Transient => {
-                        healthy = false;
-                        // Keep last-good; seed authoritative empty only when
-                        // nothing was ever published (the readiness gate).
-                        if !ctx.has_locations(source_key(source)) {
-                            ctx.set_locations(source_key(source), Vec::new());
-                        }
-                    }
+                    // Keep the last-known rows; while a source has none the
+                    // union stays unpublishable and the host keeps last-good.
+                    FetchOutcome::Transient => healthy = false,
                 }
             }
-            invalidate_on_change(&ctx);
+            let count = publish_union(&ctx);
             log_refresh(
                 &ctx,
                 if healthy { "ok" } else { "degraded" },
-                count,
+                count.unwrap_or(0),
                 started_at,
             );
             healthy
@@ -189,38 +168,35 @@ async fn refresh_catalogs(ctx: &Context) -> bool {
         .await
 }
 
-/// Both sources publish under per-source keys prefixed by the canonical
-/// aggregate id, so `has_locations(SOURCE_ID)` reflects the repos store and
-/// the union serves `sources.snapshot`.
-fn source_key(source: &str) -> &'static str {
-    match source {
-        SOURCE_PRS => "plugin:github/prs",
-        _ => SOURCE_ID,
+fn store_rows(source: &str, rows: Vec<Candidate>) {
+    if let Ok(mut catalog) = CATALOG.lock() {
+        match source {
+            SOURCE_PRS => catalog.prs = Some(rows),
+            _ => catalog.repos = Some(rows),
+        }
     }
 }
 
 fn publish_empty(ctx: &Context) {
-    ctx.set_locations(source_key(SOURCE_REPOS), Vec::new());
-    ctx.set_locations(source_key(SOURCE_PRS), Vec::new());
+    store_rows(SOURCE_REPOS, Vec::new());
+    store_rows(SOURCE_PRS, Vec::new());
+    publish_union(ctx);
 }
 
-/// Signal staleness only when the published union actually changed.
-fn invalidate_on_change(ctx: &Context) {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    for candidate in ctx.warm_locations() {
-        candidate.title.hash(&mut hasher);
-        candidate.url.hash(&mut hasher);
-        candidate.meta("source").hash(&mut hasher);
-    }
-    let fingerprint = hasher.finish();
-    let previous = LAST_FINGERPRINT
-        .lock()
-        .map(|mut last| last.replace(fingerprint))
-        .unwrap_or(None);
-    if previous.is_some_and(|last| last != fingerprint) {
-        ctx.invalidate_sources();
-    }
+/// Publish the repos+prs union as one full replacement; `None` (nothing
+/// sent) while any source is still unknown.
+fn publish_union(ctx: &Context) -> Option<usize> {
+    let rows = {
+        let catalog = CATALOG.lock().ok()?;
+        let (repos, prs) = (catalog.repos.as_ref()?, catalog.prs.as_ref()?);
+        let mut rows = Vec::with_capacity(repos.len() + prs.len());
+        rows.extend(repos.iter().cloned());
+        rows.extend(prs.iter().cloned());
+        rows
+    };
+    let count = rows.len();
+    ctx.publish(rows);
+    Some(count)
 }
 
 async fn fetch_repos(ctx: &Context, gh: &str) -> FetchOutcome {
@@ -328,11 +304,9 @@ fn parse_repos(raw: &str) -> Option<Vec<Candidate>> {
             .take(REPO_ROWS_LIMIT)
             .filter(|row| !row.name_with_owner.trim().is_empty() && acceptable_url(&row.url))
             .map(|row| {
-                Candidate::new(tidy(&row.name_with_owner))
+                Candidate::new(SOURCE_REPOS, tidy(&row.name_with_owner))
                     .url(&row.url)
                     .kind("repo")
-                    .source_id(SOURCE_ID)
-                    .source(SOURCE_REPOS)
             })
             .collect(),
     )
@@ -345,11 +319,9 @@ fn parse_prs(raw: &str) -> Option<Vec<Candidate>> {
             .take(PR_ROWS_LIMIT)
             .filter(|row| !row.title.trim().is_empty() && acceptable_url(&row.url))
             .map(|row| {
-                let mut candidate = Candidate::new(tidy(&row.title))
+                let mut candidate = Candidate::new(SOURCE_PRS, tidy(&row.title))
                     .url(&row.url)
-                    .kind("pull_request")
-                    .source_id(SOURCE_ID)
-                    .source(SOURCE_PRS);
+                    .kind("pull_request");
                 let repo = row
                     .repository
                     .map(|repo| repo.name_with_owner)
@@ -568,12 +540,6 @@ mod tests {
     ]"#;
 
     #[test]
-    fn startup_budget_stays_below_host_initialize_deadline() {
-        assert!(STARTUP_REFRESH_BUDGET < Duration::from_secs(15));
-        assert!(GH_TIMEOUT < STARTUP_REFRESH_BUDGET);
-    }
-
-    #[test]
     fn repo_rows_shape_titles_urls_and_sources() {
         let rows = parse_repos(REPOS_FIXTURE).unwrap();
         assert_eq!(rows.len(), 2);
@@ -583,8 +549,7 @@ mod tests {
             Some("https://github.com/aymericbeaumet/flash")
         );
         assert_eq!(rows[0].meta("kind"), Some("repo"));
-        assert_eq!(rows[0].meta("source"), Some(SOURCE_REPOS));
-        assert_eq!(rows[0].meta("source_id"), Some(SOURCE_ID));
+        assert_eq!(rows[0].source, SOURCE_REPOS);
     }
 
     #[test]
@@ -593,7 +558,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].title, "feat(plugins): add github catalogs");
         assert_eq!(rows[0].meta("subtitle"), Some("aymericbeaumet/flash"));
-        assert_eq!(rows[0].meta("source"), Some(SOURCE_PRS));
+        assert_eq!(rows[0].source, SOURCE_PRS);
         assert_eq!(rows[1].meta("subtitle"), None);
     }
 
@@ -660,15 +625,29 @@ mod tests {
         )));
     }
 
+    /// One sequential test: `CATALOG` is process-global state, so the
+    /// unknown-source and authoritative-empty behaviors are exercised in
+    /// order instead of racing across parallel tests.
     #[tokio::test]
-    async fn empty_publication_counts_as_authoritative_for_both_sources() {
-        let harness = Harness::new("github");
+    async fn union_publishes_only_once_every_source_is_known() {
+        let mut harness = Harness::new("github");
         let ctx = harness.context();
+        if let Ok(mut catalog) = CATALOG.lock() {
+            catalog.repos = Some(vec![Candidate::new(SOURCE_REPOS, "a/b")]);
+            catalog.prs = None;
+        }
 
+        // While prs is unknown nothing ships — the host keeps last-good.
+        assert!(publish_union(&ctx).is_none());
+        assert!(harness.drain_published_rows().is_none());
+
+        store_rows(SOURCE_PRS, Vec::new());
+        assert_eq!(publish_union(&ctx), Some(1));
+        assert_eq!(harness.drain_published_rows().unwrap().len(), 1);
+
+        // A degraded gh degrades to one authoritative empty catalog.
         publish_empty(&ctx);
-
-        assert!(ctx.has_locations(SOURCE_ID));
-        assert!(ctx.has_locations(source_key(SOURCE_PRS)));
-        assert!(ctx.warm_locations().is_empty());
+        let rows = harness.drain_published_rows().expect("one publish frame");
+        assert!(rows.is_empty());
     }
 }

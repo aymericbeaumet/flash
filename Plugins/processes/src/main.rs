@@ -2,11 +2,9 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use flash_plugin::{
-    run, Candidate, CommandRequest, CommandResponse, Context, Event, RefreshGate, ResolveResponse,
-};
+use flash_plugin::{run, Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate};
 
-const SOURCE_ID: &str = "plugin:processes";
+const SOURCE_PROCESSES: &str = "processes.processes";
 const POLL_SECONDS: u64 = 10;
 const SLOW_REFRESH_MS: u128 = 1_000;
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
@@ -17,10 +15,11 @@ flash_plugin::plugin!(Processes);
 
 impl FlashPlugin for Processes {
     async fn on_start(&self, ctx: Context) {
-        let initial_succeeded = refresh_candidates(&ctx).await;
-        if should_publish_degraded_initial(initial_succeeded, ctx.has_locations(SOURCE_ID)) {
+        // A failed initial listing publishes nothing — the host serves its
+        // last-good catalog (which survives restarts) while a background
+        // retry warms this process.
+        if !refresh_candidates(&ctx).await {
             log_degraded_initial(&ctx);
-            ctx.set_locations(SOURCE_ID, Vec::new());
             let retry_ctx = ctx.clone();
             tokio::spawn(async move {
                 refresh_candidates(&retry_ctx).await;
@@ -42,23 +41,23 @@ impl FlashPlugin for Processes {
         }
     }
 
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
             "refresh" => {
                 if refresh_candidates(&ctx).await {
-                    CommandResponse::toast("processes refreshed")
+                    PerformResponse::ok().message("processes refreshed")
                 } else {
-                    CommandResponse::error("processes refresh failed")
+                    PerformResponse::fail("processes refresh failed")
                 }
             }
             "kill" => kill_command(&ctx, command.query().trim()).await,
-            other => CommandResponse::error(format!("unknown subcommand: {other}")),
+            other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
     }
 
-    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
-        let Some(pid) = candidate.payload_str().and_then(|s| s.parse::<i32>().ok()) else {
-            return ResolveResponse::unresolved();
+    async fn on_resolve(&self, ctx: Context, row: Candidate) -> PerformResponse {
+        let Some(pid) = row.payload_str().and_then(|s| s.parse::<i32>().ok()) else {
+            return PerformResponse::unhandled();
         };
         match send_term(&ctx, pid).await {
             Ok(()) => {
@@ -67,14 +66,14 @@ impl FlashPlugin for Processes {
                 tokio::spawn(async move {
                     refresh_candidates(&refresh_ctx).await;
                 });
-                ResolveResponse::resolved(None)
+                PerformResponse::ok()
             }
             Err(error) => {
                 ctx.log(
                     "warn",
                     &format!("[processes] kill pid {pid} failed: {error}"),
                 );
-                ResolveResponse::unresolved()
+                PerformResponse::fail("kill failed")
             }
         }
     }
@@ -99,14 +98,15 @@ async fn refresh_candidates(ctx: &Context) -> bool {
 async fn refresh_candidates_inner(ctx: &Context) -> bool {
     let started_at = Instant::now();
     let Some(candidates) = collect_candidates(ctx).await else {
-        log_refresh(ctx, "failed", ctx.warm_locations().len(), started_at);
+        log_refresh(ctx, "failed", 0, started_at);
         return false;
     };
     // A libproc listing is never empty on success (this process exists), so
-    // list_processes treats empty as failure and the previous snapshot is
-    // preserved; a successful listing always replaces the store.
+    // list_processes treats empty as failure and nothing is published — the
+    // host keeps its last-good catalog; a successful listing always
+    // publishes a full replacement.
     let count = candidates.len();
-    ctx.set_locations(SOURCE_ID, candidates);
+    ctx.publish(candidates);
     log_refresh(
         ctx,
         if count == 0 { "empty" } else { "ok" },
@@ -129,16 +129,12 @@ fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) 
     }
 }
 
-fn should_publish_degraded_initial(initial_succeeded: bool, has_last_good: bool) -> bool {
-    !initial_succeeded && !has_last_good
-}
-
 fn log_degraded_initial(ctx: &Context) {
     ctx.log_fields(
         "warn",
         "[processes] initial warm catalog degraded",
         BTreeMap::from([
-            ("outcome".to_string(), "empty_without_last_good".to_string()),
+            ("outcome".to_string(), "unpublished_failure".to_string()),
             ("candidates".to_string(), "0".to_string()),
             ("retry".to_string(), "immediate_background".to_string()),
         ]),
@@ -153,10 +149,8 @@ async fn collect_candidates(ctx: &Context) -> Option<Vec<Candidate>> {
 fn candidate_for(row: &ProcessRow) -> Candidate {
     let pid = row.pid;
     let subtitle = format!("pid {} · {:.1}% CPU · {:.1}% MEM", pid, row.cpu, row.mem);
-    Candidate::new(&row.comm)
+    Candidate::new(SOURCE_PROCESSES, &row.comm)
         .kind("process")
-        .source_id(SOURCE_ID)
-        .source("processes.processes")
         .subtitle(&subtitle)
         .aliases([pid.to_string()])
         .payload(pid.to_string())
@@ -172,10 +166,7 @@ async fn list_processes(ctx: &Context) -> Option<Vec<ProcessRow>> {
     // host's). An empty table is impossible (the host exists), so empty
     // means the call failed.
     let response = ctx
-        .call_host(
-            "host.process_table",
-            serde_json::json!({ "sample_window_ms": CPU_SAMPLE_WINDOW.as_millis() as u64 }),
-        )
+        .process_table(Some(CPU_SAMPLE_WINDOW.as_millis() as u64))
         .await;
     let rows: Vec<ProcessRow> = response
         .get("processes")
@@ -200,19 +191,19 @@ async fn list_processes(ctx: &Context) -> Option<Vec<ProcessRow>> {
     Some(rows)
 }
 
-async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
+async fn kill_command(ctx: &Context, query: &str) -> PerformResponse {
     if query.is_empty() {
-        return CommandResponse::error("usage: !kill <pid|name>");
+        return PerformResponse::fail("usage: !kill <pid|name>");
     }
     // Pure-numeric query is treated as an exact PID — no fuzzy match.
     if let Ok(pid) = query.parse::<i32>() {
         return match send_term(ctx, pid).await {
-            Ok(()) => CommandResponse::toast(format!("SIGTERM → pid {pid}")),
-            Err(error) => CommandResponse::error(format!("kill pid {pid}: {error}")),
+            Ok(()) => PerformResponse::ok().message(format!("SIGTERM → pid {pid}")),
+            Err(error) => PerformResponse::fail(format!("kill pid {pid}: {error}")),
         };
     }
     let Some(rows) = list_processes(ctx).await else {
-        return CommandResponse::error("process list failed");
+        return PerformResponse::fail("process list failed");
     };
     let needle = query.to_ascii_lowercase();
     let matches: Vec<&ProcessRow> = rows
@@ -220,13 +211,13 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
         .filter(|row| row.comm.to_ascii_lowercase().contains(&needle))
         .collect();
     match matches.as_slice() {
-        [] => CommandResponse::error(format!("no process matches {query:?}")),
+        [] => PerformResponse::fail(format!("no process matches {query:?}")),
         [single] => {
             let pid = single.pid;
             let name = single.comm.clone();
             match send_term(ctx, pid).await {
-                Ok(()) => CommandResponse::toast(format!("SIGTERM → {name} (pid {pid})")),
-                Err(error) => CommandResponse::error(format!("kill {name} (pid {pid}): {error}")),
+                Ok(()) => PerformResponse::ok().message(format!("SIGTERM → {name} (pid {pid})")),
+                Err(error) => PerformResponse::fail(format!("kill {name} (pid {pid}): {error}")),
             }
         }
         many => {
@@ -235,7 +226,7 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
                 .take(5)
                 .map(|row| format!("{} (pid {})", row.comm, row.pid))
                 .collect();
-            CommandResponse::error(format!(
+            PerformResponse::fail(format!(
                 "ambiguous match ({}): {}; refine with !kill <pid>",
                 many.len(),
                 preview.join(", ")
@@ -245,17 +236,7 @@ async fn kill_command(ctx: &Context, query: &str) -> CommandResponse {
 }
 
 async fn send_term(ctx: &Context, pid: i32) -> Result<(), String> {
-    let response = ctx
-        .call_host("host.signal", serde_json::json!({ "pid": pid }))
-        .await;
-    if response.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
-        return Ok(());
-    }
-    Err(response
-        .get("error")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("host.signal failed")
-        .to_string())
+    ctx.signal(pid.into()).await
 }
 
 fn main() {
@@ -286,12 +267,5 @@ mod tests {
             .expect("subtitle");
         assert!(subtitle.contains("pid 4242"), "subtitle: {subtitle}");
         assert!(subtitle.contains("12.5% CPU"), "subtitle: {subtitle}");
-    }
-
-    #[test]
-    fn transient_startup_failure_only_uses_empty_when_no_last_good_exists() {
-        assert!(should_publish_degraded_initial(false, false));
-        assert!(!should_publish_degraded_initial(false, true));
-        assert!(!should_publish_degraded_initial(true, false));
     }
 }

@@ -1,0 +1,33 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["sources_warm"],
+  "description": "The push-catalog contract: a warm-sources plugin initializes immediately and then PUBLISHES its canonical catalog as a notification — the host owns the store and the first paint never waits on a plugin. Every row carries the first-class manifest-declared source name and a non-empty title. An authoritative-empty publish is legal (netinfo with no interfaces, snippets with nothing configured, a cleared source are all correct empties — hence no minimum row count), but the publish itself must arrive.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "publish",
+        "params": {
+          "rows": {
+            "$type": "array",
+            "$each": {
+              "source": { "$type": "string", "$min_len": 1 },
+              "title": { "$type": "string", "$min_len": 1 }
+            }
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    { "send": { "id": 2, "method": "ping", "params": {} } },
+    { "expect": { "id": 2, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

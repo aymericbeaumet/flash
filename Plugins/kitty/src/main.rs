@@ -12,7 +12,7 @@
 //!
 //!   - a warm `kitty.windows` locations source (one row per kitty pane,
 //!     `current_location` on the focused one),
-//!   - `candidate.resolve` via `kitten @ focus-window --match id:<id>`
+//!   - `perform {kind: "resolve"}` via `kitten @ focus-window --match id:<id>`
 //!     returning kitty's pid as `target_pid`,
 //!   - `:kitty focus-tab <n>` / `:kitty focus-window <id>` commands.
 //!
@@ -33,8 +33,7 @@
 //! use; failure clears it.
 
 use flash_plugin::{
-    run, run_command, Candidate, CommandRequest, CommandResponse, Context, Event, RefreshGate,
-    ResolveResponse,
+    run, run_command, Candidate, CommandRequest, Context, Event, PerformResponse, RefreshGate,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -43,7 +42,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-const SOURCE_ID: &str = "plugin:kitty";
 const SOURCE_WINDOWS: &str = "kitty.windows";
 const KITTY_BUNDLE_ID: &str = "net.kovidgoyal.kitty";
 
@@ -55,7 +53,6 @@ const KITTEN_APP_PATHS: [&str; 2] = [
 ];
 const KITTEN_PREFIXES: [&str; 3] = ["/usr/local", "/opt/local", "/usr"];
 
-const STARTUP_REFRESH_BUDGET: Duration = Duration::from_secs(8);
 const REFRESH_SECONDS: u64 = 15;
 const EVENT_DEBOUNCE: Duration = Duration::from_millis(300);
 const KITTEN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -69,9 +66,6 @@ const MAX_TITLE_CHARS: usize = 256;
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 static REFRESH_SCHEDULED: AtomicBool = AtomicBool::new(false);
-/// Fingerprint of the last published catalog: `sources.invalidated` fires
-/// only when a refresh actually changed content.
-static LAST_FINGERPRINT: Mutex<Option<u64>> = Mutex::new(None);
 /// The `--to` argument of the last successful `kitten @` invocation
 /// (`None` = bare invocation worked or no route known yet).
 static WORKING_SOCKET: Mutex<Option<Option<String>>> = Mutex::new(None);
@@ -123,36 +117,10 @@ flash_plugin::plugin!(Kitty);
 
 impl FlashPlugin for Kitty {
     async fn on_start(&self, ctx: Context) {
-        let initial_succeeded =
-            match tokio::time::timeout(STARTUP_REFRESH_BUDGET, refresh_catalog(&ctx)).await {
-                Ok(()) => true,
-                Err(_) => false,
-            };
-        if !ctx.has_locations(SOURCE_ID) {
-            // The refresh always publishes, so this only fires on a startup
-            // timeout; ship an authoritative empty so initialize never blocks.
-            publish_empty(&ctx);
-        }
-        if !initial_succeeded {
-            ctx.log_fields(
-                "warn",
-                "[kitty] initial warm refresh timed out",
-                BTreeMap::from([
-                    (
-                        "budget_ms".to_string(),
-                        STARTUP_REFRESH_BUDGET.as_millis().to_string(),
-                    ),
-                    (
-                        "outcome".to_string(),
-                        "timed_out_background_retry".to_string(),
-                    ),
-                ]),
-            );
-            let retry_ctx = ctx.clone();
-            tokio::spawn(async move {
-                refresh_catalog(&retry_ctx).await;
-            });
-        }
+        // Runs after the initialize reply, so socket discovery never delays
+        // the handshake. Every refresh outcome publishes (rows or
+        // authoritative empty — unresolvable rows must not linger).
+        refresh_catalog(&ctx).await;
         drop(
             ctx.interval(Duration::from_secs(REFRESH_SECONDS), |ctx| async move {
                 refresh_catalog(&ctx).await;
@@ -173,21 +141,21 @@ impl FlashPlugin for Kitty {
         }
     }
 
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
             "focus-tab" => focus_tab_command(&ctx, &command.query()).await,
             "focus-window" => focus_window_command(&ctx, &command.query()).await,
-            other => CommandResponse::error(format!("unknown subcommand: {other}")),
+            other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
     }
 
-    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
-        let Some(payload) = candidate.payload_as::<KittyPayload>() else {
-            ctx.log("warn", "[kitty] resolve candidate missing payload");
-            return ResolveResponse::unresolved();
+    async fn on_resolve(&self, ctx: Context, row: Candidate) -> PerformResponse {
+        let Some(payload) = row.payload_as::<KittyPayload>() else {
+            ctx.log("warn", "[kitty] resolve row missing payload");
+            return PerformResponse::unhandled();
         };
         let Some(kitty_pid) = kitty_pid(&ctx) else {
-            return ResolveResponse::unresolved();
+            return PerformResponse::fail("kitty is not running");
         };
         // Focusing a kitty window also focuses its tab and OS window.
         let matcher = format!("id:{}", payload.window_id);
@@ -196,9 +164,9 @@ impl FlashPlugin for Kitty {
             .is_none()
         {
             ctx.log("warn", "[kitty] resolve focus-window failed");
-            return ResolveResponse::unresolved();
+            return PerformResponse::fail("kitten focus-window failed");
         }
-        ResolveResponse::resolved(Some(kitty_pid))
+        PerformResponse::ok().target_pid(kitty_pid)
     }
 }
 
@@ -218,33 +186,33 @@ fn schedule_refresh(ctx: &Context) {
 // Commands
 // ---------------------------------------------------------------------------
 
-async fn focus_tab_command(ctx: &Context, arg: &str) -> CommandResponse {
+async fn focus_tab_command(ctx: &Context, arg: &str) -> PerformResponse {
     let Ok(number) = arg.parse::<u64>() else {
-        return CommandResponse::error("usage: :kitty focus-tab <n> (1-based tab number)");
+        return PerformResponse::fail("usage: :kitty focus-tab <n> (1-based tab number)");
     };
     let Some(matcher) = tab_index_matcher(number) else {
-        return CommandResponse::error("usage: :kitty focus-tab <n> (1-based tab number)");
+        return PerformResponse::fail("usage: :kitty focus-tab <n> (1-based tab number)");
     };
     let Some(kitty_pid) = kitty_pid(ctx) else {
-        return CommandResponse::error("kitty is not running");
+        return PerformResponse::fail("kitty is not running");
     };
     match run_kitten(ctx, &["focus-tab", "--match", &matcher]).await {
-        Some(_) => CommandResponse::ok().target_pid(kitty_pid),
-        None => CommandResponse::error("kitten focus-tab failed (is allow_remote_control on?)"),
+        Some(_) => PerformResponse::ok().target_pid(kitty_pid),
+        None => PerformResponse::fail("kitten focus-tab failed (is allow_remote_control on?)"),
     }
 }
 
-async fn focus_window_command(ctx: &Context, arg: &str) -> CommandResponse {
+async fn focus_window_command(ctx: &Context, arg: &str) -> PerformResponse {
     let Ok(id) = arg.parse::<u64>() else {
-        return CommandResponse::error("usage: :kitty focus-window <window-id>");
+        return PerformResponse::fail("usage: :kitty focus-window <window-id>");
     };
     let Some(kitty_pid) = kitty_pid(ctx) else {
-        return CommandResponse::error("kitty is not running");
+        return PerformResponse::fail("kitty is not running");
     };
     let matcher = format!("id:{id}");
     match run_kitten(ctx, &["focus-window", "--match", &matcher]).await {
-        Some(_) => CommandResponse::ok().target_pid(kitty_pid),
-        None => CommandResponse::error("kitten focus-window failed (is allow_remote_control on?)"),
+        Some(_) => PerformResponse::ok().target_pid(kitty_pid),
+        None => PerformResponse::fail("kitten focus-window failed (is allow_remote_control on?)"),
     }
 }
 
@@ -288,7 +256,7 @@ async fn refresh_catalog(ctx: &Context) {
             };
             let candidates = build_candidates(&os_windows, kitty_pid);
             let count = candidates.len();
-            publish(&ctx, candidates);
+            ctx.publish(candidates);
             log_refresh(
                 &ctx,
                 if count == 0 { "empty" } else { "ok" },
@@ -300,32 +268,7 @@ async fn refresh_catalog(ctx: &Context) {
 }
 
 fn publish_empty(ctx: &Context) {
-    publish(ctx, Vec::new());
-}
-
-/// Publish the snapshot; when a previous publication existed with different
-/// content, tell the host the warm catalog is stale.
-fn publish(ctx: &Context, candidates: Vec<Candidate>) {
-    let fingerprint = fingerprint_of(&candidates);
-    let previous = LAST_FINGERPRINT
-        .lock()
-        .map(|mut last| last.replace(fingerprint))
-        .unwrap_or(None);
-    ctx.set_locations(SOURCE_ID, candidates);
-    if previous.is_some_and(|last| last != fingerprint) {
-        ctx.invalidate_sources();
-    }
-}
-
-fn fingerprint_of(candidates: &[Candidate]) -> u64 {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    for candidate in candidates {
-        candidate.title.hash(&mut hasher);
-        candidate.meta("payload").hash(&mut hasher);
-        candidate.meta("current_location").hash(&mut hasher);
-    }
-    hasher.finish()
+    ctx.publish(Vec::new());
 }
 
 fn parse_ls(raw: &str) -> Option<Vec<OsWindow>> {
@@ -368,11 +311,9 @@ fn candidate_for_window(
         format!("tab · {tab_title}")
     };
     let focused = os_window.is_focused && tab.is_focused && window.is_focused;
-    Candidate::new(primary)
+    Candidate::new(SOURCE_WINDOWS, primary)
         .kind("kitty_window")
         .location()
-        .source_id(SOURCE_ID)
-        .source(SOURCE_WINDOWS)
         .subtitle(subtitle)
         .aliases(["kitty"])
         .pid(kitty_pid)
@@ -662,8 +603,7 @@ mod tests {
         assert_eq!(first.meta("subtitle"), Some("tab · ~/code"));
         assert_eq!(first.meta("kind"), Some("kitty_window"));
         assert_eq!(first.meta("entity"), Some("location"));
-        assert_eq!(first.meta("source"), Some(SOURCE_WINDOWS));
-        assert_eq!(first.meta("source_id"), Some(SOURCE_ID));
+        assert_eq!(first.source, SOURCE_WINDOWS);
         assert_eq!(first.pid_value(), Some(777));
         assert_eq!(first.meta("current_location"), Some("1"));
         let payload = first.payload_as::<KittyPayload>().unwrap();
@@ -724,7 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_without_kitty_publishes_an_authoritative_empty_catalog() {
-        let harness = Harness::new("kitty");
+        let mut harness = Harness::new("kitty");
         let ctx = harness.context();
         harness.set_running_applications(vec![RunningApplication {
             bundle_id: "com.apple.Safari".to_string(),
@@ -734,7 +674,7 @@ mod tests {
 
         refresh_catalog(&ctx).await;
 
-        assert!(ctx.has_locations(SOURCE_ID));
-        assert!(ctx.warm_locations().is_empty());
+        let rows = harness.drain_published_rows().expect("one publish frame");
+        assert!(rows.is_empty());
     }
 }

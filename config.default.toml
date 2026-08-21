@@ -123,9 +123,9 @@ watching_enabled = true
 # Hard kill for a third-party plugin's install script — a cold cargo
 # build on a slow machine can legitimately take minutes.
 install_timeout = 120
-# Handshake deadline: a plugin that warms a big catalog before answering
-# initialize may need more room.
-startup_timeout = 15
+# initialize reply deadline. The reply is immediate by contract (catalogs
+# publish after it), so this only absorbs interpreter startup.
+startup_timeout = 5
 
 # Per-plugin settings live in [plugin.<id>] tables (ids are lowercase
 # [a-z0-9._-]). Values may be strings, numbers, booleans, or string
@@ -282,12 +282,9 @@ template = "#[align=left]#{mode}#[align=right]#{date}"
 # max_boost caps the score bonus (0 disables frecency outright).
 frecency_half_life_days = 14.0
 frecency_max_boost = 600
-# Deadline for the aggregate warm-plugin catalog snapshot feeding the
-# flashlight pool; a giant browser session may need more room.
-snapshot_timeout_ms = 150
-# Per-keystroke deadline for mode = "live" plugin sources (file search and
+# Per-keystroke deadline for live = true plugin sources (file search and
 # other catalogs that cannot be kept warm). Live sources never join the
-# first-paint barrier, so raising this cannot slow the flashlight open.
+# first paint, so raising this cannot slow the flashlight open.
 # Spotlight's first output byte alone routinely takes 500-700 ms.
 live_query_timeout_ms = 1000
 # Number of suggestion rows shown below the command bar.

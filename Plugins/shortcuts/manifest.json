@@ -7,20 +7,18 @@
     "./flash-plugin-shortcuts"
   ],
   "priority": 12,
-  "commands": {
-    "items": [
-      {
-        "command": "shortcuts",
-        "subcommand": "open",
-        "description": "Open Shortcuts.app"
-      },
-      {
-        "command": "shortcuts",
-        "subcommand": "refresh",
-        "description": "Refresh the cached shortcut list"
-      }
-    ]
-  },
+  "commands": [
+    {
+      "command": "shortcuts",
+      "subcommand": "open",
+      "description": "Open Shortcuts.app"
+    },
+    {
+      "command": "shortcuts",
+      "subcommand": "refresh",
+      "description": "Refresh the cached shortcut list"
+    }
+  ],
   "listen": [
     "core:config.*"
   ],

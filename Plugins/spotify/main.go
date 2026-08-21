@@ -8,7 +8,7 @@
 // implementation: per-plugin config/cache dirs under
 // FLASH_PLUGIN_DATA_DIR, and the plugin's bin/ dir prepended to PATH for
 // the spotify_player lookup — the same convention the Rust SDK's
-// run_command applies.
+// run_command applies. Commands arrive as perform {kind: "command"}.
 package main
 
 import (
@@ -45,10 +45,10 @@ func onCommand(params map[string]any) map[string]any {
 	case "run":
 		tail = stringArgs(params)
 	default:
-		return map[string]any{"ok": false, "error": "unknown subcommand: " + subcommand}
+		return flashplugin.Fail("unknown subcommand: " + subcommand)
 	}
 
-	dataDir := os.Getenv("FLASH_PLUGIN_DATA_DIR")
+	dataDir := flashplugin.DataDir()
 	config := filepath.Join(dataDir, "config", "spotify-player")
 	cache := filepath.Join(dataDir, "cache", "spotify-player")
 	os.MkdirAll(config, 0o755)
@@ -77,14 +77,17 @@ func onCommand(params map[string]any) map[string]any {
 			if message == "" {
 				message = err.Error()
 			}
-			return map[string]any{"ok": false, "error": message}
+			return flashplugin.Fail(message)
 		}
-		return map[string]any{"ok": true, "stdout": strings.TrimSpace(string(output))}
+		if message := strings.TrimSpace(string(output)); message != "" {
+			return flashplugin.Ok(map[string]any{"message": message})
+		}
+		return flashplugin.Ok(nil)
 	case <-time.After(timeout):
 		if cmd.Process != nil {
 			cmd.Process.Kill()
 		}
-		return map[string]any{"ok": false, "error": "spotify_player timed out"}
+		return flashplugin.Fail("spotify_player timed out")
 	}
 }
 

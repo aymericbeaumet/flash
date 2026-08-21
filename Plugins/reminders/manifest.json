@@ -13,20 +13,18 @@
     "./flash-plugin-reminders"
   ],
   "priority": 12,
-  "commands": {
-    "items": [
-      {
-        "command": "reminders",
-        "subcommand": "open",
-        "description": "Open Reminders.app"
-      },
-      {
-        "command": "reminders",
-        "subcommand": "refresh",
-        "description": "Refresh the cached reminders list"
-      }
-    ]
-  },
+  "commands": [
+    {
+      "command": "reminders",
+      "subcommand": "open",
+      "description": "Open Reminders.app"
+    },
+    {
+      "command": "reminders",
+      "subcommand": "refresh",
+      "description": "Refresh the cached reminders list"
+    }
+  ],
   "listen": [
     "core:config.*",
     "core:apps.*"

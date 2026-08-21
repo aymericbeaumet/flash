@@ -17,16 +17,16 @@ struct AXElementIdentitySet {
 
 /// Host-side Accessibility broker. The core holds the single TCC grant, so it
 /// is the only process that may touch AX trees; this class is the only place
-/// `AXUIElement` handles live. Plugins reach AX through the `ax.*` host RPCs
+/// `AXUIElement` handles live. Plugins reach AX through the `host.ax_*` RPCs
 /// routed here from `PluginManager.handleHostRequest`.
 ///
 /// `AXUIElement` values cannot cross a process boundary and per-element round
 /// trips over stdio are catastrophic (a browser walk visits thousands of
-/// nodes), so the surface is deliberately *coarse*: one `ax.snapshot` call
+/// nodes), so the surface is deliberately *coarse*: one `host.ax_snapshot` call
 /// walks a subtree and returns a flat node list, each node carrying an opaque
 /// integer handle plus a batch of requested attributes. The plugin applies its
 /// own domain logic (what counts as a "tab") and later acts on a node by its
-/// handle via `ax.perform` / `ax.set`. The registry keeps the real elements
+/// handle via `host.ax_perform` / `host.ax_set`. The registry keeps the real elements
 /// resident between the snapshot and those follow-up calls.
 final class AXBroker {
   private struct Entry {
@@ -61,16 +61,16 @@ final class AXBroker {
     reply: @escaping ([String: Any]) -> Void
   ) {
     switch method {
-    case "ax.snapshot":
+    case "host.ax_snapshot":
       snapshot(params, owner: pluginID, reply: reply)
-    case "ax.perform":
+    case "host.ax_perform":
       perform(params, owner: pluginID, reply: reply)
-    case "ax.set":
+    case "host.ax_set":
       setAttribute(params, owner: pluginID, reply: reply)
-    case "ax.select_child":
+    case "host.ax_select_child":
       selectChild(params, owner: pluginID, reply: reply)
     default:
-      reply(["ok": false, "error": "unknown ax method: \(method)"])
+      reply(["ok": false, "error": PluginProtocol.unknownMethodError(method)])
     }
   }
 
@@ -80,7 +80,7 @@ final class AXBroker {
     _ params: [String: Any], owner: String, reply: @escaping ([String: Any]) -> Void
   ) {
     guard let pid = pidParam(params, key: "pid") else {
-      reply(["ok": false, "error": "ax.snapshot requires pid"])
+      reply(["ok": false, "error": "host.ax_snapshot requires pid"])
       return
     }
     let rootsMode = params["roots"] as? String ?? "windows"
@@ -147,7 +147,7 @@ final class AXBroker {
     _ params: [String: Any], owner: String, reply: @escaping ([String: Any]) -> Void
   ) {
     guard let handle = handleParam(params) else {
-      reply(["ok": false, "error": "ax.perform requires handle"])
+      reply(["ok": false, "error": "host.ax_perform requires handle"])
       return
     }
     let action = params["action"] as? String ?? (kAXPressAction as String)
@@ -167,7 +167,7 @@ final class AXBroker {
     _ params: [String: Any], owner: String, reply: @escaping ([String: Any]) -> Void
   ) {
     guard let handle = handleParam(params), let attribute = params["attribute"] as? String else {
-      reply(["ok": false, "error": "ax.set requires handle and attribute"])
+      reply(["ok": false, "error": "host.ax_set requires handle and attribute"])
       return
     }
     let value = params["value"]
@@ -182,7 +182,7 @@ final class AXBroker {
       } else if let text = value as? String {
         cfValue = text as CFString
       } else {
-        reply(["ok": false, "error": "ax.set value must be a bool or string"])
+        reply(["ok": false, "error": "host.ax_set value must be a bool or string"])
         return
       }
       let status = self.withAccessibilityTree(pid: entry.pid) { _ in
@@ -198,7 +198,7 @@ final class AXBroker {
     guard let parentHandle = uint64Param(params["parent"]),
       let childHandle = uint64Param(params["child"])
     else {
-      reply(["ok": false, "error": "ax.select_child requires parent and child"])
+      reply(["ok": false, "error": "host.ax_select_child requires parent and child"])
       return
     }
     queue.async { [weak self] in
@@ -346,8 +346,8 @@ final class AXBroker {
   /// `AXUIElementCopyMultipleAttributeValues`) into NSScreen-space
   /// `[x, y, w, h]`. Returns nil unless both slots are real `AXValue`s.
   ///
-  /// Plugin callers can feed arbitrary payloads through `ax.snapshot` /
-  /// `ax.perform`, so the `CFGetTypeID == AXValueGetTypeID()` guards must run
+  /// Plugin callers can feed arbitrary payloads through `host.ax_snapshot` /
+  /// `host.ax_perform`, so the `CFGetTypeID == AXValueGetTypeID()` guards must run
   /// *before* the force-bridge — Swift's `as!` on CoreFoundation refs cannot
   /// itself verify the type. A misbehaving plugin must never crash the host
   /// here.
@@ -412,30 +412,6 @@ final class AXBroker {
     return nil
   }
 
-  private func pointParam(_ params: [String: Any]) -> CGPoint? {
-    guard let x = doubleParam(params["x"]), let y = doubleParam(params["y"]) else { return nil }
-    return CGPoint(x: x, y: y)
-  }
 
-  private func doubleParam(_ value: Any?) -> Double? {
-    if let number = value as? NSNumber { return number.doubleValue }
-    if let value = value as? Double { return value }
-    if let value = value as? Int { return Double(value) }
-    return nil
-  }
 
-  private func jumpAction(_ raw: String?) -> JumpAction {
-    switch raw {
-    case "right_click":
-      return .rightClick
-    case "middle_click":
-      return .middleClick
-    case "double_click":
-      return .doubleClick
-    case "triple_click":
-      return .tripleClick
-    default:
-      return .leftClick
-    }
-  }
 }

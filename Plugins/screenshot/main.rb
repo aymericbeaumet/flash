@@ -6,7 +6,8 @@
 # Synthesizes the macOS screenshot keystrokes via System Events, exactly
 # like the Rust implementation: cmd+shift+3/4/5 (key codes 20/21/23), the
 # control variants copy to the clipboard, and the window flavors follow
-# cmd+shift+4 with Space to enter the window picker.
+# cmd+shift+4 with Space to enter the window picker. Commands arrive as
+# perform kind "command", routed to the on_command hook.
 
 require "flashplugin" # resolved via host-injected RUBYLIB
 
@@ -36,18 +37,19 @@ def script_for(key_code, control, then_space)
   script
 end
 
-plugin = FlashPlugin.new
-plugin.serve do |params|
-  shortcut = SHORTCUTS[params["subcommand"].to_s]
-  if shortcut.nil?
-    { "ok" => false, "error" => "unknown subcommand: #{params["subcommand"]}" }
-  else
-    out = IO.popen(["/usr/bin/osascript", "-e", script_for(*shortcut)], err: %i[child out], &:read)
-    status = $?
-    if status.success?
-      { "ok" => true }
+FlashPlugin.new.serve(
+  on_command: lambda do |params|
+    shortcut = SHORTCUTS[params["subcommand"].to_s]
+    if shortcut.nil?
+      FlashPlugin.fail("unknown subcommand: #{params["subcommand"]}")
     else
-      { "ok" => false, "error" => out.to_s.strip }
+      out = IO.popen(["/usr/bin/osascript", "-e", script_for(*shortcut)], err: %i[child out], &:read)
+      if $?.success?
+        FlashPlugin.ok
+      else
+        message = out.to_s.strip
+        FlashPlugin.fail(message.empty? ? "osascript failed" : message)
+      end
     end
-  end
-end
+  end,
+)

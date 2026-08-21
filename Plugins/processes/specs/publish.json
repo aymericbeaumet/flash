@@ -1,0 +1,41 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "description": "processes sources its catalog from the host.process_table RPC, so the generic sources/publish spec (which NAKs all host RPCs) correctly sees no publish — last-good discipline forbids publishing on a failed listing. This spec scripts the host side: given one process-table row, the plugin must publish it as a titled catalog row carrying the manifest-declared source.",
+  "host": {
+    "replies": {
+      "host.process_table": {
+        "ok": true,
+        "processes": [
+          { "pid": 1, "comm": "launchd", "cpu_percent": 0.4, "mem_percent": 0.1 }
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "publish",
+        "params": {
+          "rows": {
+            "$type": "array",
+            "$min_len": 1,
+            "$each": {
+              "source": { "$type": "string", "$min_len": 1 },
+              "title": { "$type": "string", "$min_len": 1 }
+            }
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

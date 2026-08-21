@@ -23,7 +23,7 @@ PROJECT_DIR = SCRIPTS_DIR.parent
 PLUGINS_DIR = PROJECT_DIR / "Plugins"
 SPECS_DIR = PLUGINS_DIR / "_flash_plugin_specs"
 
-RESERVED_FILES = {"schema.json", "overrides.json"}
+RESERVED_FILES = {"schema.json", "overrides.json", "protocol.json"}
 
 
 def load_spec(path, specs_root):
@@ -73,21 +73,22 @@ def probe_dirs():
 
 
 def manifest_features(manifest):
+    """Manifest v2 predicates (docs/plugin-protocol.md#manifest)."""
     features = {"always"}
     if manifest.get("exec"):
         features.add("exec")
     sources = manifest.get("sources") or []
     if sources:
         features.add("sources")
-        live = [s for s in sources if isinstance(s, dict) and s.get("mode") == "live"]
+        live = [s for s in sources if isinstance(s, dict) and s.get("live") is True]
         features.add("sources_live" if live else "sources_warm")
-    if "queries" in manifest:
+    if "query" in manifest:
         features.add("queries")
-    if manifest.get("commands") or manifest.get("shebangs"):
+    if manifest.get("commands") or manifest.get("bangs"):
         features.add("commands")
     if "hints" in manifest:
         features.add("hints")
-    if manifest.get("source_actions"):
+    if manifest.get("actions"):
         features.add("source_actions")
     if manifest.get("navigation"):
         features.add("navigation")

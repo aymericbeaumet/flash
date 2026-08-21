@@ -262,7 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var candidateFinderQueryAnswers: [Candidate] = []
   var candidateFinderQueryEvaluationText = ""
   /// Dedup key for live-source pulls: `session\u{1F}filter\u{1F}text`. A
-  /// re-render at an unchanged scoped query never refires `sources.query`.
+  /// re-render at an unchanged scoped query never refires `search`.
   var candidateFinderLiveQueryKey: String?
   /// Independent from the flashlight-session generation: every bare query
   /// supersedes the prior evaluator fan-out even within one open surface.
@@ -414,9 +414,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   /// (no grant) falls back to the legacy key-window capture in
   /// `captureKeyboardInput`.
   var keyboardCaptureTap: KeyboardCaptureTap?
-  /// Debounces re-resolving URL-scoped plugin mappings when the focused
-  /// document changes without an app-focus change (browser tab/navigation).
-  var urlContextMappingRefreshWork: DispatchWorkItem?
   var activeWindowBorderReconciliationGeneration: UInt64 = 0
   var activeWindowBorderTrackedFrame: CGRect?
   var activeWindowBorderSessionSuspensions: Set<ActiveWindowBorderSessionSuspension> = []
@@ -481,12 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         PluginEvent(
           name: "core:ax.changed",
           payload: ["notification": notification, "pid": Int(pid)],
-          bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
-          configPath: nil,
-          focused: true))
-    }
-    monitor.focusedElementMayHaveChanged = { [weak self] pid in
-      self?.focusedInputMayHaveChanged(pid: pid)
+          bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier))
     }
     monitor.activeWindowMayHaveChanged = { [weak self] pid, notification, window in
       self?.activeWindowMayHaveChanged(
@@ -512,10 +504,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     pluginManager.onNotifyRequested = { [weak self] message, durationMs in
       self?.overlay.displayBanner(message, durationMs: durationMs)
     }
-    pluginManager.onSourcesInvalidated = { [weak self] pluginID in
-      DispatchQueue.main.async {
-        self?.handlePluginSourcesInvalidated(pluginID)
-      }
+    pluginManager.onCatalogsChanged = { [weak self] in
+      self?.handlePluginCatalogsChanged()
     }
     pluginManager.onSyntheticKeysRequested = { [weak self] pid, chords, intervalMs in
       for (index, chord) in chords.enumerated() {
@@ -595,7 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     startKeyboardCaptureTap()
     pluginManager.emit(
       PluginEvent(
-        name: "core:flash.started", payload: [:], bundleID: nil, configPath: nil, focused: nil))
+        name: "core:flash.started", payload: [:], bundleID: nil))
     emitRunningApplicationsChanged(reason: "launch")
   }
 
@@ -763,7 +753,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         delaysMs: Self.activeWindowBorderRecoveryDelaysMs, reason: "space_changed")
       self.pluginManager.emit(
         PluginEvent(
-          name: "core:space.changed", payload: [:], bundleID: nil, configPath: nil, focused: nil))
+          name: "core:space.changed", payload: [:], bundleID: nil))
       if self.flashMode == .normal {
         self.scheduleNormalModeRecapture()
       }
@@ -784,9 +774,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
               "localized_name": app.localizedName ?? "",
               "pid": Int(app.processIdentifier),
             ],
-            bundleID: app.bundleIdentifier,
-            configPath: nil,
-            focused: false))
+            bundleID: app.bundleIdentifier))
       }
       self.emitRunningApplicationsChanged(reason: "app_launch")
       if self.flashMode == .normal {
@@ -820,9 +808,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
               "localized_name": app.localizedName ?? "",
               "pid": Int(app.processIdentifier),
             ],
-            bundleID: app.bundleIdentifier,
-            configPath: nil,
-            focused: false))
+            bundleID: app.bundleIdentifier))
       }
       self.emitRunningApplicationsChanged(reason: "app_terminate")
     }
@@ -969,9 +955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
             "localized_name": app.localizedName ?? "",
             "pid": Int(app.processIdentifier),
           ],
-          bundleID: app.bundleIdentifier,
-          configPath: nil,
-          focused: true))
+          bundleID: app.bundleIdentifier))
       emitRunningApplicationsChanged(reason: reason)
       recordAppActivation(app.processIdentifier)
     }
@@ -984,20 +968,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   private func refreshFocusDependentState(for app: NSRunningApplication) {
     statusBarController?.updateFocusedApplication(app)
     registry.refreshRunningApplications()
-    refreshEffectiveMappings(for: app.bundleIdentifier, includeURL: false)
-    refreshURLScopedEffectiveMappingsIfNeeded(for: app)
-  }
-
-  private func refreshURLScopedEffectiveMappingsIfNeeded(for app: NSRunningApplication) {
-    guard pluginManager.needsURLSelectorContext() else { return }
-    let pid = app.processIdentifier
-    let bundleID = app.bundleIdentifier
-    DispatchQueue.main.async { [weak self] in
-      guard let self,
-        NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
-      else { return }
-      self.refreshEffectiveMappings(for: bundleID, includeURL: true)
-    }
+    refreshEffectiveMappings(for: app.bundleIdentifier)
   }
 
   /// Start the in-process pasteboard watcher and bridge its callback onto the
@@ -1010,9 +981,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         PluginEvent(
           name: "core:clipboard.changed",
           payload: ["text": text],
-          bundleID: nil,
-          configPath: nil,
-          focused: nil))
+          bundleID: nil))
       // Let the plugin fold the new entry into its history, then refresh the
       // inspector's Clipboard tab so an open dashboard updates live.
       DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak self] in
@@ -1031,9 +1000,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
         PluginEvent(
           name: "core:power.changed",
           payload: [:],
-          bundleID: nil,
-          configPath: nil,
-          focused: nil))
+          bundleID: nil))
     }
     powerSourceMonitor?.start()
   }

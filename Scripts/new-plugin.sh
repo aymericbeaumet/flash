@@ -93,17 +93,17 @@ TOML
 cp "$PROJECT_DIR/Plugins/_flash_plugin_rust/clippy.toml" "$DIR/clippy.toml"
 
 cat >"$DIR/src/main.rs" <<'RUST'
-use flash_plugin::{run, CommandRequest, CommandResponse, Context};
+use flash_plugin::{run, CommandRequest, Context, PerformResponse};
 
 struct PluginImpl;
 
 flash_plugin::plugin!(PluginImpl);
 
 impl FlashPlugin for PluginImpl {
-    async fn on_command(&self, _ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, _ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
-            "ping" => CommandResponse::toast("pong"),
-            other => CommandResponse::error(format!("unknown subcommand: {other}")),
+            "ping" => PerformResponse::ok().message("pong"),
+            other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
     }
 }

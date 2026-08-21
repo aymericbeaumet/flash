@@ -1,20 +1,22 @@
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    applescript_quote, run, run_osascript, Candidate, Context, Event, RefreshGate, ResolveResponse,
-    RunningApplication, SourceActionRequest, SourceActionResponse,
+    applescript_quote, run, run_osascript, ActionRequest, Candidate, Context, Event,
+    PerformResponse, RefreshGate, RunningApplication,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
-const SOURCE_ID: &str = "plugin:safari";
+const SOURCE_TABS: &str = "safari.tabs";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
-const STARTUP_REFRESH_BUDGET: Duration = Duration::from_secs(11);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
+/// Last-published rows, kept so a partial cycle (one edition's AppleScript
+/// failed) can re-publish that edition's previous tabs — `publish` is a full
+/// replacement, so dropped rows would vanish from the host store.
+static LAST_ROWS: Mutex<Vec<Candidate>> = Mutex::new(Vec::new());
 const SAFARI_BUNDLES: &[&str] = &["com.apple.Safari", "com.apple.SafariTechnologyPreview"];
 
-/// Round-tripped through the host so resolve_candidate can re-match the tab
+/// Round-tripped through the host so on_resolve can re-match the tab
 /// even after a fresh snapshot has shifted indices.
 #[derive(Serialize, Deserialize)]
 struct TabPayload {
@@ -29,20 +31,10 @@ flash_plugin::plugin!(Safari);
 
 impl FlashPlugin for Safari {
     async fn on_start(&self, ctx: Context) {
-        let initial_succeeded =
-            match tokio::time::timeout(STARTUP_REFRESH_BUDGET, refresh_locations(&ctx)).await {
-                Ok(succeeded) => succeeded,
-                Err(_) => {
-                    ctx.log(
-                        "warn",
-                        "[safari] initial warm refresh timed out budget_ms=11000",
-                    );
-                    false
-                }
-            };
-        if !initial_succeeded && !ctx.has_locations(SOURCE_ID) {
+        // Runs after the initialize reply; a failed first cycle publishes
+        // nothing (the host keeps last-good) and retries in the background.
+        if !refresh_locations(&ctx).await {
             log_degraded_initial(&ctx);
-            ctx.set_locations(SOURCE_ID, Vec::new());
             let retry_ctx = ctx.clone();
             tokio::spawn(async move {
                 refresh_locations(&retry_ctx).await;
@@ -64,16 +56,12 @@ impl FlashPlugin for Safari {
         }
     }
 
-    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
-        resolve(&ctx, &candidate).await
+    async fn on_resolve(&self, ctx: Context, row: Candidate) -> PerformResponse {
+        resolve(&ctx, &row).await
     }
 
-    async fn source_action(
-        &self,
-        ctx: Context,
-        request: SourceActionRequest,
-    ) -> SourceActionResponse {
-        perform_source_action(&ctx, &request).await
+    async fn on_action(&self, ctx: Context, action: ActionRequest) -> PerformResponse {
+        perform_action(&ctx, &action).await
     }
 }
 
@@ -121,7 +109,7 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i6
     // A complete running-app snapshot with no Safari process is authoritative;
     // clear dead tabs.
     if apps.is_empty() {
-        ctx.set_locations(SOURCE_ID, Vec::new());
+        publish_rows(ctx, Vec::new());
         log_refresh(ctx, "empty", 0, started_at);
         return true;
     }
@@ -164,11 +152,9 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i6
                         app_name: label.clone(),
                         url: url.to_string(),
                     };
-                    let mut candidate = Candidate::new(display)
+                    let mut candidate = Candidate::new(SOURCE_TABS, display)
                         .kind("browser_tab")
                         .location()
-                        .source_id(SOURCE_ID)
-                        .source("safari.tabs")
                         .subtitle("browser tab")
                         .bundle_id(&bundle_id)
                         .pid(pid)
@@ -210,18 +196,15 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i6
     // empty reply is an authoritative zero-tab snapshot, and apps absent from
     // the current host snapshot are removed.
     if !failed_pids.is_empty() {
-        candidates.extend(ctx.warm_locations().into_iter().filter(|candidate| {
+        candidates.extend(last_rows().into_iter().filter(|candidate| {
             candidate
                 .pid_value()
                 .is_some_and(|pid| failed_pids.contains(&pid))
         }));
     }
     if successful_apps == 0 {
-        let count = candidates.len();
-        if ctx.has_locations(SOURCE_ID) {
-            ctx.set_locations(SOURCE_ID, candidates);
-        }
-        log_refresh(ctx, "failed", count, started_at);
+        // Publish nothing: the host keeps its last-good catalog.
+        log_refresh(ctx, "failed", candidates.len(), started_at);
         return false;
     }
     let outcome = if !failed_pids.is_empty() {
@@ -232,9 +215,23 @@ async fn refresh_locations_for_apps(ctx: &Context, apps: Vec<(String, String, i6
         "ok"
     };
     let count = candidates.len();
-    ctx.set_locations(SOURCE_ID, candidates);
+    publish_rows(ctx, candidates);
     log_refresh(ctx, outcome, count, started_at);
     true
+}
+
+fn publish_rows(ctx: &Context, rows: Vec<Candidate>) {
+    if let Ok(mut last) = LAST_ROWS.lock() {
+        *last = rows.clone();
+    }
+    ctx.publish(rows);
+}
+
+fn last_rows() -> Vec<Candidate> {
+    LAST_ROWS
+        .lock()
+        .map(|rows| rows.clone())
+        .unwrap_or_default()
 }
 
 fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) {
@@ -251,7 +248,7 @@ fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) 
 fn log_degraded_initial(ctx: &Context) {
     ctx.log(
         "warn",
-        "[safari] initial warm catalog degraded outcome=empty_without_last_good candidates=0 retry=immediate_background",
+        "[safari] initial warm catalog degraded outcome=unpublished_failure candidates=0 retry=immediate_background",
     );
 }
 
@@ -261,23 +258,23 @@ fn start_refresh_poll(ctx: &Context) {
     }));
 }
 
-async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
-    let Some(pid) = candidate.pid_value() else {
-        return ResolveResponse::unresolved();
+async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
+    let Some(pid) = row.pid_value() else {
+        return PerformResponse::unhandled();
     };
-    let payload = candidate.payload_as::<TabPayload>();
+    let payload = row.payload_as::<TabPayload>();
     let url = payload
         .as_ref()
         .map(|p| p.url.clone())
-        .or_else(|| candidate.url_value().map(str::to_string))
+        .or_else(|| row.url_value().map(str::to_string))
         .unwrap_or_default();
     let app_name = payload
         .as_ref()
         .map(|p| p.app_name.clone())
         .unwrap_or_else(|| "Safari".to_string());
-    activate_app(ctx, pid).await;
+    ctx.activate(pid).await;
     if url.is_empty() {
-        return ResolveResponse::resolved(Some(pid));
+        return PerformResponse::ok().target_pid(pid);
     }
     let script = format!(
         r#"
@@ -313,25 +310,22 @@ return "missing"
         );
     }
     // The window was activated regardless, so still report a best-effort raise.
-    ResolveResponse::resolved(Some(pid))
+    PerformResponse::ok().target_pid(pid)
 }
 
-async fn perform_source_action(
-    ctx: &Context,
-    action: &SourceActionRequest,
-) -> SourceActionResponse {
+async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformResponse {
     let Some(pid) = action.context.pid else {
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     };
     let bundle = action.context.bundle_id.clone().unwrap_or_default();
     if !SAFARI_BUNDLES.contains(&bundle.as_str()) {
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     }
     let app_name = canonical_app_name(&bundle).to_string();
     match action.name.as_str() {
         "tab_select" => {
-            let Some(index) = action.index.filter(|n| *n > 0) else {
-                return SourceActionResponse::unhandled();
+            let Some(index) = action.index().filter(|n| *n > 0) else {
+                return PerformResponse::unhandled();
             };
             // Safari's AppleScript uses `set current tab of w to tab N of w`
             // rather than Chromium's `set active tab index`. The walk-windows
@@ -359,9 +353,9 @@ return "missing"
             );
             let result = run_osascript(ctx, &script, Duration::from_secs(5)).await;
             if result.ok && result.stdout.trim() == "ok" {
-                SourceActionResponse::performed(Some(pid))
+                PerformResponse::ok().target_pid(pid)
             } else {
-                SourceActionResponse::failed(Some(pid))
+                PerformResponse::fail("tab_select did not confirm")
             }
         }
         "tab_new" => {
@@ -383,9 +377,9 @@ end tell
             );
             let result = run_osascript(ctx, &script, Duration::from_secs(5)).await;
             if result.ok && result.stdout.trim() == "ok" {
-                SourceActionResponse::performed(Some(pid))
+                PerformResponse::ok().target_pid(pid)
             } else {
-                SourceActionResponse::failed(Some(pid))
+                PerformResponse::fail("tab_new did not confirm")
             }
         }
         "tab_close" => {
@@ -404,12 +398,12 @@ end tell
             );
             let result = run_osascript(ctx, &script, Duration::from_secs(5)).await;
             if result.ok && result.stdout.trim() == "ok" {
-                SourceActionResponse::performed(Some(pid))
+                PerformResponse::ok().target_pid(pid)
             } else {
-                SourceActionResponse::failed(Some(pid))
+                PerformResponse::fail("tab_close did not confirm")
             }
         }
-        _ => SourceActionResponse::unhandled(),
+        _ => PerformResponse::unhandled(),
     }
 }
 
@@ -418,14 +412,6 @@ fn canonical_app_name(bundle_id: &str) -> &'static str {
         "com.apple.SafariTechnologyPreview" => "Safari Technology Preview",
         _ => "Safari",
     }
-}
-
-async fn activate_app(ctx: &Context, pid: i64) -> bool {
-    ctx.call_host("app.activate", json!({ "pid": pid }))
-        .await
-        .get("ok")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
 }
 
 /// Site aliases are per-app content the plugin owns — the host ranker has
@@ -443,11 +429,15 @@ fn main() {
 }
 
 #[cfg(test)]
-mod refresh_tests {
+mod tests {
     use super::*;
 
     #[test]
-    fn startup_refresh_budget_stays_below_host_initialize_timeout() {
-        assert!(STARTUP_REFRESH_BUDGET < Duration::from_secs(15));
+    fn gmail_urls_gain_search_aliases_and_other_urls_do_not() {
+        assert_eq!(
+            url_aliases("https://mail.google.com/mail/u/0/"),
+            Some("gmail gmail.com")
+        );
+        assert_eq!(url_aliases("https://example.com/"), None);
     }
 }

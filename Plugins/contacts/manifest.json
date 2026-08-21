@@ -13,20 +13,18 @@
     "./flash-plugin-contacts"
   ],
   "priority": 12,
-  "commands": {
-    "items": [
-      {
-        "command": "contacts",
-        "subcommand": "open",
-        "description": "Open Contacts.app"
-      },
-      {
-        "command": "contacts",
-        "subcommand": "refresh",
-        "description": "Refresh the cached contacts list"
-      }
-    ]
-  },
+  "commands": [
+    {
+      "command": "contacts",
+      "subcommand": "open",
+      "description": "Open Contacts.app"
+    },
+    {
+      "command": "contacts",
+      "subcommand": "refresh",
+      "description": "Refresh the cached contacts list"
+    }
+  ],
   "listen": [
     "core:config.*",
     "core:apps.*"

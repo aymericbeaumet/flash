@@ -202,20 +202,19 @@ extension AppDelegate {
     }
   }
 
-  /// Pull active plugin stores in parallel on main, then keep AX-dependent URL
-  /// disambiguation serialized on AppMonitor's queue. Completion returns to main.
+  /// Read the warm location catalogs synchronously (built-ins + the plugin
+  /// catalog store), then keep AX-dependent URL disambiguation serialized on
+  /// AppMonitor's queue. Completion returns to main.
   private func resolveCurrentLocation(
     in context: AppContext,
     completion: @escaping (Candidate?) -> Void
   ) {
-    registry.locationSnapshotCandidates(scope: .all) { [weak self] candidates in
-      guard let self else { return }
-      let registry: SourceRegistry = self.registry
-      self.monitor.axQueue.async {
-        let location = registry.currentLocation(in: context, candidates: candidates)
-        DispatchQueue.main.async {
-          completion(location)
-        }
+    let candidates = registry.locationSnapshotCandidates(scope: .all)
+    let registry: SourceRegistry = self.registry
+    monitor.axQueue.async {
+      let location = registry.currentLocation(in: context, candidates: candidates)
+      DispatchQueue.main.async {
+        completion(location)
       }
     }
   }

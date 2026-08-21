@@ -1,31 +1,27 @@
 use flash_plugin::{run, Candidate, Context, Event};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 use std::time::Instant;
 
-const SOURCE_ID: &str = "plugin:snippets";
 const SOURCE_ITEMS: &str = "snippets.items";
 
-/// Row/field caps keep the catalog far below the SDK's 10,000-row / 4 MiB
-/// publication limits (titles 4 KiB, effect text 64 KiB) — one oversized
-/// snippet must degrade to a skipped row, never reject the whole snapshot.
+/// Row/field caps keep the catalog far below the protocol's 10,000-row /
+/// 4 MiB catalog quotas (titles 4 KiB, effect text 64 KiB) — one oversized
+/// snippet must degrade to a skipped row, never make the host reject the
+/// whole publish.
 const MAX_SNIPPETS: usize = 2_000;
 const MAX_NAME_BYTES: usize = 1_024;
 const MAX_TEXT_BYTES: usize = 60 * 1_024;
 const MAX_PREVIEW_CHARS: usize = 80;
 
-// Compile-time guards: the caps above must stay inside the SDK publication
-// limits (10,000 rows; 4 KiB titles; 64 KiB effect text).
+// Compile-time guards: the caps above must stay inside the host's catalog
+// quotas (10,000 rows; 4 KiB titles; 64 KiB effect text).
 const _: () = assert!(MAX_SNIPPETS < 10_000);
 const _: () = assert!(MAX_NAME_BYTES <= 4 * 1024);
 const _: () = assert!(MAX_TEXT_BYTES < 64 * 1024);
 
-/// Fingerprint of the last published catalog, used to signal
-/// `sources.invalidated` only when a rebuild actually changed content.
-static LAST_FINGERPRINT: Mutex<Option<u64>> = Mutex::new(None);
 static REBUILD_GATE: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
@@ -36,8 +32,8 @@ flash_plugin::plugin!(Snippets);
 impl FlashPlugin for Snippets {
     async fn on_start(&self, ctx: Context) {
         // The config is the single source of truth: every outcome (including
-        // an unset table or an unreadable file) publishes authoritatively, so
-        // initialize never blocks and never fails the readiness gate.
+        // an unset table or an unreadable file) publishes authoritatively —
+        // this runs after the initialize reply and never blocks it.
         rebuild_catalog(&ctx).await;
     }
 
@@ -62,36 +58,13 @@ async fn rebuild_catalog(ctx: &Context) {
     let file = file_snippets(ctx).await;
     let candidates = compose_candidates(ctx, file, inline);
     let count = candidates.len();
-    publish(ctx, candidates);
+    ctx.publish(candidates);
     log_rebuild(
         ctx,
         if count == 0 { "empty" } else { "ok" },
         count,
         started_at,
     );
-}
-
-/// Publish the snapshot and, when a previous publication existed with
-/// different content, tell the host the warm catalog is stale.
-fn publish(ctx: &Context, candidates: Vec<Candidate>) {
-    let fingerprint = fingerprint_of(&candidates);
-    let previous = LAST_FINGERPRINT
-        .lock()
-        .map(|mut last| last.replace(fingerprint))
-        .unwrap_or(None);
-    ctx.set_locations(SOURCE_ID, candidates);
-    if previous.is_some_and(|last| last != fingerprint) {
-        ctx.invalidate_sources();
-    }
-}
-
-fn fingerprint_of(candidates: &[Candidate]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for candidate in candidates {
-        candidate.title.hash(&mut hasher);
-        candidate.meta("subtitle").hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 // ---------------------------------------------------------------------------
@@ -245,11 +218,9 @@ fn compose_candidates(
 /// One snippet row: selection makes the HOST type `text` into the focused app
 /// (the `insert_text` effect) — the plugin itself needs no capabilities.
 fn candidate(name: &str, text: &str) -> Candidate {
-    Candidate::new(name)
+    Candidate::new(SOURCE_ITEMS, name)
         .insert_text(text)
         .kind("snippet")
-        .source_id(SOURCE_ID)
-        .source(SOURCE_ITEMS)
         .subtitle(preview_of(text))
 }
 
@@ -381,8 +352,7 @@ mod tests {
             candidate.effect,
             Some(CandidateEffect::InsertText { ref text }) if text == "¯\\_(ツ)_/¯"
         ));
-        assert_eq!(candidate.meta("source"), Some(SOURCE_ITEMS));
-        assert_eq!(candidate.meta("source_id"), Some(SOURCE_ID));
+        assert_eq!(candidate.source, SOURCE_ITEMS);
         assert_eq!(candidate.meta("kind"), Some("snippet"));
     }
 
@@ -420,14 +390,14 @@ mod tests {
 
     #[tokio::test]
     async fn rebuild_publishes_inline_config_snippets() {
-        let harness = Harness::with_config(
+        let mut harness = Harness::with_config(
             "snippets",
             json!({ "snippets": { "shrug": "¯\\_(ツ)_/¯", "sig": "— A" } }),
         );
         let ctx = harness.context();
         rebuild_catalog(&ctx).await;
-        assert!(ctx.has_locations(SOURCE_ID));
-        let titles: Vec<String> = ctx.warm_locations().into_iter().map(|c| c.title).collect();
+        let rows = harness.drain_published_rows().unwrap();
+        let titles: Vec<String> = rows.into_iter().map(|c| c.title).collect();
         assert_eq!(titles, vec!["shrug", "sig"]);
     }
 
@@ -441,7 +411,7 @@ mod tests {
             .await
             .unwrap();
 
-        let harness = Harness::with_config(
+        let mut harness = Harness::with_config(
             "snippets",
             json!({
                 "file": file.to_string_lossy(),
@@ -450,8 +420,8 @@ mod tests {
         );
         let ctx = harness.context();
         rebuild_catalog(&ctx).await;
-        let warm = ctx.warm_locations();
-        let summary: Vec<(&str, Option<&str>)> = warm
+        let rows = harness.drain_published_rows().unwrap();
+        let summary: Vec<(&str, Option<&str>)> = rows
             .iter()
             .map(|c| (c.title.as_str(), c.meta("subtitle")))
             .collect();
@@ -463,10 +433,10 @@ mod tests {
 
     #[tokio::test]
     async fn empty_config_publishes_an_authoritative_empty_catalog() {
-        let harness = Harness::new("snippets");
+        let mut harness = Harness::new("snippets");
         let ctx = harness.context();
         rebuild_catalog(&ctx).await;
-        assert!(ctx.has_locations(SOURCE_ID));
-        assert!(ctx.warm_locations().is_empty());
+        let rows = harness.drain_published_rows().unwrap();
+        assert!(rows.is_empty());
     }
 }

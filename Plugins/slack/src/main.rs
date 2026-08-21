@@ -1,13 +1,13 @@
 use std::time::Duration;
 
-use flash_plugin::{run, run_command, CommandRequest, CommandResponse, Context};
+use flash_plugin::{run, run_command, CommandRequest, Context, PerformResponse};
 
 struct Slack;
 
 flash_plugin::plugin!(Slack);
 
 impl FlashPlugin for Slack {
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         let configured = ctx.config_str("cli");
         let cli = if configured.is_empty() {
             "slack".to_string()
@@ -19,12 +19,12 @@ impl FlashPlugin for Slack {
             "version" => (vec![cli, "version".into()], 120),
             "run" => (prepend(&cli, &command.args), 120),
             other => {
-                return CommandResponse::error(format!("unknown subcommand: {other}"));
+                return PerformResponse::fail(format!("unknown subcommand: {other}"));
             }
         };
         run_command(&ctx, &argv, Duration::from_secs(timeout))
             .await
-            .into_command()
+            .into_perform()
     }
 }
 

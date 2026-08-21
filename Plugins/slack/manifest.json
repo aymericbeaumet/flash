@@ -11,30 +11,27 @@
   "exec": [
     "./flash-plugin-slack"
   ],
-  "request_timeout_ms": 6500,
   "capabilities": [
     "network"
   ],
-  "commands": {
-    "items": [
-      {
-        "command": "slack",
-        "subcommand": "login",
-        "description": "Authenticate the Slack CLI",
-        "timeout_ms": 310000
-      },
-      {
-        "command": "slack",
-        "subcommand": "version",
-        "description": "Show Slack CLI version"
-      },
-      {
-        "command": "slack",
-        "subcommand": "run",
-        "description": "Run slack with raw arguments"
-      }
-    ]
-  },
+  "commands": [
+    {
+      "command": "slack",
+      "subcommand": "login",
+      "description": "Authenticate the Slack CLI",
+      "timeout_ms": 310000
+    },
+    {
+      "command": "slack",
+      "subcommand": "version",
+      "description": "Show Slack CLI version"
+    },
+    {
+      "command": "slack",
+      "subcommand": "run",
+      "description": "Run slack with raw arguments"
+    }
+  ],
   "only_bundle_ids": [
     "com.tinyspeck.slackmacgap",
     "com.tinyspeck.slackmacgap.direct"

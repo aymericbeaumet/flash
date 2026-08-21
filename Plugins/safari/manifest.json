@@ -16,22 +16,20 @@
     "app_control"
   ],
   "priority": 30,
-  "mappings": {
-    "items": [
-      {
-        "key": "R",
-        "mode": "normal",
-        "command": [
-          "flash",
-          "send_key",
-          "--keys=cmd+option+r"
-        ],
-        "only_bundle_ids": [
-          "com.apple.Safari"
-        ]
-      }
-    ]
-  },
+  "mappings": [
+    {
+      "key": "R",
+      "mode": "normal",
+      "command": [
+        "flash",
+        "send_key",
+        "--keys=cmd+option+r"
+      ],
+      "only_bundle_ids": [
+        "com.apple.Safari"
+      ]
+    }
+  ],
   "only_bundle_ids": [
     "com.apple.Safari",
     "com.apple.SafariTechnologyPreview"
@@ -50,7 +48,7 @@
       "priority": "high"
     }
   ],
-  "source_actions": [
+  "actions": [
     "tab_select",
     "tab_new",
     "tab_close"

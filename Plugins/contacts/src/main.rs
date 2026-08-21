@@ -3,15 +3,14 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use flash_plugin::{
-    applescript_quote, run, run_osascript, Candidate, CommandRequest, CommandResponse, Context,
-    Event, RefreshGate, ResolveResponse, RunningApplication,
+    applescript_quote, run, run_osascript, Candidate, CommandRequest, Context, Event,
+    PerformResponse, RefreshGate, RunningApplication,
 };
 use serde::{Deserialize, Serialize};
 
-const SOURCE_ID: &str = "plugin:contacts";
+const SOURCE_CARDS: &str = "contacts.cards";
 const POLL_SECONDS: u64 = 60;
 const SLOW_REFRESH_MS: u128 = 1_000;
-const STARTUP_REFRESH_BUDGET: Duration = Duration::from_secs(8);
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
 
 const LIST_SCRIPT: &str = r#"
@@ -65,19 +64,12 @@ flash_plugin::plugin!(Contacts);
 
 impl FlashPlugin for Contacts {
     async fn on_start(&self, ctx: Context) {
-        let initial_succeeded =
-            match tokio::time::timeout(STARTUP_REFRESH_BUDGET, refresh_candidates(&ctx)).await {
-                Ok(succeeded) => succeeded,
-                Err(_) => {
-                    log_startup_timeout(&ctx);
-                    false
-                }
-            };
-        if should_publish_degraded_initial(initial_succeeded, ctx.has_locations(SOURCE_ID)) {
+        // Runs after the initialize reply, so a slow Contacts listing never
+        // delays the handshake. A failed initial listing publishes nothing —
+        // the host keeps its last-good catalog — and retries in the
+        // background.
+        if !refresh_candidates(&ctx).await {
             log_degraded_initial(&ctx);
-            ctx.set_locations(SOURCE_ID, Vec::new());
-        }
-        if !initial_succeeded {
             let retry_ctx = ctx.clone();
             tokio::spawn(async move {
                 refresh_candidates(&retry_ctx).await;
@@ -102,12 +94,12 @@ impl FlashPlugin for Contacts {
         }
     }
 
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         invoke(&ctx, &command).await
     }
 
-    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
-        resolve(&ctx, &candidate).await
+    async fn on_resolve(&self, ctx: Context, row: Candidate) -> PerformResponse {
+        resolve(&ctx, &row).await
     }
 }
 
@@ -118,7 +110,7 @@ async fn refresh_candidates(ctx: &Context) -> bool {
                 refresh_candidates_inner(&ctx).await
             } else {
                 let started_at = Instant::now();
-                ctx.set_locations(SOURCE_ID, Vec::new());
+                ctx.publish(Vec::new());
                 log_refresh(&ctx, "empty", 0, started_at);
                 true
             }
@@ -135,14 +127,14 @@ fn contacts_is_running(applications: &[RunningApplication]) -> bool {
 async fn refresh_candidates_inner(ctx: &Context) -> bool {
     let started_at = Instant::now();
     let Some(candidates) = collect_candidates(ctx).await else {
-        log_refresh(ctx, "failed", ctx.warm_locations().len(), started_at);
+        log_refresh(ctx, "failed", 0, started_at);
         return false;
     };
     // A successful empty response is authoritative: Contacts is stopped or the
-    // address book has no rows. Only a real subprocess failure preserves the
-    // previous warm snapshot.
+    // address book has no rows. Only a real subprocess failure skips the
+    // publish so the host keeps its last-good catalog.
     let count = candidates.len();
-    ctx.set_locations(SOURCE_ID, candidates);
+    ctx.publish(candidates);
     log_refresh(
         ctx,
         if count == 0 { "empty" } else { "ok" },
@@ -155,7 +147,7 @@ async fn refresh_candidates_inner(ctx: &Context) -> bool {
 async fn clear_candidates(ctx: &Context) {
     REFRESH_GATE
         .run(ctx, |ctx, _running| async move {
-            ctx.set_locations(SOURCE_ID, Vec::new());
+            ctx.publish(Vec::new());
         })
         .await;
 }
@@ -173,33 +165,12 @@ fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) 
     }
 }
 
-fn log_startup_timeout(ctx: &Context) {
-    ctx.log_fields(
-        "warn",
-        "[contacts] initial warm refresh timed out",
-        BTreeMap::from([
-            (
-                "budget_ms".to_string(),
-                STARTUP_REFRESH_BUDGET.as_millis().to_string(),
-            ),
-            (
-                "outcome".to_string(),
-                "timed_out_background_retry".to_string(),
-            ),
-        ]),
-    );
-}
-
-fn should_publish_degraded_initial(initial_succeeded: bool, has_last_good: bool) -> bool {
-    !initial_succeeded && !has_last_good
-}
-
 fn log_degraded_initial(ctx: &Context) {
     ctx.log_fields(
         "warn",
         "[contacts] initial warm catalog degraded",
         BTreeMap::from([
-            ("outcome".to_string(), "empty_without_last_good".to_string()),
+            ("outcome".to_string(), "unpublished_failure".to_string()),
             ("candidates".to_string(), "0".to_string()),
             ("retry".to_string(), "immediate_background".to_string()),
         ]),
@@ -227,10 +198,8 @@ fn candidates_from_output(output: &str) -> Vec<Candidate> {
             continue;
         }
         candidates.push(
-            Candidate::new(name)
+            Candidate::new(SOURCE_CARDS, name)
                 .kind("contact")
-                .source_id(SOURCE_ID)
-                .source("contacts.cards")
                 .subtitle("Contact")
                 .payload_json(&ContactPayload {
                     contact: name.to_string(),
@@ -240,40 +209,40 @@ fn candidates_from_output(output: &str) -> Vec<Candidate> {
     candidates
 }
 
-async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
-    let name = candidate
+async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
+    let name = row
         .payload_as::<ContactPayload>()
         .map(|p| p.contact)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| candidate.title.clone());
+        .unwrap_or_else(|| row.title.clone());
     if name.is_empty() {
-        return ResolveResponse::unresolved();
+        return PerformResponse::unhandled();
     }
     let result = run_osascript(ctx, &select_script(&name), Duration::from_secs(10)).await;
-    ResolveResponse {
-        ok: result.ok,
-        target_pid: None,
-        navigation_url: None,
+    if result.ok {
+        PerformResponse::ok()
+    } else {
+        PerformResponse::fail("contact selection failed")
     }
 }
 
-async fn invoke(ctx: &Context, cmd: &CommandRequest) -> CommandResponse {
+async fn invoke(ctx: &Context, cmd: &CommandRequest) -> PerformResponse {
     match cmd.subcommand.as_str() {
         "open" => {
             if ctx.open_app("com.apple.AddressBook").await {
-                CommandResponse::ok()
+                PerformResponse::ok()
             } else {
-                CommandResponse::error("host.open com.apple.AddressBook failed")
+                PerformResponse::fail("host.open com.apple.AddressBook failed")
             }
         }
         "refresh" => {
             if refresh_candidates(ctx).await {
-                CommandResponse::toast("contacts refreshed")
+                PerformResponse::ok().message("contacts refreshed")
             } else {
-                CommandResponse::error("contacts refresh failed")
+                PerformResponse::fail("contacts refresh failed")
             }
         }
-        other => CommandResponse::error(format!("unknown subcommand: {other}")),
+        other => PerformResponse::fail(format!("unknown subcommand: {other}")),
     }
 }
 
@@ -289,18 +258,6 @@ mod tests {
     fn successful_empty_output_is_an_authoritative_empty_snapshot() {
         assert!(candidates_from_output("").is_empty());
         assert!(candidates_from_output(" \n\t\n").is_empty());
-    }
-
-    #[test]
-    fn startup_refresh_budget_stays_below_host_initialize_timeout() {
-        assert!(STARTUP_REFRESH_BUDGET < Duration::from_secs(15));
-    }
-
-    #[test]
-    fn transient_startup_failure_only_uses_empty_when_no_last_good_exists() {
-        assert!(should_publish_degraded_initial(false, false));
-        assert!(!should_publish_degraded_initial(false, true));
-        assert!(!should_publish_degraded_initial(true, false));
     }
 
     #[test]

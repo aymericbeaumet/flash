@@ -1,24 +1,26 @@
 use flash_plugin::{run, Candidate, Context, RefreshGate};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::{BTreeMap, HashSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-const SOURCE_ID: &str = "plugin:history";
 const SOURCE_URLS: &str = "history.urls";
 const SOURCE_BOOKMARKS: &str = "history.bookmarks";
 const REFRESH_SECONDS: u64 = 300;
 const SLOW_REFRESH_MS: u128 = 1_000;
-const STARTUP_REFRESH_BUDGET: Duration = Duration::from_secs(8);
 
-/// Per-store row caps keep the combined catalog far below the SDK's
-/// 10,000-row / 4 MiB publication limits even with every browser populated.
+/// Per-store row caps keep the combined catalog far below the host's
+/// 10,000-row / 4 MiB catalog quotas even with every browser populated.
 const FIREFOX_HISTORY_LIMIT: usize = 3_000;
 const CHROME_HISTORY_LIMIT: usize = 2_000;
 const BOOKMARKS_PER_BROWSER_LIMIT: usize = 2_000;
 const TOTAL_ROWS_LIMIT: usize = 8_000;
+// Compile-time guards: the caps must stay inside the host's catalog quotas.
+const _: () = assert!(TOTAL_ROWS_LIMIT < 10_000);
+const _: () = assert!(
+    FIREFOX_HISTORY_LIMIT + CHROME_HISTORY_LIMIT + 2 * BOOKMARKS_PER_BROWSER_LIMIT <= 10_000
+);
 const MAX_URL_BYTES: usize = 2_048;
 const MAX_TITLE_CHARS: usize = 256;
 const MAX_BOOKMARK_DEPTH: usize = 64;
@@ -51,9 +53,6 @@ fn chrome_history_sql() -> String {
 }
 
 static REFRESH_GATE: LazyLock<RefreshGate> = LazyLock::new(RefreshGate::default);
-/// Fingerprint of the last published catalog, used to signal
-/// `sources.invalidated` only when a refresh actually changed content.
-static LAST_FINGERPRINT: Mutex<Option<u64>> = Mutex::new(None);
 
 /// One page row read from a browser store, before candidate shaping.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,22 +72,10 @@ flash_plugin::plugin!(History);
 
 impl FlashPlugin for History {
     async fn on_start(&self, ctx: Context) {
-        let initial_succeeded =
-            match tokio::time::timeout(STARTUP_REFRESH_BUDGET, refresh_catalog(&ctx)).await {
-                Ok(succeeded) => succeeded,
-                Err(_) => {
-                    log_startup_timeout(&ctx);
-                    false
-                }
-            };
-        if !initial_succeeded && !ctx.has_locations(SOURCE_ID) {
-            // Authoritative empty placeholder so initialize never blocks on a
-            // slow build; the background retry replaces it in place (and its
-            // fingerprint change raises `sources.invalidated`).
+        // Runs after the initialize reply; a failed first build publishes
+        // nothing (the host keeps last-good) and retries in the background.
+        if !refresh_catalog(&ctx).await {
             log_degraded_initial(&ctx);
-            publish(&ctx, Vec::new());
-        }
-        if !initial_succeeded {
             let retry_ctx = ctx.clone();
             tokio::spawn(async move {
                 refresh_catalog(&retry_ctx).await;
@@ -109,20 +96,21 @@ async fn refresh_catalog(ctx: &Context) -> bool {
         .run(ctx, |ctx, _running| async move {
             let started_at = Instant::now();
             let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-                publish(&ctx, Vec::new());
+                ctx.publish(Vec::new());
                 log_refresh(&ctx, "empty", 0, started_at);
                 return true;
             };
             let firefox = firefox_rows(&ctx, &home).await;
             let chrome = chrome_rows(&ctx, &home).await;
             let (Some(firefox), Some(chrome)) = (firefox, chrome) else {
-                // Transient store failure: keep the last-good snapshot.
-                log_refresh(&ctx, "failed", ctx.warm_locations().len(), started_at);
+                // Transient store failure: don't publish — the host keeps
+                // its last-good catalog.
+                log_refresh(&ctx, "failed", 0, started_at);
                 return false;
             };
             let candidates = compose_candidates(firefox, chrome);
             let count = candidates.len();
-            publish(&ctx, candidates);
+            ctx.publish(candidates);
             log_refresh(
                 &ctx,
                 if count == 0 { "empty" } else { "ok" },
@@ -132,30 +120,6 @@ async fn refresh_catalog(ctx: &Context) -> bool {
             true
         })
         .await
-}
-
-/// Publish the snapshot and, when a previous publication existed with
-/// different content, tell the host the warm catalog is stale.
-fn publish(ctx: &Context, candidates: Vec<Candidate>) {
-    let fingerprint = fingerprint_of(&candidates);
-    let previous = LAST_FINGERPRINT
-        .lock()
-        .map(|mut last| last.replace(fingerprint))
-        .unwrap_or(None);
-    ctx.set_locations(SOURCE_ID, candidates);
-    if previous.is_some_and(|last| last != fingerprint) {
-        ctx.invalidate_sources();
-    }
-}
-
-fn fingerprint_of(candidates: &[Candidate]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for candidate in candidates {
-        candidate.title.hash(&mut hasher);
-        candidate.url.hash(&mut hasher);
-        candidate.meta("source").hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 // ---------------------------------------------------------------------------
@@ -403,11 +367,7 @@ fn compose_candidates(
 /// A candidate with a `url` opens natively on selection — no resolver.
 fn candidate(row: UrlRow, source: &str, kind: &str) -> Candidate {
     let title = tidy_title(&row.title, &row.url);
-    Candidate::new(title)
-        .url(&row.url)
-        .kind(kind)
-        .source_id(SOURCE_ID)
-        .source(source)
+    Candidate::new(source, title).url(&row.url).kind(kind)
 }
 
 fn tidy_title(title: &str, url: &str) -> String {
@@ -448,29 +408,12 @@ fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) 
     }
 }
 
-fn log_startup_timeout(ctx: &Context) {
-    ctx.log_fields(
-        "warn",
-        "[history] initial warm refresh timed out",
-        BTreeMap::from([
-            (
-                "budget_ms".to_string(),
-                STARTUP_REFRESH_BUDGET.as_millis().to_string(),
-            ),
-            (
-                "outcome".to_string(),
-                "timed_out_background_retry".to_string(),
-            ),
-        ]),
-    );
-}
-
 fn log_degraded_initial(ctx: &Context) {
     ctx.log_fields(
         "warn",
         "[history] initial warm catalog degraded",
         BTreeMap::from([
-            ("outcome".to_string(), "empty_without_last_good".to_string()),
+            ("outcome".to_string(), "unpublished_failure".to_string()),
             ("candidates".to_string(), "0".to_string()),
             ("retry".to_string(), "immediate_background".to_string()),
         ]),
@@ -490,20 +433,6 @@ mod tests {
             url: url.to_string(),
             title: title.to_string(),
         }
-    }
-
-    #[test]
-    fn startup_refresh_budget_stays_below_host_initialize_timeout() {
-        assert!(STARTUP_REFRESH_BUDGET < Duration::from_secs(15));
-    }
-
-    #[test]
-    fn caps_stay_well_under_the_catalog_publication_limits() {
-        assert!(TOTAL_ROWS_LIMIT < 10_000);
-        assert!(
-            FIREFOX_HISTORY_LIMIT + CHROME_HISTORY_LIMIT + 2 * BOOKMARKS_PER_BROWSER_LIMIT
-                <= 10_000
-        );
     }
 
     #[test]
@@ -606,7 +535,7 @@ mod tests {
                 (
                     c.title.as_str(),
                     c.url.as_deref().unwrap_or(""),
-                    c.meta("source").unwrap_or(""),
+                    c.source.as_str(),
                 )
             })
             .collect();
@@ -618,9 +547,6 @@ mod tests {
                 ("https://b.example/", "https://b.example/", SOURCE_URLS),
             ]
         );
-        assert!(candidates
-            .iter()
-            .all(|c| c.meta("source_id") == Some(SOURCE_ID)));
     }
 
     #[test]
@@ -631,22 +557,6 @@ mod tests {
         let bookmarks = vec![row("https://bm.example/", "Bookmark")];
         let candidates = compose_candidates((history, bookmarks), (Vec::new(), Vec::new()));
         assert_eq!(candidates.len(), TOTAL_ROWS_LIMIT);
-        assert_eq!(candidates[0].meta("source"), Some(SOURCE_BOOKMARKS));
-    }
-
-    #[test]
-    fn fingerprints_change_with_content() {
-        let before = vec![candidate(
-            row("https://a.example/", "A"),
-            SOURCE_URLS,
-            "history",
-        )];
-        let after = vec![candidate(
-            row("https://b.example/", "B"),
-            SOURCE_URLS,
-            "history",
-        )];
-        assert_eq!(fingerprint_of(&before), fingerprint_of(&before.clone()));
-        assert_ne!(fingerprint_of(&before), fingerprint_of(&after));
+        assert_eq!(candidates[0].source, SOURCE_BOOKMARKS);
     }
 }

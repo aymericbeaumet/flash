@@ -1,0 +1,26 @@
+{
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "requires": ["exec"],
+  "description": "perform is the single effect method and its reply is always decodable: an unknown kind answers ok:false (an error — the host must not fall back on garbage) without crashing the plugin, and a follow-up ping proves survival. Kind-specific dispositions (unhandled for unregistered kinds, the full trichotomy) are pinned by the probe suite; this generic spec pins only the universal floor.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 5,
+        "method": "perform",
+        "params": { "kind": "zzz-spec-probe" }
+      }
+    },
+    { "expect": { "id": 5, "result": { "ok": false } }, "within_ms": 5000 },
+    { "send": { "id": 6, "method": "ping", "params": {} } },
+    { "expect": { "id": 6, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

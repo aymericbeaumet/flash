@@ -67,23 +67,24 @@ function toHsl({ r, g, b }: RGB): string {
   return `hsl(${Math.round(h)}, ${pct(s)}, ${pct(l)})`;
 }
 
-const plugin = new Plugin();
-plugin.onQuery = (params) => {
-  const query = String(params.query ?? "").trim().toLowerCase();
-  const rgb = parse(query);
-  if (rgb === null) return [];
-  const hexDigit = (v: number) => v.toString(16).padStart(2, "0");
-  const forms = [
-    `#${hexDigit(rgb.r)}${hexDigit(rgb.g)}${hexDigit(rgb.b)}`,
-    `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`,
-    toHsl(rgb),
-  ];
-  return forms.map(
-    (title): Answer => ({
-      title,
-      subtitle: "color",
-      effect: { type: "copy_text", text: title },
-    }),
-  );
-};
+const plugin = new Plugin({
+  onEvaluate: (params) => {
+    const query = String(params.query ?? "").trim().toLowerCase();
+    const rgb = parse(query);
+    if (rgb === null) return [];
+    const hexDigit = (v: number) => v.toString(16).padStart(2, "0");
+    const forms = [
+      `#${hexDigit(rgb.r)}${hexDigit(rgb.g)}${hexDigit(rgb.b)}`,
+      `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`,
+      toHsl(rgb),
+    ];
+    return forms.map(
+      (title): Answer => ({
+        title,
+        subtitle: "color",
+        effect: { type: "copy_text", text: title },
+      }),
+    );
+  },
+});
 await plugin.serve();

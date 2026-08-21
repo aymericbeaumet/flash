@@ -1,0 +1,107 @@
+{
+  "$comment": "THE machine-readable Flash plugin protocol contract — the single source of truth. Normativity order: this file + the conformance specs > docs/plugin-protocol.md prose > any SDK. Swift asserts its constants equal this file (PluginProtocolParityTests); the spec runner reads deadlines/quotas/errors from here; every one of the 7 SDKs hardcodes these values with a guardrail grep keeping them equal. Changing anything here is a protocol change: update every SDK, every affected plugin, the specs, and the docs in the same commit (repo rule 9 — no compatibility shims, no version bump while Flash has no external users).",
+  "protocol_version": 1,
+  "deadlines_ms": {
+    "$comment": "One deadline table. startup: initialize must be answered immediately (no warm-catalog wait; config [plugins] startup_timeout tunes it). query: per-keystroke evaluate. live: search + hints (late replies dropped, non-fatal). perform: all four kinds; a manifest commands[] entry timeout_ms overrides for that entry. ping: reply budget for the idle-liveness probe (sent only after idle_before_ping_ms of inbound silence with no request in flight; ONE miss tears down). shutdown_grace: stdin-close -> SIGTERM; +500ms -> SIGKILL.",
+    "startup": 5000,
+    "query": 50,
+    "live": 1000,
+    "perform": 10000,
+    "ping": 10000,
+    "idle_before_ping": 60000,
+    "shutdown_grace": 1000
+  },
+  "methods": {
+    "host_to_plugin": {
+      "initialize": "request {protocol_version} -> {ok, protocol_version}; reply immediately, once ever; ok:false or a version mismatch is terminal (flush, exit 0)",
+      "ping": "request {} -> {ok:true}",
+      "event": "notification {name, payload}; never replied",
+      "evaluate": "request {query, scope, surface} -> {ok, answers}; CPU-only over pre-warmed state",
+      "search": "request {query, scope} -> {ok, rows}; live sources only, may do real work",
+      "hints": "request {bundle_id, pid, front_window_frame} -> {ok, targets, context_pid?}; always live",
+      "perform": "request {kind: resolve|command|action|navigate, ...} -> {ok, target_pid?, navigation_url?, message?} | {ok:false, unhandled:true} | {ok:false, error}"
+    },
+    "plugin_to_host_notifications": {
+      "publish": "{rows} — full-replacement catalog; host-owned store; empty rows = authoritative empty; transient failure = don't publish (host keeps last-good)",
+      "status": "{segments: {name: value}} — manifest-declared names only; \"\" clears",
+      "log": "{level, message, fields} — content-free"
+    },
+    "plugin_to_host_rpcs": {
+      "host.ping": null,
+      "host.fetch": "network_fetch",
+      "host.normal_mode_target": "app_control",
+      "host.activate": "app_control",
+      "host.open": "open",
+      "host.post_media_key": "media_keys",
+      "host.process_table": "process_control",
+      "host.signal": "process_control",
+      "host.clipboard_write": "clipboard",
+      "host.notify": "notify",
+      "host.storage_get": null,
+      "host.storage_set": null,
+      "host.post_keys": "accessibility",
+      "host.post_global_key": "accessibility",
+      "host.ax_snapshot": "accessibility",
+      "host.ax_perform": "accessibility",
+      "host.ax_set": "accessibility",
+      "host.ax_select_child": "accessibility"
+    }
+  },
+  "perform_kinds": ["resolve", "command", "action", "navigate"],
+  "row": {
+    "$comment": "Catalog row shape for publish and search. `source` is first-class and must name a manifest sources[].name; routing source_id stays host-stamped and never crosses the wire.",
+    "required": ["source", "title"],
+    "optional": ["url", "metadata", "effect"]
+  },
+  "effects": {
+    "$comment": "Closed union. copy_text/insert_text everywhere; open on rows only (answers cannot manufacture navigation). There is deliberately no run effect — argv side effects belong in perform, inside the sandbox.",
+    "rows": ["copy_text", "insert_text", "open"],
+    "answers": ["copy_text", "insert_text"]
+  },
+  "quotas": {
+    "$comment": "Atomic rejection doctrine: any violation rejects the complete payload (a publish keeps the previous catalog; a reply serves empty); nothing is ever truncated.",
+    "frame_bytes": 10485760,
+    "catalog_rows": 10000,
+    "catalog_bytes": 4194304,
+    "title_bytes": 4096,
+    "url_bytes": 16384,
+    "metadata_entries": 64,
+    "metadata_key_bytes": 256,
+    "metadata_value_bytes": 65536,
+    "effect_text_bytes": 65536,
+    "answers": 16,
+    "answers_bytes": 262144,
+    "answer_field_bytes": 16384,
+    "clipboard_write_bytes": 1048576,
+    "notify_message_bytes": 1024,
+    "storage_key_bytes": 128,
+    "storage_value_bytes": 65536,
+    "storage_entries": 256,
+    "fetch_response_bytes": 1048576,
+    "fetch_timeout_ms": 8000
+  },
+  "errors": {
+    "$comment": "Canonical EXACT protocol-level error strings (spec-pinned; domain failures stay free-form and content-free). The response law: every result carries boolean `ok`; ok:false carries a non-empty `error` — except perform's {ok:false, unhandled:true} (not mine; host MAY fall back). A perform {ok:false, error} means mine-but-broke: the host MUST NOT fall back.",
+    "unknown_method": "unknown method: <method>",
+    "protocol_mismatch": "protocol version mismatch: host v<H>, plugin v1",
+    "initialize_repeated": "initialize may only be called once",
+    "host_closed": "host closed stdin",
+    "host_call_timeout": "host call timed out",
+    "frame_overflow": "response exceeded outbound frame limit",
+    "capability_denied": "missing <capability> capability"
+  },
+  "capabilities": [
+    "accessibility",
+    "app_control",
+    "clipboard",
+    "media_keys",
+    "network",
+    "network_fetch",
+    "notify",
+    "open",
+    "process_control",
+    "subprocess"
+  ],
+  "id_semantics": "positive monotonic integers per sender; host and plugin counters are independent and may overlap (an inbound id+method frame is always a request). Exactly one reply per id'd request. Responses to unknown ids are dropped silently. There is no cancellation: late replies are dropped and the deadline table is the contract.",
+  "encoding": "UTF-8 JSON, one object per newline-terminated line both directions; geometry in NSScreen coordinates; undecodable or oversized lines are dropped (never fatal), the stream self-heals at the next newline"
+}

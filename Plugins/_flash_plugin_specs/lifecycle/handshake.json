@@ -1,25 +1,26 @@
 {
-  "contract": "docs/plugin-protocol.md#lifecycle-methods",
-  "description": "The v1 lifecycle every plugin must speak: initialize echoes protocol version 1, heartbeat decodes a negative id, an event notification full of doubles (incl. a negative window origin, exactly what the host emits for a display left of the primary) is absorbed, an unknown id'd request is never silently dropped, and shutdown replies before exit.",
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "description": "The lifecycle every plugin must speak: initialize replies immediately echoing protocol version 1 (no warm-catalog wait — on_start runs after the reply), ping answers ok, a repeated initialize is NAK'd with the canonical string while the plugin keeps serving, an event notification full of doubles (incl. a negative window origin, exactly what the host emits for a display left of the primary) is absorbed without a reply, an unknown id'd request is never silently dropped, and stdin EOF is the shutdown signal: cleanup, exit 0.",
   "steps": [
     {
-      "send": {
-        "id": 1,
-        "method": "initialize",
-        "params": {
-          "plugin_id": "${plugin_id}",
-          "version": "0.1.0",
-          "protocol_version": 1,
-          "running_applications": []
-        }
-      }
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
     },
     {
       "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
-      "within_ms": 15000
+      "within_ms": 5000
     },
-    { "send": { "id": -1, "method": "heartbeat" } },
-    { "expect": { "id": -1, "result": { "ok": true } }, "within_ms": 5000 },
+    { "send": { "id": 2, "method": "ping", "params": {} } },
+    { "expect": { "id": 2, "result": { "ok": true } }, "within_ms": 5000 },
+    {
+      "send": { "id": 3, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": {
+        "id": 3,
+        "result": { "ok": false, "error": "initialize may only be called once" }
+      },
+      "within_ms": 5000
+    },
     {
       "send": {
         "method": "event",
@@ -48,11 +49,13 @@
     {
       "expect": {
         "id": 7,
-        "result": { "ok": false, "error": { "$type": "string" } }
+        "result": { "ok": false, "error": "unknown method: driver.unknown" }
       },
       "within_ms": 5000
     },
-    { "send": { "id": 3, "method": "shutdown", "params": {} } },
-    { "expect": { "id": 3, "result": { "ok": true } }, "within_ms": 5000 }
+    { "send": { "id": 8, "method": "ping", "params": {} } },
+    { "expect": { "id": 8, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
   ]
 }

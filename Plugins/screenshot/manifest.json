@@ -7,96 +7,92 @@
     "ruby",
     "main.rb"
   ],
-  "commands": {
-    "items": [
-      {
-        "command": "screenshot",
-        "subcommand": "",
-        "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)"
-      },
-      {
-        "command": "screenshot",
-        "subcommand": "options",
-        "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)"
-      },
-      {
-        "command": "screenshot",
-        "subcommand": "screen",
-        "description": "Capture the screen with macOS Screenshot (Cmd-Shift-3)"
-      },
-      {
-        "command": "screenshot",
-        "subcommand": "selection",
-        "description": "Capture a selected region with macOS Screenshot (Cmd-Shift-4)"
-      },
-      {
-        "command": "screenshot",
-        "subcommand": "window",
-        "description": "Capture a window with macOS Screenshot (Cmd-Shift-4, Space)"
-      },
-      {
-        "command": "screenshot",
-        "subcommand": "screen_clipboard",
-        "description": "Copy a screen capture to the clipboard (Cmd-Ctrl-Shift-3)"
-      },
-      {
-        "command": "screenshot",
-        "subcommand": "selection_clipboard",
-        "description": "Copy a selected-region capture to the clipboard (Cmd-Ctrl-Shift-4)"
-      },
-      {
-        "command": "screenshot",
-        "subcommand": "window_clipboard",
-        "description": "Copy a window capture to the clipboard (Cmd-Ctrl-Shift-4, Space)"
-      }
-    ]
-  },
-  "verbs": {
-    "items": [
-      {
-        "name": "screenshot_options",
-        "command": "screenshot",
-        "subcommand": "options",
-        "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)."
-      },
-      {
-        "name": "screenshot_screen",
-        "command": "screenshot",
-        "subcommand": "screen",
-        "description": "Capture the screen with macOS Screenshot (Cmd-Shift-3)."
-      },
-      {
-        "name": "screenshot_selection",
-        "command": "screenshot",
-        "subcommand": "selection",
-        "description": "Capture a selected region with macOS Screenshot (Cmd-Shift-4)."
-      },
-      {
-        "name": "screenshot_window",
-        "command": "screenshot",
-        "subcommand": "window",
-        "description": "Capture a window with macOS Screenshot (Cmd-Shift-4, Space)."
-      },
-      {
-        "name": "screenshot_screen_clipboard",
-        "command": "screenshot",
-        "subcommand": "screen_clipboard",
-        "description": "Copy a screen capture to the clipboard (Cmd-Ctrl-Shift-3)."
-      },
-      {
-        "name": "screenshot_selection_clipboard",
-        "command": "screenshot",
-        "subcommand": "selection_clipboard",
-        "description": "Copy a selected-region capture to the clipboard (Cmd-Ctrl-Shift-4)."
-      },
-      {
-        "name": "screenshot_window_clipboard",
-        "command": "screenshot",
-        "subcommand": "window_clipboard",
-        "description": "Copy a window capture to the clipboard (Cmd-Ctrl-Shift-4, Space)."
-      }
-    ]
-  },
+  "commands": [
+    {
+      "command": "screenshot",
+      "subcommand": "",
+      "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)"
+    },
+    {
+      "command": "screenshot",
+      "subcommand": "options",
+      "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)"
+    },
+    {
+      "command": "screenshot",
+      "subcommand": "screen",
+      "description": "Capture the screen with macOS Screenshot (Cmd-Shift-3)"
+    },
+    {
+      "command": "screenshot",
+      "subcommand": "selection",
+      "description": "Capture a selected region with macOS Screenshot (Cmd-Shift-4)"
+    },
+    {
+      "command": "screenshot",
+      "subcommand": "window",
+      "description": "Capture a window with macOS Screenshot (Cmd-Shift-4, Space)"
+    },
+    {
+      "command": "screenshot",
+      "subcommand": "screen_clipboard",
+      "description": "Copy a screen capture to the clipboard (Cmd-Ctrl-Shift-3)"
+    },
+    {
+      "command": "screenshot",
+      "subcommand": "selection_clipboard",
+      "description": "Copy a selected-region capture to the clipboard (Cmd-Ctrl-Shift-4)"
+    },
+    {
+      "command": "screenshot",
+      "subcommand": "window_clipboard",
+      "description": "Copy a window capture to the clipboard (Cmd-Ctrl-Shift-4, Space)"
+    }
+  ],
+  "verbs": [
+    {
+      "name": "screenshot_options",
+      "command": "screenshot",
+      "subcommand": "options",
+      "description": "Open the macOS Screenshot toolbar (Cmd-Shift-5)."
+    },
+    {
+      "name": "screenshot_screen",
+      "command": "screenshot",
+      "subcommand": "screen",
+      "description": "Capture the screen with macOS Screenshot (Cmd-Shift-3)."
+    },
+    {
+      "name": "screenshot_selection",
+      "command": "screenshot",
+      "subcommand": "selection",
+      "description": "Capture a selected region with macOS Screenshot (Cmd-Shift-4)."
+    },
+    {
+      "name": "screenshot_window",
+      "command": "screenshot",
+      "subcommand": "window",
+      "description": "Capture a window with macOS Screenshot (Cmd-Shift-4, Space)."
+    },
+    {
+      "name": "screenshot_screen_clipboard",
+      "command": "screenshot",
+      "subcommand": "screen_clipboard",
+      "description": "Copy a screen capture to the clipboard (Cmd-Ctrl-Shift-3)."
+    },
+    {
+      "name": "screenshot_selection_clipboard",
+      "command": "screenshot",
+      "subcommand": "selection_clipboard",
+      "description": "Copy a selected-region capture to the clipboard (Cmd-Ctrl-Shift-4)."
+    },
+    {
+      "name": "screenshot_window_clipboard",
+      "command": "screenshot",
+      "subcommand": "window_clipboard",
+      "description": "Copy a window capture to the clipboard (Cmd-Ctrl-Shift-4, Space)."
+    }
+  ],
   "help": {
     "topics": [
       {

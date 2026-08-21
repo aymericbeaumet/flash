@@ -1,19 +1,17 @@
 //! Strongly-typed tokio scaffolding for Flash plugins.
 //!
-//! This crate speaks the length-prefixed MessagePack wire protocol over
-//! stdin/stdout — a 4-byte big-endian payload length followed by a
-//! MessagePack-encoded value — plus request/response correlation, the
-//! `initialize`/`heartbeat`/`shutdown` lifecycle, and structured logging.
-//! Everything a plugin touches is a typed value: a plugin receives a
-//! [`Request`] / [`Event`] and returns a [`Response`].
+//! This crate speaks the NDJSON wire protocol over stdin/stdout — UTF-8, one
+//! JSON object per newline-terminated line — plus request/response
+//! correlation, the immediate-initialize lifecycle, the unified `perform`
+//! dispatch, the push-based `publish`/`status`/`log` notifications, and the
+//! typed host RPC client. Everything a plugin touches is a typed value.
 
 mod context;
-mod limits;
+mod emit;
 pub mod process;
 mod runtime;
 pub mod testing;
 mod types;
-mod wire;
 
 /// Generate the typed plugin surface from `manifest.json` at compile time. See
 /// the `flash_plugin_macros` crate. Invoke as `flash_plugin::plugin!(MyPlugin);`
@@ -26,9 +24,8 @@ pub use context::{
 };
 pub use runtime::{run, Plugin};
 pub use types::{
-    candidate_metadata, ActionContext, Candidate, CandidateEffect, CommandRequest, CommandResponse,
-    DiscoverRequest, DiscoverResponse, Event, Frame, JumpTarget, LiveQueryRequest,
-    LiveQueryResponse, NavigationRequest, Priority, QueryAnswer, QueryEvaluateRequest,
-    QueryEvaluateResponse, Request, ResolveResponse, Response, RunningApplication,
-    SourceActionRequest, SourceActionResponse, TERMINAL_LINK_ROLE,
+    candidate_metadata, ActionContext, ActionRequest, Candidate, CandidateEffect, CommandRequest,
+    EvaluateRequest, EvaluateResponse, Event, Frame, HintsRequest, HintsResponse, JumpTarget,
+    NavigateRequest, Perform, PerformResponse, Priority, QueryAnswer, RunningApplication,
+    SearchRequest, SearchResponse, TERMINAL_LINK_ROLE,
 };

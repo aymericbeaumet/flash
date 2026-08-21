@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use flash_plugin::{run, CommandRequest, CommandResponse, Context, Event};
+use flash_plugin::{run, CommandRequest, Context, Event, PerformResponse};
 
 const HISTORY_FILE: &str = "history.json";
 const HISTORY_CAP: usize = 50;
@@ -55,7 +55,7 @@ impl FlashPlugin for Clipboard {
         }
     }
 
-    async fn on_command(&self, _ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, _ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.command.as_str() {
             // `:clipboard` opens the host's dedicated history modal. The plugin
             // can't drive macOS UI, so it just hands back the full history
@@ -65,8 +65,8 @@ impl FlashPlugin for Clipboard {
             // `:copy` / `:paste` are top-level commands the host synthesizes as
             // ⌘C / ⌘V against the focused app; the plugin only advertises them
             // so they appear in the command catalog. Accept as no-ops.
-            "copy" | "paste" => CommandResponse::ok(),
-            other => CommandResponse::error(format!("unknown command: {other}")),
+            "copy" | "paste" => PerformResponse::ok(),
+            other => PerformResponse::fail(format!("unknown command: {other}")),
         }
     }
 }
@@ -75,9 +75,9 @@ impl Clipboard {
     /// The full history as a JSON array of `{preview, value}`, most-recent
     /// first — the payload the host's `:clipboard` modal renders. `preview`
     /// is the one-line label; `value` is the full text pasted on selection.
-    fn history_response(&self) -> CommandResponse {
+    fn history_response(&self) -> PerformResponse {
         let Ok(hist) = self.history.lock() else {
-            return CommandResponse::error("clipboard history unavailable".to_string());
+            return PerformResponse::fail("clipboard history unavailable");
         };
         let entries: Vec<HistoryEntry> = hist
             .iter()
@@ -87,12 +87,8 @@ impl Clipboard {
             })
             .collect();
         match serde_json::to_string(&entries) {
-            Ok(json) => CommandResponse {
-                ok: true,
-                stdout: Some(json),
-                ..Default::default()
-            },
-            Err(err) => CommandResponse::error(format!("encode history: {err}")),
+            Ok(json) => PerformResponse::ok().message(json),
+            Err(err) => PerformResponse::fail(format!("encode history: {err}")),
         }
     }
 }

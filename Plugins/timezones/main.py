@@ -60,7 +60,7 @@ def matches(place):
     return [z for z in exact + prefixed if not (z in seen or seen.add(z))]
 
 
-def on_query(params):
+def on_evaluate(params):
     query = params.get("query", "").strip().lower()
     if query != "time" and not query.startswith(("time ", "time in ")):
         return []
@@ -77,5 +77,9 @@ def on_query(params):
 
 
 if __name__ == "__main__":
-    plugin.log("info", f"[timezones] zone index warmed count={len(ZONES)}")
-    plugin.serve(on_query=on_query)
+    plugin.serve(
+        on_evaluate=on_evaluate,
+        on_start=lambda: plugin.log(
+            "info", "[timezones] zone index warmed", {"count": len(ZONES)}
+        ),
+    )

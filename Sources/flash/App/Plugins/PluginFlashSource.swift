@@ -3,18 +3,19 @@ import Darwin
 import FlashCore
 import Foundation
 
+/// Thin `FlashSource` adapter over one plugin: candidates are a synchronous
+/// read of the host-owned catalog store (first paint never waits on a
+/// plugin); search/evaluate/hints/perform pass straight through to the
+/// process. No pre-flight, no availability bookkeeping — a stopped plugin's
+/// requests settle empty inside `PluginProcess`.
 final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
-  /// End-to-end wire warning, deliberately below the host's 50-ms hard
-  /// deadline but above one normal main-runloop delivery hop. The SDK measures
-  /// the synchronous evaluator body itself against the stricter 10-ms budget.
-  private static let slowQueryRoundTripMs = 40
   private let plugin: PluginProcess
+  private let store: PluginCatalogStore
   private let selector: PluginSelectorStack
-  private let availabilityLogLock = NSLock()
-  private var lastUnavailableState: PluginRuntimeState?
 
-  init(plugin: PluginProcess) {
+  init(plugin: PluginProcess, store: PluginCatalogStore) {
     self.plugin = plugin
+    self.store = store
     self.selector = PluginSelectorStack([plugin.manifest.selector])
   }
 
@@ -25,19 +26,16 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     priority + (selector.specificity(in: selectorContext(for: context)) ?? 0)
   }
   var capabilities: FlashSourceCapabilities {
-    // Each capability group is gated on the matching provider opt-in so a
+    // Each capability group is gated on the matching manifest opt-in so a
     // plugin only advertises what it declares. `.jumpTargets` follows `hints`
     // because hint selection is exclusive (highest-priority provider wins, no
     // fallback) — an empty-returning plugin must not displace the core AX walk.
-    // Discrete source actions are intentionally not inferred from candidates:
-    // a generic candidate plugin should not be asked whether it owns `tab_new`
-    // or `app_reload`.
     var caps: FlashSourceCapabilities = []
     if plugin.manifest.providesHints { caps.insert(.jumpTargets) }
     if plugin.manifest.providesCandidates {
       caps.formUnion([.candidates, .appActivation])
     }
-    caps.formUnion(Self.sourceActionCapabilities(plugin.manifest.sourceActions))
+    caps.formUnion(Self.sourceActionCapabilities(plugin.manifest.actions))
     if !plugin.manifest.navigationSchemes.isEmpty {
       caps.insert(.navigationRoutes)
     }
@@ -47,33 +45,33 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     let manifestBundles = Set(plugin.manifest.onlyBundleIDs)
     return manifestBundles.isEmpty ? .always : .bundleIDs(manifestBundles)
   }
+  /// Hints are always a live wire request now — never cache a prepared
+  /// model of plugin targets.
   var readinessPolicy: FlashSourceReadinessPolicy {
-    plugin.manifest.volatile ? .volatile : .continuous
+    plugin.manifest.providesHints ? .volatile : .continuous
   }
-  var resultsAreVolatile: Bool { plugin.manifest.volatile }
+  var resultsAreVolatile: Bool { plugin.manifest.providesHints }
   var fallsBackOnEmptyDiscovery: Bool {
-    plugin.manifest.hintsProvider?.fallbackOnEmpty ?? false
+    plugin.manifest.hints?.fallbackOnEmpty ?? false
   }
   var candidateSourceLabels: [String] { plugin.manifest.candidateSources }
   var candidateSourceDescriptors: [CandidateSourceDescriptor] {
     plugin.manifest.candidateSourceDescriptors
   }
   /// Manifest validation guarantees all-warm or all-live, so the adapter
-  /// classifies whole: a live plugin never serves warm snapshots and only
+  /// classifies whole: a live plugin never serves warm catalogs and only
   /// participates in explicitly scoped queries.
   var servesLiveCandidates: Bool {
-    plugin.manifest.sources.contains { $0.mode == .live }
+    plugin.manifest.sources.contains(where: \.live)
   }
   var navigationSchemes: Set<String> { Set(plugin.manifest.navigationSchemes) }
   var queryEvaluatorIdentifier: String { identifier }
-  var queryEvaluationPriority: Int {
-    plugin.manifest.queriesProvider?.priority ?? plugin.manifest.priority
-  }
+  var queryEvaluationPriority: Int { plugin.manifest.priority }
   var queryEvaluationSurfaces: Set<QueryEvaluationSurface> {
-    Set(plugin.manifest.queriesProvider?.surfaces ?? [])
+    plugin.manifest.providesQueryEvaluation ? [.flashlight] : []
   }
   var queryEvaluationPrefixes: Set<String> {
-    Set(plugin.manifest.queriesProvider?.exclusivePrefixes ?? [])
+    Set(plugin.manifest.query?.prefixes ?? [])
   }
 
   func supports(_ context: AppContext) -> Bool {
@@ -81,25 +79,27 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     return plugin.manifest.providesHints
       || plugin.manifest.providesCandidates
       || plugin.manifest.providesQueryEvaluation
-      || !plugin.manifest.sourceActions.isEmpty
+      || !plugin.manifest.actions.isEmpty
       || !plugin.manifest.navigationSchemes.isEmpty
   }
 
   func discover(in context: AppContext) throws -> [JumpTarget] {
-    if plugin.manifest.volatile {
-      return plugin.discoverTargets(context: context, timeout: 0.5)
-    }
-    return plugin.targets(for: context)
+    plugin.discoverTargets(
+      context: context,
+      timeout: Double(FlashTunables.flashlightLiveQueryTimeoutMs) / 1_000)
   }
 
+  /// Warm candidates are a synchronous host-memory read of the push-based
+  /// catalog store — the plugin published them earlier (or hasn't, and the
+  /// read is an authoritative empty).
   func candidates(
     in environment: FlashSourceEnvironment,
     scope: CandidateScope
   ) -> [Candidate] {
-    // Plugin candidates are pulled, not pushed: the host queries warm plugins
-    // via `snapshotCandidates` when the flashlight opens (and on `@source`/`!`).
-    // There are no host-cached warm locations to read here.
-    []
+    _ = environment
+    _ = scope
+    guard !servesLiveCandidates else { return [] }
+    return store.rows(for: plugin.identifier)
   }
 
   func liveCandidates(
@@ -109,12 +109,12 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     completion: @escaping ([Candidate]) -> Void
   ) {
     _ = environment
-    guard servesLiveCandidates, canDispatchWarmRequest(operation: "sources.query") else {
+    guard servesLiveCandidates else {
       DispatchQueue.main.async { completion([]) }
       return
     }
     let startedNs = DispatchTime.now().uptimeNanoseconds
-    plugin.queryCandidates(
+    plugin.search(
       matching: text,
       scope: scope,
       timeoutMs: FlashTunables.flashlightLiveQueryTimeoutMs
@@ -122,53 +122,9 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
       let elapsedMs = Int(
         (DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
       FlashLog.trace(
-        "[candidate_finder] plugin_live_query source=\(identifier) "
+        "[candidate_finder] plugin_search source=\(identifier) "
           + "ms=\(elapsedMs) count=\(candidates?.count ?? -1)")
       completion(candidates ?? [])
-    }
-  }
-
-  func snapshotCandidates(
-    in environment: FlashSourceEnvironment,
-    scope: CandidateScope,
-    completion: @escaping ([Candidate]) -> Void
-  ) {
-    _ = environment
-    _ = scope
-    guard !servesLiveCandidates else {
-      // A live plugin has no warm catalog; settle instantly so it costs the
-      // barrier and warm fan-outs nothing.
-      completion([])
-      return
-    }
-    guard canDispatchWarmRequest(operation: "sources.snapshot") else {
-      // A cold/dead plugin has no warm store to query. Settle synchronously so
-      // the first-paint barrier spends zero scheduling budget on it.
-      completion([])
-      return
-    }
-    let startedNs = DispatchTime.now().uptimeNanoseconds
-    plugin.snapshotCandidates { [identifier = identifier] candidates in
-      let elapsedMs = Int(
-        (DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
-      if elapsedMs >= 100 {
-        FlashLog.warn(
-          "[candidate_finder] plugin_snapshot_slow source=\(identifier) "
-            + "ms=\(elapsedMs) count=\(candidates.count)")
-      } else if candidates.isEmpty {
-        // Empty result is the diagnostic-interesting case: distinguish "the
-        // plugin isn't ready" from "the plugin ran but has nothing to
-        // contribute". The plugin's lifecycle state and warm-location freshness
-        // tell the user whether to wait, reload, or check focus events.
-        FlashLog.trace(
-          "[candidate_finder] plugin_snapshot source=\(identifier) "
-            + "ms=\(elapsedMs) count=0")
-      } else {
-        FlashLog.trace(
-          "[candidate_finder] plugin_snapshot source=\(identifier) "
-            + "ms=\(elapsedMs) count=\(candidates.count)")
-      }
-      completion(candidates)
     }
   }
 
@@ -177,65 +133,12 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     in environment: FlashSourceEnvironment,
     completion: @escaping ([Candidate]) -> Void
   ) {
+    _ = environment
     guard queryEvaluationSurfaces.contains(request.surface) else {
       completion([])
       return
     }
-    guard canDispatchWarmRequest(operation: "query.evaluate") else {
-      completion([])
-      return
-    }
-    let startedNs = DispatchTime.now().uptimeNanoseconds
-    plugin.evaluateQuery(
-      request,
-      environment: environment
-    ) { [identifier = identifier] candidates in
-      let elapsedMs = Int(
-        (DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
-      if elapsedMs >= Self.slowQueryRoundTripMs {
-        FlashLog.warn(
-          "[query_evaluator] rpc_slow source=\(identifier) elapsed_ms=\(elapsedMs) "
-            + "count=\(candidates.count)")
-      } else {
-        FlashLog.trace(
-          "[query_evaluator] source=\(identifier) elapsed_ms=\(elapsedMs) "
-            + "count=\(candidates.count)")
-      }
-      completion(candidates)
-    }
-  }
-
-  /// Only a ready/degraded process owns a canonical warm store. Every other
-  /// lifecycle state settles immediately so candidate gathering never waits
-  /// for startup/restart work or consumes the first-paint budget.
-  private func canDispatchWarmRequest(operation: String) -> Bool {
-    // Advisory pre-flight over the one shared predicate (state is the only
-    // field readable off the plugin queue; the queue-confined factors are
-    // re-checked authoritatively — and logged — inside sendRequest).
-    let state = plugin.runtimeStateSnapshot()
-    if PluginProcess.warmRequestIsDispatchable(
-      state: state, initializationCompleted: true, processRunning: true)
-    {
-      availabilityLogLock.lock()
-      lastUnavailableState = nil
-      availabilityLogLock.unlock()
-      return true
-    }
-    availabilityLogLock.lock()
-    let shouldLog = lastUnavailableState != state
-    lastUnavailableState = state
-    availabilityLogLock.unlock()
-    if shouldLog {
-      FlashLog.plugin(
-        .warn,
-        pluginID: plugin.identifier,
-        message: "[plugin] warm request skipped operation=\(operation) state=\(state.rawValue)",
-        fields: [
-          "operation": operation,
-          "state": state.rawValue,
-        ])
-    }
-    return false
+    plugin.evaluate(request, completion: completion)
   }
 
   func resolveCandidate(
@@ -243,10 +146,21 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     in environment: FlashSourceEnvironment,
     completion: @escaping (CandidateResolution) -> Void
   ) {
+    _ = environment
     // The plugin owns the location-changing side effect. The host raises the
-    // returned target pid after a successful resolve; pre-activating here makes
-    // failed resolves look like successful app-only opens.
-    plugin.resolveCandidate(candidate, completion: completion)
+    // returned target pid after a successful resolve; pre-activating here
+    // makes failed resolves look like successful app-only opens.
+    plugin.perform(
+      kind: "resolve",
+      params: ["row": PluginWireCodec.candidateJSON(candidate)]
+    ) { outcome in
+      switch outcome {
+      case .performed(let pid, let navigationURL, _):
+        completion(.resolved(pid: pid, navigationURL: navigationURL))
+      case .unhandled, .failed:
+        completion(.unresolved)
+      }
+    }
   }
 
   func performAction(
@@ -255,23 +169,25 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
+    _ = environment
     guard
-      plugin.manifest.supportsSourceAction(
+      plugin.manifest.supportsAction(
         action.wireName,
         context: selectorContext(for: context))
     else {
       DispatchQueue.main.async { completion(.unhandled) }
       return
     }
-    // The wire format (`SourceActionRequest { name, index }`) is already a
-    // single shape on the plugin side, so this method translates the host's
-    // typed `SourceAction` into the matching wire fields and posts one
-    // `source.action` RPC — no per-action dispatch fan-out.
-    plugin.invokeSourceAction(
-      name: action.wireName,
-      context: context,
-      extra: action.wireExtras,
-      completion: completion)
+    var params: [String: Any] = [
+      "name": action.wireName,
+      "context": PluginWireCodec.contextJSON(context),
+    ]
+    if !action.wireExtras.isEmpty {
+      params["args"] = action.wireExtras
+    }
+    plugin.perform(kind: "action", params: params) { outcome in
+      completion(Self.sourceActionResult(from: outcome))
+    }
   }
 
   func restoreNavigation(
@@ -279,13 +195,27 @@ final class PluginFlashSource: FlashSource, FlashQueryEvaluator {
     environment: FlashSourceEnvironment,
     completion: @escaping (SourceActionResult) -> Void
   ) {
-    plugin.restoreNavigation(to: url, completion: completion)
+    _ = environment
+    plugin.perform(kind: "navigate", params: ["url": url.absoluteString]) { outcome in
+      completion(Self.sourceActionResult(from: outcome))
+    }
+  }
+
+  /// Trichotomy → source-action tri-state. `.failed` (including timeout and
+  /// crash coercions) must never fall through to a keystroke fallback.
+  private static func sourceActionResult(from outcome: PluginPerformOutcome) -> SourceActionResult {
+    switch outcome {
+    case .performed(let pid, let navigationURL, _):
+      return .performed(pid: pid, navigationURL: navigationURL)
+    case .unhandled:
+      return .unhandled
+    case .failed:
+      return .failed
+    }
   }
 
   private func selectorContext(for context: AppContext) -> PluginSelectorContext {
-    PluginSelectorContext(
-      bundleID: context.bundleIdentifier,
-      url: selector.usesURL ? NormalModeDispatcher.documentURL(pid: context.processID) : nil)
+    PluginSelectorContext(bundleID: context.bundleIdentifier)
   }
 
   private static func sourceActionCapabilities(_ actions: [String]) -> FlashSourceCapabilities {

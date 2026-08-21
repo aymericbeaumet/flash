@@ -17,11 +17,25 @@ enum PluginSandbox {
   }
 
   /// Reads are broad, minus secrets a keyboard-productivity plugin has no
-  /// business touching and the other plugins' data.
-  private static func secretsReadDeny(baseDataDir: URL) -> String {
-    "(deny file-read* (subpath \(q("~/.ssh"))) (subpath \(q("~/.aws")))"
+  /// business touching and the OTHER plugins' data. The base-data-dir clause
+  /// carves the plugin's own data dir out with require-not INSIDE the deny:
+  /// "a later (allow file* (subpath dataDir)) re-opens the denied subtree"
+  /// is empirically false on modern seatbelt — the earlier subpath deny kept
+  /// winning for reads, which silently broke every plugin reading its own
+  /// data dir (history's sqlite copies were the visible casualty). Rule
+  /// order must never carry that exception; the filter does.
+  private static func secretsReadDeny(baseDataDir: URL, dataDir: URL? = nil) -> String {
+    let baseClause: String
+    if let dataDir {
+      baseClause =
+        "(require-all (subpath \(q(baseDataDir.path)))"
+        + " (require-not (subpath \(q(dataDir.path)))))"
+    } else {
+      baseClause = "(subpath \(q(baseDataDir.path)))"
+    }
+    return "(deny file-read* (subpath \(q("~/.ssh"))) (subpath \(q("~/.aws")))"
       + " (subpath \(q("~/.config/gh"))) (subpath \(q("~/Library/Keychains")))"
-      + " (subpath \(q(baseDataDir.path))))"
+      + " \(baseClause))"
   }
 
   /// Seatbelt profile for the plugin's runtime process: allow everything but
@@ -40,8 +54,8 @@ enum PluginSandbox {
   /// Deny-default profile generated from the manifest's `sandbox` spec plus
   /// capability composition: everything is denied except loading the binary
   /// (plugin root + system libraries), the plugin's own data dir, declared
-  /// exec/read/write allowances, and network-outbound when the `network`
-  /// capability is declared.
+  /// exec/appleevents/signal/mach allowances, and network-outbound when the
+  /// `network` capability is declared.
   static func denyDefaultSandboxProfile(
     for manifest: PluginManifest, spec: PluginSandboxSpec, root: URL, dataDir: URL,
     executablePath: String = ""
@@ -63,12 +77,11 @@ enum PluginSandbox {
       // Reads are broad — dyld's startup reads defeat a strict allowlist
       // (it aborts, without a message, on cache paths that vary per OS
       // release) — minus the secrets deny below. Exfiltration is
-      // contained by the write/network/exec denials, and a per-plugin
-      // spec.read can re-open a denied subtree (rule order: later wins).
+      // contained by the write/network/exec denials.
       "(allow file-read*)",
-      secretsReadDeny(baseDataDir: baseDataDir),
-      // The plugin's own writable data root, re-opened after the
-      // base-data-dir deny above.
+      secretsReadDeny(baseDataDir: baseDataDir, dataDir: dataDir),
+      // The plugin's own writable data root (reads stay open via the
+      // require-not carve-out in the deny above).
       "(allow file* (subpath \(q(dataDir.path))))",
       "(allow file-write-data (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))",
       "(allow file-read-metadata)",
@@ -125,14 +138,6 @@ enum PluginSandbox {
           + " (global-name \"com.apple.tccd\")"
           + " (global-name \"com.apple.tccd.system\"))")
       lines.append("(allow appleevent-send)")
-    }
-    if !spec.read.isEmpty {
-      let subpaths = spec.read.map { "(subpath \(q($0)))" }.joined(separator: " ")
-      lines.append("(allow file-read* \(subpaths))")
-    }
-    if !spec.write.isEmpty {
-      let subpaths = spec.write.map { "(subpath \(q($0)))" }.joined(separator: " ")
-      lines.append("(allow file* \(subpaths))")
     }
     return lines.joined(separator: "\n")
   }
@@ -267,7 +272,7 @@ enum PluginSandbox {
       "(allow process-fork)",
       "(allow file-map-executable)",
       "(allow file-read*)",
-      secretsReadDeny(baseDataDir: baseDataDir),
+      secretsReadDeny(baseDataDir: baseDataDir, dataDir: dataDir),
       "(allow file* (subpath \(q(root.path))) (subpath \(q(dataDir.path)))"
         + " (subpath \"/private/tmp\") (subpath \"/private/var/folders\"))",
       "(allow file-write-data (literal \"/dev/null\"))",

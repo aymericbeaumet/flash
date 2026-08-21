@@ -4,15 +4,13 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use flash_plugin::{
-    run, Candidate, Context, Event, NavigationRequest, ResolveResponse, RunningApplication,
-    SourceActionRequest, SourceActionResponse,
+    run, ActionRequest, Candidate, Context, Event, NavigateRequest, PerformResponse,
+    RunningApplication,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-const SOURCE_ID: &str = "plugin:firefox";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
-const STARTUP_REFRESH_BUDGET: Duration = Duration::from_secs(10);
 const MAX_NODES: u64 = 3_000;
 const MAX_FIREFOX_PROFILES: usize = 32;
 const MAX_SESSIONSTORE_FILES: usize = 64;
@@ -23,8 +21,8 @@ const FIREFOX: &str = "org.mozilla.firefox";
 const FIREFOX_DEV: &str = "org.mozilla.firefoxdeveloperedition";
 
 /// Serialize AX work per Firefox pid. The host broker purges one pid's handle
-/// table at the start of `ax.snapshot`, so same-pid snapshots and presses must
-/// never overlap. Different Firefox editions have independent handle tables and
+/// table at the start of `host.ax_snapshot`, so same-pid snapshots and presses
+/// must never overlap. Different Firefox editions have independent handle tables and
 /// refresh concurrently so two 5-second broker deadlines still fit inside the
 /// 10-second startup budget.
 static AX_SESSIONS: LazyLock<Mutex<HashMap<i64, Weak<tokio::sync::Mutex<()>>>>> =
@@ -92,7 +90,7 @@ struct TabPayload {
 }
 
 /// One synthesized chord of the tab-jump plan (exactly one modifier — the
-/// host's `input.post_keys` is chord-only by contract).
+/// host's `host.post_keys` is chord-only by contract).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Chord {
     key_code: u32,
@@ -147,20 +145,14 @@ fn tab_key_plan(index: usize, tab_count: usize) -> Option<Vec<Chord>> {
 
 /// Post a chord plan to `pid` through the host. Modifier chords dispatch via
 /// the target's key-equivalent path, so Firefox does not need to be
-/// frontmost — the jump runs in parallel with `app.activate`.
+/// frontmost — the jump runs in parallel with `host.activate`.
 async fn post_keys(ctx: &Context, pid: i64, plan: &[Chord]) -> bool {
     let keys: Vec<Value> = plan
         .iter()
         .map(|chord| json!({"key_code": chord.key_code, "modifiers": [chord.modifier]}))
         .collect();
-    ctx.call_host(
-        "input.post_keys",
-        json!({"pid": pid, "keys": keys, "interval_ms": 16}),
-    )
-    .await
-    .get("ok")
-    .and_then(Value::as_bool)
-    .unwrap_or(false)
+    ctx.post_keys(json!({"pid": pid, "keys": keys, "interval_ms": 16}))
+        .await
 }
 
 struct Firefox;
@@ -169,20 +161,10 @@ flash_plugin::plugin!(Firefox);
 
 impl FlashPlugin for Firefox {
     async fn on_start(&self, ctx: Context) {
-        let initial_succeeded =
-            match tokio::time::timeout(STARTUP_REFRESH_BUDGET, refresh_locations(&ctx)).await {
-                Ok(succeeded) => succeeded,
-                Err(_) => {
-                    ctx.log(
-                        "warn",
-                        "[firefox] initial warm refresh timed out budget_ms=10000",
-                    );
-                    false
-                }
-            };
-        if !initial_succeeded && !ctx.has_locations(SOURCE_ID) {
+        // Runs after the initialize reply; a failed first cycle publishes
+        // nothing (the host keeps last-good) and retries in the background.
+        if !refresh_locations(&ctx).await {
             log_degraded_initial(&ctx);
-            ctx.set_locations(SOURCE_ID, Vec::new());
             let retry_ctx = ctx.clone();
             tokio::spawn(async move {
                 refresh_locations(&retry_ctx).await;
@@ -200,23 +182,15 @@ impl FlashPlugin for Firefox {
         }
     }
 
-    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
-        resolve(&ctx, &candidate).await
+    async fn on_resolve(&self, ctx: Context, row: Candidate) -> PerformResponse {
+        resolve(&ctx, &row).await
     }
 
-    async fn source_action(
-        &self,
-        ctx: Context,
-        request: SourceActionRequest,
-    ) -> SourceActionResponse {
-        perform_source_action(&ctx, &request).await
+    async fn on_action(&self, ctx: Context, action: ActionRequest) -> PerformResponse {
+        perform_action(&ctx, &action).await
     }
 
-    async fn restore_navigation(
-        &self,
-        ctx: Context,
-        request: NavigationRequest,
-    ) -> SourceActionResponse {
+    async fn on_navigate(&self, ctx: Context, request: NavigateRequest) -> PerformResponse {
         restore_navigation(&ctx, &request).await
     }
 }
@@ -235,7 +209,7 @@ async fn refresh_locations(ctx: &Context) -> bool {
     let started_at = Instant::now();
     let apps = firefox_apps(&ctx.running_applications());
     if apps.is_empty() {
-        ctx.set_locations(SOURCE_ID, Vec::new());
+        publish_rows(ctx, Vec::new());
         log_refresh(ctx, "empty", 0, started_at);
         return true;
     }
@@ -300,18 +274,15 @@ async fn refresh_locations(ctx: &Context) -> bool {
     // snapshot is authoritative, and editions absent from the current running
     // app list are removed.
     if !failed_pids.is_empty() {
-        candidates.extend(ctx.warm_locations().into_iter().filter(|candidate| {
+        candidates.extend(last_rows().into_iter().filter(|candidate| {
             candidate
                 .pid_value()
                 .is_some_and(|pid| failed_pids.contains(&pid))
         }));
     }
     if successful_apps == 0 {
-        let count = candidates.len();
-        if ctx.has_locations(SOURCE_ID) {
-            ctx.set_locations(SOURCE_ID, candidates);
-        }
-        log_refresh(ctx, "failed", count, started_at);
+        // Publish nothing: the host keeps its last-good catalog.
+        log_refresh(ctx, "failed", candidates.len(), started_at);
         return false;
     }
     let outcome = if !failed_pids.is_empty() {
@@ -322,9 +293,28 @@ async fn refresh_locations(ctx: &Context) -> bool {
         "ok"
     };
     let count = candidates.len();
-    ctx.set_locations(SOURCE_ID, candidates);
+    publish_rows(ctx, candidates);
     log_refresh(ctx, outcome, count, started_at);
     true
+}
+
+/// Last-published rows, kept so a partial cycle (one edition's AX snapshot
+/// failed) can re-publish that edition's previous tabs — `publish` is a full
+/// replacement, so dropped rows would vanish from the host store.
+static LAST_ROWS: Mutex<Vec<Candidate>> = Mutex::new(Vec::new());
+
+fn publish_rows(ctx: &Context, rows: Vec<Candidate>) {
+    if let Ok(mut last) = LAST_ROWS.lock() {
+        *last = rows.clone();
+    }
+    ctx.publish(rows);
+}
+
+fn last_rows() -> Vec<Candidate> {
+    LAST_ROWS
+        .lock()
+        .map(|rows| rows.clone())
+        .unwrap_or_default()
 }
 
 fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) {
@@ -341,7 +331,7 @@ fn log_refresh(ctx: &Context, outcome: &str, count: usize, started_at: Instant) 
 fn log_degraded_initial(ctx: &Context) {
     ctx.log(
         "warn",
-        "[firefox] initial warm catalog degraded outcome=empty_without_last_good candidates=0 retry=immediate_background",
+        "[firefox] initial warm catalog degraded outcome=unpublished_failure candidates=0 retry=immediate_background",
     );
 }
 
@@ -432,7 +422,7 @@ async fn try_collect_tabs_ax(ctx: &Context, pid: i64) -> Option<Vec<Tab>> {
 /// Raise Firefox and snapshot its tabs (with session urls) concurrently.
 /// Activation only needs the pid, so it's independent of the snapshot +
 /// session-store read — running both under `join!` overlaps the
-/// `app.activate` round-trip with the (disk-bound) tab collection. Used by
+/// `host.activate` round-trip with the (disk-bound) tab collection. Used by
 /// the numbered `tab_select` jump; resolve/restore go through
 /// [`activate_and_find_tab`], whose fast path skips the session read.
 async fn activate_and_collect_tabs(ctx: &Context, pid: i64) -> Vec<Tab> {
@@ -829,11 +819,9 @@ fn candidate(tab: &Tab, source: &str, pid: i64, payload: &TabPayload) -> Candida
     } else {
         tab.title.clone()
     };
-    let mut candidate = Candidate::new(name)
+    let mut candidate = Candidate::new(source, name)
         .kind("browser_tab")
         .location()
-        .source_id(SOURCE_ID)
-        .source(source)
         .subtitle("browser tab")
         .pid(pid)
         .payload_json(payload)
@@ -904,25 +892,24 @@ async fn activate_and_find_tab(ctx: &Context, pid: i64, url: &str, name: &str) -
 /// payload — the raw string stashed at emit time — because the host
 /// round-trips the `url` field through Foundation's URL parser, which can
 /// percent-encode it away from what the fresh snapshot reports.
-async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
-    let Some(pid) = candidate.pid_value() else {
-        return ResolveResponse::unresolved();
+async fn resolve(ctx: &Context, row: &Candidate) -> PerformResponse {
+    let Some(pid) = row.pid_value() else {
+        return PerformResponse::unhandled();
     };
-    let payload: Option<TabPayload> = candidate.payload_as();
+    let payload: Option<TabPayload> = row.payload_as();
     let url_owned = payload
         .as_ref()
         .map(|payload| payload.url.clone())
         .filter(|url| !url.is_empty())
         .or_else(|| {
-            candidate
-                .payload_str()
+            row.payload_str()
                 .filter(|raw| !raw.is_empty() && !raw.starts_with('{'))
                 .map(str::to_string)
         })
-        .or_else(|| candidate.url_value().map(str::to_string))
+        .or_else(|| row.url_value().map(str::to_string))
         .unwrap_or_default();
     let url = url_owned.as_str();
-    let name = candidate.title.as_str();
+    let name = row.title.as_str();
 
     if let Some(payload) = payload.as_ref().filter(|payload| payload.window_count == 1) {
         if let Some(plan) = tab_key_plan(payload.index, payload.tab_count) {
@@ -930,7 +917,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
             let (keys_ok, _) = tokio::join!(post_keys(ctx, pid, &plan), activate_app(ctx, pid));
             if keys_ok {
                 spawn_fast_jump_verify(ctx, pid, url, name, plan_len);
-                let mut response = ResolveResponse::resolved(Some(pid));
+                let mut response = PerformResponse::ok().target_pid(pid);
                 if !url.is_empty() {
                     response = response.navigation_url(firefox_navigation_url(pid, url, name));
                 }
@@ -953,7 +940,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
                 !url.is_empty()
             ),
         );
-        return ResolveResponse::unresolved();
+        return PerformResponse::fail("resolve target not found");
     };
     // Reply as soon as the target is in hand: the press lands within a few
     // ms of the spawn, while the 120ms settle + verify collect behind it
@@ -974,7 +961,7 @@ async fn resolve(ctx: &Context, candidate: &Candidate) -> ResolveResponse {
             );
         }
     });
-    let mut response = ResolveResponse::resolved(Some(pid));
+    let mut response = PerformResponse::ok().target_pid(pid);
     if !url.is_empty() {
         response = response.navigation_url(firefox_navigation_url(pid, url, name));
     }
@@ -1021,9 +1008,9 @@ fn spawn_fast_jump_verify(ctx: &Context, pid: i64, url: &str, name: &str, plan_l
     });
 }
 
-async fn restore_navigation(ctx: &Context, request: &NavigationRequest) -> SourceActionResponse {
+async fn restore_navigation(ctx: &Context, request: &NavigateRequest) -> PerformResponse {
     let Some(route) = parse_firefox_navigation_url(&request.url) else {
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     };
     let pid = route.pid;
     let session = ax_session(pid);
@@ -1033,16 +1020,18 @@ async fn restore_navigation(ctx: &Context, request: &NavigationRequest) -> Sourc
             "warn",
             &format!("[firefox] restore target not found pid={pid}"),
         );
-        return SourceActionResponse::failed(Some(pid)).navigation_url(request.url.clone());
+        return PerformResponse::fail("restore target not found");
     };
     if select_tab(ctx, pid, &target).await {
-        SourceActionResponse::performed(Some(pid)).navigation_url(request.url.clone())
+        PerformResponse::ok()
+            .target_pid(pid)
+            .navigation_url(request.url.clone())
     } else {
         ctx.log(
             "warn",
             &format!("[firefox] restore target press failed pid={pid}"),
         );
-        SourceActionResponse::failed(Some(pid)).navigation_url(request.url.clone())
+        PerformResponse::fail("restore target press failed")
     }
 }
 
@@ -1121,31 +1110,27 @@ fn percent_decode(raw: &str) -> String {
 /// `tab_select` (numbered-tab jump): press the Nth tab in document order within
 /// the first window that has at least that many tabs. Ports the old
 /// `FirefoxTabsSource.tabSelect` semantics.
-async fn perform_source_action(
-    ctx: &Context,
-    action: &SourceActionRequest,
-) -> SourceActionResponse {
+async fn perform_action(ctx: &Context, action: &ActionRequest) -> PerformResponse {
     if action.name != "tab_select" {
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     }
-    let index = action.index.unwrap_or(0);
+    let index = action.index().unwrap_or(0);
     let (Some(pid), true) = (action.context.pid, index > 0) else {
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     };
     let session = ax_session(pid);
     let _ax = session.lock().await;
     let tabs = activate_and_collect_tabs(ctx, pid).await;
     let Some(target) = tabs.get((index - 1) as usize) else {
-        return SourceActionResponse::unhandled();
+        return PerformResponse::unhandled();
     };
     // Firefox owns this tab_select claim either way: a successful press is
-    // `performed`, but a failed press must be `failed` (not `unhandled`) so
-    // the host doesn't fall back to a ⌘<digit> keystroke that switches the
-    // wrong tab.
+    // ok, but a failed press must be an error (not `unhandled`) so the host
+    // doesn't fall back to a ⌘<digit> keystroke that switches the wrong tab.
     if select_tab(ctx, pid, target).await {
-        SourceActionResponse::performed(Some(pid))
+        PerformResponse::ok().target_pid(pid)
     } else {
-        SourceActionResponse::failed(Some(pid))
+        PerformResponse::fail("tab press did not stick")
     }
 }
 
@@ -1272,11 +1257,7 @@ impl AxNode {
 }
 
 async fn activate_app(ctx: &Context, pid: i64) -> bool {
-    ctx.call_host("app.activate", json!({ "pid": pid }))
-        .await
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    ctx.activate(pid).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1291,24 +1272,21 @@ async fn ax_snapshot(
     prune_roles: &[&str],
 ) -> Option<Vec<AxNode>> {
     let result = ctx
-        .call_host(
-            "ax.snapshot",
-            json!({
-                "pid": pid,
-                "roots": roots,
-                "follow": follow,
-                "collect": collect,
-                "max_nodes": max_nodes,
-                "geometry": geometry,
-                "prune_roles": prune_roles,
-            }),
-        )
+        .ax_snapshot(json!({
+            "pid": pid,
+            "roots": roots,
+            "follow": follow,
+            "collect": collect,
+            "max_nodes": max_nodes,
+            "geometry": geometry,
+            "prune_roles": prune_roles,
+        }))
         .await;
     if !result.get("ok").and_then(Value::as_bool).unwrap_or(false) {
         ctx.log(
             "warn",
             &format!(
-                "[firefox] ax.snapshot failed pid={} error={}",
+                "[firefox] host.ax_snapshot failed pid={} error={}",
                 pid,
                 result
                     .get("error")
@@ -1328,33 +1306,15 @@ async fn ax_snapshot(
 }
 
 async fn ax_perform(ctx: &Context, handle: u64, action: &str) -> bool {
-    ctx.call_host("ax.perform", json!({ "handle": handle, "action": action }))
-        .await
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    ctx.ax_perform(handle, action).await
 }
 
 async fn ax_set(ctx: &Context, handle: u64, attribute: &str, value: bool) -> bool {
-    ctx.call_host(
-        "ax.set",
-        json!({ "handle": handle, "attribute": attribute, "value": value }),
-    )
-    .await
-    .get("ok")
-    .and_then(Value::as_bool)
-    .unwrap_or(false)
+    ctx.ax_set(handle, attribute, value).await
 }
 
 async fn ax_select_child(ctx: &Context, parent: u64, child: u64) -> bool {
-    ctx.call_host(
-        "ax.select_child",
-        json!({ "parent": parent, "child": child }),
-    )
-    .await
-    .get("ok")
-    .and_then(Value::as_bool)
-    .unwrap_or(false)
+    ctx.ax_select_child(parent, child).await
 }
 
 /// Site aliases are per-app content the plugin owns — the host ranker has
@@ -1374,11 +1334,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn startup_refresh_budget_stays_below_host_initialize_timeout() {
-        assert!(STARTUP_REFRESH_BUDGET < Duration::from_secs(15));
-    }
 
     fn tab(title: &str, url: &str) -> Tab {
         Tab {

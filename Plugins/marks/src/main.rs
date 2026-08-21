@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
-use flash_plugin::{run, CommandRequest, CommandResponse, Context, Event};
+use flash_plugin::{run, CommandRequest, Context, Event, PerformResponse};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 const STATE_FILE: &str = "marks.json";
 
@@ -54,11 +53,11 @@ impl FlashPlugin for Marks {
         }
     }
 
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         match command.subcommand.as_str() {
             "set_mark" => set_mark_command(self, &ctx, &command).await,
             "jump_to_mark" => jump_to_mark_command(self, &ctx, &command).await,
-            other => CommandResponse::error(format!("unknown subcommand: {other}")),
+            other => PerformResponse::fail(format!("unknown subcommand: {other}")),
         }
     }
 }
@@ -99,12 +98,12 @@ async fn set_mark_command(
     plugin: &Marks,
     ctx: &Context,
     command: &CommandRequest,
-) -> CommandResponse {
+) -> PerformResponse {
     let Some(letter) = parse_letter(command) else {
-        return CommandResponse::error("set_mark requires letter=<a-z|0-9>");
+        return PerformResponse::fail("set_mark requires letter=<a-z|0-9>");
     };
     let Some(target) = ctx.normal_mode_target().await else {
-        return CommandResponse::error("no focused non-flash app");
+        return PerformResponse::fail("no focused non-flash app");
     };
     let entry = MarkEntry {
         pid: target.pid,
@@ -112,7 +111,7 @@ async fn set_mark_command(
     };
     let snapshot = {
         let Ok(mut state) = plugin.state.lock() else {
-            return CommandResponse::error("marks state lock poisoned");
+            return PerformResponse::fail("marks state lock poisoned");
         };
         state.entries.insert(letter.clone(), entry);
         state.clone()
@@ -125,16 +124,16 @@ async fn set_mark_command(
             target.pid, target.bundle_id
         ),
     );
-    CommandResponse::ok()
+    PerformResponse::ok()
 }
 
 async fn jump_to_mark_command(
     plugin: &Marks,
     ctx: &Context,
     command: &CommandRequest,
-) -> CommandResponse {
+) -> PerformResponse {
     let Some(letter) = parse_letter(command) else {
-        return CommandResponse::error("jump_to_mark requires letter=<a-z|0-9>");
+        return PerformResponse::fail("jump_to_mark requires letter=<a-z|0-9>");
     };
     let mark = plugin
         .state
@@ -142,14 +141,14 @@ async fn jump_to_mark_command(
         .ok()
         .and_then(|state| state.entries.get(&letter).cloned());
     let Some(mark) = mark else {
-        return CommandResponse::error(format!("no mark for letter={letter}"));
+        return PerformResponse::fail(format!("no mark for letter={letter}"));
     };
     // Pid is the fast path: if the original process is still alive, app
     // activation brings its windows to the front. If the pid is dead, fall
     // back to the durable bundle id via the running-apps mirror updated from
     // `core:apps.*` events.
-    if activate_app(ctx, mark.pid).await {
-        return CommandResponse::ok().target_pid(mark.pid);
+    if ctx.activate(mark.pid).await {
+        return PerformResponse::ok().target_pid(mark.pid);
     }
     let fallback_pid = plugin
         .apps
@@ -157,10 +156,10 @@ async fn jump_to_mark_command(
         .ok()
         .and_then(|apps| apps.get(&mark.bundle_id).copied());
     if let Some(pid) = fallback_pid {
-        if activate_app(ctx, pid).await {
+        if ctx.activate(pid).await {
             let snapshot = {
                 let Ok(mut state) = plugin.state.lock() else {
-                    return CommandResponse::ok().target_pid(pid);
+                    return PerformResponse::ok().target_pid(pid);
                 };
                 if let Some(entry) = state.entries.get_mut(&letter) {
                     entry.pid = pid;
@@ -168,21 +167,13 @@ async fn jump_to_mark_command(
                 state.clone()
             };
             write_state(ctx, STATE_FILE, &snapshot).await;
-            return CommandResponse::ok().target_pid(pid);
+            return PerformResponse::ok().target_pid(pid);
         }
     }
-    CommandResponse::error(format!(
+    PerformResponse::fail(format!(
         "mark letter={letter} bundle={} unreachable",
         mark.bundle_id
     ))
-}
-
-async fn activate_app(ctx: &Context, pid: i64) -> bool {
-    ctx.call_host("app.activate", json!({ "pid": pid }))
-        .await
-        .get("ok")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
 }
 
 async fn read_state<T: serde::de::DeserializeOwned>(ctx: &Context, name: &str) -> Option<T> {

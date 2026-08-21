@@ -432,12 +432,11 @@ final class SourceRegistryTests: XCTestCase {
         ]
       })
 
-    registry.snapshotCandidates(scope: .all) { candidates in
-      XCTAssertEqual(
-        registry.currentLocation(in: context, candidates: candidates)?.title,
-        "Current")
-      resolved.fulfill()
-    }
+    let candidates = registry.snapshotCandidates(scope: .all)
+    XCTAssertEqual(
+      registry.currentLocation(in: context, candidates: candidates)?.title,
+      "Current")
+    resolved.fulfill()
     wait(for: [resolved], timeout: 1)
   }
 
@@ -797,39 +796,32 @@ final class SourceRegistryTests: XCTestCase {
       Set(["plugin:emojis", "plugin:notes"]))
   }
 
-  func testPluginSnapshotFanInIsDeterministicDuplicateSafeAndBounded() {
-    let completion = expectation(description: "snapshot fan-in")
+  func testWarmSnapshotIsASynchronousStoreRead() {
+    // Warm catalogs are push-published into host memory, so the aggregate
+    // snapshot is a plain synchronous read — nothing can stall it and no
+    // fan-in deadline exists.
     let first = StubSource(
       identifier: "plugin:a",
       capabilities: [.candidates],
-      snapshotHandler: { done in
-        done([Candidate(title: "a")])
-        done([Candidate(title: "duplicate")])
-      })
+      candidatesHandler: { _ in [Candidate(title: "a")] })
     let second = StubSource(
       identifier: "plugin:z",
       capabilities: [.candidates],
-      snapshotHandler: { done in done([Candidate(title: "z")]) })
-    let stalled = StubSource(
-      identifier: "plugin:stalled",
-      capabilities: [.candidates],
-      snapshotHandler: { _ in })
+      candidatesHandler: { _ in [Candidate(title: "z")] })
+    let empty = StubSource(
+      identifier: "plugin:empty",
+      capabilities: [.candidates])
     let registry = SourceRegistry(
       descriptors: [],
       terminalBundleIDs: [],
       runningApplications: [],
-      pluginSourcesProvider: { [second, stalled, first] })
+      pluginSourcesProvider: { [second, empty, first] })
 
-    registry.snapshotCandidates(scope: .all, timeoutMs: 5) { candidates in
-      XCTAssertEqual(candidates.map(\.title), ["a", "z"])
-      completion.fulfill()
-    }
-
-    wait(for: [completion], timeout: 1)
+    XCTAssertEqual(
+      registry.snapshotCandidates(scope: .all).map(\.title), ["z", "a"])
   }
 
   func testLocationSnapshotDoesNotPullNonLocationCatalogs() {
-    let completion = expectation(description: "location-only snapshot")
     var locationCalls = 0
     var nonLocationCalls = 0
     let location = StubSource(
@@ -838,16 +830,16 @@ final class SourceRegistryTests: XCTestCase {
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "browser.tabs", kind: .locations)
       ],
-      snapshotHandler: { done in
+      candidatesHandler: { _ in
         locationCalls += 1
-        done([
+        return [
           Candidate(
             kind: .plugin("browser_tab"),
             sourceID: "plugin:tabs",
             source: "browser.tabs",
             title: "Tab",
             isLocation: true)
-        ])
+        ]
       })
     let nonLocation = StubSource(
       identifier: "plugin:notes",
@@ -855,9 +847,9 @@ final class SourceRegistryTests: XCTestCase {
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "notes.notes")
       ],
-      snapshotHandler: { done in
+      candidatesHandler: { _ in
         nonLocationCalls += 1
-        done([Candidate(title: "Note")])
+        return [Candidate(title: "Note")]
       })
     let registry = SourceRegistry(
       descriptors: [],
@@ -865,12 +857,8 @@ final class SourceRegistryTests: XCTestCase {
       runningApplications: [],
       pluginSourcesProvider: { [nonLocation, location] })
 
-    registry.locationSnapshotCandidates(scope: .all) { candidates in
-      XCTAssertEqual(candidates.map(\.title), ["Tab"])
-      completion.fulfill()
-    }
-
-    wait(for: [completion], timeout: 1)
+    XCTAssertEqual(
+      registry.locationSnapshotCandidates(scope: .all).map(\.title), ["Tab"])
     XCTAssertEqual(locationCalls, 1)
     XCTAssertEqual(nonLocationCalls, 0)
   }
@@ -884,9 +872,9 @@ final class SourceRegistryTests: XCTestCase {
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "processes.processes")
       ],
-      snapshotHandler: { done in
+      candidatesHandler: { _ in
         nonLocationCalls += 1
-        done([Candidate(title: "bash")])
+        return [Candidate(title: "bash")]
       })
     let locations = StubSource(
       identifier: "plugin:locations",
@@ -894,8 +882,8 @@ final class SourceRegistryTests: XCTestCase {
       candidateSourceDescriptors: [
         CandidateSourceDescriptor(name: "terminal.windows", kind: .locations)
       ],
-      snapshotHandler: { done in
-        done([
+      candidatesHandler: { _ in
+        return [
           Candidate(
             kind: CandidateFinder.emojiKind,
             sourceID: "plugin:locations",
@@ -922,7 +910,7 @@ final class SourceRegistryTests: XCTestCase {
             source: "terminal.windows",
             title: "bash window",
             isLocation: true),
-        ])
+        ]
       })
     let registry = SourceRegistry(
       descriptors: [],

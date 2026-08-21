@@ -1,0 +1,21 @@
+{
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "description": "A protocol-version mismatch is terminal and diagnosable: the reply carries ok:false, echoes the plugin's OWN version (the stale-binary diagnostic), and uses the canonical error string; the plugin then flushes and exits 0 on its own — no crash, no lingering.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 99 } }
+    },
+    {
+      "expect": {
+        "id": 1,
+        "result": {
+          "ok": false,
+          "protocol_version": 1,
+          "error": "protocol version mismatch: host v99, plugin v1"
+        }
+      },
+      "within_ms": 5000
+    },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

@@ -4,22 +4,22 @@
   "version": "0.1.0",
   "description": "Vim-style marks: `m<letter>` records the current Flash-target app; `` `<letter> `` reactivates it. State persists to disk so marks survive restarts.",
   "sandbox": {},
-  "exec": ["./flash-plugin-marks"],
+  "exec": [
+    "./flash-plugin-marks"
+  ],
   "capabilities": [
     "app_control"
   ],
-  "verbs": {
-    "items": [
-      {
-        "name": "set_mark",
-        "description": "Save the focused non-Flash app under a one-letter slot (a-z)."
-      },
-      {
-        "name": "jump_to_mark",
-        "description": "Reactivate the app previously saved under the given letter."
-      }
-    ]
-  },
+  "verbs": [
+    {
+      "name": "set_mark",
+      "description": "Save the focused non-Flash app under a one-letter slot (a-z)."
+    },
+    {
+      "name": "jump_to_mark",
+      "description": "Reactivate the app previously saved under the given letter."
+    }
+  ],
   "help": {
     "topics": [
       {

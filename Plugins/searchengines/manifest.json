@@ -7,7 +7,7 @@
   "exec": [
     "./flash-plugin-searchengines"
   ],
-  "shebangs": {
+  "bangs": {
     "command": "searchengines",
     "items": [
       {

@@ -3,15 +3,15 @@ import FlashCore
 
 extension AppDelegate {
   /// Recompute the effective mapping tables for the active-window selector
-  /// context (config defaults + the plugin mappings applicable to that app/URL)
+  /// context (config defaults + the plugin mappings applicable to that app)
   /// and hand them to the two consumers: the overlay's normal-mode interpreter
   /// (`normalModeMappings`) and the Carbon `MappingsCoordinator`. The
   /// coordinator is re-applied only when the effective mappings actually
   /// changed, so an ordinary app switch doesn't churn global-hotkey
   /// registrations.
-  func refreshEffectiveMappings(for bundleID: String?, includeURL: Bool = true) {
+  func refreshEffectiveMappings(for bundleID: String?) {
     let effective = effectiveMode(
-      for: pluginSelectorContext(fallbackBundleID: bundleID, includeURL: includeURL))
+      for: pluginSelectorContext(fallbackBundleID: bundleID))
     overlay?.normalModeMappings = effective.compiledNormal
     if mappingModeChanged(from: lastAppliedMappingMode, to: effective) {
       mappings.apply(mode: effective)
@@ -28,16 +28,10 @@ extension AppDelegate {
 
   func pluginSelectorContext(
     for context: AppContext? = nil,
-    fallbackBundleID: String? = nil,
-    includeURL: Bool = true
+    fallbackBundleID: String? = nil
   ) -> PluginSelectorContext {
     let resolved = context ?? currentNonFlashContext()
-    let bundleID = resolved?.bundleIdentifier ?? fallbackBundleID
-    let url =
-      includeURL && pluginManager.needsURLSelectorContext()
-      ? resolved.flatMap { NormalModeDispatcher.documentURL(pid: $0.processID) }
-      : nil
-    return PluginSelectorContext(bundleID: bundleID, url: url)
+    return PluginSelectorContext(bundleID: resolved?.bundleIdentifier ?? fallbackBundleID)
   }
 
   private func effectiveMode(for context: PluginSelectorContext) -> Config.Mode {

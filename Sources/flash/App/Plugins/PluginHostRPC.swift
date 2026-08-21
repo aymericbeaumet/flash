@@ -10,7 +10,7 @@ import Foundation
 /// PluginManager so the manager owns only the plugin set and its indexes.
 final class PluginHostRPC {
   /// Owns the single AX (Accessibility) grant and the handle registry that
-  /// backs the `ax.*` host RPCs. Plugins never touch AX directly; they reach
+  /// backs the `host.ax_*` RPCs. Plugins never touch AX directly; they reach
   /// it through this broker via `handleHostRequest`.
   private let axBroker = AXBroker()
   /// Resolver for the `host.normal_mode_target` RPC: returns the focused
@@ -21,13 +21,13 @@ final class PluginHostRPC {
   /// the focused process while normal mode is active. Set by AppDelegate
   /// during plugin setup.
   var onNormalModeTargetRequested: (() -> (pid: pid_t, bundleID: String)?)?
-  /// Executor for the `input.post_keys` RPC: posts a short synthesized chord
+  /// Executor for the `host.post_keys` RPC: posts a short synthesized chord
   /// sequence to a pid at the given interval. Set by AppDelegate so the
   /// posting can register each chord with the mappings dispatcher first
   /// (`noteSyntheticKey`) — a `postToPid` event can loop back through the
   /// Carbon hotkey path and re-trigger the user's own binding for the combo.
   var onSyntheticKeysRequested: ((pid_t, [(key: CGKeyCode, flags: CGEventFlags)], Int) -> Void)?
-  /// Executor for a single global modifier chord. Unlike `input.post_keys`,
+  /// Executor for a single global modifier chord. Unlike `host.post_keys`,
   /// this enters the session event stream so macOS can own the shortcut.
   var onGlobalSyntheticKeyRequested: ((CGKeyCode, CGEventFlags) -> Bool)?
   /// Executor for the `host.notify` RPC: shows a transient banner with the
@@ -78,7 +78,7 @@ final class PluginHostRPC {
       reply(["ok": true, "echo": params])
     case "host.normal_mode_target":
       guard capabilities.contains(.appControl) else {
-        reply(["ok": false, "error": "missing app_control capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("app_control")])
         return
       }
       DispatchQueue.main.async { [weak self] in
@@ -93,69 +93,69 @@ final class PluginHostRPC {
           "bundle_id": target.bundleID,
         ])
       }
-    case "app.activate":
+    case "host.activate":
       guard capabilities.contains(.appControl) else {
-        reply(["ok": false, "error": "missing app_control capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("app_control")])
         return
       }
       activatePluginApp(params, reply: reply)
-    case "input.post_keys":
+    case "host.post_keys":
       guard capabilities.contains(.accessibility) else {
-        reply(["ok": false, "error": "missing accessibility capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("accessibility")])
         return
       }
       postSyntheticKeys(params, reply: reply)
-    case "input.post_global_key":
+    case "host.post_global_key":
       guard capabilities.contains(.accessibility) else {
-        reply(["ok": false, "error": "missing accessibility capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("accessibility")])
         return
       }
       postGlobalSyntheticKey(params, reply: reply)
-    case let method where method.hasPrefix("ax."):
+    case let method where method.hasPrefix("host.ax_"):
       guard capabilities.contains(.accessibility) else {
-        reply(["ok": false, "error": "missing accessibility capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("accessibility")])
         return
       }
       axBroker.handle(method: method, params: params, pluginID: pluginID, reply: reply)
     case "host.fetch":
       guard capabilities.contains(.networkFetch) else {
-        reply(["ok": false, "error": "missing network_fetch capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("network_fetch")])
         return
       }
       hostFetch(params, allowlist: fetchURLs, pluginID: pluginID, reply: reply)
     case "host.open":
       guard capabilities.contains(.open) else {
-        reply(["ok": false, "error": "missing open capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("open")])
         return
       }
       hostOpen(params, reply: reply)
     case "host.post_media_key":
       guard capabilities.contains(.mediaKeys) else {
-        reply(["ok": false, "error": "missing media_keys capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("media_keys")])
         return
       }
       postMediaKey(params, reply: reply)
     case "host.process_table":
       guard capabilities.contains(.processControl) else {
-        reply(["ok": false, "error": "missing process_control capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("process_control")])
         return
       }
       processTable(params, reply: reply)
     case "host.signal":
       guard capabilities.contains(.processControl) else {
-        reply(["ok": false, "error": "missing process_control capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("process_control")])
         return
       }
       signalProcess(params, reply: reply)
     case "host.clipboard_write":
       guard capabilities.contains(.clipboard) else {
-        reply(["ok": false, "error": "missing clipboard capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("clipboard")])
         return
       }
       hostClipboardWrite(params, reply: reply)
     case "host.notify":
       guard capabilities.contains(.notify) else {
-        reply(["ok": false, "error": "missing notify capability"])
+        reply(["ok": false, "error": PluginProtocol.capabilityDeniedError("notify")])
         return
       }
       hostNotify(params, pluginID: pluginID, reply: reply)
@@ -167,7 +167,7 @@ final class PluginHostRPC {
       FlashLog.warn(
         "[plugin] unknown host method \(method) from \(pluginID)",
         fields: ["method": method, "plugin": pluginID])
-      reply(["ok": false, "error": "unknown host method: \(method)"])
+      reply(["ok": false, "error": PluginProtocol.unknownMethodError(method)])
     }
   }
 
@@ -176,7 +176,7 @@ final class PluginHostRPC {
   /// of UTF-8 text, and the request runs entirely off the main thread on
   /// URLSession's delegate queue with a hard timeout — a slow remote can never
   /// touch tap responsiveness. Telemetry stays content-free (no URL/body).
-  private static let hostFetchBodyCap = 1_048_576
+  private static let hostFetchBodyCap = PluginProtocol.maxFetchResponseBytes
 
   /// True when `url` sits inside the allowlisted `prefix` at a URL component
   /// boundary. A raw hasPrefix would let "https://api.example.com" also admit
@@ -204,7 +204,7 @@ final class PluginHostRPC {
       return
     }
     var request = URLRequest(url: url)
-    request.timeoutInterval = 8
+    request.timeoutInterval = Double(PluginProtocol.fetchTimeoutMs) / 1_000
     let startedAt = DispatchTime.now()
     URLSession.shared.dataTask(with: request) { data, response, error in
       let elapsedMs = Int(
@@ -239,7 +239,7 @@ final class PluginHostRPC {
   /// `host.clipboard_write`: replace the system clipboard with `text`. The
   /// host owns pasteboard access, so a sandboxed plugin needs no pasteboard
   /// entitlement of its own.
-  static let maxClipboardWriteBytes = 1_048_576
+  static let maxClipboardWriteBytes = PluginProtocol.maxClipboardWriteBytes
 
   private func hostClipboardWrite(
     _ params: [String: Any],
@@ -260,7 +260,7 @@ final class PluginHostRPC {
 
   /// `host.notify`: transient banner. Message capped at 1 KiB, duration
   /// clamped to 0.5–10 s, at most one accepted notify per plugin per second.
-  static let maxNotifyMessageBytes = 1024
+  static let maxNotifyMessageBytes = PluginProtocol.maxNotifyMessageBytes
 
   private func hostNotify(
     _ params: [String: Any],
@@ -292,9 +292,9 @@ final class PluginHostRPC {
   /// the plugin's own data directory (`storage.json`), so non-Rust plugins
   /// stop hand-rolling persistence. No capability: the file lives inside the
   /// directory the plugin's sandbox already grants it.
-  static let maxStorageKeyBytes = 128
-  static let maxStorageValueBytes = 65_536
-  static let maxStorageEntries = 256
+  static let maxStorageKeyBytes = PluginProtocol.maxStorageKeyBytes
+  static let maxStorageValueBytes = PluginProtocol.maxStorageValueBytes
+  static let maxStorageEntries = PluginProtocol.maxStorageEntries
   private static let storageQueue = DispatchQueue(label: "flash.plugin.storage", qos: .utility)
 
   static func readStorage(at url: URL) -> [String: String] {
@@ -556,7 +556,7 @@ final class PluginHostRPC {
     reply: @escaping ([String: Any]) -> Void
   ) {
     guard let pid = (params["pid"] as? Int).map(pid_t.init) else {
-      reply(["ok": false, "error": "app.activate requires pid"])
+      reply(["ok": false, "error": "host.activate requires pid"])
       return
     }
     DispatchQueue.main.async {
@@ -597,7 +597,7 @@ final class PluginHostRPC {
     guard let chord = Self.globalSyntheticKeyChord(from: params) else {
       reply([
         "ok": false,
-        "error": "input.post_global_key requires key_code and valid non-empty modifiers",
+        "error": "host.post_global_key requires key_code and valid non-empty modifiers",
       ])
       return
     }
@@ -614,11 +614,11 @@ final class PluginHostRPC {
     }
   }
 
-  /// `input.post_keys`: post a short synthesized chord sequence to a pid
+  /// `host.post_keys`: post a short synthesized chord sequence to a pid
   /// (plugin fast paths like the firefox tab jump: ⌘8 + n×ctrl+PgDn).
   /// Modifier chords dispatch through the target's key-equivalent path, so
   /// the app does NOT need to be frontmost — that's the point: the switch
-  /// runs in parallel with `app.activate`. Chord-only (every step must name
+  /// runs in parallel with `host.activate`. Chord-only (every step must name
   /// at least one modifier) and bounded, so this can never be used to type
   /// text into the target.
   private func postSyntheticKeys(
@@ -629,7 +629,7 @@ final class PluginHostRPC {
       let steps = params["keys"] as? [[String: Any]],
       !steps.isEmpty, steps.count <= 32
     else {
-      reply(["ok": false, "error": "input.post_keys requires pid and 1-32 keys"])
+      reply(["ok": false, "error": "host.post_keys requires pid and 1-32 keys"])
       return
     }
     var chords: [(key: CGKeyCode, flags: CGEventFlags)] = []

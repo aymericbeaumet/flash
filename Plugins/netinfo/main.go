@@ -2,11 +2,12 @@
 // plugins exercising the language-agnostic wire protocol; see
 // docs/plugin-protocol.md and AGENTS.md — Rust stays the default).
 //
-// Publishes every interface address plus the hostname as the canonical
-// `plugin:netinfo` warm catalog before initialize is answered (the
-// readiness gate), each row copyable. Interfaces cannot be watched from
-// userspace without privileged sockets, so a 30-second poll keeps the
-// store fresh, invalidating only when the rows actually changed.
+// Publishes every interface address plus the hostname as the catalog right
+// after initialize is answered, each row copyable. Interfaces cannot be
+// watched from userspace without privileged sockets, so a 30-second poll
+// keeps the store fresh — publish IS the invalidation: the loop republishes
+// only when the rows actually changed and stays silent otherwise (the host
+// keeps the last-good catalog by construction).
 package main
 
 import (
@@ -14,22 +15,22 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 
 	"flashplugin"
 )
 
 const (
-	sourceID    = "plugin:netinfo"
 	sourceName  = "netinfo.addresses"
 	pollSeconds = 30
 )
 
 func row(title, subtitle, copyText string) map[string]any {
 	return map[string]any{
-		"title": title,
+		"source": sourceName,
+		"title":  title,
 		"metadata": map[string]any{
-			"source":   sourceName,
 			"kind":     "network_address",
 			"subtitle": subtitle,
 			"payload":  copyText,
@@ -93,29 +94,33 @@ func main() {
 	plugin := flashplugin.New()
 	lastFingerprint := ""
 
-	refresh := func() bool {
+	// refresh publishes the catalog iff it changed since the last publish —
+	// no separate invalidation step exists in the protocol.
+	refresh := func() {
 		rows := catalog()
 		fingerprint := fmt.Sprint(rows)
 		if fingerprint == lastFingerprint {
-			return false
+			return
 		}
 		lastFingerprint = fingerprint
-		plugin.SetLocations(sourceID, rows)
-		plugin.Log("debug", fmt.Sprintf(
-			"[netinfo] warm refresh outcome=%s candidates=%d",
-			map[bool]string{true: "empty", false: "ok"}[len(rows) == 0], len(rows)))
-		return true
+		plugin.Publish(rows)
+		plugin.Log("debug", "[netinfo] publish", map[string]string{
+			"outcome": map[bool]string{true: "empty", false: "ok"}[len(rows) == 0],
+			"rows":    strconv.Itoa(len(rows)),
+		})
 	}
 
 	plugin.Serve(flashplugin.Handlers{
+		// OnStart runs after the initialize reply: the first publish lands
+		// as soon as the catalog is built, then the poll loop takes over on
+		// its own goroutine for the process lifetime.
 		OnStart: func() {
-			refresh() // warm store exists before initialize replies
+			refresh()
 			go func() {
 				ticker := time.NewTicker(pollSeconds * time.Second)
+				defer ticker.Stop()
 				for range ticker.C {
-					if refresh() {
-						plugin.InvalidateSources()
-					}
+					refresh()
 				}
 			}()
 		},

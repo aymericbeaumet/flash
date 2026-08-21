@@ -17,7 +17,7 @@ final class MenuBarSource: FlashSource {
   var candidateSourceDescriptors: [CandidateSourceDescriptor] {
     [
       CandidateSourceDescriptor(
-        name: "menus.items", kind: .standard, priority: .high, mode: .live)
+        name: "menus.items", kind: .standard, priority: .high, live: true)
     ]
   }
 

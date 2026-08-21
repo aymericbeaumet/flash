@@ -20,14 +20,12 @@ enum FlashTunables {
   static var bannerDurationMs: Int = 700
   /// `[plugins] install_timeout` — third-party install script hard kill.
   static var pluginInstallTimeoutSeconds: Int = 120
-  /// `[plugins] startup_timeout` — plugin handshake deadline.
-  static var pluginStartupTimeoutSeconds: Int = 15
-  /// `[flashlight] snapshot_timeout_ms` — warm-catalog aggregate deadline.
-  static var flashlightSnapshotTimeoutMs: Int = 150
+  /// `[plugins] startup_timeout` — the `initialize` reply deadline (the
+  /// reply is immediate by contract; this absorbs interpreter startup).
+  static var pluginStartupTimeoutSeconds: Int = 5
   /// `[flashlight] live_query_timeout_ms` — per-keystroke deadline for
-  /// `mode = "live"` plugin sources. Never joins the first-paint barrier, so
-  /// raising it cannot regress first paint — it only delays that source's
-  /// own merge into an explicitly scoped pool.
+  /// `live: true` plugin sources (`search` and `hints`). Never joins the
+  /// first paint, so raising it cannot regress the flashlight open.
   static var flashlightLiveQueryTimeoutMs: Int = 1000
   /// `[statusbar] font_size` — bar text size in points.
   static var statusBarFontSize: Double = 13
@@ -43,7 +41,6 @@ enum FlashTunables {
     bannerDurationMs = config.overlay.bannerDurationMs
     pluginInstallTimeoutSeconds = config.plugins.installTimeoutSeconds
     pluginStartupTimeoutSeconds = config.plugins.startupTimeoutSeconds
-    flashlightSnapshotTimeoutMs = config.flashlight.snapshotTimeoutMs
     flashlightLiveQueryTimeoutMs = config.flashlight.liveQueryTimeoutMs
     statusBarFontSize = config.statusBar.fontSize
     statusBarNotchMargin = config.statusBar.notchMargin

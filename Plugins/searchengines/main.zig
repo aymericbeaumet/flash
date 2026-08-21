@@ -4,12 +4,14 @@
 //! Rust stays the default).
 //!
 //! `@embedFile` replaces the Rust implementation's build.rs codegen: the
-//! vendored bangs.tsv is embedded at compile time and parsed once at
-//! startup, so the warm catalog exists before `initialize` is answered.
-//! Every bang publishes as a kind="bang" candidate in the warm catalog (so
-//! a typed `!goo` prefix-matches `!google`), and the catch-all shebang
-//! routes `!<bang> <query>` to the host's `host.open` with the query
-//! percent-encoded into the URL template.
+//! vendored bangs.tsv is embedded at compile time, parsed once at startup,
+//! and published as the catalog right after `initialize` is answered (so a
+//! typed `!goo` prefix-matches `!google`). The catch-all bang routes
+//! `!<bang> <query>` — arriving as perform {kind: "command"} with the bang
+//! token as subcommand — to the host's `host.open` with the query
+//! percent-encoded into the URL template. The callHost is awaited: ok is
+//! reported only once the host's verdict for the open actually arrives,
+//! never fire-and-forget.
 
 const std = @import("std");
 const fp = @import("flashplugin");
@@ -21,11 +23,6 @@ const Bang = struct { trigger: []const u8, template: []const u8 };
 
 var bangs_storage: [max_bangs]Bang = undefined;
 var bangs: []Bang = &.{};
-
-// Per-frame arena: inbound requests are small; the catalog snapshot reply
-// (bang count × a few hundred bytes of Value tree) dominates, far under
-// this bound.
-var arena_storage: [1 << 20]u8 = undefined;
 
 fn parseBangs() void {
     var count: usize = 0;
@@ -82,37 +79,43 @@ fn percentEncode(input: []const u8, out: []u8) []const u8 {
     return out[0..len];
 }
 
-/// The `sources.snapshot` result: `{"candidates": [...]}`. Rows carry no
-/// source_id — routing ids are host-stamped; `metadata.source` matches the
-/// manifest's `sources[].name`.
-fn buildCatalog(arena: std.mem.Allocator) !fp.Value {
-    var candidates = std.json.Array.init(arena);
+/// Catalog rows for `publish`: every bang as a kind="bang" row, each
+/// carrying the first-class `source` naming the manifest's sources[].name.
+fn buildRows(arena: std.mem.Allocator) !fp.Value {
+    var rows = std.json.Array.init(arena);
     for (bangs) |entry| {
         var metadata: fp.Value = .{ .object = .empty };
-        try metadata.object.put(arena, "source", .{ .string = "searchengines.bangs" });
         try metadata.object.put(arena, "kind", .{ .string = "bang" });
         try metadata.object.put(arena, "subtitle", .{ .string = "search engine bang" });
         try metadata.object.put(arena, "payload", .{ .string = entry.trigger });
-        var candidate: fp.Value = .{ .object = .empty };
+        var row: fp.Value = .{ .object = .empty };
+        try row.object.put(arena, "source", .{ .string = "searchengines.bangs" });
         const title = try std.fmt.allocPrint(arena, "!{s}", .{entry.trigger});
-        try candidate.object.put(arena, "title", .{ .string = title });
-        try candidate.object.put(arena, "metadata", metadata);
-        try candidates.append(candidate);
+        try row.object.put(arena, "title", .{ .string = title });
+        try row.object.put(arena, "metadata", metadata);
+        try rows.append(row);
     }
-    var result: fp.Value = .{ .object = .empty };
-    try result.object.put(arena, "candidates", .{ .array = candidates });
-    return result;
+    return .{ .array = rows };
 }
 
-fn invoke(arena: std.mem.Allocator, id: i64, params: fp.Value) void {
+fn onStart(rt: *fp.Runtime, arena: std.mem.Allocator) void {
+    const rows = buildRows(arena) catch {
+        rt.log(arena, "warn", "[searchengines] catalog build failed", null);
+        return; // no publish on failure: the host keeps the last-good catalog
+    };
+    rt.publish(arena, rows);
+    rt.log(arena, "info", "[searchengines] bang table published", null);
+}
+
+fn onCommand(rt: *fp.Runtime, arena: std.mem.Allocator, params: fp.Value) fp.Value {
     const subcommand = fp.asString(fp.field(params, "subcommand")) orelse "";
     var lower_buf: [64]u8 = undefined;
     if (subcommand.len > lower_buf.len) {
-        return fp.sendError(arena, id, "bang token too long");
+        return fp.fail(arena, "bang token too long");
     }
     const bang = std.ascii.lowerString(&lower_buf, subcommand);
     const template = lookup(bang) orelse {
-        return fp.sendError(arena, id, "unknown bang");
+        return fp.fail(arena, "unknown bang");
     };
 
     // Join args into the query, percent-encode, substitute {{{s}}}.
@@ -135,77 +138,27 @@ fn invoke(arena: std.mem.Allocator, id: i64, params: fp.Value) void {
     var encoded_buf: [8192]u8 = undefined;
     const encoded = percentEncode(query, &encoded_buf);
 
-    var url_buf: [16384:0]u8 = undefined;
-    const url: [:0]const u8 = if (std.mem.indexOf(u8, template, "{{{s}}}")) |at|
-        std.fmt.bufPrintZ(&url_buf, "{s}{s}{s}", .{
+    var url_buf: [16384]u8 = undefined;
+    const url: []const u8 = if (std.mem.indexOf(u8, template, "{{{s}}}")) |at|
+        std.fmt.bufPrint(&url_buf, "{s}{s}{s}", .{
             template[0..at], encoded, template[at + 7 ..],
-        }) catch return fp.sendError(arena, id, "url too long")
+        }) catch return fp.fail(arena, "url too long")
     else
-        std.fmt.bufPrintZ(&url_buf, "{s}", .{template}) catch
-            return fp.sendError(arena, id, "url too long");
+        template;
 
-    // Fire-and-forget through the host (`host.open`): LaunchServices runs
-    // host-side, so this plugin needs no fork/exec allowance at all.
+    // LaunchServices runs host-side (`host.open`), so this plugin needs no
+    // fork/exec allowance. The callHost BLOCKS on the host's verdict — the
+    // reply below is honest, sent only after the open actually settled.
     var open_params: fp.Value = .{ .object = .empty };
-    open_params.object.put(arena, "url", .{ .string = url }) catch
-        return fp.sendError(arena, id, "oom");
-    if (fp.callHost(arena, "host.open", open_params)) |_| {
-        fp.sendOk(arena, id);
-    } else {
-        fp.sendError(arena, id, "host.open pending table full");
+    fp.put(arena, &open_params, "url", .{ .string = url });
+    const reply = rt.callHost(arena, "host.open", open_params, null);
+    if (fp.asBool(fp.field(reply, "ok")) orelse false) {
+        return fp.ok(arena);
     }
+    return fp.fail(arena, fp.asString(fp.field(reply, "error")) orelse "host.open failed");
 }
 
 pub fn main() void {
     parseBangs();
-    var fba = std.heap.FixedBufferAllocator.init(&arena_storage);
-    fp.sendLog(fba.allocator(), "info", "[searchengines] bang table loaded");
-
-    while (fp.readLine()) |line| {
-        fba.reset();
-        const arena = fba.allocator();
-        const msg = fp.parseFrame(arena, line) orelse continue;
-        const id = fp.asInteger(fp.field(msg, "id"));
-        const method = fp.asString(fp.field(msg, "method")) orelse {
-            // id-only frame: a response to one of our host RPCs (none today).
-            if (id) |n| _ = fp.takePending(n);
-            continue;
-        };
-        // Notifications ("event", ...) carry no id and are ignored silently;
-        // id'd requests must never be dropped without a reply.
-        const request_id = id orelse continue;
-        const params = fp.field(msg, "params");
-
-        if (std.mem.eql(u8, method, "initialize")) {
-            const version = fp.asInteger(fp.field(params, "protocol_version")) orelse 0;
-            if (version != fp.protocol_version) {
-                fp.sendError(arena, request_id, "protocol version mismatch");
-                return;
-            }
-            // The bang catalog was parsed before the serve loop, so the
-            // "warm catalog exists before initialize replies" contract
-            // holds by construction.
-            var result: fp.Value = .{ .object = .empty };
-            result.object.put(arena, "ok", .{ .bool = true }) catch continue;
-            result.object.put(arena, "protocol_version", .{ .integer = fp.protocol_version }) catch continue;
-            fp.sendResult(arena, request_id, result);
-        } else if (std.mem.eql(u8, method, "heartbeat")) {
-            fp.sendOk(arena, request_id);
-        } else if (std.mem.eql(u8, method, "shutdown")) {
-            fp.sendOk(arena, request_id);
-            return;
-        } else if (std.mem.eql(u8, method, "sources.snapshot")) {
-            if (buildCatalog(arena)) |result| {
-                fp.sendResult(arena, request_id, result);
-            } else |_| {
-                fp.sendError(arena, request_id, "catalog build failed");
-            }
-        } else if (std.mem.eql(u8, method, "command.invoke")) {
-            invoke(arena, request_id, params);
-        } else {
-            const message = std.fmt.allocPrint(arena, "unsupported method {s}", .{method}) catch
-                "unsupported method";
-            fp.sendError(arena, request_id, message);
-        }
-    }
+    fp.serve(.{ .on_start = onStart, .on_command = onCommand });
 }

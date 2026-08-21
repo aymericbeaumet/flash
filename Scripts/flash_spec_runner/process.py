@@ -165,10 +165,16 @@ class SpecProcess:
 
 
 def make_data_dir(spec, variables):
-    """Fresh per-spec data dir with any declared fixture files."""
+    """Fresh per-spec data dir with any declared fixture files.
+
+    realpath is load-bearing for the sandbox lane: mkdtemp returns a
+    /var/folders/... path but seatbelt matches canonical vnode paths
+    (/private/var/...), so an unresolved path makes the profile's data-dir
+    write allowance silently never match.
+    """
     from .generators import expand
 
-    root = tempfile.mkdtemp(prefix="flash-spec-")
+    root = os.path.realpath(tempfile.mkdtemp(prefix="flash-spec-"))
     for name, content in spec.get("data_dir", {}).items():
         path = os.path.join(root, name)
         os.makedirs(os.path.dirname(path), exist_ok=True)

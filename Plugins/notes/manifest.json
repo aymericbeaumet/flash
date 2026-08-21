@@ -13,20 +13,18 @@
     "./flash-plugin-notes"
   ],
   "priority": 12,
-  "commands": {
-    "items": [
-      {
-        "command": "notes",
-        "subcommand": "open",
-        "description": "Open Notes.app"
-      },
-      {
-        "command": "notes",
-        "subcommand": "refresh",
-        "description": "Refresh the cached notes list"
-      }
-    ]
-  },
+  "commands": [
+    {
+      "command": "notes",
+      "subcommand": "open",
+      "description": "Open Notes.app"
+    },
+    {
+      "command": "notes",
+      "subcommand": "refresh",
+      "description": "Refresh the cached notes list"
+    }
+  ],
   "listen": [
     "core:config.*",
     "core:apps.*"

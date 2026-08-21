@@ -90,7 +90,7 @@ impl fend_core::ExchangeRateFnV2 for SnapshotRateHandler {
 }
 
 pub(crate) async fn seed_and_refresh(ctx: Context, store: RatesStore) {
-    let path = ctx.data_dir.join(CACHE_FILENAME);
+    let path = ctx.data_dir().join(CACHE_FILENAME);
     let cached = load_cached(&path).await;
     if let Some(cached) = cached {
         store.replace(cached);

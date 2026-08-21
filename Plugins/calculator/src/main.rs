@@ -4,7 +4,7 @@ mod rates;
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
-use flash_plugin::{run, Context, QueryEvaluateRequest, QueryEvaluateResponse};
+use flash_plugin::{run, Context, EvaluateRequest, EvaluateResponse};
 
 use rates::RatesStore;
 
@@ -24,16 +24,16 @@ impl FlashPlugin for Calculator {
         rates::seed_and_refresh(ctx, self.rates.clone()).await;
     }
 
-    fn query_evaluate(&self, request: QueryEvaluateRequest) -> QueryEvaluateResponse {
+    fn evaluate(&self, request: EvaluateRequest) -> EvaluateResponse {
         if request.surface != "flashlight" {
-            return QueryEvaluateResponse::default();
+            return EvaluateResponse::default();
         }
         let targets = self
             .target_currencies
             .read()
             .map(|targets| targets.clone())
             .unwrap_or_default();
-        QueryEvaluateResponse::answers(evaluator::evaluate(&request.query, &self.rates, &targets))
+        EvaluateResponse::answers(evaluator::evaluate(&request.query, &self.rates, &targets))
     }
 }
 

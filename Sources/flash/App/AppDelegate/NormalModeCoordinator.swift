@@ -167,17 +167,12 @@ extension AppDelegate {
         notification: notification,
         statusBarReservesSpace: statusBarVisible)
     }
-    // A browser tab switch / navigation surfaces here (title/window AX changes)
-    // without an app-focus change — re-resolve URL-scoped plugin mappings.
-    scheduleURLContextMappingRefresh(pid: pid)
     if pluginManager.hasListener(for: "core:ax.changed") {
       pluginManager.emit(
         PluginEvent(
           name: "core:ax.changed",
           payload: ["notification": notification, "pid": Int(pid)],
-          bundleID: context.bundleIdentifier,
-          configPath: nil,
-          focused: true))
+          bundleID: context.bundleIdentifier))
     }
     // The focused-window-changed and main-window-changed AX notifications are
     // exactly the signal plugins want to react to when they care about *which*
@@ -206,8 +201,6 @@ extension AppDelegate {
           name: "core:window.focus.changed",
           payload: payload,
           bundleID: context.bundleIdentifier,
-          configPath: nil,
-          focused: true,
           frontWindowFrame: context.frontWindowFrame,
           pid: pid))
     }
@@ -269,36 +262,6 @@ extension AppDelegate {
     reason == .hintCommit || reason == .normalModeInput || reason == .lockedNormalModeInput
       || reason == .pointerClick || reason == .explicitCommand
       || reason == .normalModePassthrough
-  }
-
-  func focusedInputMayHaveChanged(pid: pid_t) {
-    // Mode is no longer driven by focus changes — the only way to leave INSERT
-    // is an explicit keyboard request (`enterNormalMode`); focus-following
-    // auto-exit was removed. But URL-scoped plugin mappings (e.g. Gmail's `o`)
-    // must follow the focused document, which can change with no app-focus
-    // change (browser tab switch / in-page navigation), so re-resolve them here.
-    scheduleURLContextMappingRefresh(pid: pid)
-  }
-
-  /// Re-resolve URL-scoped plugin mappings for `pid` (e.g. Gmail's `o`, which
-  /// only applies on `mail.google.com`). The effective set is recomputed on
-  /// app-focus change, but a tab switch or in-page navigation keeps the same
-  /// app focused while the document URL — and thus the applicable mappings —
-  /// changes. Debounced so a burst of AX notifications collapses to a single
-  /// `documentURL` probe + remap; a no-op unless a URL-selector plugin is loaded.
-  func scheduleURLContextMappingRefresh(pid: pid_t) {
-    guard pluginManager.needsURLSelectorContext(),
-      let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
-    else { return }
-    urlContextMappingRefreshWork?.cancel()
-    let work = DispatchWorkItem { [weak self] in
-      guard let self,
-        NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
-      else { return }
-      self.refreshEffectiveMappings(for: bundleID, includeURL: true)
-    }
-    urlContextMappingRefreshWork = work
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
   }
 
   static func insertModeShouldExitAfterFocusedAppChange(
@@ -1347,6 +1310,12 @@ extension AppDelegate {
   /// in the host after the session closes.
   func openCandidateFinderSession(scope: CandidateScope) {
     let startedNs = DispatchTime.now().uptimeNanoseconds
+    // Advisory: the flashlight opened. Eager plugins may refresh their
+    // catalogs; nothing is required and first paint never waits for them.
+    if pluginManager.hasListener(for: "core:session.opened") {
+      pluginManager.emit(
+        PluginEvent(name: "core:session.opened", payload: [:], bundleID: nil))
+    }
     candidateFinderPrecedenceTable = buildCandidateFinderPrecedenceTable()
     candidateFinderScope = scope
     candidateFinderSessionGeneration &+= 1
@@ -1592,37 +1561,36 @@ extension AppDelegate {
     }
   }
 
-  /// A plugin declared its warm catalog stale (`sources.invalidated`). With
-  /// no flashlight session open this is a no-op — the next open pulls fresh
-  /// stores anyway. With one open, re-pull just that plugin's catalog and
-  /// merge it through the per-source pool swap; live plugins instead get
-  /// their (filter, text) dedup key cleared so the next keystroke refires.
-  func handlePluginSourcesInvalidated(_ pluginID: String) {
+  /// The catalog store's coalesced (≤1/s) change tick. With no flashlight
+  /// session open this is a no-op — the next open reads the store anyway.
+  /// With one open, re-read every plugin catalog this session already
+  /// surfaced (an initial location source, or a non-location one the user
+  /// opted into) and merge through the per-source pool swap — lossless,
+  /// since the store is already current when the tick lands.
+  func handlePluginCatalogsChanged() {
     switch overlay.inputMode {
     case .commandLine, .candidateFinder: break
     default: return
     }
-    let sourceID = "plugin:\(pluginID)"
-    guard let source = pluginManager.sources.first(where: { $0.identifier == sourceID }) else {
-      return
+    var surfaced: [String: FlashSource] = [:]
+    for source in registry.initialCandidateSnapshotSources()
+    where source.identifier.hasPrefix("plugin:") {
+      surfaced[source.identifier] = source
     }
-    if SourceRegistry.isLiveCandidateSource(source) {
-      candidateFinderLiveQueryKey = nil
-      return
+    for source in pluginManager.sources
+    where candidateFinderFetchedNonLocationSourceIDs.contains(source.identifier) {
+      surfaced[source.identifier] = source
     }
-    // Only re-pull catalogs this session already surfaced: an initial
-    // (location) source, or a non-location one the user opted into.
-    let alreadySurfaced =
-      candidateFinderFetchedNonLocationSourceIDs.contains(sourceID)
-      || registry.initialCandidateSnapshotSources().contains { $0.identifier == sourceID }
-    guard alreadySurfaced else { return }
-    FlashLog.trace("[candidate_finder] invalidated_repull source=\(sourceID)")
-    fanOutCandidateSnapshots([source], generation: candidateFinderSessionGeneration)
+    guard !surfaced.isEmpty else { return }
+    FlashLog.trace(
+      "[candidate_finder] catalogs_changed_repull sources=\(surfaced.count)")
+    fanOutCandidateSnapshots(
+      Array(surfaced.values), generation: candidateFinderSessionGeneration)
   }
 
-  /// Fire per-keystroke `sources.query` pulls at live plugin sources when —
+  /// Fire per-keystroke `search` pulls at live plugin sources when —
   /// and only when — the query is explicitly scoped to them: an `@source`
-  /// filter, or a confirmed bang bound to a `candidate_source`. The default
+  /// filter, or a confirmed bang bound to a `source`. The default
   /// pool and the first-paint barrier never see live sources. Late replies
   /// drop via the session generation; an unchanged (filter, text) pair does
   /// not refire, so a merge-triggered re-render can't loop.
@@ -2320,9 +2288,9 @@ extension AppDelegate {
     candidateFinderQueryAnswers = []
   }
 
-  /// The bang-list pool: static manifest-declared shebangs plus the dynamic
-  /// bang-kind rows from candidate sources (e.g. searchengines' DDG bangs),
-  /// which land in the session pool once the non-location sources are pulled on
+  /// The bang-list pool: static manifest-declared bangs plus the dynamic
+  /// bang-kind rows from published catalogs (e.g. searchengines' DDG bangs),
+  /// which land in the session pool once the non-location sources are read on
   /// the first `@source`/`!` keystroke.
   private func bangListCandidates() -> [Candidate] {
     pluginManager.shebangCandidates(in: pluginSelectorContext())

@@ -1,28 +1,19 @@
 {
-  "contract": "docs/plugin-protocol.md#host--plugin-methods",
+  "contract": "docs/plugin-protocol.md#host--plugin",
   "requires": ["queries"],
-  "description": "The evaluator contract's wire half: query.evaluate always answers with an answers array (empty for input the evaluator does not claim — evaluators are additive parsers, never error paths), and every answer stays inside the closed {title, subtitle?, effect} shape. Latency budgets are host-enforced; this spec asserts shape, not the 50 ms deadline.",
+  "description": "The evaluator contract's wire half: evaluate always answers {ok, answers} — an empty array for input the evaluator does not claim (evaluators are additive parsers, never error paths) — and every answer stays inside the closed {title, subtitle?, effect} shape with no URL or metadata keys. Latency budgets are host-enforced; this spec asserts shape, not the 50 ms deadline.",
   "steps": [
     {
-      "send": {
-        "id": 1,
-        "method": "initialize",
-        "params": {
-          "plugin_id": "${plugin_id}",
-          "version": "0.1.0",
-          "protocol_version": 1,
-          "running_applications": []
-        }
-      }
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
     },
     {
       "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
-      "within_ms": 15000
+      "within_ms": 5000
     },
     {
       "send": {
         "id": 4,
-        "method": "query.evaluate",
+        "method": "evaluate",
         "params": {
           "surface": "flashlight",
           "scope": "",
@@ -34,18 +25,21 @@
       "expect": {
         "id": 4,
         "result": {
+          "ok": true,
           "answers": {
             "$type": "array",
             "$each": {
               "title": { "$type": "string" },
-              "effect": { "type": { "$type": "string" } }
+              "effect": { "type": { "$type": "string" } },
+              "url": { "$absent": true },
+              "metadata": { "$absent": true }
             }
           }
         }
       },
       "within_ms": 2000
     },
-    { "send": { "id": 3, "method": "shutdown", "params": {} } },
-    { "expect": { "id": 3, "result": { "ok": true } }, "within_ms": 5000 }
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
   ]
 }

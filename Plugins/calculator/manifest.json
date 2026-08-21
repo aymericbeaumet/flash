@@ -3,9 +3,19 @@
   "name": "Calculator",
   "version": "0.1.0",
   "description": "Inline arithmetic, unit, and currency answers for the flashlight.",
-  "exec": ["./flash-plugin-calculator"],
-  "queries": { "exclusive_prefixes": ["="] },
-  "capabilities": ["network_fetch"],
-  "fetch_urls": ["https://www.ecb.europa.eu/"],
-  "sandbox": {}
+  "exec": [
+    "./flash-plugin-calculator"
+  ],
+  "capabilities": [
+    "network_fetch"
+  ],
+  "fetch_urls": [
+    "https://www.ecb.europa.eu/"
+  ],
+  "sandbox": {},
+  "query": {
+    "prefixes": [
+      "="
+    ]
+  }
 }

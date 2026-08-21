@@ -1,4 +1,8 @@
 {
+  "processes": {
+    "skip": ["sources/publish"],
+    "reason": "catalog is sourced from the host.process_table RPC, which the generic lane NAKs — the scripted-host equivalent lives in Plugins/processes/specs/publish.json"
+  },
   "reminders": {
     "skip": ["sources/*"],
     "reason": "warm catalog lists Reminders.app via AppleScript — needs a TCC grant headless runs lack"

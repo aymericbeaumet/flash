@@ -16,7 +16,7 @@ struct NDJSONFrameCollector {
   private var discardedBytes = 0
   let maxLineBytes: Int
 
-  init(maxLineBytes: Int = 10 * 1024 * 1024) {
+  init(maxLineBytes: Int = PluginProtocol.maxFrameBytes) {
     self.maxLineBytes = maxLineBytes
   }
 

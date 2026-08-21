@@ -231,16 +231,15 @@ enum HelpDocs {
 
       ## Plugin candidates
 
-      Every candidate plugin owns a canonical catalog snapshot and keeps it
-      warm in memory, refreshing it in the background from host events or
-      polling. Reading a plugin snapshot is synchronous and performs no I/O.
-      On open the prompt appears immediately with its rows hidden while Flash
-      reads every default source in parallel, including the warm `core.apps`
-      index. Plugin states other than ready/degraded settle immediately. Flash
-      reveals the initial catalog exactly once when every source settles or
-      the 150 ms first-paint budget expires. Late replies are logged and
-      ignored for that session; the next open reads the completed warm state
-      instead of visually reloading the current list.
+      Plugin catalogs are push-based: each candidate plugin publishes its
+      full catalog to the host whenever it changes, and Flash serves the
+      flashlight from its own in-memory store — reading it is synchronous and
+      performs no I/O and no plugin round-trip. On open the prompt appears
+      immediately with its rows hidden while Flash reads every default
+      source, including the warm `core.apps` index (which may still be
+      finishing its resident startup scan). Flash reveals the initial catalog
+      exactly once when every source settles or the 150 ms first-paint budget
+      expires; later publishes merge in through a coalesced refresh tick.
       """)
 
   private static let overviewTopic = HelpTopic(

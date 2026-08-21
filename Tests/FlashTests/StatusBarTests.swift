@@ -360,7 +360,7 @@ final class StatusBarTests: XCTestCase {
       template: template,
       context: FlashStatusBarContext(
         pluginStatuses: [
-          pluginStatus(id: "ok", state: "ready", lastError: nil),
+          pluginStatus(id: "ok", state: "running", lastError: nil),
           pluginStatus(id: "bad", state: "failed", lastError: "boom"),
         ]))
 
@@ -383,7 +383,7 @@ final class StatusBarTests: XCTestCase {
         pluginStatuses: [
           pluginStatus(
             id: "system",
-            state: "ready",
+            state: "running",
             lastError: nil,
             statusSegments: [
               "battery": "#[range=user|bat-prefs fg=colour178]82%#[norange]"
@@ -410,7 +410,7 @@ final class StatusBarTests: XCTestCase {
       template: template,
       context: FlashStatusBarContext(
         pluginStatuses: [
-          pluginStatus(id: "system", state: "ready", lastError: nil)
+          pluginStatus(id: "system", state: "running", lastError: nil)
         ]))
 
     XCTAssertEqual(model.rightText, "")

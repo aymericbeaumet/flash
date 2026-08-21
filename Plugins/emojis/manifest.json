@@ -2,15 +2,12 @@
   "id": "emojis",
   "name": "emoji",
   "version": "0.1.0",
-  "description": "Fuzzy-find emojis with `:emojis <query>` and insert the picked glyph.",
+  "description": "Emoji catalog for the flashlight: fuzzy-find a glyph by name or Slack-style shortcode and insert or copy it.",
   "sandbox": {},
   "exec": [
     "bun",
     "run",
     "main.ts"
-  ],
-  "listen": [
-    "core:flash.started"
   ],
   "sources": [
     {

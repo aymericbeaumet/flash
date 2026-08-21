@@ -155,9 +155,7 @@ extension AppDelegate {
       PluginEvent(
         name: "core:config.changed",
         payload: [:],
-        bundleID: nil,
-        configPath: "*",
-        focused: nil))
+        bundleID: nil))
     configureDebugServer(for: cfg)
     // Refresh the running-app set so the next flashlight open reflects any
     // ignored-app changes; candidates themselves are pulled live on open.
@@ -190,8 +188,8 @@ extension AppDelegate {
       for: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
   }
 
-  /// Plugins emit a state notification on every log line, heartbeat, and
-  /// snapshot. Coalesce a burst into a single status/debug refresh. Candidate
+  /// Plugins emit a state notification on every log line, lifecycle
+  /// transition, and publish. Coalesce a burst into a single status/debug refresh. Candidate
   /// surfaces deliberately do not re-render from plugin-state churn; their
   /// typed-query update points are explicit so rows do not reshuffle while
   /// the prompt is idle.

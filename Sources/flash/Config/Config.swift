@@ -192,14 +192,10 @@ struct Config {
     /// Cap on the frecency boost added to the ranker score; 0 disables
     /// frecency outright.
     var frecencyMaxBoost: Int = 600
-    /// Deadline for the aggregate warm-plugin catalog snapshot feeding the
-    /// flashlight pool. A giant browser session may need more room.
-    var snapshotTimeoutMs: Int = 150
-    /// Per-keystroke deadline for `mode = "live"` plugin sources
-    /// (`sources.query`). Live sources never join the first-paint barrier,
-    /// so this can exceed `snapshot_timeout_ms` without regressing paint.
-    /// A full second by default: Spotlight's first output byte alone
-    /// routinely takes 500–700 ms.
+    /// Per-keystroke deadline for `live: true` plugin sources (`search`).
+    /// Live sources never join the first paint, so raising this cannot
+    /// regress the flashlight open. A full second by default: Spotlight's
+    /// first output byte alone routinely takes 500–700 ms.
     var liveQueryTimeoutMs: Int = 1000
     /// Word-substitution aliases. The key is the exact whitespace-
     /// delimited token the user types (any leading sigil — `!`, `@`,
@@ -303,9 +299,10 @@ struct Config {
     /// Hard kill for a third-party plugin install script (a cold cargo
     /// build on a slow machine can legitimately take minutes).
     var installTimeoutSeconds: Int = 120
-    /// Handshake deadline: a plugin that warms a big catalog before
-    /// answering initialize may need more than the default.
-    var startupTimeoutSeconds: Int = 15
+    /// `initialize` reply deadline. The reply must be immediate (warm
+    /// catalogs publish after it), so this only needs to absorb interpreter
+    /// startup — 5 s is the protocol default.
+    var startupTimeoutSeconds: Int = 5
     /// Per-plugin user settings from `[plugin.<id>]` tables. Delivered to
     /// each plugin as a JSON object via `FLASH_PLUGIN_CONFIG`. Keyed by
     /// plugin id, then by setting name.

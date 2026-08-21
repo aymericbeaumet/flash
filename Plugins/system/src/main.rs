@@ -1,12 +1,10 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_command, run_osascript, Candidate, CommandRequest, CommandResponse, Context, Event,
-    ResolveResponse,
+    run, run_command, run_osascript, Candidate, CommandRequest, Context, Event, PerformResponse,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 
-const SOURCE_ID: &str = "plugin:system";
 const SOURCE_LABEL: &str = "system.actions";
 
 const LOCK_KEY_CODE: i64 = 12; // kVK_ANSI_Q
@@ -97,9 +95,9 @@ flash_plugin::plugin!(System);
 
 impl FlashPlugin for System {
     async fn on_start(&self, ctx: Context) {
-        // Candidate readiness depends only on this static in-memory catalog.
-        // Battery status is unrelated UI telemetry and may block in pmset for up
-        // to five seconds, so refresh it after on_start has made the plugin ready.
+        // The catalog is static and publishes immediately. Battery status is
+        // unrelated UI telemetry and may block in pmset for up to five
+        // seconds, so refresh it on a detached task.
         publish_system_actions(&ctx);
         tokio::spawn(async move {
             publish_battery_status(&ctx).await;
@@ -112,45 +110,39 @@ impl FlashPlugin for System {
         }
     }
 
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         if command.subcommand.is_empty() {
-            return CommandResponse::toast(system_usage());
+            return PerformResponse::ok().message(system_usage());
         }
         run_system_action(&ctx, command.subcommand.as_str()).await
     }
 
-    async fn resolve_candidate(&self, ctx: Context, candidate: Candidate) -> ResolveResponse {
-        let Some(subcommand) = candidate.payload_str() else {
-            return ResolveResponse::unresolved();
+    async fn on_resolve(&self, ctx: Context, row: Candidate) -> PerformResponse {
+        let Some(subcommand) = row.payload_str() else {
+            return PerformResponse::unhandled();
         };
         let response = run_system_action(&ctx, subcommand).await;
-        if response.ok {
-            ResolveResponse::resolved(None)
-        } else {
+        if !response.is_ok() {
             ctx.log(
                 "warn",
                 &format!(
                     "[system] action {subcommand} failed: {}",
-                    response
-                        .error
-                        .unwrap_or_else(|| "unknown error".to_string())
+                    response.error_message().unwrap_or("unknown error")
                 ),
             );
-            ResolveResponse::unresolved()
         }
+        response
     }
 }
 
 fn publish_system_actions(ctx: &Context) {
     let candidates = ACTIONS.iter().map(system_action_candidate).collect();
-    ctx.set_locations(SOURCE_ID, candidates);
+    ctx.publish(candidates);
 }
 
 fn system_action_candidate(action: &SystemAction) -> Candidate {
-    Candidate::new(action.title)
+    Candidate::new(SOURCE_LABEL, action.title)
         .kind("system_action")
-        .source_id(SOURCE_ID)
-        .source(SOURCE_LABEL)
         .subtitle(action.subtitle)
         .aliases(
             action
@@ -172,7 +164,7 @@ fn system_usage() -> String {
     format!(":system <{}> or :flashlight @system.actions", subcommands)
 }
 
-async fn run_system_action(ctx: &Context, subcommand: &str) -> CommandResponse {
+async fn run_system_action(ctx: &Context, subcommand: &str) -> PerformResponse {
     match subcommand {
         "lock" => lock_screen(ctx).await,
         "sleep" => sh(ctx, &["/usr/bin/pmset", "sleepnow"], 10).await,
@@ -183,36 +175,36 @@ async fn run_system_action(ctx: &Context, subcommand: &str) -> CommandResponse {
             Duration::from_secs(10),
         )
         .await
-        .into_command(),
+        .into_perform(),
         "shutdown" => run_osascript(
             ctx,
             "tell application \"System Events\" to shut down",
             Duration::from_secs(10),
         )
         .await
-        .into_command(),
+        .into_perform(),
         "logout" => run_osascript(
             ctx,
             "tell application \"System Events\" to log out",
             Duration::from_secs(10),
         )
         .await
-        .into_command(),
+        .into_perform(),
         "trash" => run_osascript(
             ctx,
             "tell application \"Finder\" to empty trash",
             Duration::from_secs(30),
         )
         .await
-        .into_command(),
+        .into_perform(),
         "dark" => run_osascript(ctx, DARK_TOGGLE, Duration::from_secs(10))
             .await
-            .into_command(),
+            .into_perform(),
         "screensaver" => {
             if ctx.open_app("com.apple.ScreenSaverEngine").await {
-                CommandResponse::ok()
+                PerformResponse::ok()
             } else {
-                CommandResponse::error("host.open ScreenSaverEngine failed")
+                PerformResponse::fail("host.open ScreenSaverEngine failed")
             }
         }
         // Spawn caffeinate detached so the command returns immediately and
@@ -226,29 +218,22 @@ async fn run_system_action(ctx: &Context, subcommand: &str) -> CommandResponse {
             .await
         }
         "decaffeinate" => sh(ctx, &["/usr/bin/killall", "caffeinate"], 10).await,
-        other => CommandResponse::error(format!("unknown subcommand: {other}")),
+        other => PerformResponse::fail(format!("unknown subcommand: {other}")),
     }
 }
 
-fn lock_request() -> Value {
-    json!({
-        "key_code": LOCK_KEY_CODE,
-        "modifiers": ["command", "control"],
-    })
-}
+const LOCK_MODIFIERS: &[&str] = &["command", "control"];
 
-async fn lock_screen(ctx: &Context) -> CommandResponse {
-    let response = ctx
-        .call_host("input.post_global_key", lock_request())
-        .await;
+async fn lock_screen(ctx: &Context) -> PerformResponse {
+    let response = ctx.post_global_key(LOCK_KEY_CODE, LOCK_MODIFIERS).await;
     if response.get("ok").and_then(Value::as_bool) == Some(true) {
-        CommandResponse::ok()
+        PerformResponse::ok()
     } else {
-        CommandResponse::error(
+        PerformResponse::fail(
             response
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("input.post_global_key failed"),
+                .unwrap_or("host.post_global_key failed"),
         )
     }
 }
@@ -268,7 +253,7 @@ async fn publish_battery_status(ctx: &Context) {
     // timeout-induced SIGTERM) can still carry useful data; only fall
     // back to "??" when there's genuinely no percent to display.
     let segment = battery_segment(&result.stdout);
-    ctx.emit_status_segments([("battery", segment)]);
+    ctx.status([("battery", segment)]);
 }
 
 /// Reasoning for status markers below:
@@ -359,11 +344,11 @@ fn missing_battery_segment() -> String {
     "#[range=user|bat-prefs fg=red]??#[norange]".to_string()
 }
 
-async fn sh(ctx: &Context, argv: &[&str], timeout: u64) -> CommandResponse {
+async fn sh(ctx: &Context, argv: &[&str], timeout: u64) -> PerformResponse {
     let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
     run_command(ctx, &owned, Duration::from_secs(timeout))
         .await
-        .into_command()
+        .into_perform()
 }
 
 fn main() {
@@ -397,8 +382,7 @@ mod tests {
         let candidate = system_action_candidate(restart);
         assert_eq!(candidate.title, "Restart Mac");
         assert_eq!(candidate.meta("kind"), Some("system_action"));
-        assert_eq!(candidate.meta("source"), Some(SOURCE_LABEL));
-        assert_eq!(candidate.meta("source_id"), Some(SOURCE_ID));
+        assert_eq!(candidate.source, SOURCE_LABEL);
         assert_eq!(candidate.payload_str(), Some("restart"));
         assert_eq!(candidate.meta("finishes_command"), Some("1"));
         assert!(candidate.meta("aliases").unwrap_or("").contains("reboot"));
@@ -415,9 +399,8 @@ mod tests {
 
     #[test]
     fn lock_posts_the_global_control_command_q_chord() {
-        let request = lock_request();
-        assert_eq!(request["key_code"], LOCK_KEY_CODE);
-        assert_eq!(request["modifiers"], json!(["command", "control"]));
+        assert_eq!(LOCK_KEY_CODE, 12);
+        assert_eq!(LOCK_MODIFIERS, ["command", "control"]);
     }
 
     #[test]

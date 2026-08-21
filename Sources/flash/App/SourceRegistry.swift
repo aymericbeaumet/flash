@@ -19,11 +19,6 @@ struct HintProviderPlan {
 }
 
 final class SourceRegistry {
-  private struct PluginSnapshotReply {
-    let source: FlashSource
-    let candidates: [Candidate]
-  }
-
   private let descriptors: [SourceDescriptor]
   private let terminalBundleIDs: Set<String>
   private let runningApplicationsProvider: () -> [NSRunningApplication]
@@ -202,69 +197,29 @@ final class SourceRegistry {
     return CandidateFinder.prepare(raw)
   }
 
-  /// Resolve one complete, ephemeral candidate snapshot without retaining a
-  /// host cache. Built-in warm sources contribute synchronously; active plugin
-  /// stores are pulled in parallel and published once when all settle or the
-  /// bounded timeout expires. Completion always runs on the main queue.
-  func snapshotCandidates(
-    scope: CandidateScope,
-    timeoutMs: Int = FlashTunables.flashlightSnapshotTimeoutMs,
-    completion: @escaping ([Candidate]) -> Void
-  ) {
-    guard Thread.isMainThread else {
-      DispatchQueue.main.async { [weak self] in
-        self?.snapshotCandidates(scope: scope, timeoutMs: timeoutMs, completion: completion)
-      }
-      return
+  /// Resolve one complete, ephemeral candidate snapshot synchronously.
+  /// Built-in warm sources contribute their in-memory candidates; plugin
+  /// warm catalogs are a host-owned store read (push-published, so nothing
+  /// here waits on a plugin process).
+  func snapshotCandidates(scope: CandidateScope) -> [Candidate] {
+    var aggregate = synchronousCandidates(scope: scope)
+    for source in activePluginSources() where source.capabilities.contains(.candidates) {
+      aggregate.append(
+        contentsOf: CandidateFinder.prepare(source.candidates(in: environment, scope: scope)))
     }
-    let builtIn = synchronousCandidates(scope: scope)
-    let plugins =
-      activePluginSources()
-      .filter { $0.capabilities.contains(.candidates) }
-    gatherPluginSnapshots(
-      plugins,
-      scope: scope,
-      timeoutMs: timeoutMs,
-      operation: "candidate_snapshot"
-    ) { replies in
-      var aggregate = builtIn
-      for reply in replies {
-        aggregate.append(contentsOf: CandidateFinder.prepare(reply.candidates))
-      }
-      completion(aggregate)
-    }
+    return aggregate
   }
 
   /// Location-only variant for movement/mark resolution. Avoids pulling warm
   /// emoji, notes, contacts, and other non-navigational catalogs on every focus
   /// change.
-  func locationSnapshotCandidates(
-    scope: CandidateScope,
-    timeoutMs: Int = FlashTunables.flashlightSnapshotTimeoutMs,
-    completion: @escaping ([Candidate]) -> Void
-  ) {
-    guard Thread.isMainThread else {
-      DispatchQueue.main.async { [weak self] in
-        self?.locationSnapshotCandidates(
-          scope: scope,
-          timeoutMs: timeoutMs,
-          completion: completion)
-      }
-      return
+  func locationSnapshotCandidates(scope: CandidateScope) -> [Candidate] {
+    var aggregate = synchronousCandidates(scope: scope)
+    for source in locationCandidateSources() {
+      aggregate.append(
+        contentsOf: CandidateFinder.prepare(source.candidates(in: environment, scope: scope)))
     }
-    let builtIn = synchronousCandidates(scope: scope)
-    gatherPluginSnapshots(
-      locationCandidateSources(),
-      scope: scope,
-      timeoutMs: timeoutMs,
-      operation: "location_snapshot"
-    ) { replies in
-      var aggregate = builtIn
-      for reply in replies {
-        aggregate.append(contentsOf: CandidateFinder.prepare(reply.candidates))
-      }
-      completion(aggregate)
-    }
+    return aggregate
   }
 
   /// Plugin candidate sources that contribute location rows to the default
@@ -339,77 +294,6 @@ final class SourceRegistry {
         source.activationPolicy,
         runningApplications: applications,
         terminalBundleIDs: terminalBundleIDs)
-    }
-  }
-
-  /// One-shot parallel fan-in for plugin-owned warm stores. The host never
-  /// retains these replies. Duplicate callbacks and replies after the deadline
-  /// are ignored, and output order is stable by source id.
-  private func gatherPluginSnapshots(
-    _ rawSources: [FlashSource],
-    scope: CandidateScope,
-    timeoutMs: Int,
-    operation: String,
-    completion: @escaping ([PluginSnapshotReply]) -> Void
-  ) {
-    var sourcesByID: [String: FlashSource] = [:]
-    for source in rawSources {
-      sourcesByID[source.identifier] = source
-    }
-    let sources = sourcesByID.values.sorted { $0.identifier < $1.identifier }
-    guard !sources.isEmpty else {
-      completion([])
-      return
-    }
-
-    let timeoutMs = max(1, timeoutMs)
-    let env = environment
-    var pending = Set(sources.map(\.identifier))
-    var replies: [String: PluginSnapshotReply] = [:]
-    var finished = false
-
-    func finish(timedOut: Bool) {
-      guard !finished else { return }
-      finished = true
-      if timedOut, !pending.isEmpty {
-        FlashLog.warn(
-          "[plugin_snapshot] aggregate_timeout operation=\(operation) "
-            + "timeout_ms=\(timeoutMs) pending=[\(pending.sorted().joined(separator: ","))]")
-      }
-      completion(
-        sources.compactMap { source in
-          replies[source.identifier]
-        })
-    }
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(timeoutMs)) {
-      finish(timedOut: true)
-    }
-
-    for source in sources {
-      let startedNs = DispatchTime.now().uptimeNanoseconds
-      source.snapshotCandidates(in: env, scope: scope) { candidates in
-        DispatchQueue.main.async {
-          guard !finished else { return }
-          let elapsedMs = Self.elapsedMs(since: startedNs)
-          guard pending.remove(source.identifier) != nil else {
-            FlashLog.warn(
-              "[plugin_snapshot] duplicate source=\(source.identifier) operation=\(operation)")
-            return
-          }
-          replies[source.identifier] = PluginSnapshotReply(
-            source: source,
-            candidates: candidates)
-          if elapsedMs >= 100 {
-            FlashLog.warn(
-              "[plugin_snapshot] slow source=\(source.identifier) operation=\(operation) "
-                + "elapsed_ms=\(elapsedMs) count=\(candidates.count)")
-          }
-          if pending.isEmpty {
-            finish(timedOut: false)
-          }
-        }
-      }
     }
   }
 
@@ -567,7 +451,6 @@ final class SourceRegistry {
   func resolveCandidate(
     matching target: String,
     sourceID: String? = nil,
-    timeoutMs: Int = FlashTunables.flashlightSnapshotTimeoutMs,
     completion: @escaping (Candidate?) -> Void
   ) {
     guard Thread.isMainThread else {
@@ -575,7 +458,6 @@ final class SourceRegistry {
         self?.resolveCandidate(
           matching: target,
           sourceID: sourceID,
-          timeoutMs: timeoutMs,
           completion: completion)
       }
       return
@@ -607,38 +489,32 @@ final class SourceRegistry {
       return
     }
 
-    let plugins = activePluginSources().filter { source in
-      source.capabilities.contains(.appActivation)
-        && Self.isLocationCandidateSource(source)
-        && (sourceID == nil || Self.source(source, owns: sourceID!))
-    }
-    gatherPluginSnapshots(
-      plugins,
-      scope: .all,
-      timeoutMs: timeoutMs,
-      operation: "candidate_match"
-    ) { replies in
-      let orderedReplies = replies.sorted { lhs, rhs in
-        if lhs.source.priority != rhs.source.priority {
-          return lhs.source.priority > rhs.source.priority
-        }
-        return lhs.source.identifier < rhs.source.identifier
+    // Plugin fallback: warm catalogs are a synchronous host-store read now,
+    // ordered by source priority.
+    let plugins = activePluginSources()
+      .filter { source in
+        source.capabilities.contains(.appActivation)
+          && Self.isLocationCandidateSource(source)
+          && (sourceID == nil || Self.source(source, owns: sourceID!))
       }
-      for reply in orderedReplies {
-        let prepared = CandidateFinder.prepare(reply.candidates)
-        if let item = prepared.first(where: { candidate in
-          candidate.isLocation
-            && candidate.effect == nil
-            && !CandidateFinder.insertsText(candidate)
-            && (candidate.title.localizedCaseInsensitiveContains(target)
-              || candidate.displayTitle.localizedCaseInsensitiveContains(target))
-        }) {
-          completion(item)
-          return
-        }
+      .sorted { lhs, rhs in
+        if lhs.priority != rhs.priority { return lhs.priority > rhs.priority }
+        return lhs.identifier < rhs.identifier
       }
-      completion(nil)
+    for source in plugins {
+      let prepared = CandidateFinder.prepare(source.candidates(in: env, scope: .all))
+      if let item = prepared.first(where: { candidate in
+        candidate.isLocation
+          && candidate.effect == nil
+          && !CandidateFinder.insertsText(candidate)
+          && (candidate.title.localizedCaseInsensitiveContains(target)
+            || candidate.displayTitle.localizedCaseInsensitiveContains(target))
+      }) {
+        completion(item)
+        return
+      }
     }
+    completion(nil)
   }
 
   func candidate(forProcessID pid: pid_t) -> Candidate? {

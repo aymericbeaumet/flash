@@ -3,34 +3,15 @@ import FlashCore
 import Foundation
 
 /// Wire-payload validation and (de)serialization for the plugin protocol:
-/// the protocol version handshake checks, the catalog/query/hint-target
-/// quota constants, and the strict decoders that reject a whole payload on
-/// the first malformed row. Pure functions over `[String: Any]` frames —
-/// no process state.
+/// the protocol version handshake checks, the strict catalog/answer/hint
+/// decoders that reject a whole payload on the first malformed row, and the
+/// `perform` reply trichotomy. Pure functions over `[String: Any]` frames —
+/// no process state. Quotas live in `PluginProtocol` (parity-tested against
+/// `Plugins/_flash_plugin_specs/protocol.json`).
 enum PluginWireCodec {
 
-  /// Wire-protocol version the host speaks — the ONLY version it speaks.
-  /// The required echo in the initialize reply is the stale-binary
-  /// diagnostic: a plugin built against another protocol fails the
-  /// handshake with a version message instead of decoding oddly.
-  // v1: the protocol counter restarted at the NDJSON reset — one JSON
-  // object per newline-terminated line, no jsonrpc envelope, tri-state
-  // `outcome` on action replies, readiness by first-snapshot proof.
-  static let protocolVersion = 1
-  static let maxCatalogCandidates = 10_000
-  static let maxCatalogEncodedBytes = 4 * 1024 * 1024
-  static let maxQueryAnswersPerEvaluator = 16
-  static let maxQueryEncodedBytes = 256 * 1024
-  static let maxCandidateTitleBytes = 4 * 1024
-  static let maxCandidateURLBytes = 16 * 1024
-  static let maxCandidateMetadataEntries = 64
-  static let maxCandidateMetadataKeyBytes = 256
-  static let maxCandidateMetadataValueBytes = 64 * 1024
-  static let maxCandidateEffectBytes = 64 * 1024
-  static let maxQueryFieldBytes = 16 * 1024
-
   static func acceptsProtocolVersion(_ response: [String: Any]?) -> Bool {
-    protocolVersionValue(response) == protocolVersion
+    protocolVersionValue(response) == PluginProtocol.version
   }
 
   static func protocolVersionValue(_ response: [String: Any]?) -> Int? {
@@ -49,20 +30,48 @@ enum PluginWireCodec {
 
   static func decodeFrame(_ line: Data) throws -> [String: Any] {
     guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-      throw PluginError.invalidReference("non-object IPC frame")
+      throw PluginError.failure("non-object IPC frame")
     }
     return object
   }
 
+  /// The response law: every result is a JSON object carrying boolean `ok`.
+  /// Returns the result payload iff `ok: true`; anything else (missing
+  /// result, missing/false `ok`) is nil, and the caller settles empty.
+  static func okPayload(_ result: [String: Any]?) -> [String: Any]? {
+    guard let result, result["ok"] as? Bool == true else { return nil }
+    return result
+  }
+
+  /// Decode one `perform` reply into the universal trichotomy. `nil`
+  /// (deadline expiry, plugin crash mid-call) coerces to `.failed` — the
+  /// plugin was dispatched, so the action may still land and the host must
+  /// not double-fire a fallback. The never-dispatched → `.unhandled` case is
+  /// the caller's, decided before any frame is written.
+  static func performOutcome(from result: [String: Any]?) -> PluginPerformOutcome {
+    guard let result else { return .failed("no reply within the perform deadline") }
+    guard let ok = result["ok"] as? Bool else { return .failed("reply missing ok") }
+    if ok {
+      let pid = (result["target_pid"] as? Int).map(pid_t.init)
+      let navigationURL = (result["navigation_url"] as? String).flatMap(URL.init(string:))
+      let message = (result["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+      return .performed(pid: pid, navigationURL: navigationURL, message: message)
+    }
+    if result["unhandled"] as? Bool == true { return .unhandled }
+    let error = (result["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+      ?? "unspecified error"
+    return .failed(error)
+  }
+
+  /// Per-method ceiling on a reply frame, above the SDK-owned encoded value
+  /// boundary. The frame also carries id/result envelope keys outside those
+  /// SDK-owned values, hence the small fixed allowance.
   static func responsePayloadLimit(for method: String) -> Int? {
-    // Allow a small fixed envelope overhead above the SDK's encoded
-    // `{ candidates: ... }` / `{ answers: ... }` boundary. The response also
-    // carries JSON-RPC id/result keys that are outside those SDK-owned values.
     switch method {
-    case "sources.snapshot", "sources.query":
-      return maxCatalogEncodedBytes + 1_024
-    case "query.evaluate":
-      return maxQueryEncodedBytes + 1_024
+    case "search":
+      return PluginProtocol.maxCatalogBytes + 1_024
+    case "evaluate":
+      return PluginProtocol.maxAnswersBytes + 1_024
     default:
       return nil
     }
@@ -104,60 +113,68 @@ enum PluginWireCodec {
       priority: priority)
   }
 
-  static func catalogCandidates(
+  /// Decode a complete catalog payload (`publish` rows or a `search` reply).
+  /// `source` is a first-class row field and must name a manifest
+  /// `sources[].name`; routing `source_id` never crosses the wire — it is
+  /// always host-stamped here. Atomic: one malformed or over-quota row
+  /// rejects the whole payload (`nil`), and the caller keeps the previous
+  /// catalog.
+  static func catalogRows(
     from raw: [[String: Any]],
     sourceID: String,
     allowedSources: Set<String>
-  ) -> [Candidate]? {
-    guard raw.count <= maxCatalogCandidates else { return nil }
+  ) -> (rows: [Candidate], encodedBytes: Int)? {
+    guard raw.count <= PluginProtocol.maxCatalogRows else { return nil }
     var aggregateBytes = 0
-    var candidates: [Candidate] = []
-    candidates.reserveCapacity(raw.count)
+    var rows: [Candidate] = []
+    rows.reserveCapacity(raw.count)
     for item in raw {
       guard
-        let decoded = decodedCatalogCandidate(
+        let decoded = decodedCatalogRow(
           from: item,
           sourceID: sourceID,
           allowedSources: allowedSources),
         let nextBytes = addingBytes(
           aggregateBytes,
           decoded.stringBytes,
-          limit: maxCatalogEncodedBytes)
+          limit: PluginProtocol.maxCatalogBytes)
       else {
-        // A source snapshot is atomic. Keeping the valid prefix would expose a
+        // A catalog is atomic. Keeping the valid prefix would expose a
         // deterministic but incomplete catalog and hide the plugin defect.
         return nil
       }
       aggregateBytes = nextBytes
-      candidates.append(decoded.candidate)
+      rows.append(decoded.candidate)
     }
-    return candidates
+    return (rows, aggregateBytes)
   }
 
-  private static func decodedCatalogCandidate(
+  private static func decodedCatalogRow(
     from raw: [String: Any],
     sourceID: String,
     allowedSources: Set<String>
   ) -> (candidate: Candidate, stringBytes: Int)? {
-    let allowedKeys: Set<String> = ["title", "url", "metadata", "effect"]
+    let allowedKeys: Set<String> = ["source", "title", "url", "metadata", "effect"]
     guard Set(raw.keys).isSubset(of: allowedKeys),
+      let source = raw["source"] as? String,
+      allowedSources.contains(source),
       let title = raw["title"] as? String,
       !title.isEmpty,
-      title.utf8.count <= maxCandidateTitleBytes
+      title.utf8.count <= PluginProtocol.maxTitleBytes
     else { return nil }
 
-    var stringBytes = title.utf8.count
+    var stringBytes = source.utf8.count + title.utf8.count
     let url: URL?
     if let rawURL = present(raw["url"]) {
       guard
         let value = rawURL as? String,
-        value.utf8.count <= maxCandidateURLBytes,
+        value.utf8.count <= PluginProtocol.maxURLBytes,
         let parsed = URL(string: value),
         parsed.scheme != nil,
         let nextBytes = addingBytes(
           stringBytes,
           value.utf8.count,
-          limit: maxCatalogEncodedBytes)
+          limit: PluginProtocol.maxCatalogBytes)
       else { return nil }
       url = parsed
       stringBytes = nextBytes
@@ -169,22 +186,22 @@ enum PluginWireCodec {
     if let rawMetadata = present(raw["metadata"]) {
       guard
         let dict = rawMetadata as? [String: Any],
-        dict.count <= maxCandidateMetadataEntries
+        dict.count <= PluginProtocol.maxMetadataEntries
       else { return nil }
-      metadata.reserveCapacity(dict.count + 2)
+      metadata.reserveCapacity(dict.count + 3)
       for (key, rawValue) in dict {
         guard
-          key.utf8.count <= maxCandidateMetadataKeyBytes,
+          key.utf8.count <= PluginProtocol.maxMetadataKeyBytes,
           let value = rawValue as? String,
-          value.utf8.count <= maxCandidateMetadataValueBytes,
+          value.utf8.count <= PluginProtocol.maxMetadataValueBytes,
           let withKey = addingBytes(
             stringBytes,
             key.utf8.count,
-            limit: maxCatalogEncodedBytes),
+            limit: PluginProtocol.maxCatalogBytes),
           let withValue = addingBytes(
             withKey,
             value.utf8.count,
-            limit: maxCatalogEncodedBytes)
+            limit: PluginProtocol.maxCatalogBytes)
         else { return nil }
         stringBytes = withValue
         metadata[key] = value
@@ -196,12 +213,12 @@ enum PluginWireCodec {
       guard
         let decoded = candidateEffect(
           from: rawEffect,
-          maxTextBytes: maxCandidateEffectBytes,
+          maxTextBytes: PluginProtocol.maxEffectTextBytes,
           allowOpen: true),
         let nextBytes = addingBytes(
           stringBytes,
           decoded.textBytes,
-          limit: maxCatalogEncodedBytes)
+          limit: PluginProtocol.maxCatalogBytes)
       else { return nil }
       effect = decoded.effect
       stringBytes = nextBytes
@@ -209,10 +226,9 @@ enum PluginWireCodec {
       effect = nil
     }
 
-    guard let source = metadata[CandidateMetadataKey.source],
-      allowedSources.contains(source)
-    else { return nil }
-    // Routing ownership is always host-stamped too.
+    // Provenance and routing ownership are host-stamped, never trusted from
+    // metadata: the first-class `source` overwrites any metadata echo.
+    metadata[CandidateMetadataKey.source] = source
     metadata[CandidateMetadataKey.sourceID] = sourceID
     if metadata[CandidateMetadataKey.kind] == nil {
       metadata[CandidateMetadataKey.kind] = "plugin"
@@ -233,7 +249,7 @@ enum PluginWireCodec {
     sourceID: String,
     source: String
   ) -> [Candidate]? {
-    guard raw.count <= maxQueryAnswersPerEvaluator else { return nil }
+    guard raw.count <= PluginProtocol.maxAnswers else { return nil }
     var aggregateBytes = 0
     var candidates: [Candidate] = []
     candidates.reserveCapacity(raw.count)
@@ -246,7 +262,7 @@ enum PluginWireCodec {
         let nextBytes = addingBytes(
           aggregateBytes,
           decoded.stringBytes,
-          limit: maxQueryEncodedBytes)
+          limit: PluginProtocol.maxAnswersBytes)
       else { return nil }
       aggregateBytes = nextBytes
       candidates.append(decoded.candidate)
@@ -263,11 +279,11 @@ enum PluginWireCodec {
     guard Set(raw.keys).isSubset(of: allowedKeys),
       let title = raw["title"] as? String,
       !title.isEmpty,
-      title.utf8.count <= maxQueryFieldBytes,
+      title.utf8.count <= PluginProtocol.maxAnswerFieldBytes,
       let rawEffect = present(raw["effect"]),
       let decodedEffect = candidateEffect(
         from: rawEffect,
-        maxTextBytes: maxQueryFieldBytes,
+        maxTextBytes: PluginProtocol.maxAnswerFieldBytes,
         allowOpen: false)
     else { return nil }
     var stringBytes = title.utf8.count
@@ -275,18 +291,18 @@ enum PluginWireCodec {
       let withEffect = addingBytes(
         stringBytes,
         decodedEffect.textBytes,
-        limit: maxQueryEncodedBytes)
+        limit: PluginProtocol.maxAnswersBytes)
     else { return nil }
     stringBytes = withEffect
     let subtitle: String?
     if let rawSubtitle = present(raw["subtitle"]) {
       guard
         let value = rawSubtitle as? String,
-        value.utf8.count <= maxQueryFieldBytes,
+        value.utf8.count <= PluginProtocol.maxAnswerFieldBytes,
         let nextBytes = addingBytes(
           stringBytes,
           value.utf8.count,
-          limit: maxQueryEncodedBytes)
+          limit: PluginProtocol.maxAnswersBytes)
       else { return nil }
       subtitle = value
       stringBytes = nextBytes
@@ -358,7 +374,7 @@ enum PluginWireCodec {
   /// JSON null decodes to NSNull, and `{"url": null}` is the natural
   /// serialization of an absent optional in most languages. Treat it exactly
   /// like a missing key — punishing it used to atomically discard whole
-  /// 10,000-row snapshots.
+  /// 10,000-row catalogs.
   private static func present(_ value: Any?) -> Any? {
     value is NSNull ? nil : value
   }
@@ -376,10 +392,17 @@ enum PluginWireCodec {
     return nil
   }
 
+  /// Serialize a candidate back to the wire row shape for `perform
+  /// {kind: "resolve"}`. Rows must be resolvable from their own content — a
+  /// restarted plugin sees exactly this.
   static func candidateJSON(_ candidate: Candidate) -> [String: Any] {
+    var metadata = candidate.metadata
+    let source = metadata.removeValue(forKey: CandidateMetadataKey.source) ?? ""
+    metadata.removeValue(forKey: CandidateMetadataKey.sourceID)
     var dict: [String: Any] = [
+      "source": source,
       "title": candidate.title,
-      "metadata": candidate.metadata,
+      "metadata": metadata,
     ]
     if let url = candidate.url {
       dict["url"] = url.absoluteString

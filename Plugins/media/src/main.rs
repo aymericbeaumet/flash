@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use flash_plugin::{
-    run, run_command, run_osascript, CommandOutput, CommandRequest, CommandResponse, Context,
+    run, run_command, run_osascript, CommandOutput, CommandRequest, Context, PerformResponse,
 };
 
 // NSSystemDefined media key codes (IOKit IOHIDUsageTables.h, NX_KEYTYPE_*).
@@ -45,7 +45,7 @@ struct Media;
 flash_plugin::plugin!(Media);
 
 impl FlashPlugin for Media {
-    async fn on_command(&self, ctx: Context, command: CommandRequest) -> CommandResponse {
+    async fn on_command(&self, ctx: Context, command: CommandRequest) -> PerformResponse {
         let result: CliResult = match command.subcommand.as_str() {
             "play" => media_action(&ctx, NX_KEYTYPE_PLAY, "play").await,
             "pause" => media_action(&ctx, NX_KEYTYPE_PLAY, "pause").await,
@@ -85,10 +85,10 @@ impl FlashPlugin for Media {
                 run_command(&ctx, &argv, Duration::from_secs(120)).await
             }
             other => {
-                return CommandResponse::error(format!("unknown subcommand: {other}"));
+                return PerformResponse::fail(format!("unknown subcommand: {other}"));
             }
         };
-        result.into_command()
+        result.into_perform()
     }
 }
 
@@ -167,13 +167,7 @@ async fn applescript_command(ctx: &Context, command: &str) -> CliResult {
 async fn media_action(ctx: &Context, key_code: i32, fallback: &str) -> CliResult {
     // The host posts the NX_SYSTEM_DEFINED event (`host.post_media_key`), so
     // this plugin needs no WindowServer/IOHID mach allowances of its own.
-    let response = ctx
-        .call_host(
-            "host.post_media_key",
-            serde_json::json!({ "key_code": key_code }),
-        )
-        .await;
-    if response.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+    if ctx.post_media_key(key_code.into()).await {
         return CliResult {
             ok: true,
             stdout: String::new(),
@@ -184,9 +178,9 @@ async fn media_action(ctx: &Context, key_code: i32, fallback: &str) -> CliResult
     applescript_command(ctx, fallback).await
 }
 
-async fn get_current(ctx: &Context) -> CommandResponse {
+async fn get_current(ctx: &Context) -> PerformResponse {
     let Some(player) = pick_player(ctx, true).await else {
-        return CommandResponse::error("no supported media app is running");
+        return PerformResponse::fail("no supported media app is running");
     };
     let state = app_state(ctx, player.name)
         .await
@@ -210,10 +204,10 @@ async fn get_current(ctx: &Context) -> CommandResponse {
     if !track.is_empty() {
         summary = format!("{summary}: {track}");
     }
-    CommandResponse::toast(summary)
+    PerformResponse::ok().message(summary)
 }
 
-async fn status(ctx: &Context) -> CommandResponse {
+async fn status(ctx: &Context) -> PerformResponse {
     let mut lines = Vec::new();
     for player in PLAYERS {
         let state = if app_running(ctx, player.name).await {
@@ -235,7 +229,7 @@ async fn status(ctx: &Context) -> CommandResponse {
             if muted_flag { " (muted)" } else { "" }
         ));
     }
-    CommandResponse::toast(lines.join("\n"))
+    PerformResponse::ok().message(lines.join("\n"))
 }
 
 fn main() {
