@@ -25,7 +25,7 @@ extension AppDelegate {
       action: command.action,
       commitBehavior: behavior,
       clickModifiers: command.modifiers,
-      contextOverride: contextOverride)
+      contextOverride: focusedAboutContext() ?? contextOverride)
   }
 
   func activateMouseGrid(_ command: MouseCommand, contextOverride: AppContext?) {

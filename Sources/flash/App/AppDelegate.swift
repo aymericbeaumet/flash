@@ -1079,13 +1079,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       }
       return false
     }
-    if aboutWindowVisible || nativeSurfaceSuspended {
+    let aboutOwnsNativeKeyboard = Self.aboutWindowShouldOwnNativeKeyboard(
+      visible: aboutWindowVisible,
+      hasTransientInput: !currentHints.isEmpty || hintSession.pointerModeActive,
+      activationInFlight: activationInFlight)
+    if aboutOwnsNativeKeyboard || nativeSurfaceSuspended {
       let flags = event.flags
       let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
       let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
       let passthroughModifierFlags = KeyModifier.cgEventFlags(
         config.mode.normalPassthroughModifiers)
-      let shouldEnterInsert = aboutWindowVisible
+      let shouldEnterInsert = aboutOwnsNativeKeyboard
         && KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
           flashMode: flashMode,
           modifierFlags: flags,

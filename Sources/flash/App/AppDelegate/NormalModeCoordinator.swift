@@ -435,7 +435,11 @@ extension AppDelegate {
     // transient overlay owns input (`.hints`) and NORMAL's own capture is off.
     let hasHints = !currentHints.isEmpty || hintSession.pointerModeActive
     let inFlight = activationInFlight
-    let suspended = nativeSurfaceSuspended || aboutWindowVisible
+    let suspended = nativeSurfaceSuspended
+      || Self.aboutWindowShouldOwnNativeKeyboard(
+        visible: aboutWindowVisible,
+        hasTransientInput: hasHints,
+        activationInFlight: inFlight)
     let inputMode = mode.overlayInputMode(
       hasHints: hasHints, activationInFlight: inFlight, nativeSurfaceSuspended: suspended)
     // A native-surface suspension forces capture off even when a caller passes
@@ -532,6 +536,14 @@ extension AppDelegate {
     if !visible, flashMode == .normal {
       scheduleNormalModeRecapture()
     }
+  }
+
+  static func aboutWindowShouldOwnNativeKeyboard(
+    visible: Bool,
+    hasTransientInput: Bool,
+    activationInFlight: Bool
+  ) -> Bool {
+    visible && !hasTransientInput && !activationInFlight
   }
 
   func noteMenuBarInteraction(reason: String, now: Date = Date()) {

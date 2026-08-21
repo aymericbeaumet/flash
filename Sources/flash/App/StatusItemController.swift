@@ -39,6 +39,13 @@ final class StatusItemController: NSObject {
   private var aboutPanel: NSWindow?
   private static let repoURL = URL(string: "https://github.com/aymericbeaumet/flash")!
 
+  var focusedAboutWindowFrame: CGRect? {
+    guard NSApp.isActive, let aboutPanel, aboutPanel.isVisible, aboutPanel.isKeyWindow else {
+      return nil
+    }
+    return aboutPanel.frame
+  }
+
   @objc func showAbout() {
     // A small custom About panel instead of orderFrontStandardAboutPanel:
     // the standard panel's credit links don't reliably open in an

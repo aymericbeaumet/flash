@@ -486,6 +486,13 @@ extension AppDelegate {
     return monitor.frontmostContext(excludingBundleIdentifier: flashBundleIdentifier)
   }
 
+  func focusedAboutContext() -> AppContext? {
+    guard let frame = statusItemController.focusedAboutWindowFrame,
+      let app = NSRunningApplication(processIdentifier: getpid())
+    else { return nil }
+    return monitor.makeContext(for: app, frontWindowFrame: frame)
+  }
+
   func currentDirectNonFlashContext() -> AppContext? {
     let flashBundleIdentifier = Bundle.main.bundleIdentifier ?? "com.flash.app"
     return monitor.frontmostApplicationContext(excludingBundleIdentifier: flashBundleIdentifier)

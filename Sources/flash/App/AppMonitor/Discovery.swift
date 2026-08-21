@@ -41,11 +41,26 @@ extension AppMonitor {
       completion(hints)
     }
 
+    let plan = registry.hintProviderPlan(for: context)
+
+    // Flash is normally excluded from hint discovery because its overlays are
+    // implementation UI, not user targets. The active About window is the one
+    // exception: its exact frame is supplied by AppDelegate, and a fresh walk
+    // avoids storing Flash's transient windows in the prepared-model cache.
+    if pid == getpid() {
+      runActivationDiscovery(
+        context: context,
+        providers: plan.activationProviders,
+        targetFilter: targetFilter
+      ) { result in
+        complete(path: "activation_self", hints: result.hints)
+      }
+      return
+    }
+
     if observers[pid] == nil {
       installObserver(for: pid)
     }
-
-    let plan = registry.hintProviderPlan(for: context)
 
     func discoverPreparedFallback() {
       guard !plan.preparedProviders.isEmpty else {
@@ -392,6 +407,12 @@ extension AppMonitor {
   }
 
   private func resolveDiscoveryFrame(for context: AppContext) -> DiscoveryFrame {
+    if context.processID == getpid() {
+      let frame = context.frontWindowFrame
+      return DiscoveryFrame(
+        providerContext: context,
+        visibleRegions: frame.isNull ? [] : [frame])
+    }
     let snapshot = WindowSnapshot.build(
       primaryH: primaryScreenHeight(),
       onlyComputingVisibleRegionsFor: context.processID,

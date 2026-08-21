@@ -7,6 +7,18 @@ import XCTest
 @testable import flash
 
 final class NormalModeTests: XCTestCase {
+  func testAboutWindowYieldsKeyboardToTransientHintInput() {
+    XCTAssertTrue(
+      AppDelegate.aboutWindowShouldOwnNativeKeyboard(
+        visible: true, hasTransientInput: false, activationInFlight: false))
+    XCTAssertFalse(
+      AppDelegate.aboutWindowShouldOwnNativeKeyboard(
+        visible: true, hasTransientInput: false, activationInFlight: true))
+    XCTAssertFalse(
+      AppDelegate.aboutWindowShouldOwnNativeKeyboard(
+        visible: true, hasTransientInput: true, activationInFlight: false))
+  }
+
   func testDirectionalScrollKeys() {
     XCTAssertEqual(command(chars: "h"), .scroll(.left))
     assertSendKey(command(chars: "j"), keys: "down", keyCode: CGKeyCode(kVK_DownArrow))
