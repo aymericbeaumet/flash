@@ -1,0 +1,6 @@
+# Built probe binaries (Scripts/build-probes.sh) — the repo root ignore's
+# Plugins/*/flash-plugin-* pattern is one level deep and misses this tree.
+*/flash-plugin-conformance
+# The Rust probe is a hermetic crate with a committed lockfile, mirroring
+# the root !Plugins/*/Cargo.lock re-include (one level deep, misses us).
+!rust/Cargo.lock

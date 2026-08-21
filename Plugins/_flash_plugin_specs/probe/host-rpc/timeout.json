@@ -1,0 +1,38 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["commands", "capability:network_fetch"],
+  "description": "The 5 s default call_host deadline: the scripted host drops the fetch on the floor, the SDK settles the pending call with the canonical \"host call timed out\" sentinel (never a hang, never an exception), and the perform reply carrying it arrives no earlier than the deadline — pinning that SDKs actually wait rather than failing fast.",
+  "host": { "replies": { "host.fetch": "drop" } },
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 75,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "fetch",
+          "args": ["https://example.com/x"],
+          "raw": ":conformance fetch https://example.com/x"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 75,
+        "result": { "ok": true, "message": { "$contains": "host call timed out" } }
+      },
+      "within_ms": 9000,
+      "not_before_ms": 4500
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

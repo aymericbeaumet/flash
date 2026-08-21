@@ -1,0 +1,37 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["commands"],
+  "description": "The log notification emitter: the log subcommand emits one method-only log frame carrying the requested level and message before answering ok. Notifications carry no id and expect no reply.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 80,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "log",
+          "args": ["warn", "hello-probe"],
+          "raw": ":conformance log warn hello-probe"
+        }
+      }
+    },
+    {
+      "expect_notification": {
+        "method": "log",
+        "params": { "level": "warn", "message": { "$contains": "hello-probe" } }
+      },
+      "within_ms": 3000
+    },
+    { "expect": { "id": 80, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

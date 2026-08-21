@@ -1,0 +1,24 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["sources_warm"],
+  "description": "The authoritative empty: with the empty_catalog config switch the probe still publishes — an empty rows array is a legal, meaningful catalog replacement (\"I have nothing\"), distinct from not publishing at all.",
+  "config": { "conformance": { "empty_catalog": true } },
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "publish",
+        "params": { "rows": { "$type": "array", "$len": 0 } }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "requires": ["queries"],
+  "description": "Evaluator answers, literally: conf:one yields exactly one {title, subtitle, effect} answer, conf:unicode round-trips the raw-unicode title into both the title and the copy_text effect, and unclaimed input answers the empty array — additive parsers, never error paths.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 85,
+        "method": "evaluate",
+        "params": { "surface": "flashlight", "scope": "", "query": "conf:one" }
+      }
+    },
+    {
+      "expect": {
+        "id": 85,
+        "result": {
+          "ok": true,
+          "answers": [
+            {
+              "title": "one",
+              "subtitle": "s",
+              "effect": { "type": "copy_text", "text": "one" }
+            }
+          ]
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 86,
+        "method": "evaluate",
+        "params": { "surface": "flashlight", "scope": "", "query": "conf:unicode" }
+      }
+    },
+    {
+      "expect": {
+        "id": 86,
+        "result": {
+          "ok": true,
+          "answers": [
+            {
+              "title": "héllo ⚡ 世界",
+              "effect": { "type": "copy_text", "text": "héllo ⚡ 世界" }
+            }
+          ]
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 87,
+        "method": "evaluate",
+        "params": { "surface": "flashlight", "scope": "", "query": "conf:none" }
+      }
+    },
+    {
+      "expect": {
+        "id": 87,
+        "result": { "ok": true, "answers": { "$type": "array", "$len": 0 } }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "contract": "docs/plugin-protocol.md#framing",
+  "description": "Overlapping in-flight requests: five frames land in one flush and every one is answered — in any order (replies may legally reorder across ids). Pins the id-correlation discipline every SDK hand-rolls.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send_batch": [
+        { "id": 10, "method": "ping", "params": {} },
+        { "id": 11, "method": "ping", "params": {} },
+        { "id": 12, "method": "driver.unknown", "params": {} },
+        { "id": 13, "method": "ping", "params": {} },
+        { "id": 14, "method": "ping", "params": {} }
+      ]
+    },
+    {
+      "expect_all": [
+        { "id": 10, "result": { "ok": true } },
+        { "id": 11, "result": { "ok": true } },
+        { "id": 12, "result": { "ok": false, "error": "unknown method: driver.unknown" } },
+        { "id": 13, "result": { "ok": true } },
+        { "id": 14, "result": { "ok": true } }
+      ],
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

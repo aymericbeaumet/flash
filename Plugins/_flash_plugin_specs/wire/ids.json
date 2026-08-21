@@ -1,0 +1,24 @@
+{
+  "contract": "docs/plugin-protocol.md#framing",
+  "description": "Id semantics: each id'd request gets exactly one reply, duplicate ids are answered per-request (host and plugin counters are independent — a repeat is just another request), a JSON-safe-integer id round-trips, and a malformed string id is wire noise that must not kill the process (its reply, if any, is not asserted). A final ping proves survival.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    { "send": { "id": 7, "method": "ping", "params": {} } },
+    { "expect": { "id": 7, "result": { "ok": true } }, "within_ms": 5000 },
+    { "send": { "id": 7, "method": "ping", "params": {} } },
+    { "expect": { "id": 7, "result": { "ok": true } }, "within_ms": 5000 },
+    { "send": { "id": 9007199254740991, "method": "ping", "params": {} } },
+    { "expect": { "id": 9007199254740991, "result": { "ok": true } }, "within_ms": 5000 },
+    { "send_raw": "{\"id\":\"not-an-int\",\"method\":\"ping\",\"params\":{}}\n" },
+    { "send": { "id": 8, "method": "ping", "params": {} } },
+    { "expect": { "id": 8, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

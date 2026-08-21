@@ -1,0 +1,39 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["commands", "capability:network_fetch"],
+  "description": "call_host never throws: a NAK'd host call arrives as an ordinary {ok:false, error} result object, not an exception or a nil. The runner's default reply is its capability-NAK stand-in (\"not available in spec runner\"), and the probe surfaces it verbatim through the message — the perform itself still succeeds.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 72,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "fetch",
+          "args": ["https://example.com/x"],
+          "raw": ":conformance fetch https://example.com/x"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 72,
+        "result": {
+          "ok": true,
+          "message": { "$contains": "not available in spec runner" }
+        }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

@@ -7,13 +7,23 @@ import Foundation
 struct PluginRepository {
   let baseDataDir: URL
 
+  /// Builds the git remote URL for a `github:` ref. Testability seam — the
+  /// production value IS github.com; the manager reload tests point it at a
+  /// local bare-repo fixture so the commit-pin fetch/checkout/verify pipeline
+  /// runs without the network. `var` + internal on purpose (mirrors the
+  /// PluginProcess lifecycle seams); tests must restore it.
+  static var remoteURLBuilder: (_ owner: String, _ repository: String) -> String = {
+    owner, repository in
+    "https://github.com/\(owner)/\(repository).git"
+  }
+
   func materialize(_ ref: PluginReference) -> (root: URL, origin: PluginOrigin)? {
     switch ref.kind {
     case .file(let path):
       return (URL(fileURLWithPath: path), .file(ref.raw))
     case .github(let owner, let repository, let commit):
       let root = baseDataDir.appendingPathComponent("github/\(owner)-\(repository)-\(commit)")
-      let url = "https://github.com/\(owner)/\(repository).git"
+      let url = Self.remoteURLBuilder(owner, repository)
       do {
         try FileManager.default.createDirectory(
           at: root.deletingLastPathComponent(),

@@ -1,0 +1,18 @@
+{
+  "contract": "docs/plugin-protocol.md#process-model",
+  "description": "FLASH_PLUGIN_CONFIG absent: config() is {} and the plugin initializes and serves normally — configuration is always optional at the protocol level.",
+  "env_unset": ["FLASH_PLUGIN_CONFIG"],
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    { "send": { "id": 2, "method": "ping", "params": {} } },
+    { "expect": { "id": 2, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

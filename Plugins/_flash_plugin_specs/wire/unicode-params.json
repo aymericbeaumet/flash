@@ -1,0 +1,32 @@
+{
+  "contract": "docs/plugin-protocol.md#framing",
+  "description": "UTF-8 fidelity: params carrying emoji, CJK, combining marks, and control-range escapes decode and the canonical unknown-method reply comes back intact — proving the SDK's JSON layer neither mangles nor chokes on non-ASCII frames. Literal lone-surrogate escapes arrive as a raw line (undecodable in strict decoders — either outcome is fine) followed by a survival ping.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 5,
+        "method": "driver.unicode",
+        "params": { "text": "héllo ⚡ 世界 🧪 éé\u0301 \t\u001f" }
+      }
+    },
+    {
+      "expect": {
+        "id": 5,
+        "result": { "ok": false, "error": "unknown method: driver.unicode" }
+      },
+      "within_ms": 5000
+    },
+    { "send_raw": "{\"id\":6,\"method\":\"driver.surrogate\",\"params\":{\"s\":\"\\ud800\"}}\n" },
+    { "send": { "id": 7, "method": "ping", "params": {} } },
+    { "expect": { "id": 7, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

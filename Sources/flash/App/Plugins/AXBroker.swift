@@ -159,7 +159,8 @@ final class AXBroker {
       let status = self.withAccessibilityTree(pid: entry.pid) { _ in
         AXUIElementPerformAction(entry.element, action as CFString)
       }
-      reply(["ok": status == .success])
+      // Response law: ok:false always carries a non-empty, content-free error.
+      reply(status == .success ? ["ok": true] : ["ok": false, "error": "ax action failed"])
     }
   }
 
@@ -188,7 +189,8 @@ final class AXBroker {
       let status = self.withAccessibilityTree(pid: entry.pid) { _ in
         AXUIElementSetAttributeValue(entry.element, attribute as CFString, cfValue)
       }
-      reply(["ok": status == .success])
+      // Response law: ok:false always carries a non-empty, content-free error.
+      reply(status == .success ? ["ok": true] : ["ok": false, "error": "ax set failed"])
     }
   }
 
@@ -218,7 +220,8 @@ final class AXBroker {
         return AXUIElementSetAttributeValue(
           parentEntry.element, kAXSelectedChildrenAttribute as CFString, value)
       }
-      reply(["ok": status == .success])
+      // Response law: ok:false always carries a non-empty, content-free error.
+      reply(status == .success ? ["ok": true] : ["ok": false, "error": "ax select failed"])
     }
   }
 

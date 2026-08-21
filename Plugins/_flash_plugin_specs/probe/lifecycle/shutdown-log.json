@@ -1,0 +1,22 @@
+{
+  "contract": "docs/plugin-protocol.md#process-model",
+  "description": "stdin EOF is the shutdown signal and the shutdown hook really runs before exit: the probe's on_shutdown emits one log notification (\"conformance shutdown\"), which must still make it out on stdout after the half-close, followed by a clean exit 0.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    {
+      "expect_notification": {
+        "method": "log",
+        "params": { "message": { "$contains": "conformance shutdown" } }
+      },
+      "within_ms": 3000
+    },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

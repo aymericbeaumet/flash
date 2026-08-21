@@ -1,0 +1,44 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["commands", "capability:network_fetch"],
+  "description": "host.fetch carries its url parameter and its result body flows back to the caller: the probe's fetch subcommand issues host.fetch {url}, the intercepting step pins the method name and param shape, and the scripted 200/hello response surfaces verbatim in the reply message.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 71,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "fetch",
+          "args": ["https://example.com/x"],
+          "raw": ":conformance fetch https://example.com/x"
+        }
+      }
+    },
+    {
+      "expect_host_rpc": {
+        "method": "host.fetch",
+        "params": { "url": { "$type": "string", "$min_len": 1 } }
+      },
+      "within_ms": 5000,
+      "reply": { "ok": true, "status": 200, "body": "hello" }
+    },
+    {
+      "expect": {
+        "id": 71,
+        "result": { "ok": true, "message": { "$contains": "hello" } }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

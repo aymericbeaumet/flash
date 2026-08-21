@@ -1,0 +1,44 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["sources_warm", "commands"],
+  "description": "publish is full-replacement and repeatable: the startup catalog lands with its three rows, then the publish-extra subcommand republishes the catalog plus the delta row — a SECOND publish notification with four rows. The host swaps the store whole each time; nothing is incremental.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "publish",
+        "params": { "rows": { "$type": "array", "$len": 3 } }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 82,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "publish-extra",
+          "args": [],
+          "raw": ":conformance publish-extra"
+        }
+      }
+    },
+    { "expect": { "id": 82, "result": { "ok": true } }, "within_ms": 5000 },
+    {
+      "expect_notification": {
+        "method": "publish",
+        "params": { "rows": { "$type": "array", "$len": 4 } }
+      },
+      "within_ms": 3000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "contract": "docs/plugin-protocol.md#process-model",
+  "requires": ["commands"],
+  "description": "The scrubbed child environment, asserted through the probe's env-has oracle (the matcher grammar is deliberately positive-only, so absence is answered plugin-side as a value): the FLASH_PLUGIN_* contract vars are present, an ambient agent socket is not inherited, and with the config fixture removed FLASH_PLUGIN_CONFIG is genuinely unset — not empty, absent.",
+  "env_unset": ["FLASH_PLUGIN_CONFIG"],
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 98,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "env-has",
+          "args": ["FLASH_PLUGIN_ID"],
+          "raw": ":conformance env-has FLASH_PLUGIN_ID"
+        }
+      }
+    },
+    {
+      "expect": { "id": 98, "result": { "ok": true, "message": "present" } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 99,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "env-has",
+          "args": ["FLASH_PLUGIN_DATA_DIR"],
+          "raw": ":conformance env-has FLASH_PLUGIN_DATA_DIR"
+        }
+      }
+    },
+    {
+      "expect": { "id": 99, "result": { "ok": true, "message": "present" } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 100,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "env-has",
+          "args": ["SSH_AUTH_SOCK"],
+          "raw": ":conformance env-has SSH_AUTH_SOCK"
+        }
+      }
+    },
+    {
+      "expect": { "id": 100, "result": { "ok": true, "message": "absent" } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 101,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "env-has",
+          "args": ["FLASH_PLUGIN_CONFIG"],
+          "raw": ":conformance env-has FLASH_PLUGIN_CONFIG"
+        }
+      }
+    },
+    {
+      "expect": { "id": 101, "result": { "ok": true, "message": "absent" } },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

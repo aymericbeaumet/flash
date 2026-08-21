@@ -1,0 +1,37 @@
+{
+  "contract": "docs/plugin-protocol.md#process-model",
+  "requires": ["commands"],
+  "description": "FLASH_PLUGIN_CONFIG delivery: the spec's config fixture is serialized into the child environment, every SDK parses it into the same object, and the probe echoes the full parsed config as JSON — the nested string setting survives verbatim (key/value adjacency is order-proof; nothing asserts cross-key ordering).",
+  "config": { "conformance": { "greeting": "hi", "n": 3 } },
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 102,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "config",
+          "args": [],
+          "raw": ":conformance config"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 102,
+        "result": { "ok": true, "message": { "$contains": "\"greeting\":\"hi\"" } }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

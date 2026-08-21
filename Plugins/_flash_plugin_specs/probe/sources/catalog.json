@@ -1,0 +1,40 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["sources_warm"],
+  "description": "The push catalog, literally: after the immediate initialize reply the probe publishes its fixed three rows in order — metadata carried on row one, the raw-unicode title on row two, and the url + open effect on row three — exactly as the behavior contract in probes/README.md pins them, from every language.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "expect_notification": {
+        "method": "publish",
+        "params": {
+          "rows": [
+            {
+              "source": "conformance.items",
+              "title": "alpha",
+              "metadata": { "k": "v1" }
+            },
+            { "source": "conformance.items", "title": "béta ⚡ 名前" },
+            {
+              "source": "conformance.items",
+              "title": "gamma",
+              "url": "https://example.com/g",
+              "effect": { "type": "open", "url": "https://example.com/g" }
+            }
+          ]
+        }
+      },
+      "within_ms": 5000
+    },
+    { "send": { "id": 2, "method": "ping", "params": {} } },
+    { "expect": { "id": 2, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

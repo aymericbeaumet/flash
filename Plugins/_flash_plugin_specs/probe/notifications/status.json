@@ -1,0 +1,37 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["commands", "status"],
+  "description": "The status notification emitter: the status subcommand feeds the manifest-declared `state` segment and the segments map crosses the wire exactly as {name: value}, before the perform answers ok.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 81,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "status",
+          "args": ["state", "on"],
+          "raw": ":conformance status state on"
+        }
+      }
+    },
+    {
+      "expect_notification": {
+        "method": "status",
+        "params": { "segments": { "state": "on" } }
+      },
+      "within_ms": 3000
+    },
+    { "expect": { "id": 81, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

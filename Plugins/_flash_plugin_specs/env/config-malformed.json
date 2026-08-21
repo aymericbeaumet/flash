@@ -1,0 +1,18 @@
+{
+  "contract": "docs/plugin-protocol.md#process-model",
+  "description": "A malformed FLASH_PLUGIN_CONFIG is treated as {} — never a crash, never a refusal to start. The host serializes this variable itself, so malformation here means operator error (a hand-run binary); the SDK contract is graceful degradation.",
+  "env": { "FLASH_PLUGIN_CONFIG": "{not json" },
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    { "send": { "id": 2, "method": "ping", "params": {} } },
+    { "expect": { "id": 2, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

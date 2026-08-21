@@ -1,0 +1,43 @@
+{
+  "contract": "docs/plugin-protocol.md#framing",
+  "requires": ["commands", "sources_warm"],
+  "description": "The 10 MiB outbound cap, both edges. A publish whose frame would be ~13 MiB (200 generated rows padded to 64 KiB each via the catalog_rows/row_pad config switches) must be DROPPED whole by the SDK — no truncation, no crash, no frame — while an in-cap ~1 MiB echo reply passes untouched and a follow-up ping proves the process survived building and rejecting the oversized frame.",
+  "config": { "conformance": { "catalog_rows": 200, "row_pad": 65536 } },
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    { "expect_none": { "method": "publish" }, "for_ms": 1500 },
+    {
+      "send": {
+        "id": 64,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "echo",
+          "args": ["zmarkerz", { "$repeat": { "value": "a", "count": 1048576 } }],
+          "raw": ""
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 64,
+        "result": {
+          "ok": true,
+          "message": { "$min_len": 1000000, "$contains": "zmarkerz" }
+        }
+      },
+      "within_ms": 10000
+    },
+    { "send": { "id": 65, "method": "ping", "params": {} } },
+    { "expect": { "id": 65, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

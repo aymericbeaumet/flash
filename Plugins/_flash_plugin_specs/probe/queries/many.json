@@ -1,0 +1,40 @@
+{
+  "contract": "docs/plugin-protocol.md#payload-shapes-and-quotas",
+  "requires": ["queries"],
+  "description": "The answers bound is host-enforced, not SDK-enforced: conf:many produces 17 answers — one past the 16-answer quota — and the SDK must transmit all 17 faithfully (atomic host-side rejection of the over-quota reply is Swift-tested; an SDK that silently truncated here would mask the plugin defect).",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 88,
+        "method": "evaluate",
+        "params": { "surface": "flashlight", "scope": "", "query": "conf:many" }
+      }
+    },
+    {
+      "expect": {
+        "id": 88,
+        "result": {
+          "ok": true,
+          "answers": {
+            "$type": "array",
+            "$len": 17,
+            "$each": {
+              "title": { "$type": "string", "$min_len": 2 },
+              "effect": { "type": "copy_text" }
+            }
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

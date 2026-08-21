@@ -1,0 +1,50 @@
+{
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "requires": ["hints"],
+  "description": "Hint targets with exact geometry, incl. a negative NSScreen origin (a display left of the primary): the probe answers exactly two targets in the canonical frame-object form — an AXLink and a FlashTerminalLink — with ids, labels, and the -10.5 x origin intact from every language's float encoder.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 97,
+        "method": "hints",
+        "params": {
+          "bundle_id": "dev.flash.spec",
+          "pid": 999,
+          "front_window_frame": { "x": 0, "y": 0, "width": 1512, "height": 982 }
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 97,
+        "result": {
+          "ok": true,
+          "targets": [
+            {
+              "id": "t1",
+              "frame": { "x": -10.5, "y": 20, "width": 30, "height": 40 },
+              "role": "AXLink",
+              "label": "one"
+            },
+            {
+              "id": "t2",
+              "frame": { "x": 0, "y": 0, "width": 10, "height": 10 },
+              "role": "FlashTerminalLink",
+              "label": "two"
+            }
+          ]
+        }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

@@ -80,11 +80,19 @@ pub fn put(arena: std.mem.Allocator, object: *Value, key: []const u8, value: Val
 
 // ── Config / environment ────────────────────────────────────────────────
 
+/// libc getenv — zig 0.16 removed std.posix.getenv, and lazy analysis hid
+/// the break until the conformance probe referenced these accessors
+/// (probe/env/config-echo is the permanent regression pin).
+fn getEnv(name: [*:0]const u8) ?[]const u8 {
+    const value = std.c.getenv(name) orelse return null;
+    return std.mem.span(value);
+}
+
 /// The plugin's `[plugin.<id>]` settings, delivered as a JSON object in
 /// FLASH_PLUGIN_CONFIG; empty when unset or malformed.
 pub fn config(arena: std.mem.Allocator) Value {
     const empty: Value = .{ .object = .empty };
-    const raw = std.posix.getenv("FLASH_PLUGIN_CONFIG") orelse return empty;
+    const raw = getEnv("FLASH_PLUGIN_CONFIG") orelse return empty;
     const parsed = std.json.parseFromSliceLeaky(Value, arena, raw, .{}) catch return empty;
     return switch (parsed) {
         .object => parsed,
@@ -96,7 +104,7 @@ pub fn config(arena: std.mem.Allocator) Value {
 /// host always provides the dir, and failing loudly beats scattering
 /// plugin state into an arbitrary working directory.
 pub fn dataDir() []const u8 {
-    return std.posix.getenv("FLASH_PLUGIN_DATA_DIR") orelse
+    return getEnv("FLASH_PLUGIN_DATA_DIR") orelse
         std.process.fatal("FLASH_PLUGIN_DATA_DIR is unset — refusing to fall back to \".\"", .{});
 }
 

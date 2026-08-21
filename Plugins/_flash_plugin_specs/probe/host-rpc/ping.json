@@ -1,0 +1,37 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["commands"],
+  "description": "The minimal call_host round trip: the ping subcommand issues host.ping on the plugin's own id counter, the scripted host reply resolves the pending call, and the verbatim result object surfaces through the reply message — proving request/response correlation for plugin-initiated calls.",
+  "host": { "replies": { "host.ping": { "ok": true, "echo": {} } } },
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 70,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "ping",
+          "args": [],
+          "raw": ":conformance ping"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 70,
+        "result": { "ok": true, "message": { "$contains": "\"ok\":true" } }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

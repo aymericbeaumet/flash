@@ -1,0 +1,34 @@
+{
+  "contract": "docs/plugin-protocol.md#framing",
+  "requires": ["commands"],
+  "description": "stderr is diagnostics-only and must never wedge the wire: the probe floods 256 KiB at stderr before replying, the reply still arrives (a runner or plugin that doesn't drain stderr concurrently deadlocks right here), the flood is observable in the captured stderr, and a follow-up ping proves the process kept serving.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 60,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "stderr",
+          "args": ["256"],
+          "raw": ":conformance stderr 256"
+        }
+      }
+    },
+    { "expect": { "id": 60, "result": { "ok": true } }, "within_ms": 5000 },
+    { "sleep_ms": 750 },
+    { "expect_stderr": { "contains": "xxxxxxxxxxxxxxxx" } },
+    { "send": { "id": 61, "method": "ping", "params": {} } },
+    { "expect": { "id": 61, "result": { "ok": true } }, "within_ms": 5000 },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

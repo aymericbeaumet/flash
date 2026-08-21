@@ -1,0 +1,115 @@
+{
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "requires": ["source_actions", "navigation", "sources"],
+  "description": "The universal perform trichotomy across three kinds: conf_performed answers ok with target_pid, conf_unhandled answers the canonical {ok:false, unhandled:true} (the host MAY fall back), conf_failed answers {ok:false, error} (mine-but-broke — the host MUST NOT fall back); resolving the alpha row from its own content succeeds with target_pid while an unknown row is unhandled; and the registered conformance:// navigation scheme accepts its route and declines an unknown one. The unregistered-kind floor is pinned by the shared perform/unknown-kind spec.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 90,
+        "method": "perform",
+        "params": {
+          "kind": "action",
+          "name": "conf_performed",
+          "context": { "bundle_id": "dev.flash.spec", "pid": 999 }
+        }
+      }
+    },
+    {
+      "expect": { "id": 90, "result": { "ok": true, "target_pid": 4242 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 91,
+        "method": "perform",
+        "params": {
+          "kind": "action",
+          "name": "conf_unhandled",
+          "context": { "bundle_id": "dev.flash.spec", "pid": 999 }
+        }
+      }
+    },
+    {
+      "expect": { "id": 91, "result": { "ok": false, "unhandled": true } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 92,
+        "method": "perform",
+        "params": {
+          "kind": "action",
+          "name": "conf_failed",
+          "context": { "bundle_id": "dev.flash.spec", "pid": 999 }
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 92,
+        "result": { "ok": false, "error": { "$contains": "conformance" } }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 93,
+        "method": "perform",
+        "params": {
+          "kind": "resolve",
+          "row": {
+            "source": "conformance.items",
+            "title": "alpha",
+            "metadata": { "k": "v1" }
+          }
+        }
+      }
+    },
+    {
+      "expect": { "id": 93, "result": { "ok": true, "target_pid": 4242 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 94,
+        "method": "perform",
+        "params": {
+          "kind": "resolve",
+          "row": { "source": "conformance.items", "title": "zzz" }
+        }
+      }
+    },
+    {
+      "expect": { "id": 94, "result": { "ok": false, "unhandled": true } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 95,
+        "method": "perform",
+        "params": { "kind": "navigate", "url": "conformance://ok" }
+      }
+    },
+    { "expect": { "id": 95, "result": { "ok": true } }, "within_ms": 5000 },
+    {
+      "send": {
+        "id": 96,
+        "method": "perform",
+        "params": { "kind": "navigate", "url": "conformance://nope" }
+      }
+    },
+    {
+      "expect": { "id": 96, "result": { "ok": false, "unhandled": true } },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

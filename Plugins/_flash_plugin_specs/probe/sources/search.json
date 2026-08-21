@@ -1,0 +1,53 @@
+{
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "requires": ["sources"],
+  "description": "The search wire shape from every SDK: rows come back in catalog row shape with the first-class source name, a matching query returns exactly the alpha row (metadata intact), and a miss returns {ok, rows: []} — an empty result, never an error.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 83,
+        "method": "search",
+        "params": { "query": "alpha", "scope": "" }
+      }
+    },
+    {
+      "expect": {
+        "id": 83,
+        "result": {
+          "ok": true,
+          "rows": [
+            {
+              "source": "conformance.items",
+              "title": "alpha",
+              "metadata": { "k": "v1" }
+            }
+          ]
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 84,
+        "method": "search",
+        "params": { "query": "zzz", "scope": "" }
+      }
+    },
+    {
+      "expect": {
+        "id": 84,
+        "result": { "ok": true, "rows": { "$type": "array", "$len": 0 } }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

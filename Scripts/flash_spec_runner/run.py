@@ -79,7 +79,12 @@ class SpecRun:
         """Drain frames until `until()` is truthy or the window closes.
 
         Returns the value of until() (or the matched rpc frame for pending_rpc).
+        A just-exited child gets a short drain grace: poll() can observe the
+        exit before the reader thread has flushed the final buffered reply
+        into the queue, and declaring "exited while waiting" in that window
+        was a real flake (a flush-then-exit reply is legal and common).
         """
+        exit_seen_at = None
         while True:
             hit = until() if until else None
             if hit:
@@ -94,6 +99,10 @@ class SpecRun:
             if frame is None:
                 exited = self.process.child.poll()
                 if exited is not None and self.process.frames.empty():
+                    if exit_seen_at is None:
+                        exit_seen_at = now
+                    if now - exit_seen_at < 0.25:
+                        continue
                     hit = until() if until else None
                     if hit:
                         return hit

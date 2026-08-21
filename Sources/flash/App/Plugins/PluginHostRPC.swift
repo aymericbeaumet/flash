@@ -404,7 +404,13 @@ final class PluginHostRPC {
       let url = URL(string: urlString), url.scheme != nil
     {
       DispatchQueue.main.async {
-        reply(["ok": Self.urlOpener(url)])
+        // Response law: ok:false always carries a non-empty, content-free
+        // error (a bare {"ok": false} is a spec violation).
+        if Self.urlOpener(url) {
+          reply(["ok": true])
+        } else {
+          reply(["ok": false, "error": "open failed"])
+        }
       }
       return
     }

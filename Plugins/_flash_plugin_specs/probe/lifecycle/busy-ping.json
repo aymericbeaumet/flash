@@ -1,0 +1,39 @@
+{
+  "contract": "docs/plugin-protocol.md#process-model",
+  "requires": ["commands"],
+  "description": "A busy plugin still answers everything eventually: a 1500 ms blocking perform and a ping land in one flush (guaranteed overlap), and both replies arrive inside one window. Blocking single-threaded runtimes are fully conformant — the ping may simply queue behind the sleep; concurrent runtimes may answer it first. Order is deliberately unconstrained.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send_batch": [
+        {
+          "id": 40,
+          "method": "perform",
+          "params": {
+            "kind": "command",
+            "command": "conformance",
+            "subcommand": "sleep",
+            "args": ["1500"],
+            "raw": ":conformance sleep 1500"
+          }
+        },
+        { "id": 41, "method": "ping", "params": {} }
+      ]
+    },
+    {
+      "expect_all": [
+        { "id": 40, "result": { "ok": true } },
+        { "id": 41, "result": { "ok": true } }
+      ],
+      "within_ms": 6000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "contract": "docs/plugin-protocol.md#framing",
+  "requires": ["commands"],
+  "description": "UTF-8 round-trips byte-perfectly: emoji, CJK, and a combining sequence sent as perform args come back verbatim inside the echoed JSON message (adjacent array elements pin all three in one substring — args order is deterministic even where object key order isn't), and a raw-field echo survives the same way. No language may normalize, escape to ASCII, or mangle surrogates.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 62,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "echo",
+          "args": ["héllo ⚡ 世界", "名前", "café"],
+          "raw": ":conformance echo"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 62,
+        "result": {
+          "ok": true,
+          "message": { "$contains": "\"héllo ⚡ 世界\",\"名前\",\"café\"" }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 63,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "echo",
+          "args": ["x"],
+          "raw": "rawé ⚡ check 名前"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 63,
+        "result": { "ok": true, "message": { "$contains": "rawé ⚡ check 名前" } }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

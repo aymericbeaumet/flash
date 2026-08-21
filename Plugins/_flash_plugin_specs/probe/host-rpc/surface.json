@@ -1,0 +1,432 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": [
+    "commands",
+    "capability:accessibility",
+    "capability:app_control",
+    "capability:clipboard",
+    "capability:media_keys",
+    "capability:notify",
+    "capability:open",
+    "capability:process_control"
+  ],
+  "description": "Every remaining host-RPC arm, one perform each, against a scripted always-ok host: open, clipboard_write, storage_set, ax_snapshot (each with its method name and key param shape pinned by an intercepting step), then notify, storage_get, post_media_key, process_table, signal, post_keys, post_global_key, activate, and normal_mode_target riding the wildcard reply. Each verbatim host result surfaces through the reply message — the full registry is reachable from every SDK with correct correlation, sequentially, on one process.",
+  "host": {
+    "replies": {
+      "*": {
+        "ok": true,
+        "detail": "scripted"
+      }
+    }
+  },
+  "timeout_ms": 60000,
+  "steps": [
+    {
+      "send": {
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "protocol_version": 1
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 1,
+        "result": {
+          "ok": true,
+          "protocol_version": 1
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 100,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "open",
+          "args": [
+            "https://example.com/x"
+          ],
+          "raw": ":conformance open https://example.com/x"
+        }
+      }
+    },
+    {
+      "expect_host_rpc": {
+        "method": "host.open",
+        "params": {
+          "url": {
+            "$type": "string",
+            "$min_len": 1
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "expect": {
+        "id": 100,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 101,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "clipboard",
+          "args": [
+            "copy-me"
+          ],
+          "raw": ":conformance clipboard copy-me"
+        }
+      }
+    },
+    {
+      "expect_host_rpc": {
+        "method": "host.clipboard_write",
+        "params": {
+          "text": "copy-me"
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "expect": {
+        "id": 101,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 102,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "storage-set",
+          "args": [
+            "k1",
+            "v1"
+          ],
+          "raw": ":conformance storage-set k1 v1"
+        }
+      }
+    },
+    {
+      "expect_host_rpc": {
+        "method": "host.storage_set",
+        "params": {
+          "key": "k1",
+          "value": "v1"
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "expect": {
+        "id": 102,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 103,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "ax-snapshot",
+          "args": [],
+          "raw": ":conformance ax-snapshot"
+        }
+      }
+    },
+    {
+      "expect_host_rpc": {
+        "method": "host.ax_snapshot",
+        "params": {
+          "pid": 4242,
+          "roots": "app"
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "expect": {
+        "id": 103,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 104,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "notify",
+          "args": [
+            "hi"
+          ],
+          "raw": ":conformance notify hi"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 104,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 105,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "storage-get",
+          "args": [
+            "k1"
+          ],
+          "raw": ":conformance storage-get k1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 105,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 106,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "media",
+          "args": [],
+          "raw": ":conformance media"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 106,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 107,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "ps",
+          "args": [],
+          "raw": ":conformance ps"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 107,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 108,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "signal",
+          "args": [
+            "4242"
+          ],
+          "raw": ":conformance signal 4242"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 108,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 109,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "keys",
+          "args": [],
+          "raw": ":conformance keys"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 109,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 110,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "global-key",
+          "args": [],
+          "raw": ":conformance global-key"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 110,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 111,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "activate",
+          "args": [],
+          "raw": ":conformance activate"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 111,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 112,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "normal-mode-target",
+          "args": [],
+          "raw": ":conformance normal-mode-target"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 112,
+        "result": {
+          "ok": true,
+          "message": {
+            "$contains": "\"ok\":true"
+          }
+        }
+      },
+      "within_ms": 5000
+    },
+    {
+      "close_stdin": true
+    },
+    {
+      "expect_exit": {
+        "code": 0
+      },
+      "within_ms": 3000
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "contract": "docs/plugin-protocol.md#host--plugin",
+  "requires": ["listen", "commands"],
+  "description": "Events are notifications that actually reach the event hook: a core:apps.changed delivery is absorbed without a reply, and after a settle pause (SDKs may run events on a different queue than perform) the state subcommand reads back the remembered event name.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "method": "event",
+        "params": {
+          "name": "core:apps.changed",
+          "payload": { "running_applications": [] }
+        }
+      }
+    },
+    { "sleep_ms": 750 },
+    {
+      "send": {
+        "id": 103,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "state",
+          "args": [],
+          "raw": ":conformance state"
+        }
+      }
+    },
+    {
+      "expect": {
+        "id": 103,
+        "result": { "ok": true, "message": { "$contains": "core:apps.changed" } }
+      },
+      "within_ms": 5000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

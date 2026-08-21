@@ -1,0 +1,52 @@
+{
+  "id": "conformance",
+  "name": "Conformance Probe",
+  "version": "0.1.0",
+  "description": "Wire-protocol conformance probe: a test fixture driven only by the spec runner, never shipped or spawned by the host.",
+  "exec": [
+    "ruby",
+    "main.rb"
+  ],
+  "sandbox": {},
+  "capabilities": [
+    "accessibility",
+    "app_control",
+    "clipboard",
+    "media_keys",
+    "network_fetch",
+    "notify",
+    "open",
+    "process_control"
+  ],
+  "fetch_urls": [
+    "https://example.com/"
+  ],
+  "listen": [
+    "core:*"
+  ],
+  "sources": [
+    {
+      "name": "conformance.items"
+    }
+  ],
+  "query": {},
+  "commands": [
+    {
+      "command": "conformance",
+      "subcommand": "*",
+      "description": "Catch-all conformance dispatch; the subcommand routes the probe behavior"
+    }
+  ],
+  "actions": [
+    "conf_performed",
+    "conf_unhandled",
+    "conf_failed"
+  ],
+  "hints": {},
+  "navigation": [
+    "conformance"
+  ],
+  "status": [
+    "state"
+  ]
+}

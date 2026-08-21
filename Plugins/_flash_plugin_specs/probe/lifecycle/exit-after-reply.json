@@ -1,0 +1,29 @@
+{
+  "contract": "docs/plugin-protocol.md#process-model",
+  "requires": ["commands"],
+  "description": "A reply written just before exit must actually reach the host: the exit-after-reply subcommand answers ok and terminates ~250 ms later, so the SDK's write path has to be flushed-per-frame (a buffered writer that only flushes on shutdown loses this reply) and the exit code is the requested one.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 51,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "exit-after-reply",
+          "args": ["0"],
+          "raw": ":conformance exit-after-reply 0"
+        }
+      }
+    },
+    { "expect": { "id": 51, "result": { "ok": true } }, "within_ms": 5000 },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

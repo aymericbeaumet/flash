@@ -1,0 +1,50 @@
+{
+  "contract": "docs/plugin-protocol.md#plugin--host",
+  "requires": ["commands", "capability:network_fetch"],
+  "description": "A plugin awaiting a host reply still serves inbound traffic: the fetch's host.fetch call is captured un-answered, a ping interleaves and gets its reply while the call is pending (single-threaded SDKs must pump their read loop inside call_host), and only then does the deferred host reply land and complete the original perform with its body.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 73,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "fetch",
+          "args": ["https://example.com/x"],
+          "raw": ":conformance fetch https://example.com/x"
+        }
+      }
+    },
+    {
+      "expect_host_rpc": { "method": "host.fetch" },
+      "within_ms": 5000,
+      "reply": "manual",
+      "capture": "f1"
+    },
+    { "send": { "id": 74, "method": "ping", "params": {} } },
+    { "expect": { "id": 74, "result": { "ok": true } }, "within_ms": 3000 },
+    {
+      "reply_host_rpc": {
+        "to": "f1",
+        "result": { "ok": true, "status": 200, "body": "late" }
+      }
+    },
+    {
+      "expect": {
+        "id": 73,
+        "result": { "ok": true, "message": { "$contains": "late" } }
+      },
+      "within_ms": 3000
+    },
+    { "close_stdin": true },
+    { "expect_exit": { "code": 0 }, "within_ms": 3000 }
+  ]
+}

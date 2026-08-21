@@ -1,0 +1,29 @@
+{
+  "contract": "docs/plugin-protocol.md#process-model",
+  "requires": ["commands"],
+  "description": "A plugin that dies mid-perform never fabricates a reply: the crash subcommand exits with the requested code immediately, no response frame for the in-flight id ever arrives (host-side that silence coerces to a perform error so fallback can't double-fire — Swift-tested), and the exit status is the probe's own code, not a signal death.",
+  "steps": [
+    {
+      "send": { "id": 1, "method": "initialize", "params": { "protocol_version": 1 } }
+    },
+    {
+      "expect": { "id": 1, "result": { "ok": true, "protocol_version": 1 } },
+      "within_ms": 5000
+    },
+    {
+      "send": {
+        "id": 50,
+        "method": "perform",
+        "params": {
+          "kind": "command",
+          "command": "conformance",
+          "subcommand": "crash",
+          "args": ["3"],
+          "raw": ":conformance crash 3"
+        }
+      }
+    },
+    { "expect_none": { "id": 50 }, "for_ms": 750 },
+    { "expect_exit": { "code": 3 }, "within_ms": 3000 }
+  ]
+}
