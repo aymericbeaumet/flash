@@ -115,10 +115,19 @@ class Overrides:
         return self.table.get(plugin_key, {})
 
     def disposition(self, plugin_key, spec_name):
-        """Returns (mode, reason): mode in {run, skip, xfail}."""
-        entry = self._entry(plugin_key)
-        for mode in ("skip", "xfail"):
-            for pattern in entry.get(mode, []):
-                if fnmatch.fnmatch(spec_name, pattern):
-                    return mode, entry.get("reason", "")
+        """Returns (mode, reason): mode in {run, skip, xfail}.
+
+        The sandbox lane keys rows as "sandbox:<id>" but runs the same plugin
+        binary, so a plain "<id>" entry (e.g. a TCC skip) applies there too.
+        Probe entries stay their own namespace ("probe:<lang>").
+        """
+        keys = [plugin_key]
+        if plugin_key.startswith("sandbox:"):
+            keys.append(plugin_key.split(":", 1)[1])
+        for key in keys:
+            entry = self._entry(key)
+            for mode in ("skip", "xfail"):
+                for pattern in entry.get(mode, []):
+                    if fnmatch.fnmatch(spec_name, pattern):
+                        return mode, entry.get("reason", "")
         return "run", ""

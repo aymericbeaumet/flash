@@ -38,6 +38,26 @@ final class PluginHostRPC {
   /// 1-per-second rate limit. Main-thread only (notify hops to main).
   private var lastNotifyAt: [String: Date] = [:]
 
+  // Testability seams for the three arms whose production bodies fire
+  // irreversible side effects (LaunchServices open, HID media-key post,
+  // SIGTERM). Tests swap these to assert the decoded, capability-checked,
+  // validated call without opening browsers or signaling processes; the
+  // defaults ARE the production behavior.
+  static var urlOpener: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+  static var appOpener: (String, @escaping (String?) -> Void) -> Void = { bundleID, done in
+    guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+    else {
+      done("no app for bundle id \(bundleID)")
+      return
+    }
+    NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration()) {
+      _, error in
+      done(error.map { String(describing: $0) })
+    }
+  }
+  static var mediaKeyPoster: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+  static var signalSender: (pid_t) -> Int32 = { kill($0, SIGTERM) }
+
   /// Routes a plugin→host RPC request to the matching core capability and
   /// delivers the JSON result via `reply`. This is the single entry point
   /// through which plugins reach native APIs the core owns (the AX broker,
@@ -384,23 +404,15 @@ final class PluginHostRPC {
       let url = URL(string: urlString), url.scheme != nil
     {
       DispatchQueue.main.async {
-        reply(["ok": NSWorkspace.shared.open(url)])
+        reply(["ok": Self.urlOpener(url)])
       }
       return
     }
     if let bundleID = params["bundle_id"] as? String {
       DispatchQueue.main.async {
-        guard
-          let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-        else {
-          reply(["ok": false, "error": "no app for bundle id \(bundleID)"])
-          return
-        }
-        NSWorkspace.shared.openApplication(
-          at: appURL, configuration: NSWorkspace.OpenConfiguration()
-        ) { _, error in
+        Self.appOpener(bundleID) { error in
           if let error {
-            reply(["ok": false, "error": String(describing: error)])
+            reply(["ok": false, "error": error])
           } else {
             reply(["ok": true])
           }
@@ -444,7 +456,7 @@ final class PluginHostRPC {
           reply(["ok": false, "error": "media key event synthesis failed"])
           return
         }
-        cgEvent.post(tap: .cghidEventTap)
+        Self.mediaKeyPoster(cgEvent)
       }
       reply(["ok": true])
     }
@@ -493,7 +505,7 @@ final class PluginHostRPC {
       reply(["ok": false, "error": "host.signal requires pid > 1"])
       return
     }
-    if kill(pid_t(pid), SIGTERM) == 0 {
+    if Self.signalSender(pid_t(pid)) == 0 {
       reply(["ok": true])
     } else {
       reply(["ok": false, "error": String(cString: strerror(errno))])

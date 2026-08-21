@@ -63,8 +63,14 @@ final class PluginProcess {
   /// the plugin is parked in `.crashed` and stops auto-restarting. The user
   /// can recover with `:plugins reload`.
   private var restartTimestamps: [Date] = []
-  private static let restartWindowAttempts = 5
-  private static let restartWindowSeconds: TimeInterval = 300
+  // Testability seams: production values, overridden (and restored) by the
+  // lifecycle tests so restart parking and heartbeat teardown run in
+  // milliseconds instead of minutes. `var` + internal on purpose.
+  static var restartWindowAttempts = 5
+  static var restartWindowSeconds: TimeInterval = 300
+  static var heartbeatIntervalMs = 5000
+  static var heartbeatMissLimit = 2
+  static var restartDelaySeconds: (Int) -> Int = { min(30, max(1, $0 + 1)) }
   private var requestID: Int = 0
   private var pending: [Int: PendingRequest] = [:]
   private var fileWatchers: [DispatchSourceFileSystemObject] = []
@@ -1132,7 +1138,10 @@ final class PluginProcess {
   }
 
   static var startupTimeoutSeconds: Int { FlashTunables.pluginStartupTimeoutSeconds }
-  private static let startupTimeout = DispatchTimeInterval.seconds(startupTimeoutSeconds)
+  // Computed, not a cached `let`: a `static let` snapshots the tunable at
+  // first access, so tests (and config reloads) shrinking the timeout after
+  // that read would silently see the stale value.
+  private static var startupTimeout: DispatchTimeInterval { .seconds(startupTimeoutSeconds) }
 
   private func failStartup(_ message: String, fatal: Bool) {
     recordError(message)
@@ -1444,7 +1453,8 @@ final class PluginProcess {
   private func startHeartbeat() {
     heartbeatTimer?.cancel()
     let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(deadline: .now() + .seconds(5), repeating: .seconds(5))
+    let interval = DispatchTimeInterval.milliseconds(Self.heartbeatIntervalMs)
+    timer.schedule(deadline: .now() + interval, repeating: interval)
     timer.setEventHandler { [weak self] in
       self?.heartbeat()
     }
@@ -1469,7 +1479,7 @@ final class PluginProcess {
       if runtimeStateSnapshot() == .ready {
         setState(.degraded)
       }
-      if heartbeatMisses >= 2 {
+      if heartbeatMisses >= Self.heartbeatMissLimit {
         recordError("[plugin] heartbeat missed")
         stopOnQueue(reason: "heartbeat")
         scheduleRestart()
@@ -1512,7 +1522,7 @@ final class PluginProcess {
       }
       return
     }
-    let delay = min(30, max(1, restartCount + 1))
+    let delay = Self.restartDelaySeconds(restartCount)
     restartCount += 1
     queue.asyncAfter(deadline: .now() + .seconds(delay)) { [weak self] in
       self?.startOnQueue(reason: "restart")
