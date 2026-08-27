@@ -211,8 +211,8 @@ fn has_container_ancestor(node: &AxNode, by_handle: &HashMap<u64, &AxNode>) -> b
     false
 }
 
-/// Links keep the semantic `AXLink` role (native-style `f` handling); every
-/// other role passes through and receives a plain click from the host.
+/// Links keep the semantic `AXLink` role. Every role preserves the host's
+/// current-context (`f`) or new-context (`F`) click gesture.
 fn target_role(node: &AxNode) -> String {
     node.role().to_string()
 }

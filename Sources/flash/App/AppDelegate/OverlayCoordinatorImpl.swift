@@ -343,13 +343,11 @@ extension AppDelegate {
     let action = pendingAction
     // The target carries its owning pid (always the focused app at walk time).
     // Fall back to the activation-time focused pid if the provider didn't set
-    // one, then resolve the owning bundle once for app-specific click gestures.
+    // one.
     let pid = hint.target.pid ?? sourceAppPID
     let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
-    let targetBundleIdentifier = targetApp?.bundleIdentifier
     let resolvedClickModifiers = ActionDispatcher.hintClickModifiers(
       for: hint.target,
-      bundleIdentifier: targetBundleIdentifier,
       requested: pendingClickModifiers.union(clickModifiers))
     let wasNormalMode = flashMode == .normal
     let actionMayEnterInsert = Self.pointerActionMayEnterInsert(action)
@@ -408,7 +406,6 @@ extension AppDelegate {
       // mode in the completion so it still happens *after* the click lands.
       ActionDispatcher.perform(
         action, on: hint.target, clickPoint: clickPoint,
-        bundleIdentifier: targetBundleIdentifier,
         modifiers: resolvedClickModifiers,
         leaveCursorAtClickPoint: true
       ) { [weak self] in
@@ -871,10 +868,8 @@ extension AppDelegate {
     let action = pendingAction
     let pid = hint.target.pid ?? sourceAppPID
     let targetApp = pid.flatMap { NSRunningApplication(processIdentifier: $0) }
-    let targetBundleIdentifier = targetApp?.bundleIdentifier
     let resolvedClickModifiers = ActionDispatcher.hintClickModifiers(
       for: hint.target,
-      bundleIdentifier: targetBundleIdentifier,
       requested: pendingClickModifiers.union(clickModifiers))
     let chipRect = OverlayPanel.chipFrame(
       for: hint, fontSize: CGFloat(config.overlay.fontSize))
@@ -892,7 +887,6 @@ extension AppDelegate {
     overlay.filter(prefix: "", hints: currentHints)
     ActionDispatcher.perform(
       action, on: hint.target, clickPoint: clickPoint,
-      bundleIdentifier: targetBundleIdentifier,
       modifiers: resolvedClickModifiers,
       leaveCursorAtClickPoint: true
     ) { [weak self] in

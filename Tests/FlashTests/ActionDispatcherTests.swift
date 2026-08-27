@@ -5,46 +5,37 @@ import XCTest
 @testable import flash
 
 final class ActionDispatcherTests: XCTestCase {
-  func testCurrentContextNativeLinkHintIsAPlainClick() {
-    let modifiers = ActionDispatcher.hintClickModifiers(
-      for: target(role: "AXLink"),
-      bundleIdentifier: "com.apple.Safari",
-      requested: [])
+  func testCurrentContextHintIsPlainAcrossTargets() {
+    for role in ["AXLink", "AXButton", "AXTextField", "AXTab", "tmux-pane"] {
+      let modifiers = ActionDispatcher.hintClickModifiers(
+        for: target(role: role), requested: [])
 
-    XCTAssertEqual(modifiers, [])
+      XCTAssertEqual(modifiers, [], "\(role) should receive a plain click")
+    }
   }
 
-  func testNewContextNativeLinkHintCarriesCommandAndShift() {
-    let modifiers = ActionDispatcher.hintClickModifiers(
-      for: target(role: "AXLink"),
-      bundleIdentifier: "com.apple.Safari",
-      requested: [.command, .shift])
+  func testNewContextHintCarriesCommandAndShiftAcrossTargets() {
+    for role in ["AXLink", "AXButton", "AXTextField", "AXTab", "tmux-pane"] {
+      let modifiers = ActionDispatcher.hintClickModifiers(
+        for: target(role: role), requested: [.command, .shift])
 
-    XCTAssertEqual(modifiers, [.command, .shift])
+      XCTAssertEqual(
+        modifiers, [.command, .shift], "\(role) should receive the new-context gesture")
+    }
   }
 
-  func testCurrentContextFirefoxLinkHintAddsCommand() {
-    let modifiers = ActionDispatcher.hintClickModifiers(
-      for: target(role: "AXLink"),
-      bundleIdentifier: "org.mozilla.firefox",
-      requested: [])
+  func testEveryRequestedModifierIsPreservedAcrossTargets() {
+    for role in ["AXLink", "AXButton", "AXTextField", "AXTab", "tmux-pane"] {
+      let modifiers = ActionDispatcher.hintClickModifiers(
+        for: target(role: role), requested: .all)
 
-    XCTAssertEqual(modifiers, [.command])
-  }
-
-  func testNewContextFirefoxLinkHintCarriesCommandAndShift() {
-    let modifiers = ActionDispatcher.hintClickModifiers(
-      for: target(role: "AXLink"),
-      bundleIdentifier: "org.mozilla.firefox",
-      requested: [.command, .shift])
-
-    XCTAssertEqual(modifiers, [.command, .shift])
+      XCTAssertEqual(modifiers, .all, "\(role) should preserve requested modifiers")
+    }
   }
 
   func testCurrentContextTerminalLinkHintAddsShift() {
     let modifiers = ActionDispatcher.hintClickModifiers(
       for: target(role: JumpTarget.terminalLinkRole),
-      bundleIdentifier: "org.alacritty",
       requested: [])
 
     XCTAssertEqual(modifiers, [.shift])
@@ -53,21 +44,9 @@ final class ActionDispatcherTests: XCTestCase {
   func testNewContextTerminalLinkHintCarriesCommandAndShift() {
     let modifiers = ActionDispatcher.hintClickModifiers(
       for: target(role: JumpTarget.terminalLinkRole),
-      bundleIdentifier: "org.alacritty",
       requested: [.command, .shift])
 
     XCTAssertEqual(modifiers, [.command, .shift])
-  }
-
-  func testEveryNonLinkHintIsAnUnmodifiedClick() {
-    for role in ["tmux-pane", "AXButton", "AXTextField", "AXTab"] {
-      let modifiers = ActionDispatcher.hintClickModifiers(
-        for: target(role: role),
-        bundleIdentifier: "org.mozilla.firefox",
-        requested: .all)
-
-      XCTAssertEqual(modifiers, [], "\(role) should receive a simple click")
-    }
   }
 
   private func target(role: String) -> JumpTarget {

@@ -3,25 +3,14 @@ import CoreGraphics
 import FlashCore
 
 enum ActionDispatcher {
-  /// Native links preserve the target command's requested modifiers. Firefox
-  /// links additionally require Command; terminal links require Shift so the
-  /// emulator handles the link instead of forwarding the click to tmux. Every
-  /// non-link target receives a plain click for both commands.
+  /// Preserve the caller's click gesture for every target. Terminal links add
+  /// Shift as a transport requirement so the emulator handles the link instead
+  /// of forwarding the click to tmux.
   static func hintClickModifiers(
     for target: JumpTarget,
-    bundleIdentifier: String?,
     requested modifiers: ClickModifiers
   ) -> ClickModifiers {
-    switch target.role {
-    case "AXLink" where FirefoxAccessibility.matches(bundleIdentifier: bundleIdentifier):
-      modifiers.union(.command)
-    case "AXLink":
-      modifiers
-    case JumpTarget.terminalLinkRole:
-      modifiers.union(.shift)
-    default:
-      []
-    }
+    target.role == JumpTarget.terminalLinkRole ? modifiers.union(.shift) : modifiers
   }
 
   /// Serial queue for the timed parts of click synthesis (the settle pause and
@@ -43,16 +32,15 @@ enum ActionDispatcher {
   /// Deliver a hint selection as one real mouse event to the underlying app.
   /// There is deliberately no provider-owned activation or AXPress fallback:
   /// Alacritty/tmux, browsers, native apps, and plugin targets all receive the
-  /// same real click and interpret it themselves. Semantic links apply the
-  /// `f` / `F` primary/new-context gesture appropriate to their surface;
-  /// every other target is plain.
+  /// same real click and interpret it themselves. `f` is a plain click (with the
+  /// terminal-link Shift transport exception); `F` carries Command-Shift to every
+  /// target as the uniform new-context gesture.
   ///
   /// `completion` runs on the main thread after the off-main event posting.
   static func perform(
     _ action: JumpAction,
     on target: JumpTarget,
     clickPoint: CGPoint? = nil,
-    bundleIdentifier: String? = nil,
     modifiers: ClickModifiers = [],
     leaveCursorAtClickPoint: Bool = false,
     completion: (() -> Void)? = nil
@@ -61,9 +49,7 @@ enum ActionDispatcher {
     synthesizeClick(
       at: point, action: action,
       modifiers: hintClickModifiers(
-        for: target,
-        bundleIdentifier: bundleIdentifier,
-        requested: modifiers),
+        for: target, requested: modifiers),
       preserveCursor: !leaveCursorAtClickPoint,
       completion: completion)
   }

@@ -548,8 +548,8 @@ struct Config {
         ("o", .flashCommand(.insertMode)),
         ("O", .flashCommand(.insertMode)),
         ("f", .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [])))),
-        // `F` requests the new-context link gesture. Firefox links add Command
-        // to `f`, terminal links add Shift, and non-link targets stay plain.
+        // `F` requests the global Command-Shift new-context gesture. `f` stays
+        // plain except for the Shift transport modifier terminal links require.
         (
           "F",
           .flashCommand(.mouseTarget(.click(.leftClick, modifiers: [.command, .shift])))
