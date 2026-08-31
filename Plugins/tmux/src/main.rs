@@ -48,6 +48,7 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -82,6 +83,9 @@ const ALACRITTY_BUNDLES: [&str; 2] = ["org.alacritty", "io.alacritty"];
 const SLOW_CANDIDATE_REFRESH_MS: u128 = 1_000;
 const REMOTE_POLL_INTERVAL_SECS: u64 = 5;
 const REMOTE_RETRY_DELAYS_SECS: [u64; 3] = [15, 30, 60];
+const SOCKET_DISCOVERY_INTERVAL_SECS: u64 = 30;
+const SOCKET_DISCOVERY_FANOUT_LIMIT: usize = 16;
+const SOCKET_RETRY_DELAYS_SECS: [u64; 3] = [5, 15, 60];
 // Keep the last good remote inventory through the complete retry ramp, but do
 // not present it as current forever when the SSH side channel behind an active
 // Mosh transport stays unavailable.
@@ -799,34 +803,341 @@ fn tmux_socket_argv(tmux_path: &str, socket_path: &str, args: &[&str]) -> Vec<St
     argv
 }
 
-async fn tmux_socket_paths() -> Vec<String> {
-    let mut paths = Vec::new();
-    for base in ["/private/tmp", "/tmp"] {
-        let Ok(mut entries) = tokio::fs::read_dir(base).await else {
-            continue;
-        };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if !name.starts_with("tmux-") {
-                continue;
-            }
-            let Ok(mut sockets) = tokio::fs::read_dir(entry.path()).await else {
-                continue;
-            };
-            while let Ok(Some(socket)) = sockets.next_entry().await {
-                let Ok(file_type) = socket.file_type().await else {
-                    continue;
-                };
-                if file_type.is_socket() {
-                    paths.push(socket.path().to_string_lossy().into_owned());
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct SocketIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DiscoveredSocket {
+    identity: SocketIdentity,
+    path: String,
+}
+
+struct SocketDiscovery {
+    sockets: Vec<DiscoveredSocket>,
+    complete: bool,
+}
+
+struct SocketInventoryPlan {
+    targets: Vec<DiscoveredSocket>,
+    deferred: bool,
+    inventory_incomplete: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrackedSocketState {
+    Unseen,
+    Active,
+    Absent,
+    Transient { failures: usize, retry_at: Instant },
+}
+
+#[derive(Clone, Debug)]
+struct TrackedSocket {
+    socket: DiscoveredSocket,
+    state: TrackedSocketState,
+}
+
+#[derive(Default)]
+struct TmuxSocketRegistryState {
+    sockets: BTreeMap<SocketIdentity, TrackedSocket>,
+    default_identity: Option<SocketIdentity>,
+    discovered_at: Option<Instant>,
+    discovery_complete: bool,
+}
+
+#[derive(Default)]
+struct TmuxSocketRegistry {
+    state: tokio::sync::Mutex<TmuxSocketRegistryState>,
+    discovery_lock: tokio::sync::Mutex<()>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SocketProbeOutcome {
+    Active,
+    Absent,
+    Transient,
+}
+
+fn socket_probe_outcome(result: &CliResult) -> SocketProbeOutcome {
+    if result.ok {
+        SocketProbeOutcome::Active
+    } else if is_absent_tmux_server(result) {
+        SocketProbeOutcome::Absent
+    } else {
+        SocketProbeOutcome::Transient
+    }
+}
+
+fn tmux_socket_roots(uid: u32) -> [PathBuf; 2] {
+    let directory = format!("tmux-{uid}");
+    [
+        PathBuf::from("/private/tmp").join(&directory),
+        PathBuf::from("/tmp").join(directory),
+    ]
+}
+
+fn dedupe_discovered_sockets(
+    sockets: impl IntoIterator<Item = DiscoveredSocket>,
+) -> Vec<DiscoveredSocket> {
+    let mut unique = BTreeMap::new();
+    for socket in sockets {
+        unique
+            .entry(socket.identity)
+            .and_modify(|existing: &mut DiscoveredSocket| {
+                if socket.path < existing.path {
+                    existing.path.clone_from(&socket.path);
                 }
+            })
+            .or_insert(socket);
+    }
+    unique.into_values().collect()
+}
+
+async fn discover_tmux_sockets() -> SocketDiscovery {
+    // SAFETY: geteuid has no preconditions and does not retain pointers.
+    let uid = unsafe { libc::geteuid() };
+    let mut sockets = Vec::new();
+    let mut complete = true;
+    for root in tmux_socket_roots(uid) {
+        let mut entries = match tokio::fs::read_dir(root).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                complete = false;
+                continue;
             }
+        };
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(_) => {
+                    complete = false;
+                    break;
+                }
+            };
+            let path = entry.path();
+            let metadata = match tokio::fs::symlink_metadata(&path).await {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    complete = false;
+                    continue;
+                }
+            };
+            if !metadata.file_type().is_socket() {
+                continue;
+            }
+            sockets.push(DiscoveredSocket {
+                identity: SocketIdentity {
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                },
+                path: path.to_string_lossy().into_owned(),
+            });
         }
     }
-    paths.sort();
-    paths.dedup();
-    paths
+    SocketDiscovery {
+        sockets: dedupe_discovered_sockets(sockets),
+        complete,
+    }
+}
+
+async fn resolve_default_tmux_socket_identity(tmux_path: &str) -> Option<SocketIdentity> {
+    let result = run_local(
+        &tmux_argv(tmux_path, &["display-message", "-p", "#{socket_path}"]),
+        Duration::from_secs(2),
+    )
+    .await;
+    if !result.ok {
+        return None;
+    }
+    let path = result.stdout.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let metadata = tokio::fs::metadata(path).await.ok()?;
+    metadata.file_type().is_socket().then_some(SocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+impl TmuxSocketRegistryState {
+    fn needs_discovery(&self, now: Instant) -> bool {
+        self.discovered_at.is_none_or(|discovered_at| {
+            now.saturating_duration_since(discovered_at)
+                >= Duration::from_secs(SOCKET_DISCOVERY_INTERVAL_SECS)
+        })
+    }
+
+    fn refresh_discovery(
+        &mut self,
+        sockets: Vec<DiscoveredSocket>,
+        default_identity: Option<SocketIdentity>,
+        discovery_complete: bool,
+        now: Instant,
+    ) {
+        let discovered = sockets
+            .iter()
+            .map(|socket| socket.identity)
+            .collect::<BTreeSet<_>>();
+        if discovery_complete {
+            self.sockets
+                .retain(|identity, _| discovered.contains(identity));
+        }
+        self.default_identity = default_identity;
+        if let Some(default_identity) = self.default_identity {
+            self.sockets.remove(&default_identity);
+        }
+        for socket in sockets {
+            if Some(socket.identity) == self.default_identity {
+                self.sockets.remove(&socket.identity);
+                continue;
+            }
+            self.sockets
+                .entry(socket.identity)
+                .and_modify(|tracked| tracked.socket.path.clone_from(&socket.path))
+                .or_insert(TrackedSocket {
+                    socket,
+                    state: TrackedSocketState::Unseen,
+                });
+        }
+        self.discovered_at = Some(now);
+        self.discovery_complete = discovery_complete;
+    }
+
+    fn inventory_plan(&self, now: Instant) -> SocketInventoryPlan {
+        let mut targets = self
+            .sockets
+            .values()
+            .filter(|tracked| tracked.state == TrackedSocketState::Active)
+            .map(|tracked| tracked.socket.clone())
+            .collect::<Vec<_>>();
+        let eligible_probes = self.sockets.values().filter(|tracked| match tracked.state {
+            TrackedSocketState::Unseen => true,
+            TrackedSocketState::Transient { retry_at, .. } => now >= retry_at,
+            TrackedSocketState::Active | TrackedSocketState::Absent => false,
+        });
+        let probes = eligible_probes
+            .clone()
+            .take(SOCKET_DISCOVERY_FANOUT_LIMIT)
+            .map(|tracked| tracked.socket.clone());
+        targets.extend(probes);
+        let selected_probe_count = targets
+            .iter()
+            .filter(|target| {
+                self.sockets
+                    .get(&target.identity)
+                    .is_some_and(|tracked| !matches!(tracked.state, TrackedSocketState::Active))
+            })
+            .count();
+        let eligible_probe_count = eligible_probes.count();
+        let deferred_retry = self.sockets.values().any(|tracked| {
+            matches!(
+                tracked.state,
+                TrackedSocketState::Transient { retry_at, .. } if now < retry_at
+            )
+        });
+        let inventory_incomplete =
+            !self.discovery_complete || eligible_probe_count > selected_probe_count;
+        SocketInventoryPlan {
+            targets,
+            deferred: deferred_retry || inventory_incomplete,
+            inventory_incomplete,
+        }
+    }
+
+    fn action_targets(&self) -> Vec<DiscoveredSocket> {
+        let mut targets = self
+            .sockets
+            .values()
+            .filter(|tracked| tracked.state == TrackedSocketState::Active)
+            .map(|tracked| tracked.socket.clone())
+            .collect::<Vec<_>>();
+        targets.extend(
+            self.sockets
+                .values()
+                .filter(|tracked| {
+                    matches!(
+                        tracked.state,
+                        TrackedSocketState::Unseen | TrackedSocketState::Transient { .. }
+                    )
+                })
+                .map(|tracked| tracked.socket.clone()),
+        );
+        targets
+    }
+
+    fn has_unseen_sockets(&self) -> bool {
+        self.sockets
+            .values()
+            .any(|tracked| tracked.state == TrackedSocketState::Unseen)
+    }
+
+    fn record(&mut self, identity: SocketIdentity, outcome: SocketProbeOutcome, now: Instant) {
+        let Some(tracked) = self.sockets.get_mut(&identity) else {
+            return;
+        };
+        tracked.state = match outcome {
+            SocketProbeOutcome::Active => TrackedSocketState::Active,
+            SocketProbeOutcome::Absent => TrackedSocketState::Absent,
+            SocketProbeOutcome::Transient => {
+                let failures = match tracked.state {
+                    TrackedSocketState::Transient { failures, .. } => failures.saturating_add(1),
+                    _ => 1,
+                };
+                let delay = SOCKET_RETRY_DELAYS_SECS
+                    [(failures - 1).min(SOCKET_RETRY_DELAYS_SECS.len() - 1)];
+                TrackedSocketState::Transient {
+                    failures,
+                    retry_at: now + Duration::from_secs(delay),
+                }
+            }
+        };
+    }
+}
+
+impl TmuxSocketRegistry {
+    async fn refresh_discovery_if_needed(&self, tmux_path: &str) -> Instant {
+        let _discovery_guard = self.discovery_lock.lock().await;
+        let now = Instant::now();
+        let needs_discovery = self.state.lock().await.needs_discovery(now);
+        if needs_discovery {
+            let (discovery, default_identity) = tokio::join!(
+                discover_tmux_sockets(),
+                resolve_default_tmux_socket_identity(tmux_path)
+            );
+            self.state.lock().await.refresh_discovery(
+                discovery.sockets,
+                default_identity,
+                discovery.complete,
+                now,
+            );
+        }
+        now
+    }
+
+    async fn inventory_plan(&self, tmux_path: &str) -> SocketInventoryPlan {
+        let now = self.refresh_discovery_if_needed(tmux_path).await;
+        self.state.lock().await.inventory_plan(now)
+    }
+
+    async fn action_targets(&self, tmux_path: &str) -> Vec<DiscoveredSocket> {
+        self.refresh_discovery_if_needed(tmux_path).await;
+        self.state.lock().await.action_targets()
+    }
+
+    async fn has_unseen_sockets(&self) -> bool {
+        self.state.lock().await.has_unseen_sockets()
+    }
+
+    async fn record(&self, identity: SocketIdentity, outcome: SocketProbeOutcome, now: Instant) {
+        self.state.lock().await.record(identity, outcome, now);
+    }
 }
 
 fn tmux_command_needs_nonempty_output(args: &[&str]) -> bool {
@@ -837,14 +1148,18 @@ async fn run_tmux_local(
     tmux_path: &str,
     args: &[&str],
     timeout: Duration,
+    socket_registry: &TmuxSocketRegistry,
 ) -> Result<CliResult, CliResult> {
     let needs_nonempty = tmux_command_needs_nonempty_output(args);
     let mut result = run_local(&tmux_argv(tmux_path, args), timeout).await;
     if result.ok && (!needs_nonempty || !result.stdout.trim().is_empty()) {
         return Ok(result);
     }
-    for socket_path in tmux_socket_paths().await {
-        result = run_local(&tmux_socket_argv(tmux_path, &socket_path, args), timeout).await;
+    // User-triggered work bypasses the poller's fan-out and retry delay: a
+    // named server that just recovered must be reachable immediately. The
+    // registry still suppresses sockets already confirmed absent.
+    for socket in socket_registry.action_targets(tmux_path).await {
+        result = run_local(&tmux_socket_argv(tmux_path, &socket.path, args), timeout).await;
         if result.ok && (!needs_nonempty || !result.stdout.trim().is_empty()) {
             return Ok(result);
         }
@@ -861,9 +1176,10 @@ async fn run_tmux_capture(
     tmux_path: Option<&str>,
     args: &[&str],
     timeout: Duration,
+    socket_registry: &TmuxSocketRegistry,
 ) -> Result<String, String> {
     let path = tmux_path.ok_or_else(|| "tmux binary not found".to_string())?;
-    match run_tmux_local(path, args, timeout).await {
+    match run_tmux_local(path, args, timeout, socket_registry).await {
         Ok(result) => Ok(result.stdout),
         Err(result) => {
             let stderr = result.stderr.trim();
@@ -876,22 +1192,31 @@ async fn run_tmux_capture(
     }
 }
 
-async fn run_tmux(tmux_path: Option<&str>, args: &[&str], timeout: Duration) -> Option<String> {
+async fn run_tmux(
+    tmux_path: Option<&str>,
+    args: &[&str],
+    timeout: Duration,
+    socket_registry: &TmuxSocketRegistry,
+) -> Option<String> {
     let path = tmux_path?;
-    run_tmux_local(path, args, timeout)
+    run_tmux_local(path, args, timeout, socket_registry)
         .await
         .ok()
         .map(|result| result.stdout)
 }
 
-async fn run_tmux_default(tmux_path: Option<&str>, args: &[&str]) -> Option<String> {
-    run_tmux(tmux_path, args, Duration::from_secs(2)).await
+async fn run_tmux_default(
+    tmux_path: Option<&str>,
+    args: &[&str],
+    socket_registry: &TmuxSocketRegistry,
+) -> Option<String> {
+    run_tmux(tmux_path, args, Duration::from_secs(2), socket_registry).await
 }
 
 /// Run an enumeration command (`list-windows -a`, `list-clients`, …) against
-/// the default socket *and* every other tmux socket discovered under
-/// `/private/tmp/tmux-*` and `/tmp/tmux-*`, then return the union of stdout
-/// lines.
+/// the default socket *and* every other tmux socket discovered in the current
+/// user's `/private/tmp/tmux-<uid>` and `/tmp/tmux-<uid>` directories, then
+/// return the union of stdout lines.
 ///
 /// Multiple tmux servers — one per socket — are common (e.g. `tmux -L work`
 /// vs the default socket, or one per shell user). Without this, the plugin
@@ -929,47 +1254,66 @@ async fn run_tmux_aggregate_inventory(
     tmux_path: Option<&str>,
     args: &[&str],
     timeout: Duration,
+    socket_registry: &TmuxSocketRegistry,
 ) -> TmuxAggregate {
     let Some(path) = tmux_path.map(str::to_string) else {
         return TmuxAggregate::Absent;
     };
     let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
-    // Discover sockets once up front; spawning all invocations together
-    // means the slowest socket sets the cycle length, not the sum.
-    let socket_paths = tmux_socket_paths().await;
-    let mut handles: Vec<tokio::task::JoinHandle<CliResult>> =
-        Vec::with_capacity(socket_paths.len() + 1);
+    let socket_plan = socket_registry.inventory_plan(&path).await;
+    let mut handles: Vec<(Option<SocketIdentity>, tokio::task::JoinHandle<CliResult>)> =
+        Vec::with_capacity(socket_plan.targets.len() + 1);
 
     // Default-socket invocation. Without `-S`, tmux resolves to whichever
-    // socket the user's $TMUX_TMPDIR / process environment points at — on
-    // most setups this is also covered by `tmux_socket_paths()` below, but
-    // we run it first so a non-standard $TMUX_TMPDIR (e.g. a server
-    // outside the standard discovery roots) still contributes.
+    // socket the user's $TMUX_TMPDIR / process environment points at. The
+    // registry excludes that socket's inode from the explicit targets, while
+    // this invocation also covers non-standard roots that discovery cannot see.
     {
         let path = path.clone();
         let args_owned = args_owned.clone();
-        handles.push(tokio::spawn(async move {
-            let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
-            run_local(&tmux_argv(&path, &args_ref), timeout).await
-        }));
+        handles.push((
+            None,
+            tokio::spawn(async move {
+                let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+                run_local(&tmux_argv(&path, &args_ref), timeout).await
+            }),
+        ));
     }
 
-    for socket_path in socket_paths {
+    for socket in socket_plan.targets {
         let path = path.clone();
         let args_owned = args_owned.clone();
-        handles.push(tokio::spawn(async move {
-            let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
-            run_local(&tmux_socket_argv(&path, &socket_path, &args_ref), timeout).await
-        }));
+        let identity = socket.identity;
+        handles.push((
+            Some(identity),
+            tokio::spawn(async move {
+                let args_ref: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+                run_local(&tmux_socket_argv(&path, &socket.path, &args_ref), timeout).await
+            }),
+        ));
     }
 
     let mut results = Vec::with_capacity(handles.len());
     let mut join_failed = false;
-    for handle in handles {
+    for (identity, handle) in handles {
         match handle.await {
-            Ok(result) => results.push(result),
-            Err(_) => join_failed = true,
+            Ok(result) => {
+                if let Some(identity) = identity {
+                    socket_registry
+                        .record(identity, socket_probe_outcome(&result), Instant::now())
+                        .await;
+                }
+                results.push(result);
+            }
+            Err(_) => {
+                join_failed = true;
+                if let Some(identity) = identity {
+                    socket_registry
+                        .record(identity, SocketProbeOutcome::Transient, Instant::now())
+                        .await;
+                }
+            }
         }
     }
     let scope = if args.contains(&"list-windows") {
@@ -977,14 +1321,23 @@ async fn run_tmux_aggregate_inventory(
     } else {
         TmuxInventoryScope::AnyServer
     };
-    classify_tmux_aggregate(&results, join_failed, scope)
+    classify_tmux_aggregate(
+        &results,
+        join_failed || socket_plan.deferred,
+        socket_plan.inventory_incomplete,
+        scope,
+    )
 }
 
 fn classify_tmux_aggregate(
     results: &[CliResult],
     join_failed: bool,
+    inventory_incomplete: bool,
     scope: TmuxInventoryScope,
 ) -> TmuxAggregate {
+    if inventory_incomplete {
+        return TmuxAggregate::TransientFailure;
+    }
     let merged = merge_socket_outputs(
         results
             .iter()
@@ -1050,8 +1403,12 @@ where
     merged.join("\n")
 }
 
-async fn run_tmux_inventory_default(tmux_path: Option<&str>, args: &[&str]) -> TmuxAggregate {
-    run_tmux_aggregate_inventory(tmux_path, args, Duration::from_secs(2)).await
+async fn run_tmux_inventory_default(
+    tmux_path: Option<&str>,
+    args: &[&str],
+    socket_registry: &TmuxSocketRegistry,
+) -> TmuxAggregate {
+    run_tmux_aggregate_inventory(tmux_path, args, Duration::from_secs(2), socket_registry).await
 }
 
 fn trimmed(value: Option<String>) -> Option<String> {
@@ -1271,7 +1628,10 @@ impl ClientSnapshot {
     }
 }
 
-async fn list_clients_inventory(tmux_path: Option<&str>) -> Result<Vec<TmuxClient>, ()> {
+async fn list_clients_inventory(
+    tmux_path: Option<&str>,
+    socket_registry: &TmuxSocketRegistry,
+) -> Result<Vec<TmuxClient>, ()> {
     let format = format!(
         "#{{client_tty}}{TMUX_FIELD_SEP}#{{session_name}}{TMUX_FIELD_SEP}#{{client_pid}}{TMUX_FIELD_SEP}#{{client_activity}}"
     );
@@ -1280,7 +1640,13 @@ async fn list_clients_inventory(tmux_path: Option<&str>) -> Result<Vec<TmuxClien
     // a single-socket invocation silently drops every client (and
     // therefore every window-resolution route) attached to other tmux
     // servers running on the host.
-    let raw = match run_tmux_inventory_default(tmux_path, &["list-clients", "-F", &format]).await {
+    let raw = match run_tmux_inventory_default(
+        tmux_path,
+        &["list-clients", "-F", &format],
+        socket_registry,
+    )
+    .await
+    {
         TmuxAggregate::Output(raw) => raw,
         TmuxAggregate::Absent => return Ok(Vec::new()),
         TmuxAggregate::TransientFailure => return Err(()),
@@ -1312,8 +1678,13 @@ fn parse_tmux_client_for_backend(line: &str, backend_id: &str) -> Option<TmuxCli
     })
 }
 
-async fn list_clients(tmux_path: Option<&str>) -> Vec<TmuxClient> {
-    list_clients_inventory(tmux_path).await.unwrap_or_default()
+async fn list_clients(
+    tmux_path: Option<&str>,
+    socket_registry: &TmuxSocketRegistry,
+) -> Vec<TmuxClient> {
+    list_clients_inventory(tmux_path, socket_registry)
+        .await
+        .unwrap_or_default()
 }
 
 async fn list_remote_clients(config: &RemoteTmuxConfig) -> Result<Vec<TmuxClient>, ()> {
@@ -1341,7 +1712,12 @@ async fn run_tmux_for_client(plugin: &Tmux, client: &TmuxClient, args: &[&str]) 
         let config = plugin.remote_config(&client.backend_id)?;
         run_remote_tmux_default(&config, args).await
     } else {
-        run_tmux_default(plugin.resolved_tmux_path().await, args).await
+        run_tmux_default(
+            plugin.resolved_tmux_path().await,
+            args,
+            plugin.tmux_socket_registry(),
+        )
+        .await
     }
 }
 
@@ -1364,12 +1740,23 @@ async fn run_tmux_for_client_capture(
             Err(result.stderr.trim().to_string())
         }
     } else {
-        run_tmux_capture(plugin.resolved_tmux_path().await, args, timeout).await
+        run_tmux_capture(
+            plugin.resolved_tmux_path().await,
+            args,
+            timeout,
+            plugin.tmux_socket_registry(),
+        )
+        .await
     }
 }
 
-async fn load_client_snapshot(tmux_path: Option<&str>) -> Option<ClientSnapshot> {
-    let clients = list_clients_inventory(tmux_path).await.ok()?;
+async fn load_client_snapshot(
+    tmux_path: Option<&str>,
+    socket_registry: &TmuxSocketRegistry,
+) -> Option<ClientSnapshot> {
+    let clients = list_clients_inventory(tmux_path, socket_registry)
+        .await
+        .ok()?;
     if clients.is_empty() {
         return None;
     }
@@ -1391,7 +1778,11 @@ fn cached_client_hosted_by(plugin: &Tmux, focused_pid: i64) -> Option<TmuxClient
 }
 
 async fn refresh_cached_client_snapshot(plugin: &Tmux) -> Option<ClientSnapshot> {
-    let mut snapshot = load_client_snapshot(plugin.resolved_tmux_path().await).await?;
+    let mut snapshot = load_client_snapshot(
+        plugin.resolved_tmux_path().await,
+        plugin.tmux_socket_registry(),
+    )
+    .await?;
     if let Ok(mut guard) = plugin.client_snapshot().lock() {
         if same_client_processes(&guard.clients, &snapshot.clients) {
             snapshot.window_title_by_client_pid = Arc::clone(&guard.window_title_by_client_pid);
@@ -2377,6 +2768,7 @@ async fn build_candidates(
     ctx: &Context,
     previous_client_snapshot: &ClientSnapshot,
     local_config: &LocalTmuxConfig,
+    socket_registry: &TmuxSocketRegistry,
 ) -> Option<CandidateBuild> {
     if tmux_path.is_none() {
         return Some(CandidateBuild {
@@ -2411,6 +2803,7 @@ async fn build_candidates(
             "-F",
             &window_format,
         ],
+        socket_registry,
     )
     .await
     {
@@ -2622,6 +3015,8 @@ fn hash_candidates(candidates: &[Candidate]) -> u64 {
 #[derive(Default)]
 struct CandidateRefreshCoordinator {
     lock: tokio::sync::Mutex<()>,
+    requested_generation: AtomicU64,
+    completed_generation: AtomicU64,
 }
 
 #[derive(Default)]
@@ -2642,9 +3037,28 @@ enum CandidatePartition {
 }
 
 impl CandidateRefreshCoordinator {
-    async fn run<T>(&self, work: impl Future<Output = T>) -> T {
+    async fn run<F, Fut>(&self, mut work: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let generation = self
+            .requested_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         let _guard = self.lock.lock().await;
-        work.await
+        if self.completed_generation.load(Ordering::Acquire) >= generation {
+            return;
+        }
+        loop {
+            let through_generation = self.requested_generation.load(Ordering::Acquire);
+            work().await;
+            self.completed_generation
+                .store(through_generation, Ordering::Release);
+            if self.requested_generation.load(Ordering::Acquire) == through_generation {
+                return;
+            }
+        }
     }
 }
 
@@ -2656,13 +3070,16 @@ async fn refresh_candidate_locations_for_path(
     client_snapshot: &Mutex<ClientSnapshot>,
     partitions: &Mutex<CandidatePartitions>,
     last_status: &Mutex<Option<TmuxStatusSegments>>,
-    local_config: &LocalTmuxConfig,
+    local_config: &Mutex<LocalTmuxConfig>,
     coordinator: &CandidateRefreshCoordinator,
+    socket_registry: &TmuxSocketRegistry,
 ) {
-    let requested_at = Instant::now();
     coordinator
-        .run(async {
-            let queue_wait_ms = requested_at.elapsed().as_millis();
+        .run(|| {
+            let local_config = local_config
+                .lock()
+                .map(|config| config.clone())
+                .unwrap_or_default();
             refresh_candidate_locations_for_path_inner(
                 tmux_path,
                 ctx,
@@ -2671,19 +3088,10 @@ async fn refresh_candidate_locations_for_path(
                 partitions,
                 last_status,
                 local_config,
-                CandidateRefreshTiming {
-                    requested_at,
-                    queue_wait_ms,
-                },
+                socket_registry,
             )
-            .await;
         })
         .await;
-}
-
-struct CandidateRefreshTiming {
-    requested_at: Instant,
-    queue_wait_ms: u128,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2694,26 +3102,31 @@ async fn refresh_candidate_locations_for_path_inner(
     client_snapshot: &Mutex<ClientSnapshot>,
     partitions: &Mutex<CandidatePartitions>,
     last_status: &Mutex<Option<TmuxStatusSegments>>,
-    local_config: &LocalTmuxConfig,
-    timing: CandidateRefreshTiming,
+    local_config: LocalTmuxConfig,
+    socket_registry: &TmuxSocketRegistry,
 ) {
+    let started_at = Instant::now();
     let previous_client_snapshot = client_snapshot
         .lock()
         .map(|snapshot| snapshot.clone())
         .unwrap_or_default();
-    let build_result =
-        build_candidates(tmux_path, ctx, &previous_client_snapshot, local_config).await;
-    let elapsed_ms = timing.requested_at.elapsed().as_millis();
-    let work_ms = elapsed_ms.saturating_sub(timing.queue_wait_ms);
+    let build_result = build_candidates(
+        tmux_path,
+        ctx,
+        &previous_client_snapshot,
+        &local_config,
+        socket_registry,
+    )
+    .await;
+    let elapsed_ms = started_at.elapsed().as_millis();
     let Some(build) = build_result else {
-        let fields = candidate_refresh_log_fields(
-            "failed",
-            elapsed_ms,
-            timing.queue_wait_ms,
-            work_ms,
-            None,
-            None,
-        );
+        if socket_registry.has_unseen_sockets().await {
+            // Bounded startup discovery deliberately needs another wave. It
+            // is progress, not an operational failure, so keep the internal
+            // retry silent instead of emitting one log frame per batch.
+            return;
+        }
+        let fields = candidate_refresh_log_fields("failed", elapsed_ms, None, None);
         ctx.log_fields(
             "debug",
             "[tmux] candidate refresh skipped — tmux transient failure",
@@ -2739,24 +3152,17 @@ async fn refresh_candidate_locations_for_path_inner(
     );
     let unchanged = !changed;
     if unchanged {
-        // Still useful to record that we refreshed — at trace level so a
-        // healthy cache doesn't drown out other plugins. The warm
-        // locations are untouched, so the flashlight surface
-        // doesn't repaint.
-        let fields = candidate_refresh_log_fields(
-            "ok",
-            elapsed_ms,
-            timing.queue_wait_ms,
-            work_ms,
-            Some(aggregate_count),
-            Some("unchanged"),
-        );
-        ctx.log_fields(
-            "debug",
-            "[tmux] candidate refresh (unchanged)",
-            fields.clone(),
-        );
-        warn_if_candidate_refresh_slow(ctx, fields, elapsed_ms);
+        // Healthy unchanged refreshes stay allocation- and wire-silent. Slow
+        // refreshes still warn with fields built only on that exceptional path.
+        if elapsed_ms >= SLOW_CANDIDATE_REFRESH_MS {
+            let fields = candidate_refresh_log_fields(
+                "ok",
+                elapsed_ms,
+                Some(aggregate_count),
+                Some("unchanged"),
+            );
+            warn_if_candidate_refresh_slow(ctx, fields, elapsed_ms);
+        }
         return;
     }
     let mut fields = candidate_refresh_log_fields(
@@ -2766,8 +3172,6 @@ async fn refresh_candidate_locations_for_path_inner(
             "ok"
         },
         elapsed_ms,
-        timing.queue_wait_ms,
-        work_ms,
         Some(aggregate_count),
         Some("published"),
     );
@@ -2931,16 +3335,12 @@ fn expire_remote_candidate_partition_and_publish(
 fn candidate_refresh_log_fields(
     outcome: &str,
     elapsed_ms: u128,
-    queue_wait_ms: u128,
-    work_ms: u128,
     candidates: Option<usize>,
     change: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     fields.insert("outcome".to_string(), outcome.to_string());
     fields.insert("elapsed_ms".to_string(), elapsed_ms.to_string());
-    fields.insert("queue_wait_ms".to_string(), queue_wait_ms.to_string());
-    fields.insert("work_ms".to_string(), work_ms.to_string());
     if let Some(candidates) = candidates {
         fields.insert("candidates".to_string(), candidates.to_string());
     }
@@ -2976,7 +3376,6 @@ fn cli_failure_detail(result: &CliResult) -> String {
 }
 
 async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
-    let local_config = plugin.local_config();
     refresh_candidate_locations_for_path(
         plugin.resolved_tmux_path().await,
         ctx,
@@ -2984,8 +3383,9 @@ async fn refresh_candidate_locations(plugin: &Tmux, ctx: &Context) {
         plugin.client_snapshot(),
         plugin.candidate_partitions(),
         plugin.last_status_segments(),
-        &local_config,
+        &plugin.local_config_arc,
         plugin.candidate_refresh_coordinator(),
+        plugin.tmux_socket_registry(),
     )
     .await;
 }
@@ -3113,7 +3513,8 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
     let partitions = std::sync::Arc::clone(&plugin.candidate_partitions_arc);
     let last_status = std::sync::Arc::clone(&plugin.last_status_segments_arc);
     let coordinator = std::sync::Arc::clone(&plugin.candidate_refresh_coordinator_arc);
-    let local_config = plugin.local_config();
+    let socket_registry = std::sync::Arc::clone(&plugin.tmux_socket_registry_arc);
+    let local_config = std::sync::Arc::clone(&plugin.local_config_arc);
     let ctx = ctx.clone();
     tokio::spawn(async move {
         let path = tmux_path.get_or_init(find_tmux).await.clone();
@@ -3127,11 +3528,20 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                 &last_status,
                 &local_config,
                 &coordinator,
+                &socket_registry,
             )
             .await;
         }
         loop {
-            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+            if socket_registry.has_unseen_sockets().await {
+                // Drain newly discovered sockets in bounded waves. Stale
+                // endpoints fail quickly, so a complete first catalog still
+                // meets the warm-source publish budget without ever launching
+                // an unbounded subprocess fan-out.
+                tokio::task::yield_now().await;
+            } else {
+                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+            }
             refresh_candidate_locations_for_path(
                 path.as_deref(),
                 &ctx,
@@ -3141,6 +3551,7 @@ fn start_candidate_poll(plugin: &Tmux, ctx: &Context, retry_immediately: bool) {
                 &last_status,
                 &local_config,
                 &coordinator,
+                &socket_registry,
             )
             .await;
         }
@@ -3657,7 +4068,11 @@ async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> Pe
     let resolution_started = Instant::now();
     let Some((client, client_resolution)) = source_action_client(plugin, ctx, pid, &req.name).await
     else {
-        let clients = list_clients(plugin.resolved_tmux_path().await).await;
+        let clients = list_clients(
+            plugin.resolved_tmux_path().await,
+            plugin.tmux_socket_registry(),
+        )
+        .await;
         let pmap = parent_pid_map().await;
         ctx.log(
             "warn",
@@ -3728,8 +4143,12 @@ async fn perform_action(plugin: &Tmux, ctx: &Context, req: &ActionRequest) -> Pe
 ///      the target session — single-process multi-window terminals
 ///      land here so the pick reaches the window the user was last
 ///      typing in.
-async fn select_client_for_target(tmux_path: Option<&str>, target: &str) -> Option<TmuxClient> {
-    let mut clients = list_clients(tmux_path).await;
+async fn select_client_for_target(
+    tmux_path: Option<&str>,
+    target: &str,
+    socket_registry: &TmuxSocketRegistry,
+) -> Option<TmuxClient> {
+    let mut clients = list_clients(tmux_path, socket_registry).await;
     if clients.is_empty() {
         return None;
     }
@@ -3824,7 +4243,12 @@ async fn resolve(plugin: &Tmux, ctx: &Context, row: &Candidate) -> PerformRespon
                 None => None,
             }
         } else {
-            select_client_for_target(plugin.resolved_tmux_path().await, target).await
+            select_client_for_target(
+                plugin.resolved_tmux_path().await,
+                target,
+                plugin.tmux_socket_registry(),
+            )
+            .await
         };
         if let Some(client) = route_client.as_ref() {
             switched = switch_routed_target(plugin, client, target).await;
@@ -3944,7 +4368,7 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> P
     // the target session (keeps each terminal window pinned to its
     // session), fall back to most-recently-active (single-process
     // terminals where every window shares one client).
-    let chosen = select_client_for_target(tmux_path, target).await;
+    let chosen = select_client_for_target(tmux_path, target, plugin.tmux_socket_registry()).await;
     let tty = chosen.as_ref().map(|c| c.tty.clone()).unwrap_or_default();
 
     let mut args: Vec<&str> = vec!["switch-client"];
@@ -3954,10 +4378,16 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> P
     }
     args.push("-t");
     args.push(target);
-    let switched = run_tmux_default(tmux_path, &args).await.is_some()
-        || run_tmux_default(tmux_path, &["switch-client", "-t", target])
-            .await
-            .is_some();
+    let switched = run_tmux_default(tmux_path, &args, plugin.tmux_socket_registry())
+        .await
+        .is_some()
+        || run_tmux_default(
+            tmux_path,
+            &["switch-client", "-t", target],
+            plugin.tmux_socket_registry(),
+        )
+        .await
+        .is_some();
     if !switched {
         ctx.log("warn", "[tmux] command switch-client failed");
         return PerformResponse::fail("switch-client failed");
@@ -3973,7 +4403,7 @@ async fn invoke_command(plugin: &Tmux, ctx: &Context, cmd: &CommandRequest) -> P
             find_top_level_ancestor(c.client_pid, &pmap)
         }
         None => {
-            let clients = list_clients(tmux_path).await;
+            let clients = list_clients(tmux_path, plugin.tmux_socket_registry()).await;
             let fallback = clients
                 .iter()
                 .find(|c| c.session == session)
@@ -4077,7 +4507,12 @@ async fn restore_navigation(
         route_client = if let Some(config) = remote_config.as_ref() {
             remote_client_for_target(config, Some(tmux_target)).await
         } else {
-            select_client_for_target(plugin.resolved_tmux_path().await, tmux_target).await
+            select_client_for_target(
+                plugin.resolved_tmux_path().await,
+                tmux_target,
+                plugin.tmux_socket_registry(),
+            )
+            .await
         };
         if let Some(client) = route_client.as_ref() {
             switched = switch_routed_target(plugin, client, tmux_target).await;
@@ -4797,6 +5232,188 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
         assert!(lines.contains(&"play\t1\tshell\tzsh\t/Users/ab/play"));
     }
 
+    fn discovered_socket(device: u64, inode: u64, path: &str) -> DiscoveredSocket {
+        DiscoveredSocket {
+            identity: SocketIdentity { device, inode },
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn socket_discovery_dedupes_aliases_by_inode_deterministically() {
+        let private = discovered_socket(1, 10, "/private/tmp/tmux-501/work");
+        let alias = discovered_socket(1, 10, "/tmp/tmux-501/work");
+
+        let forward = dedupe_discovered_sockets([alias.clone(), private.clone()]);
+        let reverse = dedupe_discovered_sockets([private.clone(), alias]);
+
+        assert_eq!(forward, vec![private.clone()]);
+        assert_eq!(reverse, vec![private]);
+    }
+
+    #[test]
+    fn socket_registry_excludes_default_and_keeps_all_live_named_servers() {
+        let now = Instant::now();
+        let default = discovered_socket(1, 10, "/private/tmp/tmux-501/default");
+        let work = discovered_socket(1, 20, "/private/tmp/tmux-501/work");
+        let play = discovered_socket(1, 30, "/private/tmp/tmux-501/play");
+        let mut state = TmuxSocketRegistryState::default();
+        state.refresh_discovery(
+            vec![default.clone(), work.clone(), play.clone()],
+            Some(default.identity),
+            true,
+            now,
+        );
+        state.record(work.identity, SocketProbeOutcome::Active, now);
+        state.record(play.identity, SocketProbeOutcome::Active, now);
+
+        let plan = state.inventory_plan(now);
+        assert_eq!(plan.targets, vec![work, play]);
+        assert!(!plan.deferred);
+        assert!(!state.sockets.contains_key(&default.identity));
+    }
+
+    #[test]
+    fn socket_registry_negative_caches_an_absent_inode_but_probes_replacement() {
+        let now = Instant::now();
+        let old = discovered_socket(1, 10, "/private/tmp/tmux-501/stale");
+        let replacement = discovered_socket(1, 11, "/private/tmp/tmux-501/stale");
+        let mut state = TmuxSocketRegistryState::default();
+        state.refresh_discovery(vec![old.clone()], None, true, now);
+        assert_eq!(state.inventory_plan(now).targets, vec![old.clone()]);
+
+        state.record(old.identity, SocketProbeOutcome::Absent, now);
+        state.refresh_discovery(vec![old], None, true, now);
+        assert!(state.inventory_plan(now).targets.is_empty());
+        assert!(state.action_targets().is_empty());
+
+        state.refresh_discovery(vec![replacement.clone()], None, true, now);
+        assert_eq!(
+            state.inventory_plan(now + Duration::from_secs(30)).targets,
+            vec![replacement]
+        );
+    }
+
+    #[test]
+    fn socket_registry_backs_off_transient_failures_and_resets_after_success() {
+        let now = Instant::now();
+        let socket = discovered_socket(1, 10, "/private/tmp/tmux-501/work");
+        let mut state = TmuxSocketRegistryState::default();
+        state.refresh_discovery(vec![socket.clone()], None, true, now);
+        state.record(socket.identity, SocketProbeOutcome::Transient, now);
+
+        let backed_off = state.inventory_plan(now + Duration::from_secs(4));
+        assert!(backed_off.targets.is_empty());
+        assert!(backed_off.deferred);
+        assert_eq!(state.action_targets(), vec![socket.clone()]);
+        assert_eq!(
+            state.inventory_plan(now + Duration::from_secs(5)).targets,
+            vec![socket.clone()]
+        );
+
+        state.record(
+            socket.identity,
+            SocketProbeOutcome::Active,
+            now + Duration::from_secs(5),
+        );
+        assert_eq!(
+            state.inventory_plan(now + Duration::from_secs(5)).targets,
+            vec![socket.clone()]
+        );
+        state.record(
+            socket.identity,
+            SocketProbeOutcome::Transient,
+            now + Duration::from_secs(6),
+        );
+        assert_eq!(
+            state
+                .sockets
+                .get(&socket.identity)
+                .map(|tracked| tracked.state),
+            Some(TrackedSocketState::Transient {
+                failures: 1,
+                retry_at: now + Duration::from_secs(11),
+            })
+        );
+    }
+
+    #[test]
+    fn socket_registry_bounds_new_probes_without_dropping_active_servers() {
+        let now = Instant::now();
+        let sockets = (0..20)
+            .map(|index| {
+                discovered_socket(
+                    1,
+                    index,
+                    &format!("/private/tmp/tmux-501/socket-{index:02}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut state = TmuxSocketRegistryState::default();
+        state.refresh_discovery(sockets.clone(), None, true, now);
+        state.record(sockets[0].identity, SocketProbeOutcome::Active, now);
+        state.record(sockets[1].identity, SocketProbeOutcome::Active, now);
+
+        let plan = state.inventory_plan(now);
+        assert_eq!(plan.targets.len(), 2 + SOCKET_DISCOVERY_FANOUT_LIMIT);
+        assert!(plan.targets.contains(&sockets[0]));
+        assert!(plan.targets.contains(&sockets[1]));
+        assert!(plan.deferred);
+        assert_eq!(state.action_targets().len(), sockets.len());
+    }
+
+    #[test]
+    fn socket_registry_clears_stale_default_identity_before_inode_reuse() {
+        let now = Instant::now();
+        let former_default = discovered_socket(1, 10, "/private/tmp/tmux-501/default");
+        let replacement = discovered_socket(1, 10, "/private/tmp/tmux-501/work");
+        let mut state = TmuxSocketRegistryState::default();
+        state.refresh_discovery(
+            vec![former_default.clone()],
+            Some(former_default.identity),
+            true,
+            now,
+        );
+        assert!(state.sockets.is_empty());
+
+        state.refresh_discovery(
+            vec![replacement.clone()],
+            None,
+            true,
+            now + Duration::from_secs(30),
+        );
+
+        assert_eq!(state.inventory_plan(now).targets, vec![replacement]);
+    }
+
+    #[test]
+    fn incomplete_socket_discovery_preserves_known_live_servers() {
+        let now = Instant::now();
+        let socket = discovered_socket(1, 10, "/private/tmp/tmux-501/work");
+        let mut state = TmuxSocketRegistryState::default();
+        state.refresh_discovery(vec![socket.clone()], None, true, now);
+        state.record(socket.identity, SocketProbeOutcome::Active, now);
+
+        state.refresh_discovery(Vec::new(), None, false, now + Duration::from_secs(30));
+
+        let plan = state.inventory_plan(now + Duration::from_secs(30));
+        assert_eq!(plan.targets, vec![socket]);
+        assert!(plan.deferred);
+    }
+
+    #[test]
+    fn successful_empty_socket_probe_still_marks_server_active() {
+        let successful_empty = CliResult {
+            ok: true,
+            status: 0,
+            ..CliResult::default()
+        };
+        assert_eq!(
+            socket_probe_outcome(&successful_empty),
+            SocketProbeOutcome::Active
+        );
+    }
+
     #[test]
     fn aggregate_inventory_clears_confirmed_absent_servers() {
         let absent = CliResult {
@@ -4805,7 +5422,7 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             ..CliResult::default()
         };
         assert_eq!(
-            classify_tmux_aggregate(&[absent], false, TmuxInventoryScope::AnyServer),
+            classify_tmux_aggregate(&[absent], false, false, TmuxInventoryScope::AnyServer),
             TmuxAggregate::Absent
         );
     }
@@ -4818,7 +5435,21 @@ scratch\t2\tflash\tzsh\t/Users/ab/workspace/aymericbeaumet/flash\n";
             ..CliResult::default()
         };
         assert_eq!(
-            classify_tmux_aggregate(&[timeout], false, TmuxInventoryScope::AnyServer),
+            classify_tmux_aggregate(&[timeout], false, false, TmuxInventoryScope::AnyServer),
+            TmuxAggregate::TransientFailure
+        );
+    }
+
+    #[test]
+    fn aggregate_inventory_preserves_last_good_while_socket_discovery_is_incomplete() {
+        let successful = CliResult {
+            ok: true,
+            stdout: "work\t1\teditor".to_string(),
+            status: 0,
+            ..CliResult::default()
+        };
+        assert_eq!(
+            classify_tmux_aggregate(&[successful], false, true, TmuxInventoryScope::AnyServer),
             TmuxAggregate::TransientFailure
         );
     }
@@ -4841,6 +5472,7 @@ window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
         assert_eq!(
             classify_tmux_aggregate(
                 &[successful.clone(), timeout],
+                false,
                 false,
                 TmuxInventoryScope::AttachedServers,
             ),
@@ -4869,6 +5501,7 @@ window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
             classify_tmux_aggregate(
                 &[attached.clone(), detached],
                 false,
+                false,
                 TmuxInventoryScope::AttachedServers,
             ),
             TmuxAggregate::Output(attached.stdout)
@@ -4889,7 +5522,12 @@ window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
             ..CliResult::default()
         };
         assert_eq!(
-            classify_tmux_aggregate(&[successful, absent], false, TmuxInventoryScope::AnyServer,),
+            classify_tmux_aggregate(
+                &[successful, absent],
+                false,
+                false,
+                TmuxInventoryScope::AnyServer,
+            ),
             TmuxAggregate::Output("work\t1\teditor".to_string())
         );
     }
@@ -4903,7 +5541,7 @@ window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
         };
 
         assert_eq!(
-            classify_tmux_aggregate(&[exited], false, TmuxInventoryScope::AnyServer),
+            classify_tmux_aggregate(&[exited], false, false, TmuxInventoryScope::AnyServer),
             TmuxAggregate::Absent
         );
     }
@@ -4952,44 +5590,268 @@ window|||work|||1|||editor|||nvim|||/Users/ab/work|||1"
     // candidates after a refresh catches up).
 
     #[tokio::test]
-    async fn candidate_refresh_coordinator_serializes_overlapping_refreshes() {
-        let coordinator = std::sync::Arc::new(CandidateRefreshCoordinator::default());
-        let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
-        let (release_first_tx, release_first_rx) = tokio::sync::oneshot::channel();
-        let first_coordinator = std::sync::Arc::clone(&coordinator);
-        let first = tokio::spawn(async move {
-            first_coordinator
-                .run(async move {
-                    let _ = first_started_tx.send(());
-                    let _ = release_first_rx.await;
-                })
-                .await;
-        });
-        first_started_rx.await.expect("first refresh started");
+    async fn candidate_refresh_coordinator_coalesces_a_burst_into_one_trailing_pass() {
+        use std::sync::atomic::AtomicUsize;
 
-        let (second_started_tx, mut second_started_rx) = tokio::sync::oneshot::channel();
-        let second_coordinator = std::sync::Arc::clone(&coordinator);
-        let second = tokio::spawn(async move {
-            second_coordinator
-                .run(async move {
-                    let _ = second_started_tx.send(());
-                })
-                .await;
-        });
-
-        assert!(
-            tokio::time::timeout(Duration::from_millis(25), &mut second_started_rx)
-                .await
-                .is_err(),
-            "the second refresh must not begin while the first owns the coordinator"
-        );
-        release_first_tx.send(()).expect("release first refresh");
-        first.await.expect("first refresh task");
-        tokio::time::timeout(Duration::from_secs(1), &mut second_started_rx)
+        let coordinator = Arc::new(CandidateRefreshCoordinator::default());
+        let passes = Arc::new(AtomicUsize::new(0));
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let first_started = Arc::new(tokio::sync::Notify::new());
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let leader = {
+            let coordinator = Arc::clone(&coordinator);
+            let passes = Arc::clone(&passes);
+            let in_flight = Arc::clone(&in_flight);
+            let max_in_flight = Arc::clone(&max_in_flight);
+            let first_started = Arc::clone(&first_started);
+            let release_first = Arc::clone(&release_first);
+            tokio::spawn(async move {
+                coordinator
+                    .run(move || {
+                        let passes = Arc::clone(&passes);
+                        let in_flight = Arc::clone(&in_flight);
+                        let max_in_flight = Arc::clone(&max_in_flight);
+                        let first_started = Arc::clone(&first_started);
+                        let release_first = Arc::clone(&release_first);
+                        async move {
+                            let pass = passes.fetch_add(1, Ordering::SeqCst);
+                            let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                            max_in_flight.fetch_max(current, Ordering::SeqCst);
+                            if pass == 0 {
+                                first_started.notify_one();
+                                release_first.notified().await;
+                            }
+                            in_flight.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    })
+                    .await;
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(1), first_started.notified())
             .await
-            .expect("second refresh started after release")
-            .expect("second refresh signal");
+            .expect("first refresh started");
+
+        let mut requests = tokio::task::JoinSet::new();
+        for _ in 0..24 {
+            let coordinator = Arc::clone(&coordinator);
+            let passes = Arc::clone(&passes);
+            let in_flight = Arc::clone(&in_flight);
+            let max_in_flight = Arc::clone(&max_in_flight);
+            requests.spawn(async move {
+                coordinator
+                    .run(move || {
+                        let passes = Arc::clone(&passes);
+                        let in_flight = Arc::clone(&in_flight);
+                        let max_in_flight = Arc::clone(&max_in_flight);
+                        async move {
+                            passes.fetch_add(1, Ordering::SeqCst);
+                            let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                            max_in_flight.fetch_max(current, Ordering::SeqCst);
+                            in_flight.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    })
+                    .await;
+            });
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while coordinator.requested_generation.load(Ordering::Acquire) < 25 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("all burst requests registered");
+        release_first.notify_one();
+
+        leader.await.expect("leader refresh task");
+        while let Some(result) = requests.join_next().await {
+            result.expect("coalesced refresh task");
+        }
+        assert_eq!(passes.load(Ordering::SeqCst), 2);
+        assert_eq!(max_in_flight.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn candidate_refresh_coordinator_runs_another_pass_for_trailing_requests() {
+        let coordinator = Arc::new(CandidateRefreshCoordinator::default());
+        let passes = Arc::new(AtomicU64::new(0));
+        let first_release = Arc::new(tokio::sync::Notify::new());
+        let trailing_release = Arc::new(tokio::sync::Notify::new());
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let leader = {
+            let coordinator = Arc::clone(&coordinator);
+            let passes = Arc::clone(&passes);
+            let first_release = Arc::clone(&first_release);
+            let trailing_release = Arc::clone(&trailing_release);
+            tokio::spawn(async move {
+                coordinator
+                    .run(move || {
+                        let pass = passes.fetch_add(1, Ordering::SeqCst);
+                        let first_release = Arc::clone(&first_release);
+                        let trailing_release = Arc::clone(&trailing_release);
+                        let started_tx = started_tx.clone();
+                        async move {
+                            started_tx.send(pass).expect("record pass start");
+                            match pass {
+                                0 => first_release.notified().await,
+                                1 => trailing_release.notified().await,
+                                _ => {}
+                            }
+                        }
+                    })
+                    .await;
+            })
+        };
+        assert_eq!(started_rx.recv().await, Some(0));
+
+        let second = {
+            let coordinator = Arc::clone(&coordinator);
+            tokio::spawn(async move { coordinator.run(|| async {}).await })
+        };
+        while coordinator.requested_generation.load(Ordering::Acquire) < 2 {
+            tokio::task::yield_now().await;
+        }
+        first_release.notify_one();
+        assert_eq!(started_rx.recv().await, Some(1));
+
+        let third = {
+            let coordinator = Arc::clone(&coordinator);
+            tokio::spawn(async move { coordinator.run(|| async {}).await })
+        };
+        while coordinator.requested_generation.load(Ordering::Acquire) < 3 {
+            tokio::task::yield_now().await;
+        }
+        trailing_release.notify_one();
+        assert_eq!(started_rx.recv().await, Some(2));
+
+        leader.await.expect("leader refresh task");
         second.await.expect("second refresh task");
+        third.await.expect("third refresh task");
+        assert_eq!(passes.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn candidate_refresh_coordinator_recovers_when_the_leader_is_cancelled() {
+        let coordinator = Arc::new(CandidateRefreshCoordinator::default());
+        let leader_started = Arc::new(tokio::sync::Notify::new());
+        let leader = {
+            let coordinator = Arc::clone(&coordinator);
+            let leader_started = Arc::clone(&leader_started);
+            tokio::spawn(async move {
+                coordinator
+                    .run(move || {
+                        let leader_started = Arc::clone(&leader_started);
+                        async move {
+                            leader_started.notify_one();
+                            std::future::pending::<()>().await;
+                        }
+                    })
+                    .await;
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(1), leader_started.notified())
+            .await
+            .expect("leader refresh started");
+
+        let waiter_ran = Arc::new(tokio::sync::Notify::new());
+        let waiter = {
+            let coordinator = Arc::clone(&coordinator);
+            let waiter_ran = Arc::clone(&waiter_ran);
+            tokio::spawn(async move {
+                coordinator
+                    .run(move || {
+                        let waiter_ran = Arc::clone(&waiter_ran);
+                        async move { waiter_ran.notify_one() }
+                    })
+                    .await;
+            })
+        };
+        while coordinator.requested_generation.load(Ordering::Acquire) < 2 {
+            tokio::task::yield_now().await;
+        }
+        leader.abort();
+        let _ = leader.await;
+
+        tokio::time::timeout(Duration::from_secs(1), waiter_ran.notified())
+            .await
+            .expect("waiting refresh took over after cancellation");
+        waiter.await.expect("waiting refresh task");
+    }
+
+    #[tokio::test]
+    async fn candidate_refresh_coordinator_runs_sequential_idle_requests() {
+        let coordinator = CandidateRefreshCoordinator::default();
+        let passes = AtomicU64::new(0);
+
+        coordinator
+            .run(|| async {
+                passes.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+        coordinator
+            .run(|| async {
+                passes.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+
+        assert_eq!(passes.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn candidate_refresh_coordinator_trailing_pass_reads_current_shared_input() {
+        let coordinator = Arc::new(CandidateRefreshCoordinator::default());
+        let current_input = Arc::new(AtomicU64::new(1));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let first_started = Arc::new(tokio::sync::Notify::new());
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let leader = {
+            let coordinator = Arc::clone(&coordinator);
+            let current_input = Arc::clone(&current_input);
+            let observed = Arc::clone(&observed);
+            let first_started = Arc::clone(&first_started);
+            let release_first = Arc::clone(&release_first);
+            tokio::spawn(async move {
+                coordinator
+                    .run(move || {
+                        let value = current_input.load(Ordering::SeqCst);
+                        let observed = Arc::clone(&observed);
+                        let first_started = Arc::clone(&first_started);
+                        let release_first = Arc::clone(&release_first);
+                        async move {
+                            let first = observed
+                                .lock()
+                                .map(|mut values| {
+                                    values.push(value);
+                                    values.len() == 1
+                                })
+                                .unwrap_or(false);
+                            if first {
+                                first_started.notify_one();
+                                release_first.notified().await;
+                            }
+                        }
+                    })
+                    .await;
+            })
+        };
+        first_started.notified().await;
+
+        let follower = {
+            let coordinator = Arc::clone(&coordinator);
+            tokio::spawn(async move { coordinator.run(|| async {}).await })
+        };
+        while coordinator.requested_generation.load(Ordering::Acquire) < 2 {
+            tokio::task::yield_now().await;
+        }
+        current_input.store(2, Ordering::SeqCst);
+        release_first.notify_one();
+
+        leader.await.expect("leader refresh task");
+        follower.await.expect("follower refresh task");
+        assert_eq!(
+            observed.lock().map(|values| values.clone()).unwrap(),
+            vec![1, 2]
+        );
     }
 
     fn fake_candidate(target: &str, name: &str, pid: i64) -> Candidate {
@@ -5140,6 +6002,9 @@ struct Tmux {
     /// Last statusbar segment values emitted through the `status`
     /// notification, so the 1 s refresh only notifies on actual changes.
     last_status_segments_arc: std::sync::Arc<Mutex<Option<TmuxStatusSegments>>>,
+    /// Tracks live local tmux socket inodes so the one-second refresh never
+    /// re-probes stale filesystem nodes or `/tmp` aliases.
+    tmux_socket_registry_arc: std::sync::Arc<TmuxSocketRegistry>,
     /// Serializes the complete build → hash → publish cycle shared by startup,
     /// the one-second poll, and push events. Without it, an older slow refresh
     /// can finish after a newer one and publish stale rows over the host's
@@ -5187,6 +6052,10 @@ impl Tmux {
 
     fn candidate_refresh_coordinator(&self) -> &CandidateRefreshCoordinator {
         &self.candidate_refresh_coordinator_arc
+    }
+
+    fn tmux_socket_registry(&self) -> &TmuxSocketRegistry {
+        &self.tmux_socket_registry_arc
     }
 
     /// The tmux binary path, resolved (and cached) on first use via `find_tmux()`.
@@ -5307,6 +6176,7 @@ fn main() {
         last_locations_hash_arc: std::sync::Arc::new(Mutex::new(None)),
         candidate_partitions_arc: std::sync::Arc::new(Mutex::new(CandidatePartitions::default())),
         last_status_segments_arc: std::sync::Arc::new(Mutex::new(None)),
+        tmux_socket_registry_arc: std::sync::Arc::new(TmuxSocketRegistry::default()),
         candidate_refresh_coordinator_arc: std::sync::Arc::new(
             CandidateRefreshCoordinator::default(),
         ),
