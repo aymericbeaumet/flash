@@ -947,6 +947,27 @@ final class StatusBarTests: XCTestCase {
     XCTAssertEqual(OverlayPanel.statusBarEdgePadding, 13)
   }
 
+  func testStatusBarReanchorsToUnionFrameOnScreenParameterChange() {
+    // Repro for the status bar vanishing when an external monitor is
+    // unplugged: the panel spans the union of all screens and the bar is
+    // anchored inside it, but nothing re-laid-it-out on a display change, so
+    // it was left stranded on the old (larger) union's coordinates. The
+    // re-anchor must snap the panel back onto the current union frame.
+    let panel = OverlayPanel()
+    panel.modeLabels = Config.Mode.Labels(normal: "NORMAL", insert: "INSERT", command: "COMMAND")
+    panel.updateModeBadge(text: "NORMAL", visible: true, captureInput: false, style: .normal)
+
+    // Strand the panel on a stale, wrong frame (as if a monitor it spanned was
+    // just removed). A small on-screen rect is never constrained away.
+    panel.setFrame(CGRect(x: 0, y: 0, width: 10, height: 10), display: false)
+    XCTAssertNotEqual(panel.frame, OverlayPanel.unionScreenFrame())
+
+    panel.statusBarDidChangeScreenParameters()
+
+    XCTAssertEqual(panel.frame, OverlayPanel.unionScreenFrame())
+    XCTAssertTrue(panel.modeBadgeVisible)
+  }
+
   func testCommandPromptLayerHasWindowSeparatingShadow() {
     let panel = OverlayPanel()
 

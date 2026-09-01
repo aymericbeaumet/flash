@@ -375,8 +375,20 @@ final class OverlayPanel: NSPanel {
       forName: NSApplication.didChangeScreenParametersNotification,
       object: nil,
       queue: .main
-    ) { _ in
+    ) { [weak self] _ in
       OverlayPanel.invalidateScreenSnapshot()
+      // A monitor was (un)plugged. The status bar is anchored to `NSScreen.main`
+      // and the panel window spans the union of all screens; both just moved, so
+      // without a re-layout the bar is stranded on coordinates that no longer
+      // exist and appears to vanish. Re-anchor it onto the surviving screens.
+      self?.statusBarDidChangeScreenParameters()
+      // `visibleFrame` / `NSScreen.main` can settle a beat after the notification
+      // (notably when unplugging the display that hosted the menu bar), so
+      // re-anchor once more on the next runloop hop against the finalized layout.
+      DispatchQueue.main.async {
+        OverlayPanel.invalidateScreenSnapshot()
+        self?.statusBarDidChangeScreenParameters()
+      }
     }
     self.level = Self.persistentStatusWindowLevel
     self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]

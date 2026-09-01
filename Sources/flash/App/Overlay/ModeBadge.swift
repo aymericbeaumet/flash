@@ -171,6 +171,23 @@ extension OverlayPanel {
     }
   }
 
+  /// Re-lay-out the status bar after a display reconfiguration (a monitor
+  /// plugged or unplugged). The primary bar anchors to `NSScreen.main` and the
+  /// panel window spans the union of all screens; when a display disappears
+  /// both of those move, leaving the bar stranded on coordinates that no longer
+  /// exist — which reads as the status bar vanishing from the Mac. The caller
+  /// invalidates the screen snapshot first; re-issuing the current badge state
+  /// rebuilds the union panel frame, re-lays-out the bar across the surviving
+  /// screens (pruning bars for removed displays and adding them for new ones),
+  /// and re-orders the panel back into view.
+  func statusBarDidChangeScreenParameters() {
+    updateModeBadge(
+      text: modeBadgeText,
+      visible: modeBadgeVisible,
+      captureInput: modeBadgeCapturesInput,
+      style: modeBadgeStyle)
+  }
+
   func orderOutIfNoPersistentContent() {
     guard
       !transientContentVisible,
