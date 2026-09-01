@@ -699,6 +699,12 @@ enum WindowMover {
       && abs(lhs.height - rhs.height) <= tolerance
   }
 
+  /// The most correction passes `apply` makes after its initial
+  /// size → position → size burst. One pass is enough to defeat the async
+  /// grow-clamp race described below; the extra margin lets grid-snapping
+  /// apps settle without looping.
+  private static let applyCorrectionAttempts = 2
+
   /// Push the rect into the AX window. Mirrors Hammerspoon's
   /// `setFrame` (size → position → size) so the move is instant and
   /// survives screen-edge clamping:
@@ -721,6 +727,17 @@ enum WindowMover {
   ///      size write may be clamped to the source screen, the
   ///      position move frees the constraint, the second size
   ///      write actually applies the target dimensions.
+  ///   4. The burst above assumes each AX write lands before the next, but
+  ///      many apps apply frame writes asynchronously. When the position move
+  ///      to the origin hasn't landed by the time the final size write is
+  ///      processed, the app clamps the *grow* against the window's old
+  ///      position and it settles narrower than requested — the intermittent
+  ///      "maximize only fills ~85% of the width" the result depends on where
+  ///      the window happened to start. After the burst, read the frame back
+  ///      (a synchronous AX round-trip that flushes the app's pending writes)
+  ///      and, if it missed the target, re-issue position → size. Bounded so a
+  ///      window that genuinely can't reach the rect (grid-snapping terminals,
+  ///      min-size dialogs) stops instead of looping.
   static func apply(
     rect nsRect: CGRect,
     toWindow window: AXUIElement,
@@ -760,6 +777,19 @@ enum WindowMover {
     setSize()
     setPos()
     setSize()
+
+    // Verify the burst actually reached the target and, if an async grow-clamp
+    // left the window short, correct it. The read-back is synchronous, so by
+    // the time it returns the earlier position move has landed — the window now
+    // sits at the origin and the corrective size write can grow freely.
+    for _ in 0..<Self.applyCorrectionAttempts {
+      guard
+        let actual = readWindowFrameInNSCoords(window: window, primaryHeight: primaryHeight),
+        !framesApproximatelyEqual(actual, nsRect)
+      else { break }
+      setPos()
+      setSize()
+    }
   }
 
   /// Read `AXEnhancedUserInterface`. Returns `nil` for apps that
