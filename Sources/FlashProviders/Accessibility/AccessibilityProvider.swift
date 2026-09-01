@@ -2,6 +2,32 @@ import AppKit
 import ApplicationServices
 import FlashCore
 
+/// LIFO worklist whose append operation preserves recursive depth-first visit
+/// order. AX trees can contain hundreds of single-child container levels, and
+/// dispatch workers have much smaller stacks than the main thread, so serial
+/// descent must not consume one Swift stack frame per element.
+struct AXTraversalWorklist<Element> {
+  private var storage: [Element]
+
+  init(root: Element) {
+    storage = [root]
+  }
+
+  mutating func pop() -> Element? {
+    storage.popLast()
+  }
+
+  mutating func appendForDepthFirstVisit<Child>(
+    _ children: [Child],
+    transform: (Child) -> Element
+  ) {
+    storage.reserveCapacity(storage.count + children.count)
+    for child in children.reversed() {
+      storage.append(transform(child))
+    }
+  }
+}
+
 /// Single, universal AX walker. No per-app variants — every macOS app is
 /// treated by the same rules: clickable controls, text inputs, and rows in
 /// virtualised lists.
@@ -21,6 +47,9 @@ import FlashCore
 ///     attribute.
 ///   - No mid-walk deadline truncation: walks always complete (so the set of
 ///     returned targets is deterministic).
+///   - Serial descent uses an explicit depth-first worklist rather than Swift
+///     recursion, so a deep AX container chain cannot exhaust a dispatch
+///     worker's stack. The two bounded concurrency fan-outs remain recursive.
 ///   - Per-IPC messaging timeout is bounded, not the 6 s system default:
 ///     the walk root is built via `AXApp.make` (guardrail-enforced), which
 ///     applies `AXApp.defaultMessagingTimeout` (1.5 s) to the app element
@@ -352,7 +381,7 @@ public final class AccessibilityProvider: FlashSource {
     ] as CFArray
 
   /// Per-worker mutable state. `WalkState` is per-thread under concurrent
-  /// walks; serial walks pass one through the whole recursion.
+  /// walks; serial descent passes one through the whole worklist.
   private struct WalkState {
     var confirmedTargets: [JumpTarget] = []
     /// Targets whose acceptance is contingent on an action-name IPC.
@@ -368,6 +397,16 @@ public final class AccessibilityProvider: FlashSource {
   private struct PendingTarget {
     let candidate: JumpTarget
     let element: AXUIElement
+  }
+
+  private struct WalkItem {
+    let element: AXUIElement
+    let depth: Int
+    let insideClickable: Bool
+    let insideWebArea: Bool
+    let insideExtensionDocument: Bool
+    let idPrefix: String
+    let fanoutBudget: Int
   }
 
   public func discover(in context: AppContext) throws -> [JumpTarget] {
@@ -448,7 +487,6 @@ public final class AccessibilityProvider: FlashSource {
       insideClickable: false,
       insideWebArea: false,
       insideExtensionDocument: false,
-      parentRole: nil,
       idPrefix: "r",
       fanoutBudget: Self.maxFanoutLevels,
       state: &state
@@ -517,11 +555,48 @@ public final class AccessibilityProvider: FlashSource {
     insideClickable: Bool,
     insideWebArea: Bool,
     insideExtensionDocument: Bool,
-    parentRole: String?,
     idPrefix: String,
     fanoutBudget: Int,
     state: inout WalkState
   ) {
+    var worklist = AXTraversalWorklist(
+      root: WalkItem(
+        element: element,
+        depth: depth,
+        insideClickable: insideClickable,
+        insideWebArea: insideWebArea,
+        insideExtensionDocument: insideExtensionDocument,
+        idPrefix: idPrefix,
+        fanoutBudget: fanoutBudget))
+    while let item = worklist.pop() {
+      walkNode(
+        item,
+        screenH: screenH,
+        visible: visible,
+        pid: pid,
+        bundleIdentifier: bundleIdentifier,
+        worklist: &worklist,
+        state: &state)
+    }
+  }
+
+  private func walkNode(
+    _ item: WalkItem,
+    screenH: CGFloat,
+    visible: CGRect,
+    pid: pid_t,
+    bundleIdentifier: String,
+    worklist: inout AXTraversalWorklist<WalkItem>,
+    state: inout WalkState
+  ) {
+    let element = item.element
+    let depth = item.depth
+    let insideClickable = item.insideClickable
+    let insideWebArea = item.insideWebArea
+    let insideExtensionDocument = item.insideExtensionDocument
+    let idPrefix = item.idPrefix
+    let fanoutBudget = item.fanoutBudget
+
     if depth > Self.maxDepth { return }
     if state.confirmedTargets.count >= Self.maxTargets { return }
 
@@ -742,7 +817,6 @@ public final class AccessibilityProvider: FlashSource {
       let captureInsideClickable = nowInsideClickable
       let captureInsideWebArea = nowInsideWebArea
       let captureInsideExtensionDocument = nowInsideExtensionDocument
-      let captureParentRole = role
       let captureDepth = depth
       let captureIdPrefix = idPrefix
       let captureNewBudget = fanoutBudget - 1
@@ -771,7 +845,6 @@ public final class AccessibilityProvider: FlashSource {
             insideClickable: captureInsideClickable,
             insideWebArea: captureInsideWebArea,
             insideExtensionDocument: captureInsideExtensionDocument,
-            parentRole: captureParentRole,
             idPrefix: childPrefix,
             fanoutBudget: captureNewBudget,
             state: &workerState
@@ -786,28 +859,20 @@ public final class AccessibilityProvider: FlashSource {
       return
     }
 
-    for child in children {
-      walk(
-        child,
+    worklist.appendForDepthFirstVisit(children) { child in
+      WalkItem(
+        element: child,
         depth: depth + 1,
-        screenH: screenH,
-        visible: visible,
-        pid: pid,
-        bundleIdentifier: bundleIdentifier,
         insideClickable: nowInsideClickable,
         insideWebArea: nowInsideWebArea,
         insideExtensionDocument: nowInsideExtensionDocument,
-        parentRole: role,
         idPrefix: idPrefix,
-        fanoutBudget: fanoutBudget,
-        state: &state
-      )
-      if state.confirmedTargets.count >= Self.maxTargets { return }
+        fanoutBudget: fanoutBudget)
     }
   }
 
   /// Parallel resolution of action-name IPCs for tentative targets that
-  /// the walker bookkept during the recursive descent. Each
+  /// the walker bookkept during tree descent. Each
   /// `AXUIElementCopyActionNames` is independent so they can run
   /// concurrently, bounded by the target app's main-thread service rate
   /// (and `DispatchQueue.concurrentPerform`'s thread pool sizing).
