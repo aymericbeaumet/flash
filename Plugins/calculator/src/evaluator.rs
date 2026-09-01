@@ -35,11 +35,15 @@ pub(crate) fn evaluate(
     let deadline = Deadline(Instant::now() + EVALUATION_BUDGET);
     let result = fend_core::evaluate_preview_with_interrupt(query, &context, &deadline);
     let mut primary = result.get_main_result().trim().to_string();
-    // Preview intentionally suppresses identity-shaped output. A bare currency
-    // quantity such as `10 euros` is still useful because target conversions
-    // derive from it, so selectively fall back to full evaluation for currency
-    // syntax while keeping plain `123` out of the answer lane.
-    if primary.is_empty() && looks_like_currency_result(query, &snapshot) {
+    // Preview suppresses identity-shaped output — a value that renders exactly
+    // as it was typed — which otherwise drops a bare number like `12.5` or a
+    // bare currency quantity like `10 euros`. Both are useful answers (a plain
+    // number so it can be copied; a currency so target conversions derive from
+    // it), so fall back to full evaluation for those. App-name-shaped queries
+    // still error out of fend and stay out of the answer lane.
+    if primary.is_empty()
+        && (is_plain_number(query) || looks_like_currency_result(query, &snapshot))
+    {
         if let Ok(result) = fend_core::evaluate_with_interrupt(query, &mut context, &deadline) {
             primary = result.get_main_result().trim().to_string();
         }
@@ -84,6 +88,24 @@ fn should_evaluate(query: &str) -> bool {
             query.as_bytes().first(),
             Some(b'!') | Some(b'@') | Some(b':')
         )
+}
+
+/// A dimensionless numeric literal such as `123`, `12.5`, or `-0.5`. fend's
+/// preview evaluator returns nothing for these (the rendered value equals the
+/// input), so they need the full-evaluation fallback to surface as their own
+/// copyable answer instead of collapsing the bar to "no matching app".
+fn is_plain_number(query: &str) -> bool {
+    let digits = query.strip_prefix(['+', '-']).unwrap_or(query);
+    let mut seen_dot = false;
+    let mut seen_digit = false;
+    for character in digits.chars() {
+        match character {
+            '0'..='9' => seen_digit = true,
+            '.' if !seen_dot => seen_dot = true,
+            _ => return false,
+        }
+    }
+    seen_digit
 }
 
 fn looks_like_currency_result(result: &str, rates: &ExchangeRates) -> bool {
@@ -170,9 +192,25 @@ mod tests {
     fn ignores_plain_catalog_queries_and_explicit_sigil_syntax() {
         let rates = RatesStore::default();
         assert!(evaluate("Safari", &rates, &[]).is_empty());
-        assert!(evaluate("123", &rates, &[]).is_empty());
         assert!(evaluate("!google 1+1", &rates, &[]).is_empty());
         assert!(evaluate("@apps 1+1", &rates, &[]).is_empty());
+    }
+
+    #[test]
+    fn echoes_bare_numbers_so_they_are_copyable() {
+        // A bare number renders identically to its input, so fend's preview
+        // returns nothing. The full-evaluation fallback surfaces it as its own
+        // copyable answer instead of the bar collapsing to "no matching app".
+        let rates = RatesStore::default();
+        for query in ["12.5", "123", "0.5", "-3"] {
+            let candidates = evaluate(query, &rates, &[]);
+            assert_eq!(candidates.len(), 1, "{query}: {candidates:?}");
+            assert_eq!(candidates[0].title, query, "{candidates:?}");
+            assert_eq!(
+                serde_json::to_value(&candidates[0]).unwrap()["effect"]["text"],
+                query
+            );
+        }
     }
 
     #[test]
