@@ -216,8 +216,21 @@ extension OverlayPanel {
     underlineInvalid: Bool = false
   ) {
     suppressCommandTextFieldChange = true
+    // Snapshot the field editor's live caret BEFORE mutating anything. Most
+    // re-renders don't change the text — the common one is an async candidate /
+    // suggestion merge streaming in while the bar is open (see
+    // `rerenderActiveCandidateFinderSurface`). In that case the field editor's
+    // own caret is authoritative: the user may have just moved it with an arrow
+    // key or a mouse click, neither of which notifies us, so the stored
+    // `commandLineCursorIndex` is stale (still pinned to the last typed
+    // position). Re-imposing that stale index is exactly what made the caret
+    // "jump to the end of the line" mid-edit. So when the text is unchanged we
+    // leave the caret where the user put it and fold it back into the model.
+    let previousFieldText = commandTextField.stringValue
+    let liveCaret = commandTextFieldCursorIndex()
+    let textChanged = previousFieldText != text
+    var didReassignFieldString = false
     commandLineText = text
-    commandLineCursorIndex = cursorIndex
     let font = commandTextField.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
     if let underline = underlineRange,
       underline.length > 0,
@@ -250,6 +263,7 @@ extension OverlayPanel {
       if commandTextField.attributedStringValue != attributed {
         commandTextField.allowsEditingTextAttributes = true
         commandTextField.attributedStringValue = attributed
+        didReassignFieldString = true
       }
     } else {
       if commandTextField.attributedStringValue.length > 0,
@@ -262,9 +276,27 @@ extension OverlayPanel {
       {
         commandTextField.allowsEditingTextAttributes = false
         commandTextField.stringValue = text
+        didReassignFieldString = true
       }
     }
-    syncCommandTextFieldSelection()
+    if textChanged {
+      // A genuine text change (open, history recall, alias expansion, submit
+      // normalization, completion insertion): honor the caret the caller asked
+      // for.
+      commandLineCursorIndex = cursorIndex
+      syncCommandTextFieldSelection()
+    } else if didReassignFieldString {
+      // Same text, but re-applying its attributes (e.g. the bang underline)
+      // reset the field editor's caret. Restore the user's live caret rather
+      // than the possibly-stale model cursor.
+      commandLineCursorIndex = liveCaret
+      syncCommandTextFieldSelection()
+    } else {
+      // Pure re-render — identical text and attributes (an async suggestion
+      // merge). Leave the field editor's caret/selection untouched and just
+      // fold it back into the model so the next forced sync is a no-op.
+      commandLineCursorIndex = liveCaret
+    }
     suppressCommandTextFieldChange = false
   }
 
@@ -322,10 +354,28 @@ extension OverlayPanel {
       let utf16Index = text.utf16.index(
         text.utf16.startIndex,
         offsetBy: clamped,
-        limitedBy: text.utf16.endIndex),
-      let index = String.Index(utf16Index, within: text)
+        limitedBy: text.utf16.endIndex)
     else { return text.count }
-    return text.distance(from: text.startIndex, to: index)
+    if let index = String.Index(utf16Index, within: text) {
+      return text.distance(from: text.startIndex, to: index)
+    }
+    // The UTF-16 offset fell *inside* a grapheme cluster — a surrogate pair or a
+    // multi-scalar emoji / combining sequence where NSTextView's segmentation
+    // disagreed with Swift's. Snap DOWN to the enclosing cluster's start rather
+    // than collapsing to the end of the buffer: the old `text.count` fallback
+    // read as the caret teleporting to the line end whenever it crossed such a
+    // character.
+    var boundaryOffset = 0
+    var charCount = 0
+    var index = text.startIndex
+    while index < text.endIndex {
+      let indexUTF16 = index.samePosition(in: text.utf16)?.utf16Offset(in: text) ?? text.utf16.count
+      if indexUTF16 > clamped { break }
+      boundaryOffset = charCount
+      charCount += 1
+      index = text.index(after: index)
+    }
+    return boundaryOffset
   }
 }
 

@@ -339,6 +339,50 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(editor.selectedRange, NSRange(location: editor.string.utf16.count, length: 0))
   }
 
+  func testCommandLineRerenderPreservesLiveCaretWhenTextUnchanged() throws {
+    // Repro for the "cursor jumps to the end of the line" bug: a plain
+    // left/right arrow (or a click) moves the field editor's caret without
+    // notifying us, so the stored cursor goes stale. An async candidate merge
+    // then re-renders with the SAME text and that stale index — which used to
+    // snap the caret back to the end. A no-op-text re-render must leave the
+    // live caret alone.
+    let panel = OverlayPanel()
+    panel.inputMode = .commandLine
+    panel.orderFrontRegardless()
+    defer { panel.orderOut(nil) }
+    XCTAssertTrue(panel.makeFirstResponder(panel.commandTextField))
+
+    panel.setCommandTextFieldText(":hello", cursorIndex: 6)
+    let editor = try XCTUnwrap(panel.commandTextField.currentEditor() as? NSTextView)
+
+    // User arrows left three times: the field editor owns the caret now.
+    editor.setSelectedRange(NSRange(location: 3, length: 0))
+
+    // Async suggestion merge re-renders unchanged text with the stale cursor.
+    panel.setCommandTextFieldText(":hello", cursorIndex: 6)
+
+    XCTAssertEqual(editor.selectedRange, NSRange(location: 3, length: 0))
+    XCTAssertEqual(panel.commandLineCursorIndex, 3)
+  }
+
+  func testCharacterOffsetSnapsToGraphemeBoundaryInsteadOfJumpingToEnd() {
+    // "a😀b" — UTF-16: a@0, 😀@1..2 (surrogate pair), b@3, end@4.
+    let panel = OverlayPanel()
+    let text = "a\u{1F600}b"
+
+    // A UTF-16 offset landing between the emoji's surrogates resolves to the
+    // emoji's start (char offset 1), never collapsing to the end of the buffer.
+    XCTAssertEqual(panel.characterOffset(forUTF16Offset: 2, in: text), 1)
+
+    // Exact boundaries still map precisely, both directions.
+    XCTAssertEqual(panel.characterOffset(forUTF16Offset: 0, in: text), 0)
+    XCTAssertEqual(panel.characterOffset(forUTF16Offset: 1, in: text), 1)
+    XCTAssertEqual(panel.characterOffset(forUTF16Offset: 3, in: text), 2)
+    XCTAssertEqual(panel.characterOffset(forUTF16Offset: 4, in: text), 3)
+    XCTAssertEqual(panel.utf16Offset(forCharacterOffset: 1, in: text), 1)
+    XCTAssertEqual(panel.utf16Offset(forCharacterOffset: 2, in: text), 3)
+  }
+
   func testCommandLineReturnSubmitsWithoutClearingCommandBufferFirst() {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
