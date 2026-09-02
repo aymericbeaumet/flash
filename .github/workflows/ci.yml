@@ -170,8 +170,9 @@ jobs:
             ${{ runner.os }}-plugin-cargo-
       - name: Build smoke-test plugin binaries
         # The two end-to-end subprocess smoke tests XCTSkip without these
-        # three binaries — building them turns silent skips into real runs.
-        run: ./Scripts/build-plugins.sh dev slack spotify calculator
+        # binaries — building them turns silent skips into real runs. Doctor
+        # also inspects media as a representative bundled plugin.
+        run: ./Scripts/build-plugins.sh dev slack spotify calculator media
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/build/plugin-target
       - name: Test

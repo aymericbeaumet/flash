@@ -6,12 +6,22 @@ cd "$PROJECT_DIR"
 
 fail=0
 
+if command -v rg >/dev/null 2>&1; then
+  search_paths() {
+    rg "$@"
+  }
+else
+  search_paths() {
+    grep -ER "$@"
+  }
+fi
+
 check_absent() {
   local label="$1"
   local pattern="$2"
   shift 2
   local output
-  if output="$(rg -n "$pattern" "$@" 2>/dev/null)"; then
+  if output="$(search_paths -n "$pattern" "$@" 2>/dev/null)"; then
     echo "GUARDRAIL FAILED: $label" >&2
     echo "$output" >&2
     fail=1
@@ -24,9 +34,9 @@ check_absent_except() {
   local allowed="$3"
   shift 3
   local output
-  output="$(rg -n "$pattern" "$@" 2>/dev/null || true)"
+  output="$(search_paths -n "$pattern" "$@" 2>/dev/null || true)"
   if [[ -n "$output" ]]; then
-    output="$(printf '%s\n' "$output" | rg -v "$allowed" || true)"
+    output="$(printf '%s\n' "$output" | grep -Ev "$allowed" || true)"
   fi
   if [[ -n "$output" ]]; then
     echo "GUARDRAIL FAILED: $label" >&2
@@ -77,7 +87,7 @@ check_absent \
 # banned.
 check_absent_except \
   "no production menu bar, Dock, status, or alert UI" \
-  "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|NSMenu\\(|NSMenuItem|\\.mainMenu\\b|setActivationPolicy\\(\\.regular" \
+  "NSStatusItem|NSStatusBar|NSDockTile|NSAlert|NSMenuBarExtra|NSMenu\\(|NSMenuItem|\\.mainMenu([^[:alnum:]_]|$)|setActivationPolicy\\(\\.regular" \
   '^Sources/flash/App/StatusItemController\.swift:|NSStatusBar\.system\.thickness|NSWindow\.Level = \.mainMenu|app\.mainMenu\?\.menuBarHeight|previousMenu = app\.mainMenu|app\.mainMenu = previousMenu|app\.mainMenu = measurementMenu|NSMenu\(title: "Flash"\)|NSMenuItem\(title: "Flash"' \
   Sources/flash Resources/Info.plist
 
@@ -120,11 +130,11 @@ if [[ -d Plugins ]]; then
   # The Rust SDK and host hardcode the one protocol version; drift means a
   # stale implementation is shipping against the redefined wire.
   sdk=Plugins/_flash_plugin_rust/src/runtime.rs
-  if ! rg -qi 'protocol_?version(:\s*\w+)?\s*=\s*1\b' "$sdk"; then
+  if ! search_paths -qi 'protocol_?version(:[[:space:]]*[[:alnum:]_]+)?[[:space:]]*=[[:space:]]*1([^[:alnum:]_]|$)' "$sdk"; then
     echo "GUARDRAIL FAILED: $sdk must pin PROTOCOL_VERSION = 1" >&2
     fail=1
   fi
-  if ! rg -q 'static let version = 1\b' Sources/flash/App/Plugins/PluginProtocol.swift; then
+  if ! search_paths -q 'static let version = 1([^[:alnum:]_]|$)' Sources/flash/App/Plugins/PluginProtocol.swift; then
     echo "GUARDRAIL FAILED: PluginProtocol.swift must pin protocol version 1" >&2
     fail=1
   fi
@@ -132,13 +142,13 @@ if [[ -d Plugins ]]; then
   for manifest in Plugins/*/manifest.json; do
     plugin_dir="${manifest%/manifest.json}"
     plugin_id="${plugin_dir##*/}"
-    if rg -q '^[[:space:]]{2}"exec"[[:space:]]*:' "$manifest"; then
+    if search_paths -q '^[[:space:]]{2}"exec"[[:space:]]*:' "$manifest"; then
       if [[ ! -f "$plugin_dir/Cargo.toml" || ! -f "$plugin_dir/src/main.rs" ]]; then
         echo "GUARDRAIL FAILED: executable official plugin must be Rust: $plugin_dir" >&2
         fail=1
         continue
       fi
-      if ! rg -q '"\./flash-plugin-'"$plugin_id"'"' "$manifest"; then
+      if ! search_paths -q '"\./flash-plugin-'"$plugin_id"'"' "$manifest"; then
         echo "GUARDRAIL FAILED: official plugin exec must be ./flash-plugin-$plugin_id: $manifest" >&2
         fail=1
       fi
@@ -146,7 +156,7 @@ if [[ -d Plugins ]]; then
     # Hermetic-crate invariants: every executable plugin is a standalone
     # crate with a committed lock and canonical clippy config.
     if [[ -f "$plugin_dir/Cargo.toml" ]]; then
-      if rg -q 'workspace' "$plugin_dir/Cargo.toml"; then
+      if search_paths -q 'workspace' "$plugin_dir/Cargo.toml"; then
         echo "GUARDRAIL FAILED: hermetic plugin crates must not reference a cargo workspace: $plugin_dir" >&2
         fail=1
       fi
@@ -161,15 +171,15 @@ if [[ -d Plugins ]]; then
     fi
     source="$plugin_dir/src/main.rs"
     [[ -f "$source" ]] || continue
-    if rg -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest"; then
+    if search_paths -q '^[[:space:]]*"sources"[[:space:]]*:' "$manifest"; then
       # Warm sources push their catalog; live sources (all-or-nothing per
       # plugin) serve per-keystroke search instead and never publish.
-      if rg -q '"live"[[:space:]]*:[[:space:]]*true' "$manifest"; then
-        if ! rg -q 'fn on_search' "$source"; then
+      if search_paths -q '"live"[[:space:]]*:[[:space:]]*true' "$manifest"; then
+        if ! search_paths -q 'fn on_search' "$source"; then
           echo "GUARDRAIL FAILED: live-sources plugin must implement on_search: $plugin_dir" >&2
           fail=1
         fi
-      elif ! rg -q 'publish[[:space:]]*\(' "$source"; then
+      elif ! search_paths -q 'publish[[:space:]]*\(' "$source"; then
         echo "GUARDRAIL FAILED: sources plugin must push-publish its catalog: $plugin_dir" >&2
         fail=1
       fi

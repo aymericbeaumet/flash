@@ -58,7 +58,8 @@ enum PluginWireCodec {
       return .performed(pid: pid, navigationURL: navigationURL, message: message)
     }
     if result["unhandled"] as? Bool == true { return .unhandled }
-    let error = (result["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    let error =
+      (result["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
       ?? "unspecified error"
     return .failed(error)
   }

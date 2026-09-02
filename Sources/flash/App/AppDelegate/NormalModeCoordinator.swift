@@ -398,7 +398,8 @@ extension AppDelegate {
     // transient overlay owns input (`.hints`) and NORMAL's own capture is off.
     let hasHints = !currentHints.isEmpty || hintSession.pointerModeActive
     let inFlight = activationInFlight
-    let suspended = nativeSurfaceSuspended
+    let suspended =
+      nativeSurfaceSuspended
       || Self.aboutWindowShouldOwnNativeKeyboard(
         visible: aboutWindowVisible,
         hasTransientInput: hasHints,
@@ -3189,9 +3190,10 @@ extension AppDelegate {
   }
 
   private func normalModeKeyDispatchTarget() -> NormalModeKeyDispatchTarget? {
-    let hasVisibleNonOverlayKeyWindow = NSApp.keyWindow.map {
-      $0 !== overlay && $0.isVisible
-    } ?? false
+    let hasVisibleNonOverlayKeyWindow =
+      NSApp.keyWindow.map {
+        $0 !== overlay && $0.isVisible
+      } ?? false
     if Self.normalModeKeyDispatchUsesCurrentProcess(
       applicationIsActive: NSApp.isActive,
       hasVisibleNonOverlayKeyWindow: hasVisibleNonOverlayKeyWindow)

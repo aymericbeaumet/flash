@@ -34,7 +34,9 @@ enum PluginSandboxProfileCLI {
     }
     guard let root, let dataDir else {
       FileHandle.standardError.write(
-        Data("usage: flash _plugin-sandbox-profile --root <dir> --data-dir <dir> [--settings <json>]\n".utf8))
+        Data(
+          "usage: flash _plugin-sandbox-profile --root <dir> --data-dir <dir> [--settings <json>]\n"
+            .utf8))
       return 2
     }
     let rootURL = URL(fileURLWithPath: root)

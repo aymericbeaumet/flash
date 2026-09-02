@@ -446,7 +446,8 @@ final class PluginHostRPCArmTests: XCTestCase {
     XCTAssertTrue(
       PluginHostRPC.urlIsAllowed("https://example.com/api/x", byPrefix: "https://example.com/api"))
     XCTAssertTrue(
-      PluginHostRPC.urlIsAllowed("https://example.com/api?q=1", byPrefix: "https://example.com/api"))
+      PluginHostRPC.urlIsAllowed("https://example.com/api?q=1", byPrefix: "https://example.com/api")
+    )
     XCTAssertTrue(
       PluginHostRPC.urlIsAllowed("https://example.com/api#f", byPrefix: "https://example.com/api"))
     XCTAssertFalse(

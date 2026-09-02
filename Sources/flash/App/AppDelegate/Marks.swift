@@ -41,12 +41,13 @@ extension AppDelegate {
     }
 
     guard
-      let navigation = initialNavigation ?? Self.appMRUNavigation(
-        direction: direction,
-        current: appCurrent,
-        back: appBackStack,
-        forward: appForwardStack,
-        isAvailable: available),
+      let navigation = initialNavigation
+        ?? Self.appMRUNavigation(
+          direction: direction,
+          current: appCurrent,
+          back: appBackStack,
+          forward: appForwardStack,
+          isAvailable: available),
       let app = NSRunningApplication(processIdentifier: navigation.target)
     else {
       FlashLog.debug("[app_navigation] no target direction=\(direction)")
@@ -57,7 +58,8 @@ extension AppDelegate {
       back: appBackStack,
       forward: appForwardStack,
       target: appNavigationTargetPID,
-      current: appCurrent)
+      current: appCurrent
+    )
     appBackStack = navigation.back
     appForwardStack = navigation.forward
     appNavigationTargetPID = navigation.target
@@ -89,8 +91,7 @@ extension AppDelegate {
     var ordered: [pid_t] = []
     var seen = Set<pid_t>()
     for pid in back + [current] + forward.reversed()
-    where isAvailable(pid) && seen.insert(pid).inserted
-    {
+    where isAvailable(pid) && seen.insert(pid).inserted {
       ordered.append(pid)
     }
     guard ordered.count > 1, let currentIndex = ordered.firstIndex(of: current) else {
@@ -107,7 +108,8 @@ extension AppDelegate {
     return (
       target: ordered[targetIndex],
       back: Array(ordered[..<targetIndex]),
-      forward: Array(ordered[ordered.index(after: targetIndex)...].reversed()))
+      forward: Array(ordered[ordered.index(after: targetIndex)...].reversed())
+    )
   }
 
   func recordMovement(_ entry: MovementEntry, source: String) {

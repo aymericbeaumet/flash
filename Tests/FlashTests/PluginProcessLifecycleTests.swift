@@ -153,6 +153,7 @@ extension XCTestCase {
 /// NAKs, idle-ping liveness, publish/status intake, EOF shutdown, and lazy
 /// activation. Every mutated static seam is restored before the test ends.
 final class PluginProcessLifecycleTests: XCTestCase {
+  private let immediateRestartDelay: (Int) -> Int = { _ in 0 }
 
   private func makeProcess(
     _ fixture: PluginFixtureKit.Fixture,
@@ -201,7 +202,9 @@ final class PluginProcessLifecycleTests: XCTestCase {
     if let idleBeforePingMs { PluginProcess.idleBeforePingMs = idleBeforePingMs }
     if let pingTimeoutMs { PluginProcess.pingTimeoutMs = pingTimeoutMs }
     if let restartDelay { PluginProcess.restartDelaySeconds = restartDelay }
-    if let startupTimeoutSeconds { FlashTunables.pluginStartupTimeoutSeconds = startupTimeoutSeconds }
+    if let startupTimeoutSeconds {
+      FlashTunables.pluginStartupTimeoutSeconds = startupTimeoutSeconds
+    }
     try body()
   }
 
@@ -220,7 +223,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
           \(PluginFixtureKit.performOK)
           """))
     defer { fixture.cleanup() }
-    try withSeams(restartDelay: { _ in 0 }) {
+    try withSeams(restartDelay: immediateRestartDelay) {
       let process = try makeProcess(fixture)
       process.start()
       waitUntilTrue("running") { process.runtimeStateSnapshot() == .running }
@@ -228,7 +231,9 @@ final class PluginProcessLifecycleTests: XCTestCase {
       let settled = expectation(description: "perform settles")
       process.perform(kind: "command", params: [:]) { outcome in
         guard case .failed = outcome else {
-          XCTFail("crash mid-perform must settle failed (got \(outcome)) — unhandled would let the host double-fire a fallback")
+          XCTFail(
+            "crash mid-perform must settle failed (got \(outcome)) — unhandled would let the host double-fire a fallback"
+          )
           settled.fulfill()
           return
         }
@@ -258,7 +263,7 @@ final class PluginProcessLifecycleTests: XCTestCase {
         exit 7
         """)
     defer { fixture.cleanup() }
-    try withSeams(attempts: 2, windowSeconds: 60, restartDelay: { _ in 0 }) {
+    try withSeams(attempts: 2, windowSeconds: 60, restartDelay: immediateRestartDelay) {
       let process = try makeProcess(fixture)
       process.start()
       waitUntilTrue("park in failed") { process.runtimeStateSnapshot() == .failed }
@@ -297,7 +302,9 @@ final class PluginProcessLifecycleTests: XCTestCase {
         exit 0
         """)
     defer { fixture.cleanup() }
-    try withSeams(attempts: 5, restartDelay: { _ in 0 }, startupTimeoutSeconds: 1) {
+    try withSeams(
+      attempts: 5, restartDelay: immediateRestartDelay, startupTimeoutSeconds: 1
+    ) {
       let process = try makeProcess(fixture)
       process.start()
       waitUntilTrue(timeout: 6, "respawn after startup timeout") { fixture.spawnCount() >= 2 }
@@ -399,7 +406,9 @@ final class PluginProcessLifecycleTests: XCTestCase {
           fi
           """))
     defer { fixture.cleanup() }
-    try withSeams(idleBeforePingMs: 150, pingTimeoutMs: 200, restartDelay: { _ in 0 }) {
+    try withSeams(
+      idleBeforePingMs: 150, pingTimeoutMs: 200, restartDelay: immediateRestartDelay
+    ) {
       let process = try makeProcess(fixture)
       process.start()
       waitUntilTrue("restart after missed ping") { fixture.spawnCount() >= 2 }

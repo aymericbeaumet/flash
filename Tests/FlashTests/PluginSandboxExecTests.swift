@@ -53,8 +53,9 @@ final class PluginSandboxExecTests: XCTestCase {
       process.standardError = stderr
       try process.run()
       process.waitUntilExit()
-      let diagnostics = String(
-        data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+      let diagnostics =
+        String(
+          data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
       XCTAssertEqual(
         process.terminationStatus, 0,
         "\(manifest.id): sandbox-exec exit \(process.terminationStatus) — \(diagnostics)")

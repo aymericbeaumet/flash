@@ -1065,7 +1065,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       let hasMapping = keyboardTapHasActiveMapping(keyCode: keyCode, flags: flags)
       let passthroughModifierFlags = KeyModifier.cgEventFlags(
         config.mode.normalPassthroughModifiers)
-      let shouldEnterInsert = aboutOwnsNativeKeyboard
+      let shouldEnterInsert =
+        aboutOwnsNativeKeyboard
         && KeyboardCaptureTap.shouldEnterInsertAfterNativeSurfacePassthrough(
           flashMode: flashMode,
           modifierFlags: flags,
