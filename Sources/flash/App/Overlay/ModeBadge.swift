@@ -90,6 +90,45 @@ extension OverlayPanel {
     renderModeBadgeOnlyOrHide()
   }
 
+  /// Repaint only the editable command surface after a keystroke. The status
+  /// bars, click windows, panel ordering, and application activation are stable
+  /// for the lifetime of the command field and must not be rebuilt per edit.
+  func refreshCommandLineContentInPlace() {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
+
+    let panelFrame = frame
+    configureCommandPrompt(panelFrame: panelFrame)
+    if candidateFinderResultsVisible {
+      configureCandidateFinderResults(panelFrame: panelFrame)
+    }
+    var sublayers = contentLayer.sublayers ?? []
+    if commandPromptVisible,
+      !sublayers.contains(where: { $0 === commandPromptLayer })
+    {
+      sublayers.append(commandPromptLayer)
+    }
+    if candidateFinderResultsVisible {
+      if !sublayers.contains(where: { $0 === candidateFinderResultsLayer }) {
+        sublayers.append(candidateFinderResultsLayer)
+      }
+    } else {
+      sublayers.removeAll { $0 === candidateFinderResultsLayer }
+    }
+    contentLayer.sublayers = sublayers
+  }
+
+  /// Reassert NORMAL routing without relaying out the persistent status bar or
+  /// querying window geometry. With the session tap, changing `inputMode` is
+  /// the capture operation; the key-window fallback still needs the full call.
+  func recaptureNormalModeKeyboardInput() {
+    inputMode = .normal
+    modeBadgeCapturesInput = true
+    guard !keyboardCaptureActive else { return }
+    captureKeyboardInput()
+  }
+
   func setStatusBarModel(_ model: FlashStatusBarModel) {
     CATransaction.begin()
     CATransaction.setDisableActions(true)

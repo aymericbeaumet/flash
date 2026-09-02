@@ -2546,6 +2546,61 @@ final class NormalModeTests: XCTestCase {
     XCTAssertNil(NormalModeDispatcher.commandLineCandidateQuery(":flashlightgmail"))
   }
 
+  func testCommandLineBodyIsEmptyDetectsBarePrompt() {
+    XCTAssertTrue(NormalModeDispatcher.commandLineBodyIsEmpty(":"))
+    XCTAssertTrue(NormalModeDispatcher.commandLineBodyIsEmpty(": "))
+    XCTAssertTrue(NormalModeDispatcher.commandLineBodyIsEmpty("  :  "))
+    XCTAssertFalse(NormalModeDispatcher.commandLineBodyIsEmpty(":a"))
+    XCTAssertFalse(NormalModeDispatcher.commandLineBodyIsEmpty(":flashlight "))
+  }
+
+  func testCommandLineMoveTargetPrefersHistoryOnEmptyPromptAndDuringRecall() {
+    typealias Target = NormalModeDispatcher.CommandLineMoveTarget
+    // Empty prompt recalls history even though the verb-completion list is shown.
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineMoveTarget(
+        bodyIsEmpty: true, isRecalling: false,
+        hasCandidateQuery: false, hasCompletions: true),
+      Target.history)
+    // An in-progress recall keeps history even when the recalled entry looks
+    // like a flashlight query or a completable command, so ↑/↓ keep cycling.
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineMoveTarget(
+        bodyIsEmpty: false, isRecalling: true,
+        hasCandidateQuery: true, hasCompletions: true),
+      Target.history)
+    // A live flashlight query keeps the arrows on candidate selection.
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineMoveTarget(
+        bodyIsEmpty: false, isRecalling: false,
+        hasCandidateQuery: true, hasCompletions: false),
+      Target.candidates)
+    // A typed command with completions navigates the completion list.
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineMoveTarget(
+        bodyIsEmpty: false, isRecalling: false,
+        hasCandidateQuery: false, hasCompletions: true),
+      Target.completions)
+    // A typed command that matches nothing falls back to history.
+    XCTAssertEqual(
+      NormalModeDispatcher.commandLineMoveTarget(
+        bodyIsEmpty: false, isRecalling: false,
+        hasCandidateQuery: false, hasCompletions: false),
+      Target.history)
+  }
+
+  func testCommandLineListTopEntersHistoryOnlyWhenMovingUpFromTop() {
+    // Up (delta < 0) from the first row crosses into history.
+    XCTAssertTrue(
+      NormalModeDispatcher.commandLineListTopEntersHistory(delta: -1, selectedIndex: 0))
+    // Up below the top stays in the list.
+    XCTAssertFalse(
+      NormalModeDispatcher.commandLineListTopEntersHistory(delta: -1, selectedIndex: 3))
+    // Down never crosses into history from the list.
+    XCTAssertFalse(
+      NormalModeDispatcher.commandLineListTopEntersHistory(delta: 1, selectedIndex: 0))
+  }
+
   func testCandidateFinderSourceFilterParsesAtSourceNarrow() {
     // `@<source>` is the only filter syntax — narrows the pool to one source
     // and leaves the residual text as the actual fuzzy query.

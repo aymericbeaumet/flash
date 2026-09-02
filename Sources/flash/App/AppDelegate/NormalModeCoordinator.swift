@@ -417,6 +417,13 @@ extension AppDelegate {
         + "visible=\(statusBarVisible) hints=\(currentHints.count) in_flight=\(inFlight)")
     statusBarController?.updateModeLabel(text)
     overlay.inputMode = inputMode
+    // Command entry paints its text and suggestions immediately after the mode
+    // transition. Avoid laying out an empty command surface here only to replace
+    // it in the same event-handler turn; `displayCommandLine` performs the one
+    // complete first paint.
+    if case .command = mode, !overlay.commandPromptVisible {
+      return
+    }
     updateActiveWindowBorder(reason: "apply_mode_overlay")
     overlay.setModeBadge(
       text: text,
@@ -454,18 +461,27 @@ extension AppDelegate {
     // menu) has dismissed — so clear the suspend flag before re-establishing
     // capture, otherwise the projection keeps capture pinned off.
     nativeSurfaceSuspended = false
+    normalModeRecaptureToken &+= 1
+    let token = normalModeRecaptureToken
+    cancelNormalModeCaptureRecovery(reason: "new_recapture")
+    guard shouldCaptureNormalModeInput else {
+      FlashLog.trace("[mode] recapture_skip token=\(token) reason=state")
+      return
+    }
     // Flip `overlay.inputMode` to `.normal` synchronously before
     // scheduling the retries. The 0 ms entry below is still a
     // `DispatchQueue.main.asyncAfter` — it doesn't run until the next
     // runloop turn — so set the routing mode before any later recapture
     // attempt can see stale `.hints` state left over from `commit()`'s
     // pre-dispatch `applyModeOverlay(captureOverride: false)`.
-    if shouldCaptureNormalModeInput {
-      applyModeOverlay(captureOverride: true)
+    overlay.recaptureNormalModeKeyboardInput()
+    // The session tap owns capture independently of panel focus. Once routing is
+    // `.normal`, retrying on nine future run-loop turns cannot improve anything;
+    // retain the recovery ladder only for the no-Accessibility key-window path.
+    if overlay.keyboardCaptureActive {
+      FlashLog.trace("[mode] recapture_complete token=\(token) via=tap")
+      return
     }
-    normalModeRecaptureToken &+= 1
-    let token = normalModeRecaptureToken
-    cancelNormalModeCaptureRecovery(reason: "new_recapture")
     let delays = delaysMs.isEmpty ? [0] : delaysMs
     FlashLog.trace(
       "[mode] schedule_recapture token=\(token) delays="
@@ -485,7 +501,7 @@ extension AppDelegate {
           return
         }
         FlashLog.trace("[mode] recapture_apply token=\(token) delay=\(delayMs)")
-        self.applyModeOverlay(captureOverride: true)
+        self.overlay.recaptureNormalModeKeyboardInput()
       }
     }
   }
@@ -1741,6 +1757,10 @@ extension AppDelegate {
   private func rerenderActiveCandidateFinderSurface() {
     switch overlay.inputMode {
     case .commandLine:
+      // This is a passive re-render (late candidates merged in), not a caret
+      // move — pick up the field editor's live caret so it isn't snapped back to
+      // a stale stored index the user has since moved past with an arrow/click.
+      overlay.syncCommandLineCursorFromField()
       refreshCommandLine(
         text: overlay.commandLineText, cursorIndex: overlay.commandLineCursorIndex)
     case .candidateFinder:
@@ -1872,6 +1892,23 @@ extension AppDelegate {
   private func commandLineCompletionContext(for command: String)
     -> NormalModeDispatcher.CommandLineCompletionContext?
   {
+    let inventory: NormalModeDispatcher.CommandLineCompletionInventory
+    if let cached = commandLineCompletionInventory {
+      inventory = cached
+    } else {
+      inventory = makeCommandLineCompletionInventory()
+      commandLineCompletionInventory = inventory
+    }
+    return NormalModeDispatcher.commandLineCompletions(
+      command,
+      pluginCommands: inventory.pluginCommands,
+      pluginSubcommands: inventory.pluginSubcommands,
+      helpTopics: inventory.helpTopics)
+  }
+
+  private func makeCommandLineCompletionInventory()
+    -> NormalModeDispatcher.CommandLineCompletionInventory
+  {
     let registrations = pluginManager.commandRegistrations(
       in: pluginSelectorContext())
     var subcommands: [String: [String]] = [:]
@@ -1898,8 +1935,7 @@ extension AppDelegate {
       pluginTopics: pluginManager.pluginHelpTopics()
     )
     .flatMap { [$0.name] + $0.aliases }
-    return NormalModeDispatcher.commandLineCompletions(
-      command,
+    return NormalModeDispatcher.CommandLineCompletionInventory(
       pluginCommands: commandsOrdered,
       pluginSubcommands: subcommands,
       helpTopics: topics)
@@ -2535,6 +2571,8 @@ extension AppDelegate {
       if commandLineHistory.count > cap {
         commandLineHistory.removeFirst(commandLineHistory.count - cap)
       }
+      // Persist so recall survives the next restart/reinstall.
+      commandHistoryStore?.save(commandLineHistory)
     }
   }
 
@@ -2941,6 +2979,7 @@ extension AppDelegate {
     candidateFinderScope = .all
     clearCandidateFinderState()
     clearCommandLineCompletionState()
+    commandLineCompletionInventory = nil
   }
 
   func clearCandidateFinderState() {
@@ -3161,7 +3200,7 @@ extension AppDelegate {
         processID: ProcessInfo.processInfo.processIdentifier,
         bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.flash.app")
     }
-    guard let context = normalModeContext() else { return nil }
+    guard let context = normalModeDispatchContext() else { return nil }
     return NormalModeKeyDispatchTarget(
       processID: context.processID,
       bundleIdentifier: context.bundleIdentifier)
@@ -3312,6 +3351,40 @@ extension AppDelegate {
     if let context = currentNonFlashContext() {
       normalModeTargetPID = context.processID
       return context
+    }
+    return nil
+  }
+
+  /// Context for actions that only need app identity, not exact WindowServer
+  /// geometry. Avoiding `CGWindowListCopyWindowInfo` keeps keyboard dispatch
+  /// independent of the size and age of the global window list.
+  func normalModeDispatchContext() -> AppContext? {
+    if Self.normalModeShouldPreferCapturedContext(
+      mode: flashMode,
+      overlayInputMode: overlay.inputMode,
+      hasHints: !currentHints.isEmpty,
+      activationInFlight: activationInFlight,
+      normalModeTargetPID: normalModeTargetPID),
+      let pid = normalModeTargetPID,
+      let app = NSRunningApplication(processIdentifier: pid),
+      !app.isTerminated,
+      let context = monitor.makeContext(for: app)
+    {
+      return context
+    }
+    let flashPID = ProcessInfo.processInfo.processIdentifier
+    if let app = NSWorkspace.shared.frontmostApplication,
+      app.processIdentifier != flashPID,
+      let context = monitor.makeContext(for: app)
+    {
+      normalModeTargetPID = context.processID
+      return context
+    }
+    if let pid = normalModeTargetPID,
+      let app = NSRunningApplication(processIdentifier: pid),
+      !app.isTerminated
+    {
+      return monitor.makeContext(for: app)
     }
     return nil
   }

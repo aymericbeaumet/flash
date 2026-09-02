@@ -17,8 +17,8 @@ enum MappingScope: Equatable {
 // AppDelegate routine — so the executor is a dumb `switch` with no decisions of
 // its own.
 enum ModeEffect: Equatable {
-  /// Re-register the scope-bound Carbon hotkeys for the active surface.
-  /// (`mappings.apply(scope:)`; the executor dedupes no-op re-applies.)
+  /// Reconcile the scope-bound Carbon hotkeys for the active surface. All-scope
+  /// registrations remain installed; the executor dedupes no-op re-applies.
   case setMappingScope(MappingScope)
 
   /// Recompute and push everything derived from `Mode`: `overlay.inputMode`,

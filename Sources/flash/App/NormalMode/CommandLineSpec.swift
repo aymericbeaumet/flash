@@ -104,6 +104,57 @@ extension NormalModeDispatcher {
     commandLineQuery(raw, name: "flashlight")
   }
 
+  /// True when the command buffer is just the `:` prompt (plus any leading or
+  /// trailing whitespace) with no command typed yet.
+  static func commandLineBodyIsEmpty(_ raw: String) -> Bool {
+    var body = raw.trimmingCharacters(in: .newlines)
+    body.removeLeadingWhitespace()
+    if body.hasPrefix(":") {
+      body.removeFirst()
+    }
+    return body.trimmingCharacters(in: .whitespaces).isEmpty
+  }
+
+  /// Which surface an up/down (or ctrl+p / ctrl+n) move drives in the `:` bar.
+  enum CommandLineMoveTarget: Equatable {
+    case candidates
+    case completions
+    case history
+  }
+
+  /// Decide what up/down (and ctrl+p / ctrl+n) navigate in the command bar.
+  ///
+  /// History recall wins whenever there is nothing to pick from a list: an
+  /// empty command body (bare `:`), or an in-progress recall — so the user can
+  /// keep cycling even though a recalled entry looks like a command or a
+  /// flashlight query. Otherwise the flashlight candidate list or the
+  /// command-completion list keeps the arrows, exactly as before.
+  static func commandLineMoveTarget(
+    bodyIsEmpty: Bool,
+    isRecalling: Bool,
+    hasCandidateQuery: Bool,
+    hasCompletions: Bool
+  ) -> CommandLineMoveTarget {
+    if isRecalling || bodyIsEmpty {
+      return .history
+    }
+    if hasCandidateQuery {
+      return .candidates
+    }
+    if hasCompletions {
+      return .completions
+    }
+    return .history
+  }
+
+  /// At the top of a suggestion list (candidate finder or command completions),
+  /// one more "up" (`delta < 0` with the selection already at index 0) crosses
+  /// over into command history instead of clamping; stepping back down walks out
+  /// of history and returns to the list. Any other move stays in the list.
+  static func commandLineListTopEntersHistory(delta: Int, selectedIndex: Int) -> Bool {
+    delta < 0 && selectedIndex == 0
+  }
+
   struct CandidateFinderQuery: Equatable {
     /// `@<source>` narrows the pool to candidates whose `source` matches the
     /// token (exact or prefix; see `candidateMatchesSourceFilter`). `nil` when
@@ -374,6 +425,12 @@ extension NormalModeDispatcher {
     var prefix: String
     var query: String
     var items: [CommandLineCompletion]
+  }
+
+  struct CommandLineCompletionInventory: Equatable {
+    var pluginCommands: [String]
+    var pluginSubcommands: [String: [String]]
+    var helpTopics: [String]
   }
 
   static func commandLineCompletions(

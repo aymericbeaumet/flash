@@ -12,7 +12,7 @@ import FlashCore
 extension AppDelegate {
   func tabSelectInNormalMode(index: Int) {
     let index = normalizedRepeatCount(index)
-    guard let context = normalModeContext() else {
+    guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for tab_select index=\(index)")
       applyModeOverlay()
       return
@@ -49,7 +49,7 @@ extension AppDelegate {
   }
 
   func tabNextInNormalMode(repeatCount: Int) {
-    if let bundleIdentifier = normalModeContext()?.bundleIdentifier,
+    if let bundleIdentifier = normalModeDispatchContext()?.bundleIdentifier,
       let shortcut = Self.nativeTabTraversalShortcut(
         direction: .forward,
         bundleIdentifier: bundleIdentifier)
@@ -80,7 +80,7 @@ extension AppDelegate {
   }
 
   func tabPrevInNormalMode(repeatCount: Int) {
-    if let bundleIdentifier = normalModeContext()?.bundleIdentifier,
+    if let bundleIdentifier = normalModeDispatchContext()?.bundleIdentifier,
       let shortcut = Self.nativeTabTraversalShortcut(
         direction: .back,
         bundleIdentifier: bundleIdentifier)
@@ -408,7 +408,7 @@ extension AppDelegate {
       ) -> Void,
     fallback: @escaping (AppContext, Int) -> Void
   ) {
-    guard let context = normalModeContext() else {
+    guard let context = normalModeDispatchContext() else {
       FlashLog.debug("[normal_mode] no target app for \(name)")
       applyModeOverlay()
       return

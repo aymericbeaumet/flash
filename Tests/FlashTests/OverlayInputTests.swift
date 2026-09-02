@@ -5,6 +5,29 @@ import XCTest
 @testable import flash
 
 final class OverlayInputTests: XCTestCase {
+  func testPresentedCommandLineUsesInPlaceRefresh() {
+    XCTAssertTrue(
+      OverlayPanel.commandLineCanRefreshInPlace(
+        inputMode: .commandLine,
+        commandPromptVisible: true,
+        modeBadgeVisible: true,
+        modeBadgeStyle: .command,
+        panelVisible: true))
+    XCTAssertFalse(
+      OverlayPanel.commandLineCanRefreshInPlace(
+        inputMode: .normal,
+        commandPromptVisible: true,
+        modeBadgeVisible: true,
+        modeBadgeStyle: .command,
+        panelVisible: true))
+    XCTAssertFalse(
+      OverlayPanel.commandLineCanRefreshInPlace(
+        inputMode: .commandLine,
+        commandPromptVisible: false,
+        modeBadgeVisible: true,
+        modeBadgeStyle: .command,
+        panelVisible: true))
+  }
   func testPlainLetterCommitsHintCharacter() {
     XCTAssertEqual(
       OverlayInputInterpreter.action(
@@ -282,6 +305,38 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(coordinator.commandLineSelectionDeltas, [-1, 1])
   }
 
+  func testRealArrowUpAndCtrlPRouteToCommandLineSelection() throws {
+    let panel = OverlayPanel()
+    let coordinator = SpyOverlayCoordinator()
+    panel.coordinator = coordinator
+    panel.inputMode = .commandLine
+    panel.orderFrontRegardless()
+    defer { panel.orderOut(nil) }
+    XCTAssertTrue(panel.makeFirstResponder(panel.commandTextField))
+    panel.setCommandTextFieldText(":", cursorIndex: 1)
+    let editor = try XCTUnwrap(panel.commandTextField.currentEditor() as? NSTextView)
+
+    let up = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: panel.windowNumber, context: nil,
+        characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}",
+        isARepeat: false, keyCode: 126))
+    editor.keyDown(with: up)
+
+    let ctrlP = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: 0,
+        windowNumber: panel.windowNumber, context: nil,
+        characters: "\u{10}", charactersIgnoringModifiers: "p",
+        isARepeat: false, keyCode: 35))
+    editor.keyDown(with: ctrlP)
+
+    XCTAssertEqual(
+      coordinator.commandLineSelectionDeltas, [-1, -1],
+      "real up-arrow and ctrl+p must reach overlayDidMoveCommandLineSelection(-1)")
+  }
+
   func testCommandLineControlEMovesCaretToEndOfLine() {
     let panel = OverlayPanel()
     let coordinator = SpyOverlayCoordinator()
@@ -339,13 +394,13 @@ final class OverlayInputTests: XCTestCase {
     XCTAssertEqual(editor.selectedRange, NSRange(location: editor.string.utf16.count, length: 0))
   }
 
-  func testCommandLineRerenderPreservesLiveCaretWhenTextUnchanged() throws {
+  func testCommandLinePassiveRerenderAdoptsLiveCaret() throws {
     // Repro for the "cursor jumps to the end of the line" bug: a plain
     // left/right arrow (or a click) moves the field editor's caret without
-    // notifying us, so the stored cursor goes stale. An async candidate merge
-    // then re-renders with the SAME text and that stale index — which used to
-    // snap the caret back to the end. A no-op-text re-render must leave the
-    // live caret alone.
+    // notifying us, so the stored cursor goes stale. A passive re-render (an
+    // async candidate merge that doesn't change the text) must first fold the
+    // live caret back into the model (`syncCommandLineCursorFromField`) so the
+    // subsequent forced sync keeps the caret where the user put it.
     let panel = OverlayPanel()
     panel.inputMode = .commandLine
     panel.orderFrontRegardless()
@@ -355,14 +410,39 @@ final class OverlayInputTests: XCTestCase {
     panel.setCommandTextFieldText(":hello", cursorIndex: 6)
     let editor = try XCTUnwrap(panel.commandTextField.currentEditor() as? NSTextView)
 
-    // User arrows left three times: the field editor owns the caret now.
+    // User arrows left three times: the field editor owns the caret now, but the
+    // stored cursor is still pinned at the end (6).
     editor.setSelectedRange(NSRange(location: 3, length: 0))
 
-    // Async suggestion merge re-renders unchanged text with the stale cursor.
-    panel.setCommandTextFieldText(":hello", cursorIndex: 6)
+    // The passive re-render path: adopt the live caret, then re-render.
+    panel.syncCommandLineCursorFromField()
+    panel.setCommandTextFieldText(":hello", cursorIndex: panel.commandLineCursorIndex)
 
     XCTAssertEqual(editor.selectedRange, NSRange(location: 3, length: 0))
     XCTAssertEqual(panel.commandLineCursorIndex, 3)
+  }
+
+  func testCommandLineDeliberateDisplayForcesRequestedCaret() throws {
+    // Repro for the "caret lands before the `:` on open" regression: when the
+    // field already holds the target text and its editor caret sits at the
+    // start (a fresh focus), a deliberate (re)display must still honor the
+    // requested caret rather than inheriting the field editor's caret.
+    let panel = OverlayPanel()
+    panel.inputMode = .commandLine
+    panel.orderFrontRegardless()
+    defer { panel.orderOut(nil) }
+    XCTAssertTrue(panel.makeFirstResponder(panel.commandTextField))
+
+    panel.setCommandTextFieldText(":hello", cursorIndex: 6)
+    let editor = try XCTUnwrap(panel.commandTextField.currentEditor() as? NSTextView)
+    // Field editor's caret got reset to the start (as on refocus/open).
+    editor.setSelectedRange(NSRange(location: 0, length: 0))
+
+    // Re-display the same text with the caret requested at the end.
+    panel.setCommandTextFieldText(":hello", cursorIndex: 6)
+
+    XCTAssertEqual(editor.selectedRange, NSRange(location: 6, length: 0))
+    XCTAssertEqual(panel.commandLineCursorIndex, 6)
   }
 
   func testCharacterOffsetSnapsToGraphemeBoundaryInsteadOfJumpingToEnd() {

@@ -4,10 +4,11 @@ import Foundation
 
 /// Owns the native modified-key mapping lifecycle.
 ///
-/// On every `apply(mode:)` the Carbon registration set is rebuilt from
-/// scratch. AOT: parsing of the mapping lhs and URL value happens at
-/// config load, before any keypress arrives. The hot path on a Carbon
-/// callback is one switch over the pre-resolved `MappingCommand`.
+/// All-scope Carbon registrations stay installed across mode transitions;
+/// only the small mode-specific set is replaced. AOT: parsing of the mapping
+/// lhs and URL value happens at config load, before any keypress arrives. The
+/// hot path on a Carbon callback is one switch over the pre-resolved
+/// `MappingCommand`.
 ///
 /// Dispatch policy:
 ///   - `flashCommand` → fed back to the shared `URLCommand` handler
@@ -23,7 +24,8 @@ final class MappingsCoordinator {
     let mapping: ModeMapping
   }
 
-  private let hotkeys = HotKeyManager()
+  private let allHotkeys = HotKeyManager()
+  private let scopedHotkeys = HotKeyManager()
   private var mappingDispatch: ((MappingCommand) -> Void)?
   private var currentMode: (() -> FlashMode)?
   private var activeMappings: [ActiveMapping] = []
@@ -53,7 +55,8 @@ final class MappingsCoordinator {
 
   func apply(mode: Config.Mode) {
     configuredMode = mode
-    rebuild(for: lastAppliedScope)
+    rebuildAllMappings()
+    rebuildScopedMappings(for: lastAppliedScope)
   }
 
   /// Re-register Carbon hotkeys for the current input surface. Carbon
@@ -62,22 +65,53 @@ final class MappingsCoordinator {
   /// the keyboard.
   func apply(scope: MappingScope) {
     guard scope != lastAppliedScope else { return }
-    rebuild(for: scope)
+    rebuildScopedMappings(for: scope)
   }
 
-  private func rebuild(for mappingScope: MappingScope) {
+  private func rebuildAllMappings() {
+    allHotkeys.unregisterAll()
+    rebuildActiveMappings()
+    registerMappings(
+      Self.nativeMappings(in: configuredMode).filter { $0.0 == .all },
+      with: allHotkeys)
+  }
+
+  private func rebuildScopedMappings(for mappingScope: MappingScope) {
     lastAppliedScope = mappingScope
-    hotkeys.unregisterAll()
-    activeMappings.removeAll(keepingCapacity: true)
-    for (scope, mapping) in Self.nativeMappings(in: configuredMode) {
-      guard Self.scopeIsActive(scope, for: mappingScope) else { continue }
+    scopedHotkeys.unregisterAll()
+    rebuildActiveMappings()
+    let allKeys = Set(
+      Self.nativeMappings(in: configuredMode).lazy
+        .filter { $0.0 == .all }
+        .map { $0.1.key })
+    registerMappings(
+      Self.nativeMappings(in: configuredMode).filter {
+        $0.0 != .all && Self.scopeIsActive($0.0, for: mappingScope)
+          && !allKeys.contains($0.1.key)
+      },
+      with: scopedHotkeys)
+  }
+
+  private func rebuildActiveMappings() {
+    activeMappings = Self.nativeMappings(in: configuredMode).compactMap { scope, mapping in
+      guard Self.scopeIsActive(scope, for: lastAppliedScope),
+        let parsed = HotkeySyntax.parse(hotkey: mapping.key)
+      else { return nil }
+      return ActiveMapping(parsed: parsed, scope: scope, mapping: mapping)
+    }
+  }
+
+  private func registerMappings(
+    _ mappings: [(ModeScope, ModeMapping)],
+    with hotkeys: HotKeyManager
+  ) {
+    for (scope, mapping) in mappings {
       guard let parsed = HotkeySyntax.parse(hotkey: mapping.key) else {
         if mapping.key.contains("+") {
           FlashLog.warn("[mappings] could not parse native mapping \"\(mapping.key)\"")
         }
         continue
       }
-      activeMappings.append(ActiveMapping(parsed: parsed, scope: scope, mapping: mapping))
       let status = hotkeys.register(
         modifiers: parsed.modifiers, virtualKey: parsed.virtualKey
       ) { [weak self] in

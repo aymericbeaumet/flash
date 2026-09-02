@@ -316,10 +316,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
   var commandLineCompletionMatches: [CommandLineCompletionMatch] = []
   var commandLineCompletionSelectedIndex = 0
   var commandLineCompletionQuery: String = ""
+  /// Session-local immutable completion catalog. Plugin registrations and help
+  /// topics do not change while one command field is open, so rebuilding these
+  /// collections on every character only adds input latency.
+  var commandLineCompletionInventory: NormalModeDispatcher.CommandLineCompletionInventory?
   /// Past executed command-line inputs (most-recent last). up/down (and
   /// ctrl+n/p, which route to the same handler) recall these when no candidate
-  /// or completion list is active — see `recallCommandLineHistory`.
+  /// or completion list is active — see `recallCommandLineHistory`. Loaded from
+  /// `commandHistoryStore` at startup so recall survives restarts/reinstalls.
   var commandLineHistory: [String] = []
+  /// On-disk persistence for `commandLineHistory`.
+  var commandHistoryStore: CommandHistoryStore?
   /// Index into `commandLineHistory` while recalling; nil when editing a fresh
   /// buffer. `commandLineHistoryStash` holds that fresh buffer so stepping
   /// `down` past the newest entry restores what the user was typing.
@@ -466,6 +473,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
       configuration: FrecencyStore.Configuration(
         halfLifeDays: config.flashlight.frecencyHalfLifeDays,
         maxBoost: config.flashlight.frecencyMaxBoost))
+    commandHistoryStore = CommandHistoryStore()
+    commandLineHistory = commandHistoryStore?.load() ?? []
     let manager = pluginManager
     registry = SourceRegistry(
       openConfig: config.open,
@@ -1232,6 +1241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, OverlayCoordinator {
     debugServer = nil
     frecencyStore?.drain()
     frecencyStore = nil
+    commandHistoryStore?.drain()
+    commandHistoryStore = nil
   }
 
 }

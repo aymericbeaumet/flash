@@ -1055,12 +1055,35 @@ extension AppDelegate {
   }
 
   func overlayDidMoveCommandLineSelection(_ delta: Int) -> Bool {
-    if NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil {
+    // History recall claims up/down (and ctrl+p/n) on an empty prompt or once a
+    // recall is under way; otherwise the flashlight candidate list or the
+    // command-completion list keeps the arrows. See `commandLineMoveTarget`.
+    let target = NormalModeDispatcher.commandLineMoveTarget(
+      bodyIsEmpty: NormalModeDispatcher.commandLineBodyIsEmpty(overlay.commandLineText),
+      isRecalling: commandLineHistoryCursor != nil,
+      hasCandidateQuery:
+        NormalModeDispatcher.commandLineCandidateQuery(overlay.commandLineText) != nil,
+      hasCompletions: !commandLineCompletionMatches.isEmpty)
+    // A list re-render must keep the caret where the user actually has it (they
+    // may have moved it with an arrow/click without notifying us) rather than
+    // forcing the stale stored index and jumping it to the line end.
+    if target == .candidates || target == .completions {
+      overlay.syncCommandLineCursorFromField()
+    }
+    switch target {
+    case .candidates:
       guard !candidateFinderMatches.isEmpty else {
         refreshCommandLine(
           text: overlay.commandLineText,
           cursorIndex: overlay.commandLineCursorIndex)
         return true
+      }
+      // At the top candidate, one more "up" crosses into history (the stash
+      // holds the current query, so stepping back down returns to this list).
+      if NormalModeDispatcher.commandLineListTopEntersHistory(
+        delta: delta, selectedIndex: candidateFinderSelectedIndex)
+      {
+        return recallCommandLineHistory(delta: delta)
       }
       candidateFinderSelectedIndex = min(
         max(candidateFinderSelectedIndex + delta, 0),
@@ -1073,8 +1096,14 @@ extension AppDelegate {
         suggestions: candidateFinderDisplayItems(),
         cursorIndex: overlay.commandLineCursorIndex)
       return true
-    }
-    if !commandLineCompletionMatches.isEmpty {
+    case .completions:
+      // Same crossover as the candidate list: "up" from the top completion
+      // steps into history rather than clamping.
+      if NormalModeDispatcher.commandLineListTopEntersHistory(
+        delta: delta, selectedIndex: commandLineCompletionSelectedIndex)
+      {
+        return recallCommandLineHistory(delta: delta)
+      }
       commandLineCompletionSelectedIndex = min(
         max(commandLineCompletionSelectedIndex + delta, 0),
         commandLineCompletionMatches.count - 1)
@@ -1084,8 +1113,9 @@ extension AppDelegate {
         emptyText: "no matching command",
         cursorIndex: overlay.commandLineCursorIndex)
       return true
+    case .history:
+      return recallCommandLineHistory(delta: delta)
     }
-    return recallCommandLineHistory(delta: delta)
   }
 
   /// up/down (and ctrl+n/p, which route here) recall past commands when no

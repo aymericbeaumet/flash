@@ -19,6 +19,12 @@ extension OverlayPanel {
     underlineRange: NSRange? = nil,
     underlineInvalid: Bool = false
   ) {
+    let refreshesPresentedSurface = Self.commandLineCanRefreshInPlace(
+      inputMode: inputMode,
+      commandPromptVisible: commandPromptVisible,
+      modeBadgeVisible: modeBadgeVisible,
+      modeBadgeStyle: modeBadgeStyle,
+      panelVisible: isVisible)
     FlashLog.trace(
       "[overlay] display_command_line text=\(text) cursor=\(cursorIndex ?? text.count) "
         + "suggestions=\(suggestions?.count ?? 0) "
@@ -35,7 +41,22 @@ extension OverlayPanel {
     } else {
       clearCandidateFinderResults()
     }
-    updateModeBadge(text: modeLabels.command, visible: true, captureInput: true, style: .command)
+    if refreshesPresentedSurface {
+      refreshCommandLineContentInPlace()
+    } else {
+      updateModeBadge(text: modeLabels.command, visible: true, captureInput: true, style: .command)
+    }
+  }
+
+  static func commandLineCanRefreshInPlace(
+    inputMode: OverlayInputMode,
+    commandPromptVisible: Bool,
+    modeBadgeVisible: Bool,
+    modeBadgeStyle: OverlayModeBadgeStyle,
+    panelVisible: Bool
+  ) -> Bool {
+    inputMode == .commandLine && commandPromptVisible && modeBadgeVisible
+      && modeBadgeStyle == .command && panelVisible
   }
 
   func configureCommandPrompt(panelFrame: CGRect) {
@@ -216,21 +237,15 @@ extension OverlayPanel {
     underlineInvalid: Bool = false
   ) {
     suppressCommandTextFieldChange = true
-    // Snapshot the field editor's live caret BEFORE mutating anything. Most
-    // re-renders don't change the text — the common one is an async candidate /
-    // suggestion merge streaming in while the bar is open (see
-    // `rerenderActiveCandidateFinderSurface`). In that case the field editor's
-    // own caret is authoritative: the user may have just moved it with an arrow
-    // key or a mouse click, neither of which notifies us, so the stored
-    // `commandLineCursorIndex` is stale (still pinned to the last typed
-    // position). Re-imposing that stale index is exactly what made the caret
-    // "jump to the end of the line" mid-edit. So when the text is unchanged we
-    // leave the caret where the user put it and fold it back into the model.
-    let previousFieldText = commandTextField.stringValue
-    let liveCaret = commandTextFieldCursorIndex()
-    let textChanged = previousFieldText != text
-    var didReassignFieldString = false
     commandLineText = text
+    // Always honor the requested caret. Callers that must preserve a caret the
+    // user moved with an arrow key or a click (the async suggestion re-render)
+    // first fold that live caret back into `commandLineCursorIndex` — see
+    // `syncCommandLineCursorFromField` — so "the requested caret" already IS the
+    // live one there. Trying to detect that here from an unchanged field string
+    // instead wrongly kept the field editor's focus-default caret on open,
+    // landing the cursor before the `:`.
+    commandLineCursorIndex = cursorIndex
     let font = commandTextField.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
     if let underline = underlineRange,
       underline.length > 0,
@@ -263,7 +278,6 @@ extension OverlayPanel {
       if commandTextField.attributedStringValue != attributed {
         commandTextField.allowsEditingTextAttributes = true
         commandTextField.attributedStringValue = attributed
-        didReassignFieldString = true
       }
     } else {
       if commandTextField.attributedStringValue.length > 0,
@@ -276,28 +290,21 @@ extension OverlayPanel {
       {
         commandTextField.allowsEditingTextAttributes = false
         commandTextField.stringValue = text
-        didReassignFieldString = true
       }
     }
-    if textChanged {
-      // A genuine text change (open, history recall, alias expansion, submit
-      // normalization, completion insertion): honor the caret the caller asked
-      // for.
-      commandLineCursorIndex = cursorIndex
-      syncCommandTextFieldSelection()
-    } else if didReassignFieldString {
-      // Same text, but re-applying its attributes (e.g. the bang underline)
-      // reset the field editor's caret. Restore the user's live caret rather
-      // than the possibly-stale model cursor.
-      commandLineCursorIndex = liveCaret
-      syncCommandTextFieldSelection()
-    } else {
-      // Pure re-render — identical text and attributes (an async suggestion
-      // merge). Leave the field editor's caret/selection untouched and just
-      // fold it back into the model so the next forced sync is a no-op.
-      commandLineCursorIndex = liveCaret
-    }
+    syncCommandTextFieldSelection()
     suppressCommandTextFieldChange = false
+  }
+
+  /// Fold the field editor's live caret back into `commandLineCursorIndex`.
+  /// Plain arrow keys and mouse clicks move the field editor's caret without
+  /// emitting `controlTextDidChange`, so the stored cursor goes stale. A passive
+  /// re-render (an async suggestion merge that doesn't change the text) must call
+  /// this first, otherwise `setCommandTextFieldText` would force the stale cursor
+  /// and the caret would jump to the end of the line mid-edit.
+  func syncCommandLineCursorFromField() {
+    guard commandTextField.currentEditor() is NSTextView else { return }
+    commandLineCursorIndex = commandTextFieldCursorIndex()
   }
 
   private func attributedStringHasAttributes(_ string: NSAttributedString) -> Bool {
