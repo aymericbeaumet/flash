@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    # plugin-system-v2 rides CI while the branch is active (no PR yet);
-    # drop it from this list at merge.
-    branches: [main, plugin-system-v2]
+    branches: [main]
     tags:
       - "*.*.*"
   pull_request:
